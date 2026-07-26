@@ -365,6 +365,7 @@ git commit -m "fix: map legacy replay lanes by key mode"
 ### Task 4: Retain and retry failed course replay persistence
 
 **Files:**
+- Create: `src/scene/ResultCoursePersistence.h`
 - Modify: `src/scene/ResultScene.h`
 - Modify: `src/scene/ResultScene.cpp`
 - Modify: `tests/remote_result_scene_tests.cpp`
@@ -374,7 +375,7 @@ git commit -m "fix: map legacy replay lanes by key mode"
 - Produces: `result_scene_detail::hasPersistenceAttempt(const ResultPersistenceOptions &) noexcept`.
 - Produces: `result_scene_detail::persistenceAttemptId(const ResultPersistenceOptions &) noexcept`.
 - Produces: `result_scene_detail::retryPersistenceAttempt(ResultPersistenceOptions &, std::span<const ir::IrOutboxDraft>, const ResultPersistenceRetryCallbacks &)`.
-- Produces: `result_scene_detail::applyCoursePersistenceReceipt(const ResultPersistenceOptions &, CoursePlaySession &) noexcept`.
+- Produces: `result_scene_detail::applyCoursePersistenceReceipt(const std::shared_ptr<const CompletedCourseAttempt> &, const SaveOutcome &, CoursePlaySession &) noexcept` in the focused course-persistence header.
 - Consumes: `result_persistence::Coordinator::persistCourse(const CompletedCourseAttempt &)`, with no IR drafts.
 
 - [ ] **Step 1: Write real attempt-policy, retry, and receipt regressions**
@@ -421,8 +422,8 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
           "course retry executes the course persistence branch");
 
   CoursePlaySession session;
-  require(result_scene_detail::applyCoursePersistenceReceipt(persistence,
-                                                               session) &&
+  require(result_scene_detail::applyCoursePersistenceReceipt(
+              persistence.courseAttempt, persistence.outcome, session) &&
               session.courseReplaySaved &&
               session.savedCourseReplayId == 91 &&
               session.courseReplayPlaybackData != nullptr,
@@ -475,7 +476,7 @@ Use these helpers in `persistenceDecisionRequired`, status creation, Retry Save 
 
 Add `ResultPersistenceRetryCallbacks` with one chart callback taking the attempt and automatic drafts, and one course callback taking only the course attempt. Implement `retryPersistenceAttempt` to fail closed unless exactly one attempt and its callback exist, invoke only that callback, and replace `persistence.outcome` with the returned value.
 
-Implement `applyCoursePersistenceReceipt` to require a retained course attempt, `SaveState::Saved`, a positive receipt result ID, a non-empty created time, and an exact receipt/attempt ID match. On success it sets `courseReplaySaved`, `savedCourseReplayId`, and a copy of the retained `CourseReplayPlaybackData`; otherwise it leaves the session unchanged and returns false.
+Create `ResultCoursePersistence.h` and implement `applyCoursePersistenceReceipt` there so `ResultScene.h` can retain its lightweight `CoursePlaySession` forward declaration. The helper requires a retained course attempt, `SaveState::Saved`, a positive receipt result ID, a non-empty created time, and an exact receipt/attempt ID match. On success it sets `courseReplaySaved`, `savedCourseReplayId`, and a copy of the retained `CourseReplayPlaybackData`; otherwise it leaves the session unchanged and returns false.
 
 - [ ] **Step 4: Retain the first course attempt and apply successful receipts**
 
@@ -546,7 +547,8 @@ Expected: PASS; chart retry contracts remain present, course attempt selection i
 - [ ] **Step 7: Commit the course retry fix**
 
 ```bash
-git add src/scene/ResultScene.h src/scene/ResultScene.cpp \
+git add src/scene/ResultCoursePersistence.h src/scene/ResultScene.h \
+  src/scene/ResultScene.cpp \
   tests/remote_result_scene_tests.cpp
 git commit -m "fix: expose failed course replay saves for retry"
 ```
