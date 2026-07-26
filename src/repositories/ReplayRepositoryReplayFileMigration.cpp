@@ -519,8 +519,12 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
 
   for (const auto &entry : chart.events) {
     if (std::isfinite(entry.event.gauge)) {
+      persisted.adoptedGaugeType = entry.event.gaugeType;
       persisted.adoptedGaugeHistory.push_back(entry.event.gauge);
     }
+  }
+  if (persisted.adoptedGaugeHistory.empty()) {
+    persisted.adoptedGaugeType = persisted.score.provenance.gaugeType;
   }
   if (!normalizeResultProvenance(persisted.score.provenance,
                                  chart.provenanceJson, diagnostic)) {
@@ -831,6 +835,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
         {.stageIndex = static_cast<int>(stageIndex),
          .score = chart.result.score,
          .keyMode = chart.result.keyMode,
+         .adoptedGaugeType = chart.result.adoptedGaugeType,
          .adoptedGaugeHistory = chart.result.adoptedGaugeHistory,
          .judgementTiming = chart.result.judgementTiming});
     persisted.maxScore += chart.result.score.maxScore;
@@ -1093,10 +1098,10 @@ bool insertChart(sqlite3 *database, const LegacyChart &chart,
       "INSERT INTO chart_results(id,attempt_id,chart_path,chart_md5,"
       "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,score,"
       "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
-      "fast,slow,final_gauge,clear_type,gauge_history_json,"
+      "fast,slow,final_gauge,clear_type,adopted_gauge_type,gauge_history_json,"
       "judgement_timing_json,provenance_json,result_fingerprint,"
       "played_at_unix_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-      "?,?,?,?,?,?,?,?,NULL,?,?,?,?)");
+      "?,?,?,?,?,?,?,?,?,NULL,?,?,?,?)");
   if (!result.valid()) {
     diagnostic = result.error();
     return false;
@@ -1130,13 +1135,16 @@ bool insertChart(sqlite3 *database, const LegacyChart &chart,
       sqlite3_bind_double(result.get(), column++, score.finalGauge) ==
           SQLITE_OK &&
       sqlite3_bind_int(result.get(), column++, score.clearType) == SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++,
+                       gaugeTypeIndex(persisted.adoptedGaugeType)) ==
+          SQLITE_OK &&
       bindText(result.get(), column++, history) &&
       bindText(result.get(), column++, chart.provenanceJson) &&
       bindText(result.get(), column++, persisted.resultFingerprint) &&
       sqlite3_bind_int64(result.get(), column++,
                          persisted.playedAtUnixMillis) == SQLITE_OK &&
       bindText(result.get(), column++, chart.createdAt);
-  if (!okay || column != 29 || sqlite3_step(result.get()) != SQLITE_DONE) {
+  if (!okay || column != 30 || sqlite3_step(result.get()) != SQLITE_DONE) {
     diagnostic = result.error();
     return false;
   }
@@ -1235,8 +1243,9 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
       "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,key_mode,"
       "long_note_mode,score,max_score,max_combo,combo_break,p_great,great,"
       "good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
-      "gauge_history_json,judgement_timing_json,provenance_json) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+      "adopted_gauge_type,gauge_history_json,judgement_timing_json,"
+      "provenance_json) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   if (!stage.valid()) {
     diagnostic = stage.error();
     return false;
@@ -1280,10 +1289,13 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
         sqlite3_bind_double(stage.get(), column++, score.finalGauge) ==
             SQLITE_OK &&
         sqlite3_bind_int(stage.get(), column++, score.clearType) == SQLITE_OK &&
+        sqlite3_bind_int(stage.get(), column++,
+                         gaugeTypeIndex(persistedStage.adoptedGaugeType)) ==
+            SQLITE_OK &&
         bindText(stage.get(), column++, history) &&
         sqlite3_bind_null(stage.get(), column++) == SQLITE_OK &&
         bindText(stage.get(), column++, provenance);
-    if (!okay || column != 27 || sqlite3_step(stage.get()) != SQLITE_DONE) {
+    if (!okay || column != 28 || sqlite3_step(stage.get()) != SQLITE_DONE) {
       diagnostic = stage.error();
       return false;
     }
@@ -1601,7 +1613,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                      "replay schema version query is malformed");
     }
   }
-  if (userVersion == 11) {
+  if (userVersion == 11 || userVersion == 12) {
     return {.status = MigrationStatus::AlreadyCurrent};
   }
   if (userVersion != 10) {
@@ -1736,7 +1748,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                    charts.size(), courses.size());
   }
   if (fault(faults, "version-update") ||
-      !execute(database, "PRAGMA user_version=11", diagnostic)) {
+      !execute(database, "PRAGMA user_version=12", diagnostic)) {
     return failure(MigrationStatus::StorageFailure,
                    "could not advance replay schema version", charts.size(),
                    courses.size());

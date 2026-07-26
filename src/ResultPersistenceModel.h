@@ -116,6 +116,7 @@ struct PersistedChartResult {
   std::optional<std::string> attemptId;
   ChartScoreWrite score;
   int keyMode = 0;
+  GaugeType adoptedGaugeType = GaugeType::Normal;
   std::vector<float> adoptedGaugeHistory;
   std::optional<ChartJudgementTiming> judgementTiming;
   std::int64_t playedAtUnixMillis = 0;
@@ -128,6 +129,7 @@ struct PersistedCourseStageResult {
   int stageIndex = 0;
   ChartScoreWrite score;
   int keyMode = 0;
+  GaugeType adoptedGaugeType = GaugeType::Normal;
   std::vector<float> adoptedGaugeHistory;
   std::optional<ChartJudgementTiming> judgementTiming;
 

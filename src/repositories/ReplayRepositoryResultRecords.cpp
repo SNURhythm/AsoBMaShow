@@ -638,7 +638,8 @@ ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId) {
       "r.chart_title,r.chart_artist,r.key_mode,r.long_note_mode,r.score,"
       "r.max_score,r.max_combo,r.combo_break,r.p_great,r.great,r.good,r.bad,"
       "r.poor,r.k_poor,r.fast,r.slow,r.final_gauge,r.clear_type,"
-      "r.gauge_history_json,r.judgement_timing_json,r.provenance_json,"
+      "r.adopted_gauge_type,r.gauge_history_json,r.judgement_timing_json,"
+      "r.provenance_json,"
       "r.result_fingerprint,r.played_at_unix_ms,f.id,f.stem,f.history_index,"
       "f.relative_path,f.content_sha256,f.compressed_size,f.codec_version "
       "FROM chart_results r LEFT JOIN replay_files f ON f.chart_result_id=r.id "
@@ -686,20 +687,26 @@ ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId) {
   score.finalGauge =
       static_cast<float>(sqlite3_column_double(statement.get(), 21));
   score.clearType = sqlite3_column_int(statement.get(), 22);
-  const auto history = parseGaugeHistory(columnText(statement.get(), 23));
+  const int adoptedGaugeType = sqlite3_column_int(statement.get(), 23);
+  if (adoptedGaugeType < 0 ||
+      adoptedGaugeType >= static_cast<int>(kGaugeTypeCount)) {
+    return invalidResult("chart result adopted gauge type is invalid");
+  }
+  result.adoptedGaugeType = gaugeTypeAtIndex(adoptedGaugeType);
+  const auto history = parseGaugeHistory(columnText(statement.get(), 24));
   if (!history.has_value()) {
     return invalidResult("chart result gauge history is malformed");
   }
   result.adoptedGaugeHistory = *history;
-  if (sqlite3_column_type(statement.get(), 24) != SQLITE_NULL) {
+  if (sqlite3_column_type(statement.get(), 25) != SQLITE_NULL) {
     result.judgementTiming =
-        parseJudgementTiming(columnText(statement.get(), 24));
+        parseJudgementTiming(columnText(statement.get(), 25));
     if (!result.judgementTiming.has_value()) {
       return invalidResult("chart result timing breakdown is malformed");
     }
   }
   std::string provenanceDiagnostic;
-  const std::string provenanceJson = columnText(statement.get(), 25);
+  const std::string provenanceJson = columnText(statement.get(), 26);
   if (provenanceJson.size() > kMaximumResultJsonBytes) {
     return invalidResult("chart result provenance is oversized");
   }
@@ -709,8 +716,8 @@ ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId) {
     return invalidResult("chart result provenance is malformed");
   }
   score.provenance = std::move(*provenance);
-  result.resultFingerprint = columnText(statement.get(), 26);
-  result.playedAtUnixMillis = sqlite3_column_int64(statement.get(), 27);
+  result.resultFingerprint = columnText(statement.get(), 27);
+  result.playedAtUnixMillis = sqlite3_column_int64(statement.get(), 28);
   std::string resultDiagnostic;
   if (!result_persistence::validatePersistedChartResult(result,
                                                         resultDiagnostic) ||
@@ -721,21 +728,21 @@ ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId) {
   }
 
   ResultRecord record{.result = std::move(result)};
-  if (sqlite3_column_type(statement.get(), 28) != SQLITE_NULL) {
-    const auto size = sqlite3_column_int64(statement.get(), 33);
+  if (sqlite3_column_type(statement.get(), 29) != SQLITE_NULL) {
+    const auto size = sqlite3_column_int64(statement.get(), 34);
     if (size <= 0) {
       return invalidResult("replay file size is invalid");
     }
     record.replayFile = ReplayFileReference{
-        .id = sqlite3_column_int64(statement.get(), 28),
+        .id = sqlite3_column_int64(statement.get(), 29),
         .recordKind = ReplayFileReference::RecordKind::ChartResult,
         .recordId = resultId,
-        .stem = columnText(statement.get(), 29),
-        .historyIndex = sqlite3_column_int64(statement.get(), 30),
-        .relativePath = std::filesystem::path(columnText(statement.get(), 31)),
-        .contentSha256 = columnText(statement.get(), 32),
+        .stem = columnText(statement.get(), 30),
+        .historyIndex = sqlite3_column_int64(statement.get(), 31),
+        .relativePath = std::filesystem::path(columnText(statement.get(), 32)),
+        .contentSha256 = columnText(statement.get(), 33),
         .compressedSize = static_cast<std::uint64_t>(size),
-        .codecVersion = sqlite3_column_int(statement.get(), 34),
+        .codecVersion = sqlite3_column_int(statement.get(), 35),
     };
     ReplayFileReference check = *record.replayFile;
     check.id = 0;
@@ -874,7 +881,8 @@ CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
       "SELECT stage_index,chart_path,chart_md5,chart_sha256,chart_title,"
       "chart_artist,key_mode,long_note_mode,score,max_score,max_combo,"
       "combo_break,p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,"
-      "clear_type,gauge_history_json,judgement_timing_json,provenance_json "
+      "clear_type,adopted_gauge_type,gauge_history_json,judgement_timing_json,"
+      "provenance_json "
       "FROM course_result_stages WHERE course_result_id=? ORDER BY "
       "stage_index";
   if (prepareSqliteStatement(database, stageQuery, stages) != SQLITE_OK ||
@@ -916,20 +924,27 @@ CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
     score.finalGauge =
         static_cast<float>(sqlite3_column_double(stages.get(), 20));
     score.clearType = sqlite3_column_int(stages.get(), 21);
-    auto history = parseGaugeHistory(columnText(stages.get(), 22));
+    const int adoptedGaugeType = sqlite3_column_int(stages.get(), 22);
+    if (adoptedGaugeType < 0 ||
+        adoptedGaugeType >= static_cast<int>(kGaugeTypeCount)) {
+      return invalidCourseResult(
+          "course result stage adopted gauge type is invalid");
+    }
+    stage.adoptedGaugeType = gaugeTypeAtIndex(adoptedGaugeType);
+    auto history = parseGaugeHistory(columnText(stages.get(), 23));
     if (!history.has_value()) {
       return invalidCourseResult(
           "course result stage gauge history is malformed");
     }
     stage.adoptedGaugeHistory = std::move(*history);
-    if (sqlite3_column_type(stages.get(), 23) != SQLITE_NULL) {
+    if (sqlite3_column_type(stages.get(), 24) != SQLITE_NULL) {
       stage.judgementTiming =
-          parseJudgementTiming(columnText(stages.get(), 23));
+          parseJudgementTiming(columnText(stages.get(), 24));
       if (!stage.judgementTiming.has_value()) {
         return invalidCourseResult("course result stage timing is malformed");
       }
     }
-    const std::string stageProvenanceJson = columnText(stages.get(), 24);
+    const std::string stageProvenanceJson = columnText(stages.get(), 25);
     if (stageProvenanceJson.size() > kMaximumResultJsonBytes) {
       return invalidCourseResult("course result stage provenance is oversized");
     }
@@ -1151,9 +1166,10 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
       "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,chart_sha256,"
       "chart_title,chart_artist,key_mode,long_note_mode,score,max_score,"
       "max_combo,combo_break,p_great,great,good,bad,poor,k_poor,fast,slow,"
-      "final_gauge,clear_type,gauge_history_json,judgement_timing_json,"
+      "final_gauge,clear_type,adopted_gauge_type,gauge_history_json,"
+      "judgement_timing_json,"
       "provenance_json,result_fingerprint,played_at_unix_ms)"
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
   SqliteStatementHandle insert;
   if (prepareSqliteStatement(database, insertSql, insert) != SQLITE_OK) {
     return {.status = StageStatus::StorageFailure,
@@ -1181,6 +1197,9 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
       sqlite3_bind_double(insert.get(), column++, score.finalGauge) ==
           SQLITE_OK &&
       sqlite3_bind_int(insert.get(), column++, score.clearType) == SQLITE_OK &&
+      sqlite3_bind_int(insert.get(), column++,
+                       gaugeTypeIndex(sourceResult.adoptedGaugeType)) ==
+          SQLITE_OK &&
       bindText(insert.get(), column++, *history);
   if (sourceResult.judgementTiming.has_value()) {
     bound = bound && bindText(insert.get(), column++, *timing);
@@ -1191,7 +1210,7 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
           bindText(insert.get(), column++, sourceResult.resultFingerprint) &&
           sqlite3_bind_int64(insert.get(), column++,
                              sourceResult.playedAtUnixMillis) == SQLITE_OK;
-  if (!bound || column != 28 || sqlite3_step(insert.get()) != SQLITE_DONE) {
+  if (!bound || column != 29 || sqlite3_step(insert.get()) != SQLITE_DONE) {
     return {.status = StageStatus::StorageFailure,
             .diagnostic = "could not insert compact chart result"};
   }
@@ -1519,8 +1538,9 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
       "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,key_mode,"
       "long_note_mode,score,max_score,max_combo,combo_break,p_great,great,"
       "good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
-      "gauge_history_json,judgement_timing_json,provenance_json)"
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+      "adopted_gauge_type,gauge_history_json,judgement_timing_json,"
+      "provenance_json)"
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
   for (std::size_t index = 0; index < sourceResult.stages.size(); ++index) {
     const auto &stage = sourceResult.stages[index];
     const auto &score = stage.score;
@@ -1555,6 +1575,9 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
                                 score.finalGauge) == SQLITE_OK &&
             sqlite3_bind_int(stageInsert.get(), column++, score.clearType) ==
                 SQLITE_OK &&
+            sqlite3_bind_int(stageInsert.get(), column++,
+                             gaugeTypeIndex(stage.adoptedGaugeType)) ==
+                SQLITE_OK &&
             bindText(stageInsert.get(), column++, histories[index]);
     if (stage.judgementTiming.has_value()) {
       bound = bound && bindText(stageInsert.get(), column++, timings[index]);
@@ -1563,7 +1586,7 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
           bound && sqlite3_bind_null(stageInsert.get(), column++) == SQLITE_OK;
     }
     bound = bound && bindText(stageInsert.get(), column++, provenances[index]);
-    if (!bound || column != 27 ||
+    if (!bound || column != 28 ||
         sqlite3_step(stageInsert.get()) != SQLITE_DONE) {
       return {.status = StageStatus::StorageFailure,
               .diagnostic = "could not insert compact course stage"};

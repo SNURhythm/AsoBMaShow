@@ -17,6 +17,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -75,6 +77,19 @@ bool namedSchemaObjectExists(sqlite3 *database, std::string_view type,
          sqlite3_step(statement.get()) == SQLITE_ROW;
 }
 
+bool namedTableColumnExists(sqlite3 *database, std::string_view table,
+                            std::string_view column) {
+  SqliteStatementHandle statement;
+  const std::string query =
+      "SELECT 1 FROM pragma_table_info('" + std::string(table) +
+      "') WHERE name=?";
+  return prepareSqliteStatementLogged(
+             database, query.c_str(), statement,
+             "inspecting compact replay columns", logSqlErrorText) &&
+         bindSqliteText(statement.get(), 1, std::string(column)) &&
+         sqlite3_step(statement.get()) == SQLITE_ROW;
+}
+
 bool validateCompactReplaySchema11(sqlite3 *database) {
   constexpr std::array<std::string_view, 11> requiredTables{
       "chart_results",
@@ -127,6 +142,93 @@ bool validateCompactReplaySchema11(sqlite3 *database) {
     return false;
   }
   return true;
+}
+
+bool validateCompactReplaySchema12(sqlite3 *database) {
+  return validateCompactReplaySchema11(database) &&
+         namedTableColumnExists(database, "chart_results",
+                                "adopted_gauge_type") &&
+         namedTableColumnExists(database, "course_result_stages",
+                                "adopted_gauge_type");
+}
+
+bool backfillAdoptedGaugeTypes(sqlite3 *database, std::string_view table) {
+  const std::string selectSql =
+      "SELECT rowid,provenance_json FROM " + std::string(table);
+  SqliteStatementHandle rows;
+  if (prepareSqliteStatement(database, selectSql.c_str(), rows) != SQLITE_OK) {
+    return false;
+  }
+  std::vector<std::pair<sqlite3_int64, int>> updates;
+  int step = SQLITE_OK;
+  while ((step = sqlite3_step(rows.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(rows.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(rows.get(), 1) != SQLITE_TEXT) {
+      return false;
+    }
+    const auto *raw = sqlite3_column_text(rows.get(), 1);
+    const int bytes = sqlite3_column_bytes(rows.get(), 1);
+    const std::string provenanceJson(
+        raw == nullptr ? "" : reinterpret_cast<const char *>(raw),
+        static_cast<std::size_t>(std::max(0, bytes)));
+    std::string diagnostic;
+    const auto provenance =
+        deserializeScoreProvenance(provenanceJson, diagnostic);
+    if (!provenance.has_value()) {
+      return false;
+    }
+    updates.emplace_back(sqlite3_column_int64(rows.get(), 0),
+                         gaugeTypeIndex(provenance->gaugeType));
+  }
+  if (step != SQLITE_DONE) {
+    return false;
+  }
+  rows.reset();
+
+  const std::string updateSql = "UPDATE " + std::string(table) +
+                                " SET adopted_gauge_type=? WHERE rowid=?";
+  for (const auto &[rowId, gaugeType] : updates) {
+    SqliteStatementHandle update;
+    if (prepareSqliteStatement(database, updateSql.c_str(), update) !=
+            SQLITE_OK ||
+        sqlite3_bind_int(update.get(), 1, gaugeType) != SQLITE_OK ||
+        sqlite3_bind_int64(update.get(), 2, rowId) != SQLITE_OK ||
+        sqlite3_step(update.get()) != SQLITE_DONE ||
+        sqlite3_changes(database) != 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool migrateCompactReplaySchema11To12(sqlite3 *database) {
+  if (!validateCompactReplaySchema11(database) ||
+      namedTableColumnExists(database, "chart_results",
+                             "adopted_gauge_type") ||
+      namedTableColumnExists(database, "course_result_stages",
+                             "adopted_gauge_type")) {
+    return false;
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active() ||
+      !execSql(database,
+               "ALTER TABLE chart_results ADD COLUMN adopted_gauge_type "
+               "INTEGER NOT NULL DEFAULT 2 CHECK(adopted_gauge_type BETWEEN "
+               "0 AND 5)",
+               "adding chart adopted gauge type") ||
+      !execSql(database,
+               "ALTER TABLE course_result_stages ADD COLUMN "
+               "adopted_gauge_type INTEGER NOT NULL DEFAULT 2 "
+               "CHECK(adopted_gauge_type BETWEEN 0 AND 5)",
+               "adding course-stage adopted gauge type") ||
+      !backfillAdoptedGaugeTypes(database, "chart_results") ||
+      !backfillAdoptedGaugeTypes(database, "course_result_stages") ||
+      !setDatabaseUserVersion(database, 12)) {
+    return false;
+  }
+  return transaction.commit(transactionError);
 }
 
 constexpr const char *kIrOutboxTableSql =
@@ -182,10 +284,12 @@ bool createCompactReplaySchema11(sqlite3 *database) {
       "great INTEGER NOT NULL,good INTEGER NOT NULL,bad INTEGER NOT NULL,"
       "poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,fast INTEGER NOT NULL,"
       "slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
-      "clear_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
+      "clear_type INTEGER NOT NULL,adopted_gauge_type INTEGER NOT NULL,"
+      "gauge_history_json TEXT NOT NULL,"
       "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
       "result_fingerprint TEXT NOT NULL,played_at_unix_ms INTEGER NOT NULL,"
-      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "CHECK(adopted_gauge_type BETWEEN 0 AND 5))",
       "CREATE TABLE course_results("
       "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT UNIQUE,"
       "course_key TEXT NOT NULL,legacy_course_id INTEGER NOT NULL,"
@@ -212,9 +316,11 @@ bool createCompactReplaySchema11(sqlite3 *database) {
       "great INTEGER NOT NULL,good INTEGER NOT NULL,bad INTEGER NOT NULL,"
       "poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,fast INTEGER NOT NULL,"
       "slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
-      "clear_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
+      "clear_type INTEGER NOT NULL,adopted_gauge_type INTEGER NOT NULL,"
+      "gauge_history_json TEXT NOT NULL,"
       "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
       "PRIMARY KEY(course_result_id,stage_index),"
+      "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
       "FOREIGN KEY(course_result_id) REFERENCES course_results(id) "
       "ON DELETE CASCADE)",
       "CREATE TABLE replay_files("
@@ -330,7 +436,11 @@ bool migrateReplayDatabaseSchema(
     return false;
   }
   if (*version == kReplayDatabaseSchemaVersion) {
-    return validateCompactReplaySchema11(database);
+    return validateCompactReplaySchema12(database);
+  }
+  if (*version == 11) {
+    return migrateCompactReplaySchema11To12(database) &&
+           validateCompactReplaySchema12(database);
   }
   if (*version != 10) {
     SDL_Log("Replay database schema %d is not supported", *version);
@@ -358,7 +468,17 @@ bool migrateReplayDatabaseSchema(
             outcome.diagnostic.c_str());
     return false;
   }
-  return validateCompactReplaySchema11(database);
+  std::string migratedVersionError;
+  const auto migratedVersion =
+      readSqliteUserVersion(database, migratedVersionError);
+  if (!migratedVersion.has_value()) {
+    return false;
+  }
+  if (*migratedVersion == 11 &&
+      !migrateCompactReplaySchema11To12(database)) {
+    return false;
+  }
+  return validateCompactReplaySchema12(database);
 }
 
 std::filesystem::path resolvedReplayDatabasePath(

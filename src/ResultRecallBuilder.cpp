@@ -75,7 +75,7 @@ RhythmState stateFrom(const result_persistence::PersistedChartResult &result,
     }
   }
 
-  const GaugeType recordedGauge = score.provenance.gaugeType;
+  const GaugeType recordedGauge = result.adoptedGaugeType;
   state.gaugeType = recordedGauge;
   state.selectedGaugeType = recordedGauge;
   state.currentGauge = score.finalGauge;
@@ -92,6 +92,7 @@ result_persistence::PersistedChartResult stageResultFor(
   return {
       .score = stage.score,
       .keyMode = stage.keyMode,
+      .adoptedGaugeType = stage.adoptedGaugeType,
       .adoptedGaugeHistory = stage.adoptedGaugeHistory,
       .judgementTiming = stage.judgementTiming,
       .playedAtUnixMillis = course.playedAtUnixMillis,

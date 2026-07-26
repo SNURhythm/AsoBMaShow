@@ -577,7 +577,7 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
          "schema-v10 chart rows migrate successfully");
   expect(outcome.chartFiles == 1 && outcome.courseFiles == 0,
          "migration reports the finalized chart file");
-  expect(integer(database.get(), "PRAGMA user_version") == 11,
+  expect(integer(database.get(), "PRAGMA user_version") == 12,
          "migration advances the schema exactly once");
   expect(!tableExists(database.get(), "replays") &&
              !tableExists(database.get(), "replay_events") &&
@@ -1273,7 +1273,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
   repository.Shutdown();
 
   Database migrated(databasePath);
-  expect(integer(migrated.get(), "PRAGMA user_version") == 11 &&
+  expect(integer(migrated.get(), "PRAGMA user_version") == 12 &&
              integer(migrated.get(),
                      "SELECT count(*) FROM chart_results WHERE id=42") == 1,
          "startup exposes only the committed compact schema");

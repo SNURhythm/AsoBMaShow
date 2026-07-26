@@ -186,6 +186,8 @@ CompletedChartAttempt validAttempt(std::string attemptId, int salt = 0) {
   provenance.ruleset = RulesetDescriptor::Current();
   result.score.provenance = makeScoreProvenance(provenance);
   result.keyMode = 7;
+  result.adoptedGaugeType =
+      salt == 0 ? GaugeType::Easy : GaugeType::Hard;
   result.adoptedGaugeHistory = {20.0F, 48.5F, 82.5F};
   result.judgementTiming = ChartJudgementTiming{};
   result.judgementTiming->byJudgement[PGreat] = {.fast = 1, .slow = 1};
@@ -279,11 +281,13 @@ CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
       {.stageIndex = 0,
        .score = first.result.score,
        .keyMode = first.result.keyMode,
+       .adoptedGaugeType = first.result.adoptedGaugeType,
        .adoptedGaugeHistory = first.result.adoptedGaugeHistory,
        .judgementTiming = first.result.judgementTiming},
       {.stageIndex = 1,
        .score = second.result.score,
        .keyMode = second.result.keyMode,
+       .adoptedGaugeType = second.result.adoptedGaugeType,
        .adoptedGaugeHistory = second.result.adoptedGaugeHistory,
        .judgementTiming = second.result.judgementTiming},
   };
@@ -898,11 +902,12 @@ void testSummaryCorruptionAllowanceIsBounded() {
       "attempt_id,chart_path,chart_md5,chart_sha256,chart_title,chart_artist,"
       "key_mode,long_note_mode,score,max_score,max_combo,combo_break,p_great,"
       "great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
-      "gauge_history_json,judgement_timing_json,provenance_json,"
+      "adopted_gauge_type,gauge_history_json,judgement_timing_json,"
+      "provenance_json,"
       "result_fingerprint,played_at_unix_ms) SELECT NULL,chart_path,chart_md5,"
       "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,score,"
       "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
-      "fast,slow,final_gauge,clear_type,gauge_history_json,"
+      "fast,slow,final_gauge,clear_type,adopted_gauge_type,gauge_history_json,"
       "judgement_timing_json,provenance_json,'bad',played_at_unix_ms+x "
       "FROM chart_results JOIN seq WHERE id=" +
       std::to_string(saved.receipt->resultId);

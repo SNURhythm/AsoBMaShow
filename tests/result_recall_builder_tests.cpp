@@ -50,8 +50,9 @@ result_persistence::PersistedChartResult validResult(
               .finalGauge = 93.25F,
               .clearType = kClearTypeFullComboRank,
               .provenance = verifiedProvenance(),
-          },
+      },
       .keyMode = 7,
+      .adoptedGaugeType = GaugeType::Easy,
       .adoptedGaugeHistory = {20.0F, 61.5F, 93.25F},
       .playedAtUnixMillis = 1784420645000LL,
   };
@@ -130,6 +131,10 @@ void testChartRecallUsesPersistedFactsOnly() {
   assertStateMatches(recalled.state, expected.score,
                      expected.adoptedGaugeHistory,
                      *expected.judgementTiming);
+  assert(recalled.state.gaugeType == expected.adoptedGaugeType);
+  assert(recalled.state.selectedGaugeType == expected.adoptedGaugeType);
+  assert(recalled.state.gaugeHistoryFor(expected.adoptedGaugeType) ==
+         expected.adoptedGaugeHistory);
   assert(recalled.result.playedAtUnixMillis == 1784420645000LL);
   assert(recalled.result.score.provenance == expected.score.provenance);
 }
@@ -292,11 +297,13 @@ result_persistence::PersistedCourseResult validCourseResult() {
           {.stageIndex = 0,
            .score = first.score,
            .keyMode = first.keyMode,
+           .adoptedGaugeType = first.adoptedGaugeType,
            .adoptedGaugeHistory = first.adoptedGaugeHistory,
            .judgementTiming = first.judgementTiming},
           {.stageIndex = 1,
            .score = second.score,
            .keyMode = second.keyMode,
+           .adoptedGaugeType = second.adoptedGaugeType,
            .adoptedGaugeHistory = second.adoptedGaugeHistory,
            .judgementTiming = second.judgementTiming},
       },

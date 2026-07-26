@@ -52,6 +52,7 @@ result_persistence::PersistedChartResult validResult() {
   result.attemptId = std::string(kAttemptId);
   result.score = validScore();
   result.keyMode = 7;
+  result.adoptedGaugeType = GaugeType::Hard;
   result.adoptedGaugeHistory = {20.0F, 48.5F, 82.5F};
   result.playedAtUnixMillis = 1'700'000'000'123LL;
   result.resultFingerprint = result_persistence::resultFingerprint(result);
@@ -116,6 +117,9 @@ void testChartResultIndependenceAndFingerprint() {
                                "judgement totals");
   expectChartFingerprintChange([](auto &value) { value.keyMode = 14; },
                                "keyMode");
+  expectChartFingerprintChange(
+      [](auto &value) { value.adoptedGaugeType = GaugeType::Easy; },
+      "adoptedGaugeType");
   expectChartFingerprintChange(
       [](auto &value) { value.adoptedGaugeHistory.push_back(1.0F); },
       "gaugeHistory");
@@ -212,10 +216,12 @@ result_persistence::PersistedCourseResult validCourse() {
       {.stageIndex = 0,
        .score = validScore('a'),
        .keyMode = 7,
+       .adoptedGaugeType = GaugeType::Hard,
        .adoptedGaugeHistory = {20.0F, 70.0F}},
       {.stageIndex = 1,
        .score = validScore('d'),
        .keyMode = 14,
+       .adoptedGaugeType = GaugeType::Normal,
        .adoptedGaugeHistory = {70.0F, 62.5F}},
   };
   result.playedAtUnixMillis = 1'700'000'000'456LL;
@@ -256,6 +262,9 @@ void testCourseResult() {
   expectCourseFingerprintChange(
       [](auto &value) { value.stages[0].adoptedGaugeHistory[0] += 1.0F; },
       "stage facts");
+  expectCourseFingerprintChange(
+      [](auto &value) { value.stages[0].adoptedGaugeType = GaugeType::Easy; },
+      "stage adopted gauge type");
 
   auto invalid = result;
   invalid.stages[1].stageIndex = 0;

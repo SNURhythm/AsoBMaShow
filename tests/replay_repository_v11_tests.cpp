@@ -153,6 +153,7 @@ result_persistence::PersistedChartResult validResult(std::string attemptId) {
   result.score.clearType = kClearTypeNormalClearRank;
   result.score.provenance = ScoreProvenance::Legacy();
   result.keyMode = 7;
+  result.adoptedGaugeType = GaugeType::Easy;
   result.adoptedGaugeHistory = {20.0F, 48.5F, 82.5F};
   result.judgementTiming = result_persistence::ChartJudgementTiming{};
   result.judgementTiming->byJudgement[PGreat] = {.fast = 1, .slow = 1};
@@ -285,12 +286,20 @@ void testFreshCompactSchema() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
   ReplayRepository repository(databasePath);
-  expect(repository.EnsureSchema(), "fresh v11 replay schema is created");
+  expect(repository.EnsureSchema(), "fresh compact replay schema is created");
   repository.Shutdown();
 
   Database database(databasePath);
-  expect(scalarInteger(database.get(), "PRAGMA user_version") == 11,
-         "fresh replay database uses schema version 11");
+  expect(scalarInteger(database.get(), "PRAGMA user_version") == 12,
+         "fresh replay database uses schema version 12");
+  const auto chartColumns = stringSet(
+      database.get(), "SELECT name FROM pragma_table_info('chart_results')");
+  const auto courseStageColumns = stringSet(
+      database.get(),
+      "SELECT name FROM pragma_table_info('course_result_stages')");
+  expect(chartColumns.contains("adopted_gauge_type") &&
+             courseStageColumns.contains("adopted_gauge_type"),
+         "compact result tables store adopted gauge types");
   const auto tables = stringSet(
       database.get(),
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
@@ -332,6 +341,49 @@ void testFreshCompactSchema() {
   expect(replayForeignTables.contains("chart_results") &&
              replayForeignTables.contains("course_results"),
          "replay files associate with compact chart or course results");
+}
+
+void testVersion11AdoptedGaugeMigration() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(), "schema-11 migration fixture is created");
+  repository.Shutdown();
+
+  {
+    Database database(databasePath);
+    expect(execute(database.get(),
+                   "PRAGMA writable_schema=ON;") &&
+               execute(database.get(),
+                       "UPDATE sqlite_master SET sql=replace(replace(sql,"
+                       "'adopted_gauge_type INTEGER NOT NULL,',''),"
+                       "',CHECK(adopted_gauge_type BETWEEN 0 AND 5)','') "
+                       "WHERE type='table' AND name='chart_results'") &&
+               execute(database.get(),
+                       "UPDATE sqlite_master SET sql=replace(replace(sql,"
+                       "'adopted_gauge_type INTEGER NOT NULL,',''),"
+                       "'CHECK(adopted_gauge_type BETWEEN 0 AND 5),','') "
+                       "WHERE type='table' AND "
+                       "name='course_result_stages'") &&
+               execute(database.get(), "PRAGMA writable_schema=OFF") &&
+               execute(database.get(), "PRAGMA user_version=11"),
+           "schema-12-only gauge columns are removed from the fixture");
+  }
+
+  expect(repository.EnsureSchema(),
+         "schema 11 migrates adopted gauge columns atomically");
+  repository.Shutdown();
+
+  Database database(databasePath);
+  expect(scalarInteger(database.get(), "PRAGMA user_version") == 12 &&
+             stringSet(database.get(),
+                       "SELECT name FROM pragma_table_info('chart_results')")
+                 .contains("adopted_gauge_type") &&
+             stringSet(database.get(),
+                       "SELECT name FROM pragma_table_info("
+                       "'course_result_stages')")
+                 .contains("adopted_gauge_type"),
+         "schema-11 migration commits version and both columns together");
 }
 
 void testProfileBindingCleansStaleReplayTemporaries() {
@@ -671,6 +723,7 @@ void testMalformedVersion10FailsClosed() {
 
 int main() {
   testFreshCompactSchema();
+  testVersion11AdoptedGaugeMigration();
   testProfileBindingCleansStaleReplayTemporaries();
   testMalformedVersion11FailsClosed();
   testCompactStageAndIndependentReads();

@@ -208,6 +208,73 @@ bool knownClearRank(int value) noexcept {
   return std::ranges::find(ranks, value) != ranks.end();
 }
 
+bool knownGaugeType(GaugeType value) noexcept {
+  const int index = static_cast<int>(value);
+  return index >= 0 && index < static_cast<int>(kGaugeTypeCount);
+}
+
+std::string legacyResultFingerprintV2(const PersistedChartResult &result) {
+  CanonicalEncoder encoder;
+  encoder.string("asobmashow-chart-result-v2");
+  encoder.optional(result.attemptId,
+                   [&](const std::string &value) { encoder.string(value); });
+  appendScore(encoder, result.score);
+  encoder.integer(static_cast<std::int32_t>(result.keyMode));
+  appendGaugeHistory(encoder, result.adoptedGaugeHistory);
+  appendTiming(encoder, result.judgementTiming);
+  encoder.integer(result.playedAtUnixMillis);
+  return encoder.finish();
+}
+
+std::string legacyResultFingerprintV2(const PersistedCourseResult &result) {
+  CanonicalEncoder encoder;
+  encoder.string("asobmashow-course-result-v2");
+  encoder.optional(result.attemptId,
+                   [&](const std::string &value) { encoder.string(value); });
+  encoder.string(result.courseKey);
+  encoder.integer(static_cast<std::int32_t>(result.legacyCourseId));
+  encoder.string(result.courseName);
+  encoder.string(result.courseGroupName);
+  encoder.string(result.constraintJson);
+  encoder.integer(static_cast<std::int32_t>(result.completedCharts));
+  encoder.integer(static_cast<std::int32_t>(result.totalCharts));
+  encoder.string(result.requestedPlayOption);
+  encoder.string(result.assistOption);
+  encoder.integer(
+      static_cast<std::int32_t>(gaugeTypeIndex(result.initialGaugeType)));
+  encoder.enumeration(result.gaugeProfile);
+  encoder.integer(static_cast<std::int32_t>(
+      gaugeAutoShiftModeValue(result.gaugeAutoShift)));
+  encoder.integer(static_cast<std::int32_t>(
+      gaugeTypeIndex(result.gaugeAutoShiftLowerBound)));
+  encoder.integer(static_cast<std::int32_t>(result.longNoteMode));
+  encoder.integer(static_cast<std::int32_t>(result.finalScore));
+  encoder.integer(static_cast<std::int32_t>(result.maxScore));
+  encoder.integer(static_cast<std::int32_t>(result.maxCombo));
+  encoder.float32(result.finalGauge);
+  encoder.integer(static_cast<std::int32_t>(result.clearType));
+  appendProvenance(encoder, result.provenance);
+  encoder.vector(result.stages, [&](const PersistedCourseStageResult &stage) {
+    encoder.integer(static_cast<std::int32_t>(stage.stageIndex));
+    appendScore(encoder, stage.score);
+    encoder.integer(static_cast<std::int32_t>(stage.keyMode));
+    appendGaugeHistory(encoder, stage.adoptedGaugeHistory);
+    appendTiming(encoder, stage.judgementTiming);
+  });
+  encoder.integer(result.playedAtUnixMillis);
+  return encoder.finish();
+}
+
+bool hasLegacyAdoptedGauge(const PersistedChartResult &result) noexcept {
+  return result.adoptedGaugeType == result.score.provenance.gaugeType;
+}
+
+bool hasLegacyAdoptedGauges(const PersistedCourseResult &result) noexcept {
+  return std::ranges::all_of(result.stages, [](const auto &stage) {
+    return stage.adoptedGaugeType == stage.score.provenance.gaugeType;
+  });
+}
+
 bool canonicalCourseKey(std::string_view value) noexcept {
   constexpr std::string_view prefix = "course:v1:";
   return value.starts_with(prefix) && value.size() == prefix.size() + 64U &&
@@ -377,6 +444,7 @@ std::optional<PersistedChartResult> capturePersistedChartResult(
       .score =
           captureChartScoreWrite(meta, state, provenance, storageLongNoteMode),
       .keyMode = meta.KeyMode,
+      .adoptedGaugeType = state.gaugeType,
       .adoptedGaugeHistory = state.gaugeHistoryFor(state.gaugeType),
       .judgementTiming = captureChartJudgementTiming(state),
       .playedAtUnixMillis = playedAtUnixMillis,
@@ -397,6 +465,7 @@ PersistedCourseStageResult capturePersistedCourseStageResult(
       .score =
           captureChartScoreWrite(meta, state, provenance, storageLongNoteMode),
       .keyMode = meta.KeyMode,
+      .adoptedGaugeType = state.gaugeType,
       .adoptedGaugeHistory = state.gaugeHistoryFor(state.gaugeType),
       .judgementTiming = captureChartJudgementTiming(state),
   };
@@ -415,6 +484,10 @@ bool validatePersistedChartResult(const PersistedChartResult &result,
       diagnostic = "attempt ID is not a canonical version-4 UUID";
       return false;
     }
+    if (!knownGaugeType(result.adoptedGaugeType)) {
+      diagnostic = "adopted gauge type is invalid";
+      return false;
+    }
     if (!validateResultFacts(result.score, result.keyMode,
                              result.adoptedGaugeHistory, result.judgementTiming,
                              diagnostic)) {
@@ -422,7 +495,9 @@ bool validatePersistedChartResult(const PersistedChartResult &result,
     }
     if (!result.resultFingerprint.empty() &&
         (!lowerHex(result.resultFingerprint, 64) ||
-         result.resultFingerprint != resultFingerprint(result))) {
+         (result.resultFingerprint != resultFingerprint(result) &&
+          (!hasLegacyAdoptedGauge(result) ||
+           result.resultFingerprint != legacyResultFingerprintV2(result))))) {
       diagnostic = "result fingerprint is malformed or inconsistent";
       return false;
     }
@@ -435,11 +510,12 @@ bool validatePersistedChartResult(const PersistedChartResult &result,
 
 std::string resultFingerprint(const PersistedChartResult &result) {
   CanonicalEncoder encoder;
-  encoder.string("asobmashow-chart-result-v2");
+  encoder.string("asobmashow-chart-result-v3");
   encoder.optional(result.attemptId,
                    [&](const std::string &value) { encoder.string(value); });
   appendScore(encoder, result.score);
   encoder.integer(static_cast<std::int32_t>(result.keyMode));
+  encoder.enumeration(result.adoptedGaugeType);
   appendGaugeHistory(encoder, result.adoptedGaugeHistory);
   appendTiming(encoder, result.judgementTiming);
   encoder.integer(result.playedAtUnixMillis);
@@ -483,6 +559,7 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
     for (std::size_t index = 0; index < result.stages.size(); ++index) {
       const auto &stage = result.stages[index];
       if (stage.stageIndex != static_cast<int>(index) ||
+          !knownGaugeType(stage.adoptedGaugeType) ||
           !validateResultFacts(stage.score, stage.keyMode,
                                stage.adoptedGaugeHistory, stage.judgementTiming,
                                diagnostic)) {
@@ -506,7 +583,9 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
     }
     if (!result.resultFingerprint.empty() &&
         (!lowerHex(result.resultFingerprint, 64) ||
-         result.resultFingerprint != resultFingerprint(result))) {
+         (result.resultFingerprint != resultFingerprint(result) &&
+          (!hasLegacyAdoptedGauges(result) ||
+           result.resultFingerprint != legacyResultFingerprintV2(result))))) {
       diagnostic = "course result fingerprint is malformed or inconsistent";
       return false;
     }
@@ -519,7 +598,7 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
 
 std::string resultFingerprint(const PersistedCourseResult &result) {
   CanonicalEncoder encoder;
-  encoder.string("asobmashow-course-result-v2");
+  encoder.string("asobmashow-course-result-v3");
   encoder.optional(result.attemptId,
                    [&](const std::string &value) { encoder.string(value); });
   encoder.string(result.courseKey);
@@ -549,6 +628,7 @@ std::string resultFingerprint(const PersistedCourseResult &result) {
     encoder.integer(static_cast<std::int32_t>(stage.stageIndex));
     appendScore(encoder, stage.score);
     encoder.integer(static_cast<std::int32_t>(stage.keyMode));
+    encoder.enumeration(stage.adoptedGaugeType);
     appendGaugeHistory(encoder, stage.adoptedGaugeHistory);
     appendTiming(encoder, stage.judgementTiming);
   });
