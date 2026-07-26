@@ -655,7 +655,7 @@ void testProfileStartupReclaimsFilelessReservations() {
          "profile startup reclaims fileless reservation indexes");
 }
 
-void testProfileStartupRetainsInstalledReplayReservation() {
+void testProfileStartupReclaimsInstalledReplayReservation() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
   const std::string stem = repeated('d', 64);
@@ -680,16 +680,47 @@ void testProfileStartupRetainsInstalledReplayReservation() {
   ReplayRepository reopened(databasePath);
   expect(reopened.EnsureSchema(),
          "profile restart opens installed reservation storage");
-  const auto retained = reopened.reserveReplayFile(installedAttempt, stem);
-  expect(retained.status == ReservationOutcome::Status::AlreadyReserved &&
-             retained.reservation == installed.reservation,
-         "startup retains a reservation with an installed final replay");
+  expect(!std::filesystem::exists(temporary.path() /
+                                  installed.reservation->relativePath),
+         "startup removes an unassociated finalized replay file");
+  const auto reclaimed = reopened.reserveReplayFile(installedAttempt, stem);
+  expect(reclaimed.status == ReservationOutcome::Status::Reserved &&
+             reclaimed.reservation &&
+             reclaimed.reservation->historyIndex == 0,
+         "startup reclaims the finalized orphan reservation");
   const auto afterRecovery = reopened.reserveReplayFile(
       "123e4567-e89b-42d3-a456-426614174122", stem);
   expect(afterRecovery.status == ReservationOutcome::Status::Reserved &&
              afterRecovery.reservation &&
              afterRecovery.reservation->historyIndex == 1,
-         "startup reclaims only the fileless trailing reservation");
+         "reclaimed orphan slots preserve monotonic live reservations");
+}
+
+void testExplicitlyDiscardsUndurableFinalReplay() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('e', 64);
+  constexpr std::string_view attempt =
+      "123e4567-e89b-42d3-a456-426614174130";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(), "undurable replay schema is ready");
+  const auto reserved = repository.reserveReplayFile(attempt, stem);
+  expect(reserved.reservation.has_value(),
+         "undurable replay reserves its final path");
+  if (!reserved.reservation) {
+    return;
+  }
+  const auto finalPath = temporary.path() / reserved.reservation->relativePath;
+  writeFile(finalPath, "finalized but unstaged replay");
+
+  std::string diagnostic;
+  expect(repository.discardUndurableReplay(attempt, stem, diagnostic) &&
+             !std::filesystem::exists(finalPath),
+         "continue cleanup removes the orphan file and reservation");
+  const auto reused = repository.reserveReplayFile(
+      "123e4567-e89b-42d3-a456-426614174131", stem);
+  expect(reused.reservation && reused.reservation->historyIndex == 1,
+         "explicit orphan cleanup keeps the live-session high-water mark");
 }
 
 void testMalformedVersion10FailsClosed() {
@@ -730,7 +761,8 @@ int main() {
   testReplayFileReadIsIndependentFromResultAndIr();
   testReservationIntegrityAndMonotonicity();
   testProfileStartupReclaimsFilelessReservations();
-  testProfileStartupRetainsInstalledReplayReservation();
+  testProfileStartupReclaimsInstalledReplayReservation();
+  testExplicitlyDiscardsUndurableFinalReplay();
   testMalformedVersion10FailsClosed();
   if (failures != 0) {
     std::cerr << failures << " replay repository v11 test(s) failed\n";

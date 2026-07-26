@@ -71,7 +71,12 @@ bool recoverReplayFileReservations(sqlite3 *database,
     return false;
   }
 
-  std::vector<std::string> abandonedAttempts;
+  struct AbandonedReservation {
+    std::string attemptId;
+    std::filesystem::path relativePath;
+    bool removeFinalFile = false;
+  };
+  std::vector<AbandonedReservation> abandoned;
   int step = SQLITE_OK;
   while ((step = sqlite3_step(candidates.get())) == SQLITE_ROW) {
     if (sqlite3_column_type(candidates.get(), 0) != SQLITE_TEXT ||
@@ -99,8 +104,12 @@ bool recoverReplayFileReservations(sqlite3 *database,
         (!pathError &&
          status.type() == std::filesystem::file_type::not_found) ||
         pathError == std::errc::no_such_file_or_directory;
-    if (definitelyMissing) {
-      abandonedAttempts.push_back(attemptId);
+    const bool privateFinalFile =
+        !pathError && status.type() == std::filesystem::file_type::regular;
+    if (definitelyMissing || privateFinalFile) {
+      abandoned.push_back({.attemptId = attemptId,
+                           .relativePath = identity->relativePath,
+                           .removeFinalFile = privateFinalFile});
     }
   }
   if (step != SQLITE_DONE) {
@@ -108,13 +117,23 @@ bool recoverReplayFileReservations(sqlite3 *database,
   }
   candidates.reset();
 
-  for (const std::string &attemptId : abandonedAttempts) {
+  replay::ReplayFileStore store(profileRoot);
+  for (const auto &reservation : abandoned) {
+    if (reservation.removeFinalFile) {
+      std::string removeDiagnostic;
+      if (!store.remove({.relativePath = reservation.relativePath},
+                        removeDiagnostic)) {
+        SDL_Log("Could not remove orphan replay reservation file: %s",
+                removeDiagnostic.c_str());
+        return false;
+      }
+    }
     SqliteStatementHandle remove;
     if (prepareSqliteStatement(
             database,
             "DELETE FROM replay_file_reservations WHERE attempt_id=?",
             remove) != SQLITE_OK ||
-        !bindSqliteText(remove.get(), 1, attemptId) ||
+        !bindSqliteText(remove.get(), 1, reservation.attemptId) ||
         sqlite3_step(remove.get()) != SQLITE_DONE ||
         sqlite3_changes(database) != 1) {
       return false;

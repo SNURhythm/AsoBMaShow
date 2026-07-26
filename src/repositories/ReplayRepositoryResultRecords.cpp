@@ -1992,6 +1992,66 @@ bool ReplayRepository::discardReplayFileReservation(
       impl_->sessionDatabase, reservation, diagnostic);
 }
 
+bool ReplayRepository::discardUndurableReplay(std::string_view attemptId,
+                                              std::string_view stem,
+                                              std::string &diagnostic) {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    diagnostic = "replay storage is unavailable";
+    return false;
+  }
+  if (!uuid::isCanonicalLowerV4(attemptId) || stem.empty()) {
+    diagnostic = "undurable replay identity is invalid";
+    return false;
+  }
+
+  SqliteStatementHandle query;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "SELECT r.history_index,r.relative_path FROM "
+          "replay_file_reservations r WHERE r.attempt_id=? AND r.stem=? "
+          "AND NOT EXISTS(SELECT 1 FROM chart_results c WHERE "
+          "c.attempt_id=r.attempt_id) AND NOT EXISTS(SELECT 1 FROM "
+          "course_results c WHERE c.attempt_id=r.attempt_id)",
+          query) != SQLITE_OK ||
+      !bindText(query.get(), 1, attemptId) ||
+      !bindText(query.get(), 2, stem)) {
+    diagnostic = "could not inspect undurable replay reservation";
+    return false;
+  }
+  const int step = sqlite3_step(query.get());
+  if (step == SQLITE_DONE) {
+    diagnostic.clear();
+    return true;
+  }
+  if (step != SQLITE_ROW ||
+      sqlite3_column_type(query.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_type(query.get(), 1) != SQLITE_TEXT) {
+    diagnostic = "undurable replay reservation is malformed";
+    return false;
+  }
+  ReplayFileReservation reservation{
+      .attemptId = std::string(attemptId),
+      .stem = std::string(stem),
+      .historyIndex = sqlite3_column_int64(query.get(), 0),
+      .relativePath = std::filesystem::path(columnText(query.get(), 1)),
+  };
+  if (sqlite3_step(query.get()) != SQLITE_DONE) {
+    diagnostic = "undurable replay reservation is ambiguous";
+    return false;
+  }
+  query.reset();
+
+  replay::ReplayFileStore store(
+      GetResolvedDatabasePathLocked().parent_path());
+  if (!store.remove({.relativePath = reservation.relativePath}, diagnostic)) {
+    return false;
+  }
+  return replay_repository_detail::DiscardReplayFileReservationOnConnection(
+      impl_->sessionDatabase, reservation, diagnostic);
+}
+
 result_persistence::StageOutcome ReplayRepository::stageCompletedChartAttempt(
     const result_persistence::PersistedChartResult &result,
     const ir::IrSubmissionSnapshot &snapshot,

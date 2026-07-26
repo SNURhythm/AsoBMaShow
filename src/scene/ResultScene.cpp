@@ -57,6 +57,31 @@ std::int64_t nowUnixMillis() {
       .count();
 }
 
+std::optional<std::string>
+persistenceReplayStem(const ResultPersistenceOptions &persistence,
+                      std::string &diagnostic) {
+  diagnostic.clear();
+  if (persistence.attempt != nullptr && persistence.courseAttempt == nullptr) {
+    const auto &setup = persistence.attempt->replay.setup;
+    return replay::chartStem(setup.chartSha256, setup.longNoteMode,
+                             setup.hasUndefinedLongNotes, diagnostic);
+  }
+  if (persistence.courseAttempt != nullptr && persistence.attempt == nullptr) {
+    replay::CoursePathInput pathInput;
+    pathInput.longNoteMode = persistence.courseAttempt->result.longNoteMode;
+    pathInput.beatorajaConstraintIds = beatorajaCourseConstraintIds(
+        persistence.courseAttempt->result.constraintJson);
+    for (const auto &stage : persistence.courseAttempt->replay.stages) {
+      pathInput.stageSha256.push_back(stage.setup.chartSha256);
+      pathInput.hasUndefinedLongNotes =
+          pathInput.hasUndefinedLongNotes || stage.setup.hasUndefinedLongNotes;
+    }
+    return replay::courseStem(pathInput, diagnostic);
+  }
+  diagnostic = "persistence attempt is unavailable or ambiguous";
+  return std::nullopt;
+}
+
 std::optional<int> rankingBadPoints(const RhythmState &state) {
   const auto count = [&](Judgement judgement) {
     const auto it = state.judgeCount.find(judgement);
@@ -1277,6 +1302,20 @@ void ResultScene::continueWithoutSaving() {
   auto *local = localSource();
   if (local == nullptr) {
     return;
+  }
+  if (!local->persistenceOptions.outcome.durable() &&
+      result_scene_detail::hasPersistenceAttempt(local->persistenceOptions)) {
+    std::string diagnostic;
+    const auto stem =
+        persistenceReplayStem(local->persistenceOptions, diagnostic);
+    const std::string_view attemptId =
+        result_scene_detail::persistenceAttemptId(local->persistenceOptions);
+    if (!stem.has_value() ||
+        !context.replayRepository.discardUndurableReplay(attemptId, *stem,
+                                                         diagnostic)) {
+      SDL_Log("Could not discard undurable replay after Continue: %s",
+              diagnostic.c_str());
+    }
   }
   local->persistenceContinueChosen = true;
   updateResultPersistencePresentation();

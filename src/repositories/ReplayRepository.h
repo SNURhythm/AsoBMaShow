@@ -420,6 +420,9 @@ public:
                               const ReplayFileReservation &destination);
   bool discardReplayFileReservation(const ReplayFileReservation &reservation,
                                     std::string &diagnostic);
+  bool discardUndurableReplay(std::string_view attemptId,
+                              std::string_view stem,
+                              std::string &diagnostic);
   result_persistence::StageOutcome stageCompletedChartAttempt(
       const result_persistence::PersistedChartResult &result,
       const ir::IrSubmissionSnapshot &irSnapshot,
