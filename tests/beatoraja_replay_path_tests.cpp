@@ -1,4 +1,5 @@
 #include "replay/BeatorajaReplayPath.h"
+#include "replay/ReplayPlaybackData.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -196,6 +197,17 @@ void testReplayFilenameComponentsStayWithinFilesystemLimit() {
          "formatted replay path rejects a filename over 255 bytes");
 }
 
+void testUndefinedLongNoteDetectionIncludesBackspins() {
+  expect(replay::hasUndefinedLongNotesForReplay(0, 0, 1),
+         "undefined long scratches require a mode-specific replay path");
+  expect(replay::hasUndefinedLongNotesForReplay(0, 1, 0),
+         "undefined keyboard long notes require a mode-specific replay path");
+  expect(!replay::hasUndefinedLongNotesForReplay(0, 0, 0),
+         "a chart without long notes has no undefined interpretation");
+  expect(!replay::hasUndefinedLongNotesForReplay(1, 1, 1),
+         "an authored LN mode is not undefined");
+}
+
 } // namespace
 
 int main() {
@@ -203,6 +215,7 @@ int main() {
   testCoursePathMatchesBeatorajaGrammar();
   testMalformedIdentityCannotProducePath();
   testReplayFilenameComponentsStayWithinFilesystemLimit();
+  testUndefinedLongNoteDetectionIncludesBackspins();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay path test(s) failed\n";
     return 1;

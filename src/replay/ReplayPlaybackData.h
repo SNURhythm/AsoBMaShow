@@ -16,6 +16,13 @@ namespace replay {
 
 inline constexpr std::int64_t kMinimumReplaySongTimeMicros = -30'000'000;
 
+[[nodiscard]] inline bool
+hasUndefinedLongNotesForReplay(int authoredLongNoteMode, int totalLongNotes,
+                               int totalBackSpinNotes) noexcept {
+  return authoredLongNoteMode == 0 &&
+         (totalLongNotes > 0 || totalBackSpinNotes > 0);
+}
+
 enum class DoublePlayOption : std::uint8_t {
   Normal = 0,
   Flip = 1,

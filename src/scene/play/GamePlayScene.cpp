@@ -2763,8 +2763,9 @@ void GamePlayScene::beginReplayRecording() {
                          });
   setup.keyMode = chart->Meta.KeyMode;
   setup.longNoteMode = scoreLongNoteModeForClearLamp(chart->Meta);
-  setup.hasUndefinedLongNotes =
-      chart->Meta.TotalLongNotes > 0 && chart->Meta.LnMode == 0;
+  setup.hasUndefinedLongNotes = replay::hasUndefinedLongNotesForReplay(
+      chart->Meta.LnMode, chart->Meta.TotalLongNotes,
+      chart->Meta.TotalBackSpinNotes);
   setup.randomSeed = chart->Meta.RandomSeed;
   setup.randomPrng = chart->Meta.RandomPrng;
   setup.randomValues = chart->Meta.RandomValues;
