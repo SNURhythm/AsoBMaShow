@@ -2707,6 +2707,7 @@ void GamePlayScene::beginReplayRecording() {
   practiceGhostPublished = false;
   recordedAttemptCompleted = false;
   rawReplayFinished = false;
+  rawReplayCaptureFailed = false;
   pendingReplayInput.clear();
   replayInputRecorder.reset();
   recordedPlaybackReplay = {};
@@ -2829,14 +2830,19 @@ void GamePlayScene::finishReplayRecording() {
             diagnostic.find("Duplicate") != std::string::npos ||
             diagnostic.find("Unmatched") != std::string::npos;
         if (!redundant) {
+          rawReplayCaptureFailed = true;
           SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                       "Replay input sample was rejected: %s",
                       diagnostic.c_str());
         }
       }
     }
-    recordedPlaybackReplay.input = replayInputRecorder->finish(diagnostic);
-    if (!diagnostic.empty()) {
+    auto input = replayInputRecorder->finish(diagnostic);
+    if (input.has_value()) {
+      recordedPlaybackReplay.input = std::move(*input);
+    } else {
+      rawReplayCaptureFailed = true;
+      recordedPlaybackReplay.input.clear();
       SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                   "Replay input recording could not finish: %s",
                   diagnostic.c_str());
@@ -3136,7 +3142,9 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       std::string constructionDiagnostic;
       std::optional<result_persistence::PersistedChartResult> result;
       std::optional<ir::IrSubmissionSnapshot> irSnapshot;
-      if (chart != nullptr && state != nullptr) {
+      if (rawReplayCaptureFailed) {
+        constructionDiagnostic = "Replay input capture failed";
+      } else if (chart != nullptr && state != nullptr) {
         const std::int64_t playedAtUnixMillis = nowUnixMillis();
         std::string resultDiagnostic;
         result = result_persistence::capturePersistedChartResult(
@@ -3331,7 +3339,10 @@ bool GamePlayScene::finishIfGaugeFailed() {
     }
     if (shouldRecordReplay()) {
       options.courseSession->recordReplayStage(recordedReplay);
-      options.courseSession->recordReplayPlaybackStage(recordedPlaybackReplay);
+      if (!rawReplayCaptureFailed) {
+        options.courseSession->recordReplayPlaybackStage(
+            recordedPlaybackReplay);
+      }
     }
   }
   scheduleResultTransition(0);
@@ -3474,7 +3485,10 @@ void GamePlayScene::update(float dt) {
     }
     if (shouldRecordReplay()) {
       options.courseSession->recordReplayStage(recordedReplay);
-      options.courseSession->recordReplayPlaybackStage(recordedPlaybackReplay);
+      if (!rawReplayCaptureFailed) {
+        options.courseSession->recordReplayPlaybackStage(
+            recordedPlaybackReplay);
+      }
     }
   }
   scheduleResultTransition(2000);

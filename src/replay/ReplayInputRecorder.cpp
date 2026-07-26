@@ -31,6 +31,15 @@ ReplayInputRecorder::ReplayInputRecorder(ReplayClock clock,
   transitions_.reserve(std::min<std::size_t>(limits.maximumTransitions, 4096));
 }
 
+bool ReplayInputRecorder::rejectCapture(std::string &diagnostic,
+                                        std::string message) {
+  diagnostic = std::move(message);
+  if (failureDiagnostic_.empty()) {
+    failureDiagnostic_ = diagnostic;
+  }
+  return false;
+}
+
 bool ReplayInputRecorder::record(std::int64_t steadyTimestampMicros,
                                  LogicalControl control, bool pressed,
                                  std::string &diagnostic) noexcept {
@@ -40,22 +49,20 @@ bool ReplayInputRecorder::record(std::int64_t steadyTimestampMicros,
       return false;
     }
     if (clock_.mapSteadyToSong == nullptr) {
-      diagnostic = "Replay input clock is unavailable";
-      return false;
+      return rejectCapture(diagnostic, "Replay input clock is unavailable");
     }
     const auto songTime =
         clock_.mapSteadyToSong(clock_.context, steadyTimestampMicros);
     if (!songTime.has_value()) {
-      diagnostic = "Replay input clock could not map the timestamp";
-      return false;
+      return rejectCapture(diagnostic,
+                           "Replay input clock could not map the timestamp");
     }
     return recordSongTime(*songTime, control, pressed, diagnostic);
   } catch (const std::exception &error) {
-    diagnostic = std::string("Replay input clock failed: ") + error.what();
-    return false;
+    return rejectCapture(
+        diagnostic, std::string("Replay input clock failed: ") + error.what());
   } catch (...) {
-    diagnostic = "Replay input clock failed";
-    return false;
+    return rejectCapture(diagnostic, "Replay input clock failed");
   }
 }
 
@@ -68,23 +75,17 @@ bool ReplayInputRecorder::recordSongTime(std::int64_t songTimeMicros,
       return false;
     }
     if (!validControl(control)) {
-      diagnostic = "Replay input control is invalid";
-      return false;
+      return rejectCapture(diagnostic, "Replay input control is invalid");
     }
     if (songTimeMicros < limits_.minimumSongTimeMicros) {
-      diagnostic = "Replay input is outside the supported pre-roll";
-      return false;
+      return rejectCapture(diagnostic,
+                           "Replay input is outside the supported pre-roll");
     }
     if (lastSongTimeMicros_.has_value() &&
         songTimeMicros < *lastSongTimeMicros_) {
-      diagnostic = "Replay input timestamps must not decrease";
-      return false;
+      return rejectCapture(diagnostic,
+                           "Replay input timestamps must not decrease");
     }
-    if (transitions_.size() >= limits_.maximumTransitions) {
-      diagnostic = "Replay input transition limit exceeded";
-      return false;
-    }
-
     const auto state =
         std::ranges::find(states_, control, &ControlState::control);
     const bool current = state != states_.end() && state->pressed;
@@ -92,6 +93,10 @@ bool ReplayInputRecorder::recordSongTime(std::int64_t songTimeMicros,
       diagnostic = pressed ? "Duplicate replay input press"
                            : "Unmatched replay input release";
       return false;
+    }
+    if (transitions_.size() >= limits_.maximumTransitions) {
+      return rejectCapture(diagnostic,
+                           "Replay input transition limit exceeded");
     }
 
     transitions_.push_back({.songTimeMicros = songTimeMicros,
@@ -106,21 +111,26 @@ bool ReplayInputRecorder::recordSongTime(std::int64_t songTimeMicros,
     diagnostic.clear();
     return true;
   } catch (const std::exception &error) {
-    diagnostic = std::string("Could not record replay input: ") + error.what();
-    return false;
+    return rejectCapture(
+        diagnostic,
+        std::string("Could not record replay input: ") + error.what());
   } catch (...) {
-    diagnostic = "Could not record replay input";
-    return false;
+    return rejectCapture(diagnostic, "Could not record replay input");
   }
 }
 
-std::vector<InputTransition>
+std::optional<std::vector<InputTransition>>
 ReplayInputRecorder::finish(std::string &diagnostic) noexcept {
   if (finished_) {
     diagnostic = "Replay input recording has already finished";
-    return {};
+    return std::nullopt;
   }
   finished_ = true;
+  if (!failureDiagnostic_.empty()) {
+    diagnostic = failureDiagnostic_;
+    transitions_.clear();
+    return std::nullopt;
+  }
   diagnostic.clear();
   return std::move(transitions_);
 }

@@ -238,6 +238,7 @@ private:
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool rawReplayFinished = false;
+  bool rawReplayCaptureFailed = false;
   bool resultTransitionScheduled = false;
   bool resultPersistenceAttemptCreationTried = false;
   bool floatingLaneCoverDragActive = false;

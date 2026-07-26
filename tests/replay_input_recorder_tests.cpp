@@ -56,7 +56,7 @@ void testRecordsMappedOrderedEdgesAndFinishesOnce() {
   const auto result = recorder.finish(diagnostic);
   require(diagnostic.empty(), "successful finish has no diagnostic");
   require(
-      result ==
+      result.has_value() && *result ==
           std::vector<replay::InputTransition>{
               {.songTimeMicros = 100, .control = lane(), .pressed = true},
               {.songTimeMicros = 200, .control = lane(), .pressed = false},
@@ -70,7 +70,7 @@ void testRecordsMappedOrderedEdgesAndFinishesOnce() {
 
   require(!recorder.recordSongTime(400, lane(1), true, diagnostic),
           "recording after finish is rejected");
-  require(recorder.finish(diagnostic).empty(),
+  require(!recorder.finish(diagnostic).has_value(),
           "a second finish cannot expose mutable data");
 }
 
@@ -102,6 +102,26 @@ void testRejectsUnavailableClockInvalidOrderAndPreRoll() {
           "equal song times preserve source sequence");
   require(!recorder.recordSongTime(21, lane(1), true, diagnostic),
           "transition capacity is enforced");
+  require(!recorder.finish(diagnostic).has_value(),
+          "nonredundant rejection invalidates the accepted replay prefix");
+}
+
+void testCapacityOverflowInvalidatesAcceptedPrefix() {
+  ClockFixture clock;
+  replay::ReplayInputRecorder recorder(
+      {.context = &clock, .mapSteadyToSong = &ClockFixture::map},
+      {.minimumSongTimeMicros = -100, .maximumTransitions = 2});
+  std::string diagnostic;
+
+  require(recorder.recordSongTime(0, lane(), true, diagnostic),
+          "capacity fixture accepts the first edge");
+  require(recorder.recordSongTime(1, lane(), false, diagnostic),
+          "capacity fixture accepts the second edge");
+  require(!recorder.recordSongTime(2, lane(1), true, diagnostic),
+          "capacity fixture rejects the excess effective edge");
+  require(!recorder.finish(diagnostic).has_value() &&
+              diagnostic.find("limit") != std::string::npos,
+          "capacity overflow cannot expose a truncated replay prefix");
 }
 
 void testRejectsInvalidControlsAndDuplicateState() {
@@ -132,6 +152,31 @@ void testRejectsInvalidControlsAndDuplicateState() {
           "duplicate state is rejected");
   require(recorder.recordSongTime(2, lane(), false, diagnostic),
           "state-changing release is accepted");
+  require(!recorder.finish(diagnostic).has_value(),
+          "invalid controls make the completed capture unusable");
+}
+
+void testRedundantStateDoesNotInvalidateCapture() {
+  ClockFixture clock;
+  replay::ReplayInputRecorder recorder(
+      {.context = &clock, .mapSteadyToSong = &ClockFixture::map},
+      {.minimumSongTimeMicros = -100, .maximumTransitions = 2});
+  std::string diagnostic;
+
+  require(!recorder.recordSongTime(0, lane(), false, diagnostic),
+          "redundant unmatched release is ignored");
+  require(recorder.recordSongTime(1, lane(), true, diagnostic),
+          "effective press is accepted");
+  require(!recorder.recordSongTime(2, lane(), true, diagnostic),
+          "redundant duplicate press is ignored");
+  require(recorder.recordSongTime(3, lane(), false, diagnostic),
+          "effective release is accepted");
+  require(!recorder.recordSongTime(4, lane(), false, diagnostic),
+          "redundant release remains redundant at transition capacity");
+
+  const auto result = recorder.finish(diagnostic);
+  require(result.has_value() && result->size() == 2 && diagnostic.empty(),
+          "redundant state samples preserve a valid replay capture");
 }
 
 } // namespace
@@ -139,6 +184,8 @@ void testRejectsInvalidControlsAndDuplicateState() {
 int main() {
   testRecordsMappedOrderedEdgesAndFinishesOnce();
   testRejectsUnavailableClockInvalidOrderAndPreRoll();
+  testCapacityOverflowInvalidatesAcceptedPrefix();
   testRejectsInvalidControlsAndDuplicateState();
+  testRedundantStateDoesNotInvalidateCapture();
   return 0;
 }
