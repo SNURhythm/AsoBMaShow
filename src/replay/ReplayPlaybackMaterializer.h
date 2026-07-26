@@ -14,6 +14,11 @@ class Chart;
 
 namespace replay {
 
+struct ReplayMaterializationSeed {
+  int carriedCombo = 0;
+  int carriedMaxCombo = 0;
+};
+
 struct MaterializedReplay {
   std::vector<gameplay::GameplayReplayEvent> judgedEvents;
   gameplay::GameplayAttemptSnapshot attempt;
@@ -36,6 +41,7 @@ struct MaterializeOutcome {
 // The result must never be persisted or used to construct an IR submission.
 [[nodiscard]] MaterializeOutcome materializeReplay(
     const ReplayPlaybackData &, const bms_parser::Chart &,
-    const gameplay::GameplayRulesetPolicy &);
+    const gameplay::GameplayRulesetPolicy &,
+    ReplayMaterializationSeed seed = {});
 
 } // namespace replay

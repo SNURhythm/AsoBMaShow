@@ -4218,6 +4218,7 @@ ReplayVideoExporter::ExportCourseReplay(
   adaptedCourse.context =
       analysis::playbackContextFrom(playback.stages.front().setup);
   adaptedCourse.stages.reserve(playback.stages.size());
+  replay::ReplayMaterializationSeed materializationSeed;
 
   for (std::size_t index = 0; index < playback.stages.size(); ++index) {
     const auto &stagePlayback = playback.stages[index];
@@ -4266,13 +4267,18 @@ ReplayVideoExporter::ExportCourseReplay(
                                : policy.diagnostic};
       }
       const auto materialized =
-          replay::materializeReplay(stagePlayback, *chart, *policy.policy);
+          replay::materializeReplay(stagePlayback, *chart, *policy.policy,
+                                    materializationSeed);
       if (!materialized.materialized()) {
         return {.success = false,
                 .message = materialized.diagnostic.empty()
                                ? "Unable to materialize course replay"
                                : materialized.diagnostic};
       }
+      materializationSeed = {
+          .carriedCombo = materialized.value->attempt.combo,
+          .carriedMaxCombo = materialized.value->attempt.maxCombo,
+      };
       adapted = replay::makeMaterializedPlaybackAdapter(
           stagePlayback, *materialized.value, *policy.policy, stageResult,
           chart->Meta);

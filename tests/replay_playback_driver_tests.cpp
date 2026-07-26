@@ -218,6 +218,17 @@ void testMaterializesRawInputsThroughGameplaySimulation() {
   expect(!outcome.value->gaugeHistory.empty(),
          "materialization exposes derived gauge history");
 
+  const auto nextStage = replay::materializeReplay(
+      playback, chart, policy,
+      {.carriedCombo = outcome.value->attempt.combo,
+       .carriedMaxCombo = outcome.value->attempt.maxCombo});
+  expect(nextStage.materialized() &&
+             !nextStage.value->judgedEvents.empty() &&
+             nextStage.value->judgedEvents.front().combo == 2 &&
+             nextStage.value->attempt.combo == 2 &&
+             nextStage.value->attempt.maxCombo == 2,
+         "sequential course materialization carries combo and maximum");
+
   playback.legacy.emplace();
   const auto legacyOutcome =
       replay::materializeReplay(playback, chart, policy);

@@ -58,7 +58,8 @@ private:
 
 MaterializeOutcome materializeReplay(
     const ReplayPlaybackData &playback, const bms_parser::Chart &chart,
-    const gameplay::GameplayRulesetPolicy &policy) {
+    const gameplay::GameplayRulesetPolicy &policy,
+    ReplayMaterializationSeed seed) {
   if (playback.legacy.has_value()) {
     return {.status = MaterializeOutcome::Status::LegacyTrack,
             .diagnostic =
@@ -75,6 +76,9 @@ MaterializeOutcome materializeReplay(
   const std::size_t replayCapacity =
       std::max<std::size_t>(4096, definition.noteCount() * 4 +
                                       playback.input.size() * 2 + 1024);
+  const int carriedCombo = std::max(0, seed.carriedCombo);
+  const int carriedMaxCombo =
+      std::max(carriedCombo, seed.carriedMaxCombo);
   gameplay::GameplaySimulation simulation(
       definition,
       {.judge = policy.judge,
@@ -89,6 +93,8 @@ MaterializeOutcome materializeReplay(
                 playback.setup.gaugeAutoShiftLowerBound,
             .startingGaugePercent = static_cast<int>(
                 std::lround(playback.setup.startingGaugePercent)),
+            .carriedCombo = carriedCombo,
+            .carriedMaxCombo = carriedMaxCombo,
             .assistClearMark =
                 assist_options::isEnabled(playback.setup.assistOption),
             .autoPlay = false,
