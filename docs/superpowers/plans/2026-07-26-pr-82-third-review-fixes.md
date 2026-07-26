@@ -373,11 +373,13 @@ git commit -m "fix: map legacy replay lanes by key mode"
 - Produces: `ResultPersistenceOptions::courseAttempt` as `std::shared_ptr<const result_persistence::CompletedCourseAttempt>`.
 - Produces: `result_scene_detail::hasPersistenceAttempt(const ResultPersistenceOptions &) noexcept`.
 - Produces: `result_scene_detail::persistenceAttemptId(const ResultPersistenceOptions &) noexcept`.
+- Produces: `result_scene_detail::retryPersistenceAttempt(ResultPersistenceOptions &, std::span<const ir::IrOutboxDraft>, const ResultPersistenceRetryCallbacks &)`.
+- Produces: `result_scene_detail::applyCoursePersistenceReceipt(const ResultPersistenceOptions &, CoursePlaySession &) noexcept`.
 - Consumes: `result_persistence::Coordinator::persistCourse(const CompletedCourseAttempt &)`, with no IR drafts.
 
-- [ ] **Step 1: Write attempt-policy and source-boundary regressions**
+- [ ] **Step 1: Write real attempt-policy, retry, and receipt regressions**
 
-Add a focused policy test to `remote_result_scene_tests.cpp`:
+Add a focused behavior test to `remote_result_scene_tests.cpp`. The two callback outcomes are deliberately different, so choosing the wrong branch changes the observed `SaveOutcome` without asserting on the callback itself:
 
 ```cpp
 void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
@@ -394,22 +396,46 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
               *course.result.attemptId,
           "course retry diagnostics use the retained course attempt ID");
 
+  const ResultPersistenceRetryCallbacks callbacks{
+      .persistChart =
+          [](const result_persistence::CompletedChartAttempt &,
+             std::span<const ir::IrOutboxDraft>) {
+            return result_persistence::SaveOutcome{
+                .state = result_persistence::SaveState::InvalidAttempt};
+          },
+      .persistCourse =
+          [](const result_persistence::CompletedCourseAttempt &attempt) {
+            return result_persistence::SaveOutcome{
+                .state = result_persistence::SaveState::Saved,
+                .receipt = result_persistence::StageReceipt{
+                    .attemptId = *attempt.result.attemptId,
+                    .resultId = 91,
+                    .createdAt = "2026-07-26 01:02:03",
+                }};
+          },
+  };
+  require(result_scene_detail::retryPersistenceAttempt(
+              persistence, {}, callbacks) &&
+              persistence.outcome.state ==
+                  result_persistence::SaveState::Saved,
+          "course retry executes the course persistence branch");
+
+  CoursePlaySession session;
+  require(result_scene_detail::applyCoursePersistenceReceipt(persistence,
+                                                               session) &&
+              session.courseReplaySaved &&
+              session.savedCourseReplayId == 91 &&
+              session.courseReplayPlaybackData != nullptr,
+          "saved course retry applies its receipt and replay to the session");
+
   persistence.attempt =
       std::make_shared<const result_persistence::CompletedChartAttempt>();
   require(!result_scene_detail::hasPersistenceAttempt(persistence),
           "ambiguous chart and course attempts fail closed");
+  require(!result_scene_detail::retryPersistenceAttempt(
+              persistence, {}, callbacks),
+          "ambiguous persistence attempts cannot execute either branch");
 }
-```
-
-Extend `testLocalRegressionContractsRemainPresent()` to require these concrete ResultScene boundaries:
-
-```cpp
-requireContains(result,
-                "persistenceOptions.courseAttempt = courseAttempt;",
-                "failed course save retains its completed attempt");
-requireContains(result,
-                "if (persistenceOptions.courseAttempt != nullptr) {",
-                "course Retry Save has an explicit retained-attempt branch");
 ```
 
 - [ ] **Step 2: Run the focused scene test to verify it fails**
@@ -420,7 +446,7 @@ Run:
 cmake --build cmake-build-debug --target remote_result_scene_tests -j 6
 ```
 
-Expected: compilation fails because `courseAttempt`, `hasPersistenceAttempt`, and `persistenceAttemptId` do not exist.
+Expected: compilation fails because the retained course attempt and retry/receipt policy helpers do not exist.
 
 - [ ] **Step 3: Add generic attempt availability and identity helpers**
 
@@ -446,6 +472,10 @@ Add `courseAttempt` beside the chart attempt in `ResultPersistenceOptions`. Impl
 ```
 
 Use these helpers in `persistenceDecisionRequired`, status creation, Retry Save enablement, details generation, and `updateResultPersistencePresentation`. Existing chart behavior remains unchanged.
+
+Add `ResultPersistenceRetryCallbacks` with one chart callback taking the attempt and automatic drafts, and one course callback taking only the course attempt. Implement `retryPersistenceAttempt` to fail closed unless exactly one attempt and its callback exist, invoke only that callback, and replace `persistence.outcome` with the returned value.
+
+Implement `applyCoursePersistenceReceipt` to require a retained course attempt, `SaveState::Saved`, a positive receipt result ID, a non-empty created time, and an exact receipt/attempt ID match. On success it sets `courseReplaySaved`, `savedCourseReplayId`, and a copy of the retained `CourseReplayPlaybackData`; otherwise it leaves the session unchanged and returns false.
 
 - [ ] **Step 4: Retain the first course attempt and apply successful receipts**
 
@@ -498,7 +528,7 @@ if (persistenceOptions.courseAttempt != nullptr) {
 }
 ```
 
-After either branch, apply the matching receipt. Course success updates the course session fields from Step 4; it never calls `buildAutomaticDrafts` or notifies the IR submission service. Continue Without Saving keeps the existing outcome and only dismisses the decision.
+Have `retryResultPersistence()` build automatic drafts only when the chart attempt is selected, then call `retryPersistenceAttempt` with callbacks bound to `context.resultPersistence.persist(...)` and `persistCourse(...)`. After the helper returns, apply the matching receipt. Course success calls `applyCoursePersistenceReceipt`; it never calls `buildAutomaticDrafts` or notifies the IR submission service. Continue Without Saving keeps the existing outcome and only dismisses the decision.
 
 - [ ] **Step 6: Run scene and persistence regressions**
 
