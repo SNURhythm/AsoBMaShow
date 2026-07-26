@@ -761,8 +761,8 @@ bool score_repository_detail::InsertCourseScoreOnConnection(
   }
 
   int courseTotalNotes = 0;
-  for (const auto &entry : session.entries) {
-    courseTotalNotes += std::max(0, entry.meta.TotalNotes);
+  for (std::size_t index = 0; index < session.totalChartCount(); ++index) {
+    courseTotalNotes += std::max(0, session.entryMeta(index)->TotalNotes);
   }
 
   int bindIndex = 1;

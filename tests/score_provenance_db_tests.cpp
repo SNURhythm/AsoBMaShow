@@ -1578,7 +1578,11 @@ void testCourseWritesUseAuthoritativeKeysAndExactMode(
   session.courseId = 71;
   session.courseName = "Renamed course";
   session.constraintJson = "[]";
+  meta.TotalNotes = 11;
   session.entries.push_back({.meta = meta});
+  auto authoritativeMeta = meta;
+  authoritativeMeta.TotalNotes = 37;
+  assert(session.installAuthoritativeEntryMetas({authoritativeMeta}));
   session.courseKey = course_identity::makeCourseKey(
       std::vector<course_identity::ChartIdentity>{{.md5 = std::string(kMd5A)}},
       "[]");
@@ -1592,6 +1596,7 @@ void testCourseWritesUseAuthoritativeKeysAndExactMode(
          session.courseKey);
   assert(queryInt(db.get(), "SELECT ln_mode FROM course_scores") ==
          long_note_mode::kHcnValue);
+  assert(queryInt(db.get(), "SELECT max_score FROM course_scores") == 74);
   db.reset();
 
   CoursePlaySession fallback = session;

@@ -4,6 +4,7 @@
 #include "SqliteRAII.h"
 #include "../CourseConstraintUtils.h"
 #include "../CourseIdentity.h"
+#include "../FileChecksum.h"
 #include "../ResultPersistenceModel.h"
 #include "../ScoreProvenance.h"
 #include "../replay/BeatorajaReplayCodec.h"
@@ -983,47 +984,117 @@ bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
   return true;
 }
 
-void assignPaths(std::vector<LegacyChart> &charts,
-                 std::vector<LegacyCourse> &courses, std::string &diagnostic) {
+bool advanceHistoryIndex(std::int64_t &historyIndex, std::string &diagnostic) {
+  if (historyIndex == std::numeric_limits<std::int64_t>::max()) {
+    diagnostic = "Replay history index is exhausted";
+    return false;
+  }
+  ++historyIndex;
+  return true;
+}
+
+bool finalizeEncodedAtAvailablePath(
+    std::string_view stem, std::int64_t &historyIndex,
+    std::span<const std::byte> encoded,
+    const replay::ExpectedReplayIdentity &expected, std::string_view token,
+    const replay::BeatorajaReplayCodec &codec, replay::ReplayFileStore &store,
+    std::set<std::filesystem::path> &assignedPaths,
+    replay::ReplayPathIdentity &path, replay::ReplayFileMetadata &file,
+    std::string &diagnostic) {
+  file_checksum::Sha256 hash;
+  hash.update(encoded);
+  const std::string expectedHash = hash.finalHex();
+  while (true) {
+    const auto candidate = replay::pathForStem(stem, historyIndex, diagnostic);
+    if (!candidate.has_value()) {
+      return false;
+    }
+    if (assignedPaths.contains(candidate->relativePath)) {
+      if (!advanceHistoryIndex(historyIndex, diagnostic)) {
+        return false;
+      }
+      continue;
+    }
+    const replay::ReplayFileMetadata expectedMetadata{
+        .relativePath = candidate->relativePath,
+        .sha256 = expectedHash,
+        .compressedSize = static_cast<std::uint64_t>(encoded.size()),
+        .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+    };
+    const auto inspection = store.inspect(expectedMetadata);
+    if (inspection.state == replay::ReplayFileState::Corrupt) {
+      if (!advanceHistoryIndex(historyIndex, diagnostic)) {
+        return false;
+      }
+      continue;
+    }
+    if (inspection.state == replay::ReplayFileState::Unsafe ||
+        inspection.state == replay::ReplayFileState::IoFailure) {
+      diagnostic = inspection.diagnostic.empty()
+                       ? "Could not inspect migrated replay destination"
+                       : inspection.diagnostic;
+      return false;
+    }
+    const auto finalized =
+        store.finalize(*candidate, encoded, codec, expected, token);
+    if (!finalized.metadata.has_value()) {
+      diagnostic = finalized.diagnostic.empty()
+                       ? "Could not finalize migrated replay file"
+                       : finalized.diagnostic;
+      return false;
+    }
+    path = *candidate;
+    file = *finalized.metadata;
+    assignedPaths.insert(candidate->relativePath);
+    return true;
+  }
+}
+
+bool finalizeFiles(std::vector<LegacyChart> &charts,
+                   std::vector<LegacyCourse> &courses,
+                   const replay::BeatorajaReplayCodec &codec,
+                   replay::ReplayFileStore &store,
+                   const ReplayMigrationFaults &faults,
+                   std::string &diagnostic) {
   std::set<std::filesystem::path> assignedPaths;
-  std::vector<LegacyChart *> order;
-  order.reserve(charts.size());
+  std::vector<LegacyChart *> chartOrder;
+  chartOrder.reserve(charts.size());
   for (auto &chart : charts) {
-    order.push_back(&chart);
+    chartOrder.push_back(&chart);
   }
   std::ranges::sort(
-      order, [](const LegacyChart *left, const LegacyChart *right) {
+      chartOrder, [](const LegacyChart *left, const LegacyChart *right) {
         return std::tie(left->path.stem, left->playedAtUnixMillis, left->id) <
                std::tie(right->path.stem, right->playedAtUnixMillis, right->id);
       });
   std::string previous;
-  std::int64_t index = -1;
-  for (LegacyChart *chart : order) {
+  std::int64_t historyIndex = -1;
+  for (LegacyChart *chart : chartOrder) {
+    if (fault(faults, "encode", chart->id)) {
+      diagnostic = "injected replay encode failure";
+      return false;
+    }
+    const auto bytes = codec.encodeChart(chart->playback,
+                                         chart->playedAtUnixMillis, diagnostic);
+    if (!bytes.has_value()) {
+      return false;
+    }
     if (chart->path.stem == previous) {
-      if (index == std::numeric_limits<std::int64_t>::max()) {
-        diagnostic = "Replay history index is exhausted";
-        return;
+      if (!advanceHistoryIndex(historyIndex, diagnostic)) {
+        return false;
       }
-      ++index;
     } else {
-      index = 0;
+      historyIndex = 0;
     }
     previous = chart->path.stem;
-    while (true) {
-      const auto path =
-          replay::pathForStem(chart->path.stem, index, diagnostic);
-      if (!path.has_value()) {
-        return;
-      }
-      if (assignedPaths.insert(path->relativePath).second) {
-        chart->path = *path;
-        break;
-      }
-      if (index == std::numeric_limits<std::int64_t>::max()) {
-        diagnostic = "Replay history index is exhausted";
-        return;
-      }
-      ++index;
+    if (!finalizeEncodedAtAvailablePath(
+            chart->path.stem, historyIndex, *bytes,
+            {.stageSha256 = {chart->chartSha256},
+             .stageLongNoteModes = {chart->playback.setup.longNoteMode},
+             .course = false},
+            "migration-chart-" + std::to_string(chart->id), codec, store,
+            assignedPaths, chart->path, chart->file, diagnostic)) {
+      return false;
     }
   }
 
@@ -1038,99 +1109,42 @@ void assignPaths(std::vector<LegacyChart> &charts,
                std::tie(right->path.stem, right->playedAtUnixMillis, right->id);
       });
   previous.clear();
-  index = -1;
+  historyIndex = -1;
   for (LegacyCourse *course : courseOrder) {
-    if (course->path.stem == previous) {
-      if (index == std::numeric_limits<std::int64_t>::max()) {
-        diagnostic = "Replay history index is exhausted";
-        return;
-      }
-      ++index;
-    } else {
-      index = 0;
-    }
-    previous = course->path.stem;
-    while (true) {
-      const auto path =
-          replay::pathForStem(course->path.stem, index, diagnostic);
-      if (!path.has_value()) {
-        return;
-      }
-      if (assignedPaths.insert(path->relativePath).second) {
-        course->path = *path;
-        break;
-      }
-      if (index == std::numeric_limits<std::int64_t>::max()) {
-        diagnostic = "Replay history index is exhausted";
-        return;
-      }
-      ++index;
-    }
-  }
-}
-
-bool finalizeFiles(std::vector<LegacyChart> &charts,
-                   std::vector<LegacyCourse> &courses,
-                   const replay::BeatorajaReplayCodec &codec,
-                   replay::ReplayFileStore &store,
-                   const ReplayMigrationFaults &faults,
-                   std::string &diagnostic) {
-  for (auto &chart : charts) {
-    if (fault(faults, "encode", chart.id)) {
-      diagnostic = "injected replay encode failure";
-      return false;
-    }
-    const auto bytes =
-        codec.encodeChart(chart.playback, chart.playedAtUnixMillis, diagnostic);
-    if (!bytes.has_value()) {
-      return false;
-    }
-    const auto finalized =
-        store.finalize(chart.path, *bytes, codec,
-                       {.stageSha256 = {chart.chartSha256},
-                        .stageLongNoteModes = {
-                            chart.playback.setup.longNoteMode},
-                        .course = false},
-                       "migration-chart-" + std::to_string(chart.id));
-    if (!finalized.metadata.has_value()) {
-      diagnostic = finalized.diagnostic.empty()
-                       ? "could not finalize migrated replay file"
-                       : finalized.diagnostic;
-      return false;
-    }
-    chart.file = *finalized.metadata;
-  }
-  for (auto &course : courses) {
-    if (fault(faults, "encode", course.id)) {
+    if (fault(faults, "encode", course->id)) {
       diagnostic = "injected course replay encode failure";
       return false;
     }
     const auto bytes = codec.encodeCourse(
-        course.playback, course.playedAtUnixMillis, diagnostic);
+        course->playback, course->playedAtUnixMillis, diagnostic);
     if (!bytes.has_value()) {
       return false;
     }
     std::vector<std::string> stageSha256;
     std::vector<int> stageLongNoteModes;
-    stageSha256.reserve(course.playback.stages.size());
-    stageLongNoteModes.reserve(course.playback.stages.size());
-    for (const auto &stage : course.playback.stages) {
+    stageSha256.reserve(course->playback.stages.size());
+    stageLongNoteModes.reserve(course->playback.stages.size());
+    for (const auto &stage : course->playback.stages) {
       stageSha256.push_back(stage.setup.chartSha256);
       stageLongNoteModes.push_back(stage.setup.longNoteMode);
     }
-    const auto finalized =
-        store.finalize(course.path, *bytes, codec,
-                       {.stageSha256 = std::move(stageSha256),
-                        .stageLongNoteModes = std::move(stageLongNoteModes),
-                        .course = true},
-                       "migration-course-" + std::to_string(course.id));
-    if (!finalized.metadata.has_value()) {
-      diagnostic = finalized.diagnostic.empty()
-                       ? "could not finalize migrated course replay file"
-                       : finalized.diagnostic;
+    if (course->path.stem == previous) {
+      if (!advanceHistoryIndex(historyIndex, diagnostic)) {
+        return false;
+      }
+    } else {
+      historyIndex = 0;
+    }
+    previous = course->path.stem;
+    if (!finalizeEncodedAtAvailablePath(
+            course->path.stem, historyIndex, *bytes,
+            {.stageSha256 = std::move(stageSha256),
+             .stageLongNoteModes = std::move(stageLongNoteModes),
+             .course = true},
+            "migration-course-" + std::to_string(course->id), codec, store,
+            assignedPaths, course->path, course->file, diagnostic)) {
       return false;
     }
-    course.file = *finalized.metadata;
   }
   return true;
 }
@@ -1743,10 +1757,6 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
     return failure(MigrationStatus::InvalidLegacyData,
                    diagnostic.empty() ? "legacy replay rows are invalid"
                                       : std::move(diagnostic));
-  }
-  assignPaths(charts, courses, diagnostic);
-  if (!diagnostic.empty()) {
-    return failure(MigrationStatus::InvalidLegacyData, std::move(diagnostic));
   }
   if (!finalizeFiles(charts, courses, codec, fileStore, faults, diagnostic)) {
     return failure(MigrationStatus::FileFailure,

@@ -233,7 +233,7 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   if (!session.completedResults.empty()) {
     aggregate.combo = session.carriedCombo;
   }
-  if (session.completedResults.size() < session.entries.size() &&
+  if (session.completedResults.size() < session.totalChartCount() &&
       !session.recalledCourseClearTypeRank.has_value()) {
     aggregate.currentGauge = 0.0f;
     aggregate.gaugeValues[gaugeTypeIndex(aggregate.gaugeType)] = 0.0f;
@@ -326,7 +326,7 @@ ResultScene::ResultScene(
         result_scene_detail::courseResultMetaForSession(session);
     const bool fullCombo = result_presentation::isFullComboCourseResult(
         static_cast<int>(session.completedResults.size()),
-        static_cast<int>(session.entries.size()), session.entries.size(),
+        static_cast<int>(session.totalChartCount()), session.totalChartCount(),
         local.resultState, courseMeta);
     if (fullCombo) {
       const int clearRank = clear_policy::fullComboRankForPlayback(
@@ -459,7 +459,7 @@ void ResultScene::saveCourseScore() {
   const int completedCharts =
       static_cast<int>(local->courseOptions.session->completedResults.size());
   const int totalCharts =
-      static_cast<int>(local->courseOptions.session->entries.size());
+      static_cast<int>(local->courseOptions.session->totalChartCount());
   if (context.scoreRepository.SaveCourseScore(
           *local->courseOptions.session, local->resultState, completedCharts,
           totalCharts, local->attemptProvenance)) {
@@ -523,7 +523,7 @@ void ResultScene::saveCourseReplay() {
   }
 
   const std::size_t completedCharts = session->completedResults.size();
-  const std::size_t totalCharts = session->entries.size();
+  const std::size_t totalCharts = session->totalChartCount();
   if (completedCharts == 0 || completedCharts > totalCharts ||
       session->recordedReplayPlayback.stages.size() != completedCharts ||
       session->recordedReplayPlayback.restMicrosAfterStage.size() !=
@@ -565,6 +565,9 @@ void ResultScene::saveCourseReplay() {
   result.stages.reserve(completedCharts);
   result.entryFacts =
       result_scene_detail::courseEntryFactsForPersistence(*session);
+  for (const auto &facts : result.entryFacts) {
+    result.maxScore += facts.totalNotes * 2;
+  }
 
   for (std::size_t index = 0; index < completedCharts; ++index) {
     if (!session->stageProvenance[index].has_value()) {
@@ -573,19 +576,25 @@ void ResultScene::saveCourseReplay() {
       return;
     }
     const auto &completed = session->completedResults[index];
+    const auto *stageMeta =
+        result_scene_detail::courseStageMetaForPersistence(*session, index);
+    if (stageMeta == nullptr) {
+      SDL_Log("Refusing course replay with missing stage facts: %s",
+              session->courseName.c_str());
+      return;
+    }
     auto stage = result_persistence::capturePersistedCourseStageResult(
-        static_cast<int>(index), completed.meta, completed.state,
+        static_cast<int>(index), *stageMeta, completed.state,
         *session->stageProvenance[index],
         session->recordedReplayPlayback.stages[index].setup.longNoteMode);
     result.finalScore += stage.score.score;
-    result.maxScore += stage.score.maxScore;
     result.stages.push_back(std::move(stage));
   }
 
   const bms_parser::ChartMeta courseMeta =
       result_scene_detail::courseResultMetaForSession(*session);
   const bool fullCombo = result_presentation::isFullComboCourseResult(
-      result.completedCharts, result.totalCharts, session->entries.size(),
+      result.completedCharts, result.totalCharts, session->totalChartCount(),
       local->resultState, courseMeta);
   result.clearType = clear_policy::fullComboRankForPlayback(
       result.clearType, fullCombo, result.provenance.playback);
@@ -1268,19 +1277,25 @@ void ResultScene::continueWithoutSaving() {
   if (local == nullptr) {
     return;
   }
-  if (!local->persistenceOptions.outcome.durable() &&
-      result_scene_detail::hasPersistenceAttempt(local->persistenceOptions)) {
-    std::string diagnostic;
-    const auto stem =
-        persistenceReplayStem(local->persistenceOptions, diagnostic);
-    const std::string_view attemptId =
-        result_scene_detail::persistenceAttemptId(local->persistenceOptions);
-    if (!stem.has_value() ||
-        !context.replayRepository.discardUndurableReplay(attemptId, *stem,
-                                                         diagnostic)) {
-      SDL_Log("Could not discard undurable replay after Continue: %s",
-              diagnostic.c_str());
-    }
+  std::string diagnostic;
+  const bool cleanupRequired =
+      !local->persistenceOptions.outcome.durable() &&
+      result_scene_detail::hasPersistenceAttempt(local->persistenceOptions);
+  if (!result_scene_detail::cleanupAllowsContinueWithoutSaving(
+          cleanupRequired, local->persistenceOptions.outcome.retryable(), [&] {
+            const auto stem =
+                persistenceReplayStem(local->persistenceOptions, diagnostic);
+            const std::string_view attemptId =
+                result_scene_detail::persistenceAttemptId(
+                    local->persistenceOptions);
+            return stem.has_value() &&
+                   context.replayRepository.discardUndurableReplay(
+                       attemptId, *stem, diagnostic);
+          })) {
+    SDL_Log("Could not discard undurable replay after Continue: %s",
+            diagnostic.c_str());
+    updateResultPersistencePresentation();
+    return;
   }
   local->persistenceContinueChosen = true;
   updateResultPersistencePresentation();
@@ -2047,8 +2062,8 @@ void ResultScene::continueCourse() {
   std::atomic_bool parseCancelled = false;
   std::unique_ptr<bms_parser::Chart> nextChart;
   try {
-    nextChart =
-        play_options::parseChart(nextMeta->BmsPath, parseCancelled, "course");
+    nextChart = play_options::prepareCourseChart(
+        *nextMeta, session->constraints, session->longNoteMode, parseCancelled);
   } catch (const std::exception &e) {
     SDL_Log("Course parse failed %s: %s",
             fspath_to_utf8(nextMeta->BmsPath).c_str(), e.what());
@@ -2062,12 +2077,9 @@ void ResultScene::continueCourse() {
     showCourseResult();
     return;
   }
-  applyCourseConstraintsToChart(*nextChart, session->constraints);
-
   play_options::PlayOptionReplayInfo playInfo =
       play_options::applySelectedPlayOptions(*nextChart,
                                              session->requestedPlayOption);
-  applyEffectiveLongNoteModeToChart(*nextChart, session->longNoteMode);
   session->playOption = playInfo.option;
   session->playOptionSeed = playInfo.seed;
   session->playOption2 = playInfo.option2;
@@ -2582,6 +2594,10 @@ void ResultScene::startCourseReplay() {
     replaySession->courseGroupName = sourceSession->courseGroupName;
     replaySession->constraintJson = sourceSession->constraintJson;
     replaySession->entries = sourceSession->entries;
+    if (!replaySession->installAuthoritativeEntryMetas(
+            sourceSession->entryMetasSnapshot())) {
+      return;
+    }
     const auto &firstPlayback =
         sourceSession->courseReplayPlaybackData->stages.front();
     replaySession->snapshotRulesetFromPlayback(firstPlayback);
@@ -2618,6 +2634,10 @@ void ResultScene::startCourseReplay() {
   replaySession->constraintJson = replayData->constraintJson;
   replaySession->entries = result_scene_detail::legacyReplayEntriesForSession(
       *sourceSession, *replayData);
+  if (!replaySession->installAuthoritativeEntryMetas(
+          replaySession->entryMetasSnapshot())) {
+    return;
+  }
   replaySession->snapshotRulesetFromReplay(replayData->stages.front().replay);
   const CourseConstraintSettings constraintSettings =
       courseConstraintSettingsFromJson(replayData->constraintJson);

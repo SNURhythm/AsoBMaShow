@@ -324,27 +324,38 @@ ReplayFileActionService::copyToBeatorajaSlot(LocalResultRecordId record,
           .historyIndex = reservation.reservation->historyIndex,
           .relativePath = reservation.reservation->relativePath,
       };
-      if (!fileStore_.copyToReservedReplayPath(
-              displacedMetadata, relocationDestination, diagnostic)) {
+      const replay::ReplayFileMetadata relocationMetadata{
+          .relativePath = reservation.reservation->relativePath,
+          .sha256 = owner.reference->contentSha256,
+          .compressedSize = owner.reference->compressedSize,
+          .codecVersion = owner.reference->codecVersion,
+      };
+      if (!repository_.markReplayFileReservationFinalized(
+              *reservation.reservation, relocationMetadata, diagnostic)) {
         std::string cleanupDiagnostic;
         (void)repository_.discardReplayFileReservation(*reservation.reservation,
                                                        cleanupDiagnostic);
         return {.availability = ReplayAvailability::IoFailure,
                 .diagnostic = std::move(diagnostic)};
       }
+      if (!fileStore_.copyToReservedReplayPath(
+              displacedMetadata, relocationDestination, diagnostic)) {
+        std::string cleanupDiagnostic;
+        if (fileStore_.removeIfMatches(relocationMetadata, cleanupDiagnostic)) {
+          (void)repository_.discardReplayFileReservation(
+              *reservation.reservation, cleanupDiagnostic);
+        }
+        return {.availability = ReplayAvailability::IoFailure,
+                .diagnostic = std::move(diagnostic)};
+      }
       const auto relocation = repository_.relocateReplayFileReference(
           *owner.reference, *reservation.reservation);
       if (relocation.status != ReplayFileRelocationOutcome::Status::Relocated) {
-        const replay::ReplayFileMetadata relocationMetadata{
-            .relativePath = reservation.reservation->relativePath,
-            .sha256 = owner.reference->contentSha256,
-            .compressedSize = owner.reference->compressedSize,
-            .codecVersion = owner.reference->codecVersion,
-        };
         std::string cleanupDiagnostic;
-        (void)fileStore_.remove(relocationMetadata, cleanupDiagnostic);
-        (void)repository_.discardReplayFileReservation(*reservation.reservation,
-                                                       cleanupDiagnostic);
+        if (fileStore_.removeIfMatches(relocationMetadata, cleanupDiagnostic)) {
+          (void)repository_.discardReplayFileReservation(
+              *reservation.reservation, cleanupDiagnostic);
+        }
         return {.availability = ReplayAvailability::IoFailure,
                 .diagnostic = relocation.diagnostic.empty()
                                   ? "Could not relocate occupied replay slot"

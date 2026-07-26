@@ -156,9 +156,10 @@ std::string makeCourseKey(std::span<const ChartIdentity> charts,
 
 std::string makeCourseKey(const CoursePlaySession &session) {
   std::vector<ChartIdentity> charts;
-  charts.reserve(session.entries.size());
-  for (const auto &entry : session.entries) {
-    charts.push_back({.sha256 = entry.meta.SHA256, .md5 = entry.meta.MD5});
+  charts.reserve(session.totalChartCount());
+  for (std::size_t index = 0; index < session.totalChartCount(); ++index) {
+    const auto *meta = session.entryMeta(index);
+    charts.push_back({.sha256 = meta->SHA256, .md5 = meta->MD5});
   }
   return makeCourseKey(charts, session.constraintJson);
 }

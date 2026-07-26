@@ -643,7 +643,10 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
       return false;
     }
     std::int64_t stageScore = 0;
-    std::int64_t stageMaxScore = 0;
+    std::int64_t courseMaxScore = 0;
+    for (const auto &facts : result.entryFacts) {
+      courseMaxScore += static_cast<std::int64_t>(facts.totalNotes) * 2;
+    }
     for (std::size_t index = 0; index < result.stages.size(); ++index) {
       const auto &stage = result.stages[index];
       if (stage.stageIndex != static_cast<int>(index) ||
@@ -657,15 +660,14 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
         return false;
       }
       stageScore += stage.score.score;
-      stageMaxScore += stage.score.maxScore;
       if (static_cast<std::int64_t>(result.entryFacts[index].totalNotes) * 2 !=
           stage.score.maxScore) {
         diagnostic = "course entry note count disagrees with stage result";
         return false;
       }
     }
-    if (stageScore != result.finalScore || stageMaxScore != result.maxScore) {
-      diagnostic = "course totals disagree with ordered stages";
+    if (stageScore != result.finalScore || courseMaxScore != result.maxScore) {
+      diagnostic = "course totals disagree with entries or ordered stages";
       return false;
     }
     std::string provenanceDiagnostic;

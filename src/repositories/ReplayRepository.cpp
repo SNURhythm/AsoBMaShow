@@ -116,6 +116,13 @@ bool recoverReplayFileReservations(sqlite3 *database,
     if (pathError && !definitelyMissing) {
       return false;
     }
+    if (!definitelyMissing && hashNull) {
+      // Finalization installs the replay before recording its checksum and
+      // size. If that database update failed, the reservation is the only
+      // remaining ownership barrier for the installed path. Without those
+      // markers we cannot prove that the existing entry is safe to remove.
+      continue;
+    }
     std::optional<replay::ReplayFileMetadata> ownedFinalFile;
     if (!definitelyMissing && !hashNull) {
       if (sqlite3_column_type(candidates.get(), 4) != SQLITE_TEXT ||
@@ -136,6 +143,10 @@ bool recoverReplayFileReservations(sqlite3 *database,
       }
       if (inspection.state == replay::ReplayFileState::Available) {
         ownedFinalFile = std::move(metadata);
+      } else if (inspection.state != replay::ReplayFileState::Missing) {
+        // A corrupt or unsafe entry still occupies the reserved path, but its
+        // recorded digest does not prove that it is safe to delete.
+        continue;
       }
     }
     abandoned.push_back({.attemptId = attemptId,

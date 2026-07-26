@@ -325,6 +325,41 @@ struct CoursePlaySession {
     return currentIndex < entries.size();
   }
 
+  [[nodiscard]] std::size_t totalChartCount() const noexcept {
+    return entries.size();
+  }
+
+  [[nodiscard]] bool authoritativeEntryMetasComplete() const noexcept {
+    return !entries.empty() && authoritativeEntryMetas.size() == entries.size();
+  }
+
+  [[nodiscard]] const bms_parser::ChartMeta *
+  entryMeta(std::size_t index) const noexcept {
+    if (index >= entries.size()) {
+      return nullptr;
+    }
+    return authoritativeEntryMetasComplete() ? &authoritativeEntryMetas[index]
+                                             : &entries[index].meta;
+  }
+
+  bool
+  installAuthoritativeEntryMetas(std::vector<bms_parser::ChartMeta> metas) {
+    if (!authoritativeEntryMetas.empty() || metas.size() != entries.size()) {
+      return false;
+    }
+    authoritativeEntryMetas = std::move(metas);
+    return true;
+  }
+
+  [[nodiscard]] std::vector<bms_parser::ChartMeta> entryMetasSnapshot() const {
+    std::vector<bms_parser::ChartMeta> result;
+    result.reserve(totalChartCount());
+    for (std::size_t index = 0; index < totalChartCount(); ++index) {
+      result.push_back(*entryMeta(index));
+    }
+    return result;
+  }
+
   void snapshotRulesetFromReplay(const JudgedPlaybackData &replay) {
     if (replay.context.ruleset == RulesetDescriptor::Legacy()) {
       ruleset = GameplayRuleset::Beatoraja;
@@ -368,7 +403,7 @@ struct CoursePlaySession {
   }
 
   [[nodiscard]] const bms_parser::ChartMeta *currentMeta() const {
-    return validCurrentIndex() ? &entries[currentIndex].meta : nullptr;
+    return entryMeta(currentIndex);
   }
 
   [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
@@ -453,8 +488,8 @@ struct CoursePlaySession {
       return;
     }
     while (completedResults.size() < currentIndex) {
-      const auto &entry = entries[completedResults.size()];
-      completedResults.emplace_back(entry.meta, RhythmState(nullptr, false));
+      const auto *entry = entryMeta(completedResults.size());
+      completedResults.emplace_back(*entry, RhythmState(nullptr, false));
     }
     completedResults.emplace_back(meta, state);
   }
@@ -511,4 +546,7 @@ struct CoursePlaySession {
     recordedReplayPlayback.restMicrosAfterStage[currentIndex] =
         std::max(0LL, restMicros);
   }
+
+private:
+  std::vector<bms_parser::ChartMeta> authoritativeEntryMetas;
 };

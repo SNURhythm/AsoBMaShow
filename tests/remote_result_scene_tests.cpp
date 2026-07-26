@@ -312,6 +312,49 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
           "chart retry reuses the retained chart attempt and automatic drafts");
 }
 
+void testContinueWithoutSavingRequiresSuccessfulCleanup() {
+  bool cleanupCalled = false;
+  require(!result_scene_detail::cleanupAllowsContinueWithoutSaving(
+              true, true,
+              [&] {
+                cleanupCalled = true;
+                return false;
+              }) &&
+              cleanupCalled,
+          "failed undurable replay cleanup keeps Continue blocked for retry");
+
+  cleanupCalled = false;
+  require(result_scene_detail::cleanupAllowsContinueWithoutSaving(
+              true, true,
+              [&] {
+                cleanupCalled = true;
+                return true;
+              }) &&
+              cleanupCalled,
+          "successful undurable replay cleanup allows Continue");
+
+  cleanupCalled = false;
+  require(result_scene_detail::cleanupAllowsContinueWithoutSaving(
+              false, true,
+              [&] {
+                cleanupCalled = true;
+                return false;
+              }) &&
+              !cleanupCalled,
+          "durable results need no cleanup before Continue");
+
+  cleanupCalled = false;
+  require(result_scene_detail::cleanupAllowsContinueWithoutSaving(
+              true, false,
+              [&] {
+                cleanupCalled = true;
+                return false;
+              }) &&
+              cleanupCalled,
+          "a permanent invalid attempt cannot trap the user when cleanup "
+          "must be deferred to startup recovery");
+}
+
 void testCourseReplayActionAcceptsRawAndLegacyData() {
   CoursePlaySession session;
   require(!result_scene_detail::courseReplayActionAvailable(session),
@@ -330,7 +373,7 @@ void testCourseReplayActionAcceptsRawAndLegacyData() {
           "legacy course replay data still exposes replay");
 }
 
-void testCoursePersistenceFactsUsePlayedStageMetadata() {
+void testCoursePersistenceFactsUseAuthoritativeEntrySnapshot() {
   CoursePlaySession session;
   session.entries.resize(3);
   session.entries[0].meta.TotalNotes = 40;
@@ -340,19 +383,57 @@ void testCoursePersistenceFactsUsePlayedStageMetadata() {
   session.entries[2].meta.TotalNotes = 60;
   session.entries[2].meta.PlayLength = 6'000'000;
 
-  bms_parser::ChartMeta played;
-  played.TotalNotes = 45;
-  played.PlayLength = 4'500'000;
+  std::vector<bms_parser::ChartMeta> authoritative(3);
+  authoritative[0].TotalNotes = 45;
+  authoritative[0].PlayLength = 4'500'000;
+  authoritative[0].RandomSeed = 17;
+  authoritative[0].RandomPrng = "mt19937";
+  authoritative[0].RandomValues = {2, 1};
+  authoritative[1].TotalNotes = 55;
+  authoritative[1].PlayLength = 5'500'000;
+  authoritative[2].TotalNotes = 65;
+  authoritative[2].PlayLength = 6'500'000;
+  require(session.installAuthoritativeEntryMetas(authoritative),
+          "a complete course entry snapshot installs atomically");
+
+  bms_parser::ChartMeta played = authoritative[0];
+  played.TotalNotes = 999;
+  played.PlayLength = 999'000'000;
   session.completedResults.emplace_back(played, RhythmState(nullptr, false));
 
   const auto facts =
       result_scene_detail::courseEntryFactsForPersistence(session);
   require(facts.size() == 3 && facts[0].totalNotes == 45 &&
               facts[0].playLengthMicros == 4'500'000 &&
-              facts[1].totalNotes == 50 &&
-              facts[2].playLengthMicros == 6'000'000,
-          "played course stages use their effective metadata while missing "
-          "stages retain stored presentation facts");
+              facts[1].totalNotes == 55 &&
+              facts[2].playLengthMicros == 6'500'000,
+          "course persistence ignores stale source and completed metadata once "
+          "the full-course snapshot is authoritative");
+  const auto *first = session.entryMeta(0);
+  require(first != nullptr && first->RandomSeed == 17 &&
+              first->RandomPrng == "mt19937" &&
+              first->RandomValues == std::vector<int>({2, 1}),
+          "the authoritative entry preserves the parser random branch for "
+          "later gameplay parsing");
+  const auto *persistedStageMeta =
+      result_scene_detail::courseStageMetaForPersistence(session, 0);
+  require(persistedStageMeta != nullptr &&
+              persistedStageMeta->TotalNotes == 45 &&
+              persistedStageMeta->PlayLength == 4'500'000,
+          "course stage persistence captures identity and max facts from the "
+          "same authoritative snapshot");
+
+  auto incomplete = authoritative;
+  incomplete.pop_back();
+  require(!session.installAuthoritativeEntryMetas(std::move(incomplete)) &&
+              session.entryMeta(2)->TotalNotes == 65,
+          "an incomplete replacement cannot partially change course facts");
+  auto completeReplacement = authoritative;
+  completeReplacement[0].TotalNotes = 777;
+  require(
+      !session.installAuthoritativeEntryMetas(std::move(completeReplacement)) &&
+          session.entryMeta(0)->TotalNotes == 45,
+      "a frozen full-course snapshot cannot be replaced later");
 }
 
 void testEffectiveCourseFactsSaturateResultMetadata() {
@@ -383,6 +464,11 @@ void testLegacyPartialCourseReplayPreservesEveryEntry() {
   source.entries[0].meta.Title = "Played";
   source.entries[1].meta.TotalNotes = 200;
   source.entries[2].meta.PlayLength = 30'000'000;
+  auto authoritative = source.entryMetasSnapshot();
+  authoritative[1].TotalNotes = 250;
+  authoritative[2].PlayLength = 35'000'000;
+  require(source.installAuthoritativeEntryMetas(std::move(authoritative)),
+          "legacy replay source can retain authoritative future facts");
   JudgedCoursePlaybackData replay;
   replay.totalCharts = 3;
   replay.completedCharts = 1;
@@ -392,9 +478,10 @@ void testLegacyPartialCourseReplayPreservesEveryEntry() {
   const auto entries =
       result_scene_detail::legacyReplayEntriesForSession(source, replay);
   require(entries.size() == 3 && entries[0].meta.Title == "Played replay" &&
-              entries[1].meta.TotalNotes == 200 &&
-              entries[2].meta.PlayLength == 30'000'000,
-          "replaying a migrated partial course retains unplayed entry facts");
+              entries[1].meta.TotalNotes == 250 &&
+              entries[2].meta.PlayLength == 35'000'000,
+          "replaying a migrated partial course retains authoritative unplayed "
+          "entry facts");
 }
 
 ResultRecordSummary
@@ -605,8 +692,9 @@ int main() {
   testRemoteActionMatrixIsReadOnly();
   testRecalledResultExcludesItselfFromPreviousBest();
   testCoursePersistenceAttemptParticipatesInRetryPolicy();
+  testContinueWithoutSavingRequiresSuccessfulCleanup();
   testCourseReplayActionAcceptsRawAndLegacyData();
-  testCoursePersistenceFactsUsePlayedStageMetadata();
+  testCoursePersistenceFactsUseAuthoritativeEntrySnapshot();
   testEffectiveCourseFactsSaturateResultMetadata();
   testLegacyPartialCourseReplayPreservesEveryEntry();
   testRemoteRecordViewResultActionIsPresentedEnabled();

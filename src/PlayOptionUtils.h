@@ -688,6 +688,22 @@ parseChart(const bms_parser::ChartMeta &meta, std::atomic_bool &cancelled,
 }
 
 inline std::unique_ptr<bms_parser::Chart>
+prepareCourseChart(const bms_parser::ChartMeta &frozenMeta,
+                   const CourseConstraintRules &constraints, int longNoteMode,
+                   std::atomic_bool &cancelled) {
+  auto chart = parseChart(frozenMeta, cancelled, "course");
+  if (chart == nullptr || cancelled ||
+      !replay::storedChartIdentityMatches(frozenMeta.SHA256, frozenMeta.MD5,
+                                          chart->Meta.SHA256,
+                                          chart->Meta.MD5)) {
+    return nullptr;
+  }
+  applyCourseConstraintsToChart(*chart, constraints);
+  applyEffectiveLongNoteModeToChart(*chart, longNoteMode);
+  return chart;
+}
+
+inline std::unique_ptr<bms_parser::Chart>
 parseChartForReplay(const std::filesystem::path &path, const JudgedPlaybackData &replay,
                     std::atomic_bool &cancelled) {
   return parseChart(path, replay.randomSeed, replay.randomPrng,

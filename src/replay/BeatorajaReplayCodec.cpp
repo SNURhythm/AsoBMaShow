@@ -914,6 +914,38 @@ bool validateSupplementalTracks(const ReplayPlaybackData &replay,
   return true;
 }
 
+struct AggregateReplayCounts {
+  std::size_t inputTransitions = 0;
+  std::size_t touchSamples = 0;
+  std::size_t laneCoverEvents = 0;
+  std::size_t legacyEvents = 0;
+
+  bool include(const ReplayPlaybackData &replay,
+               const ReplayCodecLimits &limits, std::string &diagnostic) {
+    const auto addWithinLimit = [](std::size_t &total, std::size_t count,
+                                   std::size_t limit) {
+      if (count > limit || total > limit - count) {
+        return false;
+      }
+      total += count;
+      return true;
+    };
+    if (!addWithinLimit(inputTransitions, replay.input.size(),
+                        limits.maxInputTransitions) ||
+        !addWithinLimit(touchSamples, replay.touchSamples.size(),
+                        limits.maxTouchSamples) ||
+        !addWithinLimit(laneCoverEvents, replay.laneCoverEvents.size(),
+                        limits.maxLaneCoverEvents) ||
+        !addWithinLimit(legacyEvents,
+                        replay.legacy ? replay.legacy->events.size() : 0,
+                        limits.maxInputTransitions)) {
+      return fail(diagnostic,
+                  "Replay course arrays exceed their aggregate limits");
+    }
+    return true;
+  }
+};
+
 std::optional<Json>
 encodeStage(const ReplayPlaybackData &replay, std::int64_t playedAtUnixMillis,
             std::string_view envelope, int stageIndex, int stageCount,
@@ -1657,6 +1689,12 @@ BeatorajaReplayCodec::encodeCourse(const CourseReplayPlaybackData &replay,
     diagnostic = "Replay course stage/rest envelope is invalid";
     return std::nullopt;
   }
+  AggregateReplayCounts aggregateCounts;
+  for (const auto &stage : replay.stages) {
+    if (!aggregateCounts.include(stage, limits_, diagnostic)) {
+      return std::nullopt;
+    }
+  }
   Json document = Json::array();
   for (std::size_t i = 0; i < replay.stages.size(); ++i) {
     const auto stage =
@@ -1737,6 +1775,7 @@ BeatorajaReplayCodec::decode(
     return outcome;
   }
   stages.reserve(stageCount);
+  AggregateReplayCounts aggregateCounts;
   for (std::size_t i = 0; i < stageCount; ++i) {
     StageDecode stage;
     const Json &stageJson = courseEnvelope ? document[i] : document;
@@ -1748,6 +1787,9 @@ BeatorajaReplayCodec::decode(
                                      : expectedStageKeyModes[i]);
     if (!decodeStage(stageJson, courseEnvelope ? "course-stage" : "chart",
                      expectedKeyMode, limits_, stage, outcome.diagnostic)) {
+      return outcome;
+    }
+    if (!aggregateCounts.include(stage.data, limits_, outcome.diagnostic)) {
       return outcome;
     }
     stages.push_back(std::move(stage));

@@ -207,7 +207,7 @@ result_persistence::PersistedCourseResult validCourse() {
   result.gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   result.longNoteMode = 1;
   result.finalScore = 14;
-  result.maxScore = 20;
+  result.maxScore = 34;
   result.maxCombo = 8;
   result.finalGauge = 62.5F;
   result.clearType = kClearTypeHardClearRank;
@@ -249,7 +249,8 @@ void testCourseResult() {
   auto result = validCourse();
   std::string diagnostic;
   expect(result_persistence::validatePersistedCourseResult(result, diagnostic),
-         "valid partial course result is accepted");
+         "partial course maximum includes every entry while stage maxima "
+         "remain per-stage");
   expectCourseFingerprintChange(
       [](auto &value) { value.constraintJson += " "; }, "constraints");
   expectCourseFingerprintChange(

@@ -1,4 +1,5 @@
 #include "ResultPersistenceCoordinator.h"
+#include "FileChecksum.h"
 
 #include <filesystem>
 #include <iostream>
@@ -168,6 +169,7 @@ struct Harness {
   ReservationOutcome reservation;
   bool encodeSucceeds = true;
   bool ownershipRecords = true;
+  std::optional<replay::ReplayFileMetadata> recordedOwnership;
   replay::FinalizeOutcome finalized;
   StageOutcome staged;
   PendingReadOutcome loaded;
@@ -188,13 +190,17 @@ struct Harness {
             .relativePath = std::filesystem::path("replay") / (stem + ".brd"),
         },
     };
+    const std::vector<std::byte> encoded{std::byte{0x42}};
+    file_checksum::Sha256 hash;
+    hash.update(encoded);
     finalized = {
-        .metadata = replay::ReplayFileMetadata{
-            .relativePath = reservation.reservation->relativePath,
-            .sha256 = repeated('c', 64),
-            .compressedSize = 123,
-            .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
-        },
+        .metadata =
+            replay::ReplayFileMetadata{
+                .relativePath = reservation.reservation->relativePath,
+                .sha256 = hash.finalHex(),
+                .compressedSize = encoded.size(),
+                .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+            },
     };
     staged = {
         .status = StageStatus::Staged,
@@ -220,13 +226,13 @@ struct Harness {
 
   Dependencies dependencies() {
     return {
-        .reserve = [this](std::string_view, std::string_view) {
-          events.emplace_back("reserve");
-          return reservation;
-        },
-        .encodeReplay =
-            [this](const replay::ReplayPlaybackData &, std::int64_t,
-                   std::string &diagnostic)
+        .reserve =
+            [this](std::string_view, std::string_view) {
+              events.emplace_back("reserve");
+              return reservation;
+            },
+        .encodeReplay = [this](const replay::ReplayPlaybackData &, std::int64_t,
+                               std::string &diagnostic)
             -> std::optional<std::vector<std::byte>> {
           events.emplace_back("encode");
           if (!encodeSucceeds) {
@@ -239,14 +245,15 @@ struct Harness {
             [this](const replay::ReplayPathIdentity &,
                    std::span<const std::byte>,
                    const replay::ExpectedReplayIdentity &, std::string_view) {
-          events.emplace_back("finalize");
-          return finalized;
-        },
+              events.emplace_back("finalize");
+              return finalized;
+            },
         .recordFinalizedReplay =
             [this](const ReplayFileReservation &,
-                   const replay::ReplayFileMetadata &,
+                   const replay::ReplayFileMetadata &metadata,
                    std::string &diagnostic) {
               events.emplace_back("own");
+              recordedOwnership = metadata;
               if (!ownershipRecords) {
                 diagnostic = "ownership write failed";
               }
@@ -257,30 +264,34 @@ struct Harness {
                    const ir::IrSubmissionSnapshot &,
                    const ReplayFileReference &,
                    std::span<const ir::IrOutboxDraft>) {
-          events.emplace_back("stage");
-          return staged;
-        },
-        .loadPending = [this](std::string_view) {
-          events.emplace_back("load");
-          return loaded;
-        },
-        .listPending = [this](std::size_t) {
-          events.emplace_back("list");
-          return batch;
-        },
-        .project = [this](const PendingChartScoreWrite &) {
-          events.emplace_back("project");
-          return projected;
-        },
-        .acknowledgeAndActivate = [this](std::string_view, int) {
-          events.emplace_back("ack");
-          return acknowledged;
-        },
+              events.emplace_back("stage");
+              return staged;
+            },
+        .loadPending =
+            [this](std::string_view) {
+              events.emplace_back("load");
+              return loaded;
+            },
+        .listPending =
+            [this](std::size_t) {
+              events.emplace_back("list");
+              return batch;
+            },
+        .project =
+            [this](const PendingChartScoreWrite &) {
+              events.emplace_back("project");
+              return projected;
+            },
+        .acknowledgeAndActivate =
+            [this](std::string_view, int) {
+              events.emplace_back("ack");
+              return acknowledged;
+            },
         .recordRecoveryAttempt =
             [this](std::string_view, RecoveryAttemptKind) {
-          events.emplace_back("mark");
-          return marked;
-        },
+              events.emplace_back("mark");
+              return marked;
+            },
     };
   }
 };
@@ -296,10 +307,13 @@ void testFileFirstSuccessOrdering() {
              outcome.receipt->resultId == 17,
          "saved receipt contains the compact result ID");
   expect(harness.events ==
-             std::vector<std::string>({"reserve", "encode", "finalize",
-                                       "own", "stage", "load", "project",
-                                       "ack"}),
-         "replay ownership is recorded before compact DB staging and score projection");
+             std::vector<std::string>({"reserve", "encode", "own", "finalize",
+                                       "stage", "load", "project", "ack"}),
+         "replay ownership is recorded before final-file visibility, compact "
+         "DB staging, and score projection");
+  expect(harness.recordedOwnership == harness.finalized.metadata,
+         "the pre-install ownership marker contains the final path, hash, and "
+         "compressed size");
   expect(outcome.validatedReceiptFor(harness.attempt) != nullptr,
          "receipt validates against the completed attempt");
 }
@@ -347,7 +361,7 @@ void testPhaseFailuresStopAtTheirBoundary() {
                outcome.retryable() && !outcome.durable(),
            "file finalization failure is explicit and retryable");
     expect(harness.events == std::vector<std::string>(
-                                 {"reserve", "encode", "finalize"}),
+                                 {"reserve", "encode", "own", "finalize"}),
            "unfinalized replay never reaches SQLite staging");
   }
   {
@@ -358,9 +372,9 @@ void testPhaseFailuresStopAtTheirBoundary() {
     const auto outcome = coordinator.persist(harness.attempt);
     expect(outcome.state == SaveState::Unstaged && !outcome.durable(),
            "staging failure reports a durable file but no durable result");
-    expect(harness.events == std::vector<std::string>(
-                                 {"reserve", "encode", "finalize", "own",
-                                  "stage"}),
+    expect(harness.events ==
+               std::vector<std::string>(
+                   {"reserve", "encode", "own", "finalize", "stage"}),
            "staging failure stops projection");
   }
   {
@@ -371,9 +385,9 @@ void testPhaseFailuresStopAtTheirBoundary() {
     expect(outcome.state == SaveState::UnfinalizedReplay &&
                outcome.retryable() && !outcome.durable(),
            "ownership-marker failure keeps finalized replay retryable");
-    expect(harness.events == std::vector<std::string>(
-                                 {"reserve", "encode", "finalize", "own"}),
-           "ownership-marker failure stops before result staging");
+    expect(harness.events ==
+               std::vector<std::string>({"reserve", "encode", "own"}),
+           "ownership-marker failure stops before final-file installation");
   }
 }
 
@@ -392,8 +406,8 @@ void testRetryAndMetadataIntegrity() {
   const auto conflict = corruptCoordinator.persist(corrupt.attempt);
   expect(conflict.state == SaveState::UnstagedConflict,
          "finalized path mismatch fails closed");
-  expect(corrupt.events == std::vector<std::string>(
-                               {"reserve", "encode", "finalize"}),
+  expect(corrupt.events ==
+             std::vector<std::string>({"reserve", "encode", "own", "finalize"}),
          "path conflict stops staging");
 }
 

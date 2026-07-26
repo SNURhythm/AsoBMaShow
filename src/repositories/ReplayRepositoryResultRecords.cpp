@@ -2107,23 +2107,29 @@ std::vector<ReplaySummary> ListCompactCourseResultsOnConnection(
                   replay_summary_scan::kChunkSize, scanBudget - inspected))
             : replay_summary_scan::kChunkSize;
     SqliteStatementHandle ids;
+    // Schema-v10 course rows have no attempt identity. A partial row may only
+    // carry a synthesized completed-prefix key, so retain its legacy-ID lookup
+    // without allowing modern UUID-backed attempts to cross course keys.
     const char *query =
         cursor.has_value()
             ? "SELECT id,played_at_unix_ms FROM course_results WHERE "
-              "((?<>'' AND course_key=?) OR (?='' AND ? > 0 AND "
-              "legacy_course_id=?)) AND (played_at_unix_ms<? OR "
+              "((?<>'' AND course_key=?) OR (? > 0 AND legacy_course_id=? "
+              "AND attempt_id IS NULL AND (?='' OR "
+              "completed_charts<total_charts))) "
+              "AND (played_at_unix_ms<? OR "
               "(played_at_unix_ms=? AND id<?)) ORDER BY played_at_unix_ms "
               "DESC,id DESC LIMIT ?"
             : "SELECT id,played_at_unix_ms FROM course_results WHERE "
-              "((?<>'' AND course_key=?) OR (?='' AND ? > 0 AND "
-              "legacy_course_id=?)) ORDER BY played_at_unix_ms DESC,id DESC "
-              "LIMIT ?";
+              "((?<>'' AND course_key=?) OR (? > 0 AND legacy_course_id=? "
+              "AND attempt_id IS NULL AND (?='' OR "
+              "completed_charts<total_charts))) "
+              "ORDER BY played_at_unix_ms DESC,id DESC LIMIT ?";
     if (prepareSqliteStatement(database, query, ids) != SQLITE_OK ||
         !bindText(ids.get(), 1, lookup.courseKey) ||
         !bindText(ids.get(), 2, lookup.courseKey) ||
-        !bindText(ids.get(), 3, lookup.courseKey) ||
+        sqlite3_bind_int(ids.get(), 3, lookup.legacyCourseId) != SQLITE_OK ||
         sqlite3_bind_int(ids.get(), 4, lookup.legacyCourseId) != SQLITE_OK ||
-        sqlite3_bind_int(ids.get(), 5, lookup.legacyCourseId) != SQLITE_OK) {
+        !bindText(ids.get(), 5, lookup.courseKey)) {
       return {};
     }
     int bindIndex = 6;
@@ -2322,6 +2328,15 @@ bool ReplayRepository::discardUndurableReplay(std::string_view attemptId,
       .historyIndex = sqlite3_column_int64(query.get(), 0),
       .relativePath = std::filesystem::path(columnText(query.get(), 1)),
   };
+  std::string pathDiagnostic;
+  const auto identity = replay::pathForStem(
+      reservation.stem, reservation.historyIndex, pathDiagnostic);
+  if (!identity || identity->relativePath != reservation.relativePath) {
+    diagnostic = pathDiagnostic.empty()
+                     ? "undurable replay reservation path is inconsistent"
+                     : std::move(pathDiagnostic);
+    return false;
+  }
   const bool hashNull = sqlite3_column_type(query.get(), 2) == SQLITE_NULL;
   const bool sizeNull = sqlite3_column_type(query.get(), 3) == SQLITE_NULL;
   if (hashNull != sizeNull ||
@@ -2356,8 +2371,34 @@ bool ReplayRepository::discardUndurableReplay(std::string_view attemptId,
       diagnostic = inspection.diagnostic;
       return false;
     }
+    if (inspection.state != replay::ReplayFileState::Available &&
+        inspection.state != replay::ReplayFileState::Missing) {
+      diagnostic = inspection.diagnostic.empty()
+                       ? "replay final path does not match recorded ownership"
+                       : inspection.diagnostic;
+      return false;
+    }
     if (inspection.state == replay::ReplayFileState::Available &&
         !store.removeIfMatches(*ownedFinalFile, diagnostic)) {
+      return false;
+    }
+  } else {
+    std::error_code pathError;
+    const auto status = std::filesystem::symlink_status(
+        GetResolvedDatabasePathLocked().parent_path() / identity->relativePath,
+        pathError);
+    const bool definitelyMissing =
+        (!pathError &&
+         status.type() == std::filesystem::file_type::not_found) ||
+        pathError == std::errc::no_such_file_or_directory;
+    if (pathError && !definitelyMissing) {
+      diagnostic = "could not inspect unmarked replay final path: " +
+                   pathError.message();
+      return false;
+    }
+    if (!definitelyMissing) {
+      diagnostic =
+          "replay final path exists without recorded ownership metadata";
       return false;
     }
   }

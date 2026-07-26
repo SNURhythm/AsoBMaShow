@@ -672,6 +672,7 @@ bool isReplayMember(std::string_view name) {
 struct ReplayArchiveReference {
   std::string sha256;
   std::uint64_t compressedSize = 0;
+  int codecVersion = replay::BeatorajaReplayCodec::kCodecVersion;
 };
 
 bool isKnownMember(std::string_view name) {
@@ -1711,9 +1712,10 @@ ProfileArchiveService::Export(std::string_view profileId,
             relativePath, reference.compressedSize) ||
         !replayReferences
              .emplace(relativePath,
-                      ReplayArchiveReference{.sha256 = reference.contentSha256,
-                                             .compressedSize =
-                                                 reference.compressedSize})
+                      ReplayArchiveReference{
+                          .sha256 = reference.contentSha256,
+                          .compressedSize = reference.compressedSize,
+                          .codecVersion = reference.codecVersion})
              .second) {
       return failure(
           ProfileError::IntegrityFailure,
@@ -1780,58 +1782,53 @@ ProfileArchiveService::Export(std::string_view profileId,
                    "unable to inspect practice data for export: " +
                        filesystemError.message());
   }
-  filesystemError.clear();
-  if (std::filesystem::exists(source.replayDirectory, filesystemError)) {
-    std::filesystem::directory_iterator iterator(source.replayDirectory,
-                                                 filesystemError);
-    if (filesystemError) {
+  replay::ReplayFileStore replayStore(source.root);
+  for (const auto &[memberName, reference] : replayReferences) {
+    const replay::ReplayFileMetadata metadata{
+        .relativePath = std::filesystem::path(memberName),
+        .sha256 = reference.sha256,
+        .compressedSize = reference.compressedSize,
+        .codecVersion = reference.codecVersion,
+    };
+    auto snapshot = replayStore.stageVerifiedSnapshot(metadata);
+    if (snapshot.state == replay::ReplayFileState::Missing) {
+      continue;
+    }
+    if (snapshot.state == replay::ReplayFileState::Corrupt ||
+        snapshot.state == replay::ReplayFileState::Unsafe) {
+      return failure(
+          ProfileError::IntegrityFailure,
+          "referenced replay is corrupt or unsafe for portable export: " +
+              snapshot.diagnostic);
+    }
+    if (snapshot.state != replay::ReplayFileState::Available ||
+        !snapshot.snapshot.has_value()) {
       return failure(ProfileError::IoFailure,
-                     "unable to enumerate replay data for export: " +
-                         filesystemError.message());
+                     "unable to stage referenced replay for export: " +
+                         snapshot.diagnostic);
     }
-    std::vector<std::filesystem::path> replayFiles;
-    for (const auto &entry : iterator) {
-      replayFiles.push_back(entry.path());
+
+    const auto stagedReplay = workspace / metadata.relativePath;
+    if (!copyFileStreaming(snapshot.snapshot->sourcePath, stagedReplay,
+                           memberName, errorMessage)) {
+      return failure(ProfileError::IoFailure,
+                     "unable to stage replay export: " + errorMessage);
     }
-    std::ranges::sort(replayFiles);
-    for (const auto &replayFile : replayFiles) {
-      if (replay::isPrivateReplayTemporaryFilename(
-              replayFile.filename().string())) {
-        continue;
-      }
-      const std::string memberName = "replay/" + replayFile.filename().string();
-      const auto stagedReplay = workspace / "replay" / replayFile.filename();
-      if (!isReplayMember(memberName) ||
-          !copyFileStreaming(replayFile, stagedReplay, memberName,
-                             errorMessage)) {
-        return failure(ProfileError::IoFailure,
-                       "unable to stage replay export: " + errorMessage);
-      }
-      const auto reference = replayReferences.find(memberName);
-      if (reference == replayReferences.end()) {
-        continue;
-      }
-      filesystemError.clear();
-      const auto stagedSize =
-          std::filesystem::file_size(stagedReplay, filesystemError);
-      if (filesystemError || stagedSize != reference->second.compressedSize) {
-        return failure(ProfileError::IntegrityFailure,
-                       "replay file size does not match its database "
-                       "reference during export");
-      }
-      const auto stagedSha256 = file_checksum::sha256File(
-          stagedReplay, errorMessage, reference->second.compressedSize);
-      if (!stagedSha256 || *stagedSha256 != reference->second.sha256) {
-        return failure(ProfileError::IntegrityFailure,
-                       "replay file checksum does not match its database "
-                       "reference during export");
-      }
-      replayReferences.erase(reference);
+    filesystemError.clear();
+    const auto stagedSize =
+        std::filesystem::file_size(stagedReplay, filesystemError);
+    if (filesystemError || stagedSize != reference.compressedSize) {
+      return failure(ProfileError::IntegrityFailure,
+                     "replay file size does not match its database reference "
+                     "during export");
     }
-  } else if (filesystemError) {
-    return failure(ProfileError::IoFailure,
-                   "unable to inspect replay data for export: " +
-                       filesystemError.message());
+    const auto stagedSha256 = file_checksum::sha256File(
+        stagedReplay, errorMessage, reference.compressedSize);
+    if (!stagedSha256 || *stagedSha256 != reference.sha256) {
+      return failure(ProfileError::IntegrityFailure,
+                     "replay file checksum does not match its database "
+                     "reference during export");
+    }
   }
   for (const std::string_view database : {"scores.db", "replays.db"}) {
     const auto size = std::filesystem::file_size(

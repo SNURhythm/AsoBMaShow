@@ -145,6 +145,18 @@ void testSessionAndLegacyKeysShareTheCanonicalDefinition() {
   expect(makeCourseKey(session) == makeCourseKey(charts, constraints),
          "session identity uses hashes and constraints without paths or name");
 
+  auto authoritative = std::vector<bms_parser::ChartMeta>(2);
+  authoritative[0].SHA256 = std::string(kShaB);
+  authoritative[1].MD5 = std::string(kMd5A);
+  expect(session.installAuthoritativeEntryMetas(std::move(authoritative)),
+         "complete authoritative identities install on the course session");
+  expect(makeCourseKey(session) ==
+             makeCourseKey(
+                 std::vector<ChartIdentity>{shaChart(kShaB), md5Chart(kMd5A)},
+                 constraints),
+         "session identity follows the frozen chart identities rather than "
+         "stale source entries");
+
   const std::string legacyNamedKey =
       "course:Old display name\nconstraint:" + std::string(constraints) +
       "\nsha256:" + std::string(kShaA) + "\nmd5:" + std::string(kMd5B) + "\n";

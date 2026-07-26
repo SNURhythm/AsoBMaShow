@@ -18,20 +18,12 @@ courseReplayActionAvailable(const CoursePlaySession &session) noexcept {
 [[nodiscard]] inline std::vector<analysis::JudgedCourseEntryFacts>
 effectiveCourseEntryFacts(const CoursePlaySession &session) {
   std::vector<analysis::JudgedCourseEntryFacts> result;
-  result.reserve(session.entries.size());
-  for (const auto &entry : session.entries) {
+  result.reserve(session.totalChartCount());
+  for (std::size_t index = 0; index < session.totalChartCount(); ++index) {
+    const auto *meta = session.entryMeta(index);
     result.push_back(
-        {.totalNotes = std::max(0, entry.meta.TotalNotes),
-         .playLengthMicros = std::max<std::int64_t>(0, entry.meta.PlayLength)});
-  }
-  const std::size_t playedCount =
-      std::min(result.size(), session.completedResults.size());
-  for (std::size_t index = 0; index < playedCount; ++index) {
-    const auto &meta = session.completedResults[index].meta;
-    result[index] = {
-        .totalNotes = std::max(0, meta.TotalNotes),
-        .playLengthMicros = std::max<std::int64_t>(0, meta.PlayLength),
-    };
+        {.totalNotes = std::max(0, meta->TotalNotes),
+         .playLengthMicros = std::max<std::int64_t>(0, meta->PlayLength)});
   }
   return result;
 }
@@ -55,10 +47,19 @@ courseResultMetaForSession(const CoursePlaySession &session) {
       effectiveCourseEntryFacts(session));
 }
 
+[[nodiscard]] inline const bms_parser::ChartMeta *
+courseStageMetaForPersistence(const CoursePlaySession &session,
+                              std::size_t index) noexcept {
+  return session.entryMeta(index);
+}
+
 [[nodiscard]] inline std::vector<CoursePlayEntry>
 legacyReplayEntriesForSession(const CoursePlaySession &source,
                               const JudgedCoursePlaybackData &replay) {
   std::vector<CoursePlayEntry> result = source.entries;
+  for (std::size_t index = 0; index < source.totalChartCount(); ++index) {
+    result[index].meta = *source.entryMeta(index);
+  }
   const std::size_t expected = std::max(
       result.size(), static_cast<std::size_t>(std::max(0, replay.totalCharts)));
   result.resize(std::max(expected, replay.stages.size()));

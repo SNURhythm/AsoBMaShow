@@ -212,6 +212,10 @@ CourseBuildOutcome BuildCourseResult(
       session->entries[index].meta.PlayLength =
           result.entryFacts[index].playLengthMicros;
     }
+    if (!session->installAuthoritativeEntryMetas(
+            session->entryMetasSnapshot())) {
+      return {.diagnostic = "saved course entry facts are incomplete"};
+    }
     RhythmState finalGaugeState(nullptr, false, session->ruleset,
                                 result.gaugeProfile);
     finalGaugeState.configureGauge(

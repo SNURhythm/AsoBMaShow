@@ -1,6 +1,7 @@
 #include "ResultPersistenceCoordinator.h"
 
 #include "CourseConstraintUtils.h"
+#include "FileChecksum.h"
 #include "ProfileDatabaseActivity.h"
 
 #include <algorithm>
@@ -65,6 +66,19 @@ void appendPhaseDiagnostic(std::string &destination, std::string_view phase,
 bool isConflictState(SaveState state) noexcept {
   return state == SaveState::UnstagedConflict ||
          state == SaveState::PendingConflict;
+}
+
+replay::ReplayFileMetadata
+ownershipMarkerFor(const replay::ReplayPathIdentity &identity,
+                   std::span<const std::byte> encoded) {
+  file_checksum::Sha256 hash;
+  hash.update(encoded);
+  return {
+      .relativePath = identity.relativePath,
+      .sha256 = hash.finalHex(),
+      .compressedSize = static_cast<std::uint64_t>(encoded.size()),
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
 }
 
 void ensureConflictDiagnostic(SaveState state, std::string &diagnostic) {
@@ -499,6 +513,15 @@ SaveOutcome Coordinator::persist(
       .stageSha256 = {attempt.replay.setup.chartSha256},
       .stageLongNoteModes = {attempt.replay.setup.longNoteMode},
       .course = false};
+  const replay::ReplayFileMetadata ownership =
+      ownershipMarkerFor(identity, *encoded);
+  if (!dependencies_.recordFinalizedReplay(*reserved.reservation, ownership,
+                                           diagnostic)) {
+    return unstagedOutcome(
+        SaveState::UnfinalizedReplay,
+        phaseDiagnostic("replay ownership marker", diagnostic,
+                        "ownership metadata could not be stored"));
+  }
   replay::FinalizeOutcome finalized = dependencies_.finalizeReplay(
       identity, *encoded, expected, attemptId);
   if (!finalized.metadata.has_value()) {
@@ -507,16 +530,10 @@ SaveOutcome Coordinator::persist(
         phaseDiagnostic("replay file finalization", finalized.diagnostic,
                         "file validation failed"));
   }
-  if (finalized.metadata->relativePath != identity.relativePath) {
+  if (*finalized.metadata != ownership) {
     return unstagedOutcome(SaveState::UnstagedConflict,
-                           "finalized replay path differs from reservation");
-  }
-  if (!dependencies_.recordFinalizedReplay(*reserved.reservation,
-                                           *finalized.metadata, diagnostic)) {
-    return unstagedOutcome(
-        SaveState::UnfinalizedReplay,
-        phaseDiagnostic("replay ownership finalization", diagnostic,
-                        "ownership metadata could not be stored"));
+                           "finalized replay metadata differs from its "
+                           "pre-install ownership marker");
   }
   const ReplayFileReference replayFile{
       .stem = identity.stem,
@@ -778,6 +795,15 @@ SaveOutcome Coordinator::persistCourse(const CompletedCourseAttempt &attempt) {
       .historyIndex = reserved.reservation->historyIndex,
       .relativePath = reserved.reservation->relativePath,
   };
+  const replay::ReplayFileMetadata ownership =
+      ownershipMarkerFor(identity, *encoded);
+  if (!dependencies_.recordFinalizedReplay(*reserved.reservation, ownership,
+                                           diagnostic)) {
+    return unstagedOutcome(
+        SaveState::UnfinalizedReplay,
+        phaseDiagnostic("course replay ownership marker", diagnostic,
+                        "ownership metadata could not be stored"));
+  }
   replay::FinalizeOutcome finalized = dependencies_.finalizeReplay(
       identity, *encoded,
       {.stageSha256 = pathInput.stageSha256,
@@ -790,17 +816,11 @@ SaveOutcome Coordinator::persistCourse(const CompletedCourseAttempt &attempt) {
         phaseDiagnostic("course replay file finalization",
                         finalized.diagnostic, "file validation failed"));
   }
-  if (finalized.metadata->relativePath != identity.relativePath) {
+  if (*finalized.metadata != ownership) {
     return unstagedOutcome(
         SaveState::UnstagedConflict,
-        "finalized course replay path differs from reservation");
-  }
-  if (!dependencies_.recordFinalizedReplay(*reserved.reservation,
-                                           *finalized.metadata, diagnostic)) {
-    return unstagedOutcome(
-        SaveState::UnfinalizedReplay,
-        phaseDiagnostic("course replay ownership finalization", diagnostic,
-                        "ownership metadata could not be stored"));
+        "finalized course replay metadata differs from its pre-install "
+        "ownership marker");
   }
   const ReplayFileReference replayFile{
       .recordKind = ReplayFileReference::RecordKind::CourseResult,

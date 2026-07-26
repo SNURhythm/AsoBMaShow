@@ -255,6 +255,61 @@ void testRawReplayPreparationValidatesParsedChartIdentity() {
   std::filesystem::remove_all(directory, ignored);
 }
 
+void testFrozenCourseEntryReusesRandomBranchAndSelectedLongNoteMode() {
+  const auto directory =
+      std::filesystem::temp_directory_path() /
+      ("asobmashow-course-entry-facts-" +
+       std::to_string(std::mt19937_64(std::random_device{}())()));
+  std::filesystem::create_directories(directory);
+  const auto chartPath = directory / "random-ln.bms";
+  {
+    std::ofstream chart(chartPath, std::ios::binary);
+    chart << "#PLAYER 1\n#TITLE COURSE FACTS\n#ARTIST TEST\n#BPM 120\n"
+             "#LNTYPE 1\n#WAV01 head.wav\n#WAV02 tail.wav\n"
+             "#RANDOM 2\n#IF 1\n#00111:01\n#ELSE\n#00111:0101\n"
+             "#ENDIF\n#ENDRANDOM\n#00251:0102\n";
+    assert(chart.good());
+  }
+
+  std::atomic_bool cancelled = false;
+  auto selectedBranch = play_options::parseChart(
+      chartPath, 123'456U, std::string("std::mt19937_64"), std::vector<int>{2},
+      cancelled, "course snapshot fixture");
+  assert(selectedBranch != nullptr);
+  const auto frozenMeta = selectedBranch->Meta;
+
+  CourseConstraintRules constraints;
+  auto prepared = play_options::prepareCourseChart(
+      frozenMeta, constraints, long_note_mode::kCnValue, cancelled);
+  assert(prepared != nullptr);
+  assert(prepared->Meta.SHA256 == frozenMeta.SHA256);
+  assert(prepared->Meta.MD5 == frozenMeta.MD5);
+  assert(prepared->Meta.RandomSeed == 123'456U);
+  assert(prepared->Meta.RandomPrng == "std::mt19937_64");
+  assert(prepared->Meta.RandomValues == std::vector<int>({2}));
+  assert(prepared->Meta.LnMode == long_note_mode::kCnValue);
+
+  auto preparedAgain = play_options::prepareCourseChart(
+      prepared->Meta, constraints, long_note_mode::kCnValue, cancelled);
+  assert(preparedAgain != nullptr);
+  assert(preparedAgain->Meta.TotalNotes == prepared->Meta.TotalNotes);
+  assert(preparedAgain->Meta.PlayLength == prepared->Meta.PlayLength);
+  assert(preparedAgain->Meta.RandomValues == prepared->Meta.RandomValues);
+
+  {
+    std::ofstream replacement(chartPath, std::ios::binary | std::ios::trunc);
+    replacement << "#PLAYER 1\n#TITLE REPLACED COURSE STAGE\n#ARTIST TEST\n"
+                   "#BPM 120\n#WAV01 note.wav\n#00111:0101\n";
+    assert(replacement.good());
+  }
+  auto replaced = play_options::prepareCourseChart(
+      frozenMeta, constraints, long_note_mode::kCnValue, cancelled);
+  assert(replaced == nullptr);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
 void testRawReplayPreparationAppliesDoublePlayFlip() {
   const auto directory =
       std::filesystem::temp_directory_path() /
@@ -392,6 +447,11 @@ void testCourseRecallUsesOrderedPersistedStageFacts() {
   assert(session->courseKey == expected.courseKey);
   assert(session->courseName == expected.courseName);
   assert(session->entries.size() == 2);
+  assert(session->authoritativeEntryMetasComplete());
+  assert(session->entryMeta(0)->TotalNotes ==
+         expected.entryFacts[0].totalNotes);
+  assert(session->entryMeta(1)->PlayLength ==
+         expected.entryFacts[1].playLengthMicros);
   assert(session->completedResults.size() == 2);
   assert(session->ownedResultBrowseCharts.size() == 2);
   assert(session->courseReplayData == nullptr);
@@ -430,7 +490,7 @@ void testIncompleteCourseRecallPreservesPersistedTotalAndOutcome() {
       {.totalNotes = 456, .playLengthMicros = 3'000'000},
   };
   persisted.finalScore = persisted.stages[0].score.score;
-  persisted.maxScore = persisted.stages[0].score.maxScore;
+  persisted.maxScore = 1'162;
   persisted.maxCombo = persisted.stages[0].score.maxCombo;
   persisted.finalGauge = 12.5F;
   persisted.clearType = kClearTypeFailedRank;
@@ -445,6 +505,7 @@ void testIncompleteCourseRecallPreservesPersistedTotalAndOutcome() {
   const auto &session = outcome.value->session;
   assert(calls == 1);
   assert(session->entries.size() == 3);
+  assert(session->authoritativeEntryMetasComplete());
   assert(session->completedResults.size() == 1);
   assert(session->ownedResultBrowseCharts.size() == 1);
   assert(session->entries[1].meta.BmsPath.empty());
@@ -453,6 +514,8 @@ void testIncompleteCourseRecallPreservesPersistedTotalAndOutcome() {
   assert(session->entries[1].meta.PlayLength == 2'000'000);
   assert(session->entries[2].meta.TotalNotes == 456);
   assert(session->entries[2].meta.PlayLength == 3'000'000);
+  assert(session->entryMeta(1)->TotalNotes == 123);
+  assert(session->entryMeta(2)->PlayLength == 3'000'000);
   assert(session->carriedGauge.has_value());
   assert(session->carriedGauge->currentGauge == persisted.finalGauge);
   assert(session->recalledCourseClearTypeRank == persisted.clearType);
@@ -515,6 +578,7 @@ int main() {
   testChartRecallRejectsChangedChartIdentity();
   testChartRecallAcceptsMatchingMd5OnlyMigrationIdentity();
   testRawReplayPreparationValidatesParsedChartIdentity();
+  testFrozenCourseEntryReusesRandomBranchAndSelectedLongNoteMode();
   testRawReplayPreparationAppliesDoublePlayFlip();
   testCourseRecallUsesOrderedPersistedStageFacts();
   testIncompleteCourseRecallPreservesPersistedTotalAndOutcome();

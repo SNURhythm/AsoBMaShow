@@ -800,11 +800,38 @@ void testExportIgnoresPrivateReplayTemporary() {
              exported.message);
 
   std::string error;
-  const auto members = readArchive(destination, error);
+  auto members = readArchive(destination, error);
   expect(error.empty() && members.size() == kExpectedMembers.size(),
          "private replay temporary is absent from the exported archive");
+  expect(findMember(members, "replay/" + temporary.filename().string()) ==
+             nullptr,
+         "recognized private replay temporary is never an archive member");
   expect(std::filesystem::exists(temporary),
          "export does not delete an in-flight replay temporary");
+}
+
+void testExportOmitsUnreferencedReplayAttachment() {
+  Fixture fixture;
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
+  const std::string unreferencedFilename = std::string(64, 'b') + ".brd";
+  const auto unreferenced = source.replayDirectory / unreferencedFilename;
+  writeFile(unreferenced, "unreferenced replay bytes\n");
+
+  const auto destination = fixture.exchange.path() / "unreferenced-replay.zip";
+  ProfileArchiveService service(fixture.manager);
+  const auto exported = service.Export(fixture.sourceId, destination);
+  expect(exported.ok(),
+         "export ignores replay files without replay_files ownership: " +
+             exported.message);
+
+  std::string error;
+  auto members = readArchive(destination, error);
+  expect(error.empty() && members.size() == kExpectedMembers.size(),
+         "unreferenced replay does not add an archive member");
+  expect(findMember(members, "replay/" + unreferencedFilename) == nullptr,
+         "only database-referenced replay attachments are exported");
+  expect(readFile(unreferenced) == "unreferenced replay bytes\n",
+         "export leaves the unreferenced local replay untouched");
 }
 
 void testExportRejectsReplayBytesThatDoNotMatchReference() {
@@ -821,6 +848,29 @@ void testExportRejectsReplayBytesThatDoNotMatchReference() {
          "export rejects replay bytes that disagree with replay_files");
   expect(!std::filesystem::exists(destination),
          "replay-reference mismatch never commits a profile archive");
+}
+
+void testExportRejectsHardLinkedReferencedReplay() {
+  Fixture fixture;
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
+  const auto replay = source.replayDirectory / std::string(kReplayFilename);
+  const auto alias = fixture.exchange.path() / "referenced-replay-alias.brd";
+  std::error_code linkError;
+  std::filesystem::create_hard_link(replay, alias, linkError);
+  expect(!linkError, "referenced replay hard-link fixture creates");
+  if (linkError) {
+    return;
+  }
+
+  const auto destination = fixture.exchange.path() / "hard-linked-replay.zip";
+  ProfileArchiveService service(fixture.manager);
+  const auto exported = service.Export(fixture.sourceId, destination);
+  expect(!exported.ok() && exported.error == ProfileError::IntegrityFailure,
+         "export rejects a referenced replay with another hard link");
+  expect(!std::filesystem::exists(destination),
+         "unsafe referenced replay never commits a profile archive");
+  expect(readFile(alias) == kReplayBytes,
+         "hard-link rejection preserves the referenced replay inode");
 }
 
 void testExportOmitsDeletedReplayAttachment() {
@@ -846,6 +896,15 @@ void testExportOmitsDeletedReplayAttachment() {
   expect(findMember(members, "replay/" + std::string(kReplayFilename)) ==
              nullptr,
          "deleted replay bytes are absent from the archive");
+  auto *replaysDatabase = findMember(members, "replays.db");
+  expect(replaysDatabase != nullptr,
+         "deleted-replay export retains its replay database");
+  if (replaysDatabase != nullptr) {
+    const auto snapshot = fixture.temp.path() / "deleted-replay-export.db";
+    writeFile(snapshot, replaysDatabase->contents);
+    expect(rowCount(snapshot, "replay_files") == 1,
+           "missing optional attachment does not erase its result reference");
+  }
 }
 
 void testExportHoldsProfileActivityExclusionAcrossSnapshotAndFiles() {
@@ -3296,7 +3355,9 @@ int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
   testExportIgnoresPrivateReplayTemporary();
+  testExportOmitsUnreferencedReplayAttachment();
   testExportRejectsReplayBytesThatDoNotMatchReference();
+  testExportRejectsHardLinkedReferencedReplay();
   testExportOmitsDeletedReplayAttachment();
   testExportHoldsProfileActivityExclusionAcrossSnapshotAndFiles();
   testIrOperationalStateIsNotProfilePortable();

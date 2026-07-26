@@ -2637,8 +2637,8 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   std::atomic_bool parseCancelled = false;
   std::unique_ptr<bms_parser::Chart> nextChart;
   try {
-    nextChart =
-        play_options::parseChart(nextMeta->BmsPath, parseCancelled, "course");
+    nextChart = play_options::prepareCourseChart(
+        *nextMeta, session->constraints, session->longNoteMode, parseCancelled);
   } catch (const std::exception &e) {
     SDL_Log("Course parse failed %s: %s",
             fspath_to_utf8(nextMeta->BmsPath).c_str(), e.what());
@@ -2650,12 +2650,9 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   if (nextChart == nullptr || parseCancelled) {
     return false;
   }
-  applyCourseConstraintsToChart(*nextChart, session->constraints);
-
   play_options::PlayOptionReplayInfo playInfo =
       play_options::applySelectedPlayOptions(*nextChart,
                                              session->requestedPlayOption);
-  applyEffectiveLongNoteModeToChart(*nextChart, options.longNoteMode);
   session->playOption = playInfo.option;
   session->playOptionSeed = playInfo.seed;
   session->playOption2 = playInfo.option2;
@@ -2679,7 +2676,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   nextOptions.playOptionSeed = playInfo.seed;
   nextOptions.playOption2 = playInfo.option2;
   nextOptions.playOption2Seed = playInfo.seed2;
-  nextOptions.longNoteMode = options.longNoteMode;
+  nextOptions.longNoteMode = session->longNoteMode;
   nextOptions.assistOption = session->assistOption;
   nextOptions.playback = course_rules::kRequiredPlaybackRate;
   nextOptions.clubMode = options.clubMode;

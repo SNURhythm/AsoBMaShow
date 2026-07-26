@@ -948,6 +948,75 @@ void testStockDecodeRejectsZeroKeyRecords() {
       "stock replay with zero nine-byte key records is rejected");
 }
 
+void expectCourseAggregateRejected(
+    const replay::CourseReplayPlaybackData &course,
+    const replay::ReplayCodecLimits &limits, std::string_view track) {
+  replay::BeatorajaReplayCodec strict(limits);
+  std::string diagnostic;
+  expect(!strict.encodeCourse(course, 1'000, diagnostic),
+         std::string("course encode enforces the aggregate ") +
+             std::string(track) + " limit");
+  expect(!diagnostic.empty(),
+         "aggregate encode rejection reports a diagnostic");
+
+  replay::BeatorajaReplayCodec permissive;
+  const auto encoded = permissive.encodeCourse(course, 1'000, diagnostic);
+  expect(encoded.has_value(), "aggregate-limit fixture encodes permissively");
+  if (!encoded) {
+    return;
+  }
+  const auto decoded = strict.decode(*encoded);
+  expect(!decoded.chart && !decoded.course,
+         std::string("course decode enforces the aggregate ") +
+             std::string(track) + " limit");
+  expect(!decoded.diagnostic.empty(),
+         "aggregate decode rejection reports a diagnostic");
+}
+
+void testCourseCodecEnforcesAggregateTrackLimits() {
+  auto stage = extensionReplay();
+  stage.input.resize(2);
+  stage.touchSamples.clear();
+  stage.laneCoverEvents.clear();
+  replay::CourseReplayPlaybackData course{.stages = {stage, stage},
+                                          .restMicrosAfterStage = {0, 0}};
+  replay::ReplayCodecLimits limits;
+  limits.maxInputTransitions = 3;
+  expectCourseAggregateRejected(course, limits, "input-transition");
+
+  stage.input.clear();
+  stage.touchSamples = {{.action = replay::ReplayTouchAction::Down,
+                         .fingerId = 1,
+                         .songTimeMicros = 1'000,
+                         .x = 0.5F,
+                         .y = 0.5F}};
+  course.stages = {stage, stage};
+  limits = {};
+  limits.maxTouchSamples = 1;
+  expectCourseAggregateRejected(course, limits, "touch-sample");
+
+  stage.touchSamples.clear();
+  stage.laneCoverEvents = {{.songTimeMicros = 1'000,
+                            .noteStartPositionPercent = 50,
+                            .resetVisibleTimeReference = false}};
+  course.stages = {stage, stage};
+  limits = {};
+  limits.maxLaneCoverEvents = 1;
+  expectCourseAggregateRejected(course, limits, "lane-cover-event");
+
+  stage.laneCoverEvents.clear();
+  stage.legacy = replay::LegacyPlaybackTrack{
+      .events = {{.action = replay::LegacyPlaybackAction::Gauge,
+                  .songTimeMicros = 1'000,
+                  .judgement = Judgement::None,
+                  .gauge = 20.0F,
+                  .gaugeType = GaugeType::Normal}}};
+  course.stages = {stage, stage};
+  limits = {};
+  limits.maxInputTransitions = 1;
+  expectCourseAggregateRejected(course, limits, "legacy-event");
+}
+
 void testMalformedAndBoundedInputs() {
   replay::BeatorajaReplayCodec codec;
   expectDecodeRejected(codec, bytes("not gzip"),
@@ -1228,6 +1297,7 @@ int main() {
   testAllMissReplayRoundTripsWithEmptyInput();
   testManualAssignmentProjectsToStockNormal();
   testStockDecodeRejectsZeroKeyRecords();
+  testCourseCodecEnforcesAggregateTrackLimits();
   testMalformedAndBoundedInputs();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay codec test(s) failed\n";

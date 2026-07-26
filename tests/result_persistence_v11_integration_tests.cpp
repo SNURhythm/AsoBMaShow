@@ -534,6 +534,28 @@ void testCompleteFileAndDatabasePipeline() {
          "snapshot");
 }
 
+void testOwnershipMarkerFailureCannotExposeFinalReplay() {
+  TemporaryDirectory temporary("preinstall-ownership");
+  Environment environment(temporary.path());
+  expect(executeSql(environment.replayDatabase,
+                    "CREATE TRIGGER fail_replay_ownership BEFORE UPDATE OF "
+                    "finalized_content_sha256,finalized_compressed_size ON "
+                    "replay_file_reservations BEGIN SELECT "
+                    "RAISE(ABORT,'injected ownership marker failure'); END"),
+         "pre-install ownership fixture rejects marker storage");
+  const auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174150");
+  const auto failed = environment.coordinator.persist(attempt);
+  const auto finalPath =
+      temporary.path() / "replay" / (attempt.result.score.chartSha256 + ".brd");
+  expect(failed.state == SaveState::UnfinalizedReplay &&
+             !std::filesystem::exists(finalPath) &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM replay_file_reservations") == 1 &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM chart_results") == 0,
+         "ownership marker failure stops before the final BRD becomes visible");
+}
+
 void testFileActionsRejectReplayFromDifferentChartContext() {
   TemporaryDirectory temporary("action-semantic-validation");
   Environment environment(temporary.path());
@@ -788,6 +810,151 @@ void testOccupiedSlotReplacementRelocatesDisplacedReference() {
              scalar(environment.replayDatabase,
                     "SELECT count(*) FROM replay_file_reservations") == 0,
          "relocation consumes its reservation without dropping references");
+}
+
+void testFailedSlotRelocationKeepsOwnedCopyForStartupRecovery() {
+  TemporaryDirectory temporary("failed-slot-relocation-recovery");
+  Environment environment(temporary.path(),
+                          {.failAt = [](std::string_view point) {
+                            return point == "remove-after-quarantine";
+                          }});
+  std::vector<int> resultIds;
+  std::vector<ReplayFileReference> references;
+  for (int index = 0; index < 2; ++index) {
+    auto attempt = validAttempt("123e4567-e89b-42d3-a456-42661417414" +
+                                std::to_string(index));
+    attempt.result.playedAtUnixMillis += index * 1000;
+    attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+    std::string snapshotDiagnostic;
+    const auto snapshot =
+        ir::captureIrSubmissionSnapshot(attempt.result, snapshotDiagnostic);
+    expect(snapshot.has_value(),
+           "failed relocation fixture captures its IR snapshot");
+    if (!snapshot.has_value()) {
+      return;
+    }
+    attempt.irSnapshot = *snapshot;
+    const auto saved = environment.coordinator.persist(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "failed relocation fixture persists");
+    if (!saved.receipt.has_value()) {
+      return;
+    }
+    const auto loaded =
+        environment.replayRepository.loadChartResult(saved.receipt->resultId);
+    expect(loaded.record.has_value() && loaded.record->replayFile.has_value(),
+           "failed relocation fixture loads its replay reference");
+    if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+      return;
+    }
+    resultIds.push_back(saved.receipt->resultId);
+    references.push_back(*loaded.record->replayFile);
+  }
+  if (resultIds.size() != 2 || references.size() != 2) {
+    return;
+  }
+
+  expect(executeSql(environment.replayDatabase,
+                    "CREATE TRIGGER fail_replay_relocation BEFORE UPDATE OF "
+                    "history_index,relative_path ON replay_files BEGIN SELECT "
+                    "RAISE(ABORT,'injected replay relocation failure'); END"),
+         "failed relocation fixture rejects the reference update");
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const auto copied = actions.copyToBeatorajaSlot(
+      {.kind = ReplayFileReference::RecordKind::ChartResult,
+       .resultId = resultIds[1]},
+      0);
+  const auto relocationPath =
+      temporary.path() / "replay" / (references[0].stem + "_2.brd");
+  expect(!copied.changed &&
+             copied.availability == ReplayAvailability::IoFailure,
+         "failed reference relocation reports an I/O failure");
+  expect(std::filesystem::exists(relocationPath) &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM replay_file_reservations") == 1,
+         "ownership-safe rollback preserves the copied file and reservation "
+         "when deletion cannot prove ownership");
+  expect(scalar(environment.replayDatabase,
+                "SELECT count(*) FROM replay_file_reservations WHERE "
+                "finalized_content_sha256 IS NOT NULL AND "
+                "finalized_compressed_size IS NOT NULL") == 1,
+         "relocation records copied-file ownership before moving the "
+         "reference");
+
+  environment.replayRepository.Shutdown();
+  ReplayRepository recovered(environment.replayDatabase);
+  expect(recovered.EnsureSchema(),
+         "startup recovery opens the failed relocation database");
+  expect(!std::filesystem::exists(relocationPath) &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM replay_file_reservations") == 0,
+         "startup reclaims the proven orphaned relocation copy");
+}
+
+void testSlotRelocationMarkerFailureCannotExposeCopiedReplay() {
+  TemporaryDirectory temporary("precopy-relocation-ownership");
+  Environment environment(temporary.path(),
+                          {.failAt = [](std::string_view point) {
+                            return point == "remove-after-quarantine";
+                          }});
+  std::vector<int> resultIds;
+  std::vector<ReplayFileReference> references;
+  for (int index = 0; index < 2; ++index) {
+    auto attempt = validAttempt("123e4567-e89b-42d3-a456-42661417415" +
+                                std::to_string(index + 1));
+    attempt.result.playedAtUnixMillis += index * 1000;
+    attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+    std::string snapshotDiagnostic;
+    const auto snapshot =
+        ir::captureIrSubmissionSnapshot(attempt.result, snapshotDiagnostic);
+    expect(snapshot.has_value(),
+           "pre-copy relocation fixture captures its IR snapshot");
+    if (!snapshot.has_value()) {
+      return;
+    }
+    attempt.irSnapshot = *snapshot;
+    const auto saved = environment.coordinator.persist(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "pre-copy relocation fixture persists");
+    if (!saved.receipt.has_value()) {
+      return;
+    }
+    const auto loaded =
+        environment.replayRepository.loadChartResult(saved.receipt->resultId);
+    expect(loaded.record.has_value() && loaded.record->replayFile.has_value(),
+           "pre-copy relocation fixture loads its replay reference");
+    if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+      return;
+    }
+    resultIds.push_back(saved.receipt->resultId);
+    references.push_back(*loaded.record->replayFile);
+  }
+  if (resultIds.size() != 2 || references.size() != 2) {
+    return;
+  }
+
+  expect(
+      executeSql(environment.replayDatabase,
+                 "CREATE TRIGGER fail_relocation_ownership BEFORE UPDATE OF "
+                 "finalized_content_sha256,finalized_compressed_size ON "
+                 "replay_file_reservations BEGIN SELECT "
+                 "RAISE(ABORT,'injected relocation ownership failure'); END"),
+      "pre-copy relocation fixture rejects marker storage");
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const auto copied = actions.copyToBeatorajaSlot(
+      {.kind = ReplayFileReference::RecordKind::ChartResult,
+       .resultId = resultIds[1]},
+      0);
+  const auto relocationPath =
+      temporary.path() / "replay" / (references[0].stem + "_2.brd");
+  expect(!copied.changed &&
+             copied.availability == ReplayAvailability::IoFailure &&
+             !std::filesystem::exists(relocationPath) &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM replay_file_reservations") == 0,
+         "relocation marker failure stops before copied bytes become visible");
 }
 
 void testFilesystemFailuresNeverStageDatabaseRows() {
@@ -1222,10 +1389,13 @@ void testSummaryCorruptionAllowanceIsBounded() {
 
 int main() {
   testCompleteFileAndDatabasePipeline();
+  testOwnershipMarkerFailureCannotExposeFinalReplay();
   testFileActionsRejectReplayFromDifferentChartContext();
   testReplayShareUsesVerifiedSnapshotAfterSourceReplacement();
   testFileActionsRejectReplayUnderDifferentChartStem();
   testOccupiedSlotReplacementRelocatesDisplacedReference();
+  testFailedSlotRelocationKeepsOwnedCopyForStartupRecovery();
+  testSlotRelocationMarkerFailureCannotExposeCopiedReplay();
   testFilesystemFailuresNeverStageDatabaseRows();
   testCrashAfterCompactStageRecoversWithoutReplayReconstruction();
   testCoursePipelineUsesOneBeatorajaArrayFile();

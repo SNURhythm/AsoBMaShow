@@ -5299,36 +5299,53 @@ void MainMenuScene::startCourseDirect(
         joinRetiredPreviewLoadThreads();
         clearSelectedChart();
 
-        const bms_parser::ChartMeta *firstMeta = session->currentMeta();
-        if (firstMeta == nullptr || firstMeta->BmsPath.empty()) {
-          return finishStart();
-        }
-
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> preparedChart;
-        try {
-          preparedChart = play_options::parseChart(firstMeta->BmsPath,
-                                                   parseCancelled, "course");
-        } catch (const std::exception &e) {
-          SDL_Log("Error parsing %s for course start: %s",
-                  fspath_to_utf8(firstMeta->BmsPath).c_str(), e.what());
-          archive_file::appendDebugLogLine(
-              "Course start parse exception: " +
-              fspath_to_utf8(firstMeta->BmsPath) + ": " + e.what());
-        }
-        if (preparedChart == nullptr || parseCancelled) {
-          if (replayStatusText != nullptr) {
-            replayStatusText->setText("Course start failed");
+        std::vector<bms_parser::ChartMeta> authoritativeEntryMetas;
+        authoritativeEntryMetas.reserve(session->entries.size());
+        for (std::size_t index = 0; index < session->entries.size(); ++index) {
+          const auto &sourceMeta = session->entries[index].meta;
+          if (sourceMeta.BmsPath.empty()) {
+            return finishStart();
           }
+
+          std::unique_ptr<bms_parser::Chart> entryChart;
+          try {
+            entryChart = play_options::parseChart(
+                sourceMeta.BmsPath, parseCancelled, "course snapshot");
+          } catch (const std::exception &e) {
+            SDL_Log("Error parsing %s for course start: %s",
+                    fspath_to_utf8(sourceMeta.BmsPath).c_str(), e.what());
+            archive_file::appendDebugLogLine(
+                "Course start parse exception: " +
+                fspath_to_utf8(sourceMeta.BmsPath) + ": " + e.what());
+          }
+          if (entryChart == nullptr || parseCancelled) {
+            if (replayStatusText != nullptr) {
+              replayStatusText->setText("Course start failed");
+            }
+            return finishStart();
+          }
+          applyCourseConstraintsToChart(*entryChart, session->constraints);
+          applyEffectiveLongNoteModeToChart(*entryChart, selectedLongNoteMode);
+          authoritativeEntryMetas.push_back(entryChart->Meta);
+          if (index == 0) {
+            preparedChart = std::move(entryChart);
+          }
+        }
+        if (preparedChart == nullptr ||
+            !session->installAuthoritativeEntryMetas(
+                std::move(authoritativeEntryMetas))) {
           return finishStart();
         }
-        applyCourseConstraintsToChart(*preparedChart, session->constraints);
+        session->courseKey = course_identity::makeCourseKey(*session);
+        if (session->courseKey.empty()) {
+          return finishStart();
+        }
 
         play_options::PlayOptionReplayInfo playInfo =
-            play_options::applySelectedPlayOptions(*preparedChart,
-                                                   session->requestedPlayOption);
-        applyEffectiveLongNoteModeToChart(*preparedChart,
-                                          selectedLongNoteMode);
+            play_options::applySelectedPlayOptions(
+                *preparedChart, session->requestedPlayOption);
         session->playOption = playInfo.option;
         session->playOptionSeed = playInfo.seed;
         session->playOption2 = playInfo.option2;
@@ -9783,6 +9800,10 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
           session->entries[static_cast<std::size_t>(stage.stageIndex)].meta =
               std::move(meta);
         }
+        if (!session->installAuthoritativeEntryMetas(
+                session->entryMetasSnapshot())) {
+          return failReplayLoad();
+        }
         session->snapshotRulesetFromPlayback(playback->stages.front());
         const CourseConstraintSettings constraintSettings =
             courseConstraintSettingsFromJson(persisted.constraintJson);
@@ -9840,11 +9861,11 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
             };
             auto adapted = replay::makeLegacyPlaybackAdapter(
                 playback->stages[index], stageResult,
-                session->entries[index].meta);
+                *session->entryMeta(index));
             if (!adapted.has_value()) {
               return failReplayLoad();
             }
-            adapted->chartMeta.BmsPath = session->entries[index].meta.BmsPath;
+            adapted->chartMeta.BmsPath = session->entryMeta(index)->BmsPath;
             legacyCourse->stages.push_back(
                 {.replay = std::move(*adapted),
                  .restMicrosAfterStage =

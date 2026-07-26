@@ -127,6 +127,15 @@ remoteResultSceneActions(bool rankingsAvailable) noexcept {
 }
 
 namespace result_scene_detail {
+[[nodiscard]] inline bool
+cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
+                                   const std::function<bool()> &cleanup) {
+  if (!cleanupRequired || (cleanup && cleanup())) {
+    return true;
+  }
+  return !retryAvailable;
+}
+
 [[nodiscard]] inline bool hasPersistenceAttempt(
     const ResultPersistenceOptions &persistence) noexcept {
   return (persistence.attempt != nullptr) !=

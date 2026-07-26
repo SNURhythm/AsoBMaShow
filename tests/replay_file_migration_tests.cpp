@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <random>
@@ -1506,6 +1507,43 @@ void testMigrationSkipsCanonicalCrossStemPathAlias() {
   }
 }
 
+void testMigrationSkipsUnrelatedOccupiedReplayPath() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  const FixtureFacts chart = insertChartFixture(database.get());
+  const auto occupied = temporary.path() / "replay" / (chart.sha256 + ".brd");
+  std::filesystem::create_directories(occupied.parent_path());
+  {
+    std::ofstream output(occupied, std::ios::binary | std::ios::trunc);
+    output << "unrelated beatoraja replay";
+  }
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+  if (outcome.status !=
+      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
+    std::cerr << "occupied path migration diagnostic: " << outcome.diagnostic
+              << '\n';
+  }
+
+  std::ifstream input(occupied, std::ios::binary);
+  const std::string preserved((std::istreambuf_iterator<char>(input)),
+                              std::istreambuf_iterator<char>());
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "migration advances past an unrelated occupied replay path");
+  expect(text(database.get(),
+              "SELECT relative_path FROM replay_files WHERE "
+              "chart_result_id=42") == "replay/" + chart.sha256 + "_1.brd" &&
+             preserved == "unrelated beatoraja replay",
+         "migration preserves unrelated Beatoraja bytes and uses the next "
+         "history slot");
+}
+
 void testMigrationLocksLegacySnapshotBeforeFinalizingFiles() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
@@ -1700,6 +1738,7 @@ int main() {
   testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles();
   testAssignsSameStemHistoryByTimestampThenPublicId();
   testMigrationSkipsCanonicalCrossStemPathAlias();
+  testMigrationSkipsUnrelatedOccupiedReplayPath();
   testMigrationLocksLegacySnapshotBeforeFinalizingFiles();
   testEveryDatabaseFailureRollsBackAndRetryReusesFiles();
   testEveryReplayFileFailurePreservesV10AndCanRetry();

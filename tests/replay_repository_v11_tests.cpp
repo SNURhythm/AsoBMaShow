@@ -1,10 +1,13 @@
+#include "CourseIdentity.h"
 #include "repositories/ReplayRepository.h"
+#include "repositories/ReplayRepositoryReplayFileMigration.h"
 #include "FileChecksum.h"
 #include "ir/IrSubmissionSnapshot.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/ReplayFileStore.h"
 #include "replay/ReplayPlaybackData.h"
 #include "sqlite3.h"
+#include "support/ReplaySchema10Fixture.h"
 
 #include <algorithm>
 #include <array>
@@ -231,6 +234,242 @@ replay::ReplayFileMetadata metadataForFile(
           .sha256 = hash.value_or(std::string{}),
           .compressedSize = std::filesystem::file_size(absolute),
           .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion};
+}
+
+replay::FinalizeOutcome
+installSampleReplay(const std::filesystem::path &root,
+                    const ReplayFileReservation &reservation,
+                    std::string_view attemptToken) {
+  const auto playback = samplePlayback();
+  replay::BeatorajaReplayCodec codec;
+  std::string diagnostic;
+  const auto encoded =
+      codec.encodeChart(playback, 1'700'000'000'123LL, diagnostic);
+  if (!encoded) {
+    return {.diagnostic = std::move(diagnostic)};
+  }
+  replay::ReplayFileStore store(root);
+  return store.finalize({.stem = reservation.stem,
+                         .historyIndex = reservation.historyIndex,
+                         .relativePath = reservation.relativePath},
+                        *encoded, codec,
+                        {.stageSha256 = {playback.setup.chartSha256},
+                         .stageLongNoteModes = {playback.setup.longNoteMode},
+                         .course = false},
+                        attemptToken);
+}
+
+constexpr std::string_view kPartialCourseMd5 =
+    "0123456789abcdef0123456789abcdef";
+constexpr std::string_view kPartialCourseCompletedSha256 =
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+constexpr std::string_view kPartialCourseRemainingSha256 =
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+std::string currentPartialCourseKey() {
+  const std::array identities{
+      course_identity::ChartIdentity{
+          .sha256 = std::string(kPartialCourseCompletedSha256),
+          .md5 = std::string(kPartialCourseMd5)},
+      course_identity::ChartIdentity{
+          .sha256 = std::string(kPartialCourseRemainingSha256)},
+  };
+  return course_identity::makeCourseKey(identities, "[]");
+}
+
+bool migrateSchema10PartialCourse(const std::filesystem::path &databasePath,
+                                  const std::filesystem::path &profileRoot) {
+  sqlite3 *database = nullptr;
+  if (sqlite3_open(databasePath.string().c_str(), &database) != SQLITE_OK) {
+    sqlite3_close(database);
+    return false;
+  }
+  try {
+    replay_schema10_fixture::createExactSchema(database);
+    const std::string provenance =
+        serializeScoreProvenance(ScoreProvenance::Legacy());
+    replay_schema10_fixture::insertSimpleChart(
+        database, 42, kPartialCourseMd5, kPartialCourseCompletedSha256,
+        "2026-07-25 01:04:04", 2, provenance, {}, 1);
+    replay_schema10_fixture::execute(
+        database,
+        "INSERT INTO course_replays(id,course_id,course_key,course_name,"
+        "course_group_name,constraint_json,gauge_type,gauge_profile,"
+        "gauge_auto_shift,ln_mode,requested_play_option,assist_option,"
+        "final_score,max_combo,final_gauge,clear_type,completed_charts,"
+        "total_charts,created_at,ruleset_version,eligibility,provenance_json) "
+        "VALUES(77,12,'','Partial Course','Folder','[]',0,0,0,1,'NORMAL',"
+        "'OFF',2,1,75.0,200,1,2,'2026-07-25 01:04:04',0,2," +
+            replay_schema10_fixture::quote(provenance) + ")");
+    replay_schema10_fixture::execute(
+        database,
+        "INSERT INTO course_replay_stages(id,course_replay_id,stage_index,"
+        "replay_id,rest_micros_after_stage) VALUES(88,77,0,42,0)");
+  } catch (...) {
+    sqlite3_close(database);
+    return false;
+  }
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(profileRoot);
+  const auto migrated = replay_repository_detail::migrateReplaySchema10To11(
+      database, profileRoot, codec, store, {},
+      [](const auto &)
+          -> std::optional<
+              replay_repository_detail::ReplayMigrationChartMetadata> {
+        return replay_repository_detail::ReplayMigrationChartMetadata{
+            .keyMode = 7,
+            .hasUndefinedLongNotes = true,
+            .totalNotes = 1,
+        };
+      });
+  if (migrated.status !=
+      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
+    std::cerr << "partial course migration diagnostic: " << migrated.diagnostic
+              << '\n';
+  }
+  sqlite3_close(database);
+  return migrated.status == replay_repository_detail::ReplayMigrationOutcome::
+                                Status::Migrated &&
+         migrated.chartFiles == 1 && migrated.courseFiles == 1;
+}
+
+void testMigratedPartialCourseRemainsVisibleByLegacyId() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  expect(migrateSchema10PartialCourse(databasePath, temporary.path()),
+         "schema-v10 partial course migrates for Records lookup");
+
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "migrated partial course repository opens for Records lookup");
+  const auto loaded = repository.loadCourseResult(77);
+  const std::string currentKey = currentPartialCourseKey();
+  expect(loaded.record.has_value() &&
+             loaded.record->result.courseKey != currentKey &&
+             loaded.record->result.legacyCourseId == 12,
+         "migration can only synthesize the completed-prefix course key");
+
+  const auto records = repository.ListCourseReplays(
+      {.courseKey = currentKey, .legacyCourseId = 12}, 100);
+  expect(records.size() == 1 && records.front().id == 77,
+         "Records uses the legacy course ID for a migrated partial course "
+         "whose synthesized prefix key differs from the current full key");
+}
+
+void testCanonicalAttemptsDoNotFallBackToLegacyCourseId() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  expect(migrateSchema10PartialCourse(databasePath, temporary.path()),
+         "partial course fixture migrates before canonical-attempt lookup");
+
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "migrated partial course opens before canonical-attempt lookup");
+  const auto loaded = repository.loadCourseResult(77);
+  expect(loaded.record.has_value(),
+         "migrated course result loads before canonical-attempt lookup");
+  if (!loaded.record.has_value()) {
+    return;
+  }
+  auto canonicalAttempt = loaded.record->result;
+  canonicalAttempt.attemptId = "123e4567-e89b-42d3-a456-426614174077";
+  canonicalAttempt.courseKey =
+      "course:v1:"
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+  canonicalAttempt.resultFingerprint =
+      result_persistence::resultFingerprint(canonicalAttempt);
+  repository.Shutdown();
+
+  {
+    Database database(databasePath);
+    expect(execute(database.get(),
+                   "UPDATE course_results SET attempt_id=" +
+                       sqlQuote(*canonicalAttempt.attemptId) +
+                       ",course_key=" + sqlQuote(canonicalAttempt.courseKey) +
+                       ",result_fingerprint=" +
+                       sqlQuote(canonicalAttempt.resultFingerprint) +
+                       " WHERE id=77"),
+           "fixture marks the row as a canonical persisted attempt");
+  }
+
+  ReplayRepository reopened(databasePath);
+  expect(reopened.EnsureSchema(),
+         "canonical-attempt fixture reopens for Records lookup");
+  const auto records = reopened.ListCourseReplays(
+      {.courseKey = currentPartialCourseKey(), .legacyCourseId = 12}, 100);
+  expect(records.empty(),
+         "Records does not use legacy course ID fallback for canonical "
+         "attempts with another course key");
+}
+
+void testCompletedMigratedCoursesDoNotFallBackToLegacyCourseId() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  expect(migrateSchema10PartialCourse(databasePath, temporary.path()),
+         "partial course fixture migrates before completed legacy lookup");
+
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "migrated course opens before completed legacy lookup");
+  const auto loaded = repository.loadCourseResult(77);
+  expect(loaded.record.has_value(),
+         "migrated course loads before completed legacy lookup");
+  if (!loaded.record.has_value()) {
+    return;
+  }
+  auto completedLegacy = loaded.record->result;
+  completedLegacy.totalCharts = completedLegacy.completedCharts;
+  completedLegacy.entryFacts.resize(
+      static_cast<std::size_t>(completedLegacy.completedCharts));
+  completedLegacy.courseKey =
+      "course:v1:"
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+  completedLegacy.maxScore = 0;
+  std::string entryFactsJson = "[";
+  for (std::size_t index = 0; index < completedLegacy.entryFacts.size();
+       ++index) {
+    const auto &facts = completedLegacy.entryFacts[index];
+    completedLegacy.maxScore += facts.totalNotes * 2;
+    if (index != 0) {
+      entryFactsJson += ',';
+    }
+    entryFactsJson += "[" + std::to_string(facts.totalNotes) + "," +
+                      std::to_string(facts.playLengthMicros) + "]";
+  }
+  entryFactsJson += ']';
+  completedLegacy.resultFingerprint =
+      result_persistence::resultFingerprint(completedLegacy);
+  repository.Shutdown();
+
+  {
+    Database database(databasePath);
+    expect(
+        execute(
+            database.get(),
+            "UPDATE course_results SET course_key=" +
+                sqlQuote(completedLegacy.courseKey) +
+                ",total_charts=" + std::to_string(completedLegacy.totalCharts) +
+                ",max_score=" + std::to_string(completedLegacy.maxScore) +
+                ",entry_facts_json=" + sqlQuote(entryFactsJson) +
+                ",result_fingerprint=" +
+                sqlQuote(completedLegacy.resultFingerprint) + " WHERE id=77"),
+        "fixture represents a completed migrated course definition");
+  }
+
+  ReplayRepository reopened(databasePath);
+  expect(reopened.EnsureSchema(),
+         "completed migrated fixture reopens for Records lookup");
+  const auto records = reopened.ListCourseReplays(
+      {.courseKey = currentPartialCourseKey(), .legacyCourseId = 12}, 100);
+  expect(records.empty(),
+         "Records does not use legacy ID fallback for completed migrated "
+         "courses with another canonical definition");
+  const auto legacyOnlyRecords =
+      reopened.ListCourseReplays({.courseKey = {}, .legacyCourseId = 12}, 100);
+  expect(legacyOnlyRecords.size() == 1 && legacyOnlyRecords.front().id == 77,
+         "Records retains the original legacy-ID lookup when no current "
+         "course key is available");
 }
 
 void testReplayFileReadIsIndependentFromResultAndIr() {
@@ -1163,16 +1402,163 @@ void testProfileStartupPreservesUnownedReplayCollision() {
                                  installed.reservation->relativePath),
          "startup preserves a file not proven to belong to the reservation");
   const auto reclaimed = reopened.reserveReplayFile(installedAttempt, stem);
-  expect(reclaimed.status == ReservationOutcome::Status::Reserved &&
-             reclaimed.reservation &&
-             reclaimed.reservation->historyIndex == 1,
-         "startup drops the reservation but skips the preserved occupied slot");
+  expect(reclaimed.status == ReservationOutcome::Status::AlreadyReserved &&
+             reclaimed.reservation && reclaimed.reservation->historyIndex == 0,
+         "startup preserves the ownership barrier for an unproven occupied "
+         "slot");
   const auto afterRecovery = reopened.reserveReplayFile(
       "123e4567-e89b-42d3-a456-426614174122", stem);
   expect(afterRecovery.status == ReservationOutcome::Status::Reserved &&
              afterRecovery.reservation &&
-             afterRecovery.reservation->historyIndex == 2,
-         "reclaimed orphan slots preserve monotonic live reservations");
+             afterRecovery.reservation->historyIndex == 1,
+         "startup reclaims only the missing orphan reservation slot");
+}
+
+void testProfileStartupPreservesUnmarkedFinalReplayReservation() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('a', 64);
+  constexpr std::string_view attempt = "123e4567-e89b-42d3-a456-426614174123";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "unmarked finalized reservation schema is ready");
+  const auto reserved = repository.reserveReplayFile(attempt, stem);
+  expect(reserved.reservation.has_value(),
+         "unmarked finalized replay reserves its path");
+  if (!reserved.reservation) {
+    return;
+  }
+  const auto finalized =
+      installSampleReplay(temporary.path(), *reserved.reservation, attempt);
+  expect(finalized.metadata.has_value(),
+         "replay installation succeeds before ownership recording fails");
+  if (!finalized.metadata) {
+    return;
+  }
+  const auto finalPath = temporary.path() / finalized.metadata->relativePath;
+  repository.Shutdown();
+
+  ReplayRepository reopened(databasePath);
+  expect(reopened.EnsureSchema(),
+         "startup opens a reservation with an unmarked final replay");
+  const auto retried = reopened.reserveReplayFile(attempt, stem);
+  expect(retried.status == ReservationOutcome::Status::AlreadyReserved &&
+             retried.reservation == reserved.reservation &&
+             std::filesystem::exists(finalPath),
+         "startup preserves the reservation for an existing unmarked final "
+         "replay");
+}
+
+void testContinuePreservesUnmarkedFinalReplayReservation() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('a', 64);
+  constexpr std::string_view attempt = "123e4567-e89b-42d3-a456-426614174124";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "continue recovery reservation schema is ready");
+  const auto reserved = repository.reserveReplayFile(attempt, stem);
+  expect(reserved.reservation.has_value(),
+         "continue recovery reserves its final path");
+  if (!reserved.reservation) {
+    return;
+  }
+  const auto finalized =
+      installSampleReplay(temporary.path(), *reserved.reservation, attempt);
+  expect(finalized.metadata.has_value(),
+         "continue fixture installs replay before ownership recording fails");
+  if (!finalized.metadata) {
+    return;
+  }
+  const auto finalPath = temporary.path() / finalized.metadata->relativePath;
+
+  std::string diagnostic;
+  expect(!repository.discardUndurableReplay(attempt, stem, diagnostic) &&
+             !diagnostic.empty() && std::filesystem::exists(finalPath),
+         "continue refuses to discard an unmarked existing final replay");
+  const auto retried = repository.reserveReplayFile(attempt, stem);
+  expect(retried.status == ReservationOutcome::Status::AlreadyReserved &&
+             retried.reservation == reserved.reservation,
+         "continue preserves the reservation for retry reconciliation");
+}
+
+void testProfileStartupPreservesMismatchedFinalReplayReservation() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('a', 64);
+  constexpr std::string_view attempt = "123e4567-e89b-42d3-a456-426614174126";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "mismatched finalized reservation schema is ready");
+  const auto reserved = repository.reserveReplayFile(attempt, stem);
+  expect(reserved.reservation.has_value(),
+         "mismatched finalized replay reserves its path");
+  if (!reserved.reservation) {
+    return;
+  }
+  const auto finalized =
+      installSampleReplay(temporary.path(), *reserved.reservation, attempt);
+  std::string diagnostic;
+  const bool ownershipRecorded =
+      finalized.metadata.has_value() &&
+      repository.markReplayFileReservationFinalized(
+          *reserved.reservation, *finalized.metadata, diagnostic);
+  expect(ownershipRecorded,
+         "mismatched replay fixture records finalized ownership");
+  if (!ownershipRecorded) {
+    return;
+  }
+  const auto finalPath = temporary.path() / finalized.metadata->relativePath;
+  writeFile(finalPath, "different bytes after ownership was recorded");
+  repository.Shutdown();
+
+  ReplayRepository reopened(databasePath);
+  expect(reopened.EnsureSchema(),
+         "startup opens a reservation with mismatched final bytes");
+  const auto retried = reopened.reserveReplayFile(attempt, stem);
+  expect(retried.status == ReservationOutcome::Status::AlreadyReserved &&
+             retried.reservation == reserved.reservation &&
+             std::filesystem::exists(finalPath),
+         "startup preserves the ownership barrier for mismatched final bytes");
+}
+
+void testContinuePreservesMismatchedFinalReplayReservation() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('a', 64);
+  constexpr std::string_view attempt = "123e4567-e89b-42d3-a456-426614174127";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "mismatched continue reservation schema is ready");
+  const auto reserved = repository.reserveReplayFile(attempt, stem);
+  expect(reserved.reservation.has_value(),
+         "mismatched continue replay reserves its path");
+  if (!reserved.reservation) {
+    return;
+  }
+  const auto finalized =
+      installSampleReplay(temporary.path(), *reserved.reservation, attempt);
+  std::string diagnostic;
+  const bool ownershipRecorded =
+      finalized.metadata.has_value() &&
+      repository.markReplayFileReservationFinalized(
+          *reserved.reservation, *finalized.metadata, diagnostic);
+  expect(ownershipRecorded,
+         "mismatched continue fixture records finalized ownership");
+  if (!ownershipRecorded) {
+    return;
+  }
+  const auto finalPath = temporary.path() / finalized.metadata->relativePath;
+  writeFile(finalPath, "different bytes after ownership was recorded");
+
+  diagnostic.clear();
+  expect(!repository.discardUndurableReplay(attempt, stem, diagnostic) &&
+             !diagnostic.empty() && std::filesystem::exists(finalPath),
+         "continue refuses to discard mismatched final bytes");
+  const auto retried = repository.reserveReplayFile(attempt, stem);
+  expect(retried.status == ReservationOutcome::Status::AlreadyReserved &&
+             retried.reservation == reserved.reservation,
+         "continue preserves mismatched ownership for explicit recovery");
 }
 
 void testProfileStartupReclaimsOwnedFinalReplay() {
@@ -1280,6 +1666,9 @@ int main() {
   testEquivalentReformattedCriticalChecksAreAccepted();
   testPartialCounterfeitUniqueConstraintFailsClosed();
   testCompactStageAndIndependentReads();
+  testMigratedPartialCourseRemainsVisibleByLegacyId();
+  testCanonicalAttemptsDoNotFallBackToLegacyCourseId();
+  testCompletedMigratedCoursesDoNotFallBackToLegacyCourseId();
   testReplayFileReadIsIndependentFromResultAndIr();
   testChartReplayRejectsLongNoteModeMismatch();
   testChartReplayRejectsStemThatOmitsDecodedLongNotePrefix();
@@ -1288,6 +1677,10 @@ int main() {
   testReservationSkipsCanonicalCrossStemPathAlias();
   testProfileStartupReclaimsFilelessReservations();
   testProfileStartupPreservesUnownedReplayCollision();
+  testProfileStartupPreservesUnmarkedFinalReplayReservation();
+  testContinuePreservesUnmarkedFinalReplayReservation();
+  testProfileStartupPreservesMismatchedFinalReplayReservation();
+  testContinuePreservesMismatchedFinalReplayReservation();
   testProfileStartupReclaimsOwnedFinalReplay();
   testExplicitlyDiscardsUndurableFinalReplay();
   testMalformedVersion10FailsClosed();
