@@ -73,6 +73,25 @@ MaterializeOutcome materializeReplay(
 
   const auto definition =
       gameplay::buildGameplayDefinition(chart, playback.setup.longNoteMode);
+  const std::int64_t finalInputTime =
+      playback.input.empty() ? 0 : playback.input.back().songTimeMicros;
+  const std::int64_t completionBase =
+      std::max(definition.metadata().finalTimelineTimeMicros, finalInputTime);
+  const std::int64_t automaticPoorLateMicros =
+      policy.judge.automaticPoorLateMicros();
+  if (automaticPoorLateMicros < 0 ||
+      automaticPoorLateMicros >= std::numeric_limits<std::int64_t>::max()) {
+    return {.status = MaterializeOutcome::Status::Invalid,
+            .diagnostic =
+                "Replay completion timing has an invalid late window."};
+  }
+  const std::int64_t completionTail = automaticPoorLateMicros + 1;
+  if (completionBase >
+      std::numeric_limits<std::int64_t>::max() - completionTail) {
+    return {.status = MaterializeOutcome::Status::Invalid,
+            .diagnostic = "Replay completion timestamp is out of range."};
+  }
+  const std::int64_t completionTime = completionBase + completionTail;
   const std::size_t replayCapacity =
       std::max<std::size_t>(4096, definition.noteCount() * 4 +
                                       playback.input.size() * 2 + 1024);
@@ -118,11 +137,6 @@ MaterializeOutcome materializeReplay(
     }
   }
 
-  const std::int64_t finalInputTime =
-      playback.input.empty() ? 0 : playback.input.back().songTimeMicros;
-  const std::int64_t completionTime =
-      std::max(definition.metadata().finalTimelineTimeMicros, finalInputTime) +
-      policy.judge.automaticPoorLateMicros() + 1;
   simulation.advanceTo(completionTime, completionTime);
   if (simulation.replayOverflowed() ||
       simulation.automaticResultOverflowed() ||

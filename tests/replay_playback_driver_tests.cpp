@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -296,6 +297,33 @@ void testMaterializationHonorsRecordedCandidateSelection() {
          "raw materialization restores the recorded Combo note selection");
 }
 
+void testMaterializationRejectsCompletionTimeOverflow() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.Rank = 2;
+
+  replay::ReplayPlaybackData playback;
+  playback.setup.keyMode = 5;
+  playback.setup.longNoteMode = 0;
+  playback.setup.initialGaugeType = GaugeType::Normal;
+  playback.input = {{
+      .songTimeMicros = std::numeric_limits<std::int64_t>::max(),
+      .control = {.kind = replay::LogicalControlKind::Lane,
+                  .player = 1,
+                  .lane = 1},
+      .pressed = true,
+  }};
+  gameplay::GameplayRulesetPolicy policy;
+  policy.judge = gameplay::CompiledGameplayJudge::from(Judge(chart.Meta.Rank));
+  policy.gauge = compileGameplayGaugeRules(
+      GameplayRuleset::Beatoraja, chart.Meta, GaugeProfile::Standard);
+
+  const auto outcome = replay::materializeReplay(playback, chart, policy);
+  expect(outcome.status == replay::MaterializeOutcome::Status::Invalid &&
+             !outcome.value.has_value(),
+         "materialization rejects a completion timestamp that would overflow");
+}
+
 } // namespace
 
 int main() {
@@ -303,6 +331,7 @@ int main() {
   testDoubleLaneCommandsScratchReversalAndReset();
   testMaterializesRawInputsThroughGameplaySimulation();
   testMaterializationHonorsRecordedCandidateSelection();
+  testMaterializationRejectsCompletionTimeOverflow();
   if (failures != 0) {
     std::cerr << failures << " replay playback driver test(s) failed\n";
     return 1;
