@@ -650,7 +650,8 @@ bool isReplayMember(std::string_view name) {
   }
   const std::string_view filename = name.substr(prefix.size());
   return !filename.empty() && filename != "." && filename != ".." &&
-         !filename.contains('/') && !filename.contains('\\') &&
+         filename.find('/') == std::string_view::npos &&
+         filename.find('\\') == std::string_view::npos &&
          filename.ends_with(".brd");
 }
 
