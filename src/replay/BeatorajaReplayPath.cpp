@@ -1,5 +1,7 @@
 #include "BeatorajaReplayPath.h"
 
+#include "BeatorajaLongNoteMode.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -22,15 +24,19 @@ bool isLowerSha256(std::string_view value) {
 std::optional<std::string_view> longNotePrefix(int longNoteMode,
                                                bool hasUndefinedLongNotes,
                                                std::string &diagnostic) {
-  if (!hasUndefinedLongNotes) {
-    return std::string_view{};
-  }
-  if (longNoteMode < 0 ||
-      longNoteMode >= static_cast<int>(kLongNotePrefixes.size())) {
+  const auto stockMode = stockLongNoteMode(longNoteMode);
+  if (!stockMode) {
     diagnostic = "Unsupported long-note mode for replay path";
     return std::nullopt;
   }
-  return kLongNotePrefixes[static_cast<std::size_t>(longNoteMode)];
+  if (!hasUndefinedLongNotes) {
+    return std::string_view{};
+  }
+  if (longNoteMode == 0) {
+    diagnostic = "Unsupported long-note mode for replay path";
+    return std::nullopt;
+  }
+  return kLongNotePrefixes[static_cast<std::size_t>(*stockMode)];
 }
 
 bool isCanonicalStem(std::string_view stem) {

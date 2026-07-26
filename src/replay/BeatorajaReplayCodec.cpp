@@ -1,6 +1,7 @@
 #include "BeatorajaReplayCodec.h"
 
 #include "Base64Url.h"
+#include "BeatorajaLongNoteMode.h"
 #include "GzipCodec.h"
 #include "../scene/play/GameplayScoreState.h"
 
@@ -548,7 +549,7 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
   if (!isKeyModeSupported(setup.keyMode)) {
     return fail(diagnostic, "Replay key mode is unsupported");
   }
-  if (setup.longNoteMode < 0 || setup.longNoteMode > 2) {
+  if (!stockLongNoteMode(setup.longNoteMode)) {
     return fail(diagnostic, "Replay long-note mode is invalid");
   }
   const int doublePlayOption = static_cast<int>(setup.doublePlayOption);
@@ -818,6 +819,11 @@ encodeStage(const ReplayPlaybackData &replay, std::int64_t playedAtUnixMillis,
     diagnostic = "Replay play option cannot be represented by Beatoraja";
     return std::nullopt;
   }
+  const auto stockMode = stockLongNoteMode(replay.setup.longNoteMode);
+  if (!stockMode) {
+    diagnostic = "Replay long-note mode cannot be represented by Beatoraja";
+    return std::nullopt;
+  }
 
   Json extension{
       {"schemaVersion", kAsoSchemaVersion},
@@ -835,7 +841,7 @@ encodeStage(const ReplayPlaybackData &replay, std::int64_t playedAtUnixMillis,
   return Json{
       {"player", "AsoBMaShow"},
       {"sha256", replay.setup.chartSha256},
-      {"mode", replay.setup.longNoteMode},
+      {"mode", *stockMode},
       {"keyinput", base64UrlEncode(*compressedKeys)},
       {"gauge", gaugeTypeIndex(replay.setup.initialGaugeType)},
       {"rand", replay.setup.randomValues},
@@ -1194,17 +1200,19 @@ bool decodeStockSetup(const Json &stage, ChartPlaybackSetup &setup,
   int doubleOption = 0;
   std::int64_t seed1 = -1;
   std::int64_t seed2 = -1;
+  int stockMode = 0;
   if (!readRequired(stage, "sha256", setup.chartSha256, diagnostic) ||
-      !readRequired(stage, "mode", setup.longNoteMode, diagnostic) ||
+      !readRequired(stage, "mode", stockMode, diagnostic) ||
       !readRequired(stage, "gauge", gauge, diagnostic)) {
     return false;
   }
-  if (!isCanonicalHex(setup.chartSha256, 64) || setup.longNoteMode < 0 ||
-      setup.longNoteMode > 2 || gauge < 0 ||
+  const auto applicationMode = applicationLongNoteMode(stockMode);
+  if (!isCanonicalHex(setup.chartSha256, 64) || !applicationMode || gauge < 0 ||
       gauge >= static_cast<int>(kGaugeTypeCount)) {
     return fail(diagnostic,
                 "Replay stock setup contains an invalid identity or enum");
   }
+  setup.longNoteMode = *applicationMode;
   setup.initialGaugeType = gaugeTypeAtIndex(gauge);
   setup.playbackRulesetId = "beatoraja";
   setup.playbackRulesetRevision =

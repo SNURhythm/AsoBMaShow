@@ -211,7 +211,8 @@ void testIndependentBeatorajaFixtures() {
     expectEqual(value.setup.chartSha256, std::string(64, 'a'),
                 "stock SHA-256 maps exactly");
     expectEqual(value.setup.keyMode, 7, "expected chart mode drives key map");
-    expectEqual(value.setup.longNoteMode, 1, "stock LN mode maps exactly");
+    expectEqual(value.setup.longNoteMode, 2,
+                "stock CN mode restores the application value");
     expectEqual(value.setup.randomValues, std::vector<int>({4, 2, 7}),
                 "stock RANDOM sequence maps exactly");
     expectEqual(value.setup.playOption, std::optional<std::string>("RANDOM"),
@@ -452,6 +453,8 @@ void testAsoExtensionRoundTripsWithoutBreakingStock() {
   // stock fields are consumed, and the extension is never consulted.
   expectEqual(stock.at("sha256").get<std::string>(), source.setup.chartSha256,
               "stock-compatible reader ignores extension and reads SHA");
+  expectEqual(stock.at("mode").get<int>(), 1,
+              "application CN projects to Beatoraja stock mode one");
   expectEqual(stock.at("config").at("lanecover").get<float>(), 0.37F,
               "initial cover remains in stock config");
   const auto expectedStockRecords = readFixture("beatoraja-keyinput.bin");
@@ -484,6 +487,20 @@ void testAsoExtensionRoundTripsWithoutBreakingStock() {
                starting->gaugeSurvivalFailed[gaugeTypeIndex(
                    GaugeType::ExHard)],
            "Aso extension preserves independent starting gauge state");
+  }
+
+  auto hcn = source;
+  hcn.setup.longNoteMode = 3;
+  const auto encodedHcn =
+      codec.encodeChart(hcn, 1'725'000'000'123LL, diagnostic);
+  expect(encodedHcn.has_value(), "application HCN replay encodes");
+  if (encodedHcn) {
+    expectEqual(outerJson(*encodedHcn).at("mode").get<int>(), 2,
+                "application HCN projects to Beatoraja stock mode two");
+    const auto decodedHcn = codec.decode(*encodedHcn);
+    expect(decodedHcn.chart.has_value() &&
+               decodedHcn.chart->setup.longNoteMode == 3,
+           "application HCN round-trips through BRD");
   }
 
   replay::CourseReplayPlaybackData course;

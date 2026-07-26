@@ -61,7 +61,7 @@ void testChartPathsMatchBeatorajaGrammar() {
 
   diagnostic.clear();
   expectPath(
-      chartPath(kShaA, 1, true, 1, diagnostic),
+      chartPath(kShaA, 2, true, 1, diagnostic),
       "Caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1,
       std::filesystem::path("replay") / "Caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                                         "aaaaaaaaaaaaaaaaaaaaaaaaaaa_1.brd",
@@ -69,14 +69,14 @@ void testChartPathsMatchBeatorajaGrammar() {
 
   diagnostic.clear();
   expectPath(
-      chartPath(kShaA, 2, true, 27, diagnostic),
+      chartPath(kShaA, 3, true, 27, diagnostic),
       "Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 27,
       std::filesystem::path("replay") / "Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                                         "aaaaaaaaaaaaaaaaaaaaaaaaaaa_27.brd",
       "undefined-LN HCN path is produced");
 
   diagnostic.clear();
-  expectPath(chartPath(kShaA, 2, false, 4, diagnostic), kShaA, 4,
+  expectPath(chartPath(kShaA, 3, false, 4, diagnostic), kShaA, 4,
              std::filesystem::path("replay") /
                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                  "aaa_4.brd",
@@ -86,7 +86,7 @@ void testChartPathsMatchBeatorajaGrammar() {
 void testCoursePathMatchesBeatorajaGrammar() {
   replay::CoursePathInput input{
       .stageSha256 = {std::string(kShaA), std::string(kShaB)},
-      .longNoteMode = 1,
+      .longNoteMode = 2,
       .hasUndefinedLongNotes = true,
       .beatorajaConstraintIds = {1, 4, 7, 13, 2, 3},
   };
@@ -122,8 +122,11 @@ void testMalformedIdentityCannotProducePath() {
   expect(!replay::chartStem("abc", 0, false, diagnostic),
          "short chart SHA-256 is rejected");
   diagnostic.clear();
-  expect(!replay::chartStem(kShaA, 3, true, diagnostic),
-         "undefined-LN chart rejects unsupported LN mode");
+  expect(!replay::chartStem(kShaA, 0, true, diagnostic),
+         "undefined-LN chart rejects an absent application LN mode");
+  diagnostic.clear();
+  expect(!replay::chartStem(kShaA, 4, true, diagnostic),
+         "undefined-LN chart rejects an unsupported application LN mode");
 
   replay::CoursePathInput empty;
   diagnostic.clear();
@@ -181,7 +184,7 @@ void testReplayFilenameComponentsStayWithinFilesystemLimit() {
 
   replay::CoursePathInput constrained;
   constrained.stageSha256.assign(22, std::string(kShaA));
-  constrained.longNoteMode = 1;
+  constrained.longNoteMode = 2;
   constrained.hasUndefinedLongNotes = true;
   constrained.beatorajaConstraintIds = {4, 5, 6, 7, 8};
   diagnostic.clear();

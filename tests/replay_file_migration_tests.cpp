@@ -503,7 +503,7 @@ std::string insertCourseFixture(sqlite3 *database, const FixtureFacts &chart) {
       "VALUES(77,12," +
           sqlQuote(courseKey) + ",'Migration Course','Folder'," +
           sqlQuote(constraints) +
-          ",2,1,0,1,'MIRROR','OFF',3,2,"
+          ",2,1,0,2,'MIRROR','OFF',3,2,"
           "64.5,300,1,1,'2026-07-25 01:03:04',0,2," +
           sqlQuote(chart.provenance) + ")");
   executeOrThrow(
@@ -526,7 +526,7 @@ void insertPartialCourseFixture(sqlite3 *database, const FixtureFacts &chart,
           sqlQuote(courseKey) +
           ",'Partial Migration Course','Folder',"
           "'[\"grade_mirror\",\"no_speed\",\"gauge_7k\",\"cn\"]',"
-          "2,1,0,1,'MIRROR','OFF',"
+          "2,1,0,2,'MIRROR','OFF',"
           "3,2,64.5,200,1,2,'2026-07-25 01:04:04',0,2," +
           sqlQuote(chart.provenance) + ")");
   executeOrThrow(
@@ -611,8 +611,8 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
          "compact result preserves provenance without coupling it to replay");
   expect(text(database.get(),
               "SELECT relative_path FROM replay_files WHERE "
-              "chart_result_id=42") == "replay/C" + fixture.sha256 + ".brd",
-         "undefined-CN replay uses the exact Beatoraja path layout");
+              "chart_result_id=42") == "replay/" + fixture.sha256 + ".brd",
+         "undefined-LN replay uses the exact Beatoraja path layout");
   expect(integer(database.get(), "SELECT history_index FROM replay_files WHERE "
                                  "chart_result_id=42") == 0,
          "first deterministic stem receives history index zero");
@@ -641,7 +641,7 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
                  "SELECT count(*) FROM pragma_foreign_key_check") == 0,
          "migrated database has no foreign-key violations");
 
-  const std::filesystem::path relative = "replay/C" + fixture.sha256 + ".brd";
+  const std::filesystem::path relative = "replay/" + fixture.sha256 + ".brd";
   const std::filesystem::path replayPath = temporary.path() / relative;
   expect(std::filesystem::is_regular_file(replayPath),
          "migration writes a durable BRD file");
@@ -871,7 +871,7 @@ void testMigratesMd5OnlyChartWithDeterministicReplayStem() {
                  fallbackSha,
          "MD5-only result preserves MD5 and receives the stable legacy SHA");
   const std::filesystem::path relative =
-      std::filesystem::path("replay") / ("C" + fallbackSha + ".brd");
+      std::filesystem::path("replay") / (fallbackSha + ".brd");
   expect(text(database.get(),
               "SELECT relative_path FROM replay_files WHERE "
               "chart_result_id=42") == relative.generic_string() &&
@@ -1060,7 +1060,7 @@ void testNormalizesLegacyPrerollSupplementalTimestamps() {
   if (outcome.status ==
       replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
     replay::ReplayFileMetadata metadata{
-        .relativePath = "replay/C" + chart.sha256 + ".brd",
+        .relativePath = "replay/" + chart.sha256 + ".brd",
         .sha256 = text(database.get(),
                        "SELECT content_sha256 FROM replay_files WHERE "
                        "chart_result_id=42"),
@@ -1111,7 +1111,7 @@ void testOrdersLegacyInputBeforeRemovingRedundantTransitions() {
   if (outcome.status ==
       replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
     replay::ReplayFileMetadata metadata{
-        .relativePath = "replay/C" + chart.sha256 + ".brd",
+        .relativePath = "replay/" + chart.sha256 + ".brd",
         .sha256 = text(database.get(),
                        "SELECT content_sha256 FROM replay_files WHERE "
                        "chart_result_id=42"),
@@ -1217,7 +1217,7 @@ void testAssignsSameStemHistoryByTimestampThenPublicId() {
     std::cerr << "history migration diagnostic: " << outcome.diagnostic << '\n';
   }
 
-  const std::string stem = "C" + chart.sha256;
+  const std::string stem = chart.sha256;
   expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
                                Status::Migrated &&
              outcome.chartFiles == 2,
@@ -1355,7 +1355,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
                      "SELECT count(*) FROM chart_results WHERE id=42") == 1,
          "startup exposes only the committed compact schema");
   expect(std::filesystem::is_regular_file(temporary.path() / "replay" /
-                                          ("C" + chart.sha256 + ".brd")),
+                                          (chart.sha256 + ".brd")),
          "startup migration writes replay files at the profile root");
 }
 

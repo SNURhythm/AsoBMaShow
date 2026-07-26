@@ -562,7 +562,7 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
   setup.chartMd5 = chart.chartMd5;
   setup.chartSha256 = chart.chartSha256;
   setup.keyMode = chart.result.keyMode;
-  setup.longNoteMode = std::clamp(chart.longNoteMode, 0, 2);
+  setup.longNoteMode = std::clamp(chart.longNoteMode, 0, 3);
   setup.hasUndefinedLongNotes = chart.hasUndefinedLongNotes;
   setup.randomSeed = chart.randomSeed;
   setup.randomPrng = chart.randomPrng;
@@ -849,7 +849,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
   std::vector<course_identity::ChartIdentity> identities;
   identities.reserve(course.chartIndexes.size());
   replay::CoursePathInput pathInput;
-  pathInput.longNoteMode = std::clamp(course.longNoteMode, 0, 2);
+  pathInput.longNoteMode = std::clamp(course.longNoteMode, 0, 3);
   pathInput.hasUndefinedLongNotes = false;
   pathInput.beatorajaConstraintIds =
       beatorajaCourseConstraintIds(course.constraintJson);
