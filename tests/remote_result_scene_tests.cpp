@@ -2,6 +2,7 @@
 #include "scene/ResultCoursePersistence.h"
 #include "scene/RemoteResultRecallController.h"
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -279,6 +280,35 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
   require(!result_scene_detail::retryPersistenceAttempt(
               persistence, {}, callbacks),
           "ambiguous persistence attempts cannot execute either branch");
+
+  result_persistence::CompletedChartAttempt chart;
+  chart.result.attemptId = "123e4567-e89b-42d3-a456-426614174098";
+  ResultPersistenceOptions chartPersistence;
+  chartPersistence.attempt =
+      std::make_shared<const result_persistence::CompletedChartAttempt>(
+          std::move(chart));
+  const std::array automaticDrafts{ir::IrOutboxDraft{}};
+  const ResultPersistenceRetryCallbacks chartCallbacks{
+      .persistChart =
+          [](const result_persistence::CompletedChartAttempt &attempt,
+             std::span<const ir::IrOutboxDraft> drafts) {
+            return result_persistence::SaveOutcome{
+                .state = attempt.result.attemptId.has_value() &&
+                                 drafts.size() == 1
+                             ? result_persistence::SaveState::PendingScore
+                             : result_persistence::SaveState::InvalidAttempt};
+          },
+      .persistCourse =
+          [](const result_persistence::CompletedCourseAttempt &) {
+            return result_persistence::SaveOutcome{
+                .state = result_persistence::SaveState::InvalidAttempt};
+          },
+  };
+  require(result_scene_detail::retryPersistenceAttempt(
+              chartPersistence, automaticDrafts, chartCallbacks) &&
+              chartPersistence.outcome.state ==
+                  result_persistence::SaveState::PendingScore,
+          "chart retry reuses the retained chart attempt and automatic drafts");
 }
 
 ResultRecordSummary

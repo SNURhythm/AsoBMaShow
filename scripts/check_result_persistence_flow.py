@@ -283,8 +283,11 @@ require(
 
 course_score_span = function_span(result_source, "ResultScene", "saveCourseScore")
 course_replay_span = function_span(result_source, "ResultScene", "saveCourseReplay")
+course_retry_span = function_span(
+    result_source, "ResultScene", "retryResultPersistence"
+)
 masked = list(result_source)
-for span in (course_score_span, course_replay_span):
+for span in (course_score_span, course_replay_span, course_retry_span):
     if span is not None:
         masked[span[0] : span[1]] = " " * (span[1] - span[0])
 masked_source = "".join(masked)
@@ -296,14 +299,22 @@ require(
 )
 require(
     course_replay_span is not None
+    and "persistCourseAttempt(" in result_source[course_replay_span[0] : course_replay_span[1]]
     and "context.resultPersistence.persistCourse(attempt)"
     in result_source[course_replay_span[0] : course_replay_span[1]],
-    "course result and replay-file persistence must remain in its course-only method",
+    "initial course result persistence must retain and save one immutable attempt",
+)
+require(
+    course_retry_span is not None
+    and "retryPersistenceAttempt(" in result_source[course_retry_span[0] : course_retry_span[1]]
+    and "context.resultPersistence.persistCourse(attempt)"
+    in result_source[course_retry_span[0] : course_retry_span[1]],
+    "Retry Save must dispatch retained course attempts through course persistence",
 )
 require(
     "SaveCourseScore(" not in masked_source
     and "context.resultPersistence.persistCourse(" not in masked_source,
-    "course persistence calls are allowed only inside course-only methods",
+    "course persistence calls are allowed only inside initial save and Retry Save",
 )
 
 require(result_source.count('"Retry Save"') == 1, "missing exact Retry Save action")
@@ -328,14 +339,15 @@ retry_body = function_body(
     result_source, "ResultScene", "retryResultPersistence"
 )
 require(
-    re.search(
-        r"context\.resultPersistence\.persist\(\s*"
-        r"\*persistenceOptions\.attempt\s*,\s*automaticDrafts\s*\)",
-        retry_body,
-        re.DOTALL,
-    )
-    is not None,
-    "Retry Save must reuse the exact immutable attempt",
+    "retryPersistenceAttempt(" in retry_body
+    and "context.resultPersistence.persist(attempt, drafts)" in retry_body
+    and "context.resultPersistence.persistCourse(attempt)" in retry_body,
+    "Retry Save must dispatch the retained immutable chart or course attempt",
+)
+require(
+    "persistenceOptions.attempt != nullptr && persistenceOptions.irSnapshot"
+    in retry_body,
+    "automatic IR drafts must remain limited to chart persistence retries",
 )
 require(
     "applyResultPersistenceReceipt();" in retry_body,
@@ -389,10 +401,17 @@ require(
 
 previous_body = function_body(result_source, "ResultScene", "loadPreviousBest")
 require(
-    "excludeAttemptId" in previous_body
-    and "validatedReceiptFor(" in previous_body
-    and "persistenceOptions.attempt->result.attemptId" in previous_body,
-    "previous best must exclude only a receipt-proven staged live attempt",
+    "previousBestQueryFor(" in previous_body
+    and "query.excludeAttemptId" in previous_body
+    and "query.beforeCreatedAt" in previous_body,
+    "previous best must use the centralized exact-attempt or legacy-cutoff query",
+)
+previous_query_body = unqualified_function_body(result_header, "previousBestQueryFor")
+require(
+    "persistence.attempt->result.attemptId" in previous_query_body
+    and "persistence.result->attemptId" in previous_query_body
+    and "persistence.previousBestBeforeCreatedAt" in previous_query_body,
+    "previous-best query selection must preserve live, recalled, and legacy identities",
 )
 
 summary_body = function_body(result_source, "ResultScene", "refreshResultSummary")
@@ -413,14 +432,14 @@ require(
 require(
     ordered(
         previous_body,
-        "beforeCreatedAt",
-        "excludeAttemptId",
+        "previousBestQueryFor(",
         "LoadBestScore(",
     ),
-    "previous-best query must pass legacy timestamp and staged-attempt filters",
+    "previous-best query selection must occur before loading the comparison score",
 )
 require(
-    "replayResult" in previous_body and "retryData->createdAt" in previous_body,
+    "replayResult" in previous_query_body
+    and "retryData->createdAt" in previous_query_body,
     "legacy replay results must preserve the beforeCreatedAt boundary",
 )
 
