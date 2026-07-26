@@ -1,5 +1,6 @@
 #include "input/LogicalGameplayInputAdapter.h"
 #include "input/RealtimePhysicalInputRouter.h"
+#include "input/TouchReplayTransition.h"
 #include "input/InputBindingResolver.h"
 #include "input/InputNormalizer.h"
 #include "input/InputProfile.h"
@@ -140,6 +141,38 @@ void testAppliedReplayTransitionsContainOnlyEffectiveLogicalEdges() {
                   replay::LogicalControlKind::ScratchCounterClockwise &&
               applied[2].control.player == 2,
           "scratch reversal exposes the old release and new directed press");
+}
+
+void testTouchReplayTransitionsPreserve48kPlayersAndReversalTime() {
+  const auto first48k =
+      touch_replay::transition(48, 26, true, std::nullopt, 101);
+  require(
+      first48k.control ==
+              replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
+                                     .player = 2,
+                                     .lane = 0} &&
+          first48k.source.scope == input::InputScope{.player = 2,
+                                                     .keyMode = 48},
+      "48K touch lane 26 records as player-two lane zero");
+
+  const auto last48k =
+      touch_replay::transition(48, 51, true, std::nullopt, 102);
+  require(last48k.control ==
+              replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
+                                     .player = 2,
+                                     .lane = 25},
+          "48K touch lane 51 remains inside the replay lane range");
+
+  const auto reversal =
+      touch_replay::scratchReversal(7, 7, 1, -1, 123'456);
+  require(!reversal[0].pressed && reversal[1].pressed &&
+              reversal[0].source.steadyTimestampMicros == 123'456 &&
+              reversal[1].source.steadyTimestampMicros == 123'456 &&
+              reversal[0].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              reversal[1].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise,
+          "touch reversal emits one timestamped release/press pair");
 }
 
 void testGameplayScopesEnableBothPlayersOnlyForDp() {
@@ -1205,6 +1238,7 @@ void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
 int main() {
   testLaneTransitionsPreserveDpLaneNumbers();
   testAppliedReplayTransitionsContainOnlyEffectiveLogicalEdges();
+  testTouchReplayTransitionsPreserve48kPlayersAndReversalTime();
   testGameplayScopesEnableBothPlayersOnlyForDp();
   testScratchReversalAndLateReleaseOrdering();
   testScratchReversalFallsBackToOlderHeldDirection();

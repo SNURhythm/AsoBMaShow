@@ -5,6 +5,7 @@
 #include "RhythmInputHandler.h"
 #include "SDLTouchInputSource.h"
 #include "InputTimestamp.h"
+#include "TouchReplayTransition.h"
 #include "../rendering/common.h"
 #include "bx/math.h"
 #include "../rendering/Camera.h"
@@ -104,7 +105,7 @@ void RhythmInputHandler::beginFingerLane(SDL_FingerID fingerIndex, int lane,
   flickStates.erase(fingerIndex);
   control->pressLane(lane);
   fingerLanePressed[fingerIndex] = true;
-  notifyTouchLaneApplied(lane, true);
+  notifyTouchLaneApplied(lane, true, std::nullopt, steadyNowMicros());
 }
 
 void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
@@ -131,7 +132,8 @@ void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
   if (shouldRelease) {
     control->releaseLane(lane, 0.0, false);
     if (!isScratchLane(lane) || scratchDirection.has_value()) {
-      notifyTouchLaneApplied(lane, false, scratchDirection);
+      notifyTouchLaneApplied(lane, false, scratchDirection,
+                             steadyNowMicros());
     }
   }
 }
@@ -169,10 +171,10 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
     if (direction != flickState.lastFlickDirection) {
       SDL_Log("Distance: %f, Direction: %d", distance, direction);
       const int previousDirection = flickState.lastFlickDirection;
+      const auto timestamp = steadyNowMicros();
       flickState.lastFlickDirection = direction;
       if (hasActiveScratchPress) {
         control->releaseLane(lane, 0.0, true);
-        notifyTouchLaneApplied(lane, false, previousDirection);
         fingerLanePressed[fingerIndex] = false;
       }
       auto *note = control->pressLane(lane);
@@ -181,7 +183,14 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
               ? static_cast<bms_parser::LongNote *>(note)
               : nullptr;
       fingerLanePressed[fingerIndex] = true;
-      notifyTouchLaneApplied(lane, true, direction);
+      if (hasActiveScratchPress && appliedTransitionCallback) {
+        for (const auto &transition : touch_replay::scratchReversal(
+                 keyMode, lane, previousDirection, direction, timestamp)) {
+          appliedTransitionCallback(transition);
+        }
+      } else {
+        notifyTouchLaneApplied(lane, true, direction, timestamp);
+      }
     }
   }
 }
@@ -530,35 +539,11 @@ RhythmInputHandler::RhythmInputHandler(
 RhythmInputHandler::~RhythmInputHandler() { stopListen(); }
 
 void RhythmInputHandler::notifyTouchLaneApplied(
-    int lane, bool pressed, std::optional<int> scratchDirection) {
+    int lane, bool pressed, std::optional<int> scratchDirection,
+    std::int64_t steadyTimestampMicros) {
   if (!appliedTransitionCallback) {
     return;
   }
-  const bool playerTwo =
-      (keyMode == 10 || keyMode == 14) && lane >= 8;
-  const int player = playerTwo ? 2 : 1;
-  const auto kind =
-      scratchDirection.has_value()
-          ? (*scratchDirection > 0
-                 ? replay::LogicalControlKind::ScratchClockwise
-                 : replay::LogicalControlKind::ScratchCounterClockwise)
-          : replay::LogicalControlKind::Lane;
-  const int localLane = playerTwo ? lane - 8 : lane;
-  input::LogicalActionKind sourceKind = input::LogicalActionKind::Lane;
-  if (scratchDirection.has_value()) {
-    sourceKind = *scratchDirection > 0
-                     ? input::LogicalActionKind::ScratchClockwise
-                     : input::LogicalActionKind::ScratchCounterClockwise;
-  }
-  const auto timestamp = steadyNowMicros();
-  appliedTransitionCallback(
-      {.source = {.scope = {.player = player, .keyMode = keyMode},
-                  .action = {.kind = sourceKind, .lane = lane},
-                  .pressed = pressed,
-                  .value = pressed ? 1.0F : 0.0F,
-                  .steadyTimestampMicros = timestamp},
-       .control = {.kind = kind,
-                   .player = player,
-                   .lane = scratchDirection.has_value() ? -1 : localLane},
-       .pressed = pressed});
+  appliedTransitionCallback(touch_replay::transition(
+      keyMode, lane, pressed, scratchDirection, steadyTimestampMicros));
 }

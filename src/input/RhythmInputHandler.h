@@ -64,9 +64,9 @@ private:
                         Vector3 normalizedLocation);
   void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
   void releaseExpiredCancelledTouches();
-  void notifyTouchLaneApplied(int lane, bool pressed,
-                              std::optional<int> scratchDirection =
-                                  std::nullopt);
+  void notifyTouchLaneApplied(
+      int lane, bool pressed, std::optional<int> scratchDirection,
+      std::int64_t steadyTimestampMicros);
 
 public:
   IRhythmControl *control;
