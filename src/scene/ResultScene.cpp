@@ -247,10 +247,15 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   if (!session.completedResults.empty()) {
     aggregate.combo = session.carriedCombo;
   }
-  if (session.completedResults.size() < session.entries.size()) {
+  if (session.completedResults.size() < session.entries.size() &&
+      !session.recalledCourseClearTypeRank.has_value()) {
     aggregate.currentGauge = 0.0f;
     aggregate.gaugeValues[gaugeTypeIndex(aggregate.gaugeType)] = 0.0f;
     aggregate.gaugeSurvivalFailed[gaugeTypeIndex(aggregate.gaugeType)] = true;
+  }
+  if (session.recalledCourseClearTypeRank.has_value()) {
+    aggregate.restoreReadOnlyResultClearType(
+        *session.recalledCourseClearTypeRank);
   }
   return aggregate;
 }

@@ -300,6 +300,7 @@ struct CoursePlaySession {
   int longNoteMode = 0;
   CourseConstraintRules constraints;
   std::optional<GaugeStateSnapshot> carriedGauge;
+  std::optional<int> recalledCourseClearTypeRank;
   int carriedCombo = 0;
   int maxCombo = 0;
   bool courseScoreSaved = false;

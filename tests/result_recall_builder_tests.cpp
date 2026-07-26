@@ -285,8 +285,8 @@ result_persistence::PersistedCourseResult validCourseResult() {
       .finalScore = first.score.score + second.score.score,
       .maxScore = first.score.maxScore + second.score.maxScore,
       .maxCombo = 2,
-      .finalGauge = second.score.finalGauge,
-      .clearType = second.score.clearType,
+      .finalGauge = 47.25F,
+      .clearType = kClearTypeFailedRank,
       .provenance = verifiedProvenance(GaugeType::Normal),
       .stages = {
           {.stageIndex = 0,
@@ -326,6 +326,17 @@ void testCourseRecallUsesOrderedPersistedStageFacts() {
   assert(session->completedResults.size() == 2);
   assert(session->ownedResultBrowseCharts.size() == 2);
   assert(session->courseReplayData == nullptr);
+  assert(session->carriedGauge.has_value());
+  assert(session->carriedGauge->currentGauge == expected.finalGauge);
+  assert(session->carriedGauge->selectedGaugeType ==
+         expected.initialGaugeType);
+  assert(session->carriedGauge->gaugeAutoShift == expected.gaugeAutoShift);
+  assert(session->carriedGauge->gaugeAutoShiftLowerBound ==
+         expected.gaugeAutoShiftLowerBound);
+  assert(session->carriedGauge->gaugeProfile == expected.gaugeProfile);
+  assert(session->carriedGauge->gaugeValues[gaugeTypeIndex(
+             session->carriedGauge->gaugeType)] == expected.finalGauge);
+  assert(session->recalledCourseClearTypeRank == expected.clearType);
   assert(session->stageProvenance.at(0) ==
          std::optional(expected.stages[0].score.provenance));
   assertStateMatches(session->completedResults[0].state,
@@ -336,6 +347,36 @@ void testCourseRecallUsesOrderedPersistedStageFacts() {
                      expected.stages[1].score,
                      expected.stages[1].adoptedGaugeHistory,
                      *expected.stages[1].judgementTiming);
+}
+
+void testIncompleteCourseRecallPreservesPersistedTotalAndOutcome() {
+  auto persisted = validCourseResult();
+  persisted.stages.resize(1);
+  persisted.completedCharts = 1;
+  persisted.totalCharts = 3;
+  persisted.finalScore = persisted.stages[0].score.score;
+  persisted.maxScore = persisted.stages[0].score.maxScore;
+  persisted.maxCombo = persisted.stages[0].score.maxCombo;
+  persisted.finalGauge = 12.5F;
+  persisted.clearType = kClearTypeFailedRank;
+  persisted.resultFingerprint =
+      result_persistence::resultFingerprint(persisted);
+
+  int calls = 0;
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildCourseResult(
+      persisted, cancelled, chartLoader(&calls));
+  assert(outcome.value.has_value());
+  const auto &session = outcome.value->session;
+  assert(calls == 1);
+  assert(session->entries.size() == 3);
+  assert(session->completedResults.size() == 1);
+  assert(session->ownedResultBrowseCharts.size() == 1);
+  assert(session->entries[1].meta.BmsPath.empty());
+  assert(session->entries[2].meta.BmsPath.empty());
+  assert(session->carriedGauge.has_value());
+  assert(session->carriedGauge->currentGauge == persisted.finalGauge);
+  assert(session->recalledCourseClearTypeRank == persisted.clearType);
 }
 
 void testCourseRecallDoesNotPublishPartialSession() {
@@ -396,6 +437,7 @@ int main() {
   testChartRecallAcceptsMatchingMd5OnlyMigrationIdentity();
   testRawReplayPreparationValidatesParsedChartIdentity();
   testCourseRecallUsesOrderedPersistedStageFacts();
+  testIncompleteCourseRecallPreservesPersistedTotalAndOutcome();
   testCourseRecallDoesNotPublishPartialSession();
   testCourseRecallRejectsChangedStageIdentity();
   return 0;

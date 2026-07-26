@@ -178,7 +178,7 @@ CourseBuildOutcome BuildCourseResult(
     session->courseReplaySaved = false;
     session->courseScoreSaved = true;
     session->savedCourseReplayId = result.resultId;
-    session->entries.reserve(result.stages.size());
+    session->entries.reserve(static_cast<std::size_t>(result.totalCharts));
     session->completedResults.reserve(result.stages.size());
     session->ownedResultBrowseCharts.reserve(result.stages.size());
 
@@ -203,6 +203,27 @@ CourseBuildOutcome BuildCourseResult(
       session->maxCombo = std::max(session->maxCombo, stage.score.maxCombo);
       session->ownedResultBrowseCharts.push_back(std::move(chart));
     }
+
+    session->entries.resize(static_cast<std::size_t>(result.totalCharts));
+    RhythmState finalGaugeState(nullptr, false, session->ruleset,
+                                result.gaugeProfile);
+    finalGaugeState.configureGauge(
+        result.initialGaugeType, result.gaugeAutoShift, result.gaugeProfile,
+        result.gaugeAutoShiftLowerBound);
+    GaugeStateSnapshot finalGauge = finalGaugeState.gaugeSnapshot();
+    if (!session->completedResults.empty()) {
+      finalGauge.gaugeType =
+          session->completedResults.back().state.gaugeType;
+    }
+    finalGauge.selectedGaugeType = result.initialGaugeType;
+    finalGauge.gaugeAutoShiftLowerBound = result.gaugeAutoShiftLowerBound;
+    finalGauge.gaugeProfile = result.gaugeProfile;
+    finalGauge.gaugeAutoShift = result.gaugeAutoShift;
+    finalGauge.currentGauge = result.finalGauge;
+    const int finalGaugeIndex = gaugeTypeIndex(finalGauge.gaugeType);
+    finalGauge.gaugeValues[finalGaugeIndex] = result.finalGauge;
+    session->carriedGauge = finalGauge;
+    session->recalledCourseClearTypeRank = result.clearType;
 
     return {.value = CourseResult{.session = std::move(session),
                                   .result = std::move(result)}};
