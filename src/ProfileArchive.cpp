@@ -1748,10 +1748,6 @@ ProfileArchiveService::Export(std::string_view profileId,
                    "unable to inspect replay data for export: " +
                        filesystemError.message());
   }
-  if (!replayReferences.empty()) {
-    return failure(ProfileError::IntegrityFailure,
-                   "profile export is missing a referenced replay file");
-  }
   for (const std::string_view database : {"scores.db", "replays.db"}) {
     const auto size = std::filesystem::file_size(
         workspace / std::string(database), filesystemError);

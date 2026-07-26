@@ -792,6 +792,31 @@ void testExportRejectsReplayBytesThatDoNotMatchReference() {
          "replay-reference mismatch never commits a profile archive");
 }
 
+void testExportOmitsDeletedReplayAttachment() {
+  Fixture fixture;
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
+  std::error_code error;
+  const bool removed = std::filesystem::remove(
+      source.replayDirectory / std::string(kReplayFilename), error);
+  expect(removed && !error, "referenced replay fixture is deleted");
+
+  const auto destination = fixture.exchange.path() / "deleted-replay.zip";
+  ProfileArchiveService service(fixture.manager);
+  const auto exported = service.Export(fixture.sourceId, destination);
+  expect(exported.ok(),
+         "profile export accepts a deliberately deleted replay attachment: " +
+             exported.message);
+
+  std::string archiveError;
+  auto members = readArchive(destination, archiveError);
+  expect(archiveError.empty(), "deleted-replay export reads");
+  expect(members.size() + 1 == kExpectedMembers.size(),
+         "deleted replay removes exactly one archive member");
+  expect(findMember(members, "replay/" + std::string(kReplayFilename)) ==
+             nullptr,
+         "deleted replay bytes are absent from the archive");
+}
+
 void testIrOperationalStateIsNotProfilePortable() {
   Fixture fixture;
   constexpr std::string_view credential = "sentinel-portable-api-key";
@@ -2864,6 +2889,7 @@ int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
   testExportRejectsReplayBytesThatDoNotMatchReference();
+  testExportOmitsDeletedReplayAttachment();
   testIrOperationalStateIsNotProfilePortable();
   testExportRejectsSupportedOlderSourceBeforeWritingArchive();
   testPresetStoreSidecarRemainsProfilePortable();
