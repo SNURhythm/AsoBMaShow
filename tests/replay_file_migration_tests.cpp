@@ -1,5 +1,6 @@
 #include "ScoreProvenance.h"
 #include "CourseIdentity.h"
+#include "FileChecksum.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/ReplayFileStore.h"
 #include "repositories/ReplayRepositoryReplayFileMigration.h"
@@ -636,6 +637,63 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
   }
 }
 
+void testMigratesMd5OnlyChartWithDeterministicReplayStem() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  const FixtureFacts fixture = insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "UPDATE replays SET chart_sha256='' WHERE id=42");
+  executeOrThrow(database.get(),
+                 "UPDATE pending_chart_score_writes SET chart_sha256='' "
+                 "WHERE replay_id=42");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store);
+  const std::string fallbackSha = file_checksum::sha256(
+      "asobmashow:legacy-md5:v1:" + fixture.md5);
+
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "canonical MD5-only schema-v10 replay migrates successfully");
+  if (outcome.status !=
+      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
+    return;
+  }
+  expect(text(database.get(),
+              "SELECT chart_md5 FROM chart_results WHERE id=42") ==
+             fixture.md5 &&
+             text(database.get(),
+                  "SELECT chart_sha256 FROM chart_results WHERE id=42") ==
+                 fallbackSha,
+         "MD5-only result preserves MD5 and receives the stable legacy SHA");
+  const std::filesystem::path relative =
+      std::filesystem::path("replay") / ("C" + fallbackSha + ".brd");
+  expect(text(database.get(),
+              "SELECT relative_path FROM replay_files WHERE "
+              "chart_result_id=42") == relative.generic_string() &&
+             std::filesystem::is_regular_file(temporary.path() / relative),
+         "MD5-only replay uses its deterministic Beatoraja-compatible stem");
+
+  replay::ReplayFileMetadata metadata{
+      .relativePath = relative,
+      .sha256 = text(database.get(),
+                     "SELECT content_sha256 FROM replay_files WHERE "
+                     "chart_result_id=42"),
+      .compressedSize = static_cast<std::uint64_t>(integer(
+          database.get(),
+          "SELECT compressed_size FROM replay_files WHERE chart_result_id=42")),
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
+  const auto decoded = store.load(metadata, codec);
+  expect(decoded.chart.has_value() &&
+             decoded.chart->setup.chartMd5 == fixture.md5 &&
+             decoded.chart->setup.chartSha256 == fallbackSha,
+         "MD5-only replay file carries both its real MD5 and legacy SHA");
+}
+
 void testReconstructsAcknowledgedResultFromRecordedScoreChanges() {
   TemporaryDirectory temporary;
   Database database(temporary.path() / "replay.db");
@@ -1045,6 +1103,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
 
 int main() {
   testMigratesChartRowsToReplayFileAndCompactResult();
+  testMigratesMd5OnlyChartWithDeterministicReplayStem();
   testReconstructsAcknowledgedResultFromRecordedScoreChanges();
   testMigratesOutdatedProvenanceAsLegacyUnverified();
   testNormalizesLegacyPrerollSupplementalTimestamps();

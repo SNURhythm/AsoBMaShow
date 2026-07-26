@@ -826,7 +826,8 @@ private:
   void startReplayFileShare();
   void requestReplayFileDeletion();
   void applyReplayDocumentHandoffResult();
-  void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
+  void startReplayResultRecall(const ChartMetaRecord &record, int replayId,
+                               std::string createdAt);
   void startRemoteResultRecall(IrRemoteRecordId identity,
                                std::string selectedStableKey);
   void startReplayIrUpload(const ChartMetaRecord &record,

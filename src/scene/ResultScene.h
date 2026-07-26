@@ -73,6 +73,12 @@ struct ResultPersistenceOptions {
   std::shared_ptr<const ir::IrSubmissionSnapshot> irSnapshot;
   std::shared_ptr<const ir::IrSubmission> irSubmission;
   result_persistence::SaveOutcome outcome;
+  std::optional<std::string> previousBestBeforeCreatedAt;
+};
+
+struct ResultPreviousBestQuery {
+  std::optional<std::string> beforeCreatedAt;
+  std::optional<std::string> excludeAttemptId;
 };
 
 struct ResultRemoteOptions {
@@ -113,6 +119,32 @@ namespace result_scene_detail {
            return (character >= '0' && character <= '9') ||
                   (character >= 'a' && character <= 'f');
          });
+}
+
+[[nodiscard]] inline ResultPreviousBestQuery previousBestQueryFor(
+    const ResultPersistenceOptions &persistence, bool replayResult,
+    const JudgedPlaybackData *retryData) {
+  ResultPreviousBestQuery query;
+  if (persistence.attempt != nullptr &&
+      persistence.attempt->result.attemptId.has_value()) {
+    query.excludeAttemptId = persistence.attempt->result.attemptId;
+    return query;
+  }
+  if (persistence.result != nullptr &&
+      persistence.result->attemptId.has_value()) {
+    query.excludeAttemptId = persistence.result->attemptId;
+    return query;
+  }
+  if (persistence.previousBestBeforeCreatedAt.has_value() &&
+      !persistence.previousBestBeforeCreatedAt->empty()) {
+    query.beforeCreatedAt = persistence.previousBestBeforeCreatedAt;
+    return query;
+  }
+  if (replayResult && retryData != nullptr && !retryData->autoPlay &&
+      !retryData->createdAt.empty()) {
+    query.beforeCreatedAt = retryData->createdAt;
+  }
+  return query;
 }
 } // namespace result_scene_detail
 

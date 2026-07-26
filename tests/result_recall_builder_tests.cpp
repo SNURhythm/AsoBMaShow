@@ -1,5 +1,6 @@
 #include "../src/ResultRecallBuilder.h"
 #include "../src/ResultPersistenceModel.h"
+#include "../src/replay/LegacyReplayIdentity.h"
 
 #include <atomic>
 #include <cassert>
@@ -64,6 +65,8 @@ result_recall::ResultChartLoader chartLoader(int *calls = nullptr) {
     }
     auto chart = std::make_unique<bms_parser::Chart>();
     chart->Meta.BmsPath = result.score.chartPath;
+    chart->Meta.MD5 = result.score.chartMd5;
+    chart->Meta.SHA256 = result.score.chartSha256;
     chart->Meta.Title = "Changed on disk";
     chart->Meta.Artist = "Changed on disk";
     chart->Meta.KeyMode = 14;
@@ -155,6 +158,47 @@ void testChartRecallDoesNotPublishMissingOrCancelledAssets() {
                                                   chartLoader());
   assert(!stopped.value.has_value());
   assert(stopped.diagnostic == "saved chart is unavailable");
+}
+
+void testChartRecallRejectsChangedChartIdentity() {
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(
+      validResult(), cancelled,
+      [](const result_persistence::PersistedChartResult &result,
+         std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta.BmsPath = result.score.chartPath;
+        chart->Meta.MD5 = std::string(32, 'd');
+        chart->Meta.SHA256 = std::string(64, 'e');
+        return chart;
+      });
+
+  assert(!outcome.value.has_value());
+  assert(outcome.diagnostic ==
+         "saved chart no longer matches its stored identity");
+}
+
+void testChartRecallAcceptsMatchingMd5OnlyMigrationIdentity() {
+  auto persisted = validResult();
+  const std::string realSha = std::string(64, 'e');
+  persisted.score.chartSha256 =
+      *replay::legacyReplaySha256ForMd5(persisted.score.chartMd5);
+  persisted.resultFingerprint =
+      result_persistence::resultFingerprint(persisted);
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(
+      persisted, cancelled,
+      [realSha](const result_persistence::PersistedChartResult &result,
+                std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta.BmsPath = result.score.chartPath;
+        chart->Meta.MD5 = result.score.chartMd5;
+        chart->Meta.SHA256 = realSha;
+        return chart;
+      });
+
+  assert(outcome.value.has_value());
+  assert(outcome.value->chart->Meta.SHA256 == persisted.score.chartSha256);
 }
 
 result_persistence::PersistedCourseResult validCourseResult() {
@@ -257,6 +301,8 @@ void testCourseRecallDoesNotPublishPartialSession() {
         }
         auto chart = std::make_unique<bms_parser::Chart>();
         chart->Meta.BmsPath = stage.score.chartPath;
+        chart->Meta.MD5 = stage.score.chartMd5;
+        chart->Meta.SHA256 = stage.score.chartSha256;
         return chart;
       };
   std::atomic_bool cancelled = false;
@@ -267,13 +313,40 @@ void testCourseRecallDoesNotPublishPartialSession() {
   assert(calls == 2);
 }
 
+void testCourseRecallRejectsChangedStageIdentity() {
+  auto persisted = validCourseResult();
+  int calls = 0;
+  result_recall::ResultChartLoader changedStageLoader =
+      [&calls](const result_persistence::PersistedChartResult &stage,
+               std::atomic_bool &) {
+        ++calls;
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta.BmsPath = stage.score.chartPath;
+        chart->Meta.MD5 = stage.score.chartMd5;
+        chart->Meta.SHA256 =
+            calls == 2 ? std::string(64, 'e') : stage.score.chartSha256;
+        return chart;
+      };
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildCourseResult(
+      std::move(persisted), cancelled, std::move(changedStageLoader));
+
+  assert(!outcome.value.has_value());
+  assert(outcome.diagnostic ==
+         "saved course stage no longer matches its stored identity");
+  assert(calls == 2);
+}
+
 } // namespace
 
 int main() {
   testChartRecallUsesPersistedFactsOnly();
   testChartRecallRejectsInvalidResultBeforeLoadingAssets();
   testChartRecallDoesNotPublishMissingOrCancelledAssets();
+  testChartRecallRejectsChangedChartIdentity();
+  testChartRecallAcceptsMatchingMd5OnlyMigrationIdentity();
   testCourseRecallUsesOrderedPersistedStageFacts();
   testCourseRecallDoesNotPublishPartialSession();
+  testCourseRecallRejectsChangedStageIdentity();
   return 0;
 }

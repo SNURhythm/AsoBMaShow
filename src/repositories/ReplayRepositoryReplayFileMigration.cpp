@@ -8,6 +8,7 @@
 #include "../ScoreProvenance.h"
 #include "../replay/BeatorajaReplayCodec.h"
 #include "../replay/BeatorajaReplayPath.h"
+#include "../replay/LegacyReplayIdentity.h"
 #include "../replay/ReplayFileStore.h"
 
 #include "nlohmann/json.hpp"
@@ -520,6 +521,26 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart,
   } else {
     diagnostic = statement.error();
     return false;
+  }
+
+  auto &score = persisted.score;
+  if (chart.chartSha256.empty()) {
+    if (!score.chartSha256.empty()) {
+      chart.chartSha256 = score.chartSha256;
+    } else {
+      const auto fallback = replay::legacyReplaySha256ForMd5(chart.chartMd5);
+      if (!fallback.has_value()) {
+        diagnostic = "legacy replay has neither a valid SHA-256 nor MD5";
+        return false;
+      }
+      chart.chartSha256 = *fallback;
+    }
+  }
+  if (score.chartSha256.empty()) {
+    score.chartSha256 = chart.chartSha256;
+  }
+  if (score.chartMd5.empty()) {
+    score.chartMd5 = chart.chartMd5;
   }
 
   for (const auto &entry : chart.events) {

@@ -3,6 +3,7 @@
 #include "ReplayPlaybackDriver.h"
 #include "../bms_parser.hpp"
 #include "../scene/play/GameplayDefinition.h"
+#include "../scene/play/GameplayCandidateSelection.h"
 
 #include <algorithm>
 #include <cmath>
@@ -78,7 +79,8 @@ MaterializeOutcome materializeReplay(
       definition,
       {.judge = policy.judge,
        .gaugeRules = policy.gauge,
-       .notePriorityMode = AppSettings::NotePriorityMode::Lowest,
+       .notePriorityMode =
+           notePriorityForCandidateSelection(playback.setup.candidateSelection),
        .attempt =
            {.initialGaugeType = playback.setup.initialGaugeType,
             .gaugeAutoShift = playback.setup.gaugeAutoShift,

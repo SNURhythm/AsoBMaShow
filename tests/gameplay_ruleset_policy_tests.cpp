@@ -1,4 +1,5 @@
 #include "CoursePlaySession.h"
+#include "CourseConstraintUtils.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/GameplayRulesetPolicy.h"
 
@@ -301,6 +302,31 @@ void testRawCourseReplayRestTimingIsPreserved() {
   require(session.restMicrosAfterCurrentStage() == 750'000,
           "freshly recorded course timing remains the fallback");
 }
+
+void testRawCourseReplayMaterializationAppliesSavedJudgementConstraint() {
+  const auto meta = chartMeta(GameplayRuleset::Beatoraja);
+  auto playback = std::make_shared<const replay::ReplayPlaybackData>(
+      replay::ReplayPlaybackData{});
+  StartOptions options;
+  applyCourseReplayPlaybackToStartOptions(
+      options, playback,
+      courseConstraintSettingsFromJson(R"(["no_good"])").rules);
+
+  const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
+      options, meta, AppSettings::NotePriorityMode::Lowest);
+  require(options.courseConstraints.judgement ==
+              CourseJudgementConstraint::NoGood &&
+              outcome.built(),
+          "raw course replay installs its saved NO GOOD rule before policy "
+          "construction");
+  const auto great = outcome.policy->judge.window(Great);
+  const auto good = outcome.policy->judge.window(Good);
+  require(great.has_value() && good.has_value() &&
+              great->earlyMicros == good->earlyMicros &&
+              great->lateMicros == good->lateMicros,
+          "raw course replay materialization uses the constrained judge "
+          "windows");
+}
 } // namespace
 
 int main() {
@@ -312,5 +338,6 @@ int main() {
   testReplayStartRebuildsCanonicalPolicyWithoutSnapshot();
   testLegacyReplayUsesBeatorajaFallback();
   testRawCourseReplayRestTimingIsPreserved();
+  testRawCourseReplayMaterializationAppliesSavedJudgementConstraint();
   return 0;
 }

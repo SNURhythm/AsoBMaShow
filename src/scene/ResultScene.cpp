@@ -486,26 +486,17 @@ void ResultScene::loadPreviousBest() {
   local->previousBestLoaded = true;
   local->previousBest.reset();
 
-  std::optional<std::string> beforeCreatedAt;
-  std::optional<std::string> excludeAttemptId;
-  const auto *receipt =
-      persistenceOptions.attempt == nullptr
-          ? nullptr
-          : persistenceOptions.outcome.validatedReceiptFor(
-                *persistenceOptions.attempt);
-  if (receipt != nullptr) {
-    excludeAttemptId = persistenceOptions.attempt->result.attemptId;
-  } else if (local->replayResult && local->retryData.has_value() &&
-             !local->retryData->autoPlay &&
-             !local->retryData->createdAt.empty()) {
-    beforeCreatedAt = local->retryData->createdAt;
-  }
+  const ResultPreviousBestQuery query =
+      result_scene_detail::previousBestQueryFor(
+          persistenceOptions, local->replayResult,
+          local->retryData.has_value() ? &*local->retryData : nullptr);
 
   const auto best = isCourseFinalResult()
                         ? context.scoreRepository.LoadBestCourseScore(
                               *local->courseOptions.session)
                         : context.scoreRepository.LoadBestScore(
-                              local->meta, beforeCreatedAt, excludeAttemptId);
+                              local->meta, query.beforeCreatedAt,
+                              query.excludeAttemptId);
   if (best.has_value()) {
     local->previousBest =
         result_presentation::previousBestDataFromSnapshot(*best);

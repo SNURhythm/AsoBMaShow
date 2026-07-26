@@ -1,6 +1,7 @@
 #include "ReplayVideoExporter.h"
 
 #include "ChartPlaybackDuration.h"
+#include "CourseConstraintUtils.h"
 #include "CoursePlaySession.h"
 #include "PlayOptionUtils.h"
 #include "PreparationPlan.h"
@@ -4192,6 +4193,8 @@ ReplayVideoExporter::ExportCourseReplay(
       playback.restMicrosAfterStage.size() != playback.stages.size()) {
     return {.success = false, .message = "Invalid course replay"};
   }
+  const CourseConstraintRules courseConstraints =
+      courseConstraintSettingsFromJson(result.constraintJson).rules;
 
   JudgedCoursePlaybackData adaptedCourse;
   adaptedCourse.courseId = result.legacyCourseId;
@@ -4252,7 +4255,8 @@ ReplayVideoExporter::ExportCourseReplay(
       auto playbackPointer =
           std::make_shared<const replay::ReplayPlaybackData>(stagePlayback);
       StartOptions startOptions;
-      applyReplayPlaybackToStartOptions(startOptions, playbackPointer);
+      applyCourseReplayPlaybackToStartOptions(
+          startOptions, playbackPointer, courseConstraints);
       const auto policy = buildGameplayRulesetPolicyAtPlayStart(
           startOptions, chart->Meta, context.settings.notePriorityMode);
       if (!policy.built()) {

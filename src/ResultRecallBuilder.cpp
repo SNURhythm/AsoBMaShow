@@ -2,6 +2,7 @@
 
 #include "CourseConstraintUtils.h"
 #include "PlayOptionUtils.h"
+#include "replay/LegacyReplayIdentity.h"
 #include "repositories/ChartStorageIdentity.h"
 
 #include <exception>
@@ -41,6 +42,13 @@ void applyStoredMeta(bms_parser::ChartMeta &meta,
   meta.KeyMode = result.keyMode;
   meta.TotalNotes = score.maxScore / 2;
   meta.LnMode = score.longNoteMode;
+}
+
+bool chartIdentityMatches(
+    const bms_parser::ChartMeta &meta,
+    const result_persistence::PersistedChartResult &result) {
+  return replay::storedChartIdentityMatches(
+      result.score.chartSha256, result.score.chartMd5, meta.SHA256, meta.MD5);
 }
 
 RhythmState stateFrom(const result_persistence::PersistedChartResult &result,
@@ -113,6 +121,10 @@ ChartBuildOutcome BuildChartResult(
     if (chart == nullptr || cancelled.load()) {
       return {.diagnostic = "saved chart is unavailable"};
     }
+    if (!chartIdentityMatches(chart->Meta, result)) {
+      return {.diagnostic =
+                  "saved chart no longer matches its stored identity"};
+    }
     applyStoredMeta(chart->Meta, result);
     RhythmState state = stateFrom(result, *chart);
     return {.value = ChartResult{.chart = std::move(chart),
@@ -175,6 +187,10 @@ CourseBuildOutcome BuildCourseResult(
       auto loadedChart = loadChart(persistedStage, cancelled);
       if (loadedChart == nullptr || cancelled.load()) {
         return {.diagnostic = "saved course stage is unavailable"};
+      }
+      if (!chartIdentityMatches(loadedChart->Meta, persistedStage)) {
+        return {.diagnostic =
+                    "saved course stage no longer matches its stored identity"};
       }
       applyStoredMeta(loadedChart->Meta, persistedStage);
       auto chart = std::shared_ptr<bms_parser::Chart>(std::move(loadedChart));

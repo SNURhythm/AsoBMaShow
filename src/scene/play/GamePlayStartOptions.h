@@ -8,6 +8,7 @@
 #include "../../practice/PracticeSession.h"
 #include "../../replay/ReplayPlaybackData.h"
 #include "Pacemaker.h"
+#include "GameplayCandidateSelection.h"
 #include "GameplayRulesetPolicy.h"
 
 #include <algorithm>
@@ -258,35 +259,12 @@ inline void applyReplayPlaybackToStartOptions(
   }
 }
 
-[[nodiscard]] inline gameplay::CandidateSelectionMode
-candidateSelectionForNotePriority(AppSettings::NotePriorityMode mode) {
-  switch (mode) {
-  case AppSettings::NotePriorityMode::Combo:
-    return gameplay::CandidateSelectionMode::Combo;
-  case AppSettings::NotePriorityMode::Duration:
-    return gameplay::CandidateSelectionMode::Duration;
-  case AppSettings::NotePriorityMode::Score:
-    return gameplay::CandidateSelectionMode::Score;
-  case AppSettings::NotePriorityMode::Lowest:
-  default:
-    return gameplay::CandidateSelectionMode::Lowest;
-  }
-}
-
-[[nodiscard]] inline AppSettings::NotePriorityMode
-notePriorityForCandidateSelection(gameplay::CandidateSelectionMode mode) {
-  switch (mode) {
-  case gameplay::CandidateSelectionMode::Combo:
-    return AppSettings::NotePriorityMode::Combo;
-  case gameplay::CandidateSelectionMode::Duration:
-    return AppSettings::NotePriorityMode::Duration;
-  case gameplay::CandidateSelectionMode::Score:
-    return AppSettings::NotePriorityMode::Score;
-  case gameplay::CandidateSelectionMode::LR2:
-  case gameplay::CandidateSelectionMode::Lowest:
-    return AppSettings::NotePriorityMode::Lowest;
-  }
-  return AppSettings::NotePriorityMode::Lowest;
+inline void applyCourseReplayPlaybackToStartOptions(
+    StartOptions &options,
+    std::shared_ptr<const replay::ReplayPlaybackData> playback,
+    const CourseConstraintRules &constraints) {
+  applyReplayPlaybackToStartOptions(options, std::move(playback));
+  options.courseConstraints = constraints;
 }
 
 [[nodiscard]] inline AppSettings::NotePriorityMode

@@ -181,6 +181,33 @@ void testRemoteActionMatrixIsReadOnly() {
           "remote rankings disappear without exact query dependencies");
 }
 
+void testRecalledResultExcludesItselfFromPreviousBest() {
+  result_persistence::PersistedChartResult stored;
+  stored.attemptId = "123e4567-e89b-42d3-a456-426614174000";
+  ResultPersistenceOptions persistence;
+  persistence.result =
+      std::make_shared<const result_persistence::PersistedChartResult>(stored);
+  persistence.previousBestBeforeCreatedAt = "2026-07-25 01:02:03";
+
+  const auto current = result_scene_detail::previousBestQueryFor(
+      persistence, false, nullptr);
+  require(current.excludeAttemptId == stored.attemptId &&
+              !current.beforeCreatedAt.has_value(),
+          "recalled result excludes its exact stored attempt from previous "
+          "best");
+
+  stored.attemptId.reset();
+  persistence.result =
+      std::make_shared<const result_persistence::PersistedChartResult>(stored);
+  const auto legacy = result_scene_detail::previousBestQueryFor(
+      persistence, false, nullptr);
+  require(!legacy.excludeAttemptId.has_value() &&
+              legacy.beforeCreatedAt ==
+                  persistence.previousBestBeforeCreatedAt,
+          "legacy recalled result uses its selected replay timestamp as the "
+          "previous-best cutoff");
+}
+
 ResultRecordSummary
 remoteRecordSummary(std::string origin = "https://ir.example.test:8443") {
   return makeRemoteResultRecord(ir::kTachiProviderId, origin, remoteScore());
@@ -387,6 +414,7 @@ int main() {
   testRemoteSourceOwnsOnlyValidatedRemoteData();
   testRemoteRankingDependenciesFailClosed();
   testRemoteActionMatrixIsReadOnly();
+  testRecalledResultExcludesItselfFromPreviousBest();
   testRemoteRecordViewResultActionIsPresentedEnabled();
   testRemoteRecallExecutesExactLookupAndRetainedBackLifecycle();
   testRemoteRecallFailsClosedForConcurrentDeletion();

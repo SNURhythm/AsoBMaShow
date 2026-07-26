@@ -226,12 +226,57 @@ void testMaterializesRawInputsThroughGameplaySimulation() {
          "migrated legacy tracks select the isolated legacy adapter instead");
 }
 
+void testMaterializationHonorsRecordedCandidateSelection() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.Rank = 2;
+  auto *measure = new bms_parser::Measure();
+  auto *earlier = new bms_parser::TimeLine(8, false);
+  earlier->Timing = 800'000;
+  earlier->SetNote(1, new bms_parser::Note(1));
+  measure->TimeLines.push_back(earlier);
+  auto *later = new bms_parser::TimeLine(8, false);
+  later->Timing = 950'000;
+  later->SetNote(1, new bms_parser::Note(2));
+  measure->TimeLines.push_back(later);
+  chart.Measures.push_back(measure);
+
+  replay::ReplayPlaybackData playback;
+  playback.setup.keyMode = 5;
+  playback.setup.longNoteMode = 0;
+  playback.setup.initialGaugeType = GaugeType::Normal;
+  playback.setup.candidateSelection = gameplay::CandidateSelectionMode::Combo;
+  playback.input = {
+      {.songTimeMicros = 1'000'000,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 1},
+       .pressed = true},
+      {.songTimeMicros = 1'010'000,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 1},
+       .pressed = false},
+  };
+  gameplay::GameplayRulesetPolicy policy;
+  policy.judge = gameplay::CompiledGameplayJudge::from(Judge(chart.Meta.Rank));
+  policy.gauge = compileGameplayGaugeRules(
+      GameplayRuleset::Beatoraja, chart.Meta, GaugeProfile::Standard);
+
+  const auto outcome = replay::materializeReplay(playback, chart, policy);
+  expect(outcome.materialized() && !outcome.value->judgedEvents.empty() &&
+             outcome.value->judgedEvents.front().noteTimeMicros == 950'000,
+         "raw materialization restores the recorded Combo note selection");
+}
+
 } // namespace
 
 int main() {
   testDrivesPinnedStockReplayAtRecordedTimes();
   testDoubleLaneCommandsScratchReversalAndReset();
   testMaterializesRawInputsThroughGameplaySimulation();
+  testMaterializationHonorsRecordedCandidateSelection();
   if (failures != 0) {
     std::cerr << failures << " replay playback driver test(s) failed\n";
     return 1;

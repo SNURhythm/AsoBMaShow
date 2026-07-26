@@ -8596,7 +8596,8 @@ void MainMenuScene::buildReplayModal() {
       return;
     }
     if (selectedReplaySummary.has_value()) {
-      startReplayResultRecall(replayModalChart, selectedReplaySummary->id);
+      startReplayResultRecall(replayModalChart, selectedReplaySummary->id,
+                              selectedReplaySummary->createdAt);
       return;
     }
     const auto *remoteIdentity = std::get_if<IrRemoteRecordId>(
@@ -10764,7 +10765,8 @@ void MainMenuScene::refreshReplayIrMarker(
 }
 
 void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
-                                            int replayId) {
+                                            int replayId,
+                                            std::string createdAt) {
   if (replayResultRecallInProgress || replayExportInProgress.load() ||
       replayIrUploadInProgress ||
       replay_autoplay::isAutoPlayReplayId(replayId)) {
@@ -10775,7 +10777,7 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
   refreshReplayModalActions();
   cancelActivePreviewLoading();
   defer(
-      [this, record, replayId]() {
+      [this, record, replayId, createdAt = std::move(createdAt)]() {
         if (loadThread.joinable()) {
           loadThread.join();
         }
@@ -10805,6 +10807,9 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
 
         auto result = std::move(*recalled.value);
         ResultPersistenceOptions persistence;
+        if (!createdAt.empty()) {
+          persistence.previousBestBeforeCreatedAt = createdAt;
+        }
         auto persisted =
             std::make_shared<const result_persistence::PersistedChartResult>(
                 result.result);
