@@ -63,7 +63,8 @@ bool recoverReplayFileReservations(sqlite3 *database,
   SqliteStatementHandle candidates;
   if (prepareSqliteStatement(
           database,
-          "SELECT r.attempt_id,r.stem,r.history_index,r.relative_path FROM "
+          "SELECT r.attempt_id,r.stem,r.history_index,r.relative_path,"
+          "r.finalized_content_sha256,r.finalized_compressed_size FROM "
           "replay_file_reservations r WHERE NOT EXISTS(SELECT 1 FROM "
           "chart_results c WHERE c.attempt_id=r.attempt_id) AND NOT EXISTS("
           "SELECT 1 FROM course_results c WHERE c.attempt_id=r.attempt_id)",
@@ -74,9 +75,10 @@ bool recoverReplayFileReservations(sqlite3 *database,
   struct AbandonedReservation {
     std::string attemptId;
     std::filesystem::path relativePath;
-    bool removeFinalFile = false;
+    std::optional<replay::ReplayFileMetadata> ownedFinalFile;
   };
   std::vector<AbandonedReservation> abandoned;
+  replay::ReplayFileStore store(profileRoot);
   int step = SQLITE_OK;
   while ((step = sqlite3_step(candidates.get())) == SQLITE_ROW) {
     if (sqlite3_column_type(candidates.get(), 0) != SQLITE_TEXT ||
@@ -90,6 +92,13 @@ bool recoverReplayFileReservations(sqlite3 *database,
     const auto historyIndex = sqlite3_column_int64(candidates.get(), 2);
     const std::filesystem::path storedRelativePath(
         sqliteColumnString(candidates.get(), 3));
+    const bool hashNull =
+        sqlite3_column_type(candidates.get(), 4) == SQLITE_NULL;
+    const bool sizeNull =
+        sqlite3_column_type(candidates.get(), 5) == SQLITE_NULL;
+    if (hashNull != sizeNull) {
+      return false;
+    }
     std::string pathDiagnostic;
     const auto identity =
         replay::pathForStem(stem, historyIndex, pathDiagnostic);
@@ -104,25 +113,45 @@ bool recoverReplayFileReservations(sqlite3 *database,
         (!pathError &&
          status.type() == std::filesystem::file_type::not_found) ||
         pathError == std::errc::no_such_file_or_directory;
-    const bool privateFinalFile =
-        !pathError && status.type() == std::filesystem::file_type::regular;
-    if (definitelyMissing || privateFinalFile) {
-      abandoned.push_back({.attemptId = attemptId,
-                           .relativePath = identity->relativePath,
-                           .removeFinalFile = privateFinalFile});
+    if (pathError && !definitelyMissing) {
+      return false;
     }
+    std::optional<replay::ReplayFileMetadata> ownedFinalFile;
+    if (!definitelyMissing && !hashNull) {
+      if (sqlite3_column_type(candidates.get(), 4) != SQLITE_TEXT ||
+          sqlite3_column_type(candidates.get(), 5) != SQLITE_INTEGER ||
+          sqlite3_column_int64(candidates.get(), 5) <= 0) {
+        return false;
+      }
+      replay::ReplayFileMetadata metadata{
+          .relativePath = identity->relativePath,
+          .sha256 = sqliteColumnString(candidates.get(), 4),
+          .compressedSize = static_cast<std::uint64_t>(
+              sqlite3_column_int64(candidates.get(), 5)),
+          .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+      };
+      const auto inspection = store.inspect(metadata);
+      if (inspection.state == replay::ReplayFileState::IoFailure) {
+        return false;
+      }
+      if (inspection.state == replay::ReplayFileState::Available) {
+        ownedFinalFile = std::move(metadata);
+      }
+    }
+    abandoned.push_back({.attemptId = attemptId,
+                         .relativePath = identity->relativePath,
+                         .ownedFinalFile = std::move(ownedFinalFile)});
   }
   if (step != SQLITE_DONE) {
     return false;
   }
   candidates.reset();
 
-  replay::ReplayFileStore store(profileRoot);
   for (const auto &reservation : abandoned) {
-    if (reservation.removeFinalFile) {
+    if (reservation.ownedFinalFile) {
       std::string removeDiagnostic;
-      if (!store.remove({.relativePath = reservation.relativePath},
-                        removeDiagnostic)) {
+      if (!store.removeIfMatches(*reservation.ownedFinalFile,
+                                 removeDiagnostic)) {
         SDL_Log("Could not remove orphan replay reservation file: %s",
                 removeDiagnostic.c_str());
         return false;

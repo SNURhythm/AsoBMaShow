@@ -23,6 +23,10 @@
 #include <string_view>
 #include <vector>
 
+namespace replay {
+struct ReplayFileMetadata;
+}
+
 namespace ir {
 
 struct IrSubmissionSnapshotReadOutcome {
@@ -394,7 +398,7 @@ struct CourseReplayLookup {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 12;
+  static constexpr int kCurrentSchemaVersion = 13;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -419,6 +423,9 @@ public:
   ReplayFileRelocationOutcome
   relocateReplayFileReference(const ReplayFileReference &expected,
                               const ReplayFileReservation &destination);
+  bool markReplayFileReservationFinalized(
+      const ReplayFileReservation &reservation,
+      const replay::ReplayFileMetadata &metadata, std::string &diagnostic);
   bool discardReplayFileReservation(const ReplayFileReservation &reservation,
                                     std::string &diagnostic);
   bool discardUndurableReplay(std::string_view attemptId,

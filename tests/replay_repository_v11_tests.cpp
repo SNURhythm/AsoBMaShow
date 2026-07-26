@@ -1,4 +1,5 @@
 #include "repositories/ReplayRepository.h"
+#include "FileChecksum.h"
 #include "ir/IrSubmissionSnapshot.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/ReplayFileStore.h"
@@ -207,6 +208,18 @@ replay::ReplayPlaybackData samplePlayback() {
   return playback;
 }
 
+replay::ReplayFileMetadata metadataForFile(
+    const std::filesystem::path &root,
+    const std::filesystem::path &relativePath) {
+  std::string diagnostic;
+  const auto absolute = root / relativePath;
+  const auto hash = file_checksum::sha256File(absolute, diagnostic);
+  return {.relativePath = relativePath,
+          .sha256 = hash.value_or(std::string{}),
+          .compressedSize = std::filesystem::file_size(absolute),
+          .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion};
+}
+
 void testReplayFileReadIsIndependentFromResultAndIr() {
   TemporaryDirectory temporary;
   ReplayRepository repository(temporary.path() / "replay.db");
@@ -254,6 +267,9 @@ void testReplayFileReadIsIndependentFromResultAndIr() {
       .compressedSize = finalized.metadata->compressedSize,
       .codecVersion = finalized.metadata->codecVersion,
   };
+  expect(repository.markReplayFileReservationFinalized(
+             *reservation.reservation, *finalized.metadata, diagnostic),
+         "file-backed read records finalized replay ownership");
   const auto staged =
       repository.stageCompletedChartAttempt(result, snapshot, reference, {});
   expect(staged.receipt.has_value(),
@@ -334,6 +350,9 @@ void testChartReplayRejectsLongNoteModeMismatch() {
       .compressedSize = finalized.metadata->compressedSize,
       .codecVersion = finalized.metadata->codecVersion,
   };
+  expect(repository.markReplayFileReservationFinalized(
+             *reservation.reservation, *finalized.metadata, diagnostic),
+         "long-note mismatch records finalized replay ownership");
   const auto staged =
       repository.stageCompletedChartAttempt(result, snapshot, reference, {});
   expect(staged.receipt.has_value(),
@@ -357,8 +376,8 @@ void testFreshCompactSchema() {
   repository.Shutdown();
 
   Database database(databasePath);
-  expect(scalarInteger(database.get(), "PRAGMA user_version") == 12,
-         "fresh replay database uses schema version 12");
+  expect(scalarInteger(database.get(), "PRAGMA user_version") == 13,
+         "fresh replay database uses schema version 13");
   const auto chartColumns = stringSet(
       database.get(), "SELECT name FROM pragma_table_info('chart_results')");
   const auto courseStageColumns = stringSet(
@@ -367,6 +386,12 @@ void testFreshCompactSchema() {
   expect(chartColumns.contains("adopted_gauge_type") &&
              courseStageColumns.contains("adopted_gauge_type"),
          "compact result tables store adopted gauge types");
+  const auto reservationColumns = stringSet(
+      database.get(),
+      "SELECT name FROM pragma_table_info('replay_file_reservations')");
+  expect(reservationColumns.contains("finalized_content_sha256") &&
+             reservationColumns.contains("finalized_compressed_size"),
+         "replay reservations store finalized ownership evidence");
   const auto tables = stringSet(
       database.get(),
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
@@ -432,9 +457,18 @@ void testVersion11AdoptedGaugeMigration() {
                        "'CHECK(adopted_gauge_type BETWEEN 0 AND 5),','') "
                        "WHERE type='table' AND "
                        "name='course_result_stages'") &&
+               execute(database.get(),
+                       "UPDATE sqlite_master SET sql=replace(replace(replace("
+                       "sql,'finalized_content_sha256 TEXT,',''),"
+                       "'finalized_compressed_size INTEGER,',''),"
+                       "'CHECK((finalized_content_sha256 IS NULL AND "
+                       "finalized_compressed_size IS NULL) OR "
+                       "(length(finalized_content_sha256)=64 AND "
+                       "finalized_compressed_size>0)),','') WHERE "
+                       "type='table' AND name='replay_file_reservations'") &&
                execute(database.get(), "PRAGMA writable_schema=OFF") &&
                execute(database.get(), "PRAGMA user_version=11"),
-           "schema-12-only gauge columns are removed from the fixture");
+           "schema-12 and schema-13-only columns are removed from the fixture");
   }
 
   expect(repository.EnsureSchema(),
@@ -442,7 +476,7 @@ void testVersion11AdoptedGaugeMigration() {
   repository.Shutdown();
 
   Database database(databasePath);
-  expect(scalarInteger(database.get(), "PRAGMA user_version") == 12 &&
+  expect(scalarInteger(database.get(), "PRAGMA user_version") == 13 &&
              stringSet(database.get(),
                        "SELECT name FROM pragma_table_info('chart_results')")
                  .contains("adopted_gauge_type") &&
@@ -523,6 +557,26 @@ void testMalformedVersion11FailsClosed() {
          "partial v11 schema fails closed instead of self-repairing");
 }
 
+void testMalformedCurrentSchemaColumnFailsClosed() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(), "current validation fixture is created");
+  repository.Shutdown();
+  {
+    Database database(databasePath);
+    expect(execute(database.get(), "PRAGMA writable_schema=ON") &&
+               execute(database.get(),
+                       "UPDATE sqlite_master SET sql=replace(sql,"
+                       "'chart_artist TEXT NOT NULL,','') WHERE type='table' "
+                       "AND name='chart_results'") &&
+               execute(database.get(), "PRAGMA writable_schema=OFF"),
+           "current validation fixture removes one ordinary result column");
+  }
+  expect(!repository.EnsureSchema(),
+         "same-version schema with a missing ordinary column fails closed");
+}
+
 void testCompactStageAndIndependentReads() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
@@ -542,6 +596,15 @@ void testCompactStageAndIndependentReads() {
   auto result = validResult(std::string(attempt));
   const auto snapshot = snapshotFor(result);
   const auto replayFile = referenceFor(*reservation.reservation);
+  std::string ownershipDiagnostic;
+  expect(repository.markReplayFileReservationFinalized(
+             *reservation.reservation,
+             {.relativePath = replayFile.relativePath,
+              .sha256 = replayFile.contentSha256,
+              .compressedSize = replayFile.compressedSize,
+              .codecVersion = replayFile.codecVersion},
+             ownershipDiagnostic),
+         "compact staging records finalized replay ownership");
 
   replay::ReplayPlaybackData rawReplay;
   rawReplay.input.resize(100'000);
@@ -739,7 +802,30 @@ void testProfileStartupReclaimsFilelessReservations() {
          "profile startup reclaims fileless reservation indexes");
 }
 
-void testProfileStartupReclaimsInstalledReplayReservation() {
+void testReservationSkipsExistingUntrackedReplay() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('b', 64);
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "collision-safe reservation schema is ready");
+  std::string pathDiagnostic;
+  const auto occupied = replay::pathForStem(stem, 0, pathDiagnostic);
+  expect(occupied.has_value(), "stock slot zero path is valid");
+  if (!occupied) {
+    return;
+  }
+  writeFile(temporary.path() / occupied->relativePath, "external replay");
+
+  const auto reserved = repository.reserveReplayFile(
+      "123e4567-e89b-42d3-a456-426614174100", stem);
+  expect(reserved.reservation && reserved.reservation->historyIndex == 1 &&
+             std::filesystem::exists(temporary.path() /
+                                     occupied->relativePath),
+         "allocator skips an existing replay that is absent from SQLite");
+}
+
+void testProfileStartupPreservesUnownedReplayCollision() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
   const std::string stem = repeated('d', 64);
@@ -764,20 +850,52 @@ void testProfileStartupReclaimsInstalledReplayReservation() {
   ReplayRepository reopened(databasePath);
   expect(reopened.EnsureSchema(),
          "profile restart opens installed reservation storage");
-  expect(!std::filesystem::exists(temporary.path() /
-                                  installed.reservation->relativePath),
-         "startup removes an unassociated finalized replay file");
+  expect(std::filesystem::exists(temporary.path() /
+                                 installed.reservation->relativePath),
+         "startup preserves a file not proven to belong to the reservation");
   const auto reclaimed = reopened.reserveReplayFile(installedAttempt, stem);
   expect(reclaimed.status == ReservationOutcome::Status::Reserved &&
              reclaimed.reservation &&
-             reclaimed.reservation->historyIndex == 0,
-         "startup reclaims the finalized orphan reservation");
+             reclaimed.reservation->historyIndex == 1,
+         "startup drops the reservation but skips the preserved occupied slot");
   const auto afterRecovery = reopened.reserveReplayFile(
       "123e4567-e89b-42d3-a456-426614174122", stem);
   expect(afterRecovery.status == ReservationOutcome::Status::Reserved &&
              afterRecovery.reservation &&
-             afterRecovery.reservation->historyIndex == 1,
+             afterRecovery.reservation->historyIndex == 2,
          "reclaimed orphan slots preserve monotonic live reservations");
+}
+
+void testProfileStartupReclaimsOwnedFinalReplay() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('d', 64);
+  constexpr std::string_view attempt =
+      "123e4567-e89b-42d3-a456-426614174125";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(), "owned reservation schema is ready");
+  const auto reserved = repository.reserveReplayFile(attempt, stem);
+  expect(reserved.reservation.has_value(), "owned replay path is reserved");
+  if (!reserved.reservation) {
+    return;
+  }
+  const auto finalPath = temporary.path() / reserved.reservation->relativePath;
+  writeFile(finalPath, "finalized owned replay");
+  const auto metadata =
+      metadataForFile(temporary.path(), reserved.reservation->relativePath);
+  std::string diagnostic;
+  expect(repository.markReplayFileReservationFinalized(
+             *reserved.reservation, metadata, diagnostic),
+         "finalized ownership metadata is recorded");
+  repository.Shutdown();
+
+  ReplayRepository reopened(databasePath);
+  expect(reopened.EnsureSchema(), "owned orphan recovery opens storage");
+  expect(!std::filesystem::exists(finalPath),
+         "startup removes an orphan only when its content proves ownership");
+  const auto reclaimed = reopened.reserveReplayFile(attempt, stem);
+  expect(reclaimed.reservation && reclaimed.reservation->historyIndex == 0,
+         "owned orphan cleanup makes its slot allocatable again");
 }
 
 void testExplicitlyDiscardsUndurableFinalReplay() {
@@ -796,9 +914,13 @@ void testExplicitlyDiscardsUndurableFinalReplay() {
   }
   const auto finalPath = temporary.path() / reserved.reservation->relativePath;
   writeFile(finalPath, "finalized but unstaged replay");
+  const auto metadata =
+      metadataForFile(temporary.path(), reserved.reservation->relativePath);
 
   std::string diagnostic;
-  expect(repository.discardUndurableReplay(attempt, stem, diagnostic) &&
+  expect(repository.markReplayFileReservationFinalized(
+             *reserved.reservation, metadata, diagnostic) &&
+             repository.discardUndurableReplay(attempt, stem, diagnostic) &&
              !std::filesystem::exists(finalPath),
          "continue cleanup removes the orphan file and reservation");
   const auto reused = repository.reserveReplayFile(
@@ -841,12 +963,15 @@ int main() {
   testVersion11AdoptedGaugeMigration();
   testProfileBindingCleansStaleReplayTemporaries();
   testMalformedVersion11FailsClosed();
+  testMalformedCurrentSchemaColumnFailsClosed();
   testCompactStageAndIndependentReads();
   testReplayFileReadIsIndependentFromResultAndIr();
   testChartReplayRejectsLongNoteModeMismatch();
   testReservationIntegrityAndMonotonicity();
+  testReservationSkipsExistingUntrackedReplay();
   testProfileStartupReclaimsFilelessReservations();
-  testProfileStartupReclaimsInstalledReplayReservation();
+  testProfileStartupPreservesUnownedReplayCollision();
+  testProfileStartupReclaimsOwnedFinalReplay();
   testExplicitlyDiscardsUndurableFinalReplay();
   testMalformedVersion10FailsClosed();
   if (failures != 0) {

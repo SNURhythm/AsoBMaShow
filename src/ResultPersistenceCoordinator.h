@@ -81,6 +81,9 @@ struct Dependencies {
       const replay::ReplayPathIdentity &, std::span<const std::byte>,
       const replay::ExpectedReplayIdentity &, std::string_view)>
       finalizeReplay;
+  std::function<bool(const ReplayFileReservation &,
+                     const replay::ReplayFileMetadata &, std::string &)>
+      recordFinalizedReplay;
   std::function<StageOutcome(const PersistedChartResult &,
                              const ir::IrSubmissionSnapshot &,
                              const ReplayFileReference &,

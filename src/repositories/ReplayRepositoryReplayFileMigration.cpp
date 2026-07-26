@@ -1664,7 +1664,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                      "replay schema version query is malformed");
     }
   }
-  if (userVersion == 11 || userVersion == 12) {
+  if (userVersion == 11 || userVersion == 12 || userVersion == 13) {
     return {.status = MigrationStatus::AlreadyCurrent};
   }
   if (userVersion != 10) {
@@ -1799,7 +1799,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                    charts.size(), courses.size());
   }
   if (fault(faults, "version-update") ||
-      !execute(database, "PRAGMA user_version=12", diagnostic)) {
+      !execute(database, "PRAGMA user_version=13", diagnostic)) {
     return failure(MigrationStatus::StorageFailure,
                    "could not advance replay schema version", charts.size(),
                    courses.size());

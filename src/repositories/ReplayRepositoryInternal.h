@@ -39,13 +39,18 @@ bool MigrateSchema(sqlite3 *database,
 
 ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
                                                  std::string_view attemptId,
-                                                 std::string_view stem);
+                                                 std::string_view stem,
+                                                 const std::filesystem::path &
+                                                     profileRoot);
 ReplayFileReferenceLookupOutcome
 LoadReplayFileReferenceOnConnection(sqlite3 *database, std::string_view stem,
                                     std::int64_t historyIndex);
 ReplayFileRelocationOutcome RelocateReplayFileReferenceOnConnection(
     sqlite3 *database, const ReplayFileReference &expected,
     const ReplayFileReservation &destination);
+bool MarkReplayFileReservationFinalizedOnConnection(
+    sqlite3 *database, const ReplayFileReservation &reservation,
+    const replay::ReplayFileMetadata &metadata, std::string &diagnostic);
 bool DiscardReplayFileReservationOnConnection(
     sqlite3 *database, const ReplayFileReservation &reservation,
     std::string &diagnostic);

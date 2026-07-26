@@ -259,8 +259,11 @@ using asobmshow::bms_metadata::normalizedHash;
 
 ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
                                                  std::string_view attemptId,
-                                                 std::string_view stem) {
-  if (database == nullptr || !uuid::isCanonicalLowerV4(attemptId)) {
+                                                 std::string_view stem,
+                                                 const std::filesystem::path &
+                                                     profileRoot) {
+  if (database == nullptr || profileRoot.empty() ||
+      !uuid::isCanonicalLowerV4(attemptId)) {
     return {.status = ReservationOutcome::Status::Invalid,
             .diagnostic = "replay reservation identity is invalid"};
   }
@@ -349,6 +352,34 @@ ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
     return {.status = ReservationOutcome::Status::StorageFailure,
             .diagnostic = "could not finish replay index allocation"};
   }
+  std::optional<replay::ReplayPathIdentity> identity;
+  while (true) {
+    identity = replay::pathForStem(stem, historyIndex, pathDiagnostic);
+    if (!identity.has_value()) {
+      return {.status = ReservationOutcome::Status::IntegrityConflict,
+              .diagnostic = std::move(pathDiagnostic)};
+    }
+    std::error_code pathError;
+    const auto status = std::filesystem::symlink_status(
+        profileRoot / identity->relativePath, pathError);
+    const bool missing =
+        (!pathError &&
+         status.type() == std::filesystem::file_type::not_found) ||
+        pathError == std::errc::no_such_file_or_directory;
+    if (missing) {
+      break;
+    }
+    if (pathError) {
+      return {.status = ReservationOutcome::Status::StorageFailure,
+              .diagnostic =
+                  "could not inspect candidate replay history path"};
+    }
+    if (historyIndex == std::numeric_limits<sqlite3_int64>::max()) {
+      return {.status = ReservationOutcome::Status::IntegrityConflict,
+              .diagnostic = "replay history index is exhausted"};
+    }
+    ++historyIndex;
+  }
   SqliteStatementHandle sequence;
   if (prepareSqliteStatement(
           database,
@@ -361,11 +392,6 @@ ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
       sqlite3_step(sequence.get()) != SQLITE_DONE) {
     return {.status = ReservationOutcome::Status::StorageFailure,
             .diagnostic = "could not advance replay history sequence"};
-  }
-  const auto identity = replay::pathForStem(stem, historyIndex, pathDiagnostic);
-  if (!identity.has_value()) {
-    return {.status = ReservationOutcome::Status::IntegrityConflict,
-            .diagnostic = std::move(pathDiagnostic)};
   }
   const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::system_clock::now().time_since_epoch())
@@ -500,7 +526,9 @@ ReplayFileRelocationOutcome RelocateReplayFileReferenceOnConnection(
 
   SqliteStatementHandle reservation;
   if (prepareSqliteStatement(database,
-                             "SELECT stem,history_index,relative_path FROM "
+                             "SELECT stem,history_index,relative_path,"
+                             "finalized_content_sha256,"
+                             "finalized_compressed_size FROM "
                              "replay_file_reservations WHERE attempt_id=?",
                              reservation) != SQLITE_OK ||
       !bindText(reservation.get(), 1, destination.attemptId)) {
@@ -565,6 +593,112 @@ ReplayFileRelocationOutcome RelocateReplayFileReferenceOnConnection(
   relocated.relativePath = destination.relativePath;
   return {.status = ReplayFileRelocationOutcome::Status::Relocated,
           .reference = std::move(relocated)};
+}
+
+bool MarkReplayFileReservationFinalizedOnConnection(
+    sqlite3 *database, const ReplayFileReservation &reservation,
+    const replay::ReplayFileMetadata &metadata, std::string &diagnostic) {
+  std::string pathDiagnostic;
+  const auto identity = replay::pathForStem(
+      reservation.stem, reservation.historyIndex, pathDiagnostic);
+  if (database == nullptr || !uuid::isCanonicalLowerV4(reservation.attemptId) ||
+      !identity || identity->relativePath != reservation.relativePath ||
+      metadata.relativePath != reservation.relativePath ||
+      !lowerHex(metadata.sha256, 64) || metadata.compressedSize == 0 ||
+      metadata.compressedSize >
+          static_cast<std::uint64_t>(std::numeric_limits<sqlite3_int64>::max()) ||
+      metadata.codecVersion != replay::BeatorajaReplayCodec::kCodecVersion) {
+    diagnostic = pathDiagnostic.empty()
+                     ? "finalized replay ownership metadata is invalid"
+                     : std::move(pathDiagnostic);
+    return false;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    diagnostic = "could not start finalized replay ownership update";
+    return false;
+  }
+  SqliteStatementHandle current;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT stem,history_index,relative_path,finalized_content_sha256,"
+          "finalized_compressed_size FROM replay_file_reservations WHERE "
+          "attempt_id=?",
+          current) != SQLITE_OK ||
+      !bindText(current.get(), 1, reservation.attemptId)) {
+    diagnostic = "could not inspect finalized replay ownership";
+    return false;
+  }
+  const int step = sqlite3_step(current.get());
+  if (step != SQLITE_ROW || columnText(current.get(), 0) != reservation.stem ||
+      sqlite3_column_int64(current.get(), 1) != reservation.historyIndex ||
+      columnText(current.get(), 2) != pathText(reservation.relativePath)) {
+    diagnostic = step == SQLITE_DONE
+                     ? "replay reservation no longer exists"
+                     : "replay reservation changed before finalization";
+    return false;
+  }
+  const bool hashNull = sqlite3_column_type(current.get(), 3) == SQLITE_NULL;
+  const bool sizeNull = sqlite3_column_type(current.get(), 4) == SQLITE_NULL;
+  if (hashNull != sizeNull) {
+    diagnostic = "finalized replay ownership marker is incomplete";
+    return false;
+  }
+  if (!hashNull) {
+    const bool identical =
+        sqlite3_column_type(current.get(), 3) == SQLITE_TEXT &&
+        sqlite3_column_type(current.get(), 4) == SQLITE_INTEGER &&
+        columnText(current.get(), 3) == metadata.sha256 &&
+        sqlite3_column_int64(current.get(), 4) ==
+            static_cast<sqlite3_int64>(metadata.compressedSize) &&
+        sqlite3_step(current.get()) == SQLITE_DONE;
+    if (!identical || !transaction.commit(transactionError)) {
+      diagnostic = identical
+                       ? "could not finish finalized replay ownership read"
+                       : "replay reservation names different finalized bytes";
+      return false;
+    }
+    diagnostic.clear();
+    return true;
+  }
+  if (sqlite3_step(current.get()) != SQLITE_DONE) {
+    diagnostic = "finalized replay ownership reservation is ambiguous";
+    return false;
+  }
+  current.reset();
+
+  SqliteStatementHandle update;
+  if (prepareSqliteStatement(
+          database,
+          "UPDATE replay_file_reservations SET finalized_content_sha256=?,"
+          "finalized_compressed_size=? WHERE attempt_id=? AND stem=? AND "
+          "history_index=? AND relative_path=? AND "
+          "finalized_content_sha256 IS NULL AND "
+          "finalized_compressed_size IS NULL",
+          update) != SQLITE_OK ||
+      !bindText(update.get(), 1, metadata.sha256) ||
+      sqlite3_bind_int64(update.get(), 2,
+                         static_cast<sqlite3_int64>(metadata.compressedSize)) !=
+          SQLITE_OK ||
+      !bindText(update.get(), 3, reservation.attemptId) ||
+      !bindText(update.get(), 4, reservation.stem) ||
+      sqlite3_bind_int64(update.get(), 5, reservation.historyIndex) !=
+          SQLITE_OK ||
+      !bindText(update.get(), 6, pathText(reservation.relativePath)) ||
+      sqlite3_step(update.get()) != SQLITE_DONE ||
+      sqlite3_changes(database) != 1) {
+    diagnostic = "could not record finalized replay ownership";
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    diagnostic = "could not commit finalized replay ownership";
+    return false;
+  }
+  diagnostic.clear();
+  return true;
 }
 
 bool DiscardReplayFileReservationOnConnection(
@@ -1150,14 +1284,22 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
 
   SqliteStatementHandle reservation;
   if (prepareSqliteStatement(database,
-                             "SELECT stem,history_index,relative_path FROM "
+                             "SELECT stem,history_index,relative_path,"
+                             "finalized_content_sha256,"
+                             "finalized_compressed_size FROM "
                              "replay_file_reservations WHERE attempt_id=?",
                              reservation) != SQLITE_OK ||
       !bindText(reservation.get(), 1, *sourceResult.attemptId) ||
       sqlite3_step(reservation.get()) != SQLITE_ROW ||
       columnText(reservation.get(), 0) != replayFile.stem ||
       sqlite3_column_int64(reservation.get(), 1) != replayFile.historyIndex ||
-      columnText(reservation.get(), 2) != pathText(replayFile.relativePath)) {
+      columnText(reservation.get(), 2) != pathText(replayFile.relativePath) ||
+      sqlite3_column_type(reservation.get(), 3) != SQLITE_TEXT ||
+      columnText(reservation.get(), 3) != replayFile.contentSha256 ||
+      sqlite3_column_type(reservation.get(), 4) != SQLITE_INTEGER ||
+      sqlite3_column_int64(reservation.get(), 4) !=
+          static_cast<sqlite3_int64>(replayFile.compressedSize) ||
+      sqlite3_step(reservation.get()) != SQLITE_DONE) {
     return {.status = StageStatus::IntegrityConflict,
             .diagnostic = "completed replay has no matching reservation"};
   }
@@ -1449,7 +1591,9 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
 
   SqliteStatementHandle reservation;
   if (prepareSqliteStatement(database,
-                             "SELECT stem,history_index,relative_path FROM "
+                             "SELECT stem,history_index,relative_path,"
+                             "finalized_content_sha256,"
+                             "finalized_compressed_size FROM "
                              "replay_file_reservations WHERE attempt_id=?",
                              reservation) != SQLITE_OK ||
       !bindText(reservation.get(), 1, *sourceResult.attemptId) ||
@@ -1457,6 +1601,11 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
       columnText(reservation.get(), 0) != replayFile.stem ||
       sqlite3_column_int64(reservation.get(), 1) != replayFile.historyIndex ||
       columnText(reservation.get(), 2) != pathText(replayFile.relativePath) ||
+      sqlite3_column_type(reservation.get(), 3) != SQLITE_TEXT ||
+      columnText(reservation.get(), 3) != replayFile.contentSha256 ||
+      sqlite3_column_type(reservation.get(), 4) != SQLITE_INTEGER ||
+      sqlite3_column_int64(reservation.get(), 4) !=
+          static_cast<sqlite3_int64>(replayFile.compressedSize) ||
       sqlite3_step(reservation.get()) != SQLITE_DONE) {
     return {.status = StageStatus::IntegrityConflict,
             .diagnostic =
@@ -1951,7 +2100,8 @@ ReplayRepository::reserveReplayFile(std::string_view attemptId,
             .diagnostic = "replay storage is unavailable"};
   }
   return replay_repository_detail::ReserveReplayFileOnConnection(
-      impl_->sessionDatabase, attemptId, stem);
+      impl_->sessionDatabase, attemptId, stem,
+      GetResolvedDatabasePathLocked().parent_path());
 }
 
 ReplayFileReferenceLookupOutcome
@@ -1978,6 +2128,20 @@ ReplayFileRelocationOutcome ReplayRepository::relocateReplayFileReference(
   }
   return replay_repository_detail::RelocateReplayFileReferenceOnConnection(
       impl_->sessionDatabase, expected, destination);
+}
+
+bool ReplayRepository::markReplayFileReservationFinalized(
+    const ReplayFileReservation &reservation,
+    const replay::ReplayFileMetadata &metadata, std::string &diagnostic) {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    diagnostic = "replay storage is unavailable";
+    return false;
+  }
+  return replay_repository_detail::
+      MarkReplayFileReservationFinalizedOnConnection(
+          impl_->sessionDatabase, reservation, metadata, diagnostic);
 }
 
 bool ReplayRepository::discardReplayFileReservation(
@@ -2009,7 +2173,8 @@ bool ReplayRepository::discardUndurableReplay(std::string_view attemptId,
   SqliteStatementHandle query;
   if (prepareSqliteStatement(
           impl_->sessionDatabase,
-          "SELECT r.history_index,r.relative_path FROM "
+          "SELECT r.history_index,r.relative_path,r.finalized_content_sha256,"
+          "r.finalized_compressed_size FROM "
           "replay_file_reservations r WHERE r.attempt_id=? AND r.stem=? "
           "AND NOT EXISTS(SELECT 1 FROM chart_results c WHERE "
           "c.attempt_id=r.attempt_id) AND NOT EXISTS(SELECT 1 FROM "
@@ -2037,6 +2202,26 @@ bool ReplayRepository::discardUndurableReplay(std::string_view attemptId,
       .historyIndex = sqlite3_column_int64(query.get(), 0),
       .relativePath = std::filesystem::path(columnText(query.get(), 1)),
   };
+  const bool hashNull = sqlite3_column_type(query.get(), 2) == SQLITE_NULL;
+  const bool sizeNull = sqlite3_column_type(query.get(), 3) == SQLITE_NULL;
+  if (hashNull != sizeNull ||
+      (!hashNull &&
+       (sqlite3_column_type(query.get(), 2) != SQLITE_TEXT ||
+        sqlite3_column_type(query.get(), 3) != SQLITE_INTEGER ||
+        sqlite3_column_int64(query.get(), 3) <= 0))) {
+    diagnostic = "undurable replay ownership marker is malformed";
+    return false;
+  }
+  std::optional<replay::ReplayFileMetadata> ownedFinalFile;
+  if (!hashNull) {
+    ownedFinalFile = replay::ReplayFileMetadata{
+        .relativePath = reservation.relativePath,
+        .sha256 = columnText(query.get(), 2),
+        .compressedSize = static_cast<std::uint64_t>(
+            sqlite3_column_int64(query.get(), 3)),
+        .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+    };
+  }
   if (sqlite3_step(query.get()) != SQLITE_DONE) {
     diagnostic = "undurable replay reservation is ambiguous";
     return false;
@@ -2045,8 +2230,16 @@ bool ReplayRepository::discardUndurableReplay(std::string_view attemptId,
 
   replay::ReplayFileStore store(
       GetResolvedDatabasePathLocked().parent_path());
-  if (!store.remove({.relativePath = reservation.relativePath}, diagnostic)) {
-    return false;
+  if (ownedFinalFile) {
+    const auto inspection = store.inspect(*ownedFinalFile);
+    if (inspection.state == replay::ReplayFileState::IoFailure) {
+      diagnostic = inspection.diagnostic;
+      return false;
+    }
+    if (inspection.state == replay::ReplayFileState::Available &&
+        !store.removeIfMatches(*ownedFinalFile, diagnostic)) {
+      return false;
+    }
   }
   return replay_repository_detail::DiscardReplayFileReservationOnConnection(
       impl_->sessionDatabase, reservation, diagnostic);

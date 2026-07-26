@@ -672,6 +672,22 @@ bool ReplayFileStore::remove(const ReplayFileMetadata &metadata,
   return atomic_file::syncDirectory(path.parent_path(), diagnostic);
 }
 
+bool ReplayFileStore::removeIfMatches(const ReplayFileMetadata &metadata,
+                                      std::string &diagnostic) {
+  const auto inspection = inspect(metadata);
+  if (inspection.state == ReplayFileState::Missing) {
+    diagnostic.clear();
+    return true;
+  }
+  if (inspection.state != ReplayFileState::Available) {
+    diagnostic = inspection.diagnostic.empty()
+                     ? "Replay file no longer matches its ownership marker"
+                     : inspection.diagnostic;
+    return false;
+  }
+  return remove(metadata, diagnostic);
+}
+
 bool ReplayFileStore::copyToBeatorajaSlot(const ReplayFileMetadata &source,
                                           std::string_view stem, int slot,
                                           std::string &diagnostic) {

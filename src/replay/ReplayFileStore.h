@@ -71,6 +71,8 @@ public:
        const BeatorajaReplayCodec &codec) const;
 
   bool remove(const ReplayFileMetadata &metadata, std::string &diagnostic);
+  bool removeIfMatches(const ReplayFileMetadata &metadata,
+                       std::string &diagnostic);
 
   bool copyToBeatorajaSlot(const ReplayFileMetadata &source,
                            std::string_view stem, int slot,

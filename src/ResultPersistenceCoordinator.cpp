@@ -315,6 +315,13 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
                 return store.finalize(identity, encoded, codec, expected,
                                       attemptToken);
               },
+          .recordFinalizedReplay =
+              [&replay](const ReplayFileReservation &reservation,
+                        const replay::ReplayFileMetadata &metadata,
+                        std::string &diagnostic) {
+                return replay.markReplayFileReservationFinalized(
+                    reservation, metadata, diagnostic);
+              },
           .stage =
               [&replay](const PersistedChartResult &result,
                         const ir::IrSubmissionSnapshot &snapshot,
@@ -383,6 +390,13 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay,
                 return fileStore.finalize(identity, encoded, codec, expected,
                                           attemptToken);
               },
+          .recordFinalizedReplay =
+              [&replay](const ReplayFileReservation &reservation,
+                        const replay::ReplayFileMetadata &metadata,
+                        std::string &diagnostic) {
+                return replay.markReplayFileReservationFinalized(
+                    reservation, metadata, diagnostic);
+              },
           .stage =
               [&replay](const PersistedChartResult &result,
                         const ir::IrSubmissionSnapshot &snapshot,
@@ -439,7 +453,8 @@ SaveOutcome Coordinator::persist(
     return unstagedOutcome(SaveState::InvalidAttempt, std::move(diagnostic));
   }
   if (!dependencies_.reserve || !dependencies_.encodeReplay ||
-      !dependencies_.finalizeReplay || !dependencies_.stage ||
+      !dependencies_.finalizeReplay || !dependencies_.recordFinalizedReplay ||
+      !dependencies_.stage ||
       !dependencies_.loadPending || !dependencies_.project ||
       !dependencies_.acknowledgeAndActivate) {
     return unstagedOutcome(SaveState::UnstagedConflict,
@@ -495,6 +510,13 @@ SaveOutcome Coordinator::persist(
   if (finalized.metadata->relativePath != identity.relativePath) {
     return unstagedOutcome(SaveState::UnstagedConflict,
                            "finalized replay path differs from reservation");
+  }
+  if (!dependencies_.recordFinalizedReplay(*reserved.reservation,
+                                           *finalized.metadata, diagnostic)) {
+    return unstagedOutcome(
+        SaveState::UnfinalizedReplay,
+        phaseDiagnostic("replay ownership finalization", diagnostic,
+                        "ownership metadata could not be stored"));
   }
   const ReplayFileReference replayFile{
       .stem = identity.stem,
@@ -696,7 +718,8 @@ SaveOutcome Coordinator::persistCourse(const CompletedCourseAttempt &attempt) {
     return unstagedOutcome(SaveState::InvalidAttempt, std::move(diagnostic));
   }
   if (!dependencies_.reserve || !dependencies_.encodeCourseReplay ||
-      !dependencies_.finalizeReplay || !dependencies_.stageCourse) {
+      !dependencies_.finalizeReplay || !dependencies_.recordFinalizedReplay ||
+      !dependencies_.stageCourse) {
     return unstagedOutcome(SaveState::UnstagedConflict,
                            "course persistence dependencies are incomplete");
   }
@@ -771,6 +794,13 @@ SaveOutcome Coordinator::persistCourse(const CompletedCourseAttempt &attempt) {
     return unstagedOutcome(
         SaveState::UnstagedConflict,
         "finalized course replay path differs from reservation");
+  }
+  if (!dependencies_.recordFinalizedReplay(*reserved.reservation,
+                                           *finalized.metadata, diagnostic)) {
+    return unstagedOutcome(
+        SaveState::UnfinalizedReplay,
+        phaseDiagnostic("course replay ownership finalization", diagnostic,
+                        "ownership metadata could not be stored"));
   }
   const ReplayFileReference replayFile{
       .recordKind = ReplayFileReference::RecordKind::CourseResult,

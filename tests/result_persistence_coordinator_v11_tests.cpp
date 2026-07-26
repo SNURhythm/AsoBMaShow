@@ -19,6 +19,12 @@ std::filesystem::path ReplayRepository::GetResolvedDatabasePath() const {
   return {};
 }
 
+bool ReplayRepository::markReplayFileReservationFinalized(
+    const ReplayFileReservation &, const replay::ReplayFileMetadata &,
+    std::string &) {
+  return false;
+}
+
 result_persistence::StageOutcome ReplayRepository::stageCompletedChartAttempt(
     const result_persistence::PersistedChartResult &,
     const ir::IrSubmissionSnapshot &, const ReplayFileReference &,
@@ -161,6 +167,7 @@ struct Harness {
   std::vector<std::string> events;
   ReservationOutcome reservation;
   bool encodeSucceeds = true;
+  bool ownershipRecords = true;
   replay::FinalizeOutcome finalized;
   StageOutcome staged;
   PendingReadOutcome loaded;
@@ -235,6 +242,16 @@ struct Harness {
           events.emplace_back("finalize");
           return finalized;
         },
+        .recordFinalizedReplay =
+            [this](const ReplayFileReservation &,
+                   const replay::ReplayFileMetadata &,
+                   std::string &diagnostic) {
+              events.emplace_back("own");
+              if (!ownershipRecords) {
+                diagnostic = "ownership write failed";
+              }
+              return ownershipRecords;
+            },
         .stage =
             [this](const PersistedChartResult &,
                    const ir::IrSubmissionSnapshot &,
@@ -280,8 +297,9 @@ void testFileFirstSuccessOrdering() {
          "saved receipt contains the compact result ID");
   expect(harness.events ==
              std::vector<std::string>({"reserve", "encode", "finalize",
-                                       "stage", "load", "project", "ack"}),
-         "replay is finalized before compact DB staging and score projection");
+                                       "own", "stage", "load", "project",
+                                       "ack"}),
+         "replay ownership is recorded before compact DB staging and score projection");
   expect(outcome.validatedReceiptFor(harness.attempt) != nullptr,
          "receipt validates against the completed attempt");
 }
@@ -341,8 +359,21 @@ void testPhaseFailuresStopAtTheirBoundary() {
     expect(outcome.state == SaveState::Unstaged && !outcome.durable(),
            "staging failure reports a durable file but no durable result");
     expect(harness.events == std::vector<std::string>(
-                                 {"reserve", "encode", "finalize", "stage"}),
+                                 {"reserve", "encode", "finalize", "own",
+                                  "stage"}),
            "staging failure stops projection");
+  }
+  {
+    Harness harness;
+    harness.ownershipRecords = false;
+    Coordinator coordinator(harness.dependencies());
+    const auto outcome = coordinator.persist(harness.attempt);
+    expect(outcome.state == SaveState::UnfinalizedReplay &&
+               outcome.retryable() && !outcome.durable(),
+           "ownership-marker failure keeps finalized replay retryable");
+    expect(harness.events == std::vector<std::string>(
+                                 {"reserve", "encode", "finalize", "own"}),
+           "ownership-marker failure stops before result staging");
   }
 }
 

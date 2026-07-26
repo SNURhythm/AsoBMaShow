@@ -90,7 +90,96 @@ bool namedTableColumnExists(sqlite3 *database, std::string_view table,
          sqlite3_step(statement.get()) == SQLITE_ROW;
 }
 
-bool validateCompactReplaySchema11(sqlite3 *database) {
+bool createCompactReplaySchema11(sqlite3 *database);
+
+struct ColumnShape {
+  std::string name;
+  std::string type;
+  bool notNull = false;
+  int primaryKeyOrder = 0;
+
+  bool operator==(const ColumnShape &) const = default;
+};
+
+std::optional<std::vector<ColumnShape>>
+tableColumnShapes(sqlite3 *database, std::string_view table) {
+  SqliteStatementHandle statement;
+  const std::string query =
+      "SELECT name,type,\"notnull\",pk FROM pragma_table_info('" +
+      std::string(table) + "') ORDER BY name";
+  if (prepareSqliteStatement(database, query.c_str(), statement) != SQLITE_OK) {
+    return std::nullopt;
+  }
+  std::vector<ColumnShape> result;
+  int step = SQLITE_OK;
+  while ((step = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_TEXT ||
+        sqlite3_column_type(statement.get(), 1) != SQLITE_TEXT ||
+        sqlite3_column_type(statement.get(), 2) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 3) != SQLITE_INTEGER) {
+      return std::nullopt;
+    }
+    result.push_back({.name = sqliteColumnString(statement.get(), 0),
+                      .type = sqliteColumnString(statement.get(), 1),
+                      .notNull = sqlite3_column_int(statement.get(), 2) != 0,
+                      .primaryKeyOrder =
+                          sqlite3_column_int(statement.get(), 3)});
+  }
+  return step == SQLITE_DONE
+             ? std::optional<std::vector<ColumnShape>>(std::move(result))
+             : std::nullopt;
+}
+
+bool validateCompactReplayColumnShapes(sqlite3 *database, int version) {
+  sqlite3 *templateDatabase = nullptr;
+  if (sqlite3_open(":memory:", &templateDatabase) != SQLITE_OK ||
+      templateDatabase == nullptr) {
+    if (templateDatabase != nullptr) {
+      sqlite3_close(templateDatabase);
+    }
+    return false;
+  }
+  const bool templateCreated = createCompactReplaySchema11(templateDatabase);
+  constexpr std::array<std::string_view, 11> tables{
+      "chart_results",
+      "course_results",
+      "course_result_stages",
+      "replay_files",
+      "replay_file_reservations",
+      "replay_stem_sequences",
+      "ir_submission_snapshots",
+      "pending_chart_score_writes",
+      "ir_outbox",
+      "ir_submission_receipts",
+      "ir_remote_scores",
+  };
+  bool valid = templateCreated;
+  for (std::string_view table : tables) {
+    auto actual = tableColumnShapes(database, table);
+    auto expected = tableColumnShapes(templateDatabase, table);
+    if (!actual || !expected) {
+      valid = false;
+      break;
+    }
+    std::erase_if(*expected, [&](const ColumnShape &column) {
+      return (version < 12 && column.name == "adopted_gauge_type") ||
+             (version < 13 &&
+              (column.name == "finalized_content_sha256" ||
+               column.name == "finalized_compressed_size"));
+    });
+    if (*actual != *expected) {
+      valid = false;
+      break;
+    }
+  }
+  sqlite3_close(templateDatabase);
+  if (!valid) {
+    SDL_Log("Refusing replay database with incompatible table columns");
+  }
+  return valid;
+}
+
+bool validateCompactReplaySchemaObjects(sqlite3 *database) {
   constexpr std::array<std::string_view, 11> requiredTables{
       "chart_results",
       "course_results",
@@ -144,12 +233,27 @@ bool validateCompactReplaySchema11(sqlite3 *database) {
   return true;
 }
 
+bool validateCompactReplaySchema11(sqlite3 *database) {
+  return validateCompactReplaySchemaObjects(database) &&
+         validateCompactReplayColumnShapes(database, 11);
+}
+
 bool validateCompactReplaySchema12(sqlite3 *database) {
-  return validateCompactReplaySchema11(database) &&
+  return validateCompactReplaySchemaObjects(database) &&
+         validateCompactReplayColumnShapes(database, 12) &&
          namedTableColumnExists(database, "chart_results",
                                 "adopted_gauge_type") &&
          namedTableColumnExists(database, "course_result_stages",
                                 "adopted_gauge_type");
+}
+
+bool validateCompactReplaySchema13(sqlite3 *database) {
+  return validateCompactReplaySchemaObjects(database) &&
+         validateCompactReplayColumnShapes(database, 13) &&
+         namedTableColumnExists(database, "replay_file_reservations",
+                                "finalized_content_sha256") &&
+         namedTableColumnExists(database, "replay_file_reservations",
+                                "finalized_compressed_size");
 }
 
 bool backfillAdoptedGaugeTypes(sqlite3 *database, std::string_view table) {
@@ -226,6 +330,36 @@ bool migrateCompactReplaySchema11To12(sqlite3 *database) {
       !backfillAdoptedGaugeTypes(database, "chart_results") ||
       !backfillAdoptedGaugeTypes(database, "course_result_stages") ||
       !setDatabaseUserVersion(database, 12)) {
+    return false;
+  }
+  return transaction.commit(transactionError);
+}
+
+bool migrateCompactReplaySchema12To13(sqlite3 *database) {
+  if (!validateCompactReplaySchema12(database) ||
+      namedTableColumnExists(database, "replay_file_reservations",
+                             "finalized_content_sha256") ||
+      namedTableColumnExists(database, "replay_file_reservations",
+                             "finalized_compressed_size")) {
+    return false;
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active() ||
+      !execSql(database,
+               "ALTER TABLE replay_file_reservations ADD COLUMN "
+               "finalized_content_sha256 TEXT CHECK("
+               "finalized_content_sha256 IS NULL OR "
+               "length(finalized_content_sha256)=64)",
+               "adding finalized replay checksum") ||
+      !execSql(database,
+               "ALTER TABLE replay_file_reservations ADD COLUMN "
+               "finalized_compressed_size INTEGER CHECK("
+               "finalized_compressed_size IS NULL OR "
+               "finalized_compressed_size>0)",
+               "adding finalized replay size") ||
+      !setDatabaseUserVersion(database, 13)) {
     return false;
   }
   return transaction.commit(transactionError);
@@ -340,7 +474,12 @@ bool createCompactReplaySchema11(sqlite3 *database) {
       "CREATE TABLE replay_file_reservations("
       "attempt_id TEXT PRIMARY KEY,stem TEXT NOT NULL,"
       "history_index INTEGER NOT NULL,relative_path TEXT UNIQUE NOT NULL,"
-      "created_at_unix_ms INTEGER NOT NULL,CHECK(history_index>=0),"
+      "created_at_unix_ms INTEGER NOT NULL,finalized_content_sha256 TEXT,"
+      "finalized_compressed_size INTEGER,CHECK(history_index>=0),"
+      "CHECK((finalized_content_sha256 IS NULL AND "
+      "finalized_compressed_size IS NULL) OR "
+      "(length(finalized_content_sha256)=64 AND "
+      "finalized_compressed_size>0)),"
       "UNIQUE(stem,history_index))",
       "CREATE TABLE replay_stem_sequences("
       "stem TEXT PRIMARY KEY,last_history_index INTEGER NOT NULL,"
@@ -436,11 +575,16 @@ bool migrateReplayDatabaseSchema(
     return false;
   }
   if (*version == kReplayDatabaseSchemaVersion) {
-    return validateCompactReplaySchema12(database);
+    return validateCompactReplaySchema13(database);
+  }
+  if (*version == 12) {
+    return migrateCompactReplaySchema12To13(database) &&
+           validateCompactReplaySchema13(database);
   }
   if (*version == 11) {
     return migrateCompactReplaySchema11To12(database) &&
-           validateCompactReplaySchema12(database);
+           migrateCompactReplaySchema12To13(database) &&
+           validateCompactReplaySchema13(database);
   }
   if (*version != 10) {
     SDL_Log("Replay database schema %d is not supported", *version);
@@ -478,7 +622,17 @@ bool migrateReplayDatabaseSchema(
       !migrateCompactReplaySchema11To12(database)) {
     return false;
   }
-  return validateCompactReplaySchema12(database);
+  std::string compactVersionError;
+  const auto compactVersion =
+      readSqliteUserVersion(database, compactVersionError);
+  if (!compactVersion.has_value()) {
+    return false;
+  }
+  if (*compactVersion == 12 &&
+      !migrateCompactReplaySchema12To13(database)) {
+    return false;
+  }
+  return validateCompactReplaySchema13(database);
 }
 
 std::filesystem::path resolvedReplayDatabasePath(
