@@ -1100,6 +1100,72 @@ void testRealtimePhysicalInputPreservesScratchDirection() {
           "native realtime scratch press and release retain direction");
 }
 
+void testRealtimePhysicalInputPublishesOrderedScratchReversal() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-scratch-cw",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::ScratchClockwise},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}});
+  profile.bindings.push_back(
+      {.id = "native-scratch-ccw",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind =
+                      input::LogicalActionKind::ScratchCounterClockwise},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_B}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &value) {
+        output.push_back(value);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 1.0,
+       .normalizedValue = 1.0F},
+      200);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_B},
+       .rawValue = 1.0,
+       .normalizedValue = 1.0F},
+      300);
+
+  require(
+      output.size() == 3 &&
+          output[0].type ==
+              input::RealtimePhysicalInputTransitionType::Press &&
+          output[0].replayControl ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          output[1].type ==
+              input::RealtimePhysicalInputTransitionType::Release &&
+          output[1].lane == 7 && output[1].backSpin &&
+          output[1].replayControl ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          output[1].steadyTimestampMicros == 300 &&
+          output[2].type ==
+              input::RealtimePhysicalInputTransitionType::Press &&
+          output[2].lane == 7 && !output[2].backSpin &&
+          output[2].replayControl ==
+              replay::LogicalControlKind::ScratchCounterClockwise &&
+          output[2].steadyTimestampMicros == 300,
+      "native realtime scratch reversal publishes release before the new "
+      "direction press");
+}
+
 void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
   const audio::PlaybackRate assistedRate{75};
   require(clear_policy::assistClearRequired(assistedRate),
@@ -1168,6 +1234,7 @@ int main() {
   testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();
   testRealtimePhysicalInputPreservesScratchDirection();
+  testRealtimePhysicalInputPublishesOrderedScratchReversal();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;
 }

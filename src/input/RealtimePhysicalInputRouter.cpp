@@ -74,16 +74,17 @@ bms_parser::Note *RealtimePhysicalInputRouter::releaseLane(
 
 void RealtimePhysicalInputRouter::prepare(
     RealtimePhysicalInputTransitionType type, int lane, bool backSpin) {
-  pendingTransition_ = {.type = type, .lane = lane, .backSpin = backSpin};
+  pendingTransitions_.push_back(
+      {.type = type, .lane = lane, .backSpin = backSpin});
 }
 
 void RealtimePhysicalInputRouter::emitApplied(
     const LogicalGameplayInputAdapter::AppliedTransition &applied) {
-  if (!pendingTransition_.has_value()) {
+  if (pendingTransitions_.empty()) {
     return;
   }
-  auto pending = *pendingTransition_;
-  pendingTransition_.reset();
+  auto pending = std::move(pendingTransitions_.front());
+  pendingTransitions_.pop_front();
   pending.replayControl = applied.control.kind;
   (void)emit(pending.type, pending.lane, pending.backSpin,
              pending.replayControl);

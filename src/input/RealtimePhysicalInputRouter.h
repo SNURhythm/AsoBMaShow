@@ -4,9 +4,9 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
-#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -65,7 +65,7 @@ private:
   std::array<bool, kTrackedLaneCapacity> publishedLanePressed_{};
   std::array<replay::LogicalControlKind, kTrackedLaneCapacity>
       desiredReplayControls_{};
-  std::optional<RealtimePhysicalInputTransition> pendingTransition_;
+  std::deque<RealtimePhysicalInputTransition> pendingTransitions_;
   LogicalGameplayInputPipeline pipeline_;
 };
 
