@@ -77,6 +77,17 @@ int main() {
   raw->setup.candidateSelection = gameplay::CandidateSelectionMode::Score;
   raw->setup.judgeWindowScalePercent = 90;
   raw->setup.startingGaugePercent = 42.0F;
+  GaugeStateSnapshot rawStartingGauge{
+      .gaugeType = GaugeType::Hard,
+      .selectedGaugeType = GaugeType::ExHard,
+      .gaugeAutoShiftLowerBound = GaugeType::Easy,
+      .gaugeProfile = GaugeProfile::Standard,
+      .gaugeAutoShift = GaugeAutoShiftMode::BestClear,
+      .currentGauge = 100.0F,
+  };
+  rawStartingGauge.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 20.0F;
+  rawStartingGauge.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] = 100.0F;
+  raw->setup.startingGaugeState = rawStartingGauge;
   raw->setup.clubMode = true;
   StartOptions rawOptions;
   applyReplayPlaybackToStartOptions(rawOptions, raw);
@@ -99,6 +110,12 @@ int main() {
                   rawOptions.startingGaugePercent == 42 &&
                   rawOptions.clubMode,
               "raw playback restores timing and audio setup") ||
+      !expect(rawOptions.startingGaugeState.has_value() &&
+                  rawOptions.startingGaugeState->gaugeType == GaugeType::Hard &&
+                  rawOptions.startingGaugeState
+                          ->gaugeValues[gaugeTypeIndex(GaugeType::Normal)] ==
+                      20.0F,
+              "raw playback carries independent starting gauge state") ||
       !expect(rawOptions.ruleset == GameplayRuleset::Beatoraja &&
                   rawOptions.requiredRulesetDescriptor ==
                       RulesetDescriptor::For(GameplayRuleset::Beatoraja),

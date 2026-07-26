@@ -581,6 +581,42 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
           static_cast<int>(gameplay::CandidateSelectionMode::Score)) {
     return fail(diagnostic, "Replay gauge setup is invalid");
   }
+  if (setup.startingGaugeState.has_value()) {
+    const auto &state = *setup.startingGaugeState;
+    const int gaugeType = gaugeTypeIndex(state.gaugeType);
+    const int selectedGaugeType = gaugeTypeIndex(state.selectedGaugeType);
+    const int lowerBound = gaugeTypeIndex(state.gaugeAutoShiftLowerBound);
+    const int stateProfile = static_cast<int>(state.gaugeProfile);
+    const int stateAutoShift = static_cast<int>(state.gaugeAutoShift);
+    if (gaugeType < 0 || gaugeType >= static_cast<int>(kGaugeTypeCount) ||
+        selectedGaugeType < 0 ||
+        selectedGaugeType >= static_cast<int>(kGaugeTypeCount) ||
+        lowerBound < 0 || lowerBound >= static_cast<int>(kGaugeTypeCount) ||
+        stateProfile < static_cast<int>(GaugeProfile::Standard) ||
+        stateProfile > static_cast<int>(GaugeProfile::Standard24Keys) ||
+        stateAutoShift < static_cast<int>(GaugeAutoShiftMode::None) ||
+        stateAutoShift > static_cast<int>(GaugeAutoShiftMode::BestClear) ||
+        state.selectedGaugeType != setup.initialGaugeType ||
+        state.gaugeProfile != setup.gaugeProfile ||
+        state.gaugeAutoShift != setup.gaugeAutoShift ||
+        state.gaugeAutoShiftLowerBound != setup.gaugeAutoShiftLowerBound ||
+        !std::isfinite(state.currentGauge) ||
+        std::ranges::any_of(state.gaugeValues,
+                            [](float value) { return !std::isfinite(value); })) {
+      return fail(diagnostic, "Replay starting gauge state is invalid");
+    }
+    for (int index = 0; index < static_cast<int>(kGaugeTypeCount); ++index) {
+      const float value = state.gaugeValues[static_cast<std::size_t>(index)];
+      if (value < 0.0F ||
+          value > gaugeMaximumValue(gaugeTypeAtIndex(index), state.gaugeProfile)) {
+        return fail(diagnostic, "Replay starting gauge value is out of range");
+      }
+    }
+    if (state.currentGauge != state.gaugeValues[static_cast<std::size_t>(
+                                  gaugeTypeIndex(state.gaugeType))]) {
+      return fail(diagnostic, "Replay active starting gauge is inconsistent");
+    }
+  }
   return true;
 }
 
@@ -589,6 +625,21 @@ template <typename T> Json optionalJson(const std::optional<T> &value) {
 }
 
 Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
+  Json startingGaugeState = nullptr;
+  if (setup.startingGaugeState.has_value()) {
+    const auto &state = *setup.startingGaugeState;
+    startingGaugeState = {
+        {"gaugeType", gaugeTypeIndex(state.gaugeType)},
+        {"selectedGaugeType", gaugeTypeIndex(state.selectedGaugeType)},
+        {"gaugeAutoShiftLowerBound",
+         gaugeTypeIndex(state.gaugeAutoShiftLowerBound)},
+        {"gaugeProfile", static_cast<int>(state.gaugeProfile)},
+        {"gaugeAutoShift", static_cast<int>(state.gaugeAutoShift)},
+        {"currentGauge", state.currentGauge},
+        {"gaugeValues", state.gaugeValues},
+        {"gaugeSurvivalFailed", state.gaugeSurvivalFailed},
+    };
+  }
   return Json{
       {"chartMd5", setup.chartMd5},
       {"keyMode", setup.keyMode},
@@ -611,6 +662,7 @@ Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
       {"candidateSelection", static_cast<int>(setup.candidateSelection)},
       {"judgeWindowScalePercent", setup.judgeWindowScalePercent},
       {"startingGaugePercent", setup.startingGaugePercent},
+      {"startingGaugeState", std::move(startingGaugeState)},
       {"clubMode", setup.clubMode},
   };
 }
@@ -873,6 +925,54 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
                     diagnostic) ||
       !readRequired(source, "clubMode", setup.clubMode, diagnostic)) {
     return false;
+  }
+  const auto startingState = source.find("startingGaugeState");
+  if (startingState != source.end() && !startingState->is_null()) {
+    if (!startingState->is_object()) {
+      return fail(diagnostic, "Replay starting gauge state is not an object");
+    }
+    int gaugeType = 0;
+    int selectedGaugeType = 0;
+    int stateLowerBound = 0;
+    int stateProfile = 0;
+    int stateAutoShift = 0;
+    GaugeStateSnapshot state;
+    if (!readRequired(*startingState, "gaugeType", gaugeType, diagnostic) ||
+        !readRequired(*startingState, "selectedGaugeType", selectedGaugeType,
+                      diagnostic) ||
+        !readRequired(*startingState, "gaugeAutoShiftLowerBound",
+                      stateLowerBound, diagnostic) ||
+        !readRequired(*startingState, "gaugeProfile", stateProfile,
+                      diagnostic) ||
+        !readRequired(*startingState, "gaugeAutoShift", stateAutoShift,
+                      diagnostic) ||
+        !readRequired(*startingState, "currentGauge", state.currentGauge,
+                      diagnostic) ||
+        !readRequired(*startingState, "gaugeValues", state.gaugeValues,
+                      diagnostic) ||
+        !readRequired(*startingState, "gaugeSurvivalFailed",
+                      state.gaugeSurvivalFailed, diagnostic)) {
+      return false;
+    }
+    if (gaugeType < 0 || gaugeType >= static_cast<int>(kGaugeTypeCount) ||
+        selectedGaugeType < 0 ||
+        selectedGaugeType >= static_cast<int>(kGaugeTypeCount) ||
+        stateLowerBound < 0 ||
+        stateLowerBound >= static_cast<int>(kGaugeTypeCount) ||
+        stateProfile < static_cast<int>(GaugeProfile::Standard) ||
+        stateProfile > static_cast<int>(GaugeProfile::Standard24Keys) ||
+        stateAutoShift < static_cast<int>(GaugeAutoShiftMode::None) ||
+        stateAutoShift > static_cast<int>(GaugeAutoShiftMode::BestClear)) {
+      return fail(diagnostic, "Replay starting gauge enum is out of range");
+    }
+    state.gaugeType = gaugeTypeAtIndex(gaugeType);
+    state.selectedGaugeType = gaugeTypeAtIndex(selectedGaugeType);
+    state.gaugeAutoShiftLowerBound = gaugeTypeAtIndex(stateLowerBound);
+    state.gaugeProfile = static_cast<GaugeProfile>(stateProfile);
+    state.gaugeAutoShift = static_cast<GaugeAutoShiftMode>(stateAutoShift);
+    setup.startingGaugeState = state;
+  } else {
+    setup.startingGaugeState.reset();
   }
   if (profile < static_cast<int>(GaugeProfile::Standard) ||
       profile > static_cast<int>(GaugeProfile::Standard24Keys) ||

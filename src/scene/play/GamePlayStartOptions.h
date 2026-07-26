@@ -95,6 +95,7 @@ struct StartOptions {
   bool clubMode = false;
   int judgeWindowScalePercent = 100;
   std::optional<int> startingGaugePercent;
+  std::optional<GaugeStateSnapshot> startingGaugeState;
   Scene *returnScene = nullptr;
   std::optional<bool> touchVisualizationEnabled;
   std::optional<bool> replayGhostRenderingEnabled;
@@ -249,6 +250,7 @@ inline void applyReplayPlaybackToStartOptions(
   options.judgeWindowScalePercent = setup.judgeWindowScalePercent;
   options.startingGaugePercent =
       static_cast<int>(std::lround(setup.startingGaugePercent));
+  options.startingGaugeState = setup.startingGaugeState;
   if (const auto ruleset =
           gameplayRulesetFromId(setup.playbackRulesetId)) {
     options.ruleset = *ruleset;

@@ -4,6 +4,7 @@
 #include "../audio/PlaybackRate.h"
 #include "../scene/play/GameplayJudgeRules.h"
 #include "../scene/play/GameplayGaugeTypes.h"
+#include "../scene/play/GameplayScoreState.h"
 #include "../scene/play/Judgement.h"
 
 #include <cstdint>
@@ -65,6 +66,7 @@ struct ChartPlaybackSetup {
       gameplay::CandidateSelectionMode::Lowest;
   int judgeWindowScalePercent = 100;
   float startingGaugePercent = 20.0F;
+  std::optional<GaugeStateSnapshot> startingGaugeState;
   bool clubMode = false;
   int initialLaneCoverPercent = 0;
   bool laneCoverEnabled = false;

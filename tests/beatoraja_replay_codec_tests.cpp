@@ -117,6 +117,19 @@ replay::ReplayPlaybackData extensionReplay() {
   value.setup.candidateSelection = gameplay::CandidateSelectionMode::Score;
   value.setup.judgeWindowScalePercent = 90;
   value.setup.startingGaugePercent = 42.5F;
+  GaugeStateSnapshot startingGauge{
+      .gaugeType = GaugeType::Hard,
+      .selectedGaugeType = GaugeType::ExHard,
+      .gaugeAutoShiftLowerBound = GaugeType::Easy,
+      .gaugeProfile = GaugeProfile::Standard,
+      .gaugeAutoShift = GaugeAutoShiftMode::BestClear,
+      .currentGauge = 100.0F,
+  };
+  startingGauge.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 20.0F;
+  startingGauge.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] = 100.0F;
+  startingGauge.gaugeValues[gaugeTypeIndex(GaugeType::ExHard)] = 100.0F;
+  startingGauge.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::ExHard)] = true;
+  value.setup.startingGaugeState = startingGauge;
   value.setup.clubMode = true;
   value.setup.initialLaneCoverPercent = 37;
   value.setup.laneCoverEnabled = true;
@@ -425,6 +438,16 @@ void testAsoExtensionRoundTripsWithoutBreakingStock() {
     expectEqual(
         *decoded.chart, source,
         "Aso playback setup, raw input, touch, and timed cover round-trip");
+    const auto &starting = decoded.chart->setup.startingGaugeState;
+    expect(starting.has_value() && starting->gaugeType == GaugeType::Hard &&
+               starting->currentGauge == 100.0F &&
+               starting->gaugeValues[gaugeTypeIndex(GaugeType::Normal)] ==
+                   20.0F &&
+               starting->gaugeValues[gaugeTypeIndex(GaugeType::Hard)] ==
+                   100.0F &&
+               starting->gaugeSurvivalFailed[gaugeTypeIndex(
+                   GaugeType::ExHard)],
+           "Aso extension preserves independent starting gauge state");
   }
 
   replay::CourseReplayPlaybackData course;

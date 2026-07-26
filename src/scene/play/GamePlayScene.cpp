@@ -1996,7 +1996,9 @@ bool GamePlayScene::reset() {
                                         : options.gaugeAutoShift));
   state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile,
                         options.gaugeAutoShiftLowerBound);
-  if (options.startingGaugePercent.has_value()) {
+  if (options.startingGaugeState.has_value()) {
+    state->restoreGaugeState(*options.startingGaugeState);
+  } else if (options.startingGaugePercent.has_value()) {
     state->setStartingGaugePercent(*options.startingGaugePercent);
   }
   if (options.courseSession != nullptr &&
@@ -2790,6 +2792,9 @@ void GamePlayScene::beginReplayRecording() {
       state != nullptr ? state->currentGauge
                        : static_cast<float>(options.startingGaugePercent
                                                 .value_or(20));
+  if (state != nullptr) {
+    setup.startingGaugeState = state->gaugeSnapshot();
+  }
   setup.clubMode = options.clubMode;
   setup.initialLaneCoverPercent = effectiveNoteStartPositionPercent();
   setup.laneCoverEnabled = setup.initialLaneCoverPercent > 0;
