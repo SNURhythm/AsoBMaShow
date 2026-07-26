@@ -144,6 +144,34 @@ struct ReservationOutcome {
   std::string diagnostic;
 };
 
+struct ReplayFileReferenceLookupOutcome {
+  enum class Status {
+    Loaded,
+    NotFound,
+    Invalid,
+    StorageFailure,
+    IntegrityConflict,
+  };
+
+  Status status = Status::StorageFailure;
+  std::optional<ReplayFileReference> reference;
+  std::string diagnostic;
+};
+
+struct ReplayFileRelocationOutcome {
+  enum class Status {
+    Relocated,
+    NotFound,
+    Invalid,
+    StorageFailure,
+    IntegrityConflict,
+  };
+
+  Status status = Status::StorageFailure;
+  std::optional<ReplayFileReference> reference;
+  std::string diagnostic;
+};
+
 struct ResultRecord {
   result_persistence::PersistedChartResult result;
   std::optional<ReplayFileReference> replayFile;
@@ -385,6 +413,13 @@ public:
   bool EnsureSchema();
   ReservationOutcome reserveReplayFile(std::string_view attemptId,
                                        std::string_view stem);
+  ReplayFileReferenceLookupOutcome
+  loadReplayFileReference(std::string_view stem, std::int64_t historyIndex);
+  ReplayFileRelocationOutcome
+  relocateReplayFileReference(const ReplayFileReference &expected,
+                              const ReplayFileReservation &destination);
+  bool discardReplayFileReservation(const ReplayFileReservation &reservation,
+                                    std::string &diagnostic);
   result_persistence::StageOutcome stageCompletedChartAttempt(
       const result_persistence::PersistedChartResult &result,
       const ir::IrSubmissionSnapshot &irSnapshot,

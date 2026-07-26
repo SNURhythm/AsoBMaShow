@@ -416,13 +416,13 @@ FinalizeOutcome validateFinal(const std::filesystem::path &finalPath,
   return outcome;
 }
 
-FinalizeOutcome syncAndValidateExistingFinal(
-    const std::filesystem::path &finalPath,
-    const std::filesystem::path &relativePath,
-    std::span<const std::byte> expectedBytes,
-    const BeatorajaReplayCodec &codec,
-    const ExpectedReplayIdentity &expected,
-    const ReplayFileStoreFaults &faults) {
+FinalizeOutcome
+syncAndValidateExistingFinal(const std::filesystem::path &finalPath,
+                             const std::filesystem::path &relativePath,
+                             std::span<const std::byte> expectedBytes,
+                             const BeatorajaReplayCodec &codec,
+                             const ExpectedReplayIdentity &expected,
+                             const ReplayFileStoreFaults &faults) {
   FinalizeOutcome outcome;
   if (failAt(faults, "directory-sync")) {
     outcome.diagnostic = "Injected replay directory-sync failure";
@@ -721,6 +721,90 @@ bool ReplayFileStore::copyToBeatorajaSlot(const ReplayFileMetadata &source,
     return false;
   }
   return atomic_file::syncDirectory(destination.parent_path(), diagnostic);
+}
+
+bool ReplayFileStore::copyToReservedReplayPath(
+    const ReplayFileMetadata &source, const ReplayPathIdentity &destination,
+    std::string &diagnostic) {
+  diagnostic.clear();
+  std::string pathDiagnostic;
+  const auto expected =
+      pathForStem(destination.stem, destination.historyIndex, pathDiagnostic);
+  if (!expected.has_value() || *expected != destination) {
+    diagnostic = pathDiagnostic.empty()
+                     ? "Reserved replay destination is inconsistent"
+                     : std::move(pathDiagnostic);
+    return false;
+  }
+  const auto sourceInspection = inspect(source);
+  if (sourceInspection.state != ReplayFileState::Available) {
+    diagnostic = sourceInspection.diagnostic;
+    return false;
+  }
+  std::filesystem::path sourcePath;
+  std::filesystem::path destinationPath;
+  if (!resolveContained(profileRoot_, source.relativePath, sourcePath,
+                        diagnostic) ||
+      !resolveContained(profileRoot_, destination.relativePath, destinationPath,
+                        diagnostic)) {
+    return false;
+  }
+  if (sourcePath == destinationPath) {
+    diagnostic = "Reserved replay destination matches its source";
+    return false;
+  }
+  const auto sourceRead = readRegularNoLinks(sourcePath, source.compressedSize);
+  if (sourceRead.state != ReadState::Success ||
+      sourceRead.bytes.size() != source.compressedSize ||
+      bytesHash(sourceRead.bytes) != source.sha256) {
+    diagnostic = "Replay source changed before relocation copy";
+    return false;
+  }
+
+  bool destinationMissing = false;
+  if (!privateRegularPath(destinationPath, destinationMissing, diagnostic)) {
+    return false;
+  }
+  if (!destinationMissing) {
+    const auto existing =
+        readRegularNoLinks(destinationPath, source.compressedSize);
+    if (existing.state == ReadState::Success &&
+        existing.bytes == sourceRead.bytes) {
+      return atomic_file::syncDirectory(destinationPath.parent_path(),
+                                        diagnostic);
+    }
+    diagnostic = "Reserved replay destination already contains other bytes";
+    return false;
+  }
+
+  const auto temporary = temporaryPathFor(destinationPath, "relocation_copy");
+  removePrivateTemporary(temporary);
+  const auto privateOperations = atomic_file::privateFileOperations();
+  if (!atomic_file::writeWithoutBackup(temporary, sourceRead.bytes, diagnostic,
+                                       &privateOperations)) {
+    removePrivateTemporary(temporary);
+    return false;
+  }
+  const auto rename = atomic_file::renameNoReplaceDurably(
+      temporary, destinationPath, diagnostic);
+  if (rename == atomic_file::RenameNoReplaceResult::DestinationExists) {
+    removePrivateTemporary(temporary);
+    const auto existing =
+        readRegularNoLinks(destinationPath, source.compressedSize);
+    if (existing.state == ReadState::Success &&
+        existing.bytes == sourceRead.bytes) {
+      diagnostic.clear();
+      return atomic_file::syncDirectory(destinationPath.parent_path(),
+                                        diagnostic);
+    }
+    diagnostic = "Reserved replay destination collided with other bytes";
+    return false;
+  }
+  if (rename != atomic_file::RenameNoReplaceResult::Renamed) {
+    removePrivateTemporary(temporary);
+    return false;
+  }
+  return atomic_file::syncDirectory(destinationPath.parent_path(), diagnostic);
 }
 
 void ReplayFileStore::removeStaleTemporaryFiles(

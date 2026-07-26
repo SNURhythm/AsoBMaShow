@@ -40,14 +40,22 @@ bool MigrateSchema(sqlite3 *database,
 ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
                                                  std::string_view attemptId,
                                                  std::string_view stem);
+ReplayFileReferenceLookupOutcome
+LoadReplayFileReferenceOnConnection(sqlite3 *database, std::string_view stem,
+                                    std::int64_t historyIndex);
+ReplayFileRelocationOutcome RelocateReplayFileReferenceOnConnection(
+    sqlite3 *database, const ReplayFileReference &expected,
+    const ReplayFileReservation &destination);
+bool DiscardReplayFileReservationOnConnection(
+    sqlite3 *database, const ReplayFileReservation &reservation,
+    std::string &diagnostic);
 result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
     sqlite3 *database, const result_persistence::PersistedChartResult &result,
     const ir::IrSubmissionSnapshot &irSnapshot,
     const ReplayFileReference &replayFile,
     std::span<const ir::IrOutboxDraft> irDrafts);
 result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
-    sqlite3 *database,
-    const result_persistence::PersistedCourseResult &result,
+    sqlite3 *database, const result_persistence::PersistedCourseResult &result,
     const ReplayFileReference &replayFile);
 ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId);
 CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
@@ -62,8 +70,7 @@ LoadIrSubmissionSnapshotOnConnection(sqlite3 *database,
                                      std::string_view attemptId);
 
 bool CreateReplayTablesOnConnection(
-    sqlite3 *database,
-    const std::filesystem::path &chartDatabasePath = {});
+    sqlite3 *database, const std::filesystem::path &chartDatabasePath = {});
 bool CreateCompactReplaySchema11OnConnection(sqlite3 *database);
 std::vector<ReplaySummary> ListReplaysOnConnection(
     sqlite3 *database, const bms_parser::ChartMeta &chartMeta, int limit,

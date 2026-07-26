@@ -174,6 +174,54 @@ bool validateReplayReference(const ReplayFileReference &reference,
   return true;
 }
 
+std::optional<ReplayFileReference>
+readReplayReferenceRow(sqlite3_stmt *statement, std::string &diagnostic) {
+  const bool chartReference =
+      sqlite3_column_type(statement, 1) == SQLITE_INTEGER;
+  const bool courseReference =
+      sqlite3_column_type(statement, 2) == SQLITE_INTEGER;
+  const std::int64_t recordId =
+      sqlite3_column_int64(statement, chartReference ? 1 : 2);
+  const std::int64_t compressedSize = sqlite3_column_int64(statement, 7);
+  if (sqlite3_column_type(statement, 0) != SQLITE_INTEGER ||
+      chartReference == courseReference ||
+      sqlite3_column_type(statement, chartReference ? 2 : 1) != SQLITE_NULL ||
+      sqlite3_column_type(statement, 3) != SQLITE_TEXT ||
+      sqlite3_column_type(statement, 4) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement, 5) != SQLITE_TEXT ||
+      sqlite3_column_type(statement, 6) != SQLITE_TEXT ||
+      sqlite3_column_type(statement, 7) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement, 8) != SQLITE_INTEGER ||
+      sqlite3_column_int64(statement, 0) <= 0 || recordId <= 0 ||
+      recordId > std::numeric_limits<int>::max() || compressedSize <= 0 ||
+      sqlite3_column_int64(statement, 8) !=
+          replay::BeatorajaReplayCodec::kCodecVersion) {
+    diagnostic = "replay file reference row is invalid";
+    return std::nullopt;
+  }
+  ReplayFileReference reference{
+      .id = sqlite3_column_int64(statement, 0),
+      .recordKind = chartReference
+                        ? ReplayFileReference::RecordKind::ChartResult
+                        : ReplayFileReference::RecordKind::CourseResult,
+      .recordId = static_cast<int>(recordId),
+      .stem = columnText(statement, 3),
+      .historyIndex = sqlite3_column_int64(statement, 4),
+      .relativePath = std::filesystem::path(columnText(statement, 5)),
+      .contentSha256 = columnText(statement, 6),
+      .compressedSize = static_cast<std::uint64_t>(compressedSize),
+      .codecVersion = sqlite3_column_int(statement, 8),
+  };
+  ReplayFileReference validation = reference;
+  validation.id = 0;
+  validation.recordId = 0;
+  if (!validateReplayReference(validation, reference.recordKind, diagnostic)) {
+    return std::nullopt;
+  }
+  diagnostic.clear();
+  return reference;
+}
+
 bool validateDrafts(const ir::IrSubmissionSnapshot &snapshot,
                     std::span<const ir::IrOutboxDraft> drafts,
                     std::string &diagnostic) {
@@ -347,6 +395,238 @@ ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
                                     .stem = std::string(stem),
                                     .historyIndex = historyIndex,
                                     .relativePath = identity->relativePath}};
+}
+
+ReplayFileReferenceLookupOutcome
+LoadReplayFileReferenceOnConnection(sqlite3 *database, std::string_view stem,
+                                    std::int64_t historyIndex) {
+  std::string pathDiagnostic;
+  const auto identity = replay::pathForStem(stem, historyIndex, pathDiagnostic);
+  if (database == nullptr || !identity.has_value()) {
+    return {.status = ReplayFileReferenceLookupOutcome::Status::Invalid,
+            .diagnostic = pathDiagnostic.empty()
+                              ? "replay file reference lookup is invalid"
+                              : std::move(pathDiagnostic)};
+  }
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT id,chart_result_id,course_result_id,stem,history_index,"
+          "relative_path,content_sha256,compressed_size,codec_version FROM "
+          "replay_files WHERE stem=? AND history_index=?",
+          statement) != SQLITE_OK ||
+      !bindText(statement.get(), 1, stem) ||
+      sqlite3_bind_int64(statement.get(), 2, historyIndex) != SQLITE_OK) {
+    return {.status = ReplayFileReferenceLookupOutcome::Status::StorageFailure,
+            .diagnostic = "could not query replay file reference"};
+  }
+  const int step = sqlite3_step(statement.get());
+  if (step == SQLITE_DONE) {
+    return {.status = ReplayFileReferenceLookupOutcome::Status::NotFound};
+  }
+  if (step != SQLITE_ROW) {
+    return {.status = ReplayFileReferenceLookupOutcome::Status::StorageFailure,
+            .diagnostic = "replay file reference query failed"};
+  }
+  std::string diagnostic;
+  auto reference = readReplayReferenceRow(statement.get(), diagnostic);
+  if (!reference.has_value() ||
+      reference->relativePath != identity->relativePath) {
+    return {.status =
+                ReplayFileReferenceLookupOutcome::Status::IntegrityConflict,
+            .diagnostic = diagnostic.empty()
+                              ? "replay file reference path is inconsistent"
+                              : std::move(diagnostic)};
+  }
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = ReplayFileReferenceLookupOutcome::Status::StorageFailure,
+            .diagnostic = "could not finish replay file reference query"};
+  }
+  return {.status = ReplayFileReferenceLookupOutcome::Status::Loaded,
+          .reference = std::move(reference)};
+}
+
+ReplayFileRelocationOutcome RelocateReplayFileReferenceOnConnection(
+    sqlite3 *database, const ReplayFileReference &expected,
+    const ReplayFileReservation &destination) {
+  ReplayFileReference validation = expected;
+  validation.id = 0;
+  validation.recordId = 0;
+  std::string diagnostic;
+  std::string pathDiagnostic;
+  const auto destinationIdentity = replay::pathForStem(
+      destination.stem, destination.historyIndex, pathDiagnostic);
+  if (database == nullptr || expected.id <= 0 || expected.recordId <= 0 ||
+      !uuid::isCanonicalLowerV4(destination.attemptId) ||
+      !validateReplayReference(validation, expected.recordKind, diagnostic) ||
+      !destinationIdentity.has_value() ||
+      destinationIdentity->relativePath != destination.relativePath ||
+      destination.stem != expected.stem) {
+    return {.status = ReplayFileRelocationOutcome::Status::Invalid,
+            .diagnostic = !diagnostic.empty() ? std::move(diagnostic)
+                          : !pathDiagnostic.empty()
+                              ? std::move(pathDiagnostic)
+                              : "replay file relocation is invalid"};
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    return {.status = ReplayFileRelocationOutcome::Status::StorageFailure,
+            .diagnostic = "could not start replay file relocation"};
+  }
+  auto current = LoadReplayFileReferenceOnConnection(database, expected.stem,
+                                                     expected.historyIndex);
+  if (current.status == ReplayFileReferenceLookupOutcome::Status::NotFound) {
+    return {.status = ReplayFileRelocationOutcome::Status::NotFound,
+            .diagnostic = "replay file reference no longer exists"};
+  }
+  if (current.status != ReplayFileReferenceLookupOutcome::Status::Loaded ||
+      !current.reference.has_value()) {
+    return {.status =
+                current.status ==
+                        ReplayFileReferenceLookupOutcome::Status::StorageFailure
+                    ? ReplayFileRelocationOutcome::Status::StorageFailure
+                    : ReplayFileRelocationOutcome::Status::IntegrityConflict,
+            .diagnostic = current.diagnostic.empty()
+                              ? "could not verify replay file reference"
+                              : std::move(current.diagnostic)};
+  }
+  if (*current.reference != expected) {
+    return {.status = ReplayFileRelocationOutcome::Status::IntegrityConflict,
+            .diagnostic = "replay file reference changed before relocation"};
+  }
+
+  SqliteStatementHandle reservation;
+  if (prepareSqliteStatement(database,
+                             "SELECT stem,history_index,relative_path FROM "
+                             "replay_file_reservations WHERE attempt_id=?",
+                             reservation) != SQLITE_OK ||
+      !bindText(reservation.get(), 1, destination.attemptId)) {
+    return {.status = ReplayFileRelocationOutcome::Status::StorageFailure,
+            .diagnostic = "could not verify replay relocation reservation"};
+  }
+  const int reservationStep = sqlite3_step(reservation.get());
+  if (reservationStep == SQLITE_DONE) {
+    return {.status = ReplayFileRelocationOutcome::Status::NotFound,
+            .diagnostic = "replay relocation reservation no longer exists"};
+  }
+  if (reservationStep != SQLITE_ROW ||
+      sqlite3_column_type(reservation.get(), 0) != SQLITE_TEXT ||
+      sqlite3_column_type(reservation.get(), 1) != SQLITE_INTEGER ||
+      sqlite3_column_type(reservation.get(), 2) != SQLITE_TEXT ||
+      columnText(reservation.get(), 0) != destination.stem ||
+      sqlite3_column_int64(reservation.get(), 1) != destination.historyIndex ||
+      std::filesystem::path(columnText(reservation.get(), 2)) !=
+          destination.relativePath ||
+      sqlite3_step(reservation.get()) != SQLITE_DONE) {
+    return {.status = ReplayFileRelocationOutcome::Status::IntegrityConflict,
+            .diagnostic = "replay relocation reservation changed"};
+  }
+
+  SqliteStatementHandle update;
+  if (prepareSqliteStatement(
+          database,
+          "UPDATE replay_files SET history_index=?,relative_path=? WHERE id=?",
+          update) != SQLITE_OK ||
+      sqlite3_bind_int64(update.get(), 1, destination.historyIndex) !=
+          SQLITE_OK ||
+      !bindText(update.get(), 2, pathText(destination.relativePath)) ||
+      sqlite3_bind_int64(update.get(), 3, expected.id) != SQLITE_OK) {
+    return {.status = ReplayFileRelocationOutcome::Status::StorageFailure,
+            .diagnostic = "could not prepare replay file relocation"};
+  }
+  const int updateStep = sqlite3_step(update.get());
+  if (updateStep != SQLITE_DONE || sqlite3_changes(database) != 1) {
+    return {.status =
+                updateStep == SQLITE_CONSTRAINT
+                    ? ReplayFileRelocationOutcome::Status::IntegrityConflict
+                    : ReplayFileRelocationOutcome::Status::StorageFailure,
+            .diagnostic = "could not relocate replay file reference"};
+  }
+
+  SqliteStatementHandle consume;
+  if (prepareSqliteStatement(
+          database, "DELETE FROM replay_file_reservations WHERE attempt_id=?",
+          consume) != SQLITE_OK ||
+      !bindText(consume.get(), 1, destination.attemptId) ||
+      sqlite3_step(consume.get()) != SQLITE_DONE ||
+      sqlite3_changes(database) != 1) {
+    return {.status = ReplayFileRelocationOutcome::Status::StorageFailure,
+            .diagnostic = "could not consume replay relocation reservation"};
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = ReplayFileRelocationOutcome::Status::StorageFailure,
+            .diagnostic = "could not commit replay file relocation"};
+  }
+  ReplayFileReference relocated = expected;
+  relocated.historyIndex = destination.historyIndex;
+  relocated.relativePath = destination.relativePath;
+  return {.status = ReplayFileRelocationOutcome::Status::Relocated,
+          .reference = std::move(relocated)};
+}
+
+bool DiscardReplayFileReservationOnConnection(
+    sqlite3 *database, const ReplayFileReservation &reservation,
+    std::string &diagnostic) {
+  std::string pathDiagnostic;
+  const auto identity = replay::pathForStem(
+      reservation.stem, reservation.historyIndex, pathDiagnostic);
+  if (database == nullptr || !uuid::isCanonicalLowerV4(reservation.attemptId) ||
+      !identity.has_value() ||
+      identity->relativePath != reservation.relativePath) {
+    diagnostic = pathDiagnostic.empty()
+                     ? "replay reservation cleanup is invalid"
+                     : std::move(pathDiagnostic);
+    return false;
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    diagnostic = "could not start replay reservation cleanup";
+    return false;
+  }
+  SqliteStatementHandle remove;
+  if (prepareSqliteStatement(
+          database,
+          "DELETE FROM replay_file_reservations WHERE attempt_id=? AND "
+          "stem=? AND history_index=? AND relative_path=?",
+          remove) != SQLITE_OK ||
+      !bindText(remove.get(), 1, reservation.attemptId) ||
+      !bindText(remove.get(), 2, reservation.stem) ||
+      sqlite3_bind_int64(remove.get(), 3, reservation.historyIndex) !=
+          SQLITE_OK ||
+      !bindText(remove.get(), 4, pathText(reservation.relativePath)) ||
+      sqlite3_step(remove.get()) != SQLITE_DONE) {
+    diagnostic = "could not discard replay reservation";
+    return false;
+  }
+  if (sqlite3_changes(database) == 0) {
+    SqliteStatementHandle existing;
+    if (prepareSqliteStatement(
+            database,
+            "SELECT 1 FROM replay_file_reservations WHERE attempt_id=?",
+            existing) != SQLITE_OK ||
+        !bindText(existing.get(), 1, reservation.attemptId)) {
+      diagnostic = "could not verify replay reservation cleanup";
+      return false;
+    }
+    const int existingStep = sqlite3_step(existing.get());
+    if (existingStep != SQLITE_DONE) {
+      diagnostic = existingStep == SQLITE_ROW
+                       ? "replay reservation changed before cleanup"
+                       : "could not verify replay reservation cleanup";
+      return false;
+    }
+  }
+  if (!transaction.commit(transactionError)) {
+    diagnostic = "could not commit replay reservation cleanup";
+    return false;
+  }
+  diagnostic.clear();
+  return true;
 }
 
 ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId) {
@@ -1649,6 +1929,44 @@ ReplayRepository::reserveReplayFile(std::string_view attemptId,
   }
   return replay_repository_detail::ReserveReplayFileOnConnection(
       impl_->sessionDatabase, attemptId, stem);
+}
+
+ReplayFileReferenceLookupOutcome
+ReplayRepository::loadReplayFileReference(std::string_view stem,
+                                          std::int64_t historyIndex) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ReplayFileReferenceLookupOutcome::Status::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  return replay_repository_detail::LoadReplayFileReferenceOnConnection(
+      impl_->sessionDatabase, stem, historyIndex);
+}
+
+ReplayFileRelocationOutcome ReplayRepository::relocateReplayFileReference(
+    const ReplayFileReference &expected,
+    const ReplayFileReservation &destination) {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ReplayFileRelocationOutcome::Status::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  return replay_repository_detail::RelocateReplayFileReferenceOnConnection(
+      impl_->sessionDatabase, expected, destination);
+}
+
+bool ReplayRepository::discardReplayFileReservation(
+    const ReplayFileReservation &reservation, std::string &diagnostic) {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    diagnostic = "replay storage is unavailable";
+    return false;
+  }
+  return replay_repository_detail::DiscardReplayFileReservationOnConnection(
+      impl_->sessionDatabase, reservation, diagnostic);
 }
 
 result_persistence::StageOutcome ReplayRepository::stageCompletedChartAttempt(

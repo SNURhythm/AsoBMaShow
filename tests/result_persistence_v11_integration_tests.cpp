@@ -42,10 +42,10 @@ public:
     static std::atomic<unsigned long long> sequence{0};
     const auto tick =
         std::chrono::steady_clock::now().time_since_epoch().count();
-    path_ = std::filesystem::temp_directory_path() /
-            ("asobmashow-result-v11-" + std::string(label) + "-" +
-             std::to_string(tick) + "-" +
-             std::to_string(sequence.fetch_add(1)));
+    path_ =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-result-v11-" + std::string(label) + "-" +
+         std::to_string(tick) + "-" + std::to_string(sequence.fetch_add(1)));
     std::filesystem::create_directories(path_);
   }
 
@@ -92,12 +92,17 @@ bool executeSql(const std::filesystem::path &databasePath,
     return false;
   }
   char *message = nullptr;
-  const bool success =
-      sqlite3_exec(database, std::string(query).c_str(), nullptr, nullptr,
-                   &message) == SQLITE_OK;
+  const bool success = sqlite3_exec(database, std::string(query).c_str(),
+                                    nullptr, nullptr, &message) == SQLITE_OK;
   sqlite3_free(message);
   sqlite3_close(database);
   return success;
+}
+
+std::vector<char> readBytes(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
 }
 
 std::map<std::string, std::int64_t>
@@ -170,8 +175,8 @@ CompletedChartAttempt validAttempt(std::string attemptId, int salt = 0) {
   provenance.judgeRankSource = JudgeRankSource::Chart;
   provenance.sourceJudgeRank = provenance.chartMeta.Rank;
   provenance.effectiveJudgeWindows = {
-      {Bad, {-330'000, 420'000}}, {PGreat, {-10'000, 10'000}},
-      {Great, {-30'000, 30'000}}, {Good, {-75'000, 75'000}},
+      {Bad, {-330'000, 420'000}},   {PGreat, {-10'000, 10'000}},
+      {Great, {-30'000, 30'000}},   {Good, {-75'000, 75'000}},
       {Kpoor, {-500'000, 150'000}},
   };
   provenance.totalNotes = provenance.chartMeta.TotalNotes;
@@ -236,10 +241,8 @@ CompletedChartAttempt validAttempt(std::string attemptId, int salt = 0) {
 }
 
 CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
-  const auto first = validAttempt(
-      "123e4567-e89b-42d3-a456-426614174010", 0);
-  const auto second = validAttempt(
-      "123e4567-e89b-42d3-a456-426614174011", 1);
+  const auto first = validAttempt("123e4567-e89b-42d3-a456-426614174010", 0);
+  const auto second = validAttempt("123e4567-e89b-42d3-a456-426614174011", 1);
   CompletedCourseAttempt attempt;
   attempt.replay.stages = {first.replay, second.replay};
   attempt.replay.restMicrosAfterStage = {750'000, 0};
@@ -285,8 +288,7 @@ CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
        .judgementTiming = second.result.judgementTiming},
   };
   result.finalScore = first.result.score.score + second.result.score.score;
-  result.maxScore =
-      first.result.score.maxScore + second.result.score.maxScore;
+  result.maxScore = first.result.score.maxScore + second.result.score.maxScore;
   result.resultFingerprint = resultFingerprint(result);
   return attempt;
 }
@@ -383,8 +385,8 @@ void testCompleteFileAndDatabasePipeline() {
     return;
   }
 
-  const auto loaded = environment.replayRepository.loadChartResult(
-      saved.receipt->resultId);
+  const auto loaded =
+      environment.replayRepository.loadChartResult(saved.receipt->resultId);
   expect(loaded.status == ResultReadOutcome::Status::Loaded && loaded.record &&
              loaded.record->replayFile,
          "compact result loads with one replay-file reference");
@@ -393,8 +395,8 @@ void testCompleteFileAndDatabasePipeline() {
   }
   const auto &reference = *loaded.record->replayFile;
   expect(reference.relativePath ==
-             std::filesystem::path("replay") /
-                 (attempt.result.score.chartSha256 + ".brd") &&
+                 std::filesystem::path("replay") /
+                     (attempt.result.score.chartSha256 + ".brd") &&
              std::filesystem::is_regular_file(temporary.path() /
                                               reference.relativePath),
          "first play uses Beatoraja's replay/<sha256>.brd layout");
@@ -450,7 +452,8 @@ void testCompleteFileAndDatabasePipeline() {
   const LocalResultRecordId recordId{.resultId = saved.receipt->resultId};
   const auto available = actions.inspect(recordId);
   expect(available.availability == ReplayAvailability::Available &&
-             available.sourcePath == temporary.path() / reference.relativePath &&
+             available.sourcePath ==
+                 temporary.path() / reference.relativePath &&
              available.suggestedFilename ==
                  reference.relativePath.filename().string(),
          "file actions expose the verified existing Beatoraja file");
@@ -487,8 +490,8 @@ void testCompleteFileAndDatabasePipeline() {
   expect(removed.availability == ReplayAvailability::Missing && removed.changed,
          "user can remove a corrupt but safely contained standalone replay "
          "file");
-  const auto afterDelete = environment.replayRepository.loadChartResult(
-      saved.receipt->resultId);
+  const auto afterDelete =
+      environment.replayRepository.loadChartResult(saved.receipt->resultId);
   const auto snapshotAfterDelete =
       environment.replayRepository.loadIrSubmissionSnapshot(
           *attempt.result.attemptId);
@@ -504,27 +507,119 @@ void testCompleteFileAndDatabasePipeline() {
          "snapshot");
 }
 
+void testOccupiedSlotReplacementRelocatesDisplacedReference() {
+  TemporaryDirectory temporary("occupied-slot-relocation");
+  Environment environment(temporary.path());
+  std::vector<int> resultIds;
+  std::vector<ReplayFileReference> references;
+  for (int index = 0; index < 5; ++index) {
+    auto attempt = validAttempt("123e4567-e89b-42d3-a456-42661417413" +
+                                std::to_string(index));
+    attempt.result.playedAtUnixMillis += index * 1000;
+    attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+    std::string snapshotDiagnostic;
+    const auto snapshot =
+        ir::captureIrSubmissionSnapshot(attempt.result, snapshotDiagnostic);
+    expect(snapshot.has_value(), "slot relocation snapshot captures");
+    if (!snapshot.has_value()) {
+      return;
+    }
+    attempt.irSnapshot = *snapshot;
+
+    const auto saved = environment.coordinator.persist(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "slot relocation replay persists");
+    if (!saved.receipt.has_value()) {
+      return;
+    }
+    const auto loaded =
+        environment.replayRepository.loadChartResult(saved.receipt->resultId);
+    expect(loaded.status == ResultReadOutcome::Status::Loaded &&
+               loaded.record.has_value() &&
+               loaded.record->replayFile.has_value(),
+           "slot relocation replay reference loads");
+    if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+      return;
+    }
+    expect(loaded.record->replayFile->historyIndex == index,
+           "slot relocation fixtures occupy sequential history paths");
+    resultIds.push_back(saved.receipt->resultId);
+    references.push_back(*loaded.record->replayFile);
+  }
+
+  const auto displacedBytes =
+      readBytes(temporary.path() / references[1].relativePath);
+  const auto selectedBytes =
+      readBytes(temporary.path() / references[4].relativePath);
+  expect(displacedBytes != selectedBytes,
+         "occupied slot contains different replay bytes before replacement");
+
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const LocalResultRecordId displacedId{
+      .kind = ReplayFileReference::RecordKind::ChartResult,
+      .resultId = resultIds[1],
+  };
+  const LocalResultRecordId selectedId{
+      .kind = ReplayFileReference::RecordKind::ChartResult,
+      .resultId = resultIds[4],
+  };
+  const auto copied = actions.copyToBeatorajaSlot(selectedId, 1);
+  expect(copied.changed && copied.availability == ReplayAvailability::Available,
+         "occupied visible slot replacement succeeds");
+
+  const auto displaced =
+      environment.replayRepository.loadChartResult(resultIds[1]);
+  const auto selected =
+      environment.replayRepository.loadChartResult(resultIds[4]);
+  expect(displaced.record.has_value() &&
+             displaced.record->replayFile.has_value() &&
+             displaced.record->replayFile->historyIndex == 5,
+         "displaced replay reference moves to the next history path");
+  expect(selected.record.has_value() &&
+             selected.record->replayFile.has_value() &&
+             selected.record->replayFile->historyIndex == 4,
+         "selected result keeps its original replay reference");
+
+  const std::string &stem = references[4].stem;
+  expect(readBytes(temporary.path() / "replay" / (stem + "_1.brd")) ==
+             selectedBytes,
+         "visible slot contains the selected replay bytes");
+  expect(readBytes(temporary.path() / "replay" / (stem + "_5.brd")) ==
+             displacedBytes,
+         "displaced replay bytes survive at the relocated reference");
+  expect(actions.inspect(displacedId).availability ==
+                 ReplayAvailability::Available &&
+             actions.inspect(selectedId).availability ==
+                 ReplayAvailability::Available,
+         "both result replay references remain valid");
+  expect(scalar(environment.replayDatabase,
+                "SELECT count(*) FROM replay_files") == 5 &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM replay_file_reservations") == 0,
+         "relocation consumes its reservation without dropping references");
+}
+
 void testFilesystemFailuresNeverStageDatabaseRows() {
-  for (std::string_view fault : {"write", "file-sync", "close", "rename",
-                                 "directory-sync", "read-back", "decode",
-                                 "hash"}) {
+  for (std::string_view fault :
+       {"write", "file-sync", "close", "rename", "directory-sync", "read-back",
+        "decode", "hash"}) {
     TemporaryDirectory temporary(std::string("fault-") + std::string(fault));
     bool enabled = true;
-    Environment environment(
-        temporary.path(),
-        {.failAt = [&](std::string_view point) {
-          return enabled && point == fault;
-        }});
-    const auto attempt =
-        validAttempt("123e4567-e89b-42d3-a456-426614174001");
+    Environment environment(temporary.path(),
+                            {.failAt = [&](std::string_view point) {
+                              return enabled && point == fault;
+                            }});
+    const auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174001");
     const auto failed = environment.coordinator.persist(attempt);
-    expect(failed.state == SaveState::UnfinalizedReplay &&
-               scalar(environment.replayDatabase,
-                      "SELECT count(*) FROM chart_results") == 0 &&
-               scalar(environment.replayDatabase,
-                      "SELECT count(*) FROM replay_files") == 0,
-           std::string("fault before verified finalization stages no DB rows: ") +
-               std::string(fault));
+    expect(
+        failed.state == SaveState::UnfinalizedReplay &&
+            scalar(environment.replayDatabase,
+                   "SELECT count(*) FROM chart_results") == 0 &&
+            scalar(environment.replayDatabase,
+                   "SELECT count(*) FROM replay_files") == 0,
+        std::string("fault before verified finalization stages no DB rows: ") +
+            std::string(fault));
     enabled = false;
     const auto retried = environment.coordinator.persist(attempt);
     if (!retried.saved()) {
@@ -541,8 +636,7 @@ void testFilesystemFailuresNeverStageDatabaseRows() {
 void testCrashAfterCompactStageRecoversWithoutReplayReconstruction() {
   TemporaryDirectory temporary("recovery");
   Environment environment(temporary.path());
-  const auto attempt =
-      validAttempt("123e4567-e89b-42d3-a456-426614174002", 1);
+  const auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174002", 1);
   const auto replayFile = finalizedReference(environment, attempt);
   const auto staged = environment.replayRepository.stageCompletedChartAttempt(
       attempt.result, attempt.irSnapshot, replayFile, {});
@@ -571,8 +665,8 @@ void testCrashAfterCompactStageRecoversWithoutReplayReconstruction() {
 void testCoursePipelineUsesOneBeatorajaArrayFile() {
   TemporaryDirectory temporary("course");
   Environment environment(temporary.path());
-  const auto attempt = validCourseAttempt(
-      "123e4567-e89b-42d3-a456-426614174012");
+  const auto attempt =
+      validCourseAttempt("123e4567-e89b-42d3-a456-426614174012");
   const auto saved = environment.coordinator.persistCourse(attempt);
   if (!saved.saved()) {
     std::cerr << "course pipeline state=" << static_cast<int>(saved.state)
@@ -583,8 +677,8 @@ void testCoursePipelineUsesOneBeatorajaArrayFile() {
   if (!saved.receipt) {
     return;
   }
-  const auto loaded = environment.replayRepository.loadCourseResult(
-      saved.receipt->resultId);
+  const auto loaded =
+      environment.replayRepository.loadCourseResult(saved.receipt->resultId);
   auto expectedResult = attempt.result;
   expectedResult.resultId = saved.receipt->resultId;
   expect(loaded.status == CourseResultReadOutcome::Status::Loaded &&
@@ -606,11 +700,9 @@ void testCoursePipelineUsesOneBeatorajaArrayFile() {
              decoded.course->restMicrosAfterStage ==
                  attempt.replay.restMicrosAfterStage,
          "one Beatoraja JSON-array .brd round-trips every ordered stage");
-  const auto playback =
-      environment.replayRepository.loadCourseReplayPlayback(
-          saved.receipt->resultId);
-  expect(playback.status ==
-                 CourseReplayPlaybackReadOutcome::Status::Loaded &&
+  const auto playback = environment.replayRepository.loadCourseReplayPlayback(
+      saved.receipt->resultId);
+  expect(playback.status == CourseReplayPlaybackReadOutcome::Status::Loaded &&
              playback.result == expectedResult &&
              playback.playback == attempt.replay,
          "course playback is loaded from its referenced .brd file");
@@ -637,19 +729,21 @@ void testCoursePipelineUsesOneBeatorajaArrayFile() {
   const auto removed = actions.remove(courseRecord);
   expect(removed.availability == ReplayAvailability::Missing && removed.changed,
          "course replay file can be deleted independently");
-  const auto afterDelete = environment.replayRepository.loadCourseResult(
-      saved.receipt->resultId);
+  const auto afterDelete =
+      environment.replayRepository.loadCourseResult(saved.receipt->resultId);
   expect(afterDelete.status == CourseResultReadOutcome::Status::Loaded &&
-             afterDelete.record && afterDelete.record->result.stages.size() == 2,
+             afterDelete.record &&
+             afterDelete.record->result.stages.size() == 2,
          "course result recall survives replay-file deletion");
   const auto playbackAfterDelete =
       environment.replayRepository.loadCourseReplayPlayback(
           saved.receipt->resultId);
-  expect(playbackAfterDelete.status ==
-                 CourseReplayPlaybackReadOutcome::Status::ReplayUnavailable &&
-             playbackAfterDelete.result == expectedResult &&
-             !playbackAfterDelete.playback.has_value(),
-         "deleted course replay disables playback without deleting result facts");
+  expect(
+      playbackAfterDelete.status ==
+              CourseReplayPlaybackReadOutcome::Status::ReplayUnavailable &&
+          playbackAfterDelete.result == expectedResult &&
+          !playbackAfterDelete.playback.has_value(),
+      "deleted course replay disables playback without deleting result facts");
 }
 
 void testReplayVolumeOnlyGrowsTheBrdFile() {
@@ -659,14 +753,12 @@ void testReplayVolumeOnlyGrowsTheBrdFile() {
   Environment large(largeRoot.path());
 
   auto makeAttempt = [](std::size_t transitionCount) {
-    auto attempt =
-        validAttempt("123e4567-e89b-42d3-a456-426614174020");
+    auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174020");
     attempt.replay.input.clear();
     attempt.replay.input.reserve(transitionCount);
     for (std::size_t index = 0; index < transitionCount; ++index) {
       attempt.replay.input.push_back(
-          {.songTimeMicros =
-               1'000 + static_cast<std::int64_t>(index) * 100,
+          {.songTimeMicros = 1'000 + static_cast<std::int64_t>(index) * 100,
            .control = {.kind = replay::LogicalControlKind::Lane,
                        .player = 1,
                        .lane = static_cast<int>((index / 2) % 7)},
@@ -694,10 +786,10 @@ void testReplayVolumeOnlyGrowsTheBrdFile() {
     return;
   }
 
-  const auto smallResult = small.replayRepository.loadChartResult(
-      smallSaved.receipt->resultId);
-  const auto largeResult = large.replayRepository.loadChartResult(
-      largeSaved.receipt->resultId);
+  const auto smallResult =
+      small.replayRepository.loadChartResult(smallSaved.receipt->resultId);
+  const auto largeResult =
+      large.replayRepository.loadChartResult(largeSaved.receipt->resultId);
   expect(smallResult.record && smallResult.record->replayFile &&
              largeResult.record && largeResult.record->replayFile,
          "both volume fixtures expose replay-file references");
@@ -713,12 +805,12 @@ void testReplayVolumeOnlyGrowsTheBrdFile() {
   expect(largeReplaySize > smallReplaySize,
          "additional transitions grow the .brd file");
   expect(tableRowCounts(small.replayDatabase) ==
-             tableRowCounts(large.replayDatabase) &&
+                 tableRowCounts(large.replayDatabase) &&
              tableRowCounts(small.scoreDatabase) ==
                  tableRowCounts(large.scoreDatabase),
          "transition volume does not change SQLite row cardinality");
   expect(std::filesystem::file_size(small.replayDatabase) ==
-             std::filesystem::file_size(large.replayDatabase) &&
+                 std::filesystem::file_size(large.replayDatabase) &&
              std::filesystem::file_size(small.scoreDatabase) ==
                  std::filesystem::file_size(large.scoreDatabase),
          "transition-volume growth is confined to standalone .brd bytes");
@@ -730,8 +822,8 @@ void testSummaryLimitsCountOnlyValidatedRows() {
 
   std::vector<int> chartIds;
   for (int index = 0; index < 3; ++index) {
-    auto attempt = validAttempt(
-        "123e4567-e89b-42d3-a456-42661417410" + std::to_string(index));
+    auto attempt = validAttempt("123e4567-e89b-42d3-a456-42661417410" +
+                                std::to_string(index));
     const auto saved = environment.coordinator.persist(attempt);
     expect(saved.saved() && saved.receipt.has_value(),
            "chart summary corruption fixture persists");
@@ -759,8 +851,8 @@ void testSummaryLimitsCountOnlyValidatedRows() {
   std::vector<int> courseIds;
   std::string courseKey;
   for (int index = 0; index < 2; ++index) {
-    auto attempt = validCourseAttempt(
-        "123e4567-e89b-42d3-a456-42661417411" + std::to_string(index));
+    auto attempt = validCourseAttempt("123e4567-e89b-42d3-a456-42661417411" +
+                                      std::to_string(index));
     attempt.result.playedAtUnixMillis += index;
     attempt.result.resultFingerprint = resultFingerprint(attempt.result);
     courseKey = attempt.result.courseKey;
@@ -789,8 +881,7 @@ void testSummaryLimitsCountOnlyValidatedRows() {
 void testSummaryCorruptionAllowanceIsBounded() {
   TemporaryDirectory temporary("summary-corruption-bound");
   Environment environment(temporary.path());
-  auto attempt =
-      validAttempt("123e4567-e89b-42d3-a456-426614174120");
+  auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174120");
   const auto saved = environment.coordinator.persist(attempt);
   expect(saved.saved() && saved.receipt.has_value(),
          "bounded summary fixture persists");
@@ -798,8 +889,7 @@ void testSummaryCorruptionAllowanceIsBounded() {
     return;
   }
 
-  const int corruptCount =
-      replay_summary_scan::kCorruptCandidateAllowance + 1;
+  const int corruptCount = replay_summary_scan::kCorruptCandidateAllowance + 1;
   const std::string cloneSql =
       "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM seq "
       "WHERE x<" +
@@ -822,8 +912,7 @@ void testSummaryCorruptionAllowanceIsBounded() {
   bms_parser::ChartMeta chartLookup;
   chartLookup.MD5 = attempt.result.score.chartMd5;
   chartLookup.SHA256 = attempt.result.score.chartSha256;
-  const auto bounded =
-      environment.replayRepository.ListReplays(chartLookup, 1);
+  const auto bounded = environment.replayRepository.ListReplays(chartLookup, 1);
   expect(bounded.empty(),
          "positive summary limit stops at the corruption allowance");
   const auto unbounded =
@@ -837,6 +926,7 @@ void testSummaryCorruptionAllowanceIsBounded() {
 
 int main() {
   testCompleteFileAndDatabasePipeline();
+  testOccupiedSlotReplacementRelocatesDisplacedReference();
   testFilesystemFailuresNeverStageDatabaseRows();
   testCrashAfterCompactStageRecoversWithoutReplayReconstruction();
   testCoursePipelineUsesOneBeatorajaArrayFile();

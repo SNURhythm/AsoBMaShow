@@ -72,6 +72,10 @@ public:
                            std::string_view stem, int slot,
                            std::string &diagnostic);
 
+  bool copyToReservedReplayPath(const ReplayFileMetadata &source,
+                                const ReplayPathIdentity &destination,
+                                std::string &diagnostic);
+
   void removeStaleTemporaryFiles(std::chrono::system_clock::time_point cutoff);
 
 private:
