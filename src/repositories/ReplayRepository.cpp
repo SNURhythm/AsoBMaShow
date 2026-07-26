@@ -47,6 +47,92 @@ void removeStaleReplayTemporaryFiles(
                                   kStaleReplayTemporaryAge);
 }
 
+bool recoverReplayFileReservations(sqlite3 *database,
+                                   const std::filesystem::path &profileRoot) {
+  if (database == nullptr || profileRoot.empty()) {
+    return false;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    return false;
+  }
+
+  SqliteStatementHandle candidates;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT r.attempt_id,r.stem,r.history_index,r.relative_path FROM "
+          "replay_file_reservations r WHERE NOT EXISTS(SELECT 1 FROM "
+          "chart_results c WHERE c.attempt_id=r.attempt_id) AND NOT EXISTS("
+          "SELECT 1 FROM course_results c WHERE c.attempt_id=r.attempt_id)",
+          candidates) != SQLITE_OK) {
+    return false;
+  }
+
+  std::vector<std::string> abandonedAttempts;
+  int step = SQLITE_OK;
+  while ((step = sqlite3_step(candidates.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(candidates.get(), 0) != SQLITE_TEXT ||
+        sqlite3_column_type(candidates.get(), 1) != SQLITE_TEXT ||
+        sqlite3_column_type(candidates.get(), 2) != SQLITE_INTEGER ||
+        sqlite3_column_type(candidates.get(), 3) != SQLITE_TEXT) {
+      continue;
+    }
+    const std::string attemptId = sqliteColumnString(candidates.get(), 0);
+    const std::string stem = sqliteColumnString(candidates.get(), 1);
+    const auto historyIndex = sqlite3_column_int64(candidates.get(), 2);
+    const std::filesystem::path storedRelativePath(
+        sqliteColumnString(candidates.get(), 3));
+    std::string pathDiagnostic;
+    const auto identity =
+        replay::pathForStem(stem, historyIndex, pathDiagnostic);
+    if (!identity || identity->relativePath != storedRelativePath) {
+      continue;
+    }
+
+    std::error_code pathError;
+    const auto status = std::filesystem::symlink_status(
+        profileRoot / identity->relativePath, pathError);
+    const bool definitelyMissing =
+        (!pathError &&
+         status.type() == std::filesystem::file_type::not_found) ||
+        pathError == std::errc::no_such_file_or_directory;
+    if (definitelyMissing) {
+      abandonedAttempts.push_back(attemptId);
+    }
+  }
+  if (step != SQLITE_DONE) {
+    return false;
+  }
+  candidates.reset();
+
+  for (const std::string &attemptId : abandonedAttempts) {
+    SqliteStatementHandle remove;
+    if (prepareSqliteStatement(
+            database,
+            "DELETE FROM replay_file_reservations WHERE attempt_id=?",
+            remove) != SQLITE_OK ||
+        !bindSqliteText(remove.get(), 1, attemptId) ||
+        sqlite3_step(remove.get()) != SQLITE_DONE ||
+        sqlite3_changes(database) != 1) {
+      return false;
+    }
+  }
+
+  if (executeSqlite(database, "DELETE FROM replay_stem_sequences") ||
+      executeSqlite(
+          database,
+          "INSERT INTO replay_stem_sequences(stem,last_history_index) "
+          "SELECT stem,MAX(history_index) FROM (SELECT stem,history_index "
+          "FROM replay_files UNION ALL SELECT stem,history_index FROM "
+          "replay_file_reservations) GROUP BY stem")) {
+    return false;
+  }
+  return transaction.commit(transactionError);
+}
+
 } // namespace
 
 ReplayRepository::Impl::Impl(std::filesystem::path path)
@@ -138,6 +224,11 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
     errorMessage = "replay database validation failed";
     return false;
   }
+  if (!recoverReplayFileReservations(candidate.get(),
+                                     resolvedPath.parent_path())) {
+    errorMessage = "replay reservation recovery failed";
+    return false;
+  }
 
   sqlite3 *oldDatabase = impl_->sessionDatabase;
   impl_->sessionDatabase = candidate.release();
@@ -189,6 +280,9 @@ bool ReplayRepository::EnsureSessionDatabaseLocked() {
   }
   if (!replay_repository_detail::CreateReplayTablesOnConnection(
           candidate.get(), impl_->chartDatabasePath)) {
+    return false;
+  }
+  if (!recoverReplayFileReservations(candidate.get(), path.parent_path())) {
     return false;
   }
   impl_->sessionDatabase = candidate.release();

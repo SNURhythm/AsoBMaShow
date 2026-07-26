@@ -157,12 +157,10 @@ existing logical input tests pass.
 
 **Files:**
 - Modify: `tests/replay_repository_v11_tests.cpp`
-- Modify: `src/repositories/ReplayRepositoryInternal.h`
-- Modify: `src/repositories/ReplayRepositoryResultRecords.cpp`
 - Modify: `src/repositories/ReplayRepository.cpp`
 
 **Interfaces:**
-- Produces: `replay_repository_detail::RecoverReplayFileReservationsOnConnection(sqlite3 *, const std::filesystem::path &) -> bool`.
+- Produces: private `recoverReplayFileReservations(sqlite3 *, const std::filesystem::path &) -> bool` in the repository session owner.
 - Consumes: `replay::pathForStem`, the opened profile root, `replay_files`, `replay_file_reservations`, and `replay_stem_sequences`.
 
 - [ ] **Step 1: Add failing abandoned-reservation reopen regressions**

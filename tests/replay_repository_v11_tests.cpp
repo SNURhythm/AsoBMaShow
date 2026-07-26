@@ -539,7 +539,6 @@ void testReservationIntegrityAndMonotonicity() {
   expect(indexes == std::vector<std::int64_t>({1, 2, 3, 4}),
          "concurrent reservations receive consecutive unique indexes");
 
-  repository.Shutdown();
   {
     Database database(databasePath);
     const std::string existingPath =
@@ -578,6 +577,69 @@ void testReservationIntegrityAndMonotonicity() {
          "deleted reservation indexes are never reused");
 }
 
+void testProfileStartupReclaimsFilelessReservations() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('c', 64);
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(), "abandoned reservation schema is ready");
+  const auto first = repository.reserveReplayFile(
+      "123e4567-e89b-42d3-a456-426614174110", stem);
+  const auto second = repository.reserveReplayFile(
+      "123e4567-e89b-42d3-a456-426614174111", stem);
+  expect(first.reservation && first.reservation->historyIndex == 0 &&
+             second.reservation && second.reservation->historyIndex == 1,
+         "fileless reservations consume the first two indexes before restart");
+  repository.Shutdown();
+
+  ReplayRepository reopened(databasePath);
+  expect(reopened.EnsureSchema(),
+         "profile restart opens abandoned reservation storage");
+  const auto reclaimed = reopened.reserveReplayFile(
+      "123e4567-e89b-42d3-a456-426614174112", stem);
+  expect(reclaimed.status == ReservationOutcome::Status::Reserved &&
+             reclaimed.reservation &&
+             reclaimed.reservation->historyIndex == 0,
+         "profile startup reclaims fileless reservation indexes");
+}
+
+void testProfileStartupRetainsInstalledReplayReservation() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  const std::string stem = repeated('d', 64);
+  constexpr std::string_view installedAttempt =
+      "123e4567-e89b-42d3-a456-426614174120";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(), "installed reservation schema is ready");
+  const auto installed =
+      repository.reserveReplayFile(installedAttempt, stem);
+  const auto abandoned = repository.reserveReplayFile(
+      "123e4567-e89b-42d3-a456-426614174121", stem);
+  expect(installed.reservation && installed.reservation->historyIndex == 0 &&
+             abandoned.reservation && abandoned.reservation->historyIndex == 1,
+         "installed and abandoned reservations occupy consecutive indexes");
+  if (!installed.reservation) {
+    return;
+  }
+  writeFile(temporary.path() / installed.reservation->relativePath,
+            "installed replay bytes");
+  repository.Shutdown();
+
+  ReplayRepository reopened(databasePath);
+  expect(reopened.EnsureSchema(),
+         "profile restart opens installed reservation storage");
+  const auto retained = reopened.reserveReplayFile(installedAttempt, stem);
+  expect(retained.status == ReservationOutcome::Status::AlreadyReserved &&
+             retained.reservation == installed.reservation,
+         "startup retains a reservation with an installed final replay");
+  const auto afterRecovery = reopened.reserveReplayFile(
+      "123e4567-e89b-42d3-a456-426614174122", stem);
+  expect(afterRecovery.status == ReservationOutcome::Status::Reserved &&
+             afterRecovery.reservation &&
+             afterRecovery.reservation->historyIndex == 1,
+         "startup reclaims only the fileless trailing reservation");
+}
+
 void testMalformedVersion10FailsClosed() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
@@ -614,6 +676,8 @@ int main() {
   testCompactStageAndIndependentReads();
   testReplayFileReadIsIndependentFromResultAndIr();
   testReservationIntegrityAndMonotonicity();
+  testProfileStartupReclaimsFilelessReservations();
+  testProfileStartupRetainsInstalledReplayReservation();
   testMalformedVersion10FailsClosed();
   if (failures != 0) {
     std::cerr << failures << " replay repository v11 test(s) failed\n";
