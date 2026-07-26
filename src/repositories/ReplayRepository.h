@@ -337,13 +337,14 @@ struct ReplaySummary {
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
   enum class ReplayFileState {
+    Unchecked,
     Missing,
     Available,
     Corrupt,
     Unsafe,
     IoFailure,
   };
-  ReplayFileState replayFileState = ReplayFileState::Missing;
+  ReplayFileState replayFileState = ReplayFileState::Unchecked;
   std::optional<std::uint64_t> replayFileSize;
   std::optional<bms_parser::ChartMeta> chartMeta;
   std::optional<std::string> playOption;

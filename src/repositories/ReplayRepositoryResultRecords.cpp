@@ -1731,7 +1731,7 @@ std::vector<ReplaySummary> ListCompactChartResultsOnConnection(
       summary.createdAt =
           readCreatedAt(database, resultId).value_or(std::string{});
       summary.replayFileState = record.replayFile.has_value()
-                                    ? ReplaySummary::ReplayFileState::Available
+                                    ? ReplaySummary::ReplayFileState::Unchecked
                                     : ReplaySummary::ReplayFileState::Missing;
       if (record.replayFile.has_value()) {
         summary.replayFileSize = record.replayFile->compressedSize;
@@ -1905,7 +1905,7 @@ std::vector<ReplaySummary> ListCompactCourseResultsOnConnection(
       summary.createdAt =
           readCourseCreatedAt(database, resultId).value_or(std::string{});
       summary.replayFileState = record.replayFile.has_value()
-                                    ? ReplaySummary::ReplayFileState::Available
+                                    ? ReplaySummary::ReplayFileState::Unchecked
                                     : ReplaySummary::ReplayFileState::Missing;
       if (record.replayFile.has_value()) {
         summary.replayFileSize = record.replayFile->compressedSize;

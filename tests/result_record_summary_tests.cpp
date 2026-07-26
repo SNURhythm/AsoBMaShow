@@ -173,6 +173,21 @@ void testLocalConversionPreservesRecordSemantics() {
          "a corrupt replay exposes only deletion among file actions");
 }
 
+void testUncheckedReplayHasNoFileBackedCapabilities() {
+  ReplaySummary replay;
+  replay.id = 74;
+  replay.finalScore = 500;
+  replay.maxScore = 1'000;
+  replay.irSubmissionEligible = true;
+  const ResultRecordSummary result = makeLocalResultRecord(replay);
+  expect(!result.capabilities.watch && !result.capabilities.gBattle &&
+             !result.capabilities.videoExport &&
+             !result.capabilities.shareReplay &&
+             !result.capabilities.deleteReplayFile &&
+             result.capabilities.resultRecall,
+         "unchecked replay exposes result recall but no file-backed actions");
+}
+
 void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
   const ir::IrRemoteScore score = validRemoteScore();
   const ResultRecordSummary result = makeRemoteResultRecord(
@@ -453,6 +468,7 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
 
 int main() {
   testLocalConversionPreservesRecordSemantics();
+  testUncheckedReplayHasNoFileBackedCapabilities();
   testRemoteConversionIsReadOnlyAndRetainsOptionalValues();
   testRemoteConversionFailsClosed();
   testIdentityEqualityHashAndStableKeys();

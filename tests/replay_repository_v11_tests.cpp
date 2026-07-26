@@ -484,6 +484,14 @@ void testCompactStageAndIndependentReads() {
              loaded.record.has_value() && loaded.record->result == result &&
              loaded.record->replayFile.has_value(),
          "result facts and replay reference load without replay events");
+  bms_parser::ChartMeta lookup;
+  lookup.MD5 = result.score.chartMd5;
+  lookup.SHA256 = result.score.chartSha256;
+  const auto summaries = repository.ListReplays(lookup, 0);
+  expect(summaries.size() == 1 &&
+             summaries.front().replayFileState ==
+                 ReplaySummary::ReplayFileState::Unchecked,
+         "record summaries defer replay-file inspection until selection");
   if (loaded.record && loaded.record->replayFile) {
     auto expectedReference = replayFile;
     expectedReference.id = loaded.record->replayFile->id;

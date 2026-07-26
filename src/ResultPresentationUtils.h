@@ -55,8 +55,7 @@ inline std::optional<JudgedPlaybackData> bestReplayForSnapshot(
   const auto summaries = replays.ListReplays(chart.Meta, 100);
   for (const ReplaySummary &summary : summaries) {
     if (summary.courseReplay || summary.autoPlay ||
-        summary.finalScore != best.score ||
-        summary.replayFileState != ReplaySummary::ReplayFileState::Available) {
+        summary.finalScore != best.score) {
       continue;
     }
     if (beforeCreatedAt.has_value() && !beforeCreatedAt->empty() &&

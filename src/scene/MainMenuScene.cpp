@@ -139,6 +139,23 @@ recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
   return ir::IrRecordActivity::None;
 }
 
+ReplaySummary::ReplayFileState
+summaryReplayFileState(ReplayAvailability availability) noexcept {
+  switch (availability) {
+  case ReplayAvailability::Available:
+    return ReplaySummary::ReplayFileState::Available;
+  case ReplayAvailability::Missing:
+    return ReplaySummary::ReplayFileState::Missing;
+  case ReplayAvailability::Corrupt:
+    return ReplaySummary::ReplayFileState::Corrupt;
+  case ReplayAvailability::Unsafe:
+    return ReplaySummary::ReplayFileState::Unsafe;
+  case ReplayAvailability::IoFailure:
+    return ReplaySummary::ReplayFileState::IoFailure;
+  }
+  return ReplaySummary::ReplayFileState::IoFailure;
+}
+
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
     "https://rattoto10.jounin.jp/table_insane.html",
@@ -8708,39 +8725,6 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
                            autoPlayReplaySummary(replayModalChart));
   }
 
-  replay::ReplayFileStore replayFileStore(
-      context.replayRepository.GetResolvedDatabasePath().parent_path());
-  ReplayFileActionService replayFileActions(context.replayRepository,
-                                            replayFileStore);
-  for (ReplaySummary &summary : replaySummaries) {
-    if (summary.autoPlay || summary.id <= 0) {
-      continue;
-    }
-    const auto inspected = replayFileActions.inspect({
-        .kind = summary.courseReplay
-                    ? ReplayFileReference::RecordKind::CourseResult
-                    : ReplayFileReference::RecordKind::ChartResult,
-        .resultId = summary.id,
-    });
-    switch (inspected.availability) {
-    case ReplayAvailability::Available:
-      summary.replayFileState = ReplaySummary::ReplayFileState::Available;
-      break;
-    case ReplayAvailability::Missing:
-      summary.replayFileState = ReplaySummary::ReplayFileState::Missing;
-      break;
-    case ReplayAvailability::Corrupt:
-      summary.replayFileState = ReplaySummary::ReplayFileState::Corrupt;
-      break;
-    case ReplayAvailability::Unsafe:
-      summary.replayFileState = ReplaySummary::ReplayFileState::Unsafe;
-      break;
-    case ReplayAvailability::IoFailure:
-      summary.replayFileState = ReplaySummary::ReplayFileState::IoFailure;
-      break;
-    }
-  }
-
   std::vector<ir::IrRemoteScore> remoteScores;
   std::string mergeOrigin;
   bool remoteReadSucceeded = false;
@@ -9235,9 +9219,48 @@ bool MainMenuScene::selectReplayModalIndex(int index) {
       visibleResultRecordSummaries[static_cast<std::size_t>(index)];
   selectedReplaySummary = selectedResultRecordSummary->local;
   selectedResultRecordStableKey = selectedResultRecordSummary->stableKey();
+  if (selectedReplaySummary.has_value() &&
+      !selectedReplaySummary->autoPlay && selectedReplaySummary->id > 0 &&
+      selectedReplaySummary->replayFileState ==
+          ReplaySummary::ReplayFileState::Unchecked) {
+    replay::ReplayFileStore replayFileStore(
+        context.replayRepository.GetResolvedDatabasePath().parent_path());
+    ReplayFileActionService replayFileActions(context.replayRepository,
+                                              replayFileStore);
+    const auto inspected = replayFileActions.inspect({
+        .kind = selectedReplaySummary->courseReplay
+                    ? ReplayFileReference::RecordKind::CourseResult
+                    : ReplayFileReference::RecordKind::ChartResult,
+        .resultId = selectedReplaySummary->id,
+    });
+    selectedReplaySummary->replayFileState =
+        summaryReplayFileState(inspected.availability);
+    for (auto &summary : replaySummaries) {
+      if (summary.id == selectedReplaySummary->id &&
+          summary.courseReplay == selectedReplaySummary->courseReplay) {
+        summary.replayFileState = selectedReplaySummary->replayFileState;
+        break;
+      }
+    }
+    const auto stableKey = *selectedResultRecordStableKey;
+    selectedResultRecordSummary =
+        makeLocalResultRecord(*selectedReplaySummary);
+    visibleResultRecordSummaries[static_cast<std::size_t>(index)] =
+        *selectedResultRecordSummary;
+    auto stored = std::ranges::find_if(
+        resultRecordSummaries, [&](const ResultRecordSummary &candidate) {
+          return candidate.stableKey() == stableKey;
+        });
+    if (stored != resultRecordSummaries.end()) {
+      *stored = *selectedResultRecordSummary;
+    }
+  }
   if (replayModalTitleText != nullptr && selectedReplaySummary.has_value() &&
       !selectedReplaySummary->autoPlay) {
     switch (selectedReplaySummary->replayFileState) {
+    case ReplaySummary::ReplayFileState::Unchecked:
+      replayModalTitleText->setText("Records");
+      break;
     case ReplaySummary::ReplayFileState::Available:
       replayModalTitleText->setText("Records");
       break;
@@ -10749,6 +10772,7 @@ void MainMenuScene::refreshReplayIrMarker(
   const float previousScrollOffset =
       replayListView != nullptr ? replayListView->scrollOffset : 0.0F;
   ir::resolveReplayIrRecordState(*latest, activity);
+  latest->replayFileState = summary->replayFileState;
   *summary = std::move(*latest);
   auto resultRecord = std::ranges::find_if(
       resultRecordSummaries, [replayId](const ResultRecordSummary &candidate) {
