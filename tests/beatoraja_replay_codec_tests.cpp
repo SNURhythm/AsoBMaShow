@@ -88,6 +88,8 @@ replay::LogicalControl control(replay::LogicalControlKind kind, int player) {
   return {.kind = kind, .player = player, .lane = -1};
 }
 
+void appendRecord(Bytes &records, std::int8_t signedCode, std::int64_t time);
+
 replay::ReplayPlaybackData extensionReplay() {
   replay::ReplayPlaybackData value;
   value.setup.chartMd5 = "0123456789abcdef0123456789abcdef";
@@ -514,6 +516,75 @@ void testAllMissReplayRoundTripsWithEmptyInput() {
   }
 }
 
+void testManualAssignmentProjectsToStockNormal() {
+  replay::BeatorajaReplayCodec codec;
+  auto source = extensionReplay();
+  source.setup.playOption = "ASSIGN:S2134567";
+  source.setup.playOptionSeed.reset();
+  source.input = {
+      {.songTimeMicros = 1000, .control = lane(1, 0), .pressed = true},
+      {.songTimeMicros = 1500, .control = lane(1, 0), .pressed = false},
+      {.songTimeMicros = 2000,
+       .control =
+           control(replay::LogicalControlKind::ScratchCounterClockwise, 1),
+       .pressed = true},
+      {.songTimeMicros = 2500,
+       .control =
+           control(replay::LogicalControlKind::ScratchCounterClockwise, 1),
+       .pressed = false},
+  };
+
+  std::string diagnostic;
+  const auto encoded =
+      codec.encodeChart(source, 1'725'000'000'123LL, diagnostic);
+  expect(encoded.has_value(),
+         "manual assignment replay encodes through the Aso extension");
+  if (encoded.has_value()) {
+    const Json stock = outerJson(*encoded);
+    expectEqual(stock.at("randomoption").get<int>(), 0,
+                "manual assignment projects to stock NORMAL");
+
+    const auto compressed = replay::base64UrlDecodeBounded(
+        stock.at("keyinput").get<std::string>(), 1024, diagnostic);
+    const auto records =
+        compressed
+            ? replay::gzipDecompressBounded(*compressed, 1024, diagnostic)
+            : std::nullopt;
+    Bytes expected;
+    appendRecord(expected, 2, 1000);
+    appendRecord(expected, -2, 1500);
+    appendRecord(expected, 9, 2000);
+    appendRecord(expected, -9, 2500);
+    expectEqual(records, std::optional<Bytes>(expected),
+                "stock input maps assigned destinations to source lanes");
+
+    const auto decoded = codec.decode(*encoded, 7);
+    expect(decoded.chart.has_value(), "manual assignment replay decodes");
+    if (decoded.chart.has_value()) {
+      expectEqual(decoded.chart->setup.playOption, source.setup.playOption,
+                  "Aso extension keeps the exact manual assignment");
+      expectEqual(decoded.chart->input, source.input,
+                  "Aso extension keeps original assigned input");
+    }
+  }
+
+  for (const auto &invalid : std::array{
+           std::pair{7, "ASSIGN:S123456"},
+           std::pair{7, "ASSIGN:S1134567"},
+           std::pair{7, "ASSIGN:S1234568"},
+           std::pair{7, "ASSIGN:S12345"},
+           std::pair{9, "ASSIGN:123456789"},
+       }) {
+    auto candidate = extensionReplay();
+    candidate.setup.keyMode = invalid.first;
+    candidate.setup.playOption = invalid.second;
+    candidate.input.clear();
+    diagnostic.clear();
+    expect(!codec.encodeChart(candidate, 1'725'000'000'123LL, diagnostic),
+           "invalid or unsupported manual assignment is rejected");
+  }
+}
+
 Json minimalStock(std::string keyInput, Json extension = nullptr) {
   Json document = {
       {"player", "fixture"},
@@ -712,6 +783,7 @@ int main() {
   testAsoExtensionRoundTripsWithoutBreakingStock();
   testPreRollInputEncodesForChartsAndCourses();
   testAllMissReplayRoundTripsWithEmptyInput();
+  testManualAssignmentProjectsToStockNormal();
   testMalformedAndBoundedInputs();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay codec test(s) failed\n";

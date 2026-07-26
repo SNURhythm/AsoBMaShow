@@ -37,6 +37,24 @@ struct StageDecode {
   std::int64_t restMicrosAfterStage = 0;
 };
 
+struct ManualAssignment {
+  std::vector<LogicalControl> destinations;
+  std::vector<LogicalControl> sources;
+
+  bool operator==(const ManualAssignment &) const = default;
+};
+
+struct OptionProjection {
+  int stockIndex = 0;
+  std::optional<ManualAssignment> manualAssignment;
+};
+
+struct SetupOptionProjection {
+  int option1 = 0;
+  int option2 = 0;
+  std::optional<ManualAssignment> manualAssignment;
+};
+
 bool fail(std::string &diagnostic, std::string message) {
   diagnostic = std::move(message);
   return false;
@@ -74,6 +92,169 @@ std::optional<int> optionIndex(const std::optional<std::string> &option) {
     if (value == kStockOptions[i]) {
       return static_cast<int>(i);
     }
+  }
+  return std::nullopt;
+}
+
+LogicalControl assignmentLane(int player, int lane) {
+  return {.kind = LogicalControlKind::Lane, .player = player, .lane = lane};
+}
+
+LogicalControl assignmentScratch(int player) {
+  return {.kind = LogicalControlKind::ScratchClockwise,
+          .player = player,
+          .lane = -1};
+}
+
+struct AssignmentLayout {
+  std::string symbols;
+  std::vector<LogicalControl> controls;
+};
+
+std::optional<AssignmentLayout> assignmentLayout(int keyMode) {
+  AssignmentLayout layout;
+  const auto addKeys = [&](int player, int count) {
+    for (int lane = 0; lane < count; ++lane) {
+      layout.controls.push_back(assignmentLane(player, lane));
+    }
+  };
+  switch (keyMode) {
+  case 5:
+    layout.symbols = "S12345";
+    layout.controls.push_back(assignmentScratch(1));
+    addKeys(1, 5);
+    break;
+  case 7:
+    layout.symbols = "S1234567";
+    layout.controls.push_back(assignmentScratch(1));
+    addKeys(1, 7);
+    break;
+  case 10:
+    layout.symbols = "L123456789AR";
+    layout.controls.push_back(assignmentScratch(1));
+    addKeys(1, 5);
+    addKeys(2, 5);
+    layout.controls.push_back(assignmentScratch(2));
+    break;
+  case 14:
+    layout.symbols = "L123456789ABCDER";
+    layout.controls.push_back(assignmentScratch(1));
+    addKeys(1, 7);
+    addKeys(2, 7);
+    layout.controls.push_back(assignmentScratch(2));
+    break;
+  default:
+    return std::nullopt;
+  }
+  return layout;
+}
+
+std::optional<ManualAssignment>
+parseManualAssignment(std::string_view option, int keyMode,
+                      std::string &diagnostic) {
+  constexpr std::string_view prefix = "ASSIGN:";
+  if (!option.starts_with(prefix)) {
+    return std::nullopt;
+  }
+  const auto layout = assignmentLayout(keyMode);
+  const std::string_view notation = option.substr(prefix.size());
+  if (!layout || notation.size() != layout->symbols.size()) {
+    fail(diagnostic,
+         "Replay manual assignment does not match its key mode");
+    return std::nullopt;
+  }
+
+  ManualAssignment assignment;
+  assignment.destinations = layout->controls;
+  assignment.sources.reserve(notation.size());
+  std::vector<char> used;
+  used.reserve(notation.size());
+  for (char symbol : notation) {
+    const auto found = layout->symbols.find(symbol);
+    if (found == std::string::npos ||
+        std::ranges::find(used, symbol) != used.end()) {
+      fail(diagnostic, "Replay manual assignment is not a lane bijection");
+      return std::nullopt;
+    }
+    used.push_back(symbol);
+    assignment.sources.push_back(layout->controls[found]);
+  }
+  return assignment;
+}
+
+std::optional<OptionProjection>
+projectOption(const std::optional<std::string> &option, int keyMode,
+              std::string &diagnostic) {
+  if (const auto stock = optionIndex(option)) {
+    return OptionProjection{.stockIndex = *stock};
+  }
+  const std::string_view value = option ? std::string_view(*option) : "NORMAL";
+  if (!value.starts_with("ASSIGN:")) {
+    fail(diagnostic, "Replay contains an unsupported stock play option");
+    return std::nullopt;
+  }
+  auto manual = parseManualAssignment(value, keyMode, diagnostic);
+  if (!manual) {
+    return std::nullopt;
+  }
+  return OptionProjection{.stockIndex = 0,
+                          .manualAssignment = std::move(*manual)};
+}
+
+std::optional<SetupOptionProjection>
+projectSetupOptions(const ChartPlaybackSetup &setup, std::string &diagnostic) {
+  auto first = projectOption(setup.playOption, setup.keyMode, diagnostic);
+  auto second = projectOption(setup.playOption2, setup.keyMode, diagnostic);
+  if (!first || !second) {
+    return std::nullopt;
+  }
+  if (first->manualAssignment && second->manualAssignment &&
+      first->manualAssignment != second->manualAssignment) {
+    fail(diagnostic, "Replay contains conflicting manual assignments");
+    return std::nullopt;
+  }
+  if ((first->manualAssignment && second->stockIndex != 0) ||
+      (second->manualAssignment && first->stockIndex != 0)) {
+    fail(diagnostic,
+         "Replay cannot combine a manual assignment with a stock shuffle");
+    return std::nullopt;
+  }
+  return SetupOptionProjection{
+      .option1 = first->stockIndex,
+      .option2 = second->stockIndex,
+      .manualAssignment = first->manualAssignment
+                              ? std::move(first->manualAssignment)
+                              : std::move(second->manualAssignment)};
+}
+
+bool isScratch(const LogicalControl &control) {
+  return control.kind == LogicalControlKind::ScratchClockwise ||
+         control.kind == LogicalControlKind::ScratchCounterClockwise;
+}
+
+std::optional<LogicalControl>
+projectManualControl(const LogicalControl &control,
+                     const ManualAssignment &assignment) {
+  if (control.kind == LogicalControlKind::Start ||
+      control.kind == LogicalControlKind::Select) {
+    return control;
+  }
+  for (std::size_t i = 0; i < assignment.destinations.size(); ++i) {
+    const auto &destination = assignment.destinations[i];
+    const bool matches =
+        destination.player == control.player &&
+        ((destination.kind == LogicalControlKind::Lane &&
+          destination.lane == control.lane &&
+          control.kind == LogicalControlKind::Lane) ||
+         (isScratch(destination) && isScratch(control)));
+    if (!matches) {
+      continue;
+    }
+    auto source = assignment.sources[i];
+    if (isScratch(source) && isScratch(control)) {
+      source.kind = control.kind;
+    }
+    return source;
   }
   return std::nullopt;
 }
@@ -255,18 +436,38 @@ std::optional<Bytes> stockKeyRecords(const ReplayPlaybackData &replay,
                      diagnostic)) {
     return std::nullopt;
   }
+  const auto options = projectSetupOptions(replay.setup, diagnostic);
+  if (!options) {
+    return std::nullopt;
+  }
   Bytes records;
   if (effective.size() > limits.maxKeyInputBytes / kKeyRecordSize) {
     fail(diagnostic, "Replay keyinput exceeds the configured limit");
     return std::nullopt;
   }
   records.reserve(effective.size() * kKeyRecordSize);
+  std::unordered_map<int, bool> stockStates;
   for (const auto &transition : effective) {
+    auto projectedControl = std::optional<LogicalControl>(transition.control);
+    if (options->manualAssignment) {
+      projectedControl =
+          projectManualControl(transition.control, *options->manualAssignment);
+      if (!projectedControl) {
+        fail(diagnostic, "Replay manual assignment input cannot be mapped");
+        return std::nullopt;
+      }
+    }
     const auto keyCode = BeatorajaReplayCodec::beatorajaKeyCode(
-        transition.control, replay.setup.keyMode);
+        *projectedControl, replay.setup.keyMode);
     if (!keyCode) {
       continue;
     }
+    const bool current = stockStates.contains(*keyCode) &&
+                         stockStates[*keyCode];
+    if (current == transition.pressed) {
+      continue;
+    }
+    stockStates[*keyCode] = transition.pressed;
     const int signedCode = (*keyCode + 1) * (transition.pressed ? 1 : -1);
     records.push_back(static_cast<std::byte>(
         static_cast<std::uint8_t>(static_cast<std::int8_t>(signedCode))));
@@ -349,8 +550,8 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
   if (setup.longNoteMode < 0 || setup.longNoteMode > 2) {
     return fail(diagnostic, "Replay long-note mode is invalid");
   }
-  if (!optionIndex(setup.playOption) || !optionIndex(setup.playOption2)) {
-    return fail(diagnostic, "Replay contains an unsupported stock play option");
+  if (!projectSetupOptions(setup, diagnostic)) {
+    return false;
   }
   if (setup.initialLaneCoverPercent < 0 ||
       setup.initialLaneCoverPercent > 100) {
@@ -551,9 +752,8 @@ encodeStage(const ReplayPlaybackData &replay, std::int64_t playedAtUnixMillis,
     }
     return std::nullopt;
   }
-  const auto option1 = optionIndex(replay.setup.playOption);
-  const auto option2 = optionIndex(replay.setup.playOption2);
-  if (!option1 || !option2) {
+  const auto options = projectSetupOptions(replay.setup, diagnostic);
+  if (!options) {
     diagnostic = "Replay play option cannot be represented by Beatoraja";
     return std::nullopt;
   }
@@ -580,9 +780,9 @@ encodeStage(const ReplayPlaybackData &replay, std::int64_t playedAtUnixMillis,
       {"rand", replay.setup.randomValues},
       {"date", playedAtUnixMillis / 1000},
       {"sevenToNinePattern", 0},
-      {"randomoption", *option1},
+      {"randomoption", options->option1},
       {"randomoptionseed", replay.setup.playOptionSeed.value_or(-1)},
-      {"randomoption2", *option2},
+      {"randomoption2", options->option2},
       {"randomoption2seed", replay.setup.playOption2Seed.value_or(-1)},
       {"doubleoption", 0},
       {"config",
