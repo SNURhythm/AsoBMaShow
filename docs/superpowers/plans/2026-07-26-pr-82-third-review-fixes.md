@@ -535,9 +535,9 @@ Have `retryResultPersistence()` build automatic drafts only when the chart attem
 Run:
 
 ```bash
-cmake --build cmake-build-debug --target remote_result_scene_tests result_persistence_v11_integration_tests -j 6
+cmake --build cmake-build-debug --target remote_result_scene_tests result_persistence_integration_tests -j 6
 ctest --test-dir cmake-build-debug \
-  -R '^(remote_result_scene_tests|result_persistence_v11_integration_tests)$' \
+  -R '^(remote_result_scene_tests|result_persistence_integration_tests)$' \
   --output-on-failure
 ```
 
@@ -567,9 +567,9 @@ git commit -m "fix: expose failed course replay saves for retry"
 ```bash
 cmake --build cmake-build-debug --target \
   profile_archive_tests replay_file_migration_tests \
-  remote_result_scene_tests result_persistence_v11_integration_tests -j 6
+  remote_result_scene_tests result_persistence_integration_tests -j 6
 ctest --test-dir cmake-build-debug \
-  -R '^(foundation_profile_archive|replay_file_migration_tests|remote_result_scene_tests|result_persistence_v11_integration_tests)$' \
+  -R '^(foundation_profile_archive|replay_file_migration_tests|remote_result_scene_tests|result_persistence_integration_tests)$' \
   --output-on-failure
 ```
 
