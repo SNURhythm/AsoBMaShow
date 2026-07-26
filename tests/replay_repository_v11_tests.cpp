@@ -234,6 +234,7 @@ void testReplayFileReadIsIndependentFromResultAndIr() {
   const auto finalized =
       encoded.has_value() ? store.finalize(path, *encoded, codec,
                                            {.stageSha256 = {repeated('a', 64)},
+                                            .stageLongNoteModes = {1},
                                             .course = false},
                                            "repository_read")
                           : replay::FinalizeOutcome{};
@@ -313,6 +314,7 @@ void testChartReplayRejectsLongNoteModeMismatch() {
       encoded.has_value()
           ? store.finalize(path, *encoded, codec,
                            {.stageSha256 = {repeated('a', 64)},
+                            .stageLongNoteModes = {2},
                             .course = false},
                            "long_note_mismatch")
           : replay::FinalizeOutcome{};

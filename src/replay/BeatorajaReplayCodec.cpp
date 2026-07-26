@@ -649,8 +649,10 @@ Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
     };
   }
   return Json{
+      {"chartSha256", setup.chartSha256},
       {"chartMd5", setup.chartMd5},
       {"keyMode", setup.keyMode},
+      {"longNoteMode", setup.longNoteMode},
       {"hasUndefinedLongNotes", setup.hasUndefinedLongNotes},
       {"randomSeed", optionalJson(setup.randomSeed)},
       {"randomPrng", optionalJson(setup.randomPrng)},
@@ -907,8 +909,10 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
   int lowerBound = 0;
   int playbackMode = 0;
   int candidateSelection = 0;
-  if (!readRequired(source, "chartMd5", setup.chartMd5, diagnostic) ||
+  if (!readRequired(source, "chartSha256", setup.chartSha256, diagnostic) ||
+      !readRequired(source, "chartMd5", setup.chartMd5, diagnostic) ||
       !readRequired(source, "keyMode", setup.keyMode, diagnostic) ||
+      !readRequired(source, "longNoteMode", setup.longNoteMode, diagnostic) ||
       !readRequired(source, "hasUndefinedLongNotes",
                     setup.hasUndefinedLongNotes, diagnostic) ||
       !readOptional(source, "randomSeed", setup.randomSeed, diagnostic) ||
@@ -1308,6 +1312,8 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
   if (!decodeStockSetup(stage, result.data.setup, diagnostic)) {
     return false;
   }
+  const std::string stockChartSha256 = result.data.setup.chartSha256;
+  const auto stockMode = stockLongNoteMode(result.data.setup.longNoteMode);
   const DoublePlayOption stockDoublePlayOption =
       result.data.setup.doublePlayOption;
 
@@ -1333,6 +1339,13 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
       if (result.data.setup.doublePlayOption != stockDoublePlayOption) {
         return fail(diagnostic,
                     "Replay stock and extension double-play options differ");
+      }
+      const auto extensionMode =
+          stockLongNoteMode(result.data.setup.longNoteMode);
+      if (result.data.setup.chartSha256 != stockChartSha256 || !stockMode ||
+          !extensionMode || *extensionMode != *stockMode) {
+        return fail(diagnostic,
+                    "Replay stock and extension chart identities differ");
       }
     } else {
       result.unsupportedExtension = true;

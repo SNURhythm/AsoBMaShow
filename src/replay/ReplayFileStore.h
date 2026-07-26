@@ -44,6 +44,7 @@ struct ReplayFileInspection {
 
 struct ExpectedReplayIdentity {
   std::vector<std::string> stageSha256;
+  std::vector<int> stageLongNoteModes;
   bool course = false;
 };
 

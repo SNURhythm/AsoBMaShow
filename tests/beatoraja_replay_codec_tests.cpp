@@ -832,6 +832,18 @@ void testMalformedAndBoundedInputs() {
                        "chart/course extension envelope mismatch is rejected",
                        std::nullopt);
 
+  Json stockShaMismatch = outerJson(*encoded);
+  stockShaMismatch["sha256"] = std::string(64, 'b');
+  expectDecodeRejected(codec, encodeJson(stockShaMismatch),
+                       "stock and extension chart SHA mismatch is rejected",
+                       std::nullopt);
+
+  Json stockLongNoteMismatch = outerJson(*encoded);
+  stockLongNoteMismatch["mode"] = 2;
+  expectDecodeRejected(codec, encodeJson(stockLongNoteMismatch),
+                       "stock and extension LN mode mismatch is rejected",
+                       std::nullopt);
+
   replay::CourseReplayPlaybackData badCourse;
   badCourse.stages = {source, source};
   badCourse.restMicrosAfterStage = {1};

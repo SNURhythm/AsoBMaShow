@@ -101,8 +101,10 @@ replay::ReplayPathIdentity chartPath(int historyIndex = 0) {
 }
 
 replay::ExpectedReplayIdentity
-chartIdentity(std::string sha = std::string(kShaA)) {
-  return {.stageSha256 = {std::move(sha)}, .course = false};
+chartIdentity(std::string sha = std::string(kShaA), int longNoteMode = 0) {
+  return {.stageSha256 = {std::move(sha)},
+          .stageLongNoteModes = {longNoteMode},
+          .course = false};
 }
 
 Bytes readBytes(const std::filesystem::path &path) {
@@ -212,6 +214,23 @@ void testDifferentCollisionFailsClosed() {
          "different-byte collision reports a diagnostic");
   expectEqual(readBytes(profile.path / chartPath().relativePath), first,
               "different-byte collision never overwrites final replay");
+}
+
+void testFinalizationRejectsWrongLongNoteIdentity() {
+  TempDirectory profile("wrong-ln-mode");
+  replay::ReplayFileStore store(profile.path);
+  replay::BeatorajaReplayCodec codec;
+  auto replay = sampleReplay();
+  replay.setup.longNoteMode = 2;
+  const Bytes encoded = encode(replay);
+
+  const auto outcome = store.finalize(chartPath(), encoded, codec,
+                                      chartIdentity(std::string(kShaA), 3),
+                                      "wrong_mode");
+  expect(!outcome.metadata.has_value(),
+         "finalization rejects a BRD with the wrong application LN mode");
+  expect(!outcome.diagnostic.empty(),
+         "wrong replay LN identity reports a diagnostic");
 }
 
 void testExplicitSlotCopyReplacesOccupiedReplay() {
@@ -459,6 +478,7 @@ void testStaleTemporaryCleanup() {
 int main() {
   testFinalizeInspectLoadRetryCopyAndRemove();
   testDifferentCollisionFailsClosed();
+  testFinalizationRejectsWrongLongNoteIdentity();
   testExplicitSlotCopyReplacesOccupiedReplay();
   testInjectedDurabilityFaults();
   testUnsafePathsAndLinks();

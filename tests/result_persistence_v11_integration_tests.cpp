@@ -357,7 +357,9 @@ ReplayFileReference finalizedReference(Environment &environment,
   };
   const auto finalized = environment.fileStore.finalize(
       identity, *encoded, environment.codec,
-      {.stageSha256 = {attempt.replay.setup.chartSha256}, .course = false},
+      {.stageSha256 = {attempt.replay.setup.chartSha256},
+       .stageLongNoteModes = {attempt.replay.setup.longNoteMode},
+       .course = false},
       attemptId);
   expect(finalized.metadata.has_value(), "manual recovery replay finalizes");
   if (!finalized.metadata) {

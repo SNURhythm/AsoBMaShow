@@ -2,6 +2,7 @@
 
 #include "../AtomicFile.h"
 #include "../FileChecksum.h"
+#include "BeatorajaLongNoteMode.h"
 
 #include <algorithm>
 #include <array>
@@ -309,19 +310,26 @@ std::string bytesHash(std::span<const std::byte> bytes) {
 
 bool expectedIdentityValid(const ExpectedReplayIdentity &expected) {
   if (expected.stageSha256.empty() ||
+      expected.stageLongNoteModes.size() != expected.stageSha256.size() ||
       (!expected.course && expected.stageSha256.size() != 1)) {
     return false;
   }
-  return std::ranges::all_of(expected.stageSha256, [](const std::string &hash) {
-    return canonicalLowerHex(hash, 64);
-  });
+  return std::ranges::all_of(expected.stageSha256,
+                             [](const std::string &hash) {
+                               return canonicalLowerHex(hash, 64);
+                             }) &&
+         std::ranges::all_of(expected.stageLongNoteModes, [](int mode) {
+           return stockLongNoteMode(mode).has_value();
+         });
 }
 
 bool decodedIdentityMatches(const ReplayDecodeOutcome &decoded,
                             const ExpectedReplayIdentity &expected) {
   if (!expected.course) {
     return decoded.chart && !decoded.course &&
-           decoded.chart->setup.chartSha256 == expected.stageSha256.front();
+           decoded.chart->setup.chartSha256 == expected.stageSha256.front() &&
+           decoded.chart->setup.longNoteMode ==
+               expected.stageLongNoteModes.front();
   }
   if (!decoded.course || decoded.chart ||
       decoded.course->stages.size() != expected.stageSha256.size()) {
@@ -329,7 +337,9 @@ bool decodedIdentityMatches(const ReplayDecodeOutcome &decoded,
   }
   for (std::size_t i = 0; i < expected.stageSha256.size(); ++i) {
     if (decoded.course->stages[i].setup.chartSha256 !=
-        expected.stageSha256[i]) {
+            expected.stageSha256[i] ||
+        decoded.course->stages[i].setup.longNoteMode !=
+            expected.stageLongNoteModes[i]) {
       return false;
     }
   }

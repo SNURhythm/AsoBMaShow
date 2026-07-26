@@ -481,7 +481,9 @@ SaveOutcome Coordinator::persist(
       .relativePath = reserved.reservation->relativePath,
   };
   const replay::ExpectedReplayIdentity expected{
-      .stageSha256 = {attempt.replay.setup.chartSha256}, .course = false};
+      .stageSha256 = {attempt.replay.setup.chartSha256},
+      .stageLongNoteModes = {attempt.replay.setup.longNoteMode},
+      .course = false};
   replay::FinalizeOutcome finalized = dependencies_.finalizeReplay(
       identity, *encoded, expected, attemptId);
   if (!finalized.metadata.has_value()) {
@@ -704,8 +706,11 @@ SaveOutcome Coordinator::persistCourse(const CompletedCourseAttempt &attempt) {
   pathInput.beatorajaConstraintIds =
       beatorajaCourseConstraintIds(attempt.result.constraintJson);
   pathInput.stageSha256.reserve(attempt.replay.stages.size());
+  std::vector<int> stageLongNoteModes;
+  stageLongNoteModes.reserve(attempt.replay.stages.size());
   for (const auto &stage : attempt.replay.stages) {
     pathInput.stageSha256.push_back(stage.setup.chartSha256);
+    stageLongNoteModes.push_back(stage.setup.longNoteMode);
     pathInput.hasUndefinedLongNotes =
         pathInput.hasUndefinedLongNotes || stage.setup.hasUndefinedLongNotes;
   }
@@ -752,7 +757,10 @@ SaveOutcome Coordinator::persistCourse(const CompletedCourseAttempt &attempt) {
   };
   replay::FinalizeOutcome finalized = dependencies_.finalizeReplay(
       identity, *encoded,
-      {.stageSha256 = pathInput.stageSha256, .course = true}, attemptId);
+      {.stageSha256 = pathInput.stageSha256,
+       .stageLongNoteModes = std::move(stageLongNoteModes),
+       .course = true},
+      attemptId);
   if (!finalized.metadata.has_value()) {
     return unstagedOutcome(
         SaveState::UnfinalizedReplay,

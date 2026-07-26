@@ -1050,7 +1050,10 @@ bool finalizeFiles(std::vector<LegacyChart> &charts,
     }
     const auto finalized =
         store.finalize(chart.path, *bytes, codec,
-                       {.stageSha256 = {chart.chartSha256}, .course = false},
+                       {.stageSha256 = {chart.chartSha256},
+                        .stageLongNoteModes = {
+                            chart.playback.setup.longNoteMode},
+                        .course = false},
                        "migration-chart-" + std::to_string(chart.id));
     if (!finalized.metadata.has_value()) {
       diagnostic = finalized.diagnostic.empty()
@@ -1071,13 +1074,18 @@ bool finalizeFiles(std::vector<LegacyChart> &charts,
       return false;
     }
     std::vector<std::string> stageSha256;
+    std::vector<int> stageLongNoteModes;
     stageSha256.reserve(course.playback.stages.size());
+    stageLongNoteModes.reserve(course.playback.stages.size());
     for (const auto &stage : course.playback.stages) {
       stageSha256.push_back(stage.setup.chartSha256);
+      stageLongNoteModes.push_back(stage.setup.longNoteMode);
     }
     const auto finalized =
         store.finalize(course.path, *bytes, codec,
-                       {.stageSha256 = std::move(stageSha256), .course = true},
+                       {.stageSha256 = std::move(stageSha256),
+                        .stageLongNoteModes = std::move(stageLongNoteModes),
+                        .course = true},
                        "migration-course-" + std::to_string(course.id));
     if (!finalized.metadata.has_value()) {
       diagnostic = finalized.diagnostic.empty()
