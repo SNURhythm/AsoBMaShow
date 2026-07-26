@@ -138,11 +138,21 @@ bool validateSubmission(const IrSubmission &submission,
     return false;
   }
   if (submission.judgementTimingBreakdownAvailable) {
-    if (submission.earlyPGreat + submission.latePGreat != submission.pGreat ||
-        submission.earlyGreat + submission.lateGreat != submission.great ||
-        submission.earlyGood + submission.lateGood != submission.good ||
-        submission.earlyBad + submission.lateBad != submission.bad ||
-        submission.earlyPoor + submission.latePoor != submission.poor ||
+    const auto timingPairMatches = [](int early, int late, int total) {
+      return static_cast<std::int64_t>(early) +
+                 static_cast<std::int64_t>(late) ==
+             static_cast<std::int64_t>(total);
+    };
+    if (!timingPairMatches(submission.earlyPGreat, submission.latePGreat,
+                           submission.pGreat) ||
+        !timingPairMatches(submission.earlyGreat, submission.lateGreat,
+                           submission.great) ||
+        !timingPairMatches(submission.earlyGood, submission.lateGood,
+                           submission.good) ||
+        !timingPairMatches(submission.earlyBad, submission.lateBad,
+                           submission.bad) ||
+        !timingPairMatches(submission.earlyPoor, submission.latePoor,
+                           submission.poor) ||
         submission.pGreatFast > submission.pGreat ||
         submission.pGreatSlow > submission.pGreat) {
       diagnostic = "IR snapshot timing facts are inconsistent";

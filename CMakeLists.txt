@@ -1466,6 +1466,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/yoga/lib
     )
     target_compile_features(ir_submission_snapshot_tests PRIVATE cxx_std_23)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(ir_submission_snapshot_tests PRIVATE -ftrapv)
+    endif()
+
+    add_executable(replay_duration_arithmetic_tests
+        tests/replay_duration_arithmetic_tests.cpp
+    )
+    target_include_directories(replay_duration_arithmetic_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_duration_arithmetic_tests PRIVATE cxx_std_23)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(replay_duration_arithmetic_tests PRIVATE -ftrapv)
+    endif()
     target_include_directories(result_persistence_model_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
@@ -3129,6 +3143,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         difficulty_table_importer_tests
         result_persistence_model_tests
         ir_submission_snapshot_tests
+        replay_duration_arithmetic_tests
         result_recall_builder_tests
         result_persistence_coordinator_tests
         result_persistence_integration_tests

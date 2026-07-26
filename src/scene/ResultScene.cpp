@@ -4,6 +4,7 @@
 #include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
+#include "../ReplayDurationArithmetic.h"
 #include "../Uuid.h"
 #include "../repositories/ReplayRepository.h"
 #include "../ResultImageExporter.h"
@@ -2861,8 +2862,8 @@ void ResultScene::init() {
       local->courseOptions.session->courseReplayPlayback) {
     const long long restMicros =
         local->courseOptions.session->restMicrosAfterCurrentStage();
-    const Uint64 delayMs =
-        static_cast<Uint64>((std::max(0LL, restMicros) + 999LL) / 1000LL);
+    const Uint64 delayMs = static_cast<Uint64>(
+        replay_duration::ceilNonnegativeMicrosToMilliseconds(restMicros));
     defer(
         [this]() {
           continueCourse();

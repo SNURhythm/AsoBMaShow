@@ -6,6 +6,7 @@
 #include "PlayOptionUtils.h"
 #include "PreparationPlan.h"
 #include "RAII.h"
+#include "ReplayDurationArithmetic.h"
 #include "analysis/JudgedPlaybackResultState.h"
 #include "analysis/JudgedPlaybackContext.h"
 #include "repositories/ChartStorageIdentity.h"
@@ -3298,11 +3299,22 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   size_t frameCount = 0;
   long long totalDurationMicros = 0;
   for (const auto &stage : stages) {
+    const auto stageDurationMicros = replay_duration::addNonnegativeMicros(
+        std::max(0LL, stage.gameplayDurationMicros),
+        std::max(0LL, stage.resultDurationMicros));
+    const auto accumulatedDurationMicros =
+        stageDurationMicros
+            ? replay_duration::addNonnegativeMicros(totalDurationMicros,
+                                                    *stageDurationMicros)
+            : std::nullopt;
+    if (!accumulatedDurationMicros) {
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = "Course replay duration is too large"};
+    }
     frameCount += framesForMicros(stage.gameplayDurationMicros);
     frameCount += framesForMicros(stage.resultDurationMicros);
-    totalDurationMicros +=
-        std::max(0LL, stage.gameplayDurationMicros) +
-        std::max(0LL, stage.resultDurationMicros);
+    totalDurationMicros = *accumulatedDurationMicros;
   }
   const long long courseResultDurationMicros =
       courseResultDurationMicrosForReplayVideo(
@@ -3310,7 +3322,14 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   const size_t courseResultFrameCount =
       framesForMicros(courseResultDurationMicros);
   frameCount += courseResultFrameCount;
-  totalDurationMicros += courseResultDurationMicros;
+  const auto fullDurationMicros = replay_duration::addNonnegativeMicros(
+      totalDurationMicros, courseResultDurationMicros);
+  if (!fullDurationMicros) {
+    return {.success = false,
+            .outputPath = outputPath,
+            .message = "Course replay duration is too large"};
+  }
+  totalDurationMicros = *fullDurationMicros;
 
   ScopedReplayVideoBgfxAccess bgfxAccess(context);
   ScopedReplayVideoRenderGeometry exportGeometry(width, height);
@@ -4418,12 +4437,20 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
                            *rawFailureMicros) +
                            failureFrameMicros)
             : normalGameplayDurationMicros;
+    const auto stageDurationMicros = replay_duration::addNonnegativeMicros(
+        gameplayDurationMicros, resultDurationMicros);
+    if (!stageDurationMicros) {
+      removeReplayExportWorkDirectory(tempDir);
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = "Course replay duration is too large"};
+    }
     const long long audioContentDurationMicros =
         failureMicros.has_value()
             ? std::min(audioResult.durationMicros,
                        stagePreparationPlan.realTimeAtChartTime(
                            *rawFailureMicros))
-            : gameplayDurationMicros + resultDurationMicros;
+            : *stageDurationMicros;
     JudgedPlaybackData exportStageReplay =
         replayThroughFailure(configuredStageReplay, failureMicros);
     const RhythmState initialGaugeState =
@@ -4436,7 +4463,7 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     carriedGauge = resultState.gaugeSnapshot();
     audioSegments.push_back(CourseReplayAudioSegment{
         .wavPath = stageWavPath,
-        .durationMicros = gameplayDurationMicros + resultDurationMicros,
+        .durationMicros = *stageDurationMicros,
         .contentDurationMicros = audioContentDurationMicros,
     });
     stages.emplace_back(
@@ -4450,9 +4477,17 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   }
 
   if (!audioSegments.empty()) {
-    audioSegments.back().durationMicros +=
+    const auto fullDurationMicros = replay_duration::addNonnegativeMicros(
+        audioSegments.back().durationMicros,
         courseResultDurationMicrosForReplayVideo(
-            stages, resolvedOptions.includeResultScreen);
+            stages, resolvedOptions.includeResultScreen));
+    if (!fullDurationMicros) {
+      removeReplayExportWorkDirectory(tempDir);
+      return {.success = false,
+              .outputPath = outputPath,
+              .message = "Course replay duration is too large"};
+    }
+    audioSegments.back().durationMicros = *fullDurationMicros;
   }
 
   reportReplayExportProgress(resolvedOptions, 0.05, "Building course audio");

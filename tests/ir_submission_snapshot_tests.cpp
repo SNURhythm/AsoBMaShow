@@ -1,5 +1,6 @@
 #include "ir/IrSubmissionSnapshot.h"
 #include "replay/ReplayPlaybackData.h"
+#include "FileChecksum.h"
 
 #include "nlohmann/json.hpp"
 
@@ -212,6 +213,28 @@ void testValidationAndFloatCanonicalization() {
          "snapshot canonicalization preserves signed-zero float bits");
 }
 
+void testOversizedTimingBreakdownIsRejectedWithoutOverflow() {
+  const auto snapshot = capture(validResult());
+  std::string diagnostic;
+  const auto serialized =
+      ir::serializeIrSubmissionSnapshot(snapshot, diagnostic);
+  expect(serialized.has_value(),
+         "valid snapshot is available for the timing overflow fixture");
+  if (!serialized) {
+    return;
+  }
+
+  auto root = nlohmann::ordered_json::parse(*serialized);
+  root["submission"]["earlyPGreat"] = std::numeric_limits<int>::max();
+  root["submission"]["latePGreat"] = 1;
+  auto fingerprintPayload = nlohmann::ordered_json::object();
+  fingerprintPayload["schemaVersion"] = root["schemaVersion"];
+  fingerprintPayload["submission"] = root["submission"];
+  root["fingerprint"] = file_checksum::sha256(fingerprintPayload.dump());
+  expect(!ir::deserializeIrSubmissionSnapshot(root.dump(), {}, diagnostic),
+         "oversized early/late timing totals are rejected safely");
+}
+
 void testLargeValidSnapshotRoundTrips() {
   auto result = validResult();
   result.adoptedGaugeHistory.assign(100'000, 20.0F);
@@ -238,6 +261,7 @@ int main() {
   testCaptureAndReplayIndependence();
   testCanonicalSerializationAndTamperChecks();
   testValidationAndFloatCanonicalization();
+  testOversizedTimingBreakdownIsRejectedWithoutOverflow();
   testLargeValidSnapshotRoundTrips();
   if (failures != 0) {
     std::cerr << failures << " IR submission snapshot test(s) failed\n";
