@@ -2180,7 +2180,8 @@ ReplayRepository::loadChartReplayPlayback(int resultId) {
                               : std::move(decoded.diagnostic)};
   }
   if (decoded.chart->setup.chartSha256 != result.score.chartSha256 ||
-      decoded.chart->setup.keyMode != result.keyMode) {
+      decoded.chart->setup.keyMode != result.keyMode ||
+      decoded.chart->setup.longNoteMode != result.score.longNoteMode) {
     return {.status = ReadStatus::IntegrityConflict,
             .result = std::move(result),
             .diagnostic =

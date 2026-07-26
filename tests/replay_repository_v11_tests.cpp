@@ -282,6 +282,71 @@ void testReplayFileReadIsIndependentFromResultAndIr() {
          "manual IR snapshot remains available after replay file deletion");
 }
 
+void testChartReplayRejectsLongNoteModeMismatch() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path() / "replay.db");
+  expect(repository.EnsureSchema(),
+         "long-note mismatch replay schema is available");
+  constexpr std::string_view attempt =
+      "123e4567-e89b-42d3-a456-426614174002";
+  const std::string stem = repeated('a', 64);
+  const auto reservation = repository.reserveReplayFile(attempt, stem);
+  expect(reservation.reservation.has_value(),
+         "long-note mismatch reserves a replay path");
+  if (!reservation.reservation.has_value()) {
+    return;
+  }
+
+  auto playback = samplePlayback();
+  playback.setup.longNoteMode = 2;
+  replay::BeatorajaReplayCodec codec;
+  std::string diagnostic;
+  const auto encoded =
+      codec.encodeChart(playback, 1'700'000'000'123LL, diagnostic);
+  replay::ReplayFileStore store(temporary.path());
+  const replay::ReplayPathIdentity path{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = reservation.reservation->relativePath,
+  };
+  const auto finalized =
+      encoded.has_value()
+          ? store.finalize(path, *encoded, codec,
+                           {.stageSha256 = {repeated('a', 64)},
+                            .course = false},
+                           "long_note_mismatch")
+          : replay::FinalizeOutcome{};
+  expect(finalized.metadata.has_value(),
+         "long-note mismatch installs a valid replay file");
+  if (!finalized.metadata.has_value()) {
+    return;
+  }
+
+  auto result = validResult(std::string(attempt));
+  const auto snapshot = snapshotFor(result);
+  const ReplayFileReference reference{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = finalized.metadata->relativePath,
+      .contentSha256 = finalized.metadata->sha256,
+      .compressedSize = finalized.metadata->compressedSize,
+      .codecVersion = finalized.metadata->codecVersion,
+  };
+  const auto staged =
+      repository.stageCompletedChartAttempt(result, snapshot, reference, {});
+  expect(staged.receipt.has_value(),
+         "long-note mismatch stages its compact result");
+  if (!staged.receipt.has_value()) {
+    return;
+  }
+
+  const auto loaded =
+      repository.loadChartReplayPlayback(staged.receipt->resultId);
+  expect(loaded.status ==
+             ChartReplayPlaybackReadOutcome::Status::IntegrityConflict,
+         "chart replay rejects a long-note mode mismatch");
+}
+
 void testFreshCompactSchema() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
@@ -767,6 +832,7 @@ int main() {
   testMalformedVersion11FailsClosed();
   testCompactStageAndIndependentReads();
   testReplayFileReadIsIndependentFromResultAndIr();
+  testChartReplayRejectsLongNoteModeMismatch();
   testReservationIntegrityAndMonotonicity();
   testProfileStartupReclaimsFilelessReservations();
   testProfileStartupReclaimsInstalledReplayReservation();
