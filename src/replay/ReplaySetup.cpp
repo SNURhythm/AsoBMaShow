@@ -14,8 +14,7 @@ namespace {
 bool canonicalHex(std::string_view value, std::size_t size) noexcept {
   return value.size() == size &&
          std::ranges::all_of(value, [](unsigned char ch) {
-           return (ch >= '0' && ch <= '9') ||
-                  (ch >= 'a' && ch <= 'f');
+           return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
          });
 }
 
@@ -94,15 +93,54 @@ bool optionsCompatible(const ReplayPlayerOption &first,
   return true;
 }
 
+std::size_t laneShuffleSize(int keyMode) noexcept {
+  switch (keyMode) {
+  case 5:
+  case 10:
+    return 6;
+  case 7:
+  case 14:
+    return 8;
+  case 9:
+    return 9;
+  case 24:
+  case 48:
+    return 26;
+  default:
+    return 0;
+  }
+}
+
+bool validLaneShufflePattern(const ReplayPlayerOption &option,
+                             int keyMode) noexcept {
+  if (!option.laneShufflePattern.has_value()) {
+    return true;
+  }
+  const auto &pattern = *option.laneShufflePattern;
+  const std::size_t expected = laneShuffleSize(keyMode);
+  if (expected == 0 || pattern.size() != expected) {
+    return false;
+  }
+  std::vector<bool> seen(expected, false);
+  for (const int lane : pattern) {
+    if (lane < 0 || static_cast<std::size_t>(lane) >= expected ||
+        seen[static_cast<std::size_t>(lane)]) {
+      return false;
+    }
+    seen[static_cast<std::size_t>(lane)] = true;
+  }
+  return true;
+}
+
 ReplaySetupValidation invalid(ReplaySetupIssue issue) noexcept {
   return {.issue = issue};
 }
 
 } // namespace
 
-ReplaySetupValidation validateReplaySetup(
-    const ReplaySetup &setup, ReplaySetupSource source,
-    const ReplayLimits &limits) {
+ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
+                                          ReplaySetupSource source,
+                                          const ReplayLimits &limits) {
   if (source != ReplaySetupSource::LocalCapture &&
       source != ReplaySetupSource::AsoExtension &&
       source != ReplaySetupSource::StockBeatoraja) {
@@ -116,8 +154,7 @@ ReplaySetupValidation validateReplaySetup(
   }
   const bool md5Required = source != ReplaySetupSource::StockBeatoraja;
   if ((md5Required && !canonicalHex(setup.chart.md5, 32)) ||
-      (!setup.chart.md5.empty() &&
-       !canonicalHex(setup.chart.md5, 32))) {
+      (!setup.chart.md5.empty() && !canonicalHex(setup.chart.md5, 32))) {
     return invalid(ReplaySetupIssue::ChartMd5);
   }
   if (!supportedKeyMode(setup.chart.keyMode)) {
@@ -144,9 +181,12 @@ ReplaySetupValidation validateReplaySetup(
   if (!optionsCompatible(setup.player1, setup.player2)) {
     return invalid(ReplaySetupIssue::PlayerOptions);
   }
+  if (!validLaneShufflePattern(setup.player1, setup.chart.keyMode) ||
+      !validLaneShufflePattern(setup.player2, setup.chart.keyMode)) {
+    return invalid(ReplaySetupIssue::LaneShufflePattern);
+  }
   const int doublePlayOption = static_cast<int>(setup.doublePlayOption);
-  if (!enumBetween(doublePlayOption,
-                   static_cast<int>(DoublePlayOption::Normal),
+  if (!enumBetween(doublePlayOption, static_cast<int>(DoublePlayOption::Normal),
                    static_cast<int>(DoublePlayOption::Flip)) ||
       (setup.doublePlayOption == DoublePlayOption::Flip &&
        setup.chart.keyMode != 10 && setup.chart.keyMode != 14)) {
@@ -178,21 +218,18 @@ ReplaySetupValidation validateReplaySetup(
   }
   if (!isSupportedRulesetDescriptor(setup.ruleset) ||
       (source == ReplaySetupSource::StockBeatoraja &&
-       setup.ruleset !=
-           RulesetDescriptor::For(GameplayRuleset::Beatoraja))) {
+       setup.ruleset != RulesetDescriptor::For(GameplayRuleset::Beatoraja))) {
     return invalid(ReplaySetupIssue::Ruleset);
   }
   if (!setup.playback.valid()) {
     return invalid(ReplaySetupIssue::PlaybackRate);
   }
-  if (!enumBetween(
-          static_cast<int>(setup.candidateSelection),
-          static_cast<int>(gameplay::CandidateSelectionMode::LR2),
-          static_cast<int>(gameplay::CandidateSelectionMode::Score))) {
+  if (!enumBetween(static_cast<int>(setup.candidateSelection),
+                   static_cast<int>(gameplay::CandidateSelectionMode::LR2),
+                   static_cast<int>(gameplay::CandidateSelectionMode::Score))) {
     return invalid(ReplaySetupIssue::CandidateSelection);
   }
-  if (!gameplay::validJudgeWindowScalePercent(
-          setup.judgeWindowScalePercent)) {
+  if (!gameplay::validJudgeWindowScalePercent(setup.judgeWindowScalePercent)) {
     return invalid(ReplaySetupIssue::JudgeWindowScale);
   }
   if (!gameplay::validStartingGaugePercent(setup.startingGaugePercent)) {
@@ -205,9 +242,9 @@ ReplaySetupValidation validateReplaySetup(
   return {};
 }
 
-ReplayChartMatch compareReplayChartIdentity(
-    const ReplayChartIdentity &recorded,
-    const ReplayChartIdentity &selected) noexcept {
+ReplayChartMatch
+compareReplayChartIdentity(const ReplayChartIdentity &recorded,
+                           const ReplayChartIdentity &selected) noexcept {
   if (recorded.sha256 != selected.sha256) {
     return ReplayChartMatch::Sha256Mismatch;
   }

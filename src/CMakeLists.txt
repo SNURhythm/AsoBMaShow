@@ -14,6 +14,7 @@ target_sources(main PRIVATE ArchiveFile.cpp MinizBridge.c bgfx_helper.cpp bms_pa
 target_sources(main PRIVATE replay/ReplayCapabilities.cpp)
 target_sources(main PRIVATE replay/ReplaySetup.cpp)
 target_sources(main PRIVATE replay/ReplayPlayback.cpp)
+target_sources(main PRIVATE replay/BeatorajaReplayPath.cpp)
 add_subdirectory(practice)
 if (IOS)
     target_sources(main PRIVATE iOSNatives.mm)

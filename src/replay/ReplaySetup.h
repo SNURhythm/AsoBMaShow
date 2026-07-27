@@ -26,6 +26,7 @@ struct ReplayChartIdentity {
 struct ReplayPlayerOption {
   std::string option = "NORMAL";
   std::optional<std::int64_t> seed;
+  std::optional<std::vector<int>> laneShufflePattern;
 
   bool operator==(const ReplayPlayerOption &) const = default;
 };
@@ -82,6 +83,7 @@ enum class ReplaySetupIssue : std::uint8_t {
   PlayerOneOption,
   PlayerTwoOption,
   PlayerOptions,
+  LaneShufflePattern,
   DoublePlayOption,
   AssistOption,
   GaugeType,
@@ -104,9 +106,9 @@ struct ReplaySetupValidation {
   }
 };
 
-[[nodiscard]] ReplaySetupValidation validateReplaySetup(
-    const ReplaySetup &setup, ReplaySetupSource source,
-    const ReplayLimits &limits = kReplayLimits);
+[[nodiscard]] ReplaySetupValidation
+validateReplaySetup(const ReplaySetup &setup, ReplaySetupSource source,
+                    const ReplayLimits &limits = kReplayLimits);
 
 enum class ReplayChartMatch : std::uint8_t {
   Match,
@@ -115,8 +117,8 @@ enum class ReplayChartMatch : std::uint8_t {
   KeyModeMismatch,
 };
 
-[[nodiscard]] ReplayChartMatch compareReplayChartIdentity(
-    const ReplayChartIdentity &recorded,
-    const ReplayChartIdentity &selected) noexcept;
+[[nodiscard]] ReplayChartMatch
+compareReplayChartIdentity(const ReplayChartIdentity &recorded,
+                           const ReplayChartIdentity &selected) noexcept;
 
 } // namespace replay
