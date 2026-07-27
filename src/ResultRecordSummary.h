@@ -35,8 +35,15 @@ struct ModernChartRecordId {
   bool operator==(const ModernChartRecordId &) const = default;
 };
 
+struct ModernCourseRecordId {
+  std::string attemptId;
+
+  bool operator==(const ModernCourseRecordId &) const = default;
+};
+
 using ResultRecordIdentity =
-    std::variant<LocalReplayRecordId, ModernChartRecordId, IrRemoteRecordId>;
+    std::variant<LocalReplayRecordId, ModernChartRecordId,
+                 ModernCourseRecordId, IrRemoteRecordId>;
 
 struct ResultRecordIdentityHash {
   [[nodiscard]] std::size_t
@@ -80,11 +87,13 @@ struct ResultRecordSummary {
   ir::IrRecordState irState = ir::IrRecordState::Hidden;
   std::optional<ReplaySummary> local;
   std::optional<ModernChartResultRecord> modern;
+  std::optional<ModernCourseResultRecord> modernCourse;
   replay::ReplayState replayState = replay::ReplayState::NotApplicable;
   std::optional<ir::IrRemoteScore> remote;
 
   [[nodiscard]] bool isLocal() const noexcept;
   [[nodiscard]] bool isModernChart() const noexcept;
+  [[nodiscard]] bool isModernCourse() const noexcept;
   [[nodiscard]] bool isRemote() const noexcept;
   [[nodiscard]] std::optional<int> localReplayId() const noexcept;
   [[nodiscard]] std::optional<std::string_view>
@@ -100,6 +109,9 @@ makeLocalResultRecord(ReplaySummary summary);
 [[nodiscard]] ResultRecordSummary makeModernChartResultRecord(
     ModernChartResultRecord record, replay::ReplayState replayState,
     bool postponedIrSnapshotEligible);
+
+[[nodiscard]] ResultRecordSummary makeModernCourseResultRecord(
+    ModernCourseResultRecord record, replay::ReplayState replayState);
 
 // Throws std::invalid_argument when the provider/origin identity is not
 // canonical or when the copied remote score fails stored-model validation.

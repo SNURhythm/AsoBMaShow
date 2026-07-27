@@ -129,6 +129,44 @@ result_persistence::ModernChartResult validModernResult() {
   return result;
 }
 
+result_persistence::ModernCourseResult validModernCourseResult() {
+  const auto chart = validModernResult();
+  result_persistence::ModernCourseResult result;
+  result.resultId = 92;
+  result.attemptId = "123e4567-e89b-42d3-a456-426614174001";
+  result.courseKey = "course:v1:" + std::string(64, 'd');
+  result.legacyCourseId = 18;
+  result.courseName = "Modern course";
+  result.courseGroupName = "Modern group";
+  result.constraintJson = "{}";
+  result.completedCharts = 1;
+  result.totalCharts = 1;
+  result.requestedPlayOption = "RANDOM";
+  result.assistOption = assist_options::kOff;
+  result.initialGaugeType = GaugeType::Hard;
+  result.gaugeProfile = GaugeProfile::Standard;
+  result.gaugeAutoShift = GaugeAutoShiftMode::None;
+  result.gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+  result.longNoteMode = chart.score.longNoteMode;
+  result.finalScore = chart.score.score;
+  result.maxScore = chart.score.maxScore;
+  result.maxCombo = chart.score.maxCombo;
+  result.finalGauge = chart.score.finalGauge;
+  result.clearType = chart.score.clearType;
+  result.provenance = chart.score.provenance;
+  result.stages = {{.stageIndex = 0,
+                    .score = chart.score,
+                    .keyMode = chart.keyMode,
+                    .adoptedGaugeType = chart.adoptedGaugeType,
+                    .adoptedGaugeHistory = chart.adoptedGaugeHistory,
+                    .judgementTiming = chart.judgementTiming}};
+  result.entryFacts = {{.totalNotes = chart.score.maxScore / 2,
+                        .playLengthMicros = 3'000'000}};
+  result.playedAtUnixMillis = chart.playedAtUnixMillis + 1'000;
+  result.resultFingerprint = std::string(64, 'd');
+  return result;
+}
+
 void testModernConversionUsesSharedReplayCapabilities() {
   ModernChartResultRecord record{.result = validModernResult()};
   const auto absent = makeModernChartResultRecord(
@@ -161,6 +199,54 @@ void testModernConversionUsesSharedReplayCapabilities() {
       record, replay::ReplayState::Corrupt, false);
   expect(!corrupt.capabilities.watch && corrupt.capabilities.deleteReplayFile,
          "invalid present BRD remains deletable but not playable");
+}
+
+void testModernCourseConversionKeepsResultWithoutReplay() {
+  ModernCourseResultRecord record{.result = validModernCourseResult()};
+  const auto missing = makeModernCourseResultRecord(
+      record, replay::ReplayState::Missing);
+  expect(missing.isLocal() && missing.isModernCourse() &&
+             !missing.isModernChart() && !missing.isRemote() &&
+             missing.modernAttemptId() == record.result.attemptId,
+         "modern course result has a distinct durable identity");
+  expect(missing.course && missing.capabilities.resultRecall &&
+             !missing.capabilities.watch &&
+             !missing.capabilities.retrySame &&
+             !missing.capabilities.videoExport &&
+             !missing.capabilities.gBattle &&
+             !missing.capabilities.practiceGhost,
+         "missing course BRD leaves only result-domain actions");
+  expect(missing.modernCourse &&
+             missing.modernCourse->result == record.result &&
+             !missing.modern && missing.score == record.result.finalScore &&
+             missing.maxScore == record.result.maxScore &&
+             missing.maxCombo == record.result.maxCombo &&
+             missing.playOption == record.result.requestedPlayOption &&
+             missing.stableKey() == "c:" + record.result.attemptId,
+         "course projection reads display facts only from its strict row");
+
+  const auto verified = makeModernCourseResultRecord(
+      record, replay::ReplayState::Verified);
+  expect(verified.capabilities.watch &&
+             verified.capabilities.retrySame &&
+             verified.capabilities.videoExport &&
+             verified.capabilities.resultRecall &&
+             !verified.capabilities.gBattle &&
+             !verified.capabilities.practiceGhost &&
+             !verified.capabilities.irUpload,
+         "verified course BRD enables only supported replay actions");
+
+  for (const auto state : {replay::ReplayState::Corrupt,
+                           replay::ReplayState::Mismatched,
+                           replay::ReplayState::UnsupportedExtension}) {
+    const auto invalid = makeModernCourseResultRecord(record, state);
+    expect(invalid.capabilities.resultRecall &&
+               !invalid.capabilities.watch &&
+               !invalid.capabilities.retrySame &&
+               !invalid.capabilities.videoExport &&
+               invalid.capabilities.deleteReplayFile,
+           "invalid course BRD disables playback but remains diagnosable");
+  }
 }
 
 void testLocalConversionPreservesRecordSemantics() {
@@ -527,6 +613,7 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
 int main() {
   testLocalConversionPreservesRecordSemantics();
   testModernConversionUsesSharedReplayCapabilities();
+  testModernCourseConversionKeepsResultWithoutReplay();
   testRemoteConversionIsReadOnlyAndRetainsOptionalValues();
   testRemoteConversionFailsClosed();
   testIdentityEqualityHashAndStableKeys();

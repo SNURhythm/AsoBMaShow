@@ -161,7 +161,8 @@ std::size_t ResultRecordIdentityHash::operator()(
         using Value = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Value, LocalReplayRecordId>) {
           combineHash(seed, std::hash<int>{}(value.replayId));
-        } else if constexpr (std::is_same_v<Value, ModernChartRecordId>) {
+        } else if constexpr (std::is_same_v<Value, ModernChartRecordId> ||
+                             std::is_same_v<Value, ModernCourseRecordId>) {
           combineHash(seed, std::hash<std::string>{}(value.attemptId));
         } else {
           combineHash(seed, std::hash<std::string>{}(value.providerId));
@@ -175,11 +176,16 @@ std::size_t ResultRecordIdentityHash::operator()(
 
 bool ResultRecordSummary::isLocal() const noexcept {
   return std::holds_alternative<LocalReplayRecordId>(identity) ||
-         std::holds_alternative<ModernChartRecordId>(identity);
+         std::holds_alternative<ModernChartRecordId>(identity) ||
+         std::holds_alternative<ModernCourseRecordId>(identity);
 }
 
 bool ResultRecordSummary::isModernChart() const noexcept {
   return std::holds_alternative<ModernChartRecordId>(identity);
+}
+
+bool ResultRecordSummary::isModernCourse() const noexcept {
+  return std::holds_alternative<ModernCourseRecordId>(identity);
 }
 
 bool ResultRecordSummary::isRemote() const noexcept {
@@ -188,10 +194,15 @@ bool ResultRecordSummary::isRemote() const noexcept {
 
 std::optional<std::string_view>
 ResultRecordSummary::modernAttemptId() const noexcept {
-  const auto *modernIdentity = std::get_if<ModernChartRecordId>(&identity);
-  return modernIdentity
-             ? std::optional<std::string_view>(modernIdentity->attemptId)
-             : std::nullopt;
+  if (const auto *modernIdentity =
+          std::get_if<ModernChartRecordId>(&identity)) {
+    return modernIdentity->attemptId;
+  }
+  if (const auto *modernIdentity =
+          std::get_if<ModernCourseRecordId>(&identity)) {
+    return modernIdentity->attemptId;
+  }
+  return std::nullopt;
 }
 
 std::optional<int> ResultRecordSummary::localReplayId() const noexcept {
@@ -216,6 +227,10 @@ std::string ResultRecordSummary::stableKey() const {
   if (const auto *modernIdentity =
           std::get_if<ModernChartRecordId>(&identity)) {
     return "m:" + modernIdentity->attemptId;
+  }
+  if (const auto *modernIdentity =
+          std::get_if<ModernCourseRecordId>(&identity)) {
+    return "c:" + modernIdentity->attemptId;
   }
 
   const auto &remoteIdentity = std::get<IrRemoteRecordId>(identity);
@@ -253,6 +268,7 @@ ResultRecordSummary makeLocalResultRecord(ReplaySummary summary) {
       .irState = summary.irRecordState,
       .local = std::move(summary),
       .modern = std::nullopt,
+      .modernCourse = std::nullopt,
       .replayState = replay::ReplayState::NotApplicable,
       .remote = std::nullopt,
   };
@@ -298,10 +314,54 @@ ResultRecordSummary makeModernChartResultRecord(
                                              : ir::IrRecordState::Hidden,
       .local = std::nullopt,
       .modern = std::move(record),
+      .modernCourse = std::nullopt,
       .replayState = replayState,
       .remote = std::nullopt,
   };
   return summary;
+}
+
+ResultRecordSummary makeModernCourseResultRecord(
+    ModernCourseResultRecord record, replay::ReplayState replayState) {
+  if (record.result.resultId <= 0 || record.result.attemptId.empty() ||
+      record.result.courseKey.empty()) {
+    throw std::invalid_argument("modern course result is invalid");
+  }
+  const auto capabilities = replay::capabilitiesFor({
+      .origin = replay::RecordOrigin::ModernCourseResult,
+      .replayState = replayState,
+  });
+  const auto &result = record.result;
+  return {
+      .identity = ModernCourseRecordId{.attemptId = result.attemptId},
+      .capabilities =
+          {
+              .watch = capabilities.watch,
+              .retrySame = capabilities.retrySame,
+              .gBattle = capabilities.gBattle,
+              .practiceGhost = capabilities.practiceGhost,
+              .resultRecall = capabilities.viewResult,
+              .videoExport = capabilities.videoExport,
+              .shareOrCopy = capabilities.shareOrCopy,
+              .deleteReplayFile = capabilities.deleteReplayFile,
+              .irUpload = false,
+          },
+      .course = true,
+      .autoPlay = false,
+      .score = result.finalScore,
+      .maxScore = result.maxScore,
+      .maxCombo = result.maxCombo,
+      .clearRank = result.clearType,
+      .displayedTimeUnixMillis = result.playedAtUnixMillis,
+      .displayedTime = formatUnixMillis(result.playedAtUnixMillis),
+      .playOption = result.requestedPlayOption,
+      .irState = ir::IrRecordState::Hidden,
+      .local = std::nullopt,
+      .modern = std::nullopt,
+      .modernCourse = std::move(record),
+      .replayState = replayState,
+      .remote = std::nullopt,
+  };
 }
 
 ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
@@ -345,6 +405,7 @@ ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
       .irState = ir::IrRecordState::Uploaded,
       .local = std::nullopt,
       .modern = std::nullopt,
+      .modernCourse = std::nullopt,
       .replayState = replay::ReplayState::NotApplicable,
       .remote = std::move(score),
   };
@@ -380,8 +441,14 @@ std::vector<ResultRecordSummary> mergeResultRecords(
     result.push_back(makeLocalResultRecord(summary));
   }
   for (const ResultRecordSummary &summary : modern) {
-    if (!summary.isModernChart() || !summary.modern.has_value() ||
-        summary.local.has_value() || summary.remote.has_value()) {
+    const bool validChart = summary.isModernChart() &&
+                            summary.modern.has_value() &&
+                            !summary.modernCourse.has_value();
+    const bool validCourse = summary.isModernCourse() &&
+                             summary.modernCourse.has_value() &&
+                             !summary.modern.has_value();
+    if ((!validChart && !validCourse) || summary.local.has_value() ||
+        summary.remote.has_value()) {
       throw std::invalid_argument("modern record projection is invalid");
     }
     result.push_back(summary);
