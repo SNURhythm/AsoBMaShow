@@ -463,6 +463,28 @@ void testMergeSuppressesOnlyExactCurrentOriginReceipt() {
          "receipt without a remote ID does not guess an equivalent row");
 }
 
+void testMergeIncludesModernResultsWithoutChangingTheirCapabilities() {
+  auto modernResult = validModernResult();
+  modernResult.playedAtUnixMillis = 1'704'164'646'000LL;
+  ModernChartResultRecord modernRecord{.result = modernResult};
+  const std::vector<ResultRecordSummary> modern{
+      makeModernChartResultRecord(modernRecord, replay::ReplayState::Missing,
+                                  true)};
+  const std::vector<ReplaySummary> local{
+      localRecord(44, "2024-01-02 03:04:05")};
+  const std::vector<ir::IrRemoteScore> remote;
+
+  const auto merged = mergeResultRecords(local, modern, remote, "tachi",
+                                         "https://boku.tachi.ac");
+  expect(merged.size() == 2 && merged.front().isModernChart() &&
+             merged.front().modernAttemptId() == modernResult.attemptId,
+         "Records merge includes strict modern results newest-first");
+  expect(merged.front().capabilities.resultRecall &&
+             merged.front().capabilities.irUpload &&
+             !merged.front().capabilities.watch,
+         "Records merge preserves file-independent modern capabilities");
+}
+
 void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
   ReplaySummary autoPlay = localRecord(-1, {});
   autoPlay.autoPlay = true;
@@ -509,6 +531,7 @@ int main() {
   testRemoteConversionFailsClosed();
   testIdentityEqualityHashAndStableKeys();
   testMergeSuppressesOnlyExactCurrentOriginReceipt();
+  testMergeIncludesModernResultsWithoutChangingTheirCapabilities();
   testMergeSortsNewestWithAutoPlayFirstAndStableTies();
 
   if (failures != 0) {
