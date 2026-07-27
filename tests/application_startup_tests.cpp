@@ -2,6 +2,7 @@
 #include "../src/rendering/BgfxInitLimits.h"
 
 #include <cstdint>
+#include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <optional>

@@ -29,6 +29,7 @@ struct Dependencies {
   std::function<app_database_initializer::DatabaseInitializationStatus()>
       initializeDatabases;
   std::function<void(const Result &)> reportFatal;
+  std::function<void()> reconcileReplayFiles;
   std::function<void()> runReadyApplication;
 };
 

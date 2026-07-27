@@ -55,12 +55,13 @@ void testOnlyTombstonedOwnershipIsRemoved() {
   });
   const auto report = reconciler.reconcile(
       std::chrono::system_clock::now() - std::chrono::hours(24));
+  const std::vector<std::filesystem::path> expectedRemoved{
+      deleted.reference.metadata.relativePath,
+      failed.reference.metadata.relativePath};
   assert(staleCleanupCalled && report.referencesScanned == 3 &&
          report.tombstonesFound == 2 && report.filesRemoved == 1 &&
          report.failures.size() == 1 &&
-         removed == std::vector<std::filesystem::path>{
-                        deleted.reference.metadata.relativePath,
-                        failed.reference.metadata.relativePath});
+         removed == expectedRemoved);
 }
 
 void testInventoryFailureIsNonThrowingAndConservative() {
