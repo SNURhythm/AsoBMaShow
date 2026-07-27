@@ -179,6 +179,27 @@ struct ModernCourseResult {
   bool operator==(const ModernCourseResult &) const = default;
 };
 
+[[nodiscard]] ChartScoreWrite captureChartScoreWrite(
+    const bms_parser::ChartMeta &meta, const RhythmState &state,
+    const ScoreProvenance &provenance, int storageLongNoteMode);
+
+[[nodiscard]] ChartJudgementTiming
+captureChartJudgementTiming(const RhythmState &state);
+
+[[nodiscard]] std::optional<ModernChartResult> captureModernChartResult(
+    std::string attemptId, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const ScoreProvenance &provenance,
+    int storageLongNoteMode, std::int64_t playedAtUnixMillis,
+    std::string &diagnostic) noexcept;
+
+[[nodiscard]] std::optional<ModernCourseStageResult>
+captureModernCourseStageResult(int stageIndex,
+                               const bms_parser::ChartMeta &meta,
+                               const RhythmState &state,
+                               const ScoreProvenance &provenance,
+                               int storageLongNoteMode,
+                               std::string &diagnostic) noexcept;
+
 enum class ResultFactAgreementIssue {
   None,
   ChartIdentity,

@@ -973,6 +973,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
@@ -1102,6 +1103,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
@@ -1228,6 +1230,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrScoreReconciliation.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1288,6 +1291,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1331,6 +1335,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1374,6 +1379,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1402,6 +1408,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(result_persistence_model_tests
         tests/result_persistence_model_tests.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/Uuid.cpp
         src/FileChecksum.cpp
         src/ScoreProvenance.cpp
@@ -1431,6 +1438,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/FileChecksum.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
         src/bms_parser.cpp
         src/scene/play/GameplayGaugeRules.cpp
     )
@@ -1453,6 +1462,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ResultRecallBuilder.cpp
         src/ReplayResultStateBuilder.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrOutboxModels.cpp
         src/FileChecksum.cpp
@@ -1520,6 +1530,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
@@ -1554,6 +1565,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
@@ -2690,6 +2702,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -2752,6 +2765,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -2807,6 +2821,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp

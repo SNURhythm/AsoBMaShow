@@ -1,8 +1,10 @@
 #include "ModernResult.h"
+#include "DurablePayloadLimits.h"
 #include "replay/ReplayFileLifecycle.h"
 #include "replay/ReplayPlayback.h"
 
 #include <bit>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -57,6 +59,78 @@ result_persistence::ModernChartResult validChartResult() {
   result.resultFingerprint =
       result_persistence::modernResultFingerprint(result);
   return result;
+}
+
+struct CompletionFixture {
+  bms_parser::ChartMeta meta;
+  RhythmState state{nullptr, false};
+  ScoreProvenance provenance = ScoreProvenance::Legacy();
+
+  CompletionFixture() {
+    meta.BmsPath = std::filesystem::path("BMS") / "sample" / "song.bms";
+    meta.MD5 = "  " + repeated('B', 32) + " ";
+    meta.SHA256 = " " + repeated('A', 64) + "  ";
+    meta.Title = "Captured title";
+    meta.Artist = "Captured artist";
+    meta.KeyMode = 7;
+    meta.TotalNotes = 5;
+
+    state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None,
+                         GaugeProfile::Standard);
+    state.currentGauge = 82.5F;
+    state.gaugeValues[gaugeTypeIndex(state.gaugeType)] = state.currentGauge;
+    state.gaugeHistoryFor(state.gaugeType) = {20.0F, 48.5F, 82.5F};
+    state.maxCombo = 4;
+    state.comboBreak = 1;
+    state.judgeCount[PGreat] = 2;
+    state.judgeCount[Great] = 1;
+    state.judgeCount[Good] = 1;
+    state.judgeCount[Poor] = 1;
+    state.judgementFastSlowCount[PGreat] = {.fast = 1, .slow = 0};
+    state.judgementFastSlowCount[Great] = {.fast = 0, .slow = 1};
+    state.fastCount = 1;
+    state.slowCount = 1;
+  }
+};
+
+void testCompletionCaptureUsesOnlyResultFacts() {
+  CompletionFixture fixture;
+  std::string diagnostic;
+  const auto captured = result_persistence::captureModernChartResult(
+      std::string(kAttemptId), fixture.meta, fixture.state, fixture.provenance,
+      1, 1'700'000'000'123LL, diagnostic);
+  expect(captured.has_value(),
+         "chart completion directly captures a modern result");
+  expect(captured && result_persistence::validateModernChartResult(*captured,
+                                                                   diagnostic),
+         "captured chart result passes the reader validator");
+  expect(captured && captured->score.chartSha256 == repeated('a', 64) &&
+             captured->score.chartMd5 == repeated('b', 32) &&
+             captured->keyMode == fixture.meta.KeyMode &&
+             captured->adoptedGaugeType == fixture.state.gaugeType &&
+             captured->adoptedGaugeHistory ==
+                 fixture.state.gaugeHistoryFor(fixture.state.gaugeType) &&
+             captured->judgementTiming.has_value(),
+         "capture owns normalized identity and adopted result state");
+
+  const auto stage = result_persistence::captureModernCourseStageResult(
+      1, fixture.meta, fixture.state, fixture.provenance, 1, diagnostic);
+  expect(
+      stage.has_value() && stage->stageIndex == 1 &&
+          stage->score.chartSha256 == repeated('a', 64) &&
+          stage->adoptedGaugeHistory ==
+              fixture.state.gaugeHistoryFor(fixture.state.gaugeType),
+      "course stage completion captures the same compact facts without replay");
+  expect(!result_persistence::captureModernCourseStageResult(
+             static_cast<int>(durable_payload::kMaximumCourseStages),
+             fixture.meta, fixture.state, fixture.provenance, 1, diagnostic),
+         "course stage capture enforces the shared stage bound");
+
+  fixture.meta.TotalNotes = std::numeric_limits<int>::max();
+  expect(!result_persistence::captureModernChartResult(
+             std::string(kAttemptId), fixture.meta, fixture.state,
+             fixture.provenance, 1, 1'700'000'000'123LL, diagnostic),
+         "capture rejects maximum-score multiplication overflow");
 }
 
 template <typename Mutator>
@@ -337,6 +411,7 @@ void testCourseResultPrefixAndAggregateContracts() {
 } // namespace
 
 int main() {
+  testCompletionCaptureUsesOnlyResultFacts();
   testChartResultIsReplayIndependentAndFullyFingerprinted();
   testChartValidationAndFactAgreement();
   testCourseResultPrefixAndAggregateContracts();

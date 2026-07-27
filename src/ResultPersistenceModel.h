@@ -15,6 +15,8 @@ struct ChartResultAttempt {
   std::string attemptId;
   ReplayData replay;
   ChartScoreWrite score;
+  int keyMode = 0;
+  GaugeType adoptedGaugeType = GaugeType::Normal;
   std::vector<float> adoptedGaugeHistory;
   std::optional<ChartJudgementTiming> judgementTiming;
   std::string payloadFingerprint;
@@ -27,10 +29,6 @@ struct StageReceipt {
   bool scorePending = false;
 };
 
-[[nodiscard]] ChartScoreWrite captureChartScoreWrite(
-    const bms_parser::ChartMeta &meta, const RhythmState &state,
-    const ScoreProvenance &provenance, int storageLongNoteMode);
-
 [[nodiscard]] std::optional<ChartResultAttempt> makeChartResultAttempt(
     std::string attemptId, const bms_parser::ChartMeta &meta,
     const RhythmState &state, const ScoreProvenance &provenance,
@@ -38,5 +36,10 @@ struct StageReceipt {
 
 [[nodiscard]] std::string payloadFingerprint(const ReplayData &replay,
                                              const ChartScoreWrite &score);
+
+[[nodiscard]] std::optional<ModernChartResult>
+projectModernResultFromLegacyAttempt(const ChartResultAttempt &attempt,
+                                     std::int64_t playedAtUnixMillis,
+                                     std::string &diagnostic) noexcept;
 
 } // namespace result_persistence

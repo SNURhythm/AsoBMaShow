@@ -288,23 +288,6 @@ void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
   appendProvenance(encoder, score.provenance);
 }
 
-int judgementCount(const RhythmState &state, Judgement judgement) {
-  const auto found = state.judgeCount.find(judgement);
-  return found == state.judgeCount.end() ? 0 : found->second;
-}
-
-ChartJudgementTiming captureChartJudgementTiming(const RhythmState &state) {
-  ChartJudgementTiming timing;
-  for (int index = 0; index < JudgementCount; ++index) {
-    const auto judgement = static_cast<Judgement>(index);
-    const auto found = state.judgementFastSlowCount.find(judgement);
-    if (found != state.judgementFastSlowCount.end()) {
-      timing.byJudgement[static_cast<std::size_t>(index)] = found->second;
-    }
-  }
-  return timing;
-}
-
 bool isHexDigest(std::string_view value, std::size_t expectedSize) {
   return value.size() == expectedSize &&
          std::ranges::all_of(value, [](unsigned char character) {
@@ -356,36 +339,6 @@ std::optional<ChartResultAttempt> rejected(std::string_view invariant,
 
 } // namespace
 
-ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
-                                       const RhythmState &state,
-                                       const ScoreProvenance &provenance,
-                                       int storageLongNoteMode) {
-  return {
-      .chartPath =
-          Utils::GetStoragePathUtf8RelativeToDocuments(meta.BmsPath, "BMS/"),
-      .chartMd5 = normalizedHash(meta.MD5),
-      .chartSha256 = normalizedHash(meta.SHA256),
-      .chartTitle = meta.Title,
-      .chartArtist = meta.Artist,
-      .longNoteMode = storageLongNoteMode,
-      .score = state.getScore(),
-      .maxScore = meta.TotalNotes * 2,
-      .maxCombo = state.maxCombo,
-      .comboBreak = state.comboBreak,
-      .pGreat = judgementCount(state, PGreat),
-      .great = judgementCount(state, Great),
-      .good = judgementCount(state, Good),
-      .bad = judgementCount(state, Bad),
-      .poor = judgementCount(state, Poor),
-      .kPoor = judgementCount(state, Kpoor),
-      .fast = state.fastCount,
-      .slow = state.slowCount,
-      .finalGauge = state.currentGauge,
-      .clearType = state.getClearTypeRank(),
-      .provenance = provenance,
-  };
-}
-
 std::optional<ChartResultAttempt> makeChartResultAttempt(
     std::string attemptId, const bms_parser::ChartMeta &meta,
     const RhythmState &state, const ScoreProvenance &provenance,
@@ -428,16 +381,41 @@ std::optional<ChartResultAttempt> makeChartResultAttempt(
   const std::string fingerprint = payloadFingerprint(replay, score);
   std::vector<float> adoptedGaugeHistory =
       state.gaugeHistoryFor(state.gaugeType);
-  ChartJudgementTiming judgementTiming =
-      captureChartJudgementTiming(state);
+  ChartJudgementTiming judgementTiming = captureChartJudgementTiming(state);
   return ChartResultAttempt{.attemptId = std::move(attemptId),
                             .replay = std::move(replay),
                             .score = std::move(score),
+                            .keyMode = meta.KeyMode,
+                            .adoptedGaugeType = state.gaugeType,
                             .adoptedGaugeHistory =
                                 std::move(adoptedGaugeHistory),
-                            .judgementTiming =
-                                std::move(judgementTiming),
+                            .judgementTiming = std::move(judgementTiming),
                             .payloadFingerprint = fingerprint};
+}
+
+std::optional<ModernChartResult>
+projectModernResultFromLegacyAttempt(const ChartResultAttempt &attempt,
+                                     std::int64_t playedAtUnixMillis,
+                                     std::string &diagnostic) noexcept {
+  try {
+    ModernChartResult result{
+        .attemptId = attempt.attemptId,
+        .score = attempt.score,
+        .keyMode = attempt.keyMode,
+        .adoptedGaugeType = attempt.adoptedGaugeType,
+        .adoptedGaugeHistory = attempt.adoptedGaugeHistory,
+        .judgementTiming = attempt.judgementTiming,
+        .playedAtUnixMillis = playedAtUnixMillis,
+    };
+    result.resultFingerprint = modernResultFingerprint(result);
+    if (!validateModernChartResult(result, diagnostic)) {
+      return std::nullopt;
+    }
+    return result;
+  } catch (...) {
+    diagnostic = "legacy result projection failed";
+    return std::nullopt;
+  }
 }
 
 std::string payloadFingerprint(const ReplayData &replay,

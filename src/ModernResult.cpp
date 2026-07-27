@@ -1,7 +1,9 @@
 #include "ModernResult.h"
 
+#include "BmsMetadataText.h"
 #include "DurablePayloadLimits.h"
 #include "FileChecksum.h"
+#include "Utils.h"
 #include "Uuid.h"
 
 #include <algorithm>
@@ -18,6 +20,8 @@
 
 namespace result_persistence {
 namespace {
+
+using asobmshow::bms_metadata::normalizedHash;
 
 class CanonicalEncoder {
 public:
@@ -80,6 +84,11 @@ private:
 bool sameFloatBits(float left, float right) noexcept {
   return std::bit_cast<std::uint32_t>(left) ==
          std::bit_cast<std::uint32_t>(right);
+}
+
+int judgementCount(const RhythmState &state, Judgement judgement) {
+  const auto found = state.judgeCount.find(judgement);
+  return found == state.judgeCount.end() ? 0 : found->second;
 }
 
 bool sameFloatVector(std::span<const float> left,
@@ -291,6 +300,114 @@ bool sameScoreOutcome(const ChartScoreWrite &left,
 }
 
 } // namespace
+
+ChartJudgementTiming captureChartJudgementTiming(const RhythmState &state) {
+  ChartJudgementTiming timing;
+  for (int index = 0; index < JudgementCount; ++index) {
+    const auto judgement = static_cast<Judgement>(index);
+    const auto found = state.judgementFastSlowCount.find(judgement);
+    if (found != state.judgementFastSlowCount.end()) {
+      timing.byJudgement[static_cast<std::size_t>(index)] = found->second;
+    }
+  }
+  return timing;
+}
+
+ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
+                                       const RhythmState &state,
+                                       const ScoreProvenance &provenance,
+                                       int storageLongNoteMode) {
+  const int maximumScore =
+      meta.TotalNotes > 0 &&
+              meta.TotalNotes <= std::numeric_limits<int>::max() / 2
+          ? meta.TotalNotes * 2
+          : -1;
+  return {
+      .chartPath =
+          Utils::GetStoragePathUtf8RelativeToDocuments(meta.BmsPath, "BMS/"),
+      .chartMd5 = normalizedHash(meta.MD5),
+      .chartSha256 = normalizedHash(meta.SHA256),
+      .chartTitle = meta.Title,
+      .chartArtist = meta.Artist,
+      .longNoteMode = storageLongNoteMode,
+      .score = state.getScore(),
+      .maxScore = maximumScore,
+      .maxCombo = state.maxCombo,
+      .comboBreak = state.comboBreak,
+      .pGreat = judgementCount(state, PGreat),
+      .great = judgementCount(state, Great),
+      .good = judgementCount(state, Good),
+      .bad = judgementCount(state, Bad),
+      .poor = judgementCount(state, Poor),
+      .kPoor = judgementCount(state, Kpoor),
+      .fast = state.fastCount,
+      .slow = state.slowCount,
+      .finalGauge = state.currentGauge,
+      .clearType = state.getClearTypeRank(),
+      .provenance = provenance,
+  };
+}
+
+std::optional<ModernChartResult> captureModernChartResult(
+    std::string attemptId, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const ScoreProvenance &provenance,
+    int storageLongNoteMode, std::int64_t playedAtUnixMillis,
+    std::string &diagnostic) noexcept {
+  try {
+    ModernChartResult result{
+        .attemptId = std::move(attemptId),
+        .score = captureChartScoreWrite(meta, state, provenance,
+                                        storageLongNoteMode),
+        .keyMode = meta.KeyMode,
+        .adoptedGaugeType = state.gaugeType,
+        .adoptedGaugeHistory = state.gaugeHistoryFor(state.gaugeType),
+        .judgementTiming = captureChartJudgementTiming(state),
+        .playedAtUnixMillis = playedAtUnixMillis,
+    };
+    result.resultFingerprint = modernResultFingerprint(result);
+    if (!validateModernChartResult(result, diagnostic)) {
+      return std::nullopt;
+    }
+    return result;
+  } catch (...) {
+    diagnostic = "modern chart result capture failed";
+    return std::nullopt;
+  }
+}
+
+std::optional<ModernCourseStageResult> captureModernCourseStageResult(
+    int stageIndex, const bms_parser::ChartMeta &meta, const RhythmState &state,
+    const ScoreProvenance &provenance, int storageLongNoteMode,
+    std::string &diagnostic) noexcept {
+  try {
+    diagnostic.clear();
+    ModernCourseStageResult result{
+        .stageIndex = stageIndex,
+        .score = captureChartScoreWrite(meta, state, provenance,
+                                        storageLongNoteMode),
+        .keyMode = meta.KeyMode,
+        .adoptedGaugeType = state.gaugeType,
+        .adoptedGaugeHistory = state.gaugeHistoryFor(state.gaugeType),
+        .judgementTiming = captureChartJudgementTiming(state),
+    };
+    if (stageIndex < 0 ||
+        static_cast<std::size_t>(stageIndex) >=
+            durable_payload::kMaximumCourseStages ||
+        !validateResultFacts(result.score, result.keyMode,
+                             result.adoptedGaugeType,
+                             result.adoptedGaugeHistory, result.judgementTiming,
+                             std::numeric_limits<int>::max(), diagnostic)) {
+      if (diagnostic.empty()) {
+        diagnostic = "modern course stage index is invalid";
+      }
+      return std::nullopt;
+    }
+    return result;
+  } catch (...) {
+    diagnostic = "modern course stage capture failed";
+    return std::nullopt;
+  }
+}
 
 bool validateModernChartResult(const ModernChartResult &result,
                                std::string &diagnostic) noexcept {
