@@ -2,6 +2,8 @@
 
 #include "repositories/ReplayRepository.h"
 #include "replay/ReplayFileStore.h"
+#include "replay/BeatorajaReplayPath.h"
+#include "sqlite3.h"
 
 #include <cassert>
 #include <chrono>
@@ -156,10 +158,84 @@ void testCorruptOwnedEntryRemainsDeletable() {
          removed.changed && !std::filesystem::exists(path));
 }
 
+void testMissingFileDoesNotCreateADeletionTombstone() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replays.db");
+  assert(repository.EnsureSchema());
+  replay::ReplayFileStore store(temporary.path);
+  const auto installed = installResult(repository, store, 3, 'c');
+  std::filesystem::remove(temporary.path /
+                          installed.reference.metadata.relativePath);
+  replay::ReplayFileActionService actions(repository, store);
+  const replay::ReplayFileActionRequest request{
+      .owner = ModernReplayOwnerKind::ChartResult,
+      .attemptId = installed.result.attemptId};
+
+  const auto removed = actions.remove(request);
+  assert(removed.state == replay::ReplayFileActionState::Missing &&
+         !removed.changed);
+  const auto loaded =
+      repository.LoadModernChartResultByAttempt(installed.result.attemptId);
+  assert(loaded.record && loaded.record->replayFile &&
+         !loaded.record->replayFile->userDeleted);
+}
+
+void testResultMismatchedReferenceCannotBeInspectedOrDeleted() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replays.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  replay::ReplayFileStore store(temporary.path);
+  const auto installed = installResult(repository, store, 4, 'd');
+  std::string diagnostic;
+  const auto otherStem =
+      replay::chartStem(std::string(64, 'e'), 1, false, diagnostic);
+  const auto otherIdentity = replay::pathForStem(*otherStem, 0, diagnostic);
+  std::filesystem::rename(
+      temporary.path / installed.reference.metadata.relativePath,
+      temporary.path / otherIdentity->relativePath);
+  repository.Shutdown();
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  sqlite3_stmt *statement = nullptr;
+  assert(sqlite3_prepare_v2(
+             database,
+             "UPDATE modern_replay_files SET stem=?,history_index=?,"
+             "relative_path=? WHERE id=?",
+             -1, &statement, nullptr) == SQLITE_OK);
+  assert(sqlite3_bind_text(statement, 1, otherIdentity->stem.c_str(), -1,
+                           SQLITE_TRANSIENT) == SQLITE_OK &&
+         sqlite3_bind_int64(statement, 2, otherIdentity->historyIndex) ==
+             SQLITE_OK);
+  const std::string otherPath = otherIdentity->relativePath.generic_string();
+  assert(sqlite3_bind_text(statement, 3, otherPath.c_str(), -1,
+                           SQLITE_TRANSIENT) == SQLITE_OK &&
+         sqlite3_bind_int64(statement, 4, installed.reference.id) == SQLITE_OK &&
+         sqlite3_step(statement) == SQLITE_DONE);
+  sqlite3_finalize(statement);
+  sqlite3_close(database);
+
+  replay::ReplayFileActionService actions(repository, store);
+  const replay::ReplayFileActionRequest request{
+      .owner = ModernReplayOwnerKind::ChartResult,
+      .attemptId = installed.result.attemptId};
+  assert(actions.inspect(request).state ==
+         replay::ReplayFileActionState::Invalid);
+  const auto removed = actions.remove(request);
+  assert(removed.state == replay::ReplayFileActionState::Invalid &&
+         !removed.changed);
+  const auto loaded =
+      repository.LoadModernChartResultByAttempt(installed.result.attemptId);
+  assert(loaded.record && loaded.record->replayFile &&
+         !loaded.record->replayFile->userDeleted);
+}
+
 } // namespace
 
 int main() {
   testVerifiedShareUsesStableSnapshotAndDeleteKeepsResult();
   testCorruptOwnedEntryRemainsDeletable();
+  testMissingFileDoesNotCreateADeletionTombstone();
+  testResultMismatchedReferenceCannotBeInspectedOrDeleted();
   return 0;
 }
