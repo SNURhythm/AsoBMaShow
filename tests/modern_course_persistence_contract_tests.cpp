@@ -73,10 +73,36 @@ void testCourseResultAndReplayStayIndependentAtRuntime() {
           "modern course result recall must not open a replay file");
 }
 
+void testLiveCourseUsesOneModernResultFirstRoute() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  const auto gameplay = root / "src/scene/play/GamePlayScene.cpp";
+  const auto resultScene = root / "src/scene/ResultScene.cpp";
+  const auto context = root / "src/context.h";
+  const auto scores = root / "src/repositories/ScoreRepositoryQueries.cpp";
+
+  requireToken(gameplay, "ModernCourseFile",
+               "live course gameplay does not select modern persistence");
+  requireToken(gameplay, "recordModernCourseStage",
+               "live course gameplay does not retain canonical stage capture");
+  requireToken(resultScene, "persistModernCourseResult",
+               "final course result does not use one modern persistence path");
+  requireToken(context, "CourseResultPersistence",
+               "application context does not own the modern course boundary");
+  requireToken(scores, "SaveProjectedCourseScore",
+               "course-score history is not projected from modern results");
+
+  const std::string gameplaySource = read(gameplay);
+  require(!gameplaySource.contains("CompletedAttemptPersistenceRoute::\n"
+                                   "                                         "
+                                   "LegacyCourse"),
+          "live course gameplay still enters the legacy result route");
+}
+
 } // namespace
 
 int main() {
   testModernCourseSchemaAndExclusiveOwnershipBoundary();
   testCourseResultAndReplayStayIndependentAtRuntime();
+  testLiveCourseUsesOneModernResultFirstRoute();
   return 0;
 }

@@ -94,8 +94,8 @@ bool testCompletionPersistenceRoutes() {
          expect(
              gameplay_startup::completedAttemptPersistenceRoute(true, true) ==
                  gameplay_startup::CompletedAttemptPersistenceRoute::
-                     LegacyCourse,
-             "course completion remains on its existing route") &&
+                     ModernCourseFile,
+             "eligible live course completion uses modern file persistence") &&
          expect(
              gameplay_startup::completedAttemptPersistenceRoute(false, false) ==
                  gameplay_startup::CompletedAttemptPersistenceRoute::None,

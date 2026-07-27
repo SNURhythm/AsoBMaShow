@@ -1,4 +1,5 @@
 #include "replay/CourseReplayPersistence.h"
+#include "replay/CourseResultPersistence.h"
 #include "replay/ReplayFileStore.h"
 #include "replay/ReplaySetupProvenance.h"
 #include "repositories/SqliteRAII.h"
@@ -451,12 +452,127 @@ void testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows() {
          "real exact course retry reuses the same result and BRD ownership");
 }
 
+void testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult() {
+  const auto value = attempt();
+  int resultCalls = 0;
+  int projectionCalls = 0;
+  CourseResultPersistence coordinator(CourseResultPersistenceDependencies{
+      .persistResult =
+          [&](const CapturedCourseReplayAttempt &received) {
+            ++resultCalls;
+            expect(received.result == value.result,
+                   "result-first coordinator preserves captured facts");
+            return CourseReplayPersistenceOutcome{
+                .state = CourseReplayPersistenceState::SavedWithReplay,
+                .receipt = ModernCourseStageReceipt{
+                    .attemptId = value.result.attemptId,
+                    .resultId = 91,
+                    .createdAt = "2026-07-27 13:00:00"},
+                .replayAttached = true};
+          },
+      .projectScore =
+          [&](const result_persistence::PendingCourseScoreWrite &pending) {
+            ++projectionCalls;
+            expect(pending.attemptId == value.result.attemptId &&
+                       pending.modernResultId == 91 &&
+                       pending.createdAt == "2026-07-27 13:00:00" &&
+                       pending.result == value.result,
+                   "score projection receives exact result/receipt agreement");
+            return result_persistence::ProjectionOutcome{
+                .status = result_persistence::ProjectionStatus::Inserted};
+          },
+  });
+
+  const auto saved = coordinator.persist(value);
+  expect(saved.state == CourseResultPersistenceState::SavedWithReplay &&
+             saved.saved() && resultCalls == 1 && projectionCalls == 1,
+         "one course completion invokes one result-first modern path");
+
+  CourseResultPersistence unavailable(CourseResultPersistenceDependencies{
+      .persistResult =
+          [&](const CapturedCourseReplayAttempt &) {
+            ++resultCalls;
+            return CourseReplayPersistenceOutcome{
+                .state = CourseReplayPersistenceState::Retryable,
+                .diagnostic = "database unavailable"};
+          },
+      .projectScore =
+          [&](const result_persistence::PendingCourseScoreWrite &) {
+            ++projectionCalls;
+            return result_persistence::ProjectionOutcome{
+                .status = result_persistence::ProjectionStatus::Inserted};
+          },
+  });
+  const auto pending = unavailable.persist(value);
+  expect(pending.state == CourseResultPersistenceState::Retryable &&
+             projectionCalls == 1,
+         "score projection never runs before a durable modern result");
+}
+
+void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
+  TemporaryDirectory profile;
+  const auto replayPath = profile.path / "replay.db";
+  const auto scorePath = profile.path / "score.db";
+  ReplayRepository replayRepository(replayPath);
+  ScoreRepository scoreRepository(scorePath);
+  expect(replayRepository.EnsureSchema() && scoreRepository.EnsureSchema(),
+         "result-first integration repositories initialize");
+
+  CourseResultPersistence persistence(scoreRepository, replayRepository);
+  const auto partial = attempt();
+  const auto saved = persistence.persist(partial);
+  expect(saved.state == CourseResultPersistenceState::SavedWithReplay &&
+             saved.saved() && saved.receipt,
+         "failed-partial course saves result, score projection, and BRD");
+  expect(queryInt(replayPath, "SELECT COUNT(*) FROM modern_course_results") ==
+                 1 &&
+             queryInt(scorePath, "SELECT COUNT(*) FROM course_scores") == 1,
+         "one final course result creates one modern result and score row");
+  expect(queryInt(scorePath,
+                  "SELECT COUNT(*) FROM course_scores WHERE attempt_id = '" +
+                      partial.result.attemptId +
+                      "' AND modern_result_id > 0") == 1,
+         "course score row retains exact attempt/result ownership");
+  for (const std::string_view table : {"replay_events", "replay_touch_samples",
+                                       "replay_lane_cover_events",
+                                       "course_replay_stages"}) {
+    expect(queryInt(replayPath,
+                    "SELECT COUNT(*) FROM " + std::string(table)) == 0,
+           "result-first course persistence writes no legacy raw rows");
+  }
+
+  const auto retried = persistence.persist(partial);
+  expect(retried.state == CourseResultPersistenceState::SavedWithReplay &&
+             retried.receipt == saved.receipt &&
+             queryInt(replayPath,
+                      "SELECT COUNT(*) FROM modern_course_results") == 1 &&
+             queryInt(scorePath, "SELECT COUNT(*) FROM course_scores") == 1,
+         "exact final-result retry is idempotent across both databases");
+
+  TemporaryDirectory summaryProfile;
+  ReplayRepository summaryReplay(summaryProfile.path / "replay.db");
+  ScoreRepository summaryScores(summaryProfile.path / "score.db");
+  expect(summaryReplay.EnsureSchema() && summaryScores.EnsureSchema(),
+         "summary-only integration repositories initialize");
+  CourseResultPersistence summaryPersistence(summaryScores, summaryReplay);
+  const auto summary = summaryPersistence.persist(attempt(false));
+  expect(summary.state == CourseResultPersistenceState::SavedWithoutReplay &&
+             summary.saved() &&
+             queryInt(summaryProfile.path / "score.db",
+                      "SELECT COUNT(*) FROM course_scores") == 1 &&
+             queryInt(summaryProfile.path / "replay.db",
+                      "SELECT COUNT(*) FROM modern_replay_files") == 0,
+         "missing raw capture preserves result and score history without BRD");
+}
+
 } // namespace
 
 int main() {
   testReplayBackedSummaryOnlyAndExactRetry();
   testReplayFailuresAndDatabaseAmbiguity();
   testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows();
+  testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult();
+  testRealResultFirstPersistenceIsIdempotentAndReplayIndependent();
   if (failures != 0) {
     std::cerr << failures << " course replay persistence test(s) failed\n";
     return 1;
