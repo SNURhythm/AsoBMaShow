@@ -1507,6 +1507,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(chart_replay_persistence_tests PRIVATE SDL2)
     endif()
 
+    add_executable(replay_file_association_coordinator_tests
+        tests/replay_file_association_coordinator_tests.cpp
+        src/replay/BeatorajaReplayPath.cpp
+    )
+    target_include_directories(replay_file_association_coordinator_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_association_coordinator_tests PRIVATE
+        cxx_std_23
+    )
+
+    add_executable(course_replay_persistence_tests
+        tests/course_replay_persistence_tests.cpp
+    )
+    target_include_directories(course_replay_persistence_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_replay_persistence_tests PRIVATE cxx_std_23)
+
     add_executable(chart_replay_context_tests
         tests/chart_replay_context_tests.cpp
         src/AtomicFile.cpp
@@ -3472,6 +3491,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_repository_modern_chart_tests
         replay_repository_modern_course_tests
         chart_replay_persistence_tests
+        replay_file_association_coordinator_tests
+        course_replay_persistence_tests
         chart_replay_context_tests
         replay_playback_driver_tests
         music_playlist_repository_tests
