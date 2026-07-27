@@ -1,4 +1,5 @@
 #include "../src/ResultRecordSummary.h"
+#include "../src/replay/ReplayFileActionSelection.h"
 
 #include <climits>
 #include <iostream>
@@ -32,6 +33,47 @@ void expectInvalid(Callable &&callable, const char *message) {
   }
   std::cerr << "FAIL: " << message << " (accepted invalid input)\n";
   ++failures;
+}
+
+result_persistence::ModernChartResult validModernResult();
+result_persistence::ModernCourseResult validModernCourseResult();
+
+void testReplayFileActionsUseModernIdentityAndCapabilitiesOnly() {
+  ModernChartResultRecord chartRecord{.result = validModernResult()};
+  const auto chart = makeModernChartResultRecord(
+      chartRecord, replay::ReplayState::Verified, false);
+  const auto chartActions = replay::replayFileActionSelection(chart, true);
+  expect(chartActions.request.has_value() && chartActions.shareVisible &&
+             chartActions.deleteVisible && chartActions.enabled &&
+             chartActions.request->owner == ModernReplayOwnerKind::ChartResult &&
+             chartActions.request->attemptId == chartRecord.result.attemptId,
+         "verified chart actions use modern attempt identity and capabilities");
+
+  ModernCourseResultRecord courseRecord{.result = validModernCourseResult()};
+  const auto course = makeModernCourseResultRecord(
+      courseRecord, replay::ReplayState::Corrupt);
+  const auto courseActions = replay::replayFileActionSelection(course, true);
+  expect(courseActions.request.has_value() && !courseActions.shareVisible &&
+             courseActions.deleteVisible &&
+             courseActions.request->owner == ModernReplayOwnerKind::CourseResult,
+         "corrupt course remains deletable but not shareable");
+
+  ReplaySummary legacyReplay;
+  legacyReplay.id = 7;
+  legacyReplay.finalScore = 1;
+  legacyReplay.maxScore = 2;
+  legacyReplay.createdAt = "2026-01-01 00:00:00";
+  auto legacy = makeLocalResultRecord(legacyReplay);
+  legacy.capabilities.shareOrCopy = true;
+  legacy.capabilities.deleteReplayFile = true;
+  const auto legacyActions = replay::replayFileActionSelection(legacy, true);
+  expect(!legacyActions.request && !legacyActions.shareVisible &&
+             !legacyActions.deleteVisible,
+         "legacy identities cannot enter modern replay file actions");
+
+  const auto busy = replay::replayFileActionSelection(chart, false);
+  expect(busy.shareVisible && busy.deleteVisible && !busy.enabled,
+         "busy UI preserves action visibility while disabling interaction");
 }
 
 ir::IrRemoteScore validRemoteScore() {
@@ -611,6 +653,7 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
 } // namespace
 
 int main() {
+  testReplayFileActionsUseModernIdentityAndCapabilitiesOnly();
   testLocalConversionPreservesRecordSemantics();
   testModernConversionUsesSharedReplayCapabilities();
   testModernCourseConversionKeepsResultWithoutReplay();

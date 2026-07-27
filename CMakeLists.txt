@@ -1027,6 +1027,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ResultRecordSummary.cpp
         src/ScoreProvenance.cpp
         src/replay/ReplayCapabilities.cpp
+        src/replay/ReplayFileActionSelection.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/bms_parser.cpp
