@@ -16,6 +16,7 @@
 #include "../ModernResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
 #include "../ProfileDatabaseActivity.h"
+#include "../PlatformDocumentHandoff.h"
 #include "../RAII.h"
 #include "../repositories/ScoreCacheQueries.h"
 #include "../repositories/SqliteRAII.h"
@@ -27,6 +28,9 @@
 #include "../path.h"
 #include "../replay/ChartReplayConsumer.h"
 #include "../replay/CourseReplayConsumer.h"
+#include "../replay/ReplayFileActionSelection.h"
+#include "../replay/ReplayFileActionService.h"
+#include "../replay/ReplayFileStore.h"
 #include "../view/ChartListItemView.h"
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
@@ -124,6 +128,8 @@ constexpr uint32_t kIconFilter = 0xf0b0;
 constexpr uint32_t kIconSort = 0xf0dc;
 constexpr uint32_t kIconFileLines = 0xf15c;
 constexpr uint32_t kIconCalculator = 0xf1ec;
+constexpr uint32_t kIconShare = 0xf1e0;
+constexpr uint32_t kIconTrash = 0xf1f8;
 
 ir::IrRecordActivity
 recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
@@ -2555,6 +2561,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayGBattleButton = nullptr;
   replayModalResultButton = nullptr;
   replayModalExportButton = nullptr;
+  replayShareButton = nullptr;
+  replayDeleteButton = nullptr;
   replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
@@ -2575,6 +2583,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayGBattleButtonText = nullptr;
   replayModalResultButtonText = nullptr;
   replayModalExportButtonText = nullptr;
+  replayShareButtonText = nullptr;
+  replayDeleteButtonText = nullptr;
   replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;
@@ -8051,7 +8061,19 @@ void MainMenuScene::buildReplayModal() {
   replayModalCloseButton->setWidth(54);
   replayModalCloseButton->setHeight(54);
   replayModalCloseButton->setFlexShrink(0.0f);
+  replayShareButton =
+      makeModalIconButton(kIconShare, 20, &replayShareButtonText);
+  replayShareButton->setWidth(54);
+  replayShareButton->setHeight(54);
+  replayShareButton->setFlexShrink(0.0f);
+  replayDeleteButton =
+      makeModalIconButton(kIconTrash, 20, &replayDeleteButtonText);
+  replayDeleteButton->setWidth(54);
+  replayDeleteButton->setHeight(54);
+  replayDeleteButton->setFlexShrink(0.0f);
   header->addView(replayModalTitleText);
+  header->addView(replayShareButton);
+  header->addView(replayDeleteButton);
   header->addView(replayModalFilterButton);
   header->addView(replayModalCloseButton);
   panel->addView(header);
@@ -8540,11 +8562,15 @@ void MainMenuScene::buildReplayModal() {
       makeModalButton("Export Video", 18, &replayModalExportButtonText);
   replayModalCloseButton->setOnClickListener([this]() {
     if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
+        replayIrUploadInProgress || replayFileDocumentHandoff) {
       return;
     }
     hideReplayModal();
   });
+  replayShareButton->setOnClickListener(
+      [this]() { startSelectedReplayFileShare(); });
+  replayDeleteButton->setOnClickListener(
+      [this]() { deleteSelectedReplayFile(); });
   replayModalFilterButton->setOnClickListener([this]() {
     if (replayExportInProgress.load() || replayResultRecallInProgress ||
         replayIrUploadInProgress) {
@@ -8997,6 +9023,110 @@ void MainMenuScene::hideReplayModal() {
   }
 }
 
+void MainMenuScene::startSelectedReplayFileShare() {
+  if (!selectedResultRecordSummary || replayFileDocumentHandoff ||
+      replayExportInProgress.load() || replayResultRecallInProgress ||
+      replayIrUploadInProgress) {
+    return;
+  }
+  const auto selection = replay::replayFileActionSelection(
+      *selectedResultRecordSummary, true);
+  if (!selection.request || !selection.shareVisible) {
+    return;
+  }
+
+  replay::ReplayFileStore store(
+      context.replayRepository.GetResolvedProfileRoot());
+  replay::ReplayFileActionService actions(context.replayRepository, store);
+  auto prepared = actions.prepareShare(*selection.request);
+  if (prepared.state != replay::ReplayFileActionState::Verified ||
+      !prepared.share) {
+    const std::string diagnostic = prepared.diagnostic.empty()
+                                       ? "Replay file is unavailable to share."
+                                       : prepared.diagnostic;
+    SDL_Log("Replay share unavailable: %s", diagnostic.c_str());
+    if (replayStatusText != nullptr) {
+      replayStatusText->setText(diagnostic);
+    }
+    reloadReplayRecordModels(true);
+    refreshReplayModalActions();
+    return;
+  }
+
+  PlatformDocumentExportRequest request{
+      .localPath = prepared.share->sourcePath,
+      .mimeType = "application/gzip",
+      .suggestedName = prepared.share->suggestedFilename,
+      .maxBytes = replay::kReplayLimits.maxCompressedBytes,
+      .sourceLifetime = std::move(prepared.share->sourceLifetime)};
+  replayFileDocumentHandoff =
+      platform_document_handoff::ExportDocumentAsync(std::move(request));
+  if (!replayFileDocumentHandoff) {
+    if (replayStatusText != nullptr) {
+      replayStatusText->setText("Unable to open replay sharing.");
+    }
+  } else if (replayStatusText != nullptr) {
+    replayStatusText->setText("Choose where to share the BRD replay.");
+  }
+  refreshReplayModalActions();
+}
+
+void MainMenuScene::deleteSelectedReplayFile() {
+  if (!selectedResultRecordSummary || replayFileDocumentHandoff ||
+      replayExportInProgress.load() || replayResultRecallInProgress ||
+      replayIrUploadInProgress) {
+    return;
+  }
+  const auto selection = replay::replayFileActionSelection(
+      *selectedResultRecordSummary, true);
+  if (!selection.request || !selection.deleteVisible) {
+    return;
+  }
+
+  replay::ReplayFileStore store(
+      context.replayRepository.GetResolvedProfileRoot());
+  replay::ReplayFileActionService actions(context.replayRepository, store);
+  const auto removed = actions.remove(*selection.request);
+  if (removed.state == replay::ReplayFileActionState::UserDeleted) {
+    if (replayStatusText != nullptr) {
+      replayStatusText->setText(
+          removed.cleanupPending
+              ? "Replay hidden; file cleanup will retry at startup."
+              : "Replay file deleted. Result history was kept.");
+    }
+    reloadReplayRecordModels(true);
+  } else {
+    const std::string diagnostic = removed.diagnostic.empty()
+                                       ? "Replay file could not be deleted."
+                                       : removed.diagnostic;
+    SDL_Log("Replay delete failed: %s", diagnostic.c_str());
+    if (replayStatusText != nullptr) {
+      replayStatusText->setText(diagnostic);
+    }
+  }
+  refreshReplayModalActions();
+}
+
+void MainMenuScene::applyReplayFileDocumentHandoff() {
+  if (!replayFileDocumentHandoff || !replayFileDocumentHandoff.ready()) {
+    return;
+  }
+  auto result = replayFileDocumentHandoff.takeResult();
+  replayFileDocumentHandoff.close();
+  if (replayStatusText != nullptr && result) {
+    if (result->ok()) {
+      replayStatusText->setText("Replay BRD shared.");
+    } else if (result->cancelled()) {
+      replayStatusText->setText("Replay sharing cancelled.");
+    } else {
+      replayStatusText->setText(result->message.empty()
+                                    ? "Replay sharing failed."
+                                    : result->message);
+    }
+  }
+  refreshReplayModalActions();
+}
+
 void MainMenuScene::refreshReplayModalActions() {
   const bool filterSortMode = replayFilterSortContent != nullptr &&
                               replayFilterSortContent->getVisible();
@@ -9014,7 +9144,13 @@ void MainMenuScene::refreshReplayModalActions() {
   const bool resultRecallInProgress = replayResultRecallInProgress;
   const bool irUploadInProgress = replayIrUploadInProgress;
   const bool modalOperationInProgress =
-      exportInProgress || resultRecallInProgress || irUploadInProgress;
+      exportInProgress || resultRecallInProgress || irUploadInProgress ||
+      static_cast<bool>(replayFileDocumentHandoff);
+  const auto fileActions = selectedResultRecordSummary.has_value()
+                               ? replay::replayFileActionSelection(
+                                     *selectedResultRecordSummary,
+                                     !modalOperationInProgress)
+                               : replay::ReplayFileActionSelection{};
   const bool watchVisible = capabilities.watch && !filterSortMode &&
                             !optionsMode && !progressMode;
   const bool gbattleVisible = capabilities.gBattle && !filterSortMode &&
@@ -9037,6 +9173,12 @@ void MainMenuScene::refreshReplayModalActions() {
     replayModalFilterButtonText->setText(
         ui_icons::textForCodepoint(kIconFilter));
   }
+  if (replayShareButtonText != nullptr) {
+    replayShareButtonText->setText(ui_icons::textForCodepoint(kIconShare));
+  }
+  if (replayDeleteButtonText != nullptr) {
+    replayDeleteButtonText->setText(ui_icons::textForCodepoint(kIconTrash));
+  }
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Watch");
   }
@@ -9057,6 +9199,14 @@ void MainMenuScene::refreshReplayModalActions() {
         !watchOptionsMode && !optionsMode && !progressMode;
     replayModalFilterButton->setVisible(filterVisible);
     replayModalFilterButton->setWidth(filterVisible ? 54.0f : 0.0f);
+  }
+  if (replayShareButton != nullptr) {
+    replayShareButton->setVisible(fileActions.shareVisible);
+    replayShareButton->setWidth(fileActions.shareVisible ? 54.0F : 0.0F);
+  }
+  if (replayDeleteButton != nullptr) {
+    replayDeleteButton->setVisible(fileActions.deleteVisible);
+    replayDeleteButton->setWidth(fileActions.deleteVisible ? 54.0F : 0.0F);
   }
   if (replayWatchButton != nullptr) {
     replayWatchButton->setVisible(watchVisible);
@@ -9081,6 +9231,16 @@ void MainMenuScene::refreshReplayModalActions() {
                           !modalOperationInProgress, ui_theme::control,
                           ui_theme::controlHover, ui_theme::controlPressed,
                           ui_theme::hairlineStrong);
+  styleThemedActionButton(
+      replayShareButton, replayShareButtonText,
+      fileActions.shareVisible && fileActions.enabled,
+      ui_theme::infoAction, ui_theme::infoActionHover,
+      ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(
+      replayDeleteButton, replayDeleteButtonText,
+      fileActions.deleteVisible && fileActions.enabled,
+      ui_theme::warningAction, ui_theme::warningActionHover,
+      ui_theme::warningActionPressed, ui_theme::amber);
   if (replay_record_filters::hasActiveCriteria(replayRecordFilters) ||
       filterSortMode) {
     styleThemedActionButton(
@@ -11379,6 +11539,7 @@ void MainMenuScene::update(float dt) {
   applyUnzipResult();
   applyReplayExportProgress();
   applyReplayExportResult();
+  applyReplayFileDocumentHandoff();
   observeReplayIrServiceRevisions();
 #if TARGET_OS_ANDROID
   pollPendingAndroidArchiveImport();
@@ -11473,6 +11634,7 @@ void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   revealContextMenu.reset();
   rankingsModal.reset();
+  replayFileDocumentHandoff.close();
   cancelActivePreviewLoading();
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
@@ -11651,6 +11813,8 @@ void MainMenuScene::cleanupScene() {
   replayGBattleButton = nullptr;
   replayModalResultButton = nullptr;
   replayModalExportButton = nullptr;
+  replayShareButton = nullptr;
+  replayDeleteButton = nullptr;
   replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
@@ -11671,6 +11835,8 @@ void MainMenuScene::cleanupScene() {
   replayGBattleButtonText = nullptr;
   replayModalResultButtonText = nullptr;
   replayModalExportButtonText = nullptr;
+  replayShareButtonText = nullptr;
+  replayDeleteButtonText = nullptr;
   replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;

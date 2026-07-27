@@ -9,6 +9,7 @@
 #include "../ReplayRecordFilters.h"
 #include "../ResultRecordSummary.h"
 #include "../ReplayVideoExporter.h"
+#include "../PlatformDocumentHandoff.h"
 #include "../repositories/ScoreRepository.h"
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
@@ -379,6 +380,8 @@ private:
   Button *replayGBattleButton = nullptr;
   Button *replayModalResultButton = nullptr;
   Button *replayModalExportButton = nullptr;
+  Button *replayShareButton = nullptr;
+  Button *replayDeleteButton = nullptr;
   Button *replayModalFilterButton = nullptr;
   Button *replayModalCloseButton = nullptr;
   Button *replayFps60Button = nullptr;
@@ -399,6 +402,8 @@ private:
   TextView *replayGBattleButtonText = nullptr;
   TextView *replayModalResultButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
+  TextView *replayShareButtonText = nullptr;
+  TextView *replayDeleteButtonText = nullptr;
   TextView *replayModalFilterButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
   TextView *replayFps60ButtonText = nullptr;
@@ -513,6 +518,8 @@ private:
   ChartMetaRecord replayModalChart;
   std::optional<ReplaySummary> selectedReplaySummary;
   std::optional<ResultRecordSummary> replayExportSelection;
+  platform_document_handoff::PlatformDocumentHandoffOperation
+      replayFileDocumentHandoff;
   ChartMetaRecord replayExportChart;
   int selectedReplayIndex = -1;
   int selectedExportFps = 120;
@@ -781,6 +788,9 @@ private:
                                     "Preparing export");
   void hideReplayModal();
   void refreshReplayModalActions();
+  void startSelectedReplayFileShare();
+  void deleteSelectedReplayFile();
+  void applyReplayFileDocumentHandoff();
   void refreshReplayFilterSortButtons();
   void refreshReplayExportOptionButtons();
   void updateReplayExportProgressUi(double fraction,
