@@ -3343,6 +3343,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -3353,12 +3356,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
         src/ScoreProvenance.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayProfileTransfer.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
