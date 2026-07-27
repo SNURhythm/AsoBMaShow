@@ -7963,6 +7963,90 @@ void testExistingListLimits(const std::filesystem::path &root) {
   assert(allCourse.back().id == 1);
 }
 
+void testSchema10LegacySummaryBoundaryIsHeaderOnly(
+    const std::filesystem::path &root) {
+  static_assert(ReplayRepository::kCurrentSchemaVersion == 10,
+                "move this characterization to a frozen v10 fixture before "
+                "advancing the production schema");
+  const auto path = root / "schema10-summary-boundary" / "replay.db";
+  ReplayRepository repository(path);
+  assert(repository.EnsureSchema());
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+
+  constexpr std::array chartHeaderFacts{
+      "id",
+      "chart_path",
+      "chart_md5",
+      "chart_sha256",
+      "chart_title",
+      "chart_artist",
+      "ln_mode",
+      "final_score",
+      "max_combo",
+      "final_gauge",
+      "clear_type",
+      "created_at",
+      "ruleset_version",
+      "eligibility",
+      "provenance_json",
+  };
+  for (const char *column : chartHeaderFacts) {
+    assert(columnExists(db.get(), "replays", column));
+  }
+
+  constexpr std::array courseHeaderFacts{
+      "id",
+      "course_id",
+      "course_key",
+      "course_name",
+      "course_group_name",
+      "constraint_json",
+      "final_score",
+      "max_combo",
+      "final_gauge",
+      "clear_type",
+      "completed_charts",
+      "total_charts",
+      "created_at",
+      "ruleset_version",
+      "eligibility",
+      "provenance_json",
+  };
+  for (const char *column : courseHeaderFacts) {
+    assert(columnExists(db.get(), "course_replays", column));
+  }
+
+  constexpr std::array eventDerivedFacts{
+      "max_score",
+      "p_great",
+      "great",
+      "good",
+      "bad",
+      "poor",
+      "k_poor",
+      "fast",
+      "slow",
+      "gauge_history_json",
+      "judgement_history_json",
+      "timing_history_json",
+  };
+  for (const char *column : eventDerivedFacts) {
+    assert(!columnExists(db.get(), "replays", column));
+    assert(!columnExists(db.get(), "course_replays", column));
+  }
+
+  assert(tableExists(db.get(), "replay_events"));
+  assert(tableExists(db.get(), "replay_touch_samples"));
+  assert(tableExists(db.get(), "replay_lane_cover_events"));
+  assert(tableExists(db.get(), "course_replay_stages"));
+  for (const char *column :
+       {"judgement", "diff_micros", "gauge", "gauge_type", "combo",
+        "score"}) {
+    assert(columnExists(db.get(), "replay_events", column));
+  }
+}
+
 } // namespace
 
 int main() {
@@ -8081,6 +8165,7 @@ int main() {
   testPendingSemanticConflictsAreRetainedByAcknowledgement(root);
   testPendingBatchHardCapsAt256(root);
   testMalformedPendingIdentitiesCanRotate(root);
+  testSchema10LegacySummaryBoundaryIsHeaderOnly(root);
   testExistingListLimits(root);
 
   std::filesystem::remove_all(root);
