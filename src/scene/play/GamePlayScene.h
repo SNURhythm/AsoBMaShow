@@ -16,6 +16,7 @@
 #include "../../input/IRhythmControl.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeResultFlow.h"
+#include "../../replay/ReplayInputRecorder.h"
 #include "../../view/TextView.h"
 #include "../ResultScene.h"
 #include <atomic>
@@ -118,6 +119,8 @@ private:
   void renderCoursePauseHoldRing();
   void beginReplayRecording();
   void finishReplayRecording();
+  void captureModernReplayInput(replay::LogicalControl control, bool pressed,
+                                bool replayOnly);
   void publishPracticeGhost();
   void buildReplayNoteLookup();
   void processReplayEvents(long long gameplayTimeMicros);
@@ -210,6 +213,10 @@ private:
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
   ReplayData analyticsReplay;
+  std::unique_ptr<replay::ReplayInputRecorder> modernReplayInputRecorder;
+  std::optional<std::vector<replay::InputTransition>>
+      completedModernReplayInput;
+  std::string modernReplayCaptureDiagnostic;
   ResultPersistenceOptions resultPersistenceOptions;
   std::string resultPersistenceAttemptId;
   std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;

@@ -22,6 +22,7 @@
 #include "repositories/ReplayRepository.h"
 #include "ResultPersistenceCoordinator.h"
 #include "repositories/ScoreRepository.h"
+#include "replay/ChartReplayPersistence.h"
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
@@ -312,6 +313,16 @@ public:
     try {
       result_persistence::RecoverySummary summary =
           resultPersistence.recoverAll();
+      if (profileInitializationResult.ok()) {
+        replay::ChartReplayPersistence modernPersistence(
+            scoreRepository, replayRepository,
+            replayRepository.GetResolvedDatabasePath().parent_path());
+        const auto modern = modernPersistence.recoverAll();
+        SDL_Log("Modern chart recovery completed: attempted=%zu saved=%zu "
+                "pending=%zu conflicts=%zu",
+                modern.attempted, modern.saved, modern.pending,
+                modern.conflicts);
+      }
       SDL_Log("Result recovery completed: attempted=%zu saved=%zu pending=%zu "
               "conflicts=%zu",
               summary.attempted, summary.saved, summary.pending,
@@ -328,6 +339,28 @@ public:
       SDL_Log("Result recovery raised a non-standard exception");
       return result_persistence::recoveryFailureSummary(
           "result recovery raised a non-standard exception");
+    }
+  }
+
+  [[nodiscard]] replay::ChartReplayPersistenceOutcome persistModernChart(
+      const replay::ChartReplayPersistenceAttempt &attempt,
+      std::span<const ir::IrOutboxDraft> drafts = {}) noexcept {
+    try {
+      if (!profileInitializationResult.ok()) {
+        return {.state = replay::ChartReplayPersistenceState::Retryable,
+                .diagnostic = "Player profiles are not initialized."};
+      }
+      replay::ChartReplayPersistence persistence(
+          scoreRepository, replayRepository,
+          replayRepository.GetResolvedDatabasePath().parent_path());
+      return persistence.persist(attempt, drafts);
+    } catch (const std::exception &error) {
+      return {.state = replay::ChartReplayPersistenceState::Retryable,
+              .diagnostic = std::string("Modern chart persistence failed: ") +
+                            error.what()};
+    } catch (...) {
+      return {.state = replay::ChartReplayPersistenceState::Retryable,
+              .diagnostic = "Modern chart persistence failed."};
     }
   }
 

@@ -10,6 +10,7 @@
 #include "../../PlayOptionUtils.h"
 #include "../../PrepMetronome.h"
 #include "../../repositories/ReplayRepository.h"
+#include "../../replay/ChartReplayCapture.h"
 #include "../../ResultPresentationUtils.h"
 #include "../../Uuid.h"
 #include "../../practice/PracticeResultFlow.h"
@@ -87,6 +88,41 @@ resultPersistenceStateName(result_persistence::SaveState state) noexcept {
     return "PendingConflict";
   }
   return "Unknown";
+}
+
+const char *chartReplayPersistenceStateName(
+    replay::ChartReplayPersistenceState state) noexcept {
+  switch (state) {
+  case replay::ChartReplayPersistenceState::SavedWithReplay:
+    return "SavedWithReplay";
+  case replay::ChartReplayPersistenceState::SavedWithoutReplay:
+    return "SavedWithoutReplay";
+  case replay::ChartReplayPersistenceState::PendingScore:
+    return "PendingScore";
+  case replay::ChartReplayPersistenceState::PendingAcknowledgement:
+    return "PendingAcknowledgement";
+  case replay::ChartReplayPersistenceState::Retryable:
+    return "Retryable";
+  case replay::ChartReplayPersistenceState::InvalidAttempt:
+    return "InvalidAttempt";
+  case replay::ChartReplayPersistenceState::IntegrityConflict:
+    return "IntegrityConflict";
+  }
+  return "Unknown";
+}
+
+replay::ReplayTouchAction modernTouchAction(ReplayTouchAction action) noexcept {
+  switch (action) {
+  case ReplayTouchAction::Down:
+    return replay::ReplayTouchAction::Down;
+  case ReplayTouchAction::Move:
+    return replay::ReplayTouchAction::Move;
+  case ReplayTouchAction::Up:
+    return replay::ReplayTouchAction::Up;
+  case ReplayTouchAction::Cancel:
+    return replay::ReplayTouchAction::Cancel;
+  }
+  return replay::ReplayTouchAction::Cancel;
 }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
 constexpr auto kPlayStartInputPlatform = PlayStartInputPlatform::Mobile;
@@ -1470,6 +1506,15 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   }
 
   if (transferReplay) {
+    if (modernReplayInputRecorder != nullptr) {
+      completedModernReplayInput =
+          session.worker->copyAcceptedReplayInputAfterStop();
+      if (!completedModernReplayInput.has_value()) {
+        modernReplayCaptureDiagnostic =
+            "Realtime raw replay input capture was unavailable.";
+      }
+      modernReplayInputRecorder.reset();
+    }
     const auto capturePolicy = resultCapturePolicy();
     const auto workerEvents = session.worker->copyReplayEventsAfterStop();
     for (const auto &source : workerEvents) {
@@ -1632,7 +1677,12 @@ void GamePlayScene::init() {
         [this](const input::LogicalInputTransition &transition) {
           handleLogicalInputCommand(transition);
         },
-        context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
+        context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
+        LogicalGameplayRegistryPolicy{},
+        [this](const auto &transition) {
+          captureModernReplayInput(transition.control, transition.pressed,
+                                   transition.replayOnly);
+        });
     inputHandler = ownedInputHandler.get();
     inputHandler->setDragModeEnabled(
         assist_options::isDragMode(options.assistOption));
@@ -2616,10 +2666,21 @@ void GamePlayScene::beginReplayRecording() {
   resultPersistenceOptions = {};
   resultPersistenceAttemptId.clear();
   resultPersistenceAttemptCreationTried = false;
+  modernReplayInputRecorder.reset();
+  completedModernReplayInput.reset();
+  modernReplayCaptureDiagnostic.clear();
   practiceGhostPublished = false;
   recordedAttemptCompleted = false;
   lastRecordedTouchSamples.clear();
   const auto capturePolicy = resultCapturePolicy();
+  if (gameplay_startup::completedAttemptPersistenceRoute(
+          capturePolicy.persistScore && capturePolicy.persistReplay,
+          isCoursePlayback()) == gameplay_startup::
+                                     CompletedAttemptPersistenceRoute::
+                                         ModernChartFile) {
+    modernReplayInputRecorder =
+        std::make_unique<replay::ReplayInputRecorder>();
+  }
   analyticsReplay = {};
   if (capturePolicy.captureAnalytics) {
     analyticsReplay.autoPlay = options.autoPlay;
@@ -2657,6 +2718,23 @@ void GamePlayScene::beginReplayRecording() {
   appendReplayLaneCoverEvent(
       effectiveNoteStartPositionPercent(),
       getGameplayTimeMicros(preparationPlan.playbackStartTimeMicros), false);
+}
+
+void GamePlayScene::captureModernReplayInput(replay::LogicalControl control,
+                                             bool pressed,
+                                             bool replayOnly) {
+  if (modernReplayInputRecorder == nullptr ||
+      realtimeGameplayAuthorityActive()) {
+    return;
+  }
+  std::string diagnostic;
+  if (!modernReplayInputRecorder->recordSongTime(
+          getGameplayTimeMicros(context.jukebox.getTimeMicros()), control,
+          pressed, diagnostic, replayOnly)) {
+    modernReplayCaptureDiagnostic =
+        diagnostic.empty() ? "Raw replay input capture failed."
+                           : std::move(diagnostic);
+  }
 }
 
 void GamePlayScene::finishReplayRecording() {
@@ -2912,7 +2990,150 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
 
   finishReplayRecording();
   const auto capturePolicy = resultCapturePolicy();
-  if (capturePolicy.persistScore && capturePolicy.persistReplay) {
+  const auto persistenceRoute =
+      gameplay_startup::completedAttemptPersistenceRoute(
+          capturePolicy.persistScore && capturePolicy.persistReplay,
+          isCoursePlayback());
+  if (persistenceRoute == gameplay_startup::
+                              CompletedAttemptPersistenceRoute::
+                                  ModernChartFile) {
+    resultPersistenceAttemptCreationTried = true;
+    if (resultPersistenceAttemptId.empty()) {
+      resultPersistenceAttemptId = uuid::generateV4();
+    }
+
+    std::int64_t completionSongTimeMicros = std::max<std::int64_t>(
+        0, getGameplayTimeMicros(context.jukebox.getTimeMicros()));
+    std::vector<replay::ReplayTouchSample> touchSamples;
+    touchSamples.reserve(recordedReplay.touchSamples.size());
+    for (const auto &sample : recordedReplay.touchSamples) {
+      touchSamples.push_back({.action = modernTouchAction(sample.action),
+                              .fingerId = sample.fingerId,
+                              .songTimeMicros = sample.songTimeMicros,
+                              .x = sample.x,
+                              .y = sample.y});
+      completionSongTimeMicros =
+          std::max(completionSongTimeMicros, sample.songTimeMicros);
+    }
+    std::vector<replay::ReplayLaneCoverEvent> laneCoverEvents;
+    laneCoverEvents.reserve(recordedReplay.laneCoverEvents.size());
+    for (const auto &event : recordedReplay.laneCoverEvents) {
+      laneCoverEvents.push_back({
+          .songTimeMicros = event.songTimeMicros,
+          .noteStartPositionPercent = event.noteStartPositionPercent,
+          .resetVisibleTimeReference = event.resetVisibleTimeReference,
+      });
+      completionSongTimeMicros =
+          std::max(completionSongTimeMicros, event.songTimeMicros);
+    }
+    const replay::ReplayTimeBounds timeBounds{
+        .completionSongTimeMicros = completionSongTimeMicros};
+    if (!completedModernReplayInput.has_value() &&
+        modernReplayInputRecorder != nullptr) {
+      std::string inputDiagnostic;
+      completedModernReplayInput =
+          modernReplayInputRecorder->finish(timeBounds, inputDiagnostic);
+      if (!completedModernReplayInput.has_value()) {
+        modernReplayCaptureDiagnostic =
+            inputDiagnostic.empty() ? "Raw replay input capture failed."
+                                    : std::move(inputDiagnostic);
+      }
+      modernReplayInputRecorder.reset();
+    }
+
+    const std::int64_t playedAt = nowUnixMillis();
+    const int resultLongNoteMode =
+        chart != nullptr
+            ? scoreLongNoteModeForClearLamp(chart->Meta, options.longNoteMode)
+            : 0;
+    std::string constructionDiagnostic;
+    std::optional<result_persistence::ModernChartResult> result;
+    if (chart != nullptr && state != nullptr) {
+      result = result_persistence::captureModernChartResult(
+          resultPersistenceAttemptId, chart->Meta, *state, attemptProvenance,
+          resultLongNoteMode, playedAt,
+          constructionDiagnostic);
+    }
+
+    replay::ChartReplayPersistenceOutcome persistenceOutcome{
+        .state = replay::ChartReplayPersistenceState::InvalidAttempt,
+        .diagnostic = constructionDiagnostic.empty()
+                          ? "modern result capture failed"
+                          : constructionDiagnostic};
+    if (result.has_value()) {
+      const replay::ReplayChartIdentity resultIdentity{
+          .md5 = result->score.chartMd5,
+          .sha256 = result->score.chartSha256,
+          .keyMode = result->keyMode,
+      };
+      const int initialLaneCover =
+          recordedReplay.laneCoverEvents.empty()
+              ? effectiveNoteStartPositionPercent()
+              : recordedReplay.laneCoverEvents.front()
+                    .noteStartPositionPercent;
+      const replay::ChartReplayCapture capture{
+          .result = std::move(*result),
+          .setupFacts =
+              {.chart = resultIdentity,
+               .longNoteMode = resultLongNoteMode,
+               .hasUndefinedLongNotes =
+                   chartContainsUndefinedLongNote(*chart),
+               .initialLaneCoverPercent = initialLaneCover,
+               .laneCoverEnabled = initialLaneCover > 0},
+          .acceptedInput = completedModernReplayInput,
+          .touchSamples = std::move(touchSamples),
+          .laneCoverEvents = std::move(laneCoverEvents),
+          .timeBounds = timeBounds,
+      };
+      auto attempt = replay::captureChartReplayPersistenceAttempt(
+          capture, constructionDiagnostic);
+      if (attempt.has_value()) {
+        if (attempt->irSnapshot.has_value()) {
+          resultPersistenceOptions.irSubmission =
+              std::make_shared<const ir::IrSubmission>(
+                  attempt->irSnapshot->submission);
+        }
+        const std::vector<ir::IrOutboxDraft> automaticDrafts =
+            attempt->irSnapshot
+                ? context.irDrivers.buildAutomaticDrafts(
+                      context.settings.irProviders,
+                      attempt->irSnapshot->submission)
+                : std::vector<ir::IrOutboxDraft>{};
+        persistenceOutcome =
+            context.persistModernChart(*attempt, automaticDrafts);
+        resultPersistenceOptions.outcome.state =
+            persistenceOutcome.saved()
+                ? result_persistence::SaveState::Saved
+                : result_persistence::SaveState::Unstaged;
+        resultPersistenceOptions.outcome.diagnostic =
+            persistenceOutcome.diagnostic;
+        if (!automaticDrafts.empty() && context.irSubmissionService) {
+          context.irSubmissionService->notifyOutboxChanged();
+        }
+      } else {
+        persistenceOutcome.diagnostic =
+            constructionDiagnostic.empty()
+                ? "modern chart completion construction failed"
+                : constructionDiagnostic;
+      }
+    }
+    if (!modernReplayCaptureDiagnostic.empty()) {
+      SDL_Log("Modern replay capture diagnostic=%s",
+              modernReplayCaptureDiagnostic.c_str());
+    }
+    if (!constructionDiagnostic.empty()) {
+      SDL_Log("Modern chart construction diagnostic=%s",
+              constructionDiagnostic.c_str());
+    }
+    SDL_Log("Modern chart persistence state=%s diagnostic=%s",
+            chartReplayPersistenceStateName(persistenceOutcome.state),
+            persistenceOutcome.diagnostic.c_str());
+    if (!persistenceOutcome.saved()) {
+      delayMillis = 0;
+    }
+  } else if (persistenceRoute == gameplay_startup::
+                                     CompletedAttemptPersistenceRoute::
+                                         LegacyCourse) {
     if (!resultPersistenceAttemptCreationTried) {
       resultPersistenceAttemptCreationTried = true;
       if (resultPersistenceAttemptId.empty()) {

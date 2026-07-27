@@ -78,6 +78,7 @@ struct StartOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  bool doublePlayFlip = false;
   int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
   std::string pacemakerTarget = pacemaker::kTargetBest;
@@ -269,6 +270,7 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
   options.gaugeProfile = replay.provenance.gaugeProfile;
   options.gaugeAutoShift = replay.provenance.gaugeAutoShift;
   options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
+  options.doublePlayFlip = replay.provenance.doublePlayFlip;
   if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
     options.ruleset = GameplayRuleset::Beatoraja;
     options.requiredRulesetDescriptor =
@@ -398,6 +400,7 @@ enforceCoursePlaybackRules(StartOptions options) {
                    .seed = options.playOptionSeed};
   input.player2 = {.option = options.playOption2.value_or("NORMAL"),
                    .seed = options.playOption2Seed};
+  input.doublePlayFlip = options.doublePlayFlip;
   input.assistOption = options.assistOption;
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;
@@ -445,6 +448,7 @@ enforceCoursePlaybackRules(StartOptions options) {
                    .seed = options.playOptionSeed};
   input.player2 = {.option = options.playOption2.value_or("NORMAL"),
                    .seed = options.playOption2Seed};
+  input.doublePlayFlip = options.doublePlayFlip;
   input.assistOption = options.assistOption;
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;
