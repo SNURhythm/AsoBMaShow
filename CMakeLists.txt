@@ -913,6 +913,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(course_continuation_tests
         tests/course_continuation_tests.cpp
         src/ScoreProvenance.cpp
+        src/replay/CourseContinuation.cpp
+        src/replay/BeatorajaReplayPath.cpp
         src/replay/ReplaySetup.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp

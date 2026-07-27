@@ -11,6 +11,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -42,12 +43,28 @@ GaugeStateSnapshot gauge(float current, GaugeType adopted) {
   return value;
 }
 
+bool sameGauge(const GaugeStateSnapshot &left,
+               const GaugeStateSnapshot &right) {
+  return left.gaugeType == right.gaugeType &&
+         left.selectedGaugeType == right.selectedGaugeType &&
+         left.gaugeAutoShiftLowerBound == right.gaugeAutoShiftLowerBound &&
+         left.gaugeProfile == right.gaugeProfile &&
+         left.gaugeAutoShift == right.gaugeAutoShift &&
+         left.currentGauge == right.currentGauge &&
+         left.gaugeValues == right.gaugeValues &&
+         left.gaugeSurvivalFailed == right.gaugeSurvivalFailed;
+}
+
 replay::ReplaySetup setup(int keyMode, char shaDigit) {
   replay::ReplaySetup value;
   value.chart.md5 = std::string(32, shaDigit);
   value.chart.sha256 = std::string(64, shaDigit);
   value.chart.keyMode = keyMode;
   value.longNoteMode = 1;
+  value.initialGaugeType = GaugeType::Hard;
+  value.gaugeProfile = GaugeProfile::Standard;
+  value.gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  value.gaugeAutoShiftLowerBound = GaugeType::Easy;
   return value;
 }
 
@@ -55,7 +72,7 @@ replay::CourseContinuationState initialState(std::size_t totalStages = 2) {
   const replay::CourseContinuationStart start{
       .totalStages = totalStages,
       .initialGauge = gauge(75.0F, GaugeType::Hard),
-      .constraints = {.identifiers = {"CLASS", "MIRROR"},
+      .constraints = {.beatorajaConstraintIds = {4, 9},
                       .longNoteMode = 1},
   };
   const auto outcome = replay::startCourseContinuation(start);
@@ -99,7 +116,8 @@ void testContiguousMixedSetupCourseCarriesEveryStateFact() {
          "course score and maximum score are accumulated");
   expect(first.state->combo == 4 && first.state->maximumCombo == 7,
          "ending combo and course maximum combo are carried");
-  expect(first.state->gauge == gauge(68.0F, GaugeType::Hard) &&
+  expect(sameGauge(first.state->gauge,
+                   gauge(68.0F, GaugeType::Hard)) &&
              first.state->adoptedGauge == GaugeType::Hard,
          "all gauge values, failures, selection, and adoption are carried");
   expect(first.state->restMicrosAfterStage.size() == 1 &&
@@ -108,8 +126,8 @@ void testContiguousMixedSetupCourseCarriesEveryStateFact() {
          "inclusive maximum course rest is retained");
   expect(first.state->stageSetups.size() == 1 &&
              first.state->stageSetups.front().chart.keyMode == 7 &&
-             first.state->constraints.identifiers ==
-                 std::vector<std::string>({"CLASS", "MIRROR"}),
+             first.state->constraints.beatorajaConstraintIds ==
+                 std::vector<int>({4, 9}),
          "constraints and first-stage setup remain explicit");
 
   const auto second = replay::advanceCourseContinuation(
