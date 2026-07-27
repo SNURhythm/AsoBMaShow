@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -115,14 +116,14 @@ ReplayChartDocument replayDocument(
 
 ModernReplayFileReference replayReference(
     const result_persistence::ModernChartResult &saved) {
-  const std::string stem = saved.score.chartSha256 + "_1";
-  const auto relative = std::filesystem::path("replay") / (stem + ".brd");
+  std::string diagnostic;
+  const auto stem = chartStem(saved.score.chartSha256,
+                              saved.score.longNoteMode, false, diagnostic);
+  const auto identity = stem ? pathForStem(*stem, 0, diagnostic) : std::nullopt;
   return {.id = 8,
           .resultId = saved.resultId,
-          .identity = {.stem = stem,
-                       .historyIndex = 0,
-                       .relativePath = relative},
-          .metadata = {.relativePath = relative,
+          .identity = *identity,
+          .metadata = {.relativePath = identity->relativePath,
                        .sha256 = repeated('c', 64),
                        .compressedSize = 3,
                        .codecVersion = BeatorajaReplayCodec::kCodecVersion}};
@@ -145,6 +146,7 @@ struct Harness {
       ModernChartResultReadStatus::Loaded;
   bool attachReplay = true;
   ReplayFileState fileState = ReplayFileState::Available;
+  bool throwDuringFileRead = false;
   bool unsupportedExtension = false;
   bool decodeChart = true;
 
@@ -164,6 +166,9 @@ struct Harness {
         },
         .readVerifiedFile = [this](const ReplayFileMetadata &) {
           calls.emplace_back("file");
+          if (throwDuringFileRead) {
+            throw std::runtime_error("injected file read failure");
+          }
           ReplayFileReadOutcome outcome{.state = fileState};
           if (fileState == ReplayFileState::Available) {
             outcome.bytes = std::vector<std::byte>{std::byte{1}, std::byte{2},
@@ -235,6 +240,16 @@ void testFileFailuresRetainResultAndFailReplayClosed() {
   expect(loaded.state == ChartReplayContextState::ReplayNotAttached &&
              loaded.resultAvailable() && !loaded.replayAvailable(),
          "result without file reference remains recallable");
+
+  Harness exceptional;
+  exceptional.throwDuringFileRead = true;
+  auto exceptionalContext = exceptional.makeContext();
+  const auto exceptionalLoad =
+      exceptionalContext.load(kAttemptId, parsedFacts(exceptional.result));
+  expect(exceptionalLoad.state == ChartReplayContextState::FileIoFailure &&
+             exceptionalLoad.resultAvailable() &&
+             !exceptionalLoad.replayAvailable(),
+         "unexpected replay I/O failure still preserves result recall");
 }
 
 void testParsedIdentityAndLongNoteAgreementPrecedeFileAccess() {

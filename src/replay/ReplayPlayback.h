@@ -57,6 +57,30 @@ logicalControlForChartLane(
                         .lane = playerLane};
 }
 
+[[nodiscard]] inline std::optional<int>
+physicalChartLaneForLogicalControl(int keyMode,
+                                   const LogicalControl &control) noexcept {
+  const auto layout = replayKeyModeLayout(keyMode);
+  if (!layout || control.player < 1 || control.player > layout->players) {
+    return std::nullopt;
+  }
+  if (control.kind == LogicalControlKind::ScratchClockwise ||
+      control.kind == LogicalControlKind::ScratchCounterClockwise) {
+    if (!layout->hasDirectionalScratch || control.lane != -1) {
+      return std::nullopt;
+    }
+    return control.player == 2 ? 15 : 7;
+  }
+  if (control.kind != LogicalControlKind::Lane || control.lane < 0 ||
+      control.lane >= layout->logicalLanesPerPlayer) {
+    return std::nullopt;
+  }
+  if (control.player == 1) {
+    return control.lane;
+  }
+  return control.lane + (keyMode == 48 ? 26 : 8);
+}
+
 struct InputTransition {
   std::int64_t songTimeMicros = 0;
   LogicalControl control;

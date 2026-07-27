@@ -4,6 +4,7 @@
 #include "ScoreProvenance.h"
 
 #include <iostream>
+#include <tuple>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -88,7 +89,8 @@ result_persistence::ModernChartResult savedResult() {
 }
 
 void testDriverMergesStreamsWithoutChangingTheirTiming() {
-  ReplayPlaybackDriver driver(document(), ReplaySetupSource::LocalCapture);
+  const auto replay = document();
+  ReplayPlaybackDriver driver(replay, ReplaySetupSource::LocalCapture);
   std::vector<std::string> delivered;
   ReplayPlaybackSink sink{
       .input = [&](const InputTransition &event, std::string &) {
@@ -122,7 +124,8 @@ void testDriverMergesStreamsWithoutChangingTheirTiming() {
 }
 
 void testDriverRejectsReverseTimeAndBoundsEachAdvance() {
-  ReplayPlaybackDriver driver(document(), ReplaySetupSource::LocalCapture);
+  const auto replay = document();
+  ReplayPlaybackDriver driver(replay, ReplaySetupSource::LocalCapture);
   ReplayPlaybackSink sink;
   expect(driver.advanceTo(200, sink).state ==
              ReplayPlaybackDriverState::Advanced,
@@ -131,11 +134,95 @@ void testDriverRejectsReverseTimeAndBoundsEachAdvance() {
              ReplayPlaybackDriverState::NonMonotonicAdvance,
          "reverse playback time fails closed");
 
-  ReplayPlaybackDriver bounded(document(), ReplaySetupSource::LocalCapture);
+  ReplayPlaybackDriver bounded(replay, ReplaySetupSource::LocalCapture);
   const auto exhausted = bounded.advanceTo(1'000, sink, 2);
   expect(exhausted.state == ReplayPlaybackDriverState::WorkLimitExceeded &&
              !bounded.complete(),
          "per-run event budget bounds adversarial playback work");
+}
+
+void testLogicalGameplayAdapterOwnsLaneAndScratchMapping() {
+  for (const auto &layout : kReplayKeyModeLayouts) {
+    for (int player = 1; player <= layout.players; ++player) {
+      for (int lane = 0; lane < layout.logicalLanesPerPlayer; ++lane) {
+        const LogicalControl logical{.kind = LogicalControlKind::Lane,
+                                     .player = player,
+                                     .lane = lane};
+        const auto physical = physicalChartLaneForLogicalControl(
+            layout.keyMode, logical);
+        expect(physical &&
+                   logicalControlForChartLane(layout.keyMode, *physical,
+                                              false) == logical,
+               "logical lane mapping round-trips through one authority");
+      }
+      if (layout.hasDirectionalScratch) {
+        const LogicalControl scratch{
+            .kind = LogicalControlKind::ScratchCounterClockwise,
+            .player = player,
+            .lane = -1};
+        const auto physical = physicalChartLaneForLogicalControl(
+            layout.keyMode, scratch);
+        expect(physical &&
+                   logicalControlForChartLane(
+                       layout.keyMode, *physical, true,
+                       LogicalControlKind::ScratchCounterClockwise) == scratch,
+               "directional scratch mapping round-trips through one authority");
+      }
+    }
+  }
+
+  struct Edge {
+    bool pressed = false;
+    int lane = -1;
+    bool backSpin = false;
+    double delay = 0.0;
+  };
+  std::vector<Edge> edges;
+  ReplayLogicalGameplayAdapter adapter(
+      14,
+      {.pressLane = [&](int lane, double delay) {
+         edges.push_back({.pressed = true, .lane = lane, .delay = delay});
+       },
+       .releaseLane = [&](int lane, double delay, bool backSpin) {
+         edges.push_back({.pressed = false,
+                          .lane = lane,
+                          .backSpin = backSpin,
+                          .delay = delay});
+       }});
+  const std::vector<InputTransition> batch{
+      {.songTimeMicros = 100,
+       .control = {.kind = LogicalControlKind::Lane,
+                   .player = 2,
+                   .lane = 2},
+       .pressed = true},
+      {.songTimeMicros = 100,
+       .control = {.kind = LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 200,
+       .control = {.kind = LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = false},
+      {.songTimeMicros = 200,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = true},
+  };
+  std::string diagnostic;
+  expect(adapter.applyBatch(std::span(batch).first(2), 250, diagnostic) &&
+             adapter.applyBatch(std::span(batch).subspan(2), 250, diagnostic),
+         "logical replay adapter accepts timestamp batches");
+  expect(edges.size() == 4 && edges[0].lane == 10 &&
+             edges[0].delay == 0.00015 && edges[1].lane == 7 &&
+             !edges[2].pressed && edges[2].lane == 7 &&
+             edges[2].backSpin && edges[3].pressed && edges[3].lane == 7,
+         "adapter maps double lanes and same-time scratch reversal exactly");
+  adapter.reset();
+  expect(!edges.back().pressed && edges.back().lane == 10,
+         "adapter reset releases every remaining physical lane");
 }
 
 void testMaterializerUsesDriverAndOnlyComparesSavedFacts() {
@@ -198,6 +285,7 @@ void testMaterializationBudgetStopsBeforeResultConstruction() {
 int main() {
   testDriverMergesStreamsWithoutChangingTheirTiming();
   testDriverRejectsReverseTimeAndBoundsEachAdvance();
+  testLogicalGameplayAdapterOwnsLaneAndScratchMapping();
   testMaterializerUsesDriverAndOnlyComparesSavedFacts();
   testMaterializationBudgetStopsBeforeResultConstruction();
   if (failures != 0) {

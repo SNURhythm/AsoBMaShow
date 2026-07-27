@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BeatorajaReplayCodec.h"
+#include "ChartReplayAgreement.h"
 #include "ReplayFileStore.h"
 
 #include "../ModernResult.h"
@@ -19,28 +20,6 @@
 #include <vector>
 
 namespace replay {
-
-enum class ChartReplayAgreementIssue {
-  None,
-  Result,
-  Replay,
-  ChartIdentity,
-  LongNoteMode,
-  SharedSetup,
-};
-
-struct ChartReplayAgreement {
-  ChartReplayAgreementIssue issue = ChartReplayAgreementIssue::None;
-  std::string diagnostic;
-
-  [[nodiscard]] bool agrees() const noexcept {
-    return issue == ChartReplayAgreementIssue::None;
-  }
-};
-
-[[nodiscard]] ChartReplayAgreement compareChartReplayToResult(
-    const ReplayChartDocument &replay,
-    const result_persistence::ModernChartResult &result) noexcept;
 
 struct ChartReplayPersistenceAttempt {
   result_persistence::ModernChartResult result;

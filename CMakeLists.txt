@@ -767,7 +767,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_setup_tests
         tests/replay_setup_tests.cpp
+        src/ScoreProvenance.cpp
         src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
     )
     target_include_directories(replay_setup_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -801,11 +805,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(beatoraja_replay_codec_tests
         tests/beatoraja_replay_codec_tests.cpp
         src/MinizBridge.c
+        src/ScoreProvenance.cpp
         src/replay/Base64Url.cpp
         src/replay/GzipCodec.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
         src/bms_parser.cpp
     )
     target_include_directories(beatoraja_replay_codec_tests PRIVATE
@@ -844,6 +852,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/FileChecksum.cpp
         src/MinizBridge.c
+        src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/replay/Base64Url.cpp
         src/replay/BeatorajaReplayCodec.cpp
@@ -853,6 +862,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplayFileStore.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
     )
     target_include_directories(replay_codec_store_contract_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -863,8 +875,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_playback_tests
         tests/replay_playback_tests.cpp
+        src/ScoreProvenance.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
     )
     target_include_directories(replay_playback_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1340,6 +1356,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/BeatorajaReplayPath.cpp
         src/replay/ChartReplayCapture.cpp
+        src/replay/ChartReplayAgreement.cpp
         src/replay/ChartReplayPersistence.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileLifecycle.cpp
@@ -1396,6 +1413,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/Base64Url.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/BeatorajaReplayPath.cpp
+        src/replay/ChartReplayAgreement.cpp
         src/replay/ChartReplayContext.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileLifecycle.cpp
@@ -1436,9 +1454,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_playback_driver_tests
         tests/replay_playback_driver_tests.cpp
+        src/FileChecksum.cpp
         src/ModernResult.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplayPlaybackDriver.cpp
         src/replay/ReplayPlaybackMaterializer.cpp
