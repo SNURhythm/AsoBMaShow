@@ -1466,6 +1466,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
+        src/replay/ChartReplayConsumer.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplayPlaybackDriver.cpp
         src/replay/ReplayPlaybackMaterializer.cpp

@@ -1,3 +1,4 @@
+#include "replay/ChartReplayConsumer.h"
 #include "replay/ReplayPlaybackDriver.h"
 #include "replay/ReplayPlaybackMaterializer.h"
 #include "replay/ReplaySetupAdapter.h"
@@ -6,7 +7,10 @@
 #include "ScoreProvenance.h"
 #include "bms_parser.hpp"
 
+#include <atomic>
+#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <tuple>
 #include <string>
 #include <string_view>
@@ -224,6 +228,103 @@ void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
          "setup translation fails closed when the parser seed cannot round-trip");
 }
 
+void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
+  auto listed = ModernChartResultRecord{.result = savedResult()};
+  auto replay = document();
+  replay.playback.setup.ruleset = listed.result.score.provenance.ruleset;
+  replay.playback.setup.gaugeProfile =
+      listed.result.score.provenance.gaugeProfile;
+  replay.playback.setup.initialGaugeType =
+      listed.result.score.provenance.gaugeType;
+  replay.playback.setup.longNoteMode = listed.result.score.longNoteMode;
+
+  std::vector<std::string> calls;
+  ChartReplayConsumer consumer({
+      .parseBaseChart = [&](const std::filesystem::path &path,
+                            std::atomic_bool &) {
+        calls.emplace_back("parse");
+        expect(path == "selected/chart.bms",
+               "consumer parses the selected chart path");
+        return std::make_unique<bms_parser::Chart>(oneNoteChart());
+      },
+      .loadContext = [&](std::string_view attemptId,
+                         const ParsedChartReplayFacts &facts) {
+        calls.emplace_back("context");
+        expect(attemptId == listed.result.attemptId &&
+                   facts.chart.sha256 == listed.result.score.chartSha256 &&
+                   facts.longNoteMode == listed.result.score.longNoteMode &&
+                   !facts.timeBounds.has_value(),
+               "consumer supplies parsed identity without inventing time");
+        VerifiedChartReplay verified{
+            .result = listed.result,
+            .document = replay,
+            .source = ReplayStageDecodeSource::AsoExtension,
+        };
+        return ChartReplayContextOutcome{
+            .state = ChartReplayContextState::Ready,
+            .result = listed.result,
+            .verified = std::move(verified),
+        };
+      },
+      .prepareChart = [&](const std::filesystem::path &path,
+                          const ReplaySetup &setup,
+                          const ScoreProvenance &provenance,
+                          const bms_parser::ChartMeta &parsedMeta,
+                          std::atomic_bool &, std::string &) {
+        calls.emplace_back("prepare");
+        expect(path == "selected/chart.bms" &&
+                   setup == replay.playback.setup &&
+                   provenance == listed.result.score.provenance &&
+                   parsedMeta.SHA256 == listed.result.score.chartSha256,
+               "consumer passes one verified setup to chart preparation");
+        return std::make_unique<bms_parser::Chart>(oneNoteChart());
+      },
+      .materialize = [&](const ReplayChartDocument &document,
+                         ReplaySetupSource source,
+                         const result_persistence::ModernChartResult &result,
+                         const bms_parser::Chart &) {
+        calls.emplace_back("materialize");
+        expect(document == replay &&
+                   source == ReplaySetupSource::AsoExtension &&
+                   result == listed.result,
+               "consumer materializes only the verified document and result");
+        ReplayPlaybackMaterializationOutcome outcome;
+        outcome.state = ReplayPlaybackMaterializationState::Matched;
+        outcome.replayData = std::make_shared<ReplayData>();
+        return outcome;
+      },
+  });
+
+  std::atomic_bool cancelled = false;
+  auto loaded = consumer.load(listed, "selected/chart.bms", cancelled);
+  expect(loaded.ready() && loaded.chart && loaded.replayData &&
+             calls == std::vector<std::string>{"parse", "context", "prepare",
+                                               "materialize"},
+         "every chart replay action receives one fully verified preparation");
+
+  calls.clear();
+  ChartReplayConsumer missing({
+      .parseBaseChart = [&](const std::filesystem::path &,
+                            std::atomic_bool &) {
+        calls.emplace_back("parse");
+        return std::make_unique<bms_parser::Chart>(oneNoteChart());
+      },
+      .loadContext = [&](std::string_view,
+                         const ParsedChartReplayFacts &) {
+        calls.emplace_back("context");
+        return ChartReplayContextOutcome{
+            .state = ChartReplayContextState::FileMissing,
+            .result = listed.result,
+        };
+      },
+  });
+  loaded = missing.load(listed, "selected/chart.bms", cancelled);
+  expect(!loaded.ready() && !loaded.chart && !loaded.replayData &&
+             loaded.replayState() == ReplayState::Missing &&
+             calls == std::vector<std::string>{"parse", "context"},
+         "missing replay stops before setup, judging, or consumer output");
+}
+
 void testDriverMergesStreamsWithoutChangingTheirTiming() {
   const auto replay = document();
   ReplayPlaybackDriver driver(replay, ReplaySetupSource::LocalCapture);
@@ -426,6 +527,7 @@ int main() {
   testMaterializerUsesDriverAndOnlyComparesSavedFacts();
   testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement();
   testConsumerSetupAdapterOwnsEveryReplaySetupTranslation();
+  testChartConsumerOwnsTheEntireVerifiedPreparationPipeline();
   testMaterializationBudgetStopsBeforeResultConstruction();
   if (failures != 0) {
     std::cerr << failures << " replay playback driver test(s) failed\n";
