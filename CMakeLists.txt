@@ -940,11 +940,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(course_replay_capture_tests
         tests/course_replay_capture_tests.cpp
+        src/FileChecksum.cpp
+        src/ModernResult.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/CourseReplayCapture.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
     )
     target_include_directories(course_replay_capture_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(course_replay_capture_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL2)
+    endif()
 
     add_executable(result_record_summary_tests
         tests/result_record_summary_tests.cpp

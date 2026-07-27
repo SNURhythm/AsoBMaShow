@@ -178,6 +178,29 @@ struct ModernCourseResult {
   bool operator==(const ModernCourseResult &) const = default;
 };
 
+// Completion-time facts used to create one authenticated course result. The
+// aggregate fields are intentionally absent: capture derives them from the
+// ordered completed prefix and complete entry list.
+struct ModernCourseResultCapture {
+  std::string attemptId;
+  std::string courseKey;
+  int legacyCourseId = 0;
+  std::string courseName;
+  std::string courseGroupName;
+  std::string constraintJson;
+  std::string requestedPlayOption = "NORMAL";
+  std::string assistOption = assist_options::kOff;
+  GaugeType initialGaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+  int longNoteMode = 0;
+  int clearType = kClearTypeFailedRank;
+  std::vector<ModernCourseStageResult> stages;
+  std::vector<ModernCourseEntryFacts> entryFacts;
+  std::int64_t playedAtUnixMillis = 0;
+};
+
 [[nodiscard]] ChartScoreWrite captureChartScoreWrite(
     const bms_parser::ChartMeta &meta, const RhythmState &state,
     const ScoreProvenance &provenance, int storageLongNoteMode);
@@ -198,6 +221,10 @@ captureModernCourseStageResult(int stageIndex,
                                const ScoreProvenance &provenance,
                                int storageLongNoteMode,
                                std::string &diagnostic) noexcept;
+
+[[nodiscard]] std::optional<ModernCourseResult>
+captureModernCourseResult(const ModernCourseResultCapture &capture,
+                          std::string &diagnostic) noexcept;
 
 enum class ResultFactAgreementIssue {
   None,

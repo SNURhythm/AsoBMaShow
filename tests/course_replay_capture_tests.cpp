@@ -140,15 +140,17 @@ void testResultCaptureDerivesPartialAggregateFromOrderedFacts() {
   std::string diagnostic;
   const auto captured = result_persistence::captureModernCourseResult(
       resultCapture(), diagnostic);
+  const std::vector<ScoreProvenance> expectedProvenance{
+      captured ? captured->stages[0].score.provenance : ScoreProvenance{},
+      captured ? captured->stages[1].score.provenance : ScoreProvenance{},
+  };
   expect(captured.has_value(), "partial course facts capture a modern result");
   expect(captured && captured->completedCharts == 2 &&
              captured->totalCharts == 3 && captured->finalScore == 14 &&
              captured->maxScore == 30 && captured->maxCombo == 8 &&
              captured->finalGauge == 62.5F &&
              captured->provenance ==
-                 mergeCourseProvenance(
-                     {captured->stages[0].score.provenance,
-                      captured->stages[1].score.provenance}) &&
+                 mergeCourseProvenance(expectedProvenance) &&
              !captured->resultFingerprint.empty(),
          "course aggregate and fingerprint come from the ordered prefix");
   expect(captured &&

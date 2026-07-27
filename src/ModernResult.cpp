@@ -376,6 +376,84 @@ std::optional<ModernCourseStageResult> captureModernCourseStageResult(
   }
 }
 
+std::optional<ModernCourseResult>
+captureModernCourseResult(const ModernCourseResultCapture &capture,
+                          std::string &diagnostic) noexcept {
+  try {
+    diagnostic.clear();
+    if (capture.stages.empty() || capture.entryFacts.empty() ||
+        capture.stages.size() > capture.entryFacts.size() ||
+        capture.stages.size() > durable_payload::kMaximumCourseStages ||
+        capture.entryFacts.size() > durable_payload::kMaximumCourseStages) {
+      diagnostic = "modern course completion prefix is malformed";
+      return std::nullopt;
+    }
+
+    std::int64_t finalScore = 0;
+    std::int64_t maximumScore = 0;
+    std::vector<ScoreProvenance> stageProvenance;
+    stageProvenance.reserve(capture.stages.size());
+    for (std::size_t index = 0; index < capture.stages.size(); ++index) {
+      const auto &stage = capture.stages[index];
+      if (stage.stageIndex != static_cast<int>(index) ||
+          stage.score.score < 0 ||
+          finalScore > std::numeric_limits<int>::max() - stage.score.score) {
+        diagnostic = "modern course completed stages are invalid";
+        return std::nullopt;
+      }
+      finalScore += stage.score.score;
+      stageProvenance.push_back(stage.score.provenance);
+    }
+    for (const auto &entry : capture.entryFacts) {
+      const std::int64_t entryMaximum =
+          static_cast<std::int64_t>(entry.totalNotes) * 2;
+      if (entry.totalNotes <= 0 ||
+          entry.totalNotes > std::numeric_limits<int>::max() / 2 ||
+          entry.playLengthMicros < 0 || entryMaximum < 0 ||
+          maximumScore > std::numeric_limits<int>::max() - entryMaximum) {
+        diagnostic = "modern course entry facts are invalid";
+        return std::nullopt;
+      }
+      maximumScore += entryMaximum;
+    }
+
+    ModernCourseResult result{
+        .attemptId = capture.attemptId,
+        .courseKey = capture.courseKey,
+        .legacyCourseId = capture.legacyCourseId,
+        .courseName = capture.courseName,
+        .courseGroupName = capture.courseGroupName,
+        .constraintJson = capture.constraintJson,
+        .completedCharts = static_cast<int>(capture.stages.size()),
+        .totalCharts = static_cast<int>(capture.entryFacts.size()),
+        .requestedPlayOption = capture.requestedPlayOption,
+        .assistOption = capture.assistOption,
+        .initialGaugeType = capture.initialGaugeType,
+        .gaugeProfile = capture.gaugeProfile,
+        .gaugeAutoShift = capture.gaugeAutoShift,
+        .gaugeAutoShiftLowerBound = capture.gaugeAutoShiftLowerBound,
+        .longNoteMode = capture.longNoteMode,
+        .finalScore = static_cast<int>(finalScore),
+        .maxScore = static_cast<int>(maximumScore),
+        .maxCombo = capture.stages.back().score.maxCombo,
+        .finalGauge = capture.stages.back().score.finalGauge,
+        .clearType = capture.clearType,
+        .provenance = mergeCourseProvenance(stageProvenance),
+        .stages = capture.stages,
+        .entryFacts = capture.entryFacts,
+        .playedAtUnixMillis = capture.playedAtUnixMillis,
+    };
+    result.resultFingerprint = modernResultFingerprint(result);
+    if (!validateModernCourseResult(result, diagnostic)) {
+      return std::nullopt;
+    }
+    return result;
+  } catch (...) {
+    diagnostic = "modern course result capture failed";
+    return std::nullopt;
+  }
+}
+
 bool validateModernChartResult(const ModernChartResult &result,
                                std::string &diagnostic) noexcept {
   try {
