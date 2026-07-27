@@ -2,6 +2,7 @@
 #include "replay/ReplayPlaybackMaterializer.h"
 
 #include "ScoreProvenance.h"
+#include "bms_parser.hpp"
 
 #include <iostream>
 #include <tuple>
@@ -86,6 +87,91 @@ result_persistence::ModernChartResult savedResult() {
   value.playedAtUnixMillis = 1'700'000'000'123LL;
   value.resultFingerprint = result_persistence::modernResultFingerprint(value);
   return value;
+}
+
+bms_parser::Chart oneNoteChart() {
+  bms_parser::Chart chart;
+  chart.Meta.BmsPath = "library/chart.bms";
+  chart.Meta.MD5 = repeated('b', 32);
+  chart.Meta.SHA256 = repeated('a', 64);
+  chart.Meta.KeyMode = 7;
+  chart.Meta.Rank = 2;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 200.0;
+  chart.Meta.LnMode = 1;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 500'000;
+  timeline->SetNote(0, new bms_parser::Note(1));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  return chart;
+}
+
+void testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement() {
+  auto chart = oneNoteChart();
+  auto replay = document();
+  replay.timeBounds = {.completionSongTimeMicros = 2'000'000};
+  replay.playback.input = {
+      {.songTimeMicros = 500'000,
+       .control = {.kind = LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 0},
+       .pressed = true},
+      {.songTimeMicros = 510'000,
+       .control = {.kind = LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 0},
+       .pressed = false},
+  };
+
+  auto saved = savedResult();
+  ScoreProvenanceBuildInput provenance;
+  provenance.chartMeta = chart.Meta;
+  provenance.longNoteMode = 1;
+  provenance.sourceJudgeRank = chart.Meta.Rank;
+  provenance.effectiveJudgeWindows = {
+      {PGreat, {-20'000, 20'000}}, {Great, {-50'000, 50'000}},
+      {Good, {-100'000, 100'000}}, {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  provenance.totalNotes = 1;
+  provenance.authoredGaugeTotal = 200.0;
+  provenance.effectiveGaugeTotal = 200.0;
+  provenance.inputDevices = {InputDeviceCategory::Keyboard};
+  saved.score.provenance = makeScoreProvenance(provenance);
+  saved.score.maxScore = 2;
+  saved.score.chartPath = "library/chart.bms";
+  saved.keyMode = 7;
+  replay.playback.setup.ruleset = saved.score.provenance.ruleset;
+  replay.playback.setup.candidateSelection =
+      saved.score.provenance.stages.front().candidateSelection;
+  replay.playback.setup.gaugeProfile = saved.score.provenance.gaugeProfile;
+  replay.playback.setup.initialGaugeType = saved.score.provenance.gaugeType;
+  replay.playback.setup.longNoteMode = 1;
+  replay.playback.setup.playback = saved.score.provenance.playback;
+
+  const auto first = ReplayPlaybackMaterializer::materializeForConsumers(
+      replay, ReplaySetupSource::LocalCapture, saved, chart);
+  expect(first.state == ReplayPlaybackMaterializationState::ResultMismatch &&
+             first.judgedResult.has_value() && !first.replayData.has_value(),
+         "consumer track stays unavailable when replay judging disagrees");
+  if (!first.judgedResult.has_value()) {
+    return;
+  }
+
+  saved = *first.judgedResult;
+  const auto matched = ReplayPlaybackMaterializer::materializeForConsumers(
+      replay, ReplaySetupSource::LocalCapture, saved, chart);
+  expect(matched.matched() && matched.replayData.has_value() &&
+             !matched.replayData->events.empty() &&
+             matched.replayData->finalScore == saved.score.score &&
+             matched.replayData->provenance == saved.score.provenance,
+         "verified replay yields one in-memory judged track for consumers");
+  expect(matched.replayData && matched.replayData->touchSamples.size() == 1 &&
+             matched.replayData->laneCoverEvents.size() == 1,
+         "consumer track preserves BRD-owned touch and lane-cover streams");
 }
 
 void testDriverMergesStreamsWithoutChangingTheirTiming() {
@@ -287,6 +373,7 @@ int main() {
   testDriverRejectsReverseTimeAndBoundsEachAdvance();
   testLogicalGameplayAdapterOwnsLaneAndScratchMapping();
   testMaterializerUsesDriverAndOnlyComparesSavedFacts();
+  testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement();
   testMaterializationBudgetStopsBeforeResultConstruction();
   if (failures != 0) {
     std::cerr << failures << " replay playback driver test(s) failed\n";
