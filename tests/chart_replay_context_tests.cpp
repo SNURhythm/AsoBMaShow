@@ -122,6 +122,7 @@ ModernReplayFileReference replayReference(
   const auto identity = stem ? pathForStem(*stem, 0, diagnostic) : std::nullopt;
   return {.id = 8,
           .resultId = saved.resultId,
+          .userDeleted = false,
           .identity = *identity,
           .metadata = {.relativePath = identity->relativePath,
                        .sha256 = repeated('c', 64),
@@ -174,6 +175,7 @@ struct Harness {
   ModernChartResultReadStatus resultStatus =
       ModernChartResultReadStatus::Loaded;
   bool attachReplay = true;
+  bool userDeleted = false;
   ReplayFileState fileState = ReplayFileState::Available;
   bool throwDuringFileRead = false;
   bool unsupportedExtension = false;
@@ -186,10 +188,12 @@ struct Harness {
           calls.emplace_back("result");
           ModernChartResultReadOutcome outcome{.status = resultStatus};
           if (resultStatus == ModernChartResultReadStatus::Loaded) {
+            auto reference = replayReference(result);
+            reference.userDeleted = userDeleted;
             outcome.record = ModernChartResultRecord{
                 .result = result,
                 .replayFile = attachReplay
-                                  ? std::optional(replayReference(result))
+                                  ? std::optional(std::move(reference))
                                   : std::nullopt};
           }
           return outcome;
@@ -220,6 +224,18 @@ struct Harness {
         }});
   }
 };
+
+void testUserDeletedReferenceNeverTouchesFilesystem() {
+  Harness harness;
+  harness.userDeleted = true;
+  auto context = harness.makeContext();
+  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  expect(loaded.state == ChartReplayContextState::FileUserDeleted &&
+             loaded.resultAvailable() && !loaded.replayAvailable() &&
+             loaded.replayState() == ReplayState::UserDeleted &&
+             harness.calls == std::vector<std::string>{"result"},
+         "durable user deletion is projected before replay file I/O");
+}
 
 void testVerifiedContextUsesStrictLoadOrder() {
   Harness harness;
@@ -368,6 +384,7 @@ void testInvalidResultNeverTouchesReplayFile() {
 int main() {
   testParsedFactsUseOneLongNoteAndIdentityAuthority();
   testVerifiedContextUsesStrictLoadOrder();
+  testUserDeletedReferenceNeverTouchesFilesystem();
   testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate();
   testFileFailuresRetainResultAndFailReplayClosed();
   testParsedIdentityAndLongNoteAgreementPrecedeFileAccess();

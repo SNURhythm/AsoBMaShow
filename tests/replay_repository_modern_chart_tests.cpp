@@ -161,7 +161,7 @@ void testSchemaReservationAtomicStageAndExactRetry() {
   assert(repository.EnsureSchema());
 
   auto database = openDatabase(databasePath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 12);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 13);
   for (const std::string_view table :
        {"modern_chart_results", "modern_replay_files",
         "modern_replay_file_reservations", "modern_replay_stem_sequences",
@@ -171,6 +171,8 @@ void testSchemaReservationAtomicStageAndExactRetry() {
   }
   assert(columnExists(database.get(), "ir_submission_receipts",
                       "modern_chart_result_id"));
+  assert(columnExists(database.get(), "modern_replay_files",
+                      "user_deleted"));
 
   const auto completed = result(1);
   const auto savedSnapshot = snapshot(completed);
@@ -241,6 +243,42 @@ void testSchemaReservationAtomicStageAndExactRetry() {
       repository.LoadModernIrSubmissionSnapshot(completed.attemptId);
   assert(loadedSnapshot.status == ModernIrSnapshotReadStatus::Loaded &&
          loadedSnapshot.snapshot == savedSnapshot);
+
+  const auto deleted = repository.MarkModernReplayFileUserDeleted(
+      ModernReplayOwnerKind::ChartResult, completed.attemptId,
+      *loaded.record->replayFile);
+  assert(deleted.status == ModernReplayFileMutationStatus::Changed);
+  const auto afterDelete =
+      repository.LoadModernChartResultByAttempt(completed.attemptId);
+  assert(afterDelete.status == ModernChartResultReadStatus::Loaded &&
+         afterDelete.record && afterDelete.record->replayFile &&
+         afterDelete.record->replayFile->userDeleted &&
+         afterDelete.record->result == loaded.record->result);
+  const auto snapshotAfterDelete =
+      repository.LoadModernIrSubmissionSnapshot(completed.attemptId);
+  assert(snapshotAfterDelete.status == ModernIrSnapshotReadStatus::Loaded &&
+         snapshotAfterDelete.snapshot == savedSnapshot);
+  assert(repository
+             .MarkModernReplayFileUserDeleted(
+                 ModernReplayOwnerKind::ChartResult, completed.attemptId,
+                 *loaded.record->replayFile)
+             .status == ModernReplayFileMutationStatus::AlreadyChanged);
+
+  auto wrongReference = *loaded.record->replayFile;
+  wrongReference.metadata.sha256 = repeated('9', 64);
+  assert(repository
+             .MarkModernReplayFileUserDeleted(
+                 ModernReplayOwnerKind::ChartResult, completed.attemptId,
+                 wrongReference)
+             .status == ModernReplayFileMutationStatus::IntegrityConflict);
+
+  const auto inventory = repository.ListModernReplayFileReferences();
+  assert(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+         inventory.entries.size() == 1 &&
+         inventory.entries.front().owner ==
+             ModernReplayOwnerKind::ChartResult &&
+         inventory.entries.front().attemptId == completed.attemptId &&
+         inventory.entries.front().reference.userDeleted);
 
   const auto retried =
       repository.StageModernChartResult(completed, savedSnapshot, file, drafts);

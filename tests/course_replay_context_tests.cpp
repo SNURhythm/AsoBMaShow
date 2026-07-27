@@ -218,6 +218,7 @@ ModernReplayFileReference reference(
   expect(identity.has_value(), "course replay reference fixture captures");
   return {.id = 8,
           .resultId = result.resultId,
+          .userDeleted = false,
           .identity = *identity,
           .metadata = {.relativePath = identity->relativePath,
                        .sha256 = repeated('d', 64),
@@ -282,6 +283,19 @@ struct Harness {
     });
   }
 };
+
+void testUserDeletedCourseReferenceNeverTouchesFilesystem() {
+  Harness harness;
+  harness.fileReference.userDeleted = true;
+  auto context = harness.makeContext();
+  const auto loaded =
+      context.load(kAttemptId, parsedFacts(harness.result));
+  expect(loaded.state == CourseReplayContextState::FileUserDeleted &&
+             loaded.resultAvailable() && !loaded.replayAvailable() &&
+             loaded.replayState() == ReplayState::UserDeleted &&
+             harness.calls == std::vector<std::string>{"result"},
+         "durable course replay deletion is projected before file I/O");
+}
 
 void testCompletePartialRepeatedAndMixedSetupsUseStrictLoadOrder() {
   for (const auto [repeatedChart, complete] :
@@ -466,6 +480,7 @@ void testReferenceDecodePlaybackAndResultAgreementFailClosed() {
 int main() {
 #if ASOBMASHOW_HAS_COURSE_REPLAY_CONTEXT
   testCompletePartialRepeatedAndMixedSetupsUseStrictLoadOrder();
+  testUserDeletedCourseReferenceNeverTouchesFilesystem();
   testMissingCorruptUnsafeAndDetachedFilesPreserveResult();
   testParsedPrefixIdentityOrderAndSetupRejectBeforeFileAccess();
   testReferenceDecodePlaybackAndResultAgreementFailClosed();
