@@ -1,0 +1,174 @@
+#include "ReplayFileActionService.h"
+
+#include "BeatorajaReplayPath.h"
+
+namespace replay {
+namespace {
+
+ReplayFileActionState actionState(ReplayFileState state) noexcept {
+  switch (state) {
+  case ReplayFileState::Available:
+    return ReplayFileActionState::Verified;
+  case ReplayFileState::Missing:
+    return ReplayFileActionState::Missing;
+  case ReplayFileState::Corrupt:
+    return ReplayFileActionState::Corrupt;
+  case ReplayFileState::Unsafe:
+    return ReplayFileActionState::Mismatched;
+  case ReplayFileState::IoFailure:
+    return ReplayFileActionState::IoFailure;
+  }
+  return ReplayFileActionState::IoFailure;
+}
+
+} // namespace
+
+ReplayFileActionService::ReplayFileActionService(ReplayRepository &repository,
+                                                 ReplayFileStore &store)
+    : repository_(repository), store_(store) {}
+
+std::optional<ReplayFileActionService::ResolvedReference>
+ReplayFileActionService::resolve(const ReplayFileActionRequest &request,
+                                 ReplayFileActionOutcome &outcome) {
+  std::optional<ModernReplayFileReference> reference;
+  if (request.owner == ModernReplayOwnerKind::ChartResult) {
+    const auto loaded =
+        repository_.LoadModernChartResultByAttempt(request.attemptId);
+    if (loaded.status == ModernChartResultReadStatus::NotFound) {
+      outcome.state = ReplayFileActionState::ResultNotFound;
+      outcome.diagnostic = loaded.diagnostic;
+      return std::nullopt;
+    }
+    if (loaded.status != ModernChartResultReadStatus::Loaded ||
+        !loaded.record) {
+      outcome.state = loaded.status == ModernChartResultReadStatus::Invalid ||
+                              loaded.status ==
+                                  ModernChartResultReadStatus::IntegrityConflict
+                          ? ReplayFileActionState::Invalid
+                          : ReplayFileActionState::IoFailure;
+      outcome.diagnostic = loaded.diagnostic;
+      return std::nullopt;
+    }
+    reference = loaded.record->replayFile;
+  } else {
+    const auto loaded =
+        repository_.LoadModernCourseResultByAttempt(request.attemptId);
+    if (loaded.status == ModernCourseResultReadStatus::NotFound) {
+      outcome.state = ReplayFileActionState::ResultNotFound;
+      outcome.diagnostic = loaded.diagnostic;
+      return std::nullopt;
+    }
+    if (loaded.status != ModernCourseResultReadStatus::Loaded ||
+        !loaded.record) {
+      outcome.state = loaded.status == ModernCourseResultReadStatus::Invalid ||
+                              loaded.status == ModernCourseResultReadStatus::IntegrityConflict
+                          ? ReplayFileActionState::Invalid
+                          : ReplayFileActionState::IoFailure;
+      outcome.diagnostic = loaded.diagnostic;
+      return std::nullopt;
+    }
+    reference = loaded.record->replayFile;
+  }
+  if (!reference) {
+    outcome.state = ReplayFileActionState::Missing;
+    outcome.diagnostic = "The result has no replay file reference.";
+    return std::nullopt;
+  }
+  std::string diagnostic;
+  const auto canonical = pathForStem(reference->identity.stem,
+                                     reference->identity.historyIndex,
+                                     diagnostic);
+  if (!canonical || *canonical != reference->identity ||
+      reference->metadata.relativePath != reference->identity.relativePath) {
+    outcome.state = ReplayFileActionState::Invalid;
+    outcome.diagnostic = diagnostic.empty()
+                             ? "The replay reference is inconsistent."
+                             : std::move(diagnostic);
+    return std::nullopt;
+  }
+  return ResolvedReference{.owner = request.owner,
+                           .attemptId = request.attemptId,
+                           .reference = std::move(*reference)};
+}
+
+ReplayFileActionOutcome ReplayFileActionService::inspectResolved(
+    const ResolvedReference &resolved) const {
+  if (resolved.reference.userDeleted) {
+    return {.state = ReplayFileActionState::UserDeleted};
+  }
+  const auto inspected = store_.inspect(resolved.reference.metadata);
+  return {.state = actionState(inspected.state),
+          .diagnostic = inspected.diagnostic};
+}
+
+ReplayFileActionOutcome
+ReplayFileActionService::inspect(const ReplayFileActionRequest &request) {
+  ReplayFileActionOutcome outcome;
+  const auto resolved = resolve(request, outcome);
+  return resolved ? inspectResolved(*resolved) : outcome;
+}
+
+ReplayFileActionOutcome ReplayFileActionService::prepareShare(
+    const ReplayFileActionRequest &request) {
+  ReplayFileActionOutcome outcome;
+  const auto resolved = resolve(request, outcome);
+  if (!resolved) {
+    return outcome;
+  }
+  outcome = inspectResolved(*resolved);
+  if (outcome.state != ReplayFileActionState::Verified) {
+    return outcome;
+  }
+  auto snapshot = store_.stageVerifiedSnapshot(resolved->reference.metadata);
+  outcome.state = actionState(snapshot.state);
+  outcome.diagnostic = snapshot.diagnostic;
+  if (snapshot.state == ReplayFileState::Available && snapshot.snapshot) {
+    outcome.share = ReplaySharePreparation{
+        .sourcePath = snapshot.snapshot->sourcePath,
+        .sourceLifetime = snapshot.snapshot->sourceLifetime,
+        .suggestedFilename =
+            resolved->reference.metadata.relativePath.filename().string()};
+  }
+  return outcome;
+}
+
+ReplayFileActionOutcome
+ReplayFileActionService::remove(const ReplayFileActionRequest &request) {
+  ReplayFileActionOutcome outcome;
+  const auto resolved = resolve(request, outcome);
+  if (!resolved) {
+    return outcome;
+  }
+  const auto mutation = repository_.MarkModernReplayFileUserDeleted(
+      resolved->owner, resolved->attemptId, resolved->reference);
+  switch (mutation.status) {
+  case ModernReplayFileMutationStatus::Changed:
+    outcome.changed = true;
+    break;
+  case ModernReplayFileMutationStatus::AlreadyChanged:
+    break;
+  case ModernReplayFileMutationStatus::NotFound:
+    outcome.state = ReplayFileActionState::ResultNotFound;
+    outcome.diagnostic = mutation.diagnostic;
+    return outcome;
+  case ModernReplayFileMutationStatus::Invalid:
+  case ModernReplayFileMutationStatus::IntegrityConflict:
+    outcome.state = ReplayFileActionState::Invalid;
+    outcome.diagnostic = mutation.diagnostic;
+    return outcome;
+  case ModernReplayFileMutationStatus::StorageFailure:
+    outcome.state = ReplayFileActionState::IoFailure;
+    outcome.diagnostic = mutation.diagnostic;
+    return outcome;
+  }
+
+  std::string cleanupDiagnostic;
+  const bool removed = store_.removeReferencedEntry(
+      resolved->reference.metadata, cleanupDiagnostic);
+  outcome.state = ReplayFileActionState::UserDeleted;
+  outcome.cleanupPending = !removed;
+  outcome.diagnostic = std::move(cleanupDiagnostic);
+  return outcome;
+}
+
+} // namespace replay

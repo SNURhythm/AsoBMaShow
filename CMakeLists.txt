@@ -884,6 +884,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(replay_file_action_service_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2)
+    endif()
 
     add_executable(replay_codec_store_contract_tests
         tests/replay_codec_store_contract_tests.cpp

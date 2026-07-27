@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -34,6 +35,18 @@ struct ReplayFileInspection {
 struct ReplayFileReadOutcome {
   ReplayFileState state = ReplayFileState::IoFailure;
   std::optional<std::vector<std::byte>> bytes;
+  std::string diagnostic;
+};
+
+struct ReplayFileSnapshot {
+  std::filesystem::path sourcePath;
+  std::uint64_t compressedSize = 0;
+  std::shared_ptr<void> sourceLifetime;
+};
+
+struct ReplayFileSnapshotOutcome {
+  ReplayFileState state = ReplayFileState::IoFailure;
+  std::optional<ReplayFileSnapshot> snapshot;
   std::string diagnostic;
 };
 
@@ -97,6 +110,9 @@ public:
 
   [[nodiscard]] ReplayFileReadOutcome
   readVerified(const ReplayFileMetadata &metadata) const;
+
+  [[nodiscard]] ReplayFileSnapshotOutcome
+  stageVerifiedSnapshot(const ReplayFileMetadata &metadata) const;
 
   bool removeIfMatches(const ReplayFileMetadata &metadata,
                        std::string &diagnostic) const;

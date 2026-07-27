@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <memory>
 #include <ranges>
 #include <system_error>
 
@@ -249,6 +250,19 @@ bool removeEntryAndSync(const std::filesystem::path &path,
   }
   return true;
 }
+
+class ReplayFileSnapshotLifetime {
+public:
+  explicit ReplayFileSnapshotLifetime(std::filesystem::path directory)
+      : directory_(std::move(directory)) {}
+  ~ReplayFileSnapshotLifetime() {
+    std::error_code ignored;
+    std::filesystem::remove_all(directory_, ignored);
+  }
+
+private:
+  std::filesystem::path directory_;
+};
 
 } // namespace
 
@@ -531,6 +545,87 @@ ReplayFileStore::readVerified(const ReplayFileMetadata &metadata) const {
     return outcome;
   }
   outcome.bytes = std::move(bytes);
+  outcome.diagnostic.clear();
+  return outcome;
+}
+
+ReplayFileSnapshotOutcome ReplayFileStore::stageVerifiedSnapshot(
+    const ReplayFileMetadata &metadata) const {
+  ReplayFileSnapshotOutcome outcome;
+  const auto read = readVerified(metadata);
+  outcome.state = read.state;
+  outcome.diagnostic = read.diagnostic;
+  if (read.state != ReplayFileState::Available || !read.bytes) {
+    return outcome;
+  }
+  if (fault(faults_, "share-snapshot")) {
+    outcome.state = ReplayFileState::IoFailure;
+    outcome.diagnostic = "Injected replay share snapshot failure";
+    return outcome;
+  }
+
+  const auto temporaryRoot = std::filesystem::temp_directory_path();
+  std::filesystem::path directory;
+  bool created = false;
+  for (int attempt = 0; attempt < 16; ++attempt) {
+    const std::string token = file_checksum::sha256(
+        metadata.sha256 + ":" +
+        std::to_string(std::chrono::steady_clock::now()
+                           .time_since_epoch()
+                           .count()) +
+        ":" + std::to_string(attempt));
+    directory = temporaryRoot /
+                ("asobmashow-replay-share-" + token.substr(0, 24));
+    std::error_code error;
+    created = std::filesystem::create_directory(directory, error);
+    if (created) {
+      break;
+    }
+    if (error && error != std::errc::file_exists) {
+      outcome.state = ReplayFileState::IoFailure;
+      outcome.diagnostic =
+          "Unable to create replay share staging: " + error.message();
+      return outcome;
+    }
+  }
+  if (!created) {
+    outcome.state = ReplayFileState::IoFailure;
+    outcome.diagnostic = "Unable to reserve replay share staging";
+    return outcome;
+  }
+
+  const auto snapshot = directory / metadata.relativePath.filename();
+  const auto operations = atomic_file::privateFileOperations();
+  if (!operations.writeAndSync(snapshot, *read.bytes, outcome.diagnostic) ||
+      !atomic_file::syncDirectory(directory, outcome.diagnostic)) {
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    outcome.state = ReplayFileState::IoFailure;
+    return outcome;
+  }
+  ReplayFileMetadata stagedMetadata = metadata;
+  stagedMetadata.relativePath = metadata.relativePath;
+  std::string checksumError;
+  const auto checksum = file_checksum::sha256File(
+      snapshot, checksumError, limits_.maxCompressedBytes);
+  std::error_code sizeError;
+  const auto size = std::filesystem::file_size(snapshot, sizeError);
+  if (!checksum || *checksum != metadata.sha256 || sizeError ||
+      size != metadata.compressedSize) {
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    outcome.state = ReplayFileState::IoFailure;
+    outcome.diagnostic = checksumError.empty()
+                             ? "Replay share snapshot verification failed"
+                             : std::move(checksumError);
+    return outcome;
+  }
+  outcome.state = ReplayFileState::Available;
+  outcome.snapshot = ReplayFileSnapshot{
+      .sourcePath = snapshot,
+      .compressedSize = metadata.compressedSize,
+      .sourceLifetime =
+          std::make_shared<ReplayFileSnapshotLifetime>(directory)};
   outcome.diagnostic.clear();
   return outcome;
 }
