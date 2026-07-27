@@ -493,6 +493,18 @@ void testContextAndUntrustedStructureFailClosed() {
   expect(!codec.decode(*encoded, wrongBounds).chart,
          "extension completion context must agree with selected chart");
 
+  replay::ReplayDecodeContext embeddedBoundsContext{
+      .stageKeyModes = {source.playback.setup.chart.keyMode},
+  };
+  const auto embeddedBounds = codec.decode(*encoded, embeddedBoundsContext);
+  expect(embeddedBounds.chart &&
+             embeddedBounds.chart->timeBounds == source.timeBounds,
+         "local Aso extension supplies its validated completion bound");
+
+  const auto stockFixture = readFixture("beatoraja-chart-v0.brd");
+  expect(!codec.decode(stockFixture, embeddedBoundsContext).chart,
+         "stock-only BRD still requires an authoritative chart time bound");
+
   Json tooDeep = outerJson(*encoded);
   Json *cursor = &tooDeep["nested"];
   for (std::size_t depth = 0; depth <= replay::kReplayLimits.maxJsonDepth;

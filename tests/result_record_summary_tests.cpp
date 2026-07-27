@@ -81,6 +81,89 @@ ir::IrRemoteScore validRemoteScore() {
   };
 }
 
+result_persistence::ModernChartResult validModernResult() {
+  result_persistence::ModernChartResult result;
+  result.resultId = 91;
+  result.attemptId = "123e4567-e89b-42d3-a456-426614174000";
+  result.score.chartPath = "BMS/example/chart.bms";
+  result.score.chartMd5 = std::string(32, 'a');
+  result.score.chartSha256 = std::string(64, 'b');
+  result.score.chartTitle = "Modern title";
+  result.score.chartArtist = "Modern artist";
+  result.score.longNoteMode = 1;
+  result.score.score = 1'900;
+  result.score.maxScore = 2'000;
+  result.score.maxCombo = 900;
+  result.score.comboBreak = 2;
+  result.score.pGreat = 900;
+  result.score.great = 100;
+  result.score.finalGauge = 78.5F;
+  result.score.clearType = kClearTypeHardClearRank;
+  ScoreProvenanceBuildInput provenance;
+  provenance.chartMeta.MD5 = result.score.chartMd5;
+  provenance.chartMeta.SHA256 = result.score.chartSha256;
+  provenance.chartMeta.KeyMode = 7;
+  provenance.chartMeta.Rank = 2;
+  provenance.chartMeta.TotalNotes = 1'000;
+  provenance.chartMeta.HasTotal = true;
+  provenance.chartMeta.Total = 200.0;
+  provenance.longNoteMode = result.score.longNoteMode;
+  provenance.sourceJudgeRank = 2;
+  provenance.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  provenance.totalNotes = 1'000;
+  provenance.authoredGaugeTotal = 200.0;
+  provenance.effectiveGaugeTotal = 200.0;
+  provenance.player1.option = "RANDOM";
+  provenance.player1.seed = 42;
+  provenance.inputDevices = {InputDeviceCategory::Keyboard};
+  result.score.provenance = makeScoreProvenance(provenance);
+  result.keyMode = 7;
+  result.adoptedGaugeType = GaugeType::Hard;
+  result.adoptedGaugeHistory = {100.0F, 78.5F};
+  result.playedAtUnixMillis = 1'704'164'645'123LL;
+  result.resultFingerprint =
+      result_persistence::modernResultFingerprint(result);
+  return result;
+}
+
+void testModernConversionUsesSharedReplayCapabilities() {
+  ModernChartResultRecord record{.result = validModernResult()};
+  const auto absent = makeModernChartResultRecord(
+      record, replay::ReplayState::Missing, true);
+  expect(absent.isLocal() && absent.isModernChart() && !absent.isRemote() &&
+             absent.modernAttemptId() == record.result.attemptId &&
+             !absent.localReplayId(),
+         "modern result has a durable tagged attempt identity");
+  expect(absent.capabilities.resultRecall && absent.capabilities.irUpload &&
+             !absent.capabilities.watch && !absent.capabilities.gBattle &&
+             !absent.capabilities.videoExport,
+         "missing BRD keeps result and IR while disabling replay actions");
+  expect(absent.modern && absent.modern->result == record.result &&
+             absent.score == record.result.score.score &&
+             absent.maxScore == record.result.score.maxScore &&
+             absent.playOption ==
+                 record.result.score.provenance.player1.option &&
+             absent.stableKey() == "m:" + record.result.attemptId,
+         "modern projection reads display facts only from the strict result");
+
+  const auto verified = makeModernChartResultRecord(
+      record, replay::ReplayState::Verified, false);
+  expect(verified.capabilities.watch && verified.capabilities.gBattle &&
+             verified.capabilities.resultRecall &&
+             verified.capabilities.videoExport &&
+             !verified.capabilities.irUpload,
+         "verified BRD enables projected replay consumers via the matrix");
+
+  const auto corrupt = makeModernChartResultRecord(
+      record, replay::ReplayState::Corrupt, false);
+  expect(!corrupt.capabilities.watch && corrupt.capabilities.deleteReplayFile,
+         "invalid present BRD remains deletable but not playable");
+}
+
 void testLocalConversionPreservesRecordSemantics() {
   ReplaySummary replay;
   replay.id = 73;
@@ -422,6 +505,7 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
 
 int main() {
   testLocalConversionPreservesRecordSemantics();
+  testModernConversionUsesSharedReplayCapabilities();
   testRemoteConversionIsReadOnlyAndRetainsOptionalValues();
   testRemoteConversionFailsClosed();
   testIdentityEqualityHashAndStableKeys();

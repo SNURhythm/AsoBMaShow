@@ -138,6 +138,13 @@ ParsedChartReplayFacts parsedFacts(
           .timeBounds = {.completionSongTimeMicros = 5'000'000}};
 }
 
+ParsedChartReplayFacts identityOnlyFacts(
+    const result_persistence::ModernChartResult &saved) {
+  auto facts = parsedFacts(saved);
+  facts.timeBounds.reset();
+  return facts;
+}
+
 struct Harness {
   result_persistence::ModernChartResult result = savedResult();
   ReplayChartDocument replay = replayDocument(result);
@@ -149,6 +156,7 @@ struct Harness {
   bool throwDuringFileRead = false;
   bool unsupportedExtension = false;
   bool decodeChart = true;
+  std::optional<ReplayDecodeContext> decodeContext;
 
   ChartReplayContext makeContext() {
     return ChartReplayContext(ChartReplayContextDependencies{
@@ -177,8 +185,9 @@ struct Harness {
           return outcome;
         },
         .decode = [this](std::span<const std::byte>,
-                         const ReplayDecodeContext &) {
+                         const ReplayDecodeContext &context) {
           calls.emplace_back("decode");
+          decodeContext = context;
           ReplayDecodeOutcome outcome;
           outcome.unsupportedAsoExtension = unsupportedExtension;
           if (decodeChart) {
@@ -202,6 +211,20 @@ void testVerifiedContextUsesStrictLoadOrder() {
          "context loads result before verified bytes and decode");
   expect(loaded.replayState() == ReplayState::Verified,
          "ready context maps to the shared verified capability state");
+}
+
+void testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate() {
+  Harness harness;
+  auto context = harness.makeContext();
+  const auto loaded = context.load(kAttemptId, identityOnlyFacts(harness.result));
+  expect(loaded.state == ChartReplayContextState::Ready &&
+             loaded.replayAvailable(),
+         "verified local replay can use its embedded completion bound");
+  expect(harness.decodeContext.has_value() &&
+             harness.decodeContext->stageKeyModes ==
+                 std::vector<int>{harness.result.keyMode} &&
+             harness.decodeContext->stageTimeBounds.empty(),
+         "context does not invent an exact completion bound in a consumer");
 }
 
 void testFileFailuresRetainResultAndFailReplayClosed() {
@@ -322,6 +345,7 @@ void testInvalidResultNeverTouchesReplayFile() {
 
 int main() {
   testVerifiedContextUsesStrictLoadOrder();
+  testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate();
   testFileFailuresRetainResultAndFailReplayClosed();
   testParsedIdentityAndLongNoteAgreementPrecedeFileAccess();
   testDecodedReplayMustAgreeWithResultAndSupportedContract();
