@@ -10,6 +10,8 @@ struct CoursePlaySession;
 
 namespace course_identity {
 
+[[nodiscard]] bool isCanonicalKey(std::string_view key) noexcept;
+
 struct ChartIdentity {
   std::string sha256;
   std::string md5;

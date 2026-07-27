@@ -32,8 +32,8 @@ void requireToken(const std::filesystem::path &path,
 }
 
 void testAdditiveModernChartSchemaBoundary() {
-  require(ReplayRepository::kCurrentSchemaVersion == 11,
-          "Slice 4 advances the additive replay schema to version 11");
+  require(ReplayRepository::kCurrentSchemaVersion >= 11,
+          "modern chart persistence requires replay schema version 11+");
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
   const auto modern =
       root / "src/repositories/ReplayRepositoryModernResults.cpp";

@@ -44,16 +44,6 @@ using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::normalizedSqlHash;
 
-bool isCanonicalCourseKey(std::string_view key) {
-  constexpr std::string_view prefix = "course:v1:";
-  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
-    return false;
-  }
-  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
-    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
-  });
-}
-
 bool isHexDigest(std::string_view value, std::size_t expectedLength) {
   return value.size() == expectedLength &&
          std::ranges::all_of(value, [](unsigned char character) {
@@ -641,7 +631,7 @@ constexpr const char *kModernChartResultsTableSql =
     "result_fingerprint=lower(result_fingerprint) AND "
     "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
 
-constexpr const char *kModernReplayFilesTableSql =
+constexpr const char *kModernReplayFilesTableSqlV11 =
     "CREATE TABLE modern_replay_files("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "modern_chart_result_id INTEGER NOT NULL UNIQUE,stem TEXT NOT NULL,"
@@ -655,6 +645,93 @@ constexpr const char *kModernReplayFilesTableSql =
     "CHECK(compressed_size>0),CHECK(codec_version=3),"
     "UNIQUE(stem,history_index),"
     "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernCourseResultsTableSql =
+    "CREATE TABLE modern_course_results("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL UNIQUE,"
+    "course_key TEXT NOT NULL,legacy_course_id INTEGER NOT NULL,"
+    "course_name TEXT NOT NULL,course_group_name TEXT NOT NULL,"
+    "constraint_json TEXT NOT NULL,completed_charts INTEGER NOT NULL,"
+    "total_charts INTEGER NOT NULL,requested_play_option TEXT NOT NULL,"
+    "assist_option TEXT NOT NULL,initial_gauge_type INTEGER NOT NULL,"
+    "gauge_profile INTEGER NOT NULL,gauge_auto_shift INTEGER NOT NULL,"
+    "gauge_auto_shift_lower_bound INTEGER NOT NULL,"
+    "long_note_mode INTEGER NOT NULL,final_score INTEGER NOT NULL,"
+    "max_score INTEGER NOT NULL,max_combo INTEGER NOT NULL,"
+    "final_gauge REAL NOT NULL,clear_type INTEGER NOT NULL,"
+    "provenance_json TEXT NOT NULL,result_fingerprint TEXT NOT NULL,"
+    "played_at_unix_ms INTEGER NOT NULL,"
+    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "CHECK(length(course_key)=74 AND substr(course_key,1,10)='course:v1:'),"
+    "CHECK(legacy_course_id>=0),"
+    "CHECK(completed_charts>0 AND completed_charts<=total_charts AND "
+    "total_charts<=256),CHECK(initial_gauge_type BETWEEN 0 AND 5),"
+    "CHECK(gauge_auto_shift_lower_bound BETWEEN 0 AND 5),"
+    "CHECK(long_note_mode BETWEEN 0 AND 3),"
+    "CHECK(final_score>=0 AND max_score>0 AND final_score<=max_score),"
+    "CHECK(max_combo>=0 AND final_gauge>=0),CHECK(played_at_unix_ms>0),"
+    "CHECK(length(result_fingerprint)=64 AND "
+    "result_fingerprint=lower(result_fingerprint) AND "
+    "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
+
+constexpr const char *kModernCourseStagesTableSql =
+    "CREATE TABLE modern_course_stages("
+    "modern_course_result_id INTEGER NOT NULL,stage_index INTEGER NOT NULL,"
+    "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,chart_title TEXT NOT NULL,"
+    "chart_artist TEXT NOT NULL,long_note_mode INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,max_score INTEGER NOT NULL,"
+    "max_combo INTEGER NOT NULL,combo_break INTEGER NOT NULL,"
+    "p_great INTEGER NOT NULL,great INTEGER NOT NULL,good INTEGER NOT NULL,"
+    "bad INTEGER NOT NULL,poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,"
+    "fast INTEGER NOT NULL,slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
+    "clear_type INTEGER NOT NULL,key_mode INTEGER NOT NULL,"
+    "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
+    "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
+    "PRIMARY KEY(modern_course_result_id,stage_index),"
+    "CHECK(stage_index>=0 AND stage_index<256),"
+    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
+    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
+    "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
+    "CHECK(long_note_mode BETWEEN 0 AND 3),"
+    "CHECK(key_mode IN (5,7,9,10,14,24,48)),"
+    "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
+    "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
+    "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
+    "good>=0 AND bad>=0 AND poor>=0 AND k_poor>=0 AND fast>=0 AND slow>=0),"
+    "CHECK(final_gauge>=0),"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernCourseEntriesTableSql =
+    "CREATE TABLE modern_course_entries("
+    "modern_course_result_id INTEGER NOT NULL,entry_index INTEGER NOT NULL,"
+    "total_notes INTEGER NOT NULL,play_length_micros INTEGER NOT NULL,"
+    "PRIMARY KEY(modern_course_result_id,entry_index),"
+    "CHECK(entry_index>=0 AND entry_index<256),CHECK(total_notes>0),"
+    "CHECK(play_length_micros>=0),"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernReplayFilesTableSql =
+    "CREATE TABLE modern_replay_files("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "modern_chart_result_id INTEGER UNIQUE,"
+    "modern_course_result_id INTEGER UNIQUE,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+    "codec_version INTEGER NOT NULL,CHECK(history_index>=0),"
+    "CHECK((modern_chart_result_id IS NOT NULL) != (modern_course_result_id IS NOT NULL)),"
+    "CHECK(length(content_sha256)=64 AND "
+    "content_sha256=lower(content_sha256) AND "
+    "content_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(compressed_size>0),CHECK(codec_version=3),"
+    "UNIQUE(stem,history_index),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
     "ON DELETE CASCADE)";
 
 constexpr const char *kModernReplayFileReservationsTableSql =
@@ -695,6 +772,12 @@ constexpr const char *kModernChartShaIndexSql =
 constexpr const char *kModernReplayResultIndexSql =
     "CREATE INDEX idx_modern_replay_files_chart_result ON "
     "modern_replay_files(modern_chart_result_id)";
+constexpr const char *kModernReplayCourseResultIndexSql =
+    "CREATE INDEX idx_modern_replay_files_course_result ON "
+    "modern_replay_files(modern_course_result_id)";
+constexpr const char *kModernCourseKeyIndexSql =
+    "CREATE INDEX idx_modern_course_results_key_played ON "
+    "modern_course_results(course_key,played_at_unix_ms DESC,id DESC)";
 constexpr const char *kModernReservationIndexSql =
     "CREATE INDEX idx_modern_replay_reservations_stem_index ON "
     "modern_replay_file_reservations(stem,history_index)";
@@ -1254,7 +1337,7 @@ bool inspectIrRemoteScoresSchema(sqlite3 *db,
   return true;
 }
 
-bool inspectModernChartSchema(sqlite3 *database) {
+bool inspectModernChartSchemaV11(sqlite3 *database) {
   struct ExpectedObject {
     const char *name;
     const char *type;
@@ -1265,7 +1348,7 @@ bool inspectModernChartSchema(sqlite3 *database) {
       {"modern_chart_results", "table", "modern_chart_results",
        kModernChartResultsTableSql},
       {"modern_replay_files", "table", "modern_replay_files",
-       kModernReplayFilesTableSql},
+       kModernReplayFilesTableSqlV11},
       {"modern_replay_file_reservations", "table",
        "modern_replay_file_reservations",
        kModernReplayFileReservationsTableSql},
@@ -1298,16 +1381,71 @@ bool inspectModernChartSchema(sqlite3 *database) {
   return true;
 }
 
+bool inspectModernCourseSchema(sqlite3 *database) {
+  struct ExpectedObject {
+    const char *name;
+    const char *type;
+    const char *table;
+    const char *sql;
+  };
+  constexpr ExpectedObject objects[] = {
+      {"modern_chart_results", "table", "modern_chart_results",
+       kModernChartResultsTableSql},
+      {"modern_course_results", "table", "modern_course_results",
+       kModernCourseResultsTableSql},
+      {"modern_course_stages", "table", "modern_course_stages",
+       kModernCourseStagesTableSql},
+      {"modern_course_entries", "table", "modern_course_entries",
+       kModernCourseEntriesTableSql},
+      {"modern_replay_files", "table", "modern_replay_files",
+       kModernReplayFilesTableSql},
+      {"modern_replay_file_reservations", "table",
+       "modern_replay_file_reservations",
+       kModernReplayFileReservationsTableSql},
+      {"modern_replay_stem_sequences", "table", "modern_replay_stem_sequences",
+       kModernReplayStemSequencesTableSql},
+      {"ir_submission_snapshots", "table", "ir_submission_snapshots",
+       kIrSubmissionSnapshotsTableSql},
+      {"modern_pending_chart_score_writes", "table",
+       "modern_pending_chart_score_writes", kModernPendingChartScoresTableSql},
+      {"idx_modern_chart_results_sha256_played", "index",
+       "modern_chart_results", kModernChartShaIndexSql},
+      {"idx_modern_course_results_key_played", "index", "modern_course_results",
+       kModernCourseKeyIndexSql},
+      {"idx_modern_replay_files_chart_result", "index", "modern_replay_files",
+       kModernReplayResultIndexSql},
+      {"idx_modern_replay_files_course_result", "index", "modern_replay_files",
+       kModernReplayCourseResultIndexSql},
+      {"idx_modern_replay_reservations_stem_index", "index",
+       "modern_replay_file_reservations", kModernReservationIndexSql},
+      {"idx_ir_submission_snapshots_fingerprint", "index",
+       "ir_submission_snapshots", kModernSnapshotFingerprintIndexSql},
+      {"idx_modern_pending_chart_score_created", "index",
+       "modern_pending_chart_score_writes", kModernPendingRecoveryIndexSql},
+  };
+  for (const auto &object : objects) {
+    NamedSchemaObjectInspection inspection;
+    if (!inspectNamedSchemaObject(database, object.name, object.type,
+                                  object.table, object.sql, inspection,
+                                  "reading modern course schema") ||
+        !inspection.present || !inspection.exact) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool createModernChartSchema(sqlite3 *database) {
   // Older migration tests and interrupted version writes can expose an exact
   // v11 object set under an earlier user_version. Treat only the complete,
   // byte-for-byte schema as already created; partial or malformed sets still
   // fail inside the caller's migration transaction.
-  if (inspectModernChartSchema(database)) {
+  if (inspectModernChartSchemaV11(database) ||
+      inspectModernCourseSchema(database)) {
     return true;
   }
   const char *tables[] = {
-      kModernChartResultsTableSql,           kModernReplayFilesTableSql,
+      kModernChartResultsTableSql,           kModernReplayFilesTableSqlV11,
       kModernReplayFileReservationsTableSql, kModernReplayStemSequencesTableSql,
       kIrSubmissionSnapshotsTableSql,        kModernPendingChartScoresTableSql,
   };
@@ -1326,7 +1464,51 @@ bool createModernChartSchema(sqlite3 *database) {
       return false;
     }
   }
-  return inspectModernChartSchema(database);
+  return inspectModernChartSchemaV11(database);
+}
+
+bool migrateModernCourseSchema(sqlite3 *database) {
+  if (inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernChartSchemaV11(database)) {
+    SDL_Log("Refusing modern course migration from a partial or unexpected "
+            "version 11 schema");
+    return false;
+  }
+  if (!execSql(database, kModernCourseResultsTableSql,
+               "creating modern course results") ||
+      !execSql(database, kModernCourseStagesTableSql,
+               "creating modern course stages") ||
+      !execSql(database, kModernCourseEntriesTableSql,
+               "creating modern course entries") ||
+      !execSql(database, "DROP INDEX idx_modern_replay_files_chart_result",
+               "dropping version 11 replay owner index") ||
+      !execSql(database,
+               "ALTER TABLE modern_replay_files RENAME TO "
+               "modern_replay_files_v11",
+               "renaming version 11 replay references") ||
+      !execSql(database, kModernReplayFilesTableSql,
+               "creating shared modern replay references") ||
+      !execSql(database,
+               "INSERT INTO modern_replay_files("
+               "id,modern_chart_result_id,modern_course_result_id,stem,"
+               "history_index,relative_path,content_sha256,compressed_size,"
+               "codec_version) SELECT id,modern_chart_result_id,NULL,stem,"
+               "history_index,relative_path,content_sha256,compressed_size,"
+               "codec_version FROM modern_replay_files_v11",
+               "copying version 11 replay references") ||
+      !execSql(database, "DROP TABLE modern_replay_files_v11",
+               "dropping version 11 replay references") ||
+      !execSql(database, kModernReplayResultIndexSql,
+               "creating chart replay owner index") ||
+      !execSql(database, kModernReplayCourseResultIndexSql,
+               "creating course replay owner index") ||
+      !execSql(database, kModernCourseKeyIndexSql,
+               "creating modern course history index")) {
+    return false;
+  }
+  return inspectModernCourseSchema(database);
 }
 
 bool migrateIrSubmissionReceiptsToModernOwnership(sqlite3 *database) {
@@ -1401,7 +1583,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         irOutboxState != IrOutboxSchemaState::Exact ||
         receiptState != IrSubmissionReceiptsSchemaState::CurrentExact ||
         remoteScoresState != IrRemoteScoresSchemaState::Exact ||
-        !inspectModernChartSchema(db)) {
+        !inspectModernCourseSchema(db)) {
       SDL_Log("Refusing current replay database with a partial or unexpected "
               "outbox, receipt, or remote score schema");
       return false;
@@ -1660,6 +1842,9 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
   }
+  if (*version < 12 && !migrateModernCourseSchema(db)) {
+    return false;
+  }
   ReplayResultOutboxSchemaState resultOutboxState{};
   IrOutboxSchemaState irOutboxState{};
   IrSubmissionReceiptsSchemaState receiptState{};
@@ -1672,7 +1857,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       irOutboxState != IrOutboxSchemaState::Exact ||
       receiptState != IrSubmissionReceiptsSchemaState::CurrentExact ||
       remoteScoresState != IrRemoteScoresSchemaState::Exact ||
-      !inspectModernChartSchema(db)) {
+      !inspectModernCourseSchema(db)) {
     SDL_Log("Refusing migrated replay database with a partial or unexpected "
             "outbox, receipt, or remote score schema");
     return false;

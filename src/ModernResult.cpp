@@ -1,6 +1,7 @@
 #include "ModernResult.h"
 
 #include "BmsMetadataText.h"
+#include "CourseIdentity.h"
 #include "DurablePayloadLimits.h"
 #include "FileChecksum.h"
 #include "ResultContracts.h"
@@ -240,12 +241,6 @@ void appendTiming(CanonicalEncoder &encoder,
       encoder.integer(static_cast<std::int32_t>(count.slow));
     }
   });
-}
-
-bool canonicalCourseKey(std::string_view value) noexcept {
-  constexpr std::string_view prefix = "course:v1:";
-  return value.starts_with(prefix) &&
-         canonical_digest::isCanonicalLowerHex(value.substr(prefix.size()), 64);
 }
 
 ResultFactAgreement disagreement(ResultFactAgreementIssue issue,
@@ -501,7 +496,7 @@ bool validateModernCourseResult(const ModernCourseResult &result,
     if (result.resultId < 0 || result.legacyCourseId < 0 ||
         !uuid::isCanonicalLowerV4(result.attemptId) ||
         result.playedAtUnixMillis <= 0 ||
-        !canonicalCourseKey(result.courseKey)) {
+        !course_identity::isCanonicalKey(result.courseKey)) {
       diagnostic =
           "modern course result identity or completion time is invalid";
       return false;

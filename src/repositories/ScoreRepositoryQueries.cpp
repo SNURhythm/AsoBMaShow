@@ -38,16 +38,6 @@
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
-bool isCanonicalCourseKey(std::string_view key) {
-  constexpr std::string_view prefix = "course:v1:";
-  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
-    return false;
-  }
-  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
-    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
-  });
-}
-
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
@@ -1146,7 +1136,7 @@ score_repository_detail::RecoverCourseRecordsOnConnection(
   for (const auto &definition : definitions) {
     const std::string canonicalConstraints =
         course_identity::canonicalConstraintPayload(definition.constraintJson);
-    if (!isCanonicalCourseKey(definition.courseKey) ||
+    if (!course_identity::isCanonicalKey(definition.courseKey) ||
         definition.charts.empty() || canonicalConstraints.empty() ||
         course_identity::makeCourseKey(definition.charts,
                                        definition.constraintJson)
@@ -1292,7 +1282,7 @@ score_repository_detail::RecoverCourseRecordsOnConnection(
     std::string resultingKey = row.courseKey;
     std::string rawEvidence = row.legacyCourseKey;
     if (rawEvidence.empty() && !row.courseKey.empty() &&
-        !isCanonicalCourseKey(row.courseKey)) {
+        !course_identity::isCanonicalKey(row.courseKey)) {
       rawEvidence = row.courseKey;
     }
 

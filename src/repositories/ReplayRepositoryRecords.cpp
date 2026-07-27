@@ -41,16 +41,6 @@ using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::normalizedSqlHash;
 
-bool isCanonicalCourseKey(std::string_view key) {
-  constexpr std::string_view prefix = "course:v1:";
-  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
-    return false;
-  }
-  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
-    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
-  });
-}
-
 bool isHexDigest(std::string_view value, std::size_t expectedLength) {
   return value.size() == expectedLength &&
          std::ranges::all_of(value, [](unsigned char character) {
@@ -1966,7 +1956,8 @@ ReplayRepository::RecordPendingChartScoreRecoveryAttempt(
 std::optional<int>
 ReplayRepository::SaveCourseReplay(const CourseReplayData &replay) {
   profile_database_activity::WriteGuard writeGuard;
-  if (!isCanonicalCourseKey(replay.courseKey) || replay.totalCharts <= 0 ||
+  if (!course_identity::isCanonicalKey(replay.courseKey) ||
+      replay.totalCharts <= 0 ||
       replay.totalCharts >
           replay_summary_scan::kMaxCourseStagesPerCandidate ||
       replay.completedCharts <= 0 ||
@@ -3086,7 +3077,7 @@ bool replay_repository_detail::RecoverCourseRecordsOnConnection(
   for (const auto &definition : definitions) {
     const std::string canonicalConstraints =
         course_identity::canonicalConstraintPayload(definition.constraintJson);
-    if (!isCanonicalCourseKey(definition.courseKey) ||
+    if (!course_identity::isCanonicalKey(definition.courseKey) ||
         definition.charts.empty() || canonicalConstraints.empty() ||
         course_identity::makeCourseKey(definition.charts,
                                        definition.constraintJson)

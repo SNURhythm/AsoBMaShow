@@ -270,13 +270,16 @@ struct ReadRecordOutcome {
 
 std::optional<ModernReplayFileReference>
 readReplayReference(sqlite3 *database, int resultId, bool &found,
-                    std::string &diagnostic) {
+                    std::string &diagnostic, bool courseOwner = false) {
   found = false;
   SqliteStatementHandle statement;
-  constexpr const char *query =
-      "SELECT id,modern_chart_result_id,stem,history_index,relative_path,"
-      "content_sha256,compressed_size,codec_version FROM modern_replay_files "
-      "WHERE modern_chart_result_id=?";
+  const std::string ownerColumn =
+      courseOwner ? "modern_course_result_id" : "modern_chart_result_id";
+  const std::string query =
+      "SELECT id," + ownerColumn +
+      ",stem,history_index,relative_path,content_sha256,compressed_size,"
+      "codec_version FROM modern_replay_files WHERE " +
+      ownerColumn + "=?";
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
       sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK) {
     diagnostic = "could not prepare modern replay reference read";
@@ -643,6 +646,425 @@ readPendingModernScore(sqlite3 *database, std::string_view attemptId) {
               .score = std::move(loaded.record->result.score),
           },
   };
+}
+
+constexpr const char *kModernCourseColumns =
+    "id,attempt_id,course_key,legacy_course_id,course_name,"
+    "course_group_name,constraint_json,completed_charts,total_charts,"
+    "requested_play_option,assist_option,initial_gauge_type,gauge_profile,"
+    "gauge_auto_shift,gauge_auto_shift_lower_bound,long_note_mode,"
+    "final_score,max_score,max_combo,final_gauge,clear_type,provenance_json,"
+    "result_fingerprint,played_at_unix_ms,created_at";
+
+std::optional<result_persistence::ModernCourseStageResult>
+decodeModernCourseStage(sqlite3_stmt *statement, std::string &diagnostic) {
+  const int textColumns[] = {1, 2, 3, 4, 5, 23, 25};
+  const int integerColumns[] = {0,  6,  7,  8,  9,  10, 11, 12, 13,
+                                14, 15, 16, 17, 18, 20, 21, 22};
+  if (std::ranges::any_of(textColumns,
+                          [&](int column) {
+                            return sqlite3_column_type(statement, column) !=
+                                   SQLITE_TEXT;
+                          }) ||
+      std::ranges::any_of(integerColumns,
+                          [&](int column) {
+                            return sqlite3_column_type(statement, column) !=
+                                   SQLITE_INTEGER;
+                          }) ||
+      (sqlite3_column_type(statement, 19) != SQLITE_FLOAT &&
+       sqlite3_column_type(statement, 19) != SQLITE_INTEGER) ||
+      (sqlite3_column_type(statement, 24) != SQLITE_NULL &&
+       sqlite3_column_type(statement, 24) != SQLITE_TEXT)) {
+    diagnostic = "modern course stage row has invalid types";
+    return std::nullopt;
+  }
+  auto gaugeHistory =
+      deserializeGaugeHistory(sqliteColumnString(statement, 23));
+  if (!gaugeHistory) {
+    diagnostic = "modern course stage gauge history is invalid";
+    return std::nullopt;
+  }
+  std::optional<result_persistence::ChartJudgementTiming> timing;
+  if (sqlite3_column_type(statement, 24) == SQLITE_TEXT) {
+    timing = deserializeJudgementTiming(sqliteColumnString(statement, 24));
+    if (!timing) {
+      diagnostic = "modern course stage judgement timing is invalid";
+      return std::nullopt;
+    }
+  }
+  const std::string provenanceJson = sqliteColumnString(statement, 25);
+  std::string provenanceDiagnostic;
+  auto provenance =
+      deserializeScoreProvenance(provenanceJson, provenanceDiagnostic);
+  if (!provenance || serializeScoreProvenance(*provenance) != provenanceJson) {
+    diagnostic = "modern course stage provenance is not canonical";
+    return std::nullopt;
+  }
+  return result_persistence::ModernCourseStageResult{
+      .stageIndex = sqlite3_column_int(statement, 0),
+      .score = {.chartPath = sqliteColumnString(statement, 1),
+                .chartMd5 = sqliteColumnString(statement, 2),
+                .chartSha256 = sqliteColumnString(statement, 3),
+                .chartTitle = sqliteColumnString(statement, 4),
+                .chartArtist = sqliteColumnString(statement, 5),
+                .longNoteMode = sqlite3_column_int(statement, 6),
+                .score = sqlite3_column_int(statement, 7),
+                .maxScore = sqlite3_column_int(statement, 8),
+                .maxCombo = sqlite3_column_int(statement, 9),
+                .comboBreak = sqlite3_column_int(statement, 10),
+                .pGreat = sqlite3_column_int(statement, 11),
+                .great = sqlite3_column_int(statement, 12),
+                .good = sqlite3_column_int(statement, 13),
+                .bad = sqlite3_column_int(statement, 14),
+                .poor = sqlite3_column_int(statement, 15),
+                .kPoor = sqlite3_column_int(statement, 16),
+                .fast = sqlite3_column_int(statement, 17),
+                .slow = sqlite3_column_int(statement, 18),
+                .finalGauge =
+                    static_cast<float>(sqlite3_column_double(statement, 19)),
+                .clearType = sqlite3_column_int(statement, 20),
+                .provenance = std::move(*provenance)},
+      .keyMode = sqlite3_column_int(statement, 21),
+      .adoptedGaugeType =
+          static_cast<GaugeType>(sqlite3_column_int(statement, 22)),
+      .adoptedGaugeHistory = std::move(*gaugeHistory),
+      .judgementTiming = std::move(timing),
+  };
+}
+
+struct ReadCourseRecordOutcome {
+  ReadRecordStatus status = ReadRecordStatus::StorageFailure;
+  std::optional<ModernCourseResultRecord> record;
+  std::string createdAt;
+  std::string diagnostic;
+};
+
+ReadCourseRecordOutcome readCourseRecord(sqlite3 *database,
+                                         const char *predicate,
+                                         std::string_view textValue,
+                                         int intValue) {
+  SqliteStatementHandle statement;
+  const std::string query = std::string("SELECT ") + kModernCourseColumns +
+                            " FROM modern_course_results WHERE " + predicate;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    return {.diagnostic = "could not prepare modern course result read"};
+  }
+  const bool bound =
+      textValue.empty()
+          ? sqlite3_bind_int(statement.get(), 1, intValue) == SQLITE_OK
+          : bindText(statement.get(), 1, textValue);
+  if (!bound) {
+    return {.diagnostic = "could not bind modern course result identity"};
+  }
+  const int rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_DONE) {
+    return {.status = ReadRecordStatus::NotFound};
+  }
+  if (rc != SQLITE_ROW) {
+    return {.diagnostic = "could not read modern course result"};
+  }
+  const int textColumns[] = {1, 2, 4, 5, 6, 9, 10, 21, 22, 24};
+  const int integerColumns[] = {0,  3,  7,  8,  11, 12, 13,
+                                14, 15, 16, 17, 18, 20, 23};
+  if (std::ranges::any_of(textColumns,
+                          [&](int column) {
+                            return sqlite3_column_type(statement.get(),
+                                                       column) != SQLITE_TEXT;
+                          }) ||
+      std::ranges::any_of(integerColumns,
+                          [&](int column) {
+                            return sqlite3_column_type(statement.get(),
+                                                       column) !=
+                                   SQLITE_INTEGER;
+                          }) ||
+      (sqlite3_column_type(statement.get(), 19) != SQLITE_FLOAT &&
+       sqlite3_column_type(statement.get(), 19) != SQLITE_INTEGER)) {
+    return {.status = ReadRecordStatus::Invalid,
+            .diagnostic = "modern course result row has invalid types"};
+  }
+  const std::string provenanceJson = sqliteColumnString(statement.get(), 21);
+  std::string provenanceDiagnostic;
+  auto provenance =
+      deserializeScoreProvenance(provenanceJson, provenanceDiagnostic);
+  if (!provenance || serializeScoreProvenance(*provenance) != provenanceJson) {
+    return {.status = ReadRecordStatus::Invalid,
+            .diagnostic = "modern course provenance is not canonical"};
+  }
+  result_persistence::ModernCourseResult result{
+      .resultId = sqlite3_column_int(statement.get(), 0),
+      .attemptId = sqliteColumnString(statement.get(), 1),
+      .courseKey = sqliteColumnString(statement.get(), 2),
+      .legacyCourseId = sqlite3_column_int(statement.get(), 3),
+      .courseName = sqliteColumnString(statement.get(), 4),
+      .courseGroupName = sqliteColumnString(statement.get(), 5),
+      .constraintJson = sqliteColumnString(statement.get(), 6),
+      .completedCharts = sqlite3_column_int(statement.get(), 7),
+      .totalCharts = sqlite3_column_int(statement.get(), 8),
+      .requestedPlayOption = sqliteColumnString(statement.get(), 9),
+      .assistOption = sqliteColumnString(statement.get(), 10),
+      .initialGaugeType =
+          static_cast<GaugeType>(sqlite3_column_int(statement.get(), 11)),
+      .gaugeProfile =
+          static_cast<GaugeProfile>(sqlite3_column_int(statement.get(), 12)),
+      .gaugeAutoShift = static_cast<GaugeAutoShiftMode>(
+          sqlite3_column_int(statement.get(), 13)),
+      .gaugeAutoShiftLowerBound =
+          static_cast<GaugeType>(sqlite3_column_int(statement.get(), 14)),
+      .longNoteMode = sqlite3_column_int(statement.get(), 15),
+      .finalScore = sqlite3_column_int(statement.get(), 16),
+      .maxScore = sqlite3_column_int(statement.get(), 17),
+      .maxCombo = sqlite3_column_int(statement.get(), 18),
+      .finalGauge =
+          static_cast<float>(sqlite3_column_double(statement.get(), 19)),
+      .clearType = sqlite3_column_int(statement.get(), 20),
+      .provenance = std::move(*provenance),
+      .playedAtUnixMillis = sqlite3_column_int64(statement.get(), 23),
+      .resultFingerprint = sqliteColumnString(statement.get(), 22),
+  };
+  const std::string createdAt = sqliteColumnString(statement.get(), 24);
+  if (result.resultId <= 0 || sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = ReadRecordStatus::Invalid,
+            .diagnostic = "modern course result identity is not unique"};
+  }
+  statement.reset();
+
+  if (prepareSqliteStatement(
+          database,
+          "SELECT entry_index,total_notes,play_length_micros FROM "
+          "modern_course_entries WHERE modern_course_result_id=? ORDER BY "
+          "entry_index",
+          statement) != SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 1, result.resultId) != SQLITE_OK) {
+    return {.diagnostic = "could not prepare modern course entry read"};
+  }
+  int childRc = SQLITE_OK;
+  while ((childRc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 1) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 2) != SQLITE_INTEGER ||
+        sqlite3_column_int(statement.get(), 0) !=
+            static_cast<int>(result.entryFacts.size())) {
+      return {.status = ReadRecordStatus::Invalid,
+              .diagnostic = "modern course entries are not contiguous"};
+    }
+    result.entryFacts.push_back(
+        {.totalNotes = sqlite3_column_int(statement.get(), 1),
+         .playLengthMicros = sqlite3_column_int64(statement.get(), 2)});
+  }
+  if (childRc != SQLITE_DONE) {
+    return {.diagnostic = "could not finish modern course entry read"};
+  }
+  statement.reset();
+
+  if (prepareSqliteStatement(
+          database,
+          "SELECT stage_index,chart_path,chart_md5,chart_sha256,chart_title,"
+          "chart_artist,long_note_mode,score,max_score,max_combo,combo_break,"
+          "p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
+          "key_mode,adopted_gauge_type,gauge_history_json,"
+          "judgement_timing_json,provenance_json FROM modern_course_stages "
+          "WHERE modern_course_result_id=? ORDER BY stage_index",
+          statement) != SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 1, result.resultId) != SQLITE_OK) {
+    return {.diagnostic = "could not prepare modern course stage read"};
+  }
+  while ((childRc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    std::string diagnostic;
+    auto stage = decodeModernCourseStage(statement.get(), diagnostic);
+    if (!stage || stage->stageIndex != static_cast<int>(result.stages.size())) {
+      return {.status = ReadRecordStatus::Invalid,
+              .diagnostic = diagnostic.empty()
+                                ? "modern course stages are not contiguous"
+                                : std::move(diagnostic)};
+    }
+    result.stages.push_back(std::move(*stage));
+  }
+  if (childRc != SQLITE_DONE) {
+    return {.diagnostic = "could not finish modern course stage read"};
+  }
+  std::string diagnostic;
+  if (!result_persistence::validateModernCourseResult(result, diagnostic)) {
+    return {.status = ReadRecordStatus::Invalid,
+            .diagnostic = std::move(diagnostic)};
+  }
+  bool referenceFound = false;
+  auto reference = readReplayReference(database, result.resultId,
+                                       referenceFound, diagnostic, true);
+  if (!reference && !diagnostic.empty()) {
+    return {.status = referenceFound ? ReadRecordStatus::Invalid
+                                     : ReadRecordStatus::StorageFailure,
+            .diagnostic = std::move(diagnostic)};
+  }
+  return {.status = ReadRecordStatus::Loaded,
+          .record =
+              ModernCourseResultRecord{.result = std::move(result),
+                                       .replayFile = std::move(reference)},
+          .createdAt = createdAt};
+}
+
+bool insertModernCourseResult(
+    sqlite3 *database, const result_persistence::ModernCourseResult &result,
+    std::string_view provenanceJson, int &resultId) {
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "INSERT INTO modern_course_results(attempt_id,course_key,"
+      "legacy_course_id,course_name,course_group_name,constraint_json,"
+      "completed_charts,total_charts,requested_play_option,assist_option,"
+      "initial_gauge_type,gauge_profile,gauge_auto_shift,"
+      "gauge_auto_shift_lower_bound,long_note_mode,final_score,max_score,"
+      "max_combo,final_gauge,clear_type,provenance_json,result_fingerprint,"
+      "played_at_unix_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+      "?)";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    return false;
+  }
+  int index = 1;
+  bool bound = bindText(statement.get(), index++, result.attemptId) &&
+               bindText(statement.get(), index++, result.courseKey) &&
+               sqlite3_bind_int(statement.get(), index++,
+                                result.legacyCourseId) == SQLITE_OK &&
+               bindText(statement.get(), index++, result.courseName) &&
+               bindText(statement.get(), index++, result.courseGroupName) &&
+               bindText(statement.get(), index++, result.constraintJson);
+  const int integers[] = {
+      result.completedCharts,
+      result.totalCharts,
+  };
+  for (const int value : integers) {
+    bound =
+        bound && sqlite3_bind_int(statement.get(), index++, value) == SQLITE_OK;
+  }
+  bound = bound &&
+          bindText(statement.get(), index++, result.requestedPlayOption) &&
+          bindText(statement.get(), index++, result.assistOption);
+  const int setupAndAggregate[] = {
+      static_cast<int>(result.initialGaugeType),
+      static_cast<int>(result.gaugeProfile),
+      static_cast<int>(result.gaugeAutoShift),
+      static_cast<int>(result.gaugeAutoShiftLowerBound),
+      result.longNoteMode,
+      result.finalScore,
+      result.maxScore,
+      result.maxCombo,
+  };
+  for (const int value : setupAndAggregate) {
+    bound =
+        bound && sqlite3_bind_int(statement.get(), index++, value) == SQLITE_OK;
+  }
+  bound = bound &&
+          sqlite3_bind_double(statement.get(), index++, result.finalGauge) ==
+              SQLITE_OK &&
+          sqlite3_bind_int(statement.get(), index++, result.clearType) ==
+              SQLITE_OK &&
+          bindText(statement.get(), index++, provenanceJson) &&
+          bindText(statement.get(), index++, result.resultFingerprint) &&
+          sqlite3_bind_int64(statement.get(), index++,
+                             result.playedAtUnixMillis) == SQLITE_OK;
+  if (!bound || index != 24 || sqlite3_step(statement.get()) != SQLITE_DONE ||
+      sqlite3_changes(database) != 1) {
+    return false;
+  }
+  const sqlite3_int64 inserted = sqlite3_last_insert_rowid(database);
+  if (inserted <= 0 || inserted > std::numeric_limits<int>::max()) {
+    return false;
+  }
+  resultId = static_cast<int>(inserted);
+  return true;
+}
+
+bool insertModernCourseChildren(
+    sqlite3 *database, int resultId,
+    const result_persistence::ModernCourseResult &result) {
+  SqliteStatementHandle entry;
+  if (prepareSqliteStatement(
+          database,
+          "INSERT INTO modern_course_entries(modern_course_result_id,"
+          "entry_index,total_notes,play_length_micros) VALUES(?,?,?,?)",
+          entry) != SQLITE_OK) {
+    return false;
+  }
+  for (std::size_t index = 0; index < result.entryFacts.size(); ++index) {
+    const auto &value = result.entryFacts[index];
+    if (sqlite3_reset(entry.get()) != SQLITE_OK ||
+        sqlite3_clear_bindings(entry.get()) != SQLITE_OK ||
+        sqlite3_bind_int(entry.get(), 1, resultId) != SQLITE_OK ||
+        sqlite3_bind_int(entry.get(), 2, static_cast<int>(index)) !=
+            SQLITE_OK ||
+        sqlite3_bind_int(entry.get(), 3, value.totalNotes) != SQLITE_OK ||
+        sqlite3_bind_int64(entry.get(), 4, value.playLengthMicros) !=
+            SQLITE_OK ||
+        sqlite3_step(entry.get()) != SQLITE_DONE ||
+        sqlite3_changes(database) != 1) {
+      return false;
+    }
+  }
+
+  SqliteStatementHandle stage;
+  constexpr const char *stageQuery =
+      "INSERT INTO modern_course_stages(modern_course_result_id,stage_index,"
+      "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,"
+      "long_note_mode,score,max_score,max_combo,combo_break,p_great,great,"
+      "good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,key_mode,"
+      "adopted_gauge_type,gauge_history_json,judgement_timing_json,"
+      "provenance_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+      "?,?,?,?)";
+  if (prepareSqliteStatement(database, stageQuery, stage) != SQLITE_OK) {
+    return false;
+  }
+  for (const auto &value : result.stages) {
+    const auto gaugeJson = serializeGaugeHistory(value.adoptedGaugeHistory);
+    const auto timingJson = serializeJudgementTiming(value.judgementTiming);
+    std::string diagnostic;
+    const auto provenanceJson =
+        serializeValidatedScoreProvenance(value.score.provenance, diagnostic);
+    if (!gaugeJson || !timingJson || !provenanceJson ||
+        sqlite3_reset(stage.get()) != SQLITE_OK ||
+        sqlite3_clear_bindings(stage.get()) != SQLITE_OK) {
+      return false;
+    }
+    int index = 1;
+    bool bound =
+        sqlite3_bind_int(stage.get(), index++, resultId) == SQLITE_OK &&
+        sqlite3_bind_int(stage.get(), index++, value.stageIndex) == SQLITE_OK &&
+        bindText(stage.get(), index++, value.score.chartPath) &&
+        bindText(stage.get(), index++, value.score.chartMd5) &&
+        bindText(stage.get(), index++, value.score.chartSha256) &&
+        bindText(stage.get(), index++, value.score.chartTitle) &&
+        bindText(stage.get(), index++, value.score.chartArtist);
+    const int scoreValues[] = {
+        value.score.longNoteMode, value.score.score,      value.score.maxScore,
+        value.score.maxCombo,     value.score.comboBreak, value.score.pGreat,
+        value.score.great,        value.score.good,       value.score.bad,
+        value.score.poor,         value.score.kPoor,      value.score.fast,
+        value.score.slow,
+    };
+    for (const int scoreValue : scoreValues) {
+      bound = bound &&
+              sqlite3_bind_int(stage.get(), index++, scoreValue) == SQLITE_OK;
+    }
+    bound =
+        bound &&
+        sqlite3_bind_double(stage.get(), index++, value.score.finalGauge) ==
+            SQLITE_OK &&
+        sqlite3_bind_int(stage.get(), index++, value.score.clearType) ==
+            SQLITE_OK &&
+        sqlite3_bind_int(stage.get(), index++, value.keyMode) == SQLITE_OK &&
+        sqlite3_bind_int(stage.get(), index++,
+                         static_cast<int>(value.adoptedGaugeType)) ==
+            SQLITE_OK &&
+        bindText(stage.get(), index++, *gaugeJson);
+    if (timingJson->empty()) {
+      bound = bound && sqlite3_bind_null(stage.get(), index++) == SQLITE_OK;
+    } else {
+      bound = bound && bindText(stage.get(), index++, *timingJson);
+    }
+    bound = bound && bindText(stage.get(), index++, *provenanceJson);
+    if (!bound || index != 28 || sqlite3_step(stage.get()) != SQLITE_DONE ||
+        sqlite3_changes(database) != 1) {
+      return false;
+    }
+  }
+  return true;
 }
 
 } // namespace
@@ -1253,6 +1675,333 @@ ReplayRepository::ListModernChartResults(std::string_view chartSha256,
   if (!transaction.commit(transactionError)) {
     return {.status = ModernChartHistoryReadStatus::StorageFailure,
             .diagnostic = "could not finish modern chart history read"};
+  }
+  return outcome;
+}
+
+ModernCourseStageOutcome ReplayRepository::StageModernCourseResult(
+    const result_persistence::ModernCourseResult &result,
+    const std::optional<ModernReplayFileAttachment> &replayFile,
+    const std::optional<replay::CoursePathInput> &replayPath) {
+  profile_database_activity::WriteGuard writeGuard;
+  std::string diagnostic;
+  if (result.resultId != 0 ||
+      !result_persistence::validateModernCourseResult(result, diagnostic)) {
+    return {.status = ModernCourseStageStatus::Invalid,
+            .diagnostic = std::move(diagnostic)};
+  }
+  const auto provenanceJson =
+      serializeValidatedScoreProvenance(result.provenance, diagnostic);
+  if (!provenanceJson) {
+    return {.status = ModernCourseStageStatus::Invalid,
+            .diagnostic = diagnostic.empty()
+                              ? "modern course provenance is invalid"
+                              : std::move(diagnostic)};
+  }
+
+  if (replayFile.has_value() != replayPath.has_value()) {
+    return {.status = ModernCourseStageStatus::Invalid,
+            .diagnostic =
+                "modern course replay file and path facts must be paired"};
+  }
+  if (replayFile) {
+    std::vector<std::string> stageSha256;
+    stageSha256.reserve(result.stages.size());
+    for (const auto &stage : result.stages) {
+      stageSha256.push_back(stage.score.chartSha256);
+    }
+    if (!validAttachment(*replayFile, diagnostic) ||
+        replayPath->stageSha256 != stageSha256 ||
+        replayPath->longNoteMode != result.longNoteMode ||
+        !replay::courseStemMatches(replayFile->identity.stem, *replayPath,
+                                   replayPath->hasUndefinedLongNotes,
+                                   diagnostic)) {
+      return {.status = ModernCourseStageStatus::Invalid,
+              .diagnostic = diagnostic.empty()
+                                ? "modern replay path disagrees with course "
+                                  "identity"
+                                : std::move(diagnostic)};
+    }
+  }
+
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernCourseStageStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ModernCourseStageStatus::StorageFailure,
+            .diagnostic = "could not start modern course staging"};
+  }
+
+  auto existing = readCourseRecord(impl_->sessionDatabase, "attempt_id=?",
+                                   result.attemptId, 0);
+  if (existing.status == ReadRecordStatus::Invalid) {
+    return {.status = ModernCourseStageStatus::IntegrityConflict,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status == ReadRecordStatus::StorageFailure) {
+    return {.status = ModernCourseStageStatus::StorageFailure,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status == ReadRecordStatus::Loaded) {
+    auto expected = result;
+    expected.resultId = existing.record->result.resultId;
+    const bool fileAgrees =
+        existing.record->replayFile.has_value() == replayFile.has_value() &&
+        (!replayFile ||
+         (existing.record->replayFile->identity == replayFile->identity &&
+          existing.record->replayFile->metadata == replayFile->metadata));
+    if (existing.record->result != expected || !fileAgrees) {
+      return {.status = ModernCourseStageStatus::IntegrityConflict,
+              .diagnostic =
+                  "attempt ID already names different modern course payloads"};
+    }
+    if (!transaction.commit(transactionError)) {
+      return {.status = ModernCourseStageStatus::StorageFailure,
+              .diagnostic = "could not finish modern course staging retry"};
+    }
+    return {.status = ModernCourseStageStatus::AlreadyStaged,
+            .receipt = ModernCourseStageReceipt{
+                .attemptId = result.attemptId,
+                .resultId = existing.record->result.resultId,
+                .createdAt = existing.createdAt}};
+  }
+
+  std::optional<ModernReplayPathReservation> reservation;
+  if (replayFile) {
+    SqliteStatementHandle statement;
+    constexpr const char *query =
+        "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+        "FROM modern_replay_file_reservations WHERE attempt_id=?";
+    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+            SQLITE_OK ||
+        !bindText(statement.get(), 1, result.attemptId) ||
+        sqlite3_step(statement.get()) != SQLITE_ROW) {
+      return {.status = ModernCourseStageStatus::IntegrityConflict,
+              .diagnostic = "modern course replay file has no reservation"};
+    }
+    reservation = decodeReservation(statement.get(), diagnostic);
+    if (!reservation || sqlite3_step(statement.get()) != SQLITE_DONE ||
+        reservation->identity != replayFile->identity) {
+      return {.status = ModernCourseStageStatus::IntegrityConflict,
+              .diagnostic = diagnostic.empty()
+                                ? "modern course replay reservation disagrees "
+                                  "with the installed file"
+                                : std::move(diagnostic)};
+    }
+  }
+
+  int resultId = 0;
+  if (!insertModernCourseResult(impl_->sessionDatabase, result, *provenanceJson,
+                                resultId) ||
+      !insertModernCourseChildren(impl_->sessionDatabase, resultId, result)) {
+    return {.status = ModernCourseStageStatus::StorageFailure,
+            .diagnostic = "could not insert modern course result"};
+  }
+  if (replayFile) {
+    SqliteStatementHandle statement;
+    constexpr const char *query =
+        "INSERT INTO modern_replay_files(modern_chart_result_id,"
+        "modern_course_result_id,stem,history_index,relative_path,"
+        "content_sha256,compressed_size,codec_version) "
+        "VALUES(NULL,?,?,?,?,?,?,?)";
+    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+            SQLITE_OK ||
+        sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK ||
+        !bindText(statement.get(), 2, replayFile->identity.stem) ||
+        sqlite3_bind_int64(statement.get(), 3,
+                           replayFile->identity.historyIndex) != SQLITE_OK ||
+        !bindText(statement.get(), 4,
+                  replayFile->identity.relativePath.generic_string()) ||
+        !bindText(statement.get(), 5, replayFile->metadata.sha256) ||
+        sqlite3_bind_int64(
+            statement.get(), 6,
+            static_cast<sqlite3_int64>(replayFile->metadata.compressedSize)) !=
+            SQLITE_OK ||
+        sqlite3_bind_int(statement.get(), 7,
+                         replayFile->metadata.codecVersion) != SQLITE_OK ||
+        sqlite3_step(statement.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ModernCourseStageStatus::StorageFailure,
+              .diagnostic = "could not insert modern course replay reference"};
+    }
+
+    SqliteStatementHandle remove;
+    if (prepareSqliteStatement(
+            impl_->sessionDatabase,
+            "DELETE FROM modern_replay_file_reservations WHERE attempt_id=? "
+            "AND stem=? AND history_index=? AND relative_path=? AND "
+            "created_at_unix_ms=?",
+            remove) != SQLITE_OK ||
+        !bindText(remove.get(), 1, reservation->attemptId) ||
+        !bindText(remove.get(), 2, reservation->identity.stem) ||
+        sqlite3_bind_int64(remove.get(), 3,
+                           reservation->identity.historyIndex) != SQLITE_OK ||
+        !bindText(remove.get(), 4,
+                  reservation->identity.relativePath.generic_string()) ||
+        sqlite3_bind_int64(remove.get(), 5, reservation->createdAtUnixMillis) !=
+            SQLITE_OK ||
+        sqlite3_step(remove.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ModernCourseStageStatus::StorageFailure,
+              .diagnostic =
+                  "could not finalize modern course replay reservation"};
+    }
+  }
+
+  auto stored = readCourseRecord(impl_->sessionDatabase, "id=?", {}, resultId);
+  if (stored.status != ReadRecordStatus::Loaded ||
+      !transaction.commit(transactionError)) {
+    return {.status = ModernCourseStageStatus::StorageFailure,
+            .diagnostic = stored.diagnostic.empty()
+                              ? "could not commit modern course result"
+                              : std::move(stored.diagnostic)};
+  }
+  return {.status = ModernCourseStageStatus::Staged,
+          .receipt = ModernCourseStageReceipt{.attemptId = result.attemptId,
+                                              .resultId = resultId,
+                                              .createdAt = stored.createdAt}};
+}
+
+ModernCourseResultReadOutcome
+ReplayRepository::LoadModernCourseResultByAttempt(std::string_view attemptId) {
+  profile_database_activity::ReadGuard readGuard;
+  if (!uuid::isCanonicalLowerV4(attemptId)) {
+    return {.status = ModernCourseResultReadStatus::Invalid,
+            .diagnostic = "modern course result attempt ID is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernCourseResultReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  auto loaded =
+      readCourseRecord(impl_->sessionDatabase, "attempt_id=?", attemptId, 0);
+  switch (loaded.status) {
+  case ReadRecordStatus::Loaded:
+    return {.status = ModernCourseResultReadStatus::Loaded,
+            .record = std::move(loaded.record)};
+  case ReadRecordStatus::NotFound:
+    return {.status = ModernCourseResultReadStatus::NotFound};
+  case ReadRecordStatus::Invalid:
+    return {.status = ModernCourseResultReadStatus::Invalid,
+            .diagnostic = std::move(loaded.diagnostic)};
+  case ReadRecordStatus::StorageFailure:
+    return {.status = ModernCourseResultReadStatus::StorageFailure,
+            .diagnostic = std::move(loaded.diagnostic)};
+  }
+  return {.status = ModernCourseResultReadStatus::StorageFailure};
+}
+
+ModernCourseResultReadOutcome
+ReplayRepository::LoadModernCourseResult(int resultId) {
+  profile_database_activity::ReadGuard readGuard;
+  if (resultId <= 0) {
+    return {.status = ModernCourseResultReadStatus::Invalid,
+            .diagnostic = "modern course result ID is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernCourseResultReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  auto loaded = readCourseRecord(impl_->sessionDatabase, "id=?", {}, resultId);
+  switch (loaded.status) {
+  case ReadRecordStatus::Loaded:
+    return {.status = ModernCourseResultReadStatus::Loaded,
+            .record = std::move(loaded.record)};
+  case ReadRecordStatus::NotFound:
+    return {.status = ModernCourseResultReadStatus::NotFound};
+  case ReadRecordStatus::Invalid:
+    return {.status = ModernCourseResultReadStatus::Invalid,
+            .diagnostic = std::move(loaded.diagnostic)};
+  case ReadRecordStatus::StorageFailure:
+    return {.status = ModernCourseResultReadStatus::StorageFailure,
+            .diagnostic = std::move(loaded.diagnostic)};
+  }
+  return {.status = ModernCourseResultReadStatus::StorageFailure};
+}
+
+ModernCourseHistoryReadOutcome
+ReplayRepository::ListModernCourseResults(std::string_view courseKey,
+                                          std::size_t limit) {
+  profile_database_activity::ReadGuard readGuard;
+  if (!course_identity::isCanonicalKey(courseKey) || limit == 0 ||
+      limit > kMaximumModernCourseHistoryRows) {
+    return {.status = ModernCourseHistoryReadStatus::Invalid,
+            .diagnostic = "modern course history request is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernCourseHistoryReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->sessionDatabase,
+                                      "BEGIN TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ModernCourseHistoryReadStatus::StorageFailure,
+            .diagnostic = "could not start modern course history read"};
+  }
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT id FROM modern_course_results WHERE course_key=? "
+      "ORDER BY played_at_unix_ms DESC,id DESC LIMIT ?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      !bindText(statement.get(), 1, courseKey) ||
+      sqlite3_bind_int64(statement.get(), 2,
+                         static_cast<sqlite3_int64>(limit)) != SQLITE_OK) {
+    return {.status = ModernCourseHistoryReadStatus::StorageFailure,
+            .diagnostic = "could not prepare modern course history read"};
+  }
+  std::vector<int> resultIds;
+  resultIds.reserve(limit);
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER) {
+      return {.status = ModernCourseHistoryReadStatus::IntegrityConflict,
+              .diagnostic = "modern course history ID has an invalid type"};
+    }
+    const sqlite3_int64 id = sqlite3_column_int64(statement.get(), 0);
+    if (id <= 0 || id > std::numeric_limits<int>::max()) {
+      return {.status = ModernCourseHistoryReadStatus::IntegrityConflict,
+              .diagnostic = "modern course history ID is out of range"};
+    }
+    resultIds.push_back(static_cast<int>(id));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ModernCourseHistoryReadStatus::StorageFailure,
+            .diagnostic = "modern course history scan did not complete"};
+  }
+  statement.reset();
+
+  ModernCourseHistoryReadOutcome outcome{
+      .status = ModernCourseHistoryReadStatus::Loaded};
+  outcome.records.reserve(resultIds.size());
+  for (const int resultId : resultIds) {
+    auto loaded =
+        readCourseRecord(impl_->sessionDatabase, "id=?", {}, resultId);
+    if (loaded.status == ReadRecordStatus::StorageFailure) {
+      return {.status = ModernCourseHistoryReadStatus::StorageFailure,
+              .diagnostic = std::move(loaded.diagnostic)};
+    }
+    if (loaded.status != ReadRecordStatus::Loaded || !loaded.record ||
+        loaded.record->result.courseKey != courseKey) {
+      return {.status = ModernCourseHistoryReadStatus::IntegrityConflict,
+              .diagnostic = loaded.diagnostic.empty()
+                                ? "modern course history row is inconsistent"
+                                : std::move(loaded.diagnostic)};
+    }
+    outcome.records.push_back(std::move(*loaded.record));
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = ModernCourseHistoryReadStatus::StorageFailure,
+            .diagnostic = "could not finish modern course history read"};
   }
   return outcome;
 }

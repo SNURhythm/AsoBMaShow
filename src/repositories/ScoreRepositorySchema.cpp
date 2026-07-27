@@ -52,16 +52,6 @@ constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
     "\"eligibility\":\"legacy-unverified\"}";
 
-bool isCanonicalCourseKey(std::string_view key) {
-  constexpr std::string_view prefix = "course:v1:";
-  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
-    return false;
-  }
-  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
-    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
-  });
-}
-
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
@@ -363,7 +353,8 @@ bool migrateScoreDatabaseToVersion6(sqlite3 *db) {
   }
   for (const auto &row : rows) {
     const bool noncanonical =
-        !row.courseKey.empty() && !isCanonicalCourseKey(row.courseKey);
+        !row.courseKey.empty() &&
+        !course_identity::isCanonicalKey(row.courseKey);
     const bool copyLegacy = noncanonical && row.legacyCourseKey.empty();
     const auto parsed =
         noncanonical ? course_identity::parseLegacyScoreKey(row.courseKey)

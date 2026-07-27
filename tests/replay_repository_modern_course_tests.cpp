@@ -147,15 +147,20 @@ attachment(const ModernReplayPathReservation &reservation, char hash = 'd') {
                            replay::BeatorajaReplayCodec::kCodecVersion}};
 }
 
-ModernReplayPathReservation reserve(ReplayRepository &repository,
-                                    const result_persistence::ModernCourseResult
-                                        &completed) {
-  replay::CoursePathInput input{
+replay::CoursePathInput coursePathInput(
+    const result_persistence::ModernCourseResult &completed) {
+  return {
       .stageSha256 = {completed.stages[0].score.chartSha256,
                       completed.stages[1].score.chartSha256},
       .longNoteMode = completed.longNoteMode,
       .beatorajaConstraintIds = {4},
   };
+}
+
+ModernReplayPathReservation reserve(ReplayRepository &repository,
+                                    const result_persistence::ModernCourseResult
+                                        &completed) {
+  const auto input = coursePathInput(completed);
   std::string diagnostic;
   const auto stem = replay::courseStem(input, diagnostic);
   assert(stem.has_value());
@@ -182,7 +187,8 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
   const auto completed = result(1);
   const auto reservation = reserve(repository, completed);
   const auto file = attachment(reservation);
-  const auto staged = repository.StageModernCourseResult(completed, file);
+  const auto staged = repository.StageModernCourseResult(
+      completed, file, coursePathInput(completed));
   assert(staged.status == ModernCourseStageStatus::Staged && staged.receipt &&
          staged.receipt->resultId > 0);
   assert(queryInt(database.get(), "SELECT COUNT(*) FROM modern_course_results") ==
@@ -213,12 +219,16 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
          loaded.record->replayFile->identity == file.identity &&
          loaded.record->replayFile->metadata == file.metadata);
 
-  const auto retried = repository.StageModernCourseResult(completed, file);
+  const auto retried = repository.StageModernCourseResult(
+      completed, file, coursePathInput(completed));
   assert(retried.status == ModernCourseStageStatus::AlreadyStaged &&
          retried.receipt == staged.receipt);
   auto conflicting = file;
   conflicting.metadata.sha256 = repeated('e', 64);
-  assert(repository.StageModernCourseResult(completed, conflicting).status ==
+  assert(repository
+             .StageModernCourseResult(completed, conflicting,
+                                      coursePathInput(completed))
+             .status ==
          ModernCourseStageStatus::IntegrityConflict);
 
   exec(database.get(),
@@ -259,7 +269,8 @@ void testResultOnlyHistoryAndRollbackPreserveReservation() {
        "CREATE TRIGGER fail_course_stage BEFORE INSERT ON "
        "modern_course_stages BEGIN SELECT RAISE(ABORT,'injected'); END");
   assert(repository
-             .StageModernCourseResult(failedResult, attachment(reservation))
+             .StageModernCourseResult(failedResult, attachment(reservation),
+                                      coursePathInput(failedResult))
              .status == ModernCourseStageStatus::StorageFailure);
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM modern_course_results WHERE "
@@ -278,8 +289,9 @@ void testReplayFileOwnerCheckRejectsBothAndNeither() {
   assert(repository.EnsureSchema());
   const auto completed = result(5);
   const auto reservation = reserve(repository, completed);
-  assert(repository.StageModernCourseResult(completed,
-                                            attachment(reservation))
+  assert(repository.StageModernCourseResult(
+                       completed, attachment(reservation),
+                       coursePathInput(completed))
              .status == ModernCourseStageStatus::Staged);
   auto database = openDatabase(databasePath);
   char *error = nullptr;

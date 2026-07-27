@@ -5121,7 +5121,7 @@ void testFreshDatabaseCreatesIrSubmissionReceipts(
   helper.Shutdown();
 
   auto db = openDatabase(path);
-  assert(ReplayRepository::kCurrentSchemaVersion == 11);
+  assert(ReplayRepository::kCurrentSchemaVersion == 12);
   assert(queryInt(db.get(), "PRAGMA user_version") ==
          ReplayRepository::kCurrentSchemaVersion);
   assertExactIrSubmissionReceiptSchema(db.get());

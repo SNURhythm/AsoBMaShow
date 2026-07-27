@@ -1,5 +1,7 @@
 #pragma once
 
+#define ASOBMASHOW_HAS_MODERN_COURSE_REPOSITORY 1
+
 #include "../CourseIdentity.h"
 #include "../ModernResult.h"
 #include "../ReplayData.h"
@@ -339,7 +341,66 @@ struct ModernChartResultReadOutcome {
   std::string diagnostic;
 };
 
+struct ModernCourseResultRecord {
+  result_persistence::ModernCourseResult result;
+  std::optional<ModernReplayFileReference> replayFile;
+
+  bool operator==(const ModernCourseResultRecord &) const = default;
+};
+
+enum class ModernCourseStageStatus {
+  Staged,
+  AlreadyStaged,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernCourseStageReceipt {
+  std::string attemptId;
+  int resultId = 0;
+  std::string createdAt;
+
+  bool operator==(const ModernCourseStageReceipt &) const = default;
+};
+
+struct ModernCourseStageOutcome {
+  ModernCourseStageStatus status = ModernCourseStageStatus::StorageFailure;
+  std::optional<ModernCourseStageReceipt> receipt;
+  std::string diagnostic;
+};
+
+enum class ModernCourseResultReadStatus {
+  Loaded,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernCourseResultReadOutcome {
+  ModernCourseResultReadStatus status =
+      ModernCourseResultReadStatus::StorageFailure;
+  std::optional<ModernCourseResultRecord> record;
+  std::string diagnostic;
+};
+
+enum class ModernCourseHistoryReadStatus {
+  Loaded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernCourseHistoryReadOutcome {
+  ModernCourseHistoryReadStatus status =
+      ModernCourseHistoryReadStatus::StorageFailure;
+  std::vector<ModernCourseResultRecord> records;
+  std::string diagnostic;
+};
+
 inline constexpr std::size_t kMaximumModernChartHistoryRows = 1024;
+inline constexpr std::size_t kMaximumModernCourseHistoryRows = 1024;
 
 enum class ModernChartHistoryReadStatus {
   Loaded,
@@ -372,7 +433,7 @@ struct ModernIrSnapshotReadOutcome {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 11;
+  static constexpr int kCurrentSchemaVersion = 12;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -405,6 +466,15 @@ public:
   ModernChartResultReadOutcome LoadModernChartResult(int resultId);
   ModernChartHistoryReadOutcome
   ListModernChartResults(std::string_view chartSha256, std::size_t limit = 100);
+  ModernCourseStageOutcome StageModernCourseResult(
+      const result_persistence::ModernCourseResult &result,
+      const std::optional<ModernReplayFileAttachment> &replayFile,
+      const std::optional<replay::CoursePathInput> &replayPath = std::nullopt);
+  ModernCourseResultReadOutcome
+  LoadModernCourseResultByAttempt(std::string_view attemptId);
+  ModernCourseResultReadOutcome LoadModernCourseResult(int resultId);
+  ModernCourseHistoryReadOutcome
+  ListModernCourseResults(std::string_view courseKey, std::size_t limit = 100);
   ModernIrSnapshotReadOutcome
   LoadModernIrSubmissionSnapshot(std::string_view attemptId);
   result_persistence::PendingReadOutcome
@@ -434,9 +504,10 @@ public:
       std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);
   ir::IrOutboxInsertOutcome
   EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft, bool userIntent);
-  ir::IrManualBatchEnqueueOutcome EnqueueReadyIrOutboxDrafts(
-      std::span<const ir::IrOutboxDraft> drafts,
-      std::string_view requestOrigin, bool userIntent, std::int64_t nowMs);
+  ir::IrManualBatchEnqueueOutcome
+  EnqueueReadyIrOutboxDrafts(std::span<const ir::IrOutboxDraft> drafts,
+                             std::string_view requestOrigin, bool userIntent,
+                             std::int64_t nowMs);
   ir::IrOutboxReadOutcome LoadIrOutbox(std::string_view providerId,
                                        std::string_view attemptId);
   ir::IrOutboxBatchOutcome ListDueIrOutbox(std::int64_t nowMs,
@@ -460,8 +531,8 @@ public:
                              std::string_view errorMessage, std::int64_t nowMs);
   ir::IrOutboxMutationOutcome
   ApplyIrOutboxDelivery(const ir::IrOutboxDeliveryUpdate &update);
-  ir::IrOutboxMutationOutcome ApplyIrOutboxDeliveries(
-      std::span<const ir::IrOutboxDeliveryUpdate> updates);
+  ir::IrOutboxMutationOutcome
+  ApplyIrOutboxDeliveries(std::span<const ir::IrOutboxDeliveryUpdate> updates);
   ir::IrReceiptReadOutcome
   LoadIrSubmissionReceipt(std::string_view providerId,
                           std::string_view serverOrigin,
@@ -481,20 +552,20 @@ public:
   // the mirror is durable but before receipts and outbox work are settled.
   ir::IrRemoteSnapshotApplyOutcome
   ReplaceIrRemoteScoreMirror(const ir::IrRemoteSnapshotMutation &mutation);
-  ir::IrRemoteSnapshotApplyOutcome FinalizeIrRemoteSnapshot(
-      const ir::IrRemoteSnapshotMutation &mutation,
-      std::int64_t expectedSyncGeneration);
+  ir::IrRemoteSnapshotApplyOutcome
+  FinalizeIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation,
+                           std::int64_t expectedSyncGeneration);
   ir::IrRemoteScoreReadOutcome
   ListIrRemoteScores(std::string_view providerId,
                      std::string_view serverOrigin);
-  ir::IrRemoteScoreMirrorStateOutcome LoadIrRemoteScoreMirrorState(
-      std::string_view providerId, std::string_view serverOrigin);
+  ir::IrRemoteScoreMirrorStateOutcome
+  LoadIrRemoteScoreMirrorState(std::string_view providerId,
+                               std::string_view serverOrigin);
   ir::IrRemoteScoreReadOutcome ListIrRemoteScoresForChart(
       std::string_view providerId, std::string_view serverOrigin,
       std::string_view chartMd5, std::string_view chartSha256);
   ir::IrRemoteScoreLookupOutcome
-  LoadIrRemoteScore(std::string_view providerId,
-                    std::string_view serverOrigin,
+  LoadIrRemoteScore(std::string_view providerId, std::string_view serverOrigin,
                     std::string_view remoteScoreId);
   ir::IrOutboxMutationOutcome
   ClearIrRemoteScores(std::string_view providerId,
@@ -519,10 +590,10 @@ public:
   ClearIrAccountDataSnapshot(const std::filesystem::path &snapshotDatabasePath,
                              std::string &errorMessage);
   // Pass limit <= 0 to return all matching rows.
-  std::vector<ReplaySummary>
-  ListReplays(const bms_parser::ChartMeta &chartMeta, int limit = 100,
-              std::string_view irProviderId = {},
-              std::string_view irServerOrigin = {});
+  std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
+                                         int limit = 100,
+                                         std::string_view irProviderId = {},
+                                         std::string_view irServerOrigin = {});
   std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
                                                int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,
