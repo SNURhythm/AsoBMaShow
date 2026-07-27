@@ -1323,6 +1323,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             SDL2)
     endif()
 
+    add_executable(chart_replay_persistence_tests
+        tests/chart_replay_persistence_tests.cpp
+    )
+    target_include_directories(chart_replay_persistence_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_replay_persistence_tests PRIVATE cxx_std_23)
+
     add_executable(music_playlist_repository_tests
         tests/music_playlist_repository_tests.cpp
         src/ArchiveFile.cpp
@@ -3192,6 +3200,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_ranking_modal_tests
         replay_repository_tests
         replay_repository_modern_chart_tests
+        chart_replay_persistence_tests
         music_playlist_repository_tests
         chart_repository_tests
         chart_library_scanner_tests
