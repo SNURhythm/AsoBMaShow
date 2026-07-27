@@ -108,15 +108,20 @@ void testDirectTouchEmitsTimestampedLaneEdges() {
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 124'000}),
           "touch up is accepted");
-  require(capture.events.size() == 2 && capture.events[0].epoch == 42 &&
-              capture.events[0].type ==
-                  gameplay::RealtimeGameplayInputType::Press &&
-              capture.events[0].lane == 0 &&
-              capture.events[0].steadyTimestampMicros == 123'456 &&
-              capture.events[1].type ==
-                  gameplay::RealtimeGameplayInputType::Release &&
-              capture.events[1].lane == 0,
-          "native samples preserve their timestamp and lane edge order");
+  require(
+      capture.events.size() == 2 && capture.events[0].epoch == 42 &&
+          capture.events[0].type ==
+              gameplay::RealtimeGameplayInputType::Press &&
+          capture.events[0].lane == 0 && capture.events[0].hasReplayControl &&
+          capture.events[0].replayControl ==
+              replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
+                                     .player = 1,
+                                     .lane = 0} &&
+          capture.events[0].steadyTimestampMicros == 123'456 &&
+          capture.events[1].type ==
+              gameplay::RealtimeGameplayInputType::Release &&
+          capture.events[1].lane == 0,
+      "native samples preserve their timestamp and lane edge order");
 }
 
 void testDragModeChangesLaneWithoutWaitingForAFrame() {
@@ -175,8 +180,14 @@ void testScratchFlickEmitsAtomicBackspinAndPressPair() {
               capture.events[1].type ==
                   gameplay::RealtimeGameplayInputType::Release &&
               capture.events[1].backSpin &&
+              capture.events[1].hasReplayControl &&
+              capture.events[1].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
               capture.events[2].type ==
-                  gameplay::RealtimeGameplayInputType::Press,
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events[2].hasReplayControl &&
+              capture.events[2].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise,
           "scratch reversal remains ordered on the realtime ingress");
 }
 

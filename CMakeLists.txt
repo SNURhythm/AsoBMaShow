@@ -2548,6 +2548,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_playback_startup_tests.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
+        src/replay/ReplaySetup.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
     )

@@ -83,7 +83,7 @@ void testRulesetContract() {
 }
 
 void testSchemaAndInputDeviceVocabularyContract() {
-  assert(ScoreProvenance::kSchemaVersion == 4);
+  assert(ScoreProvenance::kSchemaVersion == 5);
   assert(static_cast<int>(InputDeviceCategory::Keyboard) == 0);
   assert(static_cast<int>(InputDeviceCategory::GameController) == 1);
   assert(static_cast<int>(InputDeviceCategory::Joystick) == 2);
@@ -130,6 +130,7 @@ void testDeterministicRoundTrip() {
 
 void testPlaybackAndJudgeProvenanceRoundTripAndMigration() {
   auto input = sampleInput();
+  input.doublePlayFlip = true;
   input.clubMode = true;
   input.playback = {.percent = 75, .mode = audio::PlaybackMode::PitchShift};
   input.judgeWindowScalePercent = 80;
@@ -141,9 +142,11 @@ void testPlaybackAndJudgeProvenanceRoundTripAndMigration() {
   assert(modified.judgeWindowScalePercent == 80);
   assert(modified.startingGaugePercent == 37);
   assert(modified.clubMode);
+  assert(modified.doublePlayFlip);
 
   const std::string serialized = serializeScoreProvenance(modified);
   assert(serialized.find("\"mode\":\"pitch-shift\"") != std::string::npos);
+  assert(serialized.find("\"doublePlayFlip\":true") != std::string::npos);
   std::string error;
   const auto roundTrip = deserializeScoreProvenance(serialized, error);
   assert(error.empty());
@@ -174,6 +177,15 @@ void testPlaybackAndJudgeProvenanceRoundTripAndMigration() {
   assert(migrated->judgeWindowScalePercent == 100);
   assert(!migrated->startingGaugePercent.has_value());
   assert(!migrated->clubMode);
+
+  auto versionFour = nlohmann::json::parse(serialized);
+  versionFour["schemaVersion"] = 4;
+  versionFour.erase("doublePlayFlip");
+  const auto migratedVersionFour =
+      deserializeScoreProvenance(versionFour.dump(), error);
+  assert(error.empty());
+  assert(migratedVersionFour.has_value() &&
+         !migratedVersionFour->doublePlayFlip);
 }
 
 void testPlaybackAndJudgeProvenanceValidation() {
