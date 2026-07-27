@@ -18,6 +18,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -27,6 +28,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -223,29 +225,53 @@ bool normalizeResultProvenance(ScoreProvenance &provenance,
   return true;
 }
 
-std::vector<int> parseIntegers(std::string_view source) {
+bool readLegacyRandomValues(sqlite3_stmt *statement, int column,
+                            std::vector<int> &output,
+                            std::string &diagnostic) {
+  const int storage = sqlite3_column_type(statement, column);
+  if (storage == SQLITE_NULL) {
+    output.clear();
+    return true;
+  }
+  if (storage != SQLITE_TEXT) {
+    diagnostic = "legacy replay RANDOM values have invalid storage";
+    return false;
+  }
+
+  const std::string_view source = sqliteColumnTextView(statement, column);
+  if (source.empty()) {
+    diagnostic = "legacy replay RANDOM values are malformed";
+    return false;
+  }
+
   std::vector<int> values;
   std::size_t begin = 0;
-  while (begin <= source.size()) {
+  while (begin < source.size()) {
     const std::size_t end = source.find(',', begin);
-    const std::string token(source.substr(begin, end == std::string_view::npos
-                                                     ? source.size() - begin
-                                                     : end - begin));
-    if (!token.empty()) {
-      char *tail = nullptr;
-      const long value = std::strtol(token.c_str(), &tail, 10);
-      if (tail != token.c_str() && *tail == '\0' &&
-          value >= std::numeric_limits<int>::min() &&
-          value <= std::numeric_limits<int>::max()) {
-        values.push_back(static_cast<int>(value));
-      }
+    const std::string_view token = source.substr(
+        begin, end == std::string_view::npos ? source.size() - begin
+                                             : end - begin);
+    int value = 0;
+    const auto [tail, error] =
+        std::from_chars(token.data(), token.data() + token.size(), value);
+    if (token.empty() || error != std::errc{} ||
+        tail != token.data() + token.size() ||
+        std::to_string(value) != token) {
+      diagnostic = "legacy replay RANDOM values are malformed";
+      return false;
     }
+    values.push_back(value);
     if (end == std::string_view::npos) {
       break;
     }
     begin = end + 1;
+    if (begin == source.size()) {
+      diagnostic = "legacy replay RANDOM values are malformed";
+      return false;
+    }
   }
-  return values;
+  output = std::move(values);
+  return true;
 }
 
 bool supportedKeyMode(int keyMode) noexcept {
@@ -849,8 +875,9 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
     if (sqlite3_column_type(statement.get(), 14) == SQLITE_TEXT) {
       chart.randomPrng = columnText(statement.get(), 14);
     }
-    if (sqlite3_column_type(statement.get(), 15) == SQLITE_TEXT) {
-      chart.randomValues = parseIntegers(columnText(statement.get(), 15));
+    if (!readLegacyRandomValues(statement.get(), 15, chart.randomValues,
+                                diagnostic)) {
+      return false;
     }
     if (sqlite3_column_type(statement.get(), 16) == SQLITE_TEXT) {
       chart.playOption = columnText(statement.get(), 16);

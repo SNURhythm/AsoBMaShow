@@ -57,16 +57,20 @@ const std::vector<InvalidRandomCase> invalidCases = {
     {"plus sign", bindText("+1")},
     {"leading zero", bindText("01")},
     {"negative zero", bindText("-0")},
-    {"integer storage", bindInteger(1)},
     {"blob storage", bindBlob("1,2")},
     {"embedded nul", bindTextBytes({'1', '\0', ',', '2'})},
 };
 ```
 
-For every case assert `MigrationStatus::InvalidLegacyData`, zero chart/course
-files, `PRAGMA user_version == 10`, unchanged type and hex bytes, and no replay
-directory. Repair the value to canonical `3,4`, rerun, and assert successful
-migration plus decoded BRD values `{3, 4}`.
+SQLite's declared TEXT affinity canonicalizes ordinary INTEGER/REAL binds to
+TEXT before the reader sees them, so the integration matrix does not pretend
+those storage classes can survive an exact-schema update. The production guard
+still rejects any non-NULL, non-TEXT class presented by a corrupted schema.
+
+For every listed case assert `MigrationStatus::InvalidLegacyData`, zero
+chart/course files, `PRAGMA user_version == 10`, unchanged type and hex bytes,
+and no replay directory. Repair the value to canonical `3,4`, rerun, and
+assert successful migration plus decoded BRD values `{3, 4}`.
 
 Add valid cases for SQL NULL producing an empty vector and canonical boundary
 TEXT `-2147483648,0,2147483647` producing those exact three values.

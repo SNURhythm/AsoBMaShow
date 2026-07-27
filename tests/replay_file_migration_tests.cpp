@@ -141,6 +141,38 @@ std::string text(sqlite3 *database, std::string_view query) {
   return result;
 }
 
+enum class BoundSqlValueKind { Null, Text, Blob };
+
+void setLegacyRandomValues(sqlite3 *database, BoundSqlValueKind kind,
+                           std::string_view bytes = {}) {
+  sqlite3_stmt *statement = nullptr;
+  if (sqlite3_prepare_v2(
+          database, "UPDATE replays SET random_values=? WHERE id=42", -1,
+          &statement, nullptr) != SQLITE_OK) {
+    throw std::runtime_error("could not prepare legacy RANDOM mutation");
+  }
+  int bound = SQLITE_ERROR;
+  switch (kind) {
+  case BoundSqlValueKind::Null:
+    bound = sqlite3_bind_null(statement, 1);
+    break;
+  case BoundSqlValueKind::Text:
+    bound = sqlite3_bind_text(statement, 1, bytes.data(),
+                              static_cast<int>(bytes.size()), SQLITE_TRANSIENT);
+    break;
+  case BoundSqlValueKind::Blob:
+    bound = sqlite3_bind_blob(statement, 1, bytes.data(),
+                              static_cast<int>(bytes.size()), SQLITE_TRANSIENT);
+    break;
+  }
+  const bool succeeded =
+      bound == SQLITE_OK && sqlite3_step(statement) == SQLITE_DONE;
+  sqlite3_finalize(statement);
+  if (!succeeded) {
+    throw std::runtime_error("could not mutate legacy RANDOM storage");
+  }
+}
+
 bool tableExists(sqlite3 *database, std::string_view table) {
   return integer(database,
                  "SELECT count(*) FROM sqlite_master WHERE type='table' AND "
@@ -1220,6 +1252,129 @@ void testRejectsUnmappableLegacyInputLanesAtomically() {
   }
 }
 
+void testRejectsMalformedLegacyRandomValuesAtomically() {
+  struct InvalidCase {
+    std::string_view label;
+    BoundSqlValueKind kind;
+    std::string bytes;
+  };
+  const std::vector<InvalidCase> cases{
+      {"malformed middle token", BoundSqlValueKind::Text, "1,bad,2"},
+      {"positive int overflow", BoundSqlValueKind::Text, "1,2147483648,2"},
+      {"negative int overflow", BoundSqlValueKind::Text,
+       "1,-2147483649,2"},
+      {"empty text", BoundSqlValueKind::Text, ""},
+      {"leading comma", BoundSqlValueKind::Text, ",1"},
+      {"trailing comma", BoundSqlValueKind::Text, "1,"},
+      {"double comma", BoundSqlValueKind::Text, "1,,2"},
+      {"leading whitespace", BoundSqlValueKind::Text, " 1"},
+      {"trailing whitespace", BoundSqlValueKind::Text, "1 "},
+      {"plus sign", BoundSqlValueKind::Text, "+1"},
+      {"leading zero", BoundSqlValueKind::Text, "01"},
+      {"negative zero", BoundSqlValueKind::Text, "-0"},
+      {"blob storage", BoundSqlValueKind::Blob, "1,2"},
+      {"embedded NUL", BoundSqlValueKind::Text, std::string("1\0,2", 4)},
+  };
+
+  for (const auto &invalid : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    setLegacyRandomValues(database.get(), invalid.kind, invalid.bytes);
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+    const std::string beforeStorage =
+        text(database.get(),
+             "SELECT typeof(random_values)||':'||hex(random_values) FROM "
+             "replays WHERE id=42");
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto rejected = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+
+    const bool rejectedAtomically =
+        rejected.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+        rejected.chartFiles == 0 && rejected.courseFiles == 0 &&
+        snapshotLegacyDatabase(database.get()) == before &&
+        text(database.get(),
+             "SELECT typeof(random_values)||':'||hex(random_values) FROM "
+             "replays WHERE id=42") == beforeStorage &&
+        !std::filesystem::exists(temporary.path() / "replay");
+    expect(rejectedAtomically,
+           std::string("noncanonical legacy RANDOM ") +
+               std::string(invalid.label) +
+               " rejects atomically without publishing a partial branch");
+    if (!rejectedAtomically) {
+      continue;
+    }
+
+    setLegacyRandomValues(database.get(), BoundSqlValueKind::Text, "3,4");
+    replay::ReplayFileStore retryStore(temporary.path());
+    const auto retried = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, retryStore, {},
+        fixedChartMetadata(2));
+    expect(retried.status == replay_repository_detail::ReplayMigrationOutcome::
+                                 Status::Migrated &&
+               retried.chartFiles == 1 && retried.courseFiles == 0,
+           std::string("repaired legacy RANDOM ") +
+               std::string(invalid.label) + " retries successfully");
+  }
+}
+
+void testMigratesCanonicalLegacyRandomValuesExactly() {
+  struct ValidCase {
+    std::string_view label;
+    BoundSqlValueKind kind;
+    std::string bytes;
+    std::vector<int> expected;
+  };
+  const std::vector<ValidCase> cases{
+      {"SQL NULL", BoundSqlValueKind::Null, "", {}},
+      {"int boundaries", BoundSqlValueKind::Text,
+       "-2147483648,0,2147483647",
+       {-2147483648, 0, 2147483647}},
+  };
+
+  for (const auto &valid : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    const FixtureFacts fixture = insertChartFixture(database.get());
+    setLegacyRandomValues(database.get(), valid.kind, valid.bytes);
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto migrated = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+    if (migrated.status != replay_repository_detail::ReplayMigrationOutcome::
+                               Status::Migrated) {
+      expect(false, std::string("canonical legacy RANDOM ") +
+                        std::string(valid.label) + " migrates");
+      continue;
+    }
+
+    replay::ReplayFileMetadata metadata{
+        .relativePath = "replay/" + fixture.sha256 + ".brd",
+        .sha256 = text(database.get(),
+                       "SELECT content_sha256 FROM replay_files WHERE "
+                       "chart_result_id=42"),
+        .compressedSize = static_cast<std::uint64_t>(integer(
+            database.get(), "SELECT compressed_size FROM replay_files WHERE "
+                            "chart_result_id=42")),
+        .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+    };
+    const auto decoded = store.load(metadata, codec);
+    expect(decoded.chart.has_value() &&
+               decoded.chart->setup.randomValues == valid.expected,
+           std::string("canonical legacy RANDOM ") +
+               std::string(valid.label) + " is preserved exactly in BRD");
+  }
+}
+
 void testRejectsEmptyLegacyChartIdentitiesBeforeWritingFiles() {
   struct EmptyIdentityCase {
     std::string mutation;
@@ -2294,6 +2449,8 @@ int main() {
   testLongNoteMigrationRequiresAndUsesParsedTopology();
   testMapsLegacyPhysicalLanesForEverySupportedMode();
   testRejectsUnmappableLegacyInputLanesAtomically();
+  testRejectsMalformedLegacyRandomValuesAtomically();
+  testMigratesCanonicalLegacyRandomValuesExactly();
   testRejectsEmptyLegacyChartIdentitiesBeforeWritingFiles();
   testRejectsPendingChartIdentityDisagreementBeforeWritingFiles();
   testRejectsOutOfRangeChartLongNoteModeBeforeWritingFiles();
