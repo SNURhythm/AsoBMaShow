@@ -84,6 +84,9 @@ legacyReplayEntriesForSession(const CoursePlaySession &source,
   session.courseReplaySaved = true;
   session.courseReplayPlaybackData =
       std::make_shared<replay::CourseReplayPlaybackData>(attempt->replay);
+  session.courseReplayResultContext =
+      std::shared_ptr<const result_persistence::PersistedCourseResult>(
+          attempt, &attempt->result);
   return true;
 }
 

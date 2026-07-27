@@ -5,6 +5,7 @@
 #include "analysis/JudgedPlaybackData.h"
 #include "repositories/ScoreRepository.h"
 #include "scene/play/Pacemaker.h"
+#include "scene/play/ReplayResultContext.h"
 #include "analysis/JudgedPlaybackAnalysis.h"
 #include "skin/SkinTypes.h"
 
@@ -50,11 +51,10 @@ scoreBestSnapshotFromPreviousBest(const ResultPreviousBestData &previousBest) {
           .createdAt = previousBest.createdAt};
 }
 
-inline std::optional<JudgedPlaybackData> bestReplayForSnapshot(
-    ReplayRepository &replays, bms_parser::Chart &chart,
-    const ScoreBestSnapshot &best,
-    const std::optional<std::string> &beforeCreatedAt = std::nullopt,
-    const std::optional<std::string> &excludeAttemptId = std::nullopt) {
+inline std::optional<JudgedPlaybackData>
+bestReplayForSnapshot(ReplayRepository &replays, bms_parser::Chart &chart,
+                      const ScoreBestSnapshot &best,
+                      const ReplayComparisonQuery &comparison = {}) {
   if (best.score <= 0 || chart.Meta.TotalNotes <= 0) {
     return std::nullopt;
   }
@@ -65,16 +65,18 @@ inline std::optional<JudgedPlaybackData> bestReplayForSnapshot(
         summary.finalScore != best.score) {
       continue;
     }
-    if (beforeCreatedAt.has_value() && !beforeCreatedAt->empty() &&
-        !summary.createdAt.empty() && summary.createdAt >= *beforeCreatedAt) {
+    if (comparison.beforeCreatedAt.has_value() &&
+        !comparison.beforeCreatedAt->empty() && !summary.createdAt.empty() &&
+        summary.createdAt >= *comparison.beforeCreatedAt) {
       continue;
     }
-    if (excludeAttemptId.has_value() && summary.attemptId == excludeAttemptId) {
+    if (comparison.excludeAttemptId.has_value() &&
+        summary.attemptId == comparison.excludeAttemptId) {
       continue;
     }
 
-    auto loadedReplay = replay::loadJudgedPlaybackForAnalysis(
-        replays, summary.id, chart.Meta);
+    auto loadedReplay =
+        replay::loadJudgedPlaybackForAnalysis(replays, summary.id, chart.Meta);
     if (!loadedReplay.has_value() || loadedReplay->finalScore != best.score) {
       continue;
     }
@@ -119,11 +121,9 @@ inline std::optional<ResultPacemakerData> pacemakerDataForResult(
 
 inline pacemaker::Target pacemakerTargetForReplay(
     ReplayRepository &replays, bms_parser::Chart &chart,
-    const JudgedPlaybackData &replay,
-    const std::string &targetId,
+    const JudgedPlaybackData &replay, const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest,
-    const std::optional<std::string> &beforeCreatedAt = std::nullopt,
-    const std::optional<std::string> &excludeAttemptId = std::nullopt) {
+    const ReplayComparisonQuery &comparison = {}) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
   if (replay.autoPlay || normalized == pacemaker::kTargetOff) {
     return {};
@@ -136,13 +136,7 @@ inline pacemaker::Target pacemakerTargetForReplay(
   }
 
   if (normalized == pacemaker::kTargetBest && best.has_value()) {
-    std::optional<std::string> effectiveBeforeCreatedAt = beforeCreatedAt;
-    if (!effectiveBeforeCreatedAt.has_value() && !replay.createdAt.empty()) {
-      effectiveBeforeCreatedAt = replay.createdAt;
-    }
-    bestReplay = bestReplayForSnapshot(replays, chart, *best,
-                                       effectiveBeforeCreatedAt,
-                                       excludeAttemptId);
+    bestReplay = bestReplayForSnapshot(replays, chart, *best, comparison);
   }
 
   return pacemaker::targetFromSelection(
@@ -151,11 +145,12 @@ inline pacemaker::Target pacemakerTargetForReplay(
 
 inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
     ReplayRepository &replays, bms_parser::Chart &chart,
-    const RhythmState &state,
-    const JudgedPlaybackData &replay, const std::string &targetId,
-    const std::optional<ResultPreviousBestData> &previousBest) {
-  const pacemaker::Target target =
-      pacemakerTargetForReplay(replays, chart, replay, targetId, previousBest);
+    const RhythmState &state, const JudgedPlaybackData &replay,
+    const std::string &targetId,
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const ReplayComparisonQuery &comparison = {}) {
+  const pacemaker::Target target = pacemakerTargetForReplay(
+      replays, chart, replay, targetId, previousBest, comparison);
   if (!target.enabled) {
     return std::nullopt;
   }
@@ -171,34 +166,26 @@ inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
 inline std::optional<ResultPreviousBestData>
 previousBestForReplayChart(ScoreRepository &scores,
                            const bms_parser::ChartMeta &meta,
-                           const JudgedPlaybackData &replay,
-                           std::optional<std::string> beforeCreatedAt =
-                               std::nullopt,
-                           std::optional<std::string> excludeAttemptId =
-                               std::nullopt) {
-  if (!beforeCreatedAt.has_value() && !replay.autoPlay &&
-      !replay.createdAt.empty()) {
-    beforeCreatedAt = replay.createdAt;
-  }
-  if (const auto best =
-          scores.LoadBestScore(meta, beforeCreatedAt, excludeAttemptId);
+                           const ReplayComparisonQuery &comparison = {}) {
+  if (const auto best = scores.LoadBestScore(meta, comparison.beforeCreatedAt,
+                                             comparison.excludeAttemptId);
       best.has_value()) {
     return previousBestDataFromSnapshot(*best);
   }
   return std::nullopt;
 }
 
-inline std::string difficultyLabelForChart(
-    ChartRepository &charts, const bms_parser::ChartMeta &meta) {
+inline std::string difficultyLabelForChart(ChartRepository &charts,
+                                           const bms_parser::ChartMeta &meta) {
   auto session = charts.OpenSession();
-  return session.has_value()
-             ? session->DifficultyTableLabelsForChart(meta)
-             : std::string{};
+  return session.has_value() ? session->DifficultyTableLabelsForChart(meta)
+                             : std::string{};
 }
 
-inline bms_parser::ChartMeta courseResultMeta(
-    const std::string &courseName, const std::string &courseGroupName,
-    std::size_t chartCount, int totalNotes, long long playLength) {
+inline bms_parser::ChartMeta
+courseResultMeta(const std::string &courseName,
+                 const std::string &courseGroupName, std::size_t chartCount,
+                 int totalNotes, long long playLength) {
   bms_parser::ChartMeta meta;
   meta.Title = courseName.empty() ? "Course Result" : courseName;
   meta.Artist = courseGroupName.empty() ? "Course Mode" : courseGroupName;

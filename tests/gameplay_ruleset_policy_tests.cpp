@@ -1,5 +1,6 @@
 #include "CoursePlaySession.h"
 #include "CourseConstraintUtils.h"
+#include "analysis/JudgedPlaybackAnalysis.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/GameplayRulesetPolicy.h"
 
@@ -445,7 +446,7 @@ void testRawCourseReplayRestTimingIsPreserved() {
           "freshly recorded course timing remains the fallback");
 }
 
-void testMixedCourseReplaySelectsEachStagesRepresentation() {
+void testCourseReplayKeepsBrdStageInputAsThePlaybackAuthority() {
   CoursePlaySession session;
   session.courseReplayPlaybackData =
       std::make_shared<replay::CourseReplayPlaybackData>();
@@ -455,14 +456,108 @@ void testMixedCourseReplaySelectsEachStagesRepresentation() {
   session.courseReplayData->stages.resize(2);
 
   session.currentIndex = 0;
-  require(session.currentCourseReplayStagePlayback() == nullptr &&
-              session.currentCourseReplayStageReplay() != nullptr,
-          "a migrated course stage selects its judged legacy adapter");
+  require(session.currentCourseReplayStagePlayback() != nullptr &&
+              session.currentCourseReplayStagePlayback()->legacy.has_value() &&
+              session.currentCourseReplayStageReplay() == nullptr,
+          "a migrated BRD stage remains the input authority until startup "
+          "derives its judged adapter");
 
   session.currentIndex = 1;
   require(session.currentCourseReplayStagePlayback() != nullptr &&
               session.currentCourseReplayStageReplay() == nullptr,
           "a native BRD course stage remains raw input playback");
+
+  session.courseReplayPlaybackData.reset();
+  session.currentIndex = 0;
+  require(session.currentCourseReplayStagePlayback() == nullptr &&
+              session.currentCourseReplayStageReplay() != nullptr,
+          "an in-memory judged course remains the compatibility fallback when "
+          "no BRD input exists");
+}
+
+void testRawCourseReplayStartUsesDerivedAnalysisAndGhostPreference() {
+  auto session = std::make_shared<CoursePlaySession>();
+  session->replayGhostRenderingEnabled = true;
+  auto playback = std::make_shared<replay::ReplayPlaybackData>();
+  auto analysis = std::make_shared<const JudgedPlaybackData>();
+
+  const auto options =
+      makeCourseReplayStageStartOptions(session, playback, analysis);
+  require(options.replayPlayback == playback &&
+              options.replayAnalysis == analysis &&
+              options.replayGhostRenderingEnabled == true,
+          "a raw course stage renders the validated judged projection when "
+          "the user enables replay ghosts");
+}
+
+void testJudgedCourseStageAdvancesTheNextMaterializationSeed() {
+  GaugeStateSnapshot carriedGauge;
+  carriedGauge.gaugeType = GaugeType::Hard;
+  carriedGauge.selectedGaugeType = GaugeType::Hard;
+  carriedGauge.currentGauge = 80.0F;
+  carriedGauge.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] = 80.0F;
+  replay::ReplayMaterializationSeed current{
+      .carriedGauge = carriedGauge,
+      .carriedCombo = 12,
+      .carriedMaxCombo = 20,
+  };
+  JudgedPlaybackData judged;
+  const auto ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  judged.setup.playbackRulesetId = ruleset.id;
+  judged.setup.playbackRulesetRevision = ruleset.version;
+  judged.setup.initialGaugeType = GaugeType::Hard;
+  judged.setup.gaugeProfile = GaugeProfile::Standard;
+  judged.maxCombo = 25;
+  judged.finalGauge = 73.0F;
+  judged.events = {
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .gauge = 55.0F,
+       .gaugeType = GaugeType::Hard,
+       .combo = 25},
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .gauge = 73.0F,
+       .gaugeType = GaugeType::Normal,
+       .combo = 14},
+  };
+
+  bms_parser::Chart chart;
+  const auto next =
+      replay::materializationSeedAfterJudgedPlayback(current, chart, judged);
+  require(
+      next.carriedGauge.has_value() &&
+          next.carriedGauge->gaugeType == GaugeType::Normal &&
+          next.carriedGauge->currentGauge == 73.0F &&
+          next.carriedGauge->gaugeValues[gaugeTypeIndex(GaugeType::Hard)] ==
+              55.0F &&
+          next.carriedGauge->gaugeValues[gaugeTypeIndex(GaugeType::Normal)] ==
+              73.0F &&
+          next.carriedCombo == 14 && next.carriedMaxCombo >= 25,
+      "a legacy or native judged stage advances gauge and combo state for "
+      "the next raw course stage");
+}
+
+void testLiveCourseStageStartUsesSessionAuthority() {
+  auto session = std::make_shared<CoursePlaySession>();
+  session->entries.resize(1);
+  session->entries[0].meta.LnMode = long_note_mode::kUnknownValue;
+  session->entries[0].meta.TotalLongNotes = 1;
+  session->playOption = "MIRROR";
+  session->playOptionSeed = 17;
+  session->autoKeySound = true;
+  session->clubMode = true;
+
+  const auto options = makeCourseStageStartOptions(session);
+  require(options.courseSession == session && options.autoKeySound &&
+              options.clubMode && options.playOption == "MIRROR" &&
+              options.playOptionSeed == 17 &&
+              options.hasUndefinedLongNotes == true &&
+              options.playback.percent ==
+                  course_rules::kRequiredPlaybackRate.percent &&
+              options.playback.mode == course_rules::kRequiredPlaybackRate.mode,
+          "every live course stage uses the session's complete startup "
+          "contract");
 }
 
 void testRawCourseReplayMaterializationAppliesSavedJudgementConstraint() {
@@ -507,7 +602,10 @@ int main() {
   testFutureLegacyMarkerDoesNotFallBack();
   testFutureKnownRevisionDoesNotBecomeLegacyMarker();
   testRawCourseReplayRestTimingIsPreserved();
-  testMixedCourseReplaySelectsEachStagesRepresentation();
+  testCourseReplayKeepsBrdStageInputAsThePlaybackAuthority();
+  testRawCourseReplayStartUsesDerivedAnalysisAndGhostPreference();
+  testJudgedCourseStageAdvancesTheNextMaterializationSeed();
+  testLiveCourseStageStartUsesSessionAuthority();
   testRawCourseReplayMaterializationAppliesSavedJudgementConstraint();
   return 0;
 }

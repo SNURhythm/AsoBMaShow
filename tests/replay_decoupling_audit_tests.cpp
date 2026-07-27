@@ -110,11 +110,16 @@ void testProductionSourceBoundaries() {
   const std::string migration =
       "repositories/ReplayRepositoryReplayFileMigration.cpp";
   const std::vector<std::string_view> removedRuntimeSymbols{
-      "struct ReplayData", "ChartResultAttempt", "SaveReplay(",
-      "SaveCourseReplay(", "LoadReplayResult",
+      "struct ReplayData",
+      "ChartResultAttempt",
+      "SaveReplay(",
+      "SaveCourseReplay(",
+      "LoadReplayResult",
       "applyScoreProvenanceToStartOptions",
-      "applyJudgedPlaybackContextToStartOptions", "insertReplayEvent(",
-      "insertReplayTouchSample(", "insertReplayLaneCoverEvent(",
+      "applyJudgedPlaybackContextToStartOptions",
+      "insertReplayEvent(",
+      "insertReplayTouchSample(",
+      "insertReplayLaneCoverEvent(",
       "readReplaySummary("};
   const std::vector<std::string_view> rowPayloadTables{
       "replay_events", "replay_touch_samples", "replay_lane_cover_events"};
@@ -209,11 +214,33 @@ void testFreshSchemaContainsNoRowPayloadDdl() {
   sqlite3_close(database);
 }
 
+void testRetryBoundariesCaptureParsedReplayFacts() {
+  const std::filesystem::path sourceRoot =
+      std::filesystem::path(ASOBMASHOW_SOURCE_ROOT) / "src";
+  for (const auto relative :
+       {"scene/play/GamePlayScene.cpp", "scene/ResultScene.cpp"}) {
+    const std::string source = readText(sourceRoot / relative);
+    const auto capture =
+        source.find("replay::captureAuthoredReplayChartFacts(*retryChart)");
+    const auto materialization =
+        source.find("applyEffectiveLongNoteModeToChart", capture);
+    expect(capture != std::string::npos,
+           std::string(relative) +
+               " captures authored facts from the parsed retry branch");
+    expect(capture != std::string::npos &&
+               materialization != std::string::npos &&
+               capture < materialization,
+           std::string(relative) +
+               " captures retry facts before long-note materialization");
+  }
+}
+
 } // namespace
 
 int main() {
   testProductionSourceBoundaries();
   testFreshSchemaContainsNoRowPayloadDdl();
+  testRetryBoundariesCaptureParsedReplayFacts();
   if (failures != 0) {
     std::cerr << failures << " replay decoupling audit(s) failed\n";
     return 1;

@@ -91,7 +91,6 @@ struct JudgedPlaybackData {
   int maxCombo = 0;
   float finalGauge = 0.0F;
   int clearType = kClearTypeFailedRank;
-  std::string createdAt;
   std::vector<JudgedPlaybackEvent> events;
   std::vector<replay::ReplayTouchSample> touchSamples;
   std::vector<replay::ReplayLaneCoverEvent> laneCoverEvents;
@@ -129,7 +128,6 @@ struct JudgedCoursePlaybackData {
   int clearType = kClearTypeFailedRank;
   int completedCharts = 0;
   int totalCharts = 0;
-  std::string createdAt;
   std::vector<JudgedCourseEntryFacts> entryFacts;
   std::vector<JudgedCoursePlaybackStage> stages;
   PlaybackAnalysisContext context;

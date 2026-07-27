@@ -13,8 +13,7 @@
 
 namespace {
 
-constexpr const char *kAttemptId =
-    "123e4567-e89b-42d3-a456-426614174000";
+constexpr const char *kAttemptId = "123e4567-e89b-42d3-a456-426614174000";
 
 ScoreProvenance verifiedProvenance(GaugeType gauge = GaugeType::Hard) {
   ScoreProvenance provenance = ScoreProvenance::Legacy();
@@ -24,8 +23,8 @@ ScoreProvenance verifiedProvenance(GaugeType gauge = GaugeType::Hard) {
   return provenance;
 }
 
-result_persistence::PersistedChartResult validResult(
-    int resultId = 41, std::string path = "charts/recall.bms") {
+result_persistence::PersistedChartResult
+validResult(int resultId = 41, std::string path = "charts/recall.bms") {
   result_persistence::PersistedChartResult result{
       .resultId = resultId,
       .attemptId = kAttemptId,
@@ -33,9 +32,8 @@ result_persistence::PersistedChartResult validResult(
           {
               .chartPath = std::move(path),
               .chartMd5 = "0123456789abcdef0123456789abcdef",
-              .chartSha256 =
-                  "0123456789abcdef0123456789abcdef"
-                  "0123456789abcdef0123456789abcdef",
+              .chartSha256 = "0123456789abcdef0123456789abcdef"
+                             "0123456789abcdef0123456789abcdef",
               .chartTitle = "Recall Title",
               .chartArtist = "Recall Artist",
               .longNoteMode = 2,
@@ -49,7 +47,7 @@ result_persistence::PersistedChartResult validResult(
               .finalGauge = 93.25F,
               .clearType = kClearTypeFullComboRank,
               .provenance = verifiedProvenance(),
-      },
+          },
       .keyMode = 7,
       .adoptedGaugeType = GaugeType::Easy,
       .adoptedGaugeHistory = {20.0F, 61.5F, 93.25F},
@@ -81,10 +79,10 @@ result_recall::ResultChartLoader chartLoader(int *calls = nullptr) {
   };
 }
 
-void assertStateMatches(const RhythmState &state,
-                        const result_persistence::ChartScoreWrite &score,
-                        const std::vector<float> &gaugeHistory,
-                        const result_persistence::ChartJudgementTiming &timing) {
+void assertStateMatches(
+    const RhythmState &state, const result_persistence::ChartScoreWrite &score,
+    const std::vector<float> &gaugeHistory,
+    const result_persistence::ChartJudgementTiming &timing) {
   assert(state.getScore() == score.score);
   assert(state.maxCombo == score.maxCombo);
   assert(state.comboBreak == score.comboBreak);
@@ -98,8 +96,7 @@ void assertStateMatches(const RhythmState &state,
   assert(state.slowCount == score.slow);
   assert(state.currentGauge == score.finalGauge);
   assert(state.gaugeHistory == gaugeHistory);
-  assert(state.judgementFastSlowCount.at(PGreat) ==
-         timing.byJudgement[PGreat]);
+  assert(state.judgementFastSlowCount.at(PGreat) == timing.byJudgement[PGreat]);
   assert(state.getClearTypeRank() == score.clearType);
 }
 
@@ -128,8 +125,7 @@ void testChartRecallUsesPersistedFactsOnly() {
   assert(recalled.chart->Meta.TotalNotes == expected.score.maxScore / 2);
   assert(recalled.chart->Meta.LnMode == expected.score.longNoteMode);
   assertStateMatches(recalled.state, expected.score,
-                     expected.adoptedGaugeHistory,
-                     *expected.judgementTiming);
+                     expected.adoptedGaugeHistory, *expected.judgementTiming);
   assert(recalled.state.gaugeType == expected.adoptedGaugeType);
   assert(recalled.state.selectedGaugeType == expected.adoptedGaugeType);
   assert(recalled.state.gaugeHistoryFor(expected.adoptedGaugeType) ==
@@ -164,6 +160,27 @@ void testChartRecallPreservesResolvedRuntimePathForRetry() {
   assert(outcome.value->chart->Meta.BmsPath == resolvedPath);
 }
 
+void testChartRecallCapturesAuthoredUndefinedLongNoteFacts() {
+  auto persisted = validResult();
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(
+      persisted, cancelled,
+      [](const result_persistence::PersistedChartResult &result,
+         std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta.BmsPath = result.score.chartPath;
+        chart->Meta.MD5 = result.score.chartMd5;
+        chart->Meta.SHA256 = result.score.chartSha256;
+        chart->Meta.LnMode = long_note_mode::kUnknownValue;
+        chart->Meta.TotalLongNotes = 1;
+        return chart;
+      });
+
+  assert(outcome.value.has_value());
+  assert(outcome.value->chart->Meta.LnMode == persisted.score.longNoteMode);
+  assert(outcome.value->replayFacts.hasUndefinedLongNotes);
+}
+
 void testChartRecallRejectsInvalidResultBeforeLoadingAssets() {
   auto persisted = validResult();
   persisted.score.score = 1;
@@ -182,14 +199,15 @@ void testChartRecallDoesNotPublishMissingOrCancelledAssets() {
   std::atomic_bool cancelled = false;
   auto missing = result_recall::BuildChartResult(
       validResult(), cancelled,
-      [](const result_persistence::PersistedChartResult &,
-         std::atomic_bool &) { return std::unique_ptr<bms_parser::Chart>{}; });
+      [](const result_persistence::PersistedChartResult &, std::atomic_bool &) {
+        return std::unique_ptr<bms_parser::Chart>{};
+      });
   assert(!missing.value.has_value());
   assert(missing.diagnostic == "saved chart is unavailable");
 
   cancelled = true;
-  auto stopped = result_recall::BuildChartResult(validResult(), cancelled,
-                                                  chartLoader());
+  auto stopped =
+      result_recall::BuildChartResult(validResult(), cancelled, chartLoader());
   assert(!stopped.value.has_value());
   assert(stopped.diagnostic == "saved chart is unavailable");
 }
@@ -250,9 +268,9 @@ void testRawReplayPreparationValidatesParsedChartIdentity() {
   }
 
   std::atomic_bool cancelled = false;
-  auto parsed = play_options::parseChart(
-      chartPath, std::nullopt, std::nullopt, std::nullopt, cancelled,
-      "identity fixture");
+  auto parsed =
+      play_options::parseChart(chartPath, std::nullopt, std::nullopt,
+                               std::nullopt, cancelled, "identity fixture");
   assert(parsed != nullptr);
 
   replay::ReplayPlaybackData playback;
@@ -357,9 +375,9 @@ void testRawReplayPreparationAppliesDoublePlayFlip() {
   }
 
   std::atomic_bool cancelled = false;
-  auto parsed = play_options::parseChart(
-      chartPath, std::nullopt, std::nullopt, std::nullopt, cancelled,
-      "DP FLIP fixture");
+  auto parsed =
+      play_options::parseChart(chartPath, std::nullopt, std::nullopt,
+                               std::nullopt, cancelled, "DP FLIP fixture");
   assert(parsed != nullptr && parsed->Meta.IsDP && parsed->Meta.KeyMode == 14);
 
   replay::ReplayPlaybackData playback;
@@ -435,7 +453,9 @@ result_persistence::PersistedCourseResult validCourseResult() {
   result_persistence::PersistedCourseResult result{
       .resultId = 9,
       .attemptId = kAttemptId,
-      .courseKey = "course:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      .courseKey =
+          "course:v1:"
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       .legacyCourseId = 7,
       .courseName = "Recall Course",
       .courseGroupName = "Records",
@@ -455,26 +475,28 @@ result_persistence::PersistedCourseResult validCourseResult() {
       .finalGauge = 47.25F,
       .clearType = kClearTypeFailedRank,
       .provenance = verifiedProvenance(GaugeType::Normal),
-      .stages = {
-          {.stageIndex = 0,
-           .score = first.score,
-           .keyMode = first.keyMode,
-           .adoptedGaugeType = first.adoptedGaugeType,
-           .adoptedGaugeHistory = first.adoptedGaugeHistory,
-           .judgementTiming = first.judgementTiming},
-          {.stageIndex = 1,
-           .score = second.score,
-           .keyMode = second.keyMode,
-           .adoptedGaugeType = second.adoptedGaugeType,
-           .adoptedGaugeHistory = second.adoptedGaugeHistory,
-           .judgementTiming = second.judgementTiming},
-      },
-      .entryFacts = {
-          {.totalNotes = first.score.maxScore / 2,
-           .playLengthMicros = 1'000'000},
-          {.totalNotes = second.score.maxScore / 2,
-           .playLengthMicros = 2'000'000},
-      },
+      .stages =
+          {
+              {.stageIndex = 0,
+               .score = first.score,
+               .keyMode = first.keyMode,
+               .adoptedGaugeType = first.adoptedGaugeType,
+               .adoptedGaugeHistory = first.adoptedGaugeHistory,
+               .judgementTiming = first.judgementTiming},
+              {.stageIndex = 1,
+               .score = second.score,
+               .keyMode = second.keyMode,
+               .adoptedGaugeType = second.adoptedGaugeType,
+               .adoptedGaugeHistory = second.adoptedGaugeHistory,
+               .judgementTiming = second.judgementTiming},
+          },
+      .entryFacts =
+          {
+              {.totalNotes = first.score.maxScore / 2,
+               .playLengthMicros = 1'000'000},
+              {.totalNotes = second.score.maxScore / 2,
+               .playLengthMicros = 2'000'000},
+          },
       .playedAtUnixMillis = 1784420645000LL,
   };
   result.resultFingerprint = result_persistence::resultFingerprint(result);
@@ -498,7 +520,7 @@ void testCourseRecallUsesOrderedPersistedStageFacts() {
   assert(session->courseKey == expected.courseKey);
   assert(session->courseName == expected.courseName);
   assert(session->entries.size() == 2);
-  assert(session->authoritativeEntryMetasComplete());
+  assert(session->authoritativeEntriesComplete());
   assert(session->entryMeta(0)->TotalNotes ==
          expected.entryFacts[0].totalNotes);
   assert(session->entryMeta(1)->PlayLength ==
@@ -508,14 +530,14 @@ void testCourseRecallUsesOrderedPersistedStageFacts() {
   assert(session->courseReplayData == nullptr);
   assert(session->carriedGauge.has_value());
   assert(session->carriedGauge->currentGauge == expected.finalGauge);
-  assert(session->carriedGauge->selectedGaugeType ==
-         expected.initialGaugeType);
+  assert(session->carriedGauge->selectedGaugeType == expected.initialGaugeType);
   assert(session->carriedGauge->gaugeAutoShift == expected.gaugeAutoShift);
   assert(session->carriedGauge->gaugeAutoShiftLowerBound ==
          expected.gaugeAutoShiftLowerBound);
   assert(session->carriedGauge->gaugeProfile == expected.gaugeProfile);
-  assert(session->carriedGauge->gaugeValues[gaugeTypeIndex(
-             session->carriedGauge->gaugeType)] == expected.finalGauge);
+  assert(session->carriedGauge
+             ->gaugeValues[gaugeTypeIndex(session->carriedGauge->gaugeType)] ==
+         expected.finalGauge);
   assert(session->recalledCourseClearTypeRank == expected.clearType);
   assert(session->stageProvenance.at(0) ==
          std::optional(expected.stages[0].score.provenance));
@@ -527,6 +549,29 @@ void testCourseRecallUsesOrderedPersistedStageFacts() {
                      expected.stages[1].score,
                      expected.stages[1].adoptedGaugeHistory,
                      *expected.stages[1].judgementTiming);
+}
+
+void testCourseRecallPreservesAuthoredUndefinedLongNoteFacts() {
+  auto persisted = validCourseResult();
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildCourseResult(
+      persisted, cancelled,
+      [](const result_persistence::PersistedChartResult &stage,
+         std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta.BmsPath = stage.score.chartPath;
+        chart->Meta.MD5 = stage.score.chartMd5;
+        chart->Meta.SHA256 = stage.score.chartSha256;
+        chart->Meta.LnMode = long_note_mode::kUnknownValue;
+        chart->Meta.TotalLongNotes = 1;
+        return chart;
+      });
+
+  assert(outcome.value.has_value());
+  const auto &session = outcome.value->session;
+  assert(session->entryMeta(0)->LnMode ==
+         persisted.stages[0].score.longNoteMode);
+  assert(session->entryHasUndefinedLongNotes(0));
 }
 
 void testIncompleteCourseRecallPreservesPersistedTotalAndOutcome() {
@@ -550,13 +595,13 @@ void testIncompleteCourseRecallPreservesPersistedTotalAndOutcome() {
 
   int calls = 0;
   std::atomic_bool cancelled = false;
-  auto outcome = result_recall::BuildCourseResult(
-      persisted, cancelled, chartLoader(&calls));
+  auto outcome = result_recall::BuildCourseResult(persisted, cancelled,
+                                                  chartLoader(&calls));
   assert(outcome.value.has_value());
   const auto &session = outcome.value->session;
   assert(calls == 1);
   assert(session->entries.size() == 3);
-  assert(session->authoritativeEntryMetasComplete());
+  assert(session->authoritativeEntriesComplete());
   assert(session->completedResults.size() == 1);
   assert(session->ownedResultBrowseCharts.size() == 1);
   assert(session->entries[1].meta.BmsPath.empty());
@@ -625,6 +670,7 @@ void testCourseRecallRejectsChangedStageIdentity() {
 int main() {
   testChartRecallUsesPersistedFactsOnly();
   testChartRecallPreservesResolvedRuntimePathForRetry();
+  testChartRecallCapturesAuthoredUndefinedLongNoteFacts();
   testChartRecallRejectsInvalidResultBeforeLoadingAssets();
   testChartRecallDoesNotPublishMissingOrCancelledAssets();
   testChartRecallRejectsChangedChartIdentity();
@@ -633,6 +679,7 @@ int main() {
   testFrozenCourseEntryReusesRandomBranchAndSelectedLongNoteMode();
   testRawReplayPreparationAppliesDoublePlayFlip();
   testCourseRecallUsesOrderedPersistedStageFacts();
+  testCourseRecallPreservesAuthoredUndefinedLongNoteFacts();
   testIncompleteCourseRecallPreservesPersistedTotalAndOutcome();
   testCourseRecallDoesNotPublishPartialSession();
   testCourseRecallRejectsChangedStageIdentity();

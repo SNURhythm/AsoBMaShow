@@ -86,8 +86,7 @@ struct StartOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
-  replay::DoublePlayOption doublePlayOption =
-      replay::DoublePlayOption::Normal;
+  replay::DoublePlayOption doublePlayOption = replay::DoublePlayOption::Normal;
   int longNoteMode = 0;
   // Preserved before chart materialization mutates ChartMeta::LnMode.
   std::optional<bool> hasUndefinedLongNotes;
@@ -116,11 +115,10 @@ struct StartOptions {
 };
 
 namespace play_start_detail {
-[[nodiscard]] inline bool hasUndefinedLongNotes(
-    const bms_parser::ChartMeta &chartMeta) noexcept {
-  return replay::hasUndefinedLongNotesForReplay(
-      chartMeta.LnMode, chartMeta.TotalLongNotes,
-      chartMeta.TotalBackSpinNotes);
+[[nodiscard]] inline bool
+hasUndefinedLongNotes(const bms_parser::ChartMeta &chartMeta) noexcept {
+  return replay::captureAuthoredReplayChartFacts(chartMeta)
+      .hasUndefinedLongNotes;
 }
 
 [[nodiscard]] inline std::optional<
@@ -189,8 +187,9 @@ makeEffectiveJudgeAtPlayStart(const StartOptions &options,
   return judge;
 }
 
-inline void applyReplaySetupToStartOptions(
-    StartOptions &options, const replay::ChartPlaybackSetup &setup) {
+inline void
+applyReplaySetupToStartOptions(StartOptions &options,
+                               const replay::ChartPlaybackSetup &setup) {
   options.gaugeType = setup.initialGaugeType;
   options.gaugeProfile = setup.gaugeProfile;
   options.gaugeAutoShift = setup.gaugeAutoShift;
@@ -218,8 +217,9 @@ inline void applyReplaySetupToStartOptions(
       setup.playbackRulesetId, setup.playbackRulesetRevision);
 }
 
-inline void applyJudgedPlaybackSetupToStartOptions(
-    StartOptions &options, const JudgedPlaybackData &replay) {
+inline void
+applyJudgedPlaybackSetupToStartOptions(StartOptions &options,
+                                       const JudgedPlaybackData &replay) {
   applyReplaySetupToStartOptions(options, replay.setup);
   // Provenance distinguishes an explicit starting percentage from the
   // ruleset/gauge default. A judged projection without an exact raw gauge
@@ -237,8 +237,7 @@ inline void applyJudgedPlaybackSetupToStartOptions(
     return;
   }
   if (replay.context.ruleset.id == replay.setup.playbackRulesetId &&
-      replay.context.ruleset.version ==
-          replay.setup.playbackRulesetRevision) {
+      replay.context.ruleset.version == replay.setup.playbackRulesetRevision) {
     options.requiredRulesetDescriptor = replay.context.ruleset;
   }
   if (replay.context.policy.has_value()) {
@@ -249,8 +248,9 @@ inline void applyJudgedPlaybackSetupToStartOptions(
   }
 }
 
-inline void applyResultRetrySetupToStartOptions(
-    StartOptions &options, const JudgedPlaybackData &retrySource) {
+inline void
+applyResultRetrySetupToStartOptions(StartOptions &options,
+                                    const JudgedPlaybackData &retrySource) {
   applyJudgedPlaybackSetupToStartOptions(options, retrySource);
 }
 
@@ -264,8 +264,9 @@ inline void applyReplayPlaybackToStartOptions(
   options.replayPlayback = std::move(playback);
 }
 
-[[nodiscard]] inline int replayInitialLaneCoverPercent(
-    const StartOptions &options, int settingsFallbackPercent) noexcept {
+[[nodiscard]] inline int
+replayInitialLaneCoverPercent(const StartOptions &options,
+                              int settingsFallbackPercent) noexcept {
   if (options.replayPlayback != nullptr) {
     return replay::initialLaneCoverPercentForRendering(
         options.replayPlayback->setup, settingsFallbackPercent);
@@ -317,6 +318,23 @@ replayAnalysisSource(const StartOptions &options) noexcept {
   return options;
 }
 
+[[nodiscard]] inline StartOptions replayResultStartOptions(
+    std::shared_ptr<JudgedPlaybackData> playback,
+    std::optional<ReplayResultContext> resultContext = std::nullopt) {
+  StartOptions options{
+      .startPosition = 0,
+      .autoKeySound = false,
+      .autoPlay = false,
+      .replayData = playback,
+      .replayResultContext = std::move(resultContext),
+      .ownsChart = true,
+  };
+  if (playback != nullptr) {
+    applyJudgedPlaybackSetupToStartOptions(options, *playback);
+  }
+  return options;
+}
+
 inline void applyCourseReplayPlaybackToStartOptions(
     StartOptions &options,
     std::shared_ptr<const replay::ReplayPlaybackData> playback,
@@ -326,8 +344,8 @@ inline void applyCourseReplayPlaybackToStartOptions(
 }
 
 [[nodiscard]] inline AppSettings::NotePriorityMode
-effectiveNotePriorityModeAtPlayStart(
-    const StartOptions &options, AppSettings::NotePriorityMode fallback) {
+effectiveNotePriorityModeAtPlayStart(const StartOptions &options,
+                                     AppSettings::NotePriorityMode fallback) {
   return options.replayCandidateSelection.has_value()
              ? notePriorityForCandidateSelection(
                    *options.replayCandidateSelection)
@@ -338,9 +356,9 @@ effectiveNotePriorityModeAtPlayStart(
 buildGameplayRulesetPolicyAtPlayStart(
     const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
     AppSettings::NotePriorityMode notePriorityMode) {
-  const GameplayRuleset selectedRuleset =
-      options.courseSession != nullptr ? options.courseSession->ruleset
-                                       : options.ruleset;
+  const GameplayRuleset selectedRuleset = options.courseSession != nullptr
+                                              ? options.courseSession->ruleset
+                                              : options.ruleset;
   std::optional<RulesetDescriptor> requiredDescriptor =
       options.requiredRulesetDescriptor;
   if (!requiredDescriptor.has_value() && options.courseSession != nullptr) {
@@ -359,9 +377,8 @@ buildGameplayRulesetPolicyAtPlayStart(
        .playbackRatePercent = options.playback.percent,
        .judgeScalePercent = options.judgeWindowScalePercent,
        .courseJudgement = options.courseConstraints.judgement,
-       .beatorajaCandidateSelection =
-           options.replayCandidateSelection.value_or(
-               candidateSelectionForNotePriority(notePriorityMode)),
+       .beatorajaCandidateSelection = options.replayCandidateSelection.value_or(
+           candidateSelectionForNotePriority(notePriorityMode)),
        .requiredDescriptor = std::move(requiredDescriptor),
        .replaySnapshot = options.replayRulesetOverride});
   if (outcome.policy.has_value() && options.courseSession != nullptr &&
@@ -369,8 +386,7 @@ buildGameplayRulesetPolicyAtPlayStart(
                                             *outcome.policy)) {
     outcome.status = gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset;
     outcome.policy.reset();
-    outcome.diagnostic =
-        "This course stage uses a different gameplay ruleset.";
+    outcome.diagnostic = "This course stage uses a different gameplay ruleset.";
   }
   return outcome;
 }
@@ -384,9 +400,9 @@ enforceCoursePlaybackRules(StartOptions options) {
 }
 
 [[nodiscard]] inline replay::ChartPlaybackSetup
-capturePlaybackSetupAtPlayStart(
-    const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
-    const gameplay::GameplayRulesetPolicy &policy) {
+capturePlaybackSetupAtPlayStart(const StartOptions &options,
+                                const bms_parser::ChartMeta &chartMeta,
+                                const gameplay::GameplayRulesetPolicy &policy) {
   replay::ChartPlaybackSetup setup;
   setup.chartMd5 = chartMeta.MD5;
   setup.chartSha256 = chartMeta.SHA256;
@@ -490,8 +506,7 @@ capturePlaybackSetupAtPlayStart(
 [[nodiscard]] inline ScoreProvenance captureScoreProvenanceAtPlayStart(
     const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
     const gameplay::GameplayRulesetPolicy &policy,
-    const replay::ChartPlaybackSetup &setup,
-    bool policyCanonical = true) {
+    const replay::ChartPlaybackSetup &setup, bool policyCanonical = true) {
   ScoreProvenanceBuildInput input;
   input.chartMeta = chartMeta;
   input.longNoteMode = setup.longNoteMode;
@@ -530,14 +545,45 @@ capturePlaybackSetupAtPlayStart(
   return makeScoreProvenance(input);
 }
 
-[[nodiscard]] inline ScoreProvenance captureScoreProvenanceAtPlayStart(
-    const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
-    const gameplay::GameplayRulesetPolicy &policy,
-    bool policyCanonical = true) {
+[[nodiscard]] inline ScoreProvenance
+captureScoreProvenanceAtPlayStart(const StartOptions &options,
+                                  const bms_parser::ChartMeta &chartMeta,
+                                  const gameplay::GameplayRulesetPolicy &policy,
+                                  bool policyCanonical = true) {
   const auto setup =
       capturePlaybackSetupAtPlayStart(options, chartMeta, policy);
-  return captureScoreProvenanceAtPlayStart(
-      options, chartMeta, policy, setup, policyCanonical);
+  return captureScoreProvenanceAtPlayStart(options, chartMeta, policy, setup,
+                                           policyCanonical);
+}
+
+inline StartOptions
+makeCourseStageStartOptions(const std::shared_ptr<CoursePlaySession> &session) {
+  StartOptions options;
+  options.startPosition = 0;
+  options.autoPlay = false;
+  options.ownsChart = true;
+  if (session == nullptr) {
+    return options;
+  }
+  options.autoKeySound = session->autoKeySound;
+  options.gaugeType = session->gaugeType;
+  options.gaugeProfile = session->gaugeProfile;
+  options.gaugeAutoShift = session->gaugeAutoShift;
+  options.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
+  options.playOption = session->playOption;
+  options.playOptionSeed = session->playOptionSeed;
+  options.playOption2 = session->playOption2;
+  options.playOption2Seed = session->playOption2Seed;
+  options.longNoteMode = session->longNoteMode;
+  options.hasUndefinedLongNotes =
+      session->entryHasUndefinedLongNotes(session->currentIndex);
+  options.assistOption = session->assistOption;
+  options.clubMode = session->clubMode;
+  options.courseSession = session;
+  options.courseConstraints = session->constraints;
+  options.ruleset = session->ruleset;
+  options.requiredRulesetDescriptor = session->rulesetDescriptor;
+  return enforceCoursePlaybackRules(std::move(options));
 }
 
 inline StartOptions makeCourseReplayStageStartOptions(
@@ -570,7 +616,8 @@ inline StartOptions makeCourseReplayStageStartOptions(
 
 inline StartOptions makeCourseReplayStageStartOptions(
     const std::shared_ptr<CoursePlaySession> &session,
-    const std::shared_ptr<const replay::ReplayPlaybackData> &stagePlayback) {
+    const std::shared_ptr<const replay::ReplayPlaybackData> &stagePlayback,
+    std::shared_ptr<const JudgedPlaybackData> stageAnalysis = nullptr) {
   StartOptions options;
   options.startPosition = 0;
   options.autoKeySound = false;
@@ -578,6 +625,7 @@ inline StartOptions makeCourseReplayStageStartOptions(
   options.ownsChart = true;
   if (stagePlayback != nullptr) {
     applyReplayPlaybackToStartOptions(options, stagePlayback);
+    options.replayAnalysis = std::move(stageAnalysis);
   }
   if (session != nullptr) {
     options.gaugeType = session->gaugeType;
@@ -590,7 +638,9 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.requiredRulesetDescriptor = session->rulesetDescriptor;
     options.touchVisualizationEnabled =
         session->replayTouchVisualizationEnabled;
-    options.replayGhostRenderingEnabled = false;
+    options.replayGhostRenderingEnabled =
+        options.replayAnalysis != nullptr ? session->replayGhostRenderingEnabled
+                                          : std::optional<bool>(false);
   }
   return enforceCoursePlaybackRules(std::move(options));
 }

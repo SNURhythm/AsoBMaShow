@@ -174,6 +174,26 @@ struct PersistedCourseResult {
   bool operator==(const PersistedCourseResult &) const = default;
 };
 
+[[nodiscard]] inline std::optional<PersistedChartResult>
+chartResultForCourseStage(const PersistedCourseResult &course,
+                          std::size_t index) {
+  if (index >= course.stages.size() ||
+      course.stages[index].stageIndex != static_cast<int>(index)) {
+    return std::nullopt;
+  }
+  const auto &stage = course.stages[index];
+  return PersistedChartResult{
+      .resultId = course.resultId,
+      .attemptId = course.attemptId,
+      .score = stage.score,
+      .keyMode = stage.keyMode,
+      .adoptedGaugeType = stage.adoptedGaugeType,
+      .adoptedGaugeHistory = stage.adoptedGaugeHistory,
+      .judgementTiming = stage.judgementTiming,
+      .playedAtUnixMillis = course.playedAtUnixMillis,
+  };
+}
+
 struct StageReceipt {
   std::string attemptId;
   int resultId = 0;
@@ -192,9 +212,8 @@ struct StageReceipt {
     std::string &diagnostic);
 
 [[nodiscard]] PersistedCourseStageResult capturePersistedCourseStageResult(
-    int stageIndex, const bms_parser::ChartMeta &meta,
-    const RhythmState &state, const ScoreProvenance &provenance,
-    int storageLongNoteMode);
+    int stageIndex, const bms_parser::ChartMeta &meta, const RhythmState &state,
+    const ScoreProvenance &provenance, int storageLongNoteMode);
 
 [[nodiscard]] bool
 validatePersistedChartResult(const PersistedChartResult &result,

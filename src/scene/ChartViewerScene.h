@@ -7,6 +7,7 @@
 #include "../practice/PracticeConfiguration.h"
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticePresetStore.h"
+#include "../replay/ReplayChartFacts.h"
 #include "Scene.h"
 
 #include <memory>
@@ -32,8 +33,7 @@ struct ViewerReplayPlayOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
-  replay::DoublePlayOption doublePlayOption =
-      replay::DoublePlayOption::Normal;
+  replay::DoublePlayOption doublePlayOption = replay::DoublePlayOption::Normal;
 
   bool operator==(const ViewerReplayPlayOptions &) const = default;
 };
@@ -49,9 +49,9 @@ viewerReplayPlayOptions(const JudgedPlaybackData &replayData) {
   };
 }
 
-[[nodiscard]] inline int practiceLongNoteModeForChart(
-    const bms_parser::ChartMeta &materializedChart,
-    const std::string &configuredMode) {
+[[nodiscard]] inline int
+practiceLongNoteModeForChart(const bms_parser::ChartMeta &materializedChart,
+                             const std::string &configuredMode) {
   const int materializedMode =
       long_note_mode::normalizeValue(materializedChart.LnMode);
   return materializedMode > long_note_mode::kUnknownValue
@@ -72,16 +72,15 @@ struct GhostRefreshState {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
-  replay::DoublePlayOption doublePlayOption =
-      replay::DoublePlayOption::Normal;
+  replay::DoublePlayOption doublePlayOption = replay::DoublePlayOption::Normal;
   std::string visibleStatus;
 };
 
 template <typename Commit>
-[[nodiscard]] bool installGhostRefreshState(
-    GhostRefreshState state, long long newChartEndMicros,
-    practice::PresetLoadResult loaded, const std::string &successText,
-    Commit &&commit) {
+[[nodiscard]] bool
+installGhostRefreshState(GhostRefreshState state, long long newChartEndMicros,
+                         practice::PresetLoadResult loaded,
+                         const std::string &successText, Commit &&commit) {
   state.chartEndMicros = newChartEndMicros;
   const auto notice = loaded.notice();
   const bool usable = practice::installPresetLoadState(
@@ -127,6 +126,7 @@ private:
   std::vector<int> selectedRandomValues;
   std::vector<RandomOption> randomOptions;
   std::unique_ptr<bms_parser::Chart> chart;
+  replay::AuthoredReplayChartFacts authoredReplayFacts;
   std::vector<unsigned char> chartSourceBytes;
 
   View *rootLayout = nullptr;
@@ -208,8 +208,8 @@ private:
   void updatePracticeGhostReplayButton();
   void loadPracticeGhostReplay();
   void loadSelectedGhostReplay();
-  bool applyGhostReplayData(const JudgedPlaybackData &replayData, int loadedReplayId,
-                            const std::string &successText);
+  bool applyGhostReplayData(const JudgedPlaybackData &replayData,
+                            int loadedReplayId, const std::string &successText);
   void clearGhostReplay();
   void rebuildOptionsDrawer();
   void showOptionsDrawer();
@@ -231,8 +231,8 @@ private:
                               const char *logContext);
   void onCanvasSelectionChanged(long long timeMicros);
   void onPracticeRangeChanged(const practice::RangeSelection &range);
-  void onPracticeConfigurationChanged(
-      const practice::Configuration &configuration);
+  void
+  onPracticeConfigurationChanged(const practice::Configuration &configuration);
   void selectActivePracticeMarker(practice::Marker marker);
   void moveActivePracticeMarker(practice::TimelineDirection direction);
   void loadPracticeConfiguration(
@@ -253,8 +253,7 @@ private:
   void startPracticeFromSelection(bool autoPlay);
   void goBack();
 
-  [[nodiscard]] std::vector<RandomOption>
-  scanActiveRandomOptions(
+  [[nodiscard]] std::vector<RandomOption> scanActiveRandomOptions(
       const std::vector<unsigned char> *sourceBytes = nullptr) const;
   [[nodiscard]] std::string randomSummary() const;
   [[nodiscard]] std::string viewerPlayOptionLabel() const;

@@ -94,8 +94,8 @@ ensureExportDirectoryError(const std::filesystem::path &path,
     return std::nullopt;
   }
 
-  return std::string(failureMessage) + " (" +
-         fspath_to_utf8(path) + "): " + error.message();
+  return std::string(failureMessage) + " (" + fspath_to_utf8(path) +
+         "): " + error.message();
 }
 
 class ScopedResultImageBgfxAccess {
@@ -204,8 +204,8 @@ bool writePngChunk(std::ofstream &out, const char type[4],
 }
 
 bool writeBgraPng(const std::filesystem::path &path,
-                  const std::vector<unsigned char> &bgra, int width,
-                  int height, std::string &errorMessage) {
+                  const std::vector<unsigned char> &bgra, int width, int height,
+                  std::string &errorMessage) {
   if (width <= 0 || height <= 0 ||
       bgra.size() != static_cast<size_t>(width) * height * 4U) {
     errorMessage = "Invalid result image pixels";
@@ -214,12 +214,13 @@ bool writeBgraPng(const std::filesystem::path &path,
 
   const size_t rowBytes = static_cast<size_t>(width) * 4U;
   const size_t filteredRowBytes = rowBytes + 1U;
-  std::vector<unsigned char> rgba(filteredRowBytes * static_cast<size_t>(height));
+  std::vector<unsigned char> rgba(filteredRowBytes *
+                                  static_cast<size_t>(height));
   for (int y = 0; y < height; ++y) {
-    unsigned char *dst = rgba.data() + static_cast<size_t>(y) * filteredRowBytes;
+    unsigned char *dst =
+        rgba.data() + static_cast<size_t>(y) * filteredRowBytes;
     dst[0] = 0;
-    const unsigned char *src =
-        bgra.data() + static_cast<size_t>(y) * rowBytes;
+    const unsigned char *src = bgra.data() + static_cast<size_t>(y) * rowBytes;
     for (int x = 0; x < width; ++x) {
       dst[1 + static_cast<size_t>(x) * 4U + 0U] =
           src[static_cast<size_t>(x) * 4U + 2U];
@@ -260,19 +261,19 @@ bool writeBgraPng(const std::filesystem::path &path,
             kPngSignature.size());
 
   std::vector<unsigned char> ihdr(13);
-  ihdr[0] = static_cast<unsigned char>((static_cast<uint32_t>(width) >> 24U) &
-                                       0xffU);
-  ihdr[1] = static_cast<unsigned char>((static_cast<uint32_t>(width) >> 16U) &
-                                       0xffU);
-  ihdr[2] = static_cast<unsigned char>((static_cast<uint32_t>(width) >> 8U) &
-                                       0xffU);
+  ihdr[0] =
+      static_cast<unsigned char>((static_cast<uint32_t>(width) >> 24U) & 0xffU);
+  ihdr[1] =
+      static_cast<unsigned char>((static_cast<uint32_t>(width) >> 16U) & 0xffU);
+  ihdr[2] =
+      static_cast<unsigned char>((static_cast<uint32_t>(width) >> 8U) & 0xffU);
   ihdr[3] = static_cast<unsigned char>(static_cast<uint32_t>(width) & 0xffU);
   ihdr[4] = static_cast<unsigned char>((static_cast<uint32_t>(height) >> 24U) &
                                        0xffU);
   ihdr[5] = static_cast<unsigned char>((static_cast<uint32_t>(height) >> 16U) &
                                        0xffU);
-  ihdr[6] = static_cast<unsigned char>((static_cast<uint32_t>(height) >> 8U) &
-                                       0xffU);
+  ihdr[6] =
+      static_cast<unsigned char>((static_cast<uint32_t>(height) >> 8U) & 0xffU);
   ihdr[7] = static_cast<unsigned char>(static_cast<uint32_t>(height) & 0xffU);
   ihdr[8] = 8;
   ihdr[9] = 6;
@@ -339,10 +340,8 @@ void drawResultGaugeGraphPrimitive(
   const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
   const float guide80Y = graphY + graph.geometry.guide80Y * graphH;
   const float guide30Y = graphY + graph.geometry.guide30Y * graphH;
-  batch.addLine(graphX, guide80Y, graphX + graphW, guide80Y, 1.0F,
-                guideColor);
-  batch.addLine(graphX, guide30Y, graphX + graphW, guide30Y, 1.0F,
-                guideColor);
+  batch.addLine(graphX, guide80Y, graphX + graphW, guide80Y, 1.0F, guideColor);
+  batch.addLine(graphX, guide30Y, graphX + graphW, guide30Y, 1.0F, guideColor);
 
   for (const auto &segment : graph.geometry.segments) {
     batch.addLine(pointX(segment.from), pointY(segment.from),
@@ -373,10 +372,9 @@ protected:
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
     batch.begin(context.getTransformMatrix());
-    drawResultGaugeGraphPrimitive(batch, graph, static_cast<float>(getX()),
-                                  static_cast<float>(getY()),
-                                  static_cast<float>(getWidth()),
-                                  static_cast<float>(getHeight()));
+    drawResultGaugeGraphPrimitive(
+        batch, graph, static_cast<float>(getX()), static_cast<float>(getY()),
+        static_cast<float>(getWidth()), static_cast<float>(getHeight()));
     batch.end();
   }
 
@@ -411,14 +409,15 @@ void attachPresentationGaugeGraph(
   gaugeLabel->setZIndex(2);
   gaugeLabel->setName("resultGaugeLabel");
   gaugeLabel->setBackgroundColor(graph.label->background);
-  gaugeLabel->setColor(ui_theme::sdl(ui_theme::textOn(graph.label->background)));
+  gaugeLabel->setColor(
+      ui_theme::sdl(ui_theme::textOn(graph.label->background)));
   graphPlaceHolder->addView(gaugeLabel);
 }
 
-void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
-                          const std::optional<
-                              result_gauge_history::ResultGaugeGraph> &graph,
-                          const View *graphPlaceHolder) {
+void drawResultGaugeGraph(
+    rendering::SimpleBatchRenderer &batch,
+    const std::optional<result_gauge_history::ResultGaugeGraph> &graph,
+    const View *graphPlaceHolder) {
   if (graphPlaceHolder == nullptr || !graph.has_value()) {
     return;
   }
@@ -455,9 +454,9 @@ bms_parser::ChartMeta courseResultMetaForReplay(
       playedEntryFacts);
 }
 
-RhythmState courseResultStateForReplay(
-    const JudgedCoursePlaybackData &replay,
-    const std::vector<RhythmState> &stageStates) {
+RhythmState
+courseResultStateForReplay(const JudgedCoursePlaybackData &replay,
+                           const std::vector<RhythmState> &stageStates) {
   RhythmState aggregate(nullptr, false);
   aggregate.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
                            replay.gaugeProfile,
@@ -631,8 +630,8 @@ ResultImageExportResult renderResultImageWithSkinData(
       auto *analyticsView = new PracticeAnalyticsView(*analyticsModel);
       analyticsView->setMode(mode);
       analyticsView->setPhotoExportPresentation(
-          practice_analytics_presentation::
-              photoExportShowsSharedInformation(mode));
+          practice_analytics_presentation::photoExportShowsSharedInformation(
+              mode));
       return prepareCell(analyticsView);
     };
 
@@ -687,8 +686,8 @@ ResultImageExportResult renderResultImageWithSkinData(
 
   std::vector<unsigned char> pixels(static_cast<size_t>(width) *
                                     static_cast<size_t>(height) * 4U);
-  const uint32_t expectedFrame = bgfx::readTexture(readbackTexture,
-                                                   pixels.data());
+  const uint32_t expectedFrame =
+      bgfx::readTexture(readbackTexture, pixels.data());
   while (currentFrame < expectedFrame) {
     currentFrame = bgfx::frame();
   }
@@ -745,9 +744,9 @@ ResultImageExportResult renderResultImage(
 }
 } // namespace
 
-ResultImageExportResult ResultImageExporter::Export(
-    ApplicationContext &context,
-    const ResultPresentationModel &presentation) {
+ResultImageExportResult
+ResultImageExporter::Export(ApplicationContext &context,
+                            const ResultPresentationModel &presentation) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
   if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
@@ -765,31 +764,22 @@ ResultImageExportResult ResultImageExporter::Export(
       [&context](ResultSkinData skinData,
                  std::optional<result_gauge_history::ResultGaugeGraph> gauge,
                  const std::filesystem::path &outputPath) {
-        return renderResultImageWithSkinData(
-            context, std::move(skinData), gauge, std::nullopt, true,
-            outputPath);
+        return renderResultImageWithSkinData(context, std::move(skinData),
+                                             gauge, std::nullopt, true,
+                                             outputPath);
       });
 }
 
-ResultImageExportResult
-ResultImageExporter::Export(ApplicationContext &context,
-                            const bms_parser::ChartMeta &meta,
-                            const RhythmState &state,
-                            const std::string &playModeLabel,
-                            const std::string &laneOrderLabel,
-                            const std::string &difficultyLabel,
-                            const std::optional<ResultPreviousBestData>
-                                &previousBest,
-                            const std::optional<std::string>
-                                &currentClearLabelOverride,
-                            const std::optional<int>
-                                &currentClearRankOverride,
-                            const std::optional<std::string>
-                                &headerDifficultyLabelOverride,
-                            const std::optional<ResultPacemakerData>
-                                &pacemaker,
-                            const std::optional<practice::ResultModel>
-                                &analyticsModel) {
+ResultImageExportResult ResultImageExporter::Export(
+    ApplicationContext &context, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const std::string &playModeLabel,
+    const std::string &laneOrderLabel, const std::string &difficultyLabel,
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const std::optional<std::string> &currentClearLabelOverride,
+    const std::optional<int> &currentClearRankOverride,
+    const std::optional<std::string> &headerDifficultyLabelOverride,
+    const std::optional<ResultPacemakerData> &pacemaker,
+    const std::optional<practice::ResultModel> &analyticsModel) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
   if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
@@ -806,50 +796,48 @@ ResultImageExporter::Export(ApplicationContext &context,
     return {.success = false, .message = *error};
   }
 
-  const auto outputPath =
-      outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
-                   ".png");
-  return renderResultImage(context, meta, state, playModeLabel, laneOrderLabel,
-                           difficultyLabel, previousBest,
-                           currentClearLabelOverride, currentClearRankOverride,
-                           headerDifficultyLabelOverride, pacemaker,
-                           analyticsModel,
-                           outputPath);
+  const auto outputPath = outputDir / (sanitizeFileNamePart(meta.Title) + "_" +
+                                       makeTimestamp() + ".png");
+  return renderResultImage(
+      context, meta, state, playModeLabel, laneOrderLabel, difficultyLabel,
+      previousBest, currentClearLabelOverride, currentClearRankOverride,
+      headerDifficultyLabelOverride, pacemaker, analyticsModel, outputPath);
 }
 
-ResultImageExportResult
-ResultImageExporter::ExportReplay(ApplicationContext &context,
-                                  bms_parser::Chart &chart,
-                                  const JudgedPlaybackData &replay,
-                                  const std::string &pacemakerTarget) {
+ResultImageExportResult ResultImageExporter::ExportReplay(
+    ApplicationContext &context, bms_parser::Chart &chart,
+    const JudgedPlaybackData &replay, const std::string &pacemakerTarget,
+    std::optional<ReplayResultContext> resultContext) {
+  const ReplayComparisonQuery replayComparison = replayComparisonQueryFor(
+      resultContext.has_value() ? &*resultContext : nullptr);
   RhythmState state = analysis::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest =
       result_presentation::previousBestForReplayChart(
-          context.scoreRepository, chart.Meta, replay);
+          context.scoreRepository, chart.Meta, replayComparison);
   std::optional<ResultPacemakerData> pacemaker;
   if (!replay.autoPlay) {
-    const std::string target =
-        pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
-                                : pacemakerTarget;
+    const std::string target = pacemakerTarget.empty()
+                                   ? context.settings.selectedPacemakerTarget
+                                   : pacemakerTarget;
     pacemaker = result_presentation::pacemakerDataForReplayResult(
-        context.replayRepository, chart, state, replay, target, previousBest);
+        context.replayRepository, chart, state, replay, target, previousBest,
+        replayComparison);
   }
-  std::string difficultyLabel =
-      result_presentation::difficultyLabelForChart(context.chartRepository,
-                                                    chart.Meta);
+  std::string difficultyLabel = result_presentation::difficultyLabelForChart(
+      context.chartRepository, chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
   const std::span<const JudgedPlaybackData> attempts(&replay, 1);
-  const std::optional<practice::ResultModel> analyticsModel(
-      std::in_place, chart, attempts, 0);
+  const std::optional<practice::ResultModel> analyticsModel(std::in_place,
+                                                            chart, attempts, 0);
   return Export(context, chart.Meta, state, display.mode, display.laneOrder,
                 difficultyLabel, previousBest, std::nullopt, std::nullopt,
                 std::nullopt, pacemaker, analyticsModel);
 }
 
-ResultImageExportResult
-ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
-                                        const JudgedCoursePlaybackData &replay) {
+ResultImageExportResult ResultImageExporter::ExportCourseReplay(
+    ApplicationContext &context, const JudgedCoursePlaybackData &replay,
+    std::optional<ReplayResultContext> resultContext) {
   if (replay.stages.empty()) {
     return {.success = false, .message = "No Course Replay"};
   }
@@ -882,6 +870,8 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
 
   std::vector<std::unique_ptr<bms_parser::Chart>> charts;
   std::vector<RhythmState> stageStates;
+  const ReplayComparisonQuery replayComparison = replayComparisonQueryFor(
+      resultContext.has_value() ? &*resultContext : nullptr);
   charts.reserve(replay.stages.size());
   stageStates.reserve(replay.stages.size());
   for (size_t i = 0; i < replay.stages.size(); ++i) {
@@ -895,24 +885,23 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
               .message = "Failed to load course replay stage"};
     }
 
-    RhythmState state = analysis::BuildResultState(
-        *chart, stageReplay, replay.gaugeProfile);
+    RhythmState state =
+        analysis::BuildResultState(*chart, stageReplay, replay.gaugeProfile);
     const play_options::PlayModeDisplayLabel display =
         play_options::formatPlayModeDisplayLabel(stageReplay);
-    const std::string filename =
-        "stage_" + std::to_string(i + 1) + "_" +
-        sanitizeFileNamePart(chart->Meta.Title) + ".png";
+    const std::string filename = "stage_" + std::to_string(i + 1) + "_" +
+                                 sanitizeFileNamePart(chart->Meta.Title) +
+                                 ".png";
     const std::span<const JudgedPlaybackData> attempts(&stageReplay, 1);
     const std::optional<practice::ResultModel> analyticsModel(
         std::in_place, *chart, attempts, 0);
     const auto result = renderResultImage(
         context, chart->Meta, state, display.mode, display.laneOrder,
         result_presentation::difficultyLabelForChart(context.chartRepository,
-                                                      chart->Meta),
+                                                     chart->Meta),
         result_presentation::previousBestForReplayChart(
-            context.scoreRepository, chart->Meta, stageReplay),
-        "NO PLAY", kNoClearTypeRank, std::nullopt, std::nullopt,
-        analyticsModel,
+            context.scoreRepository, chart->Meta, replayComparison),
+        "NO PLAY", kNoClearTypeRank, std::nullopt, std::nullopt, analyticsModel,
         outputDir / filename);
     if (!result.success) {
       return result;
@@ -925,9 +914,9 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   bms_parser::ChartMeta courseMeta = courseResultMetaForReplay(replay, charts);
   RhythmState courseState = courseResultStateForReplay(replay, stageStates);
   const play_options::PlayModeDisplayLabel display =
-      replay.stages.empty()
-          ? play_options::PlayModeDisplayLabel{}
-          : play_options::formatPlayModeDisplayLabel(replay.stages.back().replay);
+      replay.stages.empty() ? play_options::PlayModeDisplayLabel{}
+                            : play_options::formatPlayModeDisplayLabel(
+                                  replay.stages.back().replay);
   std::optional<std::string> clearLabelOverride;
   std::optional<int> clearRankOverride;
   const bool fullCombo = result_presentation::isFullComboCourseResult(
@@ -953,9 +942,8 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
 
   const int exportedCount = static_cast<int>(stageStates.size()) + 1;
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  return {.success = true,
-          .outputPath = outputDir,
-          .message = "Saved to Photos"};
+  return {
+      .success = true, .outputPath = outputDir, .message = "Saved to Photos"};
 #else
   return {.success = true,
           .outputPath = outputDir,

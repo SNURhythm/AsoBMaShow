@@ -1,8 +1,8 @@
 #include "MainMenuScene.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
-#include "../analysis/JudgedPlaybackContext.h"
 #include "../analysis/JudgedPlaybackAnalysis.h"
+#include "../analysis/JudgedPlaybackContext.h"
 #include "../BmsChartFile.h"
 #include "../DifficultyTableImporter.h"
 #include "../CourseConstraintUtils.h"
@@ -14,7 +14,6 @@
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayAutoPlay.h"
 #include "../ReplayVideoExporter.h"
-#include "../replay/LegacyReplayPlaybackAdapter.h"
 #include "../ResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
 #include "../ProfileDatabaseActivity.h"
@@ -49,6 +48,7 @@
 #include "RemoteResultRecallController.h"
 #include "ResultScene.h"
 #include "play/GamePlayScene.h"
+#include "play/CourseReplayStageStartup.h"
 #include "play/GameplayGaugeRules.h"
 #include "play/Pacemaker.h"
 #include "../view/ClearLampColors.h"
@@ -170,8 +170,10 @@ std::string formatGaugeTotal(const bms_parser::ChartMeta &meta,
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(2) << total;
   std::string value = stream.str();
-  while (!value.empty() && value.back() == '0') value.pop_back();
-  if (!value.empty() && value.back() == '.') value.pop_back();
+  while (!value.empty() && value.back() == '0')
+    value.pop_back();
+  if (!value.empty() && value.back() == '.')
+    value.pop_back();
   return value;
 }
 
@@ -252,12 +254,13 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
 };
 
 std::string trimAsciiWhitespace(std::string text) {
-  const auto first = std::find_if_not(
-      text.begin(), text.end(),
-      [](unsigned char ch) { return std::isspace(ch) != 0; });
-  const auto last = std::find_if_not(
-      text.rbegin(), text.rend(),
-      [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
+  const auto first =
+      std::find_if_not(text.begin(), text.end(),
+                       [](unsigned char ch) { return std::isspace(ch) != 0; });
+  const auto last =
+      std::find_if_not(text.rbegin(), text.rend(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+      }).base();
   if (first >= last) {
     return "";
   }
@@ -698,28 +701,24 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   const std::string targetPathText = fspath_to_utf8(targetPath);
   const bool targetExists = std::filesystem::exists(targetPath, errorCode);
   if (errorCode) {
-    errorMessage =
-        "Could not check chart file: " + targetPathText + " (" +
-        errorCode.message() + ")";
+    errorMessage = "Could not check chart file: " + targetPathText + " (" +
+                   errorCode.message() + ")";
     return false;
   }
   if (!targetExists) {
-    errorMessage = "Chart file does not exist: " +
-                   targetPathText;
+    errorMessage = "Chart file does not exist: " + targetPathText;
     return false;
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  const NormalizedOverlayAnchor normalizedSourceAnchor =
-      normalizeOverlayAnchor(sourceAnchor, rendering::window_width,
-                             rendering::window_height);
-  return RevealIOSFileInFiles(
-      targetPathText,
-      {.x = normalizedSourceAnchor.x,
-       .y = normalizedSourceAnchor.y,
-       .width = normalizedSourceAnchor.width,
-       .height = normalizedSourceAnchor.height},
-      errorMessage);
+  const NormalizedOverlayAnchor normalizedSourceAnchor = normalizeOverlayAnchor(
+      sourceAnchor, rendering::window_width, rendering::window_height);
+  return RevealIOSFileInFiles(targetPathText,
+                              {.x = normalizedSourceAnchor.x,
+                               .y = normalizedSourceAnchor.y,
+                               .width = normalizedSourceAnchor.width,
+                               .height = normalizedSourceAnchor.height},
+                              errorMessage);
 #elif TARGET_OS_ANDROID
   errorMessage = "Reveal is not supported on Android yet";
   return false;
@@ -755,9 +754,8 @@ bool revealPathInFileManager(const std::filesystem::path &path,
 #elif TARGET_OS_LINUX
   const bool isDirectory = std::filesystem::is_directory(targetPath, errorCode);
   if (errorCode) {
-    errorMessage =
-        "Could not check chart file type: " + targetPathText + " (" +
-        errorCode.message() + ")";
+    errorMessage = "Could not check chart file type: " + targetPathText + " (" +
+                   errorCode.message() + ")";
     return false;
   }
   std::filesystem::path directoryPath =
@@ -1134,8 +1132,7 @@ std::string musicPlaylistTextSnapshot(
   constexpr std::size_t kVisibleTrackCount = 5;
   std::ostringstream text;
   text << "My Playlist";
-  const std::size_t visibleCount =
-      std::min(kVisibleTrackCount, tracks.size());
+  const std::size_t visibleCount = std::min(kVisibleTrackCount, tracks.size());
   for (std::size_t i = 0; i < visibleCount; ++i) {
     text << "\n" << (i + 1) << ". " << musicTrackDisplayName(&tracks[i]);
   }
@@ -1226,8 +1223,7 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
 
 void MainMenuScene::init() {
   // Initialize the scene
-  chartSession =
-      context.chartRepository.OpenSession(&context.scoreRepository);
+  chartSession = context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
     if (libraryActiveTaskCount.load(std::memory_order_acquire) > 0 ||
         androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
@@ -1279,9 +1275,7 @@ void MainMenuScene::init() {
     };
   }
 #endif
-  context.requestRebuildChartLibrary = [this]() {
-    startLibraryRebuild();
-  };
+  context.requestRebuildChartLibrary = [this]() { startLibraryRebuild(); };
   context.notifyBackgroundTaskPauseStateChanged = [this]() {
     syncLibraryTaskPauseStateWithForegroundScene();
   };
@@ -1620,10 +1614,9 @@ void MainMenuScene::enqueueAndroidImportTask(
         .androidImportPath = importPath,
         .androidImportFolder = folderImport,
     });
-    auto taskIt = std::find_if(libraryTasks.begin(), libraryTasks.end(),
-                               [id](const auto &task) {
-                                 return task.id == id;
-                               });
+    auto taskIt =
+        std::find_if(libraryTasks.begin(), libraryTasks.end(),
+                     [id](const auto &task) { return task.id == id; });
     if (taskIt == libraryTasks.end()) {
       libraryTasks.push_back(LibraryTaskInfo{
           .id = id,
@@ -1897,9 +1890,8 @@ void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
         chartSession, url, &errorMessage,
         [this, taskId, i, totalTables,
          url](const DifficultyTableImportProgress &progress) {
-          std::string detail = progress.tableName.empty()
-                                   ? std::string(url)
-                                   : progress.tableName;
+          std::string detail = progress.tableName.empty() ? std::string(url)
+                                                          : progress.tableName;
           setLibraryTaskState(taskId, LibraryTaskStatus::Running, 0.02,
                               i + (progress.current > 0 ? 1 : 0), totalTables,
                               "Adding default table: " + detail);
@@ -2142,10 +2134,9 @@ void MainMenuScene::addIOSFolderEntryFromFiles() {
         }
 
         std::filesystem::path folderPath(folder);
-        std::string folderName =
-            !folderPath.filename().empty()
-                ? fspath_to_utf8(folderPath.filename())
-                : fspath_to_utf8(folderPath);
+        std::string folderName = !folderPath.filename().empty()
+                                     ? fspath_to_utf8(folderPath.filename())
+                                     : fspath_to_utf8(folderPath);
         if (folderName.empty()) {
           folderName = "Folder";
         }
@@ -2191,10 +2182,9 @@ void MainMenuScene::addAndroidFolderEntryFromPicker() {
         }
 
         std::filesystem::path folderPath(folder);
-        std::string folderName =
-            !folderPath.filename().empty()
-                ? fspath_to_utf8(folderPath.filename())
-                : fspath_to_utf8(folderPath);
+        std::string folderName = !folderPath.filename().empty()
+                                     ? fspath_to_utf8(folderPath.filename())
+                                     : fspath_to_utf8(folderPath);
         if (folderName.empty()) {
           folderName = "Folder";
         }
@@ -2238,9 +2228,9 @@ void MainMenuScene::importAndroidPathFromPicker(bool folderImport) {
         std::filesystem::path importPath;
         std::string errorMessage;
         const bool picked =
-            folderImport ? PickAndroidFolderForImport(importPath, errorMessage)
-                         : PickAndroidArchiveForImport(importPath,
-                                                       errorMessage);
+            folderImport
+                ? PickAndroidFolderForImport(importPath, errorMessage)
+                : PickAndroidArchiveForImport(importPath, errorMessage);
         if (!picked) {
           std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
           pendingAndroidArchiveImportError =
@@ -2336,7 +2326,8 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
       task.androidImportFolder ||
       std::filesystem::is_directory(importPath, importPathError);
   const std::string importType = importingFolder ? "folder" : "archive";
-  const std::filesystem::path outputRoot = ChartRepository::DefaultBmsFolderPath();
+  const std::filesystem::path outputRoot =
+      ChartRepository::DefaultBmsFolderPath();
 
   setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
                       "Preparing import");
@@ -2344,15 +2335,14 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
       "Android import task requested: " + fspath_to_utf8(importPath) +
       " outputRoot=" + fspath_to_utf8(outputRoot));
 
-  auto postImportProgress = [this, &task,
-                             importingFolder](double fraction,
-                                              const std::string &message) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running,
-                        std::clamp(fraction, 0.0, 1.0), 0, 0,
-                        message.empty()
-                            ? (importingFolder ? "Importing folder"
-                                               : "Importing archive")
-                            : message);
+  auto postImportProgress = [this, &task, importingFolder](
+                                double fraction, const std::string &message) {
+    setLibraryTaskState(
+        task.id, LibraryTaskStatus::Running, std::clamp(fraction, 0.0, 1.0), 0,
+        0,
+        message.empty()
+            ? (importingFolder ? "Importing folder" : "Importing archive")
+            : message);
   };
 
   std::string errorMessage;
@@ -2368,10 +2358,9 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
     outputFolder = importPath;
     postImportProgress(0.90, "Refreshing library");
   } else {
-    auto postUnzipProgress =
-        [&](const archive_file::UnzipProgress &progress) {
-          postImportProgress(progress.fraction * 0.90, progress.message);
-        };
+    auto postUnzipProgress = [&](const archive_file::UnzipProgress &progress) {
+      postImportProgress(progress.fraction * 0.90, progress.message);
+    };
     const auto unzippedArchive = archive_file::unzipArchiveFully(
         importPath, outputRoot, &errorMessage, &stopToken, postUnzipProgress);
     if (unzippedArchive.has_value()) {
@@ -2380,11 +2369,11 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
   }
 
   if (outputFolder.empty()) {
-    throw std::runtime_error(
-        stopToken.stop_requested()
-            ? "Import cancelled"
-            : (errorMessage.empty() ? "Import failed"
-                                    : "Import failed: " + errorMessage));
+    throw std::runtime_error(stopToken.stop_requested()
+                                 ? "Import cancelled"
+                                 : (errorMessage.empty()
+                                        ? "Import failed"
+                                        : "Import failed: " + errorMessage));
   }
   if (stopToken.stop_requested()) {
     throw std::runtime_error("Import cancelled");
@@ -2415,8 +2404,8 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
     return waitForLibraryTaskResume(task.id, stopToken);
   };
   ChartLibraryScanner scanner;
-  const int changedCount = scanner.Scan(
-      *importSession, roots, &stopToken, scanProgress, pauseTask);
+  const int changedCount =
+      scanner.Scan(*importSession, roots, &stopToken, scanProgress, pauseTask);
   if (stopToken.stop_requested()) {
     throw std::runtime_error("Import cancelled");
   }
@@ -2426,13 +2415,12 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
   }
   requestLibraryReload(true);
   const std::string message =
-      changedCount > 0 ? "Imported " + importType + ". Library refreshed."
-                       : "Imported " + importType +
-                             ". Library already current.";
+      changedCount > 0
+          ? "Imported " + importType + ". Library refreshed."
+          : "Imported " + importType + ". Library already current.";
   SDL_Log("Android import task result: %s", message.c_str());
   archive_file::appendDebugLogLine(message);
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 1.0, 1, 1,
-                      message);
+  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 1.0, 1, 1, message);
 }
 #endif
 
@@ -2870,8 +2858,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       folderView->setItem(item.label, item.depth, item.count, isSelected,
                           item.clearMarkFolder ? item.clearMarkRank
                                                : clearRankForFolder(item.key),
-                          item.clearMarkFolder, item.expandable,
-                          item.expanded);
+                          item.clearMarkFolder, item.expandable, item.expanded);
     }
   };
   folderRecyclerView->onSelected = [this](const LibraryFolderItem &item,
@@ -2933,7 +2920,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   showAddFolderButton = true;
 #elif TARGET_OS_ANDROID
-  const bool androidFullFileAccessBuild = AndroidBuildHasManageExternalStorage();
+  const bool androidFullFileAccessBuild =
+      AndroidBuildHasManageExternalStorage();
   showAddFolderButton = true;
   addFolderButtonLabel =
       androidFullFileAccessBuild ? "Add Folder" : "Import Folder";
@@ -2945,11 +2933,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
     addFolderText->setAlign(TextView::CENTER);
     addFolderText->setVAlign(TextView::MIDDLE);
     addFolderButton->setContentView(addFolderText);
-    styleThemedActionButton(addFolderButton, addFolderText, true,
-                            ui_theme::primaryAction,
-                            ui_theme::primaryActionHover,
-                            ui_theme::primaryActionPressed,
-                            ui_theme::accentBorderStrong);
+    styleThemedActionButton(
+        addFolderButton, addFolderText, true, ui_theme::primaryAction,
+        ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
+        ui_theme::accentBorderStrong);
     addFolderButton->setCornerRadius(ui_theme::controlRadius());
     addFolderButton->setStyledBorderWidth(1);
 #if TARGET_OS_ANDROID
@@ -2975,8 +2962,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   importArchiveButton->setContentView(importArchiveText);
   styleThemedActionButton(importArchiveButton, importArchiveText, true,
                           ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
   importArchiveButton->setCornerRadius(ui_theme::controlRadius());
   importArchiveButton->setStyledBorderWidth(1);
   importArchiveButton->setOnClickListener(
@@ -3040,8 +3026,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                           ui_theme::hairlineStrong);
   libraryHeader->addView(musicButton);
 
-  irUploadsButton =
-      makeModalButton("IR Uploads", 20, &irUploadsButtonText);
+  irUploadsButton = makeModalButton("IR Uploads", 20, &irUploadsButtonText);
   irUploadsButton->setWidth(154);
   irUploadsButton->setHeight(50);
   irUploadsButton->setOnClickListener([this, &context]() {
@@ -3053,8 +3038,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   });
   styleThemedActionButton(irUploadsButton, irUploadsButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
+                          ui_theme::controlPressed, ui_theme::hairlineStrong);
   libraryHeader->addView(irUploadsButton);
 
   tasksButton = makeModalButton("0 Tasks", 20, &tasksButtonText);
@@ -3096,19 +3080,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartFilterButton->setWidth(56);
   chartFilterButton->setHeight(56);
   chartFilterButton->setFlexShrink(0.0f);
-  chartFilterButton->setOnClickListener([this]() {
-    setChartFilterPanelVisible(!chartFilterPanelVisible);
-  });
+  chartFilterButton->setOnClickListener(
+      [this]() { setChartFilterPanelVisible(!chartFilterPanelVisible); });
   filterRow->addView(chartFilterButton);
 
-  chartSortButton =
-      makeModalIconButton(kIconSort, 20, &chartSortButtonText);
+  chartSortButton = makeModalIconButton(kIconSort, 20, &chartSortButtonText);
   chartSortButton->setWidth(56);
   chartSortButton->setHeight(56);
   chartSortButton->setFlexShrink(0.0f);
-  chartSortButton->setOnClickListener([this]() {
-    setChartSortPanelVisible(!chartSortPanelVisible);
-  });
+  chartSortButton->setOnClickListener(
+      [this]() { setChartSortPanelVisible(!chartSortPanelVisible); });
   filterRow->addView(chartSortButton);
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
@@ -3120,40 +3101,45 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartFilterPanel = new ChartFilterPanelView({
       .onClearMarkChanged =
           [this](std::optional<int> rank) { setChartClearFilter(rank); },
-      .onScoreRankChanged = [this](std::optional<std::string> rank) {
-        setChartScoreRankFilter(std::move(rank));
-      },
+      .onScoreRankChanged =
+          [this](std::optional<std::string> rank) {
+            setChartScoreRankFilter(std::move(rank));
+          },
       .onBpmMinChanged =
           [this](const std::string &text) { setChartBpmMinFilter(text); },
       .onBpmMaxChanged =
           [this](const std::string &text) { setChartBpmMaxFilter(text); },
-      .onDifficultyMinChanged = [this](std::optional<std::string> level) {
-        setChartDifficultyMinFilter(std::move(level));
-      },
-      .onDifficultyMaxChanged = [this](std::optional<std::string> level) {
-        setChartDifficultyMaxFilter(std::move(level));
-      },
-      .onClearMarkDropdownChanged = [this](bool open) {
-        setChartClearMarkDropdownOpen(open);
-      },
-      .onScoreRankDropdownChanged = [this](bool open) {
-        setChartScoreRankDropdownOpen(open);
-      },
-      .onClearMarkRangeChanged = [this](bool orAbove, bool orBelow) {
-        setChartClearMarkRange(orAbove, orBelow);
-      },
-      .onScoreRankRangeChanged = [this](bool orAbove, bool orBelow) {
-        setChartScoreRankRange(orAbove, orBelow);
-      },
-      .onDifficultyDropdownChanged = [this](bool minLevel, bool open) {
-        setChartDifficultyDropdownOpen(minLevel, open);
-      },
+      .onDifficultyMinChanged =
+          [this](std::optional<std::string> level) {
+            setChartDifficultyMinFilter(std::move(level));
+          },
+      .onDifficultyMaxChanged =
+          [this](std::optional<std::string> level) {
+            setChartDifficultyMaxFilter(std::move(level));
+          },
+      .onClearMarkDropdownChanged =
+          [this](bool open) { setChartClearMarkDropdownOpen(open); },
+      .onScoreRankDropdownChanged =
+          [this](bool open) { setChartScoreRankDropdownOpen(open); },
+      .onClearMarkRangeChanged =
+          [this](bool orAbove, bool orBelow) {
+            setChartClearMarkRange(orAbove, orBelow);
+          },
+      .onScoreRankRangeChanged =
+          [this](bool orAbove, bool orBelow) {
+            setChartScoreRankRange(orAbove, orBelow);
+          },
+      .onDifficultyDropdownChanged =
+          [this](bool minLevel, bool open) {
+            setChartDifficultyDropdownOpen(minLevel, open);
+          },
   });
 
   chartSortPanel = new ChartSortPanelView({
-      .onSortChanged = [this](ChartRecordSortCriterion criterion) {
-        setChartSortCriterion(criterion);
-      },
+      .onSortChanged =
+          [this](ChartRecordSortCriterion criterion) {
+            setChartSortCriterion(criterion);
+          },
   });
 
   left->addView(chartFilterPanel);
@@ -3231,8 +3217,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyTotalRow->setHeight(28);
   readyTotalRow->setPadding(Edge::Left, 12);
   readyTotalRow->setPadding(Edge::Right, 12);
-  readyTotalIconText =
-      new TextView(ui_icons::kFontAwesomeSolidPath, 15);
+  readyTotalIconText = new TextView(ui_icons::kFontAwesomeSolidPath, 15);
   readyTotalIconText->setWidth(18);
   readyTotalIconText->setHeight(28);
   readyTotalIconText->setAlign(TextView::CENTER);
@@ -3244,8 +3229,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyTotalText->setThemedColor(ui_theme::cyan);
   readyTotalRow->addView(readyTotalIconText);
   readyTotalRow->addView(readyTotalText);
-  readyAssistOptionText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  readyAssistOptionText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   readyAssistOptionText->setHeight(28);
   readyAssistOptionText->setThemedColor(ui_theme::textPrimary);
   readyAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
@@ -3263,9 +3247,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionsButton->setStyledBorderWidth(1);
   readyPlayOptionsButton->setThemedBackgroundColors(
       ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
-  readyPlayOptionsButton->setThemedBorderColors(
-      ui_theme::hairlineStrong, ui_theme::accentBorderStrong,
-      ui_theme::accentBorderStrong);
+  readyPlayOptionsButton->setThemedBorderColors(ui_theme::hairlineStrong,
+                                                ui_theme::accentBorderStrong,
+                                                ui_theme::accentBorderStrong);
   readyPlayOptionsButton->setContentView(readySettings);
   readyPlayOptionsButton->setOnClickListener(
       [this]() { showPlayOptionsModal(); });
@@ -3404,10 +3388,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rankingsButton->setContentView(rankingsButtonText);
   styleThemedActionButton(rankingsButton, rankingsButtonText, true,
                           ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed,
-                          ui_theme::accentBorder);
-  rankingsButton->setOnClickListener(
-      [this]() { openRankingsForSelection(); });
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  rankingsButton->setOnClickListener([this]() { openRankingsForSelection(); });
   rankingsButton->setEnabled(false);
   rightContent->addView(rankingsButton);
 
@@ -3604,8 +3586,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     if (levelsIt == folderMetadataCache.levelsByTable.end()) {
       levelsIt =
           folderMetadataCache.levelsByTable
-              .emplace(table.id,
-                       chartSession->SelectDifficultyLevels(table.id))
+              .emplace(table.id, chartSession->SelectDifficultyLevels(table.id))
               .first;
     }
     const auto &levels = levelsIt->second;
@@ -3708,8 +3689,8 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
             folders.push_back(makeCourseItem(
                 group.singletonCourseId, group.singletonCourseKey,
                 group.tableId, group.groupName, group.singletonCourseLevel,
-                group.singletonCourseName,
-                group.singletonCourseConstraintJson, 2));
+                group.singletonCourseName, group.singletonCourseConstraintJson,
+                2));
             continue;
           }
 
@@ -3731,11 +3712,11 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
           auto coursesIt = folderMetadataCache.coursesByGroup.find(groupKey);
           if (coursesIt == folderMetadataCache.coursesByGroup.end()) {
-            coursesIt = folderMetadataCache.coursesByGroup
-                            .emplace(groupKey,
-                                     chartSession->SelectDifficultyCourses(
-                                         group.tableId, group.groupName))
-                            .first;
+            coursesIt =
+                folderMetadataCache.coursesByGroup
+                    .emplace(groupKey, chartSession->SelectDifficultyCourses(
+                                           group.tableId, group.groupName))
+                    .first;
           }
           for (const auto &course : coursesIt->second) {
             folders.push_back(makeCourseInfoItem(course, 3));
@@ -3746,9 +3727,8 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   }
 
   for (auto &folder : folders) {
-    folder.clearRank =
-        folder.clearMarkFolder ? folder.clearMarkRank
-                               : clearRankForFolder(folder.key);
+    folder.clearRank = folder.clearMarkFolder ? folder.clearMarkRank
+                                              : clearRankForFolder(folder.key);
   }
 
   if (activeFolder.key.empty()) {
@@ -3923,8 +3903,8 @@ MainMenuScene::chartFilterDifficultyLevels() const {
   if (!chartDifficultyRangeEnabled()) {
     return {};
   }
-  const auto tableIt = folderMetadataCache.levelsByTable.find(
-      activeFolder.tableId);
+  const auto tableIt =
+      folderMetadataCache.levelsByTable.find(activeFolder.tableId);
   if (tableIt == folderMetadataCache.levelsByTable.end()) {
     return {};
   }
@@ -4001,34 +3981,37 @@ void MainMenuScene::refreshChartFilterPanel() {
     chartRecordFilters.difficultyMaxLevel.reset();
     chartDifficultyMinDropdownOpen = false;
     chartDifficultyMaxDropdownOpen = false;
-    if (!sameFolderScope &&
-        chartRecordFilters.sort.criterion ==
-            ChartRecordSortCriterion::Difficulty) {
+    if (!sameFolderScope && chartRecordFilters.sort.criterion ==
+                                ChartRecordSortCriterion::Difficulty) {
       chartRecordFilters.sort = {};
     }
   }
 
   if (chartFilterPanel != nullptr) {
-    chartFilterPanel->refresh({
-        .filters = chartRecordFilters,
-        .bpmMinText = chartBpmMinText,
-        .bpmMaxText = chartBpmMaxText,
-        .clearMarkFilterVisible =
-            sameFolderScope || !activeFolder.clearMarkFolder,
-        .effectiveClearMarkRank = effectiveClearMarkRank,
-        .clearMarkDropdownOpen = chartClearMarkDropdownOpen,
-        .scoreRankDropdownOpen = chartScoreRankDropdownOpen,
-        .difficultyRangeEnabled = difficultyRangeEnabled,
-        .difficultyMinDropdownOpen = chartDifficultyMinDropdownOpen,
-        .difficultyMaxDropdownOpen = chartDifficultyMaxDropdownOpen,
-        .difficultyLevels = levels,
-    }, chartFilterPanelVisible);
+    chartFilterPanel->refresh(
+        {
+            .filters = chartRecordFilters,
+            .bpmMinText = chartBpmMinText,
+            .bpmMaxText = chartBpmMaxText,
+            .clearMarkFilterVisible =
+                sameFolderScope || !activeFolder.clearMarkFolder,
+            .effectiveClearMarkRank = effectiveClearMarkRank,
+            .clearMarkDropdownOpen = chartClearMarkDropdownOpen,
+            .scoreRankDropdownOpen = chartScoreRankDropdownOpen,
+            .difficultyRangeEnabled = difficultyRangeEnabled,
+            .difficultyMinDropdownOpen = chartDifficultyMinDropdownOpen,
+            .difficultyMaxDropdownOpen = chartDifficultyMaxDropdownOpen,
+            .difficultyLevels = levels,
+        },
+        chartFilterPanelVisible);
   }
   if (chartSortPanel != nullptr) {
-    chartSortPanel->refresh({
-        .sort = chartRecordFilters.sort,
-        .difficultySortEnabled = difficultyRangeEnabled || sameFolderScope,
-    }, chartSortPanelVisible);
+    chartSortPanel->refresh(
+        {
+            .sort = chartRecordFilters.sort,
+            .difficultySortEnabled = difficultyRangeEnabled || sameFolderScope,
+        },
+        chartSortPanelVisible);
   }
   refreshChartFilterButtons();
   if (rootLayout != nullptr) {
@@ -4037,13 +4020,13 @@ void MainMenuScene::refreshChartFilterPanel() {
 }
 
 void MainMenuScene::refreshChartFilterButtons() {
-  const bool filterActive =
-      chartFilterPanelVisible || chartRecordFilters.clearMarkRank.has_value() ||
-      chartRecordFilters.scoreRank.has_value() ||
-      chartRecordFilters.bpmMin.has_value() ||
-      chartRecordFilters.bpmMax.has_value() ||
-      chartRecordFilters.difficultyMinLevel.has_value() ||
-      chartRecordFilters.difficultyMaxLevel.has_value();
+  const bool filterActive = chartFilterPanelVisible ||
+                            chartRecordFilters.clearMarkRank.has_value() ||
+                            chartRecordFilters.scoreRank.has_value() ||
+                            chartRecordFilters.bpmMin.has_value() ||
+                            chartRecordFilters.bpmMax.has_value() ||
+                            chartRecordFilters.difficultyMinLevel.has_value() ||
+                            chartRecordFilters.difficultyMaxLevel.has_value();
   styleThemedActionButton(
       chartFilterButton, chartFilterButtonText, true,
       filterActive ? ui_theme::primaryAction : ui_theme::control,
@@ -4117,9 +4100,8 @@ void MainMenuScene::setChartBpmMaxFilter(const std::string &text) {
 
 void MainMenuScene::setChartDifficultyMinFilter(
     std::optional<std::string> level) {
-  chart_record_filters::setDifficultyMinLevel(chartRecordFilters,
-                                              chartFilterDifficultyLevels(),
-                                              std::move(level));
+  chart_record_filters::setDifficultyMinLevel(
+      chartRecordFilters, chartFilterDifficultyLevels(), std::move(level));
   chartDifficultyMinDropdownOpen = false;
   reloadChartList();
   refreshChartFilterPanel();
@@ -4127,9 +4109,8 @@ void MainMenuScene::setChartDifficultyMinFilter(
 
 void MainMenuScene::setChartDifficultyMaxFilter(
     std::optional<std::string> level) {
-  chart_record_filters::setDifficultyMaxLevel(chartRecordFilters,
-                                              chartFilterDifficultyLevels(),
-                                              std::move(level));
+  chart_record_filters::setDifficultyMaxLevel(
+      chartRecordFilters, chartFilterDifficultyLevels(), std::move(level));
   chartDifficultyMaxDropdownOpen = false;
   reloadChartList();
   refreshChartFilterPanel();
@@ -4210,8 +4191,7 @@ void MainMenuScene::setChartDifficultyDropdownOpen(bool minLevel, bool open) {
   refreshChartFilterPanel();
 }
 
-void MainMenuScene::setChartSortCriterion(
-    ChartRecordSortCriterion criterion) {
+void MainMenuScene::setChartSortCriterion(ChartRecordSortCriterion criterion) {
   if (criterion == ChartRecordSortCriterion::Difficulty &&
       !chartDifficultyRangeEnabled() && !temporaryChartFolder.has_value()) {
     return;
@@ -4234,8 +4214,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   std::filesystem::path visibleSelectedPath;
   if (preserveViewState && previousSelectedIndex >= 0 &&
       previousSelectedIndex < recyclerView->size()) {
-    visibleSelectedPath =
-        recyclerView->get(previousSelectedIndex).meta.BmsPath;
+    visibleSelectedPath = recyclerView->get(previousSelectedIndex).meta.BmsPath;
   }
   const path_t previousSelectedPath =
       preserveViewState
@@ -4266,8 +4245,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       activeFolder.courseId > 0) {
     ChartMetaRecord courseRecord;
     courseRecord.courseStart = true;
-    courseRecord.meta.Title = activeFolder.label.empty() ? "Course"
-                                                         : activeFolder.label;
+    courseRecord.meta.Title =
+        activeFolder.label.empty() ? "Course" : activeFolder.label;
     courseRecord.meta.Artist = activeFolder.courseGroupName.empty()
                                    ? "Course Mode"
                                    : activeFolder.courseGroupName;
@@ -4281,10 +4260,10 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(*chartSession, query, databaseCount,
                        std::move(leadingRecord));
-  recyclerView->setItemProvider(
-      count, [this](int index) -> const ChartMetaRecord & {
-        return chartListCache.get(index);
-      });
+  recyclerView->setItemProvider(count,
+                                [this](int index) -> const ChartMetaRecord & {
+                                  return chartListCache.get(index);
+                                });
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
@@ -4317,8 +4296,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     if (pathMatches(preferredIndex, path)) {
       return preferredIndex;
     }
-    const int databaseIndex = chartSession->FindChartMetaIndex(
-        query, std::filesystem::path(path));
+    const int databaseIndex =
+        chartSession->FindChartMetaIndex(query, std::filesystem::path(path));
     if (databaseIndex < 0) {
       return -1;
     }
@@ -4326,7 +4305,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     return index >= 0 && index < count ? index : -1;
   };
 
-  float restoredScrollOffset = std::clamp(previousScrollOffset, 0.0f, maxOffset);
+  float restoredScrollOffset =
+      std::clamp(previousScrollOffset, 0.0f, maxOffset);
   const int restoredTopIndex = findPathNear(previousTopPath, previousTopIndex);
   if (restoredTopIndex >= 0) {
     restoredScrollOffset = std::clamp(
@@ -4413,7 +4393,8 @@ void MainMenuScene::refreshLongNoteModeClearRankViews() {
         activeFolder.type == LibraryFolderItem::Type::DifficultyClearMark ||
         chartRecordFilters.clearMarkRank.has_value() ||
         chartRecordFilters.scoreRank.has_value() ||
-        chartRecordFilters.sort.criterion == ChartRecordSortCriterion::ClearMark ||
+        chartRecordFilters.sort.criterion ==
+            ChartRecordSortCriterion::ClearMark ||
         chartRecordFilters.sort.criterion == ChartRecordSortCriterion::Score;
     if (chartListDependsOnScores) {
       reloadChartList(true);
@@ -4451,8 +4432,8 @@ void MainMenuScene::refreshIrRecordListIfNeeded() {
   }
 
   if (context.irSubmissionService != nullptr) {
-    const auto status = context.irSubmissionService->reconciliationStatus(
-        ir::kTachiProviderId);
+    const auto status =
+        context.irSubmissionService->reconciliationStatus(ir::kTachiProviderId);
     if (status.phase == ir::IrReconciliationPhase::Succeeded &&
         status.revision != 0 &&
         status.revision != observedIrReconciliationRevision) {
@@ -4469,8 +4450,7 @@ void MainMenuScene::refreshIrRecordListIfNeeded() {
 }
 
 void MainMenuScene::refreshLibraryIfNeeded() {
-  const std::uint64_t revision =
-      context.chartRepository.GetLibraryRevision();
+  const std::uint64_t revision = context.chartRepository.GetLibraryRevision();
   if (libraryRevision == 0) {
     libraryRevision = revision;
     return;
@@ -4499,7 +4479,8 @@ int MainMenuScene::clearRankForChart(const ChartMetaRecord &record) const {
 
 int MainMenuScene::clearRankForFolder(const std::string &key) const {
   const int mode = long_note_mode::valueFromId(profileSelections.longNoteMode);
-  const auto &clearRanks = folderClearData.clearRanks[static_cast<size_t>(mode)];
+  const auto &clearRanks =
+      folderClearData.clearRanks[static_cast<size_t>(mode)];
   const auto it = clearRanks.find(key);
   return it == clearRanks.end() ? kNoClearTypeRank : it->second;
 }
@@ -4578,8 +4559,8 @@ void MainMenuScene::selectChartByPathAfterReload(
       if (recyclerView->onSelected) {
         recyclerView->onSelected(record, index);
       }
-      archive_file::appendDebugLogLine(
-          "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
+      archive_file::appendDebugLogLine("Selected unzipped chart: " +
+                                       fspath_to_utf8(record.meta.BmsPath));
       return;
     }
   }
@@ -4632,7 +4613,8 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
 
 bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
                                         bool favorite) {
-  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+  if (record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
     return false;
   }
 
@@ -4690,10 +4672,10 @@ void MainMenuScene::refreshSelectedChartActionState() {
                                  !record->solidArchive &&
                                  !record->meta.BmsPath.empty());
   refreshUnzipButtonForSelection(&*record);
-  setFindBmsButtonVisible(
-      record->unavailable && !record->solidArchive &&
-      (!record->meta.SHA256.empty() || !record->meta.MD5.empty() ||
-       !record->meta.Title.empty()));
+  setFindBmsButtonVisible(record->unavailable && !record->solidArchive &&
+                          (!record->meta.SHA256.empty() ||
+                           !record->meta.MD5.empty() ||
+                           !record->meta.Title.empty()));
   refreshStartButtonForActiveFolder();
 }
 
@@ -4703,8 +4685,8 @@ void MainMenuScene::refreshRankingsButton() {
   }
   const auto record = selectedRecordSnapshot();
   const auto driver = context.irDrivers.find(ir::kTachiProviderId);
-  const auto settings = context.settings.irProviders.find(
-      std::string(ir::kTachiProviderId));
+  const auto settings =
+      context.settings.irProviders.find(std::string(ir::kTachiProviderId));
   const bool enabled =
       context.irRankingService != nullptr && record.has_value() &&
       !record->courseStart && driver != nullptr &&
@@ -4725,8 +4707,8 @@ void MainMenuScene::openRankingsForSelection() {
     return;
   }
   const auto query = ir::makeBokutachiRankingQuery(record->meta);
-  const auto settings = context.settings.irProviders.find(
-      std::string(ir::kTachiProviderId));
+  const auto settings =
+      context.settings.irProviders.find(std::string(ir::kTachiProviderId));
   if (!query.value || settings == context.settings.irProviders.end() ||
       !settings->second.enabled) {
     refreshRankingsButton();
@@ -4755,13 +4737,13 @@ void MainMenuScene::openRankingsForSelection() {
     rankingsModal = std::make_unique<ir::IrRankingModal>(
         *overlayPortal, *context.irRankingService);
   }
-  rankingsModal->open(
-      {.profileId = context.profileManager.activeProfile().id,
-       .providerId = std::string(ir::kTachiProviderId),
-       .serverOrigin = settings->second.serverOrigin,
-       .chart = *query.value,
-       .localComparison = std::move(comparison)},
-      record->meta.Title.empty() ? "Selected chart" : record->meta.Title);
+  rankingsModal->open({.profileId = context.profileManager.activeProfile().id,
+                       .providerId = std::string(ir::kTachiProviderId),
+                       .serverOrigin = settings->second.serverOrigin,
+                       .chart = *query.value,
+                       .localComparison = std::move(comparison)},
+                      record->meta.Title.empty() ? "Selected chart"
+                                                 : record->meta.Title);
 }
 
 MainMenuScene::EffectivePlayOptionSelection
@@ -5010,15 +4992,14 @@ void MainMenuScene::refreshPlayOptionsPanel() {
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
   const bool playbackLocked = playbackSelectionLockedForCourse();
-  const int playbackRate =
-      playbackLocked ? course_rules::kRequiredPlaybackRate.percent
-                     : context.settings.selectedPlaybackRatePercent;
+  const int playbackRate = playbackLocked
+                               ? course_rules::kRequiredPlaybackRate.percent
+                               : context.settings.selectedPlaybackRatePercent;
   playOptionsPanel->refresh(
       {.ruleset = profileSelections.ruleset,
        .gaugeType = profileSelections.gaugeType,
        .gaugeAutoShift = profileSelections.gaugeAutoShift,
-       .gaugeAutoShiftLowerBound =
-           profileSelections.gaugeAutoShiftLowerBound,
+       .gaugeAutoShiftLowerBound = profileSelections.gaugeAutoShiftLowerBound,
        .playOption = effective.playOption,
        .defaultLaneOrder = {},
        .laneOrderEnabled = false,
@@ -5079,10 +5060,9 @@ void MainMenuScene::refreshReadySettingsSummary() {
     }
   }
   if (readyAssistOptionText != nullptr) {
-    const int percent =
-        playbackSelectionLockedForCourse()
-            ? course_rules::kRequiredPlaybackRate.percent
-            : context.settings.selectedPlaybackRatePercent;
+    const int percent = playbackSelectionLockedForCourse()
+                            ? course_rules::kRequiredPlaybackRate.percent
+                            : context.settings.selectedPlaybackRatePercent;
     const bool optionEnabled =
         assist_options::isEnabled(effective.assistOption);
     if (!optionEnabled && percent == 100) {
@@ -5132,8 +5112,8 @@ MainMenuScene::courseValidationForActiveFolder() {
   query.courseId = activeFolder.courseId;
   chartSession->QueryChartMeta(query, courseValidationCache.records);
   courseValidationCache.empty = courseValidationCache.records.empty();
-  for (int i = 0;
-       i < static_cast<int>(courseValidationCache.records.size()); ++i) {
+  for (int i = 0; i < static_cast<int>(courseValidationCache.records.size());
+       ++i) {
     const auto &record =
         courseValidationCache.records[static_cast<std::size_t>(i)];
     if (record.solidArchive || record.unavailable ||
@@ -5198,11 +5178,11 @@ void MainMenuScene::startSelectedCourse() {
     const auto &missingRecord =
         records[static_cast<std::size_t>(firstMissingIndex)];
     if (!missingRecord.meta.BmsPath.empty()) {
-      const int databaseIndex = chartSession.has_value()
-                                    ? chartSession->FindChartMetaIndex(
-                                          chartQueryForActiveFolder(),
-                                          missingRecord.meta.BmsPath)
-                                    : -1;
+      const int databaseIndex =
+          chartSession.has_value()
+              ? chartSession->FindChartMetaIndex(chartQueryForActiveFolder(),
+                                                 missingRecord.meta.BmsPath)
+              : -1;
       if (databaseIndex >= 0) {
         visibleMissingIndex = databaseIndex + 1;
       }
@@ -5262,6 +5242,7 @@ void MainMenuScene::startSelectedCourse() {
       profileSelections.playOption, constraintSettings);
   session->assistOption = assist_options::kOff;
   session->autoKeySound = !context.settings.inputKeysoundEnabled;
+  session->clubMode = context.settings.gameplayClubModeEnabled;
   startCourseDirect(std::move(session));
 }
 
@@ -5302,8 +5283,8 @@ void MainMenuScene::startCourseDirect(
 
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> preparedChart;
-        std::vector<bms_parser::ChartMeta> authoritativeEntryMetas;
-        authoritativeEntryMetas.reserve(session->entries.size());
+        std::vector<CoursePlayEntrySnapshot> authoritativeEntries;
+        authoritativeEntries.reserve(session->entries.size());
         for (std::size_t index = 0; index < session->entries.size(); ++index) {
           const auto &sourceMeta = session->entries[index].meta;
           if (sourceMeta.BmsPath.empty()) {
@@ -5327,16 +5308,18 @@ void MainMenuScene::startCourseDirect(
             }
             return finishStart();
           }
+          const auto replayFacts =
+              replay::captureAuthoredReplayChartFacts(*entryChart);
           applyCourseConstraintsToChart(*entryChart, session->constraints);
           applyEffectiveLongNoteModeToChart(*entryChart, selectedLongNoteMode);
-          authoritativeEntryMetas.push_back(entryChart->Meta);
+          authoritativeEntries.push_back(
+              {.meta = entryChart->Meta, .replayFacts = replayFacts});
           if (index == 0) {
             preparedChart = std::move(entryChart);
           }
         }
-        if (preparedChart == nullptr ||
-            !session->installAuthoritativeEntryMetas(
-                std::move(authoritativeEntryMetas))) {
+        if (preparedChart == nullptr || !session->installAuthoritativeEntries(
+                                            std::move(authoritativeEntries))) {
           return finishStart();
         }
         session->courseKey = course_identity::makeCourseKey(*session);
@@ -5358,31 +5341,7 @@ void MainMenuScene::startCourseDirect(
           return finishStart();
         }
 
-        StartOptions options;
-        options.startPosition = 0;
-        options.autoKeySound = session->autoKeySound;
-        options.autoPlay = false;
-        options.gaugeType = session->gaugeType;
-        options.gaugeProfile = session->gaugeProfile;
-        options.gaugeAutoShift = session->gaugeAutoShift;
-        options.gaugeAutoShiftLowerBound =
-            session->gaugeAutoShiftLowerBound;
-        options.playOption = playInfo.option;
-        options.playOptionSeed = playInfo.seed;
-        options.playOption2 = playInfo.option2;
-        options.playOption2Seed = playInfo.seed2;
-        options.longNoteMode = selectedLongNoteMode;
-        options.hasUndefinedLongNotes =
-            play_start_detail::hasUndefinedLongNotes(
-                session->entries.front().meta);
-        options.assistOption = session->assistOption;
-        options.playback = course_rules::kRequiredPlaybackRate;
-        options.clubMode = context.settings.gameplayClubModeEnabled;
-        options.courseSession = session;
-        options.courseConstraints = session->constraints;
-        options.ruleset = session->ruleset;
-        options.requiredRulesetDescriptor = session->rulesetDescriptor;
-        options.ownsChart = true;
+        StartOptions options = makeCourseStageStartOptions(session);
 
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(context, std::move(preparedChart),
@@ -5434,7 +5393,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   const GameplayRuleset ruleset = profileSelections.ruleset;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = profileSelections.playOption;
-  int selectedLongNoteMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
+  int selectedLongNoteMode =
+      normalizeChartLongNoteModeValue(record.meta.LnMode);
   if (selectedLongNoteMode == 0) {
     selectedLongNoteMode =
         long_note_mode::valueFromId(profileSelections.longNoteMode);
@@ -5456,8 +5416,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   defer(
       [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
        ruleset, autoKeySound, playOption, selectedLongNoteMode, assistOption,
-       pacemakerTarget, playback,
-       canReusePreviewForStart, chartRandomInfo]() {
+       pacemakerTarget, playback, canReusePreviewForStart, chartRandomInfo]() {
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -5478,27 +5437,27 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           archive_file::appendDebugLogLine(
               "Start reusing loaded preview chart: " +
               fspath_to_utf8(record.meta.BmsPath));
-          applyEffectiveLongNoteModeToChart(*readyChart,
-                                            selectedLongNoteMode);
+          const bool hasUndefinedLongNotes =
+              replay::captureAuthoredReplayChartFacts(*readyChart)
+                  .hasUndefinedLongNotes;
+          applyEffectiveLongNoteModeToChart(*readyChart, selectedLongNoteMode);
           context.jukebox.stop();
-          changeToGameplayScene(readyChart,
-                                {
-                                    .startPosition = 0,
-                                    .autoKeySound = autoKeySound,
-                                    .autoPlay = false,
-                                    .gaugeType = gaugeType,
-                                    .gaugeAutoShift = gaugeAutoShift,
-                                    .gaugeAutoShiftLowerBound =
-                                        gaugeAutoShiftLowerBound,
-                                    .longNoteMode = selectedLongNoteMode,
-                                    .hasUndefinedLongNotes =
-                                        play_start_detail::
-                                            hasUndefinedLongNotes(record.meta),
-                                    .assistOption = assistOption,
-                                    .pacemakerTarget = pacemakerTarget,
-                                    .playback = playback,
-                                    .ruleset = ruleset,
-                                });
+          changeToGameplayScene(
+              readyChart,
+              {
+                  .startPosition = 0,
+                  .autoKeySound = autoKeySound,
+                  .autoPlay = false,
+                  .gaugeType = gaugeType,
+                  .gaugeAutoShift = gaugeAutoShift,
+                  .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
+                  .longNoteMode = selectedLongNoteMode,
+                  .hasUndefinedLongNotes = hasUndefinedLongNotes,
+                  .assistOption = assistOption,
+                  .pacemakerTarget = pacemakerTarget,
+                  .playback = playback,
+                  .ruleset = ruleset,
+              });
           return finishStart();
         }
 
@@ -5515,10 +5474,13 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           SDL_Log("Error parsing %s for start: %s",
                   fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
           archive_file::appendDebugLogLine(
-              "Start parse exception: " +
-              fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
+              "Start parse exception: " + fspath_to_utf8(record.meta.BmsPath) +
+              ": " + e.what());
         }
         if (preparedChart != nullptr && !parseCancelled) {
+          const bool hasUndefinedLongNotes =
+              replay::captureAuthoredReplayChartFacts(*preparedChart)
+                  .hasUndefinedLongNotes;
           play_options::PlayOptionReplayInfo playInfo =
               play_options::applySelectedPlayOptions(*preparedChart,
                                                      playOption);
@@ -5528,36 +5490,33 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           context.jukebox.loadChart(*preparedChart, true, parseCancelled);
           bms_parser::Chart *loadedChart = nullptr;
           if (!parseCancelled) {
-            loadedChart = setSelectedChart(
-                std::move(preparedChart), true,
-                play_options::isNormalPlayOption(playOption));
+            loadedChart =
+                setSelectedChart(std::move(preparedChart), true,
+                                 play_options::isNormalPlayOption(playOption));
           }
           if (parseCancelled) {
             preparedChart.reset();
           } else {
-            changeToGameplayScene(loadedChart,
-                                  {
-                                      .startPosition = 0,
-                                      .autoKeySound = autoKeySound,
-                                      .autoPlay = false,
-                                      .gaugeType = gaugeType,
-                                      .gaugeAutoShift = gaugeAutoShift,
-                                      .gaugeAutoShiftLowerBound =
-                                          gaugeAutoShiftLowerBound,
-                                      .playOption = playInfo.option,
-                                      .playOptionSeed = playInfo.seed,
-                                      .playOption2 = playInfo.option2,
-                                      .playOption2Seed = playInfo.seed2,
-                                      .longNoteMode = selectedLongNoteMode,
-                                      .hasUndefinedLongNotes =
-                                          play_start_detail::
-                                              hasUndefinedLongNotes(
-                                                  record.meta),
-                                      .assistOption = assistOption,
-                                      .pacemakerTarget = pacemakerTarget,
-                                      .playback = playback,
-                                      .ruleset = ruleset,
-                                  });
+            changeToGameplayScene(
+                loadedChart,
+                {
+                    .startPosition = 0,
+                    .autoKeySound = autoKeySound,
+                    .autoPlay = false,
+                    .gaugeType = gaugeType,
+                    .gaugeAutoShift = gaugeAutoShift,
+                    .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
+                    .playOption = playInfo.option,
+                    .playOptionSeed = playInfo.seed,
+                    .playOption2 = playInfo.option2,
+                    .playOption2Seed = playInfo.seed2,
+                    .longNoteMode = selectedLongNoteMode,
+                    .hasUndefinedLongNotes = hasUndefinedLongNotes,
+                    .assistOption = assistOption,
+                    .pacemakerTarget = pacemakerTarget,
+                    .playback = playback,
+                    .ruleset = ruleset,
+                });
             return finishStart();
           }
         }
@@ -5568,25 +5527,25 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         }
 
         context.jukebox.stop();
+        const bool hasUndefinedLongNotes =
+            replay::captureAuthoredReplayChartFacts(*chart)
+                .hasUndefinedLongNotes;
         applyEffectiveLongNoteModeToChart(*chart, selectedLongNoteMode);
-        changeToGameplayScene(chart, {
-                                         .startPosition = 0,
-                                         .autoKeySound = autoKeySound,
-                                         .autoPlay = false,
-                                         .gaugeType = gaugeType,
-                                         .gaugeAutoShift = gaugeAutoShift,
-                                         .gaugeAutoShiftLowerBound =
-                                             gaugeAutoShiftLowerBound,
-                                         .longNoteMode = selectedLongNoteMode,
-                                         .hasUndefinedLongNotes =
-                                             play_start_detail::
-                                                 hasUndefinedLongNotes(
-                                                     record.meta),
-                                         .assistOption = assistOption,
-                                         .pacemakerTarget = pacemakerTarget,
-                                         .playback = playback,
-                                         .ruleset = ruleset,
-                                     });
+        changeToGameplayScene(
+            chart, {
+                       .startPosition = 0,
+                       .autoKeySound = autoKeySound,
+                       .autoPlay = false,
+                       .gaugeType = gaugeType,
+                       .gaugeAutoShift = gaugeAutoShift,
+                       .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
+                       .longNoteMode = selectedLongNoteMode,
+                       .hasUndefinedLongNotes = hasUndefinedLongNotes,
+                       .assistOption = assistOption,
+                       .pacemakerTarget = pacemakerTarget,
+                       .playback = playback,
+                       .ruleset = ruleset,
+                   });
         return finishStart();
       },
       0, true);
@@ -5623,8 +5582,8 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
       selectedChartRandomInfoForPath(record.meta.BmsPath);
 
   cancelPreviewLoading(false);
-  archive_file::appendDebugLogLine(
-      "Open chart viewer: " + fspath_to_utf8(record.meta.BmsPath));
+  archive_file::appendDebugLogLine("Open chart viewer: " +
+                                   fspath_to_utf8(record.meta.BmsPath));
   context.jukebox.stop();
   context.sceneManager->changeScene(
       std::make_unique<ChartViewerScene>(context, record, chartRandomInfo.seed,
@@ -5656,16 +5615,15 @@ void MainMenuScene::toggleRevealContextMenu() {
       main_menu_library::sameFolderForChart(*record).has_value();
   revealContextMenu->setViewportSize(rendering::window_width,
                                      rendering::window_height);
-  revealContextMenu->show(
-      {.x = revealButton->getX(),
-       .y = revealButton->getY(),
-       .width = revealButton->getWidth(),
-       .height = revealButton->getHeight()},
-      {{.id = "show-same-folder",
-        .label = "Show Same Folder",
-        .enabled = canShowSameFolder},
-       {.id = "reveal-file", .label = "Reveal File"}},
-      220);
+  revealContextMenu->show({.x = revealButton->getX(),
+                           .y = revealButton->getY(),
+                           .width = revealButton->getWidth(),
+                           .height = revealButton->getHeight()},
+                          {{.id = "show-same-folder",
+                            .label = "Show Same Folder",
+                            .enabled = canShowSameFolder},
+                           {.id = "reveal-file", .label = "Reveal File"}},
+                          220);
 }
 
 void MainMenuScene::showSelectedChartFolder() {
@@ -5712,10 +5670,9 @@ void MainMenuScene::showSelectedChartFolder() {
   refreshChartFilterPanel();
   reloadChartList(true);
   if (recyclerView->selectedIndex >= 0) {
-    recyclerView->scrollOffset =
-        main_menu_library::centeredScrollOffsetForItem(
-            recyclerView->selectedIndex, recyclerView->size(),
-            recyclerView->itemHeight, recyclerView->getHeight());
+    recyclerView->scrollOffset = main_menu_library::centeredScrollOffsetForItem(
+        recyclerView->selectedIndex, recyclerView->size(),
+        recyclerView->itemHeight, recyclerView->getHeight());
     recyclerView->rebindVisibleItems();
   }
 }
@@ -5753,8 +5710,7 @@ void MainMenuScene::revealSelectedChartInFileManager() {
   if (!revealPathInFileManager(record->meta.BmsPath, sourceAnchor,
                                errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
-            fspath_to_utf8(record->meta.BmsPath).c_str(),
-            errorMessage.c_str());
+            fspath_to_utf8(record->meta.BmsPath).c_str(), errorMessage.c_str());
   }
 }
 
@@ -5967,8 +5923,7 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
         postProgress(archive_file::UnzipProgress{
             .fraction = 0.98, .message = "Refreshing library"});
         ChartLibraryScanner scanner;
-        const int changedCount = scanner.Scan(*unzipSession, roots,
-                                              &stopToken);
+        const int changedCount = scanner.Scan(*unzipSession, roots, &stopToken);
         if (!stopToken.stop_requested()) {
           std::vector<bms_parser::ChartMeta> chartMetas;
           unzipSession->SelectAllChartMeta(chartMetas);
@@ -6182,8 +6137,8 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
   const bool archiveExists =
       std::filesystem::is_regular_file(archivePath, error);
   if (error) {
-    updateUnzipProgressUi(1.0,
-                          "Could not check archive: " + error.message(), 0, 0);
+    updateUnzipProgressUi(1.0, "Could not check archive: " + error.message(), 0,
+                          0);
     archive_file::appendDebugLogLine(
         "Failed to check source archive before delete: " +
         fspath_to_utf8(archivePath) + ": " + error.message());
@@ -6223,8 +6178,8 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
     unzipCancelButtonText->setText("Close");
   }
   updateUnzipProgressUi(1.0, "Original archive deleted", 0, 0);
-  archive_file::appendDebugLogLine(
-      "Deleted source archive after unzip: " + fspath_to_utf8(archivePath));
+  archive_file::appendDebugLogLine("Deleted source archive after unzip: " +
+                                   fspath_to_utf8(archivePath));
 }
 
 void MainMenuScene::applyUnzipProgress() {
@@ -6295,9 +6250,9 @@ void MainMenuScene::applyUnzipResult() {
     replayStatusText->setText(result->message);
   }
   archive_file::appendDebugLogLine(
-      result->message +
-      (result->chartPath.empty() ? ""
-                                 : ": " + fspath_to_utf8(result->chartPath)));
+      result->message + (result->chartPath.empty()
+                             ? ""
+                             : ": " + fspath_to_utf8(result->chartPath)));
 
   defer(
       [this, hideModal = result->success && !canDeleteArchive]() {
@@ -6442,9 +6397,8 @@ void MainMenuScene::buildParseLogModal() {
   parseLogRecyclerView->onCreateView = [](const MainMenuParseLogRow &) {
     return new ParseLogRowView();
   };
-  parseLogRecyclerView->onBind = [](View *view,
-                                    const MainMenuParseLogRow &row, int,
-                                    bool) {
+  parseLogRecyclerView->onBind = [](View *view, const MainMenuParseLogRow &row,
+                                    int, bool) {
     auto *rowView = dynamic_cast<ParseLogRowView *>(view);
     if (rowView != nullptr) {
       rowView->setRow(row);
@@ -6503,9 +6457,9 @@ void MainMenuScene::refreshParseLogModal(bool forceScrollToBottom) {
     }
     return;
   }
-  const bool shouldScrollToBottom =
-      forceScrollToBottom || parseLogDisplayedRevision == 0 ||
-      isParseLogScrolledNearBottom();
+  const bool shouldScrollToBottom = forceScrollToBottom ||
+                                    parseLogDisplayedRevision == 0 ||
+                                    isParseLogScrolledNearBottom();
   parseLogDisplayedRevision = revision;
   parseLogRecyclerView->setItems(
       parseLogRowsFromLines(archive_file::debugLogLines()));
@@ -6518,10 +6472,10 @@ bool MainMenuScene::isParseLogScrolledNearBottom() const {
   if (parseLogRecyclerView == nullptr) {
     return true;
   }
-  const float maxOffset = std::max(
-      0.0f, static_cast<float>(parseLogRecyclerView->size() *
-                                   parseLogRecyclerView->itemHeight -
-                               parseLogRecyclerView->getHeight()));
+  const float maxOffset =
+      std::max(0.0f, static_cast<float>(parseLogRecyclerView->size() *
+                                            parseLogRecyclerView->itemHeight -
+                                        parseLogRecyclerView->getHeight()));
   return maxOffset - parseLogRecyclerView->scrollOffset <=
          static_cast<float>(parseLogRecyclerView->itemHeight * 2);
 }
@@ -6530,10 +6484,10 @@ void MainMenuScene::scrollParseLogModalToBottom() {
   if (parseLogRecyclerView == nullptr) {
     return;
   }
-  const float maxOffset = std::max(
-      0.0f, static_cast<float>(parseLogRecyclerView->size() *
-                                   parseLogRecyclerView->itemHeight -
-                               parseLogRecyclerView->getHeight()));
+  const float maxOffset =
+      std::max(0.0f, static_cast<float>(parseLogRecyclerView->size() *
+                                            parseLogRecyclerView->itemHeight -
+                                        parseLogRecyclerView->getHeight()));
   parseLogRecyclerView->scrollOffset = maxOffset;
   parseLogRecyclerView->rebindVisibleItems();
 }
@@ -6734,17 +6688,16 @@ void MainMenuScene::refreshMusicModal() {
               formatMusicTime(playback.durationMicros);
   }
   if (const auto playlist = context.musicPlayer.DefaultPlaylistSnapshot()) {
-    status += "  " + playlist->name + ": " +
-              std::to_string(playlist->trackCount);
+    status +=
+        "  " + playlist->name + ": " + std::to_string(playlist->trackCount);
   }
   const std::size_t libraryTrackCount = context.musicPlayer.LibraryTrackCount();
   if (libraryTrackCount > 0) {
     status += "  Library tracks: " + std::to_string(libraryTrackCount);
   }
   musicStatusText->setText(status);
-  musicPlaylistText->setText(
-      musicPlaylistTextSnapshot(
-          context.musicPlayer.DefaultPlaylistTracksSnapshot()));
+  musicPlaylistText->setText(musicPlaylistTextSnapshot(
+      context.musicPlayer.DefaultPlaylistTracksSnapshot()));
 
   if (musicPlayPauseButtonText != nullptr) {
     musicPlayPauseButtonText->setText(
@@ -6766,12 +6719,10 @@ void MainMenuScene::refreshMusicModal() {
                           ui_theme::primaryAction, ui_theme::primaryActionHover,
                           ui_theme::primaryActionPressed,
                           ui_theme::accentBorderStrong);
-  styleThemedActionButton(musicClearPlaylistButton,
-                          musicClearPlaylistButtonText, true,
-                          ui_theme::warningAction,
-                          ui_theme::warningActionHover,
-                          ui_theme::warningActionPressed,
-                          ui_theme::accentBorder);
+  styleThemedActionButton(
+      musicClearPlaylistButton, musicClearPlaylistButtonText, true,
+      ui_theme::warningAction, ui_theme::warningActionHover,
+      ui_theme::warningActionPressed, ui_theme::accentBorder);
   styleThemedActionButton(musicRandomButton, musicRandomButtonText, true,
                           ui_theme::successAction, ui_theme::successActionHover,
                           ui_theme::successActionPressed,
@@ -6779,9 +6730,8 @@ void MainMenuScene::refreshMusicModal() {
   styleThemedActionButton(musicPreviousButton, musicPreviousButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
-  styleThemedActionButton(musicSeekBackwardButton,
-                          musicSeekBackwardButtonText, true,
-                          ui_theme::control, ui_theme::controlHover,
+  styleThemedActionButton(musicSeekBackwardButton, musicSeekBackwardButtonText,
+                          true, ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
   styleThemedActionButton(musicPlayPauseButton, musicPlayPauseButtonText, true,
                           ui_theme::infoAction, ui_theme::infoActionHover,
@@ -6830,7 +6780,8 @@ void MainMenuScene::playSelectedChartAsMusic() {
   context.musicPlayer.SetNowPlaying({music_playlist::MakeTrack(musicRecord)});
 
   std::string statusMessage;
-  context.musicPlayer.PlayCurrentAsync(statusMessage, "Playing selected chart.");
+  context.musicPlayer.PlayCurrentAsync(statusMessage,
+                                       "Playing selected chart.");
   musicStatusMessage = statusMessage;
   refreshMusicModal();
 }
@@ -6930,8 +6881,7 @@ void MainMenuScene::playRandomMusicLibrary() {
       !context.musicPlayer.StartRandomLibrary(errorMessage)) {
     musicStatusMessage = errorMessage;
   } else {
-    context.musicPlayer.PlayCurrentAsync(errorMessage,
-                                         "Playing Now Playing.");
+    context.musicPlayer.PlayCurrentAsync(errorMessage, "Playing Now Playing.");
     musicStatusMessage = errorMessage;
   }
   refreshMusicModal();
@@ -7474,10 +7424,10 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
     if (stopToken.stop_requested()) {
       findBmsCancelled = true;
     }
-    auto result = service.findAndDownload(
-        record.meta.SHA256, record.meta.MD5, downloadRoot, findBmsCancelled,
-        progressCallback, record.meta.Title, record.meta.Artist,
-        downloadOptions);
+    auto result = service.findAndDownload(record.meta.SHA256, record.meta.MD5,
+                                          downloadRoot, findBmsCancelled,
+                                          progressCallback, record.meta.Title,
+                                          record.meta.Artist, downloadOptions);
     {
       std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
       pendingFindBmsResult = std::move(result);
@@ -7517,9 +7467,9 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsJobRunning = true;
   refreshFindBmsModal();
 
-  findBmsThread = std::jthread(
-      [this, candidate, record, downloadRoot, downloadOptions](
-          const std::stop_token &stopToken) {
+  findBmsThread =
+      std::jthread([this, candidate, record, downloadRoot,
+                    downloadOptions](const std::stop_token &stopToken) {
         BmsSearchService service;
         auto progressCallback =
             [this](const BmsSearchDownloadProgress &progress) {
@@ -7555,9 +7505,9 @@ void MainMenuScene::startFindBmsPendingArtifactResolution(
 
   BmsSearchResult result = findBmsResult;
   findBmsPendingDecision = decision;
-  findBmsProgressMessage =
-      decision == BmsSearchPendingArtifactDecision::Keep ? "Keeping files"
-                                                        : "Deleting files";
+  findBmsProgressMessage = decision == BmsSearchPendingArtifactDecision::Keep
+                               ? "Keeping files"
+                               : "Deleting files";
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.95;
@@ -7567,16 +7517,14 @@ void MainMenuScene::startFindBmsPendingArtifactResolution(
   findBmsJobRunning = true;
   refreshFindBmsModal();
 
-  findBmsThread = std::jthread(
-      [this, result = std::move(result), decision](
-          const std::stop_token &) mutable {
-        BmsSearchService service;
-        auto resolved =
-            service.resolvePendingArtifact(std::move(result), decision);
-        std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-        pendingFindBmsResult = std::move(resolved);
-        findBmsJobRunning = false;
-      });
+  findBmsThread = std::jthread([this, result = std::move(result),
+                                decision](const std::stop_token &) mutable {
+    BmsSearchService service;
+    auto resolved = service.resolvePendingArtifact(std::move(result), decision);
+    std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
+    pendingFindBmsResult = std::move(resolved);
+    findBmsJobRunning = false;
+  });
 }
 
 void MainMenuScene::hideFindBmsModal() {
@@ -7605,10 +7553,10 @@ void MainMenuScene::refreshFindBmsModal() {
   std::string statusText;
   if (running) {
     if (findBmsPendingDecision) {
-      statusText = *findBmsPendingDecision ==
-                           BmsSearchPendingArtifactDecision::Keep
-                       ? "Keeping files"
-                       : "Deleting files";
+      statusText =
+          *findBmsPendingDecision == BmsSearchPendingArtifactDecision::Keep
+              ? "Keeping files"
+              : "Deleting files";
     } else {
       statusText = findBmsProgressDisplayText(findBmsProgressMessage,
                                               findBmsProgressCurrent,
@@ -7726,12 +7674,11 @@ void MainMenuScene::refreshFindBmsModal() {
       policy.showNormalResultActions && !manualSourceUrl.empty() &&
       findBmsResult.status != BmsSearchResult::Status::Downloaded &&
       findBmsResult.status != BmsSearchResult::Status::NotFound;
-  const bool hasSearchAction =
-      policy.showNormalResultActions && !downloaded &&
-      (!findBmsModalChart.meta.SHA256.empty() ||
-       !findBmsModalChart.meta.MD5.empty() ||
-       !findBmsModalChart.meta.Title.empty() ||
-       !findBmsModalChart.meta.Artist.empty());
+  const bool hasSearchAction = policy.showNormalResultActions && !downloaded &&
+                               (!findBmsModalChart.meta.SHA256.empty() ||
+                                !findBmsModalChart.meta.MD5.empty() ||
+                                !findBmsModalChart.meta.Title.empty() ||
+                                !findBmsModalChart.meta.Artist.empty());
   const bool hasRefreshAction =
       policy.showNormalResultActions && !running && !downloaded;
   if (findBmsCloseButtonText != nullptr) {
@@ -7743,8 +7690,7 @@ void MainMenuScene::refreshFindBmsModal() {
   }
   if (findBmsKeepFilesButton != nullptr) {
     findBmsKeepFilesButton->setVisible(policy.showPendingActions);
-    findBmsKeepFilesButton->setWidth(policy.showPendingActions ? 150.0f
-                                                              : 0.0f);
+    findBmsKeepFilesButton->setWidth(policy.showPendingActions ? 150.0f : 0.0f);
   }
   if (findBmsDeleteFilesButton != nullptr) {
     findBmsDeleteFilesButton->setVisible(policy.showPendingActions);
@@ -7779,11 +7725,11 @@ void MainMenuScene::refreshFindBmsModal() {
   styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
-  styleThemedActionButton(
-      findBmsKeepFilesButton, findBmsKeepFilesButtonText,
-      policy.showPendingActions, ui_theme::successAction,
-      ui_theme::successActionHover, ui_theme::successActionPressed,
-      ui_theme::accentBorder);
+  styleThemedActionButton(findBmsKeepFilesButton, findBmsKeepFilesButtonText,
+                          policy.showPendingActions, ui_theme::successAction,
+                          ui_theme::successActionHover,
+                          ui_theme::successActionPressed,
+                          ui_theme::accentBorder);
   styleThemedActionButton(
       findBmsDeleteFilesButton, findBmsDeleteFilesButtonText,
       policy.showPendingActions, ui_theme::dangerAction,
@@ -7885,8 +7831,7 @@ void MainMenuScene::buildPlayOptionsModal() {
   const float kModalPanelWidth = std::min(760.0f, availablePanelWidth);
   constexpr float kModalPanelPadding = 22.0f;
   constexpr float kModalScrollRightPadding = 18.0f;
-  const float kModalContentWidth =
-      kModalPanelWidth - kModalPanelPadding * 2.0f;
+  const float kModalContentWidth = kModalPanelWidth - kModalPanelPadding * 2.0f;
   const float kOptionContentWidth =
       std::max(0.0f, kModalContentWidth - kModalScrollRightPadding);
   const float availablePanelHeight =
@@ -7924,8 +7869,8 @@ void MainMenuScene::buildPlayOptionsModal() {
   title->setHeight(42);
   panel->addView(title);
 
-  auto *scrollView = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
-                                    1);
+  auto *scrollView =
+      new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 1);
   scrollView->setWidth(kModalContentWidth);
   scrollView->setFlex(1.0f);
   scrollView->setContentPadding(Edge::Right, kModalScrollRightPadding);
@@ -7938,38 +7883,39 @@ void MainMenuScene::buildPlayOptionsModal() {
 
   const size_t playOptionColumns = kOptionContentWidth >= 620.0f ? 4U : 2U;
   playOptionsPanel = new PlayOptionsPanelView(
-      {.onRulesetSelected = [this](GameplayRuleset ruleset) {
-         setGameplayRulesetSelection(ruleset);
-       },
-       .onGaugeSelected = [this](GaugeType type,
-                                 GaugeAutoShiftMode autoShift) {
-         setGaugeSelection(type, autoShift);
-       },
-       .onGaugeLowerBoundSelected = [this](GaugeType type) {
-         setGaugeAutoShiftLowerBound(type);
-       },
-       .onPlayOptionSelected = [this](const std::string &option) {
-         setPlayOptionSelection(option);
-       },
-       .isPlayOptionAllowed = [this](const std::string &option) {
-         return currentPlayOptionSelectionAllowed(option);
-       },
-       .onLongNoteModeSelected = [this](const std::string &mode) {
-         setLongNoteModeSelection(mode);
-       },
-       .onAssistOptionSelected = [this](const std::string &option) {
-         setAssistOptionSelection(option);
-       },
-       .onPlaybackRateSelected = [this](int percent) {
-         setPlaybackRateSelection(percent);
-       },
-       .onPlaybackModeSelected = [this](const std::string &mode) {
-         setPlaybackModeSelection(mode);
-       },
+      {.onRulesetSelected =
+           [this](GameplayRuleset ruleset) {
+             setGameplayRulesetSelection(ruleset);
+           },
+       .onGaugeSelected =
+           [this](GaugeType type, GaugeAutoShiftMode autoShift) {
+             setGaugeSelection(type, autoShift);
+           },
+       .onGaugeLowerBoundSelected =
+           [this](GaugeType type) { setGaugeAutoShiftLowerBound(type); },
+       .onPlayOptionSelected =
+           [this](const std::string &option) {
+             setPlayOptionSelection(option);
+           },
+       .isPlayOptionAllowed =
+           [this](const std::string &option) {
+             return currentPlayOptionSelectionAllowed(option);
+           },
+       .onLongNoteModeSelected =
+           [this](const std::string &mode) { setLongNoteModeSelection(mode); },
+       .onAssistOptionSelected =
+           [this](const std::string &option) {
+             setAssistOptionSelection(option);
+           },
+       .onPlaybackRateSelected =
+           [this](int percent) { setPlaybackRateSelection(percent); },
+       .onPlaybackModeSelected =
+           [this](const std::string &mode) { setPlaybackModeSelection(mode); },
        .onClubModeToggled = [this]() { toggleGameplayClubMode(); },
-       .onPacemakerSelected = [this](const std::string &target) {
-         setPacemakerTargetSelection(target);
-       }},
+       .onPacemakerSelected =
+           [this](const std::string &target) {
+             setPacemakerTargetSelection(target);
+           }},
       {.width = kOptionContentWidth,
        .playOptionColumns = static_cast<int>(playOptionColumns),
        .showGauge = true,
@@ -8152,8 +8098,9 @@ void MainMenuScene::buildReplayModal() {
   constexpr float kFilterScrollRightPadding = 12.0f;
   constexpr float kFilterContentWidth =
       kModalContentWidth - kFilterScrollRightPadding;
-  auto *filterScroll = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
-                                      static_cast<int>(kModalContentHeight));
+  auto *filterScroll =
+      new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
+                     static_cast<int>(kModalContentHeight));
   filterScroll->setWidth(kModalContentWidth);
   filterScroll->setHeight(kModalContentHeight);
   filterScroll->setContentPadding(Edge::Right, kFilterScrollRightPadding);
@@ -8188,13 +8135,12 @@ void MainMenuScene::buildReplayModal() {
   filterContent->addView(makeModalLabel("Clear Mark"));
   View *filterRow = nullptr;
   size_t filterIndex = 0;
-  auto makeClearFilterButton = [this, &makeFilterButton](
-                                   const std::string &label,
-                                   std::optional<int> rank) {
+  auto makeClearFilterButton = [this,
+                                &makeFilterButton](const std::string &label,
+                                                   std::optional<int> rank) {
     TextView *text = nullptr;
     auto *button = makeFilterButton(label, 15, &text);
-    button->setOnClickListener(
-        [this, rank]() { setReplayClearFilter(rank); });
+    button->setOnClickListener([this, rank]() { setReplayClearFilter(rank); });
     replayClearFilterButtons.push_back({
         .button = button,
         .text = text,
@@ -8649,8 +8595,8 @@ void MainMenuScene::buildReplayModal() {
                               selectedReplaySummary->createdAt);
       return;
     }
-    const auto *remoteIdentity = std::get_if<IrRemoteRecordId>(
-        &selectedResultRecordSummary->identity);
+    const auto *remoteIdentity =
+        std::get_if<IrRemoteRecordId>(&selectedResultRecordSummary->identity);
     if (remoteIdentity == nullptr || !selectedResultRecordStableKey) {
       return;
     }
@@ -8687,6 +8633,13 @@ void MainMenuScene::buildReplayModal() {
           exportAutoPlay
               ? pacemaker::kTargetOff
               : pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+      if (!exportAutoPlay) {
+        options.replayResultContext = ReplayResultContext{
+            .resultId = exportSelection.id,
+            .attemptId = exportSelection.attemptId,
+            .createdAt = exportSelection.createdAt,
+        };
+      }
       if (!selectedExportFullResolution) {
         options.height = 1080;
       }
@@ -8761,8 +8714,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
   std::string mergeOrigin;
   bool remoteReadSucceeded = false;
   if (!courseReplayList) {
-    const auto providerSettings = context.settings.irProviders.find(
-        std::string(ir::kTachiProviderId));
+    const auto providerSettings =
+        context.settings.irProviders.find(std::string(ir::kTachiProviderId));
     if (providerSettings == context.settings.irProviders.end() ||
         !providerSettings->second.enabled) {
       remoteReadSucceeded = true;
@@ -8803,9 +8756,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
   try {
     resultRecordSummaries = mergeResultRecords(
         replaySummaries,
-        remoteReadSucceeded
-            ? std::span<const ir::IrRemoteScore>(remoteScores)
-            : std::span<const ir::IrRemoteScore>{},
+        remoteReadSucceeded ? std::span<const ir::IrRemoteScore>(remoteScores)
+                            : std::span<const ir::IrRemoteScore>{},
         ir::kTachiProviderId, mergeOrigin);
     if (remoteReadSucceeded) {
       publishedResultRecordDiagnostic.clear();
@@ -8878,8 +8830,7 @@ void MainMenuScene::showReplayFilterSortOptions() {
 }
 
 void MainMenuScene::showReplayExportOptions() {
-  if (replayModalRoot == nullptr ||
-      !selectedResultRecordSummary.has_value() ||
+  if (replayModalRoot == nullptr || !selectedResultRecordSummary.has_value() ||
       !selectedResultRecordSummary->capabilities.videoExport ||
       !selectedReplaySummary.has_value()) {
     return;
@@ -8972,25 +8923,23 @@ void MainMenuScene::refreshReplayModalActions() {
   const bool modalOperationInProgress =
       exportInProgress || fileActionInProgress || resultRecallInProgress ||
       irUploadInProgress;
-  const bool watchVisible = capabilities.watch && !filterSortMode &&
-                            !optionsMode && !progressMode;
+  const bool watchVisible =
+      capabilities.watch && !filterSortMode && !optionsMode && !progressMode;
   const bool gbattleVisible = capabilities.gBattle && !filterSortMode &&
                               !watchOptionsMode && !optionsMode &&
                               !progressMode;
   const ResultRecordRecallActionState resultAction =
-      resultRecordRecallActionState(
-          selectedResultRecordSummary,
-          !filterSortMode && !watchOptionsMode && !optionsMode &&
-              !progressMode,
-          modalOperationInProgress);
+      resultRecordRecallActionState(selectedResultRecordSummary,
+                                    !filterSortMode && !watchOptionsMode &&
+                                        !optionsMode && !progressMode,
+                                    modalOperationInProgress);
   const bool resultVisible = resultAction.visible;
   const bool exportVisible = capabilities.videoExport && !filterSortMode &&
                              !watchOptionsMode && !progressMode;
   const bool shareVisible = capabilities.shareReplay && !filterSortMode &&
                             !watchOptionsMode && !optionsMode && !progressMode;
-  const bool deleteVisible = capabilities.deleteReplayFile &&
-                             !filterSortMode && !watchOptionsMode &&
-                             !optionsMode && !progressMode;
+  const bool deleteVisible = capabilities.deleteReplayFile && !filterSortMode &&
+                             !watchOptionsMode && !optionsMode && !progressMode;
 
   if (replayModalCloseButtonText != nullptr) {
     replayModalCloseButtonText->setText(ui_icons::textForCodepoint(kIconXmark));
@@ -9068,12 +9017,12 @@ void MainMenuScene::refreshReplayModalActions() {
         ui_theme::primaryAction, ui_theme::primaryActionHover,
         ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
   } else {
-    styleThemedActionButton(
-        replayModalFilterButton, replayModalFilterButtonText,
-        !watchOptionsMode && !optionsMode && !progressMode &&
-            !modalOperationInProgress,
-        ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
-        ui_theme::hairlineStrong);
+    styleThemedActionButton(replayModalFilterButton,
+                            replayModalFilterButtonText,
+                            !watchOptionsMode && !optionsMode &&
+                                !progressMode && !modalOperationInProgress,
+                            ui_theme::control, ui_theme::controlHover,
+                            ui_theme::controlPressed, ui_theme::hairlineStrong);
   }
   styleThemedActionButton(replayWatchButton, replayWatchButtonText,
                           watchVisible && !modalOperationInProgress,
@@ -9081,12 +9030,10 @@ void MainMenuScene::refreshReplayModalActions() {
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
   styleThemedActionButton(replayGBattleButton, replayGBattleButtonText,
                           gbattleVisible && !modalOperationInProgress,
-                          ui_theme::warningAction,
-                          ui_theme::warningActionHover,
+                          ui_theme::warningAction, ui_theme::warningActionHover,
                           ui_theme::warningActionPressed, ui_theme::amber);
   styleThemedActionButton(replayModalResultButton, replayModalResultButtonText,
-                          resultAction.enabled,
-                          ui_theme::successAction,
+                          resultAction.enabled, ui_theme::successAction,
                           ui_theme::successActionHover,
                           ui_theme::successActionPressed, ui_theme::lime);
   styleThemedActionButton(replayModalExportButton, replayModalExportButtonText,
@@ -9098,11 +9045,11 @@ void MainMenuScene::refreshReplayModalActions() {
                           shareVisible && !modalOperationInProgress,
                           ui_theme::infoAction, ui_theme::infoActionHover,
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
-  styleThemedActionButton(
-      replayModalDeleteButton, replayModalDeleteButtonText,
-      deleteVisible && !modalOperationInProgress, ui_theme::dangerAction,
-      ui_theme::dangerActionHover, ui_theme::dangerActionPressed,
-      ui_theme::dangerActionHover);
+  styleThemedActionButton(replayModalDeleteButton, replayModalDeleteButtonText,
+                          deleteVisible && !modalOperationInProgress,
+                          ui_theme::dangerAction, ui_theme::dangerActionHover,
+                          ui_theme::dangerActionPressed,
+                          ui_theme::dangerActionHover);
 
   if (replayModalRoot != nullptr) {
     replayModalRoot->applyYogaLayoutFromRoot();
@@ -9123,12 +9070,10 @@ void MainMenuScene::refreshReplayFilterSortButtons() {
     styleOptionButton(item.button, item.text,
                       normalized == replayRecordFilters.playOption);
   }
-  for (const ReplayScoreRankFilterButton &item :
-       replayScoreRankFilterButtons) {
+  for (const ReplayScoreRankFilterButton &item : replayScoreRankFilterButtons) {
     if (item.rank.has_value() && !replayScoreRankFilterAvailable()) {
-      styleThemedActionButton(item.button, item.text, false,
-                              ui_theme::control, ui_theme::controlHover,
-                              ui_theme::controlPressed,
+      styleThemedActionButton(item.button, item.text, false, ui_theme::control,
+                              ui_theme::controlHover, ui_theme::controlPressed,
                               ui_theme::hairlineStrong);
     } else {
       styleOptionButton(item.button, item.text,
@@ -9163,26 +9108,22 @@ void MainMenuScene::refreshReplayExportOptionButtons() {
   if (autoPlaySelection) {
     styleThemedActionButton(replayTouchShowButton, replayTouchShowButtonText,
                             false, ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
+                            ui_theme::controlPressed, ui_theme::hairlineStrong);
     styleOptionButton(replayTouchHideButton, replayTouchHideButtonText, true);
     styleThemedActionButton(replayExportTouchShowButton,
                             replayExportTouchShowButtonText, false,
                             ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
+                            ui_theme::controlPressed, ui_theme::hairlineStrong);
     styleOptionButton(replayExportTouchHideButton,
                       replayExportTouchHideButtonText, true);
     styleThemedActionButton(replayGhostShowButton, replayGhostShowButtonText,
                             false, ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
+                            ui_theme::controlPressed, ui_theme::hairlineStrong);
     styleOptionButton(replayGhostHideButton, replayGhostHideButtonText, true);
     styleThemedActionButton(replayExportGhostShowButton,
                             replayExportGhostShowButtonText, false,
                             ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
+                            ui_theme::controlPressed, ui_theme::hairlineStrong);
     styleOptionButton(replayExportGhostHideButton,
                       replayExportGhostHideButtonText, true);
     return;
@@ -9251,8 +9192,8 @@ bool MainMenuScene::selectReplayModalIndex(int index) {
       visibleResultRecordSummaries[static_cast<std::size_t>(index)];
   selectedReplaySummary = selectedResultRecordSummary->local;
   selectedResultRecordStableKey = selectedResultRecordSummary->stableKey();
-  if (selectedReplaySummary.has_value() &&
-      !selectedReplaySummary->autoPlay && selectedReplaySummary->id > 0 &&
+  if (selectedReplaySummary.has_value() && !selectedReplaySummary->autoPlay &&
+      selectedReplaySummary->id > 0 &&
       selectedReplaySummary->replayFileState ==
           ReplaySummary::ReplayFileState::Unchecked) {
     replay::ReplayFileStore replayFileStore(
@@ -9275,8 +9216,7 @@ bool MainMenuScene::selectReplayModalIndex(int index) {
       }
     }
     const auto stableKey = *selectedResultRecordStableKey;
-    selectedResultRecordSummary =
-        makeLocalResultRecord(*selectedReplaySummary);
+    selectedResultRecordSummary = makeLocalResultRecord(*selectedReplaySummary);
     visibleResultRecordSummaries[static_cast<std::size_t>(index)] =
         *selectedResultRecordSummary;
     auto stored = std::ranges::find_if(
@@ -9321,8 +9261,8 @@ void MainMenuScene::applyReplayRecordFilters(
     preferredStableKey = selectedResultRecordStableKey;
   }
 
-  visibleResultRecordSummaries = replay_record_filters::apply(
-      resultRecordSummaries, replayRecordFilters);
+  visibleResultRecordSummaries =
+      replay_record_filters::apply(resultRecordSummaries, replayRecordFilters);
   if (replayListView != nullptr) {
     replayListView->setResultRecords(visibleResultRecordSummaries);
   }
@@ -9331,8 +9271,7 @@ void MainMenuScene::applyReplayRecordFilters(
   int restoreIndex = -1;
   if (preferredStableKey.has_value()) {
     for (size_t i = 0; i < visibleResultRecordSummaries.size(); ++i) {
-      if (visibleResultRecordSummaries[i].stableKey() ==
-          *preferredStableKey) {
+      if (visibleResultRecordSummaries[i].stableKey() == *preferredStableKey) {
         restoreIndex = static_cast<int>(i);
         break;
       }
@@ -9363,8 +9302,7 @@ void MainMenuScene::setReplayPlayOptionFilter(
   refreshReplayFilterSortButtons();
 }
 
-void MainMenuScene::setReplayScoreRankFilter(
-    std::optional<std::string> rank) {
+void MainMenuScene::setReplayScoreRankFilter(std::optional<std::string> rank) {
   if (rank.has_value() && !replayScoreRankFilterAvailable()) {
     return;
   }
@@ -9381,8 +9319,7 @@ void MainMenuScene::setReplaySortCriterion(
 }
 
 bool MainMenuScene::replayScoreRankFilterAvailable() const {
-  return replay_record_filters::supportsScoreRankFilter(
-      resultRecordSummaries);
+  return replay_record_filters::supportsScoreRankFilter(resultRecordSummaries);
 }
 
 bool MainMenuScene::selectedReplayIsAutoPlay() const {
@@ -9432,9 +9369,10 @@ MainMenuScene::autoPlayReplaySummary(const ChartMetaRecord &record) const {
 bool MainMenuScene::prepareAutoPlayChartForRecord(
     const ChartMetaRecord &record,
     std::unique_ptr<bms_parser::Chart> &preparedChart,
-    play_options::PlayOptionReplayInfo &playInfo,
+    play_options::PlayOptionReplayInfo &playInfo, bool &hasUndefinedLongNotes,
     std::atomic_bool &parseCancelled) const {
-  if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
+  if (record.solidArchive || record.unavailable ||
+      record.meta.BmsPath.empty()) {
     return false;
   }
 
@@ -9455,6 +9393,9 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
     return false;
   }
 
+  hasUndefinedLongNotes =
+      replay::captureAuthoredReplayChartFacts(*preparedChart)
+          .hasUndefinedLongNotes;
   playInfo = play_options::applySelectedPlayOptions(
       *preparedChart, profileSelections.playOption);
   applyEffectiveLongNoteModeToChart(
@@ -9508,7 +9449,9 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           std::atomic_bool parseCancelled = false;
           std::unique_ptr<bms_parser::Chart> autoPlayChart;
           play_options::PlayOptionReplayInfo playInfo;
+          bool hasUndefinedLongNotes = false;
           if (!prepareAutoPlayChartForRecord(record, autoPlayChart, playInfo,
+                                             hasUndefinedLongNotes,
                                              parseCancelled)) {
             return failReplayLoad();
           }
@@ -9540,9 +9483,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                          .playOption2Seed = playInfo.seed2,
                          .longNoteMode = long_note_mode::valueFromId(
                              profileSelections.longNoteMode),
-                         .hasUndefinedLongNotes =
-                             play_start_detail::hasUndefinedLongNotes(
-                                 record.meta),
+                         .hasUndefinedLongNotes = hasUndefinedLongNotes,
                          .assistOption = profileSelections.assistOption,
                          .pacemakerTarget = pacemaker::kTargetOff,
                          .playback = autoPlayPlayback,
@@ -9570,35 +9511,26 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
         auto playback = std::make_shared<replay::ReplayPlaybackData>(
             std::move(*replayRead.playback));
         std::atomic_bool parseCancelled = false;
-        std::unique_ptr<bms_parser::Chart> replayChart;
-        std::shared_ptr<JudgedPlaybackData> legacyReplay;
-        if (playback->legacy.has_value()) {
-          auto adapted = replay::makeLegacyPlaybackAdapter(
-              *playback, *replayRead.result, record.meta);
-          if (!adapted.has_value()) {
-            return failReplayLoad();
-          }
-          legacyReplay =
-              std::make_shared<JudgedPlaybackData>(std::move(*adapted));
-          replayChart = play_options::prepareReplayChart(
-              record.meta.BmsPath, *legacyReplay, parseCancelled);
-        } else {
-          replayChart = play_options::prepareReplayChart(
-              record.meta.BmsPath, *playback, parseCancelled);
-        }
+        auto replayChart = play_options::prepareReplayChart(
+            record.meta.BmsPath, *playback, parseCancelled);
         if (replayChart == nullptr || parseCancelled) {
           return failReplayLoad();
         }
 
+        auto judged = replay::makeJudgedPlaybackForAnalysis(
+            *playback, *replayRead.result, *replayChart,
+            {.notePriorityMode = context.settings.notePriorityMode});
+        if (!judged.has_value()) {
+          return failReplayLoad();
+        }
+        std::shared_ptr<JudgedPlaybackData> legacyReplay;
         std::shared_ptr<const JudgedPlaybackData> replayAnalysis;
-        if (legacyReplay == nullptr) {
-          auto analysis = replay::makeJudgedPlaybackForAnalysis(
-              *playback, *replayRead.result, *replayChart);
-          if (!analysis.has_value()) {
-            return failReplayLoad();
-          }
-          replayAnalysis = std::make_shared<const JudgedPlaybackData>(
-              std::move(*analysis));
+        if (playback->legacy.has_value()) {
+          legacyReplay =
+              std::make_shared<JudgedPlaybackData>(std::move(*judged));
+        } else {
+          replayAnalysis =
+              std::make_shared<const JudgedPlaybackData>(std::move(*judged));
         }
 
         context.jukebox.stop();
@@ -9612,30 +9544,24 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return failReplayLoad();
         }
 
-        StartOptions replayOptions{
-            .startPosition = 0,
-            .autoKeySound = false,
-            .autoPlay = false,
-            .replayData = legacyReplay,
-            .replayAnalysis = replayAnalysis,
-            .replayResultContext = ReplayResultContext{
-                .resultId = replayId,
-                .attemptId = replayRead.result->attemptId,
-                .createdAt = watchedReplaySummary.has_value()
-                                 ? watchedReplaySummary->createdAt
-                                 : std::string{},
-            },
-            .pacemakerTarget = pacemakerTarget,
-            .touchVisualizationEnabled = selectedReplayRenderTouchPoints,
-            .replayGhostRenderingEnabled =
-                (legacyReplay != nullptr || replayAnalysis != nullptr) &&
-                selectedReplayRenderGhosts,
+        ReplayResultContext resultContext{
+            .resultId = replayId,
+            .attemptId = replayRead.result->attemptId,
+            .createdAt = watchedReplaySummary.has_value()
+                             ? watchedReplaySummary->createdAt
+                             : std::string{},
         };
-        if (legacyReplay != nullptr) {
-          applyJudgedPlaybackSetupToStartOptions(replayOptions, *legacyReplay);
-        } else {
-          applyReplayPlaybackToStartOptions(replayOptions, playback);
-        }
+        StartOptions replayOptions =
+            legacyReplay != nullptr
+                ? replayResultStartOptions(legacyReplay, resultContext)
+                : replayResultStartOptions(playback, replayAnalysis,
+                                           resultContext);
+        replayOptions.pacemakerTarget = pacemakerTarget;
+        replayOptions.touchVisualizationEnabled =
+            selectedReplayRenderTouchPoints;
+        replayOptions.replayGhostRenderingEnabled =
+            (legacyReplay != nullptr || replayAnalysis != nullptr) &&
+            selectedReplayRenderGhosts;
         context.jukebox.stop();
         hideReplayModal();
         changeToGameplayScene(chart, std::move(replayOptions));
@@ -9715,31 +9641,9 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
           return failGBattleLoad();
         }
 
-        std::optional<JudgedPlaybackData> adapted;
-        if (replayPlayback->legacy.has_value()) {
-          adapted = replay::makeLegacyPlaybackAdapter(
-              *replayPlayback, *replayRead.result, chart->Meta);
-        } else {
-          StartOptions recordedOptions;
-          applyReplayPlaybackToStartOptions(recordedOptions, replayPlayback);
-          const auto policy = buildGameplayRulesetPolicyAtPlayStart(
-              recordedOptions, chart->Meta, context.settings.notePriorityMode);
-          if (!policy.built()) {
-            SDL_Log("Unable to build G-Battle replay policy: %s",
-                    policy.diagnostic.c_str());
-            return failGBattleLoad();
-          }
-          const auto materialized = replay::materializeReplay(
-              *replayPlayback, *chart, *policy.policy);
-          if (!materialized.materialized()) {
-            SDL_Log("Unable to materialize G-Battle replay: %s",
-                    materialized.diagnostic.c_str());
-            return failGBattleLoad();
-          }
-          adapted = replay::makeMaterializedPlaybackAdapter(
-              *replayPlayback, *materialized.value, *policy.policy,
-              *replayRead.result, chart->Meta);
-        }
+        auto adapted = replay::makeJudgedPlaybackForAnalysis(
+            *replayPlayback, *replayRead.result, *chart,
+            {.notePriorityMode = context.settings.notePriorityMode});
         if (!adapted.has_value()) {
           return failGBattleLoad();
         }
@@ -9760,8 +9664,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
             .replayGhostRenderingEnabled = false,
             .ruleset = ruleset,
         };
-        applyGBattleReplayChartSetupToStartOptions(
-            gbattleOptions, *recordData);
+        applyGBattleReplayChartSetupToStartOptions(gbattleOptions, *recordData);
         changeToGameplayScene(chart, std::move(gbattleOptions));
         willStart.store(false);
         return true;
@@ -9814,7 +9717,8 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         session->courseName = persisted.courseName;
         session->courseGroupName = persisted.courseGroupName;
         session->constraintJson = persisted.constraintJson;
-        session->entries.resize(static_cast<std::size_t>(persisted.totalCharts));
+        session->entries.resize(
+            static_cast<std::size_t>(persisted.totalCharts));
         for (std::size_t index = 0; index < persisted.entryFacts.size();
              ++index) {
           session->entries[index].meta.TotalNotes =
@@ -9839,8 +9743,19 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
           session->entries[static_cast<std::size_t>(stage.stageIndex)].meta =
               std::move(meta);
         }
-        if (!session->installAuthoritativeEntryMetas(
-                session->entryMetasSnapshot())) {
+        std::vector<CoursePlayEntrySnapshot> authoritativeEntries;
+        authoritativeEntries.reserve(session->entries.size());
+        for (std::size_t index = 0; index < session->entries.size(); ++index) {
+          replay::AuthoredReplayChartFacts replayFacts;
+          if (index < playback->stages.size()) {
+            replayFacts.hasUndefinedLongNotes =
+                playback->stages[index].setup.hasUndefinedLongNotes;
+          }
+          authoritativeEntries.push_back({.meta = session->entries[index].meta,
+                                          .replayFacts = replayFacts});
+        }
+        if (!session->installAuthoritativeEntries(
+                std::move(authoritativeEntries))) {
           return failReplayLoad();
         }
         session->snapshotRulesetFromPlayback(playback->stages.front());
@@ -9858,72 +9773,15 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         session->requestedPlayOption = persisted.requestedPlayOption;
         session->assistOption = persisted.assistOption;
         session->autoKeySound = false;
+        session->clubMode = persisted.provenance.clubMode;
         session->courseReplayPlayback = true;
-        const bool migrated = std::ranges::any_of(
-            playback->stages, [](const auto &stage) {
-              return stage.legacy.has_value();
-            });
-        if (migrated) {
-          auto legacyCourse = std::make_shared<JudgedCoursePlaybackData>();
-          legacyCourse->courseId = persisted.legacyCourseId;
-          legacyCourse->courseKey = persisted.courseKey;
-          legacyCourse->courseName = persisted.courseName;
-          legacyCourse->courseGroupName = persisted.courseGroupName;
-          legacyCourse->constraintJson = persisted.constraintJson;
-          legacyCourse->requestedPlayOption = persisted.requestedPlayOption;
-          legacyCourse->assistOption = persisted.assistOption;
-          legacyCourse->initialGaugeType = persisted.initialGaugeType;
-          legacyCourse->gaugeProfile = persisted.gaugeProfile;
-          legacyCourse->gaugeAutoShift = persisted.gaugeAutoShift;
-          legacyCourse->gaugeAutoShiftLowerBound =
-              persisted.gaugeAutoShiftLowerBound;
-          legacyCourse->longNoteMode = persisted.longNoteMode;
-          legacyCourse->finalScore = persisted.finalScore;
-          legacyCourse->maxCombo = persisted.maxCombo;
-          legacyCourse->finalGauge = persisted.finalGauge;
-          legacyCourse->clearType = persisted.clearType;
-          legacyCourse->completedCharts = persisted.completedCharts;
-          legacyCourse->totalCharts = persisted.totalCharts;
-          legacyCourse->context =
-              analysis::playbackContextFrom(initialSetup);
-          legacyCourse->stages.reserve(persisted.stages.size());
-          for (std::size_t index = 0; index < persisted.stages.size(); ++index) {
-            if (!playback->stages[index].legacy.has_value()) {
-              legacyCourse->stages.emplace_back();
-              continue;
-            }
-            result_persistence::PersistedChartResult stageResult{
-                .resultId = persisted.resultId,
-                .score = persisted.stages[index].score,
-                .keyMode = persisted.stages[index].keyMode,
-                .adoptedGaugeType =
-                    persisted.stages[index].adoptedGaugeType,
-                .adoptedGaugeHistory =
-                    persisted.stages[index].adoptedGaugeHistory,
-                .judgementTiming = persisted.stages[index].judgementTiming,
-                .playedAtUnixMillis = persisted.playedAtUnixMillis,
-            };
-            auto adapted = replay::makeLegacyPlaybackAdapter(
-                playback->stages[index], stageResult,
-                *session->entryMeta(index));
-            if (!adapted.has_value()) {
-              return failReplayLoad();
-            }
-            adapted->chartMeta.BmsPath = session->entryMeta(index)->BmsPath;
-            legacyCourse->stages.push_back(
-                {.replay = std::move(*adapted),
-                 .restMicrosAfterStage =
-                     playback->restMicrosAfterStage[index]});
-          }
-          session->courseReplayData = std::move(legacyCourse);
-          session->courseReplayPlaybackData = std::move(playback);
-        } else {
-          session->courseReplayPlaybackData = std::move(playback);
-        }
+        session->courseReplayPlaybackData = std::move(playback);
+        session->courseReplayResultContext =
+            std::make_shared<const result_persistence::PersistedCourseResult>(
+                persisted);
         session->replayTouchVisualizationEnabled =
             selectedReplayRenderTouchPoints;
-        session->replayGhostRenderingEnabled =
-            migrated && selectedReplayRenderGhosts;
+        session->replayGhostRenderingEnabled = selectedReplayRenderGhosts;
 
         hideReplayModal();
         startCourseReplayDirect(std::move(session));
@@ -9940,64 +9798,26 @@ void MainMenuScene::startCourseReplayDirect(
     return;
   }
 
-  if (auto stagePlayback = session->currentCourseReplayStagePlayback()) {
-    const bms_parser::ChartMeta *stageMeta = session->currentMeta();
-    if (stageMeta == nullptr || stageMeta->BmsPath.empty()) {
-      resetReplayWatchLoadingUi();
-      return;
-    }
-    session->applyReplayStagePlayOptions(*stagePlayback);
     std::atomic_bool parseCancelled = false;
-    auto replayChart = play_options::prepareReplayChart(
-        stageMeta->BmsPath, *stagePlayback, parseCancelled);
-    if (replayChart == nullptr || parseCancelled) {
+    auto outcome = course_replay_startup::prepareCurrentStage(
+        session, context.settings.notePriorityMode, parseCancelled);
+    if (!outcome.prepared()) {
+      SDL_Log("Course replay start failed: %s", outcome.diagnostic.c_str());
       resetReplayWatchLoadingUi();
       return;
     }
+    auto prepared = std::move(*outcome.value);
     context.jukebox.stop();
-    context.jukebox.loadChart(*replayChart, true, parseCancelled);
+    context.jukebox.loadChart(*prepared.chart, true, parseCancelled);
     if (parseCancelled) {
       resetReplayWatchLoadingUi();
       return;
     }
-    StartOptions options =
-        makeCourseReplayStageStartOptions(session, stagePlayback);
     context.sceneManager->changeScene(
-        std::make_unique<GamePlayScene>(context, std::move(replayChart),
-                                        std::move(options)),
+        std::make_unique<GamePlayScene>(context, std::move(prepared.chart),
+                                        std::move(prepared.options)),
         true);
     willStart.store(false);
-    return;
-  }
-
-  auto stageReplay = session->currentCourseReplayStageReplay();
-  if (stageReplay == nullptr) {
-    resetReplayWatchLoadingUi();
-    return;
-  }
-  session->applyReplayStagePlayOptions(*stageReplay);
-  std::atomic_bool parseCancelled = false;
-  auto replayChart = play_options::prepareReplayChart(
-      stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
-  if (replayChart == nullptr || parseCancelled) {
-    resetReplayWatchLoadingUi();
-    return;
-  }
-
-  context.jukebox.stop();
-  context.jukebox.loadChart(*replayChart, true, parseCancelled);
-  if (parseCancelled) {
-    resetReplayWatchLoadingUi();
-    return;
-  }
-
-  StartOptions options = makeCourseReplayStageStartOptions(session, stageReplay);
-
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(replayChart),
-                                      std::move(options)),
-      true);
-  willStart.store(false);
 }
 
 bms_parser::Chart *
@@ -10040,8 +9860,8 @@ void MainMenuScene::schedulePreviewLoad(bms_parser::ChartMeta meta) {
       });
 }
 
-void MainMenuScene::startPreviewLoadThread(
-    bms_parser::ChartMeta meta, DebounceToken previewToken) {
+void MainMenuScene::startPreviewLoadThread(bms_parser::ChartMeta meta,
+                                           DebounceToken previewToken) {
   if (loadThread.joinable()) {
     return;
   }
@@ -10152,9 +9972,8 @@ void MainMenuScene::reapRetiredPreviewLoadThreads() {
     std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
     auto it = retiredPreviewLoadThreads.begin();
     while (it != retiredPreviewLoadThreads.end()) {
-      const bool finished =
-          it->finished == nullptr ||
-          it->finished->load(std::memory_order_acquire);
+      const bool finished = it->finished == nullptr ||
+                            it->finished->load(std::memory_order_acquire);
       if (!finished) {
         ++it;
         continue;
@@ -10241,8 +10060,8 @@ MainMenuScene::selectedChartRandomInfoForPath(
 bms_parser::Chart *MainMenuScene::loadedSelectedChartForPath(
     const std::filesystem::path &path) const {
   std::lock_guard<std::mutex> lock(selectedChartMutex);
-  if (!selectedChartMediaReady.load() || !selectedChartReusableForStart.load() ||
-      selectedChart == nullptr ||
+  if (!selectedChartMediaReady.load() ||
+      !selectedChartReusableForStart.load() || selectedChart == nullptr ||
       fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
     return nullptr;
   }
@@ -10324,12 +10143,13 @@ void MainMenuScene::startReplayFileShare() {
   ReplayFileActionService actions(context.replayRepository, fileStore);
   const auto inspected = actions.prepareShare(*record);
   if (inspected.availability != ReplayAvailability::Available ||
-      !inspected.sourcePath.has_value() || inspected.suggestedFilename.empty()) {
+      !inspected.sourcePath.has_value() ||
+      inspected.suggestedFilename.empty()) {
     if (replayModalTitleText != nullptr) {
-      replayModalTitleText->setText(
-          inspected.availability == ReplayAvailability::Missing
-              ? "Replay missing — result kept"
-              : "Replay unavailable — result kept");
+      replayModalTitleText->setText(inspected.availability ==
+                                            ReplayAvailability::Missing
+                                        ? "Replay missing — result kept"
+                                        : "Replay unavailable — result kept");
     }
     reloadReplayRecordModels(true);
     return;
@@ -10400,9 +10220,9 @@ void MainMenuScene::requestReplayFileDeletion() {
   reloadReplayRecordModels(true);
   if (replayModalTitleText != nullptr) {
     if (removed.availability == ReplayAvailability::Missing) {
-      replayModalTitleText->setText(removed.changed
-                                        ? "Replay deleted — result kept"
-                                        : "Replay already missing — result kept");
+      replayModalTitleText->setText(
+          removed.changed ? "Replay deleted — result kept"
+                          : "Replay already missing — result kept");
     } else if (removed.availability == ReplayAvailability::Corrupt) {
       replayModalTitleText->setText("Replay corrupt — file not deleted");
     } else if (removed.availability == ReplayAvailability::Unsafe) {
@@ -10480,9 +10300,9 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 
   auto runExport = [this, record, replayId, options, complete,
                     autoPlayGaugeType, autoPlayGaugeAutoShift,
-                    autoPlayGaugeAutoShiftLowerBound,
-                    autoPlayAssistOption, autoPlayOption, autoPlayPlayback,
-                    autoPlayClubMode, autoPlayRuleset, autoPlayLongNoteMode,
+                    autoPlayGaugeAutoShiftLowerBound, autoPlayAssistOption,
+                    autoPlayOption, autoPlayPlayback, autoPlayClubMode,
+                    autoPlayRuleset, autoPlayLongNoteMode,
                     autoPlayRandomInfo](const std::stop_token *stopToken) {
     try {
       if (loadThread.joinable()) {
@@ -10529,29 +10349,31 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for autoplay export: %s",
                   fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
-          archive_file::appendDebugLogLine(
-              "Autoplay export parse exception: " +
-              fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
+          archive_file::appendDebugLogLine("Autoplay export parse exception: " +
+                                           fspath_to_utf8(record.meta.BmsPath) +
+                                           ": " + e.what());
         }
         if (chart == nullptr || parseCancelled) {
           complete({.success = false, .message = "No Chart"});
           return;
         }
         if (stopToken != nullptr && stopToken->stop_requested()) {
-          complete({.success = false,
-                    .message = "Replay export cancelled"});
+          complete({.success = false, .message = "Replay export cancelled"});
           return;
         }
 
+        const bool hasUndefinedLongNotes =
+            replay::captureAuthoredReplayChartFacts(*chart)
+                .hasUndefinedLongNotes;
         play_options::PlayOptionReplayInfo playInfo =
             play_options::applySelectedPlayOptions(*chart, autoPlayOption);
         applyEffectiveLongNoteModeToChart(*chart, autoPlayLongNoteMode);
         JudgedPlaybackData replay = replay_autoplay::BuildReplayData(
-            *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
-            autoPlayPlayback, playInfo.option, playInfo.seed, playInfo.option2,
-            playInfo.seed2, autoPlayAssistOption, autoPlayClubMode,
-            autoPlayGaugeAutoShiftLowerBound, autoPlayRuleset,
-            play_start_detail::hasUndefinedLongNotes(record.meta));
+            *chart, {.hasUndefinedLongNotes = hasUndefinedLongNotes},
+            autoPlayGaugeType, autoPlayGaugeAutoShift, autoPlayPlayback,
+            playInfo.option, playInfo.seed, playInfo.option2, playInfo.seed2,
+            autoPlayAssistOption, autoPlayClubMode,
+            autoPlayGaugeAutoShiftLowerBound, autoPlayRuleset);
         ReplayVideoExportOptions exportOptions = options;
         exportOptions.renderTouchPoints = false;
         exportOptions.renderReplayGhosts = false;
@@ -10563,10 +10385,8 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 
       auto replayRead =
           context.replayRepository.loadChartReplayPlayback(replayId);
-      if (replayRead.status !=
-              ChartReplayPlaybackReadOutcome::Status::Loaded ||
-          !replayRead.result.has_value() ||
-          !replayRead.playback.has_value()) {
+      if (replayRead.status != ChartReplayPlaybackReadOutcome::Status::Loaded ||
+          !replayRead.result.has_value() || !replayRead.playback.has_value()) {
         complete({.success = false,
                   .message = replayRead.diagnostic.empty()
                                  ? "Replay unavailable"
@@ -10586,13 +10406,14 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         return;
       }
 
-      complete(ReplayVideoExporter::Export(
-          context, chart.get(), *replayRead.playback, *replayRead.result,
-          options));
+      complete(ReplayVideoExporter::Export(context, chart.get(),
+                                           *replayRead.playback,
+                                           *replayRead.result, options));
     } catch (const std::exception &e) {
       complete({.success = false, .message = e.what()});
     } catch (...) {
-      complete({.success = false, .message = "Unexpected replay export failure"});
+      complete(
+          {.success = false, .message = "Unexpected replay export failure"});
     }
   };
 
@@ -10607,18 +10428,16 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 #endif
 }
 
-std::optional<std::string>
-MainMenuScene::activeReplayIrServerOrigin() const {
-  const auto settings = context.settings.irProviders.find(
-      std::string(ir::kTachiProviderId));
+std::optional<std::string> MainMenuScene::activeReplayIrServerOrigin() const {
+  const auto settings =
+      context.settings.irProviders.find(std::string(ir::kTachiProviderId));
   if (settings == context.settings.irProviders.end()) {
     return std::nullopt;
   }
   return ir::normalizeServerOrigin(settings->second.serverOrigin);
 }
 
-void MainMenuScene::publishReplayIrStatusFeedback(
-    ir::IrRecordState state) {
+void MainMenuScene::publishReplayIrStatusFeedback(ir::IrRecordState state) {
   const char *message = nullptr;
   switch (state) {
   case ir::IrRecordState::Queued:
@@ -10677,15 +10496,13 @@ void MainMenuScene::observeReplayIrServiceRevisions() {
     }
     const auto status = context.irSubmissionService->status(
         ir::kTachiProviderId, *summary.attemptId);
-    const auto observed =
-        replayIrObservedRevisions.find(*summary.attemptId);
+    const auto observed = replayIrObservedRevisions.find(*summary.attemptId);
     if (observed != replayIrObservedRevisions.end() &&
         observed->second == status.revision) {
       continue;
     }
     replayIrObservedRevisions[*summary.attemptId] = status.revision;
-    refreshReplayIrMarker(summary.id,
-                          recordActivityFor(status.activeRequest));
+    refreshReplayIrMarker(summary.id, recordActivityFor(status.activeRequest));
   }
 }
 
@@ -10695,17 +10512,17 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
       summary.irRecordState == ir::IrRecordState::Eligible ||
       summary.irRecordState == ir::IrRecordState::Failed;
   if (replayIrUploadInProgress || replayResultRecallInProgress ||
-      replayExportInProgress.load() || record.courseStart ||
-      summary.autoPlay || summary.courseReplay || !actionableState) {
+      replayExportInProgress.load() || record.courseStart || summary.autoPlay ||
+      summary.courseReplay || !actionableState) {
     return;
   }
 
-  const auto providerSettings = context.settings.irProviders.find(
-      std::string(ir::kTachiProviderId));
+  const auto providerSettings =
+      context.settings.irProviders.find(std::string(ir::kTachiProviderId));
   if (providerSettings == context.settings.irProviders.end() ||
       !providerSettings->second.enabled) {
-    finishReplayIrUpload(
-        summary.id, "Enable Bokutachi in Settings > IR before uploading.");
+    finishReplayIrUpload(summary.id,
+                         "Enable Bokutachi in Settings > IR before uploading.");
     return;
   }
   const auto driver = context.irDrivers.find(ir::kTachiProviderId);
@@ -10744,8 +10561,7 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
           (void)record;
           if (!summary.attemptId.has_value()) {
             finishReplayIrUpload(
-                summary.id,
-                "This saved result has no IR snapshot identity.");
+                summary.id, "This saved result has no IR snapshot identity.");
             return true;
           }
           std::optional<ir::IrSubmission> submission;
@@ -10765,32 +10581,32 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
 
           const ir::IrSavedResultUploadDependencies dependencies{
               .loadOutbox =
-                  [this](std::string_view provider,
-                         std::string_view attempt) {
+                  [this](std::string_view provider, std::string_view attempt) {
                     return context.replayRepository.LoadIrOutbox(provider,
                                                                  attempt);
                   },
-              .buildDraft = [this](const ir::IrSubmission &submission) {
-                return context.irDrivers.buildDraft(ir::kTachiProviderId,
-                                                    submission);
-              },
-              .enqueue = [this](const ir::IrOutboxDraft &draft) {
-                return context.irSubmissionService->enqueueManual(draft);
-              },
-              .retry = [this](std::int64_t rowId) {
-                return context.irSubmissionService->retry(rowId);
-              },
+              .buildDraft =
+                  [this](const ir::IrSubmission &submission) {
+                    return context.irDrivers.buildDraft(ir::kTachiProviderId,
+                                                        submission);
+                  },
+              .enqueue =
+                  [this](const ir::IrOutboxDraft &draft) {
+                    return context.irSubmissionService->enqueueManual(draft);
+                  },
+              .retry =
+                  [this](std::int64_t rowId) {
+                    return context.irSubmissionService->retry(rowId);
+                  },
           };
           const auto action = ir::executeIrSavedResultUpload(
               ir::kTachiProviderId, *summary.attemptId,
               submission.has_value() ? &*submission : nullptr, dependencies);
           finishReplayIrUpload(summary.id, action.message);
         } catch (const std::exception &) {
-          finishReplayIrUpload(summary.id,
-                               "IR upload could not be prepared.");
+          finishReplayIrUpload(summary.id, "IR upload could not be prepared.");
         } catch (...) {
-          finishReplayIrUpload(summary.id,
-                               "IR upload could not be prepared.");
+          finishReplayIrUpload(summary.id, "IR upload could not be prepared.");
         }
         return true;
       },
@@ -10828,13 +10644,12 @@ void MainMenuScene::finishReplayIrUpload(int replayId, std::string message) {
       1400, true);
 }
 
-void MainMenuScene::refreshReplayIrMarker(
-    int replayId, ir::IrRecordActivity activity) {
-  auto summary = std::find_if(
-      replaySummaries.begin(), replaySummaries.end(),
-      [replayId](const ReplaySummary &candidate) {
-        return candidate.id == replayId;
-      });
+void MainMenuScene::refreshReplayIrMarker(int replayId,
+                                          ir::IrRecordActivity activity) {
+  auto summary = std::find_if(replaySummaries.begin(), replaySummaries.end(),
+                              [replayId](const ReplaySummary &candidate) {
+                                return candidate.id == replayId;
+                              });
   if (summary == replaySummaries.end() || replayModalChart.courseStart) {
     return;
   }
@@ -10843,11 +10658,10 @@ void MainMenuScene::refreshReplayIrMarker(
       activeReplayIrServerOrigin().value_or(std::string{});
   auto latestSummaries = context.replayRepository.ListReplays(
       replayModalChart.meta, 0, ir::kTachiProviderId, irServerOrigin);
-  auto latest = std::find_if(
-      latestSummaries.begin(), latestSummaries.end(),
-      [replayId](const ReplaySummary &candidate) {
-        return candidate.id == replayId;
-      });
+  auto latest = std::find_if(latestSummaries.begin(), latestSummaries.end(),
+                             [replayId](const ReplaySummary &candidate) {
+                               return candidate.id == replayId;
+                             });
   if (latest == latestSummaries.end()) {
     return;
   }
@@ -10900,17 +10714,16 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
 
         auto stored = context.replayRepository.loadChartResult(replayId);
         std::atomic_bool cancelled = false;
-        auto recalled =
-            stored.status == ResultReadOutcome::Status::Loaded &&
-                    stored.record.has_value()
-                ? result_recall::BuildChartResult(
-                      std::move(stored.record->result), cancelled)
-                : result_recall::ChartBuildOutcome{
-                      .diagnostic = std::move(stored.diagnostic)};
+        auto recalled = stored.status == ResultReadOutcome::Status::Loaded &&
+                                stored.record.has_value()
+                            ? result_recall::BuildChartResult(
+                                  std::move(stored.record->result), cancelled)
+                            : result_recall::ChartBuildOutcome{
+                                  .diagnostic = std::move(stored.diagnostic)};
         if (!recalled.value.has_value()) {
-          finishReplayResultRecallFailure(
-              recalled.diagnostic.empty() ? "saved replay was not found"
-                                          : recalled.diagnostic);
+          finishReplayResultRecallFailure(recalled.diagnostic.empty()
+                                              ? "saved replay was not found"
+                                              : recalled.diagnostic);
           return true;
         }
 
@@ -10932,24 +10745,26 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
             persistence.irSnapshot =
                 std::make_shared<const ir::IrSubmissionSnapshot>(
                     std::move(*snapshot.snapshot));
-            persistence.irSubmission =
-                std::make_shared<const ir::IrSubmission>(
-                    persistence.irSnapshot->submission);
+            persistence.irSubmission = std::make_shared<const ir::IrSubmission>(
+                persistence.irSnapshot->submission);
           }
-          persistence.outcome = {
-              .state = result_persistence::SaveState::Saved,
-              .receipt = result_persistence::StageReceipt{
-                  .attemptId = *persisted->attemptId,
-                  .resultId = persisted->resultId,
-                  .scorePending = false}};
+          persistence.outcome = {.state = result_persistence::SaveState::Saved,
+                                 .receipt = result_persistence::StageReceipt{
+                                     .attemptId = *persisted->attemptId,
+                                     .resultId = persisted->resultId,
+                                     .scorePending = false}};
         }
         auto chart = std::move(result.chart);
         const bms_parser::ChartMeta meta = chart->Meta;
+        JudgedPlaybackData retrySource = analysis::retrySourceFromProvenance(
+            meta, result.result.score.provenance);
+        retrySource.setup.hasUndefinedLongNotes =
+            result.replayFacts.hasUndefinedLongNotes;
         replayResultRecallInProgress = false;
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
                 context, meta, result.state, result.result.score.provenance,
-                nullptr, std::move(persistence), nullptr,
+                nullptr, std::move(persistence), &retrySource,
                 ResultPracticeOptions{}, false, ResultCourseOptions{},
                 profileSelections.pacemakerTarget, std::move(chart), false),
             true);
@@ -10982,28 +10797,31 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
             .selectedStableKey = std::move(selectedStableKey),
         };
         RemoteResultRecallCallbacks callbacks{
-            .selectionStillMatches = [this](const auto &candidate) {
-              return remoteResultRecallSelectionMatches(
-                  selectedResultRecordSummary, candidate);
-            },
-            .loadExact = [this](const IrRemoteRecordId &candidate) {
-              return context.replayRepository.LoadIrRemoteScore(
-                  candidate.providerId, candidate.serverOrigin,
-                  candidate.remoteScoreId);
-            },
-            .transition = [this](ResultRemoteOptions remote,
-                                 bool retainCurrentScene) {
-              auto next =
-                  std::make_unique<ResultScene>(context, std::move(remote));
-              replayResultRecallInProgress = false;
-              context.jukebox.stop();
-              context.sceneManager->changeScene(std::move(next),
-                                                retainCurrentScene);
-              return true;
-            },
-            .failAndReload = [this](std::string diagnostic) {
-              finishRemoteResultRecallFailure(std::move(diagnostic));
-            },
+            .selectionStillMatches =
+                [this](const auto &candidate) {
+                  return remoteResultRecallSelectionMatches(
+                      selectedResultRecordSummary, candidate);
+                },
+            .loadExact =
+                [this](const IrRemoteRecordId &candidate) {
+                  return context.replayRepository.LoadIrRemoteScore(
+                      candidate.providerId, candidate.serverOrigin,
+                      candidate.remoteScoreId);
+                },
+            .transition =
+                [this](ResultRemoteOptions remote, bool retainCurrentScene) {
+                  auto next =
+                      std::make_unique<ResultScene>(context, std::move(remote));
+                  replayResultRecallInProgress = false;
+                  context.jukebox.stop();
+                  context.sceneManager->changeScene(std::move(next),
+                                                    retainCurrentScene);
+                  return true;
+                },
+            .failAndReload =
+                [this](std::string diagnostic) {
+                  finishRemoteResultRecallFailure(std::move(diagnostic));
+                },
         };
         (void)executeRemoteResultRecall(request, callbacks);
         return true;
@@ -11014,18 +10832,17 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
 void MainMenuScene::startCourseReplayResultRecall(int replayId) {
   auto stored = context.replayRepository.loadCourseResult(replayId);
   std::atomic_bool cancelled = false;
-  auto recalled =
-      stored.status == CourseResultReadOutcome::Status::Loaded &&
-              stored.record.has_value()
-          ? result_recall::BuildCourseResult(
-                std::move(stored.record->result), cancelled)
-          : result_recall::CourseBuildOutcome{
-                .diagnostic = std::move(stored.diagnostic)};
+  auto recalled = stored.status == CourseResultReadOutcome::Status::Loaded &&
+                          stored.record.has_value()
+                      ? result_recall::BuildCourseResult(
+                            std::move(stored.record->result), cancelled)
+                      : result_recall::CourseBuildOutcome{
+                            .diagnostic = std::move(stored.diagnostic)};
   if (!recalled.value.has_value() || recalled.value->session == nullptr ||
       recalled.value->session->completedResults.empty()) {
-    finishReplayResultRecallFailure(
-        recalled.diagnostic.empty() ? "saved course replay was not found"
-                                    : recalled.diagnostic);
+    finishReplayResultRecallFailure(recalled.diagnostic.empty()
+                                        ? "saved course replay was not found"
+                                        : recalled.diagnostic);
     return;
   }
 
@@ -11050,9 +10867,9 @@ void MainMenuScene::startCourseReplayResultRecall(int replayId) {
 
 void MainMenuScene::finishReplayResultRecallFailure(std::string diagnostic) {
   const std::string safeDiagnostic = ir::sanitizeDiagnostic(diagnostic);
-  SDL_Log("Saved result recall failed: %s",
-          safeDiagnostic.empty() ? "result unavailable"
-                                 : safeDiagnostic.c_str());
+  SDL_Log("Saved result recall failed: %s", safeDiagnostic.empty()
+                                                ? "result unavailable"
+                                                : safeDiagnostic.c_str());
   if (replayModalResultButtonText != nullptr) {
     replayModalResultButtonText->setText("Result Unavailable");
   }

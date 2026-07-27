@@ -48,9 +48,9 @@ result_persistence::ChartScoreWrite validScore(char hash = 'a') {
   return score;
 }
 
-ScoreProvenance provenanceFor(
-    const result_persistence::ChartScoreWrite &score,
-    replay::DoublePlayOption doublePlayOption, GaugeType gaugeType) {
+ScoreProvenance provenanceFor(const result_persistence::ChartScoreWrite &score,
+                              replay::DoublePlayOption doublePlayOption,
+                              GaugeType gaugeType) {
   ScoreProvenanceBuildInput input;
   input.chartMeta.MD5 = score.chartMd5;
   input.chartMeta.SHA256 = score.chartSha256;
@@ -193,8 +193,7 @@ void testDoublePlaySetupFingerprintContract() {
   std::vector<ScoreProvenance> stageProvenance;
   for (auto &stage : normalCourse.stages) {
     stage.score.provenance = provenanceFor(
-        stage.score, replay::DoublePlayOption::Normal,
-        stage.adoptedGaugeType);
+        stage.score, replay::DoublePlayOption::Normal, stage.adoptedGaugeType);
     stageProvenance.push_back(stage.score.provenance);
   }
   normalCourse.provenance = mergeCourseProvenance(stageProvenance);
@@ -217,8 +216,8 @@ void testDoublePlaySetupFingerprintContract() {
   inconsistentCourse.resultFingerprint =
       result_persistence::resultFingerprint(inconsistentCourse);
   std::string diagnostic;
-  expect(!result_persistence::validatePersistedCourseResult(
-             inconsistentCourse, diagnostic),
+  expect(!result_persistence::validatePersistedCourseResult(inconsistentCourse,
+                                                            diagnostic),
          "course aggregate provenance must equal its ordered stage proofs");
 
   auto schemaFourNormal = normal;
@@ -242,12 +241,13 @@ void testDoublePlaySetupFingerprintContract() {
   const ScoreProvenance mergedSchemaFour =
       mergeCourseProvenance(schemaFourStages);
   std::string serializationError;
-  expect(mergedSchemaFour.schemaVersion ==
-             ScoreProvenance::kPolicyProofSchemaVersion &&
-             serializeValidatedScoreProvenance(mergedSchemaFour,
-                                                serializationError)
-                 .has_value(),
-         "merging schema-four stage proofs remains serializable as schema four");
+  expect(
+      mergedSchemaFour.schemaVersion ==
+              ScoreProvenance::kPolicyProofSchemaVersion &&
+          serializeValidatedScoreProvenance(mergedSchemaFour,
+                                            serializationError)
+              .has_value(),
+      "merging schema-four stage proofs remains serializable as schema four");
 
   auto legacyEligibilityAggregate = normalCourse;
   legacyEligibilityAggregate.provenance.eligibility =
@@ -268,8 +268,8 @@ void testDoublePlaySetupFingerprintContract() {
   mixedSchemaCourse.resultFingerprint =
       result_persistence::resultFingerprint(mixedSchemaCourse);
   diagnostic.clear();
-  expect(!result_persistence::validatePersistedCourseResult(
-             mixedSchemaCourse, diagnostic),
+  expect(!result_persistence::validatePersistedCourseResult(mixedSchemaCourse,
+                                                            diagnostic),
          "schema-five aggregate rejects mixed-version ordered stage proofs");
 
   auto allSchemaFourCourse = normalCourse;
@@ -394,6 +394,19 @@ void testCourseResult() {
   expect(result_persistence::validatePersistedCourseResult(result, diagnostic),
          "partial course maximum includes every entry while stage maxima "
          "remain per-stage");
+
+  result.resultId = 42;
+  const auto secondStage =
+      result_persistence::chartResultForCourseStage(result, 1);
+  expect(secondStage.has_value() && secondStage->resultId == 42 &&
+             secondStage->attemptId == result.attemptId &&
+             secondStage->score == result.stages[1].score &&
+             secondStage->keyMode == result.stages[1].keyMode &&
+             secondStage->playedAtUnixMillis == result.playedAtUnixMillis,
+         "course replay analysis projects one complete stage result from the "
+         "saved course context");
+  expect(!result_persistence::chartResultForCourseStage(result, 2),
+         "course replay analysis rejects a stage beyond completed results");
   expectCourseFingerprintChange(
       [](auto &value) { value.constraintJson += " "; }, "constraints");
   expectCourseFingerprintChange(

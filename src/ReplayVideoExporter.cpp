@@ -9,10 +9,9 @@
 #include "ReplayDurationArithmetic.h"
 #include "ReplayVideoProjection.h"
 #include "analysis/JudgedPlaybackResultState.h"
+#include "analysis/JudgedPlaybackAnalysis.h"
 #include "analysis/JudgedPlaybackContext.h"
 #include "repositories/ChartStorageIdentity.h"
-#include "replay/LegacyReplayPlaybackAdapter.h"
-#include "replay/ReplayPlaybackMaterializer.h"
 #include "ResultPresentationUtils.h"
 #include "Utils.h"
 #include "audio/ChartAudioRenderer.h"
@@ -94,22 +93,20 @@ constexpr int kDefaultExportFps = 120;
 constexpr int kH264HighProfile = 100;
 constexpr long long kResultSceneTailMicros = 10000000;
 
-PracticeAnalyticsView *addReplayResultAnalytics(
-    View &resultRoot, const bms_parser::Chart &chart,
-    const JudgedPlaybackData &replay) {
+PracticeAnalyticsView *
+addReplayResultAnalytics(View &resultRoot, const bms_parser::Chart &chart,
+                         const JudgedPlaybackData &replay) {
   const std::span<const JudgedPlaybackData> attempts(&replay, 1);
   auto *host = new View();
   host->setName("timingAnalytics");
   host->setWidthPercent(100.0f);
-  host->setHeight(
-      practice_analytics_presentation::kPreferredAnalyticsHeight);
-  host->setMinHeight(
-      practice_analytics_presentation::kMinimumAnalyticsHeight);
+  host->setHeight(practice_analytics_presentation::kPreferredAnalyticsHeight);
+  host->setMinHeight(practice_analytics_presentation::kMinimumAnalyticsHeight);
   host->setFlexShrink(1.0f);
   host->setFlexDirection(FlexDirection::Column);
   host->setAlignItems(YGAlignStretch);
-  auto *analytics = new PracticeAnalyticsView(
-      practice::ResultModel(chart, attempts, 0));
+  auto *analytics =
+      new PracticeAnalyticsView(practice::ResultModel(chart, attempts, 0));
   host->addView(analytics);
   resultRoot.addView(host);
   return analytics;
@@ -126,8 +123,8 @@ ensureReplayExportDirectoryError(const std::filesystem::path &path,
     return std::nullopt;
   }
 
-  return std::string(failureMessage) + " (" +
-         fspath_to_utf8(path) + "): " + error.message();
+  return std::string(failureMessage) + " (" + fspath_to_utf8(path) +
+         "): " + error.message();
 }
 
 void removeReplayExportOutputFile(const std::filesystem::path &outputPath) {
@@ -188,6 +185,7 @@ resolveReplayVideoExportOptions(const ReplayVideoExportOptions &options) {
   resolved.renderTouchPoints = options.renderTouchPoints;
   resolved.renderReplayGhosts = options.renderReplayGhosts;
   resolved.pacemakerTarget = options.pacemakerTarget;
+  resolved.replayResultContext = options.replayResultContext;
   resolved.progressCallback = options.progressCallback;
   return resolved;
 }
@@ -274,9 +272,8 @@ size_t replayVideoFrameBufferMemoryBudgetBytes() {
   if (physicalMemoryBytes == 0) {
     return static_cast<size_t>(kDefaultBudgetBytes);
   }
-  return static_cast<size_t>(
-      std::clamp<uint64_t>(physicalMemoryBytes / uint64_t{32},
-                           kMinBudgetBytes, kMaxBudgetBytes));
+  return static_cast<size_t>(std::clamp<uint64_t>(
+      physicalMemoryBytes / uint64_t{32}, kMinBudgetBytes, kMaxBudgetBytes));
 }
 
 size_t replayVideoFrameBufferSlotBytes(int width, int height) {
@@ -320,8 +317,8 @@ long long courseStageGameplayDurationMicrosForReplay(
     bool includeResultScreen, const preparation::Plan &preparationPlan,
     long long audioOffsetMicros) {
   const long long transitionDurationMicros =
-      preparationPlan.realTimeAtGameplayTime(
-          gameplayEndMicrosForReplay(chart), audioOffsetMicros) +
+      preparationPlan.realTimeAtGameplayTime(gameplayEndMicrosForReplay(chart),
+                                             audioOffsetMicros) +
       chart_playback_duration::kGameplayResultTransitionDelayMicros;
   if (includeResultScreen) {
     return transitionDurationMicros;
@@ -440,9 +437,7 @@ public:
 
   void applyExport() { rendering::updateUIScale(exportWidth, exportHeight); }
 
-  void restorePrimary() {
-    restoreReplayVideoRenderGeometry(primary);
-  }
+  void restorePrimary() { restoreReplayVideoRenderGeometry(primary); }
 
 private:
   ReplayVideoRenderGeometryState primary;
@@ -675,11 +670,11 @@ collectBpmChangeTimelines(const bms_parser::Chart &chart) {
       timelines.push_back(timeline);
     }
   }
-  std::sort(timelines.begin(), timelines.end(),
-            [](const bms_parser::TimeLine *lhs,
-               const bms_parser::TimeLine *rhs) {
-              return lhs->Timing < rhs->Timing;
-            });
+  std::sort(
+      timelines.begin(), timelines.end(),
+      [](const bms_parser::TimeLine *lhs, const bms_parser::TimeLine *rhs) {
+        return lhs->Timing < rhs->Timing;
+      });
   return timelines;
 }
 
@@ -690,12 +685,10 @@ struct ReplayAudioTrackResult {
   long long durationMicros = 0;
 };
 
-ReplayAudioTrackResult
-writeReplayAudioTrack(bms_parser::Chart &chart, const JudgedPlaybackData &replay,
-                      const preparation::Plan &preparationPlan,
-                      long long audioOffsetMicros,
-                      const std::filesystem::path &path,
-                      ReplayVideoExportLog *log) {
+ReplayAudioTrackResult writeReplayAudioTrack(
+    bms_parser::Chart &chart, const JudgedPlaybackData &replay,
+    const preparation::Plan &preparationPlan, long long audioOffsetMicros,
+    const std::filesystem::path &path, ReplayVideoExportLog *log) {
   std::atomic_bool isCancelled = false;
   const chart_audio::RenderOptions options{
       .keySoundMode = chart_audio::KeySoundMode::ReplayTiming,
@@ -708,11 +701,12 @@ writeReplayAudioTrack(bms_parser::Chart &chart, const JudgedPlaybackData &replay
                                ? &preparationPlan.metronome
                                : nullptr,
       .isCancelled = &isCancelled,
-      .log = [log](const std::string &message) {
-        if (log != nullptr) {
-          log->write("Replay export " + message);
-        }
-      },
+      .log =
+          [log](const std::string &message) {
+            if (log != nullptr) {
+              log->write("Replay export " + message);
+            }
+          },
   };
   const auto result = chart_audio::RenderChartAudioToWav(chart, path, options);
   return {.success = result.success,
@@ -787,8 +781,8 @@ bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
   }
 
   constexpr sf_count_t kChunkFrames = 4096;
-  std::vector<short> buffer(
-      static_cast<size_t>(kChunkFrames) * kExportChannels);
+  std::vector<short> buffer(static_cast<size_t>(kChunkFrames) *
+                            kExportChannels);
   sf_count_t copiedFrames = 0;
   while (copiedFrames < maxFrames) {
     const sf_count_t requestedFrames =
@@ -841,7 +835,8 @@ bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
     return false;
   }
   if (writtenFrames < targetFrames &&
-      !writeSilentAudioFrames(outputHandle.get(), targetFrames - writtenFrames)) {
+      !writeSilentAudioFrames(outputHandle.get(),
+                              targetFrames - writtenFrames)) {
     errorMessage = std::string("Failed to pad aligned replay audio: ") +
                    sf_strerror(outputHandle.get());
     return false;
@@ -890,8 +885,9 @@ ReplayAudioTrackResult writeCourseReplayAudioTrack(
       if (!writeSilentAudioFrames(outputHandle.get(), silenceFrames)) {
         return {.success = false,
                 .outputPath = path,
-                .message = std::string("Failed to write course replay silence: ") +
-                           sf_strerror(outputHandle.get())};
+                .message =
+                    std::string("Failed to write course replay silence: ") +
+                    sf_strerror(outputHandle.get())};
       }
       writtenFrames += silenceFrames;
     }
@@ -1030,18 +1026,17 @@ void markReplayMissedNote(bms_parser::Note *note, long long judgedTimeMicros) {
 }
 
 bool applyReplayEventForVideo(
-    BMSRenderer &renderer,
-    const bms_parser::Chart &chart,
+    BMSRenderer &renderer, const bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
-    const ReplayEvent &event, long long visualTimeMicros, GaugeAutoShiftMode gaugeAutoShift,
+    const ReplayEvent &event, long long visualTimeMicros,
+    GaugeAutoShiftMode gaugeAutoShift,
     GaugeProfile gaugeProfile = GaugeProfile::Standard) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
   auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
       return false;
     }
-    renderer.onJudge(recordedJudge, event.combo, event.score,
-                     visualTimeMicros,
+    renderer.onJudge(recordedJudge, event.combo, event.score, visualTimeMicros,
                      event.action != ReplayEventAction::Miss);
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
                             gaugeProfile);
@@ -1096,8 +1091,7 @@ bool applyReplayEventForVideo(
     return appliedHud;
   }
   case ReplayEventAction::Miss:
-    markReplayMissedNote(findReplayNote(lookup, event),
-                         event.judgeTimeMicros);
+    markReplayMissedNote(findReplayNote(lookup, event), event.judgeTimeMicros);
     return applyHud();
   case ReplayEventAction::Mine:
     if (auto *note = findReplayNote(lookup, event); note != nullptr) {
@@ -1190,11 +1184,11 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
     const float prevValue = clampedValue(resultState.gaugeHistory[i - 1]);
     const float value = clampedValue(resultState.gaugeHistory[i]);
     const float x0 =
-        graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
-                     graphW;
+        graphX +
+        (static_cast<float>(i - 1) / static_cast<float>(count - 1)) * graphW;
     const float x1 =
-        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
-                     graphW;
+        graphX +
+        (static_cast<float>(i) / static_cast<float>(count - 1)) * graphW;
     batch.addLine(x0, valueY(prevValue), x1, valueY(value), 3.0f,
                   resultGaugeLineColor(value).toABGR());
   }
@@ -1203,8 +1197,8 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   for (size_t i = 0; i < count; i += markerStep) {
     const float value = clampedValue(resultState.gaugeHistory[i]);
     const float pointX =
-        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
-                     graphW;
+        graphX +
+        (static_cast<float>(i) / static_cast<float>(count - 1)) * graphW;
     batch.addCircle(pointX, valueY(value), 2.5f,
                     resultGaugeLineColor(value).toABGR());
   }
@@ -1242,14 +1236,11 @@ struct CourseReplayVideoStage {
   long long resultDurationMicros = 0;
   long long audioDurationMicros = 0;
 
-  CourseReplayVideoStage(std::unique_ptr<bms_parser::Chart> chart,
-                         JudgedPlaybackData replay,
-                         preparation::Plan preparationPlan,
-                         GaugeStateSnapshot initialGaugeState,
-                         RhythmState resultState,
-                         long long gameplayDurationMicros,
-                         long long resultDurationMicros,
-                         long long audioDurationMicros)
+  CourseReplayVideoStage(
+      std::unique_ptr<bms_parser::Chart> chart, JudgedPlaybackData replay,
+      preparation::Plan preparationPlan, GaugeStateSnapshot initialGaugeState,
+      RhythmState resultState, long long gameplayDurationMicros,
+      long long resultDurationMicros, long long audioDurationMicros)
       : chart(std::move(chart)), replay(std::move(replay)),
         preparationPlan(std::move(preparationPlan)),
         initialGaugeState(std::move(initialGaugeState)),
@@ -1260,14 +1251,14 @@ struct CourseReplayVideoStage {
 };
 
 long long courseResultDurationMicrosForReplayVideo(
-    const std::vector<CourseReplayVideoStage> &stages, bool includeResultScreen) {
+    const std::vector<CourseReplayVideoStage> &stages,
+    bool includeResultScreen) {
   long long finalAudioTailMicros = 0;
   if (!stages.empty()) {
     const CourseReplayVideoStage &finalStage = stages.back();
-    finalAudioTailMicros =
-        std::max(0LL, finalStage.audioDurationMicros -
-                          finalStage.gameplayDurationMicros -
-                          finalStage.resultDurationMicros);
+    finalAudioTailMicros = std::max(0LL, finalStage.audioDurationMicros -
+                                             finalStage.gameplayDurationMicros -
+                                             finalStage.resultDurationMicros);
   }
   return includeResultScreen
              ? std::max(kResultSceneTailMicros, finalAudioTailMicros)
@@ -1473,7 +1464,8 @@ bool encodeFrame(AVCodecContext *encoderContext, AVFormatContext *formatContext,
       if (packet->pts != AV_NOPTS_VALUE && packet->dts == AV_NOPTS_VALUE) {
         packet->dts = packet->pts;
       }
-      av_packet_rescale_ts(packet, encoderContext->time_base, stream->time_base);
+      av_packet_rescale_ts(packet, encoderContext->time_base,
+                           stream->time_base);
       packet->stream_index = stream->index;
       const auto writeStart = std::chrono::steady_clock::now();
       ret = av_interleaved_write_frame(formatContext, packet);
@@ -1659,15 +1651,13 @@ std::string vImageReplayError(vImage_Error error) {
 
 bool initBgraToNv12Converter(vImage_ARGBToYpCbCr &converter,
                              std::string &errorMessage) {
-  const vImage_YpCbCrPixelRange pixelRange{
-      16, 128, 235, 240, 255, 0, 255, 1};
+  const vImage_YpCbCrPixelRange pixelRange{16, 128, 235, 240, 255, 0, 255, 1};
   const vImage_Error error = vImageConvert_ARGBToYpCbCr_GenerateConversion(
       kvImage_ARGBToYpCbCrMatrix_ITU_R_601_4, &pixelRange, &converter,
       kvImageARGB8888, kvImage420Yp8_CbCr8, kvImageNoFlags);
   if (error != kvImageNoError) {
-    errorMessage =
-        "Failed to initialize vImage BGRA to NV12 converter: " +
-        vImageReplayError(error);
+    errorMessage = "Failed to initialize vImage BGRA to NV12 converter: " +
+                   vImageReplayError(error);
     return false;
   }
   return true;
@@ -1713,8 +1703,9 @@ public:
     const bool videoCodecIsH264 = videoCodec->id == AV_CODEC_ID_H264;
     const auto videoPixelFormat = chooseVideoPixelFormat(videoCodec);
     if (!videoPixelFormat.has_value()) {
-      return failOpen("Replay video encoder does not support a BGRA-convertible "
-                      "format");
+      return failOpen(
+          "Replay video encoder does not support a BGRA-convertible "
+          "format");
     }
 
     videoStream = avformat_new_stream(formatContext, nullptr);
@@ -1768,10 +1759,11 @@ public:
       const std::string threadCount =
           std::to_string(videoContext->thread_count);
       av_dict_set(&videoOptions, "threads", threadCount.c_str(), 0);
-      replayExportLog(log,
-                      "Replay video export libx264 speed hints: preset=ultrafast, "
-                      "crf=22, profile=high, threads=%s",
-                      threadCount.c_str());
+      replayExportLog(
+          log,
+          "Replay video export libx264 speed hints: preset=ultrafast, "
+          "crf=22, profile=high, threads=%s",
+          threadCount.c_str());
     } else if (videoCodecName.find("videotoolbox") != std::string::npos) {
       av_dict_set(&videoOptions, "realtime", "1", 0);
       av_dict_set(&videoOptions, "prio_speed", "1", 0);
@@ -1907,15 +1899,13 @@ public:
                       ffmpegError(ret));
     }
     replayExportLog(
-        log,
-        "Replay video export FFmpeg buffers: refcounted AVFrames via "
-        "av_frame_get_buffer");
+        log, "Replay video export FFmpeg buffers: refcounted AVFrames via "
+             "av_frame_get_buffer");
 
     pixelConvertThreadCount = replayVideoPixelConvertThreadCount();
 #if __APPLE__
-    useVImageBgraToNv12 =
-        videoContext->pix_fmt == AV_PIX_FMT_NV12 && width % 2 == 0 &&
-        height % 2 == 0;
+    useVImageBgraToNv12 = videoContext->pix_fmt == AV_PIX_FMT_NV12 &&
+                          width % 2 == 0 && height % 2 == 0;
     if (useVImageBgraToNv12 &&
         !initBgraToNv12Converter(vImageBgraToNv12Converter, errorMessage)) {
       return failOpen(errorMessage);
@@ -1954,9 +1944,9 @@ public:
           "ITU-R 601 video range");
 #endif
     } else {
-      replayExportLog(log,
-                      "Replay video export pixel converter: swscale, threads: %d",
-                      pixelConvertThreadCount);
+      replayExportLog(
+          log, "Replay video export pixel converter: swscale, threads: %d",
+          pixelConvertThreadCount);
     }
 
     videoPacket = av_packet_alloc();
@@ -2017,9 +2007,9 @@ public:
       bufferRefsBefore[i] = videoFrame->buf[i];
       dataPointersBefore[i] = videoFrame->data[i];
       if (videoFrame->buf[i] != nullptr) {
-        maxFrameBufferRefCount = std::max(
-            maxFrameBufferRefCount,
-            av_buffer_get_ref_count(videoFrame->buf[i]));
+        maxFrameBufferRefCount =
+            std::max(maxFrameBufferRefCount,
+                     av_buffer_get_ref_count(videoFrame->buf[i]));
       }
     }
     maxVideoFrameBufferRefCount =
@@ -2074,12 +2064,11 @@ public:
       };
       const uint8_t bgraPermuteMap[4] = {3, 2, 1, 0};
       const vImage_Error error = vImageConvert_ARGB8888To420Yp8_CbCr8(
-          &source, &destinationY, &destinationCbCr,
-          &vImageBgraToNv12Converter, bgraPermuteMap, kvImageNoFlags);
+          &source, &destinationY, &destinationCbCr, &vImageBgraToNv12Converter,
+          bgraPermuteMap, kvImageNoFlags);
       if (error != kvImageNoError) {
-        errorMessage =
-            "Failed to convert replay video frame with vImage: " +
-            vImageReplayError(error);
+        errorMessage = "Failed to convert replay video frame with vImage: " +
+                       vImageReplayError(error);
         return false;
       }
 #endif
@@ -2499,12 +2488,8 @@ public:
   long long videoPackets() const { return writer.videoPackets(); }
   int videoStalls() const { return writer.videoStalls(); }
   int videoThreadCount() const { return writer.videoThreadCount(); }
-  int maxVideoFrameRefCount() const {
-    return writer.maxVideoFrameRefCount();
-  }
-  long long videoFrameCowCopies() const {
-    return writer.videoFrameCowCopies();
-  }
+  int maxVideoFrameRefCount() const { return writer.maxVideoFrameRefCount(); }
+  long long videoFrameCowCopies() const { return writer.videoFrameCowCopies(); }
 
 private:
   struct PendingFrame {
@@ -2584,18 +2569,17 @@ private:
   std::string failureMessage;
 };
 
-ReplayVideoExportResult
-renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
-                       const JudgedPlaybackData &replay, const AppSettings &settings,
-                       const preparation::Plan &preparationPlan,
-                       const ReplayVideoExportOptions &options,
-                       const std::filesystem::path &wavPath,
-                       const std::filesystem::path &outputPath,
-                       long long requestedGameplayDurationMicros,
-                       long long requestedAudioDurationMicros,
-                       const replay_video_detail::GaugeFailureProjection
-                           &failureProjection,
-                       ReplayVideoExportLog *log) {
+ReplayVideoExportResult renderReplayVideoToMp4(
+    ApplicationContext &context, bms_parser::Chart &chart,
+    const JudgedPlaybackData &replay, const AppSettings &settings,
+    const preparation::Plan &preparationPlan,
+    const ReplayVideoExportOptions &options,
+    const std::filesystem::path &wavPath,
+    const std::filesystem::path &outputPath,
+    long long requestedGameplayDurationMicros,
+    long long requestedAudioDurationMicros,
+    const replay_video_detail::GaugeFailureProjection &failureProjection,
+    ReplayVideoExportLog *log) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
@@ -2656,8 +2640,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   std::unique_ptr<View> resultRoot;
   View *resultGraphPlaceholder = nullptr;
   PracticeAnalyticsView *resultAnalytics = nullptr;
-  PracticeAnalyticsMode resultAnalyticsMode =
-      PracticeAnalyticsMode::Histogram;
+  PracticeAnalyticsMode resultAnalyticsMode = PracticeAnalyticsMode::Histogram;
   auto cleanupBgfx = [&]() {
     resultGraphPlaceholder = nullptr;
     resultAnalytics = nullptr;
@@ -2790,32 +2773,33 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const GaugeProfile gaugeProfile = replay.setup.gaugeProfile;
   const RhythmState initialGaugeState =
       analysis::BuildInitialGaugeState(chart, replay, gaugeProfile);
-  renderer.setGaugeStatus(initialGaugeState.gaugeType,
-                          initialGaugeState.gaugeAutoShift,
-                          initialGaugeState.currentGauge,
-                          initialGaugeState.gaugeProfile);
+  renderer.setGaugeStatus(
+      initialGaugeState.gaugeType, initialGaugeState.gaugeAutoShift,
+      initialGaugeState.currentGauge, initialGaugeState.gaugeProfile);
   renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
   renderer.setStartLaneIndicators(preparationPlan.laneIndicator.lanes);
   renderer.setAutoPlayMarkVisible(replay.autoPlay);
   renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
   renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
+  const ReplayComparisonQuery replayComparison =
+      replayComparisonQueryFor(resolvedOptions.replayResultContext.has_value()
+                                   ? &*resolvedOptions.replayResultContext
+                                   : nullptr);
   const std::optional<ResultPreviousBestData> previousBest =
       result_presentation::previousBestForReplayChart(
-          context.scoreRepository, chart.Meta, replay);
+          context.scoreRepository, chart.Meta, replayComparison);
   const std::string selectedPacemakerTarget =
-      resolvedOptions.pacemakerTarget.empty()
-          ? settings.selectedPacemakerTarget
-          : resolvedOptions.pacemakerTarget;
+      resolvedOptions.pacemakerTarget.empty() ? settings.selectedPacemakerTarget
+                                              : resolvedOptions.pacemakerTarget;
   const pacemaker::Target activePacemakerTarget =
       result_presentation::pacemakerTargetForReplay(
           context.replayRepository, chart, replay, selectedPacemakerTarget,
-          previousBest);
+          previousBest, replayComparison);
   RhythmState pacemakerState(&chart, false);
-  pacemakerState.configureGauge(replay.setup.initialGaugeType,
-                                replay.setup.gaugeAutoShift,
-                                replay.setup.gaugeProfile,
-                                replay.setup.gaugeAutoShiftLowerBound);
+  pacemakerState.configureGauge(
+      replay.setup.initialGaugeType, replay.setup.gaugeAutoShift,
+      replay.setup.gaugeProfile, replay.setup.gaugeAutoShiftLowerBound);
   renderer.setPacemakerTarget(activePacemakerTarget);
   renderer.setPacemakerStatus(
       pacemaker::snapshotForState(activePacemakerTarget, pacemakerState));
@@ -2829,17 +2813,15 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const long long visualTailMicros =
       stoppedOnGaugeFailure
           ? 0LL
-          : std::max(0LL,
-                     scheduledVisualEndMicros - gameplayDurationMicros);
+          : std::max(0LL, scheduledVisualEndMicros - gameplayDurationMicros);
   const long long audioTailMicros =
-      stoppedOnGaugeFailure
-          ? 0LL
-          : std::max(0LL,
-                     requestedAudioDurationMicros - gameplayDurationMicros);
+      stoppedOnGaugeFailure ? 0LL
+                            : std::max(0LL, requestedAudioDurationMicros -
+                                                gameplayDurationMicros);
   const long long resultTailMicros =
       resolvedOptions.includeResultScreen
-          ? std::max({kResultSceneTailMicros, visualTailMicros,
-                      audioTailMicros})
+          ? std::max(
+                {kResultSceneTailMicros, visualTailMicros, audioTailMicros})
           : std::max(visualTailMicros, audioTailMicros);
   const long long totalDurationMicros =
       gameplayDurationMicros + resultTailMicros;
@@ -2875,7 +2857,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultSkinData.pacemaker =
         result_presentation::pacemakerDataForReplayResult(
             context.replayRepository, chart, replayResultState, replay,
-            selectedPacemakerTarget, previousBest);
+            selectedPacemakerTarget, previousBest, replayComparison);
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
     resultAnalytics =
@@ -2890,10 +2872,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     std::filesystem::path alignedAudioName = wavPath.stem();
     alignedAudioName += PATH("_video.wav");
     alignedAudioPath = wavPath.parent_path() / alignedAudioName;
-    if (!writeReplayAudioFileAtDuration(wavPath, alignedAudioPath,
-                                        totalDurationMicros,
-                                        requestedAudioDurationMicros,
-                                        errorMessage)) {
+    if (!writeReplayAudioFileAtDuration(
+            wavPath, alignedAudioPath, totalDurationMicros,
+            requestedAudioDurationMicros, errorMessage)) {
       bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -3086,15 +3067,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
            replay.events[replayCursor].songTimeMicros <=
                frameTiming.gameplayTimeMicros) {
       const auto &event = replay.events[replayCursor];
-      const bool appliedHud =
-          applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                   frameTiming.visualTimeMicros,
-                                   replay.setup.gaugeAutoShift,
-                                   gaugeProfile);
+      const bool appliedHud = applyReplayEventForVideo(
+          renderer, chart, replayNotes, event, frameTiming.visualTimeMicros,
+          replay.setup.gaugeAutoShift, gaugeProfile);
       if (appliedHud && event.judgement != None) {
         applyReplayEventToPacemakerState(pacemakerState, event);
-        renderer.setPacemakerStatus(pacemaker::snapshotForState(
-            activePacemakerTarget, pacemakerState));
+        renderer.setPacemakerStatus(
+            pacemaker::snapshotForState(activePacemakerTarget, pacemakerState));
         replayJudgeCounts[event.judgement]++;
         if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
           replayComboBreak++;
@@ -3140,9 +3119,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     const size_t frameIndex = gameplayFrameCount + resultFrameIndex;
     const long long videoTimeMicros =
         gameplayDurationMicros +
-        static_cast<long long>((static_cast<long double>(resultFrameIndex) *
-                                1000000.0L) /
-                               fps);
+        static_cast<long long>(
+            (static_cast<long double>(resultFrameIndex) * 1000000.0L) / fps);
     const long long rawSongTimeMicros =
         preparationPlan.chartTimeAtRealTime(videoTimeMicros);
     const long long bgaTimeMicros =
@@ -3224,8 +3202,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   "%.2fs mux write, %.2fs stalls, %.2fs flush, packets=%lld, "
                   "stall retries=%d",
                   static_cast<double>(encoder.videoSendMicros()) / 1000000.0,
-                  static_cast<double>(encoder.videoReceiveMicros()) /
-                      1000000.0,
+                  static_cast<double>(encoder.videoReceiveMicros()) / 1000000.0,
                   static_cast<double>(encoder.videoWriteMicros()) / 1000000.0,
                   static_cast<double>(encoder.videoStallMicros()) / 1000000.0,
                   static_cast<double>(encoder.videoFlushMicros()) / 1000000.0,
@@ -3245,7 +3222,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     const std::filesystem::path &wavPath,
     const std::filesystem::path &outputPath, ReplayVideoExportLog *log) {
   if (stages.empty()) {
-    return {.success = false, .outputPath = outputPath,
+    return {.success = false,
+            .outputPath = outputPath,
             .message = "No course replay stages"};
   }
 
@@ -3266,9 +3244,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     if (micros <= 0) {
       return 0;
     }
-    return static_cast<size_t>(
-        std::ceil(static_cast<long double>(micros) *
-                  static_cast<long double>(fps) / 1000000.0L));
+    return static_cast<size_t>(std::ceil(static_cast<long double>(micros) *
+                                         static_cast<long double>(fps) /
+                                         1000000.0L));
   };
 
   size_t frameCount = 0;
@@ -3278,10 +3256,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         std::max(0LL, stage.gameplayDurationMicros),
         std::max(0LL, stage.resultDurationMicros));
     const auto accumulatedDurationMicros =
-        stageDurationMicros
-            ? replay_duration::addNonnegativeMicros(totalDurationMicros,
-                                                    *stageDurationMicros)
-            : std::nullopt;
+        stageDurationMicros ? replay_duration::addNonnegativeMicros(
+                                  totalDurationMicros, *stageDurationMicros)
+                            : std::nullopt;
     if (!accumulatedDurationMicros) {
       return {.success = false,
               .outputPath = outputPath,
@@ -3424,9 +3401,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   RhythmState courseState = courseResultStateForReplayVideo(replay, stages);
   rendering::SimpleBatchRenderer courseResultGraphBatch;
   if (courseResultFrameCount > 0 && resolvedOptions.includeResultScreen) {
-    courseResultRoot =
-        std::make_unique<View>(0, 0, rendering::window_width,
-                               rendering::window_height);
+    courseResultRoot = std::make_unique<View>(0, 0, rendering::window_width,
+                                              rendering::window_height);
     ResultSkinData data = {&courseState, &courseMeta, &context};
     data.outGraphPlaceholder = &courseResultGraphPlaceholder;
     data.showControls = false;
@@ -3669,10 +3645,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     size_t laneCoverEventCursor = 0;
     auto applyReplayLaneCoverEvents = [&](long long songTimeMicros) {
       while (laneCoverEventCursor < stageReplay.laneCoverEvents.size() &&
-             stageReplay.laneCoverEvents[laneCoverEventCursor]
-                     .songTimeMicros <= songTimeMicros) {
-        const auto &event =
-            stageReplay.laneCoverEvents[laneCoverEventCursor];
+             stageReplay.laneCoverEvents[laneCoverEventCursor].songTimeMicros <=
+                 songTimeMicros) {
+        const auto &event = stageReplay.laneCoverEvents[laneCoverEventCursor];
         renderer.applyLaneCoverState(event.noteStartPositionPercent,
                                      event.resetVisibleTimeReference);
         ++laneCoverEventCursor;
@@ -3695,8 +3670,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                             stage.initialGaugeState.gaugeProfile);
     renderer.setPlayOptionStatus(replayExportPlayOptionLabel(stageReplay));
     renderer.setReplayData(&stageReplay);
-    renderer.setStartLaneIndicators(
-        stage.preparationPlan.laneIndicator.lanes);
+    renderer.setStartLaneIndicators(stage.preparationPlan.laneIndicator.lanes);
     renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
     renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
 
@@ -3707,8 +3681,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         static_cast<long long>(settings.visualOffsetMs) * 1000LL;
     const size_t gameplayFrameCount =
         framesForMicros(stage.gameplayDurationMicros);
-    const size_t resultFrameCount =
-        framesForMicros(stage.resultDurationMicros);
+    const size_t resultFrameCount = framesForMicros(stage.resultDurationMicros);
     size_t replayCursor = 0;
     std::map<Judgement, int> replayJudgeCounts;
     for (int i = 0; i < JudgementCount; i++) {
@@ -3718,9 +3691,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
 
     rendering::SimpleBatchRenderer stageResultGraphBatch;
     if (resultFrameCount > 0) {
-      stageResultRoot =
-          std::make_unique<View>(0, 0, rendering::window_width,
-                                 rendering::window_height);
+      stageResultRoot = std::make_unique<View>(0, 0, rendering::window_width,
+                                               rendering::window_height);
       ResultSkinData data = {&stage.resultState, &chart.Meta, &context};
       data.outGraphPlaceholder = &stageResultGraphPlaceholder;
       data.showControls = false;
@@ -3728,13 +3700,16 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           play_options::formatPlayModeDisplayLabel(stageReplay);
       data.playModeLabel = display.mode;
       data.laneOrderLabel = display.laneOrder;
-      data.difficultyLabel =
-          result_presentation::difficultyLabelForChart(
-              context.chartRepository, chart.Meta);
+      data.difficultyLabel = result_presentation::difficultyLabelForChart(
+          context.chartRepository, chart.Meta);
       data.currentClearLabelOverride = "NO PLAY";
       data.currentClearRankOverride = kNoClearTypeRank;
+      const ReplayComparisonQuery replayComparison = replayComparisonQueryFor(
+          resolvedOptions.replayResultContext.has_value()
+              ? &*resolvedOptions.replayResultContext
+              : nullptr);
       data.previousBest = result_presentation::previousBestForReplayChart(
-          context.scoreRepository, chart.Meta, stageReplay);
+          context.scoreRepository, chart.Meta, replayComparison);
       DefaultSkin resultSkin;
       resultSkin.buildLayout("Result", stageResultRoot.get(), &data);
       stageResultAnalytics =
@@ -3754,11 +3729,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
              stageReplay.events[replayCursor].songTimeMicros <=
                  frameTiming.gameplayTimeMicros) {
         const auto &event = stageReplay.events[replayCursor];
-        const bool appliedHud =
-            applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                     frameTiming.visualTimeMicros,
-                                     replay.gaugeAutoShift,
-                                     replay.gaugeProfile);
+        const bool appliedHud = applyReplayEventForVideo(
+            renderer, chart, replayNotes, event, frameTiming.visualTimeMicros,
+            replay.gaugeAutoShift, replay.gaugeProfile);
         if (appliedHud && event.judgement != None) {
           replayJudgeCounts[event.judgement]++;
           if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
@@ -3776,25 +3749,18 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       renderer.setStartLaneIndicatorsVisible(
           stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros));
 
-      if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
-                               [&]() {
-                                 bgfx::touch(rendering::clear_view);
-                                 bgfx::touch(rendering::bga_view);
-                                 bgfx::touch(rendering::bga_layer_view);
-                                 context.jukebox.renderVisualsAt(
-                                     frameTiming.bgaTimeMicros);
-                                 bgaBlurPass->execute();
-                                 rendering::renderFullscreenTextureTint(
-                                     bgaBlurPass->outputTexture(),
-                                     rendering::final_view,
-                                     static_cast<float>(
-                                         settings.bgaBrightnessPercent) /
-                                         100.0f);
-                                 renderer.render(
-                                     renderContext,
-                                     frameTiming.visualTimeMicros,
-                                     frameTiming.gameplayTimeMicros);
-                               })) {
+      if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros, [&]() {
+            bgfx::touch(rendering::clear_view);
+            bgfx::touch(rendering::bga_view);
+            bgfx::touch(rendering::bga_layer_view);
+            context.jukebox.renderVisualsAt(frameTiming.bgaTimeMicros);
+            bgaBlurPass->execute();
+            rendering::renderFullscreenTextureTint(
+                bgaBlurPass->outputTexture(), rendering::final_view,
+                static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
+            renderer.render(renderContext, frameTiming.visualTimeMicros,
+                            frameTiming.gameplayTimeMicros);
+          })) {
         bgfxCleanup.runNow();
         return {.success = false,
                 .outputPath = outputPath,
@@ -3813,8 +3779,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       const long long stageChartTimeMicros =
           stage.preparationPlan.chartTimeAtRealTime(stageVideoMicros);
       const long long stageBgaTimeMicros =
-          gameplay_timing::gameplayTimeFromRawSongTime(
-              stageChartTimeMicros, audioOffsetMicros);
+          gameplay_timing::gameplayTimeFromRawSongTime(stageChartTimeMicros,
+                                                       audioOffsetMicros);
       const auto analyticsMode =
           practice_analytics_presentation::analyticsModeForSlideshow(
               resultOffsetMicros, stage.resultDurationMicros);
@@ -3823,29 +3789,23 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         stageResultAnalytics->setMode(analyticsMode);
         stageResultAnalyticsMode = analyticsMode;
       }
-      if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
-                               [&]() {
-                                 bgfx::touch(rendering::clear_view);
-                                 bgfx::touch(rendering::bga_view);
-                                 bgfx::touch(rendering::bga_layer_view);
-                                 context.jukebox.renderVisualsAt(
-                                     stageBgaTimeMicros);
-                                 bgaBlurPass->execute();
-                                 rendering::renderFullscreenTextureTint(
-                                     bgaBlurPass->outputTexture(),
-                                     rendering::final_view,
-                                     static_cast<float>(
-                                         settings.bgaBrightnessPercent) /
-                                         100.0f);
-                                 bgfx::touch(rendering::ui_view);
-                                 if (stageResultRoot != nullptr) {
-                                   stageResultRoot->render(renderContext);
-                                   drawReplayResultGaugeGraph(
-                                       stageResultGraphBatch,
-                                       stage.resultState,
-                                       stageResultGraphPlaceholder);
-                                 }
-                               })) {
+      if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros, [&]() {
+            bgfx::touch(rendering::clear_view);
+            bgfx::touch(rendering::bga_view);
+            bgfx::touch(rendering::bga_layer_view);
+            context.jukebox.renderVisualsAt(stageBgaTimeMicros);
+            bgaBlurPass->execute();
+            rendering::renderFullscreenTextureTint(
+                bgaBlurPass->outputTexture(), rendering::final_view,
+                static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
+            bgfx::touch(rendering::ui_view);
+            if (stageResultRoot != nullptr) {
+              stageResultRoot->render(renderContext);
+              drawReplayResultGaugeGraph(stageResultGraphBatch,
+                                         stage.resultState,
+                                         stageResultGraphPlaceholder);
+            }
+          })) {
         bgfxCleanup.runNow();
         return {.success = false,
                 .outputPath = outputPath,
@@ -3875,34 +3835,27 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     const long long stageChartTimeMicros =
         stages.back().preparationPlan.chartTimeAtRealTime(stageVideoMicros);
     const long long stageBgaTimeMicros =
-        gameplay_timing::gameplayTimeFromRawSongTime(
-            stageChartTimeMicros, audioOffsetMicros);
-    if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
-                             [&]() {
-                               bgfx::touch(rendering::clear_view);
-                               bgfx::touch(rendering::bga_view);
-                               bgfx::touch(rendering::bga_layer_view);
-                               context.jukebox.renderVisualsAt(
-                                   stageBgaTimeMicros);
-                               bgaBlurPass->execute();
-                               rendering::renderFullscreenTextureTint(
-                                   bgaBlurPass->outputTexture(),
-                                   rendering::final_view,
-                                   static_cast<float>(
-                                       settings.bgaBrightnessPercent) /
-                                       100.0f);
-                               bgfx::touch(rendering::ui_view);
-                               if (courseResultRoot != nullptr) {
-                                 courseResultRoot->render(renderContext);
-                                 drawReplayResultGaugeGraph(
-                                     courseResultGraphBatch, courseState,
-                                     courseResultGraphPlaceholder);
-                               }
-                             })) {
+        gameplay_timing::gameplayTimeFromRawSongTime(stageChartTimeMicros,
+                                                     audioOffsetMicros);
+    if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros, [&]() {
+          bgfx::touch(rendering::clear_view);
+          bgfx::touch(rendering::bga_view);
+          bgfx::touch(rendering::bga_layer_view);
+          context.jukebox.renderVisualsAt(stageBgaTimeMicros);
+          bgaBlurPass->execute();
+          rendering::renderFullscreenTextureTint(
+              bgaBlurPass->outputTexture(), rendering::final_view,
+              static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
+          bgfx::touch(rendering::ui_view);
+          if (courseResultRoot != nullptr) {
+            courseResultRoot->render(renderContext);
+            drawReplayResultGaugeGraph(courseResultGraphBatch, courseState,
+                                       courseResultGraphPlaceholder);
+          }
+        })) {
       bgfxCleanup.runNow();
-      return {.success = false,
-              .outputPath = outputPath,
-              .message = errorMessage};
+      return {
+          .success = false, .outputPath = outputPath, .message = errorMessage};
     }
     ++globalFrameIndex;
     globalVideoTimeMicros = static_cast<long long>(
@@ -3912,9 +3865,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   while (!pendingReadbacks.empty()) {
     if (!drainOldestReadback()) {
       bgfxCleanup.runNow();
-      return {.success = false,
-              .outputPath = outputPath,
-              .message = errorMessage};
+      return {
+          .success = false, .outputPath = outputPath, .message = errorMessage};
     }
   }
 
@@ -3951,8 +3903,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                   "%.2fs mux write, %.2fs stalls, %.2fs flush, packets=%lld, "
                   "stall retries=%d",
                   static_cast<double>(encoder.videoSendMicros()) / 1000000.0,
-                  static_cast<double>(encoder.videoReceiveMicros()) /
-                      1000000.0,
+                  static_cast<double>(encoder.videoReceiveMicros()) / 1000000.0,
                   static_cast<double>(encoder.videoWriteMicros()) / 1000000.0,
                   static_cast<double>(encoder.videoStallMicros()) / 1000000.0,
                   static_cast<double>(encoder.videoFlushMicros()) / 1000000.0,
@@ -3985,10 +3936,9 @@ saveReplayVideoToPlatformLibrary(const ReplayVideoExportResult &muxResult) {
 }
 } // namespace
 
-ReplayVideoExportResult
-ReplayVideoExporter::Export(ApplicationContext &context,
-                            bms_parser::Chart *chart, const JudgedPlaybackData &replay,
-                            const ReplayVideoExportOptions &options) {
+ReplayVideoExportResult ReplayVideoExporter::Export(
+    ApplicationContext &context, bms_parser::Chart *chart,
+    const JudgedPlaybackData &replay, const ReplayVideoExportOptions &options) {
   if (chart == nullptr) {
     return {.success = false, .message = "No chart selected"};
   }
@@ -4049,7 +3999,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
 
   if (const auto error = ensureReplayExportDirectoryError(
           tempDir, "Failed to create replay export work directory")) {
-    replayExportLog(exportLog, "Replay export failed to create work directory: %s",
+    replayExportLog(exportLog,
+                    "Replay export failed to create work directory: %s",
                     error->c_str());
     return {.success = false, .message = *error};
   }
@@ -4094,8 +4045,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
       failureMicros, audioOffsetMicros);
   const long long normalGameplayDurationMicros =
-      preparationPlan.realTimeAtGameplayTime(
-          gameplayEndMicrosForReplay(*chart), audioOffsetMicros) +
+      preparationPlan.realTimeAtGameplayTime(gameplayEndMicrosForReplay(*chart),
+                                             audioOffsetMicros) +
       chart_playback_duration::kGameplayResultTransitionDelayMicros;
   const long long failureAudioMicros =
       rawFailureMicros.has_value()
@@ -4150,37 +4101,9 @@ ReplayVideoExportResult ReplayVideoExporter::Export(
   if (chart == nullptr) {
     return {.success = false, .message = "No chart selected"};
   }
-  if (playback.legacy.has_value()) {
-    auto adapted = replay::makeLegacyPlaybackAdapter(playback, result,
-                                                     chart->Meta);
-    if (!adapted.has_value()) {
-      return {.success = false, .message = "Invalid migrated replay"};
-    }
-    return Export(context, chart, *adapted, options);
-  }
-
-  auto playbackPointer =
-      std::make_shared<const replay::ReplayPlaybackData>(playback);
-  StartOptions startOptions;
-  applyReplayPlaybackToStartOptions(startOptions, playbackPointer);
-  const auto policy = buildGameplayRulesetPolicyAtPlayStart(
-      startOptions, chart->Meta, context.settings.notePriorityMode);
-  if (!policy.built()) {
-    return {.success = false,
-            .message = policy.diagnostic.empty()
-                           ? "Unsupported replay gameplay policy"
-                           : policy.diagnostic};
-  }
-  const auto materialized =
-      replay::materializeReplay(playback, *chart, *policy.policy);
-  if (!materialized.materialized()) {
-    return {.success = false,
-            .message = materialized.diagnostic.empty()
-                           ? "Unable to materialize replay"
-                           : materialized.diagnostic};
-  }
-  const auto adapted = replay::makeMaterializedPlaybackAdapter(
-      playback, *materialized.value, *policy.policy, result, chart->Meta);
+  const auto adapted = replay::makeJudgedPlaybackForAnalysis(
+      playback, result, *chart,
+      {.notePriorityMode = context.settings.notePriorityMode});
   if (!adapted.has_value()) {
     return {.success = false,
             .message = "Replay input does not match its saved result"};
@@ -4188,8 +4111,7 @@ ReplayVideoExportResult ReplayVideoExporter::Export(
   return Export(context, chart, *adapted, options);
 }
 
-ReplayVideoExportResult
-ReplayVideoExporter::ExportCourseReplay(
+ReplayVideoExportResult ReplayVideoExporter::ExportCourseReplay(
     ApplicationContext &context,
     const replay::CourseReplayPlaybackData &playback,
     const result_persistence::PersistedCourseResult &result,
@@ -4235,71 +4157,31 @@ ReplayVideoExporter::ExportCourseReplay(
   for (std::size_t index = 0; index < playback.stages.size(); ++index) {
     const auto &stagePlayback = playback.stages[index];
     const auto &stage = result.stages[index];
-    bms_parser::ChartMeta meta;
-    meta.BmsPath = stage.score.chartPath;
-    chart_storage_identity::ToAbsolutePath(meta.BmsPath);
-    meta.MD5 = stage.score.chartMd5;
-    meta.SHA256 = stage.score.chartSha256;
-    meta.Title = stage.score.chartTitle;
-    meta.Artist = stage.score.chartArtist;
-    meta.KeyMode = stage.keyMode;
-    meta.TotalNotes = stage.score.maxScore / 2;
-    meta.LnMode = stage.score.longNoteMode;
-
-    result_persistence::PersistedChartResult stageResult{
-        .resultId = result.resultId,
-        .score = stage.score,
-        .keyMode = stage.keyMode,
-        .adoptedGaugeType = stage.adoptedGaugeType,
-        .adoptedGaugeHistory = stage.adoptedGaugeHistory,
-        .judgementTiming = stage.judgementTiming,
-        .playedAtUnixMillis = result.playedAtUnixMillis,
-    };
-    std::optional<JudgedPlaybackData> adapted;
-    if (stagePlayback.legacy.has_value()) {
-      adapted = replay::makeLegacyPlaybackAdapter(stagePlayback, stageResult,
-                                                  std::move(meta));
-    } else {
-      std::atomic_bool parseCancelled = false;
-      auto chart = play_options::prepareReplayChart(
-          meta.BmsPath, stagePlayback, parseCancelled);
-      if (chart == nullptr || parseCancelled) {
-        return {.success = false, .message = "Course stage is unavailable"};
-      }
-      auto playbackPointer =
-          std::make_shared<const replay::ReplayPlaybackData>(stagePlayback);
-      StartOptions startOptions;
-      applyCourseReplayPlaybackToStartOptions(
-          startOptions, playbackPointer, courseConstraints);
-      const auto policy = buildGameplayRulesetPolicyAtPlayStart(
-          startOptions, chart->Meta, context.settings.notePriorityMode);
-      if (!policy.built()) {
-        return {.success = false,
-                .message = policy.diagnostic.empty()
-                               ? "Unsupported course replay gameplay policy"
-                               : policy.diagnostic};
-      }
-      const auto materialized =
-          replay::materializeReplay(stagePlayback, *chart, *policy.policy,
-                                    materializationSeed);
-      if (!materialized.materialized()) {
-        return {.success = false,
-                .message = materialized.diagnostic.empty()
-                               ? "Unable to materialize course replay"
-                               : materialized.diagnostic};
-      }
-      materializationSeed = {
-          .carriedGauge = materialized.value->gaugeState,
-          .carriedCombo = materialized.value->attempt.combo,
-          .carriedMaxCombo = materialized.value->attempt.maxCombo,
-      };
-      adapted = replay::makeMaterializedPlaybackAdapter(
-          stagePlayback, *materialized.value, *policy.policy, stageResult,
-          chart->Meta);
+    const auto stageResult =
+        result_persistence::chartResultForCourseStage(result, index);
+    if (!stageResult.has_value()) {
+      return {.success = false, .message = "Invalid course replay stage"};
     }
+    std::filesystem::path stagePath = stage.score.chartPath;
+    chart_storage_identity::ToAbsolutePath(stagePath);
+    std::atomic_bool parseCancelled = false;
+    auto chart = play_options::prepareReplayChart(stagePath, stagePlayback,
+                                                  parseCancelled);
+    if (chart == nullptr || parseCancelled) {
+      return {.success = false, .message = "Course stage is unavailable"};
+    }
+    auto adapted = replay::makeJudgedPlaybackForAnalysis(
+        stagePlayback, *stageResult, *chart,
+        {
+            .notePriorityMode = context.settings.notePriorityMode,
+            .courseConstraints = courseConstraints,
+            .materializationSeed = materializationSeed,
+        });
     if (!adapted.has_value()) {
       return {.success = false, .message = "Invalid course replay stage"};
     }
+    materializationSeed = replay::materializationSeedAfterJudgedPlayback(
+        materializationSeed, *chart, *adapted, result.gaugeProfile);
     adaptedCourse.stages.push_back(
         {.replay = std::move(*adapted),
          .restMicrosAfterStage = playback.restMicrosAfterStage[index]});
@@ -4308,10 +4190,9 @@ ReplayVideoExporter::ExportCourseReplay(
   return ExportCourseReplay(context, adaptedCourse, options);
 }
 
-ReplayVideoExportResult
-ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
-                                        const JudgedCoursePlaybackData &replay,
-                                        const ReplayVideoExportOptions &options) {
+ReplayVideoExportResult ReplayVideoExporter::ExportCourseReplay(
+    ApplicationContext &context, const JudgedCoursePlaybackData &replay,
+    const ReplayVideoExportOptions &options) {
   if (replay.stages.empty()) {
     return {.success = false, .message = "No course replay selected"};
   }
@@ -4390,9 +4271,9 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
 
     const auto stageWavPath =
         tempDir / ("stage_" + std::to_string(i + 1) + ".wav");
-    const auto audioResult = writeReplayAudioTrack(
-        *chart, stageReplay, stagePreparationPlan, audioOffsetMicros,
-        stageWavPath, exportLog);
+    const auto audioResult =
+        writeReplayAudioTrack(*chart, stageReplay, stagePreparationPlan,
+                              audioOffsetMicros, stageWavPath, exportLog);
     if (!audioResult.success) {
       removeReplayExportWorkDirectory(tempDir);
       return {.success = false,
@@ -4426,10 +4307,10 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
         (1000000LL + resolvedOptions.fps - 1) / resolvedOptions.fps;
     const long long gameplayDurationMicros =
         failureMicros.has_value()
-            ? std::min(normalGameplayDurationMicros,
-                       stagePreparationPlan.realTimeAtChartTime(
-                           *rawFailureMicros) +
-                           failureFrameMicros)
+            ? std::min(
+                  normalGameplayDurationMicros,
+                  stagePreparationPlan.realTimeAtChartTime(*rawFailureMicros) +
+                      failureFrameMicros)
             : normalGameplayDurationMicros;
     const auto stageDurationMicros = replay_duration::addNonnegativeMicros(
         gameplayDurationMicros, resultDurationMicros);
@@ -4441,19 +4322,16 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     }
     const long long audioContentDurationMicros =
         failureMicros.has_value()
-            ? std::min(audioResult.durationMicros,
-                       stagePreparationPlan.realTimeAtChartTime(
-                           *rawFailureMicros))
+            ? std::min(
+                  audioResult.durationMicros,
+                  stagePreparationPlan.realTimeAtChartTime(*rawFailureMicros))
             : *stageDurationMicros;
     JudgedPlaybackData exportStageReplay =
         std::move(failureProjection.resultReplay);
-    const RhythmState initialGaugeState =
-        analysis::BuildInitialGaugeState(
-            *chart, exportStageReplay, replay.gaugeProfile,
-            carriedGaugeState);
+    const RhythmState initialGaugeState = analysis::BuildInitialGaugeState(
+        *chart, exportStageReplay, replay.gaugeProfile, carriedGaugeState);
     RhythmState resultState = analysis::BuildResultState(
-        *chart, exportStageReplay, replay.gaugeProfile,
-        carriedGaugeState);
+        *chart, exportStageReplay, replay.gaugeProfile, carriedGaugeState);
     carriedGauge = resultState.gaugeSnapshot();
     audioSegments.push_back(CourseReplayAudioSegment{
         .wavPath = stageWavPath,
@@ -4462,10 +4340,8 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     });
     stages.emplace_back(
         std::move(chart), std::move(exportStageReplay),
-        std::move(stagePreparationPlan),
-        initialGaugeState.gaugeSnapshot(), std::move(resultState),
-        gameplayDurationMicros,
-        resultDurationMicros,
+        std::move(stagePreparationPlan), initialGaugeState.gaugeSnapshot(),
+        std::move(resultState), gameplayDurationMicros, resultDurationMicros,
         failureMicros.has_value() ? audioContentDurationMicros
                                   : audioResult.durationMicros);
   }

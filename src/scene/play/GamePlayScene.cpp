@@ -3,6 +3,7 @@
 //
 
 #include "GamePlayScene.h"
+#include "CourseReplayStageStartup.h"
 #include "GamePlayStartup.h"
 #include "GamePlayTiming.h"
 #include "PracticeNoteFinalizer.h"
@@ -248,9 +249,8 @@ JudgeResult judgeClassicLongNoteRelease(
   }
 
   const auto noteTiming = [](const bms_parser::Note *note) {
-    return note != nullptr && note->Timeline != nullptr
-               ? note->Timeline->Timing
-               : 0LL;
+    return note != nullptr && note->Timeline != nullptr ? note->Timeline->Timing
+                                                        : 0LL;
   };
   const JudgeResult headJudge = judge.judgeAt(
       gameplay::judgeRoleFor(tail->Head, chartMeta, longNoteModeOverride),
@@ -335,8 +335,8 @@ Judge presentationJudgeForPolicy(
     const auto window = outcome.policy->judge.window(
         gameplay::JudgeWindowContext::Normal, judgement);
     if (window.has_value()) {
-      result.timingWindows[judgement] =
-          {window->earlyMicros, window->lateMicros};
+      result.timingWindows[judgement] = {window->earlyMicros,
+                                         window->lateMicros};
     }
   }
   return result;
@@ -363,6 +363,7 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
   if (retryChart == nullptr || cancelled) {
     return false;
   }
+  const auto replayFacts = replay::captureAuthoredReplayChartFacts(*retryChart);
   if (sourceOptions.courseSession != nullptr) {
     applyCourseConstraintsToChart(*retryChart, sourceOptions.courseConstraints);
   }
@@ -376,6 +377,7 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
   retryOptions.playOptionSeed.reset();
   retryOptions.playOption2.reset();
   retryOptions.playOption2Seed.reset();
+  retryOptions.hasUndefinedLongNotes = replayFacts.hasUndefinedLongNotes;
   retryOptions.ownsChart = true;
 
   if (!play_options::applyReplayDoublePlayOption(
@@ -386,8 +388,7 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
   if (sourceOptions.playOption.has_value() &&
       !play_options::applyPlayOptionModifier(
           *retryChart, *sourceOptions.playOption, std::nullopt, 0,
-          retryOptions.playOption,
-          retryOptions.playOptionSeed, "retry")) {
+          retryOptions.playOption, retryOptions.playOptionSeed, "retry")) {
     return false;
   }
 
@@ -1446,8 +1447,7 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
         recordedReplay.events.push_back(event);
       }
     }
-    const auto workerInput =
-        session.worker->copyAcceptedReplayInputAfterStop();
+    const auto workerInput = session.worker->copyAcceptedReplayInputAfterStop();
     for (const auto &transition : workerInput) {
       captureReplayControlAtSongTime(transition.songTimeMicros,
                                      transition.control, transition.pressed,
@@ -1473,10 +1473,10 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
-  latePoorTiming = rulesetPolicyBuild.policy.has_value()
-                       ? rulesetPolicyBuild.policy->judge
-                             .automaticPoorLateMicros()
-                       : judge.timingWindows[Bad].second;
+  latePoorTiming =
+      rulesetPolicyBuild.policy.has_value()
+          ? rulesetPolicyBuild.policy->judge.automaticPoorLateMicros()
+          : judge.timingWindows[Bad].second;
   if (rulesetPolicyBuild.policy.has_value()) {
     capturedAttemptSetup = capturePlaybackSetupAtPlayStart(
         this->options, this->chart->Meta, *rulesetPolicyBuild.policy);
@@ -1501,10 +1501,10 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                                        this->chart->Meta.Rank)) {
   this->options.ownsChart = true;
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
-  latePoorTiming = rulesetPolicyBuild.policy.has_value()
-                       ? rulesetPolicyBuild.policy->judge
-                             .automaticPoorLateMicros()
-                       : judge.timingWindows[Bad].second;
+  latePoorTiming =
+      rulesetPolicyBuild.policy.has_value()
+          ? rulesetPolicyBuild.policy->judge.automaticPoorLateMicros()
+          : judge.timingWindows[Bad].second;
   if (rulesetPolicyBuild.policy.has_value()) {
     capturedAttemptSetup = capturePlaybackSetupAtPlayStart(
         this->options, this->chart->Meta, *rulesetPolicyBuild.policy);
@@ -1621,8 +1621,7 @@ void GamePlayScene::init() {
 
   ownedLaneInputController = std::make_unique<RhythmLaneInputController>(
       chart, renderer, lanePressed, rulesetPolicyBuild.policy->judge,
-      options.longNoteMode,
-      practiceNoteRange());
+      options.longNoteMode, practiceNoteRange());
   laneInputController = ownedLaneInputController.get();
   initializeRawReplayPlayback();
 
@@ -1907,12 +1906,11 @@ bool GamePlayScene::reset() {
   if (renderer != nullptr) {
     renderer->setCurrentBpm(currentGameplayBpm);
   }
-  ownedState = std::make_unique<RhythmState>(
-      chart, false, rulesetPolicyBuild.policy->gauge);
+  ownedState = std::make_unique<RhythmState>(chart, false,
+                                             rulesetPolicyBuild.policy->gauge);
   state = ownedState.get();
   state->configureGauge(options.gaugeType, options.gaugeAutoShift,
-                        options.gaugeProfile,
-                        options.gaugeAutoShiftLowerBound);
+                        options.gaugeProfile, options.gaugeAutoShiftLowerBound);
   if (options.startingGaugeState.has_value()) {
     state->restoreGaugeState(*options.startingGaugeState);
   } else if (options.startingGaugePercent.has_value()) {
@@ -2412,21 +2410,15 @@ void GamePlayScene::configurePacemakerTarget() {
       return;
     }
 
-    std::optional<std::string> beforeCreatedAt;
-    std::optional<std::string> excludeAttemptId;
-    if (options.replayResultContext.has_value()) {
-      if (!options.replayResultContext->createdAt.empty()) {
-        beforeCreatedAt = options.replayResultContext->createdAt;
-      }
-      excludeAttemptId = options.replayResultContext->attemptId;
-    }
+    const ReplayComparisonQuery replayComparison = replayComparisonQueryFor(
+        options.replayResultContext.has_value() ? &*options.replayResultContext
+                                                : nullptr);
 
     activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
         context.replayRepository, *chart, *analysis, selected,
         result_presentation::previousBestForReplayChart(
-            context.scoreRepository, chart->Meta, *analysis, beforeCreatedAt,
-            excludeAttemptId),
-        beforeCreatedAt, excludeAttemptId);
+            context.scoreRepository, chart->Meta, replayComparison),
+        replayComparison);
     renderer->setPacemakerTarget(activePacemakerTarget);
     return;
   }
@@ -2482,59 +2474,25 @@ bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
     return false;
   }
 
-  if (auto stagePlayback = session->currentCourseReplayStagePlayback()) {
-    const bms_parser::ChartMeta *stageMeta = session->currentMeta();
-    if (stageMeta == nullptr || stageMeta->BmsPath.empty()) {
-      return false;
-    }
-    session->applyReplayStagePlayOptions(*stagePlayback);
     std::atomic_bool parseCancelled = false;
-    auto replayChart = play_options::prepareReplayChart(
-        stageMeta->BmsPath, *stagePlayback, parseCancelled);
-    if (replayChart == nullptr || parseCancelled) {
+    auto outcome = course_replay_startup::prepareCurrentStage(
+        session, context.settings.notePriorityMode, parseCancelled);
+    if (!outcome.prepared()) {
+      SDL_Log("Course replay stage start failed: %s",
+              outcome.diagnostic.c_str());
       return false;
     }
+    auto prepared = std::move(*outcome.value);
     context.jukebox.stop();
-    context.jukebox.loadChart(*replayChart, true, parseCancelled);
+    context.jukebox.loadChart(*prepared.chart, true, parseCancelled);
     if (parseCancelled) {
       return false;
     }
-    StartOptions nextOptions =
-        makeCourseReplayStageStartOptions(session, stagePlayback);
     context.sceneManager->changeScene(
-        std::make_unique<GamePlayScene>(context, std::move(replayChart),
-                                        std::move(nextOptions)),
+        std::make_unique<GamePlayScene>(context, std::move(prepared.chart),
+                                        std::move(prepared.options)),
         false);
     return true;
-  }
-
-  auto stageReplay = session->currentCourseReplayStageReplay();
-  if (stageReplay == nullptr) {
-    return false;
-  }
-  session->applyReplayStagePlayOptions(*stageReplay);
-
-  std::atomic_bool parseCancelled = false;
-  auto replayChart = play_options::prepareReplayChart(
-      stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
-  if (replayChart == nullptr || parseCancelled) {
-    return false;
-  }
-
-  context.jukebox.stop();
-  context.jukebox.loadChart(*replayChart, true, parseCancelled);
-  if (parseCancelled) {
-    return false;
-  }
-
-  StartOptions nextOptions =
-      makeCourseReplayStageStartOptions(session, stageReplay);
-
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(replayChart),
-                                      std::move(nextOptions)),
-      false);
-  return true;
 }
 
 bool GamePlayScene::startCourseChartAtCurrentIndex() {
@@ -2578,30 +2536,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     return false;
   }
 
-  StartOptions nextOptions;
-  nextOptions.startPosition = 0;
-  nextOptions.autoKeySound = session->autoKeySound;
-  nextOptions.autoPlay = false;
-  nextOptions.gaugeType = session->gaugeType;
-  nextOptions.gaugeProfile = session->gaugeProfile;
-  nextOptions.gaugeAutoShift = session->gaugeAutoShift;
-  nextOptions.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
-  nextOptions.playOption = playInfo.option;
-  nextOptions.playOptionSeed = playInfo.seed;
-  nextOptions.playOption2 = playInfo.option2;
-  nextOptions.playOption2Seed = playInfo.seed2;
-  nextOptions.longNoteMode = session->longNoteMode;
-  nextOptions.hasUndefinedLongNotes =
-      play_start_detail::hasUndefinedLongNotes(
-          session->entries[session->currentIndex].meta);
-  nextOptions.assistOption = session->assistOption;
-  nextOptions.playback = course_rules::kRequiredPlaybackRate;
-  nextOptions.clubMode = options.clubMode;
-  nextOptions.courseSession = session;
-  nextOptions.courseConstraints = session->constraints;
-  nextOptions.ruleset = session->ruleset;
-  nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
-  nextOptions.ownsChart = true;
+  StartOptions nextOptions = makeCourseStageStartOptions(session);
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),
@@ -2632,9 +2567,9 @@ void GamePlayScene::beginReplayRecording() {
   recordedPlaybackReplay = {};
   lastRecordedTouchSamples.clear();
   capturedAttemptSetup.startingGaugePercent =
-      state != nullptr ? state->currentGauge
-                       : static_cast<float>(options.startingGaugePercent
-                                                .value_or(20));
+      state != nullptr
+          ? state->currentGauge
+          : static_cast<float>(options.startingGaugePercent.value_or(20));
   capturedAttemptSetup.startingGaugeState =
       state != nullptr
           ? std::optional<GaugeStateSnapshot>(state->gaugeSnapshot())
@@ -2673,8 +2608,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.laneCoverEvents.reserve(128);
 
   recordedPlaybackReplay.setup = capturedAttemptSetup;
-  replayInputCapture =
-      std::make_unique<replay::ReplayInputCaptureBuffer>();
+  replayInputCapture = std::make_unique<replay::ReplayInputCaptureBuffer>();
   recordedPlaybackReplay.touchSamples.reserve(1024);
   recordedPlaybackReplay.laneCoverEvents.reserve(128);
   appendReplayLaneCoverEvent(
@@ -2732,9 +2666,9 @@ void GamePlayScene::captureReplayControl(std::int64_t steadyTimestampMicros,
     rawReplayCaptureFailed = true;
     return;
   }
-  const auto rawSongTime = context.jukebox.audioRuntime()
-                               .songTimeMicrosAtSteadyMicros(
-                                   steadyTimestampMicros);
+  const auto rawSongTime =
+      context.jukebox.audioRuntime().songTimeMicrosAtSteadyMicros(
+          steadyTimestampMicros);
   if (!rawSongTime.has_value()) {
     replayInputCapture->fail(
         "Replay input clock could not map the steady timestamp");
@@ -2771,8 +2705,10 @@ void GamePlayScene::publishPracticeGhost() {
     return;
   }
 
-  const JudgedPlaybackData *completedReplay = practice::completedAttemptForGhost(
-      options.practiceSession.get(), recordedReplay, recordedAttemptCompleted);
+  const JudgedPlaybackData *completedReplay =
+      practice::completedAttemptForGhost(options.practiceSession.get(),
+                                         recordedReplay,
+                                         recordedAttemptCompleted);
   if (completedReplay == nullptr) {
     return;
   }
@@ -3016,13 +2952,13 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
         const std::int64_t playedAtUnixMillis = nowUnixMillis();
         std::string resultDiagnostic;
         result = result_persistence::capturePersistedChartResult(
-            resultPersistenceAttemptId, chart->Meta, *state,
-            attemptProvenance, scoreLongNoteModeForClearLamp(chart->Meta),
-            playedAtUnixMillis, resultDiagnostic);
+            resultPersistenceAttemptId, chart->Meta, *state, attemptProvenance,
+            scoreLongNoteModeForClearLamp(chart->Meta), playedAtUnixMillis,
+            resultDiagnostic);
         if (result.has_value()) {
           std::string snapshotDiagnostic;
-          irSnapshot = ir::captureIrSubmissionSnapshot(
-              *result, snapshotDiagnostic);
+          irSnapshot =
+              ir::captureIrSubmissionSnapshot(*result, snapshotDiagnostic);
           if (!irSnapshot.has_value() && constructionDiagnostic.empty()) {
             constructionDiagnostic = std::move(snapshotDiagnostic);
           }
@@ -3077,14 +3013,6 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       if (!automaticDrafts.empty() && context.irSubmissionService) {
         context.irSubmissionService->notifyOutboxChanged();
       }
-    }
-    const auto *receipt =
-        resultPersistenceOptions.attempt == nullptr
-            ? nullptr
-            : resultPersistenceOptions.outcome.validatedReceiptFor(
-                  *resultPersistenceOptions.attempt);
-    if (receipt != nullptr) {
-      recordedReplay.createdAt = receipt->createdAt;
     }
     SDL_Log("Result persistence state=%s diagnostic=%s",
             resultPersistenceStateName(resultPersistenceOptions.outcome.state),
@@ -3682,8 +3610,8 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     }
     return result.note;
   }
-  const auto result = laneInputController->pressLane(
-      mainLane, compensateLane, inputContext);
+  const auto result =
+      laneInputController->pressLane(mainLane, compensateLane, inputContext);
   updateLaneStateText();
   if (result.keySoundNote != nullptr &&
       result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
@@ -3891,9 +3819,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                   chargeLongNote
                       ? normalizeLongNoteReleaseJudge(
                             rulesetPolicyBuild.policy->judge.judgeAt(
-                                gameplay::judgeRoleFor(
-                                    longNote, chart->Meta,
-                                    options.longNoteMode),
+                                gameplay::judgeRoleFor(longNote, chart->Meta,
+                                                       options.longNoteMode),
                                 longNote->Timeline->Timing, judgedTime))
                       : judgeClassicLongNoteRelease(
                             rulesetPolicyBuild.policy->judge, chart->Meta,
@@ -3924,8 +3851,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           if (note == nullptr || note->IsDead) {
             continue;
           }
-          if (!legacyReplayPlayback &&
-              laneIsPressed(lanePressed, note->Lane)) {
+          if (!legacyReplayPlayback && laneIsPressed(lanePressed, note->Lane)) {
             detonateLandmine(note, time, judgedTime);
           } else {
             expireGimmickNote(note, judgedTime);
@@ -4003,8 +3929,7 @@ void GamePlayScene::processReplayLaneCoverEvents(long long gameplayTimeMicros) {
   if (options.replayPlayback != nullptr) {
     const auto &events = options.replayPlayback->laneCoverEvents;
     while (replayLaneCoverCursor < events.size() &&
-           events[replayLaneCoverCursor].songTimeMicros <=
-               gameplayTimeMicros) {
+           events[replayLaneCoverCursor].songTimeMicros <= gameplayTimeMicros) {
       const auto &event = events[replayLaneCoverCursor];
       if (practiceInputAllowed(event.songTimeMicros)) {
         renderer->applyLaneCoverState(event.noteStartPositionPercent,
@@ -4577,14 +4502,12 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
       options.replayData == nullptr) {
     context.jukebox.playKeySound(note->Wav);
   }
-  const JudgeResult judgeResult = precomputedJudge != nullptr
-                                      ? *precomputedJudge
-                                      : rulesetPolicyBuild.policy->judge.judgeAt(
-                                            gameplay::judgeRoleFor(
-                                                note, chart->Meta,
-                                                options.longNoteMode),
-                                            note->Timeline->Timing,
-                                            pressedTime);
+  const JudgeResult judgeResult =
+      precomputedJudge != nullptr
+          ? *precomputedJudge
+          : rulesetPolicyBuild.policy->judge.judgeAt(
+                gameplay::judgeRoleFor(note, chart->Meta, options.longNoteMode),
+                note->Timeline->Timing, pressedTime);
   if (judgeResult.judgement != None) {
     if (judgeResult.isNotePlayed()) {
       // TODO: play keybomb
@@ -4634,26 +4557,24 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
     return JudgeResult(None, 0);
   }
   LongNote->Release(ReleasedTime);
-  const auto judgeResult = precomputedJudge != nullptr
-                               ? *precomputedJudge
-                               : rulesetPolicyBuild.policy->judge.judgeAt(
-                                     gameplay::judgeRoleFor(
-                                         LongNote, chart->Meta,
-                                         options.longNoteMode),
-                                     LongNote->Timeline->Timing,
-                                     ReleasedTime);
+  const auto judgeResult =
+      precomputedJudge != nullptr
+          ? *precomputedJudge
+          : rulesetPolicyBuild.policy->judge.judgeAt(
+                gameplay::judgeRoleFor(LongNote, chart->Meta,
+                                       options.longNoteMode),
+                LongNote->Timeline->Timing, ReleasedTime);
   JudgeResult appliedJudge(None, 0);
   const bool chargeLongNote =
       effectiveLongNoteIsCharge(LongNote, chart, options.longNoteMode);
   if (precomputedJudge != nullptr) {
     appliedJudge = *precomputedJudge;
   } else {
-    appliedJudge =
-        chargeLongNote
-            ? normalizeLongNoteReleaseJudge(judgeResult)
-            : judgeClassicLongNoteRelease(
-                  rulesetPolicyBuild.policy->judge, chart->Meta,
-                  options.longNoteMode, LongNote, ReleasedTime);
+    appliedJudge = chargeLongNote
+                       ? normalizeLongNoteReleaseJudge(judgeResult)
+                       : judgeClassicLongNoteRelease(
+                             rulesetPolicyBuild.policy->judge, chart->Meta,
+                             options.longNoteMode, LongNote, ReleasedTime);
   }
   onJudge(appliedJudge, !options.autoPlay || isReplayPlayback());
   if (recordEvent) {

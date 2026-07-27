@@ -3,11 +3,13 @@
 #include "analysis/JudgedPlaybackData.h"
 #include "ResultPersistenceModel.h"
 #include "replay/ReplayPlaybackData.h"
+#include "scene/play/ReplayResultContext.h"
 #include "context.h"
 
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 
 struct ReplayVideoExportProgress {
@@ -28,6 +30,7 @@ struct ReplayVideoExportOptions {
   bool renderTouchPoints = true;
   bool renderReplayGhosts = true;
   std::string pacemakerTarget;
+  std::optional<ReplayResultContext> replayResultContext;
   ReplayVideoExportProgressCallback progressCallback;
 };
 
@@ -43,17 +46,18 @@ public:
   Export(ApplicationContext &context, bms_parser::Chart *chart,
          const JudgedPlaybackData &replay,
          const ReplayVideoExportOptions &options = {});
-  static ReplayVideoExportResult Export(
-      ApplicationContext &context, bms_parser::Chart *chart,
-      const replay::ReplayPlaybackData &playback,
-      const result_persistence::PersistedChartResult &result,
-      const ReplayVideoExportOptions &options = {});
   static ReplayVideoExportResult
-  ExportCourseReplay(ApplicationContext &context, const JudgedCoursePlaybackData &replay,
+  Export(ApplicationContext &context, bms_parser::Chart *chart,
+         const replay::ReplayPlaybackData &playback,
+         const result_persistence::PersistedChartResult &result,
+         const ReplayVideoExportOptions &options = {});
+  static ReplayVideoExportResult
+  ExportCourseReplay(ApplicationContext &context,
+                     const JudgedCoursePlaybackData &replay,
                      const ReplayVideoExportOptions &options = {});
-  static ReplayVideoExportResult ExportCourseReplay(
-      ApplicationContext &context,
-      const replay::CourseReplayPlaybackData &playback,
-      const result_persistence::PersistedCourseResult &result,
-      const ReplayVideoExportOptions &options = {});
+  static ReplayVideoExportResult
+  ExportCourseReplay(ApplicationContext &context,
+                     const replay::CourseReplayPlaybackData &playback,
+                     const result_persistence::PersistedCourseResult &result,
+                     const ReplayVideoExportOptions &options = {});
 };

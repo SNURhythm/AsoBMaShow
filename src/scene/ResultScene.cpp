@@ -21,6 +21,7 @@
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
+#include "play/CourseReplayStageStartup.h"
 #include "play/Pacemaker.h"
 #include "ChartViewerScene.h"
 #include "PracticeAnalyticsPresentation.h"
@@ -112,10 +113,8 @@ void drawResultGaugeGraphPrimitive(
   const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
   const float guide80Y = graphY + graph.geometry.guide80Y * graphH;
   const float guide30Y = graphY + graph.geometry.guide30Y * graphH;
-  batch.addLine(graphX, guide80Y, graphX + graphW, guide80Y, 1.0F,
-                guideColor);
-  batch.addLine(graphX, guide30Y, graphX + graphW, guide30Y, 1.0F,
-                guideColor);
+  batch.addLine(graphX, guide80Y, graphX + graphW, guide80Y, 1.0F, guideColor);
+  batch.addLine(graphX, guide30Y, graphX + graphW, guide30Y, 1.0F, guideColor);
 
   for (const auto &segment : graph.geometry.segments) {
     batch.addLine(pointX(segment.from), pointY(segment.from),
@@ -260,10 +259,11 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
 ResultScene::ResultScene(
     ApplicationContext &context, const bms_parser::ChartMeta &meta,
     const RhythmState &state, const ScoreProvenance &attemptProvenance,
-    const JudgedPlaybackData *replay, ResultPersistenceOptions persistenceOptions,
-    const JudgedPlaybackData *retrySource, ResultPracticeOptions practiceOptions,
-    bool autoPlayResult, ResultCourseOptions courseOptions,
-    std::string pacemakerTarget,
+    const JudgedPlaybackData *replay,
+    ResultPersistenceOptions persistenceOptions,
+    const JudgedPlaybackData *retrySource,
+    ResultPracticeOptions practiceOptions, bool autoPlayResult,
+    ResultCourseOptions courseOptions, std::string pacemakerTarget,
     std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
     bool reusableRetryChartMatchesRetrySource,
     bms_parser::Chart *reusableRetryChart,
@@ -276,9 +276,9 @@ ResultScene::ResultScene(
           .meta = meta,
           .resultState = state,
           .attemptProvenance = attemptProvenance,
-          .presentationReplay =
-              replay != nullptr ? std::optional<JudgedPlaybackData>(*replay)
-                                : std::nullopt,
+          .presentationReplay = replay != nullptr
+                                    ? std::optional<JudgedPlaybackData>(*replay)
+                                    : std::nullopt,
           .retryData = result_scene_detail::retrySourceForLocalResult(
               meta, attemptProvenance, replay, retrySource,
               rawReplayPlayback.get()),
@@ -289,9 +289,9 @@ ResultScene::ResultScene(
                   ? std::optional<JudgedPlaybackData>(*analyticsSource)
                   : std::nullopt,
           .persistedResultId = result_scene_detail::resultIdForPractice(
-              persistenceOptions,
-              replayResultContext.has_value() ? &*replayResultContext
-                                              : nullptr),
+              persistenceOptions, replayResultContext.has_value()
+                                      ? &*replayResultContext
+                                      : nullptr),
           .persistenceOptions = std::move(persistenceOptions),
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
@@ -299,15 +299,13 @@ ResultScene::ResultScene(
           .reusableRetryChartMatchesRetrySource =
               reusableRetryChartMatchesRetrySource,
           .pacemakerTarget = pacemaker::normalizeTargetId(
-              pacemakerTarget.empty()
-                  ? context.settings.selectedPacemakerTarget
-                  : pacemakerTarget),
+              pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
+                                      : pacemakerTarget),
           .pacemakerOverride = std::move(pacemakerOverride),
           .replayResult = result_scene_detail::isReplayResultSource(
               replay, retrySource, rawReplayPlayback.get()),
-          .autoPlayResult =
-              autoPlayResult ||
-              (retrySource != nullptr && retrySource->autoPlay),
+          .autoPlayResult = autoPlayResult ||
+                            (retrySource != nullptr && retrySource->autoPlay),
       }) {
   auto &local = *localSource();
   local.replayResult = local.replayResult && !local.practiceOptions.enabled &&
@@ -318,8 +316,7 @@ ResultScene::ResultScene(
   applyResultPersistenceReceipt();
   const play_options::PlayModeDisplayLabel display = resultPlayModeDisplayLabel(
       local.meta, local.presentationReplay, local.retryData,
-      local.rawReplayPlayback,
-      local.practiceOptions);
+      local.rawReplayPlayback, local.practiceOptions);
   local.playModeLabel = display.mode;
   local.laneOrderLabel = display.laneOrder;
   if (local.courseOptions.session != nullptr) {
@@ -359,7 +356,8 @@ ResultScene::ResultScene(
   skin = std::make_unique<DefaultSkin>();
 }
 
-ResultScene::ResultScene(ApplicationContext &context, ResultRemoteOptions remote)
+ResultScene::ResultScene(ApplicationContext &context,
+                         ResultRemoteOptions remote)
     : Scene(context), source(makeResultRemoteSource(std::move(remote))) {
   skin = std::make_unique<DefaultSkin>();
 }
@@ -382,7 +380,8 @@ const RemoteResultSource *ResultScene::remoteSource() const noexcept {
 
 bool ResultScene::isCourseStageResult() const {
   const auto *local = localSource();
-  return local != nullptr && local->courseOptions.mode == ResultCourseMode::Stage &&
+  return local != nullptr &&
+         local->courseOptions.mode == ResultCourseMode::Stage &&
          local->courseOptions.session != nullptr;
 }
 
@@ -428,8 +427,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.playModeLabel = local->playModeLabel;
   data.laneOrderLabel = local->laneOrderLabel;
   data.difficultyLabel = local->difficultyLabel;
-  data.headerDifficultyLabelOverride =
-      local->headerDifficultyLabelOverride;
+  data.headerDifficultyLabelOverride = local->headerDifficultyLabelOverride;
   if (local->autoPlayResult) {
     data.currentClearLabelOverride = "AUTO PLAY";
   }
@@ -454,11 +452,10 @@ void ResultScene::rebuildLocalPresentation(
       {.playModeLabel = local->playModeLabel,
        .laneOrderLabel = local->laneOrderLabel,
        .difficultyLabel = local->difficultyLabel,
-       .headerDifficultyLabelOverride =
-           local->headerDifficultyLabelOverride,
-       .currentClearLabelOverride = local->autoPlayResult
-                                        ? std::optional<std::string>("AUTO PLAY")
-                                        : local->currentClearLabelOverride,
+       .headerDifficultyLabelOverride = local->headerDifficultyLabelOverride,
+       .currentClearLabelOverride =
+           local->autoPlayResult ? std::optional<std::string>("AUTO PLAY")
+                                 : local->currentClearLabelOverride,
        .currentClearRankOverride = local->currentClearRankOverride,
        .previousBest = local->previousBest,
        .pacemaker = pacemakerDataForCurrentResult(),
@@ -501,16 +498,15 @@ void ResultScene::loadPreviousBest() {
   const ResultPreviousBestQuery query =
       result_scene_detail::previousBestQueryFor(
           persistenceOptions, local->replayResult,
-          local->replayResultContext.has_value()
-              ? &*local->replayResultContext
-              : nullptr);
+          local->replayResultContext.has_value() ? &*local->replayResultContext
+                                                 : nullptr);
 
-  const auto best = isCourseFinalResult()
-                        ? context.scoreRepository.LoadBestCourseScore(
-                              *local->courseOptions.session)
-                        : context.scoreRepository.LoadBestScore(
-                              local->meta, query.beforeCreatedAt,
-                              query.excludeAttemptId);
+  const auto best =
+      isCourseFinalResult()
+          ? context.scoreRepository.LoadBestCourseScore(
+                *local->courseOptions.session)
+          : context.scoreRepository.LoadBestScore(
+                local->meta, query.beforeCreatedAt, query.excludeAttemptId);
   if (best.has_value()) {
     local->previousBest =
         result_presentation::previousBestDataFromSnapshot(*best);
@@ -526,9 +522,8 @@ void ResultScene::loadDifficultyLabel() {
     local->difficultyLabel = "Course";
     return;
   }
-  local->difficultyLabel =
-      result_presentation::difficultyLabelForChart(context.chartRepository,
-                                                    local->meta);
+  local->difficultyLabel = result_presentation::difficultyLabelForChart(
+      context.chartRepository, local->meta);
 }
 
 void ResultScene::saveCourseReplay() {
@@ -576,8 +571,7 @@ void ResultScene::saveCourseReplay() {
   result.gaugeProfile = session->gaugeProfile;
   result.gaugeAutoShift = session->gaugeAutoShift;
   result.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
-  result.longNoteMode =
-      normalizeChartLongNoteModeValue(session->longNoteMode);
+  result.longNoteMode = normalizeChartLongNoteModeValue(session->longNoteMode);
   result.maxCombo = session->maxCombo;
   result.finalGauge = local->resultState.currentGauge;
   result.clearType = local->resultState.getClearTypeRank();
@@ -636,8 +630,7 @@ void ResultScene::saveCourseReplay() {
   if (!result_scene_detail::applyCoursePersistenceReceipt(
           persistenceOptions.courseAttempt, persistenceOptions.outcome,
           *session)) {
-    SDL_Log("Failed to save course replay %s: %s",
-            session->courseName.c_str(),
+    SDL_Log("Failed to save course replay %s: %s", session->courseName.c_str(),
             persistenceOptions.outcome.diagnostic.c_str());
     return;
   }
@@ -657,15 +650,11 @@ void ResultScene::applyResultPersistenceReceipt() {
     return;
   }
   local->persistedResultId = receipt->resultId;
-
-  const auto applyReceipt = [receipt](std::optional<JudgedPlaybackData> &replay) {
-    if (!replay.has_value()) {
-      return;
-    }
-    replay->createdAt = receipt->createdAt;
+  local->replayResultContext = ReplayResultContext{
+      .resultId = receipt->resultId,
+      .attemptId = receipt->attemptId,
+      .createdAt = receipt->createdAt,
   };
-  applyReceipt(local->presentationReplay);
-  applyReceipt(local->retryData);
 }
 
 bool ResultScene::persistenceDecisionRequired() const {
@@ -681,8 +670,7 @@ std::optional<practice::ResultModel>
 ResultScene::makeTimingAnalyticsModel() const {
   const auto *local = localSource();
   if (local == nullptr || local->reusableRetryChart == nullptr ||
-      isCourseStageResult() ||
-      isCourseFinalResult()) {
+      isCourseStageResult() || isCourseFinalResult()) {
     return std::nullopt;
   }
   std::span<const JudgedPlaybackData> completedAttempts;
@@ -690,8 +678,7 @@ ResultScene::makeTimingAnalyticsModel() const {
   std::array<JudgedPlaybackData, 1> singleAttempt;
   if (local->practiceOptions.session != nullptr) {
     completedAttempts = local->practiceOptions.session->completedAttempts();
-    abandonedAttempts =
-        local->practiceOptions.session->abandonedAttemptCount();
+    abandonedAttempts = local->practiceOptions.session->abandonedAttemptCount();
   } else if (local->analyticsData.has_value()) {
     singleAttempt.front() = *local->analyticsData;
     completedAttempts = singleAttempt;
@@ -718,10 +705,9 @@ ResultScene::makeTimingAnalyticsModel() const {
 
 void ResultScene::addTimingAnalytics(
     std::optional<practice::ResultModel> analyticsModel) {
-  View *host =
-      rootLayout == nullptr
-          ? nullptr
-          : rootLayout->findViewByName("timingAnalytics");
+  View *host = rootLayout == nullptr
+                   ? nullptr
+                   : rootLayout->findViewByName("timingAnalytics");
   if (rootLayout == nullptr || !analyticsModel.has_value()) {
     if (host != nullptr) {
       host->setDisplay(YGDisplayNone);
@@ -733,8 +719,7 @@ void ResultScene::addTimingAnalytics(
     host = new View();
     host->setName("timingAnalytics");
     host->setWidthPercent(100.0f);
-    host->setHeight(
-        practice_analytics_presentation::kPreferredAnalyticsHeight);
+    host->setHeight(practice_analytics_presentation::kPreferredAnalyticsHeight);
     host->setMinHeight(
         practice_analytics_presentation::kMinimumAnalyticsHeight);
     host->setFlexShrink(1.0f);
@@ -756,8 +741,7 @@ void ResultScene::addTimingAnalytics(
     }
   }
 
-  timingAnalyticsView =
-      new PracticeAnalyticsView(std::move(*analyticsModel));
+  timingAnalyticsView = new PracticeAnalyticsView(std::move(*analyticsModel));
   host->addView(timingAnalyticsView);
 }
 
@@ -790,8 +774,7 @@ void ResultScene::addResultPersistenceStatus() {
   status->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
 
   persistenceStatusMessage = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  persistenceStatusMessage->setText(
-      persistenceOptions.outcome.userMessage);
+  persistenceStatusMessage->setText(persistenceOptions.outcome.userMessage);
   persistenceStatusMessage->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   persistenceStatusMessage->setAlign(TextView::CENTER);
   persistenceStatusMessage->setWrap(true);
@@ -851,21 +834,17 @@ void ResultScene::addResultPersistenceStatus() {
           return;
         }
         if (persistenceDetailsStateText != nullptr) {
-          persistenceDetailsStateText->setText("Save state: " +
-                                               details->state);
+          persistenceDetailsStateText->setText("Save state: " + details->state);
         }
         if (persistenceDetailsReasonText != nullptr) {
-          persistenceDetailsReasonText->setText("Reason\n" +
-                                                details->reason);
+          persistenceDetailsReasonText->setText("Reason\n" + details->reason);
         }
         if (persistenceDetailsReferenceText != nullptr) {
-          std::string references =
-              details->attemptId.empty()
-                  ? "Attempt ID: unavailable"
-                  : "Attempt ID: " + details->attemptId;
+          std::string references = details->attemptId.empty()
+                                       ? "Attempt ID: unavailable"
+                                       : "Attempt ID: " + details->attemptId;
           if (details->resultId.has_value()) {
-            references += "\nResult ID: " +
-                          std::to_string(*details->resultId);
+            references += "\nResult ID: " + std::to_string(*details->resultId);
           }
           persistenceDetailsReferenceText->setText(references);
         }
@@ -876,10 +855,9 @@ void ResultScene::addResultPersistenceStatus() {
       });
   const std::string_view attemptId =
       result_scene_detail::persistenceAttemptId(persistenceOptions);
-  const bool hasConflictDetails =
-      result_persistence::saveConflictDetails(persistenceOptions.outcome,
-                                              attemptId)
-          .has_value();
+  const bool hasConflictDetails = result_persistence::saveConflictDetails(
+                                      persistenceOptions.outcome, attemptId)
+                                      .has_value();
   persistenceDetailsButton->setVisible(hasConflictDetails);
   persistenceDetailsButton->setDisplay(hasConflictDetails ? YGDisplayFlex
                                                            : YGDisplayNone);
@@ -934,8 +912,7 @@ void ResultScene::addResultPersistenceStatus() {
   modalTitle->setHeight(42);
   modalPanel->addView(modalTitle);
 
-  auto *modalIntroduction =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  auto *modalIntroduction = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   modalIntroduction->setText(
       "This diagnostic identifies the integrity check that raised the "
       "warning.");
@@ -946,8 +923,7 @@ void ResultScene::addResultPersistenceStatus() {
 
   persistenceDetailsStateText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  persistenceDetailsStateText->setColor(
-      ui_theme::sdl(ui_theme::textPrimary()));
+  persistenceDetailsStateText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   persistenceDetailsStateText->setWrap(true);
   persistenceDetailsStateText->setHeight(34);
   modalPanel->addView(persistenceDetailsStateText);
@@ -1000,14 +976,13 @@ ir::IrResultPresentation ResultScene::makeIrResultPresentation() const {
     capabilities = driver->capabilities();
   }
   ir::IrProviderSettings settings;
-  if (const auto found = context.settings.irProviders.find(
-          std::string(ir::kTachiProviderId));
+  if (const auto found =
+          context.settings.irProviders.find(std::string(ir::kTachiProviderId));
       found != context.settings.irProviders.end()) {
     settings = found->second;
   }
   ir::IrAttemptStatusSnapshot snapshot;
-  if (local->persistenceOptions.irSubmission &&
-      context.irSubmissionService) {
+  if (local->persistenceOptions.irSubmission && context.irSubmissionService) {
     snapshot = context.irSubmissionService->status(
         ir::kTachiProviderId,
         local->persistenceOptions.irSubmission->attemptId);
@@ -1058,14 +1033,12 @@ void ResultScene::addIrResultStatus() {
   copy->setFlex(1.0F);
   copy->setMinWidth(0.0F);
   copy->setGap(2.0F);
-  irResultStatusText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  irResultStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
   irResultStatusText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   irResultStatusText->setWrap(true);
   irResultStatusText->setWidthPercent(100.0F);
   copy->addView(irResultStatusText);
-  irResultDetailText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  irResultDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   irResultDetailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   irResultDetailText->setWrap(true);
   irResultDetailText->setWidthPercent(100.0F);
@@ -1083,21 +1056,20 @@ void ResultScene::addIrResultStatus() {
     button->setContentView(text);
     button->setSize(196, 52);
     button->setCornerRadius(ui_theme::controlRadius());
-    button->setBackgroundColors(
-        ui_theme::withAlpha(accent, 72), ui_theme::withAlpha(accent, 104),
-        ui_theme::withAlpha(accent, 136));
-    button->setBorderColors(
-        ui_theme::withAlpha(accent, 170), ui_theme::withAlpha(accent, 210),
-        accent);
+    button->setBackgroundColors(ui_theme::withAlpha(accent, 72),
+                                ui_theme::withAlpha(accent, 104),
+                                ui_theme::withAlpha(accent, 136));
+    button->setBorderColors(ui_theme::withAlpha(accent, 170),
+                            ui_theme::withAlpha(accent, 210), accent);
     button->setStyledBorderWidth(1);
     button->setOnClickListener(std::move(action));
     return button;
   };
-  irResultSubmitButton = makeAction(
-      "Submit", ui_theme::cyan(), [this]() { submitIrResult(); });
+  irResultSubmitButton =
+      makeAction("Submit", ui_theme::cyan(), [this]() { submitIrResult(); });
   status->addView(irResultSubmitButton);
-  irResultRetryButton = makeAction(
-      "Retry", ui_theme::lime(), [this]() { retryIrResult(); });
+  irResultRetryButton =
+      makeAction("Retry", ui_theme::lime(), [this]() { retryIrResult(); });
   status->addView(irResultRetryButton);
 
   status->setDisplay(YGDisplayNone);
@@ -1184,13 +1156,14 @@ void ResultScene::submitIrResult() {
   const auto draft = context.irDrivers.buildDraft(
       ir::kTachiProviderId, *local->persistenceOptions.irSubmission);
   if (draft.status != ir::BuildDraftStatus::Built || !draft.draft) {
-    local->irActionDiagnostic = draft.diagnostic.empty()
-                             ? "This result could not be prepared for IR."
-                             : ir::sanitizeDiagnostic(draft.diagnostic);
+    local->irActionDiagnostic =
+        draft.diagnostic.empty() ? "This result could not be prepared for IR."
+                                 : ir::sanitizeDiagnostic(draft.diagnostic);
     updateIrResultPresentation(true);
     return;
   }
-  const auto enqueued = context.irSubmissionService->enqueueManual(*draft.draft);
+  const auto enqueued =
+      context.irSubmissionService->enqueueManual(*draft.draft);
   if (enqueued.status == ir::IrOutboxInsertStatus::Inserted ||
       enqueued.status == ir::IrOutboxInsertStatus::AlreadyExists ||
       enqueued.status == ir::IrOutboxInsertStatus::AlreadySubmitted) {
@@ -1233,8 +1206,7 @@ void ResultScene::retryIrResult() {
 void ResultScene::retryResultPersistence() {
   auto *local = localSource();
   if (local == nullptr ||
-      !result_scene_detail::hasPersistenceAttempt(
-          local->persistenceOptions) ||
+      !result_scene_detail::hasPersistenceAttempt(local->persistenceOptions) ||
       !local->persistenceOptions.outcome.retryable()) {
     return;
   }
@@ -1244,8 +1216,7 @@ void ResultScene::retryResultPersistence() {
   std::vector<ir::IrOutboxDraft> automaticDrafts;
   if (persistenceOptions.attempt != nullptr && persistenceOptions.irSnapshot) {
     automaticDrafts = context.irDrivers.buildAutomaticDrafts(
-        context.settings.irProviders,
-        *persistenceOptions.irSnapshot);
+        context.settings.irProviders, *persistenceOptions.irSnapshot);
   }
   const ResultPersistenceRetryCallbacks callbacks{
       .persistChart =
@@ -1263,8 +1234,7 @@ void ResultScene::retryResultPersistence() {
     return;
   }
   if (persistenceOptions.attempt != nullptr &&
-      persistenceOptions.outcome.saved() &&
-      !automaticDrafts.empty() &&
+      persistenceOptions.outcome.saved() && !automaticDrafts.empty() &&
       context.irSubmissionService) {
     context.irSubmissionService->notifyOutboxChanged();
   }
@@ -1346,16 +1316,14 @@ void ResultScene::updateResultPersistencePresentation() {
   }
   if (persistenceRetryButton != nullptr) {
     persistenceRetryButton->setEnabled(
-        result_scene_detail::hasPersistenceAttempt(
-            local->persistenceOptions) &&
+        result_scene_detail::hasPersistenceAttempt(local->persistenceOptions) &&
         local->persistenceOptions.outcome.retryable());
   }
   const std::string_view attemptId =
-      result_scene_detail::persistenceAttemptId(
-          local->persistenceOptions);
+      result_scene_detail::persistenceAttemptId(local->persistenceOptions);
   const bool hasConflictDetails =
-      result_persistence::saveConflictDetails(
-          local->persistenceOptions.outcome, attemptId)
+      result_persistence::saveConflictDetails(local->persistenceOptions.outcome,
+                                              attemptId)
           .has_value();
   if (persistenceDetailsButton != nullptr) {
     const bool showDetails = decisionRequired && hasConflictDetails;
@@ -1436,27 +1404,24 @@ void ResultScene::addRetryButtons() {
                                  ui_theme::infoActionPressed(),
                                  ui_theme::cyan()));
   } else if (local->practiceOptions.enabled) {
-    retryRow->addView(makeButton("Retry", true, false,
-                                 ui_theme::primaryAction(),
-                                 ui_theme::primaryActionHover(),
-                                 ui_theme::primaryActionPressed(),
-                                 ui_theme::cyan()));
+    retryRow->addView(
+        makeButton("Retry", true, false, ui_theme::primaryAction(),
+                   ui_theme::primaryActionHover(),
+                   ui_theme::primaryActionPressed(), ui_theme::cyan()));
   } else {
     const bool canRetrySame =
         local->retryData.has_value()
             ? play_options::hasSamePatternRandomization(*local->retryData)
             : play_options::hasSamePatternRandomization(local->meta);
-    retryRow->addView(makeButton("Retry", !canRetrySame, false,
-                                 ui_theme::primaryAction(),
-                                 ui_theme::primaryActionHover(),
-                                 ui_theme::primaryActionPressed(),
-                                 ui_theme::cyan()));
+    retryRow->addView(
+        makeButton("Retry", !canRetrySame, false, ui_theme::primaryAction(),
+                   ui_theme::primaryActionHover(),
+                   ui_theme::primaryActionPressed(), ui_theme::cyan()));
     if (canRetrySame) {
-      retryRow->addView(makeButton("Retry Same", true, false,
-                                   ui_theme::successAction(),
-                                   ui_theme::successActionHover(),
-                                   ui_theme::successActionPressed(),
-                                   ui_theme::lime()));
+      retryRow->addView(
+          makeButton("Retry Same", true, false, ui_theme::successAction(),
+                     ui_theme::successActionHover(),
+                     ui_theme::successActionPressed(), ui_theme::lime()));
     }
   }
 
@@ -1474,10 +1439,9 @@ void ResultScene::addRetryButtons() {
   rankingsButton->setBackgroundColors(ui_theme::infoAction(),
                                        ui_theme::infoActionHover(),
                                        ui_theme::infoActionPressed());
-  rankingsButton->setBorderColors(
-      ui_theme::withAlpha(ui_theme::cyan(), 150),
-      ui_theme::withAlpha(ui_theme::cyan(), 190),
-      ui_theme::withAlpha(ui_theme::cyan(), 220));
+  rankingsButton->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 150),
+                                  ui_theme::withAlpha(ui_theme::cyan(), 190),
+                                  ui_theme::withAlpha(ui_theme::cyan(), 220));
   rankingsButton->setStyledBorderWidth(1);
   retryRow->addView(rankingsButton);
   refreshRankingsButton();
@@ -1504,9 +1468,8 @@ void ResultScene::addRetryButtons() {
   if (local->autoPlayResult) {
     exportPhotoButtonText->setText("AUTO PLAY");
     exportPhotoButton->setOnClickListener([]() {});
-    exportPhotoButton->setBackgroundColors(ui_theme::control(),
-                                           ui_theme::control(),
-                                           ui_theme::control());
+    exportPhotoButton->setBackgroundColors(
+        ui_theme::control(), ui_theme::control(), ui_theme::control());
     exportPhotoButton->setBorderColors(ui_theme::hairlineSubtle(),
                                        ui_theme::hairlineSubtle(),
                                        ui_theme::hairlineSubtle());
@@ -1526,9 +1489,9 @@ void ResultScene::addRetryButtons() {
       [this]() { practiceThisSection(); });
   practiceSectionButton->setSize(280, 64);
   practiceSectionButton->setCornerRadius(ui_theme::controlRadius());
-  practiceSectionButton->setBackgroundColors(
-      ui_theme::successAction(), ui_theme::successActionHover(),
-      ui_theme::successActionPressed());
+  practiceSectionButton->setBackgroundColors(ui_theme::successAction(),
+                                             ui_theme::successActionHover(),
+                                             ui_theme::successActionPressed());
   practiceSectionButton->setBorderColors(
       ui_theme::withAlpha(ui_theme::lime(), 150),
       ui_theme::withAlpha(ui_theme::lime(), 190),
@@ -1580,26 +1543,25 @@ void ResultScene::addRemoteButtons() {
   };
 
   if (actions.rankings) {
-    rankingsButton = makeButton(
-        "Rankings", ui_theme::infoAction(), ui_theme::infoActionHover(),
-        ui_theme::infoActionPressed(), ui_theme::cyan(),
-        [this]() { openRankings(); });
+    rankingsButton =
+        makeButton("Rankings", ui_theme::infoAction(),
+                   ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
+                   ui_theme::cyan(), [this]() { openRankings(); });
     rankingsButton->setEnabled(rankingsAvailable());
     row->addView(rankingsButton);
   }
 
   if (actions.exportPhoto) {
-    exportPhotoButtonText =
-        new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+    exportPhotoButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
     exportPhotoButtonText->setText("Export Photo");
     exportPhotoButtonText->setAlign(TextView::CENTER);
     exportPhotoButtonText->setVAlign(TextView::MIDDLE);
     exportPhotoButtonText->setColor(
         ui_theme::sdl(ui_theme::textOn(ui_theme::violetAction())));
     exportPhotoButton = makeButton(
-        "Export Photo", ui_theme::violetAction(),
-        ui_theme::violetActionHover(), ui_theme::violetActionPressed(),
-        ui_theme::violetActionHover(), [this]() { exportPhoto(); });
+        "Export Photo", ui_theme::violetAction(), ui_theme::violetActionHover(),
+        ui_theme::violetActionPressed(), ui_theme::violetActionHover(),
+        [this]() { exportPhoto(); });
     exportPhotoButton->setContentView(exportPhotoButtonText);
     row->addView(exportPhotoButton);
   }
@@ -1680,12 +1642,11 @@ bool ResultScene::rankingsAvailable() const {
   if (local != nullptr && (isCourseStageResult() || isCourseFinalResult())) {
     return false;
   }
-  const std::string providerId =
-      remote == nullptr ? std::string(ir::kTachiProviderId)
-                        : remote->providerId;
+  const std::string providerId = remote == nullptr
+                                     ? std::string(ir::kTachiProviderId)
+                                     : remote->providerId;
   const auto driver = context.irDrivers.find(providerId);
-  const auto settings = context.settings.irProviders.find(
-      providerId);
+  const auto settings = context.settings.irProviders.find(providerId);
   if (driver == nullptr || !driver->capabilities().chartRankings ||
       settings == context.settings.irProviders.end() ||
       !settings->second.enabled) {
@@ -1715,9 +1676,9 @@ void ResultScene::openRankings() {
   }
   const auto *remote = remoteSource();
   const auto *local = localSource();
-  const std::string providerId =
-      remote == nullptr ? std::string(ir::kTachiProviderId)
-                        : remote->providerId;
+  const std::string providerId = remote == nullptr
+                                     ? std::string(ir::kTachiProviderId)
+                                     : remote->providerId;
   std::optional<ir::IrChartQuery> chartQuery;
   std::string serverOrigin;
   std::string title;
@@ -1741,8 +1702,7 @@ void ResultScene::openRankings() {
     if (query.value && settings != context.settings.irProviders.end()) {
       chartQuery = *query.value;
       serverOrigin = settings->second.serverOrigin;
-      title = local->meta.Title.empty() ? "Completed chart"
-                                        : local->meta.Title;
+      title = local->meta.Title.empty() ? "Completed chart" : local->meta.Title;
       comparison = ir::IrLocalComparison{
           .label = "This Play",
           .score = local->resultState.getScore(),
@@ -1761,13 +1721,12 @@ void ResultScene::openRankings() {
     rankingsModal = std::make_unique<ir::IrRankingModal>(
         *rankingOverlayPortal, *context.irRankingService);
   }
-  rankingsModal->open(
-      {.profileId = context.profileManager.activeProfile().id,
-       .providerId = providerId,
-       .serverOrigin = serverOrigin,
-       .chart = *chartQuery,
-       .localComparison = std::move(comparison)},
-      std::move(title));
+  rankingsModal->open({.profileId = context.profileManager.activeProfile().id,
+                       .providerId = providerId,
+                       .serverOrigin = serverOrigin,
+                       .chart = *chartQuery,
+                       .localComparison = std::move(comparison)},
+                      std::move(title));
 }
 
 void ResultScene::addCourseButtons() {
@@ -1815,18 +1774,18 @@ void ResultScene::addCourseButtons() {
   if (isCourseFinalResult() && courseOptions.session != nullptr &&
       result_scene_detail::courseReplayActionAvailable(
           *courseOptions.session)) {
-    auto [replayButton, ignoredText] = makeButton(
-        "Replay", ui_theme::infoAction(), ui_theme::infoActionHover(),
-        ui_theme::infoActionPressed(), ui_theme::cyan(),
-        [this]() { startCourseReplay(); });
+    auto [replayButton, ignoredText] =
+        makeButton("Replay", ui_theme::infoAction(),
+                   ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
+                   ui_theme::cyan(), [this]() { startCourseReplay(); });
     (void)ignoredText;
     actionHost->addView(replayButton);
   }
 
-  auto [photoButton, photoText] = makeButton(
-      "Export Photo", ui_theme::violetAction(),
-      ui_theme::violetActionHover(), ui_theme::violetActionPressed(),
-      ui_theme::violetActionHover(), [this]() { exportPhoto(); });
+  auto [photoButton, photoText] =
+      makeButton("Export Photo", ui_theme::violetAction(),
+                 ui_theme::violetActionHover(), ui_theme::violetActionPressed(),
+                 ui_theme::violetActionHover(), [this]() { exportPhoto(); });
   exportPhotoButton = photoButton;
   exportPhotoButtonText = photoText;
   actionHost->addView(exportPhotoButton);
@@ -1910,8 +1869,8 @@ void ResultScene::buildCourseExitConfirmation() {
   row->setJustifyContent(YGJustifyCenter);
   row->setGap(14);
 
-  auto makeModalButton = [](const std::string &label, Color normal,
-                            Color hover, Color pressed, Color border,
+  auto makeModalButton = [](const std::string &label, Color normal, Color hover,
+                            Color pressed, Color border,
                             std::function<void()> onClick) {
     auto *button = new Button();
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
@@ -1931,14 +1890,14 @@ void ResultScene::buildCourseExitConfirmation() {
     return button;
   };
 
-  row->addView(makeModalButton(
-      "Cancel", ui_theme::control(), ui_theme::controlHover(),
-      ui_theme::controlPressed(), ui_theme::hairlineSubtle(),
-      [this]() { hideCourseExitConfirmation(); }));
-  row->addView(makeModalButton(
-      "Back to Menu", ui_theme::warningAction(),
-      ui_theme::warningActionHover(), ui_theme::warningActionPressed(),
-      ui_theme::coral(), [this]() { exitResult(); }));
+  row->addView(
+      makeModalButton("Cancel", ui_theme::control(), ui_theme::controlHover(),
+                      ui_theme::controlPressed(), ui_theme::hairlineSubtle(),
+                      [this]() { hideCourseExitConfirmation(); }));
+  row->addView(makeModalButton("Back to Menu", ui_theme::warningAction(),
+                               ui_theme::warningActionHover(),
+                               ui_theme::warningActionPressed(),
+                               ui_theme::coral(), [this]() { exitResult(); }));
   panel->addView(row);
   overlay->addView(panel);
   overlay->setVisible(false);
@@ -2006,9 +1965,8 @@ void ResultScene::exportPhoto() {
   resultPhotoExportInProgress = false;
 
   if (result.success) {
-    exportPhotoButtonText->setText(result.message == "Saved to Photos"
-                                       ? "Saved"
-                                       : "Exported");
+    exportPhotoButtonText->setText(
+        result.message == "Saved to Photos" ? "Saved" : "Exported");
     SDL_Log("Result image exported: %s (%s)",
             fspath_to_utf8(result.outputPath).c_str(), result.message.c_str());
   } else {
@@ -2091,8 +2049,8 @@ void ResultScene::continueCourse() {
     SDL_Log("Course parse failed %s: %s",
             fspath_to_utf8(nextMeta->BmsPath).c_str(), e.what());
     archive_file::appendDebugLogLine(
-        "Course parse exception: " + fspath_to_utf8(nextMeta->BmsPath) +
-        ": " + e.what());
+        "Course parse exception: " + fspath_to_utf8(nextMeta->BmsPath) + ": " +
+        e.what());
     showCourseResult();
     return;
   }
@@ -2115,28 +2073,7 @@ void ResultScene::continueCourse() {
     return;
   }
 
-  StartOptions nextOptions;
-  nextOptions.startPosition = 0;
-  nextOptions.autoKeySound = session->autoKeySound;
-  nextOptions.autoPlay = false;
-  nextOptions.gaugeType = session->gaugeType;
-  nextOptions.gaugeProfile = session->gaugeProfile;
-  nextOptions.gaugeAutoShift = session->gaugeAutoShift;
-  nextOptions.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
-  nextOptions.playOption = playInfo.option;
-  nextOptions.playOptionSeed = playInfo.seed;
-  nextOptions.playOption2 = playInfo.option2;
-  nextOptions.playOption2Seed = playInfo.seed2;
-  nextOptions.longNoteMode = session->longNoteMode;
-  nextOptions.hasUndefinedLongNotes =
-      play_start_detail::hasUndefinedLongNotes(
-          session->entries[session->currentIndex].meta);
-  nextOptions.assistOption = session->assistOption;
-  nextOptions.courseSession = session;
-  nextOptions.courseConstraints = session->constraints;
-  nextOptions.ruleset = session->ruleset;
-  nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
-  nextOptions.ownsChart = true;
+  StartOptions nextOptions = makeCourseStageStartOptions(session);
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),
@@ -2216,8 +2153,7 @@ void ResultScene::startRetry(bool samePattern) {
     retrySource.setup.playOption = local->practiceOptions.playOption;
     retrySource.setup.playOptionSeed = local->practiceOptions.playOptionSeed;
     retrySource.setup.playOption2 = local->practiceOptions.playOption2;
-    retrySource.setup.playOption2Seed =
-        local->practiceOptions.playOption2Seed;
+    retrySource.setup.playOption2Seed = local->practiceOptions.playOption2Seed;
     retrySource.setup.doublePlayOption =
         local->practiceOptions.doublePlayOption;
     retrySource.setup.longNoteMode = local->practiceOptions.longNoteMode;
@@ -2238,10 +2174,10 @@ void ResultScene::startRetry(bool samePattern) {
                 samePattern, local->reusableRetryChart,
                 local->reusableRetryChartMatchesRetrySource);
         const play_options::ResultRetryPatternAuthority patternAuthority =
-            play_options::resultRetryPatternAuthority(retrySource,
-                                                      samePattern);
+            play_options::resultRetryPatternAuthority(retrySource, samePattern);
         std::unique_ptr<bms_parser::Chart> ownedRetryChart;
         bms_parser::Chart *retryChart = nullptr;
+        std::optional<replay::AuthoredReplayChartFacts> parsedReplayFacts;
         if (reuseCurrentPattern) {
           if (local->ownedReusableRetryChart != nullptr) {
             ownedRetryChart = std::move(local->ownedReusableRetryChart);
@@ -2253,6 +2189,10 @@ void ResultScene::startRetry(bool samePattern) {
           ownedRetryChart = play_options::parseChartForRetry(
               retrySource, local->meta, parseCancelled, samePattern);
           retryChart = ownedRetryChart.get();
+          if (retryChart != nullptr && !parseCancelled) {
+            parsedReplayFacts =
+                replay::captureAuthoredReplayChartFacts(*retryChart);
+          }
         }
         if (retryChart == nullptr || parseCancelled) {
           return true;
@@ -2260,23 +2200,24 @@ void ResultScene::startRetry(bool samePattern) {
 
         StartOptions options;
         applyResultRetrySetupToStartOptions(options, retrySource);
-        options.startPosition = local->practiceOptions.enabled
-                                    ? (practiceConfiguration.has_value()
-                                           ? static_cast<unsigned long long>(
-                                                 std::max(
-                                                     0LL,
-                                                     practiceConfiguration
-                                                         ->startMicros))
-                                           : local->practiceOptions.startPosition)
-                                    : 0;
-        options.autoKeySound =
+        if (parsedReplayFacts.has_value()) {
+          options.hasUndefinedLongNotes =
+              parsedReplayFacts->hasUndefinedLongNotes;
+        }
+        options.startPosition =
             local->practiceOptions.enabled
-                ? (local->practiceOptions.autoPlay ||
-                   local->practiceOptions.autoKeySound)
-                : !context.settings.inputKeysoundEnabled;
-        options.autoPlay =
-            local->practiceOptions.enabled ? local->practiceOptions.autoPlay
-                                           : false;
+                ? (practiceConfiguration.has_value()
+                       ? static_cast<unsigned long long>(
+                             std::max(0LL, practiceConfiguration->startMicros))
+                       : local->practiceOptions.startPosition)
+                : 0;
+        options.autoKeySound = local->practiceOptions.enabled
+                                   ? (local->practiceOptions.autoPlay ||
+                                      local->practiceOptions.autoKeySound)
+                                   : !context.settings.inputKeysoundEnabled;
+        options.autoPlay = local->practiceOptions.enabled
+                               ? local->practiceOptions.autoPlay
+                               : false;
         options.pacemakerTarget =
             local->practiceOptions.enabled
                 ? pacemaker::kTargetOff
@@ -2285,8 +2226,8 @@ void ResultScene::startRetry(bool samePattern) {
         options.ownsChart = true;
         if (local->practiceOptions.enabled) {
           if (practiceConfiguration.has_value()) {
-            applyPracticeConfigurationToStartOptions(
-                options, *practiceConfiguration);
+            applyPracticeConfigurationToStartOptions(options,
+                                                     *practiceConfiguration);
           } else {
             options.gaugeType = local->practiceOptions.gaugeType;
             options.gaugeAutoShift = local->practiceOptions.gaugeAutoShift;
@@ -2295,8 +2236,7 @@ void ResultScene::startRetry(bool samePattern) {
           }
           options.longNoteMode = local->practiceOptions.longNoteMode;
           options.assistOption = local->practiceOptions.assistOption;
-          options.doublePlayOption =
-              local->practiceOptions.doublePlayOption;
+          options.doublePlayOption = local->practiceOptions.doublePlayOption;
           options.practiceSession = retryPracticeSession;
           options.practiceMode = retryPracticeSession == nullptr;
           options.practiceLeadInMicros =
@@ -2337,8 +2277,8 @@ void ResultScene::startRetry(bool samePattern) {
           }
           if (!play_options::applyPlayOptionModifier(
                   *retryChart, *retrySource.setup.playOption,
-                  patternAuthority.playOptionSeed, 0,
-                  options.playOption, options.playOptionSeed, "retry")) {
+                  patternAuthority.playOptionSeed, 0, options.playOption,
+                  options.playOptionSeed, "retry")) {
             return true;
           }
         }
@@ -2353,14 +2293,13 @@ void ResultScene::startRetry(bool samePattern) {
           }
           if (!play_options::applyPlayOptionModifier(
                   *retryChart, *retrySource.setup.playOption2,
-                  patternAuthority.playOption2Seed, 1,
-                  options.playOption2, options.playOption2Seed, "retry")) {
+                  patternAuthority.playOption2Seed, 1, options.playOption2,
+                  options.playOption2Seed, "retry")) {
             return true;
           }
         }
         if (!reuseCurrentPattern) {
-          applyEffectiveLongNoteModeToChart(*retryChart,
-                                            options.longNoteMode);
+          applyEffectiveLongNoteModeToChart(*retryChart, options.longNoteMode);
         }
 
         context.jukebox.stop();
@@ -2374,8 +2313,8 @@ void ResultScene::startRetry(bool samePattern) {
 
         if (ownedRetryChart != nullptr) {
           context.sceneManager->changeScene(
-              std::make_unique<GamePlayScene>(context, std::move(ownedRetryChart),
-                                              options),
+              std::make_unique<GamePlayScene>(
+                  context, std::move(ownedRetryChart), options),
               false);
         } else {
           options.ownsChart = false;
@@ -2441,8 +2380,8 @@ void ResultScene::startReplay() {
           StartOptions replayOptions = replayResultStartOptions(
               replayPlayback, replayAnalysis, replayResultContext);
           context.sceneManager->changeScene(
-              std::make_unique<GamePlayScene>(
-                  context, std::move(replayChart), std::move(replayOptions)),
+              std::make_unique<GamePlayScene>(context, std::move(replayChart),
+                                              std::move(replayOptions)),
               false);
           return false;
         },
@@ -2470,26 +2409,20 @@ void ResultScene::startReplay() {
         }
 
         auto replayData = std::make_shared<JudgedPlaybackData>(replaySource);
-        StartOptions replayOptions{
-            .startPosition = 0,
-            .autoKeySound = false,
-            .autoPlay = false,
-            .replayData = replayData,
-            .replayResultContext = replayResultContext,
-            .ownsChart = true,
-        };
-        applyJudgedPlaybackSetupToStartOptions(replayOptions, *replayData);
+        StartOptions replayOptions =
+            replayResultStartOptions(replayData, replayResultContext);
         context.sceneManager->changeScene(
-            std::make_unique<GamePlayScene>(
-                context, std::move(replayChart), std::move(replayOptions)),
+            std::make_unique<GamePlayScene>(context, std::move(replayChart),
+                                            std::move(replayOptions)),
             false);
         return false;
       },
       0, true);
 }
 
-practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
-    long long startMicros, long long endMicros) const {
+practice::LaunchRequest
+ResultScene::makePracticeLaunchRequest(long long startMicros,
+                                       long long endMicros) const {
   const auto *local = localSource();
   if (local == nullptr) {
     throw std::logic_error("practice launch is local-result only");
@@ -2535,8 +2468,8 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
   if (source == practice::LaunchSource::ReplayResult &&
       local->rawReplayPlayback != nullptr) {
     request.replayId = local->persistedResultId;
-    request.replayPlayOptions = practice::launchPlayOptionsFromReplay(
-        local->rawReplayPlayback->setup);
+    request.replayPlayOptions =
+        practice::launchPlayOptionsFromReplay(local->rawReplayPlayback->setup);
   } else if (source == practice::LaunchSource::ReplayResult &&
              replayProjection != nullptr) {
     request.replayId = local->persistedResultId;
@@ -2555,12 +2488,12 @@ ResultScene::selectedPracticeLaunchRequest() const {
   if (!selected.has_value()) {
     return std::nullopt;
   }
-  return makePracticeLaunchRequest(selected->startMicros,
-                                   selected->endMicros);
+  return makePracticeLaunchRequest(selected->startMicros, selected->endMicros);
 }
 
 void ResultScene::updatePracticeSectionAction() {
-  if (practiceSectionButton == nullptr || practiceSectionButtonText == nullptr) {
+  if (practiceSectionButton == nullptr ||
+      practiceSectionButtonText == nullptr) {
     return;
   }
 
@@ -2606,8 +2539,8 @@ void ResultScene::practiceThisSection() {
 
   if (request.source == practice::LaunchSource::PracticeResult &&
       local->practiceOptions.returnScene != nullptr) {
-    if (auto *viewer =
-            dynamic_cast<ChartViewerScene *>(local->practiceOptions.returnScene);
+    if (auto *viewer = dynamic_cast<ChartViewerScene *>(
+            local->practiceOptions.returnScene);
         viewer != nullptr) {
       viewer->setPracticeLaunchRequest(std::move(request));
       context.sceneManager->changeScene(viewer, false);
@@ -2623,9 +2556,9 @@ void ResultScene::practiceThisSection() {
   const auto randomPrng = request.chartMeta.RandomPrng;
   const auto randomValues = request.chartMeta.RandomValues;
   context.sceneManager->changeScene(
-      std::make_unique<ChartViewerScene>(
-          context, std::move(record), randomSeed, randomPrng, randomValues,
-          std::move(request)),
+      std::make_unique<ChartViewerScene>(context, std::move(record), randomSeed,
+                                         randomPrng, randomValues,
+                                         std::move(request)),
       false);
 }
 
@@ -2657,8 +2590,8 @@ void ResultScene::startCourseReplay() {
     replaySession->courseGroupName = sourceSession->courseGroupName;
     replaySession->constraintJson = sourceSession->constraintJson;
     replaySession->entries = sourceSession->entries;
-    if (!replaySession->installAuthoritativeEntryMetas(
-            sourceSession->entryMetasSnapshot())) {
+    if (!replaySession->installAuthoritativeEntries(
+            sourceSession->entrySnapshotsSnapshot())) {
       return;
     }
     const auto &firstPlayback =
@@ -2679,6 +2612,8 @@ void ResultScene::startCourseReplay() {
     replaySession->courseReplayPlaybackData =
         std::make_shared<replay::CourseReplayPlaybackData>(
             *sourceSession->courseReplayPlaybackData);
+    replaySession->courseReplayResultContext =
+        sourceSession->courseReplayResultContext;
     if (sourceSession->courseReplayData != nullptr) {
       replaySession->courseReplayData =
           std::make_shared<JudgedCoursePlaybackData>(
@@ -2702,8 +2637,21 @@ void ResultScene::startCourseReplay() {
   replaySession->constraintJson = replayData->constraintJson;
   replaySession->entries = result_scene_detail::legacyReplayEntriesForSession(
       *sourceSession, *replayData);
-  if (!replaySession->installAuthoritativeEntryMetas(
-          replaySession->entryMetasSnapshot())) {
+  const auto sourceSnapshots = sourceSession->entrySnapshotsSnapshot();
+  std::vector<CoursePlayEntrySnapshot> replaySnapshots;
+  replaySnapshots.reserve(replaySession->entries.size());
+  for (std::size_t index = 0; index < replaySession->entries.size(); ++index) {
+    replay::AuthoredReplayChartFacts replayFacts;
+    if (index < replayData->stages.size()) {
+      replayFacts.hasUndefinedLongNotes =
+          replayData->stages[index].replay.setup.hasUndefinedLongNotes;
+    } else if (index < sourceSnapshots.size()) {
+      replayFacts = sourceSnapshots[index].replayFacts;
+    }
+    replaySnapshots.push_back({.meta = replaySession->entries[index].meta,
+                               .replayFacts = replayFacts});
+  }
+  if (!replaySession->installAuthoritativeEntries(std::move(replaySnapshots))) {
     return;
   }
   replaySession->snapshotRulesetFromReplay(replayData->stages.front().replay);
@@ -2736,62 +2684,26 @@ void ResultScene::startCourseReplayStage(
     return;
   }
 
-  if (auto stagePlayback = session->currentCourseReplayStagePlayback()) {
-    const bms_parser::ChartMeta *stageMeta = session->currentMeta();
-    if (stageMeta == nullptr || stageMeta->BmsPath.empty()) {
-      context.sceneManager->changeScene("MainMenu");
-      return;
-    }
-    session->applyReplayStagePlayOptions(*stagePlayback);
-    context.jukebox.stop();
     std::atomic_bool parseCancelled = false;
-    auto replayChart = play_options::prepareReplayChart(
-        stageMeta->BmsPath, *stagePlayback, parseCancelled);
-    if (replayChart == nullptr || parseCancelled) {
+    auto outcome = course_replay_startup::prepareCurrentStage(
+        session, context.settings.notePriorityMode, parseCancelled);
+    if (!outcome.prepared()) {
+      SDL_Log("Course replay result-stage start failed: %s",
+              outcome.diagnostic.c_str());
       context.sceneManager->changeScene("MainMenu");
       return;
     }
-    context.jukebox.loadChart(*replayChart, true, parseCancelled);
+    auto prepared = std::move(*outcome.value);
+    context.jukebox.stop();
+    context.jukebox.loadChart(*prepared.chart, true, parseCancelled);
     if (parseCancelled) {
       context.sceneManager->changeScene("MainMenu");
       return;
     }
-    StartOptions options =
-        makeCourseReplayStageStartOptions(session, stagePlayback);
     context.sceneManager->changeScene(
-        std::make_unique<GamePlayScene>(context, std::move(replayChart),
-                                        std::move(options)),
+        std::make_unique<GamePlayScene>(context, std::move(prepared.chart),
+                                        std::move(prepared.options)),
         false);
-    return;
-  }
-
-  auto stageReplay = session->currentCourseReplayStageReplay();
-  if (stageReplay == nullptr) {
-    return;
-  }
-  session->applyReplayStagePlayOptions(*stageReplay);
-  context.jukebox.stop();
-  std::atomic_bool parseCancelled = false;
-  auto replayChart = play_options::prepareReplayChart(
-      stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
-  if (replayChart == nullptr || parseCancelled) {
-    context.sceneManager->changeScene("MainMenu");
-    return;
-  }
-
-  context.jukebox.stop();
-  context.jukebox.loadChart(*replayChart, true, parseCancelled);
-  if (parseCancelled) {
-    context.sceneManager->changeScene("MainMenu");
-    return;
-  }
-
-  StartOptions options = makeCourseReplayStageStartOptions(session, stageReplay);
-
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(replayChart),
-                                      std::move(options)),
-      false);
 }
 
 void ResultScene::init() {
@@ -2850,8 +2762,8 @@ void ResultScene::init() {
     }
   }
 
-  rankingOverlayPortal = new OverlayPortal(
-      0, 0, rendering::window_width, rendering::window_height);
+  rankingOverlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                           rendering::window_height);
   rankingOverlayPortal->setPositionType(YGPositionTypeAbsolute);
   rankingOverlayPortal->setPosition(Edge::Left, 0);
   rankingOverlayPortal->setPosition(Edge::Top, 0);
@@ -2897,11 +2809,10 @@ void ResultScene::init() {
 
     if (graphView->seriesCount() > 1) {
       if (auto *graphButton = dynamic_cast<Button *>(graphPlaceHolder)) {
-        graphButton->setOnClickListener(
-            [graphView, updateGaugeLabel]() {
-              graphView->selectNext();
-              updateGaugeLabel();
-            });
+        graphButton->setOnClickListener([graphView, updateGaugeLabel]() {
+          graphView->selectNext();
+          updateGaugeLabel();
+        });
       }
     }
   }

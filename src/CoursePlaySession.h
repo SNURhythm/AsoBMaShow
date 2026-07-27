@@ -4,6 +4,7 @@
 #include "ScoreProvenance.h"
 #include "analysis/JudgedPlaybackData.h"
 #include "bms_parser.hpp"
+#include "replay/ReplayChartFacts.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -11,6 +12,10 @@
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace result_persistence {
+struct PersistedCourseResult;
+}
 
 enum class CourseLongNoteMode { Unspecified, LN, CN, HCN };
 
@@ -269,6 +274,11 @@ struct CoursePlayEntry {
   bms_parser::ChartMeta meta;
 };
 
+struct CoursePlayEntrySnapshot {
+  bms_parser::ChartMeta meta;
+  replay::AuthoredReplayChartFacts replayFacts;
+};
+
 struct CoursePlayChartResult {
   bms_parser::ChartMeta meta;
   RhythmState state;
@@ -311,6 +321,7 @@ struct CoursePlaySession {
   std::optional<long long> playOption2Seed;
   std::string assistOption = assist_options::kOff;
   bool autoKeySound = false;
+  bool clubMode = false;
   bool courseReplayPlayback = false;
   bool courseReplaySaved = false;
   std::string coursePersistenceAttemptId;
@@ -318,6 +329,10 @@ struct CoursePlaySession {
   std::shared_ptr<JudgedCoursePlaybackData> courseReplayData = nullptr;
   std::shared_ptr<replay::CourseReplayPlaybackData> courseReplayPlaybackData =
       nullptr;
+  // Compact saved-result context used only to validate derived replay
+  // analysis. Raw BRD input remains the playback authority.
+  std::shared_ptr<const result_persistence::PersistedCourseResult>
+      courseReplayResultContext = nullptr;
   std::optional<bool> replayTouchVisualizationEnabled;
   std::optional<bool> replayGhostRenderingEnabled;
 
@@ -329,8 +344,8 @@ struct CoursePlaySession {
     return entries.size();
   }
 
-  [[nodiscard]] bool authoritativeEntryMetasComplete() const noexcept {
-    return !entries.empty() && authoritativeEntryMetas.size() == entries.size();
+  [[nodiscard]] bool authoritativeEntriesComplete() const noexcept {
+    return !entries.empty() && authoritativeEntries.size() == entries.size();
   }
 
   [[nodiscard]] const bms_parser::ChartMeta *
@@ -338,16 +353,16 @@ struct CoursePlaySession {
     if (index >= entries.size()) {
       return nullptr;
     }
-    return authoritativeEntryMetasComplete() ? &authoritativeEntryMetas[index]
-                                             : &entries[index].meta;
+    return authoritativeEntriesComplete() ? &authoritativeEntries[index].meta
+                                          : &entries[index].meta;
   }
 
   bool
-  installAuthoritativeEntryMetas(std::vector<bms_parser::ChartMeta> metas) {
-    if (!authoritativeEntryMetas.empty() || metas.size() != entries.size()) {
+  installAuthoritativeEntries(std::vector<CoursePlayEntrySnapshot> snapshots) {
+    if (!authoritativeEntries.empty() || snapshots.size() != entries.size()) {
       return false;
     }
-    authoritativeEntryMetas = std::move(metas);
+    authoritativeEntries = std::move(snapshots);
     return true;
   }
 
@@ -360,6 +375,33 @@ struct CoursePlaySession {
     return result;
   }
 
+  [[nodiscard]] std::vector<CoursePlayEntrySnapshot>
+  entrySnapshotsSnapshot() const {
+    std::vector<CoursePlayEntrySnapshot> result;
+    result.reserve(totalChartCount());
+    for (std::size_t index = 0; index < totalChartCount(); ++index) {
+      result.push_back({
+          .meta = *entryMeta(index),
+          .replayFacts = authoritativeEntriesComplete()
+                             ? authoritativeEntries[index].replayFacts
+                             : replay::captureAuthoredReplayChartFacts(
+                                   entries[index].meta),
+      });
+    }
+    return result;
+  }
+
+  [[nodiscard]] bool
+  entryHasUndefinedLongNotes(std::size_t index) const noexcept {
+    if (index >= entries.size()) {
+      return false;
+    }
+    return authoritativeEntriesComplete()
+               ? authoritativeEntries[index].replayFacts.hasUndefinedLongNotes
+               : replay::captureAuthoredReplayChartFacts(entries[index].meta)
+                     .hasUndefinedLongNotes;
+  }
+
   void snapshotRulesetFromReplay(const JudgedPlaybackData &replay) {
     if (isLegacyRulesetIdentity(replay.setup.playbackRulesetId,
                                 replay.setup.playbackRulesetRevision)) {
@@ -368,8 +410,7 @@ struct CoursePlaySession {
       return;
     }
     rulesetDescriptor = rulesetDescriptorFromReplayIdentity(
-        replay.setup.playbackRulesetId,
-        replay.setup.playbackRulesetRevision);
+        replay.setup.playbackRulesetId, replay.setup.playbackRulesetRevision);
     if (const auto recorded =
             gameplayRulesetFromId(replay.setup.playbackRulesetId)) {
       ruleset = *recorded;
@@ -406,9 +447,7 @@ struct CoursePlaySession {
   [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
     if (courseReplayPlaybackData != nullptr &&
         index < courseReplayPlaybackData->stages.size()) {
-      return !courseReplayPlaybackData->stages[index].legacy.has_value() ||
-             (courseReplayData != nullptr &&
-              index < courseReplayData->stages.size());
+      return true;
     }
     return courseReplayData != nullptr &&
            index < courseReplayData->stages.size();
@@ -417,8 +456,7 @@ struct CoursePlaySession {
   [[nodiscard]] std::shared_ptr<const replay::ReplayPlaybackData>
   currentCourseReplayStagePlayback() const {
     if (courseReplayPlaybackData == nullptr ||
-        currentIndex >= courseReplayPlaybackData->stages.size() ||
-        courseReplayPlaybackData->stages[currentIndex].legacy.has_value()) {
+        currentIndex >= courseReplayPlaybackData->stages.size()) {
       return nullptr;
     }
     return std::shared_ptr<const replay::ReplayPlaybackData>(
@@ -437,8 +475,7 @@ struct CoursePlaySession {
   [[nodiscard]] std::shared_ptr<JudgedPlaybackData>
   currentCourseReplayStageReplay() const {
     if (courseReplayPlaybackData != nullptr &&
-        currentIndex < courseReplayPlaybackData->stages.size() &&
-        !courseReplayPlaybackData->stages[currentIndex].legacy.has_value()) {
+        currentIndex < courseReplayPlaybackData->stages.size()) {
       return nullptr;
     }
     const auto *stage = courseReplayStage(currentIndex);
@@ -447,14 +484,16 @@ struct CoursePlaySession {
                : std::make_shared<JudgedPlaybackData>(stage->replay);
   }
 
-  void applyReplayStagePlayOptions(const JudgedPlaybackData &replay) {
+  void applyReplayStageSetup(const JudgedPlaybackData &replay) {
+    snapshotRulesetFromReplay(replay);
     playOption = replay.setup.playOption;
     playOptionSeed = replay.setup.playOptionSeed;
     playOption2 = replay.setup.playOption2;
     playOption2Seed = replay.setup.playOption2Seed;
   }
 
-  void applyReplayStagePlayOptions(const replay::ReplayPlaybackData &replay) {
+  void applyReplayStageSetup(const replay::ReplayPlaybackData &replay) {
+    snapshotRulesetFromPlayback(replay);
     playOption = replay.setup.playOption;
     playOptionSeed = replay.setup.playOptionSeed;
     playOption2 = replay.setup.playOption2;
@@ -562,5 +601,5 @@ struct CoursePlaySession {
   }
 
 private:
-  std::vector<bms_parser::ChartMeta> authoritativeEntryMetas;
+  std::vector<CoursePlayEntrySnapshot> authoritativeEntries;
 };

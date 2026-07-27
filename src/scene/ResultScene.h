@@ -45,8 +45,7 @@ struct ResultPracticeOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
-  replay::DoublePlayOption doublePlayOption =
-      replay::DoublePlayOption::Normal;
+  replay::DoublePlayOption doublePlayOption = replay::DoublePlayOption::Normal;
   int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
   unsigned long long leadInMicros = 0;
@@ -96,10 +95,7 @@ struct ResultPersistenceRetryCallbacks {
   CoursePersistenceCallback persistCourse;
 };
 
-struct ResultPreviousBestQuery {
-  std::optional<std::string> beforeCreatedAt;
-  std::optional<std::string> excludeAttemptId;
-};
+using ResultPreviousBestQuery = ReplayComparisonQuery;
 
 struct ResultRemoteOptions {
   ir::IrRemoteScore score;
@@ -155,28 +151,27 @@ cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
   return !retryAvailable;
 }
 
-[[nodiscard]] inline bool hasPersistenceAttempt(
-    const ResultPersistenceOptions &persistence) noexcept {
+[[nodiscard]] inline bool
+hasPersistenceAttempt(const ResultPersistenceOptions &persistence) noexcept {
   return (persistence.attempt != nullptr) !=
          (persistence.courseAttempt != nullptr);
 }
 
-[[nodiscard]] inline std::string_view persistenceAttemptId(
-    const ResultPersistenceOptions &persistence) noexcept {
+[[nodiscard]] inline std::string_view
+persistenceAttemptId(const ResultPersistenceOptions &persistence) noexcept {
   if (!hasPersistenceAttempt(persistence)) {
     return {};
   }
-  const auto &attemptId =
-      persistence.attempt != nullptr
-          ? persistence.attempt->result.attemptId
-          : persistence.courseAttempt->result.attemptId;
+  const auto &attemptId = persistence.attempt != nullptr
+                              ? persistence.attempt->result.attemptId
+                              : persistence.courseAttempt->result.attemptId;
   return attemptId ? std::string_view(*attemptId) : std::string_view{};
 }
 
-[[nodiscard]] inline bool persistCourseAttempt(
-    ResultPersistenceOptions &persistence,
-    result_persistence::CompletedCourseAttempt attempt,
-    const CoursePersistenceCallback &persist) {
+[[nodiscard]] inline bool
+persistCourseAttempt(ResultPersistenceOptions &persistence,
+                     result_persistence::CompletedCourseAttempt attempt,
+                     const CoursePersistenceCallback &persist) {
   if (persistence.attempt != nullptr || persistence.courseAttempt != nullptr ||
       !persist) {
     return false;
@@ -188,10 +183,10 @@ cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
   return true;
 }
 
-[[nodiscard]] inline bool retryPersistenceAttempt(
-    ResultPersistenceOptions &persistence,
-    std::span<const ir::IrOutboxDraft> automaticDrafts,
-    const ResultPersistenceRetryCallbacks &callbacks) {
+[[nodiscard]] inline bool
+retryPersistenceAttempt(ResultPersistenceOptions &persistence,
+                        std::span<const ir::IrOutboxDraft> automaticDrafts,
+                        const ResultPersistenceRetryCallbacks &callbacks) {
   if (!hasPersistenceAttempt(persistence)) {
     return false;
   }
@@ -219,9 +214,10 @@ cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
          });
 }
 
-[[nodiscard]] inline ResultPreviousBestQuery previousBestQueryFor(
-    const ResultPersistenceOptions &persistence, bool replayResult,
-    const ReplayResultContext *replayContext) {
+[[nodiscard]] inline ResultPreviousBestQuery
+previousBestQueryFor(const ResultPersistenceOptions &persistence,
+                     bool replayResult,
+                     const ReplayResultContext *replayContext) {
   ResultPreviousBestQuery query;
   if (persistence.attempt != nullptr &&
       persistence.attempt->result.attemptId.has_value()) {
@@ -239,20 +235,14 @@ cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
     return query;
   }
   if (replayResult && replayContext != nullptr) {
-    if (replayContext->attemptId.has_value() &&
-        !replayContext->attemptId->empty()) {
-      query.excludeAttemptId = replayContext->attemptId;
-    }
-    if (!replayContext->createdAt.empty()) {
-      query.beforeCreatedAt = replayContext->createdAt;
-    }
+    return replayComparisonQueryFor(replayContext);
   }
   return query;
 }
 
-[[nodiscard]] inline std::optional<int> resultIdForPractice(
-    const ResultPersistenceOptions &persistence,
-    const ReplayResultContext *replayContext) noexcept {
+[[nodiscard]] inline std::optional<int>
+resultIdForPractice(const ResultPersistenceOptions &persistence,
+                    const ReplayResultContext *replayContext) noexcept {
   if (persistence.result != nullptr && persistence.result->resultId > 0) {
     return persistence.result->resultId;
   }
@@ -261,21 +251,20 @@ cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
              : std::nullopt;
 }
 
-[[nodiscard]] inline bool isReplayResultSource(
-    const JudgedPlaybackData *presentationReplay,
-    const JudgedPlaybackData *judgedReplay,
-    const replay::ReplayPlaybackData *rawReplay) noexcept {
+[[nodiscard]] inline bool
+isReplayResultSource(const JudgedPlaybackData *presentationReplay,
+                     const JudgedPlaybackData *judgedReplay,
+                     const replay::ReplayPlaybackData *rawReplay) noexcept {
   return presentationReplay == nullptr &&
          (judgedReplay != nullptr || rawReplay != nullptr);
 }
 
 [[nodiscard]] inline std::optional<JudgedPlaybackData>
-retrySourceForLocalResult(
-    const bms_parser::ChartMeta &meta,
-    const ScoreProvenance &attemptProvenance,
-    const JudgedPlaybackData *presentationReplay,
-    const JudgedPlaybackData *explicitRetrySource,
-    const replay::ReplayPlaybackData *rawReplayPlayback) {
+retrySourceForLocalResult(const bms_parser::ChartMeta &meta,
+                          const ScoreProvenance &attemptProvenance,
+                          const JudgedPlaybackData *presentationReplay,
+                          const JudgedPlaybackData *explicitRetrySource,
+                          const replay::ReplayPlaybackData *rawReplayPlayback) {
   if (explicitRetrySource != nullptr) {
     return *explicitRetrySource;
   }
@@ -294,9 +283,9 @@ retrySourceForLocalResult(
   return analysis::retrySourceFromProvenance(meta, attemptProvenance);
 }
 
-[[nodiscard]] inline bool shouldReuseResultRetryChart(
-    bool samePattern, const bms_parser::Chart *chart,
-    bool chartMatchesRetrySource) noexcept {
+[[nodiscard]] inline bool
+shouldReuseResultRetryChart(bool samePattern, const bms_parser::Chart *chart,
+                            bool chartMatchesRetrySource) noexcept {
   return samePattern && chart != nullptr && chartMatchesRetrySource;
 }
 

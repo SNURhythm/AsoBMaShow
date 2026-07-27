@@ -126,6 +126,7 @@ game_header = read("src/scene/play/GamePlayScene.h")
 game_source = read("src/scene/play/GamePlayScene.cpp")
 result_header = read("src/scene/ResultScene.h")
 result_source = read("src/scene/ResultScene.cpp")
+replay_result_context_header = read("src/scene/play/ReplayResultContext.h")
 coordinator_header = read("src/ResultPersistenceCoordinator.h")
 skin_interface = read("src/skin/ISkin.h")
 default_skin = read("src/skin/DefaultSkin.cpp")
@@ -392,11 +393,11 @@ receipt_body = function_body(
 require(
     "validatedReceiptFor(" in receipt_body
     and "receipt->resultId" in receipt_body
+    and "receipt->attemptId" in receipt_body
     and "receipt->createdAt" in receipt_body
     and "persistedResultId" in receipt_body
-    and "presentationReplay" in receipt_body
-    and "retryData" in receipt_body,
-    "receipt result ID and createdAt must reach result and analysis presentation state",
+    and "replayResultContext" in receipt_body,
+    "receipt identity and timestamp must reach the dedicated replay result context",
 )
 
 previous_body = function_body(result_source, "ResultScene", "loadPreviousBest")
@@ -439,9 +440,16 @@ require(
 )
 require(
     "replayResult" in previous_query_body
-    and "replayContext->createdAt" in previous_query_body
-    and "replayContext->attemptId" in previous_query_body,
+    and "replayComparisonQueryFor(replayContext)" in previous_query_body,
     "replay results must preserve their exact-attempt or beforeCreatedAt boundary",
+)
+replay_comparison_body = unqualified_function_body(
+    replay_result_context_header, "replayComparisonQueryFor"
+)
+require(
+    "context->createdAt" in replay_comparison_body
+    and "context->attemptId" in replay_comparison_body,
+    "the replay comparison query must derive both result boundaries from navigation context",
 )
 
 exit_body = function_body(result_source, "ResultScene", "exitResult")

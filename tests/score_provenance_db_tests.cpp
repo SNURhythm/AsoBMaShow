@@ -771,12 +771,10 @@ void removeImportedIrFromCurrentSchema(sqlite3 *db) {
   if (indexExists(db, "idx_scores_imported_ir_identity")) {
     execOrAbort(db, "DROP INDEX idx_scores_imported_ir_identity");
   }
-  execOrAbort(db,
-              "DROP TRIGGER IF EXISTS score_sha256_summary_after_insert");
-  for (const std::string column : {"source_sync_generation",
-                                   "source_remote_score_id",
-                                   "source_server_origin",
-                                   "source_provider_id", "score_source"}) {
+  execOrAbort(db, "DROP TRIGGER IF EXISTS score_sha256_summary_after_insert");
+  for (const std::string column :
+       {"source_sync_generation", "source_remote_score_id",
+        "source_server_origin", "source_provider_id", "score_source"}) {
     if (columnExists(db, "scores", column)) {
       execOrAbort(db, "ALTER TABLE scores DROP COLUMN " + column);
     }
@@ -968,16 +966,17 @@ void testCachedHelperRevalidatesAttemptIdentitySchema(
 
 void testFutureVersionRejectsBeforeAttemptIdentityInspection(
     const std::filesystem::path &root) {
-  const auto path = root / "future-score-before-attempt-inspection" / "score.db";
+  const auto path =
+      root / "future-score-before-attempt-inspection" / "score.db";
   {
     ScoreRepository bootstrap(path);
     assert(bootstrap.EnsureSchema());
   }
   auto db = openDatabase(path);
   execOrAbort(db.get(), "DROP INDEX idx_scores_attempt_id");
-  execOrAbort(db.get(), "PRAGMA user_version = " +
-                            std::to_string(
-                                ScoreRepository::kCurrentSchemaVersion + 1));
+  execOrAbort(db.get(),
+              "PRAGMA user_version = " +
+                  std::to_string(ScoreRepository::kCurrentSchemaVersion + 1));
   db.reset();
   const auto before = rawDatabaseFamilySnapshot(path);
   ScoreRepository helper(path);
@@ -1149,8 +1148,8 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
     const std::filesystem::path &root) {
   const auto path = root / "best-score-ir-bp" / "score.db";
   ScoreRepository helper(path);
-  auto pending = samplePendingScore(root, "best-score-ir-bp", 14,
-                                    "2026-07-18 12:34:56");
+  auto pending =
+      samplePendingScore(root, "best-score-ir-bp", 14, "2026-07-18 12:34:56");
   pending.score.bad = 14;
   pending.score.poor = 8;
   pending.score.kPoor = 40;
@@ -1185,7 +1184,8 @@ void testBestScoreCanFilterExactRuleset(const std::filesystem::path &root) {
          result_persistence::ProjectionStatus::Inserted);
 
   const auto meta = sampleMeta(root, "best-score-ruleset-filter");
-  const auto overall = helper.LoadBestScore(meta, std::nullopt, std::nullopt, 2);
+  const auto overall =
+      helper.LoadBestScore(meta, std::nullopt, std::nullopt, 2);
   assert(overall.has_value() && overall->score == beatoraja.score.score);
   const auto lr2Best = helper.LoadBestScoreForRuleset(
       meta, RulesetDescriptor::For(GameplayRuleset::LR2), 2);
@@ -1583,7 +1583,10 @@ void testCourseWritesUseAuthoritativeKeysAndExactMode(
   session.entries.push_back({.meta = meta});
   auto authoritativeMeta = meta;
   authoritativeMeta.TotalNotes = 37;
-  assert(session.installAuthoritativeEntryMetas({authoritativeMeta}));
+  assert(session.installAuthoritativeEntries(
+      {{.meta = authoritativeMeta,
+        .replayFacts =
+            replay::captureAuthoredReplayChartFacts(authoritativeMeta)}}));
   session.courseKey = course_identity::makeCourseKey(
       std::vector<course_identity::ChartIdentity>{{.md5 = std::string(kMd5A)}},
       "[]");
@@ -1969,9 +1972,9 @@ void testFutureVersionIsRejected(const std::filesystem::path &root) {
   createFutureSentinelDatabase(path);
   {
     auto db = openDatabase(path);
-    execOrAbort(db.get(), "PRAGMA user_version=" +
-                              std::to_string(
-                                  ScoreRepository::kCurrentSchemaVersion + 1));
+    execOrAbort(db.get(),
+                "PRAGMA user_version=" +
+                    std::to_string(ScoreRepository::kCurrentSchemaVersion + 1));
   }
   const auto before = rawDatabaseFamilySnapshot(path);
   ScoreRepository helper(path);
@@ -2090,8 +2093,7 @@ void testVersion8MigrationReclassifiesBeatorajaValidScores(
   const auto state = sampleState(20, 5);
 
   ScoreProvenance chartProvenance = sampleProvenance("migration-v8-chart");
-  chartProvenance.ruleset =
-      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  chartProvenance.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   chartProvenance.stages.front().candidateSelection =
       gameplay::CandidateSelectionMode::Lowest;
   chartProvenance.gaugeAutoShift = GaugeAutoShiftMode::SurvivalToGroove;
@@ -2108,8 +2110,7 @@ void testVersion8MigrationReclassifiesBeatorajaValidScores(
   session.courseKey = course_identity::makeCourseKey(session);
 
   ScoreProvenance courseProvenance = sampleProvenance("migration-v8-course");
-  courseProvenance.ruleset =
-      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  courseProvenance.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   courseProvenance.stages.front().candidateSelection =
       gameplay::CandidateSelectionMode::Lowest;
   courseProvenance.gaugeProfile = GaugeProfile::CourseDefault;
@@ -2356,11 +2357,11 @@ void testFutureScorePreflightPreservesRawDatabaseFamily(
                                  FutureDatabaseState::HotJournal,
                                  FutureDatabaseState::Delete};
   for (const FutureDatabaseState databaseState : states) {
-    assertRejectedWithoutFamilyMutation(
-        databaseState, "connect", [&](const auto &path) {
-          ScoreRepository helper(path);
-          return !helper.EnsureSchema();
-        });
+    assertRejectedWithoutFamilyMutation(databaseState, "connect",
+                                        [&](const auto &path) {
+                                          ScoreRepository helper(path);
+                                          return !helper.EnsureSchema();
+                                        });
     assertRejectedWithoutFamilyMutation(
         databaseState, "save-chart", [&](const auto &path) {
           ScoreRepository helper(path);
@@ -2676,8 +2677,8 @@ void testValidatedOpenCheckpointPolicy(const std::filesystem::path &root) {
       .enableForeignKeys = false,
       .disableCheckpointOnClose = false,
   };
-  SqliteConnectionHandle policyConnection(openValidatedSqliteDatabase(
-      policyPath, 3, policy, errorMessage));
+  SqliteConnectionHandle policyConnection(
+      openValidatedSqliteDatabase(policyPath, 3, policy, errorMessage));
   assert(policyConnection);
   int noCheckpointOnClose = -1;
   assert(sqlite3_db_config(policyConnection.get(),
@@ -2690,8 +2691,8 @@ void testValidatedOpenCheckpointPolicy(const std::filesystem::path &root) {
       root / "validated-open-compatibility" / "score.db";
   std::filesystem::create_directories(compatibilityPath.parent_path());
   errorMessage.clear();
-  SqliteConnectionHandle compatibilityConnection(openValidatedSqliteDatabase(
-      compatibilityPath, 3, false, errorMessage));
+  SqliteConnectionHandle compatibilityConnection(
+      openValidatedSqliteDatabase(compatibilityPath, 3, false, errorMessage));
   assert(compatibilityConnection);
   noCheckpointOnClose = -1;
   assert(sqlite3_db_config(compatibilityConnection.get(),

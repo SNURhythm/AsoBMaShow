@@ -3,6 +3,7 @@
 #include "ChartListenStart.h"
 
 #include "../ArchiveFile.h"
+#include "../analysis/JudgedPlaybackAnalysis.h"
 #include "../ChartPlaybackDuration.h"
 #include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
@@ -13,8 +14,6 @@
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticePresetStore.h"
 #include "../practice/PracticeSession.h"
-#include "../replay/LegacyReplayPlaybackAdapter.h"
-#include "../replay/ReplayPlaybackMaterializer.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/TexBatchRenderer.h"
 #include "../rendering/common.h"
@@ -135,11 +134,13 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
 }
 
 GaugeAutoShiftMode gaugeAutoShiftFromSettingId(const std::string &id) {
-  if (id == "continue") return GaugeAutoShiftMode::Continue;
+  if (id == "continue")
+    return GaugeAutoShiftMode::Continue;
   if (id == "survival_to_groove") {
     return GaugeAutoShiftMode::SurvivalToGroove;
   }
-  if (id == "best_clear") return GaugeAutoShiftMode::BestClear;
+  if (id == "best_clear")
+    return GaugeAutoShiftMode::BestClear;
   if (id == "select_to_under") {
     return GaugeAutoShiftMode::SelectToUnder;
   }
@@ -242,8 +243,7 @@ std::string formatMicrosTime(long long micros) {
 uint32_t markerLabelColorKey(const SDL_Color &color) {
   return (static_cast<uint32_t>(color.r) << 24) |
          (static_cast<uint32_t>(color.g) << 16) |
-         (static_cast<uint32_t>(color.b) << 8) |
-         static_cast<uint32_t>(color.a);
+         (static_cast<uint32_t>(color.b) << 8) | static_cast<uint32_t>(color.a);
 }
 
 std::string markerGlyphCacheKey(char glyph, const SDL_Color &color,
@@ -379,24 +379,23 @@ Button *makeButton(const std::string &label, int width, int fontSize,
   return button;
 }
 
-GaugeProfile
-practiceGaugeProfileForChart(const bms_parser::Chart *chart) {
+GaugeProfile practiceGaugeProfileForChart(const bms_parser::Chart *chart) {
   return resolveGaugeProfile(GaugeProfile::Standard,
                              chart != nullptr ? chart->Meta.KeyMode : 7);
 }
 
-int practiceStartingGaugeMaximum(
-    const practice::Configuration &configuration,
-    const bms_parser::Chart *chart) {
+int practiceStartingGaugeMaximum(const practice::Configuration &configuration,
+                                 const bms_parser::Chart *chart) {
   const GaugeProfile gaugeProfile = practiceGaugeProfileForChart(chart);
   return static_cast<int>(gaugeStartingMaximumValue(
       configuration.gaugeType, configuration.gaugeAutoShift,
       configuration.gaugeAutoShiftLowerBound, gaugeProfile));
 }
 
-practice::SanitizedConfiguration sanitizePracticeConfiguration(
-    practice::Configuration configuration, long long chartEndMicros,
-    const bms_parser::Chart *chart) {
+practice::SanitizedConfiguration
+sanitizePracticeConfiguration(practice::Configuration configuration,
+                              long long chartEndMicros,
+                              const bms_parser::Chart *chart) {
   const int startingGaugeMaximum =
       practiceStartingGaugeMaximum(configuration, chart);
   return practice::sanitize(std::move(configuration), chartEndMicros,
@@ -511,9 +510,7 @@ public:
     practiceRangeListener = std::move(listener);
   }
 
-  [[nodiscard]] bool hasSelectedTime() const {
-    return practiceRangeSet;
-  }
+  [[nodiscard]] bool hasSelectedTime() const { return practiceRangeSet; }
 
   [[nodiscard]] long long getSelectedTimeMicros() const {
     return practiceRange.active == practice::Marker::Start
@@ -534,10 +531,14 @@ public:
   void setGhostReplay(const JudgedPlaybackData &replayData) {
     replayGhostEvents = replay_ghost::buildReplayGhostEvents(
         replayData, orderedTimelines, laneToOrderIndex,
-        [this](long long timeMicros) { return timeToBeatPosition(timeMicros); });
+        [this](long long timeMicros) {
+          return timeToBeatPosition(timeMicros);
+        });
     replayMissMarkers = replay_ghost::buildReplayMissMarkers(
         replayData, orderedTimelines, laneToOrderIndex,
-        [this](long long timeMicros) { return timeToBeatPosition(timeMicros); });
+        [this](long long timeMicros) {
+          return timeToBeatPosition(timeMicros);
+        });
   }
 
   void clearGhostReplay() {
@@ -589,9 +590,9 @@ protected:
       if (!containsPoint(static_cast<float>(uiX), static_cast<float>(uiY))) {
         return true;
       }
-      const float horizontal =
-          event.wheel.x != 0 ? static_cast<float>(-event.wheel.x)
-                             : static_cast<float>(-event.wheel.y);
+      const float horizontal = event.wheel.x != 0
+                                   ? static_cast<float>(-event.wheel.x)
+                                   : static_cast<float>(-event.wheel.y);
       scrollX += horizontal * 88.0f / screenZoom;
       scrollY += static_cast<float>(-event.wheel.y) * 12.0f / screenZoom;
       clampScroll();
@@ -629,10 +630,9 @@ protected:
       scrollY -= static_cast<float>(dy) / screenZoom;
       lastMouseX = uiX;
       lastMouseY = uiY;
-      mouseDragDistance =
-          std::max(mouseDragDistance,
-                   std::hypot(static_cast<float>(uiX - mouseStartX),
-                              static_cast<float>(uiY - mouseStartY)));
+      mouseDragDistance = std::max(
+          mouseDragDistance, std::hypot(static_cast<float>(uiX - mouseStartX),
+                                        static_cast<float>(uiY - mouseStartY)));
       clampScroll();
       return false;
     }
@@ -900,10 +900,9 @@ private:
         std::clamp(static_cast<float>(getWidth()) * 0.12f, 84.0f, 156.0f);
     contentLeftMargin = baseSideMargin + horizontalSafeInset;
     contentRightMargin = baseSideMargin + horizontalSafeInset;
-    const float maxColumnHeight =
-        std::max(280.0f, static_cast<float>(getHeight()) -
-                             kChartContentTopPadding -
-                             kChartContentBottomPadding);
+    const float maxColumnHeight = std::max(
+        280.0f, static_cast<float>(getHeight()) - kChartContentTopPadding -
+                    kChartContentBottomPadding);
     const float baseMeasureHeight = 272.0f * zoom;
     totalBeatLength = 0.0;
     for (const auto *measure : chart->Measures) {
@@ -915,8 +914,8 @@ private:
     for (const auto *measure : chart->Measures) {
       const double scale = measure == nullptr ? 1.0 : measure->Scale;
       measureHeights.push_back(
-          std::max(22.0f, baseMeasureHeight * static_cast<float>(
-                                           std::max(0.05, scale))));
+          std::max(22.0f, baseMeasureHeight *
+                              static_cast<float>(std::max(0.05, scale))));
     }
 
     int column = 0;
@@ -926,19 +925,19 @@ private:
       size_t groupEnd = groupStart;
       while (groupEnd < measureHeights.size()) {
         const float nextHeight = measureHeights[groupEnd];
-        if (groupEnd > groupStart && groupHeight + nextHeight > maxColumnHeight) {
+        if (groupEnd > groupStart &&
+            groupHeight + nextHeight > maxColumnHeight) {
           break;
         }
         groupHeight += nextHeight;
         ++groupEnd;
       }
 
-      const float columnX = contentLeftMargin +
-                            static_cast<float>(column) * columnWidth;
+      const float columnX =
+          contentLeftMargin + static_cast<float>(column) * columnWidth;
       const float columnBottom = kChartContentTopPadding + maxColumnHeight;
       float cursorY = columnBottom;
-      ColumnLayout columnLayout{columnX, columnBottom,
-                                kChartContentTopPadding};
+      ColumnLayout columnLayout{columnX, columnBottom, kChartContentTopPadding};
       double beatStart = 0.0;
       for (size_t i = 0; i < groupStart; ++i) {
         const auto *measure = chart->Measures[i];
@@ -950,8 +949,8 @@ private:
         const double scale = measure == nullptr ? 1.0 : measure->Scale;
         const float height = measureHeights[i];
         cursorY -= height;
-        measureLayouts.push_back({static_cast<int>(i), column, columnX,
-                                  cursorY, height, beatStart, scale});
+        measureLayouts.push_back({static_cast<int>(i), column, columnX, cursorY,
+                                  height, beatStart, scale});
         columnLayout.yTop = std::min(columnLayout.yTop, cursorY);
         columnLayout.yBottom = std::max(columnLayout.yBottom, cursorY + height);
         beatStart += scale;
@@ -964,18 +963,17 @@ private:
 
     contentHeight =
         kChartContentTopPadding + maxColumnHeight + kChartContentBottomPadding;
-    contentWidth =
-        columnLayouts.empty()
-            ? 0.0f
-            : columnLayouts.back().x + gutterWidth + laneAreaWidth + 78.0f +
-                  contentRightMargin;
+    contentWidth = columnLayouts.empty()
+                       ? 0.0f
+                       : columnLayouts.back().x + gutterWidth + laneAreaWidth +
+                             78.0f + contentRightMargin;
 
     for (size_t layoutIndex = 0; layoutIndex < measureLayouts.size();
          ++layoutIndex) {
       auto &layout = measureLayouts[layoutIndex];
       const auto *measure = chart->Measures[layout.measureIndex];
-      auto label = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf",
-                                              16);
+      auto label =
+          std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", 16);
       label->setText(std::to_string(layout.measureIndex));
       label->setColor({245, 247, 250, 255});
       label->setAlign(TextView::CENTER);
@@ -994,9 +992,8 @@ private:
         const double localBeat = std::clamp(
             (timeline->BeatPosition - layout.beatStart) / layout.scale, 0.0,
             1.0);
-        const float y =
-            layout.y + layout.height - static_cast<float>(localBeat) *
-                                            layout.height;
+        const float y = layout.y + layout.height -
+                        static_cast<float>(localBeat) * layout.height;
         orderedTimelines.push_back(timeline);
         timelineY[timeline] = y;
         timelineMeasure[timeline] = layoutIndex;
@@ -1022,8 +1019,7 @@ private:
                {242, 211, 80, 255});
     }
     if (timeline->ScrollChange) {
-      addLabel(MarkerType::Scroll,
-               "SCROLL " + formatDouble(timeline->Scroll),
+      addLabel(MarkerType::Scroll, "SCROLL " + formatDouble(timeline->Scroll),
                {101, 205, 208, 255});
     }
   }
@@ -1037,14 +1033,14 @@ private:
     const uint32_t fineLine = Color(34, 38, 39, 128).toABGR();
 
     for (const auto &layout : measureLayouts) {
-      if (!contentRectIntersects(layout.x, layout.y, gutterWidth + laneAreaWidth,
-                                 layout.height)) {
+      if (!contentRectIntersects(layout.x, layout.y,
+                                 gutterWidth + laneAreaWidth, layout.height)) {
         continue;
       }
       const float laneX = layout.x + gutterWidth;
       drawRectClip(layout.x, layout.y, gutterWidth, layout.height, gutterColor);
-      drawRectClip(layout.x + gutterWidth - 2.0f, layout.y, 2.0f,
-                   layout.height, gutterAccent);
+      drawRectClip(layout.x + gutterWidth - 2.0f, layout.y, 2.0f, layout.height,
+                   gutterAccent);
       drawRectClip(laneX, layout.y, laneAreaWidth, layout.height,
                    laneBackground);
       drawRectClip(layout.x, layout.y, gutterWidth + laneAreaWidth, 1.5f,
@@ -1053,16 +1049,16 @@ private:
                    gutterWidth + laneAreaWidth, 1.5f, majorLine);
 
       for (int i = 1; i < 16; ++i) {
-        const float y = layout.y + layout.height * static_cast<float>(i) / 16.0f;
+        const float y =
+            layout.y + layout.height * static_cast<float>(i) / 16.0f;
         drawRectClip(laneX, y, laneAreaWidth, i % 4 == 0 ? 1.1f : 0.8f,
                      i % 4 == 0 ? minorLine : fineLine);
       }
       for (size_t i = 0; i <= laneOrder.size(); ++i) {
         const float x = laneX + static_cast<float>(i) * laneWidth;
         drawRectClip(x, layout.y, i == 0 || i == laneOrder.size() ? 1.4f : 1.0f,
-                     layout.height, i == 0 || i == laneOrder.size()
-                                        ? majorLine
-                                        : minorLine);
+                     layout.height,
+                     i == 0 || i == laneOrder.size() ? majorLine : minorLine);
       }
     }
   }
@@ -1120,8 +1116,7 @@ private:
       const bool isLongNote =
           dynamic_cast<const bms_parser::LongNote *>(note) != nullptr;
       const float borderThickness =
-          height *
-          chart_viewer_note_geometry::kInvisibleNoteBorderHeightRatio;
+          height * chart_viewer_note_geometry::kInvisibleNoteBorderHeightRatio;
       const auto rectangles =
           chart_viewer_note_geometry::invisibleNoteRectangles(
               x, y, width, height, borderThickness, isLongNote);
@@ -1152,7 +1147,8 @@ private:
       }
 
       const uint32_t color = ghostColor(event).toABGR();
-      const float thickness = std::max(1.25f, std::min(2.4f, laneWidth * 0.12f));
+      const float thickness =
+          std::max(1.25f, std::min(2.4f, laneWidth * 0.12f));
       drawRectClip(x, y, width, thickness, color);
       drawRectClip(x, y + height - thickness, width, thickness, color);
       drawRectClip(x, y, thickness, height, color);
@@ -1265,8 +1261,7 @@ private:
         constexpr float kEndpointEpsilon = 0.5f;
         if (std::abs(position.y - column.yTop) <= kEndpointEpsilon) {
           side = CursorSegmentSide::Below;
-        } else if (std::abs(position.y - column.yBottom) <=
-                   kEndpointEpsilon) {
+        } else if (std::abs(position.y - column.yBottom) <= kEndpointEpsilon) {
           side = CursorSegmentSide::Above;
         }
       }
@@ -1293,8 +1288,8 @@ private:
       markerY = position.y;
     }
     drawRectClip(laneX, laneY, laneAreaWidth, laneHeight, color.toABGR());
-    drawRectClip(position.x + gutterWidth - 6.0f, markerY, 6.0f,
-                 markerHeight, color.toABGR());
+    drawRectClip(position.x + gutterWidth - 6.0f, markerY, 6.0f, markerHeight,
+                 color.toABGR());
   }
 
   void selectAtUiPoint(float uiX, float uiY) {
@@ -1310,9 +1305,8 @@ private:
     for (const auto &layout : measureLayouts) {
       const float laneLeft = layout.x;
       const float laneRight = layout.x + gutterWidth + laneAreaWidth;
-      if (contentX < laneLeft || contentX > laneRight ||
-          contentY < layout.y || contentY > layout.y + layout.height ||
-          layout.scale <= 0.0) {
+      if (contentX < laneLeft || contentX > laneRight || contentY < layout.y ||
+          contentY > layout.y + layout.height || layout.scale <= 0.0) {
         continue;
       }
 
@@ -1331,10 +1325,10 @@ private:
     const double selectedBeatPosition =
         std::clamp(beatPosition, 0.0, std::max(0.0, totalBeatLength));
     const long long timeMicros = beatToTimeMicros(selectedBeatPosition);
-    const long long chartEnd = chart == nullptr
-                                   ? std::max(0LL, timeMicros)
-                                   : chart_playback_duration::
-                                         ChartTimelineEndMicros(*chart);
+    const long long chartEnd =
+        chart == nullptr
+            ? std::max(0LL, timeMicros)
+            : chart_playback_duration::ChartTimelineEndMicros(*chart);
     practiceRange.placeActiveMarker(timeMicros, chartEnd);
     practiceRangeSet = true;
     playbackActive = false;
@@ -1367,7 +1361,8 @@ private:
           continue;
         }
         if (bottomMeasure == nullptr ||
-            layout.y + layout.height > bottomMeasure->y + bottomMeasure->height) {
+            layout.y + layout.height >
+                bottomMeasure->y + bottomMeasure->height) {
           bottomMeasure = &layout;
         }
         if (topMeasure == nullptr || layout.y < topMeasure->y) {
@@ -1423,8 +1418,7 @@ private:
     return beatToCursorPositions(timeToBeatPosition(timeMicros));
   }
 
-  bool beatToCursorPosition(double beatPosition,
-                            CursorDrawPosition &position,
+  bool beatToCursorPosition(double beatPosition, CursorDrawPosition &position,
                             BoundaryPreference boundaryPreference =
                                 BoundaryPreference::PreferEnd) const {
     if (measureLayouts.empty()) {
@@ -1456,18 +1450,18 @@ private:
       return true;
     }
 
-    const auto &fallback =
-        beatPosition < measureLayouts.front().beatStart ? measureLayouts.front()
-                                                        : measureLayouts.back();
+    const auto &fallback = beatPosition < measureLayouts.front().beatStart
+                               ? measureLayouts.front()
+                               : measureLayouts.back();
     position = cursorPositionForLayout(
-        fallback, beatPosition < fallback.beatStart ? fallback.beatStart
-                                                    : fallback.beatStart +
-                                                          fallback.scale);
+        fallback, beatPosition < fallback.beatStart
+                      ? fallback.beatStart
+                      : fallback.beatStart + fallback.scale);
     return true;
   }
 
-  std::vector<CursorDrawPosition> beatToCursorPositions(
-      double beatPosition) const {
+  std::vector<CursorDrawPosition>
+  beatToCursorPositions(double beatPosition) const {
     std::vector<CursorDrawPosition> positions;
     if (measureLayouts.empty()) {
       return positions;
@@ -1483,7 +1477,8 @@ private:
       if (beatPosition + epsilon < start || beatPosition - epsilon > end) {
         continue;
       }
-      CursorDrawPosition position = cursorPositionForLayout(layout, beatPosition);
+      CursorDrawPosition position =
+          cursorPositionForLayout(layout, beatPosition);
       const auto duplicate = std::find_if(
           positions.begin(), positions.end(), [&](const auto &existing) {
             return existing.column == position.column &&
@@ -1516,8 +1511,8 @@ private:
     CursorDrawPosition position;
     position.column = layout.column;
     position.x = layout.x;
-    position.y = layout.y + layout.height -
-                 static_cast<float>(local) * layout.height;
+    position.y =
+        layout.y + layout.height - static_cast<float>(local) * layout.height;
     return position;
   }
 
@@ -1616,9 +1611,8 @@ private:
         if (beatDistance <= epsilon) {
           return current->Timing;
         }
-        const double progress =
-            std::clamp((clampedBeat - prev->BeatPosition) / beatDistance, 0.0,
-                       1.0);
+        const double progress = std::clamp(
+            (clampedBeat - prev->BeatPosition) / beatDistance, 0.0, 1.0);
         return static_cast<long long>(std::llround(
             static_cast<double>(stopEnd) +
             static_cast<double>(current->Timing - stopEnd) * progress));
@@ -1640,11 +1634,10 @@ private:
       return last->Timing;
     }
     const double progress =
-        std::clamp((clampedBeat - last->BeatPosition) / beatDistance, 0.0,
-                   1.0);
-    return static_cast<long long>(std::llround(
-        static_cast<double>(stopEnd) +
-        static_cast<double>(totalLength - stopEnd) * progress));
+        std::clamp((clampedBeat - last->BeatPosition) / beatDistance, 0.0, 1.0);
+    return static_cast<long long>(
+        std::llround(static_cast<double>(stopEnd) +
+                     static_cast<double>(totalLength - stopEnd) * progress));
   }
 
   void renderLabels(RenderContext &context) {
@@ -1656,10 +1649,9 @@ private:
         continue;
       }
       auto *label = measureLabels[i].get();
-      label->setSize(std::max(28, static_cast<int>(std::lround(gutterWidth *
-                                                               screenZoom))),
-                     std::max(16, static_cast<int>(std::lround(22.0f *
-                                                               screenZoom))));
+      label->setSize(
+          std::max(28, static_cast<int>(std::lround(gutterWidth * screenZoom))),
+          std::max(16, static_cast<int>(std::lround(22.0f * screenZoom))));
       label->setPositionNoLayout(
           static_cast<int>(std::round(contentToScreenX(layout.x))),
           static_cast<int>(
@@ -1683,8 +1675,7 @@ private:
       } else if (marker.type == MarkerType::Scroll) {
         y += 20.0f;
       }
-      if (!contentRectIntersects(x, y, kMarkerLabelWidth,
-                                 kMarkerLabelHeight)) {
+      if (!contentRectIntersects(x, y, kMarkerLabelWidth, kMarkerLabelHeight)) {
         continue;
       }
       const float labelBoxWidth =
@@ -1760,8 +1751,7 @@ private:
     label.width = glyph == ' ' ? static_cast<float>(fontSize) * 0.34f
                                : static_cast<float>(label.text->textureWidth());
     label.height = static_cast<float>(label.text->textureHeight());
-    auto [it, inserted] =
-        markerGlyphTextures.emplace(key, std::move(label));
+    auto [it, inserted] = markerGlyphTextures.emplace(key, std::move(label));
     (void)inserted;
     return &it->second;
   }
@@ -1779,8 +1769,7 @@ private:
           continue;
         }
         for (int lane : laneOrder) {
-          if (lane < 0 ||
-              lane >= static_cast<int>(timeline->Notes.size())) {
+          if (lane < 0 || lane >= static_cast<int>(timeline->Notes.size())) {
             continue;
           }
           const auto *note = timeline->Notes[static_cast<size_t>(lane)];
@@ -1858,8 +1847,8 @@ private:
         y0 = tailYIt->second;
         y1 = columnLayout.yBottom;
       }
-      const float x = laneContentX(column, lane) + laneWidth * 0.5f -
-                      bodyWidth * 0.5f;
+      const float x =
+          laneContentX(column, lane) + laneWidth * 0.5f - bodyWidth * 0.5f;
       drawRectClip(x, y0, bodyWidth, std::max(2.0f, y1 - y0), color);
     }
   }
@@ -1930,9 +1919,9 @@ private:
     const float maxX = std::max(0.0f, width - block);
     const float maxY = std::max(0.0f, height - block);
     for (int i = 0; i < kSteps; ++i) {
-      const float t = kSteps == 1 ? 0.0f
-                                  : static_cast<float>(i) /
-                                        static_cast<float>(kSteps - 1);
+      const float t =
+          kSteps == 1 ? 0.0f
+                      : static_cast<float>(i) / static_cast<float>(kSteps - 1);
       const float yOffset = maxY * t;
       drawRectClip(x + maxX * t, y + yOffset, block, block, color);
       drawRectClip(x + maxX * (1.0f - t), y + yOffset, block, block, color);
@@ -1945,7 +1934,8 @@ private:
            scratchLanes.end();
   }
 
-  bool contentRectIntersects(float x, float y, float width, float height) const {
+  bool contentRectIntersects(float x, float y, float width,
+                             float height) const {
     const float viewportWidth = static_cast<float>(getWidth()) / screenZoom;
     const float viewportHeight = static_cast<float>(getHeight()) / screenZoom;
     return x + width >= scrollX && x <= scrollX + viewportWidth &&
@@ -1979,12 +1969,10 @@ private:
     const float screenHeight = height * screenZoom;
     const float left = std::max(screenX, static_cast<float>(getX()));
     const float top = std::max(screenY, static_cast<float>(getY()));
-    const float right =
-        std::min(screenX + screenWidth,
-                 static_cast<float>(getX() + getWidth()));
-    const float bottom =
-        std::min(screenY + screenHeight,
-                 static_cast<float>(getY() + getHeight()));
+    const float right = std::min(screenX + screenWidth,
+                                 static_cast<float>(getX() + getWidth()));
+    const float bottom = std::min(screenY + screenHeight,
+                                  static_cast<float>(getY() + getHeight()));
     if (right <= left || bottom <= top) {
       return;
     }
@@ -2052,10 +2040,9 @@ private:
       const float measureTop = layout.y;
       const float measureBottom = layout.y + layout.height;
       const float measureCenter = (measureTop + measureBottom) * 0.5f;
-      const float distance =
-          centerY >= measureTop && centerY <= measureBottom
-              ? 0.0f
-              : std::abs(centerY - measureCenter);
+      const float distance = centerY >= measureTop && centerY <= measureBottom
+                                 ? 0.0f
+                                 : std::abs(centerY - measureCenter);
       if (distance < nearestMeasureDistance && layout.height > 0.0f) {
         nearestMeasureDistance = distance;
         anchor.centerMeasureIndex = layout.measureIndex;
@@ -2153,9 +2140,10 @@ private:
     }
 
     const float viewportHeight = static_cast<float>(getHeight()) / screenZoom;
-    const float localY = targetMeasure->measureIndex == anchor.centerMeasureIndex
-                             ? anchor.centerMeasureLocalY
-                             : 0.5f;
+    const float localY =
+        targetMeasure->measureIndex == anchor.centerMeasureIndex
+            ? anchor.centerMeasureLocalY
+            : 0.5f;
     scrollY = targetMeasure->y + targetMeasure->height * localY -
               viewportHeight * 0.5f;
     clampScroll();
@@ -2236,20 +2224,18 @@ private:
     }
 
     constexpr float kCursorFocusHeight = 24.0f;
-    ensureContentRectVisible(
-        position.x, position.y - kCursorFocusHeight * 0.5f,
-        gutterWidth + laneAreaWidth, kCursorFocusHeight,
-        kPlaybackAutofocusPaddingX, kPlaybackAutofocusPaddingY);
+    ensureContentRectVisible(position.x, position.y - kCursorFocusHeight * 0.5f,
+                             gutterWidth + laneAreaWidth, kCursorFocusHeight,
+                             kPlaybackAutofocusPaddingX,
+                             kPlaybackAutofocusPaddingY);
   }
 
   void clampScroll() {
     screenZoom = std::clamp(screenZoom, kMinScreenZoom, kMaxScreenZoom);
     const float viewportWidth = static_cast<float>(getWidth()) / screenZoom;
     const float viewportHeight = static_cast<float>(getHeight()) / screenZoom;
-    const float maxX =
-        std::max(0.0f, contentWidth - viewportWidth);
-    const float maxY =
-        std::max(0.0f, contentHeight - viewportHeight);
+    const float maxX = std::max(0.0f, contentWidth - viewportWidth);
+    const float maxY = std::max(0.0f, contentHeight - viewportHeight);
     scrollX = std::clamp(scrollX, 0.0f, maxX);
     scrollY = std::clamp(scrollY, 0.0f, maxY);
   }
@@ -2353,9 +2339,9 @@ ChartViewerScene::ChartViewerScene(
     const auto &replayOptions =
         *pendingPracticeLaunchRequest->replayPlayOptions;
     viewerDoublePlayOption = replayOptions.doublePlayOption;
-    setViewerPlayOptions(
-        replayOptions.playOption, replayOptions.playOptionSeed,
-        replayOptions.playOption2, replayOptions.playOption2Seed);
+    setViewerPlayOptions(replayOptions.playOption, replayOptions.playOptionSeed,
+                         replayOptions.playOption2,
+                         replayOptions.playOption2Seed);
   } else {
     const std::optional<std::string> selectedPlayOption =
         context.settings.selectedPlayOption;
@@ -2433,8 +2419,8 @@ void ChartViewerScene::update(float dt) {
   if (listenActive && canvasView != nullptr) {
     const long long rawTime = context.jukebox.getTimeMicros();
     const long long displayTime =
-        rawTime + static_cast<long long>(context.settings.audioOffsetMs) *
-                      1000LL;
+        rawTime +
+        static_cast<long long>(context.settings.audioOffsetMs) * 1000LL;
     canvasView->setPlaybackTime(displayTime, true);
     if (chart != nullptr && listenEndMicros > 0 && rawTime >= listenEndMicros) {
       stopListening();
@@ -2445,9 +2431,9 @@ void ChartViewerScene::update(float dt) {
   const SafeAreaInsets safe = getSafeAreaInsetsUi();
   if (rootLayout != nullptr &&
       (lastLayoutWidth != rendering::window_width ||
-       lastLayoutHeight != rendering::window_height || lastSafeTop != safe.top ||
-       lastSafeLeft != safe.left || lastSafeBottom != safe.bottom ||
-       lastSafeRight != safe.right)) {
+       lastLayoutHeight != rendering::window_height ||
+       lastSafeTop != safe.top || lastSafeLeft != safe.left ||
+       lastSafeBottom != safe.bottom || lastSafeRight != safe.right)) {
     lastLayoutWidth = rendering::window_width;
     lastLayoutHeight = rendering::window_height;
     lastSafeTop = safe.top;
@@ -2472,8 +2458,7 @@ void ChartViewerScene::update(float dt) {
       optionsDrawerRoot->applyYogaLayout();
     }
     if (overlayPortal != nullptr) {
-      overlayPortal->setSize(rendering::window_width,
-                             rendering::window_height);
+      overlayPortal->setSize(rendering::window_width, rendering::window_height);
       overlayPortal->applyYogaLayout();
     }
   }
@@ -2528,7 +2513,8 @@ void ChartViewerScene::cleanupScene() {
   practiceChartEndMicros = 0;
 }
 
-void ChartViewerScene::setPracticeGhostReplay(const JudgedPlaybackData &replayData) {
+void ChartViewerScene::setPracticeGhostReplay(
+    const JudgedPlaybackData &replayData) {
   if (replayData.events.empty()) {
     practiceGhostReplay.reset();
     clearGhostReplay();
@@ -2536,7 +2522,6 @@ void ChartViewerScene::setPracticeGhostReplay(const JudgedPlaybackData &replayDa
   }
 
   practiceGhostReplay = replayData;
-  practiceGhostReplay->createdAt = "Practice Ghost";
   loadedGhostReplayId = kPracticeGhostReplayId;
   selectedGhostReplayIndex = -1;
 
@@ -2559,7 +2544,8 @@ void ChartViewerScene::initView() {
   lastSafeBottom = safe.bottom;
   lastSafeRight = safe.right;
 
-  rootLayout = new View(0, 0, rendering::window_width, rendering::window_height);
+  rootLayout =
+      new View(0, 0, rendering::window_width, rendering::window_height);
   addView(rootLayout);
   rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setAlignItems(YGAlignStretch);
@@ -2722,16 +2708,17 @@ void ChartViewerScene::initView() {
   practicePanel = new PracticePanelView(
       0,
       {
-          .onChanged = [this](const practice::Configuration &configuration) {
-            onPracticeConfigurationChanged(configuration);
-          },
+          .onChanged =
+              [this](const practice::Configuration &configuration) {
+                onPracticeConfigurationChanged(configuration);
+              },
           .onStart = [this]() { startPracticeFromSelection(false); },
-          .onSaveAs = [this](std::string name) {
-            savePracticeAs(std::move(name));
-          },
-          .onRename = [this](std::string name) {
-            renamePracticePreset(std::move(name));
-          },
+          .onSaveAs =
+              [this](std::string name) { savePracticeAs(std::move(name)); },
+          .onRename =
+              [this](std::string name) {
+                renamePracticePreset(std::move(name));
+              },
           .onUpdateNamed = [this]() { updatePracticePreset(); },
           .onDeleteNamed = [this]() { deletePracticePreset(); },
       },
@@ -2773,9 +2760,8 @@ void ChartViewerScene::rebuildRandomDrawer() {
   const bool wasVisible =
       randomDrawerRoot != nullptr && randomDrawerRoot->getVisible();
   if (randomDrawerRoot == nullptr) {
-    randomDrawerRoot =
-        new BlockingOverlayView(0, 0, rendering::window_width,
-                                rendering::window_height);
+    randomDrawerRoot = new BlockingOverlayView(0, 0, rendering::window_width,
+                                               rendering::window_height);
     randomDrawerRoot->setPositionType(YGPositionTypeAbsolute);
     randomDrawerRoot->setPosition(Edge::Left, 0);
     randomDrawerRoot->setPosition(Edge::Top, 0);
@@ -2897,8 +2883,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
       content->addView(pager);
     }
 
-    for (size_t optionIndex = pageStart; optionIndex < pageEnd;
-         ++optionIndex) {
+    for (size_t optionIndex = pageStart; optionIndex < pageEnd; ++optionIndex) {
       const auto &option = randomOptions[optionIndex];
       auto *row = new View();
       row->setFlexDirection(FlexDirection::Row);
@@ -2974,7 +2959,8 @@ void ChartViewerScene::showRandomDrawer() {
     rebuildRandomDrawer();
   }
   if (randomDrawerRoot != nullptr) {
-    randomDrawerRoot->setSize(rendering::window_width, rendering::window_height);
+    randomDrawerRoot->setSize(rendering::window_width,
+                              rendering::window_height);
     randomDrawerRoot->setVisible(true);
     randomDrawerRoot->applyYogaLayout();
   }
@@ -3060,6 +3046,7 @@ void ChartViewerScene::parseAndRefresh(
     effectiveLongNoteMode = long_note_mode::valueFromId(
         context.settings.selectedLnMode, long_note_mode::kLnValue);
   }
+  authoredReplayFacts = replay::captureAuthoredReplayChartFacts(*parsed);
   applyEffectiveLongNoteModeToChart(*parsed, effectiveLongNoteMode);
 
   randomSeed = parsed->Meta.RandomSeed;
@@ -3109,7 +3096,8 @@ void ChartViewerScene::setRandomValue(size_t index, int value) {
     if (i == index || (i > index && i < nextSibling)) {
       continue;
     }
-    preservedBySourceLine[previousOptions[i].sourceLine] = previousSelectedAt(i);
+    preservedBySourceLine[previousOptions[i].sourceLine] =
+        previousSelectedAt(i);
   }
 
   std::vector<int> seedValues;
@@ -3150,9 +3138,9 @@ void ChartViewerScene::setRandomValue(size_t index, int value) {
 
 void ChartViewerScene::refreshHeaderText() {
   if (titleText != nullptr) {
-    const std::string title =
-        chart != nullptr && !chart->Meta.Title.empty() ? chart->Meta.Title
-                                                       : record.meta.Title;
+    const std::string title = chart != nullptr && !chart->Meta.Title.empty()
+                                  ? chart->Meta.Title
+                                  : record.meta.Title;
     titleText->setText(title.empty() ? "Chart Viewer" : title);
   }
   if (subtitleText != nullptr) {
@@ -3162,8 +3150,8 @@ void ChartViewerScene::refreshHeaderText() {
                           std::to_string(meta.KeyMode) + "K");
   }
   if (randomSummaryText != nullptr) {
-    randomSummaryText->setText(randomSummary() + " / Option: " +
-                               viewerPlayOptionLabel());
+    randomSummaryText->setText(randomSummary() +
+                               " / Option: " + viewerPlayOptionLabel());
   }
 }
 
@@ -3186,10 +3174,10 @@ void ChartViewerScene::updateSelectionText() {
   }
 
   const auto range = canvasView->getPracticeRange();
-  std::string text = "Practice " + formatMicrosTime(range.startMicros) +
-                     " - " + formatMicrosTime(range.endMicros) +
-                     (range.active == practice::Marker::Start ? " / Start"
-                                                              : " / End");
+  std::string text =
+      "Practice " + formatMicrosTime(range.startMicros) + " - " +
+      formatMicrosTime(range.endMicros) +
+      (range.active == practice::Marker::Start ? " / Start" : " / End");
   if (listenActive) {
     text += " / Listening";
   }
@@ -3255,10 +3243,11 @@ void ChartViewerScene::rebuildGhostModal() {
   ghostModalRoot->setBackgroundColor(Color(2, 5, 9, 174));
 
   auto *panel = new View();
-  panel->setWidth(std::min<float>(kPanelWidth,
-                                  rendering::window_width - kMinPanelMargin))
-      ->setHeight(std::min<float>(640,
-                                  rendering::window_height - kMinPanelMargin))
+  panel
+      ->setWidth(std::min<float>(kPanelWidth,
+                                 rendering::window_width - kMinPanelMargin))
+      ->setHeight(
+          std::min<float>(640, rendering::window_height - kMinPanelMargin))
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
@@ -3283,9 +3272,8 @@ void ChartViewerScene::rebuildGhostModal() {
   panel->addView(ghostModalEmptyText);
 
   practiceGhostReplayButton = new Button();
-  practiceGhostReplayButton->setWidthPercent(100)
-      ->setHeight(0)
-      ->setFlexShrink(0);
+  practiceGhostReplayButton->setWidthPercent(100)->setHeight(0)->setFlexShrink(
+      0);
   practiceGhostReplayItem = new ReplaySummaryListItemView();
   practiceGhostReplayButton->setContentView(practiceGhostReplayItem);
   practiceGhostReplayButton->setOnClickListener(
@@ -3319,18 +3307,13 @@ void ChartViewerScene::rebuildGhostModal() {
   auto *closeButton = makeButton("Close", 104, 19);
   auto *clearButton = makeButton("Clear Ghost", 138, 18);
   auto *loadButton = makeButton("Load", 104, 19);
-  closeButton->setFlexGrow(1)
-      ->setFlexShrink(1)
-      ->setFlexBasis(0)
-      ->setMinWidth(0);
+  closeButton->setFlexGrow(1)->setFlexShrink(1)->setFlexBasis(0)->setMinWidth(
+      0);
   clearButton->setFlexGrow(1.25f)
       ->setFlexShrink(1)
       ->setFlexBasis(0)
       ->setMinWidth(0);
-  loadButton->setFlexGrow(1)
-      ->setFlexShrink(1)
-      ->setFlexBasis(0)
-      ->setMinWidth(0);
+  loadButton->setFlexGrow(1)->setFlexShrink(1)->setFlexBasis(0)->setMinWidth(0);
   closeButton->setOnClickListener([this]() { hideGhostModal(); });
   clearButton->setOnClickListener([this]() { clearGhostReplay(); });
   loadButton->setOnClickListener([this]() { loadSelectedGhostReplay(); });
@@ -3360,14 +3343,12 @@ void ChartViewerScene::showGhostModal() {
   selectedGhostReplayIndex = -1;
   ghostReplayListView->setReplaySummaries(ghostReplaySummaries);
   if (ghostModalEmptyText != nullptr) {
-    const bool hasPracticeGhost = practiceGhostReplay.has_value() &&
-                                  !practiceGhostReplay->events.empty();
+    const bool hasPracticeGhost =
+        practiceGhostReplay.has_value() && !practiceGhostReplay->events.empty();
     ghostModalEmptyText->setText(
-        hasPracticeGhost
-            ? "Practice ghost available."
-            : (ghostReplaySummaries.empty()
-                   ? "No saved replays."
-                   : "Select a replay."));
+        hasPracticeGhost ? "Practice ghost available."
+                         : (ghostReplaySummaries.empty() ? "No saved replays."
+                                                         : "Select a replay."));
   }
   updatePracticeGhostReplayButton();
   ghostModalRoot->setSize(rendering::window_width, rendering::window_height);
@@ -3436,9 +3417,9 @@ void ChartViewerScene::loadPracticeGhostReplay() {
       0, true);
 }
 
-bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData,
-                                            int loadedReplayId,
-                                            const std::string &successText) {
+bool ChartViewerScene::applyGhostReplayData(
+    const JudgedPlaybackData &replayData, int loadedReplayId,
+    const std::string &successText) {
   if (canvasView == nullptr) {
     return false;
   }
@@ -3477,9 +3458,9 @@ bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData
   const auto replayOptions =
       chart_viewer_practice::viewerReplayPlayOptions(replayData);
   viewerDoublePlayOption = replayOptions.doublePlayOption;
-  setViewerPlayOptions(
-      replayOptions.playOption, replayOptions.playOptionSeed,
-      replayOptions.playOption2, replayOptions.playOption2Seed);
+  setViewerPlayOptions(replayOptions.playOption, replayOptions.playOptionSeed,
+                       replayOptions.playOption2,
+                       replayOptions.playOption2Seed);
   if (!applyViewerPlayOptions(*replayChart, "ghost replay")) {
     viewerPlayOption = previousPlayOption;
     viewerPlayOptionSeed = previousPlayOptionSeed;
@@ -3491,6 +3472,7 @@ bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData
     }
     return false;
   }
+  authoredReplayFacts = replay::captureAuthoredReplayChartFacts(*replayChart);
   applyEffectiveLongNoteModeToChart(*replayChart,
                                     replayData.setup.longNoteMode);
 
@@ -3516,7 +3498,8 @@ bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData
 }
 
 void ChartViewerScene::loadSelectedGhostReplay() {
-  if (chart == nullptr || canvasView == nullptr || selectedGhostReplayIndex < 0 ||
+  if (chart == nullptr || canvasView == nullptr ||
+      selectedGhostReplayIndex < 0 ||
       selectedGhostReplayIndex >=
           static_cast<int>(ghostReplaySummaries.size())) {
     return;
@@ -3547,35 +3530,13 @@ void ChartViewerScene::loadSelectedGhostReplay() {
         auto playback = std::make_shared<replay::ReplayPlaybackData>(
             std::move(*loaded.playback));
         std::atomic_bool parseCancelled = false;
-        std::unique_ptr<bms_parser::Chart> replayChart;
+        auto replayChart = play_options::prepareReplayChart(
+            loadMeta.BmsPath, *playback, parseCancelled);
         std::optional<JudgedPlaybackData> judged;
-        if (playback->legacy.has_value()) {
-          judged = replay::makeLegacyPlaybackAdapter(
-              *playback, *loaded.result, loadMeta);
-          if (judged.has_value()) {
-            replayChart = play_options::prepareReplayChart(
-                loadMeta.BmsPath, *judged, parseCancelled);
-          }
-        } else {
-          replayChart = play_options::prepareReplayChart(
-              loadMeta.BmsPath, *playback, parseCancelled);
-          if (replayChart != nullptr && !parseCancelled) {
-            StartOptions replayOptions;
-            applyReplayPlaybackToStartOptions(replayOptions, playback);
-            const auto policy = buildGameplayRulesetPolicyAtPlayStart(
-                replayOptions, replayChart->Meta,
-                context.settings.notePriorityMode);
-            if (policy.built()) {
-              const auto materialized = replay::materializeReplay(
-                  *playback, *replayChart, *policy.policy);
-              if (materialized.materialized()) {
-                judged = replay::makeMaterializedPlaybackAdapter(
-                    *playback, *materialized.value, *policy.policy,
-                    *loaded.result,
-                    replayChart->Meta);
-              }
-            }
-          }
+        if (replayChart != nullptr && !parseCancelled) {
+          judged = replay::makeJudgedPlaybackForAnalysis(
+              *playback, *loaded.result, *replayChart,
+              {.notePriorityMode = context.settings.notePriorityMode});
         }
         if (!judged.has_value() || replayChart == nullptr || parseCancelled) {
           if (statusText != nullptr) {
@@ -3584,8 +3545,7 @@ void ChartViewerScene::loadSelectedGhostReplay() {
           return true;
         }
         applyGhostReplayData(*judged, replayId,
-                             "Ghost #" + std::to_string(replayId) +
-                                 " loaded");
+                             "Ghost #" + std::to_string(replayId) + " loaded");
         return true;
       },
       0, true);
@@ -3690,24 +3650,22 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   content->addView(currentRow);
 
   viewerPlayOptionsPanel = new PlayOptionsPanelView(
-      {.onPlayOptionSelected = [this](const std::string &option) {
-         setViewerNamedPlayOption(option);
-       },
-       .onLaneOrderSubmitted = [this](const std::string &notation) {
-         setViewerLaneAssign(notation);
-       },
-       .onLongNoteModeSelected = [this](const std::string &mode) {
-         setViewerLongNoteMode(mode);
-       },
-       .onAssistOptionSelected = [this](const std::string &option) {
-         setViewerAssistOption(option);
-       },
-       .onPlaybackRateSelected = [this](int percent) {
-         setViewerPlaybackRate(percent);
-       },
-       .onPlaybackModeSelected = [this](const std::string &mode) {
-         setViewerPlaybackMode(mode);
-       },
+      {.onPlayOptionSelected =
+           [this](const std::string &option) {
+             setViewerNamedPlayOption(option);
+           },
+       .onLaneOrderSubmitted =
+           [this](const std::string &notation) {
+             setViewerLaneAssign(notation);
+           },
+       .onLongNoteModeSelected =
+           [this](const std::string &mode) { setViewerLongNoteMode(mode); },
+       .onAssistOptionSelected =
+           [this](const std::string &option) { setViewerAssistOption(option); },
+       .onPlaybackRateSelected =
+           [this](int percent) { setViewerPlaybackRate(percent); },
+       .onPlaybackModeSelected =
+           [this](const std::string &mode) { setViewerPlaybackMode(mode); },
        .onClubModeToggled = [this]() { toggleViewerClubMode(); }},
       {.width = kContentWidth,
        .playOptionColumns = 4,
@@ -3817,7 +3775,8 @@ void ChartViewerScene::refreshViewerOptionControls() {
                                         AppSettings::kDefaultLnMode)
           : long_note_mode::parseId(context.settings.selectedLnMode,
                                     AppSettings::kDefaultLnMode);
-  const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
+  const bms_parser::ChartMeta &meta =
+      chart != nullptr ? chart->Meta : record.meta;
   viewerPlayOptionsPanel->refresh(
       {.playOption = viewerPlayOption.value_or("NORMAL"),
        .defaultLaneOrder = play_options::defaultLaneAssignNotation(meta),
@@ -3841,16 +3800,15 @@ void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
     return;
   }
 
-  setViewerPlayOptions(
-      play_options::isNormalPlayOption(normalized)
-          ? std::nullopt
-          : std::optional<std::string>(normalized),
-      std::nullopt,
-      chart != nullptr && chart->Meta.IsDP &&
-              !play_options::isNormalPlayOption(normalized)
-          ? std::optional<std::string>(normalized)
-          : std::nullopt,
-      std::nullopt);
+  setViewerPlayOptions(play_options::isNormalPlayOption(normalized)
+                           ? std::nullopt
+                           : std::optional<std::string>(normalized),
+                       std::nullopt,
+                       chart != nullptr && chart->Meta.IsDP &&
+                               !play_options::isNormalPlayOption(normalized)
+                           ? std::optional<std::string>(normalized)
+                           : std::nullopt,
+                       std::nullopt);
   context.settings.selectedPlayOption = normalized;
   context.settings.sanitize();
   if (!context.saveSettings()) {
@@ -3865,7 +3823,8 @@ void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
 void ChartViewerScene::setViewerLaneAssign(const std::string &notation) {
   const std::string option = play_options::makeLaneAssignOption(notation);
   std::string error;
-  const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
+  const bms_parser::ChartMeta &meta =
+      chart != nullptr ? chart->Meta : record.meta;
   if (play_options::isNormalPlayOption(option) ||
       !play_options::validateLaneAssignOption(meta, option, &error)) {
     if (viewerPlayOptionsPanel != nullptr) {
@@ -3940,9 +3899,9 @@ bool ChartViewerScene::applyViewerPlayOptions(bms_parser::Chart &target,
           .has_value()) {
     std::optional<std::string> appliedOption;
     std::optional<long long> appliedSeed;
-    if (!play_options::applyPlayOptionModifier(
-            target, *viewerPlayOption, std::nullopt, 0, appliedOption,
-            appliedSeed, logContext)) {
+    if (!play_options::applyPlayOptionModifier(target, *viewerPlayOption,
+                                               std::nullopt, 0, appliedOption,
+                                               appliedSeed, logContext)) {
       return false;
     }
     viewerPlayOption = appliedOption;
@@ -3974,8 +3933,8 @@ bool ChartViewerScene::applyViewerPlayOptions(bms_parser::Chart &target,
     std::optional<long long> appliedSeed;
     std::vector<int> appliedLaneOrder;
     if (!play_options::applyPlayOptionModifier(
-            target, *viewerPlayOption2, viewerPlayOption2Seed, 1,
-            appliedOption, appliedSeed, logContext, &appliedLaneOrder)) {
+            target, *viewerPlayOption2, viewerPlayOption2Seed, 1, appliedOption,
+            appliedSeed, logContext, &appliedLaneOrder)) {
       return false;
     }
     viewerPlayOption2 = appliedOption;
@@ -3986,8 +3945,8 @@ bool ChartViewerScene::applyViewerPlayOptions(bms_parser::Chart &target,
   }
 
   if (shouldSummarizeLaneOrder) {
-    viewerLaneOrderSummary = formatLaneOrderSummary(target.Meta,
-                                                    combinedLaneOrder);
+    viewerLaneOrderSummary =
+        formatLaneOrderSummary(target.Meta, combinedLaneOrder);
   }
 
   return true;
@@ -4017,9 +3976,8 @@ void ChartViewerScene::onPracticeRangeChanged(
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
         practicePanel != nullptr) {
-      practicePanel->setPresetMessage("Could not save practice settings: " +
-                                          error,
-                                      true);
+      practicePanel->setPresetMessage(
+          "Could not save practice settings: " + error, true);
     }
   }
   refreshPracticePanel();
@@ -4030,9 +3988,9 @@ void ChartViewerScene::onPracticeConfigurationChanged(
   if (chart == nullptr) {
     return;
   }
-  selectedPracticePresetId =
-      practicePanel == nullptr ? std::nullopt
-                               : practicePanel->selectedPresetId();
+  selectedPracticePresetId = practicePanel == nullptr
+                                 ? std::nullopt
+                                 : practicePanel->selectedPresetId();
   practiceConfiguration =
       sanitizePracticeConfiguration(configuration, practiceChartEndMicros,
                                     chart.get())
@@ -4048,9 +4006,8 @@ void ChartViewerScene::onPracticeConfigurationChanged(
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
         practicePanel != nullptr) {
-      practicePanel->setPresetMessage("Could not save practice settings: " +
-                                          error,
-                                      true);
+      practicePanel->setPresetMessage(
+          "Could not save practice settings: " + error, true);
     }
   }
   refreshPracticePanel();
@@ -4115,9 +4072,8 @@ void ChartViewerScene::loadPracticeConfiguration(
         gaugeSelectionFromSettingId(
             context.settings.selectedGaugeAutoShiftLowerBound)
             .type;
-    practiceConfiguration.countInBeats =
-        practice::defaultCountInBeatsForChart(
-            chart->Meta.GuessedBeatsPerMeasure);
+    practiceConfiguration.countInBeats = practice::defaultCountInBeatsForChart(
+        chart->Meta.GuessedBeatsPerMeasure);
   };
   const auto refreshInstalledState = [this, &applyMissingDefaults]() {
     applyMissingDefaults();
@@ -4222,9 +4178,8 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
         practicePanel != nullptr) {
-      practicePanel->setPresetMessage("Could not save practice settings: " +
-                                          error,
-                                      true);
+      practicePanel->setPresetMessage(
+          "Could not save practice settings: " + error, true);
       refreshPracticePanel();
       updateSelectionText();
       return;
@@ -4249,9 +4204,9 @@ void ChartViewerScene::refreshPracticePanel() {
       practiceStartingGaugeMaximum(practiceConfiguration, chart.get()),
       practice::defaultStartingGaugePercent(
           practiceConfiguration, practiceGaugeProfileForChart(chart.get())));
-  const practice::Marker active =
-      canvasView == nullptr ? practice::Marker::Start
-                            : canvasView->getPracticeRange().active;
+  const practice::Marker active = canvasView == nullptr
+                                      ? practice::Marker::Start
+                                      : canvasView->getPracticeRange().active;
   practicePanel->refresh(practiceConfiguration, practiceNamedPresets,
                          selectedPracticePresetId, active);
 }
@@ -4262,8 +4217,8 @@ void ChartViewerScene::savePracticeAs(std::string name) {
   }
   std::string error;
   const auto id = practicePresetStore->saveNamed(
-      practiceConfiguration.chartSha256, std::move(name),
-      practiceConfiguration, error);
+      practiceConfiguration.chartSha256, std::move(name), practiceConfiguration,
+      error);
   if (!id) {
     if (practicePanel != nullptr) {
       practicePanel->setPresetMessage(error, true);
@@ -4308,9 +4263,9 @@ void ChartViewerScene::updatePracticePreset() {
     return;
   }
   std::string error;
-  if (!practicePresetStore->updateNamed(
-          practiceConfiguration.chartSha256, *selectedPracticePresetId,
-          practiceConfiguration, error)) {
+  if (!practicePresetStore->updateNamed(practiceConfiguration.chartSha256,
+                                        *selectedPracticePresetId,
+                                        practiceConfiguration, error)) {
     if (practicePanel != nullptr) {
       practicePanel->setPresetMessage(error, true);
     }
@@ -4377,11 +4332,10 @@ void ChartViewerScene::startListeningFromSelection() {
       practiceConfiguration, canvasView->getSelectedTimeMicros(),
       practiceRange.active);
   if (statusText != nullptr) {
-    statusText->setText(
-        listenAudioLoaded
-            ? "Seeking audio..."
-            : (retainedListenResourcesForReload ? "Updating audio..."
-                                                : "Loading audio..."));
+    statusText->setText(listenAudioLoaded ? "Seeking audio..."
+                                          : (retainedListenResourcesForReload
+                                                 ? "Updating audio..."
+                                                 : "Loading audio..."));
   }
   listenActive = false;
   canvasView->clearPlaybackTime();
@@ -4418,17 +4372,16 @@ void ChartViewerScene::startListeningFromSelection() {
         } else {
           context.jukebox.stop();
         }
-        listenEndMicros = std::max(
-            chart_playback_duration::ChartTimelineEndMicros(*chart),
-            context.jukebox.getScheduledAudioEndMicros());
+        listenEndMicros =
+            std::max(chart_playback_duration::ChartTimelineEndMicros(*chart),
+                     context.jukebox.getScheduledAudioEndMicros());
 
         context.jukebox.play();
         context.jukebox.seek(std::max(0LL, selectedTime));
         listenActive = true;
         canvasView->setPlaybackTime(
             selectedTime +
-                static_cast<long long>(context.settings.audioOffsetMs) *
-                    1000LL,
+                static_cast<long long>(context.settings.audioOffsetMs) * 1000LL,
             true);
         if (statusText != nullptr && chart != nullptr) {
           statusText->setText(std::to_string(chart->Meta.TotalNotes) +
@@ -4471,9 +4424,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
     return;
   }
 
-  const auto sanitized =
-      sanitizePracticeConfiguration(practiceConfiguration,
-                                    practiceChartEndMicros, chart.get());
+  const auto sanitized = sanitizePracticeConfiguration(
+      practiceConfiguration, practiceChartEndMicros, chart.get());
   if (!sanitized.playable()) {
     if (statusText != nullptr) {
       statusText->setText(sanitized.diagnostics.empty()
@@ -4482,8 +4434,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
     }
     return;
   }
-  const practice::Configuration launchConfiguration =
-      sanitized.configuration;
+  const practice::Configuration launchConfiguration = sanitized.configuration;
   const long long selectedTime = launchConfiguration.startMicros;
   const auto chartRandomSeed = chart->Meta.RandomSeed;
   const auto chartRandomPrng = chart->Meta.RandomPrng;
@@ -4491,9 +4442,9 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
       chart->Meta.RandomValues.empty()
           ? std::nullopt
           : std::optional<std::vector<int>>(chart->Meta.RandomValues);
-  const GaugeSelection gaugeSelection{
-      .type = launchConfiguration.gaugeType,
-      .autoShift = launchConfiguration.gaugeAutoShift};
+  const GaugeSelection gaugeSelection{.type = launchConfiguration.gaugeType,
+                                      .autoShift =
+                                          launchConfiguration.gaugeAutoShift};
   const bool autoKeySound = autoPlay || !context.settings.inputKeysoundEnabled;
   const std::string assistOption = viewerAssistOption;
   const int selectedLongNoteMode =
@@ -4515,12 +4466,10 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {
-          practiceChart =
-              play_options::parseChart(record.meta.BmsPath, chartRandomSeed,
-                                       chartRandomPrng, chartRandomValues,
-                                       parseCancelled,
-                                       autoPlay ? "practice autoplay"
-                                                : "practice");
+          practiceChart = play_options::parseChart(
+              record.meta.BmsPath, chartRandomSeed, chartRandomPrng,
+              chartRandomValues, parseCancelled,
+              autoPlay ? "practice autoplay" : "practice");
         } catch (const std::exception &e) {
           SDL_Log("Error parsing %s for %s: %s",
                   fspath_to_utf8(record.meta.BmsPath).c_str(),
@@ -4538,9 +4487,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
           return true;
         }
 
-        if (!applyViewerPlayOptions(*practiceChart,
-                                    autoPlay ? "practice autoplay"
-                                             : "practice")) {
+        if (!applyViewerPlayOptions(
+                *practiceChart, autoPlay ? "practice autoplay" : "practice")) {
           if (statusText != nullptr) {
             statusText->setText(autoPlay ? "Auto play option failed"
                                          : "Practice play option failed");
@@ -4588,7 +4536,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .doublePlayOption = viewerDoublePlayOption,
                     .longNoteMode = selectedLongNoteMode,
                     .hasUndefinedLongNotes =
-                        play_start_detail::hasUndefinedLongNotes(record.meta),
+                        authoredReplayFacts.hasUndefinedLongNotes,
                     .assistOption = assistOption,
                     .pacemakerTarget = pacemaker::kTargetOff,
                     .ownsChart = true,

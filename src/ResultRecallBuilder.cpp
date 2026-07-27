@@ -88,24 +88,11 @@ RhythmState stateFrom(const result_persistence::PersistedChartResult &result,
   return state;
 }
 
-result_persistence::PersistedChartResult stageResultFor(
-    const result_persistence::PersistedCourseResult &course,
-    const result_persistence::PersistedCourseStageResult &stage) {
-  return {
-      .score = stage.score,
-      .keyMode = stage.keyMode,
-      .adoptedGaugeType = stage.adoptedGaugeType,
-      .adoptedGaugeHistory = stage.adoptedGaugeHistory,
-      .judgementTiming = stage.judgementTiming,
-      .playedAtUnixMillis = course.playedAtUnixMillis,
-  };
-}
-
 } // namespace
 
-ChartBuildOutcome BuildChartResult(
-    result_persistence::PersistedChartResult result,
-    std::atomic_bool &cancelled, ResultChartLoader loader) {
+ChartBuildOutcome
+BuildChartResult(result_persistence::PersistedChartResult result,
+                 std::atomic_bool &cancelled, ResultChartLoader loader) {
   std::string diagnostic;
   if (!result_persistence::validatePersistedChartResult(result, diagnostic) ||
       result.resultFingerprint.empty()) {
@@ -128,11 +115,13 @@ ChartBuildOutcome BuildChartResult(
       return {.diagnostic =
                   "saved chart no longer matches its stored identity"};
     }
+    const auto replayFacts = replay::captureAuthoredReplayChartFacts(*chart);
     applyStoredMeta(chart->Meta, result);
     RhythmState state = stateFrom(result, *chart);
     return {.value = ChartResult{.chart = std::move(chart),
                                  .result = std::move(result),
-                                 .state = std::move(state)}};
+                                 .state = std::move(state),
+                                 .replayFacts = replayFacts}};
   } catch (const std::exception &) {
     return {.diagnostic = "saved chart result could not be loaded"};
   } catch (...) {
@@ -140,9 +129,9 @@ ChartBuildOutcome BuildChartResult(
   }
 }
 
-CourseBuildOutcome BuildCourseResult(
-    result_persistence::PersistedCourseResult result,
-    std::atomic_bool &cancelled, ResultChartLoader loader) {
+CourseBuildOutcome
+BuildCourseResult(result_persistence::PersistedCourseResult result,
+                  std::atomic_bool &cancelled, ResultChartLoader loader) {
   std::string diagnostic;
   if (!result_persistence::validatePersistedCourseResult(result, diagnostic) ||
       result.resultFingerprint.empty()) {
@@ -177,6 +166,7 @@ CourseBuildOutcome BuildCourseResult(
     session->playOption = result.requestedPlayOption;
     session->assistOption = result.assistOption;
     session->autoKeySound = false;
+    session->clubMode = result.provenance.clubMode;
     session->courseReplayPlayback = false;
     session->courseReplaySaved = false;
     session->courseScoreSaved = true;
@@ -184,25 +174,33 @@ CourseBuildOutcome BuildCourseResult(
     session->entries.reserve(static_cast<std::size_t>(result.totalCharts));
     session->completedResults.reserve(result.stages.size());
     session->ownedResultBrowseCharts.reserve(result.stages.size());
+    std::vector<replay::AuthoredReplayChartFacts> authoredReplayFacts(
+        static_cast<std::size_t>(result.totalCharts));
 
     for (const auto &stage : result.stages) {
-      auto persistedStage = stageResultFor(result, stage);
-      auto loadedChart = loadChart(persistedStage, cancelled);
+      const auto persistedStage = result_persistence::chartResultForCourseStage(
+          result, static_cast<std::size_t>(stage.stageIndex));
+      if (!persistedStage.has_value()) {
+        return {.diagnostic = "saved course stage order is invalid"};
+      }
+      auto loadedChart = loadChart(*persistedStage, cancelled);
       if (loadedChart == nullptr || cancelled.load()) {
         return {.diagnostic = "saved course stage is unavailable"};
       }
-      if (!chartIdentityMatches(loadedChart->Meta, persistedStage)) {
+      if (!chartIdentityMatches(loadedChart->Meta, *persistedStage)) {
         return {.diagnostic =
                     "saved course stage no longer matches its stored identity"};
       }
-      applyStoredMeta(loadedChart->Meta, persistedStage);
+      authoredReplayFacts[static_cast<std::size_t>(stage.stageIndex)] =
+          replay::captureAuthoredReplayChartFacts(*loadedChart);
+      applyStoredMeta(loadedChart->Meta, *persistedStage);
       auto chart = std::shared_ptr<bms_parser::Chart>(std::move(loadedChart));
-      RhythmState state = stateFrom(persistedStage, *chart,
-                                    result.gaugeProfile);
+      RhythmState state =
+          stateFrom(*persistedStage, *chart, result.gaugeProfile);
       session->entries.push_back({.meta = chart->Meta});
       session->completedResults.emplace_back(chart->Meta, state);
-      session->recordStageProvenance(
-          static_cast<std::size_t>(stage.stageIndex), stage.score.provenance);
+      session->recordStageProvenance(static_cast<std::size_t>(stage.stageIndex),
+                                     stage.score.provenance);
       session->maxCombo = std::max(session->maxCombo, stage.score.maxCombo);
       session->ownedResultBrowseCharts.push_back(std::move(chart));
     }
@@ -214,19 +212,25 @@ CourseBuildOutcome BuildCourseResult(
       session->entries[index].meta.PlayLength =
           result.entryFacts[index].playLengthMicros;
     }
-    if (!session->installAuthoritativeEntryMetas(
-            session->entryMetasSnapshot())) {
+    std::vector<CoursePlayEntrySnapshot> authoritativeEntries;
+    authoritativeEntries.reserve(session->entries.size());
+    for (std::size_t index = 0; index < session->entries.size(); ++index) {
+      authoritativeEntries.push_back(
+          {.meta = session->entries[index].meta,
+           .replayFacts = authoredReplayFacts[index]});
+    }
+    if (!session->installAuthoritativeEntries(
+            std::move(authoritativeEntries))) {
       return {.diagnostic = "saved course entry facts are incomplete"};
     }
     RhythmState finalGaugeState(nullptr, false, session->ruleset,
                                 result.gaugeProfile);
-    finalGaugeState.configureGauge(
-        result.initialGaugeType, result.gaugeAutoShift, result.gaugeProfile,
-        result.gaugeAutoShiftLowerBound);
+    finalGaugeState.configureGauge(result.initialGaugeType,
+                                   result.gaugeAutoShift, result.gaugeProfile,
+                                   result.gaugeAutoShiftLowerBound);
     GaugeStateSnapshot finalGauge = finalGaugeState.gaugeSnapshot();
     if (!session->completedResults.empty()) {
-      finalGauge.gaugeType =
-          session->completedResults.back().state.gaugeType;
+      finalGauge.gaugeType = session->completedResults.back().state.gaugeType;
     }
     finalGauge.selectedGaugeType = result.initialGaugeType;
     finalGauge.gaugeAutoShiftLowerBound = result.gaugeAutoShiftLowerBound;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoursePlaySession.h"
+#include "replay/ReplayChartFacts.h"
 #include "repositories/ReplayRepository.h"
 
 #include <algorithm>
@@ -61,15 +62,16 @@ inline float perfectPlayGauge(const bms_parser::ChartMeta &meta,
   return state.currentGauge;
 }
 
-inline ReplaySummary BuildSummary(
-    const bms_parser::ChartMeta &meta, GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
-    const std::optional<std::string> &playOption = std::nullopt,
-    const std::optional<long long> &playOptionSeed = std::nullopt,
-    const std::optional<std::string> &playOption2 = std::nullopt,
-    const std::optional<long long> &playOption2Seed = std::nullopt,
-    const std::string &assistOption = assist_options::kOff,
-    audio::PlaybackRate playback = {},
-    GameplayRuleset ruleset = kDefaultGameplayRuleset) {
+inline ReplaySummary
+BuildSummary(const bms_parser::ChartMeta &meta, GaugeType gaugeType,
+             GaugeAutoShiftMode gaugeAutoShift,
+             const std::optional<std::string> &playOption = std::nullopt,
+             const std::optional<long long> &playOptionSeed = std::nullopt,
+             const std::optional<std::string> &playOption2 = std::nullopt,
+             const std::optional<long long> &playOption2Seed = std::nullopt,
+             const std::string &assistOption = assist_options::kOff,
+             audio::PlaybackRate playback = {},
+             GameplayRuleset ruleset = kDefaultGameplayRuleset) {
   ReplaySummary summary;
   summary.id = kReplayId;
   summary.autoPlay = true;
@@ -93,26 +95,26 @@ inline ReplaySummary BuildSummary(
   return summary;
 }
 
-inline JudgedPlaybackData BuildReplayData(
-    bms_parser::Chart &chart, GaugeType gaugeType,
-    GaugeAutoShiftMode gaugeAutoShift, audio::PlaybackRate playback = {},
-    const std::optional<std::string> &playOption = std::nullopt,
-    const std::optional<long long> &playOptionSeed = std::nullopt,
-    const std::optional<std::string> &playOption2 = std::nullopt,
-    const std::optional<long long> &playOption2Seed = std::nullopt,
-    const std::string &assistOption = assist_options::kOff,
-    bool clubMode = false,
-    GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
-    GameplayRuleset ruleset = kDefaultGameplayRuleset,
-    std::optional<bool> hasUndefinedLongNotes = std::nullopt) {
+inline JudgedPlaybackData
+BuildReplayData(bms_parser::Chart &chart,
+                ::replay::AuthoredReplayChartFacts authoredReplayFacts,
+                GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
+                audio::PlaybackRate playback = {},
+                const std::optional<std::string> &playOption = std::nullopt,
+                const std::optional<long long> &playOptionSeed = std::nullopt,
+                const std::optional<std::string> &playOption2 = std::nullopt,
+                const std::optional<long long> &playOption2Seed = std::nullopt,
+                const std::string &assistOption = assist_options::kOff,
+                bool clubMode = false,
+                GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+                GameplayRuleset ruleset = kDefaultGameplayRuleset) {
   JudgedPlaybackData replay;
   replay.autoPlay = true;
   replay.chartMeta = chart.Meta;
   const RulesetDescriptor rulesetDescriptor = RulesetDescriptor::For(ruleset);
   replay.context.ruleset = rulesetDescriptor;
-  replay.createdAt = kLabel;
-  replay.events.reserve(static_cast<size_t>(std::max(0, chart.Meta.TotalNotes)) *
-                        2U);
+  replay.events.reserve(
+      static_cast<size_t>(std::max(0, chart.Meta.TotalNotes)) * 2U);
 
   RhythmState state(&chart, false, ruleset);
   state.configureGauge(gaugeType, gaugeAutoShift, GaugeProfile::Standard,
@@ -122,10 +124,7 @@ inline JudgedPlaybackData BuildReplayData(
       .chartSha256 = chart.Meta.SHA256,
       .keyMode = chart.Meta.KeyMode,
       .longNoteMode = normalizeChartLongNoteModeValue(chart.Meta.LnMode),
-      .hasUndefinedLongNotes = hasUndefinedLongNotes.value_or(
-          ::replay::hasUndefinedLongNotesForReplay(
-              chart.Meta.LnMode, chart.Meta.TotalLongNotes,
-              chart.Meta.TotalBackSpinNotes)),
+      .hasUndefinedLongNotes = authoredReplayFacts.hasUndefinedLongNotes,
       .randomSeed = chart.Meta.RandomSeed,
       .randomPrng = chart.Meta.RandomPrng,
       .randomValues = chart.Meta.RandomValues,
@@ -147,7 +146,8 @@ inline JudgedPlaybackData BuildReplayData(
       .clubMode = clubMode,
   };
   replay.setup = std::move(setup);
-  state.setAssistClearMark(assist_options::isEnabled(replay.setup.assistOption));
+  state.setAssistClearMark(
+      assist_options::isEnabled(replay.setup.assistOption));
   const JudgeResult perfect(PGreat, 0);
   const JudgeResult noJudge(None, 0);
 
@@ -169,14 +169,14 @@ inline JudgedPlaybackData BuildReplayData(
             if (effectiveLongNoteIsCharge(longNote, chart)) {
               applyAutoPlayJudge(state, perfect);
             }
-            replay.events.push_back(makeAutoPlayEvent(
-                ReplayEventAction::Press, note, timeline->Timing, perfect,
-                state));
+            replay.events.push_back(makeAutoPlayEvent(ReplayEventAction::Press,
+                                                      note, timeline->Timing,
+                                                      perfect, state));
           } else {
             applyAutoPlayJudge(state, perfect);
-            replay.events.push_back(makeAutoPlayEvent(
-                ReplayEventAction::Release, note, timeline->Timing, perfect,
-                state));
+            replay.events.push_back(
+                makeAutoPlayEvent(ReplayEventAction::Release, note,
+                                  timeline->Timing, perfect, state));
           }
           continue;
         }
@@ -184,9 +184,9 @@ inline JudgedPlaybackData BuildReplayData(
         applyAutoPlayJudge(state, perfect);
         replay.events.push_back(makeAutoPlayEvent(
             ReplayEventAction::Press, note, timeline->Timing, perfect, state));
-        replay.events.push_back(makeAutoPlayEvent(
-            ReplayEventAction::Release, note, timeline->Timing, noJudge,
-            state));
+        replay.events.push_back(makeAutoPlayEvent(ReplayEventAction::Release,
+                                                  note, timeline->Timing,
+                                                  noJudge, state));
       }
     }
   }

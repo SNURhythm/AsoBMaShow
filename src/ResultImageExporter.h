@@ -5,6 +5,7 @@
 #include "context.h"
 #include "practice/PracticeResultModel.h"
 #include "scene/ResultPresentationModel.h"
+#include "scene/play/ReplayResultContext.h"
 #include "scene/play/RhythmState.h"
 #include "skin/SkinTypes.h"
 
@@ -38,8 +39,7 @@ struct PresentationExportDestination {
 };
 
 using PresentationRenderBackend = std::function<ResultImageExportResult(
-    ResultSkinData,
-    std::optional<result_gauge_history::ResultGaugeGraph>,
+    ResultSkinData, std::optional<result_gauge_history::ResultGaugeGraph>,
     const std::filesystem::path &)>;
 
 namespace detail {
@@ -121,41 +121,33 @@ public:
   // Shared presentation export orchestration. Production supplies the bgfx
   // renderer; controlled/headless callers can supply another artifact writer
   // while exercising the same destination, filename, skin, and gauge plan.
-  static ResultImageExportResult Export(
-      const ResultPresentationModel &presentation,
-      const result_image_export::PresentationExportDestination &destination,
-      const result_image_export::PresentationRenderBackend &renderBackend);
+  static ResultImageExportResult
+  Export(const ResultPresentationModel &presentation,
+         const result_image_export::PresentationExportDestination &destination,
+         const result_image_export::PresentationRenderBackend &renderBackend);
   static ResultImageExportResult
   Export(ApplicationContext &context,
          const ResultPresentationModel &presentation);
-  static ResultImageExportResult Export(ApplicationContext &context,
-                                        const bms_parser::ChartMeta &meta,
-                                        const RhythmState &state,
-                                        const std::string &playModeLabel = {},
-                                        const std::string &laneOrderLabel = {},
-                                        const std::string &difficultyLabel = {},
-                                        const std::optional<
-                                            ResultPreviousBestData>
-                                            &previousBest = std::nullopt,
-                                        const std::optional<std::string>
-                                            &currentClearLabelOverride =
-                                                std::nullopt,
-                                        const std::optional<int>
-                                            &currentClearRankOverride =
-                                                std::nullopt,
-                                        const std::optional<std::string>
-                                            &headerDifficultyLabelOverride =
-                                                std::nullopt,
-                                        const std::optional<ResultPacemakerData>
-                                            &pacemaker = std::nullopt,
-                                        const std::optional<practice::ResultModel>
-                                            &analyticsModel = std::nullopt);
-  static ResultImageExportResult ExportReplay(ApplicationContext &context,
-                                              bms_parser::Chart &chart,
-                                              const JudgedPlaybackData &replay,
-                                              const std::string
-                                                  &pacemakerTarget = {});
+  static ResultImageExportResult Export(
+      ApplicationContext &context, const bms_parser::ChartMeta &meta,
+      const RhythmState &state, const std::string &playModeLabel = {},
+      const std::string &laneOrderLabel = {},
+      const std::string &difficultyLabel = {},
+      const std::optional<ResultPreviousBestData> &previousBest = std::nullopt,
+      const std::optional<std::string> &currentClearLabelOverride =
+          std::nullopt,
+      const std::optional<int> &currentClearRankOverride = std::nullopt,
+      const std::optional<std::string> &headerDifficultyLabelOverride =
+          std::nullopt,
+      const std::optional<ResultPacemakerData> &pacemaker = std::nullopt,
+      const std::optional<practice::ResultModel> &analyticsModel =
+          std::nullopt);
   static ResultImageExportResult
-  ExportCourseReplay(ApplicationContext &context,
-                     const JudgedCoursePlaybackData &replay);
+  ExportReplay(ApplicationContext &context, bms_parser::Chart &chart,
+               const JudgedPlaybackData &replay,
+               const std::string &pacemakerTarget = {},
+               std::optional<ReplayResultContext> resultContext = std::nullopt);
+  static ResultImageExportResult ExportCourseReplay(
+      ApplicationContext &context, const JudgedCoursePlaybackData &replay,
+      std::optional<ReplayResultContext> resultContext = std::nullopt);
 };

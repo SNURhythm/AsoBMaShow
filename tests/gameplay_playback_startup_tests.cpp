@@ -24,7 +24,8 @@ int main() {
   replay.setup.clubMode = true;
   replay.setup.playbackRulesetId = "beatoraja";
   replay.setup.playbackRulesetRevision = 2;
-  StartOptions replayOptions{.replayData = std::make_shared<JudgedPlaybackData>(replay)};
+  StartOptions replayOptions{.replayData =
+                                 std::make_shared<JudgedPlaybackData>(replay)};
   applyJudgedPlaybackSetupToStartOptions(replayOptions, replay);
 
   const auto failure = gameplay_startup::playbackInitializationResult(
@@ -95,20 +96,18 @@ int main() {
       captureOptions, captureMeta, *capturePolicy.policy);
   const auto capturedProvenance = captureScoreProvenanceAtPlayStart(
       captureOptions, captureMeta, *capturePolicy.policy, capturedSetup);
-  if (!expect(capturedSetup.doublePlayOption ==
+  if (!expect(
+          capturedSetup.doublePlayOption == replay::DoublePlayOption::Flip &&
+              capturedProvenance.stages.size() == 1 &&
+              capturedProvenance.stages.front().doublePlayOption ==
                   replay::DoublePlayOption::Flip &&
-                  capturedProvenance.stages.size() == 1 &&
-                  capturedProvenance.stages.front().doublePlayOption ==
-                      replay::DoublePlayOption::Flip &&
-                  capturedSetup.playOption ==
-                      capturedProvenance.player1.option &&
-                  capturedSetup.playOption2 ==
-                      capturedProvenance.player2.option &&
-                  capturedSetup.randomValues == capturedProvenance.stages.front()
-                                                    .chartRandomValues &&
-                  capturedSetup.playbackRatePercent ==
-                      capturedProvenance.playback.percent,
-              "one captured setup feeds raw replay and provenance facts")) {
+              capturedSetup.playOption == capturedProvenance.player1.option &&
+              capturedSetup.playOption2 == capturedProvenance.player2.option &&
+              capturedSetup.randomValues ==
+                  capturedProvenance.stages.front().chartRandomValues &&
+              capturedSetup.playbackRatePercent ==
+                  capturedProvenance.playback.percent,
+          "one captured setup feeds raw replay and provenance facts")) {
     return 1;
   }
   const result_persistence::ChartScoreWrite capturedScore{
@@ -199,17 +198,17 @@ int main() {
       .gaugeType = GaugeType::Easy,
       .playback = {.percent = 150},
   };
-  applyGBattleReplayChartSetupToStartOptions(
-      materializedGBattleOptions, *gbattleRecord);
+  applyGBattleReplayChartSetupToStartOptions(materializedGBattleOptions,
+                                             *gbattleRecord);
 
   StartOptions legacyGBattleOptions;
   applyGBattleReplayChartSetupToStartOptions(legacyGBattleOptions,
                                              *gbattleRecord);
 
-  const bool materializedGBattlePreservesFlip = expect(
-      materializedGBattleOptions.doublePlayOption ==
-          replay::DoublePlayOption::Flip,
-      "materialized raw G-Battle preserves its recorded DP FLIP option");
+  const bool materializedGBattlePreservesFlip =
+      expect(materializedGBattleOptions.doublePlayOption ==
+                 replay::DoublePlayOption::Flip,
+             "materialized raw G-Battle preserves its recorded DP FLIP option");
   const bool legacyGBattlePreservesFlip = expect(
       legacyGBattleOptions.doublePlayOption == replay::DoublePlayOption::Flip,
       "legacy-adapted raw G-Battle preserves its recorded DP FLIP option");
@@ -250,14 +249,13 @@ int main() {
                   rawOptions.playOptionSeed == 17 &&
                   rawOptions.playOption2 == "MIRROR" &&
                   rawOptions.playOption2Seed == 29 &&
-                  rawOptions.doublePlayOption ==
-                      replay::DoublePlayOption::Flip,
+                  rawOptions.doublePlayOption == replay::DoublePlayOption::Flip,
               "raw playback restores DP FLIP and chart randomization") ||
       !expect(rawOptions.playback.percent == 125 &&
-                  rawOptions.playback.mode == audio::PlaybackMode::TimeStretch &&
+                  rawOptions.playback.mode ==
+                      audio::PlaybackMode::TimeStretch &&
                   rawOptions.judgeWindowScalePercent == 90 &&
-                  rawOptions.startingGaugePercent == 42 &&
-                  rawOptions.clubMode,
+                  rawOptions.startingGaugePercent == 42 && rawOptions.clubMode,
               "raw playback restores timing and audio setup") ||
       !expect(rawOptions.startingGaugeState.has_value() &&
                   rawOptions.startingGaugeState->gaugeType == GaugeType::Hard &&
@@ -281,11 +279,9 @@ int main() {
   bms_parser::ChartMeta doublePlayMeta;
   doublePlayMeta.KeyMode = 14;
   doublePlayMeta.IsDP = true;
-  const auto rawDisplay =
-      play_options::formatReplayPlaybackModeDisplayLabel(doublePlayMeta,
-                                                         raw->setup);
-  if (!expect(rawDisplay.mode ==
-                  "FLIP + R-RANDOM #17 / MIRROR #29" &&
+  const auto rawDisplay = play_options::formatReplayPlaybackModeDisplayLabel(
+      doublePlayMeta, raw->setup);
+  if (!expect(rawDisplay.mode == "FLIP + R-RANDOM #17 / MIRROR #29" &&
                   rawDisplay.laneOrder.empty(),
               "raw replay result labels DP FLIP and recorded player options")) {
     return 1;
@@ -310,6 +306,19 @@ int main() {
                       raw->setup.startingGaugeState,
               "raw replay result relaunch rebuilds startup from the retained "
               "BRD setup without promoting analysis to playback authority")) {
+    return 1;
+  }
+  auto judgedResult = std::make_shared<JudgedPlaybackData>(replay);
+  const StartOptions judgedResultOptions =
+      replayResultStartOptions(judgedResult, rawOptions.replayResultContext);
+  if (!expect(judgedResultOptions.replayData == judgedResult &&
+                  judgedResultOptions.replayPlayback == nullptr &&
+                  judgedResultOptions.replayResultContext ==
+                      rawOptions.replayResultContext &&
+                  judgedResultOptions.ownsChart &&
+                  judgedResultOptions.playback.percent == 75,
+              "judged and raw replay result relaunches share one startup "
+              "contract")) {
     return 1;
   }
   if (!expect(effectiveNotePriorityModeAtPlayStart(
@@ -357,9 +366,8 @@ int main() {
   recalledProvenance.clubMode = true;
   recalledProvenance.eligibility = ScoreEligibility::Modified;
 
-  const JudgedPlaybackData recalledRetry =
-      analysis::retrySourceFromProvenance(recalledResultMeta,
-                                          recalledProvenance);
+  const JudgedPlaybackData recalledRetry = analysis::retrySourceFromProvenance(
+      recalledResultMeta, recalledProvenance);
   const auto recalledDisplay =
       play_options::formatPlayModeDisplayLabel(recalledRetry);
   if (!expect(recalledRetry.setup.initialGaugeType == GaugeType::Hard &&
@@ -377,20 +385,18 @@ int main() {
                   recalledRetry.setup.playOptionSeed == 17 &&
                   recalledRetry.setup.playOption2 == "RANDOM" &&
                   recalledRetry.setup.playOption2Seed == 29 &&
-                  recalledDisplay.mode ==
-                      "FLIP + MIRROR #17 / RANDOM #29",
+                  recalledDisplay.mode == "FLIP + MIRROR #17 / RANDOM #29",
               "saved-result recall rebuilds its displayed and retried lane "
               "pattern from provenance") ||
-      !expect(recalledRetry.setup.randomSeed == 123U &&
-                  recalledRetry.setup.randomPrng == "std::mt19937_64" &&
-                  recalledRetry.setup.randomValues ==
-                      std::vector<int>({2, 1}) &&
-                  recalledRetry.chartMeta.RandomSeed == 123U &&
-                  recalledRetry.chartMeta.RandomPrng == "std::mt19937_64" &&
-                  recalledRetry.chartMeta.RandomValues ==
-                      std::vector<int>({2, 1}),
-              "Retry Same uses the persisted chart branch instead of the "
-              "freshly parsed result chart") ||
+      !expect(
+          recalledRetry.setup.randomSeed == 123U &&
+              recalledRetry.setup.randomPrng == "std::mt19937_64" &&
+              recalledRetry.setup.randomValues == std::vector<int>({2, 1}) &&
+              recalledRetry.chartMeta.RandomSeed == 123U &&
+              recalledRetry.chartMeta.RandomPrng == "std::mt19937_64" &&
+              recalledRetry.chartMeta.RandomValues == std::vector<int>({2, 1}),
+          "Retry Same uses the persisted chart branch instead of the "
+          "freshly parsed result chart") ||
       !expect(recalledRetry.setup.candidateSelection ==
                       gameplay::CandidateSelectionMode::Combo &&
                   recalledRetry.setup.playbackRatePercent ==
@@ -407,9 +413,8 @@ int main() {
   ScoreProvenance schema4Provenance = recalledProvenance;
   schema4Provenance.schemaVersion = 4;
   schema4Provenance.stages.front().doublePlayOption.reset();
-  const JudgedPlaybackData schema4Retry =
-      analysis::retrySourceFromProvenance(recalledResultMeta,
-                                          schema4Provenance);
+  const JudgedPlaybackData schema4Retry = analysis::retrySourceFromProvenance(
+      recalledResultMeta, schema4Provenance);
   if (!expect(!schema4Provenance.stages.front().doublePlayOption.has_value() &&
                   schema4Retry.setup.doublePlayOption ==
                       replay::DoublePlayOption::Normal,
@@ -438,19 +443,19 @@ int main() {
   const auto newPatternAuthority =
       play_options::resultRetryPatternAuthority(recalledRetry, false);
   if (!expect(samePatternAuthority.chartRandomSeed == 123U &&
-                  samePatternAuthority.chartRandomPrng ==
-                      "std::mt19937_64" &&
+                  samePatternAuthority.chartRandomPrng == "std::mt19937_64" &&
                   samePatternAuthority.chartRandomValues ==
                       std::vector<int>({2, 1}) &&
                   samePatternAuthority.playOptionSeed == 17 &&
                   samePatternAuthority.playOption2Seed == 29,
               "Retry Same retains chart and MIRROR/RANDOM seed authority") ||
-      !expect(!newPatternAuthority.chartRandomSeed.has_value() &&
-                  !newPatternAuthority.chartRandomPrng.has_value() &&
-                  !newPatternAuthority.chartRandomValues.has_value() &&
-                  !newPatternAuthority.playOptionSeed.has_value() &&
-                  !newPatternAuthority.playOption2Seed.has_value(),
-              "Retry with a new pattern drops persisted chart and lane seeds")) {
+      !expect(
+          !newPatternAuthority.chartRandomSeed.has_value() &&
+              !newPatternAuthority.chartRandomPrng.has_value() &&
+              !newPatternAuthority.chartRandomValues.has_value() &&
+              !newPatternAuthority.playOptionSeed.has_value() &&
+              !newPatternAuthority.playOption2Seed.has_value(),
+          "Retry with a new pattern drops persisted chart and lane seeds")) {
     return 1;
   }
 

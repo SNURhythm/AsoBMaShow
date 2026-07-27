@@ -65,8 +65,7 @@ replay::ReplayPlaybackData replayWithNonDefaultSetup() {
   playback.setup.playbackRulesetRevision = 2;
   playback.setup.playbackRatePercent = 75;
   playback.setup.playbackMode = audio::PlaybackMode::TimeStretch;
-  playback.setup.candidateSelection =
-      gameplay::CandidateSelectionMode::Score;
+  playback.setup.candidateSelection = gameplay::CandidateSelectionMode::Score;
   playback.setup.judgeWindowScalePercent = 90;
   playback.setup.startingGaugePercent = 37.0F;
   playback.setup.startingGaugeState = GaugeStateSnapshot{
@@ -121,6 +120,22 @@ void testLegacyAdapterCarriesEnabledInitialLaneCoverForChartVideo() {
            "legacy regression has no timed cover event masking the bug");
     expectInitialLaneCover(*adapted, 64, true, 19, 64,
                            "legacy chart video adapter");
+  }
+}
+
+void testAdapterPreservesResolvedRuntimeChartPath() {
+  replay::ReplayPlaybackData playback;
+  playback.legacy.emplace();
+  bms_parser::ChartMeta chartMeta;
+  chartMeta.BmsPath = "/resolved/profile/chart.bms";
+
+  const auto adapted =
+      replay::makeLegacyPlaybackAdapter(playback, persistedResult(), chartMeta);
+
+  expect(adapted.has_value(), "legacy replay with a resolved chart adapts");
+  if (adapted.has_value()) {
+    expect(adapted->chartMeta.BmsPath == chartMeta.BmsPath,
+           "the adapter preserves the loader-resolved runtime chart path");
   }
 }
 
@@ -183,8 +198,8 @@ void testMaterializedAdapterRejectsResultMismatch() {
 }
 
 void testJudgedPlaybackWithoutRecordedLaneCoverKeepsSettingsFallback() {
-  expect(replay::initialLaneCoverPercentForRendering(
-             JudgedPlaybackData{}.setup, 19) == 19,
+  expect(replay::initialLaneCoverPercentForRendering(JudgedPlaybackData{}.setup,
+                                                     19) == 19,
          "judged playback without a raw setup keeps the settings fallback");
 }
 
@@ -193,6 +208,7 @@ void testJudgedPlaybackWithoutRecordedLaneCoverKeepsSettingsFallback() {
 int main() {
   testAdaptersRetainCompletePlaybackSetup();
   testLegacyAdapterCarriesEnabledInitialLaneCoverForChartVideo();
+  testAdapterPreservesResolvedRuntimeChartPath();
   testMaterializedAdapterCarriesDisabledRememberedLaneCoverForCourseVideo();
   testMaterializedAdapterRejectsResultMismatch();
   testJudgedPlaybackWithoutRecordedLaneCoverKeepsSettingsFallback();

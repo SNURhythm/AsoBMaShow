@@ -26,6 +26,17 @@ void require(bool condition, const char *message) {
   }
 }
 
+std::vector<CoursePlayEntrySnapshot>
+entrySnapshots(std::vector<bms_parser::ChartMeta> metas) {
+  std::vector<CoursePlayEntrySnapshot> snapshots;
+  snapshots.reserve(metas.size());
+  for (auto &meta : metas) {
+    const auto replayFacts = replay::captureAuthoredReplayChartFacts(meta);
+    snapshots.push_back({.meta = std::move(meta), .replayFacts = replayFacts});
+  }
+  return snapshots;
+}
+
 template <typename T>
 concept HasReplayData = requires(T value) { value.replay; };
 
@@ -193,8 +204,8 @@ void testRecalledResultExcludesItselfFromPreviousBest() {
       std::make_shared<const result_persistence::PersistedChartResult>(stored);
   persistence.previousBestBeforeCreatedAt = "2026-07-25 01:02:03";
 
-  const auto current = result_scene_detail::previousBestQueryFor(
-      persistence, false, nullptr);
+  const auto current =
+      result_scene_detail::previousBestQueryFor(persistence, false, nullptr);
   require(current.excludeAttemptId == stored.attemptId &&
               !current.beforeCreatedAt.has_value(),
           "recalled result excludes its exact stored attempt from previous "
@@ -203,11 +214,10 @@ void testRecalledResultExcludesItselfFromPreviousBest() {
   stored.attemptId.reset();
   persistence.result =
       std::make_shared<const result_persistence::PersistedChartResult>(stored);
-  const auto legacy = result_scene_detail::previousBestQueryFor(
-      persistence, false, nullptr);
+  const auto legacy =
+      result_scene_detail::previousBestQueryFor(persistence, false, nullptr);
   require(!legacy.excludeAttemptId.has_value() &&
-              legacy.beforeCreatedAt ==
-                  persistence.previousBestBeforeCreatedAt,
+              legacy.beforeCreatedAt == persistence.previousBestBeforeCreatedAt,
           "legacy recalled result uses its selected replay timestamp as the "
           "previous-best cutoff");
 
@@ -217,8 +227,14 @@ void testRecalledResultExcludesItselfFromPreviousBest() {
       .attemptId = "123e4567-e89b-42d3-a456-426614174073",
       .createdAt = "2026-07-25 01:02:03",
   };
-  const auto watchedReplay = result_scene_detail::previousBestQueryFor(
-      persistence, true, &watched);
+  const ReplayComparisonQuery replayComparison =
+      replayComparisonQueryFor(watched);
+  require(replayComparison.excludeAttemptId == watched.attemptId &&
+              replayComparison.beforeCreatedAt == watched.createdAt,
+          "replay consumers share the selected attempt identity and "
+          "historical cutoff");
+  const auto watchedReplay =
+      result_scene_detail::previousBestQueryFor(persistence, true, &watched);
   require(watchedReplay.excludeAttemptId == watched.attemptId &&
               watchedReplay.beforeCreatedAt == watched.createdAt,
           "watched replay keeps both exact attempt identity and its "
@@ -229,8 +245,7 @@ void testRecalledResultExcludesItselfFromPreviousBest() {
 }
 
 void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
-  constexpr std::string_view attemptId =
-      "123e4567-e89b-42d3-a456-426614174099";
+  constexpr std::string_view attemptId = "123e4567-e89b-42d3-a456-426614174099";
   result_persistence::CompletedCourseAttempt course;
   course.result.attemptId = std::string(attemptId);
   ResultPersistenceOptions persistence;
@@ -248,14 +263,12 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
 
   require(result_scene_detail::hasPersistenceAttempt(persistence),
           "completed course attempt is available to persistence retry");
-  require(result_scene_detail::persistenceAttemptId(persistence) ==
-              attemptId,
+  require(result_scene_detail::persistenceAttemptId(persistence) == attemptId,
           "course retry diagnostics use the retained course attempt ID");
   CoursePlaySession session;
   require(!result_scene_detail::applyCoursePersistenceReceipt(
               persistence.courseAttempt, persistence.outcome, session) &&
-              !session.courseReplaySaved &&
-              session.savedCourseReplayId == 0 &&
+              !session.courseReplaySaved && session.savedCourseReplayId == 0 &&
               session.courseReplayPlaybackData == nullptr,
           "failed course save leaves the session unsaved while awaiting a "
           "decision");
@@ -278,16 +291,14 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
                 }};
           },
   };
-  require(result_scene_detail::retryPersistenceAttempt(
-              persistence, {}, callbacks) &&
-              persistence.outcome.state ==
-                  result_persistence::SaveState::Saved,
+  require(result_scene_detail::retryPersistenceAttempt(persistence, {},
+                                                       callbacks) &&
+              persistence.outcome.state == result_persistence::SaveState::Saved,
           "course retry executes the course persistence branch");
 
   require(result_scene_detail::applyCoursePersistenceReceipt(
               persistence.courseAttempt, persistence.outcome, session) &&
-              session.courseReplaySaved &&
-              session.savedCourseReplayId == 91 &&
+              session.courseReplaySaved && session.savedCourseReplayId == 91 &&
               session.courseReplayPlaybackData != nullptr,
           "saved course retry applies its receipt and replay to the session");
 
@@ -295,9 +306,9 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
       std::make_shared<const result_persistence::CompletedChartAttempt>();
   require(!result_scene_detail::hasPersistenceAttempt(persistence),
           "ambiguous chart and course attempts fail closed");
-  require(!result_scene_detail::retryPersistenceAttempt(
-              persistence, {}, callbacks),
-          "ambiguous persistence attempts cannot execute either branch");
+  require(
+      !result_scene_detail::retryPersistenceAttempt(persistence, {}, callbacks),
+      "ambiguous persistence attempts cannot execute either branch");
 
   result_persistence::CompletedChartAttempt chart;
   chart.result.attemptId = "123e4567-e89b-42d3-a456-426614174098";
@@ -311,10 +322,10 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
           [](const result_persistence::CompletedChartAttempt &attempt,
              std::span<const ir::IrOutboxDraft> drafts) {
             return result_persistence::SaveOutcome{
-                .state = attempt.result.attemptId.has_value() &&
-                                 drafts.size() == 1
-                             ? result_persistence::SaveState::PendingScore
-                             : result_persistence::SaveState::InvalidAttempt};
+                .state =
+                    attempt.result.attemptId.has_value() && drafts.size() == 1
+                        ? result_persistence::SaveState::PendingScore
+                        : result_persistence::SaveState::InvalidAttempt};
           },
       .persistCourse =
           [](const result_persistence::CompletedCourseAttempt &) {
@@ -430,7 +441,7 @@ void testCoursePersistenceFactsUseAuthoritativeEntrySnapshot() {
   authoritative[1].PlayLength = 5'500'000;
   authoritative[2].TotalNotes = 65;
   authoritative[2].PlayLength = 6'500'000;
-  require(session.installAuthoritativeEntryMetas(authoritative),
+  require(session.installAuthoritativeEntries(entrySnapshots(authoritative)),
           "a complete course entry snapshot installs atomically");
 
   bms_parser::ChartMeta played = authoritative[0];
@@ -462,15 +473,16 @@ void testCoursePersistenceFactsUseAuthoritativeEntrySnapshot() {
 
   auto incomplete = authoritative;
   incomplete.pop_back();
-  require(!session.installAuthoritativeEntryMetas(std::move(incomplete)) &&
+  require(!session.installAuthoritativeEntries(
+              entrySnapshots(std::move(incomplete))) &&
               session.entryMeta(2)->TotalNotes == 65,
           "an incomplete replacement cannot partially change course facts");
   auto completeReplacement = authoritative;
   completeReplacement[0].TotalNotes = 777;
-  require(
-      !session.installAuthoritativeEntryMetas(std::move(completeReplacement)) &&
-          session.entryMeta(0)->TotalNotes == 45,
-      "a frozen full-course snapshot cannot be replaced later");
+  require(!session.installAuthoritativeEntries(
+              entrySnapshots(std::move(completeReplacement))) &&
+              session.entryMeta(0)->TotalNotes == 45,
+          "a frozen full-course snapshot cannot be replaced later");
 }
 
 void testEffectiveCourseFactsSaturateResultMetadata() {
@@ -504,7 +516,8 @@ void testLegacyPartialCourseReplayPreservesEveryEntry() {
   auto authoritative = source.entryMetasSnapshot();
   authoritative[1].TotalNotes = 250;
   authoritative[2].PlayLength = 35'000'000;
-  require(source.installAuthoritativeEntryMetas(std::move(authoritative)),
+  require(source.installAuthoritativeEntries(
+              entrySnapshots(std::move(authoritative))),
           "legacy replay source can retain authoritative future facts");
   JudgedCoursePlaybackData replay;
   replay.totalCharts = 3;
@@ -774,8 +787,7 @@ void testSavedResultBuildsRetrySourceFromPersistedProvenance() {
   rawPlayback.setup.doublePlayOption = replay::DoublePlayOption::Flip;
   const auto rawRetry = result_scene_detail::retrySourceForLocalResult(
       meta, provenance, nullptr, nullptr, &rawPlayback);
-  require(rawRetry.has_value() &&
-              rawRetry->setup == rawPlayback.setup &&
+  require(rawRetry.has_value() && rawRetry->setup == rawPlayback.setup &&
               rawRetry->setup.doublePlayOption ==
                   replay::DoublePlayOption::Flip,
           "a raw replay result projects the complete BRD setup for retry, "
@@ -830,8 +842,8 @@ void testCourseReplayResultLabelRetainsStageSetupFlip() {
           "a live course result keeps the session play-option label");
 
   const auto defaultLiveDisplay =
-      result_scene_detail::selectCoursePlayModeDisplayLabel(
-          retainedStage, {}, false);
+      result_scene_detail::selectCoursePlayModeDisplayLabel(retainedStage, {},
+                                                            false);
   require(defaultLiveDisplay.mode == "COURSE" &&
               defaultLiveDisplay.laneOrder.empty(),
           "a live course without an explicit option keeps the COURSE fallback");

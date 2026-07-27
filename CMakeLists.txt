@@ -2184,6 +2184,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(gameplay_ruleset_policy_tests
         tests/gameplay_ruleset_policy_tests.cpp
+        src/analysis/JudgedPlaybackResultState.cpp
         src/bms_parser.cpp
         src/ScoreProvenance.cpp
         src/scene/play/CompiledGameplayJudge.cpp

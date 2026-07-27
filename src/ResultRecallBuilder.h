@@ -18,6 +18,7 @@ struct ChartResult {
   std::unique_ptr<bms_parser::Chart> chart;
   result_persistence::PersistedChartResult result;
   RhythmState state;
+  replay::AuthoredReplayChartFacts replayFacts;
 };
 
 struct ChartBuildOutcome {
@@ -37,12 +38,10 @@ struct CourseBuildOutcome {
 
 [[nodiscard]] ChartBuildOutcome
 BuildChartResult(result_persistence::PersistedChartResult result,
-                 std::atomic_bool &cancelled,
-                 ResultChartLoader loader = {});
+                 std::atomic_bool &cancelled, ResultChartLoader loader = {});
 
 [[nodiscard]] CourseBuildOutcome
 BuildCourseResult(result_persistence::PersistedCourseResult result,
-                  std::atomic_bool &cancelled,
-                  ResultChartLoader loader = {});
+                  std::atomic_bool &cancelled, ResultChartLoader loader = {});
 
 } // namespace result_recall

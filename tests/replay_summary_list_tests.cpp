@@ -37,10 +37,10 @@ void addClassicLongNote(bms_parser::Chart &chart, long long headMicros,
   auto *tailTimeline = new bms_parser::TimeLine(8, false);
   headTimeline->Timing = headMicros;
   tailTimeline->Timing = tailMicros;
-  auto *head = new bms_parser::LongNote(
-      bms_parser::Parser::NoWav, bms_parser::LongNoteType::LongNote);
-  auto *tail = new bms_parser::LongNote(
-      bms_parser::Parser::NoWav, bms_parser::LongNoteType::LongNote);
+  auto *head = new bms_parser::LongNote(bms_parser::Parser::NoWav,
+                                        bms_parser::LongNoteType::LongNote);
+  auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav,
+                                        bms_parser::LongNoteType::LongNote);
   head->Tail = tail;
   tail->Head = head;
   headTimeline->SetNote(lane, head);
@@ -200,8 +200,8 @@ int main() {
   const auto multiBadProgression =
       pacemaker::buildReplayScoreProgression(multiBadReplay, 2);
   if (multiBadResult.judgeCount.at(Bad) != 1 ||
-      multiBadResult.judgeCount.at(Good) != 1 ||
-      multiBadResult.maxCombo != 1 || multiBadProgression.size() != 3) {
+      multiBadResult.judgeCount.at(Good) != 1 || multiBadResult.maxCombo != 1 ||
+      multiBadProgression.size() != 3) {
     std::cerr << "a replay must count every multi-BAD judgement while "
                  "retaining one physical press boundary"
               << std::endl;
@@ -216,8 +216,7 @@ int main() {
       legacyRulesetReplay.context.ruleset.version;
   const RhythmState legacyRulesetResult =
       analysis::BuildResultState(chart, legacyRulesetReplay);
-  if (legacyRulesetResult.gaugeRules().ruleset !=
-      GameplayRuleset::Beatoraja) {
+  if (legacyRulesetResult.gaugeRules().ruleset != GameplayRuleset::Beatoraja) {
     std::cerr << "legacy replay result gauge reconstruction remains Beatoraja"
               << std::endl;
     return 1;
@@ -266,8 +265,8 @@ int main() {
       .combo = 0,
       .score = 0,
   });
-  const RhythmState terminalLongHeadResult = analysis::BuildResultState(
-      terminalLongHeadChart, terminalLongHeadReplay);
+  const RhythmState terminalLongHeadResult =
+      analysis::BuildResultState(terminalLongHeadChart, terminalLongHeadReplay);
   if (terminalLongHeadResult.judgeCount.at(Bad) != 1 ||
       terminalLongHeadResult.comboBreak != 1 ||
       terminalLongHeadResult.fastCount != 1) {
@@ -286,8 +285,8 @@ int main() {
   JudgedPlaybackData deferredLongHeadReplay = terminalLongHeadReplay;
   deferredLongHeadReplay.events.front().judgement = Good;
   deferredLongHeadReplay.events.front().diffMicros = -50'000;
-  const RhythmState deferredLongHeadResult = analysis::BuildResultState(
-      deferredLongHeadChart, deferredLongHeadReplay);
+  const RhythmState deferredLongHeadResult =
+      analysis::BuildResultState(deferredLongHeadChart, deferredLongHeadReplay);
   if (deferredLongHeadResult.judgeCount.at(Good) != 0 ||
       deferredLongHeadResult.comboBreak != 0 ||
       deferredLongHeadResult.fastCount != 0) {
@@ -318,8 +317,7 @@ int main() {
       .score = 0,
   });
   const RhythmState releasedLongNoteResult =
-      analysis::BuildResultState(releasedLongNoteChart,
-                                      releasedLongNoteReplay);
+      analysis::BuildResultState(releasedLongNoteChart, releasedLongNoteReplay);
   if (releasedLongNoteResult.judgeCount.at(Bad) != 1 ||
       releasedLongNoteResult.comboBreak != 1 ||
       releasedLongNoteResult.fastCount != 1) {
@@ -340,9 +338,8 @@ int main() {
   const GaugeStateSnapshot carriedGauge = firstCourseResult.gaugeSnapshot();
   JudgedPlaybackData secondCourseStage = makeLegacyReplay();
   secondCourseStage.setup.initialGaugeType = GaugeType::Hard;
-  const RhythmState secondCourseInitial =
-      analysis::BuildInitialGaugeState(
-          chart, secondCourseStage, GaugeProfile::Standard, &carriedGauge);
+  const RhythmState secondCourseInitial = analysis::BuildInitialGaugeState(
+      chart, secondCourseStage, GaugeProfile::Standard, &carriedGauge);
   if (secondCourseInitial.gaugeType != GaugeType::Hard ||
       secondCourseInitial.currentGauge != 42.0f) {
     std::cerr << "course export HUD must start from the carried gauge state"
@@ -401,8 +398,7 @@ int main() {
   continuedReplay.setup.initialGaugeType = GaugeType::Hard;
   continuedReplay.setup.gaugeAutoShift = GaugeAutoShiftMode::Continue;
   continuedReplay.context.startingGaugePercent = 0;
-  if (analysis::FindGaugeFailureMicros(chart, continuedReplay)
-          .has_value()) {
+  if (analysis::FindGaugeFailureMicros(chart, continuedReplay).has_value()) {
     std::cerr << "Continue export must not stop at a zero percent start"
               << std::endl;
     return 1;
@@ -452,9 +448,9 @@ int main() {
   }
 
   const JudgedPlaybackData autoExport = replay_autoplay::BuildReplayData(
-      chart, GaugeType::Normal, GaugeAutoShiftMode::None, {.percent = 200},
-      std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-      assist_options::kOff, true, GaugeType::Hard);
+      chart, replay::captureAuthoredReplayChartFacts(chart), GaugeType::Normal,
+      GaugeAutoShiftMode::None, {.percent = 200}, std::nullopt, std::nullopt,
+      std::nullopt, std::nullopt, assist_options::kOff, true, GaugeType::Hard);
   if (autoExport.setup.playbackRatePercent != 200) {
     std::cerr << "synthetic Auto export retains the selected playback rate"
               << std::endl;
@@ -475,10 +471,12 @@ int main() {
               << std::endl;
     return 1;
   }
-  const JudgedPlaybackData beatorajaAutoExport = replay_autoplay::BuildReplayData(
-      chart, GaugeType::Normal, GaugeAutoShiftMode::None, {}, std::nullopt,
-      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, false,
-      GaugeType::AssistedEasy, GameplayRuleset::Beatoraja);
+  const JudgedPlaybackData beatorajaAutoExport =
+      replay_autoplay::BuildReplayData(
+          chart, replay::captureAuthoredReplayChartFacts(chart),
+          GaugeType::Normal, GaugeAutoShiftMode::None, {}, std::nullopt,
+          std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, false,
+          GaugeType::AssistedEasy, GameplayRuleset::Beatoraja);
   if (beatorajaAutoExport.context.ruleset !=
       RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
     std::cerr << "synthetic Auto export retains a selected Beatoraja ruleset"
@@ -507,13 +505,12 @@ int main() {
   bms_parser::Chart rulesetChart;
   rulesetChart.Meta = rulesetMeta;
   RhythmState expectedLr2Auto(&rulesetChart, false, GameplayRuleset::LR2);
-  expectedLr2Auto.configureGauge(GaugeType::Normal,
-                                 GaugeAutoShiftMode::None);
+  expectedLr2Auto.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
   for (int note = 0; note < rulesetMeta.TotalNotes; ++note) {
     expectedLr2Auto.applyGaugeJudgement(PGreat);
   }
-  if (std::abs(lr2AutoSummary.finalGauge -
-               expectedLr2Auto.currentGauge) > 0.01f) {
+  if (std::abs(lr2AutoSummary.finalGauge - expectedLr2Auto.currentGauge) >
+      0.01f) {
     std::cerr << "synthetic Auto summary defaults to the LR2 gauge ruleset"
               << std::endl;
     return 1;

@@ -148,7 +148,14 @@ void testSessionAndLegacyKeysShareTheCanonicalDefinition() {
   auto authoritative = std::vector<bms_parser::ChartMeta>(2);
   authoritative[0].SHA256 = std::string(kShaB);
   authoritative[1].MD5 = std::string(kMd5A);
-  expect(session.installAuthoritativeEntryMetas(std::move(authoritative)),
+  std::vector<CoursePlayEntrySnapshot> authoritativeSnapshots;
+  authoritativeSnapshots.reserve(authoritative.size());
+  for (auto &meta : authoritative) {
+    const auto replayFacts = replay::captureAuthoredReplayChartFacts(meta);
+    authoritativeSnapshots.push_back(
+        {.meta = std::move(meta), .replayFacts = replayFacts});
+  }
+  expect(session.installAuthoritativeEntries(std::move(authoritativeSnapshots)),
          "complete authoritative identities install on the course session");
   expect(makeCourseKey(session) ==
              makeCourseKey(
@@ -224,6 +231,27 @@ void testDefinitionMatchingUsesStrongestCommonHashes() {
          "a mismatching strongest common prefix is rejected");
 }
 
+void testCourseEntryKeepsAuthoredReplayFactsAcrossLongNoteMaterialization() {
+  bms_parser::ChartMeta parsedMeta;
+  parsedMeta.LnMode = long_note_mode::kUnknownValue;
+  parsedMeta.TotalLongNotes = 1;
+
+  const auto authoredFacts =
+      replay::captureAuthoredReplayChartFacts(parsedMeta);
+  parsedMeta.LnMode = long_note_mode::kHcnValue;
+
+  CoursePlaySession session;
+  session.entries.resize(1);
+  expect(session.installAuthoritativeEntries(
+             {{.meta = parsedMeta, .replayFacts = authoredFacts}}),
+         "a complete parsed course entry installs atomically");
+  expect(session.entryMeta(0)->LnMode == long_note_mode::kHcnValue,
+         "course metadata exposes the materialized long-note mode");
+  expect(session.entryHasUndefinedLongNotes(0),
+         "replay setup keeps the authored undefined-LN fact from before "
+         "course mutation");
+}
+
 } // namespace
 
 int main() {
@@ -232,6 +260,7 @@ int main() {
   testMalformedConstraintJsonCannotProduceDurableIdentity();
   testSessionAndLegacyKeysShareTheCanonicalDefinition();
   testDefinitionMatchingUsesStrongestCommonHashes();
+  testCourseEntryKeepsAuthoredReplayFactsAcrossLongNoteMaterialization();
 
   if (failures != 0) {
     std::cerr << failures << " course identity test(s) failed.\n";

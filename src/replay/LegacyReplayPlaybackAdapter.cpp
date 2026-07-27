@@ -8,13 +8,15 @@
 namespace replay {
 namespace {
 
-JudgedPlaybackData makeAdapterBase(
-    const ReplayPlaybackData &playback,
-    const result_persistence::PersistedChartResult &result,
-    bms_parser::ChartMeta chartMeta) {
+JudgedPlaybackData
+makeAdapterBase(const ReplayPlaybackData &playback,
+                const result_persistence::PersistedChartResult &result,
+                bms_parser::ChartMeta chartMeta) {
   const auto &setup = playback.setup;
   const auto &score = result.score;
-  chartMeta.BmsPath = score.chartPath;
+  if (chartMeta.BmsPath.empty()) {
+    chartMeta.BmsPath = score.chartPath;
+  }
   chartMeta.MD5 = score.chartMd5;
   chartMeta.SHA256 = score.chartSha256;
   chartMeta.Title = score.chartTitle;
@@ -49,8 +51,8 @@ bool materializedFactsMatch(
       attempt.judgeCounts[Good] != score.good ||
       attempt.judgeCounts[Bad] != score.bad ||
       attempt.judgeCounts[Poor] != score.poor ||
-      attempt.judgeCounts[Kpoor] != score.kPoor ||
-      attempt.fast != score.fast || attempt.slow != score.slow ||
+      attempt.judgeCounts[Kpoor] != score.kPoor || attempt.fast != score.fast ||
+      attempt.slow != score.slow ||
       !sameFloat(attempt.gauge, score.finalGauge) ||
       attempt.gaugeType != result.adoptedGaugeType ||
       attempt.clearTypeRank != score.clearType ||
@@ -108,8 +110,7 @@ std::optional<JudgedPlaybackData> makeLegacyPlaybackAdapter(
 }
 
 std::optional<JudgedPlaybackData> makeMaterializedPlaybackAdapter(
-    const ReplayPlaybackData &playback,
-    const MaterializedReplay &materialized,
+    const ReplayPlaybackData &playback, const MaterializedReplay &materialized,
     const gameplay::GameplayRulesetPolicy &policy,
     const result_persistence::PersistedChartResult &result,
     bms_parser::ChartMeta chartMeta) {

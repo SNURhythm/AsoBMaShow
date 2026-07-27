@@ -605,8 +605,8 @@ private:
   void refreshScoreClearRanksIfNeeded();
   void refreshIrRecordListIfNeeded();
   void refreshLibraryIfNeeded();
-  void startLibraryRefresh(
-      const std::filesystem::path &additionalFolderToScan = {});
+  void
+  startLibraryRefresh(const std::filesystem::path &additionalFolderToScan = {});
   void startLibraryRebuild();
   void startLibraryTaskWorker();
   void stopLibraryTaskWorker();
@@ -618,8 +618,7 @@ private:
   void enqueueLibraryRefreshTask(
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
-      const std::string &iosBookmark = "",
-      bool rebuildLibraryMetadata = false,
+      const std::string &iosBookmark = "", bool rebuildLibraryMetadata = false,
       const std::filesystem::path &additionalFolderToScan = {});
 #if TARGET_OS_ANDROID
   void createPendingAndroidImportTask(bool folderImport);
@@ -634,9 +633,10 @@ private:
   void runAndroidImportTask(const LibraryTaskRequest &task,
                             const std::stop_token &stopToken);
 #endif
-  void seedDefaultDifficultyTablesIfNeeded(
-      ChartRepository::Session &chartSession, std::uint64_t taskId,
-      const std::stop_token &stopToken);
+  void
+  seedDefaultDifficultyTablesIfNeeded(ChartRepository::Session &chartSession,
+                                      std::uint64_t taskId,
+                                      const std::stop_token &stopToken);
   static bool isPauseableLibraryTaskStatus(LibraryTaskStatus status);
   static bool isActiveLibraryTaskStatus(LibraryTaskStatus status);
   void setLibraryTaskState(std::uint64_t id, LibraryTaskStatus status,
@@ -651,9 +651,9 @@ private:
   std::uint64_t pendingLibraryScanFlushRequest() const;
   void completeLibraryScanFlush(std::uint64_t request);
   void refreshTasksButton();
-  bool insertChartFolderEntryImmediately(
-      const std::filesystem::path &folderPath,
-      const std::string &iosBookmark);
+  bool
+  insertChartFolderEntryImmediately(const std::filesystem::path &folderPath,
+                                    const std::string &iosBookmark);
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   int clearMarkCountForFolder(const std::string &key, int clearMarkRank) const;
@@ -785,9 +785,9 @@ private:
   void reloadReplayRecordModels(bool preserveViewState);
   void showReplayFilterSortOptions();
   void showReplayExportOptions();
-  void showReplayExportProgress(const std::string &title = "Exporting Replay",
-                                const std::string &message =
-                                    "Preparing export");
+  void
+  showReplayExportProgress(const std::string &title = "Exporting Replay",
+                           const std::string &message = "Preparing export");
   void hideReplayModal();
   void refreshReplayModalActions();
   void refreshReplayFilterSortButtons();
@@ -815,7 +815,7 @@ private:
   bool prepareAutoPlayChartForRecord(
       const ChartMetaRecord &record,
       std::unique_ptr<bms_parser::Chart> &preparedChart,
-      play_options::PlayOptionReplayInfo &playInfo,
+      play_options::PlayOptionReplayInfo &playInfo, bool &hasUndefinedLongNotes,
       std::atomic_bool &parseCancelled) const;
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
   void startGBattlePlayback(const ChartMetaRecord &record, int replayId);
@@ -835,11 +835,9 @@ private:
   void finishReplayIrUpload(int replayId, std::string message);
   void publishReplayIrStatusFeedback(ir::IrRecordState state);
   void observeReplayIrServiceRevisions();
-  [[nodiscard]] std::optional<std::string>
-  activeReplayIrServerOrigin() const;
+  [[nodiscard]] std::optional<std::string> activeReplayIrServerOrigin() const;
   void refreshReplayIrMarker(
-      int replayId,
-      ir::IrRecordActivity activity = ir::IrRecordActivity::None);
+      int replayId, ir::IrRecordActivity activity = ir::IrRecordActivity::None);
   void startCourseReplayResultRecall(int replayId);
   void finishReplayResultRecallFailure(std::string diagnostic = {});
   void finishRemoteResultRecallFailure(std::string diagnostic = {});
