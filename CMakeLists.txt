@@ -848,6 +848,43 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_file_store_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_file_action_service_tests
+        tests/replay_file_action_service_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ModernResult.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileActionService.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(replay_file_action_service_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_action_service_tests PRIVATE cxx_std_23)
+
     add_executable(replay_codec_store_contract_tests
         tests/replay_codec_store_contract_tests.cpp
         src/AtomicFile.cpp
@@ -3601,6 +3638,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         beatoraja_replay_codec_tests
         replay_file_lifecycle_tests
         replay_file_store_tests
+        replay_file_action_service_tests
         replay_codec_store_contract_tests
         replay_playback_tests
         replay_input_recorder_tests
