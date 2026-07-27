@@ -1,5 +1,6 @@
 #pragma once
 #include "../analysis/JudgedPlaybackData.h"
+#include "../analysis/JudgedPlaybackContext.h"
 #include "../ResultPersistenceCoordinator.h"
 #include "../ir/IrSubmission.h"
 #include "../ir/IrSubmissionSnapshot.h"
@@ -252,6 +253,36 @@ cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
   return presentationReplay == nullptr &&
          (judgedReplay != nullptr || rawReplay != nullptr);
 }
+
+[[nodiscard]] inline std::optional<JudgedPlaybackData>
+retrySourceForLocalResult(
+    const bms_parser::ChartMeta &meta,
+    const ScoreProvenance &attemptProvenance,
+    const JudgedPlaybackData *presentationReplay,
+    const JudgedPlaybackData *explicitRetrySource,
+    const replay::ReplayPlaybackData *rawReplayPlayback) {
+  if (explicitRetrySource != nullptr) {
+    return *explicitRetrySource;
+  }
+  if (presentationReplay != nullptr) {
+    return *presentationReplay;
+  }
+  if (rawReplayPlayback != nullptr) {
+    return std::nullopt;
+  }
+  return analysis::retrySourceFromProvenance(meta, attemptProvenance);
+}
+
+[[nodiscard]] inline bool shouldReuseResultRetryChart(
+    bool samePattern, const bms_parser::Chart *chart,
+    bool chartMatchesRetrySource) noexcept {
+  return samePattern && chart != nullptr && chartMatchesRetrySource;
+}
+
+[[nodiscard]] inline bool retrySourceProvidesTimingAnalytics(
+    const JudgedPlaybackData &retrySource) noexcept {
+  return !retrySource.events.empty();
+}
 } // namespace result_scene_detail
 
 [[nodiscard]] inline std::optional<ir::IrChartQuery>
@@ -292,6 +323,7 @@ struct LocalResultSource {
   ResultPracticeOptions practiceOptions;
   ResultCourseOptions courseOptions;
   std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
+  bool reusableRetryChartMatchesRetrySource = true;
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
   std::optional<ResultPacemakerData> pacemakerOverride;
@@ -364,6 +396,7 @@ public:
       ResultPracticeOptions practiceOptions = {}, bool autoPlayResult = false,
       ResultCourseOptions courseOptions = {}, std::string pacemakerTarget = {},
       std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart = nullptr,
+      bool reusableRetryChartMatchesRetrySource = true,
       bms_parser::Chart *reusableRetryChart = nullptr,
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
       const JudgedPlaybackData *analyticsSource = nullptr,

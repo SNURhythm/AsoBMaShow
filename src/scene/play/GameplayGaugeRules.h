@@ -40,6 +40,15 @@ struct GameplayGaugeRules {
                             float rate = 1.0F) const noexcept;
 };
 
+[[nodiscard]] inline GaugeProfile resolveGaugeProfileForRuleset(
+    GameplayRuleset ruleset, GaugeProfile requestedProfile,
+    int keyMode) noexcept {
+  return ruleset == GameplayRuleset::LR2 &&
+                 gaugeProfileIsCourse(requestedProfile)
+             ? GaugeProfile::CourseLR2
+             : resolveGaugeProfile(requestedProfile, keyMode);
+}
+
 [[nodiscard]] double resolveEffectiveGaugeTotal(
     GameplayRuleset ruleset, const bms_parser::ChartMeta &meta) noexcept;
 

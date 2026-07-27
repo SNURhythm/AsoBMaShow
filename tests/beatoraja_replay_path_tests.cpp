@@ -208,6 +208,39 @@ void testUndefinedLongNoteDetectionIncludesBackspins() {
          "an authored LN mode is not undefined");
 }
 
+void testStemMatchingPreservesUnknownLongNoteContext() {
+  std::string diagnostic;
+  expect(replay::chartStemMatches(
+             std::string("C") + std::string(kShaA), kShaA, 2, std::nullopt,
+             diagnostic) &&
+             replay::chartStemMatches(std::string("H") + std::string(kShaA),
+                                      kShaA, 3, std::nullopt, diagnostic) &&
+             replay::chartStemMatches(kShaA, kShaA, 2, std::nullopt,
+                                      diagnostic),
+         "unknown authored-LN context accepts both stock-compatible chart "
+         "stems");
+  expect(!replay::chartStemMatches(std::string("C") + std::string(kShaA),
+                                   kShaA, 2, false, diagnostic) &&
+             !replay::chartStemMatches(kShaA, kShaA, 2, true, diagnostic),
+         "known chart context still requires its exact prefix form");
+
+  replay::CoursePathInput course{
+      .stageSha256 = {std::string(kShaA), std::string(kShaB)},
+      .longNoteMode = 2,
+  };
+  expect(replay::courseStemMatches("Caaaaaaaaaabbbbbbbbbb", course,
+                                   std::nullopt, diagnostic) &&
+             replay::courseStemMatches("aaaaaaaaaabbbbbbbbbb", course,
+                                       std::nullopt, diagnostic),
+         "unknown aggregate context accepts both stock-compatible course "
+         "stems");
+  expect(!replay::courseStemMatches("Caaaaaaaaaabbbbbbbbbb", course, false,
+                                    diagnostic) &&
+             !replay::courseStemMatches("aaaaaaaaaabbbbbbbbbb", course, true,
+                                        diagnostic),
+         "known course context still requires its exact prefix form");
+}
+
 } // namespace
 
 int main() {
@@ -216,6 +249,7 @@ int main() {
   testMalformedIdentityCannotProducePath();
   testReplayFilenameComponentsStayWithinFilesystemLimit();
   testUndefinedLongNoteDetectionIncludesBackspins();
+  testStemMatchingPreservesUnknownLongNoteContext();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay path test(s) failed\n";
     return 1;

@@ -758,6 +758,39 @@ inline std::unique_ptr<bms_parser::Chart> prepareReplayChart(
   return chart;
 }
 
+struct ResultRetryPatternAuthority {
+  std::optional<unsigned int> chartRandomSeed;
+  std::optional<std::string> chartRandomPrng;
+  std::optional<std::vector<int>> chartRandomValues;
+  std::optional<long long> playOptionSeed;
+  std::optional<long long> playOption2Seed;
+};
+
+[[nodiscard]] inline ResultRetryPatternAuthority resultRetryPatternAuthority(
+    const JudgedPlaybackData &retrySource,
+    const bms_parser::ChartMeta &fallbackMeta, bool samePattern) {
+  if (!samePattern) {
+    return {};
+  }
+  const bms_parser::ChartMeta &chartMeta = retrySource.chartMeta.BmsPath.empty()
+                                               ? fallbackMeta
+                                               : retrySource.chartMeta;
+  return {
+      .chartRandomSeed = retrySource.randomSeed.has_value()
+                             ? retrySource.randomSeed
+                             : chartMeta.RandomSeed,
+      .chartRandomPrng = retrySource.randomPrng.has_value()
+                             ? retrySource.randomPrng
+                             : chartMeta.RandomPrng,
+      .chartRandomValues =
+          !retrySource.randomValues.empty()
+              ? randomValuesOrNull(retrySource.randomValues)
+              : randomValuesOrNull(chartMeta.RandomValues),
+      .playOptionSeed = retrySource.playOptionSeed,
+      .playOption2Seed = retrySource.playOption2Seed,
+  };
+}
+
 inline std::unique_ptr<bms_parser::Chart>
 parseChartForRetry(const JudgedPlaybackData &retrySource,
                    const bms_parser::ChartMeta &fallbackMeta,
@@ -765,20 +798,11 @@ parseChartForRetry(const JudgedPlaybackData &retrySource,
   const bms_parser::ChartMeta &chartMeta = retrySource.chartMeta.BmsPath.empty()
                                                ? fallbackMeta
                                                : retrySource.chartMeta;
-  std::optional<std::string> randomPrng;
-  std::optional<unsigned int> randomSeed;
-  std::optional<std::vector<int>> randomValues;
-  if (samePattern) {
-    randomPrng = retrySource.randomPrng.has_value() ? retrySource.randomPrng
-                                                    : chartMeta.RandomPrng;
-    randomSeed = retrySource.randomSeed.has_value() ? retrySource.randomSeed
-                                                    : chartMeta.RandomSeed;
-    randomValues = !retrySource.randomValues.empty()
-                       ? randomValuesOrNull(retrySource.randomValues)
-                       : randomValuesOrNull(chartMeta.RandomValues);
-  }
-  auto chart = parseChart(chartMeta.BmsPath, randomSeed, randomPrng,
-                          randomValues, cancelled, "retry");
+  const ResultRetryPatternAuthority pattern =
+      resultRetryPatternAuthority(retrySource, fallbackMeta, samePattern);
+  auto chart = parseChart(chartMeta.BmsPath, pattern.chartRandomSeed,
+                          pattern.chartRandomPrng,
+                          pattern.chartRandomValues, cancelled, "retry");
   if (chart != nullptr && !cancelled && chart->Meta.LnMode == 0 &&
       normalizeChartLongNoteModeValue(chartMeta.LnMode) > 0) {
     chart->Meta.LnMode = chartMeta.LnMode;

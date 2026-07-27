@@ -4,9 +4,12 @@
 #include "FileChecksum.h"
 #include "ir/IrSubmissionSnapshot.h"
 #include "replay/BeatorajaReplayCodec.h"
+#include "replay/GzipCodec.h"
 #include "replay/ReplayFileStore.h"
 #include "replay/ReplayFileActionService.h"
 #include "sqlite3.h"
+
+#include "nlohmann/json.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -24,6 +27,7 @@
 namespace {
 
 using namespace result_persistence;
+using Json = nlohmann::ordered_json;
 
 int failures = 0;
 
@@ -113,6 +117,37 @@ bool writeBytes(const std::filesystem::path &path,
   output.write(reinterpret_cast<const char *>(bytes.data()),
                static_cast<std::streamsize>(bytes.size()));
   return static_cast<bool>(output);
+}
+
+std::optional<std::vector<std::byte>>
+withUnsupportedAsoExtension(const std::filesystem::path &path,
+                            std::span<const std::size_t> stageIndexes) {
+  const auto source = readBytes(path);
+  const auto compressed = std::span(
+      reinterpret_cast<const std::byte *>(source.data()), source.size());
+  std::string diagnostic;
+  const auto jsonBytes = replay::gzipDecompressBounded(
+      compressed, replay::ReplayCodecLimits{}.maxJsonBytes, diagnostic);
+  if (!jsonBytes.has_value()) {
+    return std::nullopt;
+  }
+
+  Json document;
+  try {
+    document = Json::parse(std::string(
+        reinterpret_cast<const char *>(jsonBytes->data()), jsonBytes->size()));
+    for (const std::size_t index : stageIndexes) {
+      Json &stage = document.is_array() ? document.at(index) : document;
+      stage.at("asobmashow").at("schemaVersion") = 999;
+    }
+  } catch (const Json::exception &) {
+    return std::nullopt;
+  }
+
+  const std::string serialized = document.dump();
+  return replay::gzipCompress(
+      std::as_bytes(std::span(serialized.data(), serialized.size())),
+      diagnostic);
 }
 
 std::map<std::string, std::int64_t>
@@ -213,8 +248,20 @@ CompletedChartAttempt validAttempt(std::string attemptId, int salt = 0) {
   playback.setup.hasUndefinedLongNotes = false;
   playback.setup.playOption = "NORMAL";
   playback.setup.playOption2 = "NORMAL";
-  playback.setup.playbackRulesetId = "asobmashow";
-  playback.setup.playbackRulesetRevision = 11;
+  const auto ruleset = RulesetDescriptor::Current();
+  playback.setup.playbackRulesetId = ruleset.id;
+  playback.setup.playbackRulesetRevision = ruleset.version;
+  GaugeStateSnapshot startingGauge{
+      .gaugeType = GaugeType::Normal,
+      .selectedGaugeType = GaugeType::Normal,
+      .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+      .gaugeProfile = GaugeProfile::Standard,
+      .gaugeAutoShift = GaugeAutoShiftMode::None,
+      .currentGauge = 20.0F,
+  };
+  startingGauge.gaugeValues = {20.0F, 20.0F, 20.0F,
+                               100.0F, 100.0F, 100.0F};
+  playback.setup.startingGaugeState = startingGauge;
   playback.setup.initialLaneCoverPercent = 37;
   playback.setup.laneCoverEnabled = true;
   playback.input = {
@@ -349,6 +396,29 @@ struct Environment {
   replay::ReplayFileStore fileStore;
   Coordinator coordinator;
 };
+
+bool replaceReplayStagesWithStockFallback(
+    Environment &environment, const ReplayFileReference &reference,
+    std::string_view ownerColumn, int resultId,
+    std::span<const std::size_t> stageIndexes) {
+  const auto replayPath =
+      environment.replayDatabase.parent_path() / reference.relativePath;
+  const auto futureBytes =
+      withUnsupportedAsoExtension(replayPath, stageIndexes);
+  if (!futureBytes.has_value() || !writeBytes(replayPath, *futureBytes)) {
+    return false;
+  }
+  std::string diagnostic;
+  const auto futureHash = file_checksum::sha256File(
+      replayPath, diagnostic, futureBytes->size());
+  return futureHash.has_value() &&
+         executeSql(environment.replayDatabase,
+                    "UPDATE replay_files SET content_sha256='" +
+                        *futureHash + "',compressed_size=" +
+                        std::to_string(futureBytes->size()) + " WHERE " +
+                        std::string(ownerColumn) + "=" +
+                        std::to_string(resultId));
+}
 
 ReplayFileReference finalizedReference(Environment &environment,
                                        const CompletedChartAttempt &attempt) {
@@ -556,7 +626,7 @@ void testOwnershipMarkerFailureCannotExposeFinalReplay() {
          "ownership marker failure stops before the final BRD becomes visible");
 }
 
-void testFileActionsRejectReplayFromDifferentChartContext() {
+void testFileActionsRejectReplayFromDifferentSavedProvenance() {
   TemporaryDirectory temporary("action-semantic-validation");
   Environment environment(temporary.path());
   auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174030");
@@ -568,7 +638,8 @@ void testFileActionsRejectReplayFromDifferentChartContext() {
   }
 
   auto incompatible = attempt.replay;
-  incompatible.setup.keyMode = 14;
+  incompatible.setup.initialGaugeType = GaugeType::Hard;
+  incompatible.setup.startingGaugeState.reset();
   std::string diagnostic;
   const auto encoded = environment.codec.encodeChart(
       incompatible, attempt.result.playedAtUnixMillis, diagnostic);
@@ -621,7 +692,8 @@ void testFileActionsRejectReplayFromDifferentChartContext() {
   });
   expect(inspected.availability == ReplayAvailability::Corrupt &&
              !inspected.sourcePath.has_value(),
-         "file actions reject a BRD that disagrees with result chart context");
+         "file actions reject a BRD whose setup disagrees with saved "
+         "provenance");
 }
 
 void testReplayShareUsesVerifiedSnapshotAfterSourceReplacement() {
@@ -717,6 +789,366 @@ void testFileActionsRejectReplayUnderDifferentChartStem() {
   expect(inspected.availability == ReplayAvailability::Corrupt &&
              !inspected.sourcePath.has_value(),
          "file actions reject a valid BRD stored under the wrong chart stem");
+}
+
+void testStockFallbackKeepsUndefinedLongNoteChartPathAvailable() {
+  TemporaryDirectory temporary("stock-undefined-ln-chart");
+  Environment environment(temporary.path());
+  auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174032");
+  attempt.result.score.longNoteMode = 2;
+  attempt.result.score.provenance.stages.front().longNoteMode = 2;
+  attempt.replay.setup.longNoteMode = 2;
+  attempt.replay.setup.hasUndefinedLongNotes = true;
+  attempt.replay.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  attempt.replay.setup.startingGaugePercent = 100.0F;
+  attempt.replay.setup.startingGaugeState.reset();
+  attempt.result.score.provenance.gaugeAutoShift =
+      GaugeAutoShiftMode::BestClear;
+  attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+  std::string snapshotDiagnostic;
+  const auto snapshot =
+      ir::captureIrSubmissionSnapshot(attempt.result, snapshotDiagnostic);
+  expect(snapshot.has_value(), "stock fallback chart snapshot captures");
+  if (!snapshot.has_value()) {
+    return;
+  }
+  attempt.irSnapshot = *snapshot;
+
+  const auto saved = environment.coordinator.persist(attempt);
+  expect(saved.saved() && saved.receipt.has_value(),
+         "undefined-LN CN chart persists under a Beatoraja C stem");
+  if (!saved.receipt.has_value()) {
+    return;
+  }
+  const auto loaded =
+      environment.replayRepository.loadChartResult(saved.receipt->resultId);
+  expect(loaded.record.has_value() && loaded.record->replayFile.has_value() &&
+             loaded.record->replayFile->stem ==
+                 "C" + attempt.result.score.chartSha256,
+         "undefined-LN CN chart owns the stock-compatible C stem");
+  if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+    return;
+  }
+
+  const auto &reference = *loaded.record->replayFile;
+  const std::array chartStage{std::size_t{0}};
+  const bool replaced = replaceReplayStagesWithStockFallback(
+      environment, reference, "chart_result_id", saved.receipt->resultId,
+      chartStage);
+  expect(replaced,
+         "chart fixture becomes an owned stock fallback BRD");
+  if (!replaced) {
+    return;
+  }
+
+  const auto playback = environment.replayRepository.loadChartReplayPlayback(
+      saved.receipt->resultId);
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const auto inspected = actions.inspect({
+      .kind = ReplayFileReference::RecordKind::ChartResult,
+      .resultId = saved.receipt->resultId,
+  });
+  expect(playback.status == ChartReplayPlaybackReadOutcome::Status::Loaded &&
+             playback.playback.has_value() &&
+             playback.playback->setup.longNoteMode == 2 &&
+             playback.playback->setup.playbackRulesetId ==
+                 RulesetDescriptor::Current().id &&
+             playback.playback->setup.startingGaugeState.has_value() &&
+             playback.playback->setup.startingGaugeState->gaugeType ==
+                 GaugeType::Hazard &&
+             playback.playback->setup.startingGaugeState
+                     ->gaugeValues[gaugeTypeIndex(GaugeType::Normal)] ==
+                 20.0F &&
+             inspected.availability == ReplayAvailability::Available,
+         "stock fallback inherits saved setup and deterministic best-clear "
+         "state while remaining playable and shareable at its valid C stem");
+}
+
+void setCourseStageLongNoteContext(CompletedCourseAttempt &attempt,
+                                   std::size_t index,
+                                   bool hasUndefinedLongNotes) {
+  attempt.replay.stages[index].setup.longNoteMode = 2;
+  attempt.replay.stages[index].setup.hasUndefinedLongNotes =
+      hasUndefinedLongNotes;
+  auto &score = attempt.result.stages[index].score;
+  score.longNoteMode = 2;
+  score.provenance.stages.front().longNoteMode = 2;
+}
+
+void testCourseStockFallbackPreservesUnknownLongNotePathFact() {
+  TemporaryDirectory temporary("stock-undefined-ln-course");
+  Environment environment(temporary.path());
+  auto attempt =
+      validCourseAttempt("123e4567-e89b-42d3-a456-426614174033");
+  setCourseStageLongNoteContext(attempt, 0, false);
+  setCourseStageLongNoteContext(attempt, 1, true);
+  attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+
+  const auto saved = environment.coordinator.persistCourse(attempt);
+  expect(saved.saved() && saved.receipt.has_value(),
+         "course with one undefined-LN stage persists at a C stem");
+  if (!saved.receipt.has_value()) {
+    return;
+  }
+  const auto loaded =
+      environment.replayRepository.loadCourseResult(saved.receipt->resultId);
+  expect(loaded.record.has_value() && loaded.record->replayFile.has_value() &&
+             loaded.record->replayFile->stem.starts_with('C'),
+         "undefined-LN course owns a stock-compatible C stem");
+  if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+    return;
+  }
+
+  const std::array futureStage{std::size_t{1}};
+  const bool replaced = replaceReplayStagesWithStockFallback(
+      environment, *loaded.record->replayFile, "course_result_id",
+      saved.receipt->resultId, futureStage);
+  expect(replaced,
+         "the only undefined-LN course stage becomes stock fallback");
+  if (!replaced) {
+    return;
+  }
+
+  const auto playback = environment.replayRepository.loadCourseReplayPlayback(
+      saved.receipt->resultId);
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const auto inspected = actions.inspect({
+      .kind = ReplayFileReference::RecordKind::CourseResult,
+      .resultId = saved.receipt->resultId,
+  });
+  expect(playback.status == CourseReplayPlaybackReadOutcome::Status::Loaded &&
+             playback.playback.has_value() &&
+             inspected.availability == ReplayAvailability::Available,
+         "unknown fallback stage keeps the valid prefixed course available");
+}
+
+void testStockFallbackAcceptsNoLongNoteResults() {
+  {
+    TemporaryDirectory temporary("stock-no-ln-chart");
+    Environment environment(temporary.path());
+    auto attempt =
+        validAttempt("123e4567-e89b-42d3-a456-426614174035");
+    attempt.result.score.longNoteMode = 0;
+    attempt.replay.setup.longNoteMode = 0;
+    attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+    std::string snapshotDiagnostic;
+    const auto snapshot =
+        ir::captureIrSubmissionSnapshot(attempt.result, snapshotDiagnostic);
+    expect(snapshot.has_value(), "no-LN chart snapshot captures");
+    if (!snapshot.has_value()) {
+      return;
+    }
+    attempt.irSnapshot = *snapshot;
+
+    const auto saved = environment.coordinator.persist(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "no-LN chart persists before fallback");
+    if (!saved.receipt.has_value()) {
+      return;
+    }
+    const auto loaded =
+        environment.replayRepository.loadChartResult(saved.receipt->resultId);
+    if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+      expect(false, "no-LN chart exposes its replay reference");
+      return;
+    }
+    const std::array fallbackStage{std::size_t{0}};
+    expect(replaceReplayStagesWithStockFallback(
+               environment, *loaded.record->replayFile, "chart_result_id",
+               saved.receipt->resultId, fallbackStage),
+           "no-LN chart becomes a stock fallback");
+    const auto playback = environment.replayRepository.loadChartReplayPlayback(
+        saved.receipt->resultId);
+    expect(playback.status ==
+                   ChartReplayPlaybackReadOutcome::Status::Loaded &&
+               playback.playback.has_value() &&
+               playback.playback->setup.longNoteMode == 0,
+           "stock mode zero preserves an application no-LN chart result");
+  }
+
+  {
+    TemporaryDirectory temporary("stock-no-ln-course");
+    Environment environment(temporary.path());
+    auto attempt = validCourseAttempt(
+        "123e4567-e89b-42d3-a456-426614174036");
+    for (std::size_t index = 0; index < attempt.replay.stages.size(); ++index) {
+      attempt.replay.stages[index].setup.longNoteMode = 0;
+      attempt.result.stages[index].score.longNoteMode = 0;
+    }
+    attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+    const auto saved = environment.coordinator.persistCourse(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "no-LN course persists before fallback");
+    if (!saved.receipt.has_value()) {
+      return;
+    }
+    const auto loaded =
+        environment.replayRepository.loadCourseResult(saved.receipt->resultId);
+    if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+      expect(false, "no-LN course exposes its replay reference");
+      return;
+    }
+    const std::array fallbackStage{std::size_t{0}};
+    expect(replaceReplayStagesWithStockFallback(
+               environment, *loaded.record->replayFile, "course_result_id",
+               saved.receipt->resultId, fallbackStage),
+           "no-LN course becomes a mixed stock fallback");
+    const auto playback =
+        environment.replayRepository.loadCourseReplayPlayback(
+            saved.receipt->resultId);
+    expect(playback.status ==
+                   CourseReplayPlaybackReadOutcome::Status::Loaded &&
+               playback.playback.has_value() &&
+               playback.playback->stages.front().setup.longNoteMode == 0,
+           "stock mode zero preserves application no-LN course stages");
+  }
+}
+
+void testManualAssignmentFallbackFailsClosed() {
+  {
+    TemporaryDirectory temporary("stock-manual-chart");
+    Environment environment(temporary.path());
+    auto attempt =
+        validAttempt("123e4567-e89b-42d3-a456-426614174037");
+    attempt.replay.setup.playOption = "ASSIGN:S2134567";
+    attempt.result.score.provenance.player1.option = "ASSIGN:S2134567";
+    attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+    std::string snapshotDiagnostic;
+    const auto snapshot =
+        ir::captureIrSubmissionSnapshot(attempt.result, snapshotDiagnostic);
+    expect(snapshot.has_value(), "manual chart snapshot captures");
+    if (!snapshot.has_value()) {
+      return;
+    }
+    attempt.irSnapshot = *snapshot;
+
+    const auto saved = environment.coordinator.persist(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "manual chart persists with its supported extension");
+    if (!saved.receipt.has_value()) {
+      return;
+    }
+    const auto loaded =
+        environment.replayRepository.loadChartResult(saved.receipt->resultId);
+    if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+      expect(false, "manual chart exposes its replay reference");
+      return;
+    }
+    const std::array fallbackStage{std::size_t{0}};
+    expect(replaceReplayStagesWithStockFallback(
+               environment, *loaded.record->replayFile, "chart_result_id",
+               saved.receipt->resultId, fallbackStage),
+           "manual chart extension becomes unsupported");
+    const auto playback = environment.replayRepository.loadChartReplayPlayback(
+        saved.receipt->resultId);
+    expect(playback.status ==
+               ChartReplayPlaybackReadOutcome::Status::IntegrityConflict,
+           "stock NORMAL cannot authenticate saved chart ASSIGN provenance");
+  }
+
+  {
+    TemporaryDirectory temporary("stock-manual-course");
+    Environment environment(temporary.path());
+    auto attempt = validCourseAttempt(
+        "123e4567-e89b-42d3-a456-426614174038");
+    attempt.replay.stages[1].setup.playOption = "ASSIGN:S2134567";
+    attempt.result.stages[1].score.provenance.player1.option =
+        "ASSIGN:S2134567";
+    attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+
+    const auto saved = environment.coordinator.persistCourse(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "manual course persists with its supported extension");
+    if (!saved.receipt.has_value()) {
+      return;
+    }
+    const auto loaded =
+        environment.replayRepository.loadCourseResult(saved.receipt->resultId);
+    if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+      expect(false, "manual course exposes its replay reference");
+      return;
+    }
+    const std::array fallbackStage{std::size_t{1}};
+    expect(replaceReplayStagesWithStockFallback(
+               environment, *loaded.record->replayFile, "course_result_id",
+               saved.receipt->resultId, fallbackStage),
+           "manual course stage extension becomes unsupported");
+    const auto playback =
+        environment.replayRepository.loadCourseReplayPlayback(
+            saved.receipt->resultId);
+    expect(playback.status ==
+               CourseReplayPlaybackReadOutcome::Status::IntegrityConflict,
+           "stock NORMAL cannot authenticate saved course ASSIGN provenance");
+  }
+}
+
+void testKnownUndefinedLongNoteCourseStillRequiresPrefixWithFallbackStage() {
+  TemporaryDirectory temporary("mixed-known-undefined-ln-course");
+  Environment environment(temporary.path());
+  auto attempt =
+      validCourseAttempt("123e4567-e89b-42d3-a456-426614174034");
+  setCourseStageLongNoteContext(attempt, 0, true);
+  setCourseStageLongNoteContext(attempt, 1, false);
+  attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+
+  const auto saved = environment.coordinator.persistCourse(attempt);
+  expect(saved.saved() && saved.receipt.has_value(),
+         "known undefined-LN course fixture persists");
+  if (!saved.receipt.has_value()) {
+    return;
+  }
+  const auto loaded =
+      environment.replayRepository.loadCourseResult(saved.receipt->resultId);
+  expect(loaded.record.has_value() && loaded.record->replayFile.has_value() &&
+             loaded.record->replayFile->stem.starts_with('C'),
+         "known undefined-LN course fixture owns a C stem");
+  if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+    return;
+  }
+
+  const std::array futureStage{std::size_t{1}};
+  const bool replaced = replaceReplayStagesWithStockFallback(
+      environment, *loaded.record->replayFile, "course_result_id",
+      saved.receipt->resultId, futureStage);
+  expect(replaced, "known undefined-LN course gains one fallback stage");
+  if (!replaced) {
+    return;
+  }
+
+  const auto &reference = *loaded.record->replayFile;
+  const std::string wrongStem = reference.stem.substr(1);
+  const auto wrongRelativePath =
+      std::filesystem::path("replay") / (wrongStem + ".brd");
+  std::error_code renameError;
+  std::filesystem::rename(temporary.path() / reference.relativePath,
+                          temporary.path() / wrongRelativePath, renameError);
+  const bool moved =
+      !renameError &&
+      executeSql(environment.replayDatabase,
+                 "UPDATE replay_files SET stem='" + wrongStem +
+                     "',relative_path='" + wrongRelativePath.generic_string() +
+                     "' WHERE course_result_id=" +
+                     std::to_string(saved.receipt->resultId));
+  expect(moved, "mixed-source course fixture removes its required prefix");
+  if (!moved) {
+    return;
+  }
+
+  const auto playback = environment.replayRepository.loadCourseReplayPlayback(
+      saved.receipt->resultId);
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const auto inspected = actions.inspect({
+      .kind = ReplayFileReference::RecordKind::CourseResult,
+      .resultId = saved.receipt->resultId,
+  });
+  expect(playback.status ==
+                 CourseReplayPlaybackReadOutcome::Status::IntegrityConflict &&
+             inspected.availability == ReplayAvailability::Corrupt,
+         "a supported true fact still rejects an unprefixed mixed-source "
+         "course");
 }
 
 void testOccupiedSlotReplacementRelocatesDisplacedReference() {
@@ -1390,9 +1822,14 @@ void testSummaryCorruptionAllowanceIsBounded() {
 int main() {
   testCompleteFileAndDatabasePipeline();
   testOwnershipMarkerFailureCannotExposeFinalReplay();
-  testFileActionsRejectReplayFromDifferentChartContext();
+  testFileActionsRejectReplayFromDifferentSavedProvenance();
   testReplayShareUsesVerifiedSnapshotAfterSourceReplacement();
   testFileActionsRejectReplayUnderDifferentChartStem();
+  testStockFallbackKeepsUndefinedLongNoteChartPathAvailable();
+  testCourseStockFallbackPreservesUnknownLongNotePathFact();
+  testStockFallbackAcceptsNoLongNoteResults();
+  testManualAssignmentFallbackFailsClosed();
+  testKnownUndefinedLongNoteCourseStillRequiresPrefixWithFallbackStage();
   testOccupiedSlotReplacementRelocatesDisplacedReference();
   testFailedSlotRelocationKeepsOwnedCopyForStartupRecovery();
   testSlotRelocationMarkerFailureCannotExposeCopiedReplay();

@@ -139,6 +139,32 @@ void testChartRecallUsesPersistedFactsOnly() {
   assert(recalled.result.score.provenance == expected.score.provenance);
 }
 
+void testChartRecallPreservesResolvedRuntimePathForRetry() {
+  auto persisted = validResult();
+  persisted.score.chartPath = "Documents/BMS/portable-recall.bms";
+  persisted.resultFingerprint =
+      result_persistence::resultFingerprint(persisted);
+  const std::filesystem::path resolvedPath =
+      std::filesystem::path("/current-profile/Documents/BMS") /
+      "portable-recall.bms";
+
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(
+      persisted, cancelled,
+      [resolvedPath](const result_persistence::PersistedChartResult &result,
+                     std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta.BmsPath = resolvedPath;
+        chart->Meta.MD5 = result.score.chartMd5;
+        chart->Meta.SHA256 = result.score.chartSha256;
+        return chart;
+      });
+
+  assert(outcome.value.has_value());
+  assert(outcome.value->result.score.chartPath == persisted.score.chartPath);
+  assert(outcome.value->chart->Meta.BmsPath == resolvedPath);
+}
+
 void testChartRecallRejectsInvalidResultBeforeLoadingAssets() {
   auto persisted = validResult();
   persisted.score.score = 1;
@@ -573,6 +599,7 @@ void testCourseRecallRejectsChangedStageIdentity() {
 
 int main() {
   testChartRecallUsesPersistedFactsOnly();
+  testChartRecallPreservesResolvedRuntimePathForRetry();
   testChartRecallRejectsInvalidResultBeforeLoadingAssets();
   testChartRecallDoesNotPublishMissingOrCancelledAssets();
   testChartRecallRejectsChangedChartIdentity();

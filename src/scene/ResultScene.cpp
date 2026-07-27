@@ -265,6 +265,7 @@ ResultScene::ResultScene(
     bool autoPlayResult, ResultCourseOptions courseOptions,
     std::string pacemakerTarget,
     std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
+    bool reusableRetryChartMatchesRetrySource,
     bms_parser::Chart *reusableRetryChart,
     std::optional<ResultPacemakerData> pacemakerOverride,
     const JudgedPlaybackData *analyticsSource,
@@ -278,11 +279,9 @@ ResultScene::ResultScene(
           .presentationReplay =
               replay != nullptr ? std::optional<JudgedPlaybackData>(*replay)
                                 : std::nullopt,
-          .retryData =
-              retrySource != nullptr
-                  ? std::optional<JudgedPlaybackData>(*retrySource)
-                  : (replay != nullptr ? std::optional<JudgedPlaybackData>(*replay)
-                                       : std::nullopt),
+          .retryData = result_scene_detail::retrySourceForLocalResult(
+              meta, attemptProvenance, replay, retrySource,
+              rawReplayPlayback.get()),
           .rawReplayPlayback = rawReplayPlayback,
           .replayResultContext = replayResultContext,
           .analyticsData =
@@ -297,6 +296,8 @@ ResultScene::ResultScene(
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
           .ownedReusableRetryChart = std::move(ownedReusableRetryChart),
+          .reusableRetryChartMatchesRetrySource =
+              reusableRetryChartMatchesRetrySource,
           .pacemakerTarget = pacemaker::normalizeTargetId(
               pacemakerTarget.empty()
                   ? context.settings.selectedPacemakerTarget
@@ -696,7 +697,9 @@ ResultScene::makeTimingAnalyticsModel() const {
     singleAttempt.front().autoPlay =
         singleAttempt.front().autoPlay || local->autoPlayResult;
     completedAttempts = singleAttempt;
-  } else if (local->retryData.has_value()) {
+  } else if (local->retryData.has_value() &&
+             result_scene_detail::retrySourceProvidesTimingAnalytics(
+                 *local->retryData)) {
     singleAttempt.front() = *local->retryData;
     singleAttempt.front().autoPlay =
         singleAttempt.front().autoPlay || local->autoPlayResult;
@@ -2236,7 +2239,12 @@ void ResultScene::startRetry(bool samePattern) {
         }
         std::atomic_bool parseCancelled = false;
         const bool reuseCurrentPattern =
-            samePattern && local->reusableRetryChart != nullptr;
+            result_scene_detail::shouldReuseResultRetryChart(
+                samePattern, local->reusableRetryChart,
+                local->reusableRetryChartMatchesRetrySource);
+        const play_options::ResultRetryPatternAuthority patternAuthority =
+            play_options::resultRetryPatternAuthority(
+                retrySource, local->meta, samePattern);
         std::unique_ptr<bms_parser::Chart> ownedRetryChart;
         bms_parser::Chart *retryChart = nullptr;
         if (reuseCurrentPattern) {
@@ -2256,6 +2264,9 @@ void ResultScene::startRetry(bool samePattern) {
         }
 
         StartOptions options;
+        if (!local->practiceOptions.enabled) {
+          applyResultRetrySetupToStartOptions(options, retrySource);
+        }
         options.startPosition = local->practiceOptions.enabled
                                     ? (practiceConfiguration.has_value()
                                            ? static_cast<unsigned long long>(
@@ -2331,10 +2342,10 @@ void ResultScene::startRetry(bool samePattern) {
 
         if (reuseCurrentPattern) {
           options.playOption = retrySource.playOption;
-          options.playOptionSeed = retrySource.playOptionSeed;
+          options.playOptionSeed = patternAuthority.playOptionSeed;
           if (retryChart->Meta.IsDP) {
             options.playOption2 = retrySource.playOption2;
-            options.playOption2Seed = retrySource.playOption2Seed;
+            options.playOption2Seed = patternAuthority.playOption2Seed;
           }
         } else if (!play_options::applyReplayDoublePlayOption(
                        *retryChart, options.doublePlayOption)) {
@@ -2342,15 +2353,13 @@ void ResultScene::startRetry(bool samePattern) {
         } else if (retrySource.playOption.has_value()) {
           if (samePattern &&
               play_options::usesRandomizer(*retrySource.playOption) &&
-              !retrySource.playOptionSeed.has_value()) {
+              !patternAuthority.playOptionSeed.has_value()) {
             SDL_Log("Cannot retry same pattern: missing play option seed");
             return true;
           }
-          const std::optional<long long> optionSeed =
-              samePattern ? retrySource.playOptionSeed
-                          : std::optional<long long>();
           if (!play_options::applyPlayOptionModifier(
-                  *retryChart, *retrySource.playOption, optionSeed, 0,
+                  *retryChart, *retrySource.playOption,
+                  patternAuthority.playOptionSeed, 0,
                   options.playOption, options.playOptionSeed, "retry")) {
             return true;
           }
@@ -2360,15 +2369,13 @@ void ResultScene::startRetry(bool samePattern) {
             retrySource.playOption2.has_value()) {
           if (samePattern &&
               play_options::usesRandomizer(*retrySource.playOption2) &&
-              !retrySource.playOption2Seed.has_value()) {
+              !patternAuthority.playOption2Seed.has_value()) {
             SDL_Log("Cannot retry same pattern: missing P2 play option seed");
             return true;
           }
-          const std::optional<long long> optionSeed =
-              samePattern ? retrySource.playOption2Seed
-                          : std::optional<long long>();
           if (!play_options::applyPlayOptionModifier(
-                  *retryChart, *retrySource.playOption2, optionSeed, 1,
+                  *retryChart, *retrySource.playOption2,
+                  patternAuthority.playOption2Seed, 1,
                   options.playOption2, options.playOption2Seed, "retry")) {
             return true;
           }

@@ -34,7 +34,9 @@ GameplayRuleset rulesetFor(const ScoreProvenance &provenance) {
 void applyStoredMeta(bms_parser::ChartMeta &meta,
                      const result_persistence::PersistedChartResult &result) {
   const auto &score = result.score;
-  meta.BmsPath = score.chartPath;
+  if (meta.BmsPath.empty()) {
+    meta.BmsPath = score.chartPath;
+  }
   meta.MD5 = score.chartMd5;
   meta.SHA256 = score.chartSha256;
   meta.Title = score.chartTitle;

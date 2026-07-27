@@ -23,12 +23,21 @@ struct ReplayCodecLimits {
   std::size_t maxJsonDepth = 64U;
 };
 
+enum class ReplayStageDecodeSource : std::uint8_t {
+  Stock,
+  AsoExtension,
+};
+
 struct ReplayDecodeOutcome {
   std::optional<ReplayPlaybackData> chart;
   std::optional<CourseReplayPlaybackData> course;
+  std::vector<ReplayStageDecodeSource> stageSources;
   bool stockOnly = false;
   bool unsupportedAsoExtension = false;
   std::string diagnostic;
+
+  [[nodiscard]] std::optional<bool>
+  replayPathHasUndefinedLongNotes() const noexcept;
 };
 
 class BeatorajaReplayCodec {

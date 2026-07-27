@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 
 namespace analysis {
 
@@ -45,6 +46,47 @@ namespace analysis {
     });
   }
   result.policy = std::move(policy);
+  return result;
+}
+
+// Builds the in-memory retry projection for a result that was loaded without
+// replay events. Score provenance owns the completed attempt's setup and chart
+// branch; JudgedPlaybackData remains an ephemeral consumer model.
+[[nodiscard]] inline JudgedPlaybackData retrySourceFromProvenance(
+    bms_parser::ChartMeta chartMeta, const ScoreProvenance &source) {
+  JudgedPlaybackData result;
+  result.chartMeta = std::move(chartMeta);
+  result.randomSeed = result.chartMeta.RandomSeed;
+  result.randomPrng = result.chartMeta.RandomPrng;
+  result.randomValues = result.chartMeta.RandomValues;
+
+  if (const ScoreStageProvenance *stage =
+          score_provenance::uniqueStageForChart(source, result.chartMeta)) {
+    result.randomSeed.reset();
+    if (stage->chartRandomSeed.has_value() &&
+        *stage->chartRandomSeed <=
+            std::numeric_limits<unsigned int>::max()) {
+      result.randomSeed =
+          static_cast<unsigned int>(*stage->chartRandomSeed);
+    }
+    result.randomPrng = stage->chartRandomPrng;
+    result.randomValues = stage->chartRandomValues;
+    result.chartMeta.RandomSeed = result.randomSeed;
+    result.chartMeta.RandomPrng = result.randomPrng;
+    result.chartMeta.RandomValues = result.randomValues;
+  }
+
+  result.autoPlay = source.autoPlay;
+  result.playOption = source.player1.option;
+  result.playOptionSeed = source.player1.seed;
+  result.playOption2 = source.player2.option;
+  result.playOption2Seed = source.player2.seed;
+  result.assistOption = source.assistOption;
+  result.initialGaugeType = source.gaugeType;
+  result.gaugeProfile = source.gaugeProfile;
+  result.gaugeAutoShift = source.gaugeAutoShift;
+  result.gaugeAutoShiftLowerBound = source.gaugeAutoShiftLowerBound;
+  result.context = playbackContextFrom(source, result.chartMeta);
   return result;
 }
 

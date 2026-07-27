@@ -92,6 +92,22 @@ std::optional<std::string> chartStem(std::string_view lowerSha256,
   return result;
 }
 
+bool chartStemMatches(std::string_view stem, std::string_view lowerSha256,
+                      int longNoteMode,
+                      std::optional<bool> hasUndefinedLongNotes,
+                      std::string &diagnostic) {
+  const auto expected = chartStem(lowerSha256, longNoteMode,
+                                  hasUndefinedLongNotes.value_or(false),
+                                  diagnostic);
+  if (!expected.has_value() || *expected == stem ||
+      hasUndefinedLongNotes.has_value()) {
+    return expected.has_value() && *expected == stem;
+  }
+  const auto prefixed =
+      chartStem(lowerSha256, longNoteMode, true, diagnostic);
+  return prefixed.has_value() && *prefixed == stem;
+}
+
 std::optional<std::string> courseStem(const CoursePathInput &input,
                                       std::string &diagnostic) {
   diagnostic.clear();
@@ -140,6 +156,20 @@ std::optional<std::string> courseStem(const CoursePathInput &input,
     return std::nullopt;
   }
   return result;
+}
+
+bool courseStemMatches(std::string_view stem, CoursePathInput input,
+                       std::optional<bool> hasUndefinedLongNotes,
+                       std::string &diagnostic) {
+  input.hasUndefinedLongNotes = hasUndefinedLongNotes.value_or(false);
+  const auto expected = courseStem(input, diagnostic);
+  if (!expected.has_value() || *expected == stem ||
+      hasUndefinedLongNotes.has_value()) {
+    return expected.has_value() && *expected == stem;
+  }
+  input.hasUndefinedLongNotes = true;
+  const auto prefixed = courseStem(input, diagnostic);
+  return prefixed.has_value() && *prefixed == stem;
 }
 
 std::optional<ReplayPathIdentity> pathForStem(std::string_view stem,

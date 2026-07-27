@@ -3320,7 +3320,7 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
                 options.autoPlay || (options.replayData != nullptr &&
                                      options.replayData->autoPlay),
                 courseResultOptions, resultPacemakerTarget,
-                std::move(ownedReusableRetryChart), reusableRetryChart,
+                std::move(ownedReusableRetryChart), true, reusableRetryChart,
                 gbattleResultPacemaker, analyticsSource,
                 rawReplayResultSource(options), options.replayResultContext),
             false);

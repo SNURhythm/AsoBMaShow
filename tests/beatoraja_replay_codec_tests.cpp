@@ -217,6 +217,10 @@ void testIndependentBeatorajaFixtures() {
   expect(chart.stockOnly, "stock fixture is identified as stock-only");
   expect(!chart.unsupportedAsoExtension,
          "stock fixture has no unsupported extension");
+  expect(chart.stageSources ==
+                 std::vector{replay::ReplayStageDecodeSource::Stock} &&
+             !chart.replayPathHasUndefinedLongNotes().has_value(),
+         "stock chart reports that extension-owned setup facts are unknown");
   expect(chart.diagnostic.empty(), "stock chart fixture has no diagnostic");
   if (chart.chart) {
     const auto &value = *chart.chart;
@@ -485,6 +489,10 @@ void testAsoExtensionRoundTripsWithoutBreakingStock() {
   expect(!decoded.stockOnly, "supported extension is not stock-only");
   expect(!decoded.unsupportedAsoExtension,
          "supported extension is not flagged unsupported");
+  expect(decoded.stageSources ==
+                 std::vector{replay::ReplayStageDecodeSource::AsoExtension} &&
+             decoded.replayPathHasUndefinedLongNotes() == true,
+         "supported chart reports extension-owned setup facts as known");
   if (decoded.chart) {
     expectEqual(
         *decoded.chart, source,
@@ -528,6 +536,12 @@ void testAsoExtensionRoundTripsWithoutBreakingStock() {
            "stock reader sees a normal two-stage JudgedPlaybackData array");
     const auto courseDecoded = codec.decode(*courseEncoded);
     expect(courseDecoded.course.has_value(), "supported Aso course decodes");
+    expect(courseDecoded.stageSources ==
+                   std::vector{
+                       replay::ReplayStageDecodeSource::AsoExtension,
+                       replay::ReplayStageDecodeSource::AsoExtension} &&
+               courseDecoded.replayPathHasUndefinedLongNotes() == true,
+           "supported course aggregates its known undefined-LN facts");
     if (courseDecoded.course) {
       expectEqual(*courseDecoded.course, course,
                   "course stages and inter-stage rests round-trip");
@@ -737,6 +751,80 @@ void testEncodeValidatesRandomAndGaugeEnums() {
   auto supportedPrng = extensionReplay();
   expect(codec.encodeChart(supportedPrng, 1'000, diagnostic).has_value(),
          "the parser-declared replay PRNG remains encodable");
+
+  auto resolvedGaugeProfile = extensionReplay();
+  resolvedGaugeProfile.setup.keyMode = 5;
+  resolvedGaugeProfile.setup.gaugeProfile = GaugeProfile::Standard;
+  resolvedGaugeProfile.setup.startingGaugeState->gaugeProfile =
+      GaugeProfile::Standard5Keys;
+  expect(codec.encodeChart(resolvedGaugeProfile, 1'000, diagnostic).has_value(),
+         "a production gauge snapshot may carry the key-mode-resolved "
+         "profile");
+
+  auto carriedPmsGauge = extensionReplay();
+  carriedPmsGauge.setup.keyMode = 9;
+  carriedPmsGauge.setup.initialGaugeType = GaugeType::Normal;
+  carriedPmsGauge.setup.gaugeProfile = GaugeProfile::Standard9Keys;
+  carriedPmsGauge.setup.gaugeAutoShift = GaugeAutoShiftMode::None;
+  carriedPmsGauge.setup.playbackRulesetId = "beatoraja";
+  carriedPmsGauge.setup.playbackRulesetRevision =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja).version;
+  carriedPmsGauge.setup.startingGaugePercent = 120.0F;
+  carriedPmsGauge.setup.startingGaugeState = GaugeStateSnapshot{
+      .gaugeType = GaugeType::Normal,
+      .selectedGaugeType = GaugeType::Normal,
+      .gaugeAutoShiftLowerBound = GaugeType::Easy,
+      .gaugeProfile = GaugeProfile::Standard9Keys,
+      .gaugeAutoShift = GaugeAutoShiftMode::None,
+      .currentGauge = 120.0F,
+  };
+  carriedPmsGauge.setup.startingGaugeState->gaugeValues = {
+      30.0F, 30.0F, 120.0F, 100.0F, 100.0F, 100.0F};
+  carriedPmsGauge.input = {
+      {.songTimeMicros = 1'000, .control = lane(1, 0), .pressed = true},
+      {.songTimeMicros = 2'000, .control = lane(1, 0), .pressed = false},
+  };
+  auto initialPmsGauge = carriedPmsGauge;
+  initialPmsGauge.setup.startingGaugePercent = 30.0F;
+  initialPmsGauge.setup.startingGaugeState->currentGauge = 30.0F;
+  initialPmsGauge.setup.startingGaugeState
+      ->gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 30.0F;
+  carriedPmsGauge.setup.chartSha256 = std::string(64, 'b');
+  replay::CourseReplayPlaybackData pmsCourse{
+      .stages = {initialPmsGauge, carriedPmsGauge},
+      .restMicrosAfterStage = {0, 0},
+  };
+  expect(codec.encodeCourse(pmsCourse, 1'000, diagnostic).has_value(),
+         "course encode accepts a carried 9-key groove gauge at its 120 "
+         "percent profile maximum");
+
+  auto lr2CourseStage = extensionReplay();
+  lr2CourseStage.setup.playbackRulesetId =
+      RulesetDescriptor::Current().id;
+  lr2CourseStage.setup.playbackRulesetRevision =
+      RulesetDescriptor::Current().version;
+  lr2CourseStage.setup.initialGaugeType = GaugeType::Normal;
+  lr2CourseStage.setup.gaugeProfile = GaugeProfile::CourseDefault;
+  lr2CourseStage.setup.gaugeAutoShift = GaugeAutoShiftMode::None;
+  lr2CourseStage.setup.gaugeAutoShiftLowerBound =
+      GaugeType::AssistedEasy;
+  lr2CourseStage.setup.startingGaugePercent = 100.0F;
+  lr2CourseStage.setup.startingGaugeState = GaugeStateSnapshot{
+      .gaugeType = GaugeType::Normal,
+      .selectedGaugeType = GaugeType::Normal,
+      .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+      .gaugeProfile = GaugeProfile::CourseLR2,
+      .gaugeAutoShift = GaugeAutoShiftMode::None,
+      .currentGauge = 100.0F,
+  };
+  lr2CourseStage.setup.startingGaugeState->gaugeValues.fill(100.0F);
+  replay::CourseReplayPlaybackData lr2Course{
+      .stages = {lr2CourseStage},
+      .restMicrosAfterStage = {0},
+  };
+  expect(codec.encodeCourse(lr2Course, 1'000, diagnostic).has_value(),
+         "course encode accepts the production LR2 snapshot resolution of a "
+         "generic course gauge profile");
 
   auto maximumRandomValues = extensionReplay();
   maximumRandomValues.setup.randomValues.assign(100'000, 0);
@@ -1161,6 +1249,11 @@ void testMalformedAndBoundedInputs() {
          "unknown Aso extension is explicitly flagged");
   expect(unsupported.stockOnly,
          "unknown Aso extension is treated as stock-only playback");
+  expect(unsupported.stageSources ==
+                 std::vector{replay::ReplayStageDecodeSource::Stock} &&
+             !unsupported.replayPathHasUndefinedLongNotes().has_value(),
+         "unknown Aso setup falls back to stock while its extension-owned "
+         "facts remain unknown");
 
   replay::CourseReplayPlaybackData futureCourse;
   futureCourse.stages = {source, source};
@@ -1182,7 +1275,11 @@ void testMalformedAndBoundedInputs() {
     expect(futureDecoded.course.has_value() &&
                futureDecoded.course->stages[0].setup.keyMode == 7 &&
                futureDecoded.course->stages[1].setup.keyMode == 14 &&
-               futureDecoded.unsupportedAsoExtension,
+               futureDecoded.unsupportedAsoExtension &&
+               futureDecoded.stageSources ==
+                   std::vector{
+                       replay::ReplayStageDecodeSource::Stock,
+                       replay::ReplayStageDecodeSource::Stock},
            "future course extension falls back with per-stage chart key modes");
   }
 

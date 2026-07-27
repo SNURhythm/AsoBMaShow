@@ -6,6 +6,7 @@
 #include "BeatorajaReplayPath.h"
 #include "GzipCodec.h"
 #include "../bms_parser.hpp"
+#include "../scene/play/GameplayGaugeRules.h"
 #include "../scene/play/GameplayScoreState.h"
 
 #include "nlohmann/json.hpp"
@@ -669,8 +670,7 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
       setup.judgeWindowScalePercent <= 0 ||
       setup.judgeWindowScalePercent > 1000 ||
       !std::isfinite(setup.startingGaugePercent) ||
-      setup.startingGaugePercent < 0.0F ||
-      setup.startingGaugePercent > 100.0F) {
+      setup.startingGaugePercent < 0.0F) {
     return fail(diagnostic, "Replay playback setup contains an invalid scale");
   }
   const int gaugeProfile = static_cast<int>(setup.gaugeProfile);
@@ -688,8 +688,27 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
           static_cast<int>(gameplay::CandidateSelectionMode::Score)) {
     return fail(diagnostic, "Replay gauge setup is invalid");
   }
+  const GaugeProfile resolvedGaugeProfile =
+      resolveGaugeProfile(setup.gaugeProfile, setup.keyMode);
+  if (setup.startingGaugePercent >
+      gaugeStartingMaximumValue(
+          setup.initialGaugeType, setup.gaugeAutoShift,
+          setup.gaugeAutoShiftLowerBound, resolvedGaugeProfile)) {
+    return fail(diagnostic, "Replay starting gauge is out of range");
+  }
   if (setup.startingGaugeState.has_value()) {
     const auto &state = *setup.startingGaugeState;
+    const auto ruleset = gameplayRulesetFromId(setup.playbackRulesetId);
+    const GaugeProfile resolvedSetupProfile =
+        ruleset.has_value()
+            ? resolveGaugeProfileForRuleset(
+                  *ruleset, setup.gaugeProfile, setup.keyMode)
+            : resolveGaugeProfile(setup.gaugeProfile, setup.keyMode);
+    const GaugeProfile resolvedStateProfile =
+        ruleset.has_value()
+            ? resolveGaugeProfileForRuleset(
+                  *ruleset, state.gaugeProfile, setup.keyMode)
+            : resolveGaugeProfile(state.gaugeProfile, setup.keyMode);
     const int gaugeType = gaugeTypeIndex(state.gaugeType);
     const int selectedGaugeType = gaugeTypeIndex(state.selectedGaugeType);
     const int lowerBound = gaugeTypeIndex(state.gaugeAutoShiftLowerBound);
@@ -707,7 +726,7 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
         stateAutoShift < static_cast<int>(GaugeAutoShiftMode::None) ||
         stateAutoShift > static_cast<int>(GaugeAutoShiftMode::BestClear) ||
         state.selectedGaugeType != setup.initialGaugeType ||
-        state.gaugeProfile != setup.gaugeProfile ||
+        resolvedStateProfile != resolvedSetupProfile ||
         state.gaugeAutoShift != setup.gaugeAutoShift ||
         state.gaugeAutoShiftLowerBound != setup.gaugeAutoShiftLowerBound ||
         !std::isfinite(state.currentGauge) ||
@@ -1661,6 +1680,32 @@ std::optional<Bytes> encodeDocument(const Json &document,
 
 } // namespace
 
+std::optional<bool>
+ReplayDecodeOutcome::replayPathHasUndefinedLongNotes() const noexcept {
+  if (chart.has_value()) {
+    if (course.has_value() || stageSources.size() != 1) {
+      return std::nullopt;
+    }
+    return stageSources.front() == ReplayStageDecodeSource::AsoExtension
+               ? std::optional<bool>(chart->setup.hasUndefinedLongNotes)
+               : std::nullopt;
+  }
+  if (!course.has_value() ||
+      stageSources.size() != course->stages.size()) {
+    return std::nullopt;
+  }
+
+  bool hasStockStage = false;
+  for (std::size_t index = 0; index < course->stages.size(); ++index) {
+    if (stageSources[index] == ReplayStageDecodeSource::Stock) {
+      hasStockStage = true;
+    } else if (course->stages[index].setup.hasUndefinedLongNotes) {
+      return true;
+    }
+  }
+  return hasStockStage ? std::nullopt : std::optional<bool>(false);
+}
+
 BeatorajaReplayCodec::BeatorajaReplayCodec(ReplayCodecLimits limits)
     : limits_(limits) {}
 
@@ -1796,9 +1841,14 @@ BeatorajaReplayCodec::decode(
   }
 
   outcome.stockOnly = true;
+  outcome.stageSources.reserve(stages.size());
   for (std::size_t i = 0; i < stages.size(); ++i) {
     outcome.unsupportedAsoExtension |= stages[i].unsupportedExtension;
     outcome.stockOnly &= !stages[i].supportedExtension;
+    outcome.stageSources.push_back(
+        stages[i].supportedExtension
+            ? ReplayStageDecodeSource::AsoExtension
+            : ReplayStageDecodeSource::Stock);
     if (stages[i].supportedExtension &&
         (stages[i].stageIndex != static_cast<int>(i) ||
          stages[i].stageCount != static_cast<int>(stages.size()))) {

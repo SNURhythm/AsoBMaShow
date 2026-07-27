@@ -11,6 +11,8 @@
 #include "../replay/BeatorajaReplayPath.h"
 #include "../replay/LegacyReplayIdentity.h"
 #include "../replay/ReplayFileStore.h"
+#include "../scene/play/GameplayGaugeRules.h"
+#include "../scene/play/GameplayScoreState.h"
 #include "../path.h"
 
 #include "nlohmann/json.hpp"
@@ -697,8 +699,25 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
     setup.candidateSelection = stage->candidateSelection;
   }
   setup.judgeWindowScalePercent = chart.provenance.judgeWindowScalePercent;
-  setup.startingGaugePercent =
-      static_cast<float>(chart.provenance.startingGaugePercent.value_or(20));
+  bms_parser::ChartMeta gaugeMeta;
+  gaugeMeta.KeyMode = setup.keyMode;
+  const GameplayRuleset gaugeRuleset =
+      gameplayRulesetFromId(setup.playbackRulesetId)
+          .value_or(GameplayRuleset::Beatoraja);
+  GameplayScoreState startingGauge({
+      .gaugeRules = compileGameplayGaugeRules(
+          gaugeRuleset, gaugeMeta, setup.gaugeProfile),
+      .keyMode = setup.keyMode,
+  });
+  startingGauge.configureGauge(
+      setup.initialGaugeType, setup.gaugeAutoShift, setup.gaugeProfile,
+      setup.gaugeAutoShiftLowerBound);
+  if (chart.provenance.startingGaugePercent.has_value()) {
+    startingGauge.setStartingGaugePercent(
+        *chart.provenance.startingGaugePercent);
+  }
+  setup.startingGaugePercent = startingGauge.currentGauge;
+  setup.startingGaugeState = startingGauge.gaugeSnapshot();
   setup.clubMode = chart.provenance.clubMode;
   for (const auto &cover : chart.laneCoverEvents) {
     if (cover.songTimeMicros <= 0) {
@@ -718,8 +737,14 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
     }
     const auto control =
         legacyReplayControlForPhysicalLane(entry.event.lane, setup.keyMode);
-    if (!control.has_value() ||
-        entry.event.songTimeMicros < replay::kMinimumReplaySongTimeMicros) {
+    if (!control.has_value()) {
+      diagnostic = "legacy replay input physical lane " +
+                   std::to_string(entry.event.lane) +
+                   " cannot be mapped for resolved key mode " +
+                   std::to_string(setup.keyMode);
+      return false;
+    }
+    if (entry.event.songTimeMicros < replay::kMinimumReplaySongTimeMicros) {
       continue;
     }
     scratchBestEffort |=

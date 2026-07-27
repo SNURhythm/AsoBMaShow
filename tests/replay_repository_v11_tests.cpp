@@ -148,6 +148,32 @@ std::set<std::string> stringSet(sqlite3 *database, std::string_view sql) {
   return values;
 }
 
+ScoreProvenance sampleProvenance(std::string_view chartMd5,
+                                 std::string_view chartSha256,
+                                 int longNoteMode) {
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = chartMd5;
+  input.chartMeta.SHA256 = chartSha256;
+  input.chartMeta.Rank = 2;
+  input.chartMeta.TotalNotes = 5;
+  input.chartMeta.HasTotal = true;
+  input.chartMeta.Total = 100.0;
+  input.longNoteMode = longNoteMode;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = input.chartMeta.Rank;
+  input.effectiveJudgeWindows = {
+      {Bad, {-330'000, 420'000}},   {PGreat, {-10'000, 10'000}},
+      {Great, {-30'000, 30'000}},   {Good, {-75'000, 75'000}},
+      {Kpoor, {-500'000, 150'000}},
+  };
+  input.totalNotes = input.chartMeta.TotalNotes;
+  input.authoredGaugeTotal = input.chartMeta.Total;
+  input.effectiveGaugeTotal = input.chartMeta.Total;
+  input.inputDevices = {InputDeviceCategory::Keyboard};
+  input.ruleset = RulesetDescriptor::Current();
+  return makeScoreProvenance(input);
+}
+
 result_persistence::PersistedChartResult validResult(std::string attemptId) {
   result_persistence::PersistedChartResult result;
   result.attemptId = std::move(attemptId);
@@ -168,7 +194,9 @@ result_persistence::PersistedChartResult validResult(std::string attemptId) {
   result.score.slow = 1;
   result.score.finalGauge = 82.5F;
   result.score.clearType = kClearTypeNormalClearRank;
-  result.score.provenance = ScoreProvenance::Legacy();
+  result.score.provenance = sampleProvenance(
+      result.score.chartMd5, result.score.chartSha256,
+      result.score.longNoteMode);
   result.keyMode = 7;
   result.adoptedGaugeType = GaugeType::Easy;
   result.adoptedGaugeHistory = {20.0F, 48.5F, 82.5F};
@@ -207,8 +235,9 @@ replay::ReplayPlaybackData samplePlayback() {
   playback.setup.longNoteMode = 1;
   playback.setup.playOption = "NORMAL";
   playback.setup.playOption2 = "NORMAL";
-  playback.setup.playbackRulesetId = "beatoraja";
-  playback.setup.playbackRulesetRevision = 1;
+  playback.setup.playbackRulesetId = RulesetDescriptor::Current().id;
+  playback.setup.playbackRulesetRevision =
+      RulesetDescriptor::Current().version;
   playback.input = {
       {.songTimeMicros = 1000,
        .control = {.kind = replay::LogicalControlKind::Lane,
@@ -222,6 +251,205 @@ replay::ReplayPlaybackData samplePlayback() {
        .pressed = false},
   };
   return playback;
+}
+
+std::string replayAttemptId(int index) {
+  std::string suffix = std::to_string(index);
+  suffix.insert(suffix.begin(), 3U - suffix.size(), '0');
+  return "123e4567-e89b-42d3-a456-426614175" + suffix;
+}
+
+std::optional<ChartReplayPlaybackReadOutcome> stageAndLoadChartReplay(
+    ReplayRepository &repository, const std::filesystem::path &profileRoot,
+    const replay::ReplayPlaybackData &playback,
+    result_persistence::PersistedChartResult result, int fixtureIndex,
+    std::string_view label) {
+  std::string diagnostic;
+  const auto stem = replay::chartStem(
+      playback.setup.chartSha256, playback.setup.longNoteMode,
+      playback.setup.hasUndefinedLongNotes, diagnostic);
+  expect(stem.has_value(), std::string(label) + " has a valid replay stem");
+  if (!stem.has_value() || !result.attemptId.has_value()) {
+    return std::nullopt;
+  }
+  const auto reservation =
+      repository.reserveReplayFile(*result.attemptId, *stem);
+  expect(reservation.reservation.has_value(),
+         std::string(label) + " reserves a replay path");
+  if (!reservation.reservation.has_value()) {
+    return std::nullopt;
+  }
+
+  replay::BeatorajaReplayCodec codec;
+  const auto encoded =
+      codec.encodeChart(playback, result.playedAtUnixMillis, diagnostic);
+  replay::ReplayFileStore store(profileRoot);
+  const replay::ReplayPathIdentity path{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = reservation.reservation->relativePath,
+  };
+  const auto finalized =
+      encoded.has_value()
+          ? store.finalize(path, *encoded, codec,
+                           {.stageSha256 = {playback.setup.chartSha256},
+                            .stageLongNoteModes = {playback.setup.longNoteMode},
+                            .course = false},
+                           "setup_provenance_" +
+                               std::to_string(fixtureIndex))
+          : replay::FinalizeOutcome{};
+  expect(finalized.metadata.has_value(),
+         std::string(label) + " installs a valid replay file");
+  if (!finalized.metadata.has_value()) {
+    return std::nullopt;
+  }
+
+  const ReplayFileReference reference{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = finalized.metadata->relativePath,
+      .contentSha256 = finalized.metadata->sha256,
+      .compressedSize = finalized.metadata->compressedSize,
+      .codecVersion = finalized.metadata->codecVersion,
+  };
+  expect(repository.markReplayFileReservationFinalized(
+             *reservation.reservation, *finalized.metadata, diagnostic),
+         std::string(label) + " records finalized replay ownership");
+  result.resultFingerprint = result_persistence::resultFingerprint(result);
+  const auto staged = repository.stageCompletedChartAttempt(
+      result, snapshotFor(result), reference, {});
+  expect(staged.receipt.has_value(),
+         std::string(label) + " stages its compact result");
+  if (!staged.receipt.has_value()) {
+    return std::nullopt;
+  }
+  return repository.loadChartReplayPlayback(staged.receipt->resultId);
+}
+
+result_persistence::PersistedCourseResult
+validCourseResult(std::string attemptId) {
+  const auto chart = validResult("123e4567-e89b-42d3-a456-426614175900");
+  result_persistence::PersistedCourseResult result;
+  result.attemptId = std::move(attemptId);
+  result.constraintJson = "[]";
+  const std::array identities{course_identity::ChartIdentity{
+      .sha256 = chart.score.chartSha256,
+      .md5 = chart.score.chartMd5,
+  }};
+  result.courseKey =
+      course_identity::makeCourseKey(identities, result.constraintJson);
+  result.courseName = "Provenance Course";
+  result.courseGroupName = "Tests";
+  result.completedCharts = 1;
+  result.totalCharts = 1;
+  result.requestedPlayOption = chart.score.provenance.player1.option;
+  result.assistOption = chart.score.provenance.assistOption;
+  result.initialGaugeType = chart.score.provenance.gaugeType;
+  result.gaugeProfile = chart.score.provenance.gaugeProfile;
+  result.gaugeAutoShift = chart.score.provenance.gaugeAutoShift;
+  result.gaugeAutoShiftLowerBound =
+      chart.score.provenance.gaugeAutoShiftLowerBound;
+  result.longNoteMode = chart.score.longNoteMode;
+  result.finalScore = chart.score.score;
+  result.maxScore = chart.score.maxScore;
+  result.maxCombo = chart.score.maxCombo;
+  result.finalGauge = chart.score.finalGauge;
+  result.clearType = chart.score.clearType;
+  result.provenance = chart.score.provenance;
+  result.entryFacts = {{.totalNotes = chart.score.maxScore / 2,
+                        .playLengthMicros = 2'000'000}};
+  result.stages = {{.stageIndex = 0,
+                    .score = chart.score,
+                    .keyMode = chart.keyMode,
+                    .adoptedGaugeType = chart.adoptedGaugeType,
+                    .adoptedGaugeHistory = chart.adoptedGaugeHistory,
+                    .judgementTiming = chart.judgementTiming}};
+  result.playedAtUnixMillis = chart.playedAtUnixMillis;
+  result.resultFingerprint = result_persistence::resultFingerprint(result);
+  return result;
+}
+
+std::optional<CourseReplayPlaybackReadOutcome> stageAndLoadCourseReplay(
+    ReplayRepository &repository, const std::filesystem::path &profileRoot,
+    const replay::CourseReplayPlaybackData &playback,
+    result_persistence::PersistedCourseResult result, int fixtureIndex,
+    std::string_view label) {
+  replay::CoursePathInput pathInput{
+      .longNoteMode = result.longNoteMode,
+  };
+  pathInput.stageSha256.reserve(playback.stages.size());
+  for (const auto &stage : playback.stages) {
+    pathInput.stageSha256.push_back(stage.setup.chartSha256);
+    pathInput.hasUndefinedLongNotes =
+        pathInput.hasUndefinedLongNotes || stage.setup.hasUndefinedLongNotes;
+  }
+  std::string diagnostic;
+  const auto stem = replay::courseStem(pathInput, diagnostic);
+  expect(stem.has_value(), std::string(label) + " has a valid course stem");
+  if (!stem.has_value() || !result.attemptId.has_value()) {
+    return std::nullopt;
+  }
+  const auto reservation =
+      repository.reserveReplayFile(*result.attemptId, *stem);
+  expect(reservation.reservation.has_value(),
+         std::string(label) + " reserves a course replay path");
+  if (!reservation.reservation.has_value()) {
+    return std::nullopt;
+  }
+
+  replay::BeatorajaReplayCodec codec;
+  const auto encoded =
+      codec.encodeCourse(playback, result.playedAtUnixMillis, diagnostic);
+  std::vector<std::string> stageSha256;
+  std::vector<int> stageLongNoteModes;
+  for (const auto &stage : playback.stages) {
+    stageSha256.push_back(stage.setup.chartSha256);
+    stageLongNoteModes.push_back(stage.setup.longNoteMode);
+  }
+  replay::ReplayFileStore store(profileRoot);
+  const replay::ReplayPathIdentity path{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = reservation.reservation->relativePath,
+  };
+  const auto finalized =
+      encoded.has_value()
+          ? store.finalize(path, *encoded, codec,
+                           {.stageSha256 = std::move(stageSha256),
+                            .stageLongNoteModes =
+                                std::move(stageLongNoteModes),
+                            .course = true},
+                           "course_setup_provenance_" +
+                               std::to_string(fixtureIndex))
+          : replay::FinalizeOutcome{};
+  expect(finalized.metadata.has_value(),
+         std::string(label) + " installs a valid course replay file");
+  if (!finalized.metadata.has_value()) {
+    return std::nullopt;
+  }
+
+  const ReplayFileReference reference{
+      .recordKind = ReplayFileReference::RecordKind::CourseResult,
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = finalized.metadata->relativePath,
+      .contentSha256 = finalized.metadata->sha256,
+      .compressedSize = finalized.metadata->compressedSize,
+      .codecVersion = finalized.metadata->codecVersion,
+  };
+  expect(repository.markReplayFileReservationFinalized(
+             *reservation.reservation, *finalized.metadata, diagnostic),
+         std::string(label) + " records finalized course replay ownership");
+  result.resultFingerprint = result_persistence::resultFingerprint(result);
+  const auto staged =
+      repository.stageCompletedCourseAttempt(result, reference);
+  expect(staged.receipt.has_value(),
+         std::string(label) + " stages its compact course result: " +
+             staged.diagnostic);
+  if (!staged.receipt.has_value()) {
+    return std::nullopt;
+  }
+  return repository.loadCourseReplayPlayback(staged.receipt->resultId);
 }
 
 replay::ReplayFileMetadata metadataForFile(
@@ -592,8 +820,21 @@ void testReplayFileReadIsIndependentFromResultAndIr() {
 
   const auto loaded =
       repository.loadChartReplayPlayback(staged.receipt->resultId);
+  auto expectedPlayback = playback;
+  GaugeStateSnapshot expectedStartingGauge{
+      .gaugeType = GaugeType::Normal,
+      .selectedGaugeType = GaugeType::Normal,
+      .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+      .gaugeProfile = GaugeProfile::Standard,
+      .gaugeAutoShift = GaugeAutoShiftMode::None,
+      .currentGauge = 20.0F,
+  };
+  expectedStartingGauge.gaugeValues = {20.0F, 20.0F, 20.0F,
+                                       100.0F, 100.0F, 100.0F};
+  expectedPlayback.setup.startingGaugeState = expectedStartingGauge;
   expect(loaded.status == ChartReplayPlaybackReadOutcome::Status::Loaded &&
-             loaded.playback.has_value() && *loaded.playback == playback,
+             loaded.playback.has_value() &&
+             *loaded.playback == expectedPlayback,
          "watch loads and decodes raw input from the referenced brd file");
 
   expect(store.remove(*finalized.metadata, diagnostic),
@@ -609,6 +850,342 @@ void testReplayFileReadIsIndependentFromResultAndIr() {
   expect(repository.loadIrSubmissionSnapshot(attempt).status ==
              ir::IrSubmissionSnapshotReadOutcome::Status::Loaded,
          "manual IR snapshot remains available after replay file deletion");
+}
+
+void testChartReplayRejectsSetupThatDiffersFromSavedProvenance() {
+  struct SetupMismatchCase {
+    std::string_view label;
+    void (*mutate)(replay::ReplayPlaybackData &,
+                   result_persistence::PersistedChartResult &);
+  };
+  constexpr std::array cases{
+      SetupMismatchCase{
+          "chart MD5",
+          [](auto &playback, auto &) {
+            playback.setup.chartMd5 = repeated('c', 32);
+          }},
+      SetupMismatchCase{
+          "initial gauge",
+          [](auto &playback, auto &) {
+            playback.setup.initialGaugeType = GaugeType::Hard;
+          }},
+      SetupMismatchCase{
+          "gauge profile",
+          [](auto &playback, auto &) {
+            playback.setup.gaugeProfile = GaugeProfile::Standard5Keys;
+          }},
+      SetupMismatchCase{
+          "gauge auto shift",
+          [](auto &playback, auto &) {
+            playback.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+          }},
+      SetupMismatchCase{
+          "gauge auto-shift lower bound",
+          [](auto &playback, auto &) {
+            playback.setup.gaugeAutoShiftLowerBound = GaugeType::Easy;
+          }},
+      SetupMismatchCase{
+          "player-one option",
+          [](auto &playback, auto &) {
+            playback.setup.playOption = "MIRROR";
+          }},
+      SetupMismatchCase{
+          "player-one option seed",
+          [](auto &playback, auto &) { playback.setup.playOptionSeed = 101; }},
+      SetupMismatchCase{
+          "player-two option",
+          [](auto &playback, auto &) {
+            playback.setup.playOption2 = "MIRROR";
+          }},
+      SetupMismatchCase{
+          "player-two option seed",
+          [](auto &playback, auto &) { playback.setup.playOption2Seed = 202; }},
+      SetupMismatchCase{
+          "assist option",
+          [](auto &playback, auto &) {
+            playback.setup.assistOption = assist_options::kDrag;
+          }},
+      SetupMismatchCase{
+          "ruleset ID",
+          [](auto &playback, auto &) {
+            playback.setup.playbackRulesetId = "beatoraja";
+          }},
+      SetupMismatchCase{
+          "ruleset revision",
+          [](auto &playback, auto &) {
+            ++playback.setup.playbackRulesetRevision;
+          }},
+      SetupMismatchCase{
+          "playback percentage",
+          [](auto &playback, auto &) {
+            playback.setup.playbackRatePercent = 75;
+          }},
+      SetupMismatchCase{
+          "playback mode",
+          [](auto &playback, auto &) {
+            playback.setup.playbackMode = audio::PlaybackMode::TimeStretch;
+          }},
+      SetupMismatchCase{
+          "judge-window scale",
+          [](auto &playback, auto &) {
+            playback.setup.judgeWindowScalePercent = 80;
+          }},
+      SetupMismatchCase{
+          "explicit starting gauge",
+          [](auto &playback, auto &result) {
+            playback.setup.startingGaugePercent = 37.6F;
+            result.score.provenance.startingGaugePercent = 37;
+            result.score.provenance.eligibility = ScoreEligibility::Modified;
+          }},
+      SetupMismatchCase{
+          "effective starting gauge state",
+          [](auto &playback, auto &result) {
+            playback.setup.startingGaugePercent = 37.0F;
+            GaugeStateSnapshot state{
+                .gaugeType = GaugeType::Normal,
+                .selectedGaugeType = GaugeType::Normal,
+                .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+                .gaugeProfile = GaugeProfile::Standard,
+                .gaugeAutoShift = GaugeAutoShiftMode::None,
+                .currentGauge = 90.0F,
+            };
+            state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 90.0F;
+            playback.setup.startingGaugeState = state;
+            result.score.provenance.startingGaugePercent = 37;
+            result.score.provenance.eligibility = ScoreEligibility::Modified;
+          }},
+      SetupMismatchCase{
+          "club mode",
+          [](auto &playback, auto &) { playback.setup.clubMode = true; }},
+      SetupMismatchCase{
+          "chart random seed",
+          [](auto &playback, auto &) { playback.setup.randomSeed = 17U; }},
+      SetupMismatchCase{
+          "chart random PRNG",
+          [](auto &playback, auto &) {
+            playback.setup.randomPrng = bms_parser::Parser::RandomPrngId;
+          }},
+      SetupMismatchCase{
+          "chart random values",
+          [](auto &playback, auto &) { playback.setup.randomValues = {4, 2}; }},
+      SetupMismatchCase{
+          "candidate selection",
+          [](auto &playback, auto &) {
+            playback.setup.candidateSelection =
+                gameplay::CandidateSelectionMode::Combo;
+          }},
+  };
+
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path() / "replay.db");
+  expect(repository.EnsureSchema(),
+         "setup-provenance mismatch schema is available");
+  for (std::size_t index = 0; index < cases.size(); ++index) {
+    auto playback = samplePlayback();
+    auto result = validResult(replayAttemptId(static_cast<int>(index)));
+    cases[index].mutate(playback, result);
+    const auto loaded = stageAndLoadChartReplay(
+        repository, temporary.path(), playback, std::move(result),
+        static_cast<int>(index), cases[index].label);
+    expect(loaded.has_value() &&
+               loaded->status ==
+                   ChartReplayPlaybackReadOutcome::Status::IntegrityConflict,
+           std::string("chart replay rejects mismatched ") +
+               std::string(cases[index].label));
+  }
+}
+
+void testChartReplayComparesNormalizedProvenanceSemantics() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path() / "replay.db");
+  expect(repository.EnsureSchema(),
+         "normalized setup-provenance schema is available");
+
+  auto normalizedPlayback = samplePlayback();
+  normalizedPlayback.setup.assistOption = assist_options::kDrag;
+  normalizedPlayback.setup.startingGaugePercent = 37.49F;
+  auto normalizedResult = validResult(replayAttemptId(100));
+  normalizedResult.score.provenance.player1.option = " off ";
+  normalizedResult.score.provenance.assistOption = " drag-mode ";
+  normalizedResult.score.provenance.startingGaugePercent = 37;
+  normalizedResult.score.provenance.eligibility = ScoreEligibility::Modified;
+  const auto normalized = stageAndLoadChartReplay(
+      repository, temporary.path(), normalizedPlayback,
+      std::move(normalizedResult), 100, "normalized setup provenance");
+  expect(normalized.has_value() &&
+             normalized->status ==
+                 ChartReplayPlaybackReadOutcome::Status::Loaded,
+         "semantically equivalent play, assist, and rounded gauge values load");
+
+  auto implicitGaugePlayback = samplePlayback();
+  implicitGaugePlayback.setup.startingGaugePercent = 63.25F;
+  auto implicitGaugeResult = validResult(replayAttemptId(101));
+  implicitGaugeResult.score.provenance.startingGaugePercent.reset();
+  const auto implicitGauge = stageAndLoadChartReplay(
+      repository, temporary.path(), implicitGaugePlayback,
+      std::move(implicitGaugeResult), 101, "implicit starting gauge");
+  expect(implicitGauge.has_value() &&
+             implicitGauge->status ==
+                 ChartReplayPlaybackReadOutcome::Status::IntegrityConflict,
+         "absent chart starting-gauge provenance requires the deterministic "
+         "gauge default");
+
+  auto genericProfilePlayback = samplePlayback();
+  genericProfilePlayback.setup.keyMode = 5;
+  genericProfilePlayback.setup.gaugeProfile = GaugeProfile::Standard;
+  auto resolvedProfileResult = validResult(replayAttemptId(103));
+  resolvedProfileResult.keyMode = 5;
+  resolvedProfileResult.score.provenance.gaugeProfile =
+      GaugeProfile::Standard5Keys;
+  const auto resolvedProfile = stageAndLoadChartReplay(
+      repository, temporary.path(), genericProfilePlayback,
+      std::move(resolvedProfileResult), 103, "resolved 5-key gauge profile");
+  expect(resolvedProfile.has_value() &&
+             resolvedProfile->status ==
+                 ChartReplayPlaybackReadOutcome::Status::Loaded,
+         "generic chart gauge profile matches its key-mode-resolved "
+         "provenance");
+
+  auto legacyPlayback = samplePlayback();
+  legacyPlayback.setup.initialGaugeType = GaugeType::Hard;
+  legacyPlayback.setup.playOption = "MIRROR";
+  auto legacyResult = validResult(replayAttemptId(105));
+  legacyResult.score.provenance = ScoreProvenance::Legacy();
+  const auto legacy = stageAndLoadChartReplay(
+      repository, temporary.path(), legacyPlayback, std::move(legacyResult),
+      105, "placeholder legacy provenance");
+  expect(legacy.has_value() &&
+             legacy->status ==
+                 ChartReplayPlaybackReadOutcome::Status::Loaded,
+         "placeholder legacy provenance leaves migrated replay setup owned by "
+         "the BRD");
+
+  auto oldBestClearPlayback = samplePlayback();
+  oldBestClearPlayback.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  oldBestClearPlayback.setup.startingGaugePercent = 100.0F;
+  auto oldBestClearResult = validResult(replayAttemptId(106));
+  oldBestClearResult.score.provenance.gaugeAutoShift =
+      GaugeAutoShiftMode::BestClear;
+  const auto oldBestClear = stageAndLoadChartReplay(
+      repository, temporary.path(), oldBestClearPlayback,
+      std::move(oldBestClearResult), 106, "pre-snapshot best-clear setup");
+  expect(oldBestClear.has_value() &&
+             oldBestClear->status ==
+                 ChartReplayPlaybackReadOutcome::Status::Loaded &&
+             oldBestClear->playback.has_value() &&
+             oldBestClear->playback->setup.startingGaugeState.has_value() &&
+             oldBestClear->playback->setup.startingGaugeState->gaugeType ==
+                 GaugeType::Hazard &&
+             oldBestClear->playback->setup.startingGaugeState
+                     ->gaugeValues[gaugeTypeIndex(GaugeType::Normal)] ==
+                 20.0F,
+         "a pre-snapshot Aso replay receives the deterministic full "
+         "best-clear gauge state");
+
+  auto duplicateGaugePlayback = samplePlayback();
+  duplicateGaugePlayback.setup.startingGaugePercent = 90.0F;
+  GaugeStateSnapshot authoritativeState{
+      .gaugeType = GaugeType::Normal,
+      .selectedGaugeType = GaugeType::Normal,
+      .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+      .gaugeProfile = GaugeProfile::Standard,
+      .gaugeAutoShift = GaugeAutoShiftMode::None,
+      .currentGauge = 37.0F,
+  };
+  authoritativeState.gaugeValues = {20.0F, 20.0F, 37.0F,
+                                    100.0F, 100.0F, 100.0F};
+  duplicateGaugePlayback.setup.startingGaugeState = authoritativeState;
+  auto duplicateGaugeResult = validResult(replayAttemptId(108));
+  duplicateGaugeResult.score.provenance.startingGaugePercent = 37;
+  duplicateGaugeResult.score.provenance.eligibility =
+      ScoreEligibility::Modified;
+  const auto duplicateGauge = stageAndLoadChartReplay(
+      repository, temporary.path(), duplicateGaugePlayback,
+      std::move(duplicateGaugeResult), 108, "duplicate starting gauge");
+  expect(duplicateGauge.has_value() &&
+             duplicateGauge->status ==
+                 ChartReplayPlaybackReadOutcome::Status::Loaded &&
+             duplicateGauge->playback.has_value() &&
+             duplicateGauge->playback->setup.startingGaugePercent == 37.0F,
+         "the verified full starting-gauge snapshot canonicalizes its "
+         "duplicate scalar");
+
+  auto divergentBestClearPlayback = samplePlayback();
+  divergentBestClearPlayback.setup.gaugeAutoShift =
+      GaugeAutoShiftMode::BestClear;
+  divergentBestClearPlayback.setup.startingGaugePercent = 100.0F;
+  GaugeStateSnapshot divergentState{
+      .gaugeType = GaugeType::Hazard,
+      .selectedGaugeType = GaugeType::Normal,
+      .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+      .gaugeProfile = GaugeProfile::Standard,
+      .gaugeAutoShift = GaugeAutoShiftMode::BestClear,
+      .currentGauge = 100.0F,
+  };
+  divergentState.gaugeValues = {20.0F, 20.0F, 100.0F,
+                                100.0F, 100.0F, 100.0F};
+  divergentBestClearPlayback.setup.startingGaugeState = divergentState;
+  auto divergentBestClearResult = validResult(replayAttemptId(107));
+  divergentBestClearResult.score.provenance.gaugeAutoShift =
+      GaugeAutoShiftMode::BestClear;
+  const auto divergentBestClear = stageAndLoadChartReplay(
+      repository, temporary.path(), divergentBestClearPlayback,
+      std::move(divergentBestClearResult), 107,
+      "divergent best-clear gauge state");
+  expect(divergentBestClear.has_value() &&
+             divergentBestClear->status ==
+                 ChartReplayPlaybackReadOutcome::Status::IntegrityConflict,
+         "a full starting-gauge snapshot cannot alter inactive gauges "
+         "outside saved provenance");
+}
+
+void testCourseReplayRejectsStageSetupThatDiffersFromSavedProvenance() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path() / "replay.db");
+  expect(repository.EnsureSchema(),
+         "course setup-provenance mismatch schema is available");
+  replay::CourseReplayPlaybackData playback{
+      .stages = {samplePlayback()},
+      .restMicrosAfterStage = {0},
+  };
+  playback.stages.front().setup.initialGaugeType = GaugeType::Hard;
+  auto result = validCourseResult(replayAttemptId(102));
+  const auto loaded = stageAndLoadCourseReplay(
+      repository, temporary.path(), playback, std::move(result), 102,
+      "course stage initial gauge");
+  expect(loaded.has_value() &&
+             loaded->status ==
+                 CourseReplayPlaybackReadOutcome::Status::IntegrityConflict,
+         "course replay rejects a stage setup inconsistent with stage "
+         "provenance");
+}
+
+void testCourseReplayComparesResolvedGaugeProfileSemantics() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path() / "replay.db");
+  expect(repository.EnsureSchema(),
+         "resolved course gauge-profile schema is available");
+  replay::CourseReplayPlaybackData playback{
+      .stages = {samplePlayback()},
+      .restMicrosAfterStage = {0},
+  };
+  playback.stages.front().setup.gaugeProfile = GaugeProfile::CourseDefault;
+  playback.stages.front().setup.startingGaugePercent = gaugeInitialValue(
+      playback.stages.front().setup.initialGaugeType,
+      GaugeProfile::CourseDefault);
+  auto result = validCourseResult(replayAttemptId(104));
+  result.gaugeProfile = GaugeProfile::Course7Keys;
+  result.provenance.gaugeProfile = GaugeProfile::Course7Keys;
+  result.stages.front().score.provenance.gaugeProfile =
+      GaugeProfile::Course7Keys;
+  const auto loaded = stageAndLoadCourseReplay(
+      repository, temporary.path(), playback, std::move(result), 104,
+      "resolved course gauge profile");
+  expect(loaded.has_value() &&
+             loaded->status ==
+                 CourseReplayPlaybackReadOutcome::Status::Loaded,
+         "generic course gauge profile matches its key-mode-resolved "
+         "provenance");
 }
 
 void testChartReplayRejectsLongNoteModeMismatch() {
@@ -1739,6 +2316,10 @@ int main() {
   testCanonicalAttemptsDoNotFallBackToLegacyCourseId();
   testCompletedMigratedCoursesDoNotFallBackToLegacyCourseId();
   testReplayFileReadIsIndependentFromResultAndIr();
+  testChartReplayRejectsSetupThatDiffersFromSavedProvenance();
+  testChartReplayComparesNormalizedProvenanceSemantics();
+  testCourseReplayRejectsStageSetupThatDiffersFromSavedProvenance();
+  testCourseReplayComparesResolvedGaugeProfileSemantics();
   testChartReplayRejectsLongNoteModeMismatch();
   testChartReplayRejectsStemThatOmitsDecodedLongNotePrefix();
   testReservationIntegrityAndMonotonicity();

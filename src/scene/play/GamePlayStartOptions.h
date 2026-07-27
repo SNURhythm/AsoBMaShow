@@ -240,6 +240,12 @@ inline void applyJudgedPlaybackContextToStartOptions(
   }
 }
 
+inline void applyResultRetrySetupToStartOptions(
+    StartOptions &options, const JudgedPlaybackData &retrySource) {
+  applyJudgedPlaybackContextToStartOptions(options, retrySource);
+  options.assistOption = retrySource.assistOption;
+}
+
 inline void applyReplayPlaybackToStartOptions(
     StartOptions &options,
     std::shared_ptr<const replay::ReplayPlaybackData> playback) {

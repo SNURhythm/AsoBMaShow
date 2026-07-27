@@ -1159,6 +1159,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         src/replay/BeatorajaReplayPath.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp

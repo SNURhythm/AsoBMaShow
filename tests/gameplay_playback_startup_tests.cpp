@@ -226,6 +226,126 @@ int main() {
     return 1;
   }
 
+  bms_parser::ChartMeta recalledResultMeta;
+  recalledResultMeta.MD5 = std::string(32, 'a');
+  recalledResultMeta.SHA256 = std::string(64, 'b');
+  recalledResultMeta.KeyMode = 14;
+  recalledResultMeta.IsDP = true;
+  recalledResultMeta.RandomSeed = 999U;
+  recalledResultMeta.RandomPrng = "stale-prng";
+  recalledResultMeta.RandomValues = {9};
+
+  ScoreProvenance recalledProvenance = ScoreProvenance::Legacy();
+  recalledProvenance.ruleset = RulesetDescriptor::Current();
+  recalledProvenance.stages = {{
+      .chartMd5 = recalledResultMeta.MD5,
+      .chartSha256 = recalledResultMeta.SHA256,
+      .longNoteMode = 2,
+      .chartRandomSeed = 123U,
+      .chartRandomPrng = "std::mt19937_64",
+      .chartRandomValues = {2, 1},
+      .candidateSelection = gameplay::CandidateSelectionMode::Combo,
+  }};
+  recalledProvenance.gaugeType = GaugeType::Hard;
+  recalledProvenance.gaugeProfile = GaugeProfile::Standard;
+  recalledProvenance.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  recalledProvenance.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  recalledProvenance.player1 = {.option = "MIRROR", .seed = 17};
+  recalledProvenance.player2 = {.option = "RANDOM", .seed = 29};
+  recalledProvenance.assistOption = assist_options::kDrag;
+  recalledProvenance.playback = {
+      .percent = 75,
+      .mode = audio::PlaybackMode::TimeStretch,
+  };
+  recalledProvenance.judgeWindowScalePercent = 90;
+  recalledProvenance.startingGaugePercent = 37;
+  recalledProvenance.clubMode = true;
+  recalledProvenance.eligibility = ScoreEligibility::Modified;
+
+  const JudgedPlaybackData recalledRetry =
+      analysis::retrySourceFromProvenance(recalledResultMeta,
+                                          recalledProvenance);
+  const auto recalledDisplay =
+      play_options::formatPlayModeDisplayLabel(recalledRetry);
+  if (!expect(recalledRetry.initialGaugeType == GaugeType::Hard &&
+                  recalledRetry.gaugeProfile == GaugeProfile::Standard &&
+                  recalledRetry.gaugeAutoShift ==
+                      GaugeAutoShiftMode::BestClear &&
+                  recalledRetry.gaugeAutoShiftLowerBound == GaugeType::Easy &&
+                  recalledRetry.assistOption == assist_options::kDrag,
+              "saved-result recall rebuilds non-default retry gauge and "
+              "assist setup from provenance") ||
+      !expect(recalledRetry.playOption == "MIRROR" &&
+                  recalledRetry.playOptionSeed == 17 &&
+                  recalledRetry.playOption2 == "RANDOM" &&
+                  recalledRetry.playOption2Seed == 29 &&
+                  recalledDisplay.mode == "MIRROR #17 / RANDOM #29",
+              "saved-result recall rebuilds its displayed and retried lane "
+              "pattern from provenance") ||
+      !expect(recalledRetry.randomSeed == 123U &&
+                  recalledRetry.randomPrng == "std::mt19937_64" &&
+                  recalledRetry.randomValues == std::vector<int>({2, 1}) &&
+                  recalledRetry.chartMeta.RandomSeed == 123U &&
+                  recalledRetry.chartMeta.RandomPrng == "std::mt19937_64" &&
+                  recalledRetry.chartMeta.RandomValues ==
+                      std::vector<int>({2, 1}),
+              "Retry Same uses the persisted chart branch instead of the "
+              "freshly parsed result chart") ||
+      !expect(recalledRetry.context.candidateSelection ==
+                      gameplay::CandidateSelectionMode::Combo &&
+                  recalledRetry.context.playback ==
+                      recalledProvenance.playback &&
+                  recalledRetry.context.judgeWindowScalePercent == 90 &&
+                  recalledRetry.context.startingGaugePercent == 37 &&
+                  recalledRetry.context.clubMode,
+              "saved-result retry restores the persisted gameplay context")) {
+    return 1;
+  }
+
+  const auto samePatternAuthority =
+      play_options::resultRetryPatternAuthority(recalledRetry,
+                                                recalledResultMeta, true);
+  const auto newPatternAuthority =
+      play_options::resultRetryPatternAuthority(recalledRetry,
+                                                recalledResultMeta, false);
+  if (!expect(samePatternAuthority.chartRandomSeed == 123U &&
+                  samePatternAuthority.chartRandomPrng ==
+                      "std::mt19937_64" &&
+                  samePatternAuthority.chartRandomValues ==
+                      std::vector<int>({2, 1}) &&
+                  samePatternAuthority.playOptionSeed == 17 &&
+                  samePatternAuthority.playOption2Seed == 29,
+              "Retry Same retains chart and MIRROR/RANDOM seed authority") ||
+      !expect(!newPatternAuthority.chartRandomSeed.has_value() &&
+                  !newPatternAuthority.chartRandomPrng.has_value() &&
+                  !newPatternAuthority.chartRandomValues.has_value() &&
+                  !newPatternAuthority.playOptionSeed.has_value() &&
+                  !newPatternAuthority.playOption2Seed.has_value(),
+              "Retry with a new pattern drops persisted chart and lane seeds")) {
+    return 1;
+  }
+
+  StartOptions recalledRetryOptions;
+  applyResultRetrySetupToStartOptions(recalledRetryOptions, recalledRetry);
+  if (!expect(recalledRetryOptions.gaugeType == GaugeType::Hard &&
+                  recalledRetryOptions.gaugeProfile == GaugeProfile::Standard &&
+                  recalledRetryOptions.gaugeAutoShift ==
+                      GaugeAutoShiftMode::BestClear &&
+                  recalledRetryOptions.gaugeAutoShiftLowerBound ==
+                      GaugeType::Easy &&
+                  recalledRetryOptions.assistOption == assist_options::kDrag &&
+                  recalledRetryOptions.replayCandidateSelection ==
+                      gameplay::CandidateSelectionMode::Combo &&
+                  recalledRetryOptions.playback ==
+                      recalledProvenance.playback &&
+                  recalledRetryOptions.judgeWindowScalePercent == 90 &&
+                  recalledRetryOptions.startingGaugePercent == 37 &&
+                  recalledRetryOptions.clubMode,
+              "View Result retry startup applies the reconstructed provenance "
+              "context")) {
+    return 1;
+  }
+
   auto unsupported = std::make_shared<replay::ReplayPlaybackData>();
   unsupported->setup.playbackRulesetId = "beatoraja";
   unsupported->setup.playbackRulesetRevision = 1;

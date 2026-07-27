@@ -10927,7 +10927,7 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
                 context, meta, result.state, result.result.score.provenance,
                 nullptr, std::move(persistence), nullptr,
                 ResultPracticeOptions{}, false, ResultCourseOptions{},
-                profileSelections.pacemakerTarget, std::move(chart)),
+                profileSelections.pacemakerTarget, std::move(chart), false),
             true);
         return true;
       },

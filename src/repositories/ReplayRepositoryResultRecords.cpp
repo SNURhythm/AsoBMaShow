@@ -2,13 +2,17 @@
 
 #include "../BmsMetadataText.h"
 #include "../CourseConstraintUtils.h"
+#include "../PlayOptionUtils.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../Uuid.h"
 #include "../ir/IrProfileSettings.h"
 #include "../ir/IrSubmissionSnapshot.h"
+#include "../replay/BeatorajaLongNoteMode.h"
 #include "../replay/BeatorajaReplayCodec.h"
 #include "../replay/BeatorajaReplayPath.h"
 #include "../replay/ReplayFileStore.h"
+#include "../scene/play/GameplayGaugeRules.h"
+#include "../scene/play/GameplayScoreState.h"
 #include "SqliteRAII.h"
 
 #include "nlohmann/json.hpp"
@@ -321,6 +325,240 @@ ResultReadOutcome invalidResult(std::string diagnostic) {
 CourseResultReadOutcome invalidCourseResult(std::string diagnostic) {
   return {.status = CourseResultReadOutcome::Status::Invalid,
           .diagnostic = std::move(diagnostic)};
+}
+
+std::optional<GaugeStateSnapshot> deterministicStartingGaugeState(
+    const replay::ChartPlaybackSetup &setup,
+    std::optional<int> startingGaugePercent) {
+  const auto ruleset = gameplayRulesetFromId(setup.playbackRulesetId);
+  if (!ruleset.has_value()) {
+    return std::nullopt;
+  }
+  bms_parser::ChartMeta chartMeta;
+  chartMeta.KeyMode = setup.keyMode;
+  GameplayScoreState state({
+      .gaugeRules = compileGameplayGaugeRules(
+          *ruleset, chartMeta, setup.gaugeProfile),
+      .keyMode = setup.keyMode,
+  });
+  state.configureGauge(setup.initialGaugeType, setup.gaugeAutoShift,
+                       setup.gaugeProfile,
+                       setup.gaugeAutoShiftLowerBound);
+  if (startingGaugePercent.has_value()) {
+    state.setStartingGaugePercent(*startingGaugePercent);
+  }
+  return state.gaugeSnapshot();
+}
+
+bool equivalentStartingGaugeState(const GaugeStateSnapshot &actual,
+                                  const GaugeStateSnapshot &expected,
+                                  int keyMode,
+                                  GameplayRuleset ruleset) {
+  return actual.gaugeType == expected.gaugeType &&
+         actual.selectedGaugeType == expected.selectedGaugeType &&
+         actual.gaugeAutoShiftLowerBound ==
+             expected.gaugeAutoShiftLowerBound &&
+         resolveGaugeProfileForRuleset(ruleset, actual.gaugeProfile,
+                                       keyMode) ==
+             resolveGaugeProfileForRuleset(ruleset, expected.gaugeProfile,
+                                           keyMode) &&
+         actual.gaugeAutoShift == expected.gaugeAutoShift &&
+         actual.currentGauge == expected.currentGauge &&
+         actual.gaugeValues == expected.gaugeValues &&
+         actual.gaugeSurvivalFailed == expected.gaugeSurvivalFailed;
+}
+
+const char *bindReplaySetupToProvenance(
+    replay::ChartPlaybackSetup &setup,
+    const result_persistence::ChartScoreWrite &score,
+    replay::ReplayStageDecodeSource source,
+    bool carriedStartingGaugeAllowed) {
+  const auto &provenance = score.provenance;
+  if (provenance.eligibility == ScoreEligibility::LegacyUnverified) {
+    if (setup.startingGaugeState.has_value()) {
+      setup.startingGaugePercent = setup.startingGaugeState->currentGauge;
+    }
+    return nullptr;
+  }
+  const bool hasFullAsoSetup =
+      source == replay::ReplayStageDecodeSource::AsoExtension;
+
+  const ScoreStageProvenance *stage = nullptr;
+  if (!provenance.stages.empty()) {
+    bms_parser::ChartMeta chartMeta;
+    chartMeta.MD5 = score.chartMd5;
+    chartMeta.SHA256 = score.chartSha256;
+    stage = score_provenance::uniqueStageForChart(provenance, chartMeta);
+    if (stage == nullptr) {
+      return "stage identity";
+    }
+  }
+
+  if (hasFullAsoSetup &&
+      asobmshow::bms_metadata::normalizedHash(setup.chartMd5) !=
+          asobmshow::bms_metadata::normalizedHash(score.chartMd5)) {
+    return "chart MD5";
+  }
+  if (setup.initialGaugeType != provenance.gaugeType) {
+    return "initial gauge";
+  }
+  if (play_options::normalizePlayOption(
+          setup.playOption.value_or("NORMAL")) !=
+      play_options::normalizePlayOption(provenance.player1.option)) {
+    return "player-one option";
+  }
+  if (setup.playOptionSeed != provenance.player1.seed) {
+    return "player-one option seed";
+  }
+  if (play_options::normalizePlayOption(
+          setup.playOption2.value_or("NORMAL")) !=
+      play_options::normalizePlayOption(provenance.player2.option)) {
+    return "player-two option";
+  }
+  if (setup.playOption2Seed != provenance.player2.seed) {
+    return "player-two option seed";
+  }
+  if (stage != nullptr && setup.randomValues != stage->chartRandomValues) {
+    return "chart random values";
+  }
+
+  if (hasFullAsoSetup) {
+    const auto ruleset = gameplayRulesetFromId(provenance.ruleset.id);
+    if (!ruleset.has_value() ||
+        resolveGaugeProfileForRuleset(
+            *ruleset, setup.gaugeProfile, setup.keyMode) !=
+            resolveGaugeProfileForRuleset(
+                *ruleset, provenance.gaugeProfile, setup.keyMode)) {
+      return "gauge profile";
+    }
+    if (setup.gaugeAutoShift != provenance.gaugeAutoShift) {
+      return "gauge auto shift";
+    }
+    if (setup.gaugeAutoShiftLowerBound !=
+        provenance.gaugeAutoShiftLowerBound) {
+      return "gauge auto-shift lower bound";
+    }
+    if (assist_options::normalize(setup.assistOption) !=
+        assist_options::normalize(provenance.assistOption)) {
+      return "assist option";
+    }
+    if (setup.playbackRulesetId != provenance.ruleset.id) {
+      return "ruleset ID";
+    }
+    if (setup.playbackRulesetRevision != provenance.ruleset.version) {
+      return "ruleset revision";
+    }
+    if (setup.playbackRatePercent != provenance.playback.percent) {
+      return "playback percentage";
+    }
+    if (setup.playbackMode != provenance.playback.mode) {
+      return "playback mode";
+    }
+    if (setup.judgeWindowScalePercent !=
+        provenance.judgeWindowScalePercent) {
+      return "judge-window scale";
+    }
+    if (setup.clubMode != provenance.clubMode) {
+      return "club mode";
+    }
+  } else {
+    setup.chartMd5 =
+        asobmshow::bms_metadata::normalizedHash(score.chartMd5);
+    setup.gaugeProfile = provenance.gaugeProfile;
+    setup.gaugeAutoShift = provenance.gaugeAutoShift;
+    setup.gaugeAutoShiftLowerBound = provenance.gaugeAutoShiftLowerBound;
+    setup.assistOption = assist_options::normalize(provenance.assistOption);
+    setup.playbackRulesetId = provenance.ruleset.id;
+    setup.playbackRulesetRevision = provenance.ruleset.version;
+    setup.playbackRatePercent = provenance.playback.percent;
+    setup.playbackMode = provenance.playback.mode;
+    setup.judgeWindowScalePercent = provenance.judgeWindowScalePercent;
+    setup.clubMode = provenance.clubMode;
+    if (provenance.startingGaugePercent.has_value()) {
+      setup.startingGaugePercent =
+          static_cast<float>(*provenance.startingGaugePercent);
+    }
+  }
+
+  if (hasFullAsoSetup && stage != nullptr &&
+      asobmshow::bms_metadata::normalizedHash(setup.chartMd5) !=
+          asobmshow::bms_metadata::normalizedHash(stage->chartMd5)) {
+    return "provenance-stage chart MD5";
+  }
+  if (hasFullAsoSetup && stage != nullptr) {
+    const std::optional<std::uint64_t> randomSeed =
+        setup.randomSeed.has_value()
+            ? std::optional<std::uint64_t>(*setup.randomSeed)
+            : std::nullopt;
+    if (randomSeed != stage->chartRandomSeed) {
+      return "chart random seed";
+    }
+    if (setup.randomPrng != stage->chartRandomPrng) {
+      return "chart random PRNG";
+    }
+    if (setup.candidateSelection != stage->candidateSelection) {
+      return "candidate selection";
+    }
+  } else if (!hasFullAsoSetup && stage != nullptr) {
+    if (stage->chartRandomSeed.has_value() &&
+        *stage->chartRandomSeed >
+            std::numeric_limits<unsigned int>::max()) {
+      return "chart random seed";
+    }
+    setup.randomSeed =
+        stage->chartRandomSeed.has_value()
+            ? std::optional<unsigned int>(
+                  static_cast<unsigned int>(*stage->chartRandomSeed))
+            : std::nullopt;
+    setup.randomPrng = stage->chartRandomPrng;
+    setup.candidateSelection = stage->candidateSelection;
+  }
+
+  if (!carriedStartingGaugeAllowed) {
+    const auto expectedState = deterministicStartingGaugeState(
+        setup, provenance.startingGaugePercent);
+    if (!expectedState.has_value()) {
+      return "ruleset ID";
+    }
+    if (setup.startingGaugeState.has_value()) {
+      const auto ruleset = gameplayRulesetFromId(setup.playbackRulesetId);
+      if (!ruleset.has_value()) {
+        return "ruleset ID";
+      }
+      if (!equivalentStartingGaugeState(
+              *setup.startingGaugeState, *expectedState, setup.keyMode,
+              *ruleset)) {
+        return "starting gauge state";
+      }
+    } else {
+      const bool scalarMatches = provenance.startingGaugePercent.has_value()
+                                     ? std::lround(
+                                           setup.startingGaugePercent) ==
+                                           *provenance.startingGaugePercent
+                                     : std::fabs(
+                                           setup.startingGaugePercent -
+                                           expectedState->currentGauge) <=
+                                           0.0001F;
+      if (hasFullAsoSetup && !scalarMatches) {
+        return "starting gauge";
+      }
+      setup.startingGaugeState = *expectedState;
+      setup.startingGaugePercent = expectedState->currentGauge;
+    }
+  } else if (provenance.startingGaugePercent.has_value()) {
+    const float effectiveStartingGauge =
+        setup.startingGaugeState.has_value()
+            ? setup.startingGaugeState->currentGauge
+            : setup.startingGaugePercent;
+    if (std::lround(effectiveStartingGauge) !=
+        *provenance.startingGaugePercent) {
+      return "starting gauge";
+    }
+  }
+  if (setup.startingGaugeState.has_value()) {
+    setup.startingGaugePercent = setup.startingGaugeState->currentGauge;
+  }
+  return nullptr;
 }
 
 } // namespace
@@ -2552,18 +2790,42 @@ ReplayRepository::loadChartReplayPlayback(int resultId) {
                               ? "The replay file is not a chart replay."
                               : std::move(decoded.diagnostic)};
   }
+  if (decoded.stageSources.size() != 1U) {
+    return {.status = ReadStatus::Invalid,
+            .result = std::move(result),
+            .diagnostic =
+                "The replay decoder did not identify its chart setup source."};
+  }
+  const auto source = decoded.stageSources.front();
+  const bool longNoteModeMatches =
+      source == replay::ReplayStageDecodeSource::AsoExtension
+          ? decoded.chart->setup.longNoteMode == result.score.longNoteMode
+          : replay::stockLongNoteMode(decoded.chart->setup.longNoteMode) ==
+                replay::stockLongNoteMode(result.score.longNoteMode);
+  if (source != replay::ReplayStageDecodeSource::AsoExtension &&
+      longNoteModeMatches) {
+    decoded.chart->setup.longNoteMode = result.score.longNoteMode;
+  }
   std::string stemDiagnostic;
-  const auto expectedStem = replay::chartStem(
-      decoded.chart->setup.chartSha256, decoded.chart->setup.longNoteMode,
-      decoded.chart->setup.hasUndefinedLongNotes, stemDiagnostic);
+  const bool stemMatches = replay::chartStemMatches(
+      reference.stem, decoded.chart->setup.chartSha256,
+      decoded.chart->setup.longNoteMode,
+      decoded.replayPathHasUndefinedLongNotes(), stemDiagnostic);
   if (decoded.chart->setup.chartSha256 != result.score.chartSha256 ||
       decoded.chart->setup.keyMode != result.keyMode ||
-      decoded.chart->setup.longNoteMode != result.score.longNoteMode ||
-      !expectedStem.has_value() || reference.stem != *expectedStem) {
+      !longNoteModeMatches || !stemMatches) {
     return {.status = ReadStatus::IntegrityConflict,
             .result = std::move(result),
             .diagnostic =
                 "The replay file identity differs from its saved result."};
+  }
+  if (const char *mismatch = bindReplaySetupToProvenance(
+          decoded.chart->setup, result.score, source, false);
+      mismatch != nullptr) {
+    return {.status = ReadStatus::IntegrityConflict,
+            .result = std::move(result),
+            .diagnostic = "The replay file setup " + std::string(mismatch) +
+                          " differs from its saved result provenance."};
   }
   return {.status = ReadStatus::Loaded,
           .result = std::move(result),
@@ -2652,6 +2914,7 @@ ReplayRepository::loadCourseReplayPlayback(int resultId) {
                               : std::move(decoded.diagnostic)};
   }
   if (decoded.course->stages.size() != result.stages.size() ||
+      decoded.stageSources.size() != result.stages.size() ||
       decoded.course->restMicrosAfterStage.size() != result.stages.size()) {
     return {.status = ReadStatus::IntegrityConflict,
             .result = std::move(result),
@@ -2659,15 +2922,35 @@ ReplayRepository::loadCourseReplayPlayback(int resultId) {
                 "The course replay stage count differs from its result."};
   }
   for (std::size_t index = 0; index < result.stages.size(); ++index) {
-    const auto &setup = decoded.course->stages[index].setup;
+    auto &setup = decoded.course->stages[index].setup;
     const auto &stage = result.stages[index];
+    const auto source = decoded.stageSources[index];
+    const bool longNoteModeMatches =
+        source == replay::ReplayStageDecodeSource::AsoExtension
+            ? setup.longNoteMode == stage.score.longNoteMode
+            : replay::stockLongNoteMode(setup.longNoteMode) ==
+                  replay::stockLongNoteMode(stage.score.longNoteMode);
+    if (source != replay::ReplayStageDecodeSource::AsoExtension &&
+        longNoteModeMatches) {
+      setup.longNoteMode = stage.score.longNoteMode;
+    }
     if (setup.chartSha256 != stage.score.chartSha256 ||
-        setup.keyMode != stage.keyMode ||
-        setup.longNoteMode != stage.score.longNoteMode) {
+        setup.keyMode != stage.keyMode || !longNoteModeMatches) {
       return {.status = ReadStatus::IntegrityConflict,
               .result = std::move(result),
               .diagnostic =
                   "A course replay stage differs from its saved result."};
+    }
+    if (const char *mismatch = bindReplaySetupToProvenance(
+            setup, stage.score, source, index > 0U);
+        mismatch != nullptr) {
+      return {
+          .status = ReadStatus::IntegrityConflict,
+          .result = std::move(result),
+          .diagnostic = "The course replay stage setup " +
+                        std::string(mismatch) +
+                        " differs from its saved result provenance.",
+      };
     }
   }
   replay::CoursePathInput pathInput{
@@ -2678,12 +2961,12 @@ ReplayRepository::loadCourseReplayPlayback(int resultId) {
   pathInput.stageSha256.reserve(decoded.course->stages.size());
   for (const auto &stage : decoded.course->stages) {
     pathInput.stageSha256.push_back(stage.setup.chartSha256);
-    pathInput.hasUndefinedLongNotes =
-        pathInput.hasUndefinedLongNotes || stage.setup.hasUndefinedLongNotes;
   }
   std::string stemDiagnostic;
-  const auto expectedStem = replay::courseStem(pathInput, stemDiagnostic);
-  if (!expectedStem.has_value() || reference.stem != *expectedStem) {
+  const bool stemMatches = replay::courseStemMatches(
+      reference.stem, std::move(pathInput),
+      decoded.replayPathHasUndefinedLongNotes(), stemDiagnostic);
+  if (!stemMatches) {
     return {.status = ReadStatus::IntegrityConflict,
             .result = std::move(result),
             .diagnostic =

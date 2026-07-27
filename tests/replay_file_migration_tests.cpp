@@ -379,6 +379,64 @@ struct FixtureFacts {
   std::int64_t playedAtUnixMillis = 0;
 };
 
+ScoreProvenance currentFixtureProvenance(
+    const FixtureFacts &facts, GaugeType gaugeType,
+    GaugeProfile gaugeProfile = GaugeProfile::Standard) {
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = facts.md5;
+  input.chartMeta.SHA256 = facts.sha256;
+  input.chartMeta.Rank = 2;
+  input.chartMeta.TotalNotes = 2;
+  input.chartMeta.HasTotal = true;
+  input.chartMeta.Total = 100.0;
+  input.chartMeta.RandomSeed = 77;
+  input.chartMeta.RandomPrng = "std::mt19937_64";
+  input.chartMeta.RandomValues = {3, 4};
+  input.longNoteMode = 1;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = input.chartMeta.Rank;
+  input.effectiveJudgeWindows = {
+      {Bad, {-330'000, 420'000}},   {PGreat, {-10'000, 10'000}},
+      {Great, {-30'000, 30'000}},   {Good, {-75'000, 75'000}},
+      {Kpoor, {-500'000, 150'000}},
+  };
+  input.totalNotes = input.chartMeta.TotalNotes;
+  input.authoredGaugeTotal = input.chartMeta.Total;
+  input.effectiveGaugeTotal = input.chartMeta.Total;
+  input.gaugeType = gaugeType;
+  input.gaugeProfile = gaugeProfile;
+  input.player1 = {.option = "MIRROR", .seed = 91};
+  input.inputDevices = {InputDeviceCategory::Keyboard};
+  input.ruleset = RulesetDescriptor::Current();
+  return makeScoreProvenance(input);
+}
+
+void applyCurrentProvenanceToChartFixture(sqlite3 *database,
+                                          const ScoreProvenance &provenance,
+                                          int replayId) {
+  const std::string serialized = serializeScoreProvenance(provenance);
+  const std::string rulesetVersion =
+      std::to_string(provenance.ruleset.version);
+  const std::string eligibility =
+      std::to_string(static_cast<int>(provenance.eligibility));
+  const std::string gaugeType =
+      std::to_string(gaugeTypeIndex(provenance.gaugeType));
+  executeOrThrow(database,
+                 "UPDATE replays SET gauge_type=" + gaugeType +
+                     ",gauge_auto_shift=0,ruleset_version=" +
+                     rulesetVersion + ",eligibility=" + eligibility +
+                     ",provenance_json=" + sqlQuote(serialized) +
+                     " WHERE id=" + std::to_string(replayId));
+  executeOrThrow(database,
+                 "UPDATE replay_events SET gauge_type=" + gaugeType +
+                     " WHERE replay_id=" + std::to_string(replayId));
+  executeOrThrow(database,
+                 "UPDATE pending_chart_score_writes SET ruleset_version=" +
+                     rulesetVersion + ",eligibility=" + eligibility +
+                     ",provenance_json=" + sqlQuote(serialized) +
+                     " WHERE replay_id=" + std::to_string(replayId));
+}
+
 FixtureFacts insertChartFixture(sqlite3 *database) {
   FixtureFacts facts;
   const std::string provenance = sqlQuote(facts.provenance);
@@ -769,6 +827,105 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
   }
 }
 
+void testCurrentChartMigrationSynthesizesDeterministicStartingGaugeState() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  const FixtureFacts fixture = insertChartFixture(database.get());
+  const ScoreProvenance provenance = currentFixtureProvenance(
+      fixture, GaugeType::Hard, GaugeProfile::Standard);
+  applyCurrentProvenanceToChartFixture(database.get(), provenance, 42);
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::Migrated,
+         "current hard-gauge chart replay migrates");
+  const replay::ReplayFileMetadata metadata{
+      .relativePath = text(database.get(),
+                           "SELECT relative_path FROM replay_files WHERE "
+                           "chart_result_id=42"),
+      .sha256 = text(database.get(),
+                     "SELECT content_sha256 FROM replay_files WHERE "
+                     "chart_result_id=42"),
+      .compressedSize = static_cast<std::uint64_t>(integer(
+          database.get(), "SELECT compressed_size FROM replay_files WHERE "
+                          "chart_result_id=42")),
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
+  const auto decoded = store.load(metadata, codec);
+  expect(decoded.chart.has_value() &&
+             decoded.chart->setup.startingGaugePercent == 100.0F &&
+             decoded.chart->setup.startingGaugeState.has_value() &&
+             decoded.chart->setup.startingGaugeState->gaugeType ==
+                 GaugeType::Hard &&
+             decoded.chart->setup.startingGaugeState->currentGauge ==
+                 100.0F &&
+             decoded.chart->setup.startingGaugeState
+                     ->gaugeValues[gaugeTypeIndex(GaugeType::Normal)] == 20.0F,
+         "migration writes the full deterministic hard-gauge state instead "
+         "of the legacy 20-percent placeholder");
+}
+
+void testCurrentCourseMigrationSynthesizesRulesetGaugeState() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  const FixtureFacts fixture = insertChartFixture(database.get());
+  insertCourseFixture(database.get(), fixture);
+  const ScoreProvenance provenance = currentFixtureProvenance(
+      fixture, GaugeType::Hard, GaugeProfile::Course7Keys);
+  applyCurrentProvenanceToChartFixture(database.get(), provenance, 42);
+  applyCurrentProvenanceToChartFixture(database.get(), provenance,
+                                       kCourseStageReplayId);
+  const std::string serialized = serializeScoreProvenance(provenance);
+  executeOrThrow(
+      database.get(),
+      "UPDATE course_replays SET gauge_type=" +
+          std::to_string(gaugeTypeIndex(GaugeType::Hard)) +
+          ",gauge_profile=" +
+          std::to_string(static_cast<int>(GaugeProfile::Course7Keys)) +
+          ",gauge_auto_shift=0,ruleset_version=" +
+          std::to_string(provenance.ruleset.version) + ",eligibility=" +
+          std::to_string(static_cast<int>(provenance.eligibility)) +
+          ",provenance_json=" + sqlQuote(serialized) + " WHERE id=77");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::Migrated,
+         "current hard-gauge course replay migrates");
+  const replay::ReplayFileMetadata metadata{
+      .relativePath = text(database.get(),
+                           "SELECT relative_path FROM replay_files WHERE "
+                           "course_result_id=77"),
+      .sha256 = text(database.get(),
+                     "SELECT content_sha256 FROM replay_files WHERE "
+                     "course_result_id=77"),
+      .compressedSize = static_cast<std::uint64_t>(integer(
+          database.get(), "SELECT compressed_size FROM replay_files WHERE "
+                          "course_result_id=77")),
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
+  const auto decoded = store.load(metadata, codec);
+  expect(decoded.course.has_value() && decoded.course->stages.size() == 1 &&
+             decoded.course->stages.front().setup.startingGaugeState
+                 .has_value() &&
+             decoded.course->stages.front()
+                     .setup.startingGaugeState->gaugeProfile ==
+                 GaugeProfile::CourseLR2 &&
+             decoded.course->stages.front()
+                     .setup.startingGaugeState->currentGauge == 100.0F,
+         "migration uses the saved ruleset and course profile to synthesize "
+         "the stage-zero gauge state");
+}
+
 void testPreservesEmptyLegacyReplayInput() {
   TemporaryDirectory temporary;
   Database database(temporary.path() / "replay.db");
@@ -1014,6 +1171,53 @@ void testMapsLegacyPhysicalLanesForEverySupportedMode() {
   }
   expect(!replay_repository_detail::legacyReplayControlForPhysicalLane(8, 7),
          "7-key migration rejects player-two and 9-key-only lane 8");
+}
+
+void testRejectsUnmappableLegacyInputLanesAtomically() {
+  struct UnmappableInputCase {
+    int eventIndex;
+    replay::LegacyPlaybackAction action;
+    std::string_view label;
+  };
+  constexpr std::array cases{
+      UnmappableInputCase{0, replay::LegacyPlaybackAction::Press, "press"},
+      UnmappableInputCase{1, replay::LegacyPlaybackAction::Release, "release"},
+  };
+
+  for (const auto &malformed : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    executeOrThrow(
+        database.get(),
+        "UPDATE replay_events SET lane=8 WHERE replay_id=42 AND event_index=" +
+            std::to_string(malformed.eventIndex) + " AND action=" +
+            std::to_string(static_cast<int>(malformed.action)));
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+
+    expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                                 Status::InvalidLegacyData &&
+               outcome.diagnostic.find("physical lane") != std::string::npos &&
+               outcome.diagnostic.find("key mode") != std::string::npos,
+           std::string("unmappable legacy ") + std::string(malformed.label) +
+               " input fails closed");
+    expect(outcome.chartFiles == 0 && outcome.courseFiles == 0 &&
+               snapshotLegacyDatabase(database.get()) == before &&
+               integer(database.get(),
+                       "SELECT lane FROM replay_events WHERE replay_id=42 AND "
+                       "event_index=" +
+                           std::to_string(malformed.eventIndex)) == 8 &&
+               !std::filesystem::exists(temporary.path() / "replay"),
+           std::string("unmappable legacy ") + std::string(malformed.label) +
+               " input leaves schema-v10 rows and files untouched");
+  }
 }
 
 void testRejectsEmptyLegacyChartIdentitiesBeforeWritingFiles() {
@@ -2081,12 +2285,15 @@ void testRepositoryStartupRunsAtomicV10Migration() {
 
 int main() {
   testMigratesChartRowsToReplayFileAndCompactResult();
+  testCurrentChartMigrationSynthesizesDeterministicStartingGaugeState();
+  testCurrentCourseMigrationSynthesizesRulesetGaugeState();
   testPreservesEmptyLegacyReplayInput();
   testUnavailableKeyModeBlocksAllMissMigrationAtomically();
   testChartMetadataPreservesSparseFourteenKeyMode();
   testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes();
   testLongNoteMigrationRequiresAndUsesParsedTopology();
   testMapsLegacyPhysicalLanesForEverySupportedMode();
+  testRejectsUnmappableLegacyInputLanesAtomically();
   testRejectsEmptyLegacyChartIdentitiesBeforeWritingFiles();
   testRejectsPendingChartIdentityDisagreementBeforeWritingFiles();
   testRejectsOutOfRangeChartLongNoteModeBeforeWritingFiles();

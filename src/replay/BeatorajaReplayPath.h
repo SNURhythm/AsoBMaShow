@@ -35,8 +35,16 @@ struct ReplayPathIdentity {
                                                    bool hasUndefinedLongNotes,
                                                    std::string &diagnostic);
 
+[[nodiscard]] bool chartStemMatches(
+    std::string_view stem, std::string_view lowerSha256, int longNoteMode,
+    std::optional<bool> hasUndefinedLongNotes, std::string &diagnostic);
+
 [[nodiscard]] std::optional<std::string>
 courseStem(const CoursePathInput &input, std::string &diagnostic);
+
+[[nodiscard]] bool courseStemMatches(
+    std::string_view stem, CoursePathInput input,
+    std::optional<bool> hasUndefinedLongNotes, std::string &diagnostic);
 
 [[nodiscard]] std::optional<ReplayPathIdentity>
 pathForStem(std::string_view stem, std::int64_t historyIndex,

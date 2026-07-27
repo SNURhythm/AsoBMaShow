@@ -733,6 +733,64 @@ void testRawAndLegacyPlaybackAreClassifiedAsReplayResults() {
           "raw BRD playback is classified as a replay result");
 }
 
+void testSavedResultBuildsRetrySourceFromPersistedProvenance() {
+  bms_parser::ChartMeta meta;
+  meta.MD5 = std::string(32, 'a');
+  meta.SHA256 = std::string(64, 'b');
+  meta.KeyMode = 7;
+
+  ScoreProvenance provenance = ScoreProvenance::Legacy();
+  provenance.stages = {{.chartMd5 = meta.MD5,
+                        .chartSha256 = meta.SHA256,
+                        .chartRandomSeed = 41U,
+                        .chartRandomPrng = "std::mt19937_64",
+                        .chartRandomValues = {2}}};
+  provenance.gaugeType = GaugeType::Hard;
+  provenance.player1 = {.option = "MIRROR", .seed = 73};
+
+  const auto retrySource = result_scene_detail::retrySourceForLocalResult(
+      meta, provenance, nullptr, nullptr, nullptr);
+  require(retrySource.has_value(),
+          "a compact saved result receives a provenance retry source");
+  const JudgedPlaybackData &retry = *retrySource;
+  require(retry.initialGaugeType == GaugeType::Hard &&
+              retry.playOption == "MIRROR" &&
+              retry.playOptionSeed == 73 && retry.randomSeed == 41U &&
+              retry.randomValues == std::vector<int>({2}),
+          "View Result derives retry authority from persisted provenance when "
+          "no replay projection is present");
+
+  JudgedPlaybackData explicitRetry;
+  explicitRetry.playOption = "RANDOM";
+  const auto selected = result_scene_detail::retrySourceForLocalResult(
+      meta, provenance, nullptr, &explicitRetry, nullptr);
+  require(selected.has_value() && selected->playOption == "RANDOM",
+          "an explicit live retry source remains authoritative");
+
+  replay::ReplayPlaybackData rawPlayback;
+  require(!result_scene_detail::retrySourceForLocalResult(
+               meta, provenance, nullptr, nullptr, &rawPlayback)
+               .has_value(),
+          "a raw replay result keeps BRD setup authority instead of gaining a "
+          "competing provenance projection");
+
+  bms_parser::Chart retainedResultChart;
+  require(!result_scene_detail::shouldReuseResultRetryChart(
+              true, &retainedResultChart, false) &&
+              result_scene_detail::shouldReuseResultRetryChart(
+                  true, &retainedResultChart, true),
+          "Retry Same reparses a compact recalled result whose retained chart "
+          "does not contain the persisted lane pattern");
+  require(!result_scene_detail::retrySourceProvidesTimingAnalytics(retry),
+          "a provenance-only retry projection is not treated as judged "
+          "timing analytics");
+  JudgedPlaybackData judgedRetry = retry;
+  judgedRetry.events.push_back({.action = ReplayEventAction::Press});
+  require(result_scene_detail::retrySourceProvidesTimingAnalytics(judgedRetry),
+          "a retry projection with real judged events remains an analytics "
+          "source");
+}
+
 } // namespace
 
 int main() {
@@ -753,6 +811,7 @@ int main() {
   testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup();
   testLocalRegressionContractsRemainPresent();
   testRawAndLegacyPlaybackAreClassifiedAsReplayResults();
+  testSavedResultBuildsRetrySourceFromPersistedProvenance();
   std::cout << "remote result scene tests passed\n";
   return 0;
 }
