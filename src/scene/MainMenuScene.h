@@ -512,7 +512,7 @@ private:
   ReplayRecordFilters replayRecordFilters;
   ChartMetaRecord replayModalChart;
   std::optional<ReplaySummary> selectedReplaySummary;
-  std::optional<ReplaySummary> replayExportSelection;
+  std::optional<ResultRecordSummary> replayExportSelection;
   ChartMetaRecord replayExportChart;
   int selectedReplayIndex = -1;
   int selectedExportFps = 120;
@@ -809,16 +809,26 @@ private:
       play_options::PlayOptionReplayInfo &playInfo,
       std::atomic_bool &parseCancelled) const;
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startModernReplayPlayback(const ChartMetaRecord &record,
+                                 ModernChartResultRecord modern);
   void startGBattlePlayback(const ChartMetaRecord &record, int replayId);
+  void startModernGBattlePlayback(const ChartMetaRecord &record,
+                                  ModernChartResultRecord modern);
   void startCourseReplayPlayback(const ChartMetaRecord &record, int replayId);
   void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
+  void startModernReplayVideoExport(const ChartMetaRecord &record,
+                                    ModernChartResultRecord modern,
+                                    ReplayVideoExportOptions options);
   void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
+  void startModernReplayResultRecall(const ChartMetaRecord &record,
+                                     ModernChartResultRecord modern);
   void startRemoteResultRecall(IrRemoteRecordId identity,
                                std::string selectedStableKey);
   void startReplayIrUpload(const ChartMetaRecord &record,
                            ReplaySummary summary);
+  void startModernReplayIrUpload(ModernChartResultRecord modern);
   void finishReplayIrUpload(int replayId, std::string message);
   void publishReplayIrStatusFeedback(ir::IrRecordState state);
   void observeReplayIrServiceRevisions();

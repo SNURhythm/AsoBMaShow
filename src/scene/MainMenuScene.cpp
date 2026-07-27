@@ -13,6 +13,7 @@
 #include "../ReplayAutoPlay.h"
 #include "../ReplayVideoExporter.h"
 #include "../ResultRecallBuilder.h"
+#include "../ModernResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../RAII.h"
@@ -24,6 +25,7 @@
 #include "../ir/IrSavedResultUpload.h"
 #include "../ir/IrSubmissionService.h"
 #include "../path.h"
+#include "../replay/ChartReplayConsumer.h"
 #include "../view/ChartListItemView.h"
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
@@ -94,6 +96,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #if TARGET_OS_LINUX
 #include <spawn.h>
@@ -8071,10 +8074,14 @@ void MainMenuScene::buildReplayModal() {
   };
   replayListView->onIrUploadRequested =
       [this](const ResultRecordSummary &record) {
-        if (!record.capabilities.irUpload || !record.local.has_value()) {
+        if (!record.capabilities.irUpload) {
           return;
         }
-        startReplayIrUpload(replayModalChart, *record.local);
+        if (record.modern.has_value()) {
+          startModernReplayIrUpload(*record.modern);
+        } else if (record.local.has_value()) {
+          startReplayIrUpload(replayModalChart, *record.local);
+        }
       };
   replayListView->onIrStatusFeedbackRequested =
       [this](const ResultRecordSummary &record) {
@@ -8551,13 +8558,17 @@ void MainMenuScene::buildReplayModal() {
       return;
     }
     if (!selectedResultRecordSummary.has_value() ||
-        !selectedResultRecordSummary->capabilities.watch ||
-        !selectedReplaySummary.has_value()) {
+        !selectedResultRecordSummary->capabilities.watch) {
       return;
     }
     if (replayWatchOptionsContent != nullptr &&
         replayWatchOptionsContent->getVisible()) {
-      startReplayPlayback(replayModalChart, selectedReplaySummary->id);
+      if (selectedResultRecordSummary->modern.has_value()) {
+        startModernReplayPlayback(replayModalChart,
+                                  *selectedResultRecordSummary->modern);
+      } else if (selectedReplaySummary.has_value()) {
+        startReplayPlayback(replayModalChart, selectedReplaySummary->id);
+      }
       return;
     }
     replayModalTitleText->setText("Watch Options");
@@ -8576,17 +8587,26 @@ void MainMenuScene::buildReplayModal() {
       return;
     }
     if (!selectedResultRecordSummary.has_value() ||
-        !selectedResultRecordSummary->capabilities.gBattle ||
-        !selectedReplaySummary.has_value()) {
+        !selectedResultRecordSummary->capabilities.gBattle) {
       return;
     }
-    startGBattlePlayback(replayModalChart, selectedReplaySummary->id);
+    if (selectedResultRecordSummary->modern.has_value()) {
+      startModernGBattlePlayback(replayModalChart,
+                                 *selectedResultRecordSummary->modern);
+    } else if (selectedReplaySummary.has_value()) {
+      startGBattlePlayback(replayModalChart, selectedReplaySummary->id);
+    }
   });
   replayModalResultButton->setOnClickListener([this]() {
     if (replayExportInProgress.load() || replayResultRecallInProgress ||
         replayIrUploadInProgress ||
         !selectedResultRecordSummary.has_value() ||
         !selectedResultRecordSummary->capabilities.resultRecall) {
+      return;
+    }
+    if (selectedResultRecordSummary->modern.has_value()) {
+      startModernReplayResultRecall(replayModalChart,
+                                    *selectedResultRecordSummary->modern);
       return;
     }
     if (selectedReplaySummary.has_value()) {
@@ -8618,7 +8638,8 @@ void MainMenuScene::buildReplayModal() {
       if (!replayExportSelection.has_value()) {
         return;
       }
-      const ReplaySummary exportSelection = replayExportSelection.value();
+      const ResultRecordSummary exportSelection =
+          replayExportSelection.value();
       const bool exportAutoPlay = exportSelection.autoPlay;
       ReplayVideoExportOptions options;
       options.fps = selectedExportFps;
@@ -8634,12 +8655,16 @@ void MainMenuScene::buildReplayModal() {
       if (!selectedExportFullResolution) {
         options.height = 1080;
       }
-      startReplayVideoExport(replayExportChart, exportSelection.id, options);
+      if (exportSelection.modern.has_value()) {
+        startModernReplayVideoExport(replayExportChart,
+                                     *exportSelection.modern, options);
+      } else if (const auto replayId = exportSelection.localReplayId()) {
+        startReplayVideoExport(replayExportChart, *replayId, options);
+      }
       return;
     }
     if (!selectedResultRecordSummary.has_value() ||
-        !selectedResultRecordSummary->capabilities.videoExport ||
-        !selectedReplaySummary.has_value()) {
+        !selectedResultRecordSummary->capabilities.videoExport) {
       return;
     }
     showReplayExportOptions();
@@ -8689,6 +8714,52 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
                            autoPlayReplaySummary(replayModalChart));
   }
 
+  std::vector<ResultRecordSummary> modernSummaries;
+  if (!courseReplayList && !replayModalChart.meta.SHA256.empty()) {
+    const auto history = context.replayRepository.ListModernChartResults(
+        replayModalChart.meta.SHA256, 100);
+    if (history.status == ModernChartHistoryReadStatus::Loaded) {
+      modernSummaries.reserve(history.records.size());
+      replay::ChartReplayContext replayContext(
+          context.replayRepository,
+          context.replayRepository.GetResolvedDatabasePath().parent_path());
+      for (const ModernChartResultRecord &modern : history.records) {
+        const int authoredLongNoteMode =
+            normalizeChartLongNoteModeValue(replayModalChart.meta.LnMode);
+        const replay::ParsedChartReplayFacts facts{
+            .chart = {.md5 = replayModalChart.meta.MD5,
+                      .sha256 = replayModalChart.meta.SHA256,
+                      .keyMode = replayModalChart.meta.KeyMode},
+            .longNoteMode =
+                authoredLongNoteMode > long_note_mode::kUnknownValue
+                    ? authoredLongNoteMode
+                    : modern.result.score.longNoteMode,
+            .timeBounds = std::nullopt,
+        };
+        const auto replayLoad =
+            replayContext.load(modern.result.attemptId, facts);
+        const auto snapshot =
+            context.replayRepository.LoadModernIrSubmissionSnapshot(
+                modern.result.attemptId);
+        modernSummaries.push_back(makeModernChartResultRecord(
+            modern, replayLoad.replayState(),
+            snapshot.status == ModernIrSnapshotReadStatus::Loaded &&
+                snapshot.snapshot.has_value()));
+      }
+    } else {
+      const std::string diagnostic = ir::sanitizeDiagnostic(
+          history.diagnostic.empty()
+              ? "Modern Records unavailable: history could not be read"
+              : std::string("Modern Records unavailable: ") +
+                    history.diagnostic);
+      if (diagnostic != publishedResultRecordDiagnostic) {
+        publishedResultRecordDiagnostic = diagnostic;
+        SDL_Log("%s", diagnostic.c_str());
+        archive_file::appendDebugLogLine(diagnostic);
+      }
+    }
+  }
+
   std::vector<ir::IrRemoteScore> remoteScores;
   std::string mergeOrigin;
   bool remoteReadSucceeded = false;
@@ -8734,7 +8805,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
 
   try {
     resultRecordSummaries = mergeResultRecords(
-        replaySummaries,
+        replaySummaries, modernSummaries,
         remoteReadSucceeded
             ? std::span<const ir::IrRemoteScore>(remoteScores)
             : std::span<const ir::IrRemoteScore>{},
@@ -8744,7 +8815,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
     }
   } catch (...) {
     resultRecordSummaries = mergeResultRecords(
-        replaySummaries, std::span<const ir::IrRemoteScore>{},
+        replaySummaries, modernSummaries,
+        std::span<const ir::IrRemoteScore>{},
         ir::kTachiProviderId, std::string_view{});
     const std::string diagnostic =
         "IR Records unavailable: remote score projection is invalid";
@@ -8812,12 +8884,11 @@ void MainMenuScene::showReplayFilterSortOptions() {
 void MainMenuScene::showReplayExportOptions() {
   if (replayModalRoot == nullptr ||
       !selectedResultRecordSummary.has_value() ||
-      !selectedResultRecordSummary->capabilities.videoExport ||
-      !selectedReplaySummary.has_value()) {
+      !selectedResultRecordSummary->capabilities.videoExport) {
     return;
   }
 
-  replayExportSelection = selectedReplaySummary;
+  replayExportSelection = selectedResultRecordSummary;
   replayExportChart = replayModalChart;
   replayModalTitleText->setText("Export Options");
   replayListContent->setVisible(false);
@@ -9236,7 +9307,7 @@ bool MainMenuScene::selectedReplayIsCourseReplay() const {
   if (replayExportOptionsContent != nullptr &&
       replayExportOptionsContent->getVisible() &&
       replayExportSelection.has_value()) {
-    return replayExportSelection->courseReplay;
+    return replayExportSelection->course;
   }
   return selectedResultRecordSummary.has_value() &&
          selectedResultRecordSummary->course;
@@ -9431,6 +9502,73 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
       0, true);
 }
 
+void MainMenuScene::startModernReplayPlayback(
+    const ChartMetaRecord &record, ModernChartResultRecord modern) {
+  if (record.courseStart || willStart.load()) {
+    return;
+  }
+
+  willStart.store(true);
+  cancelActivePreviewLoading();
+  if (replayWatchButtonText != nullptr) {
+    replayWatchButtonText->setText("Loading...");
+  }
+  const std::string pacemakerTarget =
+      pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+  defer(
+      [this, record, modern = std::move(modern), pacemakerTarget]() mutable {
+        auto failReplayLoad = [this]() {
+          resetReplayWatchLoadingUi();
+          reloadReplayRecordModels(true);
+          return true;
+        };
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+        joinRetiredPreviewLoadThreads();
+
+        std::atomic_bool parseCancelled = false;
+        auto consumer = replay::makeRuntimeChartReplayConsumer(
+            context.replayRepository,
+            context.replayRepository.GetResolvedDatabasePath().parent_path());
+        auto loaded = consumer.load(modern, record.meta.BmsPath,
+                                    parseCancelled);
+        if (!loaded.ready() || parseCancelled) {
+          return failReplayLoad();
+        }
+
+        context.jukebox.stop();
+        context.jukebox.loadChart(*loaded.chart, true, parseCancelled);
+        if (parseCancelled) {
+          return failReplayLoad();
+        }
+        auto *chart = setSelectedChart(std::move(loaded.chart), true, false);
+        if (chart == nullptr) {
+          return failReplayLoad();
+        }
+
+        StartOptions replayOptions{
+            .startPosition = 0,
+            .autoKeySound = false,
+            .autoPlay = false,
+            .gaugeType = loaded.replayData->initialGaugeType,
+            .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
+            .replayData = loaded.replayData,
+            .pacemakerTarget = pacemakerTarget,
+            .touchVisualizationEnabled = selectedReplayRenderTouchPoints,
+            .replayGhostRenderingEnabled = selectedReplayRenderGhosts,
+        };
+        applyReplayProvenanceToStartOptions(replayOptions,
+                                            *loaded.replayData);
+        context.jukebox.stop();
+        hideReplayModal();
+        changeToGameplayScene(chart, std::move(replayOptions));
+        willStart.store(false);
+        return true;
+      },
+      0, true);
+}
+
 void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
                                          int replayId) {
   if (record.courseStart || replay_autoplay::isAutoPlayReplayId(replayId) ||
@@ -9495,6 +9633,91 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
 
         auto recordData =
             std::make_shared<ReplayData>(std::move(replay.value()));
+        context.jukebox.stop();
+        hideReplayModal();
+        changeToGameplayScene(
+            chart, {
+                       .startPosition = 0,
+                       .autoKeySound = autoKeySound,
+                       .autoPlay = false,
+                       .gaugeType = gaugeType,
+                       .gaugeAutoShift = gaugeAutoShift,
+                       .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
+                       .gbattleRecordData = recordData,
+                       .playOption = recordData->playOption,
+                       .playOptionSeed = recordData->playOptionSeed,
+                       .playOption2 = recordData->playOption2,
+                       .playOption2Seed = recordData->playOption2Seed,
+                       .longNoteMode = normalizeChartLongNoteModeValue(
+                           recordData->chartMeta.LnMode),
+                       .assistOption = recordData->assistOption,
+                       .pacemakerTarget = pacemaker::kTargetOff,
+                       .playback = playback,
+                       .replayGhostRenderingEnabled = false,
+                       .ruleset = ruleset,
+                   });
+        willStart.store(false);
+        return true;
+      },
+      0, true);
+}
+
+void MainMenuScene::startModernGBattlePlayback(
+    const ChartMetaRecord &record, ModernChartResultRecord modern) {
+  if (record.courseStart || willStart.load()) {
+    return;
+  }
+
+  willStart.store(true);
+  cancelActivePreviewLoading();
+  if (replayGBattleButtonText != nullptr) {
+    replayGBattleButtonText->setText("Loading...");
+  }
+  const GaugeType gaugeType = profileSelections.gaugeType;
+  const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeType gaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
+  const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+  const GameplayRuleset ruleset = profileSelections.ruleset;
+  const audio::PlaybackRate playback{
+      .percent = context.settings.selectedPlaybackRatePercent,
+      .mode = context.settings.selectedPlaybackMode,
+  };
+
+  defer(
+      [this, record, modern = std::move(modern), gaugeType, gaugeAutoShift,
+       gaugeAutoShiftLowerBound, autoKeySound, ruleset, playback]() mutable {
+        auto failReplayLoad = [this]() {
+          resetReplayWatchLoadingUi();
+          reloadReplayRecordModels(true);
+          return true;
+        };
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+        joinRetiredPreviewLoadThreads();
+
+        std::atomic_bool parseCancelled = false;
+        auto consumer = replay::makeRuntimeChartReplayConsumer(
+            context.replayRepository,
+            context.replayRepository.GetResolvedDatabasePath().parent_path());
+        auto loaded = consumer.load(modern, record.meta.BmsPath,
+                                    parseCancelled);
+        if (!loaded.ready() || parseCancelled) {
+          return failReplayLoad();
+        }
+
+        context.jukebox.stop();
+        context.jukebox.loadChart(*loaded.chart, true, parseCancelled);
+        if (parseCancelled) {
+          return failReplayLoad();
+        }
+        auto *chart = setSelectedChart(std::move(loaded.chart), true, false);
+        if (chart == nullptr) {
+          return failReplayLoad();
+        }
+
+        auto recordData = loaded.replayData;
         context.jukebox.stop();
         hideReplayModal();
         changeToGameplayScene(
@@ -10097,6 +10320,80 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 #endif
 }
 
+void MainMenuScene::startModernReplayVideoExport(
+    const ChartMetaRecord &record, ModernChartResultRecord modern,
+    ReplayVideoExportOptions options) {
+  if (!beginReplayExport("Exporting Replay", "Preparing export",
+                         "Exporting...")) {
+    return;
+  }
+
+#if TARGET_OS_ANDROID
+  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
+    updateReplayExportProgressUi(progress.fraction, progress.message);
+  };
+#else
+  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
+    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
+    pendingReplayExportProgress = PendingReplayExportProgress{
+        .fraction = progress.fraction,
+        .message = progress.message,
+    };
+  };
+#endif
+
+  auto complete = [this](const ReplayVideoExportResult &result) {
+    queueReplayExportResult(result);
+  };
+  auto runExport = [this, record, modern = std::move(modern), options,
+                    complete](const std::stop_token *stopToken) mutable {
+    try {
+      if (loadThread.joinable()) {
+        loadThread.join();
+      }
+      joinRetiredPreviewLoadThreads();
+      context.jukebox.stop();
+      if (stopToken != nullptr && stopToken->stop_requested()) {
+        complete({.success = false, .message = "Replay export cancelled"});
+        return;
+      }
+
+      std::atomic_bool parseCancelled = false;
+      auto consumer = replay::makeRuntimeChartReplayConsumer(
+          context.replayRepository,
+          context.replayRepository.GetResolvedDatabasePath().parent_path());
+      auto loaded = consumer.load(modern, record.meta.BmsPath,
+                                  parseCancelled);
+      if (!loaded.ready() || parseCancelled) {
+        complete({.success = false, .message = "No Replay"});
+        return;
+      }
+      if (stopToken != nullptr && stopToken->stop_requested()) {
+        complete({.success = false, .message = "Replay export cancelled"});
+        return;
+      }
+
+      complete(ReplayVideoExporter::Export(
+          context, loaded.chart.get(), *loaded.replayData, options));
+    } catch (const std::exception &e) {
+      complete({.success = false, .message = e.what()});
+    } catch (...) {
+      complete({.success = false,
+                .message = "Unexpected replay export failure"});
+    }
+  };
+
+#if TARGET_OS_ANDROID
+  runExport(nullptr);
+  applyReplayExportResult();
+#else
+  replayExportThread = std::jthread(
+      [runExport = std::move(runExport)](const std::stop_token &stopToken) mutable {
+        runExport(&stopToken);
+      });
+#endif
+}
+
 std::optional<std::string>
 MainMenuScene::activeReplayIrServerOrigin() const {
   const auto settings = context.settings.irProviders.find(
@@ -10281,6 +10578,94 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
       1, true);
 }
 
+void MainMenuScene::startModernReplayIrUpload(
+    ModernChartResultRecord modern) {
+  if (replayIrUploadInProgress || replayResultRecallInProgress ||
+      replayExportInProgress.load()) {
+    return;
+  }
+
+  const auto providerSettings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  if (providerSettings == context.settings.irProviders.end() ||
+      !providerSettings->second.enabled) {
+    finishReplayIrUpload(
+        std::numeric_limits<int>::min(),
+        "Enable Bokutachi in Settings > IR before uploading.");
+    return;
+  }
+  const auto driver = context.irDrivers.find(ir::kTachiProviderId);
+  if (driver == nullptr) {
+    finishReplayIrUpload(std::numeric_limits<int>::min(),
+                         "Bokutachi IR is unavailable.");
+    return;
+  }
+  const ir::IrDriverCapabilities capabilities = driver->capabilities();
+  if (capabilities.readOnly || !capabilities.scoreSubmission ||
+      context.irSubmissionService == nullptr) {
+    finishReplayIrUpload(std::numeric_limits<int>::min(),
+                         "Bokutachi score submission is unavailable.");
+    return;
+  }
+
+  replayIrUploadInProgress = true;
+  ++replayIrUploadFeedbackRevision;
+  if (replayModalTitleText != nullptr) {
+    replayModalTitleText->setText("Preparing IR...");
+  }
+  refreshReplayModalActions();
+  cancelActivePreviewLoading();
+
+  defer(
+      [this, modern = std::move(modern)]() {
+        try {
+          if (loadThread.joinable()) {
+            loadThread.join();
+          }
+          joinRetiredPreviewLoadThreads();
+          const auto snapshot =
+              context.replayRepository.LoadModernIrSubmissionSnapshot(
+                  modern.result.attemptId);
+          if (snapshot.status != ModernIrSnapshotReadStatus::Loaded ||
+              !snapshot.snapshot.has_value()) {
+            finishReplayIrUpload(
+                std::numeric_limits<int>::min(),
+                "This saved result has no verified IR snapshot.");
+            return true;
+          }
+
+          const ir::IrSavedResultUploadDependencies dependencies{
+              .loadOutbox =
+                  [this](std::string_view provider,
+                         std::string_view attempt) {
+                    return context.replayRepository.LoadIrOutbox(provider,
+                                                                 attempt);
+                  },
+              .buildDraft = [this](const ir::IrSubmission &submission) {
+                return context.irDrivers.buildDraft(ir::kTachiProviderId,
+                                                    submission);
+              },
+              .enqueue = [this](const ir::IrOutboxDraft &draft) {
+                return context.irSubmissionService->enqueueManual(draft);
+              },
+              .retry = [this](std::int64_t rowId) {
+                return context.irSubmissionService->retry(rowId);
+              },
+          };
+          const auto action = ir::executeIrSavedResultUpload(
+              ir::kTachiProviderId, snapshot.snapshot->submission,
+              dependencies);
+          finishReplayIrUpload(std::numeric_limits<int>::min(),
+                               action.message);
+        } catch (...) {
+          finishReplayIrUpload(std::numeric_limits<int>::min(),
+                               "IR upload could not be prepared.");
+        }
+        return true;
+      },
+      1, true);
+}
+
 void MainMenuScene::finishReplayIrUpload(int replayId, std::string message) {
   replayIrUploadInProgress = false;
   refreshReplayIrMarker(replayId);
@@ -10411,6 +10796,75 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
                 std::move(persistence), &replay, ResultPracticeOptions{},
                 false, ResultCourseOptions{},
                 profileSelections.pacemakerTarget, std::move(chart)),
+            true);
+        return true;
+      },
+      1, true);
+}
+
+void MainMenuScene::startModernReplayResultRecall(
+    const ChartMetaRecord &record, ModernChartResultRecord modern) {
+  if (record.courseStart || replayResultRecallInProgress ||
+      replayExportInProgress.load() || replayIrUploadInProgress) {
+    return;
+  }
+
+  replayResultRecallInProgress = true;
+  refreshReplayModalActions();
+  cancelActivePreviewLoading();
+  defer(
+      [this, record, modern = std::move(modern)]() mutable {
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+        joinRetiredPreviewLoadThreads();
+        context.jukebox.stop();
+
+        const auto exact = context.replayRepository
+                               .LoadModernChartResultByAttempt(
+                                   modern.result.attemptId);
+        if (exact.status != ModernChartResultReadStatus::Loaded ||
+            !exact.record.has_value()) {
+          finishReplayResultRecallFailure(
+              exact.diagnostic.empty() ? "saved result was not found"
+                                       : exact.diagnostic);
+          return true;
+        }
+
+        std::atomic_bool cancelled = false;
+        auto recalled = result_recall::BuildChartResult(
+            exact.record->result, cancelled);
+        if (!recalled.value.has_value()) {
+          finishReplayResultRecallFailure(
+              recalled.diagnostic.empty() ? "saved result was not found"
+                                           : recalled.diagnostic);
+          return true;
+        }
+
+        std::shared_ptr<ReplayData> retryData;
+        auto consumer = replay::makeRuntimeChartReplayConsumer(
+            context.replayRepository,
+            context.replayRepository.GetResolvedDatabasePath().parent_path());
+        auto replayLoad = consumer.load(*exact.record, record.meta.BmsPath,
+                                        cancelled);
+        if (replayLoad.ready() && !cancelled) {
+          retryData = std::move(replayLoad.replayData);
+        }
+
+        auto result = std::move(*recalled.value);
+        auto chart = std::move(result.chart);
+        const bms_parser::ChartMeta meta = chart->Meta;
+        const std::string attemptId = result.result.attemptId;
+        const ScoreProvenance provenance = result.result.score.provenance;
+        replayResultRecallInProgress = false;
+        context.sceneManager->changeScene(
+            std::make_unique<ResultScene>(
+                context, meta, result.state, provenance, nullptr,
+                ResultPersistenceOptions{}, retryData.get(),
+                ResultPracticeOptions{}, false, ResultCourseOptions{},
+                profileSelections.pacemakerTarget, std::move(chart), nullptr,
+                std::nullopt, retryData.get(), attemptId,
+                retryData != nullptr),
             true);
         return true;
       },
