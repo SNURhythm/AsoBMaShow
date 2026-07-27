@@ -202,6 +202,40 @@ void testScoreOverflowAndCompletedCourseCannotAdvance() {
   }
 }
 
+void testCompletedStageRestUsesTheSameValidatedStateTransition() {
+  const auto initial = initialState();
+  const auto first = replay::advanceCourseContinuation(
+      initial, completion(0, 12, 20, 3, 4, 68.0F, 7, 'a', 0),
+      replay::ReplaySetupSource::LocalCapture);
+  expect(first.advanced() && first.state,
+         "a live stage may advance before its result-screen rest is known");
+  if (!first.state) {
+    return;
+  }
+
+  const auto updated = replay::recordCourseContinuationRest(
+      *first.state, 0, replay::kReplayLimits.maxCourseRestMicros);
+  expect(updated.advanced() && updated.state &&
+             updated.state->restMicrosAfterStage ==
+                 std::vector<std::int64_t>{
+                     replay::kReplayLimits.maxCourseRestMicros} &&
+             updated.state->score == first.state->score &&
+             sameGauge(updated.state->gauge, first.state->gauge),
+         "exact bounded rest replaces only the completed stage rest fact");
+
+  const auto wrongStage = replay::recordCourseContinuationRest(
+      *first.state, 1, 1);
+  expect(wrongStage.issue == replay::CourseContinuationIssue::StageOrder &&
+             !wrongStage.state,
+         "rest cannot be attached to an uncompleted stage");
+
+  const auto excessive = replay::recordCourseContinuationRest(
+      *first.state, 0, replay::kReplayLimits.maxCourseRestMicros + 1);
+  expect(excessive.issue == replay::CourseContinuationIssue::Rest &&
+             !excessive.state,
+         "live rest uses the same upper bound and is never clamped");
+}
+
 #endif
 
 } // namespace
@@ -211,6 +245,7 @@ int main() {
   testContiguousMixedSetupCourseCarriesEveryStateFact();
   testInvalidTransitionsLeaveThePriorStateUntouched();
   testScoreOverflowAndCompletedCourseCannotAdvance();
+  testCompletedStageRestUsesTheSameValidatedStateTransition();
 #else
   expect(false, "CourseContinuation contract is not implemented");
 #endif
