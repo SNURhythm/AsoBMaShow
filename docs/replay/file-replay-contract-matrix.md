@@ -26,13 +26,17 @@ missing and user-deleted states are already absent.
 | Contract | Current authority | Replay-file dependency | Delivery status |
 | --- | --- | --- | --- |
 | Modern chart result facts | `result_persistence::ModernChartResult` validation, fingerprinting, agreement, recall, and schema-v11 repository storage | none | active |
-| Modern course result facts | `result_persistence::ModernCourseResult` validation, fingerprinting, ordered-stage agreement, and atomic recall | none | contract active; SQLite ownership is Slice 5 |
+| Modern course result facts | `result_persistence::ModernCourseResult` validation, fingerprinting, ordered-stage agreement, schema-v12 repository storage, and atomic recall | none | active for complete and failed-partial courses |
 | Shared result/setup domains | `result_contract` key modes, chart identity agreement, gauge/clear domains, and score arithmetic | none | active for replay setup, modern results, recall, and IR |
 | Postponed IR payload | canonical `ir::IrSubmissionSnapshot` captured from a validated modern result and stored atomically with it | none | active for modern charts |
 | Modern chart capture | `ReplayInputRecorder`, `ReplaySetupProvenance`, and `ChartReplayCapture` | live logical input only | active; raw input is encoded to BRD and is not written to SQLite |
 | Modern chart file ownership | `ReplayRepository::GetResolvedProfileRoot`, `BeatorajaReplayPath`, `ReplayFileStore`, and `ChartReplayPersistence` | contained `replay/*.brd` path and verified metadata | active with recoverable summary-only fallback |
 | Modern chart replay availability | `ChartReplayContext`, `makeParsedChartReplayFacts`, and `replay::capabilitiesFor` | verified file only for replay actions | active in Records, Watch, Retry Same, G-Battle, practice ghost, and video |
 | Modern chart consumer preparation | `ChartReplayConsumer`, `ReplaySetupAdapter`, shared raw driver, and judged materializer | verified file only | active; all chart replay consumers use one pipeline |
+| Modern course capture and continuation | `CourseReplayCapture` and immutable `CourseContinuation` transitions | live stage result facts plus live logical input | active; complete and failed-partial prefixes share checked score, combo, gauge, setup, rest, and ordering rules |
+| Modern course file ownership | `ReplayFileAssociationCoordinator`, `BeatorajaReplayPath::courseStem`, `ReplayFileStore`, and `CourseReplayPersistence` | contained `replay/*.brd` path and verified metadata | active with recoverable summary-only fallback and exclusive chart-or-course ownership |
+| Modern course replay availability | `CourseReplayContext`, `CourseReplayConsumer`, and `replay::capabilitiesFor` | verified file only for replay actions | active in Records, Watch, Retry Same, and video; result recall remains file-independent |
+| Modern course consumer preparation | `CourseReplayConsumer`, shared setup/identity/result agreement, raw playback materialization, and `CourseContinuation` | verified file only | active; scene and video adapters are produced only after the complete saved prefix agrees |
 | Legacy result and IR bridge | explicitly named legacy projection/adapter functions | legacy in-memory detail only | temporary until the Slice 7 schema cutover |
 
 The activated result and postponed-IR contracts do not accept a replay path,
