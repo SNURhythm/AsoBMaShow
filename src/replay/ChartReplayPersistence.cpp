@@ -57,9 +57,9 @@ bool releaseReservation(const ChartReplayPersistenceDependencies &dependencies,
 } // namespace
 
 ChartReplayPersistence::ChartReplayPersistence(
-    ScoreRepository &score, ReplayRepository &repository,
-    std::filesystem::path profileRoot) {
-  auto store = std::make_shared<ReplayFileStore>(std::move(profileRoot));
+    ScoreRepository &score, ReplayRepository &repository) {
+  auto store = std::make_shared<ReplayFileStore>(
+      repository.GetResolvedProfileRoot());
   auto codec = std::make_shared<BeatorajaReplayCodec>();
   dependencies_ = {
       .loadResult =

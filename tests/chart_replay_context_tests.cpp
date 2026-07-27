@@ -146,6 +146,27 @@ ParsedChartReplayFacts identityOnlyFacts(
   return facts;
 }
 
+void testParsedFactsUseOneLongNoteAndIdentityAuthority() {
+  bms_parser::ChartMeta meta;
+  meta.MD5 = repeated('b', 32);
+  meta.SHA256 = repeated('a', 64);
+  meta.KeyMode = 14;
+  meta.LnMode = 2;
+  const ReplayTimeBounds bounds{.completionSongTimeMicros = 9'000'000};
+
+  const auto authored = makeParsedChartReplayFacts(meta, 3, bounds);
+  expect(authored.chart == ReplayChartIdentity{.md5 = meta.MD5,
+                                                .sha256 = meta.SHA256,
+                                                .keyMode = meta.KeyMode} &&
+             authored.longNoteMode == 2 && authored.timeBounds == bounds,
+         "parsed facts preserve chart identity/time and prefer authored LN");
+
+  meta.LnMode = 0;
+  const auto undefined = makeParsedChartReplayFacts(meta, 3);
+  expect(undefined.longNoteMode == 3 && !undefined.timeBounds.has_value(),
+         "undefined-LN charts use the strict result's LN fallback");
+}
+
 struct Harness {
   result_persistence::ModernChartResult result = savedResult();
   ReplayChartDocument replay = replayDocument(result);
@@ -345,6 +366,7 @@ void testInvalidResultNeverTouchesReplayFile() {
 } // namespace
 
 int main() {
+  testParsedFactsUseOneLongNoteAndIdentityAuthority();
   testVerifiedContextUsesStrictLoadOrder();
   testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate();
   testFileFailuresRetainResultAndFailReplayClosed();

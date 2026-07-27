@@ -25,13 +25,20 @@ missing and user-deleted states are already absent.
 
 | Contract | Current authority | Replay-file dependency | Delivery status |
 | --- | --- | --- | --- |
-| Modern chart result facts | `result_persistence::ModernChartResult` validation, fingerprinting, agreement, and recall | none | active; SQLite ownership is Slice 4 |
-| Modern course result facts | `result_persistence::ModernCourseResult` validation, fingerprinting, ordered-stage agreement, and atomic recall | none | active; SQLite ownership is Slice 4 |
+| Modern chart result facts | `result_persistence::ModernChartResult` validation, fingerprinting, agreement, recall, and schema-v11 repository storage | none | active |
+| Modern course result facts | `result_persistence::ModernCourseResult` validation, fingerprinting, ordered-stage agreement, and atomic recall | none | contract active; SQLite ownership is Slice 5 |
 | Shared result/setup domains | `result_contract` key modes, chart identity agreement, gauge/clear domains, and score arithmetic | none | active for replay setup, modern results, recall, and IR |
-| Postponed IR payload | canonical `ir::IrSubmissionSnapshot` captured from a validated modern result | none | active; outbox persistence is Slice 4 |
+| Postponed IR payload | canonical `ir::IrSubmissionSnapshot` captured from a validated modern result and stored atomically with it | none | active for modern charts |
+| Modern chart capture | `ReplayInputRecorder`, `ReplaySetupProvenance`, and `ChartReplayCapture` | live logical input only | active; raw input is encoded to BRD and is not written to SQLite |
+| Modern chart file ownership | `ReplayRepository::GetResolvedProfileRoot`, `BeatorajaReplayPath`, `ReplayFileStore`, and `ChartReplayPersistence` | contained `replay/*.brd` path and verified metadata | active with recoverable summary-only fallback |
+| Modern chart replay availability | `ChartReplayContext`, `makeParsedChartReplayFacts`, and `replay::capabilitiesFor` | verified file only for replay actions | active in Records, Watch, Retry Same, G-Battle, practice ghost, and video |
+| Modern chart consumer preparation | `ChartReplayConsumer`, `ReplaySetupAdapter`, shared raw driver, and judged materializer | verified file only | active; all chart replay consumers use one pipeline |
 | Legacy result and IR bridge | explicitly named legacy projection/adapter functions | legacy in-memory detail only | temporary until the Slice 7 schema cutover |
 
 The activated result and postponed-IR contracts do not accept a replay path,
 file reference, playback collection, repository handle, outbox receipt, or
 SQLite handle. Rich result recall reads the stored chart path and rejects chart
 identity disagreement before applying independently saved display facts.
+Missing, corrupt, unsupported, or mismatched chart BRDs change only the shared
+replay state and replay-dependent capabilities; the result row and postponed IR
+snapshot remain independently usable.

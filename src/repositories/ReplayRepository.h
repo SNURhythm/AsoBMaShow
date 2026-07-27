@@ -383,6 +383,7 @@ public:
   void SetDatabasePath(std::filesystem::path databasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
+  [[nodiscard]] std::filesystem::path GetResolvedProfileRoot() const;
   bool BindDatabasePath(std::filesystem::path databasePath,
                         std::string &errorMessage);
   [[nodiscard]] static bool HasActiveReads();

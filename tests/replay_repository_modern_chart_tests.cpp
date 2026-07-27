@@ -157,6 +157,7 @@ void testSchemaReservationAtomicStageAndExactRetry() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path / "replay.db";
   ReplayRepository repository(databasePath);
+  assert(repository.GetResolvedProfileRoot() == temporary.path);
   assert(repository.EnsureSchema());
 
   auto database = openDatabase(databasePath);

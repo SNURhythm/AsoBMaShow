@@ -130,12 +130,24 @@ void testSharedModernResultAuthorities() {
 
 void testActivatedChartConsumersUseTheSharedPipeline() {
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  requireToken(root / "src/repositories/ReplayRepository.cpp",
+               "GetResolvedProfileRoot",
+               "profile-contained replay ownership root");
   requireToken(root / "src/scene/MainMenuScene.cpp",
                "makeRuntimeChartReplayConsumer",
                "modern Watch, G-Battle, recall, and video consumer");
+  requireToken(root / "src/scene/MainMenuScene.cpp",
+               "makeParsedChartReplayFacts",
+               "modern Records replay availability projection");
   requireToken(root / "src/scene/ChartViewerScene.cpp",
                "makeRuntimeChartReplayConsumer",
                "modern practice ghost consumer");
+  requireToken(root / "src/scene/ChartViewerScene.cpp",
+               "makeParsedChartReplayFacts",
+               "modern practice replay availability projection");
+  requireToken(root / "src/replay/ChartReplayConsumer.cpp",
+               "makeParsedChartReplayFacts",
+               "modern replay consumer selected-chart projection");
   requireToken(root / "src/scene/MainMenuScene.cpp",
                "result_recall::BuildChartResult",
                "replay-independent modern result recall");
@@ -149,6 +161,18 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   rejectTokens(root / "src/scene/ChartViewerScene.cpp", forbidden);
   rejectTokens(root / "src/scene/ResultScene.cpp", forbidden);
   rejectTokens(root / "src/ReplayVideoExporter.cpp", forbidden);
+
+  constexpr std::array<std::string_view, 1> ownershipForbidden{
+      "GetResolvedDatabasePath"};
+  rejectTokens(root / "src/context.h", ownershipForbidden);
+  rejectTokens(root / "src/scene/MainMenuScene.cpp", ownershipForbidden);
+  rejectTokens(root / "src/scene/ChartViewerScene.cpp", ownershipForbidden);
+  rejectTokens(root / "src/replay/ChartReplayContext.cpp",
+               ownershipForbidden);
+  rejectTokens(root / "src/replay/ChartReplayPersistence.cpp",
+               ownershipForbidden);
+  rejectTokens(root / "src/replay/ChartReplayConsumerRuntime.cpp",
+               ownershipForbidden);
 }
 
 void requireToken(const std::filesystem::path &path, std::string_view token,

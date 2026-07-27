@@ -109,8 +109,7 @@ struct ChartReplayPersistenceDependencies {
 
 class ChartReplayPersistence {
 public:
-  ChartReplayPersistence(ScoreRepository &score, ReplayRepository &repository,
-                         std::filesystem::path profileRoot);
+  ChartReplayPersistence(ScoreRepository &score, ReplayRepository &repository);
   explicit ChartReplayPersistence(
       ChartReplayPersistenceDependencies dependencies);
 

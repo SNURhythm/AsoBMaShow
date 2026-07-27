@@ -315,8 +315,7 @@ public:
           resultPersistence.recoverAll();
       if (profileInitializationResult.ok()) {
         replay::ChartReplayPersistence modernPersistence(
-            scoreRepository, replayRepository,
-            replayRepository.GetResolvedDatabasePath().parent_path());
+            scoreRepository, replayRepository);
         const auto modern = modernPersistence.recoverAll();
         SDL_Log("Modern chart recovery completed: attempted=%zu saved=%zu "
                 "pending=%zu conflicts=%zu",
@@ -351,8 +350,7 @@ public:
                 .diagnostic = "Player profiles are not initialized."};
       }
       replay::ChartReplayPersistence persistence(
-          scoreRepository, replayRepository,
-          replayRepository.GetResolvedDatabasePath().parent_path());
+          scoreRepository, replayRepository);
       return persistence.persist(attempt, drafts);
     } catch (const std::exception &error) {
       return {.state = replay::ChartReplayPersistenceState::Retryable,

@@ -643,7 +643,7 @@ void testRealRepositoriesPersistBrdAndAdvanceOccupiedSlot() {
   ScoreRepository score(profile.path / "scores.db");
   expect(repository.EnsureSchema() && score.EnsureSchema(),
          "integration repositories initialize");
-  ChartReplayPersistence persistence(score, repository, profile.path);
+  ChartReplayPersistence persistence(score, repository);
   const auto attempt = validAttempt();
   const auto saved = persistence.persist(attempt);
   expect(saved.state == ChartReplayPersistenceState::SavedWithReplay &&

@@ -79,7 +79,7 @@ private:
 };
 
 [[nodiscard]] ChartReplayConsumer makeRuntimeChartReplayConsumer(
-    ReplayRepository &repository, std::filesystem::path profileRoot,
+    ReplayRepository &repository,
     ReplayLimits limits = kReplayLimits);
 
 } // namespace replay

@@ -94,12 +94,10 @@ ReplayState ChartReplayContextOutcome::replayState() const noexcept {
 }
 
 ChartReplayContext::ChartReplayContext(ReplayRepository &repository,
-                                       std::filesystem::path profileRoot,
                                        ReplayLimits limits)
     : limits_(limits) {
-  auto store = std::make_shared<ReplayFileStore>(std::move(profileRoot),
-                                                 ReplayFileStoreFaults{},
-                                                 limits);
+  auto store = std::make_shared<ReplayFileStore>(
+      repository.GetResolvedProfileRoot(), ReplayFileStoreFaults{}, limits);
   auto codec = std::make_shared<BeatorajaReplayCodec>(limits);
   dependencies_ = {
       .loadResult = [&repository](std::string_view attemptId) {

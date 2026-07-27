@@ -51,19 +51,8 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
                      "The selected chart could not be parsed.");
     }
 
-    const int authoredLongNoteMode =
-        long_note_mode::normalizeValue(baseChart->Meta.LnMode);
-    const int effectiveLongNoteMode =
-        authoredLongNoteMode > long_note_mode::kUnknownValue
-            ? authoredLongNoteMode
-            : listedRecord.result.score.longNoteMode;
-    const ParsedChartReplayFacts facts{
-        .chart = {.md5 = baseChart->Meta.MD5,
-                  .sha256 = baseChart->Meta.SHA256,
-                  .keyMode = baseChart->Meta.KeyMode},
-        .longNoteMode = effectiveLongNoteMode,
-        .timeBounds = std::nullopt,
-    };
+    const ParsedChartReplayFacts facts = makeParsedChartReplayFacts(
+        baseChart->Meta, listedRecord.result.score.longNoteMode);
     auto context = dependencies_.loadContext(listedRecord.result.attemptId,
                                              facts);
     if (!context.replayAvailable() || !context.verified.has_value()) {

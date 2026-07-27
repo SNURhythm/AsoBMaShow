@@ -8717,25 +8717,14 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
   std::vector<ResultRecordSummary> modernSummaries;
   if (!courseReplayList && !replayModalChart.meta.SHA256.empty()) {
     const auto history = context.replayRepository.ListModernChartResults(
-        replayModalChart.meta.SHA256, 100);
+        replayModalChart.meta.SHA256);
     if (history.status == ModernChartHistoryReadStatus::Loaded) {
       modernSummaries.reserve(history.records.size());
       replay::ChartReplayContext replayContext(
-          context.replayRepository,
-          context.replayRepository.GetResolvedDatabasePath().parent_path());
+          context.replayRepository);
       for (const ModernChartResultRecord &modern : history.records) {
-        const int authoredLongNoteMode =
-            normalizeChartLongNoteModeValue(replayModalChart.meta.LnMode);
-        const replay::ParsedChartReplayFacts facts{
-            .chart = {.md5 = replayModalChart.meta.MD5,
-                      .sha256 = replayModalChart.meta.SHA256,
-                      .keyMode = replayModalChart.meta.KeyMode},
-            .longNoteMode =
-                authoredLongNoteMode > long_note_mode::kUnknownValue
-                    ? authoredLongNoteMode
-                    : modern.result.score.longNoteMode,
-            .timeBounds = std::nullopt,
-        };
+        const auto facts = replay::makeParsedChartReplayFacts(
+            replayModalChart.meta, modern.result.score.longNoteMode);
         const auto replayLoad =
             replayContext.load(modern.result.attemptId, facts);
         const auto snapshot =
@@ -9529,8 +9518,7 @@ void MainMenuScene::startModernReplayPlayback(
 
         std::atomic_bool parseCancelled = false;
         auto consumer = replay::makeRuntimeChartReplayConsumer(
-            context.replayRepository,
-            context.replayRepository.GetResolvedDatabasePath().parent_path());
+            context.replayRepository);
         auto loaded = consumer.load(modern, record.meta.BmsPath,
                                     parseCancelled);
         if (!loaded.ready() || parseCancelled) {
@@ -9699,8 +9687,7 @@ void MainMenuScene::startModernGBattlePlayback(
 
         std::atomic_bool parseCancelled = false;
         auto consumer = replay::makeRuntimeChartReplayConsumer(
-            context.replayRepository,
-            context.replayRepository.GetResolvedDatabasePath().parent_path());
+            context.replayRepository);
         auto loaded = consumer.load(modern, record.meta.BmsPath,
                                     parseCancelled);
         if (!loaded.ready() || parseCancelled) {
@@ -10360,8 +10347,7 @@ void MainMenuScene::startModernReplayVideoExport(
 
       std::atomic_bool parseCancelled = false;
       auto consumer = replay::makeRuntimeChartReplayConsumer(
-          context.replayRepository,
-          context.replayRepository.GetResolvedDatabasePath().parent_path());
+          context.replayRepository);
       auto loaded = consumer.load(modern, record.meta.BmsPath,
                                   parseCancelled);
       if (!loaded.ready() || parseCancelled) {
@@ -10843,8 +10829,7 @@ void MainMenuScene::startModernReplayResultRecall(
 
         std::shared_ptr<ReplayData> retryData;
         auto consumer = replay::makeRuntimeChartReplayConsumer(
-            context.replayRepository,
-            context.replayRepository.GetResolvedDatabasePath().parent_path());
+            context.replayRepository);
         auto replayLoad = consumer.load(*exact.record, record.meta.BmsPath,
                                         cancelled);
         if (replayLoad.ready() && !cancelled) {

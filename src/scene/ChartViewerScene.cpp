@@ -3363,26 +3363,15 @@ void ChartViewerScene::showGhostModal() {
 
   const auto legacy = context.replayRepository.ListReplays(chart->Meta);
   std::vector<ResultRecordSummary> modern;
-  const auto history = context.replayRepository.ListModernChartResults(
-      chart->Meta.SHA256, 100);
+  const auto history =
+      context.replayRepository.ListModernChartResults(chart->Meta.SHA256);
   if (history.status == ModernChartHistoryReadStatus::Loaded) {
     replay::ChartReplayContext replayContext(
-        context.replayRepository,
-        context.replayRepository.GetResolvedDatabasePath().parent_path());
+        context.replayRepository);
     modern.reserve(history.records.size());
     for (const ModernChartResultRecord &record : history.records) {
-      const int authoredLongNoteMode =
-          normalizeChartLongNoteModeValue(chart->Meta.LnMode);
-      const replay::ParsedChartReplayFacts facts{
-          .chart = {.md5 = chart->Meta.MD5,
-                    .sha256 = chart->Meta.SHA256,
-                    .keyMode = chart->Meta.KeyMode},
-          .longNoteMode =
-              authoredLongNoteMode > long_note_mode::kUnknownValue
-                  ? authoredLongNoteMode
-                  : record.result.score.longNoteMode,
-          .timeBounds = std::nullopt,
-      };
+      const auto facts = replay::makeParsedChartReplayFacts(
+          chart->Meta, record.result.score.longNoteMode);
       const auto replayLoad =
           replayContext.load(record.result.attemptId, facts);
       auto summary = makeModernChartResultRecord(
@@ -3571,8 +3560,7 @@ void ChartViewerScene::loadSelectedGhostReplay() {
         if (selected.modern.has_value()) {
           std::atomic_bool parseCancelled = false;
           auto consumer = replay::makeRuntimeChartReplayConsumer(
-              context.replayRepository,
-              context.replayRepository.GetResolvedDatabasePath().parent_path());
+              context.replayRepository);
           auto loaded = consumer.load(*selected.modern, record.meta.BmsPath,
                                       parseCancelled);
           if (!loaded.ready() || parseCancelled) {
@@ -4233,8 +4221,7 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
         exact.record.has_value()) {
       std::atomic_bool cancelled = false;
       auto consumer = replay::makeRuntimeChartReplayConsumer(
-          context.replayRepository,
-          context.replayRepository.GetResolvedDatabasePath().parent_path());
+          context.replayRepository);
       auto loaded = consumer.load(*exact.record, record.meta.BmsPath,
                                   cancelled);
       if (loaded.ready() && !cancelled) {

@@ -63,6 +63,11 @@ std::filesystem::path ReplayRepository::GetResolvedDatabasePath() const {
   return GetResolvedDatabasePathLocked();
 }
 
+std::filesystem::path ReplayRepository::GetResolvedProfileRoot() const {
+  std::lock_guard lock(impl_->sessionMutex);
+  return GetResolvedDatabasePathLocked().parent_path();
+}
+
 std::filesystem::path ReplayRepository::GetResolvedDatabasePathLocked() const {
   return replay_repository_detail::ResolvedDatabasePath(impl_->databasePath);
 }

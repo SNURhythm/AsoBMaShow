@@ -10,10 +10,9 @@
 namespace replay {
 
 ChartReplayConsumer makeRuntimeChartReplayConsumer(
-    ReplayRepository &repository, std::filesystem::path profileRoot,
-    ReplayLimits limits) {
+    ReplayRepository &repository, ReplayLimits limits) {
   auto context = std::make_shared<ChartReplayContext>(
-      repository, std::move(profileRoot), limits);
+      repository, limits);
   return ChartReplayConsumer({
       .parseBaseChart = [](const std::filesystem::path &path,
                            std::atomic_bool &cancelled) {
