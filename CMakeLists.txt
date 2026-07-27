@@ -899,8 +899,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionLegacyAdapter.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/FileChecksum.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(ir_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ir_driver_tests PRIVATE cxx_std_23)
@@ -1455,6 +1464,32 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(modern_result_tests PRIVATE SDL2)
     endif()
 
+    add_executable(ir_submission_snapshot_tests
+        tests/ir_submission_snapshot_tests.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ModernResult.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(ir_submission_snapshot_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_submission_snapshot_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2)
+    endif()
+
     add_executable(result_recall_builder_tests
         tests/result_recall_builder_tests.cpp
         src/ArchiveFile.cpp
@@ -1464,6 +1499,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
         src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionLegacyAdapter.cpp
         src/ir/IrOutboxModels.cpp
         src/FileChecksum.cpp
         src/ScoreProvenance.cpp
@@ -1518,6 +1555,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
         src/ir/tachi/BokutachiCacheStore.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/ir/tachi/TachiDriver.cpp
@@ -1531,6 +1569,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
+        src/ir/IrSubmissionLegacyAdapter.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
@@ -3017,6 +3056,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_codec_store_contract_tests
         replay_playback_tests
         modern_result_tests
+        ir_submission_snapshot_tests
         result_record_summary_tests
         course_identity_tests
         ir_driver_tests

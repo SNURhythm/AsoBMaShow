@@ -17,6 +17,9 @@ target_sources(main PRIVATE
     IrSavedResultBatchUpload.cpp
     IrSettingsPresentation.cpp
     IrSubmission.cpp
+    IrSubmissionModern.cpp
+    IrSubmissionLegacyAdapter.cpp
+    IrSubmissionSnapshot.cpp
     IrSubmissionService.cpp
     IrUploadCandidates.cpp
     tachi/BokutachiCacheStore.cpp

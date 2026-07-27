@@ -2,6 +2,7 @@
 #include "ir/IrHttpClient.h"
 #include "ir/IrRankingModels.h"
 #include "ir/IrSubmission.h"
+#include "ResultPersistenceModel.h"
 
 #include <iostream>
 #include <limits>
@@ -34,6 +35,7 @@ result_persistence::ChartResultAttempt validAttempt() {
   attempt.replay.chartMeta.MD5 = repeated('B', 32);
   attempt.replay.chartMeta.SHA256 = repeated('A', 64);
   attempt.replay.chartMeta.TotalNotes = 5;
+  attempt.score.chartPath = "sample/song.bms";
   attempt.score.chartMd5 = repeated('b', 32);
   attempt.score.chartSha256 = repeated('a', 64);
   attempt.score.score = 7;
@@ -51,6 +53,8 @@ result_persistence::ChartResultAttempt validAttempt() {
   attempt.score.finalGauge = 82.5F;
   attempt.score.clearType = kClearTypeNormalClearRank;
   attempt.score.provenance = ScoreProvenance::Legacy();
+  attempt.keyMode = 7;
+  attempt.adoptedGaugeType = GaugeType::Normal;
   return attempt;
 }
 

@@ -218,8 +218,8 @@ void testSubmissionValidationExplainsInvariantFailure() {
   assert(outcome.value.has_value());
   assert(!outcome.value->historicalIr.has_value());
   assert(outcome.value->historicalIrDiagnostic ==
-         "IR submission validation failed: chart key mode must be positive. "
-         "This score cannot be uploaded safely.");
+         "IR submission validation failed: chart result key mode or "
+         "adopted gauge is invalid. This score cannot be uploaded safely.");
 }
 
 void testChartBuildRejectsMismatchedPersistedOutcome() {

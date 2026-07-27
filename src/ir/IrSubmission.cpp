@@ -1,44 +1,19 @@
 #include "IrSubmission.h"
 
-#include "IrOutboxModels.h"
+#include "../CanonicalDigest.h"
+#include "../DurablePayloadLimits.h"
 #include "../Uuid.h"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <limits>
-#include <string_view>
-#include <utility>
 
 namespace ir {
 namespace {
 
-std::string normalizedHash(std::string_view value) {
-  while (!value.empty() &&
-         std::isspace(static_cast<unsigned char>(value.front())) != 0) {
-    value.remove_prefix(1);
-  }
-  while (!value.empty() &&
-         std::isspace(static_cast<unsigned char>(value.back())) != 0) {
-    value.remove_suffix(1);
-  }
-  std::string result(value);
-  std::ranges::transform(result, result.begin(), [](unsigned char character) {
-    return static_cast<char>(std::tolower(character));
-  });
-  return result;
-}
-
-bool isHexDigest(std::string_view value, std::size_t size) {
-  return value.size() == size &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isdigit(character) != 0 ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
-bool isKnownClearRank(int value) {
+bool isKnownClearRank(int value) noexcept {
   constexpr std::array ranks{
       kClearTypeFailedRank,
       kClearTypeAssistedEasyClearRank,
@@ -52,180 +27,91 @@ bool isKnownClearRank(int value) {
   return std::ranges::find(ranks, value) != ranks.end();
 }
 
-IrSubmissionBuildOutcome invalid(std::string_view diagnostic) {
-  return {.diagnostic = sanitizeDiagnostic(diagnostic)};
+bool timingPairMatches(int early, int late, int total) noexcept {
+  return static_cast<std::int64_t>(early) + static_cast<std::int64_t>(late) ==
+         static_cast<std::int64_t>(total);
 }
 
 } // namespace
 
-IrSubmissionBuildOutcome makeIrSubmission(
-    const result_persistence::ChartResultAttempt &attempt,
-    std::int64_t playedAtUnixMillis) noexcept {
+bool validateIrSubmission(const IrSubmission &submission,
+                          std::string &diagnostic) noexcept {
   try {
-    const auto &score = attempt.score;
-    const auto &meta = attempt.replay.chartMeta;
-    if (!uuid::isCanonicalLowerV4(attempt.attemptId)) {
-      return invalid("attempt ID is not a canonical version-4 UUID");
+    diagnostic.clear();
+    if (!uuid::isCanonicalLowerV4(submission.attemptId) ||
+        submission.keyMode <= 0 ||
+        (!submission.chartMd5.empty() &&
+         !canonical_digest::isCanonicalLowerHex(submission.chartMd5, 32)) ||
+        !canonical_digest::isCanonicalLowerHex(submission.chartSha256, 64) ||
+        submission.playedAtUnixMillis <= 0) {
+      diagnostic = "IR submission identity is invalid";
+      return false;
     }
-    if (playedAtUnixMillis <= 0) {
-      return invalid("play completion time must be positive");
+    const std::array counts{
+        submission.score,      submission.maxScore,   submission.maxCombo,
+        submission.comboBreak, submission.pGreat,     submission.great,
+        submission.good,       submission.bad,        submission.poor,
+        submission.kPoor,      submission.fast,       submission.slow,
+        submission.pGreatFast, submission.pGreatSlow, submission.earlyPGreat,
+        submission.latePGreat, submission.earlyGreat, submission.lateGreat,
+        submission.earlyGood,  submission.lateGood,   submission.earlyBad,
+        submission.lateBad,    submission.earlyPoor,  submission.latePoor,
+    };
+    if (std::ranges::any_of(counts, [](int value) { return value < 0; }) ||
+        submission.maxScore <= 0 || submission.score > submission.maxScore ||
+        submission.maxScore % 2 != 0 ||
+        submission.maxCombo > submission.maxScore / 2 ||
+        static_cast<std::int64_t>(submission.pGreat) * 2LL + submission.great !=
+            submission.score ||
+        !std::isfinite(submission.finalGauge) || submission.finalGauge < 0.0F ||
+        !isKnownClearRank(submission.clearType) ||
+        !durable_payload::withinLimit(
+            submission.gaugeHistory.size(),
+            durable_payload::kMaximumResultGaugeSamples) ||
+        std::ranges::any_of(
+            submission.gaugeHistory,
+            [](float value) { return !std::isfinite(value); })) {
+      diagnostic = "IR submission result facts are invalid";
+      return false;
     }
-    if (meta.KeyMode <= 0) {
-      return invalid("chart key mode must be positive");
-    }
-
-    const std::string md5 = normalizedHash(score.chartMd5);
-    const std::string sha256 = normalizedHash(score.chartSha256);
-    if ((!md5.empty() && !isHexDigest(md5, 32)) ||
-        (!sha256.empty() && !isHexDigest(sha256, 64)) ||
-        (md5.empty() && sha256.empty())) {
-      return invalid("chart hash identity is malformed");
-    }
-    const std::string replayMd5 = normalizedHash(meta.MD5);
-    const std::string replaySha256 = normalizedHash(meta.SHA256);
-    if ((!replayMd5.empty() && replayMd5 != md5) ||
-        (!replaySha256.empty() && replaySha256 != sha256)) {
-      return invalid("score and replay chart identities disagree");
-    }
-
-    const std::array counts{score.maxCombo, score.comboBreak, score.pGreat,
-                            score.great,    score.good,       score.bad,
-                            score.poor,     score.kPoor,      score.fast,
-                            score.slow};
-    if (std::ranges::any_of(counts, [](int value) { return value < 0; })) {
-      return invalid("score counters must not be negative");
-    }
-    if (score.maxScore <= 0 || score.score < 0 || score.score > score.maxScore ||
-        meta.TotalNotes <= 0 || meta.TotalNotes > std::numeric_limits<int>::max() / 2 ||
-        score.maxScore != meta.TotalNotes * 2 ||
-        score.maxCombo > meta.TotalNotes) {
-      return invalid("score range is inconsistent with chart notes");
-    }
-    const long long expectedScore =
-        static_cast<long long>(score.pGreat) * 2LL + score.great;
-    if (expectedScore != score.score) {
-      return invalid("EX score disagrees with judgement counts");
-    }
-    if (!std::isfinite(score.finalGauge) || !isKnownClearRank(score.clearType)) {
-      return invalid("score gauge or clear rank is invalid");
-    }
-
-    int pGreatFast = 0;
-    int pGreatSlow = 0;
-    int earlyPGreat = 0;
-    int latePGreat = 0;
-    int earlyGreat = 0;
-    int lateGreat = 0;
-    int earlyGood = 0;
-    int lateGood = 0;
-    int earlyBad = 0;
-    int lateBad = 0;
-    int earlyPoor = 0;
-    int latePoor = 0;
-    bool judgementTimingBreakdownAvailable = false;
-    if (attempt.judgementTiming.has_value()) {
-      const auto &timing = attempt.judgementTiming->byJudgement;
-      std::array<int, JudgementCount> judgementTotals{};
-      judgementTotals[PGreat] = score.pGreat;
-      judgementTotals[Great] = score.great;
-      judgementTotals[Good] = score.good;
-      judgementTotals[Bad] = score.bad;
-      judgementTotals[Kpoor] = score.kPoor;
-      judgementTotals[Poor] = score.poor;
-
-      std::int64_t capturedFast = 0;
-      std::int64_t capturedSlow = 0;
-      for (int index = 0; index < JudgementCount; ++index) {
-        const auto judgement = static_cast<Judgement>(index);
-        const auto &count = timing[static_cast<std::size_t>(index)];
-        if (count.fast < 0 || count.slow < 0) {
-          return invalid("captured judgement timing must not be negative");
-        }
-        if (judgement == Kpoor || judgement == None) {
-          if (count.fast != 0 || count.slow != 0) {
-            return invalid("KPOOR and NONE cannot have captured timing");
-          }
-          continue;
-        }
-        if (static_cast<std::int64_t>(count.fast) + count.slow >
-            judgementTotals[static_cast<std::size_t>(index)]) {
-          return invalid("captured judgement timing exceeds result totals");
-        }
-        capturedFast += count.fast;
-        capturedSlow += count.slow;
+    if (submission.judgementTimingBreakdownAvailable) {
+      if (!timingPairMatches(submission.earlyPGreat, submission.latePGreat,
+                             submission.pGreat) ||
+          !timingPairMatches(submission.earlyGreat, submission.lateGreat,
+                             submission.great) ||
+          !timingPairMatches(submission.earlyGood, submission.lateGood,
+                             submission.good) ||
+          !timingPairMatches(submission.earlyBad, submission.lateBad,
+                             submission.bad) ||
+          !timingPairMatches(submission.earlyPoor, submission.latePoor,
+                             submission.poor) ||
+          submission.pGreatFast > submission.pGreat ||
+          submission.pGreatSlow > submission.pGreat ||
+          static_cast<std::int64_t>(submission.pGreatFast) +
+                  submission.pGreatSlow >
+              submission.pGreat) {
+        diagnostic = "IR submission timing facts are inconsistent";
+        return false;
       }
-      if (capturedFast != score.fast || capturedSlow != score.slow) {
-        return invalid(
-            "captured judgement timing disagrees with aggregate timing");
-      }
-
-      const auto early = [&](Judgement judgement) {
-        return judgementTotals[static_cast<std::size_t>(judgement)] -
-               timing[static_cast<std::size_t>(judgement)].slow;
-      };
-      const auto late = [&](Judgement judgement) {
-        return timing[static_cast<std::size_t>(judgement)].slow;
-      };
-      pGreatFast = timing[PGreat].fast;
-      pGreatSlow = timing[PGreat].slow;
-      earlyPGreat = early(PGreat);
-      latePGreat = late(PGreat);
-      earlyGreat = early(Great);
-      lateGreat = late(Great);
-      earlyGood = early(Good);
-      lateGood = late(Good);
-      earlyBad = early(Bad);
-      lateBad = late(Bad);
-      earlyPoor = early(Poor);
-      latePoor = late(Poor);
-      judgementTimingBreakdownAvailable = true;
+    } else if (submission.pGreatFast != 0 || submission.pGreatSlow != 0 ||
+               submission.earlyPGreat != 0 || submission.latePGreat != 0 ||
+               submission.earlyGreat != 0 || submission.lateGreat != 0 ||
+               submission.earlyGood != 0 || submission.lateGood != 0 ||
+               submission.earlyBad != 0 || submission.lateBad != 0 ||
+               submission.earlyPoor != 0 || submission.latePoor != 0) {
+      diagnostic = "IR submission has timing facts without a breakdown";
+      return false;
     }
-
-    std::vector<float> gaugeHistory = attempt.adoptedGaugeHistory;
-    if (std::ranges::any_of(gaugeHistory,
-                            [](float value) { return !std::isfinite(value); })) {
-      return invalid("adopted gauge history is not finite");
+    std::string provenanceDiagnostic;
+    if (!serializeValidatedScoreProvenance(submission.provenance,
+                                           provenanceDiagnostic)) {
+      diagnostic = "IR submission provenance is invalid";
+      return false;
     }
-
-    return {.value = IrSubmission{
-                .attemptId = attempt.attemptId,
-                .keyMode = meta.KeyMode,
-                .chartMd5 = md5,
-                .chartSha256 = sha256,
-                .score = score.score,
-                .maxScore = score.maxScore,
-                .maxCombo = score.maxCombo,
-                .comboBreak = score.comboBreak,
-                .pGreat = score.pGreat,
-                .great = score.great,
-                .good = score.good,
-                .bad = score.bad,
-                .poor = score.poor,
-                .kPoor = score.kPoor,
-                .fast = score.fast,
-                .slow = score.slow,
-                .pGreatFast = pGreatFast,
-                .pGreatSlow = pGreatSlow,
-                .judgementTimingBreakdownAvailable =
-                    judgementTimingBreakdownAvailable,
-                .earlyPGreat = earlyPGreat,
-                .latePGreat = latePGreat,
-                .earlyGreat = earlyGreat,
-                .lateGreat = lateGreat,
-                .earlyGood = earlyGood,
-                .lateGood = lateGood,
-                .earlyBad = earlyBad,
-                .lateBad = lateBad,
-                .earlyPoor = earlyPoor,
-                .latePoor = latePoor,
-                .gaugeHistory = std::move(gaugeHistory),
-                .finalGauge = score.finalGauge,
-                .clearType = score.clearType,
-                .playedAtUnixMillis = playedAtUnixMillis,
-                .provenance = score.provenance,
-            }};
+    return true;
   } catch (...) {
-    return invalid("canonical submission construction failed");
+    diagnostic = "IR submission validation failed";
+    return false;
   }
 }
 
