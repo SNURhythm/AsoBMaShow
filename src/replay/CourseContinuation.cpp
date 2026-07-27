@@ -175,4 +175,30 @@ CourseContinuationOutcome advanceCourseContinuation(
   }
 }
 
+CourseContinuationOutcome recordCourseContinuationRest(
+    const CourseContinuationState &current, std::size_t completedStageIndex,
+    std::int64_t restMicros, const ReplayLimits &limits) noexcept {
+  try {
+    if (!limits.valid()) {
+      return invalid(CourseContinuationIssue::Limits);
+    }
+    if (!validState(current, limits)) {
+      return invalid(CourseContinuationIssue::State);
+    }
+    if (current.nextStageIndex == 0 ||
+        completedStageIndex + 1 != current.nextStageIndex) {
+      return invalid(CourseContinuationIssue::StageOrder);
+    }
+    if (!validCourseRestMicros(restMicros, limits)) {
+      return invalid(CourseContinuationIssue::Rest);
+    }
+
+    CourseContinuationState next = current;
+    next.restMicrosAfterStage[completedStageIndex] = restMicros;
+    return {.state = std::move(next)};
+  } catch (...) {
+    return invalid(CourseContinuationIssue::State);
+  }
+}
+
 } // namespace replay

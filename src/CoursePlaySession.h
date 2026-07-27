@@ -3,6 +3,7 @@
 #include "LongNoteModeUtils.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
+#include "replay/CourseContinuation.h"
 #include "replay/CourseReplayCapture.h"
 #include "replay/CourseResultPersistence.h"
 
@@ -299,6 +300,7 @@ struct CoursePlaySession {
   std::vector<result_persistence::ModernCourseStageResult>
       modernCourseStageResults;
   std::vector<replay::CourseReplayStageCapture> modernCourseReplayStages;
+  std::optional<replay::CourseContinuationState> modernCourseContinuation;
   std::optional<replay::CapturedCourseReplayAttempt> modernCourseAttempt;
   std::optional<replay::CourseResultPersistenceOutcome>
       modernCoursePersistenceOutcome;
@@ -406,6 +408,33 @@ struct CoursePlaySession {
     playOption2Seed = replay.playOption2Seed;
   }
 
+  [[nodiscard]] const GaugeStateSnapshot *courseCarriedGauge() const {
+    if (modernCourseContinuation.has_value()) {
+      return &modernCourseContinuation->gauge;
+    }
+    return carriedGauge.has_value() ? &*carriedGauge : nullptr;
+  }
+
+  [[nodiscard]] int courseCarriedCombo() const {
+    return modernCourseContinuation.has_value()
+               ? modernCourseContinuation->combo
+               : carriedCombo;
+  }
+
+  [[nodiscard]] int courseMaximumCombo() const {
+    return modernCourseContinuation.has_value()
+               ? modernCourseContinuation->maximumCombo
+               : maxCombo;
+  }
+
+  void adoptModernCourseContinuation(
+      replay::CourseContinuationState continuation) {
+    carriedGauge = continuation.gauge;
+    carriedCombo = continuation.combo;
+    maxCombo = continuation.maximumCombo;
+    modernCourseContinuation = std::move(continuation);
+  }
+
   CourseReplayStageData &ensureReplayStage(std::size_t index) {
     while (replayStages.size() <= index) {
       replayStages.emplace_back();
@@ -484,6 +513,7 @@ struct CoursePlaySession {
     modernCoursePlayedAtUnixMillis = 0;
     modernCourseStageResults.clear();
     modernCourseReplayStages.clear();
+    modernCourseContinuation.reset();
     modernCourseAttempt.reset();
     modernCoursePersistenceOutcome.reset();
     modernCourseDiagnostic.clear();
@@ -510,13 +540,38 @@ struct CoursePlaySession {
     return aggregate;
   }
 
-  void recordRestMicrosAfterCurrentStage(long long restMicros) {
+  bool recordRestMicrosAfterCurrentStage(long long restMicros) {
+    if (currentIndex < modernCourseReplayStages.size()) {
+      if (!modernCourseContinuation.has_value()) {
+        modernCourseReplayStages[currentIndex].playback.reset();
+        modernCourseAttempt.reset();
+        if (modernCourseDiagnostic.empty()) {
+          modernCourseDiagnostic =
+              "Course continuation is unavailable for the completed stage.";
+        }
+        return false;
+      }
+      auto updated = replay::recordCourseContinuationRest(
+          *modernCourseContinuation, currentIndex, restMicros);
+      if (!updated.advanced() || !updated.state.has_value()) {
+        modernCourseReplayStages[currentIndex].playback.reset();
+        modernCourseAttempt.reset();
+        modernCourseDiagnostic =
+            "Course rest exceeded the shared replay limit.";
+        modernCourseContinuation.reset();
+        return false;
+      }
+      adoptModernCourseContinuation(std::move(*updated.state));
+      modernCourseReplayStages[currentIndex].restMicrosAfterStage =
+          restMicros;
+      modernCourseAttempt.reset();
+      return true;
+    }
+
+    // Temporary legacy course adapters retain their historical non-negative
+    // presentation behavior until the Slice 7 cutover.
     ensureReplayStage(currentIndex).restMicrosAfterStage =
         std::max(0LL, restMicros);
-    if (currentIndex < modernCourseReplayStages.size()) {
-      modernCourseReplayStages[currentIndex].restMicrosAfterStage =
-          std::max(0LL, restMicros);
-      modernCourseAttempt.reset();
-    }
+    return true;
   }
 };

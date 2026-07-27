@@ -216,13 +216,13 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   aggregate.configureGauge(session.gaugeType, session.gaugeAutoShift,
                            session.gaugeProfile,
                            session.gaugeAutoShiftLowerBound);
-  if (session.carriedGauge.has_value()) {
-    aggregate.restoreGaugeState(*session.carriedGauge);
+  if (session.courseCarriedGauge() != nullptr) {
+    aggregate.restoreGaugeState(*session.courseCarriedGauge());
   }
 
   aggregate.resetJudgeCounts();
   aggregate.comboBreak = 0;
-  aggregate.maxCombo = session.maxCombo;
+  aggregate.maxCombo = session.courseMaximumCombo();
   aggregate.fastCount = 0;
   aggregate.slowCount = 0;
   aggregate.gaugeHistory.clear();
@@ -242,7 +242,7 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
                                   session.completedResults.size());
 
   if (!session.completedResults.empty()) {
-    aggregate.combo = session.carriedCombo;
+    aggregate.combo = session.courseCarriedCombo();
   }
   if (session.completedResults.size() < session.entries.size()) {
     aggregate.currentGauge = 0.0f;
@@ -306,7 +306,7 @@ courseReplayDataForSession(const CoursePlaySession &session,
   replay.gaugeAutoShiftLowerBound = session.gaugeAutoShiftLowerBound;
   replay.longNoteMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   replay.finalScore = resultState.getScore();
-  replay.maxCombo = session.maxCombo;
+  replay.maxCombo = session.courseMaximumCombo();
   replay.finalGauge = resultState.currentGauge;
   replay.clearType = resultState.getClearTypeRank();
   replay.completedCharts = static_cast<int>(completedCharts);
@@ -2055,7 +2055,7 @@ void ResultScene::hideCourseExitConfirmation() {
   }
 }
 
-void ResultScene::recordCourseStageRestTime() {
+bool ResultScene::recordCourseStageRestTime() {
   auto *local = localSource();
   if (local == nullptr || !isCourseStageResult() ||
       local->courseStageRestRecorded ||
@@ -2063,11 +2063,11 @@ void ResultScene::recordCourseStageRestTime() {
       local->courseOptions.savedResultBrowsing ||
       local->courseOptions.session->courseReplayPlayback ||
       local->courseStageResultShownMicros <= 0) {
-    return;
+    return true;
   }
 
   local->courseStageRestRecorded = true;
-  local->courseOptions.session->recordRestMicrosAfterCurrentStage(
+  return local->courseOptions.session->recordRestMicrosAfterCurrentStage(
       nowMicros() - local->courseStageResultShownMicros);
 }
 
@@ -2138,7 +2138,10 @@ void ResultScene::continueCourse() {
     return;
   }
   local->courseTransitionStarted = true;
-  recordCourseStageRestTime();
+  if (!recordCourseStageRestTime()) {
+    showCourseResult();
+    return;
+  }
 
   if (local->courseOptions.savedResultBrowsing) {
     if (session->currentIndex + 1 >= session->completedResults.size()) {
@@ -2161,8 +2164,8 @@ void ResultScene::continueCourse() {
     return;
   }
 
-  const float finalGauge = session->carriedGauge.has_value()
-                               ? session->carriedGauge->currentGauge
+  const float finalGauge = session->courseCarriedGauge() != nullptr
+                               ? session->courseCarriedGauge()->currentGauge
                                : local->resultState.currentGauge;
   if (!session->hasNextChart() || finalGauge <= 0.0f) {
     showCourseResult();

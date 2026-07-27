@@ -90,4 +90,13 @@ struct CourseContinuationOutcome {
     const CourseStageCompletion &completion, ReplaySetupSource setupSource,
     const ReplayLimits &limits = kReplayLimits) noexcept;
 
+// Live play learns the result-screen rest duration after the stage transition
+// has already produced the gauge/combo state needed for presentation. Replace
+// that one completed-stage fact through the same validation boundary; callers
+// must never clamp or mutate the continuation vector directly.
+[[nodiscard]] CourseContinuationOutcome recordCourseContinuationRest(
+    const CourseContinuationState &current, std::size_t completedStageIndex,
+    std::int64_t restMicros,
+    const ReplayLimits &limits = kReplayLimits) noexcept;
+
 } // namespace replay

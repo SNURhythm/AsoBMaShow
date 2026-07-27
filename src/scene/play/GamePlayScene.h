@@ -109,6 +109,7 @@ private:
   [[nodiscard]] int effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;
+  [[nodiscard]] bool usesModernCourseContinuation() const;
   [[nodiscard]] practice::ResultCapturePolicy resultCapturePolicy() const;
   [[nodiscard]] std::optional<NoteTimeRange> practiceNoteRange() const;
   [[nodiscard]] bool practiceInputAllowed(long long chartTimeMicros) const;
@@ -221,6 +222,7 @@ private:
   std::unique_ptr<replay::ReplayInputRecorder> modernReplayInputRecorder;
   std::optional<std::vector<replay::InputTransition>>
       completedModernReplayInput;
+  std::optional<GaugeStateSnapshot> courseStageInitialGauge;
   std::string modernReplayCaptureDiagnostic;
   ResultPersistenceOptions resultPersistenceOptions;
   std::string resultPersistenceAttemptId;

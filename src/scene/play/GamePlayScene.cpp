@@ -2011,14 +2011,18 @@ bool GamePlayScene::reset() {
     state->setStartingGaugePercent(*options.startingGaugePercent);
   }
   if (options.courseSession != nullptr &&
-      options.courseSession->carriedGauge.has_value()) {
-    GaugeStateSnapshot carriedGauge = *options.courseSession->carriedGauge;
+      options.courseSession->courseCarriedGauge() != nullptr) {
+    GaugeStateSnapshot carriedGauge =
+        *options.courseSession->courseCarriedGauge();
     carriedGauge.gaugeProfile = state->gaugeProfile;
     state->restoreGaugeState(carriedGauge);
   }
   if (isCoursePlayback()) {
-    state->combo = options.courseSession->carriedCombo;
-    state->maxCombo = options.courseSession->maxCombo;
+    state->combo = options.courseSession->courseCarriedCombo();
+    state->maxCombo = options.courseSession->courseMaximumCombo();
+    courseStageInitialGauge = state->gaugeSnapshot();
+  } else {
+    courseStageInitialGauge.reset();
   }
   const std::string assistOption = isReplayPlayback()
                                        ? options.replayData->assistOption
@@ -2450,6 +2454,17 @@ bool GamePlayScene::shouldPersistRecordedReplay() const {
   return resultCapturePolicy().persistReplay;
 }
 
+bool GamePlayScene::usesModernCourseContinuation() const {
+  if (!isCoursePlayback() || options.courseSession == nullptr ||
+      options.courseSession->courseReplayPlayback) {
+    return false;
+  }
+  const auto policy = resultCapturePolicy();
+  return gameplay_startup::completedAttemptPersistenceRoute(
+             policy.persistScore && policy.persistReplay, true) ==
+         gameplay_startup::CompletedAttemptPersistenceRoute::ModernCourseFile;
+}
+
 practice::ResultCapturePolicy GamePlayScene::resultCapturePolicy() const {
   return practice::resultCapturePolicy({
       .autoPlay = options.autoPlay,
@@ -2840,45 +2855,88 @@ void GamePlayScene::recordModernCourseStage(
     return;
   }
 
-  replay::CourseReplayStageCapture replayCapture{.timeBounds =
-                                                     capture.timeBounds};
-  if (capture.acceptedInput.has_value()) {
-    const int initialLaneCover =
-        recordedReplay.laneCoverEvents.empty()
-            ? effectiveNoteStartPositionPercent()
-            : recordedReplay.laneCoverEvents.front().noteStartPositionPercent;
-    const replay::LocalReplaySetupFacts setupFacts{
-        .chart = {.md5 = result->score.chartMd5,
-                  .sha256 = result->score.chartSha256,
-                  .keyMode = result->keyMode},
-        .longNoteMode = longNoteMode,
-        .hasUndefinedLongNotes = chartContainsUndefinedLongNote(*chart),
-        .initialLaneCoverPercent = initialLaneCover,
-        .laneCoverEnabled = initialLaneCover > 0,
+  const int initialLaneCover =
+      recordedReplay.laneCoverEvents.empty()
+          ? effectiveNoteStartPositionPercent()
+          : recordedReplay.laneCoverEvents.front().noteStartPositionPercent;
+  const replay::LocalReplaySetupFacts setupFacts{
+      .chart = {.md5 = result->score.chartMd5,
+                .sha256 = result->score.chartSha256,
+                .keyMode = result->keyMode},
+      .longNoteMode = longNoteMode,
+      .hasUndefinedLongNotes = chartContainsUndefinedLongNote(*chart),
+      .initialLaneCoverPercent = initialLaneCover,
+      .laneCoverEnabled = initialLaneCover > 0,
+  };
+  auto setup = replay::captureLocalReplaySetup(
+      setupFacts, result->score.provenance, diagnostic);
+
+  replay::CourseReplayStageCapture replayCapture{
+      .timeBounds = capture.timeBounds};
+  if (capture.acceptedInput.has_value() && setup.has_value()) {
+    replayCapture.playback = replay::ReplayPlaybackData{
+        .setup = *setup,
+        .input = *capture.acceptedInput,
+        .touchSamples = capture.touchSamples,
+        .laneCoverEvents = capture.laneCoverEvents,
     };
-    auto setup = replay::captureLocalReplaySetup(
-        setupFacts, result->score.provenance, diagnostic);
-    if (setup) {
-      replayCapture.playback = replay::ReplayPlaybackData{
-          .setup = std::move(*setup),
-          .input = *capture.acceptedInput,
-          .touchSamples = capture.touchSamples,
-          .laneCoverEvents = capture.laneCoverEvents,
-      };
-    }
   }
-  if (!capture.acceptedInput.has_value() || !replayCapture.playback) {
+  if (!capture.acceptedInput.has_value() || !setup.has_value()) {
     if (!session->modernCourseDiagnostic.empty()) {
       session->modernCourseDiagnostic += "; ";
     }
     session->modernCourseDiagnostic +=
         diagnostic.empty() ? "Course BRD capture was unavailable." : diagnostic;
   }
+  std::optional<replay::CourseContinuationState> currentContinuation =
+      session->modernCourseContinuation;
+  if (!currentContinuation.has_value() && courseStageInitialGauge.has_value()) {
+    const auto started = replay::startCourseContinuation(
+        {.totalStages = session->entries.size(),
+         .initialGauge = *courseStageInitialGauge,
+         .constraints = {
+             .beatorajaConstraintIds =
+                 beatorajaCourseConstraintIdsFromJson(session->constraintJson),
+             .longNoteMode = longNoteMode,
+         }});
+    if (started.ready()) {
+      currentContinuation = std::move(started.state);
+    }
+  }
+
+  std::optional<replay::CourseContinuationState> advancedContinuation;
+  if (currentContinuation.has_value() && setup.has_value()) {
+    const auto advanced = replay::advanceCourseContinuation(
+        *currentContinuation,
+        {.stageIndex = session->currentIndex,
+         .score = result->score.score,
+         .maximumScore = result->score.maxScore,
+         .combo = state->combo,
+         .maximumCombo = result->score.maxCombo,
+         .gauge = state->gaugeSnapshot(),
+         .adoptedGauge = result->adoptedGaugeType,
+         .restMicrosAfterStage = 0,
+         .setup = *setup},
+        replay::ReplaySetupSource::LocalCapture);
+    if (advanced.advanced()) {
+      advancedContinuation = std::move(advanced.state);
+    }
+  }
+
   if (!session->recordModernCourseStage(std::move(*result),
                                         std::move(replayCapture))) {
     session->modernCourseDiagnostic =
         "Modern course stage capture was not contiguous.";
+    return;
   }
+  if (!advancedContinuation.has_value()) {
+    session->modernCourseDiagnostic =
+        "Modern course continuation rejected the completed stage.";
+    session->modernCourseContinuation.reset();
+    return;
+  }
+  session->adoptModernCourseContinuation(
+      std::move(*advancedContinuation));
 }
 
 void GamePlayScene::publishPracticeGhost() {
@@ -3335,10 +3393,12 @@ bool GamePlayScene::finishIfGaugeFailed() {
     publishPracticeGhost();
   }
   if (isCoursePlayback()) {
-    options.courseSession->carriedGauge = state->gaugeSnapshot();
-    options.courseSession->carriedCombo = state->combo;
-    options.courseSession->maxCombo =
-        std::max(options.courseSession->maxCombo, state->maxCombo);
+    if (!usesModernCourseContinuation()) {
+      options.courseSession->carriedGauge = state->gaugeSnapshot();
+      options.courseSession->carriedCombo = state->combo;
+      options.courseSession->maxCombo =
+          std::max(options.courseSession->maxCombo, state->maxCombo);
+    }
     options.courseSession->recordResult(chart->Meta, *state);
     if (!options.courseSession->courseReplayPlayback) {
       options.courseSession->recordStageProvenance(
@@ -3473,10 +3533,12 @@ void GamePlayScene::update(float dt) {
   recordedAttemptCompleted = options.practiceMode;
   publishPracticeGhost();
   if (isCoursePlayback()) {
-    options.courseSession->carriedGauge = state->gaugeSnapshot();
-    options.courseSession->carriedCombo = state->combo;
-    options.courseSession->maxCombo =
-        std::max(options.courseSession->maxCombo, state->maxCombo);
+    if (!usesModernCourseContinuation()) {
+      options.courseSession->carriedGauge = state->gaugeSnapshot();
+      options.courseSession->carriedCombo = state->combo;
+      options.courseSession->maxCombo =
+          std::max(options.courseSession->maxCombo, state->maxCombo);
+    }
     options.courseSession->recordResult(chart->Meta, *state);
     if (!options.courseSession->courseReplayPlayback) {
       options.courseSession->recordStageProvenance(

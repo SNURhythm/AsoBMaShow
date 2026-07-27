@@ -263,7 +263,7 @@ private:
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();
-  void recordCourseStageRestTime();
+  [[nodiscard]] bool recordCourseStageRestTime();
   void startRetry(bool samePattern);
   void startReplay();
   void practiceThisSection();
