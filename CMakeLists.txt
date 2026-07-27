@@ -616,6 +616,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )
 
+    add_executable(replay_contract_boundary_tests
+        tests/replay_contract_boundary_tests.cpp
+    )
+    target_include_directories(replay_contract_boundary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_contract_boundary_tests PRIVATE cxx_std_23)
+    target_compile_definitions(replay_contract_boundary_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(gyroscope_turntable_tests
         tests/gyroscope_turntable_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -2807,6 +2818,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endfunction()
 
     asobmashow_register_test(repository_boundary_tests)
+    asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
 
     add_test(NAME foundation_av_settings
