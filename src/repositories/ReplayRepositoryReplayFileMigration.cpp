@@ -190,9 +190,18 @@ std::string lowerHex(std::string value) {
 bool normalizeResultProvenance(ScoreProvenance &provenance,
                                std::string &storedJson,
                                std::string &diagnostic) {
+  ScoreProvenance canonicalCandidate = provenance;
+  if (canonicalCandidate.schemaVersion <
+      ScoreProvenance::kPolicyProofSchemaVersion) {
+    canonicalCandidate.schemaVersion =
+        ScoreProvenance::kPolicyProofSchemaVersion;
+  }
+
   std::string validationError;
   if (const auto canonical =
-          serializeValidatedScoreProvenance(provenance, validationError)) {
+          serializeValidatedScoreProvenance(canonicalCandidate,
+                                            validationError)) {
+    provenance = std::move(canonicalCandidate);
     storedJson = *canonical;
     return true;
   }
@@ -206,7 +215,7 @@ bool normalizeResultProvenance(ScoreProvenance &provenance,
     return false;
   }
   if (sourceSchemaVersion < 1 ||
-      sourceSchemaVersion >= ScoreProvenance::kSchemaVersion) {
+      sourceSchemaVersion >= ScoreProvenance::kPolicyProofSchemaVersion) {
     diagnostic = validationError.empty() ? "legacy result provenance is invalid"
                                          : std::move(validationError);
     return false;

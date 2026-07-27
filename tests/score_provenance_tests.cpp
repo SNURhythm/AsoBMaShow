@@ -46,6 +46,7 @@ ScoreProvenanceBuildInput sampleInput(const std::string &hashSuffix = "one") {
   input.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   input.player1 = {.option = "RANDOM", .seed = 12345};
   input.player2 = {.option = "MIRROR", .seed = std::nullopt};
+  input.doublePlayOption = replay::DoublePlayOption::Normal;
   input.assistOption = assist_options::kOff;
   input.inputDevices = {InputDeviceCategory::Touch,
                         InputDeviceCategory::Keyboard,
@@ -83,7 +84,7 @@ void testRulesetContract() {
 }
 
 void testSchemaAndInputDeviceVocabularyContract() {
-  assert(ScoreProvenance::kSchemaVersion == 4);
+  assert(ScoreProvenance::kSchemaVersion == 5);
   assert(static_cast<int>(InputDeviceCategory::Keyboard) == 0);
   assert(static_cast<int>(InputDeviceCategory::GameController) == 1);
   assert(static_cast<int>(InputDeviceCategory::Joystick) == 2);
@@ -114,6 +115,42 @@ void testSchemaAndInputDeviceVocabularyContract() {
              resolverClasses, PlayStartInputPlatform::Mobile) ==
          std::vector({InputDeviceCategory::Touch,
                       InputDeviceCategory::Gyroscope}));
+}
+
+void testDoublePlaySetupSchemaContract() {
+  const ScoreProvenance normal = sampleVerifiedProvenance("dp-normal");
+  assert(normal.stages.size() == 1);
+  assert(normal.stages.front().doublePlayOption ==
+         replay::DoublePlayOption::Normal);
+
+  auto flipInput = sampleInput("dp-flip");
+  flipInput.doublePlayOption = replay::DoublePlayOption::Flip;
+  const ScoreProvenance flip = makeScoreProvenance(flipInput);
+  const std::string normalJson = serializeScoreProvenance(normal);
+  const std::string flipJson = serializeScoreProvenance(flip);
+  assert(normalJson != flipJson);
+  assert(flipJson.find("\"doublePlayOption\":\"flip\"") !=
+         std::string::npos);
+
+  std::string error;
+  const auto roundTrip = deserializeScoreProvenance(flipJson, error);
+  assert(error.empty());
+  assert(roundTrip == flip);
+
+  auto missingCurrent = nlohmann::json::parse(flipJson);
+  missingCurrent["stages"][0].erase("doublePlayOption");
+  assert(!deserializeScoreProvenance(missingCurrent.dump(), error).has_value());
+  assert(!error.empty());
+
+  auto previous = nlohmann::json::parse(flipJson);
+  previous["schemaVersion"] = 4;
+  previous["stages"][0].erase("doublePlayOption");
+  const auto decodedPrevious =
+      deserializeScoreProvenance(previous.dump(), error);
+  assert(error.empty());
+  assert(decodedPrevious.has_value());
+  assert(decodedPrevious->schemaVersion == 4);
+  assert(!decodedPrevious->stages.front().doublePlayOption.has_value());
 }
 
 void testDeterministicRoundTrip() {
@@ -345,7 +382,7 @@ void testFutureSchemaIsRejected() {
   assert(error.find("future") != std::string::npos);
 }
 
-void testVersionOneMigratesToCurrentSchema() {
+void testVersionOneRetainsItsSetupCapability() {
   const ScoreProvenance currentValue = sampleVerifiedProvenance();
   std::string json = serializeScoreProvenance(currentValue);
   const std::string current =
@@ -359,8 +396,12 @@ void testVersionOneMigratesToCurrentSchema() {
   const auto decoded = deserializeScoreProvenance(json, error);
   assert(error.empty());
   assert(decoded.has_value());
-  assert(decoded->schemaVersion == ScoreProvenance::kSchemaVersion);
-  assert(decoded == currentValue);
+  assert(decoded->schemaVersion == 1);
+  assert(!decoded->stages.front().doublePlayOption.has_value());
+  ScoreProvenance expected = currentValue;
+  expected.schemaVersion = 1;
+  expected.stages.front().doublePlayOption.reset();
+  assert(decoded == expected);
 
   json.replace(json.find("\"schemaVersion\":1"),
                std::string("\"schemaVersion\":1").size(),
@@ -706,6 +747,7 @@ ScoreStageProvenance replayStage(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
   return {.chartMd5 = std::move(md5),
           .chartSha256 = std::move(sha256),
+          .doublePlayOption = replay::DoublePlayOption::Normal,
           .judgeRankSource = JudgeRankSource::Override,
           .totalNotes = 1000,
           .authoredGaugeTotal = 200.0,
@@ -957,13 +999,14 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
 int main() {
   testRulesetContract();
   testSchemaAndInputDeviceVocabularyContract();
+  testDoublePlaySetupSchemaContract();
   testDeterministicRoundTrip();
   testPlaybackAndJudgeProvenanceRoundTripAndMigration();
   testPlaybackAndJudgeProvenanceValidation();
   testEligibilityClassification();
   testSignedWindowsAndCanonicalDevices();
   testFutureSchemaIsRejected();
-  testVersionOneMigratesToCurrentSchema();
+  testVersionOneRetainsItsSetupCapability();
   testVersionZeroDescriptorRemainsLegacy();
   testSchemaFourPolicyProofRoundTrip();
   testSchemaFourMalformedPolicyProofIsRejected();

@@ -7,6 +7,7 @@
 #include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/GameplayRuleset.h"
 #include "scene/play/RhythmState.h"
+#include "replay/DoublePlayOption.h"
 
 #include <cstdint>
 #include <array>
@@ -65,6 +66,7 @@ struct ScoreStageProvenance {
   std::optional<std::uint64_t> chartRandomSeed;
   std::optional<std::string> chartRandomPrng;
   std::vector<int> chartRandomValues;
+  std::optional<replay::DoublePlayOption> doublePlayOption;
   JudgeRankSource judgeRankSource = JudgeRankSource::Unknown;
   std::optional<int> sourceJudgeRank;
   int totalNotes = 0;
@@ -78,7 +80,9 @@ struct ScoreStageProvenance {
 };
 
 struct ScoreProvenance {
-  static constexpr int kSchemaVersion = 4;
+  static constexpr int kPolicyProofSchemaVersion = 4;
+  static constexpr int kDoublePlayOptionSchemaVersion = 5;
+  static constexpr int kSchemaVersion = kDoublePlayOptionSchemaVersion;
 
   int schemaVersion = kSchemaVersion;
   RulesetDescriptor ruleset;
@@ -134,6 +138,8 @@ struct ScoreProvenanceBuildInput {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
+  replay::DoublePlayOption doublePlayOption =
+      replay::DoublePlayOption::Normal;
   std::string assistOption = assist_options::kOff;
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;

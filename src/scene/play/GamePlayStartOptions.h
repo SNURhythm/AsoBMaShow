@@ -431,6 +431,7 @@ enforceCoursePlaybackRules(StartOptions options) {
                    .seed = options.playOptionSeed};
   input.player2 = {.option = options.playOption2.value_or("NORMAL"),
                    .seed = options.playOption2Seed};
+  input.doublePlayOption = options.doublePlayOption;
   input.assistOption = options.assistOption;
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;
@@ -478,6 +479,7 @@ enforceCoursePlaybackRules(StartOptions options) {
                    .seed = options.playOptionSeed};
   input.player2 = {.option = options.playOption2.value_or("NORMAL"),
                    .seed = options.playOption2Seed};
+  input.doublePlayOption = options.doublePlayOption;
   input.assistOption = options.assistOption;
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;

@@ -101,6 +101,12 @@ void appendProvenance(CanonicalEncoder &encoder,
     encoder.vector(stage.chartRandomValues, [&](int value) {
       encoder.integer(static_cast<std::int32_t>(value));
     });
+    if (provenance.schemaVersion >=
+        ScoreProvenance::kDoublePlayOptionSchemaVersion) {
+      encoder.optional(stage.doublePlayOption, [&](auto value) {
+        encoder.enumeration(value);
+      });
+    }
     encoder.enumeration(stage.judgeRankSource);
     encoder.optional(stage.sourceJudgeRank, [&](int value) {
       encoder.integer(static_cast<std::int32_t>(value));

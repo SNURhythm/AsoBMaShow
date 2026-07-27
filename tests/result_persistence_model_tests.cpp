@@ -6,6 +6,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -47,6 +48,30 @@ result_persistence::ChartScoreWrite validScore(char hash = 'a') {
   return score;
 }
 
+ScoreProvenance provenanceFor(
+    const result_persistence::ChartScoreWrite &score,
+    replay::DoublePlayOption doublePlayOption, GaugeType gaugeType) {
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = score.chartMd5;
+  input.chartMeta.SHA256 = score.chartSha256;
+  input.chartMeta.Rank = 1;
+  input.chartMeta.TotalNotes = score.maxScore / 2;
+  input.chartMeta.HasTotal = true;
+  input.chartMeta.Total = 200.0;
+  input.longNoteMode = score.longNoteMode;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-330'000, 420'000}},
+      {Kpoor, {-500'000, 150'000}},
+  };
+  input.totalNotes = input.chartMeta.TotalNotes;
+  input.authoredGaugeTotal = input.chartMeta.Total;
+  input.effectiveGaugeTotal = input.chartMeta.Total;
+  input.gaugeType = gaugeType;
+  input.doublePlayOption = doublePlayOption;
+  return makeScoreProvenance(input);
+}
+
 result_persistence::PersistedChartResult validResult() {
   result_persistence::PersistedChartResult result;
   result.attemptId = std::string(kAttemptId);
@@ -58,6 +83,8 @@ result_persistence::PersistedChartResult validResult() {
   result.resultFingerprint = result_persistence::resultFingerprint(result);
   return result;
 }
+
+result_persistence::PersistedCourseResult validCourse();
 
 template <typename Mutator>
 void expectChartFingerprintChange(Mutator mutate, std::string_view field) {
@@ -146,6 +173,54 @@ void testChartResultIndependenceAndFingerprint() {
   expect(result_persistence::resultFingerprint(positiveZero) !=
              result_persistence::resultFingerprint(negativeZero),
          "canonical fingerprint preserves float bit patterns");
+}
+
+void testDoublePlaySetupFingerprintContract() {
+  auto normal = validResult();
+  normal.score.provenance = provenanceFor(
+      normal.score, replay::DoublePlayOption::Normal, normal.adoptedGaugeType);
+  normal.resultFingerprint = result_persistence::resultFingerprint(normal);
+
+  auto flip = normal;
+  flip.score.provenance.stages.front().doublePlayOption =
+      replay::DoublePlayOption::Flip;
+  flip.resultFingerprint.clear();
+  expect(result_persistence::resultFingerprint(flip) !=
+             normal.resultFingerprint,
+         "chart fingerprint binds the double-play option");
+
+  auto normalCourse = validCourse();
+  std::vector<ScoreProvenance> stageProvenance;
+  for (auto &stage : normalCourse.stages) {
+    stage.score.provenance = provenanceFor(
+        stage.score, replay::DoublePlayOption::Normal,
+        stage.adoptedGaugeType);
+    stageProvenance.push_back(stage.score.provenance);
+  }
+  normalCourse.provenance = mergeCourseProvenance(stageProvenance);
+  normalCourse.resultFingerprint =
+      result_persistence::resultFingerprint(normalCourse);
+
+  auto flipCourse = normalCourse;
+  flipCourse.stages[1].score.provenance.stages.front().doublePlayOption =
+      replay::DoublePlayOption::Flip;
+  flipCourse.provenance.stages[1].doublePlayOption =
+      replay::DoublePlayOption::Flip;
+  flipCourse.resultFingerprint.clear();
+  expect(result_persistence::resultFingerprint(flipCourse) !=
+             normalCourse.resultFingerprint,
+         "course fingerprint binds each stage double-play option");
+
+  auto schemaFourNormal = normal;
+  schemaFourNormal.score.provenance.schemaVersion = 4;
+  schemaFourNormal.score.provenance.stages.front().doublePlayOption =
+      replay::DoublePlayOption::Normal;
+  auto schemaFourFlip = schemaFourNormal;
+  schemaFourFlip.score.provenance.stages.front().doublePlayOption =
+      replay::DoublePlayOption::Flip;
+  expect(result_persistence::resultFingerprint(schemaFourNormal) ==
+             result_persistence::resultFingerprint(schemaFourFlip),
+         "schema-four fingerprints remain independent of unavailable DP data");
 }
 
 void testChartValidation() {
@@ -344,6 +419,7 @@ void testCourseResult() {
 
 int main() {
   testChartResultIndependenceAndFingerprint();
+  testDoublePlaySetupFingerprintContract();
   testChartValidation();
   testCourseResult();
   if (failures != 0) {

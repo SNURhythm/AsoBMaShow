@@ -1358,6 +1358,8 @@ void testVersion4MigrationPreservesOutcomesAndRows(
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_scores") == 1);
   assert(chartOutcome(migrated.get()) == chartBefore);
   assert(courseOutcome(migrated.get()) == courseBefore);
+  auto storedLegacy = ScoreProvenance::Legacy();
+  storedLegacy.schemaVersion = 1;
   for (const std::string table : {"scores", "course_scores"}) {
     assert(columnExists(migrated.get(), table, "ruleset_version"));
     assert(columnExists(migrated.get(), table, "eligibility"));
@@ -1367,8 +1369,7 @@ void testVersion4MigrationPreservesOutcomesAndRows(
     assert(queryInt(migrated.get(),
                     "SELECT eligibility FROM " + table + " WHERE id=1") ==
            static_cast<int>(ScoreEligibility::LegacyUnverified));
-    assert(readStoredProvenance(migrated.get(), table, 1) ==
-           ScoreProvenance::Legacy());
+    assert(readStoredProvenance(migrated.get(), table, 1) == storedLegacy);
     assert(queryText(migrated.get(),
                      "SELECT provenance_json FROM " + table + " WHERE id=1") ==
            kLegacyProvenanceJson);

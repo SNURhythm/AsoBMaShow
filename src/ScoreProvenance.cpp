@@ -238,6 +238,27 @@ std::optional<InputDeviceCategory> inputDeviceFromName(std::string_view value) {
   return std::nullopt;
 }
 
+const char *doublePlayOptionName(replay::DoublePlayOption value) {
+  switch (value) {
+  case replay::DoublePlayOption::Normal:
+    return "normal";
+  case replay::DoublePlayOption::Flip:
+    return "flip";
+  }
+  throw std::invalid_argument("Unknown double-play option value.");
+}
+
+std::optional<replay::DoublePlayOption>
+doublePlayOptionFromName(std::string_view value) {
+  if (value == "normal") {
+    return replay::DoublePlayOption::Normal;
+  }
+  if (value == "flip") {
+    return replay::DoublePlayOption::Flip;
+  }
+  return std::nullopt;
+}
+
 const char *playbackModeName(audio::PlaybackMode value) {
   switch (value) {
   case audio::PlaybackMode::PitchShift:
@@ -512,7 +533,8 @@ RulesetDescriptor rulesetFromJson(const Json &value, int schemaVersion) {
   }
   const bool hasId = id != value.end();
   const std::string idValue = hasId ? id->get<std::string>() : std::string();
-  if (schemaVersion >= 4 && (!hasId || idValue.empty())) {
+  if (schemaVersion >= ScoreProvenance::kPolicyProofSchemaVersion &&
+      (!hasId || idValue.empty())) {
     throw std::runtime_error(
         "Score provenance ruleset id is required by this schema.");
   }
@@ -645,9 +667,14 @@ void migrateLegacyBeatorajaWindows(ScoreStageProvenance &stage) {
   }
 }
 
-Json stageToJson(ScoreStageProvenance stage) {
+Json stageToJson(ScoreStageProvenance stage, int schemaVersion) {
   validateStageProof(stage);
   canonicalizeWindows(stage.effectiveJudgeWindows);
+  if (schemaVersion >= ScoreProvenance::kDoublePlayOptionSchemaVersion &&
+      !stage.doublePlayOption.has_value()) {
+    throw std::runtime_error(
+        "Score provenance double-play option is missing.");
+  }
 
   Json value = Json::object();
   value["chartMd5"] = stage.chartMd5;
@@ -656,6 +683,10 @@ Json stageToJson(ScoreStageProvenance stage) {
   writeOptional(value, "chartRandomSeed", stage.chartRandomSeed);
   writeOptional(value, "chartRandomPrng", stage.chartRandomPrng);
   value["chartRandomValues"] = stage.chartRandomValues;
+  if (schemaVersion >= ScoreProvenance::kDoublePlayOptionSchemaVersion) {
+    value["doublePlayOption"] =
+        doublePlayOptionName(*stage.doublePlayOption);
+  }
   value["judgeRankSource"] = judgeRankSourceName(stage.judgeRankSource);
   writeOptional(value, "sourceJudgeRank", stage.sourceJudgeRank);
   value["totalNotes"] = stage.totalNotes;
@@ -692,6 +723,16 @@ ScoreStageProvenance stageFromJson(const Json &value, int schemaVersion,
   result.chartRandomPrng = readOptional<std::string>(value, "chartRandomPrng");
   result.chartRandomValues =
       value.value("chartRandomValues", result.chartRandomValues);
+  if (schemaVersion >= ScoreProvenance::kDoublePlayOptionSchemaVersion) {
+    const auto option = value.find("doublePlayOption");
+    if (option == value.end() || !option->is_string()) {
+      throw std::runtime_error(
+          "Score provenance double-play option is missing or malformed.");
+    }
+    result.doublePlayOption = enumOrThrow(
+        doublePlayOptionFromName(option->get<std::string>()),
+        "Unknown double-play option in score provenance.");
+  }
   result.judgeRankSource = enumOrThrow(
       judgeRankSourceFromName(value.value("judgeRankSource", "unknown")),
       "Unknown judge-rank source in score provenance.");
@@ -735,12 +776,12 @@ ScoreStageProvenance stageFromJson(const Json &value, int schemaVersion,
       });
     }
   }
-  if (schemaVersion < 4 &&
+  if (schemaVersion < ScoreProvenance::kPolicyProofSchemaVersion &&
       ruleset == RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
     migrateLegacyBeatorajaWindows(result);
   }
   canonicalizeWindows(result.effectiveJudgeWindows);
-  if (schemaVersion >= 4) {
+  if (schemaVersion >= ScoreProvenance::kPolicyProofSchemaVersion) {
     validateStageProof(result);
   } else {
     validateStageWindows(result, false);
@@ -803,6 +844,10 @@ uniqueStageForChart(const ScoreProvenance &provenance,
 
 ScoreProvenance ScoreProvenance::Legacy() {
   ScoreProvenance result;
+  // Legacy provenance has no per-stage setup proof. Keep it on the last
+  // schema that did not require double-play orientation so existing result
+  // fingerprints remain stable and callers cannot mistake it for v5 proof.
+  result.schemaVersion = ScoreProvenance::kPolicyProofSchemaVersion;
   result.ruleset = RulesetDescriptor::Legacy();
   result.eligibility = ScoreEligibility::LegacyUnverified;
   return result;
@@ -818,7 +863,7 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
 
   Json stages = Json::array();
   for (const auto &stage : canonical.stages) {
-    stages.push_back(stageToJson(stage));
+    stages.push_back(stageToJson(stage, canonical.schemaVersion));
   }
   root["stages"] = std::move(stages);
   root["gaugeType"] = gaugeTypeName(canonical.gaugeType);
@@ -865,7 +910,7 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
     }
 
     ScoreProvenance result = ScoreProvenance::Legacy();
-    result.schemaVersion = ScoreProvenance::kSchemaVersion;
+    result.schemaVersion = schemaVersion;
     if (const auto ruleset = root.find("ruleset"); ruleset != root.end()) {
       result.ruleset = rulesetFromJson(*ruleset, schemaVersion);
     }
@@ -973,6 +1018,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   }
   stage.chartRandomPrng = input.chartMeta.RandomPrng;
   stage.chartRandomValues = input.chartMeta.RandomValues;
+  stage.doublePlayOption = input.doublePlayOption;
   stage.judgeRankSource = input.judgeRankSource;
   stage.sourceJudgeRank = input.sourceJudgeRank;
   if (!stage.sourceJudgeRank.has_value() &&

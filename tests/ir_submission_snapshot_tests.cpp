@@ -24,6 +24,29 @@ std::string repeated(char value, std::size_t count) {
   return std::string(count, value);
 }
 
+ScoreProvenance provenanceFor(
+    const result_persistence::ChartScoreWrite &score,
+    replay::DoublePlayOption doublePlayOption) {
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = score.chartMd5;
+  input.chartMeta.SHA256 = score.chartSha256;
+  input.chartMeta.Rank = 1;
+  input.chartMeta.TotalNotes = score.maxScore / 2;
+  input.chartMeta.HasTotal = true;
+  input.chartMeta.Total = 200.0;
+  input.longNoteMode = score.longNoteMode;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-330'000, 420'000}},
+      {Kpoor, {-500'000, 150'000}},
+  };
+  input.totalNotes = input.chartMeta.TotalNotes;
+  input.authoredGaugeTotal = input.chartMeta.Total;
+  input.effectiveGaugeTotal = input.chartMeta.Total;
+  input.doublePlayOption = doublePlayOption;
+  return makeScoreProvenance(input);
+}
+
 result_persistence::PersistedChartResult validResult() {
   result_persistence::PersistedChartResult result;
   result.attemptId = "123e4567-e89b-42d3-a456-426614174000";
@@ -119,6 +142,33 @@ void testCaptureAndReplayIndependence() {
       result_persistence::resultFingerprint(changedResult);
   expect(capture(changedResult).fingerprint != snapshot.fingerprint,
          "IR provenance mutation changes snapshot fingerprint");
+}
+
+void testDoublePlayProvenanceIsCapturedWithoutRawReplayData() {
+  auto normalResult = validResult();
+  normalResult.score.provenance = provenanceFor(
+      normalResult.score, replay::DoublePlayOption::Normal);
+  normalResult.resultFingerprint =
+      result_persistence::resultFingerprint(normalResult);
+  const auto normalSnapshot = capture(normalResult);
+
+  auto flipResult = normalResult;
+  flipResult.score.provenance.stages.front().doublePlayOption =
+      replay::DoublePlayOption::Flip;
+  flipResult.resultFingerprint =
+      result_persistence::resultFingerprint(flipResult);
+  const auto flipSnapshot = capture(flipResult);
+
+  expect(normalSnapshot.fingerprint != flipSnapshot.fingerprint,
+         "IR snapshot binds DP setup through result provenance");
+
+  std::string diagnostic;
+  const auto serialized =
+      ir::serializeIrSubmissionSnapshot(flipSnapshot, diagnostic);
+  expect(serialized.has_value() &&
+             serialized->find("\"doublePlayOption\":\"flip\"") !=
+                 std::string::npos,
+         "IR snapshot stores DP setup without embedding raw replay events");
 }
 
 void testCanonicalSerializationAndTamperChecks() {
@@ -259,6 +309,7 @@ void testLargeValidSnapshotRoundTrips() {
 
 int main() {
   testCaptureAndReplayIndependence();
+  testDoublePlayProvenanceIsCapturedWithoutRawReplayData();
   testCanonicalSerializationAndTamperChecks();
   testValidationAndFloatCanonicalization();
   testOversizedTimingBreakdownIsRejectedWithoutOverflow();

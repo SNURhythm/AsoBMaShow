@@ -6,6 +6,7 @@
 #include "../scene/play/GameplayGaugeTypes.h"
 #include "../scene/play/GameplayScoreState.h"
 #include "../scene/play/Judgement.h"
+#include "DoublePlayOption.h"
 
 #include <cstdint>
 #include <optional>
@@ -22,11 +23,6 @@ hasUndefinedLongNotesForReplay(int authoredLongNoteMode, int totalLongNotes,
   return authoredLongNoteMode == 0 &&
          (totalLongNotes > 0 || totalBackSpinNotes > 0);
 }
-
-enum class DoublePlayOption : std::uint8_t {
-  Normal = 0,
-  Flip = 1,
-};
 
 enum class LogicalControlKind : std::uint8_t {
   Lane,
