@@ -1339,6 +1339,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/Base64Url.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/BeatorajaReplayPath.cpp
+        src/replay/ChartReplayCapture.cpp
         src/replay/ChartReplayPersistence.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileLifecycle.cpp

@@ -1,4 +1,5 @@
 #include "replay/ChartReplayPersistence.h"
+#include "replay/ChartReplayCapture.h"
 
 #include <chrono>
 #include <filesystem>
@@ -135,6 +136,66 @@ ChartReplayPersistenceAttempt validAttempt(bool withReplay = true) {
     attempt.replay = replayDocument(attempt.result);
   }
   return attempt;
+}
+
+void testCompletionCaptureBuildsIndependentResultSnapshotAndReplay() {
+  auto completed = result();
+  ChartReplayCapture capture{
+      .result = completed,
+      .setupFacts =
+          {.chart = {.md5 = completed.score.chartMd5,
+                     .sha256 = completed.score.chartSha256,
+                     .keyMode = completed.keyMode},
+           .longNoteMode = completed.score.longNoteMode,
+           .initialLaneCoverPercent = 37,
+           .laneCoverEnabled = true},
+      .acceptedInput =
+          std::vector<InputTransition>{
+              {.songTimeMicros = -1'000,
+               .control = {.kind = LogicalControlKind::Lane,
+                           .player = 1,
+                           .lane = 0},
+               .pressed = true},
+              {.songTimeMicros = 1'000,
+               .control = {.kind = LogicalControlKind::Lane,
+                           .player = 1,
+                           .lane = 0},
+               .pressed = false}},
+      .touchSamples = {{.action = replay::ReplayTouchAction::Down,
+                        .fingerId = 4,
+                        .songTimeMicros = 0,
+                        .x = 0.25F,
+                        .y = 0.75F}},
+      .laneCoverEvents = {{.songTimeMicros = 0,
+                           .noteStartPositionPercent = 37}},
+      .timeBounds = {.completionSongTimeMicros = 5'000'000},
+  };
+  std::string diagnostic;
+  const auto captured =
+      captureChartReplayPersistenceAttempt(capture, diagnostic);
+  expect(captured && captured->result == completed && captured->irSnapshot &&
+             captured->replay &&
+             captured->replay->playback.input == *capture.acceptedInput &&
+             captured->replay->playback.touchSamples == capture.touchSamples &&
+             captured->replay->playback.laneCoverEvents ==
+                 capture.laneCoverEvents,
+         "completion captures compact result, IR snapshot, and raw BRD facts");
+
+  capture.acceptedInput.reset();
+  const auto replayless =
+      captureChartReplayPersistenceAttempt(capture, diagnostic);
+  expect(replayless && replayless->result == completed &&
+             replayless->irSnapshot && !replayless->replay,
+         "lost raw capture drops only replay attachment");
+
+  capture.acceptedInput = std::vector<InputTransition>{};
+  capture.touchSamples.front().x = 2.0F;
+  const auto malformed =
+      captureChartReplayPersistenceAttempt(capture, diagnostic);
+  expect(malformed && malformed->result == completed &&
+             malformed->irSnapshot && !malformed->replay &&
+             !diagnostic.empty(),
+         "malformed raw detail cannot discard result or postponed IR facts");
 }
 
 ReplayFileMetadata metadata(const ReplayPathIdentity &identity,
@@ -634,6 +695,7 @@ void testRealRepositoriesPersistBrdAndAdvanceOccupiedSlot() {
 } // namespace
 
 int main() {
+  testCompletionCaptureBuildsIndependentResultSnapshotAndReplay();
   testFileFirstSuccessAndExactRetry();
   testReplayFailuresPreserveIndependentResult();
   testAmbiguousInstallOccupiedSlotAndCleanupBoundaries();
