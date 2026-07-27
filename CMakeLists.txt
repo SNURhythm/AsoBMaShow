@@ -1362,6 +1362,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/ChartReplayCapture.cpp
         src/replay/ChartReplayAgreement.cpp
+        src/replay/ReplaySetupProvenance.cpp
         src/replay/ChartReplayPersistence.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileLifecycle.cpp
@@ -1419,6 +1420,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/BeatorajaReplayPath.cpp
         src/replay/ChartReplayAgreement.cpp
+        src/replay/ReplaySetupProvenance.cpp
         src/replay/ChartReplayContext.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileLifecycle.cpp
@@ -2658,6 +2660,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
     )

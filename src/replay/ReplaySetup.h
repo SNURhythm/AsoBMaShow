@@ -14,8 +14,6 @@
 #include <string>
 #include <vector>
 
-struct ScoreProvenance;
-
 namespace replay {
 
 using ReplayChartIdentity = result_contract::ChartIdentity;
@@ -116,15 +114,6 @@ struct ReplaySetupValidation {
 [[nodiscard]] ReplaySetupValidation
 validateReplaySetup(const ReplaySetup &setup, ReplaySetupSource source,
                     const ReplayLimits &limits = kReplayLimits);
-
-[[nodiscard]] std::optional<ReplaySetup>
-captureLocalReplaySetup(const LocalReplaySetupFacts &facts,
-                        const ScoreProvenance &provenance,
-                        std::string &diagnostic) noexcept;
-
-[[nodiscard]] bool
-replaySetupAgreesWithProvenance(const ReplaySetup &setup,
-                                const ScoreProvenance &provenance) noexcept;
 
 using ReplayChartMatch = result_contract::ChartIdentityMatch;
 

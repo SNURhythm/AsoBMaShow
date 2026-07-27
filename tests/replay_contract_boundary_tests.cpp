@@ -128,6 +128,29 @@ void testSharedModernResultAuthorities() {
                "replay identity agreement authority");
 }
 
+void testActivatedChartConsumersUseTheSharedPipeline() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  requireToken(root / "src/scene/MainMenuScene.cpp",
+               "makeRuntimeChartReplayConsumer",
+               "modern Watch, G-Battle, recall, and video consumer");
+  requireToken(root / "src/scene/ChartViewerScene.cpp",
+               "makeRuntimeChartReplayConsumer",
+               "modern practice ghost consumer");
+  requireToken(root / "src/scene/MainMenuScene.cpp",
+               "result_recall::BuildChartResult",
+               "replay-independent modern result recall");
+  requireToken(root / "src/scene/ResultScene.cpp",
+               "modernReplayAttemptId",
+               "modern practice replay identity");
+
+  constexpr std::array<std::string_view, 3> forbidden{
+      "BeatorajaReplayCodec", "ReplayFileStore", "readVerified"};
+  rejectTokens(root / "src/scene/MainMenuScene.cpp", forbidden);
+  rejectTokens(root / "src/scene/ChartViewerScene.cpp", forbidden);
+  rejectTokens(root / "src/scene/ResultScene.cpp", forbidden);
+  rejectTokens(root / "src/ReplayVideoExporter.cpp", forbidden);
+}
+
 void requireToken(const std::filesystem::path &path, std::string_view token,
                   std::string_view authority) {
   if (!readText(path).contains(token)) {
@@ -214,6 +237,7 @@ int main() {
   testSharedFormatAuthorities();
   testModernResultAndSnapshotBoundary();
   testSharedModernResultAuthorities();
+  testActivatedChartConsumersUseTheSharedPipeline();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;

@@ -1,5 +1,7 @@
 #include "ChartReplayCapture.h"
 
+#include "ReplaySetupProvenance.h"
+
 #include <utility>
 
 namespace replay {

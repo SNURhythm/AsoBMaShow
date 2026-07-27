@@ -1,6 +1,7 @@
 #include "scene/play/GamePlayStartup.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "replay/ReplayKeyMode.h"
+#include "replay/ReplaySetupProvenance.h"
 #include "replay/ReplaySetup.h"
 
 #include <iostream>
