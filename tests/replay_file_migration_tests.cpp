@@ -589,6 +589,8 @@ fixedChartMetadata(
 }
 
 constexpr int kCourseStageReplayId = 43;
+constexpr int kCumulativeCourseStageReplayId = 44;
+constexpr int kCumulativeCourseId = 79;
 
 void ensureCourseStageReplayFixture(sqlite3 *database) {
   if (integer(database, "SELECT count(*) FROM replays WHERE id=" +
@@ -681,6 +683,74 @@ void insertPartialCourseFixture(sqlite3 *database, const FixtureFacts &chart,
       "INSERT INTO course_replay_stages(id,course_replay_id,stage_index,"
       "replay_id,rest_micros_after_stage) VALUES(89,78,0," +
           std::to_string(kCourseStageReplayId) + ",500000)");
+}
+
+void insertCumulativeMaxComboCourseFixture(sqlite3 *database,
+                                           const FixtureFacts &chart) {
+  ensureCourseStageReplayFixture(database);
+  executeOrThrow(
+      database,
+      "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,chart_title,"
+      "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,max_combo,"
+      "final_gauge,clear_type,random_seed,random_prng,random_values,"
+      "play_option,play_option_seed,play_option2,play_option2_seed,"
+      "assist_option,created_at,ruleset_version,eligibility,provenance_json,"
+      "attempt_id,attempt_fingerprint) SELECT " +
+          std::to_string(kCumulativeCourseStageReplayId) +
+          ",chart_path,chart_md5,chart_sha256,chart_title,chart_artist,ln_mode,"
+          "gauge_type,gauge_auto_shift,final_score,4,final_gauge,clear_type,"
+          "random_seed,random_prng,random_values,play_option,play_option_seed,"
+          "play_option2,play_option2_seed,assist_option,created_at,"
+          "ruleset_version,eligibility,provenance_json,NULL,NULL FROM replays "
+          "WHERE id=" +
+          std::to_string(kCourseStageReplayId) +
+          ";INSERT INTO replay_events(replay_id,event_index,action,lane,"
+          "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+          "diff_micros,gauge,gauge_type,combo,score) SELECT " +
+          std::to_string(kCumulativeCourseStageReplayId) +
+          ",event_index,action,lane,note_time_micros,song_time_micros,"
+          "judge_time_micros,judgement,diff_micros,gauge,gauge_type,combo+2,"
+          "score FROM replay_events WHERE replay_id=" +
+          std::to_string(kCourseStageReplayId) +
+          ";INSERT INTO replay_touch_samples(replay_id,sample_index,action,"
+          "finger_id,song_time_micros,x,y) SELECT " +
+          std::to_string(kCumulativeCourseStageReplayId) +
+          ",sample_index,action,finger_id,song_time_micros,x,y FROM "
+          "replay_touch_samples WHERE replay_id=" +
+          std::to_string(kCourseStageReplayId) +
+          ";INSERT INTO replay_lane_cover_events(replay_id,event_index,"
+          "song_time_micros,note_start_position_percent,"
+          "reset_visible_time_reference) SELECT " +
+          std::to_string(kCumulativeCourseStageReplayId) +
+          ",event_index,song_time_micros,note_start_position_percent,"
+          "reset_visible_time_reference FROM replay_lane_cover_events WHERE "
+          "replay_id=" +
+          std::to_string(kCourseStageReplayId));
+
+  const std::array identities{
+      course_identity::ChartIdentity{.sha256 = chart.sha256, .md5 = chart.md5},
+      course_identity::ChartIdentity{.sha256 = chart.sha256, .md5 = chart.md5},
+  };
+  const std::string courseKey =
+      course_identity::makeCourseKey(identities, "[]");
+  executeOrThrow(
+      database,
+      "INSERT INTO course_replays(id,course_id,course_key,course_name,"
+      "course_group_name,constraint_json,gauge_type,gauge_profile,"
+      "gauge_auto_shift,ln_mode,requested_play_option,assist_option,"
+      "final_score,max_combo,final_gauge,clear_type,completed_charts,"
+      "total_charts,created_at,ruleset_version,eligibility,provenance_json) "
+      "VALUES(" +
+          std::to_string(kCumulativeCourseId) + ",14," + sqlQuote(courseKey) +
+          ",'Cumulative Combo Course','Folder','[]',2,1,0,1,'MIRROR','OFF',"
+          "6,4,64.5,300,2,2,'2026-07-25 01:06:04',0,2," +
+          sqlQuote(chart.provenance) +
+          ");INSERT INTO course_replay_stages(id,course_replay_id,stage_index,"
+          "replay_id,rest_micros_after_stage) VALUES(90," +
+          std::to_string(kCumulativeCourseId) + ",0," +
+          std::to_string(kCourseStageReplayId) + ",0),(91," +
+          std::to_string(kCumulativeCourseId) + ",1," +
+          std::to_string(kCumulativeCourseStageReplayId) + ",0)");
 }
 
 void insertCanonicalCoursePathAliasFixtures(sqlite3 *database,
@@ -2237,6 +2307,65 @@ void testRejectsNonIntegerReplayOrderingFieldsAtomically() {
   }
 }
 
+void testMigratesCumulativeCourseStageMaximumCombo() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  const FixtureFacts chart = insertChartFixture(database.get());
+  insertCumulativeMaxComboCourseFixture(database.get(), chart);
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::Migrated &&
+             outcome.chartFiles == 1 && outcome.courseFiles == 1,
+         "later course stage with a cumulative maximum combo migrates");
+  expect(
+      integer(database.get(), "SELECT count(*) FROM course_results WHERE id=" +
+                                  std::to_string(kCumulativeCourseId) +
+                                  " AND max_combo=4 AND max_score=8") == 1 &&
+          integer(database.get(),
+                  "SELECT count(*) FROM course_result_stages WHERE "
+                  "course_result_id=" +
+                      std::to_string(kCumulativeCourseId) +
+                      " AND stage_index=1 AND max_combo=4 AND "
+                      "max_score=4") == 1,
+      "migrated course preserves cumulative stage and aggregate combo");
+  expect(integer(database.get(),
+                 "SELECT count(*) FROM chart_results WHERE id=42 AND "
+                 "max_combo=2 AND max_score=4") == 1,
+         "course-aware migration keeps standalone chart validation and data");
+}
+
+void testMigrationStillRejectsStandaloneCumulativeMaximumCombo() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "UPDATE replays SET max_combo=3 WHERE id=42;"
+                 "UPDATE pending_chart_score_writes SET max_combo=3 WHERE "
+                 "replay_id=42");
+  const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+             snapshotLegacyDatabase(database.get()) == before &&
+             !std::filesystem::exists(temporary.path() / "replay"),
+         "standalone replay maximum combo remains chart-local and fails "
+         "atomically");
+}
+
 void testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles() {
   TemporaryDirectory temporary;
   Database database(temporary.path() / "replay.db");
@@ -2649,6 +2778,8 @@ int main() {
   testMigratesLegacyPrerollSupplementalTimestamps();
   testRejectsDecreasingIndexedReplayTimestampsAtomically();
   testRejectsNonIntegerReplayOrderingFieldsAtomically();
+  testMigratesCumulativeCourseStageMaximumCombo();
+  testMigrationStillRejectsStandaloneCumulativeMaximumCombo();
   testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles();
   testAssignsSameStemHistoryByTimestampThenPublicId();
   testMigrationSkipsCanonicalCrossStemPathAlias();

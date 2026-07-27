@@ -2526,6 +2526,43 @@ void testImportRejectsReplayBytesThatDoNotMatchReference() {
          "replay-reference mismatch does not install a profile");
 }
 
+void testImportRejectsUnreferencedReplayMember() {
+  Fixture fixture;
+  const auto source = exportFixture(fixture, "unreferenced-replay-source.zip");
+  std::string error;
+  auto members = readArchive(source, error);
+  expect(error.empty(), "unreferenced-replay source archive reads: " + error);
+  if (!error.empty()) {
+    return;
+  }
+
+  const auto checksums = std::ranges::find(
+      members, std::string("checksums.sha256"), &ArchiveMember::name);
+  expect(checksums != members.end(),
+         "unreferenced-replay checksum member exists");
+  if (checksums == members.end()) {
+    return;
+  }
+  members.insert(checksums, {.name = "replay/" + std::string(64, 'b') + ".brd",
+                             .contents = "unreferenced portable replay\n"});
+  refreshChecksums(members);
+
+  const auto archive = fixture.temp.path() / "unreferenced-replay-member.zip";
+  expect(writeArchive(archive, members, error),
+         "unreferenced-replay archive writes: " + error);
+  const std::size_t profileCount = fixture.manager.listProfiles().size();
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(archive);
+  expect(!imported.ok() && imported.error == ProfileError::IntegrityFailure &&
+             imported.message.find("not referenced") != std::string::npos,
+         "profile import rejects unreferenced replay archive members: " +
+             imported.message);
+  expect(fixture.manager.listProfiles().size() == profileCount &&
+             transactionArtifacts(fixture.temp.path()).empty(),
+         "unreferenced replay rejection installs no profile or transaction "
+         "artifacts");
+}
+
 void testImportRejectsOrphanReplayReferenceRows() {
   Fixture fixture;
   const auto source = exportFixture(fixture, "orphan-reference-source.zip");
@@ -3384,6 +3421,7 @@ int main() {
   testSchema13ArchiveMigratesAndPreservesRows();
   testImportRejectsMalformedReplayReferenceRows();
   testImportRejectsReplayBytesThatDoNotMatchReference();
+  testImportRejectsUnreferencedReplayMember();
   testImportRejectsOrphanReplayReferenceRows();
   testFutureDatabaseAndCorruptionAreRejected();
   testExportFailurePreservesDestinationAndCleansTemps();

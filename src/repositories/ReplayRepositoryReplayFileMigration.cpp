@@ -815,10 +815,6 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
   }
   persisted.resultFingerprint =
       result_persistence::resultFingerprint(persisted);
-  if (!result_persistence::validatePersistedChartResult(persisted,
-                                                        diagnostic)) {
-    return false;
-  }
   return true;
 }
 
@@ -1356,6 +1352,17 @@ bool readCourses(sqlite3 *database, std::vector<LegacyChart> &charts,
   for (auto &course : courses) {
     if (!readCourseStages(database, course, chartById, charts, diagnostic) ||
         !buildCourse(course, charts, diagnostic)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool validateStandaloneChartResults(const std::vector<LegacyChart> &charts,
+                                    std::string &diagnostic) {
+  for (const auto &chart : charts) {
+    if (!chart.courseStage && !result_persistence::validatePersistedChartResult(
+                                  chart.result, diagnostic)) {
       return false;
     }
   }
@@ -2199,7 +2206,8 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
   std::vector<LegacyCourse> courses;
   std::string diagnostic;
   if (!readCharts(database, charts, resolveMetadata, diagnostic) ||
-      !readCourses(database, charts, courses, diagnostic)) {
+      !readCourses(database, charts, courses, diagnostic) ||
+      !validateStandaloneChartResults(charts, diagnostic)) {
     return failure(MigrationStatus::InvalidLegacyData,
                    diagnostic.empty() ? "legacy replay rows are invalid"
                                       : std::move(diagnostic));

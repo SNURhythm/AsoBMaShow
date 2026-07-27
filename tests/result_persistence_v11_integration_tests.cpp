@@ -356,6 +356,7 @@ CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
        .adoptedGaugeHistory = second.result.adoptedGaugeHistory,
        .judgementTiming = second.result.judgementTiming},
   };
+  result.stages[1].score.maxCombo = result.maxCombo;
   result.entryFacts = {
       {.totalNotes = first.result.score.maxScore / 2,
        .playLengthMicros = 1'000'000},

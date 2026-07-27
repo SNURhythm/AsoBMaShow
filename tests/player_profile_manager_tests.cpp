@@ -2613,6 +2613,38 @@ void testDuplicatePreservesDeletedReferencedReplayAsMissing() {
   }
 }
 
+void testDuplicateOmitsUnreferencedReplayFile() {
+  TempDirectory temp("profile-duplicate-unreferenced-replay");
+  auto dependencies = dependenciesFor();
+  int uuidIndex = 0;
+  dependencies.generateUuid = [&] {
+    return uuidIndex++ == 0 ? "11111111-1111-4111-8111-111111111111"
+                            : "22222222-2222-4222-8222-222222222222";
+  };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "unreferenced-replay duplicate fixture initializes");
+  const auto source = manager.activePaths();
+  const auto unreferencedFilename = std::string(64, 'b') + ".brd";
+  writeFile(source.replayDirectory / unreferencedFilename,
+            "unreferenced replay bytes\n");
+
+  const auto duplicated = manager.duplicateProfile(manager.activeProfile().id,
+                                                   "Referenced Replays Only");
+  expect(duplicated.ok() && duplicated.profile.has_value(),
+         "duplicate succeeds while omitting an unreferenced replay: " +
+             duplicated.message);
+  if (duplicated.profile) {
+    expect(!std::filesystem::exists(
+               manager.pathsFor(duplicated.profile->id).replayDirectory /
+               unreferencedFilename) &&
+               readFile(source.replayDirectory / unreferencedFilename) ==
+                   "unreferenced replay bytes\n",
+           "duplicate omits the unreferenced replay without changing the "
+           "source");
+  }
+}
+
 void testUnsupportedPreV10ReplayProfileFailsActivationPreflight() {
   TempDirectory temp("profile-unsupported-pre-v10-replay");
   PlayerProfileManager manager(temp.path(), dependenciesFor());
@@ -2675,8 +2707,10 @@ void testProfileCrudConstraintsAndDataIsolation() {
 
   writeFile(manager.pathsFor(firstId).irCredentialsJson,
             R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
-  constexpr std::string_view replayBytes = "duplicate-replay-bytes\n";
-  writeFile(manager.pathsFor(firstId).replayDirectory / "copy-test.brd",
+  constexpr std::string_view replayBytes = "owned replay bytes\n";
+  seedReferencedReplay(manager.pathsFor(firstId), "duplicate source");
+  writeFile(manager.pathsFor(firstId).replayDirectory /
+                kReferencedReplayFilename,
             replayBytes);
   seedIrOperationalState(manager.pathsFor(firstId).replaysDb,
                          "duplicate source");
@@ -2702,9 +2736,9 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(AppSettingsStore::Load(manager.pathsFor(copyId).settingsJson)
                  .settings.selectedGameplayRuleset == "beatoraja",
          "duplicate preserves the per-profile ruleset selection");
-  expect(readFile(manager.pathsFor(copyId).replayDirectory / "copy-test.brd") ==
-             replayBytes,
-         "duplicate preserves replay paths and exact file bytes");
+  expect(readFile(manager.pathsFor(copyId).replayDirectory /
+                  kReferencedReplayFilename) == replayBytes,
+         "duplicate preserves referenced replay paths and exact file bytes");
   expect(matchingRowCount(manager.pathsFor(copyId).scoresDb,
                           "SELECT COUNT(*) FROM scores WHERE score_source=0") ==
              matchingRowCount(manager.pathsFor(firstId).scoresDb,
@@ -3040,6 +3074,7 @@ int main() {
   testDuplicateHoldsProfileActivityExclusionAcrossSnapshotAndFiles();
   testDuplicateRejectsReferencedReplayChecksumMismatch();
   testDuplicatePreservesDeletedReferencedReplayAsMissing();
+  testDuplicateOmitsUnreferencedReplayFile();
   testUnsupportedPreV10ReplayProfileFailsActivationPreflight();
   testProfileCrudConstraintsAndDataIsolation();
   testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();

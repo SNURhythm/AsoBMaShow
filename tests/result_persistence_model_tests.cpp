@@ -367,6 +367,7 @@ result_persistence::PersistedCourseResult validCourse() {
        .adoptedGaugeType = GaugeType::Normal,
        .adoptedGaugeHistory = {70.0F, 62.5F}},
   };
+  result.stages[1].score.maxCombo = result.maxCombo;
   result.entryFacts = {
       {.totalNotes = 5, .playLengthMicros = 1'000'000},
       {.totalNotes = 5, .playLengthMicros = 2'000'000},
@@ -393,7 +394,7 @@ void testCourseResult() {
   std::string diagnostic;
   expect(result_persistence::validatePersistedCourseResult(result, diagnostic),
          "partial course maximum includes every entry while stage maxima "
-         "remain per-stage");
+         "remain cumulative");
 
   result.resultId = 42;
   const auto secondStage =
@@ -496,6 +497,54 @@ void testCourseResult() {
       "course long-note mode must be supported");
 }
 
+void testCourseMaxComboValidationContract() {
+  std::string diagnostic;
+
+  auto cumulativeStage = validCourse();
+  cumulativeStage.stages[1].score.maxCombo = 8;
+  cumulativeStage.resultFingerprint.clear();
+  expect(result_persistence::validatePersistedCourseResult(cumulativeStage,
+                                                           diagnostic),
+         "course stage maximum combo is bounded by the completed course "
+         "prefix, not only the current chart");
+
+  auto stageBeyondPrefix = validCourse();
+  stageBeyondPrefix.stages[1].score.maxCombo = 11;
+  stageBeyondPrefix.resultFingerprint.clear();
+  expect(!result_persistence::validatePersistedCourseResult(stageBeyondPrefix,
+                                                            diagnostic),
+         "course stage maximum combo cannot exceed its completed prefix");
+
+  auto aggregateBeyondPrefix = validCourse();
+  aggregateBeyondPrefix.maxCombo = 11;
+  aggregateBeyondPrefix.resultFingerprint.clear();
+  expect(!result_persistence::validatePersistedCourseResult(
+             aggregateBeyondPrefix, diagnostic),
+         "course maximum combo cannot exceed the completed prefix");
+
+  auto aggregateBelowStage = validCourse();
+  aggregateBelowStage.maxCombo = 3;
+  aggregateBelowStage.resultFingerprint.clear();
+  expect(!result_persistence::validatePersistedCourseResult(aggregateBelowStage,
+                                                            diagnostic),
+         "course maximum combo cannot be lower than a persisted stage");
+
+  auto decreasingStages = validCourse();
+  decreasingStages.stages[1].score.maxCombo = 3;
+  decreasingStages.maxCombo = 4;
+  decreasingStages.resultFingerprint.clear();
+  expect(!result_persistence::validatePersistedCourseResult(decreasingStages,
+                                                            diagnostic),
+         "cumulative course stage maximum combo cannot decrease");
+
+  auto inflatedAggregate = validCourse();
+  inflatedAggregate.maxCombo = 9;
+  inflatedAggregate.resultFingerprint.clear();
+  expect(!result_persistence::validatePersistedCourseResult(inflatedAggregate,
+                                                            diagnostic),
+         "course maximum combo must equal its final cumulative stage");
+}
+
 } // namespace
 
 int main() {
@@ -503,6 +552,7 @@ int main() {
   testDoublePlaySetupFingerprintContract();
   testChartValidation();
   testCourseResult();
+  testCourseMaxComboValidationContract();
   if (failures != 0) {
     std::cerr << failures << " result persistence model test(s) failed\n";
     return 1;

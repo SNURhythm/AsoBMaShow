@@ -374,7 +374,8 @@ ChartJudgementTiming captureChartJudgementTiming(const RhythmState &state) {
   return timing;
 }
 
-bool validateScore(const ChartScoreWrite &score, std::string &diagnostic) {
+bool validateScore(const ChartScoreWrite &score,
+                   std::int64_t maximumAllowedCombo, std::string &diagnostic) {
   if (!hasProjectableChartIdentity(score)) {
     diagnostic = "chart identity is not projectable";
     return false;
@@ -389,7 +390,8 @@ bool validateScore(const ChartScoreWrite &score, std::string &diagnostic) {
     return false;
   }
   if (score.maxScore <= 0 || (score.maxScore % 2) != 0 ||
-      score.score > score.maxScore || score.maxCombo > score.maxScore / 2 ||
+      score.score > score.maxScore ||
+      static_cast<std::int64_t>(score.maxCombo) > maximumAllowedCombo ||
       static_cast<std::int64_t>(score.pGreat) * 2LL + score.great !=
           score.score) {
     diagnostic = "score range is inconsistent with result counters";
@@ -451,12 +453,13 @@ bool validateTiming(const ChartScoreWrite &score,
 bool validateResultFacts(const ChartScoreWrite &score, int keyMode,
                          const std::vector<float> &gaugeHistory,
                          const std::optional<ChartJudgementTiming> &timing,
+                         std::int64_t maximumAllowedCombo,
                          std::string &diagnostic) {
   if (keyMode <= 0) {
     diagnostic = "chart key mode must be positive";
     return false;
   }
-  if (!validateScore(score, diagnostic) ||
+  if (!validateScore(score, maximumAllowedCombo, diagnostic) ||
       !validateTiming(score, timing, diagnostic)) {
     return false;
   }
@@ -466,6 +469,21 @@ bool validateResultFacts(const ChartScoreWrite &score, int keyMode,
     return false;
   }
   return true;
+}
+
+bool validateChartResultFacts(const PersistedChartResult &result,
+                              std::string &diagnostic) {
+  return validateResultFacts(result.score, result.keyMode,
+                             result.adoptedGaugeHistory, result.judgementTiming,
+                             result.score.maxScore / 2, diagnostic);
+}
+
+bool validateCourseStageResultFacts(const PersistedCourseStageResult &stage,
+                                    std::int64_t completedPrefixNotes,
+                                    std::string &diagnostic) {
+  return validateResultFacts(stage.score, stage.keyMode,
+                             stage.adoptedGaugeHistory, stage.judgementTiming,
+                             completedPrefixNotes, diagnostic);
 }
 
 } // namespace
@@ -564,9 +582,7 @@ bool validatePersistedChartResult(const PersistedChartResult &result,
       diagnostic = "adopted gauge type is invalid";
       return false;
     }
-    if (!validateResultFacts(result.score, result.keyMode,
-                             result.adoptedGaugeHistory, result.judgementTiming,
-                             diagnostic)) {
+    if (!validateChartResultFacts(result, diagnostic)) {
       return false;
     }
     if (!result.resultFingerprint.empty() &&
@@ -650,27 +666,40 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
     }
     std::int64_t stageScore = 0;
     std::int64_t courseMaxScore = 0;
+    std::int64_t completedPrefixNotes = 0;
+    int previousStageMaxCombo = 0;
     for (const auto &facts : result.entryFacts) {
       courseMaxScore += static_cast<std::int64_t>(facts.totalNotes) * 2;
     }
     for (std::size_t index = 0; index < result.stages.size(); ++index) {
       const auto &stage = result.stages[index];
+      completedPrefixNotes += result.entryFacts[index].totalNotes;
       if (stage.stageIndex != static_cast<int>(index) ||
           !knownGaugeType(stage.adoptedGaugeType) ||
-          !validateResultFacts(stage.score, stage.keyMode,
-                               stage.adoptedGaugeHistory, stage.judgementTiming,
-                               diagnostic)) {
+          !validateCourseStageResultFacts(stage, completedPrefixNotes,
+                                          diagnostic)) {
         if (diagnostic.empty()) {
           diagnostic = "course stage ordering is malformed";
         }
         return false;
       }
+      if (stage.score.maxCombo < previousStageMaxCombo) {
+        diagnostic = "course stage maximum combo cannot decrease";
+        return false;
+      }
+      previousStageMaxCombo = stage.score.maxCombo;
       stageScore += stage.score.score;
       if (static_cast<std::int64_t>(result.entryFacts[index].totalNotes) * 2 !=
           stage.score.maxScore) {
         diagnostic = "course entry note count disagrees with stage result";
         return false;
       }
+    }
+    if (static_cast<std::int64_t>(result.maxCombo) > completedPrefixNotes ||
+        result.maxCombo != previousStageMaxCombo) {
+      diagnostic =
+          "course maximum combo disagrees with its completed stage prefix";
+      return false;
     }
     const bool hasCurrentBoundProvenance =
         result.provenance.schemaVersion >=

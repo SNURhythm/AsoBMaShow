@@ -626,6 +626,68 @@ bool validatePresentReplayFilesAgainstReferences(
   return true;
 }
 
+bool validateImportedReplayFilesAgainstReferences(
+    const std::filesystem::path &applicationRoot,
+    const PlayerProfilePaths &paths,
+    const std::vector<ReplayFileReference> &references,
+    std::string &errorMessage) {
+  std::set<std::filesystem::path> referencedPaths;
+  for (const auto &reference : references) {
+    if (!referencedPaths.insert(reference.relativePath).second) {
+      errorMessage = "imported replay path has multiple database references";
+      return false;
+    }
+  }
+
+  std::vector<std::filesystem::path> replayFiles;
+  if (!validateReplayDirectory(applicationRoot, paths, &replayFiles,
+                               errorMessage)) {
+    return false;
+  }
+  for (const auto &replayFile : replayFiles) {
+    const auto relativePath = replayFile.lexically_relative(paths.root);
+    if (relativePath.empty() || !referencedPaths.contains(relativePath)) {
+      errorMessage =
+          "imported replay file is not referenced by the replay database";
+      return false;
+    }
+  }
+  return validatePresentReplayFilesAgainstReferences(applicationRoot, paths,
+                                                     references, errorMessage);
+}
+
+bool removeUnreferencedReplayFiles(
+    const std::filesystem::path &applicationRoot,
+    const PlayerProfilePaths &paths,
+    const std::vector<ReplayFileReference> &references,
+    std::string &errorMessage) {
+  std::set<std::filesystem::path> referencedPaths;
+  for (const auto &reference : references) {
+    referencedPaths.insert(reference.relativePath);
+  }
+
+  std::vector<std::filesystem::path> replayFiles;
+  if (!validateReplayDirectory(applicationRoot, paths, &replayFiles,
+                               errorMessage)) {
+    return false;
+  }
+  for (const auto &replayFile : replayFiles) {
+    const auto relativePath = replayFile.lexically_relative(paths.root);
+    if (referencedPaths.contains(relativePath)) {
+      continue;
+    }
+    std::error_code removeError;
+    if (!std::filesystem::remove(replayFile, removeError) || removeError) {
+      errorMessage =
+          "unable to omit unreferenced replay from duplicate: " +
+          (removeError ? removeError.message() : "replay file disappeared");
+      return false;
+    }
+  }
+  errorMessage.clear();
+  return true;
+}
+
 bool copyReplayDirectory(const std::filesystem::path &applicationRoot,
                          const PlayerProfilePaths &source,
                          const PlayerProfilePaths &destination,
@@ -1687,6 +1749,11 @@ ProfileResult buildProfile(
                   "unable to validate duplicated replay references: " +
                       errorMessage);
     }
+    if (!removeUnreferencedReplayFiles(applicationRoot, staging,
+                                       replayReferences, errorMessage)) {
+      return fail(ProfileError::IoFailure,
+                  "unable to filter duplicated replay files: " + errorMessage);
+    }
     if (!validatePresentReplayFilesAgainstReferences(
             applicationRoot, staging, replayReferences, errorMessage)) {
       return fail(ProfileError::IntegrityFailure,
@@ -2635,7 +2702,7 @@ ProfileResult PlayerProfileManager::installProfile(
                                "imported replay references are invalid: " +
                                    errorMessage);
   }
-  if (!validatePresentReplayFilesAgainstReferences(
+  if (!validateImportedReplayFilesAgainstReferences(
           applicationDataRoot_, staging, replayReferences, errorMessage)) {
     return cleanStagingAndFail(ProfileError::IntegrityFailure,
                                "imported replay bytes are invalid: " +

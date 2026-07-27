@@ -442,7 +442,7 @@ result_persistence::PersistedCourseResult validCourseResult() {
   second.score.score = 2;
   second.score.pGreat = 1;
   second.score.great = 0;
-  second.score.maxCombo = 1;
+  second.score.maxCombo = first.score.maxCombo;
   second.score.comboBreak = 1;
   second.score.fast = 0;
   second.score.finalGauge = 62.5F;
