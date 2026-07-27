@@ -117,8 +117,9 @@ bool validateIrSubmissionReceipt(const IrSubmissionReceipt &receipt,
       diagnostic = "IR receipt row ID is invalid";
     } else if (!isValidProviderId(receipt.providerId)) {
       diagnostic = "IR receipt provider ID is invalid";
-    } else if (receipt.replayId <= 0) {
-      diagnostic = "IR receipt replay ID is invalid";
+    } else if (receipt.replayId < 0 || receipt.modernChartResultId < 0 ||
+               (receipt.replayId > 0) == (receipt.modernChartResultId > 0)) {
+      diagnostic = "IR receipt must have exactly one durable result owner";
     } else if (!uuid::isCanonicalLowerV4(receipt.attemptId)) {
       diagnostic = "IR receipt attempt ID is invalid";
     } else if (!receipt.chartMd5.empty() &&

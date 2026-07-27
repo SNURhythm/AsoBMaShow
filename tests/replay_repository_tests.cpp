@@ -4808,7 +4808,7 @@ void testCurrentVersionRejectsMalformedRulesetProofSchema(
   assert(schemaSnapshot(db.get()) == before);
 }
 
-constexpr const char *kExpectedIrSubmissionReceiptsTableSql =
+constexpr const char *kExpectedLegacyIrSubmissionReceiptsTableSql =
     "CREATE TABLE ir_submission_receipts ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "provider_id TEXT NOT NULL,"
@@ -4826,6 +4826,31 @@ constexpr const char *kExpectedIrSubmissionReceiptsTableSql =
     "UNIQUE(provider_id, server_origin, replay_id),"
     "CHECK(observed_in_snapshot IN (0, 1)),"
     "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+    ")";
+
+constexpr const char *kExpectedIrSubmissionReceiptsTableSql =
+    "CREATE TABLE ir_submission_receipts ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "provider_id TEXT NOT NULL,"
+    "server_origin TEXT NOT NULL,"
+    "replay_id INTEGER,"
+    "modern_chart_result_id INTEGER,"
+    "attempt_id TEXT NOT NULL,"
+    "chart_md5 TEXT,"
+    "chart_sha256 TEXT NOT NULL,"
+    "remote_user_id INTEGER,"
+    "remote_chart_id TEXT,"
+    "remote_score_id TEXT,"
+    "confirmation_source INTEGER NOT NULL,"
+    "observed_in_snapshot INTEGER NOT NULL DEFAULT 0,"
+    "confirmed_at_ms INTEGER NOT NULL,"
+    "UNIQUE(provider_id, server_origin, replay_id),"
+    "UNIQUE(provider_id, server_origin, modern_chart_result_id),"
+    "CHECK((replay_id IS NOT NULL) != (modern_chart_result_id IS NOT NULL)),"
+    "CHECK(observed_in_snapshot IN (0, 1)),"
+    "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE"
     ")";
 
 constexpr const char *kExpectedIrSubmissionReceiptsAttemptIndexSql =
@@ -4862,17 +4887,69 @@ void assertExactIrSubmissionReceiptSchema(sqlite3 *db) {
   assert(!columnExists(db, "ir_submission_receipts", "authorization"));
   assert(!columnExists(db, "ir_submission_receipts", "payload_json"));
 
-  SqliteStatementHandle foreignKeys;
-  assert(prepareSqliteStatement(
-             db, "PRAGMA foreign_key_list(ir_submission_receipts)",
-             foreignKeys) == SQLITE_OK);
-  assert(sqlite3_step(foreignKeys.get()) == SQLITE_ROW);
-  assert(queryText(db,
-                   "SELECT \"table\" || '|' || \"from\" || '|' || "
-                   "\"to\" || '|' || on_delete FROM "
-                   "pragma_foreign_key_list('ir_submission_receipts')") ==
-         "replays|replay_id|id|CASCADE");
-  assert(sqlite3_step(foreignKeys.get()) == SQLITE_DONE);
+  assert(queryInt(db,
+                  "SELECT COUNT(*) FROM "
+                  "pragma_foreign_key_list('ir_submission_receipts')") == 2);
+  assert(queryInt(db, "SELECT COUNT(*) FROM "
+                      "pragma_foreign_key_list('ir_submission_receipts') WHERE "
+                      "\"table\"='replays' AND \"from\"='replay_id' AND "
+                      "\"to\"='id' AND on_delete='CASCADE'") == 1);
+  assert(queryInt(db, "SELECT COUNT(*) FROM "
+                      "pragma_foreign_key_list('ir_submission_receipts') WHERE "
+                      "\"table\"='modern_chart_results' AND "
+                      "\"from\"='modern_chart_result_id' AND \"to\"='id' AND "
+                      "on_delete='CASCADE'") == 1);
+}
+
+void testVersion10MigrationPreservesLegacyReceiptOwnership(
+    const std::filesystem::path &root) {
+  const auto path = root / "version-10-shared-receipt-owner" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  constexpr std::string_view attemptId = "123e4567-e89b-42d3-a456-426614174088";
+  const std::string chartMd5(32, 'a');
+  const std::string chartSha256(64, 'b');
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_submission_receipts");
+  execOrAbort(db.get(), kExpectedLegacyIrSubmissionReceiptsTableSql);
+  execOrAbort(db.get(), kExpectedIrSubmissionReceiptsAttemptIndexSql);
+  execOrAbort(db.get(), kExpectedIrSubmissionReceiptsRemoteScoreIndexSql);
+  execOrAbort(
+      db.get(),
+      "INSERT INTO replays(chart_path,chart_md5,chart_sha256,chart_title,"
+      "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,max_combo,"
+      "final_gauge,clear_type,assist_option,ruleset_version,eligibility,"
+      "provenance_json,attempt_id,attempt_fingerprint) VALUES('chart.bms','" +
+          chartMd5 + "','" + chartSha256 +
+          "','Title','Artist',1,0,0,7,4,82.5,300,'off',0,2,'" +
+          kLegacyProvenanceJson + "','" + std::string(attemptId) + "',NULL)");
+  const int replayId = queryInt(db.get(), "SELECT last_insert_rowid()");
+  execOrAbort(
+      db.get(),
+      "INSERT INTO ir_submission_receipts(provider_id,server_origin,replay_id,"
+      "attempt_id,chart_md5,chart_sha256,remote_user_id,remote_chart_id,"
+      "remote_score_id,confirmation_source,observed_in_snapshot,"
+      "confirmed_at_ms) VALUES('tachi','https://boku.tachi.ac'," +
+          std::to_string(replayId) + ",'" + std::string(attemptId) + "','" +
+          chartMd5 + "','" + chartSha256 +
+          "',42,'chart','score',0,1,1700000000000)");
+  execOrAbort(db.get(), "PRAGMA user_version=10");
+  db.reset();
+
+  assert(helper.EnsureSchema());
+  const auto receipt = helper.LoadIrSubmissionReceipt(
+      "tachi", "https://boku.tachi.ac", attemptId);
+  assert(receipt.status == ir::IrReceiptReadStatus::Found && receipt.receipt &&
+         receipt.receipt->replayId == replayId &&
+         receipt.receipt->modernChartResultId == 0 &&
+         receipt.receipt->observedInSnapshot);
+  helper.Shutdown();
+  db = openDatabase(path);
+  assertExactIrSubmissionReceiptSchema(db.get());
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
 }
 
 constexpr const char *kExpectedIrRemoteScoresTableSql =
@@ -4984,7 +5061,8 @@ void testFreshDatabaseCreatesIrRemoteScores(
   helper.Shutdown();
 
   auto db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assertExactIrRemoteScoreSchema(db.get());
 }
 
@@ -5005,7 +5083,8 @@ void testVersion9MigrationAddsIrRemoteScores(
   assert(helper.EnsureSchema());
   helper.Shutdown();
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(queryText(db.get(), "SELECT value FROM sentinel") ==
          "version-9-kept");
   assertExactIrRemoteScoreSchema(db.get());
@@ -5029,7 +5108,8 @@ void testCurrentVersionRejectsMalformedIrRemoteScoreSchema(
 
   assert(!helper.EnsureSchema());
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(schemaSnapshot(db.get()) == before);
 }
 
@@ -5041,8 +5121,9 @@ void testFreshDatabaseCreatesIrSubmissionReceipts(
   helper.Shutdown();
 
   auto db = openDatabase(path);
-  assert(ReplayRepository::kCurrentSchemaVersion == 10);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(ReplayRepository::kCurrentSchemaVersion == 11);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assertExactIrSubmissionReceiptSchema(db.get());
 }
 
@@ -5063,7 +5144,8 @@ void testVersion8MigrationAddsIrSubmissionReceipts(
   assert(helper.EnsureSchema());
   helper.Shutdown();
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(queryText(db.get(), "SELECT value FROM sentinel") ==
          "version-8-kept");
   assertExactIrSubmissionReceiptSchema(db.get());
@@ -7965,13 +8047,27 @@ void testExistingListLimits(const std::filesystem::path &root) {
 
 void testSchema10LegacySummaryBoundaryIsHeaderOnly(
     const std::filesystem::path &root) {
-  static_assert(ReplayRepository::kCurrentSchemaVersion == 10,
-                "move this characterization to a frozen v10 fixture before "
-                "advancing the production schema");
+  static_assert(ReplayRepository::kCurrentSchemaVersion > 10);
   const auto path = root / "schema10-summary-boundary" / "replay.db";
   ReplayRepository repository(path);
   assert(repository.EnsureSchema());
+  repository.Shutdown();
   auto db = openDatabase(path);
+  for (const char *statement : {
+           "DROP TABLE ir_submission_receipts",
+           "DROP TABLE modern_pending_chart_score_writes",
+           "DROP TABLE ir_submission_snapshots",
+           "DROP TABLE modern_replay_files",
+           "DROP TABLE modern_replay_file_reservations",
+           "DROP TABLE modern_replay_stem_sequences",
+           "DROP TABLE modern_chart_results",
+           kExpectedLegacyIrSubmissionReceiptsTableSql,
+           kExpectedIrSubmissionReceiptsAttemptIndexSql,
+           kExpectedIrSubmissionReceiptsRemoteScoreIndexSql,
+           "PRAGMA user_version=10",
+       }) {
+    execOrAbort(db.get(), statement);
+  }
   assert(queryInt(db.get(), "PRAGMA user_version") == 10);
 
   constexpr std::array chartHeaderFacts{
@@ -8099,6 +8195,7 @@ int main() {
   testCurrentVersionRejectsMalformedRulesetProofSchema(root);
   testFreshDatabaseCreatesIrSubmissionReceipts(root);
   testVersion8MigrationAddsIrSubmissionReceipts(root);
+  testVersion10MigrationPreservesLegacyReceiptOwnership(root);
   testVersion8MigrationRejectsMalformedExistingOutbox(root);
   testCurrentVersionRejectsMalformedIrSubmissionReceiptSchema(root);
   testFreshDatabaseCreatesIrRemoteScores(root);

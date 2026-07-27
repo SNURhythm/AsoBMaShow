@@ -25,9 +25,9 @@ constexpr const char *kIrOutboxColumns =
     "created_at_ms,updated_at_ms,completed_at_ms";
 
 constexpr const char *kIrSubmissionReceiptColumns =
-    "id,provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
-    "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
-    "observed_in_snapshot,confirmed_at_ms";
+    "id,provider_id,server_origin,replay_id,modern_chart_result_id,attempt_id,"
+    "chart_md5,chart_sha256,remote_user_id,remote_chart_id,remote_score_id,"
+    "confirmation_source,observed_in_snapshot,confirmed_at_ms";
 
 bool validProviderId(std::string_view value) {
   if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
@@ -132,19 +132,26 @@ bool decodeIrSubmissionReceiptRow(sqlite3_stmt *stmt,
                                   ir::IrSubmissionReceipt &receipt,
                                   std::string &diagnostic) {
   if (!columnIs(stmt, 0, SQLITE_INTEGER) || !columnIs(stmt, 1, SQLITE_TEXT) ||
-      !columnIs(stmt, 2, SQLITE_TEXT) || !columnIs(stmt, 3, SQLITE_INTEGER) ||
-      !columnIs(stmt, 4, SQLITE_TEXT) || !nullableText(stmt, 5) ||
-      !columnIs(stmt, 6, SQLITE_TEXT) || !nullableInteger(stmt, 7) ||
-      !nullableText(stmt, 8) || !nullableText(stmt, 9) ||
-      !columnIs(stmt, 10, SQLITE_INTEGER) ||
-      !columnIs(stmt, 11, SQLITE_INTEGER) ||
-      !columnIs(stmt, 12, SQLITE_INTEGER)) {
+      !columnIs(stmt, 2, SQLITE_TEXT) || !nullableInteger(stmt, 3) ||
+      !nullableInteger(stmt, 4) || !columnIs(stmt, 5, SQLITE_TEXT) ||
+      !nullableText(stmt, 6) || !columnIs(stmt, 7, SQLITE_TEXT) ||
+      !nullableInteger(stmt, 8) || !nullableText(stmt, 9) ||
+      !nullableText(stmt, 10) || !columnIs(stmt, 11, SQLITE_INTEGER) ||
+      !columnIs(stmt, 12, SQLITE_INTEGER) ||
+      !columnIs(stmt, 13, SQLITE_INTEGER)) {
     diagnostic = "IR receipt row has unexpected SQLite value types";
     return false;
   }
-  const sqlite3_int64 replayId = sqlite3_column_int64(stmt, 3);
-  if (replayId <= 0 || replayId > std::numeric_limits<int>::max()) {
-    diagnostic = "IR receipt replay ID is out of range";
+  const sqlite3_int64 replayId = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                                     ? 0
+                                     : sqlite3_column_int64(stmt, 3);
+  const sqlite3_int64 modernResultId =
+      sqlite3_column_type(stmt, 4) == SQLITE_NULL
+          ? 0
+          : sqlite3_column_int64(stmt, 4);
+  if (replayId < 0 || replayId > std::numeric_limits<int>::max() ||
+      modernResultId < 0 || modernResultId > std::numeric_limits<int>::max()) {
+    diagnostic = "IR receipt result owner ID is out of range";
     return false;
   }
   receipt = {
@@ -152,16 +159,17 @@ bool decodeIrSubmissionReceiptRow(sqlite3_stmt *stmt,
       .providerId = sqliteColumnString(stmt, 1),
       .serverOrigin = sqliteColumnString(stmt, 2),
       .replayId = static_cast<int>(replayId),
-      .attemptId = sqliteColumnString(stmt, 4),
-      .chartMd5 = optionalText(stmt, 5),
-      .chartSha256 = sqliteColumnString(stmt, 6),
-      .remoteUserId = optionalInteger(stmt, 7),
-      .remoteChartId = optionalText(stmt, 8),
-      .remoteScoreId = optionalText(stmt, 9),
+      .modernChartResultId = static_cast<int>(modernResultId),
+      .attemptId = sqliteColumnString(stmt, 5),
+      .chartMd5 = optionalText(stmt, 6),
+      .chartSha256 = sqliteColumnString(stmt, 7),
+      .remoteUserId = optionalInteger(stmt, 8),
+      .remoteChartId = optionalText(stmt, 9),
+      .remoteScoreId = optionalText(stmt, 10),
       .source = static_cast<ir::IrReceiptConfirmationSource>(
-          sqlite3_column_int(stmt, 10)),
-      .observedInSnapshot = sqlite3_column_int(stmt, 11) != 0,
-      .confirmedAtUnixMillis = sqlite3_column_int64(stmt, 12),
+          sqlite3_column_int(stmt, 11)),
+      .observedInSnapshot = sqlite3_column_int(stmt, 12) != 0,
+      .confirmedAtUnixMillis = sqlite3_column_int64(stmt, 13),
   };
   return ir::validateIrSubmissionReceipt(receipt, diagnostic);
 }
@@ -334,36 +342,45 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
     return {.status = ir::IrOutboxMutationStatus::Updated, .affectedRows = 1};
   }
 
-  SqliteStatementHandle replay;
-  if (prepareSqliteStatement(database,
-                             "SELECT id FROM replays WHERE attempt_id=?",
-                             replay) != SQLITE_OK ||
-      !bindSqliteText(replay.get(), 1, claimed.attemptId)) {
+  SqliteStatementHandle owner;
+  constexpr const char *ownerQuery =
+      "SELECT id,NULL FROM replays WHERE attempt_id=? UNION ALL "
+      "SELECT NULL,id FROM modern_chart_results WHERE attempt_id=?";
+  if (prepareSqliteStatement(database, ownerQuery, owner) != SQLITE_OK ||
+      !bindSqliteText(owner.get(), 1, claimed.attemptId) ||
+      !bindSqliteText(owner.get(), 2, claimed.attemptId)) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "could not prepare IR receipt replay lookup"};
+            .diagnostic = "could not prepare IR receipt result lookup"};
   }
-  const int replayStep = sqlite3_step(replay.get());
-  if (replayStep != SQLITE_ROW ||
-      sqlite3_column_type(replay.get(), 0) != SQLITE_INTEGER) {
+  const int ownerStep = sqlite3_step(owner.get());
+  if (ownerStep != SQLITE_ROW || !nullableInteger(owner.get(), 0) ||
+      !nullableInteger(owner.get(), 1)) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = replayStep == SQLITE_DONE
-                              ? "IR receipt replay attempt is missing"
-                              : "IR receipt replay lookup did not complete"};
+            .diagnostic = ownerStep == SQLITE_DONE
+                              ? "IR receipt durable result is missing"
+                              : "IR receipt result lookup did not complete"};
   }
-  const sqlite3_int64 replayId = sqlite3_column_int64(replay.get(), 0);
-  if (replayId <= 0 || replayId > std::numeric_limits<int>::max() ||
-      sqlite3_step(replay.get()) != SQLITE_DONE) {
+  const std::optional<std::int64_t> replayId = optionalInteger(owner.get(), 0);
+  const std::optional<std::int64_t> modernResultId =
+      optionalInteger(owner.get(), 1);
+  if (replayId.has_value() == modernResultId.has_value() ||
+      (replayId &&
+       (*replayId <= 0 || *replayId > std::numeric_limits<int>::max())) ||
+      (modernResultId && (*modernResultId <= 0 ||
+                          *modernResultId > std::numeric_limits<int>::max())) ||
+      sqlite3_step(owner.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "IR receipt replay lookup is invalid"};
+            .diagnostic =
+                "IR receipt result ownership is ambiguous or invalid"};
   }
 
   const ir::IrSuccessfulReceiptDraft &receipt = *update.successfulReceipt;
   constexpr const char *receiptQuery =
       "INSERT INTO ir_submission_receipts("
-      "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
-      "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
-      "observed_in_snapshot,confirmed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
-      "ON CONFLICT(provider_id,server_origin,replay_id) DO UPDATE SET "
+      "provider_id,server_origin,replay_id,modern_chart_result_id,attempt_id,"
+      "chart_md5,chart_sha256,remote_user_id,remote_chart_id,remote_score_id,"
+      "confirmation_source,observed_in_snapshot,confirmed_at_ms) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET "
       "attempt_id=excluded.attempt_id,"
       "chart_md5=excluded.chart_md5,"
       "chart_sha256=excluded.chart_sha256,"
@@ -381,23 +398,29 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
           SQLITE_OK ||
       !bindSqliteText(receiptStatement.get(), 1, claimed.providerId) ||
       !bindSqliteText(receiptStatement.get(), 2, receipt.serverOrigin) ||
-      sqlite3_bind_int64(receiptStatement.get(), 3, replayId) != SQLITE_OK ||
-      !bindSqliteText(receiptStatement.get(), 4, claimed.attemptId) ||
+      (replayId ? sqlite3_bind_int64(receiptStatement.get(), 3, *replayId) !=
+                      SQLITE_OK
+                : sqlite3_bind_null(receiptStatement.get(), 3) != SQLITE_OK) ||
+      (modernResultId
+           ? sqlite3_bind_int64(receiptStatement.get(), 4, *modernResultId) !=
+                 SQLITE_OK
+           : sqlite3_bind_null(receiptStatement.get(), 4) != SQLITE_OK) ||
+      !bindSqliteText(receiptStatement.get(), 5, claimed.attemptId) ||
       (claimed.chartMd5.empty()
-           ? sqlite3_bind_null(receiptStatement.get(), 5) != SQLITE_OK
-           : !bindSqliteText(receiptStatement.get(), 5, claimed.chartMd5)) ||
-      !bindSqliteText(receiptStatement.get(), 6, claimed.chartSha256) ||
+           ? sqlite3_bind_null(receiptStatement.get(), 6) != SQLITE_OK
+           : !bindSqliteText(receiptStatement.get(), 6, claimed.chartMd5)) ||
+      !bindSqliteText(receiptStatement.get(), 7, claimed.chartSha256) ||
       (receipt.remoteUserId
-           ? sqlite3_bind_int64(receiptStatement.get(), 7,
+           ? sqlite3_bind_int64(receiptStatement.get(), 8,
                                 *receipt.remoteUserId) != SQLITE_OK
-           : sqlite3_bind_null(receiptStatement.get(), 7) != SQLITE_OK) ||
-      !bindSqliteText(receiptStatement.get(), 8, receipt.remoteChartId) ||
-      !bindSqliteText(receiptStatement.get(), 9, receipt.remoteScoreId) ||
-      sqlite3_bind_int(receiptStatement.get(), 10,
-                       static_cast<int>(receipt.source)) != SQLITE_OK ||
+           : sqlite3_bind_null(receiptStatement.get(), 8) != SQLITE_OK) ||
+      !bindSqliteText(receiptStatement.get(), 9, receipt.remoteChartId) ||
+      !bindSqliteText(receiptStatement.get(), 10, receipt.remoteScoreId) ||
       sqlite3_bind_int(receiptStatement.get(), 11,
+                       static_cast<int>(receipt.source)) != SQLITE_OK ||
+      sqlite3_bind_int(receiptStatement.get(), 12,
                        receipt.observedInSnapshot ? 1 : 0) != SQLITE_OK ||
-      sqlite3_bind_int64(receiptStatement.get(), 12,
+      sqlite3_bind_int64(receiptStatement.get(), 13,
                          receipt.confirmedAtUnixMillis) != SQLITE_OK ||
       sqlite3_step(receiptStatement.get()) != SQLITE_DONE ||
       sqlite3_changes(database) != 1) {

@@ -1,9 +1,14 @@
 #pragma once
 
 #include "../CourseIdentity.h"
+#include "../ModernResult.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceModel.h"
 #include "../ir/IrOutboxModels.h"
+#include "../ir/IrSubmissionSnapshot.h"
+#include "../replay/BeatorajaReplayCodec.h"
+#include "../replay/BeatorajaReplayPath.h"
+#include "../replay/ReplayFileStore.h"
 #include "../ir/IrRemoteScoreModels.h"
 #include "../ir/IrScoreReconciliation.h"
 #include "ScoreRepositoryModels.h"
@@ -228,9 +233,123 @@ struct CourseReplayLookup {
   int legacyCourseId = 0;
 };
 
+struct ModernReplayPathReservation {
+  std::string attemptId;
+  replay::ReplayPathIdentity identity;
+  std::int64_t createdAtUnixMillis = 0;
+
+  bool operator==(const ModernReplayPathReservation &) const = default;
+};
+
+enum class ModernReplayReservationStatus {
+  Reserved,
+  AlreadyReserved,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayReservationOutcome {
+  ModernReplayReservationStatus status =
+      ModernReplayReservationStatus::StorageFailure;
+  std::optional<ModernReplayPathReservation> reservation;
+  std::string diagnostic;
+};
+
+struct ModernReplayFileAttachment {
+  replay::ReplayPathIdentity identity;
+  replay::ReplayFileMetadata metadata;
+
+  bool operator==(const ModernReplayFileAttachment &) const = default;
+};
+
+struct ModernReplayFileReference {
+  std::int64_t id = 0;
+  int resultId = 0;
+  replay::ReplayPathIdentity identity;
+  replay::ReplayFileMetadata metadata;
+
+  bool operator==(const ModernReplayFileReference &) const = default;
+};
+
+struct ModernChartResultRecord {
+  result_persistence::ModernChartResult result;
+  std::optional<ModernReplayFileReference> replayFile;
+
+  bool operator==(const ModernChartResultRecord &) const = default;
+};
+
+enum class ModernChartStageStatus {
+  Staged,
+  AlreadyStaged,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernChartStageReceipt {
+  std::string attemptId;
+  int resultId = 0;
+  std::string createdAt;
+
+  bool operator==(const ModernChartStageReceipt &) const = default;
+};
+
+struct ModernChartStageOutcome {
+  ModernChartStageStatus status = ModernChartStageStatus::StorageFailure;
+  std::optional<ModernChartStageReceipt> receipt;
+  std::string diagnostic;
+};
+
+enum class ModernChartResultReadStatus {
+  Loaded,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernChartResultReadOutcome {
+  ModernChartResultReadStatus status =
+      ModernChartResultReadStatus::StorageFailure;
+  std::optional<ModernChartResultRecord> record;
+  std::string diagnostic;
+};
+
+inline constexpr std::size_t kMaximumModernChartHistoryRows = 1024;
+
+enum class ModernChartHistoryReadStatus {
+  Loaded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernChartHistoryReadOutcome {
+  ModernChartHistoryReadStatus status =
+      ModernChartHistoryReadStatus::StorageFailure;
+  std::vector<ModernChartResultRecord> records;
+  std::string diagnostic;
+};
+
+enum class ModernIrSnapshotReadStatus {
+  Loaded,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernIrSnapshotReadOutcome {
+  ModernIrSnapshotReadStatus status =
+      ModernIrSnapshotReadStatus::StorageFailure;
+  std::optional<ir::IrSubmissionSnapshot> snapshot;
+  std::string diagnostic;
+};
+
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 10;
+  static constexpr int kCurrentSchemaVersion = 11;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -247,6 +366,21 @@ public:
   [[nodiscard]] static bool HasActiveWrites();
   void Shutdown();
   bool EnsureSchema();
+  ModernReplayReservationOutcome
+  ReserveModernReplayPath(std::string_view attemptId, std::string_view stem,
+                          std::int64_t createdAtUnixMillis);
+  ModernChartStageOutcome StageModernChartResult(
+      const result_persistence::ModernChartResult &result,
+      const std::optional<ir::IrSubmissionSnapshot> &snapshot,
+      const std::optional<ModernReplayFileAttachment> &replayFile,
+      std::span<const ir::IrOutboxDraft> irDrafts = {});
+  ModernChartResultReadOutcome
+  LoadModernChartResultByAttempt(std::string_view attemptId);
+  ModernChartResultReadOutcome LoadModernChartResult(int resultId);
+  ModernChartHistoryReadOutcome
+  ListModernChartResults(std::string_view chartSha256, std::size_t limit = 100);
+  ModernIrSnapshotReadOutcome
+  LoadModernIrSubmissionSnapshot(std::string_view attemptId);
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
   result_persistence::StageOutcome

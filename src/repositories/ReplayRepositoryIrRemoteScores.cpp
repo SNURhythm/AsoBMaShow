@@ -34,6 +34,15 @@ constexpr const char *kIrRemoteScoreColumns =
     "bad_points,final_gauge,gauge_history_json,random_mode,gauge_mode,"
     "input_device,client,sync_generation";
 
+constexpr std::string_view kReceiptOwnerMatchesOutboxAttempt =
+    "((receipt.replay_id IS NOT NULL AND EXISTS(SELECT 1 FROM replays replay "
+    "WHERE replay.id=receipt.replay_id AND "
+    "replay.attempt_id=ir_outbox.attempt_id)) OR "
+    "(receipt.modern_chart_result_id IS NOT NULL AND EXISTS(SELECT 1 FROM "
+    "modern_chart_results result WHERE "
+    "result.id=receipt.modern_chart_result_id AND "
+    "result.attempt_id=ir_outbox.attempt_id)))";
+
 bool validProviderId(std::string_view value) {
   if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
       value.front() < 'a' || value.front() > 'z') {
@@ -127,6 +136,11 @@ bool bindOptionalInteger(sqlite3_stmt *stmt, int column,
                          const std::optional<std::int64_t> &value) {
   return value ? sqlite3_bind_int64(stmt, column, *value) == SQLITE_OK
                : sqlite3_bind_null(stmt, column) == SQLITE_OK;
+}
+
+bool bindOwnerId(sqlite3_stmt *stmt, int column, int value) {
+  return value > 0 ? sqlite3_bind_int(stmt, column, value) == SQLITE_OK
+                   : sqlite3_bind_null(stmt, column) == SQLITE_OK;
 }
 
 bool bindOptionalInt(sqlite3_stmt *stmt, int column,
@@ -391,7 +405,7 @@ validateMutation(const ir::IrRemoteSnapshotMutation &mutation) {
         ir::kMaximumIrRemoteScoreSnapshotEntries) {
       return {.diagnostic = "IR remote receipt mutation is oversized"};
     }
-    std::unordered_set<int> receiptReplayIds;
+    std::unordered_set<std::string> receiptOwnerIds;
     std::unordered_set<std::int64_t> upsertedReceiptIds;
     for (const auto &receipt : mutation.upsertedReceipts) {
       ir::IrSubmissionReceipt validated = receipt;
@@ -403,9 +417,13 @@ validateMutation(const ir::IrRemoteSnapshotMutation &mutation) {
       } else if (!upsertedReceiptIds.emplace(validated.id).second) {
         return {.diagnostic = "IR remote receipt mutation has duplicate IDs"};
       }
+      const std::string ownerKey =
+          receipt.replayId > 0
+              ? "legacy:" + std::to_string(receipt.replayId)
+              : "modern:" + std::to_string(receipt.modernChartResultId);
       if (receipt.providerId != mutation.providerId ||
           receipt.serverOrigin != mutation.serverOrigin ||
-          !receiptReplayIds.emplace(receipt.replayId).second ||
+          !receiptOwnerIds.emplace(ownerKey).second ||
           !ir::validateIrSubmissionReceipt(validated, diagnostic)) {
         return {.diagnostic = diagnostic.empty()
                                   ? "IR remote receipt mutation is invalid"
@@ -592,31 +610,33 @@ bool deleteOlderRemoteGeneration(sqlite3 *db,
 bool insertReceipt(sqlite3 *db, const ir::IrSubmissionReceipt &receipt) {
   constexpr const char *query =
       "INSERT INTO ir_submission_receipts("
-      "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
-      "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
-      "observed_in_snapshot,confirmed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)";
+      "provider_id,server_origin,replay_id,modern_chart_result_id,attempt_id,"
+      "chart_md5,chart_sha256,remote_user_id,remote_chart_id,remote_score_id,"
+      "confirmation_source,observed_in_snapshot,confirmed_at_ms) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)";
   SqliteStatementHandle statement;
   return prepareSqliteStatement(db, query, statement) == SQLITE_OK &&
          bindSqliteText(statement.get(), 1, receipt.providerId) &&
          bindSqliteText(statement.get(), 2, receipt.serverOrigin) &&
-         sqlite3_bind_int(statement.get(), 3, receipt.replayId) == SQLITE_OK &&
-         bindSqliteText(statement.get(), 4, receipt.attemptId) &&
+         bindOwnerId(statement.get(), 3, receipt.replayId) &&
+         bindOwnerId(statement.get(), 4, receipt.modernChartResultId) &&
+         bindSqliteText(statement.get(), 5, receipt.attemptId) &&
          (receipt.chartMd5.empty()
-              ? sqlite3_bind_null(statement.get(), 5) == SQLITE_OK
-              : bindSqliteText(statement.get(), 5, receipt.chartMd5)) &&
-         bindSqliteText(statement.get(), 6, receipt.chartSha256) &&
-         bindOptionalInteger(statement.get(), 7, receipt.remoteUserId) &&
+              ? sqlite3_bind_null(statement.get(), 6) == SQLITE_OK
+              : bindSqliteText(statement.get(), 6, receipt.chartMd5)) &&
+         bindSqliteText(statement.get(), 7, receipt.chartSha256) &&
+         bindOptionalInteger(statement.get(), 8, receipt.remoteUserId) &&
          (receipt.remoteChartId.empty()
-              ? sqlite3_bind_null(statement.get(), 8) == SQLITE_OK
-              : bindSqliteText(statement.get(), 8, receipt.remoteChartId)) &&
-         (receipt.remoteScoreId.empty()
               ? sqlite3_bind_null(statement.get(), 9) == SQLITE_OK
-              : bindSqliteText(statement.get(), 9, receipt.remoteScoreId)) &&
-         sqlite3_bind_int(statement.get(), 10,
-                          static_cast<int>(receipt.source)) == SQLITE_OK &&
+              : bindSqliteText(statement.get(), 9, receipt.remoteChartId)) &&
+         (receipt.remoteScoreId.empty()
+              ? sqlite3_bind_null(statement.get(), 10) == SQLITE_OK
+              : bindSqliteText(statement.get(), 10, receipt.remoteScoreId)) &&
          sqlite3_bind_int(statement.get(), 11,
+                          static_cast<int>(receipt.source)) == SQLITE_OK &&
+         sqlite3_bind_int(statement.get(), 12,
                           receipt.observedInSnapshot ? 1 : 0) == SQLITE_OK &&
-         sqlite3_bind_int64(statement.get(), 12,
+         sqlite3_bind_int64(statement.get(), 13,
                             receipt.confirmedAtUnixMillis) == SQLITE_OK &&
          sqlite3_step(statement.get()) == SQLITE_DONE &&
          sqlite3_changes(db) == 1;
@@ -624,34 +644,36 @@ bool insertReceipt(sqlite3 *db, const ir::IrSubmissionReceipt &receipt) {
 
 bool updateReceipt(sqlite3 *db, const ir::IrSubmissionReceipt &receipt) {
   constexpr const char *query =
-      "UPDATE ir_submission_receipts SET replay_id=?,attempt_id=?,"
-      "chart_md5=?,chart_sha256=?,remote_user_id=?,remote_chart_id=?,"
-      "remote_score_id=?,confirmation_source=?,observed_in_snapshot=?,"
-      "confirmed_at_ms=? WHERE id=? AND provider_id=? AND server_origin=?";
+      "UPDATE ir_submission_receipts SET replay_id=?,modern_chart_result_id=?,"
+      "attempt_id=?,chart_md5=?,chart_sha256=?,remote_user_id=?,"
+      "remote_chart_id=?,remote_score_id=?,confirmation_source=?,"
+      "observed_in_snapshot=?,confirmed_at_ms=? WHERE id=? AND provider_id=? "
+      "AND server_origin=?";
   SqliteStatementHandle statement;
   return prepareSqliteStatement(db, query, statement) == SQLITE_OK &&
-         sqlite3_bind_int(statement.get(), 1, receipt.replayId) == SQLITE_OK &&
-         bindSqliteText(statement.get(), 2, receipt.attemptId) &&
+         bindOwnerId(statement.get(), 1, receipt.replayId) &&
+         bindOwnerId(statement.get(), 2, receipt.modernChartResultId) &&
+         bindSqliteText(statement.get(), 3, receipt.attemptId) &&
          (receipt.chartMd5.empty()
-              ? sqlite3_bind_null(statement.get(), 3) == SQLITE_OK
-              : bindSqliteText(statement.get(), 3, receipt.chartMd5)) &&
-         bindSqliteText(statement.get(), 4, receipt.chartSha256) &&
-         bindOptionalInteger(statement.get(), 5, receipt.remoteUserId) &&
+              ? sqlite3_bind_null(statement.get(), 4) == SQLITE_OK
+              : bindSqliteText(statement.get(), 4, receipt.chartMd5)) &&
+         bindSqliteText(statement.get(), 5, receipt.chartSha256) &&
+         bindOptionalInteger(statement.get(), 6, receipt.remoteUserId) &&
          (receipt.remoteChartId.empty()
-              ? sqlite3_bind_null(statement.get(), 6) == SQLITE_OK
-              : bindSqliteText(statement.get(), 6, receipt.remoteChartId)) &&
-         (receipt.remoteScoreId.empty()
               ? sqlite3_bind_null(statement.get(), 7) == SQLITE_OK
-              : bindSqliteText(statement.get(), 7, receipt.remoteScoreId)) &&
-         sqlite3_bind_int(statement.get(), 8,
-                          static_cast<int>(receipt.source)) == SQLITE_OK &&
+              : bindSqliteText(statement.get(), 7, receipt.remoteChartId)) &&
+         (receipt.remoteScoreId.empty()
+              ? sqlite3_bind_null(statement.get(), 8) == SQLITE_OK
+              : bindSqliteText(statement.get(), 8, receipt.remoteScoreId)) &&
          sqlite3_bind_int(statement.get(), 9,
+                          static_cast<int>(receipt.source)) == SQLITE_OK &&
+         sqlite3_bind_int(statement.get(), 10,
                           receipt.observedInSnapshot ? 1 : 0) == SQLITE_OK &&
-         sqlite3_bind_int64(statement.get(), 10,
+         sqlite3_bind_int64(statement.get(), 11,
                             receipt.confirmedAtUnixMillis) == SQLITE_OK &&
-         sqlite3_bind_int64(statement.get(), 11, receipt.id) == SQLITE_OK &&
-         bindSqliteText(statement.get(), 12, receipt.providerId) &&
-         bindSqliteText(statement.get(), 13, receipt.serverOrigin) &&
+         sqlite3_bind_int64(statement.get(), 12, receipt.id) == SQLITE_OK &&
+         bindSqliteText(statement.get(), 13, receipt.providerId) &&
+         bindSqliteText(statement.get(), 14, receipt.serverOrigin) &&
          sqlite3_step(statement.get()) == SQLITE_DONE &&
          sqlite3_changes(db) == 1;
 }
@@ -691,15 +713,16 @@ bool deleteReceiptIds(sqlite3 *db, const ir::IrRemoteSnapshotMutation &mutation,
 bool deleteOutboxIds(sqlite3 *db, const ir::IrRemoteSnapshotMutation &mutation,
                      const std::vector<std::int64_t> &rowIds,
                      bool succeededOnly, int &deletedCount) {
-  const char *query =
+  const std::string query =
       succeededOnly
-          ? "DELETE FROM ir_outbox WHERE id=? AND provider_id=? AND state=5 "
-            "AND EXISTS(SELECT 1 FROM ir_submission_receipts receipt WHERE "
-            "receipt.provider_id=? AND receipt.server_origin=? AND "
-            "receipt.attempt_id=ir_outbox.attempt_id AND "
-            "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays "
-            "replay WHERE replay.id=receipt.replay_id AND "
-            "replay.attempt_id=ir_outbox.attempt_id))"
+          ? std::string(
+                "DELETE FROM ir_outbox WHERE id=? AND provider_id=? AND "
+                "state=5 AND EXISTS(SELECT 1 FROM ir_submission_receipts "
+                "receipt WHERE receipt.provider_id=? AND "
+                "receipt.server_origin=? AND "
+                "receipt.attempt_id=ir_outbox.attempt_id AND "
+                "receipt.confirmation_source=0 AND ") +
+                std::string(kReceiptOwnerMatchesOutboxAttempt) + ")"
           : "DELETE FROM ir_outbox WHERE id=? AND provider_id=? AND state IN "
             "(0,3,4) AND local_result_ready=1 AND (remote_origin IS NULL OR "
             "remote_origin=?) AND EXISTS(SELECT 1 FROM "
@@ -1340,14 +1363,14 @@ ReplayRepository::ClearIrAccountEvidence(std::string_view providerId,
 
   std::size_t affectedRows = 0;
   SqliteStatementHandle outboxStatement;
-  constexpr const char *outboxQuery =
-      "DELETE FROM ir_outbox WHERE provider_id=? AND state=5 AND EXISTS("
-      "SELECT 1 FROM ir_submission_receipts receipt WHERE "
-      "receipt.provider_id=? AND receipt.server_origin=? AND "
-      "receipt.attempt_id=ir_outbox.attempt_id AND "
-      "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays replay "
-      "WHERE replay.id=receipt.replay_id AND "
-      "replay.attempt_id=ir_outbox.attempt_id))";
+  const std::string outboxQuery =
+      std::string(
+          "DELETE FROM ir_outbox WHERE provider_id=? AND state=5 AND EXISTS("
+          "SELECT 1 FROM ir_submission_receipts receipt WHERE "
+          "receipt.provider_id=? AND receipt.server_origin=? AND "
+          "receipt.attempt_id=ir_outbox.attempt_id AND "
+          "receipt.confirmation_source=0 AND ") +
+      std::string(kReceiptOwnerMatchesOutboxAttempt) + ")";
   if (prepareSqliteStatement(database, outboxQuery, outboxStatement) !=
           SQLITE_OK ||
       sqlite3_bind_text(outboxStatement.get(), 1, providerId.data(),
@@ -1436,13 +1459,14 @@ ir::IrOutboxMutationOutcome ReplayRepository::ClearIrProviderAccountEvidence(
 
   std::size_t affectedRows = 0;
   SqliteStatementHandle outboxStatement;
-  constexpr const char *outboxQuery =
-      "DELETE FROM ir_outbox WHERE provider_id=? AND state=5 AND EXISTS("
-      "SELECT 1 FROM ir_submission_receipts receipt WHERE "
-      "receipt.provider_id=? AND receipt.attempt_id=ir_outbox.attempt_id AND "
-      "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays replay "
-      "WHERE replay.id=receipt.replay_id AND "
-      "replay.attempt_id=ir_outbox.attempt_id))";
+  const std::string outboxQuery =
+      std::string(
+          "DELETE FROM ir_outbox WHERE provider_id=? AND state=5 AND EXISTS("
+          "SELECT 1 FROM ir_submission_receipts receipt WHERE "
+          "receipt.provider_id=? AND "
+          "receipt.attempt_id=ir_outbox.attempt_id AND "
+          "receipt.confirmation_source=0 AND ") +
+      std::string(kReceiptOwnerMatchesOutboxAttempt) + ")";
   if (prepareSqliteStatement(database, outboxQuery, outboxStatement) !=
           SQLITE_OK ||
       sqlite3_bind_text(outboxStatement.get(), 1, providerId.data(),

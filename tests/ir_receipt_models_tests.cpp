@@ -174,6 +174,12 @@ void testValidReceiptModels() {
   receipt.observedInSnapshot = true;
   expect(ir::validateIrSubmissionReceipt(receipt, diagnostic),
          "receipt permits optional MD5 and remote identity values");
+
+  receipt = validReceipt();
+  receipt.replayId = 0;
+  receipt.modernChartResultId = 42;
+  expect(ir::validateIrSubmissionReceipt(receipt, diagnostic),
+         "modern result ownership is valid without a legacy replay");
 }
 
 void testInvalidReceiptDrafts() {
@@ -222,7 +228,16 @@ void testInvalidStoredReceipts() {
 
   receipt = validReceipt();
   receipt.replayId = 0;
-  expectInvalidReceipt(receipt, "non-positive replay ID is rejected");
+  expectInvalidReceipt(receipt, "ownerless receipt is rejected");
+
+  receipt = validReceipt();
+  receipt.modernChartResultId = 42;
+  expectInvalidReceipt(receipt, "receipt with two result owners is rejected");
+
+  receipt = validReceipt();
+  receipt.replayId = 0;
+  receipt.modernChartResultId = -1;
+  expectInvalidReceipt(receipt, "negative modern result owner is rejected");
 
   receipt = validReceipt();
   receipt.attemptId = "123E4567-E89B-42D3-A456-426614174000";

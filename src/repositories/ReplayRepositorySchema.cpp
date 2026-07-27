@@ -483,7 +483,7 @@ constexpr const char *kIrOutboxAttemptIndexSql =
     "CREATE INDEX idx_ir_outbox_attempt ON "
     "ir_outbox(provider_id, attempt_id)";
 
-constexpr const char *kIrSubmissionReceiptsTableSql =
+constexpr const char *kLegacyIrSubmissionReceiptsTableSql =
     "CREATE TABLE ir_submission_receipts ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "provider_id TEXT NOT NULL,"
@@ -501,6 +501,31 @@ constexpr const char *kIrSubmissionReceiptsTableSql =
     "UNIQUE(provider_id, server_origin, replay_id),"
     "CHECK(observed_in_snapshot IN (0, 1)),"
     "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+    ")";
+
+constexpr const char *kIrSubmissionReceiptsTableSql =
+    "CREATE TABLE ir_submission_receipts ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "provider_id TEXT NOT NULL,"
+    "server_origin TEXT NOT NULL,"
+    "replay_id INTEGER,"
+    "modern_chart_result_id INTEGER,"
+    "attempt_id TEXT NOT NULL,"
+    "chart_md5 TEXT,"
+    "chart_sha256 TEXT NOT NULL,"
+    "remote_user_id INTEGER,"
+    "remote_chart_id TEXT,"
+    "remote_score_id TEXT,"
+    "confirmation_source INTEGER NOT NULL,"
+    "observed_in_snapshot INTEGER NOT NULL DEFAULT 0,"
+    "confirmed_at_ms INTEGER NOT NULL,"
+    "UNIQUE(provider_id, server_origin, replay_id),"
+    "UNIQUE(provider_id, server_origin, modern_chart_result_id),"
+    "CHECK((replay_id IS NOT NULL) != (modern_chart_result_id IS NOT NULL)),"
+    "CHECK(observed_in_snapshot IN (0, 1)),"
+    "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE"
     ")";
 
 constexpr const char *kIrSubmissionReceiptsAttemptIndexSql =
@@ -585,9 +610,109 @@ constexpr const char *kIrRemoteScoresChartIdIndexSql =
     "CREATE INDEX idx_ir_remote_scores_remote_chart_id ON "
     "ir_remote_scores(provider_id,server_origin,remote_chart_id)";
 
+constexpr const char *kModernChartResultsTableSql =
+    "CREATE TABLE modern_chart_results("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL UNIQUE,"
+    "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,chart_title TEXT NOT NULL,"
+    "chart_artist TEXT NOT NULL,long_note_mode INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,max_score INTEGER NOT NULL,"
+    "max_combo INTEGER NOT NULL,combo_break INTEGER NOT NULL,"
+    "p_great INTEGER NOT NULL,great INTEGER NOT NULL,good INTEGER NOT NULL,"
+    "bad INTEGER NOT NULL,poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,"
+    "fast INTEGER NOT NULL,slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
+    "clear_type INTEGER NOT NULL,key_mode INTEGER NOT NULL,"
+    "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
+    "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
+    "result_fingerprint TEXT NOT NULL,played_at_unix_ms INTEGER NOT NULL,"
+    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
+    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
+    "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
+    "CHECK(long_note_mode BETWEEN 0 AND 3),"
+    "CHECK(key_mode IN (5,7,9,10,14,24,48)),"
+    "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
+    "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
+    "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
+    "good>=0 AND bad>=0 AND poor>=0 AND k_poor>=0 AND fast>=0 AND slow>=0),"
+    "CHECK(final_gauge>=0),CHECK(played_at_unix_ms>0),"
+    "CHECK(length(result_fingerprint)=64 AND "
+    "result_fingerprint=lower(result_fingerprint) AND "
+    "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
+
+constexpr const char *kModernReplayFilesTableSql =
+    "CREATE TABLE modern_replay_files("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "modern_chart_result_id INTEGER NOT NULL UNIQUE,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+    "codec_version INTEGER NOT NULL,"
+    "CHECK(history_index>=0),"
+    "CHECK(length(content_sha256)=64 AND "
+    "content_sha256=lower(content_sha256) AND "
+    "content_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(compressed_size>0),CHECK(codec_version=3),"
+    "UNIQUE(stem,history_index),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernReplayFileReservationsTableSql =
+    "CREATE TABLE modern_replay_file_reservations("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "created_at_unix_ms INTEGER NOT NULL,CHECK(history_index>=0),"
+    "CHECK(created_at_unix_ms>0),UNIQUE(stem,history_index))";
+
+constexpr const char *kModernReplayStemSequencesTableSql =
+    "CREATE TABLE modern_replay_stem_sequences("
+    "stem TEXT PRIMARY KEY NOT NULL,last_history_index INTEGER NOT NULL,"
+    "CHECK(last_history_index>=0))";
+
+constexpr const char *kIrSubmissionSnapshotsTableSql =
+    "CREATE TABLE ir_submission_snapshots("
+    "modern_chart_result_id INTEGER PRIMARY KEY NOT NULL,"
+    "attempt_id TEXT NOT NULL UNIQUE,schema_version INTEGER NOT NULL,"
+    "payload_json TEXT NOT NULL,fingerprint TEXT NOT NULL,"
+    "CHECK(schema_version=1),"
+    "CHECK(length(fingerprint)=64 AND fingerprint=lower(fingerprint) AND "
+    "fingerprint NOT GLOB '*[^0-9a-f]*'),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernPendingChartScoresTableSql =
+    "CREATE TABLE modern_pending_chart_score_writes("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,"
+    "modern_chart_result_id INTEGER NOT NULL UNIQUE,"
+    "created_at TEXT NOT NULL,recovery_attempts INTEGER NOT NULL DEFAULT 0,"
+    "last_recovery_at TEXT,CHECK(recovery_attempts>=0),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernChartShaIndexSql =
+    "CREATE INDEX idx_modern_chart_results_sha256_played ON "
+    "modern_chart_results(chart_sha256,played_at_unix_ms DESC,id DESC)";
+constexpr const char *kModernReplayResultIndexSql =
+    "CREATE INDEX idx_modern_replay_files_chart_result ON "
+    "modern_replay_files(modern_chart_result_id)";
+constexpr const char *kModernReservationIndexSql =
+    "CREATE INDEX idx_modern_replay_reservations_stem_index ON "
+    "modern_replay_file_reservations(stem,history_index)";
+constexpr const char *kModernSnapshotFingerprintIndexSql =
+    "CREATE INDEX idx_ir_submission_snapshots_fingerprint ON "
+    "ir_submission_snapshots(fingerprint)";
+constexpr const char *kModernPendingRecoveryIndexSql =
+    "CREATE INDEX idx_modern_pending_chart_score_created ON "
+    "modern_pending_chart_score_writes(recovery_attempts,last_recovery_at,"
+    "created_at,attempt_id)";
 enum class ReplayResultOutboxSchemaState { Absent, Exact, Malformed };
 enum class IrOutboxSchemaState { Absent, Exact, Malformed };
-enum class IrSubmissionReceiptsSchemaState { Absent, Exact, Malformed };
+enum class IrSubmissionReceiptsSchemaState {
+  Absent,
+  LegacyExact,
+  CurrentExact,
+  Malformed,
+};
 enum class IrRemoteScoresSchemaState { Absent, Exact, Malformed };
 
 struct NamedSchemaObjectInspection {
@@ -1031,14 +1156,19 @@ bool inspectIrOutboxSchema(
 
 bool inspectIrSubmissionReceiptsSchema(
     sqlite3 *db, IrSubmissionReceiptsSchemaState &state) {
-  NamedSchemaObjectInspection table;
+  NamedSchemaObjectInspection currentTable;
+  NamedSchemaObjectInspection legacyTable;
   NamedSchemaObjectInspection attemptIndex;
   NamedSchemaObjectInspection remoteScoreIndex;
   bool attemptShapeExact = false;
   bool remoteScoreShapeExact = false;
   if (!inspectNamedSchemaObject(
           db, "ir_submission_receipts", "table", "ir_submission_receipts",
-          kIrSubmissionReceiptsTableSql, table,
+          kIrSubmissionReceiptsTableSql, currentTable,
+          "reading current IR submission receipts table schema") ||
+      !inspectNamedSchemaObject(
+          db, "ir_submission_receipts", "table", "ir_submission_receipts",
+          kLegacyIrSubmissionReceiptsTableSql, legacyTable,
           "reading IR submission receipts table schema") ||
       !inspectNamedSchemaObject(
           db, "idx_ir_submission_receipts_attempt", "index",
@@ -1050,9 +1180,9 @@ bool inspectIrSubmissionReceiptsSchema(
           remoteScoreIndex,
           "reading IR submission receipts remote score index") ||
       !inspectNamedIndexShape(
-          db, "ir_submission_receipts",
-          "idx_ir_submission_receipts_attempt", false, false,
-          {"provider_id", "server_origin", "attempt_id"}, attemptShapeExact,
+          db, "ir_submission_receipts", "idx_ir_submission_receipts_attempt",
+          false, false, {"provider_id", "server_origin", "attempt_id"},
+          attemptShapeExact,
           "reading IR submission receipts attempt index shape") ||
       !inspectNamedIndexShape(
           db, "ir_submission_receipts",
@@ -1062,13 +1192,19 @@ bool inspectIrSubmissionReceiptsSchema(
           "reading IR submission receipts remote score index shape")) {
     return false;
   }
-  if (!table.present && !attemptIndex.present && !remoteScoreIndex.present) {
+  if (!currentTable.present && !attemptIndex.present &&
+      !remoteScoreIndex.present) {
     state = IrSubmissionReceiptsSchemaState::Absent;
-  } else if (table.present && table.exact && attemptIndex.present &&
+  } else if (currentTable.present && currentTable.exact &&
+             attemptIndex.present && attemptIndex.exact && attemptShapeExact &&
+             remoteScoreIndex.present && remoteScoreIndex.exact &&
+             remoteScoreShapeExact) {
+    state = IrSubmissionReceiptsSchemaState::CurrentExact;
+  } else if (legacyTable.present && legacyTable.exact && attemptIndex.present &&
              attemptIndex.exact && attemptShapeExact &&
              remoteScoreIndex.present && remoteScoreIndex.exact &&
              remoteScoreShapeExact) {
-    state = IrSubmissionReceiptsSchemaState::Exact;
+    state = IrSubmissionReceiptsSchemaState::LegacyExact;
   } else {
     state = IrSubmissionReceiptsSchemaState::Malformed;
   }
@@ -1118,6 +1254,128 @@ bool inspectIrRemoteScoresSchema(sqlite3 *db,
   return true;
 }
 
+bool inspectModernChartSchema(sqlite3 *database) {
+  struct ExpectedObject {
+    const char *name;
+    const char *type;
+    const char *table;
+    const char *sql;
+  };
+  constexpr ExpectedObject objects[] = {
+      {"modern_chart_results", "table", "modern_chart_results",
+       kModernChartResultsTableSql},
+      {"modern_replay_files", "table", "modern_replay_files",
+       kModernReplayFilesTableSql},
+      {"modern_replay_file_reservations", "table",
+       "modern_replay_file_reservations",
+       kModernReplayFileReservationsTableSql},
+      {"modern_replay_stem_sequences", "table", "modern_replay_stem_sequences",
+       kModernReplayStemSequencesTableSql},
+      {"ir_submission_snapshots", "table", "ir_submission_snapshots",
+       kIrSubmissionSnapshotsTableSql},
+      {"modern_pending_chart_score_writes", "table",
+       "modern_pending_chart_score_writes", kModernPendingChartScoresTableSql},
+      {"idx_modern_chart_results_sha256_played", "index",
+       "modern_chart_results", kModernChartShaIndexSql},
+      {"idx_modern_replay_files_chart_result", "index", "modern_replay_files",
+       kModernReplayResultIndexSql},
+      {"idx_modern_replay_reservations_stem_index", "index",
+       "modern_replay_file_reservations", kModernReservationIndexSql},
+      {"idx_ir_submission_snapshots_fingerprint", "index",
+       "ir_submission_snapshots", kModernSnapshotFingerprintIndexSql},
+      {"idx_modern_pending_chart_score_created", "index",
+       "modern_pending_chart_score_writes", kModernPendingRecoveryIndexSql},
+  };
+  for (const auto &object : objects) {
+    NamedSchemaObjectInspection inspection;
+    if (!inspectNamedSchemaObject(database, object.name, object.type,
+                                  object.table, object.sql, inspection,
+                                  "reading modern chart schema") ||
+        !inspection.present || !inspection.exact) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool createModernChartSchema(sqlite3 *database) {
+  // Older migration tests and interrupted version writes can expose an exact
+  // v11 object set under an earlier user_version. Treat only the complete,
+  // byte-for-byte schema as already created; partial or malformed sets still
+  // fail inside the caller's migration transaction.
+  if (inspectModernChartSchema(database)) {
+    return true;
+  }
+  const char *tables[] = {
+      kModernChartResultsTableSql,           kModernReplayFilesTableSql,
+      kModernReplayFileReservationsTableSql, kModernReplayStemSequencesTableSql,
+      kIrSubmissionSnapshotsTableSql,        kModernPendingChartScoresTableSql,
+  };
+  for (const char *table : tables) {
+    if (!execSql(database, table, "creating modern chart table")) {
+      return false;
+    }
+  }
+  const char *indexes[] = {
+      kModernChartShaIndexSql,        kModernReplayResultIndexSql,
+      kModernReservationIndexSql,     kModernSnapshotFingerprintIndexSql,
+      kModernPendingRecoveryIndexSql,
+  };
+  for (const char *index : indexes) {
+    if (!execSql(database, index, "creating modern chart index")) {
+      return false;
+    }
+  }
+  return inspectModernChartSchema(database);
+}
+
+bool migrateIrSubmissionReceiptsToModernOwnership(sqlite3 *database) {
+  IrSubmissionReceiptsSchemaState state{};
+  if (!inspectIrSubmissionReceiptsSchema(database, state)) {
+    return false;
+  }
+  if (state == IrSubmissionReceiptsSchemaState::CurrentExact) {
+    return true;
+  }
+  if (state != IrSubmissionReceiptsSchemaState::LegacyExact) {
+    SDL_Log("Refusing modern receipt ownership migration from a partial or "
+            "unexpected schema");
+    return false;
+  }
+  if (!execSql(database,
+               "ALTER TABLE ir_submission_receipts RENAME TO "
+               "ir_submission_receipts_v10",
+               "renaming version 10 IR submission receipts") ||
+      !execSql(database, "DROP INDEX idx_ir_submission_receipts_attempt",
+               "dropping version 10 receipt attempt index") ||
+      !execSql(database, "DROP INDEX idx_ir_submission_receipts_remote_score",
+               "dropping version 10 receipt remote score index") ||
+      !execSql(database, kIrSubmissionReceiptsTableSql,
+               "creating shared-owner IR submission receipts") ||
+      !execSql(
+          database,
+          "INSERT INTO ir_submission_receipts("
+          "id,provider_id,server_origin,replay_id,modern_chart_result_id,"
+          "attempt_id,chart_md5,chart_sha256,remote_user_id,remote_chart_id,"
+          "remote_score_id,confirmation_source,observed_in_snapshot,"
+          "confirmed_at_ms) SELECT id,provider_id,server_origin,replay_id,NULL,"
+          "attempt_id,chart_md5,chart_sha256,remote_user_id,remote_chart_id,"
+          "remote_score_id,confirmation_source,observed_in_snapshot,"
+          "confirmed_at_ms FROM ir_submission_receipts_v10",
+          "copying version 10 IR submission receipts") ||
+      !execSql(database, "DROP TABLE ir_submission_receipts_v10",
+               "dropping version 10 IR submission receipts") ||
+      !execSql(database, kIrSubmissionReceiptsAttemptIndexSql,
+               "creating shared receipt attempt index") ||
+      !execSql(database, kIrSubmissionReceiptsRemoteScoreIndexSql,
+               "creating shared receipt remote score index") ||
+      !inspectIrSubmissionReceiptsSchema(database, state) ||
+      state != IrSubmissionReceiptsSchemaState::CurrentExact) {
+    return false;
+  }
+  return true;
+}
+
 bool migrateReplayDatabaseSchema(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -1141,8 +1399,9 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     }
     if (resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
         irOutboxState != IrOutboxSchemaState::Exact ||
-        receiptState != IrSubmissionReceiptsSchemaState::Exact ||
-        remoteScoresState != IrRemoteScoresSchemaState::Exact) {
+        receiptState != IrSubmissionReceiptsSchemaState::CurrentExact ||
+        remoteScoresState != IrRemoteScoresSchemaState::Exact ||
+        !inspectModernChartSchema(db)) {
       SDL_Log("Refusing current replay database with a partial or unexpected "
               "outbox, receipt, or remote score schema");
       return false;
@@ -1353,7 +1612,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
     if (receiptState == IrSubmissionReceiptsSchemaState::Absent &&
-        (!execSql(db, kIrSubmissionReceiptsTableSql,
+        (!execSql(db, kLegacyIrSubmissionReceiptsTableSql,
                   "creating IR submission receipts") ||
          !execSql(db, kIrSubmissionReceiptsAttemptIndexSql,
                   "creating IR submission receipts attempt index") ||
@@ -1362,7 +1621,8 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
     if (!inspectIrSubmissionReceiptsSchema(db, receiptState) ||
-        receiptState != IrSubmissionReceiptsSchemaState::Exact) {
+        (receiptState != IrSubmissionReceiptsSchemaState::LegacyExact &&
+         receiptState != IrSubmissionReceiptsSchemaState::CurrentExact)) {
       SDL_Log("Refusing migrated IR submission receipts with a partial or "
               "unexpected schema");
       return false;
@@ -1394,6 +1654,12 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
   }
+  if (*version < 11) {
+    if (!createModernChartSchema(db) ||
+        !migrateIrSubmissionReceiptsToModernOwnership(db)) {
+      return false;
+    }
+  }
   ReplayResultOutboxSchemaState resultOutboxState{};
   IrOutboxSchemaState irOutboxState{};
   IrSubmissionReceiptsSchemaState receiptState{};
@@ -1404,8 +1670,9 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       !inspectIrRemoteScoresSchema(db, remoteScoresState) ||
       resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
       irOutboxState != IrOutboxSchemaState::Exact ||
-      receiptState != IrSubmissionReceiptsSchemaState::Exact ||
-      remoteScoresState != IrRemoteScoresSchemaState::Exact) {
+      receiptState != IrSubmissionReceiptsSchemaState::CurrentExact ||
+      remoteScoresState != IrRemoteScoresSchemaState::Exact ||
+      !inspectModernChartSchema(db)) {
     SDL_Log("Refusing migrated replay database with a partial or unexpected "
             "outbox, receipt, or remote score schema");
     return false;

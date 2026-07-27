@@ -7,6 +7,7 @@ namespace durable_payload {
 
 inline constexpr std::size_t kMaximumStringBytes = 16U * 1024U;
 inline constexpr std::size_t kMaximumResultGaugeSamples = 1'000'000U;
+inline constexpr std::size_t kMaximumResultPayloadBytes = 16U * 1024U * 1024U;
 inline constexpr std::size_t kMaximumCourseStages = 256U;
 inline constexpr std::size_t kMaximumIrSnapshotBytes = 16U * 1024U * 1024U;
 

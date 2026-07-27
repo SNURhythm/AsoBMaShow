@@ -2877,7 +2877,8 @@ void testProjectionFailureKeepsReceiptsAndOutboxRetryable() {
                    .deferredSubmission = true,
                    .scoreReconciliation = true});
   harness.setCredential("record-sync-key");
-  const auto local = harness.enqueueReady(draft(38, harness.now.load()), false);
+  const auto local =
+      harness.enqueueReady(draft(38, harness.now.load() + 60'000), false);
   expect(local.entry.has_value(),
          "projection-failure fixture stores pending upload work");
   if (!local.entry) {

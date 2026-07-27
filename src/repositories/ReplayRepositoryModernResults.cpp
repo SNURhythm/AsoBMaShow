@@ -1,0 +1,1135 @@
+#include "ReplayRepository.h"
+#include "ReplayRepositoryInternal.h"
+
+#include "../ProfileDatabaseActivity.h"
+#include "../Uuid.h"
+#include "../ir/IrSubmissionSnapshot.h"
+#include "../replay/ReplayFormat.h"
+#include "SqliteRAII.h"
+
+#include "nlohmann/json.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <ranges>
+#include <set>
+#include <string>
+#include <utility>
+
+namespace {
+
+using Json = nlohmann::ordered_json;
+
+constexpr const char *kModernChartColumns =
+    "id,attempt_id,chart_path,chart_md5,chart_sha256,chart_title,"
+    "chart_artist,long_note_mode,score,max_score,max_combo,combo_break,"
+    "p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
+    "key_mode,adopted_gauge_type,gauge_history_json,judgement_timing_json,"
+    "provenance_json,result_fingerprint,played_at_unix_ms,created_at";
+
+bool bindText(sqlite3_stmt *statement, int index, std::string_view value) {
+  return sqlite3_bind_text(statement, index, value.data(),
+                           static_cast<int>(value.size()),
+                           SQLITE_TRANSIENT) == SQLITE_OK;
+}
+
+std::optional<std::string>
+serializeGaugeHistory(std::span<const float> history) {
+  try {
+    if (history.size() > durable_payload::kMaximumResultGaugeSamples ||
+        std::ranges::any_of(
+            history, [](float value) { return !std::isfinite(value); })) {
+      return std::nullopt;
+    }
+    const std::string serialized = Json(history).dump();
+    return durable_payload::withinLimit(
+               serialized.size(), durable_payload::kMaximumResultPayloadBytes)
+               ? std::optional<std::string>(serialized)
+               : std::nullopt;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::vector<float>>
+deserializeGaugeHistory(std::string_view serialized) {
+  try {
+    if (!durable_payload::withinLimit(
+            serialized.size(), durable_payload::kMaximumResultPayloadBytes)) {
+      return std::nullopt;
+    }
+    const Json value = Json::parse(serialized.begin(), serialized.end());
+    auto result = value.get<std::vector<float>>();
+    if (result.size() > durable_payload::kMaximumResultGaugeSamples ||
+        std::ranges::any_of(
+            result, [](float sample) { return !std::isfinite(sample); }) ||
+        Json(result).dump() != serialized) {
+      return std::nullopt;
+    }
+    return result;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::string> serializeJudgementTiming(
+    const std::optional<result_persistence::ChartJudgementTiming> &timing) {
+  if (!timing.has_value()) {
+    return std::string{};
+  }
+  try {
+    Json value = Json::array();
+    for (const auto &count : timing->byJudgement) {
+      value.push_back(Json::array({count.fast, count.slow}));
+    }
+    return value.dump();
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<result_persistence::ChartJudgementTiming>
+deserializeJudgementTiming(std::string_view serialized) {
+  if (serialized.empty()) {
+    return std::nullopt;
+  }
+  try {
+    const Json value = Json::parse(serialized.begin(), serialized.end());
+    if (!value.is_array() || value.size() != JudgementCount ||
+        value.dump() != serialized) {
+      return std::nullopt;
+    }
+    result_persistence::ChartJudgementTiming result;
+    for (std::size_t index = 0; index < value.size(); ++index) {
+      const auto &pair = value[index];
+      if (!pair.is_array() || pair.size() != 2 ||
+          !pair[0].is_number_integer() || !pair[1].is_number_integer()) {
+        return std::nullopt;
+      }
+      result.byJudgement[index] = {.fast = pair[0].get<int>(),
+                                   .slow = pair[1].get<int>()};
+    }
+    return result;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+bool validAttachment(const ModernReplayFileAttachment &attachment,
+                     std::string &diagnostic) {
+  diagnostic.clear();
+  const auto rebuilt = replay::pathForStem(
+      attachment.identity.stem, attachment.identity.historyIndex, diagnostic);
+  if (!rebuilt || *rebuilt != attachment.identity ||
+      attachment.metadata.relativePath != attachment.identity.relativePath ||
+      !replay::isCanonicalLowerHex(attachment.metadata.sha256, 64) ||
+      attachment.metadata.compressedSize == 0 ||
+      attachment.metadata.compressedSize >
+          replay::kReplayLimits.maxCompressedBytes ||
+      attachment.metadata.codecVersion !=
+          replay::BeatorajaReplayCodec::kCodecVersion) {
+    if (diagnostic.empty()) {
+      diagnostic = "modern replay attachment is malformed";
+    }
+    return false;
+  }
+  return true;
+}
+
+std::optional<ModernReplayPathReservation>
+decodeReservation(sqlite3_stmt *statement, std::string &diagnostic) {
+  if (sqlite3_column_type(statement, 0) != SQLITE_TEXT ||
+      sqlite3_column_type(statement, 1) != SQLITE_TEXT ||
+      sqlite3_column_type(statement, 2) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement, 3) != SQLITE_TEXT ||
+      sqlite3_column_type(statement, 4) != SQLITE_INTEGER) {
+    diagnostic = "modern replay reservation row has invalid types";
+    return std::nullopt;
+  }
+  ModernReplayPathReservation reservation{
+      .attemptId = sqliteColumnString(statement, 0),
+      .identity = {.stem = sqliteColumnString(statement, 1),
+                   .historyIndex = sqlite3_column_int64(statement, 2),
+                   .relativePath =
+                       std::filesystem::path(sqliteColumnString(statement, 3))},
+      .createdAtUnixMillis = sqlite3_column_int64(statement, 4),
+  };
+  std::string pathDiagnostic;
+  const auto rebuilt =
+      replay::pathForStem(reservation.identity.stem,
+                          reservation.identity.historyIndex, pathDiagnostic);
+  if (!uuid::isCanonicalLowerV4(reservation.attemptId) ||
+      reservation.createdAtUnixMillis <= 0 || !rebuilt ||
+      *rebuilt != reservation.identity) {
+    diagnostic = "modern replay reservation row is inconsistent";
+    return std::nullopt;
+  }
+  diagnostic.clear();
+  return reservation;
+}
+
+std::optional<result_persistence::ModernChartResult>
+decodeModernChartResult(sqlite3_stmt *statement, std::string &diagnostic) {
+  const int textColumns[] = {1, 2, 3, 4, 5, 6, 24, 26, 27, 29};
+  const int integerColumns[] = {0,  7,  8,  9,  10, 11, 12, 13, 14,
+                                15, 16, 17, 18, 19, 21, 22, 23, 28};
+  if (std::ranges::any_of(textColumns,
+                          [&](int column) {
+                            return sqlite3_column_type(statement, column) !=
+                                   SQLITE_TEXT;
+                          }) ||
+      std::ranges::any_of(integerColumns,
+                          [&](int column) {
+                            return sqlite3_column_type(statement, column) !=
+                                   SQLITE_INTEGER;
+                          }) ||
+      (sqlite3_column_type(statement, 20) != SQLITE_FLOAT &&
+       sqlite3_column_type(statement, 20) != SQLITE_INTEGER) ||
+      (sqlite3_column_type(statement, 25) != SQLITE_NULL &&
+       sqlite3_column_type(statement, 25) != SQLITE_TEXT)) {
+    diagnostic = "modern chart result row has invalid types";
+    return std::nullopt;
+  }
+
+  const std::string gaugeJson = sqliteColumnString(statement, 24);
+  auto gaugeHistory = deserializeGaugeHistory(gaugeJson);
+  if (!gaugeHistory) {
+    diagnostic = "modern chart result gauge history is invalid";
+    return std::nullopt;
+  }
+  std::optional<result_persistence::ChartJudgementTiming> timing;
+  if (sqlite3_column_type(statement, 25) == SQLITE_TEXT) {
+    const std::string timingJson = sqliteColumnString(statement, 25);
+    timing = deserializeJudgementTiming(timingJson);
+    if (!timing.has_value()) {
+      diagnostic = "modern chart result judgement timing is invalid";
+      return std::nullopt;
+    }
+  }
+  const std::string provenanceJson = sqliteColumnString(statement, 26);
+  std::string provenanceDiagnostic;
+  auto provenance =
+      deserializeScoreProvenance(provenanceJson, provenanceDiagnostic);
+  if (!provenance || serializeScoreProvenance(*provenance) != provenanceJson) {
+    diagnostic = "modern chart result provenance is not canonical";
+    return std::nullopt;
+  }
+
+  result_persistence::ModernChartResult result{
+      .resultId = sqlite3_column_int(statement, 0),
+      .attemptId = sqliteColumnString(statement, 1),
+      .score = {.chartPath = sqliteColumnString(statement, 2),
+                .chartMd5 = sqliteColumnString(statement, 3),
+                .chartSha256 = sqliteColumnString(statement, 4),
+                .chartTitle = sqliteColumnString(statement, 5),
+                .chartArtist = sqliteColumnString(statement, 6),
+                .longNoteMode = sqlite3_column_int(statement, 7),
+                .score = sqlite3_column_int(statement, 8),
+                .maxScore = sqlite3_column_int(statement, 9),
+                .maxCombo = sqlite3_column_int(statement, 10),
+                .comboBreak = sqlite3_column_int(statement, 11),
+                .pGreat = sqlite3_column_int(statement, 12),
+                .great = sqlite3_column_int(statement, 13),
+                .good = sqlite3_column_int(statement, 14),
+                .bad = sqlite3_column_int(statement, 15),
+                .poor = sqlite3_column_int(statement, 16),
+                .kPoor = sqlite3_column_int(statement, 17),
+                .fast = sqlite3_column_int(statement, 18),
+                .slow = sqlite3_column_int(statement, 19),
+                .finalGauge =
+                    static_cast<float>(sqlite3_column_double(statement, 20)),
+                .clearType = sqlite3_column_int(statement, 21),
+                .provenance = std::move(*provenance)},
+      .keyMode = sqlite3_column_int(statement, 22),
+      .adoptedGaugeType =
+          static_cast<GaugeType>(sqlite3_column_int(statement, 23)),
+      .adoptedGaugeHistory = std::move(*gaugeHistory),
+      .judgementTiming = std::move(timing),
+      .playedAtUnixMillis = sqlite3_column_int64(statement, 28),
+      .resultFingerprint = sqliteColumnString(statement, 27),
+  };
+  if (result.resultId <= 0 ||
+      !result_persistence::validateModernChartResult(result, diagnostic)) {
+    if (diagnostic.empty()) {
+      diagnostic = "modern chart result row is invalid";
+    }
+    return std::nullopt;
+  }
+  return result;
+}
+
+enum class ReadRecordStatus { Loaded, NotFound, Invalid, StorageFailure };
+
+struct ReadRecordOutcome {
+  ReadRecordStatus status = ReadRecordStatus::StorageFailure;
+  std::optional<ModernChartResultRecord> record;
+  std::string createdAt;
+  std::string diagnostic;
+};
+
+std::optional<ModernReplayFileReference>
+readReplayReference(sqlite3 *database, int resultId, bool &found,
+                    std::string &diagnostic) {
+  found = false;
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT id,modern_chart_result_id,stem,history_index,relative_path,"
+      "content_sha256,compressed_size,codec_version FROM modern_replay_files "
+      "WHERE modern_chart_result_id=?";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK) {
+    diagnostic = "could not prepare modern replay reference read";
+    return std::nullopt;
+  }
+  const int rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_DONE) {
+    diagnostic.clear();
+    return std::nullopt;
+  }
+  if (rc != SQLITE_ROW) {
+    diagnostic = "could not read modern replay reference";
+    return std::nullopt;
+  }
+  found = true;
+  if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement.get(), 1) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement.get(), 2) != SQLITE_TEXT ||
+      sqlite3_column_type(statement.get(), 3) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement.get(), 4) != SQLITE_TEXT ||
+      sqlite3_column_type(statement.get(), 5) != SQLITE_TEXT ||
+      sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER) {
+    diagnostic = "modern replay reference row has invalid types";
+    return std::nullopt;
+  }
+  const auto compressedSize = sqlite3_column_int64(statement.get(), 6);
+  if (compressedSize <= 0) {
+    diagnostic = "modern replay reference size is invalid";
+    return std::nullopt;
+  }
+  ModernReplayFileReference reference{
+      .id = sqlite3_column_int64(statement.get(), 0),
+      .resultId = sqlite3_column_int(statement.get(), 1),
+      .identity = {.stem = sqliteColumnString(statement.get(), 2),
+                   .historyIndex = sqlite3_column_int64(statement.get(), 3),
+                   .relativePath = std::filesystem::path(
+                       sqliteColumnString(statement.get(), 4))},
+      .metadata = {.relativePath = std::filesystem::path(
+                       sqliteColumnString(statement.get(), 4)),
+                   .sha256 = sqliteColumnString(statement.get(), 5),
+                   .compressedSize = static_cast<std::uint64_t>(compressedSize),
+                   .codecVersion = sqlite3_column_int(statement.get(), 7)},
+  };
+  ModernReplayFileAttachment attachment{.identity = reference.identity,
+                                        .metadata = reference.metadata};
+  if (reference.id <= 0 || reference.resultId != resultId ||
+      !validAttachment(attachment, diagnostic) ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    if (diagnostic.empty()) {
+      diagnostic = "modern replay reference row is inconsistent";
+    }
+    return std::nullopt;
+  }
+  diagnostic.clear();
+  return reference;
+}
+
+ReadRecordOutcome readRecord(sqlite3 *database, const char *predicate,
+                             std::string_view textValue, int intValue) {
+  SqliteStatementHandle statement;
+  const std::string query = std::string("SELECT ") + kModernChartColumns +
+                            " FROM modern_chart_results WHERE " + predicate;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    return {.diagnostic = "could not prepare modern chart result read"};
+  }
+  const bool bound =
+      textValue.empty()
+          ? sqlite3_bind_int(statement.get(), 1, intValue) == SQLITE_OK
+          : bindText(statement.get(), 1, textValue);
+  if (!bound) {
+    return {.diagnostic = "could not bind modern chart result identity"};
+  }
+  const int rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_DONE) {
+    return {.status = ReadRecordStatus::NotFound};
+  }
+  if (rc != SQLITE_ROW) {
+    return {.diagnostic = "could not read modern chart result"};
+  }
+  std::string diagnostic;
+  auto result = decodeModernChartResult(statement.get(), diagnostic);
+  if (!result) {
+    return {.status = ReadRecordStatus::Invalid,
+            .diagnostic = std::move(diagnostic)};
+  }
+  const std::string createdAt = sqliteColumnString(statement.get(), 29);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = ReadRecordStatus::Invalid,
+            .diagnostic = "modern chart result identity is not unique"};
+  }
+  bool referenceFound = false;
+  auto reference = readReplayReference(database, result->resultId,
+                                       referenceFound, diagnostic);
+  if (!reference && !diagnostic.empty()) {
+    return {.status = referenceFound ? ReadRecordStatus::Invalid
+                                     : ReadRecordStatus::StorageFailure,
+            .diagnostic = std::move(diagnostic)};
+  }
+  return {.status = ReadRecordStatus::Loaded,
+          .record = ModernChartResultRecord{.result = std::move(*result),
+                                            .replayFile = std::move(reference)},
+          .createdAt = createdAt};
+}
+
+std::optional<ir::IrSubmissionSnapshot> readSnapshot(sqlite3 *database,
+                                                     std::string_view attemptId,
+                                                     bool &found,
+                                                     std::string &diagnostic) {
+  found = false;
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT schema_version,payload_json,fingerprint FROM "
+      "ir_submission_snapshots WHERE attempt_id=?";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+      !bindText(statement.get(), 1, attemptId)) {
+    diagnostic = "could not prepare modern IR snapshot read";
+    return std::nullopt;
+  }
+  const int rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_DONE) {
+    diagnostic.clear();
+    return std::nullopt;
+  }
+  if (rc != SQLITE_ROW) {
+    diagnostic = "could not read modern IR snapshot";
+    return std::nullopt;
+  }
+  found = true;
+  if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement.get(), 1) != SQLITE_TEXT ||
+      sqlite3_column_type(statement.get(), 2) != SQLITE_TEXT ||
+      sqlite3_column_int(statement.get(), 0) !=
+          ir::IrSubmissionSnapshot::kSchemaVersion) {
+    diagnostic = "modern IR snapshot row has invalid types";
+    return std::nullopt;
+  }
+  const std::string payload = sqliteColumnString(statement.get(), 1);
+  const std::string fingerprint = sqliteColumnString(statement.get(), 2);
+  auto result =
+      ir::deserializeIrSubmissionSnapshot(payload, fingerprint, diagnostic);
+  if (!result || result->submission.attemptId != attemptId ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    if (diagnostic.empty()) {
+      diagnostic = "modern IR snapshot row is inconsistent";
+    }
+    return std::nullopt;
+  }
+  return result;
+}
+
+bool validateDrafts(const result_persistence::ModernChartResult &result,
+                    const std::optional<ir::IrSubmissionSnapshot> &snapshot,
+                    std::span<const ir::IrOutboxDraft> drafts,
+                    std::string &diagnostic) {
+  if (!drafts.empty() && !snapshot.has_value()) {
+    diagnostic = "IR drafts require a durable modern snapshot";
+    return false;
+  }
+  std::set<std::string> providers;
+  for (const auto &draft : drafts) {
+    if (!ir::validateIrOutboxDraft(draft, diagnostic) ||
+        draft.attemptId != result.attemptId ||
+        draft.chartMd5 != result.score.chartMd5 ||
+        draft.chartSha256 != result.score.chartSha256 ||
+        !providers.insert(draft.providerId).second) {
+      if (diagnostic.empty()) {
+        diagnostic = "IR draft disagrees with the modern result";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+bool insertReadyDrafts(sqlite3 *database,
+                       std::span<const ir::IrOutboxDraft> drafts) {
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,chart_sha256,"
+      "payload_json,ruleset_id,ruleset_revision,validation_fingerprint,state,"
+      "local_result_ready,next_request_user_intent,created_at_ms,updated_at_ms)"
+      " VALUES(?,?,?,?,?,?,?,?,0,1,0,?,?)";
+  if (!drafts.empty() &&
+      prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    return false;
+  }
+  for (const auto &draft : drafts) {
+    if (sqlite3_reset(statement.get()) != SQLITE_OK ||
+        sqlite3_clear_bindings(statement.get()) != SQLITE_OK ||
+        !bindText(statement.get(), 1, draft.providerId) ||
+        !bindText(statement.get(), 2, draft.attemptId) ||
+        (draft.chartMd5.empty()
+             ? sqlite3_bind_null(statement.get(), 3) != SQLITE_OK
+             : !bindText(statement.get(), 3, draft.chartMd5)) ||
+        !bindText(statement.get(), 4, draft.chartSha256) ||
+        !bindText(statement.get(), 5, draft.payloadJson) ||
+        !bindText(statement.get(), 6, draft.rulesetProof.rulesetId) ||
+        sqlite3_bind_int(statement.get(), 7,
+                         draft.rulesetProof.rulesetRevision) != SQLITE_OK ||
+        !bindText(statement.get(), 8,
+                  draft.rulesetProof.validationFingerprint) ||
+        sqlite3_bind_int64(statement.get(), 9, draft.createdAtUnixMillis) !=
+            SQLITE_OK ||
+        sqlite3_bind_int64(statement.get(), 10, draft.createdAtUnixMillis) !=
+            SQLITE_OK ||
+        sqlite3_step(statement.get()) != SQLITE_DONE ||
+        sqlite3_changes(database) != 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool verifyDrafts(sqlite3 *database, std::string_view attemptId,
+                  std::span<const ir::IrOutboxDraft> drafts,
+                  std::string &diagnostic) {
+  const auto verified = replay_repository_detail::VerifyIrDraftsOnConnection(
+      database, attemptId, drafts);
+  if (verified.status !=
+      replay_repository_detail::IrDraftStageStatus::Succeeded) {
+    diagnostic = verified.diagnostic;
+    return false;
+  }
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT COUNT(*) FROM ir_outbox WHERE attempt_id=? AND "
+          "local_result_ready!=1",
+          statement) != SQLITE_OK ||
+      !bindText(statement.get(), 1, attemptId) ||
+      sqlite3_step(statement.get()) != SQLITE_ROW ||
+      sqlite3_column_int(statement.get(), 0) != 0) {
+    diagnostic = "modern IR outbox readiness differs";
+    return false;
+  }
+  return true;
+}
+
+bool insertResult(sqlite3 *database,
+                  const result_persistence::ModernChartResult &result,
+                  std::string_view gaugeJson, std::string_view timingJson,
+                  std::string_view provenanceJson, int &resultId) {
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "INSERT INTO modern_chart_results(attempt_id,chart_path,chart_md5,"
+      "chart_sha256,chart_title,chart_artist,long_note_mode,score,max_score,"
+      "max_combo,combo_break,p_great,great,good,bad,poor,k_poor,fast,slow,"
+      "final_gauge,clear_type,key_mode,adopted_gauge_type,gauge_history_json,"
+      "judgement_timing_json,provenance_json,result_fingerprint,"
+      "played_at_unix_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+      "?,?,?,?,?,?)";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    return false;
+  }
+  const auto &score = result.score;
+  int index = 1;
+  bool bound = bindText(statement.get(), index++, result.attemptId) &&
+               bindText(statement.get(), index++, score.chartPath) &&
+               bindText(statement.get(), index++, score.chartMd5) &&
+               bindText(statement.get(), index++, score.chartSha256) &&
+               bindText(statement.get(), index++, score.chartTitle) &&
+               bindText(statement.get(), index++, score.chartArtist);
+  const int integers[] = {score.longNoteMode, score.score,      score.maxScore,
+                          score.maxCombo,     score.comboBreak, score.pGreat,
+                          score.great,        score.good,       score.bad,
+                          score.poor,         score.kPoor,      score.fast,
+                          score.slow};
+  for (const int value : integers) {
+    bound =
+        bound && sqlite3_bind_int(statement.get(), index++, value) == SQLITE_OK;
+  }
+  bound =
+      bound &&
+      sqlite3_bind_double(statement.get(), index++, score.finalGauge) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(statement.get(), index++, score.clearType) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(statement.get(), index++, result.keyMode) == SQLITE_OK &&
+      sqlite3_bind_int(statement.get(), index++,
+                       static_cast<int>(result.adoptedGaugeType)) ==
+          SQLITE_OK &&
+      bindText(statement.get(), index++, gaugeJson);
+  if (timingJson.empty()) {
+    bound = bound && sqlite3_bind_null(statement.get(), index++) == SQLITE_OK;
+  } else {
+    bound = bound && bindText(statement.get(), index++, timingJson);
+  }
+  bound = bound && bindText(statement.get(), index++, provenanceJson) &&
+          bindText(statement.get(), index++, result.resultFingerprint) &&
+          sqlite3_bind_int64(statement.get(), index++,
+                             result.playedAtUnixMillis) == SQLITE_OK;
+  if (!bound || index != 29 || sqlite3_step(statement.get()) != SQLITE_DONE ||
+      sqlite3_changes(database) != 1) {
+    return false;
+  }
+  const sqlite3_int64 inserted = sqlite3_last_insert_rowid(database);
+  if (inserted <= 0 || inserted > std::numeric_limits<int>::max()) {
+    return false;
+  }
+  resultId = static_cast<int>(inserted);
+  return true;
+}
+
+} // namespace
+
+ModernReplayReservationOutcome
+ReplayRepository::ReserveModernReplayPath(std::string_view attemptId,
+                                          std::string_view stem,
+                                          std::int64_t createdAtUnixMillis) {
+  profile_database_activity::WriteGuard writeGuard;
+  std::string pathDiagnostic;
+  if (!uuid::isCanonicalLowerV4(attemptId) || createdAtUnixMillis <= 0 ||
+      !replay::pathForStem(stem, 0, pathDiagnostic)) {
+    return {.status = ModernReplayReservationStatus::Invalid,
+            .diagnostic = pathDiagnostic.empty()
+                              ? "modern replay reservation input is invalid"
+                              : std::move(pathDiagnostic)};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernReplayReservationStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ModernReplayReservationStatus::StorageFailure,
+            .diagnostic = "could not start modern replay reservation"};
+  }
+
+  SqliteStatementHandle existing;
+  constexpr const char *existingQuery =
+      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+      "FROM modern_replay_file_reservations WHERE attempt_id=?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, existingQuery, existing) !=
+          SQLITE_OK ||
+      !bindText(existing.get(), 1, attemptId)) {
+    return {.status = ModernReplayReservationStatus::StorageFailure,
+            .diagnostic = "could not inspect modern replay reservation"};
+  }
+  int rc = sqlite3_step(existing.get());
+  if (rc == SQLITE_ROW) {
+    std::string diagnostic;
+    auto reservation = decodeReservation(existing.get(), diagnostic);
+    if (!reservation || sqlite3_step(existing.get()) != SQLITE_DONE) {
+      return {.status = ModernReplayReservationStatus::IntegrityConflict,
+              .diagnostic = diagnostic.empty()
+                                ? "modern replay reservation is not unique"
+                                : std::move(diagnostic)};
+    }
+    if (reservation->identity.stem != stem) {
+      return {.status = ModernReplayReservationStatus::IntegrityConflict,
+              .diagnostic = "attempt already reserves a different replay "
+                            "stem"};
+    }
+    if (reservation->createdAtUnixMillis != createdAtUnixMillis) {
+      return {.status = ModernReplayReservationStatus::IntegrityConflict,
+              .diagnostic = "attempt replay reservation timestamp differs"};
+    }
+    if (!transaction.commit(transactionError)) {
+      return {.status = ModernReplayReservationStatus::StorageFailure,
+              .diagnostic = "could not finish replay reservation retry"};
+    }
+    return {.status = ModernReplayReservationStatus::AlreadyReserved,
+            .reservation = std::move(reservation)};
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ModernReplayReservationStatus::StorageFailure,
+            .diagnostic = "could not inspect modern replay reservation"};
+  }
+
+  std::int64_t historyIndex = 0;
+  SqliteStatementHandle sequence;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "SELECT last_history_index FROM modern_replay_stem_sequences WHERE "
+          "stem=?",
+          sequence) != SQLITE_OK ||
+      !bindText(sequence.get(), 1, stem)) {
+    return {.status = ModernReplayReservationStatus::StorageFailure,
+            .diagnostic = "could not read modern replay history sequence"};
+  }
+  rc = sqlite3_step(sequence.get());
+  if (rc == SQLITE_ROW) {
+    if (sqlite3_column_type(sequence.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_int64(sequence.get(), 0) ==
+            std::numeric_limits<std::int64_t>::max()) {
+      return {.status = ModernReplayReservationStatus::IntegrityConflict,
+              .diagnostic = "modern replay history sequence is invalid"};
+    }
+    historyIndex = sqlite3_column_int64(sequence.get(), 0) + 1;
+    if (sqlite3_step(sequence.get()) != SQLITE_DONE) {
+      return {.status = ModernReplayReservationStatus::IntegrityConflict,
+              .diagnostic = "modern replay history sequence is not unique"};
+    }
+    SqliteStatementHandle update;
+    if (prepareSqliteStatement(
+            impl_->sessionDatabase,
+            "UPDATE modern_replay_stem_sequences SET last_history_index=? "
+            "WHERE stem=?",
+            update) != SQLITE_OK ||
+        sqlite3_bind_int64(update.get(), 1, historyIndex) != SQLITE_OK ||
+        !bindText(update.get(), 2, stem) ||
+        sqlite3_step(update.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ModernReplayReservationStatus::StorageFailure,
+              .diagnostic = "could not advance modern replay history"};
+    }
+  } else if (rc == SQLITE_DONE) {
+    SqliteStatementHandle insertSequence;
+    if (prepareSqliteStatement(
+            impl_->sessionDatabase,
+            "INSERT INTO modern_replay_stem_sequences(stem,last_history_index)"
+            " VALUES(?,0)",
+            insertSequence) != SQLITE_OK ||
+        !bindText(insertSequence.get(), 1, stem) ||
+        sqlite3_step(insertSequence.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ModernReplayReservationStatus::StorageFailure,
+              .diagnostic = "could not start modern replay history"};
+    }
+  } else {
+    return {.status = ModernReplayReservationStatus::StorageFailure,
+            .diagnostic = "could not read modern replay history"};
+  }
+
+  auto identity = replay::pathForStem(stem, historyIndex, pathDiagnostic);
+  if (!identity) {
+    return {.status = ModernReplayReservationStatus::IntegrityConflict,
+            .diagnostic = std::move(pathDiagnostic)};
+  }
+  SqliteStatementHandle insert;
+  constexpr const char *insertQuery =
+      "INSERT INTO modern_replay_file_reservations(attempt_id,stem,"
+      "history_index,relative_path,created_at_unix_ms) VALUES(?,?,?,?,?)";
+  if (prepareSqliteStatement(impl_->sessionDatabase, insertQuery, insert) !=
+          SQLITE_OK ||
+      !bindText(insert.get(), 1, attemptId) ||
+      !bindText(insert.get(), 2, identity->stem) ||
+      sqlite3_bind_int64(insert.get(), 3, identity->historyIndex) !=
+          SQLITE_OK ||
+      !bindText(insert.get(), 4, identity->relativePath.generic_string()) ||
+      sqlite3_bind_int64(insert.get(), 5, createdAtUnixMillis) != SQLITE_OK ||
+      sqlite3_step(insert.get()) != SQLITE_DONE ||
+      sqlite3_changes(impl_->sessionDatabase) != 1 ||
+      !transaction.commit(transactionError)) {
+    return {.status = ModernReplayReservationStatus::StorageFailure,
+            .diagnostic = "could not commit modern replay reservation"};
+  }
+  return {.status = ModernReplayReservationStatus::Reserved,
+          .reservation = ModernReplayPathReservation{
+              .attemptId = std::string(attemptId),
+              .identity = std::move(*identity),
+              .createdAtUnixMillis = createdAtUnixMillis}};
+}
+
+ModernChartStageOutcome ReplayRepository::StageModernChartResult(
+    const result_persistence::ModernChartResult &result,
+    const std::optional<ir::IrSubmissionSnapshot> &snapshot,
+    const std::optional<ModernReplayFileAttachment> &replayFile,
+    std::span<const ir::IrOutboxDraft> irDrafts) {
+  profile_database_activity::WriteGuard writeGuard;
+  std::string diagnostic;
+  if (result.resultId != 0 ||
+      !result_persistence::validateModernChartResult(result, diagnostic)) {
+    return {.status = ModernChartStageStatus::Invalid,
+            .diagnostic = std::move(diagnostic)};
+  }
+  const auto gaugeJson = serializeGaugeHistory(result.adoptedGaugeHistory);
+  const auto timingJson = serializeJudgementTiming(result.judgementTiming);
+  const auto provenanceJson =
+      serializeValidatedScoreProvenance(result.score.provenance, diagnostic);
+  if (!gaugeJson || !timingJson || !provenanceJson) {
+    return {.status = ModernChartStageStatus::Invalid,
+            .diagnostic = diagnostic.empty()
+                              ? "modern chart durable payload is invalid"
+                              : std::move(diagnostic)};
+  }
+  std::optional<std::string> snapshotJson;
+  if (snapshot.has_value()) {
+    auto expected = ir::captureIrSubmissionSnapshot(result, diagnostic);
+    snapshotJson = ir::serializeIrSubmissionSnapshot(*snapshot, diagnostic);
+    if (!expected || !snapshotJson || *expected != *snapshot) {
+      return {.status = ModernChartStageStatus::Invalid,
+              .diagnostic = diagnostic.empty()
+                                ? "IR snapshot disagrees with modern result"
+                                : std::move(diagnostic)};
+    }
+  }
+  bool replayIdentityAgrees = true;
+  if (replayFile.has_value()) {
+    replayIdentityAgrees = validAttachment(*replayFile, diagnostic) &&
+                           replay::chartStemMatches(replayFile->identity.stem,
+                                                    result.score.chartSha256,
+                                                    result.score.longNoteMode,
+                                                    std::nullopt, diagnostic);
+    if (!replayIdentityAgrees && diagnostic.empty()) {
+      diagnostic = "modern replay path disagrees with chart identity";
+    }
+  }
+  if (!validateDrafts(result, snapshot, irDrafts, diagnostic) ||
+      !replayIdentityAgrees) {
+    return {.status = ModernChartStageStatus::Invalid,
+            .diagnostic = std::move(diagnostic)};
+  }
+
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernChartStageStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ModernChartStageStatus::StorageFailure,
+            .diagnostic = "could not start modern chart staging"};
+  }
+
+  auto existing =
+      readRecord(impl_->sessionDatabase, "attempt_id=?", result.attemptId, 0);
+  if (existing.status == ReadRecordStatus::Invalid) {
+    return {.status = ModernChartStageStatus::IntegrityConflict,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status == ReadRecordStatus::StorageFailure) {
+    return {.status = ModernChartStageStatus::StorageFailure,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status == ReadRecordStatus::Loaded) {
+    auto expected = result;
+    expected.resultId = existing.record->result.resultId;
+    bool snapshotFound = false;
+    auto storedSnapshot = readSnapshot(impl_->sessionDatabase, result.attemptId,
+                                       snapshotFound, diagnostic);
+    if (!snapshotFound && !diagnostic.empty()) {
+      return {.status = ModernChartStageStatus::StorageFailure,
+              .diagnostic = std::move(diagnostic)};
+    }
+    const bool snapshotAgrees =
+        snapshotFound == snapshot.has_value() &&
+        (!snapshotFound || (storedSnapshot && *storedSnapshot == *snapshot));
+    const bool fileAgrees =
+        existing.record->replayFile.has_value() == replayFile.has_value() &&
+        (!replayFile.has_value() ||
+         (existing.record->replayFile->identity == replayFile->identity &&
+          existing.record->replayFile->metadata == replayFile->metadata));
+    if (existing.record->result != expected || !snapshotAgrees || !fileAgrees ||
+        !verifyDrafts(impl_->sessionDatabase, result.attemptId, irDrafts,
+                      diagnostic)) {
+      return {.status = ModernChartStageStatus::IntegrityConflict,
+              .diagnostic = diagnostic.empty()
+                                ? "attempt ID already names different modern "
+                                  "payloads"
+                                : std::move(diagnostic)};
+    }
+    if (!transaction.commit(transactionError)) {
+      return {.status = ModernChartStageStatus::StorageFailure,
+              .diagnostic = "could not finish modern chart staging retry"};
+    }
+    return {.status = ModernChartStageStatus::AlreadyStaged,
+            .receipt = ModernChartStageReceipt{
+                .attemptId = result.attemptId,
+                .resultId = existing.record->result.resultId,
+                .createdAt = existing.createdAt}};
+  }
+
+  std::optional<ModernReplayPathReservation> reservation;
+  if (replayFile.has_value()) {
+    SqliteStatementHandle statement;
+    constexpr const char *query =
+        "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+        "FROM modern_replay_file_reservations WHERE attempt_id=?";
+    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+            SQLITE_OK ||
+        !bindText(statement.get(), 1, result.attemptId) ||
+        sqlite3_step(statement.get()) != SQLITE_ROW) {
+      return {.status = ModernChartStageStatus::IntegrityConflict,
+              .diagnostic = "modern replay file has no reservation"};
+    }
+    reservation = decodeReservation(statement.get(), diagnostic);
+    if (!reservation || sqlite3_step(statement.get()) != SQLITE_DONE ||
+        reservation->identity != replayFile->identity) {
+      return {.status = ModernChartStageStatus::IntegrityConflict,
+              .diagnostic = diagnostic.empty()
+                                ? "modern replay reservation disagrees with "
+                                  "the installed file"
+                                : std::move(diagnostic)};
+    }
+  }
+
+  int resultId = 0;
+  if (!insertResult(impl_->sessionDatabase, result, *gaugeJson, *timingJson,
+                    *provenanceJson, resultId)) {
+    return {.status = ModernChartStageStatus::StorageFailure,
+            .diagnostic = "could not insert modern chart result"};
+  }
+  if (snapshot.has_value()) {
+    SqliteStatementHandle statement;
+    constexpr const char *query =
+        "INSERT INTO ir_submission_snapshots(modern_chart_result_id,"
+        "attempt_id,schema_version,payload_json,fingerprint) VALUES(?,?,?,?,?)";
+    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+            SQLITE_OK ||
+        sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK ||
+        !bindText(statement.get(), 2, result.attemptId) ||
+        sqlite3_bind_int(statement.get(), 3, snapshot->schemaVersion) !=
+            SQLITE_OK ||
+        !bindText(statement.get(), 4, *snapshotJson) ||
+        !bindText(statement.get(), 5, snapshot->fingerprint) ||
+        sqlite3_step(statement.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ModernChartStageStatus::StorageFailure,
+              .diagnostic = "could not insert modern IR snapshot"};
+    }
+  }
+  if (replayFile.has_value()) {
+    SqliteStatementHandle statement;
+    constexpr const char *query =
+        "INSERT INTO modern_replay_files(modern_chart_result_id,stem,"
+        "history_index,relative_path,content_sha256,compressed_size,"
+        "codec_version) VALUES(?,?,?,?,?,?,?)";
+    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+            SQLITE_OK ||
+        sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK ||
+        !bindText(statement.get(), 2, replayFile->identity.stem) ||
+        sqlite3_bind_int64(statement.get(), 3,
+                           replayFile->identity.historyIndex) != SQLITE_OK ||
+        !bindText(statement.get(), 4,
+                  replayFile->identity.relativePath.generic_string()) ||
+        !bindText(statement.get(), 5, replayFile->metadata.sha256) ||
+        sqlite3_bind_int64(
+            statement.get(), 6,
+            static_cast<sqlite3_int64>(replayFile->metadata.compressedSize)) !=
+            SQLITE_OK ||
+        sqlite3_bind_int(statement.get(), 7,
+                         replayFile->metadata.codecVersion) != SQLITE_OK ||
+        sqlite3_step(statement.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ModernChartStageStatus::StorageFailure,
+              .diagnostic = "could not insert modern replay reference"};
+    }
+  }
+
+  SqliteStatementHandle pending;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "INSERT INTO modern_pending_chart_score_writes(attempt_id,"
+          "modern_chart_result_id,created_at) VALUES(?,?,CURRENT_TIMESTAMP)",
+          pending) != SQLITE_OK ||
+      !bindText(pending.get(), 1, result.attemptId) ||
+      sqlite3_bind_int(pending.get(), 2, resultId) != SQLITE_OK ||
+      sqlite3_step(pending.get()) != SQLITE_DONE ||
+      sqlite3_changes(impl_->sessionDatabase) != 1 ||
+      !insertReadyDrafts(impl_->sessionDatabase, irDrafts)) {
+    return {.status = ModernChartStageStatus::StorageFailure,
+            .diagnostic = "could not stage modern score or IR work"};
+  }
+  if (replayFile.has_value()) {
+    SqliteStatementHandle removeReservation;
+    if (prepareSqliteStatement(
+            impl_->sessionDatabase,
+            "DELETE FROM modern_replay_file_reservations WHERE attempt_id=?",
+            removeReservation) != SQLITE_OK ||
+        !bindText(removeReservation.get(), 1, result.attemptId) ||
+        sqlite3_step(removeReservation.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ModernChartStageStatus::StorageFailure,
+              .diagnostic = "could not finalize modern replay reservation"};
+    }
+  }
+
+  auto stored = readRecord(impl_->sessionDatabase, "id=?", {}, resultId);
+  if (stored.status != ReadRecordStatus::Loaded ||
+      !transaction.commit(transactionError)) {
+    return {.status = ModernChartStageStatus::StorageFailure,
+            .diagnostic = stored.diagnostic.empty()
+                              ? "could not commit modern chart result"
+                              : std::move(stored.diagnostic)};
+  }
+  return {.status = ModernChartStageStatus::Staged,
+          .receipt = ModernChartStageReceipt{.attemptId = result.attemptId,
+                                             .resultId = resultId,
+                                             .createdAt = stored.createdAt}};
+}
+
+ModernChartResultReadOutcome
+ReplayRepository::LoadModernChartResultByAttempt(std::string_view attemptId) {
+  profile_database_activity::ReadGuard readGuard;
+  if (!uuid::isCanonicalLowerV4(attemptId)) {
+    return {.status = ModernChartResultReadStatus::Invalid,
+            .diagnostic = "modern result attempt ID is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernChartResultReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  auto loaded =
+      readRecord(impl_->sessionDatabase, "attempt_id=?", attemptId, 0);
+  switch (loaded.status) {
+  case ReadRecordStatus::Loaded:
+    return {.status = ModernChartResultReadStatus::Loaded,
+            .record = std::move(loaded.record)};
+  case ReadRecordStatus::NotFound:
+    return {.status = ModernChartResultReadStatus::NotFound};
+  case ReadRecordStatus::Invalid:
+    return {.status = ModernChartResultReadStatus::Invalid,
+            .diagnostic = std::move(loaded.diagnostic)};
+  case ReadRecordStatus::StorageFailure:
+    return {.status = ModernChartResultReadStatus::StorageFailure,
+            .diagnostic = std::move(loaded.diagnostic)};
+  }
+  return {.status = ModernChartResultReadStatus::StorageFailure};
+}
+
+ModernChartResultReadOutcome
+ReplayRepository::LoadModernChartResult(int resultId) {
+  profile_database_activity::ReadGuard readGuard;
+  if (resultId <= 0) {
+    return {.status = ModernChartResultReadStatus::Invalid,
+            .diagnostic = "modern result ID is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernChartResultReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  auto loaded = readRecord(impl_->sessionDatabase, "id=?", {}, resultId);
+  switch (loaded.status) {
+  case ReadRecordStatus::Loaded:
+    return {.status = ModernChartResultReadStatus::Loaded,
+            .record = std::move(loaded.record)};
+  case ReadRecordStatus::NotFound:
+    return {.status = ModernChartResultReadStatus::NotFound};
+  case ReadRecordStatus::Invalid:
+    return {.status = ModernChartResultReadStatus::Invalid,
+            .diagnostic = std::move(loaded.diagnostic)};
+  case ReadRecordStatus::StorageFailure:
+    return {.status = ModernChartResultReadStatus::StorageFailure,
+            .diagnostic = std::move(loaded.diagnostic)};
+  }
+  return {.status = ModernChartResultReadStatus::StorageFailure};
+}
+
+ModernChartHistoryReadOutcome
+ReplayRepository::ListModernChartResults(std::string_view chartSha256,
+                                         std::size_t limit) {
+  profile_database_activity::ReadGuard readGuard;
+  if (!replay::isCanonicalLowerHex(chartSha256, 64) || limit == 0 ||
+      limit > kMaximumModernChartHistoryRows) {
+    return {.status = ModernChartHistoryReadStatus::Invalid,
+            .diagnostic = "modern chart history request is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernChartHistoryReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->sessionDatabase,
+                                      "BEGIN TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ModernChartHistoryReadStatus::StorageFailure,
+            .diagnostic = "could not start modern chart history read"};
+  }
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT id FROM modern_chart_results WHERE chart_sha256=? "
+      "ORDER BY played_at_unix_ms DESC,id DESC LIMIT ?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      !bindText(statement.get(), 1, chartSha256) ||
+      sqlite3_bind_int64(statement.get(), 2,
+                         static_cast<sqlite3_int64>(limit)) != SQLITE_OK) {
+    return {.status = ModernChartHistoryReadStatus::StorageFailure,
+            .diagnostic = "could not prepare modern chart history read"};
+  }
+  std::vector<int> resultIds;
+  resultIds.reserve(limit);
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER) {
+      return {.status = ModernChartHistoryReadStatus::IntegrityConflict,
+              .diagnostic = "modern chart history ID has an invalid type"};
+    }
+    const sqlite3_int64 id = sqlite3_column_int64(statement.get(), 0);
+    if (id <= 0 || id > std::numeric_limits<int>::max()) {
+      return {.status = ModernChartHistoryReadStatus::IntegrityConflict,
+              .diagnostic = "modern chart history ID is out of range"};
+    }
+    resultIds.push_back(static_cast<int>(id));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ModernChartHistoryReadStatus::StorageFailure,
+            .diagnostic = "modern chart history scan did not complete"};
+  }
+  statement.reset();
+
+  ModernChartHistoryReadOutcome outcome{
+      .status = ModernChartHistoryReadStatus::Loaded};
+  outcome.records.reserve(resultIds.size());
+  for (const int resultId : resultIds) {
+    auto loaded = readRecord(impl_->sessionDatabase, "id=?", {}, resultId);
+    if (loaded.status == ReadRecordStatus::StorageFailure) {
+      return {.status = ModernChartHistoryReadStatus::StorageFailure,
+              .diagnostic = std::move(loaded.diagnostic)};
+    }
+    if (loaded.status != ReadRecordStatus::Loaded || !loaded.record ||
+        loaded.record->result.score.chartSha256 != chartSha256) {
+      return {.status = ModernChartHistoryReadStatus::IntegrityConflict,
+              .diagnostic = loaded.diagnostic.empty()
+                                ? "modern chart history row is inconsistent"
+                                : std::move(loaded.diagnostic)};
+    }
+    outcome.records.push_back(std::move(*loaded.record));
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = ModernChartHistoryReadStatus::StorageFailure,
+            .diagnostic = "could not finish modern chart history read"};
+  }
+  return outcome;
+}
+
+ModernIrSnapshotReadOutcome
+ReplayRepository::LoadModernIrSubmissionSnapshot(std::string_view attemptId) {
+  profile_database_activity::ReadGuard readGuard;
+  if (!uuid::isCanonicalLowerV4(attemptId)) {
+    return {.status = ModernIrSnapshotReadStatus::Invalid,
+            .diagnostic = "modern IR snapshot attempt ID is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernIrSnapshotReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  bool found = false;
+  std::string diagnostic;
+  auto snapshot =
+      readSnapshot(impl_->sessionDatabase, attemptId, found, diagnostic);
+  if (!found) {
+    if (!diagnostic.empty()) {
+      return {.status = ModernIrSnapshotReadStatus::StorageFailure,
+              .diagnostic = std::move(diagnostic)};
+    }
+    return {.status = ModernIrSnapshotReadStatus::NotFound};
+  }
+  if (!snapshot) {
+    return {.status = ModernIrSnapshotReadStatus::Invalid,
+            .diagnostic = std::move(diagnostic)};
+  }
+  return {.status = ModernIrSnapshotReadStatus::Loaded,
+          .snapshot = std::move(snapshot)};
+}
