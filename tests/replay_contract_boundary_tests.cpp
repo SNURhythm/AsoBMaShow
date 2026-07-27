@@ -1,4 +1,6 @@
 #include "replay/ReplayCapabilities.h"
+#include "replay/BeatorajaReplayCodec.h"
+#include "replay/ReplayFileLifecycle.h"
 #include "replay/ReplayPlayback.h"
 #include "replay/ReplaySetup.h"
 
@@ -33,6 +35,9 @@ static_assert(!HasRawReplayCollection<replay::ReplaySetup>);
 static_assert(!HasResultFact<replay::ReplayPlaybackData>);
 static_assert(!HasResultFact<replay::CourseReplayPlaybackData>);
 static_assert(!HasResultFact<replay::ReplayCapabilities>);
+static_assert(!HasResultFact<replay::ReplayChartDocument>);
+static_assert(!HasResultFact<replay::ReplayCourseDocument>);
+static_assert(!HasResultFact<replay::ReplayFileMetadata>);
 
 namespace {
 
@@ -59,18 +64,10 @@ void rejectTokens(const std::filesystem::path &path,
 void testPlaybackSetupBoundary() {
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
   constexpr std::array<std::string_view, 12> forbidden{
-      "ReplayData",
-      "ScoreProvenance",
-      "ResultPersistence",
-      "IrSubmission",
-      "ReplayRepository",
-      "sqlite3",
-      "attemptId",
-      "resultFingerprint",
-      "finalScore",
-      "maxCombo",
-      "finalGauge",
-      "clearType",
+      "ReplayData",   "ScoreProvenance",   "ResultPersistence",
+      "IrSubmission", "ReplayRepository",  "sqlite3",
+      "attemptId",    "resultFingerprint", "finalScore",
+      "maxCombo",     "finalGauge",        "clearType",
   };
   rejectTokens(root / "src/replay/ReplaySetup.h", forbidden);
   rejectTokens(root / "src/replay/ReplaySetup.cpp", forbidden);
@@ -82,21 +79,36 @@ void testPlaybackSetupBoundary() {
 void testCapabilityPolicyBoundary() {
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
   constexpr std::array<std::string_view, 12> forbidden{
-      "ReplayData",
-      "ScoreProvenance",
-      "ResultPersistence",
-      "IrOutbox",
-      "ReplayRepository",
-      "sqlite3",
-      "filesystem",
-      "fstream",
-      "GamePlayScene",
-      "ResultScene",
-      "ProfileArchive",
-      "ReplayFileStore",
+      "ReplayData",  "ScoreProvenance",  "ResultPersistence",
+      "IrOutbox",    "ReplayRepository", "sqlite3",
+      "filesystem",  "fstream",          "GamePlayScene",
+      "ResultScene", "ProfileArchive",   "ReplayFileStore",
   };
   rejectTokens(root / "src/replay/ReplayCapabilities.h", forbidden);
   rejectTokens(root / "src/replay/ReplayCapabilities.cpp", forbidden);
+}
+
+void testCodecAndFileBoundary() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  constexpr std::array<std::string_view, 12> codecForbidden{
+      "ScoreProvenance", "ResultPersistence", "IrSubmission",
+      "IrOutbox",        "ReplayRepository",  "sqlite3",
+      "attemptToken",    "resultFingerprint", "finalScore",
+      "maxCombo",        "finalGauge",        "clearType",
+  };
+  rejectTokens(root / "src/replay/BeatorajaReplayCodec.h", codecForbidden);
+  rejectTokens(root / "src/replay/BeatorajaReplayCodec.cpp", codecForbidden);
+
+  constexpr std::array<std::string_view, 12> storeForbidden{
+      "ScoreProvenance", "ResultPersistence", "IrSubmission",
+      "IrOutbox",        "ReplayRepository",  "sqlite3",
+      "resultId",        "resultFingerprint", "finalScore",
+      "maxCombo",        "finalGauge",        "clearType",
+  };
+  rejectTokens(root / "src/replay/ReplayFileLifecycle.h", storeForbidden);
+  rejectTokens(root / "src/replay/ReplayFileLifecycle.cpp", storeForbidden);
+  rejectTokens(root / "src/replay/ReplayFileStore.h", storeForbidden);
+  rejectTokens(root / "src/replay/ReplayFileStore.cpp", storeForbidden);
 }
 
 } // namespace
@@ -104,6 +116,7 @@ void testCapabilityPolicyBoundary() {
 int main() {
   testPlaybackSetupBoundary();
   testCapabilityPolicyBoundary();
+  testCodecAndFileBoundary();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;

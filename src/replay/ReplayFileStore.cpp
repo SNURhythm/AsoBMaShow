@@ -508,6 +508,49 @@ ReplayFileStore::inspect(const ReplayFileMetadata &metadata) const {
   return inspectAt(profileRoot_, metadata, limits_);
 }
 
+ReplayFileReadOutcome
+ReplayFileStore::readVerified(const ReplayFileMetadata &metadata) const {
+  ReplayFileReadOutcome outcome;
+  const auto inspection = inspect(metadata);
+  outcome.state = inspection.state;
+  outcome.diagnostic = inspection.diagnostic;
+  if (inspection.state != ReplayFileState::Available) {
+    return outcome;
+  }
+  const auto path = profileRoot_ / metadata.relativePath;
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input) {
+    outcome.state = ReplayFileState::IoFailure;
+    outcome.diagnostic = "Unable to open verified replay file";
+    return outcome;
+  }
+  const auto end = input.tellg();
+  if (end < 0 || static_cast<std::uint64_t>(end) != metadata.compressedSize ||
+      static_cast<std::uint64_t>(end) > limits_.maxCompressedBytes) {
+    outcome.state = ReplayFileState::Corrupt;
+    outcome.diagnostic = "Replay size changed while opening verified bytes";
+    return outcome;
+  }
+  std::vector<std::byte> bytes(static_cast<std::size_t>(end));
+  input.seekg(0, std::ios::beg);
+  input.read(reinterpret_cast<char *>(bytes.data()),
+             static_cast<std::streamsize>(bytes.size()));
+  if (input.gcount() != static_cast<std::streamsize>(bytes.size()) ||
+      input.bad()) {
+    outcome.state = ReplayFileState::IoFailure;
+    outcome.diagnostic = "Unable to read complete verified replay bytes";
+    return outcome;
+  }
+  if (hashBytes(bytes) != metadata.sha256) {
+    outcome.state = ReplayFileState::Corrupt;
+    outcome.diagnostic = "Replay hash changed while reading verified bytes";
+    return outcome;
+  }
+  outcome.bytes = std::move(bytes);
+  outcome.diagnostic.clear();
+  return outcome;
+}
+
 bool ReplayFileStore::removeIfMatches(const ReplayFileMetadata &metadata,
                                       std::string &diagnostic) const {
   diagnostic.clear();

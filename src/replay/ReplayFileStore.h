@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace replay {
 
@@ -27,6 +28,12 @@ enum class ReplayFileState {
 
 struct ReplayFileInspection {
   ReplayFileState state = ReplayFileState::IoFailure;
+  std::string diagnostic;
+};
+
+struct ReplayFileReadOutcome {
+  ReplayFileState state = ReplayFileState::IoFailure;
+  std::optional<std::vector<std::byte>> bytes;
   std::string diagnostic;
 };
 
@@ -87,6 +94,9 @@ public:
 
   [[nodiscard]] ReplayFileInspection
   inspect(const ReplayFileMetadata &metadata) const;
+
+  [[nodiscard]] ReplayFileReadOutcome
+  readVerified(const ReplayFileMetadata &metadata) const;
 
   bool removeIfMatches(const ReplayFileMetadata &metadata,
                        std::string &diagnostic) const;
