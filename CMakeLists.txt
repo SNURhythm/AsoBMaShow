@@ -1636,6 +1636,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(chart_replay_context_tests PRIVATE SDL2)
     endif()
 
+    add_executable(course_replay_context_tests
+        tests/course_replay_context_tests.cpp
+    )
+    target_include_directories(course_replay_context_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_replay_context_tests PRIVATE cxx_std_23)
+
+    add_executable(course_replay_consumer_tests
+        tests/course_replay_consumer_tests.cpp
+    )
+    target_include_directories(course_replay_consumer_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_replay_consumer_tests PRIVATE cxx_std_23)
+
     add_executable(replay_playback_driver_tests
         tests/replay_playback_driver_tests.cpp
         src/FileChecksum.cpp
@@ -3549,6 +3565,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_file_association_coordinator_tests
         course_replay_persistence_tests
         chart_replay_context_tests
+        course_replay_context_tests
+        course_replay_consumer_tests
         replay_playback_driver_tests
         music_playlist_repository_tests
         chart_repository_tests
