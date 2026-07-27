@@ -938,6 +938,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         cxx_std_23
     )
 
+    add_executable(course_replay_capture_tests
+        tests/course_replay_capture_tests.cpp
+    )
+    target_include_directories(course_replay_capture_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_replay_capture_tests PRIVATE cxx_std_23)
+
     add_executable(result_record_summary_tests
         tests/result_record_summary_tests.cpp
         src/ResultRecordSummary.cpp
@@ -3368,6 +3376,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         modern_chart_persistence_contract_tests
         course_continuation_tests
         modern_course_persistence_contract_tests
+        course_replay_capture_tests
         modern_result_tests
         result_contract_tests
         ir_submission_snapshot_tests
