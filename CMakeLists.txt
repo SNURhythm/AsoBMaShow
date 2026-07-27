@@ -901,6 +901,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_file_reconciler_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_profile_transfer_tests
+        tests/replay_profile_transfer_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayProfileTransfer.cpp
+    )
+    target_include_directories(replay_profile_transfer_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_profile_transfer_tests PRIVATE cxx_std_23)
+
     add_executable(replay_codec_store_contract_tests
         tests/replay_codec_store_contract_tests.cpp
         src/AtomicFile.cpp
@@ -3657,6 +3671,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_file_store_tests
         replay_file_action_service_tests
         replay_file_reconciler_tests
+        replay_profile_transfer_tests
         replay_codec_store_contract_tests
         replay_playback_tests
         replay_input_recorder_tests
