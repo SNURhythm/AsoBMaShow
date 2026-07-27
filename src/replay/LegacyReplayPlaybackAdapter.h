@@ -18,7 +18,8 @@ namespace replay {
 
 // Compatibility bridge for consumers that still render judged JudgedPlaybackData.
 // This derived value must never be persisted or used for IR.
-[[nodiscard]] JudgedPlaybackData makeMaterializedPlaybackAdapter(
+[[nodiscard]] std::optional<JudgedPlaybackData>
+makeMaterializedPlaybackAdapter(
     const ReplayPlaybackData &playback,
     const MaterializedReplay &materialized,
     const gameplay::GameplayRulesetPolicy &policy,

@@ -876,7 +876,7 @@ void testEncodeValidatesRandomAndGaugeEnums() {
            "encode rejects an out-of-range legacy gauge type");
 }
 
-void testCourseEncodeRejectsNegativeRestDuration() {
+void testCourseCodecRejectsInvalidRestDuration() {
   replay::BeatorajaReplayCodec codec;
   replay::CourseReplayPlaybackData course;
   course.stages = {extensionReplay()};
@@ -887,6 +887,26 @@ void testCourseEncodeRejectsNegativeRestDuration() {
          "course encode rejects a negative post-stage rest duration");
   expect(!diagnostic.empty(),
          "negative post-stage rest reports an encode diagnostic");
+
+  course.restMicrosAfterStage = {3'600'000'001LL};
+  expect(!codec.encodeCourse(course, 1'000, diagnostic),
+         "course encode rejects an excessive post-stage rest duration");
+  expect(!diagnostic.empty(),
+         "excessive post-stage rest reports an encode diagnostic");
+
+  course.restMicrosAfterStage = {0};
+  const auto encoded = codec.encodeCourse(course, 1'000, diagnostic);
+  expect(encoded.has_value(), "course rest decode fixture encodes");
+  if (encoded.has_value()) {
+    Json document = outerJson(*encoded);
+    document.front()["asobmashow"]["restMicrosAfterStage"] =
+        std::numeric_limits<std::int64_t>::max();
+    const auto decoded = codec.decode(encodeJson(document));
+    expect(!decoded.chart && !decoded.course,
+           "course decode rejects an excessive post-stage rest");
+    expect(!decoded.diagnostic.empty(),
+           "excessive decoded post-stage rest reports a diagnostic");
+  }
 }
 
 void testAllMissReplayRoundTripsWithEmptyInput() {
@@ -1395,7 +1415,7 @@ int main() {
   testPreRollInputEncodesForChartsAndCourses();
   testStockProjectionCarriesPreRollHoldsAcrossTimeZero();
   testEncodeValidatesRandomAndGaugeEnums();
-  testCourseEncodeRejectsNegativeRestDuration();
+  testCourseCodecRejectsInvalidRestDuration();
   testAllMissReplayRoundTripsWithEmptyInput();
   testManualAssignmentProjectsToStockNormal();
   testStockDecodeRejectsZeroKeyRecords();

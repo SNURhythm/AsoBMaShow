@@ -1,6 +1,8 @@
 #include "LegacyReplayPlaybackAdapter.h"
 #include "../analysis/JudgedPlaybackContext.h"
 
+#include <bit>
+#include <cstdint>
 #include <utility>
 
 namespace replay {
@@ -30,6 +32,47 @@ JudgedPlaybackData makeAdapterBase(
   return adapted;
 }
 
+bool sameFloat(float left, float right) noexcept {
+  return std::bit_cast<std::uint32_t>(left) ==
+         std::bit_cast<std::uint32_t>(right);
+}
+
+bool materializedFactsMatch(
+    const MaterializedReplay &materialized,
+    const result_persistence::PersistedChartResult &result) noexcept {
+  const auto &attempt = materialized.attempt;
+  const auto &score = result.score;
+  if (attempt.score != score.score || attempt.maxCombo != score.maxCombo ||
+      attempt.comboBreak != score.comboBreak ||
+      attempt.judgeCounts[PGreat] != score.pGreat ||
+      attempt.judgeCounts[Great] != score.great ||
+      attempt.judgeCounts[Good] != score.good ||
+      attempt.judgeCounts[Bad] != score.bad ||
+      attempt.judgeCounts[Poor] != score.poor ||
+      attempt.judgeCounts[Kpoor] != score.kPoor ||
+      attempt.fast != score.fast || attempt.slow != score.slow ||
+      !sameFloat(attempt.gauge, score.finalGauge) ||
+      attempt.gaugeType != result.adoptedGaugeType ||
+      attempt.clearTypeRank != score.clearType ||
+      materialized.gaugeState.gaugeType != result.adoptedGaugeType ||
+      !sameFloat(materialized.gaugeState.currentGauge, score.finalGauge) ||
+      materialized.gaugeHistory.size() != result.adoptedGaugeHistory.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < materialized.gaugeHistory.size();
+       ++index) {
+    if (!sameFloat(materialized.gaugeHistory[index],
+                   result.adoptedGaugeHistory[index])) {
+      return false;
+    }
+  }
+  if (result.judgementTiming.has_value() &&
+      attempt.judgementTiming != result.judgementTiming->byJudgement) {
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 std::optional<JudgedPlaybackData> makeLegacyPlaybackAdapter(
@@ -40,7 +83,8 @@ std::optional<JudgedPlaybackData> makeLegacyPlaybackAdapter(
     return std::nullopt;
   }
   const auto &score = result.score;
-  JudgedPlaybackData adapted = makeAdapterBase(playback, result, std::move(chartMeta));
+  JudgedPlaybackData adapted =
+      makeAdapterBase(playback, result, std::move(chartMeta));
   adapted.finalScore = score.score;
   adapted.maxCombo = score.maxCombo;
   adapted.finalGauge = score.finalGauge;
@@ -63,13 +107,17 @@ std::optional<JudgedPlaybackData> makeLegacyPlaybackAdapter(
   return adapted;
 }
 
-JudgedPlaybackData makeMaterializedPlaybackAdapter(
+std::optional<JudgedPlaybackData> makeMaterializedPlaybackAdapter(
     const ReplayPlaybackData &playback,
     const MaterializedReplay &materialized,
     const gameplay::GameplayRulesetPolicy &policy,
     const result_persistence::PersistedChartResult &result,
     bms_parser::ChartMeta chartMeta) {
-  JudgedPlaybackData adapted = makeAdapterBase(playback, result, std::move(chartMeta));
+  if (!materializedFactsMatch(materialized, result)) {
+    return std::nullopt;
+  }
+  JudgedPlaybackData adapted =
+      makeAdapterBase(playback, result, std::move(chartMeta));
   adapted.context =
       analysis::playbackContextFrom(playback.setup, policy, adapted.chartMeta);
   adapted.finalScore = materialized.attempt.score;

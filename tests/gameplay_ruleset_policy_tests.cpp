@@ -445,6 +445,26 @@ void testRawCourseReplayRestTimingIsPreserved() {
           "freshly recorded course timing remains the fallback");
 }
 
+void testMixedCourseReplaySelectsEachStagesRepresentation() {
+  CoursePlaySession session;
+  session.courseReplayPlaybackData =
+      std::make_shared<replay::CourseReplayPlaybackData>();
+  session.courseReplayPlaybackData->stages.resize(2);
+  session.courseReplayPlaybackData->stages[0].legacy.emplace();
+  session.courseReplayData = std::make_shared<JudgedCoursePlaybackData>();
+  session.courseReplayData->stages.resize(2);
+
+  session.currentIndex = 0;
+  require(session.currentCourseReplayStagePlayback() == nullptr &&
+              session.currentCourseReplayStageReplay() != nullptr,
+          "a migrated course stage selects its judged legacy adapter");
+
+  session.currentIndex = 1;
+  require(session.currentCourseReplayStagePlayback() != nullptr &&
+              session.currentCourseReplayStageReplay() == nullptr,
+          "a native BRD course stage remains raw input playback");
+}
+
 void testRawCourseReplayMaterializationAppliesSavedJudgementConstraint() {
   const auto meta = chartMeta(GameplayRuleset::Beatoraja);
   auto playback = std::make_shared<replay::ReplayPlaybackData>();
@@ -487,6 +507,7 @@ int main() {
   testFutureLegacyMarkerDoesNotFallBack();
   testFutureKnownRevisionDoesNotBecomeLegacyMarker();
   testRawCourseReplayRestTimingIsPreserved();
+  testMixedCourseReplaySelectsEachStagesRepresentation();
   testRawCourseReplayMaterializationAppliesSavedJudgementConstraint();
   return 0;
 }

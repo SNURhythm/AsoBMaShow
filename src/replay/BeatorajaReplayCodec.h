@@ -13,6 +13,8 @@ namespace replay {
 
 struct ReplayCodecLimits {
   static constexpr std::size_t kMaximumCompressedBytes = 64U * 1024U * 1024U;
+  static constexpr std::int64_t kMaximumCourseRestMicros =
+      60LL * 60LL * 1'000'000LL;
 
   std::size_t maxCompressedBytes = kMaximumCompressedBytes;
   std::size_t maxJsonBytes = 256U * 1024U * 1024U;
@@ -21,6 +23,7 @@ struct ReplayCodecLimits {
   std::size_t maxTouchSamples = 1'000'000U;
   std::size_t maxLaneCoverEvents = 100'000U;
   std::size_t maxJsonDepth = 64U;
+  std::int64_t maxCourseRestMicros = kMaximumCourseRestMicros;
 };
 
 enum class ReplayStageDecodeSource : std::uint8_t {

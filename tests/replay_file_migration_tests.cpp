@@ -1167,6 +1167,134 @@ void testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes() {
          "conflicting chart metadata matches fail closed");
 }
 
+void testChartMetadataUsesValidDuplicateWhenAnotherCopyCannotParse() {
+  TemporaryDirectory temporary;
+  FixtureFacts chart;
+  Database chartDatabase(temporary.path() / "chart.db");
+  createChartMetadataDatabase(chartDatabase.get(), chart, 7, 1, 1, 0);
+  executeOrThrow(chartDatabase.get(),
+                 "UPDATE chart_meta SET path='BMS/stale.bms';"
+                 "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
+                 "total_long_notes,total_backspin_notes,total_notes) VALUES("
+                 "'BMS/valid.bms','" +
+                     chart.md5 + "','" + chart.sha256 + "',7,1,1,0,2);"
+                     "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
+                     "total_long_notes,total_backspin_notes,total_notes) "
+                     "VALUES('BMS/other-stale.bms','" +
+                     chart.md5 + "','" + chart.sha256 + "',5,1,1,0,3)");
+
+  replay_repository_detail::setReplayMigrationChartTopologyResolver(
+      [](const auto &identity)
+          -> std::optional<std::vector<
+              replay_repository_detail::ReplayMigrationClassicLongNote>> {
+        if (identity.chartPath == "BMS/stale.bms" ||
+            identity.chartPath == "BMS/other-stale.bms") {
+          return std::nullopt;
+        }
+        return std::vector<
+            replay_repository_detail::ReplayMigrationClassicLongNote>{};
+      });
+  const auto resolver =
+      replay_repository_detail::makeChartDatabaseReplayMetadataResolver(
+          temporary.path() / "chart.db");
+  const auto resolved = resolver({.chartPath = "BMS/stale.bms",
+                                  .chartMd5 = chart.md5,
+                                  .chartSha256 = chart.sha256});
+  replay_repository_detail::setReplayMigrationChartTopologyResolver({});
+
+  expect(resolved.has_value() && resolved->keyMode == 7 &&
+             resolved->totalNotes == 2 &&
+             resolved->resultEventTopologyComplete,
+         "a parseable duplicate chart copy wins over a stale matching path");
+}
+
+void testChartMetadataRejectsOutOfRangeIntegers() {
+  TemporaryDirectory temporary;
+  FixtureFacts chart;
+  Database chartDatabase(temporary.path() / "chart.db");
+  createChartMetadataDatabase(chartDatabase.get(), chart, 7, 1, 0, 0);
+  executeOrThrow(chartDatabase.get(),
+                 "UPDATE chart_meta SET keys=4294967303");
+
+  const auto resolver =
+      replay_repository_detail::makeChartDatabaseReplayMetadataResolver(
+          temporary.path() / "chart.db");
+  const auto resolved = resolver({.chartPath = "BMS/chart.bms",
+                                  .chartMd5 = chart.md5,
+                                  .chartSha256 = chart.sha256});
+
+  expect(!resolved.has_value(),
+         "chart metadata integers cannot wrap through SQLite's int API");
+}
+
+void testRejectsTextReplayGaugeAtomically() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "UPDATE replay_events SET gauge='not-a-number' "
+                 "WHERE replay_id=42 AND event_index=0");
+  const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+             snapshotLegacyDatabase(database.get()) == before &&
+             integer(database.get(), "PRAGMA user_version") == 10,
+         "a text replay gauge fails migration without mutating schema 10");
+}
+
+void testRejectsTextIntegerReplayPayloadsAtomically() {
+  struct Case {
+    std::string_view mutation;
+    std::string_view field;
+  };
+  constexpr std::array cases{
+      Case{"UPDATE replay_events SET lane='bad' WHERE replay_id=42",
+           "event lane"},
+      Case{"UPDATE replay_touch_samples SET finger_id='bad' "
+           "WHERE replay_id=42",
+           "touch finger ID"},
+      Case{"UPDATE replay_lane_cover_events "
+           "SET note_start_position_percent='bad' WHERE replay_id=42",
+           "lane-cover position"},
+      Case{"UPDATE replays SET random_seed='bad' WHERE id=42",
+           "chart random seed"},
+      Case{"UPDATE pending_chart_score_writes SET fast='bad' "
+           "WHERE replay_id=42",
+           "pending score timing"},
+  };
+
+  for (const auto &test : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    executeOrThrow(database.get(), test.mutation);
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+
+    const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+
+    expect(outcome.status ==
+                   replay_repository_detail::ReplayMigrationOutcome::Status::
+                       InvalidLegacyData &&
+               snapshotLegacyDatabase(database.get()) == before &&
+               integer(database.get(), "PRAGMA user_version") == 10,
+           std::string("text-backed ") + std::string(test.field) +
+               " fails migration atomically");
+  }
+}
+
 void testLongNoteMigrationRequiresAndUsesParsedTopology() {
   TemporaryDirectory temporary;
   Database replayDatabase(temporary.path() / "replay.db");
@@ -2496,6 +2624,8 @@ int main() {
   testUnavailableKeyModeBlocksAllMissMigrationAtomically();
   testChartMetadataPreservesSparseFourteenKeyMode();
   testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes();
+  testChartMetadataUsesValidDuplicateWhenAnotherCopyCannotParse();
+  testChartMetadataRejectsOutOfRangeIntegers();
   testLongNoteMigrationRequiresAndUsesParsedTopology();
   testMapsLegacyPhysicalLanesForEverySupportedMode();
   testRejectsUnmappableLegacyInputLanesAtomically();
@@ -2513,6 +2643,8 @@ int main() {
   testMigratesOnlyAdoptedGaugeJudgementHistory();
   testMissingChartMetadataBlocksResultReconstruction();
   testRejectsInvalidLegacyReplayEnums();
+  testRejectsTextReplayGaugeAtomically();
+  testRejectsTextIntegerReplayPayloadsAtomically();
   testMigratesOutdatedProvenanceAsLegacyUnverified();
   testMigratesLegacyPrerollSupplementalTimestamps();
   testRejectsDecreasingIndexedReplayTimestampsAtomically();

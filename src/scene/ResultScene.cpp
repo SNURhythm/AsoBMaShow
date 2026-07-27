@@ -2679,6 +2679,11 @@ void ResultScene::startCourseReplay() {
     replaySession->courseReplayPlaybackData =
         std::make_shared<replay::CourseReplayPlaybackData>(
             *sourceSession->courseReplayPlaybackData);
+    if (sourceSession->courseReplayData != nullptr) {
+      replaySession->courseReplayData =
+          std::make_shared<JudgedCoursePlaybackData>(
+              *sourceSession->courseReplayData);
+    }
     replaySession->replayTouchVisualizationEnabled =
         sourceSession->replayTouchVisualizationEnabled;
     replaySession->replayGhostRenderingEnabled =

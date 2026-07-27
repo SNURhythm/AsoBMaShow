@@ -9886,7 +9886,12 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
           legacyCourse->totalCharts = persisted.totalCharts;
           legacyCourse->context =
               analysis::playbackContextFrom(initialSetup);
+          legacyCourse->stages.reserve(persisted.stages.size());
           for (std::size_t index = 0; index < persisted.stages.size(); ++index) {
+            if (!playback->stages[index].legacy.has_value()) {
+              legacyCourse->stages.emplace_back();
+              continue;
+            }
             result_persistence::PersistedChartResult stageResult{
                 .resultId = persisted.resultId,
                 .score = persisted.stages[index].score,
@@ -9911,6 +9916,7 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
                      playback->restMicrosAfterStage[index]});
           }
           session->courseReplayData = std::move(legacyCourse);
+          session->courseReplayPlaybackData = std::move(playback);
         } else {
           session->courseReplayPlaybackData = std::move(playback);
         }

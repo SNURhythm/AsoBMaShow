@@ -1647,7 +1647,8 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
     return false;
   }
   if (result.stageIndex < 0 || result.stageCount <= 0 ||
-      result.restMicrosAfterStage < 0) {
+      result.restMicrosAfterStage < 0 ||
+      result.restMicrosAfterStage > limits.maxCourseRestMicros) {
     return fail(diagnostic, "Replay extension course metadata is invalid");
   }
   if (!decodeInputExtension(*input, *keyMode, limits, result.data.input,
@@ -1734,7 +1735,10 @@ BeatorajaReplayCodec::encodeCourse(const CourseReplayPlaybackData &replay,
   if (replay.stages.empty() ||
       replay.stages.size() != replay.restMicrosAfterStage.size() ||
       std::ranges::any_of(replay.restMicrosAfterStage,
-                          [](std::int64_t rest) { return rest < 0; }) ||
+                          [this](std::int64_t rest) {
+                            return rest < 0 ||
+                                   rest > limits_.maxCourseRestMicros;
+                          }) ||
       replay.stages.size() > kMaximumCourseReplayStages ||
       replay.stages.size() >
           static_cast<std::size_t>(std::numeric_limits<int>::max())) {

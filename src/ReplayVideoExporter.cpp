@@ -4179,9 +4179,13 @@ ReplayVideoExportResult ReplayVideoExporter::Export(
                            ? "Unable to materialize replay"
                            : materialized.diagnostic};
   }
-  const JudgedPlaybackData adapted = replay::makeMaterializedPlaybackAdapter(
+  const auto adapted = replay::makeMaterializedPlaybackAdapter(
       playback, *materialized.value, *policy.policy, result, chart->Meta);
-  return Export(context, chart, adapted, options);
+  if (!adapted.has_value()) {
+    return {.success = false,
+            .message = "Replay input does not match its saved result"};
+  }
+  return Export(context, chart, *adapted, options);
 }
 
 ReplayVideoExportResult

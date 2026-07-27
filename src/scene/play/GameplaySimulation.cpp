@@ -168,11 +168,17 @@ GameplayAttemptSnapshot GameplaySimulation::snapshot() const noexcept {
     if (count != scoreState_.judgeCount.end()) {
       result.judgeCounts[index] = count->second;
     }
+    const auto timing = scoreState_.judgementFastSlowCount.find(judgement);
+    if (timing != scoreState_.judgementFastSlowCount.end()) {
+      result.judgementTiming[index] = timing->second;
+    }
   }
   result.combo = scoreState_.combo;
   result.maxCombo = scoreState_.maxCombo;
   result.comboBreak = scoreState_.comboBreak;
   result.score = scoreState_.getScore();
+  result.fast = scoreState_.fastCount;
+  result.slow = scoreState_.slowCount;
   result.gauge = scoreState_.currentGauge;
   result.gaugeType = scoreState_.gaugeType;
   result.clearTypeRank = scoreState_.getClearTypeRank();

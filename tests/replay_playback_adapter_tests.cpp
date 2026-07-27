@@ -99,8 +99,11 @@ void testAdaptersRetainCompletePlaybackSetup() {
   const auto judged = replay::makeMaterializedPlaybackAdapter(
       playback, materialized, policy, persistedResult(),
       bms_parser::ChartMeta{});
-  expect(judged.setup == playback.setup,
-         "materialized adapter retains the complete raw playback setup");
+  expect(judged.has_value(), "matching materialized replay adapts");
+  if (judged.has_value()) {
+    expect(judged->setup == playback.setup,
+           "materialized adapter retains the complete raw playback setup");
+  }
 }
 
 void testLegacyAdapterCarriesEnabledInitialLaneCoverForChartVideo() {
@@ -128,14 +131,55 @@ void testMaterializedAdapterCarriesDisabledRememberedLaneCoverForCourseVideo() {
   replay::MaterializedReplay materialized;
   gameplay::GameplayRulesetPolicy policy;
 
-  const JudgedPlaybackData adapted = replay::makeMaterializedPlaybackAdapter(
+  const auto adapted = replay::makeMaterializedPlaybackAdapter(
       playback, materialized, policy, persistedResult(),
       bms_parser::ChartMeta{});
 
-  expect(adapted.laneCoverEvents.empty(),
-         "materialized regression has no timed cover event masking the bug");
-  expectInitialLaneCover(adapted, 73, false, 19, 0,
-                         "materialized course video adapter");
+  expect(adapted.has_value(), "matching materialized course replay adapts");
+  if (adapted.has_value()) {
+    expect(adapted->laneCoverEvents.empty(),
+           "materialized regression has no timed cover event masking the bug");
+    expectInitialLaneCover(*adapted, 73, false, 19, 0,
+                           "materialized course video adapter");
+  }
+}
+
+void testMaterializedAdapterRejectsResultMismatch() {
+  replay::ReplayPlaybackData playback;
+  gameplay::GameplayRulesetPolicy policy;
+  const auto rejected = [&](replay::MaterializedReplay materialized,
+                            std::string_view fact) {
+    const auto adapted = replay::makeMaterializedPlaybackAdapter(
+        playback, materialized, policy, persistedResult(),
+        bms_parser::ChartMeta{});
+    expect(!adapted.has_value(),
+           std::string("materialized input cannot replace saved ") +
+               std::string(fact));
+  };
+
+  replay::MaterializedReplay materialized;
+  materialized.attempt.score = 1;
+  rejected(materialized, "score facts");
+
+  materialized = {};
+  materialized.attempt.maxCombo = 1;
+  rejected(materialized, "combo facts");
+
+  materialized = {};
+  materialized.attempt.judgeCounts[PGreat] = 1;
+  rejected(materialized, "judgement facts");
+
+  materialized = {};
+  materialized.attempt.gauge = 1.0F;
+  rejected(materialized, "gauge facts");
+
+  materialized = {};
+  materialized.attempt.clearTypeRank = kClearTypeNormalClearRank;
+  rejected(materialized, "clear facts");
+
+  materialized = {};
+  materialized.gaugeHistory = {1.0F};
+  rejected(materialized, "gauge-history facts");
 }
 
 void testJudgedPlaybackWithoutRecordedLaneCoverKeepsSettingsFallback() {
@@ -150,6 +194,7 @@ int main() {
   testAdaptersRetainCompletePlaybackSetup();
   testLegacyAdapterCarriesEnabledInitialLaneCoverForChartVideo();
   testMaterializedAdapterCarriesDisabledRememberedLaneCoverForCourseVideo();
+  testMaterializedAdapterRejectsResultMismatch();
   testJudgedPlaybackWithoutRecordedLaneCoverKeepsSettingsFallback();
   if (failures != 0) {
     std::cerr << failures << " replay playback adapter test(s) failed\n";

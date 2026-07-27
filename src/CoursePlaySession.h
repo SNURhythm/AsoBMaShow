@@ -396,10 +396,7 @@ struct CoursePlaySession {
   }
 
   [[nodiscard]] bool hasNextCourseReplayStage() const {
-    return (courseReplayPlaybackData != nullptr &&
-            currentIndex + 1 < courseReplayPlaybackData->stages.size()) ||
-           (courseReplayData != nullptr &&
-            currentIndex + 1 < courseReplayData->stages.size());
+    return hasCourseReplayStage(currentIndex + 1);
   }
 
   [[nodiscard]] const bms_parser::ChartMeta *currentMeta() const {
@@ -407,16 +404,21 @@ struct CoursePlaySession {
   }
 
   [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
-    return (courseReplayPlaybackData != nullptr &&
-            index < courseReplayPlaybackData->stages.size()) ||
-           (courseReplayData != nullptr &&
-            index < courseReplayData->stages.size());
+    if (courseReplayPlaybackData != nullptr &&
+        index < courseReplayPlaybackData->stages.size()) {
+      return !courseReplayPlaybackData->stages[index].legacy.has_value() ||
+             (courseReplayData != nullptr &&
+              index < courseReplayData->stages.size());
+    }
+    return courseReplayData != nullptr &&
+           index < courseReplayData->stages.size();
   }
 
   [[nodiscard]] std::shared_ptr<const replay::ReplayPlaybackData>
   currentCourseReplayStagePlayback() const {
     if (courseReplayPlaybackData == nullptr ||
-        currentIndex >= courseReplayPlaybackData->stages.size()) {
+        currentIndex >= courseReplayPlaybackData->stages.size() ||
+        courseReplayPlaybackData->stages[currentIndex].legacy.has_value()) {
       return nullptr;
     }
     return std::shared_ptr<const replay::ReplayPlaybackData>(
@@ -434,6 +436,11 @@ struct CoursePlaySession {
 
   [[nodiscard]] std::shared_ptr<JudgedPlaybackData>
   currentCourseReplayStageReplay() const {
+    if (courseReplayPlaybackData != nullptr &&
+        currentIndex < courseReplayPlaybackData->stages.size() &&
+        !courseReplayPlaybackData->stages[currentIndex].legacy.has_value()) {
+      return nullptr;
+    }
     const auto *stage = courseReplayStage(currentIndex);
     return stage == nullptr
                ? nullptr
