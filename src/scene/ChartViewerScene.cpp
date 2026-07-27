@@ -8,6 +8,7 @@
 #include "../PlayOptionUtils.h"
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayGhostUtils.h"
+#include "../replay/ChartReplayConsumer.h"
 #include "../path.h"
 #include "../practice/PracticeConfiguration.h"
 #include "../practice/PracticeLaunchRequest.h"
@@ -22,6 +23,7 @@
 #include "../view/OverlayPortal.h"
 #include "../view/PlayOptionsPanelView.h"
 #include "../view/ReplaySummaryListView.h"
+#include "../view/ResultRecordListView.h"
 #include "../view/ScrollView.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
@@ -75,6 +77,7 @@ constexpr float kPlaybackAutofocusPaddingY = 40.0f;
 constexpr long long kPracticeLeadInMicros = 3000000LL;
 constexpr int kNoGhostReplayId = -1;
 constexpr int kPracticeGhostReplayId = -2;
+constexpr int kModernGhostReplayId = -3;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -3195,6 +3198,8 @@ void ChartViewerScene::updateSelectionText() {
   }
   if (loadedGhostReplayId == kPracticeGhostReplayId) {
     text += " / Practice Ghost";
+  } else if (loadedGhostReplayId == kModernGhostReplayId) {
+    text += " / Saved Ghost";
   } else if (loadedGhostReplayId >= 0) {
     text += " / Ghost #" + std::to_string(loadedGhostReplayId);
   }
@@ -3292,7 +3297,7 @@ void ChartViewerScene::rebuildGhostModal() {
       [this]() { loadPracticeGhostReplay(); });
   panel->addView(practiceGhostReplayButton);
 
-  ghostReplayListView = new ReplaySummaryListView();
+  ghostReplayListView = new ResultRecordListView();
   ghostReplayListView->setWidthPercent(100)
       ->setFlexGrow(1)
       ->setFlexShrink(1)
@@ -3356,9 +3361,42 @@ void ChartViewerScene::showGhostModal() {
     return;
   }
 
-  ghostReplaySummaries = context.replayRepository.ListReplays(chart->Meta);
+  const auto legacy = context.replayRepository.ListReplays(chart->Meta);
+  std::vector<ResultRecordSummary> modern;
+  const auto history = context.replayRepository.ListModernChartResults(
+      chart->Meta.SHA256, 100);
+  if (history.status == ModernChartHistoryReadStatus::Loaded) {
+    replay::ChartReplayContext replayContext(
+        context.replayRepository,
+        context.replayRepository.GetResolvedDatabasePath().parent_path());
+    modern.reserve(history.records.size());
+    for (const ModernChartResultRecord &record : history.records) {
+      const int authoredLongNoteMode =
+          normalizeChartLongNoteModeValue(chart->Meta.LnMode);
+      const replay::ParsedChartReplayFacts facts{
+          .chart = {.md5 = chart->Meta.MD5,
+                    .sha256 = chart->Meta.SHA256,
+                    .keyMode = chart->Meta.KeyMode},
+          .longNoteMode =
+              authoredLongNoteMode > long_note_mode::kUnknownValue
+                  ? authoredLongNoteMode
+                  : record.result.score.longNoteMode,
+          .timeBounds = std::nullopt,
+      };
+      const auto replayLoad =
+          replayContext.load(record.result.attemptId, facts);
+      auto summary = makeModernChartResultRecord(
+          record, replayLoad.replayState(), false);
+      if (summary.capabilities.practiceGhost) {
+        modern.push_back(std::move(summary));
+      }
+    }
+  }
+  ghostReplaySummaries = mergeResultRecords(
+      legacy, modern, std::span<const ir::IrRemoteScore>{},
+      std::string_view{}, std::string_view{});
   selectedGhostReplayIndex = -1;
-  ghostReplayListView->setReplaySummaries(ghostReplaySummaries);
+  ghostReplayListView->setResultRecords(ghostReplaySummaries);
   if (ghostModalEmptyText != nullptr) {
     const bool hasPracticeGhost = practiceGhostReplay.has_value() &&
                                   !practiceGhostReplay->events.empty();
@@ -3478,12 +3516,24 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
     return false;
   }
 
+  return applyPreparedGhostReplayData(replayData, std::move(replayChart),
+                                      loadedReplayId, successText);
+}
+
+bool ChartViewerScene::applyPreparedGhostReplayData(
+    const ReplayData &replayData,
+    std::unique_ptr<bms_parser::Chart> preparedChart, int loadedReplayId,
+    const std::string &successText) {
+  if (canvasView == nullptr || preparedChart == nullptr) {
+    return false;
+  }
+
   retainLoadedListenResourcesForChartChange();
 
-  randomSeed = replayChart->Meta.RandomSeed;
-  randomPrng = replayChart->Meta.RandomPrng;
-  selectedRandomValues = replayChart->Meta.RandomValues;
-  chart = std::move(replayChart);
+  randomSeed = preparedChart->Meta.RandomSeed;
+  randomPrng = preparedChart->Meta.RandomPrng;
+  selectedRandomValues = preparedChart->Meta.RandomValues;
+  chart = std::move(preparedChart);
   randomOptions = scanActiveRandomOptions();
   canvasView->setChart(chart.get());
   canvasView->setGhostReplay(replayData);
@@ -3506,21 +3556,55 @@ void ChartViewerScene::loadSelectedGhostReplay() {
     return;
   }
 
-  const int replayId = ghostReplaySummaries[selectedGhostReplayIndex].id;
+  const ResultRecordSummary selected =
+      ghostReplaySummaries[static_cast<std::size_t>(selectedGhostReplayIndex)];
   if (statusText != nullptr) {
     statusText->setText("Loading ghost...");
   }
 
   defer(
-      [this, replayId]() {
+      [this, selected]() {
         if (canvasView == nullptr) {
+          return true;
+        }
+
+        if (selected.modern.has_value()) {
+          std::atomic_bool parseCancelled = false;
+          auto consumer = replay::makeRuntimeChartReplayConsumer(
+              context.replayRepository,
+              context.replayRepository.GetResolvedDatabasePath().parent_path());
+          auto loaded = consumer.load(*selected.modern, record.meta.BmsPath,
+                                      parseCancelled);
+          if (!loaded.ready() || parseCancelled) {
+            if (statusText != nullptr) {
+              statusText->setText("Ghost load failed");
+            }
+            return true;
+          }
+          setViewerPlayOptions(
+              loaded.replayData->playOption,
+              loaded.replayData->playOptionSeed,
+              loaded.replayData->playOption2,
+              loaded.replayData->playOption2Seed);
+          applyPreparedGhostReplayData(*loaded.replayData,
+                                       std::move(loaded.chart),
+                                       kModernGhostReplayId,
+                                       "Saved ghost loaded");
+          return true;
+        }
+
+        const auto replayId = selected.localReplayId();
+        if (!replayId.has_value()) {
+          if (statusText != nullptr) {
+            statusText->setText("Ghost load failed");
+          }
           return true;
         }
 
         const bms_parser::ChartMeta &loadMeta =
             chart != nullptr ? chart->Meta : record.meta;
         auto replay =
-            context.replayRepository.LoadReplay(replayId, loadMeta);
+            context.replayRepository.LoadReplay(*replayId, loadMeta);
         if (!replay.has_value()) {
           if (statusText != nullptr) {
             statusText->setText("Ghost load failed");
@@ -4140,6 +4224,37 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
   practiceRequiredRulesetDescriptor = request.requiredRulesetDescriptor;
   practiceReplayRulesetSnapshot = request.replayRulesetSnapshot;
 
+  bool replayGhostUnavailable = false;
+  if (request.source == practice::LaunchSource::ReplayResult &&
+      request.modernReplayAttemptId.has_value()) {
+    const auto exact = context.replayRepository.LoadModernChartResultByAttempt(
+        *request.modernReplayAttemptId);
+    if (exact.status == ModernChartResultReadStatus::Loaded &&
+        exact.record.has_value()) {
+      std::atomic_bool cancelled = false;
+      auto consumer = replay::makeRuntimeChartReplayConsumer(
+          context.replayRepository,
+          context.replayRepository.GetResolvedDatabasePath().parent_path());
+      auto loaded = consumer.load(*exact.record, record.meta.BmsPath,
+                                  cancelled);
+      if (loaded.ready() && !cancelled) {
+        practiceGhostReplay = *loaded.replayData;
+        loadedGhostReplayId = kModernGhostReplayId;
+        chart = std::move(loaded.chart);
+        practiceChartEndMicros =
+            chart_playback_duration::ChartTimelineEndMicros(*chart);
+        if (canvasView != nullptr) {
+          canvasView->setChart(chart.get());
+          canvasView->setGhostReplay(*practiceGhostReplay);
+        }
+      } else {
+        replayGhostUnavailable = true;
+      }
+    } else {
+      replayGhostUnavailable = true;
+    }
+  }
+
   practiceConfiguration =
       sanitizePracticeConfiguration(std::move(application.configuration),
                                     practiceChartEndMicros, chart.get())
@@ -4169,8 +4284,12 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     }
   }
   if (statusText != nullptr) {
-    statusText->setText("Section ready");
+    statusText->setText(replayGhostUnavailable
+                            ? "Section ready / replay ghost unavailable"
+                            : "Section ready");
   }
+  updatePracticeGhostReplayButton();
+  updateGhostControls();
   refreshPracticePanel();
   updateSelectionText();
   if (rootLayout != nullptr) {
