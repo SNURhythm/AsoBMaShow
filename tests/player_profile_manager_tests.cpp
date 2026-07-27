@@ -4,6 +4,7 @@
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreRepository.h"
+#include "../src/replay/ReplayFileStore.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/sqlite3.h"
 #include "../yoga/lib/nlohmann/json.hpp"
@@ -18,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -71,6 +73,78 @@ std::string readFile(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(input),
           std::istreambuf_iterator<char>()};
+}
+
+std::string repeated(char value, std::size_t count) {
+  return std::string(count, value);
+}
+
+result_persistence::ModernChartResult modernReplayResult(int suffix,
+                                                         char hash) {
+  result_persistence::ModernChartResult value;
+  value.attemptId = "123e4567-e89b-42d3-a456-42661417400" +
+                    std::to_string(suffix);
+  value.score.chartPath = "library/chart.bms";
+  value.score.chartMd5 = repeated(hash, 32);
+  value.score.chartSha256 = repeated(hash, 64);
+  value.score.chartTitle = "Transfer Title";
+  value.score.chartArtist = "Transfer Artist";
+  value.score.longNoteMode = 1;
+  value.score.score = 7;
+  value.score.maxScore = 10;
+  value.score.maxCombo = 4;
+  value.score.comboBreak = 1;
+  value.score.pGreat = 3;
+  value.score.great = 1;
+  value.score.good = 1;
+  value.score.finalGauge = 82.5F;
+  value.score.clearType = kClearTypeNormalClearRank;
+  value.score.provenance = ScoreProvenance::Legacy();
+  value.keyMode = 7;
+  value.adoptedGaugeType = GaugeType::Normal;
+  value.adoptedGaugeHistory = {20.0F, 82.5F};
+  value.playedAtUnixMillis = 1'700'000'000'000LL + suffix;
+  value.resultFingerprint = result_persistence::modernResultFingerprint(value);
+  return value;
+}
+
+ModernReplayFileReference installModernReplay(
+    const PlayerProfilePaths &paths, ReplayRepository &repository, int suffix,
+    char hash, bool userDeleted = false) {
+  const auto result = modernReplayResult(suffix, hash);
+  const auto reserved = repository.ReserveModernReplayPath(
+      result.attemptId, result.score.chartSha256, result.playedAtUnixMillis);
+  expect(reserved.status == ModernReplayReservationStatus::Reserved &&
+             reserved.reservation,
+         "profile transfer replay path reserves");
+  const std::string payload = "profile replay " + std::to_string(suffix);
+  const auto raw = std::as_bytes(std::span(payload.data(), payload.size()));
+  const std::vector<std::byte> bytes(raw.begin(), raw.end());
+  replay::ReplayFileStore store(paths.root);
+  const auto fileReservation = store.reserve(
+      reserved.reservation->identity, bytes, result.attemptId);
+  const auto installed = store.install(*fileReservation.reservation, bytes);
+  expect(installed.file.has_value(), "profile transfer replay installs");
+  const ModernReplayFileAttachment attachment{
+      .identity = reserved.reservation->identity,
+      .metadata = installed.file->metadata};
+  expect(repository.StageModernChartResult(result, std::nullopt, attachment, {})
+             .status == ModernChartStageStatus::Staged,
+         "profile transfer modern result stages");
+  auto loaded = repository.LoadModernChartResultByAttempt(result.attemptId);
+  expect(loaded.record && loaded.record->replayFile,
+         "profile transfer replay reference reloads");
+  ModernReplayFileReference reference = *loaded.record->replayFile;
+  if (userDeleted) {
+    expect(repository
+               .MarkModernReplayFileUserDeleted(
+                   ModernReplayOwnerKind::ChartResult, result.attemptId,
+                   reference)
+               .status == ModernReplayFileMutationStatus::Changed,
+           "profile transfer deletion state persists");
+    reference.userDeleted = true;
+  }
+  return reference;
 }
 
 std::string validPracticePresetJson(std::string_view hash) {
@@ -2584,6 +2658,65 @@ void testPracticeDirectoryLifecycleAndValidation() {
   }
 }
 
+void testReplayDirectoryDuplicationUsesOwnedVerifiedInventory() {
+  TempDirectory temp("profile-replay-transfer");
+  std::vector<std::string> uuids = {
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333",
+  };
+  std::size_t uuidIndex = 0;
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "replay transfer fixture initializes");
+  const auto source = manager.activePaths();
+  expect(source.replayDirectory == source.root / "replay" &&
+             std::filesystem::is_directory(source.replayDirectory),
+         "new profile owns an empty replay directory");
+  ReplayRepository repository(source.replaysDb);
+  expect(repository.EnsureSchema(), "replay transfer repository opens");
+  const auto active = installModernReplay(source, repository, 1, 'a');
+  const auto missing = installModernReplay(source, repository, 2, 'b');
+  std::filesystem::remove(source.root / missing.metadata.relativePath);
+  const auto deleted = installModernReplay(source, repository, 3, 'c', true);
+  writeFile(source.replayDirectory / "unreferenced.brd", "unreferenced");
+
+  const auto duplicate = manager.duplicateProfile(
+      manager.activeProfile().id, "Replay Transfer Copy");
+  expect(duplicate.ok() && duplicate.profile,
+         "profile with replay inventory duplicates: " + duplicate.message);
+  if (duplicate.profile) {
+    const auto copied = manager.pathsFor(duplicate.profile->id);
+    replay::ReplayFileStore copiedStore(copied.root);
+    expect(copiedStore.inspect(active.metadata).state ==
+               replay::ReplayFileState::Available &&
+               !std::filesystem::exists(copied.root /
+                                        missing.metadata.relativePath) &&
+               !std::filesystem::exists(copied.root /
+                                        deleted.metadata.relativePath) &&
+               !std::filesystem::exists(copied.replayDirectory /
+                                        "unreferenced.brd"),
+           "duplicate contains only active verified owned replay bytes");
+    ReplayRepository copiedRepository(copied.replaysDb);
+    expect(copiedRepository.EnsureSchema(),
+           "duplicated replay repository opens");
+    const auto inventory = copiedRepository.ListModernReplayFileReferences();
+    expect(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+               inventory.entries.size() == 3,
+           "duplicate preserves result references when bytes are omitted");
+  }
+  expect(std::filesystem::exists(source.replayDirectory / "unreferenced.brd"),
+         "duplication never mutates unreferenced source bytes");
+
+  writeFile(source.root / active.metadata.relativePath, "corrupt");
+  const auto failed = manager.duplicateProfile(
+      manager.activeProfile().id, "Corrupt Replay Copy");
+  expect(failed.error == ProfileError::IntegrityFailure &&
+             !std::filesystem::exists(manager.pathsFor(uuids.back()).root),
+         "corrupt owned replay aborts duplicate without visible target");
+}
+
 void testFutureVersionsFailClosed() {
   TempDirectory temp("profile-future");
   PlayerProfileManager manager(temp.path(), dependenciesFor());
@@ -2656,6 +2789,7 @@ int main() {
   testProfileCrudConstraintsAndDataIsolation();
   testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();
   testPracticeDirectoryLifecycleAndValidation();
+  testReplayDirectoryDuplicationUsesOwnedVerifiedInventory();
   testFutureVersionsFailClosed();
 
   if (failures != 0) {
