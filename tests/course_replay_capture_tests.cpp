@@ -86,7 +86,7 @@ result_persistence::ModernCourseResultCapture resultCapture() {
       .legacyCourseId = 42,
       .courseName = "Capture Course",
       .courseGroupName = "Tests",
-      .constraintJson = "[\"CLASS\"]",
+      .constraintJson = "[\"no_speed\"]",
       .requestedPlayOption = "NORMAL",
       .assistOption = "OFF",
       .initialGaugeType = GaugeType::Hard,
@@ -218,6 +218,14 @@ void testRawCaptureDropsOnlyReplayAttachment() {
   expect(invalid && invalid->result == *result && !invalid->replay &&
              !diagnostic.empty(),
          "invalid rest drops only the BRD attachment with a diagnostic");
+
+  capture.stages[0].restMicrosAfterStage = 0;
+  capture.constraints.beatorajaConstraintIds = {9};
+  const auto wrongConstraints =
+      replay::captureCourseReplayAttempt(capture, diagnostic);
+  expect(wrongConstraints && wrongConstraints->result == *result &&
+             !wrongConstraints->replay && !diagnostic.empty(),
+         "constraint/path disagreement drops only the BRD attachment");
 }
 
 void testBeatorajaConstraintIdentityIsCanonical() {

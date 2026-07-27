@@ -1,0 +1,88 @@
+#pragma once
+
+#include "CourseReplayContext.h"
+#include "CourseContinuation.h"
+#include "ReplayPlaybackMaterializer.h"
+
+#include "../ReplayData.h"
+#include "../bms_parser.hpp"
+
+#include <atomic>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace replay {
+
+enum class CourseReplayConsumerState {
+  Ready,
+  InvalidRequest,
+  ChartUnavailable,
+  ReplayUnavailable,
+  StaleResult,
+  SetupUnavailable,
+  PreparedStageMismatch,
+  MaterializationFailed,
+  ContinuationFailed,
+  ResultMismatch,
+};
+
+struct CourseReplayConsumerOutcome {
+  CourseReplayConsumerState state = CourseReplayConsumerState::InvalidRequest;
+  CourseReplayContextOutcome context;
+  std::vector<std::unique_ptr<bms_parser::Chart>> charts;
+  std::shared_ptr<CourseReplayData> replayData;
+  std::optional<CourseContinuationState> continuation;
+  std::string diagnostic;
+
+  [[nodiscard]] bool ready() const noexcept {
+    return state == CourseReplayConsumerState::Ready && !charts.empty() &&
+           replayData != nullptr && continuation.has_value();
+  }
+  [[nodiscard]] ReplayState replayState() const noexcept {
+    return context.replayState();
+  }
+};
+
+struct CourseReplayConsumerDependencies {
+  std::function<std::unique_ptr<bms_parser::Chart>(
+      const std::filesystem::path &, std::atomic_bool &)>
+      parseBaseChart;
+  std::function<CourseReplayContextOutcome(
+      std::string_view, const ParsedCourseReplayFacts &)>
+      loadContext;
+  std::function<std::unique_ptr<bms_parser::Chart>(
+      const std::filesystem::path &, const ReplaySetup &,
+      const ScoreProvenance &, const bms_parser::ChartMeta &,
+      std::atomic_bool &, std::string &)>
+      prepareChart;
+  std::function<ReplayPlaybackMaterializationOutcome(
+      const ReplayChartDocument &, ReplaySetupSource,
+      const result_persistence::ModernChartResult &,
+      const bms_parser::Chart &, const ReplayPlaybackCarryState &)>
+      materializeStage;
+};
+
+// The sole modern course replay preparation pipeline. The compatibility
+// CourseReplayData is memory-only and is emitted only after every stage,
+// carried state transition, and saved result fact agrees.
+class CourseReplayConsumer {
+public:
+  explicit CourseReplayConsumer(CourseReplayConsumerDependencies dependencies);
+
+  [[nodiscard]] CourseReplayConsumerOutcome load(
+      const ModernCourseResultRecord &listedRecord,
+      const std::vector<std::filesystem::path> &completedChartPaths,
+      std::atomic_bool &cancelled) const noexcept;
+
+private:
+  CourseReplayConsumerDependencies dependencies_;
+};
+
+[[nodiscard]] CourseReplayConsumer makeRuntimeCourseReplayConsumer(
+    ReplayRepository &repository, ReplayLimits limits = kReplayLimits);
+
+} // namespace replay

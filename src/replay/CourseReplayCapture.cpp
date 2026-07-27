@@ -1,6 +1,6 @@
 #include "CourseReplayCapture.h"
 
-#include "ReplaySetupProvenance.h"
+#include "CourseReplayAgreement.h"
 
 #include <utility>
 
@@ -15,25 +15,6 @@ void appendDiagnostic(std::string &destination, std::string source) {
     destination += "; ";
   }
   destination += std::move(source);
-}
-
-bool setupAgrees(const ReplaySetup &setup,
-                 const result_persistence::ModernCourseResult &result,
-                 const result_persistence::ModernCourseStageResult &stage,
-                 const CourseContinuationConstraints &constraints) noexcept {
-  const ReplayChartIdentity expected{.md5 = stage.score.chartMd5,
-                                     .sha256 = stage.score.chartSha256,
-                                     .keyMode = stage.keyMode};
-  return compareReplayChartIdentity(setup.chart, expected) ==
-             ReplayChartMatch::Match &&
-         setup.longNoteMode == stage.score.longNoteMode &&
-         setup.longNoteMode == constraints.longNoteMode &&
-         setup.initialGaugeType == result.initialGaugeType &&
-         setup.gaugeProfile == result.gaugeProfile &&
-         setup.gaugeAutoShift == result.gaugeAutoShift &&
-         setup.gaugeAutoShiftLowerBound ==
-             result.gaugeAutoShiftLowerBound &&
-         replaySetupAgreesWithProvenance(setup, stage.score.provenance);
 }
 
 } // namespace
@@ -84,9 +65,7 @@ captureCourseReplayAttempt(const CourseReplayCapture &capture,
       const auto validation = validateReplayPlayback(
           *raw.playback, ReplaySetupSource::LocalCapture, raw.timeBounds);
       if (!validation.valid() ||
-          !validCourseRestMicros(raw.restMicrosAfterStage) ||
-          !setupAgrees(raw.playback->setup, capture.result,
-                       capture.result.stages[index], capture.constraints)) {
+          !validCourseRestMicros(raw.restMicrosAfterStage)) {
         appendDiagnostic(diagnostic,
                          "raw course replay is invalid at stage " +
                              std::to_string(index + 1));
@@ -102,15 +81,15 @@ captureCourseReplayAttempt(const CourseReplayCapture &capture,
       sources.push_back(ReplaySetupSource::LocalCapture);
     }
 
-    const auto courseValidation = validateCourseReplayPlayback(
-        document.playback, sources, document.timeBounds);
-    std::string pathDiagnostic;
-    if (!courseValidation.valid() ||
-        !courseStem(attempt.pathInput, pathDiagnostic)) {
+    const auto replayAgreement =
+        compareCourseReplayToResult(document, capture.result, sources);
+    const auto pathAgreement =
+        compareCourseReplayPathToResult(attempt.pathInput, capture.result);
+    if (!replayAgreement.agrees() || !pathAgreement.agrees()) {
       appendDiagnostic(diagnostic,
-                       pathDiagnostic.empty()
-                           ? "captured course replay violates its envelope"
-                           : std::move(pathDiagnostic));
+                       !replayAgreement.agrees()
+                           ? replayAgreement.diagnostic
+                           : pathAgreement.diagnostic);
       return attempt;
     }
     attempt.replay = std::move(document);

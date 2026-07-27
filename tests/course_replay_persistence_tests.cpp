@@ -128,7 +128,7 @@ CapturedCourseReplayAttempt attempt(bool withReplay = true,
       .legacyCourseId = 17,
       .courseName = "Persistence Course",
       .courseGroupName = "Tests",
-      .constraintJson = "[\"CLASS\"]",
+      .constraintJson = "[\"no_speed\"]",
       .initialGaugeType = GaugeType::Hard,
       .gaugeProfile = GaugeProfile::Standard,
       .gaugeAutoShift = GaugeAutoShiftMode::None,
@@ -384,6 +384,16 @@ void testReplayFailuresAndDatabaseAmbiguity() {
              mismatch.events ==
                  std::vector<std::string>({"load-result", "stage-summary"}),
          "course stage identity mismatch cannot block result history");
+
+  Harness wrongConstraints;
+  wrongConstraints.value.pathInput.beatorajaConstraintIds = {9};
+  CourseReplayPersistence invalidPath(wrongConstraints.dependencies());
+  const auto savedWithoutWrongPath = invalidPath.persist(wrongConstraints.value);
+  expect(savedWithoutWrongPath.state ==
+                 CourseReplayPersistenceState::SavedWithoutReplay &&
+             wrongConstraints.events ==
+                 std::vector<std::string>({"load-result", "stage-summary"}),
+         "course constraint path mismatch cannot attach bytes or hide history");
 
   Harness ambiguous;
   ambiguous.staged = {.status = ModernCourseStageStatus::StorageFailure,

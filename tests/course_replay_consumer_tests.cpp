@@ -1,3 +1,4 @@
+// The conditional keeps the red contract buildable before production exists.
 #if __has_include("replay/CourseReplayConsumer.h")
 #include "replay/CourseReplayConsumer.h"
 #define ASOBMASHOW_HAS_COURSE_REPLAY_CONSUMER 1

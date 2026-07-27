@@ -148,6 +148,16 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     const ReplayChartDocument &document, ReplaySetupSource source,
     const result_persistence::ModernChartResult &savedResult,
     const bms_parser::Chart &chart, std::size_t eventBudget) {
+  return materializeForConsumers(document, source, savedResult, chart,
+                                 ReplayPlaybackCarryState{}, eventBudget);
+}
+
+ReplayPlaybackMaterializationOutcome
+ReplayPlaybackMaterializer::materializeForConsumers(
+    const ReplayChartDocument &document, ReplaySetupSource source,
+    const result_persistence::ModernChartResult &savedResult,
+    const bms_parser::Chart &chart, const ReplayPlaybackCarryState &carry,
+    std::size_t eventBudget) {
   const auto &setup = document.playback.setup;
   const auto selectedRuleset = rulesetFor(setup);
   const auto *stage = score_provenance::uniqueStageForChart(
@@ -198,11 +208,16 @@ ReplayPlaybackMaterializer::materializeForConsumers(
             .gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound,
             .startingGaugePercent = static_cast<int>(
                 std::lround(setup.startingGaugePercent)),
+            .carriedGauge = carry.gauge,
+            .carriedCombo = carry.combo,
+            .carriedMaxCombo = carry.maximumCombo,
             .assistClearMark = assist_options::isEnabled(setup.assistOption),
             .autoPlay = false,
             .replayCapacity = capacity,
             .automaticResultCapacity = capacity,
             .gaugeHistoryCapacity = capacity}});
+  const GaugeStateSnapshot initialGaugeState =
+      simulation.scoreState().gaugeSnapshot();
 
   std::int64_t currentSongTime = kReplayLimits.minimumSongTimeMicros;
   ReplayLogicalGameplayAdapter adapter(
@@ -278,6 +293,9 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   };
 
   auto outcome = materialize(document, source, savedResult, judge, eventBudget);
+  outcome.initialGaugeState = initialGaugeState;
+  outcome.finalGaugeState = simulation.scoreState().gaugeSnapshot();
+  outcome.endingCombo = simulation.scoreState().combo;
   if (!outcome.matched() || !outcome.judgedResult.has_value()) {
     return outcome;
   }

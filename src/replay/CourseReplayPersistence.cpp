@@ -1,11 +1,12 @@
 #include "CourseReplayPersistence.h"
 
+#include "CourseReplayAgreement.h"
 #include "ReplayFileStore.h"
-#include "ReplaySetupProvenance.h"
 
 #include "../ProfileDatabaseActivity.h"
 
 #include <memory>
+#include <ranges>
 #include <utility>
 
 namespace replay {
@@ -27,76 +28,6 @@ void appendDiagnostic(std::string &destination, std::string_view phase,
 CourseReplayPersistenceState savedState(bool replayAttached) noexcept {
   return replayAttached ? CourseReplayPersistenceState::SavedWithReplay
                         : CourseReplayPersistenceState::SavedWithoutReplay;
-}
-
-bool pathAgreesWithResult(const CoursePathInput &path,
-                          const result_persistence::ModernCourseResult &result,
-                          std::string &stem, std::string &diagnostic) {
-  if (path.longNoteMode != result.longNoteMode ||
-      path.stageSha256.size() != result.stages.size()) {
-    diagnostic = "course replay path shape differs from its result";
-    return false;
-  }
-  for (std::size_t index = 0; index < result.stages.size(); ++index) {
-    if (path.stageSha256[index] != result.stages[index].score.chartSha256) {
-      diagnostic = "course replay path stage identity differs from its result";
-      return false;
-    }
-  }
-  auto expected = courseStem(path, diagnostic);
-  if (!expected) {
-    return false;
-  }
-  stem = std::move(*expected);
-  return true;
-}
-
-bool replayAgreesWithResult(
-    const ReplayCourseDocument &replay, const CoursePathInput &path,
-    const result_persistence::ModernCourseResult &result,
-    std::string &diagnostic) {
-  if (replay.playback.stages.size() != result.stages.size()) {
-    diagnostic = "course replay completed prefix differs from its result";
-    return false;
-  }
-  std::vector<ReplaySetupSource> sources(
-      replay.playback.stages.size(), ReplaySetupSource::LocalCapture);
-  if (!validateCourseReplayPlayback(replay.playback, sources, replay.timeBounds)
-           .valid()) {
-    diagnostic = "course replay playback envelope is invalid";
-    return false;
-  }
-
-  bool hasUndefinedLongNotes = false;
-  for (std::size_t index = 0; index < result.stages.size(); ++index) {
-    const auto &setup = replay.playback.stages[index].setup;
-    const auto &stage = result.stages[index];
-    const ReplayChartIdentity expected{.md5 = stage.score.chartMd5,
-                                       .sha256 = stage.score.chartSha256,
-                                       .keyMode = stage.keyMode};
-    if (compareReplayChartIdentity(setup.chart, expected) !=
-            ReplayChartMatch::Match ||
-        setup.longNoteMode != stage.score.longNoteMode ||
-        setup.longNoteMode != result.longNoteMode ||
-        setup.player1.option != result.requestedPlayOption ||
-        setup.assistOption != assist_options::normalize(result.assistOption) ||
-        setup.initialGaugeType != result.initialGaugeType ||
-        setup.gaugeProfile != result.gaugeProfile ||
-        setup.gaugeAutoShift != result.gaugeAutoShift ||
-        setup.gaugeAutoShiftLowerBound !=
-            result.gaugeAutoShiftLowerBound ||
-        !replaySetupAgreesWithProvenance(setup, stage.score.provenance)) {
-      diagnostic = "course replay stage setup differs from its result";
-      return false;
-    }
-    hasUndefinedLongNotes =
-        hasUndefinedLongNotes || setup.hasUndefinedLongNotes;
-  }
-  if (hasUndefinedLongNotes != path.hasUndefinedLongNotes) {
-    diagnostic = "course replay undefined-LN path fact differs from setup";
-    return false;
-  }
-  return true;
 }
 
 } // namespace
@@ -214,9 +145,18 @@ CourseReplayPersistenceOutcome CourseReplayPersistence::persist(
 
   std::string stem;
   std::string pathDiagnostic;
-  const bool pathAgrees =
-      pathAgreesWithResult(attempt.pathInput, attempt.result, stem,
-                           pathDiagnostic);
+  const auto pathAgreement =
+      compareCourseReplayPathToResult(attempt.pathInput, attempt.result);
+  bool pathAgrees = pathAgreement.agrees();
+  if (pathAgrees) {
+    const auto expectedStem = courseStem(attempt.pathInput, pathDiagnostic);
+    pathAgrees = expectedStem.has_value();
+    if (expectedStem) {
+      stem = *expectedStem;
+    }
+  } else {
+    pathDiagnostic = pathAgreement.diagnostic;
+  }
   if (attachment && !pathAgrees) {
     return {.state = CourseReplayPersistenceState::IntegrityConflict,
             .diagnostic = std::move(pathDiagnostic)};
@@ -227,9 +167,23 @@ CourseReplayPersistenceOutcome CourseReplayPersistence::persist(
   std::optional<ReplayFileAssociation> fileAssociation;
   if (!attachment && !suppressNewReplay && attempt.replay) {
     std::string replayDiagnostic;
-    if (!pathAgrees ||
-        !replayAgreesWithResult(*attempt.replay, attempt.pathInput,
-                                attempt.result, replayDiagnostic)) {
+    std::vector<ReplaySetupSource> sources(
+        attempt.replay->playback.stages.size(),
+        ReplaySetupSource::LocalCapture);
+    const auto replayAgreement = compareCourseReplayToResult(
+        *attempt.replay, attempt.result, sources);
+    const bool undefinedLongNotes = std::ranges::any_of(
+        attempt.replay->playback.stages, [](const auto &stage) {
+          return stage.setup.hasUndefinedLongNotes;
+        });
+    if (!replayAgreement.agrees()) {
+      replayDiagnostic = replayAgreement.diagnostic;
+    } else if (undefinedLongNotes != attempt.pathInput.hasUndefinedLongNotes) {
+      replayDiagnostic =
+          "course replay undefined-LN path fact differs from setup";
+    }
+    if (!pathAgrees || !replayAgreement.agrees() ||
+        undefinedLongNotes != attempt.pathInput.hasUndefinedLongNotes) {
       appendDiagnostic(diagnostic, "replay omitted",
                        !pathAgrees ? pathDiagnostic : replayDiagnostic);
     } else {

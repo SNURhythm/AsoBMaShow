@@ -149,7 +149,8 @@ ReplaySetup setup(const result_persistence::ModernCourseResult &result,
   value.judgeWindowScalePercent =
       saved.score.provenance.judgeWindowScalePercent;
   value.startingGaugePercent =
-      static_cast<float>(saved.score.provenance.startingGaugePercent);
+      static_cast<float>(
+          saved.score.provenance.startingGaugePercent.value_or(100));
   return value;
 }
 
@@ -202,8 +203,10 @@ ParsedCourseReplayFacts parsedFacts(
 
 ModernReplayFileReference reference(
     const result_persistence::ModernCourseResult &result,
-    std::vector<int> constraints = {4, 9}) {
+    std::vector<int> constraints = {4, 9},
+    bool hasUndefinedLongNotes = false) {
   CoursePathInput input{.longNoteMode = result.longNoteMode,
+                        .hasUndefinedLongNotes = hasUndefinedLongNotes,
                         .beatorajaConstraintIds = std::move(constraints)};
   for (const auto &saved : result.stages) {
     input.stageSha256.push_back(saved.score.chartSha256);
@@ -392,6 +395,16 @@ void testReferenceDecodePlaybackAndResultAgreementFailClosed() {
              wrongConstraint.calls == std::vector<std::string>{"result"},
          "wrong constraint path identity rejects before BRD access");
 
+  Harness futureCodec;
+  ++futureCodec.fileReference.metadata.codecVersion;
+  auto futureCodecContext = futureCodec.makeContext();
+  loaded = futureCodecContext.load(kAttemptId,
+                                   parsedFacts(futureCodec.result));
+  expect(loaded.state ==
+                 CourseReplayContextState::UnsupportedCodecVersion &&
+             futureCodec.calls == std::vector<std::string>{"result"},
+         "unsupported course codec version rejects before file access");
+
   Harness future;
   future.unsupportedExtension = true;
   auto futureContext = future.makeContext();
@@ -409,6 +422,15 @@ void testReferenceDecodePlaybackAndResultAgreementFailClosed() {
              loaded.resultAvailable() && !loaded.replayAvailable(),
          "decoded stage/result identity disagreement disables replay");
 
+  Harness sharedSetup;
+  sharedSetup.replay.playback.stages[0].setup.judgeWindowScalePercent = 75;
+  auto sharedSetupContext = sharedSetup.makeContext();
+  loaded = sharedSetupContext.load(kAttemptId,
+                                   parsedFacts(sharedSetup.result));
+  expect(loaded.state == CourseReplayContextState::SharedFactsMismatch &&
+             loaded.resultAvailable() && !loaded.replayAvailable(),
+         "decoded course setup/result disagreement disables replay");
+
   Harness excessiveRest;
   excessiveRest.replay.playback.restMicrosAfterStage[0] =
       kReplayLimits.maxCourseRestMicros + 1;
@@ -425,6 +447,16 @@ void testReferenceDecodePlaybackAndResultAgreementFailClosed() {
   expect(loaded.state == CourseReplayContextState::DecodeFailed &&
              loaded.resultAvailable() && !loaded.replayAvailable(),
          "chart-shaped or absent decode cannot become a course replay");
+
+  Harness invalidResult;
+  invalidResult.result.resultFingerprint = "invalid";
+  auto invalidResultContext = invalidResult.makeContext();
+  loaded = invalidResultContext.load(kAttemptId,
+                                     parsedFacts(savedResult()));
+  expect(loaded.state == CourseReplayContextState::ResultInvalid &&
+             !loaded.resultAvailable() &&
+             invalidResult.calls == std::vector<std::string>{"result"},
+         "invalid modern course result never grants file authority");
 }
 
 #endif

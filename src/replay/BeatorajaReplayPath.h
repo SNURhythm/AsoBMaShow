@@ -20,6 +20,8 @@ struct CoursePathInput {
   int longNoteMode = 0;
   bool hasUndefinedLongNotes = false;
   std::vector<int> beatorajaConstraintIds;
+
+  bool operator==(const CoursePathInput &) const = default;
 };
 
 struct ReplayPathIdentity {

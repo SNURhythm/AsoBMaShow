@@ -948,6 +948,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/path.cpp
         src/bms_parser.cpp
         src/replay/BeatorajaReplayPath.cpp
+        src/replay/CourseReplayAgreement.cpp
         src/replay/CourseReplayCapture.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplaySetup.cpp
@@ -1536,6 +1537,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/Base64Url.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/BeatorajaReplayPath.cpp
+        src/replay/CourseReplayAgreement.cpp
         src/replay/CourseReplayCapture.cpp
         src/replay/CourseReplayPersistence.cpp
         src/replay/CourseResultPersistence.cpp
@@ -1638,14 +1640,86 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(course_replay_context_tests
         tests/course_replay_context_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/ModernResult.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/CourseReplayAgreement.cpp
+        src/replay/CourseReplayContext.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupProvenance.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/sqlite3.c
     )
     target_include_directories(course_replay_context_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(course_replay_context_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL2)
+    endif()
 
     add_executable(course_replay_consumer_tests
         tests/course_replay_consumer_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ModernResult.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/CourseContinuation.cpp
+        src/replay/CourseReplayConsumer.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplayPlaybackDriver.cpp
+        src/replay/ReplayPlaybackMaterializer.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupAdapter.cpp
+        src/bms_parser.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/Judge.cpp
     )
     target_include_directories(course_replay_consumer_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

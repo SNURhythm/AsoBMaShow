@@ -3,6 +3,7 @@
 #include "ReplayPlaybackDriver.h"
 
 #include "../ModernResult.h"
+#include "../scene/play/GameplayScoreState.h"
 
 #include <functional>
 #include <memory>
@@ -39,12 +40,21 @@ struct ReplayPlaybackMaterializationOutcome {
       ReplayPlaybackMaterializationState::InvalidReplay;
   std::optional<result_persistence::ResultFactAgreement> agreement;
   std::optional<result_persistence::ModernChartResult> judgedResult;
+  std::optional<GaugeStateSnapshot> initialGaugeState;
+  std::optional<GaugeStateSnapshot> finalGaugeState;
+  int endingCombo = 0;
   std::shared_ptr<ReplayData> replayData;
   std::string diagnostic;
 
   [[nodiscard]] bool matched() const noexcept {
     return state == ReplayPlaybackMaterializationState::Matched;
   }
+};
+
+struct ReplayPlaybackCarryState {
+  std::optional<GaugeStateSnapshot> gauge;
+  int combo = 0;
+  int maximumCombo = 0;
 };
 
 class ReplayPlaybackMaterializer {
@@ -63,6 +73,13 @@ public:
       const ReplayChartDocument &document, ReplaySetupSource source,
       const result_persistence::ModernChartResult &savedResult,
       const bms_parser::Chart &chart,
+      std::size_t eventBudget = kDefaultReplayPlaybackEventBudget);
+
+  [[nodiscard]] static ReplayPlaybackMaterializationOutcome
+  materializeForConsumers(
+      const ReplayChartDocument &document, ReplaySetupSource source,
+      const result_persistence::ModernChartResult &savedResult,
+      const bms_parser::Chart &chart, const ReplayPlaybackCarryState &carry,
       std::size_t eventBudget = kDefaultReplayPlaybackEventBudget);
 };
 
