@@ -35,7 +35,7 @@ void requireToken(const std::filesystem::path &path, std::string_view token,
 }
 
 void testModernCourseSchemaAndExclusiveOwnershipBoundary() {
-  require(ReplayRepository::kCurrentSchemaVersion == 12,
+  require(ReplayRepository::kCurrentSchemaVersion == 13,
           "Slice 5 advances the additive replay schema to version 12");
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
   const auto schema =

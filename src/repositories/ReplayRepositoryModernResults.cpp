@@ -278,7 +278,7 @@ readReplayReference(sqlite3 *database, int resultId, bool &found,
   const std::string query =
       "SELECT id," + ownerColumn +
       ",stem,history_index,relative_path,content_sha256,compressed_size,"
-      "codec_version FROM modern_replay_files WHERE " +
+      "codec_version,user_deleted FROM modern_replay_files WHERE " +
       ownerColumn + "=?";
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
       sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK) {
@@ -302,7 +302,8 @@ readReplayReference(sqlite3 *database, int resultId, bool &found,
       sqlite3_column_type(statement.get(), 4) != SQLITE_TEXT ||
       sqlite3_column_type(statement.get(), 5) != SQLITE_TEXT ||
       sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER ||
-      sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER) {
+      sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement.get(), 8) != SQLITE_INTEGER) {
     diagnostic = "modern replay reference row has invalid types";
     return std::nullopt;
   }
@@ -314,6 +315,7 @@ readReplayReference(sqlite3 *database, int resultId, bool &found,
   ModernReplayFileReference reference{
       .id = sqlite3_column_int64(statement.get(), 0),
       .resultId = sqlite3_column_int(statement.get(), 1),
+      .userDeleted = sqlite3_column_int(statement.get(), 8) != 0,
       .identity = {.stem = sqliteColumnString(statement.get(), 2),
                    .historyIndex = sqlite3_column_int64(statement.get(), 3),
                    .relativePath = std::filesystem::path(
@@ -327,6 +329,8 @@ readReplayReference(sqlite3 *database, int resultId, bool &found,
   ModernReplayFileAttachment attachment{.identity = reference.identity,
                                         .metadata = reference.metadata};
   if (reference.id <= 0 || reference.resultId != resultId ||
+      (sqlite3_column_int(statement.get(), 8) != 0 &&
+       sqlite3_column_int(statement.get(), 8) != 1) ||
       !validAttachment(attachment, diagnostic) ||
       sqlite3_step(statement.get()) != SQLITE_DONE) {
     if (diagnostic.empty()) {
@@ -2002,6 +2006,195 @@ ReplayRepository::ListModernCourseResults(std::string_view courseKey,
   if (!transaction.commit(transactionError)) {
     return {.status = ModernCourseHistoryReadStatus::StorageFailure,
             .diagnostic = "could not finish modern course history read"};
+  }
+  return outcome;
+}
+
+ModernReplayFileMutationOutcome ReplayRepository::MarkModernReplayFileUserDeleted(
+    ModernReplayOwnerKind owner, std::string_view attemptId,
+    const ModernReplayFileReference &expected) {
+  profile_database_activity::WriteGuard writeGuard;
+  ModernReplayFileAttachment attachment{.identity = expected.identity,
+                                        .metadata = expected.metadata};
+  std::string diagnostic;
+  if (!uuid::isCanonicalLowerV4(attemptId) || expected.id <= 0 ||
+      expected.resultId <= 0 || !validAttachment(attachment, diagnostic)) {
+    return {.status = ModernReplayFileMutationStatus::Invalid,
+            .diagnostic = diagnostic.empty()
+                              ? "modern replay deletion request is invalid"
+                              : std::move(diagnostic)};
+  }
+
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernReplayFileMutationStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  const bool course = owner == ModernReplayOwnerKind::CourseResult;
+  const std::string ownerColumn = course ? "modern_course_result_id"
+                                         : "modern_chart_result_id";
+  const std::string resultTable = course ? "modern_course_results"
+                                         : "modern_chart_results";
+  const std::string exactPredicate =
+      "f.id=? AND f." + ownerColumn +
+      "=? AND f.stem=? AND f.history_index=? AND f.relative_path=? AND "
+      "f.content_sha256=? AND f.compressed_size=? AND f.codec_version=? AND "
+      "EXISTS(SELECT 1 FROM " + resultTable +
+      " r WHERE r.id=f." + ownerColumn + " AND r.attempt_id=?)";
+  auto bindExpected = [&](sqlite3_stmt *statement) {
+    return sqlite3_bind_int64(statement, 1, expected.id) == SQLITE_OK &&
+           sqlite3_bind_int(statement, 2, expected.resultId) == SQLITE_OK &&
+           bindText(statement, 3, expected.identity.stem) &&
+           sqlite3_bind_int64(statement, 4,
+                              expected.identity.historyIndex) == SQLITE_OK &&
+           bindText(statement, 5,
+                    expected.identity.relativePath.generic_string()) &&
+           bindText(statement, 6, expected.metadata.sha256) &&
+           sqlite3_bind_int64(
+               statement, 7,
+               static_cast<sqlite3_int64>(expected.metadata.compressedSize)) ==
+               SQLITE_OK &&
+           sqlite3_bind_int(statement, 8,
+                            expected.metadata.codecVersion) == SQLITE_OK &&
+           bindText(statement, 9, attemptId);
+  };
+
+  SqliteStatementHandle update;
+  const std::string updateSql =
+      "UPDATE modern_replay_files AS f SET user_deleted=1 WHERE " +
+      exactPredicate + " AND f.user_deleted=0";
+  if (prepareSqliteStatement(impl_->sessionDatabase, updateSql, update) !=
+          SQLITE_OK ||
+      !bindExpected(update.get()) || sqlite3_step(update.get()) != SQLITE_DONE) {
+    return {.status = ModernReplayFileMutationStatus::StorageFailure,
+            .diagnostic = "could not mark modern replay as user-deleted"};
+  }
+  if (sqlite3_changes(impl_->sessionDatabase) == 1) {
+    return {.status = ModernReplayFileMutationStatus::Changed};
+  }
+
+  SqliteStatementHandle exact;
+  const std::string exactSql =
+      "SELECT f.user_deleted FROM modern_replay_files f WHERE " +
+      exactPredicate;
+  if (prepareSqliteStatement(impl_->sessionDatabase, exactSql, exact) !=
+          SQLITE_OK ||
+      !bindExpected(exact.get())) {
+    return {.status = ModernReplayFileMutationStatus::StorageFailure,
+            .diagnostic = "could not reconcile modern replay deletion"};
+  }
+  const int exactStep = sqlite3_step(exact.get());
+  if (exactStep == SQLITE_ROW && sqlite3_column_type(exact.get(), 0) ==
+                                     SQLITE_INTEGER &&
+      sqlite3_column_int(exact.get(), 0) == 1 &&
+      sqlite3_step(exact.get()) == SQLITE_DONE) {
+    return {.status = ModernReplayFileMutationStatus::AlreadyChanged};
+  }
+  if (exactStep != SQLITE_DONE && exactStep != SQLITE_ROW) {
+    return {.status = ModernReplayFileMutationStatus::StorageFailure,
+            .diagnostic = "could not read modern replay deletion state"};
+  }
+
+  SqliteStatementHandle result;
+  const std::string resultSql =
+      "SELECT 1 FROM " + resultTable + " WHERE id=? AND attempt_id=?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, resultSql, result) !=
+          SQLITE_OK ||
+      sqlite3_bind_int(result.get(), 1, expected.resultId) != SQLITE_OK ||
+      !bindText(result.get(), 2, attemptId)) {
+    return {.status = ModernReplayFileMutationStatus::StorageFailure,
+            .diagnostic = "could not inspect modern replay owner"};
+  }
+  return sqlite3_step(result.get()) == SQLITE_ROW
+             ? ModernReplayFileMutationOutcome{
+                   .status =
+                       ModernReplayFileMutationStatus::IntegrityConflict,
+                   .diagnostic =
+                       "modern replay reference does not match its owner"}
+             : ModernReplayFileMutationOutcome{
+                   .status = ModernReplayFileMutationStatus::NotFound,
+                   .diagnostic = "modern replay owner was not found"};
+}
+
+ModernReplayFileInventoryOutcome
+ReplayRepository::ListModernReplayFileReferences() {
+  profile_database_activity::ReadGuard readGuard;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernReplayFileInventoryStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT f.id,CASE WHEN f.modern_chart_result_id IS NOT NULL THEN 0 ELSE 1 END,"
+      "COALESCE(f.modern_chart_result_id,f.modern_course_result_id),"
+      "COALESCE(c.attempt_id,k.attempt_id),f.stem,f.history_index,"
+      "f.relative_path,f.content_sha256,f.compressed_size,f.codec_version,"
+      "f.user_deleted FROM modern_replay_files f "
+      "LEFT JOIN modern_chart_results c ON c.id=f.modern_chart_result_id "
+      "LEFT JOIN modern_course_results k ON k.id=f.modern_course_result_id "
+      "ORDER BY f.id";
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+      SQLITE_OK) {
+    return {.status = ModernReplayFileInventoryStatus::StorageFailure,
+            .diagnostic = "could not prepare modern replay inventory"};
+  }
+  ModernReplayFileInventoryOutcome outcome{
+      .status = ModernReplayFileInventoryStatus::Loaded};
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    for (int column = 0; column <= 10; ++column) {
+      const int expectedType =
+          (column == 3 || column == 4 || column == 6 || column == 7)
+              ? SQLITE_TEXT
+              : SQLITE_INTEGER;
+      if (sqlite3_column_type(statement.get(), column) != expectedType) {
+        return {.status =
+                    ModernReplayFileInventoryStatus::IntegrityConflict,
+                .diagnostic = "modern replay inventory has invalid types"};
+      }
+    }
+    const int ownerValue = sqlite3_column_int(statement.get(), 1);
+    const auto size = sqlite3_column_int64(statement.get(), 8);
+    const int deleted = sqlite3_column_int(statement.get(), 10);
+    ModernReplayFileInventoryEntry entry{
+        .owner = ownerValue == 0 ? ModernReplayOwnerKind::ChartResult
+                                 : ModernReplayOwnerKind::CourseResult,
+        .attemptId = sqliteColumnString(statement.get(), 3),
+        .reference = {
+            .id = sqlite3_column_int64(statement.get(), 0),
+            .resultId = sqlite3_column_int(statement.get(), 2),
+            .userDeleted = deleted != 0,
+            .identity =
+                {.stem = sqliteColumnString(statement.get(), 4),
+                 .historyIndex = sqlite3_column_int64(statement.get(), 5),
+                 .relativePath = std::filesystem::path(
+                     sqliteColumnString(statement.get(), 6))},
+            .metadata =
+                {.relativePath = std::filesystem::path(
+                     sqliteColumnString(statement.get(), 6)),
+                 .sha256 = sqliteColumnString(statement.get(), 7),
+                 .compressedSize = static_cast<std::uint64_t>(size),
+                 .codecVersion = sqlite3_column_int(statement.get(), 9)},
+        }};
+    ModernReplayFileAttachment attachment{.identity = entry.reference.identity,
+                                          .metadata = entry.reference.metadata};
+    std::string validation;
+    if ((ownerValue != 0 && ownerValue != 1) || size <= 0 ||
+        (deleted != 0 && deleted != 1) || entry.reference.id <= 0 ||
+        entry.reference.resultId <= 0 ||
+        !uuid::isCanonicalLowerV4(entry.attemptId) ||
+        !validAttachment(attachment, validation)) {
+      return {.status = ModernReplayFileInventoryStatus::IntegrityConflict,
+              .diagnostic = validation.empty()
+                                ? "modern replay inventory is inconsistent"
+                                : std::move(validation)};
+    }
+    outcome.entries.push_back(std::move(entry));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ModernReplayFileInventoryStatus::StorageFailure,
+            .diagnostic = "modern replay inventory scan did not complete"};
   }
   return outcome;
 }

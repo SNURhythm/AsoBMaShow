@@ -715,7 +715,7 @@ constexpr const char *kModernCourseEntriesTableSql =
     "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
     "ON DELETE CASCADE)";
 
-constexpr const char *kModernReplayFilesTableSql =
+constexpr const char *kModernReplayFilesTableSqlV12 =
     "CREATE TABLE modern_replay_files("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "modern_chart_result_id INTEGER UNIQUE,"
@@ -723,6 +723,26 @@ constexpr const char *kModernReplayFilesTableSql =
     "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
     "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
     "codec_version INTEGER NOT NULL,CHECK(history_index>=0),"
+    "CHECK((modern_chart_result_id IS NOT NULL) != (modern_course_result_id IS NOT NULL)),"
+    "CHECK(length(content_sha256)=64 AND "
+    "content_sha256=lower(content_sha256) AND "
+    "content_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(compressed_size>0),CHECK(codec_version=3),"
+    "UNIQUE(stem,history_index),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernReplayFilesTableSql =
+    "CREATE TABLE modern_replay_files("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "modern_chart_result_id INTEGER UNIQUE,"
+    "modern_course_result_id INTEGER UNIQUE,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+    "codec_version INTEGER NOT NULL,user_deleted INTEGER NOT NULL DEFAULT 0,"
+    "CHECK(history_index>=0),CHECK(user_deleted IN (0,1)),"
     "CHECK((modern_chart_result_id IS NOT NULL) != (modern_course_result_id IS NOT NULL)),"
     "CHECK(length(content_sha256)=64 AND "
     "content_sha256=lower(content_sha256) AND "
@@ -1344,7 +1364,7 @@ bool inspectModernChartSchemaV11(sqlite3 *database) {
     const char *table;
     const char *sql;
   };
-  constexpr ExpectedObject objects[] = {
+  const ExpectedObject objects[] = {
       {"modern_chart_results", "table", "modern_chart_results",
        kModernChartResultsTableSql},
       {"modern_replay_files", "table", "modern_replay_files",
@@ -1381,14 +1401,15 @@ bool inspectModernChartSchemaV11(sqlite3 *database) {
   return true;
 }
 
-bool inspectModernCourseSchema(sqlite3 *database) {
+bool inspectModernCourseSchemaWithReplayTable(sqlite3 *database,
+                                              const char *replayTableSql) {
   struct ExpectedObject {
     const char *name;
     const char *type;
     const char *table;
     const char *sql;
   };
-  constexpr ExpectedObject objects[] = {
+  const ExpectedObject objects[] = {
       {"modern_chart_results", "table", "modern_chart_results",
        kModernChartResultsTableSql},
       {"modern_course_results", "table", "modern_course_results",
@@ -1398,7 +1419,7 @@ bool inspectModernCourseSchema(sqlite3 *database) {
       {"modern_course_entries", "table", "modern_course_entries",
        kModernCourseEntriesTableSql},
       {"modern_replay_files", "table", "modern_replay_files",
-       kModernReplayFilesTableSql},
+       replayTableSql},
       {"modern_replay_file_reservations", "table",
        "modern_replay_file_reservations",
        kModernReplayFileReservationsTableSql},
@@ -1435,12 +1456,23 @@ bool inspectModernCourseSchema(sqlite3 *database) {
   return true;
 }
 
+bool inspectModernCourseSchemaV12(sqlite3 *database) {
+  return inspectModernCourseSchemaWithReplayTable(
+      database, kModernReplayFilesTableSqlV12);
+}
+
+bool inspectModernCourseSchema(sqlite3 *database) {
+  return inspectModernCourseSchemaWithReplayTable(database,
+                                                  kModernReplayFilesTableSql);
+}
+
 bool createModernChartSchema(sqlite3 *database) {
   // Older migration tests and interrupted version writes can expose an exact
   // v11 object set under an earlier user_version. Treat only the complete,
   // byte-for-byte schema as already created; partial or malformed sets still
   // fail inside the caller's migration transaction.
   if (inspectModernChartSchemaV11(database) ||
+      inspectModernCourseSchemaV12(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1468,7 +1500,8 @@ bool createModernChartSchema(sqlite3 *database) {
 }
 
 bool migrateModernCourseSchema(sqlite3 *database) {
-  if (inspectModernCourseSchema(database)) {
+  if (inspectModernCourseSchemaV12(database) ||
+      inspectModernCourseSchema(database)) {
     return true;
   }
   if (!inspectModernChartSchemaV11(database)) {
@@ -1488,7 +1521,7 @@ bool migrateModernCourseSchema(sqlite3 *database) {
                "ALTER TABLE modern_replay_files RENAME TO "
                "modern_replay_files_v11",
                "renaming version 11 replay references") ||
-      !execSql(database, kModernReplayFilesTableSql,
+      !execSql(database, kModernReplayFilesTableSqlV12,
                "creating shared modern replay references") ||
       !execSql(database,
                "INSERT INTO modern_replay_files("
@@ -1506,6 +1539,45 @@ bool migrateModernCourseSchema(sqlite3 *database) {
                "creating course replay owner index") ||
       !execSql(database, kModernCourseKeyIndexSql,
                "creating modern course history index")) {
+    return false;
+  }
+  return inspectModernCourseSchemaV12(database);
+}
+
+bool migrateModernReplayDeletionSchema(sqlite3 *database) {
+  if (inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernCourseSchemaV12(database)) {
+    SDL_Log("Refusing replay deletion migration from a partial or unexpected "
+            "version 12 schema");
+    return false;
+  }
+  if (!execSql(database, "DROP INDEX idx_modern_replay_files_chart_result",
+               "dropping version 12 chart replay owner index") ||
+      !execSql(database, "DROP INDEX idx_modern_replay_files_course_result",
+               "dropping version 12 course replay owner index") ||
+      !execSql(database,
+               "ALTER TABLE modern_replay_files RENAME TO "
+               "modern_replay_files_v12",
+               "renaming version 12 replay references") ||
+      !execSql(database, kModernReplayFilesTableSql,
+               "creating user-deleted replay references") ||
+      !execSql(database,
+               "INSERT INTO modern_replay_files("
+               "id,modern_chart_result_id,modern_course_result_id,stem,"
+               "history_index,relative_path,content_sha256,compressed_size,"
+               "codec_version,user_deleted) SELECT id,"
+               "modern_chart_result_id,modern_course_result_id,stem,"
+               "history_index,relative_path,content_sha256,compressed_size,"
+               "codec_version,0 FROM modern_replay_files_v12",
+               "copying version 12 replay references") ||
+      !execSql(database, "DROP TABLE modern_replay_files_v12",
+               "dropping version 12 replay references") ||
+      !execSql(database, kModernReplayResultIndexSql,
+               "creating chart replay owner index") ||
+      !execSql(database, kModernReplayCourseResultIndexSql,
+               "creating course replay owner index")) {
     return false;
   }
   return inspectModernCourseSchema(database);
@@ -1843,6 +1915,9 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     }
   }
   if (*version < 12 && !migrateModernCourseSchema(db)) {
+    return false;
+  }
+  if (*version < 13 && !migrateModernReplayDeletionSchema(db)) {
     return false;
   }
   ReplayResultOutboxSchemaState resultOutboxState{};

@@ -63,6 +63,7 @@ enum class CourseReplayContextState {
   StageMismatch,
   LongNoteModeMismatch,
   ReplayNotAttached,
+  FileUserDeleted,
   ReferenceMismatch,
   UnsupportedCodecVersion,
   FileMissing,
@@ -98,6 +99,8 @@ enum class CourseReplayContextState {
   case CourseReplayContextState::FileMissing:
   case CourseReplayContextState::FileIoFailure:
     return ReplayState::Missing;
+  case CourseReplayContextState::FileUserDeleted:
+    return ReplayState::UserDeleted;
   case CourseReplayContextState::InvalidRequest:
   case CourseReplayContextState::ResultNotFound:
   case CourseReplayContextState::ResultUnavailable:

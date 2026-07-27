@@ -212,6 +212,11 @@ CourseReplayContextOutcome CourseReplayContext::load(
                      "The saved course result has no replay file reference.",
                      preservedResult);
     }
+    if (loaded.record->replayFile->userDeleted) {
+      return failure(CourseReplayContextState::FileUserDeleted,
+                     "The course replay file was deleted by the user.",
+                     preservedResult, loaded.record->replayFile);
+    }
 
     std::optional<ModernReplayFileReference> reference =
         *loaded.record->replayFile;

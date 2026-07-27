@@ -55,6 +55,7 @@ enum class ChartReplayContextState {
   ChartMismatch,
   LongNoteModeMismatch,
   ReplayNotAttached,
+  FileUserDeleted,
   ReferenceMismatch,
   UnsupportedCodecVersion,
   FileMissing,

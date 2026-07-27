@@ -291,10 +291,50 @@ struct ModernReplayFileAttachment {
 struct ModernReplayFileReference {
   std::int64_t id = 0;
   int resultId = 0;
+  bool userDeleted = false;
   replay::ReplayPathIdentity identity;
   replay::ReplayFileMetadata metadata;
 
   bool operator==(const ModernReplayFileReference &) const = default;
+};
+
+enum class ModernReplayOwnerKind { ChartResult, CourseResult };
+
+enum class ModernReplayFileMutationStatus {
+  Changed,
+  AlreadyChanged,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayFileMutationOutcome {
+  ModernReplayFileMutationStatus status =
+      ModernReplayFileMutationStatus::StorageFailure;
+  std::string diagnostic;
+};
+
+struct ModernReplayFileInventoryEntry {
+  ModernReplayOwnerKind owner = ModernReplayOwnerKind::ChartResult;
+  std::string attemptId;
+  ModernReplayFileReference reference;
+
+  bool operator==(const ModernReplayFileInventoryEntry &) const = default;
+};
+
+enum class ModernReplayFileInventoryStatus {
+  Loaded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayFileInventoryOutcome {
+  ModernReplayFileInventoryStatus status =
+      ModernReplayFileInventoryStatus::StorageFailure;
+  std::vector<ModernReplayFileInventoryEntry> entries;
+  std::string diagnostic;
 };
 
 struct ModernChartResultRecord {
@@ -433,7 +473,7 @@ struct ModernIrSnapshotReadOutcome {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 12;
+  static constexpr int kCurrentSchemaVersion = 13;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -475,6 +515,10 @@ public:
   ModernCourseResultReadOutcome LoadModernCourseResult(int resultId);
   ModernCourseHistoryReadOutcome
   ListModernCourseResults(std::string_view courseKey, std::size_t limit = 100);
+  ModernReplayFileMutationOutcome MarkModernReplayFileUserDeleted(
+      ModernReplayOwnerKind owner, std::string_view attemptId,
+      const ModernReplayFileReference &expected);
+  ModernReplayFileInventoryOutcome ListModernReplayFileReferences();
   ModernIrSnapshotReadOutcome
   LoadModernIrSubmissionSnapshot(std::string_view attemptId);
   result_persistence::PendingReadOutcome

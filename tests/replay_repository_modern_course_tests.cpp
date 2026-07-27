@@ -177,7 +177,7 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
   ReplayRepository repository(databasePath);
   assert(repository.EnsureSchema());
   auto database = openDatabase(databasePath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 12);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 13);
   for (const std::string_view table : {"modern_course_results",
                                        "modern_course_stages",
                                        "modern_course_entries"}) {

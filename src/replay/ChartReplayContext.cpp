@@ -84,6 +84,8 @@ ReplayState ChartReplayContextOutcome::replayState() const noexcept {
   case ChartReplayContextState::FileMissing:
   case ChartReplayContextState::FileIoFailure:
     return ReplayState::Missing;
+  case ChartReplayContextState::FileUserDeleted:
+    return ReplayState::UserDeleted;
   case ChartReplayContextState::InvalidRequest:
   case ChartReplayContextState::ResultNotFound:
   case ChartReplayContextState::ResultUnavailable:
@@ -183,6 +185,11 @@ ChartReplayContextOutcome ChartReplayContext::load(
       return failure(ChartReplayContextState::ReplayNotAttached,
                      "The saved result has no replay file reference.",
                      preservedResult);
+    }
+    if (loaded.record->replayFile->userDeleted) {
+      return failure(ChartReplayContextState::FileUserDeleted,
+                     "The replay file was deleted by the user.",
+                     preservedResult, loaded.record->replayFile);
     }
 
     std::optional<ModernReplayFileReference> reference =
