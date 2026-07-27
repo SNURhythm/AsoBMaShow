@@ -8,6 +8,10 @@
 #include <functional>
 #include <string>
 
+namespace replay {
+struct CourseReplayConsumerOutcome;
+}
+
 struct ReplayVideoExportProgress {
   double fraction = 0.0;
   std::string message;
@@ -44,4 +48,8 @@ public:
   static ReplayVideoExportResult
   ExportCourseReplay(ApplicationContext &context, const CourseReplayData &replay,
                      const ReplayVideoExportOptions &options = {});
+  static ReplayVideoExportResult ExportCourseReplay(
+      ApplicationContext &context,
+      replay::CourseReplayConsumerOutcome &&verified,
+      const ReplayVideoExportOptions &options = {});
 };

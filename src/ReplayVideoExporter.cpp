@@ -1,4 +1,5 @@
 #include "ReplayVideoExporter.h"
+#include "replay/CourseReplayConsumer.h"
 
 #include "ChartPlaybackDuration.h"
 #include "CoursePlaySession.h"
@@ -4134,11 +4135,33 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   return platformSaveResult;
 }
 
-ReplayVideoExportResult
-ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
-                                        const CourseReplayData &replay,
-                                        const ReplayVideoExportOptions &options) {
-  if (replay.stages.empty()) {
+namespace {
+
+bool sameGaugeSnapshot(const GaugeStateSnapshot &left,
+                       const GaugeStateSnapshot &right) noexcept {
+  return left.gaugeType == right.gaugeType &&
+         left.selectedGaugeType == right.selectedGaugeType &&
+         left.gaugeAutoShiftLowerBound == right.gaugeAutoShiftLowerBound &&
+         left.gaugeProfile == right.gaugeProfile &&
+         left.gaugeAutoShift == right.gaugeAutoShift &&
+         left.currentGauge == right.currentGauge &&
+         left.gaugeValues == right.gaugeValues &&
+         left.gaugeSurvivalFailed == right.gaugeSurvivalFailed;
+}
+
+using CourseMaterializedStages =
+    std::vector<replay::CourseReplayMaterializedStage>;
+
+ReplayVideoExportResult exportCourseReplayImpl(
+    ApplicationContext &context, const CourseReplayData &replay,
+    std::vector<std::unique_ptr<bms_parser::Chart>> *preparedCharts,
+    const CourseMaterializedStages *materializedStages,
+    const ReplayVideoExportOptions &options) {
+  if (replay.stages.empty() ||
+      (preparedCharts != nullptr &&
+       preparedCharts->size() != replay.stages.size()) ||
+      (materializedStages != nullptr &&
+       materializedStages->size() != replay.stages.size())) {
     return {.success = false, .message = "No course replay selected"};
   }
   reportReplayExportProgress(options, 0.0, "Preparing course export");
@@ -4200,8 +4223,13 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
                        static_cast<double>(replay.stages.size())),
         "Preparing course stage " + std::to_string(i + 1));
     std::atomic_bool parseCancelled = false;
-    auto chart = play_options::prepareReplayChart(stageReplay.chartMeta.BmsPath,
-                                                  stageReplay, parseCancelled);
+    std::unique_ptr<bms_parser::Chart> chart;
+    if (preparedCharts != nullptr) {
+      chart = std::move((*preparedCharts)[i]);
+    } else {
+      chart = play_options::prepareReplayChart(
+          stageReplay.chartMeta.BmsPath, stageReplay, parseCancelled);
+    }
     if (chart == nullptr || parseCancelled) {
       removeReplayExportWorkDirectory(tempDir);
       return {.success = false,
@@ -4235,8 +4263,12 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     configuredStageReplay.gaugeAutoShift = replay.gaugeAutoShift;
     configuredStageReplay.gaugeAutoShiftLowerBound =
         replay.gaugeAutoShiftLowerBound;
-    const GaugeStateSnapshot *carriedGaugeState =
-        carriedGauge.has_value() ? &*carriedGauge : nullptr;
+    const GaugeStateSnapshot *carriedGaugeState = nullptr;
+    if (materializedStages != nullptr && i > 0) {
+      carriedGaugeState = &(*materializedStages)[i].initialGaugeState;
+    } else if (materializedStages == nullptr && carriedGauge.has_value()) {
+      carriedGaugeState = &*carriedGauge;
+    }
     const auto failureMicros = replay_result::FindGaugeFailureMicros(
         *chart, configuredStageReplay, replay.gaugeProfile,
         carriedGaugeState);
@@ -4271,7 +4303,24 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     RhythmState resultState = replay_result::BuildResultState(
         *chart, exportStageReplay, replay.gaugeProfile,
         carriedGaugeState);
-    carriedGauge = resultState.gaugeSnapshot();
+    const GaugeStateSnapshot renderedInitial =
+        initialGaugeState.gaugeSnapshot();
+    const GaugeStateSnapshot renderedFinal = resultState.gaugeSnapshot();
+    if (materializedStages != nullptr &&
+        (!sameGaugeSnapshot(
+             renderedInitial,
+             (*materializedStages)[i].initialGaugeState) ||
+         !sameGaugeSnapshot(renderedFinal,
+                            (*materializedStages)[i].finalGaugeState))) {
+      removeReplayExportWorkDirectory(tempDir);
+      return {.success = false,
+              .outputPath = outputPath,
+              .message =
+                  "Course video state disagrees with verified continuation"};
+    }
+    carriedGauge = materializedStages != nullptr
+                       ? (*materializedStages)[i].finalGaugeState
+                       : renderedFinal;
     audioSegments.push_back(CourseReplayAudioSegment{
         .wavPath = stageWavPath,
         .durationMicros = gameplayDurationMicros + resultDurationMicros,
@@ -4337,4 +4386,25 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
                   static_cast<double>(elapsedMicros(totalStart)) / 1000000.0,
                   platformSaveResult.message.c_str());
   return platformSaveResult;
+}
+
+} // namespace
+
+ReplayVideoExportResult
+ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
+                                        const CourseReplayData &replay,
+                                        const ReplayVideoExportOptions &options) {
+  return exportCourseReplayImpl(context, replay, nullptr, nullptr, options);
+}
+
+ReplayVideoExportResult ReplayVideoExporter::ExportCourseReplay(
+    ApplicationContext &context,
+    replay::CourseReplayConsumerOutcome &&verified,
+    const ReplayVideoExportOptions &options) {
+  if (!verified.ready()) {
+    return {.success = false, .message = "No verified course replay selected"};
+  }
+  return exportCourseReplayImpl(context, *verified.replayData,
+                                &verified.charts,
+                                &verified.materializedStages, options);
 }

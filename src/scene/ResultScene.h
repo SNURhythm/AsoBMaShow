@@ -270,6 +270,9 @@ private:
   void updatePracticeSectionAction();
   void startCourseReplay();
   void startCourseReplayStage(std::shared_ptr<CoursePlaySession> session);
+  void startModernCourseRetrySame();
+  void startModernCourseRetrySameStage(
+      std::shared_ptr<CoursePlaySession> session);
   void continueCourse();
   void showSavedCourseStage();
   void showCourseResult();

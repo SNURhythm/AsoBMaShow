@@ -102,6 +102,50 @@ bool testCompletionPersistenceRoutes() {
              "ineligible attempts do not acquire a persistence route");
 }
 
+bool testCourseRetrySameUsesValidatedSetupWithoutReplayInput() {
+  auto session = std::make_shared<CoursePlaySession>();
+  session->autoKeySound = true;
+  session->gaugeType = GaugeType::Hard;
+  session->gaugeProfile = GaugeProfile::Standard;
+  session->gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  session->gaugeAutoShiftLowerBound = GaugeType::Easy;
+  session->ruleset = GameplayRuleset::Beatoraja;
+  session->rulesetDescriptor =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+
+  ReplayData setup;
+  setup.chartMeta.LnMode = 2;
+  setup.playOption = "RANDOM";
+  setup.playOptionSeed = 123;
+  setup.playOption2 = "MIRROR";
+  setup.playOption2Seed = 456;
+  setup.assistOption = assist_options::kOff;
+  setup.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  setup.provenance = ScoreProvenance::Legacy();
+  setup.provenance.gaugeType = GaugeType::Hard;
+  setup.provenance.gaugeProfile = GaugeProfile::Standard;
+  setup.provenance.gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  setup.provenance.playback = {.percent = 75,
+                               .mode = audio::PlaybackMode::PitchShift};
+  setup.events.push_back({});
+
+  const StartOptions options =
+      makeCourseRetrySameStageStartOptions(session, setup);
+  return expect(options.courseSession == session &&
+                    options.replayData == nullptr && !options.autoPlay &&
+                    options.autoKeySound &&
+                    options.playOption == setup.playOption &&
+                    options.playOptionSeed == setup.playOptionSeed &&
+                    options.playOption2 == setup.playOption2 &&
+                    options.playOption2Seed == setup.playOption2Seed,
+                "course Retry Same applies validated setup without replay input") &&
+         expect(options.playback == course_rules::kRequiredPlaybackRate &&
+                    options.gaugeType == GaugeType::Hard &&
+                    options.gaugeAutoShift == GaugeAutoShiftMode::Continue &&
+                    options.gaugeAutoShiftLowerBound == GaugeType::Easy,
+                "course Retry Same uses the shared course setup authority");
+}
+
 int main() {
   ReplayData replay;
   replay.provenance.playback = {
@@ -145,7 +189,8 @@ int main() {
     return 1;
   }
 
-  if (!testLocalReplaySetupCapture() || !testCompletionPersistenceRoutes()) {
+  if (!testLocalReplaySetupCapture() || !testCompletionPersistenceRoutes() ||
+      !testCourseRetrySameUsesValidatedSetupWithoutReplayInput()) {
     return 1;
   }
 

@@ -1,6 +1,7 @@
 // The conditional keeps the red contract buildable before production exists.
 #if __has_include("replay/CourseReplayConsumer.h")
 #include "replay/CourseReplayConsumer.h"
+#include "CoursePlaySession.h"
 #define ASOBMASHOW_HAS_COURSE_REPLAY_CONSUMER 1
 #else
 #define ASOBMASHOW_HAS_COURSE_REPLAY_CONSUMER 0
@@ -300,7 +301,13 @@ void testConsumerOwnsOneVerifiedCoursePipelineAndContinuation() {
   const std::vector<std::filesystem::path> paths{
       "selected/stage-0.bms", "selected/stage-1.bms"};
   const auto loaded = consumer.load(harness.listed, paths, cancelled);
-  expect(loaded.ready() && loaded.charts.size() == 2 && loaded.replayData &&
+  expect(loaded.ready() && loaded.charts.size() == 2 &&
+             loaded.materializedStages.size() == 2 &&
+             loaded.materializedStages[0].finalGaugeState.currentGauge ==
+                 76.0F &&
+             loaded.materializedStages[1].initialGaugeState.currentGauge ==
+                 76.0F &&
+             loaded.replayData &&
              loaded.replayData->stages.size() == 2 && loaded.continuation &&
              loaded.continuation->complete() &&
              loaded.continuation->score == harness.listed.result.finalScore &&
@@ -326,6 +333,7 @@ void testReplayFailureStopsBeforeSetupAndProducesNoAdapter() {
   const auto loaded = consumer.load(harness.listed, paths, cancelled);
   expect(loaded.state == CourseReplayConsumerState::ReplayUnavailable &&
              !loaded.ready() && loaded.charts.empty() && !loaded.replayData &&
+             loaded.replayState() == ReplayState::Missing &&
              harness.calls ==
                  std::vector<std::string>{"parse-0", "parse-1", "context"},
          "missing course BRD stops before setup, judging, and adapters");
@@ -340,8 +348,43 @@ void testMaterializedCarriedStateMustAgreeWithSavedFacts() {
       "selected/stage-0.bms", "selected/stage-1.bms"};
   const auto loaded = consumer.load(harness.listed, paths, cancelled);
   expect(loaded.state == CourseReplayConsumerState::ResultMismatch &&
-             !loaded.ready() && !loaded.replayData,
+             !loaded.ready() && !loaded.replayData &&
+             loaded.replayState() == ReplayState::Mismatched,
          "materialized carried gauge disagreement fails closed");
+}
+
+void testVerifiedLaunchAdaptersSeparateWatchFromRetrySame() {
+  const std::vector<std::filesystem::path> paths{
+      "selected/stage-0.bms", "selected/stage-1.bms"};
+
+  ConsumerHarness watchHarness;
+  auto watchConsumer = watchHarness.makeConsumer();
+  std::atomic_bool cancelled = false;
+  auto watchLoaded =
+      watchConsumer.load(watchHarness.listed, paths, cancelled);
+  auto watch = makeCourseReplayLaunchSession(
+      std::move(watchLoaded), CourseReplayLaunchMode::Watch, true, true);
+  expect(watch && watch->courseReplayPlayback && watch->courseReplayData &&
+             !watch->courseRetrySameData &&
+             watch->entries.size() == 3 &&
+             watch->entries[2].meta.TotalNotes == 5 &&
+             watch->preparedCourseCharts.size() == 2 &&
+             watch->replayTouchVisualizationEnabled == true &&
+             watch->replayGhostRenderingEnabled == true,
+         "Watch adapter retains verified playback and prepared charts");
+
+  ConsumerHarness retryHarness;
+  auto retryConsumer = retryHarness.makeConsumer();
+  cancelled = false;
+  auto retryLoaded =
+      retryConsumer.load(retryHarness.listed, paths, cancelled);
+  auto retry = makeCourseReplayLaunchSession(
+      std::move(retryLoaded), CourseReplayLaunchMode::RetrySame);
+  expect(retry && !retry->courseReplayPlayback && !retry->courseReplayData &&
+             retry->courseRetrySameData &&
+             retry->courseRetrySameStageSetup(0) != nullptr &&
+             retry->preparedCourseCharts.size() == 2,
+         "Retry Same adapter keeps validated setup without replay playback");
 }
 
 #endif
@@ -353,6 +396,7 @@ int main() {
   testConsumerOwnsOneVerifiedCoursePipelineAndContinuation();
   testReplayFailureStopsBeforeSetupAndProducesNoAdapter();
   testMaterializedCarriedStateMustAgreeWithSavedFacts();
+  testVerifiedLaunchAdaptersSeparateWatchFromRetrySame();
 #else
   expect(false, "CourseReplayConsumer contract is not implemented");
 #endif

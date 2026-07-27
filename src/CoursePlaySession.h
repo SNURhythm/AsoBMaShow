@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -288,6 +289,7 @@ struct CoursePlaySession {
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
   std::vector<std::shared_ptr<bms_parser::Chart>> ownedResultBrowseCharts;
+  std::vector<std::unique_ptr<bms_parser::Chart>> preparedCourseCharts;
   std::vector<CourseReplayStageData> replayStages;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
   RulesetDescriptor rulesetDescriptor = RulesetDescriptor::Current();
@@ -301,6 +303,9 @@ struct CoursePlaySession {
   std::optional<replay::CourseResultPersistenceOutcome>
       modernCoursePersistenceOutcome;
   std::string modernCourseDiagnostic;
+  std::vector<std::filesystem::path> modernCourseChartPaths;
+  bool modernCourseResultBrowsing = false;
+  bool modernCourseRetrySameAllowed = false;
   std::size_t currentIndex = 0;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
@@ -323,6 +328,7 @@ struct CoursePlaySession {
   bool courseReplaySaved = false;
   int savedCourseReplayId = 0;
   std::shared_ptr<CourseReplayData> courseReplayData = nullptr;
+  std::shared_ptr<CourseReplayData> courseRetrySameData = nullptr;
   std::optional<bool> replayTouchVisualizationEnabled;
   std::optional<bool> replayGhostRenderingEnabled;
 
@@ -358,6 +364,26 @@ struct CoursePlaySession {
   [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
     return courseReplayData != nullptr &&
            index < courseReplayData->stages.size();
+  }
+
+  [[nodiscard]] bool hasPreparedCourseChart(std::size_t index) const {
+    return index < preparedCourseCharts.size() &&
+           preparedCourseCharts[index] != nullptr;
+  }
+
+  [[nodiscard]] std::unique_ptr<bms_parser::Chart>
+  takePreparedCourseChart(std::size_t index) {
+    return hasPreparedCourseChart(index)
+               ? std::move(preparedCourseCharts[index])
+               : nullptr;
+  }
+
+  [[nodiscard]] const ReplayData *courseRetrySameStageSetup(
+      std::size_t index) const {
+    return courseRetrySameData != nullptr &&
+                   index < courseRetrySameData->stages.size()
+               ? &courseRetrySameData->stages[index].replay
+               : nullptr;
   }
 
   [[nodiscard]] const CourseReplayStageData *

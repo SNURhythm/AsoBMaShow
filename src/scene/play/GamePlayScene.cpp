@@ -2556,8 +2556,11 @@ bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
   session->applyReplayStagePlayOptions(*stageReplay);
 
   std::atomic_bool parseCancelled = false;
-  auto replayChart = play_options::prepareReplayChart(
-      stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
+  auto replayChart = session->takePreparedCourseChart(session->currentIndex);
+  if (replayChart == nullptr) {
+    replayChart = play_options::prepareReplayChart(
+        stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
+  }
   if (replayChart == nullptr || parseCancelled) {
     return false;
   }
@@ -2590,31 +2593,46 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   }
 
   std::atomic_bool parseCancelled = false;
-  std::unique_ptr<bms_parser::Chart> nextChart;
-  try {
-    nextChart =
-        play_options::parseChart(nextMeta->BmsPath, parseCancelled, "course");
-  } catch (const std::exception &e) {
-    SDL_Log("Course parse failed %s: %s",
-            fspath_to_utf8(nextMeta->BmsPath).c_str(), e.what());
-    archive_file::appendDebugLogLine(
-        "Course parse exception: " + fspath_to_utf8(nextMeta->BmsPath) + ": " +
-        e.what());
-    return false;
+  const ReplayData *retrySetup =
+      session->courseRetrySameStageSetup(session->currentIndex);
+  std::unique_ptr<bms_parser::Chart> nextChart =
+      session->takePreparedCourseChart(session->currentIndex);
+  if (nextChart == nullptr) {
+    try {
+      nextChart = retrySetup != nullptr
+                      ? play_options::prepareReplayChart(
+                            nextMeta->BmsPath, *retrySetup, parseCancelled)
+                      : play_options::parseChart(nextMeta->BmsPath,
+                                                 parseCancelled, "course");
+    } catch (const std::exception &e) {
+      SDL_Log("Course parse failed %s: %s",
+              fspath_to_utf8(nextMeta->BmsPath).c_str(), e.what());
+      archive_file::appendDebugLogLine(
+          "Course parse exception: " + fspath_to_utf8(nextMeta->BmsPath) +
+          ": " + e.what());
+      return false;
+    }
   }
   if (nextChart == nullptr || parseCancelled) {
     return false;
   }
-  applyCourseConstraintsToChart(*nextChart, session->constraints);
-
-  play_options::PlayOptionReplayInfo playInfo =
-      play_options::applySelectedPlayOptions(*nextChart,
-                                             session->requestedPlayOption);
-  applyEffectiveLongNoteModeToChart(*nextChart, options.longNoteMode);
-  session->playOption = playInfo.option;
-  session->playOptionSeed = playInfo.seed;
-  session->playOption2 = playInfo.option2;
-  session->playOption2Seed = playInfo.seed2;
+  play_options::PlayOptionReplayInfo playInfo;
+  if (retrySetup != nullptr) {
+    session->applyReplayStagePlayOptions(*retrySetup);
+    playInfo = {.option = retrySetup->playOption,
+                .seed = retrySetup->playOptionSeed,
+                .option2 = retrySetup->playOption2,
+                .seed2 = retrySetup->playOption2Seed};
+  } else {
+    applyCourseConstraintsToChart(*nextChart, session->constraints);
+    playInfo = play_options::applySelectedPlayOptions(
+        *nextChart, session->requestedPlayOption);
+    applyEffectiveLongNoteModeToChart(*nextChart, options.longNoteMode);
+    session->playOption = playInfo.option;
+    session->playOptionSeed = playInfo.seed;
+    session->playOption2 = playInfo.option2;
+    session->playOption2Seed = playInfo.seed2;
+  }
 
   context.jukebox.stop();
   context.jukebox.loadChart(*nextChart, true, parseCancelled);
@@ -2622,27 +2640,33 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     return false;
   }
 
-  StartOptions nextOptions;
-  nextOptions.startPosition = 0;
-  nextOptions.autoKeySound = session->autoKeySound;
-  nextOptions.autoPlay = false;
-  nextOptions.gaugeType = session->gaugeType;
-  nextOptions.gaugeProfile = session->gaugeProfile;
-  nextOptions.gaugeAutoShift = session->gaugeAutoShift;
-  nextOptions.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
-  nextOptions.playOption = playInfo.option;
-  nextOptions.playOptionSeed = playInfo.seed;
-  nextOptions.playOption2 = playInfo.option2;
-  nextOptions.playOption2Seed = playInfo.seed2;
-  nextOptions.longNoteMode = options.longNoteMode;
-  nextOptions.assistOption = session->assistOption;
-  nextOptions.playback = course_rules::kRequiredPlaybackRate;
-  nextOptions.clubMode = options.clubMode;
-  nextOptions.courseSession = session;
-  nextOptions.courseConstraints = session->constraints;
-  nextOptions.ruleset = session->ruleset;
-  nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
-  nextOptions.ownsChart = true;
+  StartOptions nextOptions =
+      retrySetup != nullptr
+          ? makeCourseRetrySameStageStartOptions(session, *retrySetup)
+          : StartOptions{};
+  if (retrySetup == nullptr) {
+    nextOptions.startPosition = 0;
+    nextOptions.autoKeySound = session->autoKeySound;
+    nextOptions.autoPlay = false;
+    nextOptions.gaugeType = session->gaugeType;
+    nextOptions.gaugeProfile = session->gaugeProfile;
+    nextOptions.gaugeAutoShift = session->gaugeAutoShift;
+    nextOptions.gaugeAutoShiftLowerBound =
+        session->gaugeAutoShiftLowerBound;
+    nextOptions.playOption = playInfo.option;
+    nextOptions.playOptionSeed = playInfo.seed;
+    nextOptions.playOption2 = playInfo.option2;
+    nextOptions.playOption2Seed = playInfo.seed2;
+    nextOptions.longNoteMode = options.longNoteMode;
+    nextOptions.assistOption = session->assistOption;
+    nextOptions.playback = course_rules::kRequiredPlaybackRate;
+    nextOptions.clubMode = options.clubMode;
+    nextOptions.courseSession = session;
+    nextOptions.courseConstraints = session->constraints;
+    nextOptions.ruleset = session->ruleset;
+    nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
+    nextOptions.ownsChart = true;
+  }
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),

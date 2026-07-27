@@ -137,6 +137,59 @@ std::shared_ptr<CourseReplayData> makeCompatibilityCourse(
 
 } // namespace
 
+std::shared_ptr<CoursePlaySession> makeCourseReplayLaunchSession(
+    CourseReplayConsumerOutcome outcome, CourseReplayLaunchMode mode,
+    bool renderTouchPoints, bool renderGhosts) {
+  if (!outcome.ready() || outcome.charts.size() !=
+                              outcome.replayData->stages.size()) {
+    return nullptr;
+  }
+
+  auto replayData = std::move(outcome.replayData);
+  auto session = std::make_shared<CoursePlaySession>();
+  session->courseId = replayData->courseId;
+  session->courseKey = replayData->courseKey;
+  session->courseName = replayData->courseName;
+  session->courseGroupName = replayData->courseGroupName;
+  session->constraintJson = replayData->constraintJson;
+  const auto &savedResult = outcome.context.verified->result;
+  session->entries.resize(
+      static_cast<std::size_t>(savedResult.totalCharts));
+  for (std::size_t index = 0; index < session->entries.size(); ++index) {
+    session->entries[index].meta.TotalNotes =
+        savedResult.entryFacts[index].totalNotes;
+    session->entries[index].meta.PlayLength =
+        savedResult.entryFacts[index].playLengthMicros;
+  }
+  for (std::size_t index = 0; index < replayData->stages.size(); ++index) {
+    session->entries[index].meta = replayData->stages[index].replay.chartMeta;
+  }
+  session->snapshotRulesetFromReplay(replayData->stages.front().replay);
+  const CourseConstraintSettings constraintSettings =
+      courseConstraintSettingsFromJson(replayData->constraintJson);
+  session->gaugeType = replayData->initialGaugeType;
+  session->gaugeProfile = replayData->gaugeProfile;
+  session->gaugeAutoShift = replayData->gaugeAutoShift;
+  session->gaugeAutoShiftLowerBound =
+      replayData->gaugeAutoShiftLowerBound;
+  session->longNoteMode = replayData->longNoteMode;
+  session->constraints = constraintSettings.rules;
+  session->requestedPlayOption = replayData->requestedPlayOption;
+  session->assistOption = replayData->assistOption;
+  session->autoKeySound = false;
+  session->preparedCourseCharts = std::move(outcome.charts);
+  session->replayTouchVisualizationEnabled = renderTouchPoints;
+  session->replayGhostRenderingEnabled = renderGhosts;
+  if (mode == CourseReplayLaunchMode::Watch) {
+    session->courseReplayPlayback = true;
+    session->courseReplayData = std::move(replayData);
+  } else {
+    session->courseReplayPlayback = false;
+    session->courseRetrySameData = std::move(replayData);
+  }
+  return session;
+}
+
 CourseReplayConsumer::CourseReplayConsumer(
     CourseReplayConsumerDependencies dependencies)
     : dependencies_(std::move(dependencies)) {}
@@ -207,9 +260,11 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
 
     std::vector<std::unique_ptr<bms_parser::Chart>> preparedCharts;
     std::vector<CourseReplayStageData> compatibilityStages;
+    std::vector<CourseReplayMaterializedStage> materializedStages;
     std::vector<result_persistence::ModernCourseStageResult> judgedStages;
     preparedCharts.reserve(parsedCharts.size());
     compatibilityStages.reserve(parsedCharts.size());
+    materializedStages.reserve(parsedCharts.size());
     judgedStages.reserve(parsedCharts.size());
     std::optional<CourseContinuationState> continuation;
     ReplayPlaybackCarryState carry;
@@ -324,6 +379,11 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
                .maximumCombo = continuation->maximumCombo};
       judgedStages.push_back(stageResultForChart(
           static_cast<int>(index), *materialized.judgedResult));
+      materializedStages.push_back(
+          {.initialGaugeState = *materialized.initialGaugeState,
+           .finalGaugeState = *materialized.finalGaugeState,
+           .judgedResult = *materialized.judgedResult,
+           .endingCombo = materialized.endingCombo});
       compatibilityStages.push_back(
           {.replay = std::move(*materialized.replayData),
            .restMicrosAfterStage =
@@ -364,6 +424,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
     return {.state = CourseReplayConsumerState::Ready,
             .context = std::move(context),
             .charts = std::move(preparedCharts),
+            .materializedStages = std::move(materializedStages),
             .replayData = std::move(replayData),
             .continuation = std::move(continuation)};
   } catch (...) {

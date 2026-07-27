@@ -15,6 +15,8 @@
 #include <string_view>
 #include <vector>
 
+struct CoursePlaySession;
+
 namespace replay {
 
 enum class CourseReplayConsumerState {
@@ -30,21 +32,38 @@ enum class CourseReplayConsumerState {
   ResultMismatch,
 };
 
+struct CourseReplayMaterializedStage {
+  GaugeStateSnapshot initialGaugeState;
+  GaugeStateSnapshot finalGaugeState;
+  result_persistence::ModernChartResult judgedResult;
+  int endingCombo = 0;
+};
+
 struct CourseReplayConsumerOutcome {
   CourseReplayConsumerState state = CourseReplayConsumerState::InvalidRequest;
   CourseReplayContextOutcome context;
   std::vector<std::unique_ptr<bms_parser::Chart>> charts;
+  std::vector<CourseReplayMaterializedStage> materializedStages;
   std::shared_ptr<CourseReplayData> replayData;
   std::optional<CourseContinuationState> continuation;
   std::string diagnostic;
 
   [[nodiscard]] bool ready() const noexcept {
     return state == CourseReplayConsumerState::Ready && !charts.empty() &&
+           charts.size() == materializedStages.size() &&
            replayData != nullptr && continuation.has_value();
   }
   [[nodiscard]] ReplayState replayState() const noexcept {
-    return context.replayState();
+    const ReplayState state = context.replayState();
+    return !ready() && state == ReplayState::Verified
+               ? ReplayState::Mismatched
+               : state;
   }
+};
+
+enum class CourseReplayLaunchMode {
+  Watch,
+  RetrySame,
 };
 
 struct CourseReplayConsumerDependencies {
@@ -84,5 +103,12 @@ private:
 
 [[nodiscard]] CourseReplayConsumer makeRuntimeCourseReplayConsumer(
     ReplayRepository &repository, ReplayLimits limits = kReplayLimits);
+
+// Converts only a fully verified consumer outcome into the temporary scene
+// adapter. Watch retains raw replay playback; Retry Same retains only the
+// validated setup and already-prepared chart patterns for a new live attempt.
+[[nodiscard]] std::shared_ptr<CoursePlaySession> makeCourseReplayLaunchSession(
+    CourseReplayConsumerOutcome outcome, CourseReplayLaunchMode mode,
+    bool renderTouchPoints = false, bool renderGhosts = false);
 
 } // namespace replay

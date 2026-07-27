@@ -118,14 +118,18 @@ void testModernCourseRecordsUseResultAndVerifiedReplayAuthorities() {
                "course video is not separated from the legacy adapter");
   requireToken(menu, "makeRuntimeCourseReplayConsumer",
                "modern course replay actions bypass the sole consumer");
+  requireToken(root / "src/ReplayVideoExporter.cpp", "materializedStages",
+               "course video does not consume verified continuation stages");
   requireToken(resultScene, "modernCourseResultBrowsing",
                "course result browsing still requires replay detail");
 
   const std::string modernRecall = read(menu);
-  const auto begin = modernRecall.find("startModernCourseReplayResultRecall");
+  const auto begin = modernRecall.find(
+      "void MainMenuScene::startModernCourseReplayResultRecall");
   require(begin != std::string::npos,
           "modern course result recall entry point is missing");
-  const auto end = modernRecall.find("finishReplayResultRecallFailure", begin);
+  const auto end = modernRecall.find(
+      "void MainMenuScene::startRemoteResultRecall", begin);
   require(end != std::string::npos,
           "modern course result recall boundary is malformed");
   const std::string_view recallBody(modernRecall.data() + begin, end - begin);

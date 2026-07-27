@@ -811,6 +811,8 @@ private:
   void startReplayPlayback(const ChartMetaRecord &record, int replayId);
   void startModernReplayPlayback(const ChartMetaRecord &record,
                                  ModernChartResultRecord modern);
+  void startModernCourseReplayPlayback(const ChartMetaRecord &record,
+                                       ModernCourseResultRecord modern);
   void startGBattlePlayback(const ChartMetaRecord &record, int replayId);
   void startModernGBattlePlayback(const ChartMetaRecord &record,
                                   ModernChartResultRecord modern);
@@ -821,9 +823,13 @@ private:
   void startModernReplayVideoExport(const ChartMetaRecord &record,
                                     ModernChartResultRecord modern,
                                     ReplayVideoExportOptions options);
+  void startModernCourseReplayVideoExport(
+      ModernCourseResultRecord modern, ReplayVideoExportOptions options);
   void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
   void startModernReplayResultRecall(const ChartMetaRecord &record,
                                      ModernChartResultRecord modern);
+  void startModernCourseReplayResultRecall(ModernCourseResultRecord modern,
+                                           bool retrySameAllowed);
   void startRemoteResultRecall(IrRemoteRecordId identity,
                                std::string selectedStableKey);
   void startReplayIrUpload(const ChartMetaRecord &record,

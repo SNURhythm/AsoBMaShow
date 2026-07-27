@@ -481,3 +481,15 @@ inline StartOptions makeCourseReplayStageStartOptions(
   }
   return enforceCoursePlaybackRules(std::move(options));
 }
+
+inline StartOptions makeCourseRetrySameStageStartOptions(
+    const std::shared_ptr<CoursePlaySession> &session,
+    const ReplayData &validatedSetup) {
+  auto options = makeCourseReplayStageStartOptions(
+      session, std::make_shared<ReplayData>(validatedSetup));
+  options.replayData.reset();
+  options.autoKeySound = session != nullptr && session->autoKeySound;
+  options.touchVisualizationEnabled.reset();
+  options.replayGhostRenderingEnabled.reset();
+  return enforceCoursePlaybackRules(std::move(options));
+}

@@ -75,6 +75,38 @@ enum class CourseReplayContextState {
   SharedFactsMismatch,
 };
 
+[[nodiscard]] inline ReplayState replayStateForCourseReplayContext(
+    CourseReplayContextState state) noexcept {
+  switch (state) {
+  case CourseReplayContextState::Ready:
+    return ReplayState::Verified;
+  case CourseReplayContextState::FileCorrupt:
+    return ReplayState::Corrupt;
+  case CourseReplayContextState::UnsupportedExtension:
+  case CourseReplayContextState::UnsupportedCodecVersion:
+    return ReplayState::UnsupportedExtension;
+  case CourseReplayContextState::CourseShapeMismatch:
+  case CourseReplayContextState::StageMismatch:
+  case CourseReplayContextState::LongNoteModeMismatch:
+  case CourseReplayContextState::ReferenceMismatch:
+  case CourseReplayContextState::FileUnsafe:
+  case CourseReplayContextState::DecodeFailed:
+  case CourseReplayContextState::ReplayInvalid:
+  case CourseReplayContextState::SharedFactsMismatch:
+    return ReplayState::Mismatched;
+  case CourseReplayContextState::ReplayNotAttached:
+  case CourseReplayContextState::FileMissing:
+  case CourseReplayContextState::FileIoFailure:
+    return ReplayState::Missing;
+  case CourseReplayContextState::InvalidRequest:
+  case CourseReplayContextState::ResultNotFound:
+  case CourseReplayContextState::ResultUnavailable:
+  case CourseReplayContextState::ResultInvalid:
+    return ReplayState::NotApplicable;
+  }
+  return ReplayState::NotApplicable;
+}
+
 struct VerifiedCourseReplay {
   result_persistence::ModernCourseResult result;
   ModernReplayFileReference reference;
@@ -98,7 +130,9 @@ struct CourseReplayContextOutcome {
   [[nodiscard]] bool replayAvailable() const noexcept {
     return state == CourseReplayContextState::Ready && verified.has_value();
   }
-  [[nodiscard]] ReplayState replayState() const noexcept;
+  [[nodiscard]] ReplayState replayState() const noexcept {
+    return replayStateForCourseReplayContext(state);
+  }
 };
 
 struct CourseReplayContextDependencies {
