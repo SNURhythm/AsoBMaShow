@@ -102,8 +102,17 @@ struct StageOutcome {
 struct PendingChartScoreWrite {
   std::string attemptId;
   int replayId = 0;
+  int modernResultId = 0;
   std::string createdAt;
   ChartScoreWrite score;
+
+  [[nodiscard]] bool hasExactlyOneOwner() const noexcept {
+    return (replayId > 0) != (modernResultId > 0);
+  }
+
+  [[nodiscard]] int ownerId() const noexcept {
+    return replayId > 0 ? replayId : modernResultId;
+  }
 };
 
 enum class PendingReadStatus {
@@ -256,6 +265,20 @@ struct ModernReplayReservationOutcome {
   std::string diagnostic;
 };
 
+enum class ModernReplayReservationReleaseStatus {
+  Released,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayReservationReleaseOutcome {
+  ModernReplayReservationReleaseStatus status =
+      ModernReplayReservationReleaseStatus::StorageFailure;
+  std::string diagnostic;
+};
+
 struct ModernReplayFileAttachment {
   replay::ReplayPathIdentity identity;
   replay::ReplayFileMetadata metadata;
@@ -369,6 +392,8 @@ public:
   ModernReplayReservationOutcome
   ReserveModernReplayPath(std::string_view attemptId, std::string_view stem,
                           std::int64_t createdAtUnixMillis);
+  ModernReplayReservationReleaseOutcome ReleaseModernReplayPathReservation(
+      const ModernReplayPathReservation &reservation);
   ModernChartStageOutcome StageModernChartResult(
       const result_persistence::ModernChartResult &result,
       const std::optional<ir::IrSubmissionSnapshot> &snapshot,
@@ -381,6 +406,16 @@ public:
   ListModernChartResults(std::string_view chartSha256, std::size_t limit = 100);
   ModernIrSnapshotReadOutcome
   LoadModernIrSubmissionSnapshot(std::string_view attemptId);
+  result_persistence::PendingReadOutcome
+  LoadPendingModernChartScore(std::string_view attemptId);
+  result_persistence::PendingBatchOutcome
+  ListPendingModernChartScores(std::size_t limit = 256);
+  result_persistence::AcknowledgeOutcome
+  AcknowledgePendingModernChartScore(std::string_view attemptId,
+                                     int modernResultId);
+  result_persistence::RecoveryMarkOutcome
+  RecordPendingModernChartScoreRecoveryAttempt(
+      std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
   result_persistence::StageOutcome

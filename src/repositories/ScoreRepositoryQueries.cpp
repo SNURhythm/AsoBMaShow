@@ -851,10 +851,11 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   using result_persistence::ProjectionStatus;
 
   profile_database_activity::WriteGuard writeGuard;
-  if (!uuid::isCanonicalLowerV4(pending.attemptId)) {
+  if (!uuid::isCanonicalLowerV4(pending.attemptId) ||
+      !pending.hasExactlyOneOwner()) {
     return {.status = ProjectionStatus::IntegrityConflict,
             .diagnostic =
-                "score projection attempt ID is not a canonical v4 UUID"};
+                "score projection attempt or owner identity is invalid"};
   }
   if (pending.createdAt.empty()) {
     return {.status = ProjectionStatus::IntegrityConflict,

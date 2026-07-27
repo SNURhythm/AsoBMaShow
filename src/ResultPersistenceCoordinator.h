@@ -61,6 +61,52 @@ struct RecoverySummary {
   std::string diagnostic;
 };
 
+enum class PendingScoreCompletionStatus {
+  Saved,
+  PendingScore,
+  PendingAcknowledgement,
+  IntegrityConflict,
+};
+
+enum class PendingScoreCompletionPhase {
+  Validation,
+  Projection,
+  Acknowledgement,
+};
+
+struct PendingScoreCompletionOutcome {
+  PendingScoreCompletionStatus status =
+      PendingScoreCompletionStatus::IntegrityConflict;
+  PendingScoreCompletionPhase phase = PendingScoreCompletionPhase::Validation;
+  std::string diagnostic;
+};
+
+struct PendingScoreCompletionDependencies {
+  std::function<ProjectionOutcome(const PendingChartScoreWrite &)> project;
+  std::function<AcknowledgeOutcome(std::string_view, int)> acknowledge;
+};
+
+[[nodiscard]] PendingScoreCompletionOutcome completePendingChartScore(
+    const PendingChartScoreWrite &pending,
+    const PendingScoreCompletionDependencies &dependencies);
+
+enum class PendingScoreOwnerKind {
+  LegacyReplay,
+  ModernResult,
+};
+
+struct PendingScoreRecoveryDependencies {
+  std::function<PendingBatchOutcome(std::size_t)> listPending;
+  PendingScoreCompletionDependencies completion;
+  std::function<RecoveryMarkOutcome(std::string_view, RecoveryAttemptKind)>
+      recordRecoveryAttempt;
+};
+
+[[nodiscard]] RecoverySummary
+recoverPendingChartScores(PendingScoreOwnerKind ownerKind,
+                          const PendingScoreRecoveryDependencies &dependencies,
+                          std::size_t limit = 256);
+
 [[nodiscard]] std::string_view recoveryUserMessage() noexcept;
 [[nodiscard]] RecoverySummary recoveryFailureSummary(std::string diagnostic);
 

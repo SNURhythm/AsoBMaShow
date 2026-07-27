@@ -581,6 +581,70 @@ bool insertResult(sqlite3 *database,
   return true;
 }
 
+result_persistence::PendingReadOutcome
+readPendingModernScore(sqlite3 *database, std::string_view attemptId) {
+  using result_persistence::PendingReadStatus;
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT pending.modern_chart_result_id,pending.created_at,"
+      "result.created_at,result.attempt_id FROM "
+      "modern_pending_chart_score_writes pending LEFT JOIN "
+      "modern_chart_results result ON result.id="
+      "pending.modern_chart_result_id WHERE pending.attempt_id=?";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+      !bindText(statement.get(), 1, attemptId)) {
+    return {.status = PendingReadStatus::StorageFailure,
+            .diagnostic = "could not prepare modern pending score read"};
+  }
+  const int rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_DONE) {
+    return {.status = PendingReadStatus::NotFound};
+  }
+  if (rc != SQLITE_ROW ||
+      sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_type(statement.get(), 1) != SQLITE_TEXT ||
+      sqlite3_column_type(statement.get(), 2) != SQLITE_TEXT ||
+      sqlite3_column_type(statement.get(), 3) != SQLITE_TEXT) {
+    return {.status = rc == SQLITE_ROW ? PendingReadStatus::IntegrityConflict
+                                       : PendingReadStatus::StorageFailure,
+            .diagnostic = "modern pending score row has invalid types"};
+  }
+  const sqlite3_int64 rawId = sqlite3_column_int64(statement.get(), 0);
+  const std::string pendingCreatedAt = sqliteColumnString(statement.get(), 1);
+  const std::string resultCreatedAt = sqliteColumnString(statement.get(), 2);
+  const std::string resultAttemptId = sqliteColumnString(statement.get(), 3);
+  if (rawId <= 0 || rawId > std::numeric_limits<int>::max() ||
+      pendingCreatedAt.empty() || pendingCreatedAt != resultCreatedAt ||
+      resultAttemptId != attemptId ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = PendingReadStatus::IntegrityConflict,
+            .diagnostic = "modern pending score row is inconsistent"};
+  }
+  const int resultId = static_cast<int>(rawId);
+  auto loaded = readRecord(database, "id=?", {}, resultId);
+  if (loaded.status == ReadRecordStatus::StorageFailure) {
+    return {.status = PendingReadStatus::StorageFailure,
+            .diagnostic = std::move(loaded.diagnostic)};
+  }
+  if (loaded.status != ReadRecordStatus::Loaded || !loaded.record ||
+      loaded.record->result.attemptId != attemptId) {
+    return {.status = PendingReadStatus::IntegrityConflict,
+            .diagnostic = loaded.diagnostic.empty()
+                              ? "modern pending score owner is inconsistent"
+                              : std::move(loaded.diagnostic)};
+  }
+  return {
+      .status = PendingReadStatus::Found,
+      .value =
+          result_persistence::PendingChartScoreWrite{
+              .attemptId = std::string(attemptId),
+              .modernResultId = resultId,
+              .createdAt = std::move(pendingCreatedAt),
+              .score = std::move(loaded.record->result.score),
+          },
+  };
+}
+
 } // namespace
 
 ModernReplayReservationOutcome
@@ -733,6 +797,95 @@ ReplayRepository::ReserveModernReplayPath(std::string_view attemptId,
               .attemptId = std::string(attemptId),
               .identity = std::move(*identity),
               .createdAtUnixMillis = createdAtUnixMillis}};
+}
+
+ModernReplayReservationReleaseOutcome
+ReplayRepository::ReleaseModernReplayPathReservation(
+    const ModernReplayPathReservation &reservation) {
+  profile_database_activity::WriteGuard writeGuard;
+  std::string pathDiagnostic;
+  const auto rebuilt =
+      replay::pathForStem(reservation.identity.stem,
+                          reservation.identity.historyIndex, pathDiagnostic);
+  if (!uuid::isCanonicalLowerV4(reservation.attemptId) ||
+      reservation.createdAtUnixMillis <= 0 || !rebuilt ||
+      *rebuilt != reservation.identity) {
+    return {.status = ModernReplayReservationReleaseStatus::Invalid,
+            .diagnostic = pathDiagnostic.empty()
+                              ? "modern replay reservation is invalid"
+                              : std::move(pathDiagnostic)};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernReplayReservationReleaseStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ModernReplayReservationReleaseStatus::StorageFailure,
+            .diagnostic = "could not start replay reservation release"};
+  }
+
+  SqliteStatementHandle query;
+  constexpr const char *querySql =
+      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+      "FROM modern_replay_file_reservations WHERE attempt_id=?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, querySql, query) !=
+          SQLITE_OK ||
+      !bindText(query.get(), 1, reservation.attemptId)) {
+    return {.status = ModernReplayReservationReleaseStatus::StorageFailure,
+            .diagnostic = "could not inspect replay reservation release"};
+  }
+  const int rc = sqlite3_step(query.get());
+  if (rc == SQLITE_DONE) {
+    if (!transaction.commit(transactionError)) {
+      return {.status = ModernReplayReservationReleaseStatus::StorageFailure,
+              .diagnostic = "could not finish absent reservation release"};
+    }
+    return {.status = ModernReplayReservationReleaseStatus::NotFound};
+  }
+  std::string diagnostic;
+  auto stored = rc == SQLITE_ROW ? decodeReservation(query.get(), diagnostic)
+                                 : std::nullopt;
+  if (!stored || sqlite3_step(query.get()) != SQLITE_DONE) {
+    return {.status =
+                rc == SQLITE_ROW
+                    ? ModernReplayReservationReleaseStatus::IntegrityConflict
+                    : ModernReplayReservationReleaseStatus::StorageFailure,
+            .diagnostic = diagnostic.empty()
+                              ? "modern replay reservation is malformed"
+                              : std::move(diagnostic)};
+  }
+  if (*stored != reservation) {
+    return {.status = ModernReplayReservationReleaseStatus::IntegrityConflict,
+            .diagnostic = "modern replay reservation release identity differs"};
+  }
+  query.reset();
+
+  SqliteStatementHandle remove;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "DELETE FROM modern_replay_file_reservations WHERE attempt_id=? "
+          "AND stem=? AND history_index=? AND relative_path=? AND "
+          "created_at_unix_ms=?",
+          remove) != SQLITE_OK ||
+      !bindText(remove.get(), 1, reservation.attemptId) ||
+      !bindText(remove.get(), 2, reservation.identity.stem) ||
+      sqlite3_bind_int64(remove.get(), 3, reservation.identity.historyIndex) !=
+          SQLITE_OK ||
+      !bindText(remove.get(), 4,
+                reservation.identity.relativePath.generic_string()) ||
+      sqlite3_bind_int64(remove.get(), 5, reservation.createdAtUnixMillis) !=
+          SQLITE_OK ||
+      sqlite3_step(remove.get()) != SQLITE_DONE ||
+      sqlite3_changes(impl_->sessionDatabase) != 1 ||
+      !transaction.commit(transactionError)) {
+    return {.status = ModernReplayReservationReleaseStatus::StorageFailure,
+            .diagnostic = "could not commit replay reservation release"};
+  }
+  return {.status = ModernReplayReservationReleaseStatus::Released};
 }
 
 ModernChartStageOutcome ReplayRepository::StageModernChartResult(
@@ -927,10 +1080,11 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
   if (prepareSqliteStatement(
           impl_->sessionDatabase,
           "INSERT INTO modern_pending_chart_score_writes(attempt_id,"
-          "modern_chart_result_id,created_at) VALUES(?,?,CURRENT_TIMESTAMP)",
+          "modern_chart_result_id,created_at) SELECT attempt_id,id,created_at "
+          "FROM modern_chart_results WHERE id=? AND attempt_id=?",
           pending) != SQLITE_OK ||
-      !bindText(pending.get(), 1, result.attemptId) ||
-      sqlite3_bind_int(pending.get(), 2, resultId) != SQLITE_OK ||
+      sqlite3_bind_int(pending.get(), 1, resultId) != SQLITE_OK ||
+      !bindText(pending.get(), 2, result.attemptId) ||
       sqlite3_step(pending.get()) != SQLITE_DONE ||
       sqlite3_changes(impl_->sessionDatabase) != 1 ||
       !insertReadyDrafts(impl_->sessionDatabase, irDrafts)) {
@@ -1132,4 +1286,210 @@ ReplayRepository::LoadModernIrSubmissionSnapshot(std::string_view attemptId) {
   }
   return {.status = ModernIrSnapshotReadStatus::Loaded,
           .snapshot = std::move(snapshot)};
+}
+
+result_persistence::PendingReadOutcome
+ReplayRepository::LoadPendingModernChartScore(std::string_view attemptId) {
+  using result_persistence::PendingReadStatus;
+  profile_database_activity::ReadGuard readGuard;
+  if (!uuid::isCanonicalLowerV4(attemptId)) {
+    return {.status = PendingReadStatus::IntegrityConflict,
+            .diagnostic = "modern pending score attempt ID is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = PendingReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  return readPendingModernScore(impl_->sessionDatabase, attemptId);
+}
+
+result_persistence::PendingBatchOutcome
+ReplayRepository::ListPendingModernChartScores(std::size_t limit) {
+  using result_persistence::PendingReadStatus;
+  profile_database_activity::ReadGuard readGuard;
+  if (limit == 0 || limit > kMaximumModernChartHistoryRows) {
+    return {.diagnostic = "modern pending score limit is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->sessionDatabase,
+                                      "BEGIN TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.diagnostic = "could not start modern pending score scan"};
+  }
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT attempt_id FROM modern_pending_chart_score_writes ORDER BY "
+      "recovery_attempts,last_recovery_at,created_at,attempt_id LIMIT ?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      sqlite3_bind_int64(statement.get(), 1,
+                         static_cast<sqlite3_int64>(limit)) != SQLITE_OK) {
+    return {.diagnostic = "could not prepare modern pending score scan"};
+  }
+  std::vector<std::string> attemptIds;
+  attemptIds.reserve(limit);
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_TEXT) {
+      return {.diagnostic = "modern pending score attempt ID has invalid type"};
+    }
+    attemptIds.push_back(sqliteColumnString(statement.get(), 0));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.diagnostic = "modern pending score scan did not complete"};
+  }
+  statement.reset();
+
+  result_persistence::PendingBatchOutcome outcome{.storageAvailable = true};
+  outcome.entries.reserve(attemptIds.size());
+  for (const auto &attemptId : attemptIds) {
+    auto pending = readPendingModernScore(impl_->sessionDatabase, attemptId);
+    outcome.entries.push_back({.status = pending.status,
+                               .attemptId = attemptId,
+                               .value = std::move(pending.value),
+                               .diagnostic = std::move(pending.diagnostic)});
+  }
+  SqliteStatementHandle count;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "SELECT COUNT(*) FROM modern_pending_chart_score_writes",
+          count) != SQLITE_OK ||
+      sqlite3_step(count.get()) != SQLITE_ROW ||
+      sqlite3_column_type(count.get(), 0) != SQLITE_INTEGER) {
+    return {.diagnostic = "could not count modern pending scores"};
+  }
+  const sqlite3_int64 total = sqlite3_column_int64(count.get(), 0);
+  if (total < 0 || static_cast<std::uint64_t>(total) < outcome.entries.size() ||
+      sqlite3_step(count.get()) != SQLITE_DONE ||
+      !transaction.commit(transactionError)) {
+    return {.diagnostic = "modern pending score count is inconsistent"};
+  }
+  outcome.remaining = static_cast<std::size_t>(total) - outcome.entries.size();
+  return outcome;
+}
+
+result_persistence::AcknowledgeOutcome
+ReplayRepository::AcknowledgePendingModernChartScore(std::string_view attemptId,
+                                                     int modernResultId) {
+  using result_persistence::AcknowledgeStatus;
+  profile_database_activity::WriteGuard writeGuard;
+  if (!uuid::isCanonicalLowerV4(attemptId) || modernResultId <= 0) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic = "modern score acknowledgement identity is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "could not start modern score acknowledgement"};
+  }
+  auto pending = readPendingModernScore(impl_->sessionDatabase, attemptId);
+  if (pending.status == result_persistence::PendingReadStatus::StorageFailure) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = std::move(pending.diagnostic)};
+  }
+  if (pending.status ==
+      result_persistence::PendingReadStatus::IntegrityConflict) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic = std::move(pending.diagnostic)};
+  }
+  if (pending.status == result_persistence::PendingReadStatus::Found) {
+    if (!pending.value || pending.value->modernResultId != modernResultId ||
+        pending.value->replayId != 0 || !pending.value->hasExactlyOneOwner()) {
+      return {.status = AcknowledgeStatus::IntegrityConflict,
+              .diagnostic = "modern pending score names a different result"};
+    }
+    SqliteStatementHandle remove;
+    if (prepareSqliteStatement(
+            impl_->sessionDatabase,
+            "DELETE FROM modern_pending_chart_score_writes WHERE attempt_id=? "
+            "AND modern_chart_result_id=?",
+            remove) != SQLITE_OK ||
+        !bindText(remove.get(), 1, attemptId) ||
+        sqlite3_bind_int(remove.get(), 2, modernResultId) != SQLITE_OK ||
+        sqlite3_step(remove.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1 ||
+        !transaction.commit(transactionError)) {
+      return {.status = AcknowledgeStatus::StorageFailure,
+              .diagnostic = "could not commit modern score acknowledgement"};
+    }
+    return {.status = AcknowledgeStatus::Acknowledged};
+  }
+
+  auto existing =
+      readRecord(impl_->sessionDatabase, "attempt_id=?", attemptId, 0);
+  if (existing.status == ReadRecordStatus::StorageFailure) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status != ReadRecordStatus::Loaded || !existing.record ||
+      existing.record->result.resultId != modernResultId) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic = "acknowledged modern score has no matching result"};
+  }
+  SqliteStatementHandle inactive;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "SELECT COUNT(*) FROM ir_outbox WHERE attempt_id=? AND "
+          "local_result_ready=0",
+          inactive) != SQLITE_OK ||
+      !bindText(inactive.get(), 1, attemptId) ||
+      sqlite3_step(inactive.get()) != SQLITE_ROW ||
+      sqlite3_column_type(inactive.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_int64(inactive.get(), 0) != 0 ||
+      sqlite3_step(inactive.get()) != SQLITE_DONE ||
+      !transaction.commit(transactionError)) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "could not verify modern score acknowledgement"};
+  }
+  return {.status = AcknowledgeStatus::AlreadyAcknowledged};
+}
+
+result_persistence::RecoveryMarkOutcome
+ReplayRepository::RecordPendingModernChartScoreRecoveryAttempt(
+    std::string_view attemptId, result_persistence::RecoveryAttemptKind kind) {
+  using result_persistence::RecoveryMarkStatus;
+  profile_database_activity::WriteGuard writeGuard;
+  (void)kind;
+  if (!uuid::isCanonicalLowerV4(attemptId)) {
+    return {.status = RecoveryMarkStatus::NotFound,
+            .diagnostic = "modern pending score attempt ID is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = RecoveryMarkStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "UPDATE modern_pending_chart_score_writes SET recovery_attempts="
+          "recovery_attempts+1,last_recovery_at=CURRENT_TIMESTAMP WHERE "
+          "attempt_id=?",
+          statement) != SQLITE_OK ||
+      !bindText(statement.get(), 1, attemptId) ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = RecoveryMarkStatus::StorageFailure,
+            .diagnostic = "could not record modern score recovery"};
+  }
+  const int changes = sqlite3_changes(impl_->sessionDatabase);
+  if (changes == 0) {
+    return {.status = RecoveryMarkStatus::NotFound};
+  }
+  if (changes != 1) {
+    return {.status = RecoveryMarkStatus::StorageFailure,
+            .diagnostic = "modern score recovery updated unexpected rows"};
+  }
+  return {.status = RecoveryMarkStatus::Recorded};
 }

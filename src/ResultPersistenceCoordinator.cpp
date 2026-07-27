@@ -62,6 +62,18 @@ bool isConflictState(SaveState state) noexcept {
          state == SaveState::PendingConflict;
 }
 
+std::string_view completionPhaseName(PendingScoreCompletionPhase phase) {
+  switch (phase) {
+  case PendingScoreCompletionPhase::Validation:
+    return "pending score validation";
+  case PendingScoreCompletionPhase::Projection:
+    return "score projection";
+  case PendingScoreCompletionPhase::Acknowledgement:
+    return "acknowledgement";
+  }
+  return "pending score completion";
+}
+
 void ensureConflictDiagnostic(SaveState state, std::string &diagnostic) {
   if (isConflictState(state) && diagnostic.empty()) {
     diagnostic = "persistence conflict reported without details";
@@ -196,6 +208,194 @@ saveConflictDetails(const SaveOutcome &outcome, std::string_view attemptId) {
     details.replayId = outcome.receipt->replayId;
   }
   return details;
+}
+
+PendingScoreCompletionOutcome completePendingChartScore(
+    const PendingChartScoreWrite &pending,
+    const PendingScoreCompletionDependencies &dependencies) {
+  if (!pending.hasExactlyOneOwner() || pending.attemptId.empty() ||
+      pending.createdAt.empty()) {
+    return {.status = PendingScoreCompletionStatus::IntegrityConflict,
+            .phase = PendingScoreCompletionPhase::Validation,
+            .diagnostic = "pending score durable owner is invalid"};
+  }
+  const ProjectionOutcome projected = dependencies.project(pending);
+  switch (projected.status) {
+  case ProjectionStatus::StorageFailure:
+    return {.status = PendingScoreCompletionStatus::PendingScore,
+            .phase = PendingScoreCompletionPhase::Projection,
+            .diagnostic = projected.diagnostic};
+  case ProjectionStatus::IntegrityConflict:
+    return {.status = PendingScoreCompletionStatus::IntegrityConflict,
+            .phase = PendingScoreCompletionPhase::Projection,
+            .diagnostic = projected.diagnostic.empty()
+                              ? "integrity conflict reported without details"
+                              : projected.diagnostic};
+  case ProjectionStatus::Inserted:
+  case ProjectionStatus::AlreadyPresent:
+    break;
+  default:
+    return {.status = PendingScoreCompletionStatus::IntegrityConflict,
+            .phase = PendingScoreCompletionPhase::Projection,
+            .diagnostic = "unknown projection status"};
+  }
+  const AcknowledgeOutcome acknowledged =
+      dependencies.acknowledge(pending.attemptId, pending.ownerId());
+  switch (acknowledged.status) {
+  case AcknowledgeStatus::Acknowledged:
+  case AcknowledgeStatus::AlreadyAcknowledged:
+    return {.status = PendingScoreCompletionStatus::Saved,
+            .phase = PendingScoreCompletionPhase::Acknowledgement,
+            .diagnostic = acknowledged.diagnostic};
+  case AcknowledgeStatus::StorageFailure:
+    return {.status = PendingScoreCompletionStatus::PendingAcknowledgement,
+            .phase = PendingScoreCompletionPhase::Acknowledgement,
+            .diagnostic = acknowledged.diagnostic};
+  case AcknowledgeStatus::IntegrityConflict:
+    return {.status = PendingScoreCompletionStatus::IntegrityConflict,
+            .phase = PendingScoreCompletionPhase::Acknowledgement,
+            .diagnostic = acknowledged.diagnostic.empty()
+                              ? "integrity conflict reported without details"
+                              : acknowledged.diagnostic};
+  default:
+    return {.status = PendingScoreCompletionStatus::IntegrityConflict,
+            .phase = PendingScoreCompletionPhase::Acknowledgement,
+            .diagnostic = "unknown acknowledgement status"};
+  }
+  return {.status = PendingScoreCompletionStatus::IntegrityConflict,
+          .phase = PendingScoreCompletionPhase::Acknowledgement,
+          .diagnostic = "pending score completion state is unknown"};
+}
+
+RecoverySummary
+recoverPendingChartScores(PendingScoreOwnerKind ownerKind,
+                          const PendingScoreRecoveryDependencies &dependencies,
+                          std::size_t limit) {
+  const std::size_t effectiveLimit = std::min(limit, std::size_t{256});
+  PendingBatchOutcome batch = dependencies.listPending(effectiveLimit);
+  RecoverySummary summary;
+  appendDiagnostic(summary.diagnostic, batch.diagnostic);
+  if (!batch.storageAvailable) {
+    summary.pending = 1;
+    summary.userMessage = recoveryUserMessage();
+    return summary;
+  }
+  summary.pending = batch.remaining;
+  if (batch.remaining != 0) {
+    appendDiagnostic(summary.diagnostic,
+                     std::to_string(batch.remaining) +
+                         " pending result rows remain beyond the recovery "
+                         "batch");
+  }
+
+  const auto retain = [&](const PendingBatchEntry &entry,
+                          RecoveryAttemptKind kind,
+                          std::string_view diagnostic) {
+    if (kind == RecoveryAttemptKind::StorageFailure) {
+      ++summary.pending;
+    } else {
+      ++summary.conflicts;
+    }
+    appendDiagnostic(summary.diagnostic, diagnostic);
+    const RecoveryMarkOutcome marked =
+        dependencies.recordRecoveryAttempt(entry.attemptId, kind);
+    appendDiagnostic(summary.diagnostic, marked.diagnostic);
+    const auto reclassifyAsConflict = [&] {
+      if (kind == RecoveryAttemptKind::StorageFailure) {
+        --summary.pending;
+        ++summary.conflicts;
+      }
+    };
+    switch (marked.status) {
+    case RecoveryMarkStatus::Recorded:
+      break;
+    case RecoveryMarkStatus::NotFound:
+      reclassifyAsConflict();
+      appendDiagnostic(summary.diagnostic,
+                       "recovery marker did not find the pending row");
+      break;
+    case RecoveryMarkStatus::StorageFailure:
+      appendDiagnostic(summary.diagnostic,
+                       "recovery marker could not be recorded");
+      break;
+    default:
+      reclassifyAsConflict();
+      appendDiagnostic(summary.diagnostic, "unknown recovery marker status");
+      break;
+    }
+  };
+
+  const std::size_t entryCount = std::min(effectiveLimit, batch.entries.size());
+  for (std::size_t entryIndex = 0; entryIndex < entryCount; ++entryIndex) {
+    const PendingBatchEntry &entry = batch.entries[entryIndex];
+    ++summary.attempted;
+    switch (entry.status) {
+    case PendingReadStatus::StorageFailure:
+      retain(entry, RecoveryAttemptKind::StorageFailure, entry.diagnostic);
+      continue;
+    case PendingReadStatus::NotFound:
+    case PendingReadStatus::IntegrityConflict:
+      retain(entry, RecoveryAttemptKind::IntegrityConflict, entry.diagnostic);
+      continue;
+    case PendingReadStatus::Found:
+      if (!entry.value.has_value()) {
+        std::string diagnostic = entry.diagnostic;
+        appendDiagnostic(
+            diagnostic,
+            "pending recovery entry returned Found without a payload");
+        retain(entry, RecoveryAttemptKind::IntegrityConflict, diagnostic);
+        continue;
+      }
+      break;
+    default: {
+      std::string diagnostic = entry.diagnostic;
+      appendDiagnostic(diagnostic, "unknown pending read status");
+      retain(entry, RecoveryAttemptKind::IntegrityConflict, diagnostic);
+      continue;
+    }
+    }
+
+    const PendingChartScoreWrite &pending = *entry.value;
+    if (pending.attemptId != entry.attemptId) {
+      retain(entry, RecoveryAttemptKind::IntegrityConflict,
+             "pending recovery entry identity does not match its payload");
+      continue;
+    }
+    const bool ownerAgrees =
+        pending.hasExactlyOneOwner() &&
+        ((ownerKind == PendingScoreOwnerKind::LegacyReplay &&
+          pending.replayId > 0 && pending.modernResultId == 0) ||
+         (ownerKind == PendingScoreOwnerKind::ModernResult &&
+          pending.replayId == 0 && pending.modernResultId > 0));
+    if (!ownerAgrees || pending.createdAt.empty()) {
+      retain(entry, RecoveryAttemptKind::IntegrityConflict,
+             ownerKind == PendingScoreOwnerKind::LegacyReplay
+                 ? "pending recovery payload has invalid replay metadata"
+                 : "pending recovery payload has invalid modern result "
+                   "metadata");
+      continue;
+    }
+    const auto completed =
+        completePendingChartScore(pending, dependencies.completion);
+    switch (completed.status) {
+    case PendingScoreCompletionStatus::Saved:
+      ++summary.saved;
+      break;
+    case PendingScoreCompletionStatus::PendingScore:
+    case PendingScoreCompletionStatus::PendingAcknowledgement:
+      retain(entry, RecoveryAttemptKind::StorageFailure, completed.diagnostic);
+      break;
+    case PendingScoreCompletionStatus::IntegrityConflict:
+      retain(entry, RecoveryAttemptKind::IntegrityConflict,
+             completed.diagnostic);
+      break;
+    }
+  }
+
+  if (summary.pending != 0 || summary.conflicts != 0) {
+    summary.userMessage = recoveryUserMessage();
+  }
+  return summary;
 }
 
 Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
@@ -367,52 +567,28 @@ SaveOutcome Coordinator::persist(
                           std::move(staged.diagnostic));
   }
 
-  ProjectionOutcome projected = dependencies_.project(pending);
-  switch (projected.status) {
-  case ProjectionStatus::StorageFailure:
-    appendDiagnostic(staged.diagnostic, projected.diagnostic);
+  const auto completed = completePendingChartScore(
+      pending, {.project = dependencies_.project,
+                .acknowledge = dependencies_.acknowledgeAndActivate});
+  if (completed.status == PendingScoreCompletionStatus::IntegrityConflict) {
+    appendPhaseDiagnostic(
+        staged.diagnostic, completionPhaseName(completed.phase),
+        completed.diagnostic, "integrity conflict reported without details");
+  } else {
+    appendDiagnostic(staged.diagnostic, completed.diagnostic);
+  }
+  switch (completed.status) {
+  case PendingScoreCompletionStatus::PendingScore:
     return durableOutcome(SaveState::PendingScore, receipt,
                           std::move(staged.diagnostic));
-  case ProjectionStatus::IntegrityConflict:
-    appendPhaseDiagnostic(staged.diagnostic, "score projection",
-                          projected.diagnostic,
-                          "integrity conflict reported without details");
-    return durableOutcome(SaveState::PendingConflict, receipt,
-                          std::move(staged.diagnostic));
-  case ProjectionStatus::Inserted:
-  case ProjectionStatus::AlreadyPresent:
-    appendDiagnostic(staged.diagnostic, projected.diagnostic);
-    break;
-  default:
-    appendPhaseDiagnostic(staged.diagnostic, "score projection", {},
-                          "unknown projection status");
-    return durableOutcome(SaveState::PendingConflict, receipt,
-                          std::move(staged.diagnostic));
-  }
-
-  AcknowledgeOutcome acknowledged =
-      dependencies_.acknowledgeAndActivate(pending.attemptId,
-                                           pending.replayId);
-  switch (acknowledged.status) {
-  case AcknowledgeStatus::StorageFailure:
-    appendDiagnostic(staged.diagnostic, acknowledged.diagnostic);
+  case PendingScoreCompletionStatus::PendingAcknowledgement:
     return durableOutcome(SaveState::PendingAcknowledgement, receipt,
                           std::move(staged.diagnostic));
-  case AcknowledgeStatus::IntegrityConflict:
-    appendPhaseDiagnostic(staged.diagnostic, "acknowledgement",
-                          acknowledged.diagnostic,
-                          "integrity conflict reported without details");
+  case PendingScoreCompletionStatus::IntegrityConflict:
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
-  case AcknowledgeStatus::Acknowledged:
-  case AcknowledgeStatus::AlreadyAcknowledged:
-    appendDiagnostic(staged.diagnostic, acknowledged.diagnostic);
+  case PendingScoreCompletionStatus::Saved:
     break;
-  default:
-    appendPhaseDiagnostic(staged.diagnostic, "acknowledgement", {},
-                          "unknown acknowledgement status");
-    return durableOutcome(SaveState::PendingConflict, receipt,
-                          std::move(staged.diagnostic));
   }
 
   receipt.scorePending = false;
@@ -422,151 +598,13 @@ SaveOutcome Coordinator::persist(
 
 RecoverySummary Coordinator::recoverAll(std::size_t limit) {
   profile_database_activity::WriteGuard bindingLease;
-  const std::size_t effectiveLimit = std::min(limit, std::size_t{256});
-  PendingBatchOutcome batch = dependencies_.listPending(effectiveLimit);
-  RecoverySummary summary;
-  appendDiagnostic(summary.diagnostic, batch.diagnostic);
-  if (!batch.storageAvailable) {
-    summary.pending = 1;
-    summary.userMessage = recoveryUserMessage();
-    return summary;
-  }
-  summary.pending = batch.remaining;
-  if (batch.remaining != 0) {
-    appendDiagnostic(summary.diagnostic,
-                     std::to_string(batch.remaining) +
-                         " pending result rows remain beyond the recovery "
-                         "batch");
-  }
-
-  const auto retain = [&](const PendingBatchEntry &entry,
-                          RecoveryAttemptKind kind,
-                          std::string_view diagnostic) {
-    if (kind == RecoveryAttemptKind::StorageFailure) {
-      ++summary.pending;
-    } else {
-      ++summary.conflicts;
-    }
-    appendDiagnostic(summary.diagnostic, diagnostic);
-    const RecoveryMarkOutcome marked =
-        dependencies_.recordRecoveryAttempt(entry.attemptId, kind);
-    appendDiagnostic(summary.diagnostic, marked.diagnostic);
-    const auto reclassifyAsConflict = [&] {
-      if (kind == RecoveryAttemptKind::StorageFailure) {
-        --summary.pending;
-        ++summary.conflicts;
-      }
-    };
-    switch (marked.status) {
-    case RecoveryMarkStatus::Recorded:
-      break;
-    case RecoveryMarkStatus::NotFound:
-      reclassifyAsConflict();
-      appendDiagnostic(summary.diagnostic,
-                       "recovery marker did not find the pending row");
-      break;
-    case RecoveryMarkStatus::StorageFailure:
-      appendDiagnostic(summary.diagnostic,
-                       "recovery marker could not be recorded");
-      break;
-    default:
-      reclassifyAsConflict();
-      appendDiagnostic(summary.diagnostic, "unknown recovery marker status");
-      break;
-    }
-  };
-
-  const std::size_t entryCount = std::min(effectiveLimit, batch.entries.size());
-  for (std::size_t entryIndex = 0; entryIndex < entryCount; ++entryIndex) {
-    const PendingBatchEntry &entry = batch.entries[entryIndex];
-    ++summary.attempted;
-    switch (entry.status) {
-    case PendingReadStatus::StorageFailure:
-      retain(entry, RecoveryAttemptKind::StorageFailure, entry.diagnostic);
-      continue;
-    case PendingReadStatus::NotFound:
-    case PendingReadStatus::IntegrityConflict:
-      retain(entry, RecoveryAttemptKind::IntegrityConflict, entry.diagnostic);
-      continue;
-    case PendingReadStatus::Found:
-      if (!entry.value.has_value()) {
-        std::string diagnostic = entry.diagnostic;
-        appendDiagnostic(
-            diagnostic,
-            "pending recovery entry returned Found without a payload");
-        retain(entry, RecoveryAttemptKind::IntegrityConflict, diagnostic);
-        continue;
-      }
-      break;
-    default: {
-      std::string diagnostic = entry.diagnostic;
-      appendDiagnostic(diagnostic, "unknown pending read status");
-      retain(entry, RecoveryAttemptKind::IntegrityConflict, diagnostic);
-      continue;
-    }
-    }
-
-    const PendingChartScoreWrite &pending = *entry.value;
-    if (pending.attemptId != entry.attemptId) {
-      retain(entry, RecoveryAttemptKind::IntegrityConflict,
-             "pending recovery entry identity does not match its payload");
-      continue;
-    }
-    if (pending.replayId <= 0 || pending.createdAt.empty()) {
-      retain(entry, RecoveryAttemptKind::IntegrityConflict,
-             "pending recovery payload has invalid replay metadata");
-      continue;
-    }
-
-    ProjectionOutcome projected = dependencies_.project(pending);
-    switch (projected.status) {
-    case ProjectionStatus::StorageFailure:
-      retain(entry, RecoveryAttemptKind::StorageFailure, projected.diagnostic);
-      continue;
-    case ProjectionStatus::IntegrityConflict:
-      retain(entry, RecoveryAttemptKind::IntegrityConflict,
-             projected.diagnostic);
-      continue;
-    case ProjectionStatus::Inserted:
-    case ProjectionStatus::AlreadyPresent:
-      break;
-    default:
-      appendDiagnostic(projected.diagnostic, "unknown projection status");
-      retain(entry, RecoveryAttemptKind::IntegrityConflict,
-             projected.diagnostic);
-      continue;
-    }
-
-    AcknowledgeOutcome acknowledged =
-        dependencies_.acknowledgeAndActivate(pending.attemptId,
-                                             pending.replayId);
-    switch (acknowledged.status) {
-    case AcknowledgeStatus::StorageFailure:
-      retain(entry, RecoveryAttemptKind::StorageFailure,
-             acknowledged.diagnostic);
-      continue;
-    case AcknowledgeStatus::IntegrityConflict:
-      retain(entry, RecoveryAttemptKind::IntegrityConflict,
-             acknowledged.diagnostic);
-      continue;
-    case AcknowledgeStatus::Acknowledged:
-    case AcknowledgeStatus::AlreadyAcknowledged:
-      break;
-    default:
-      appendDiagnostic(acknowledged.diagnostic,
-                       "unknown acknowledgement status");
-      retain(entry, RecoveryAttemptKind::IntegrityConflict,
-             acknowledged.diagnostic);
-      continue;
-    }
-
-    ++summary.saved;
-  }
-
-  if (summary.pending != 0 || summary.conflicts != 0) {
-    summary.userMessage = recoveryUserMessage();
-  }
-  return summary;
+  return recoverPendingChartScores(
+      PendingScoreOwnerKind::LegacyReplay,
+      {.listPending = dependencies_.listPending,
+       .completion = {.project = dependencies_.project,
+                      .acknowledge = dependencies_.acknowledgeAndActivate},
+       .recordRecoveryAttempt = dependencies_.recordRecoveryAttempt},
+      limit);
 }
 
 } // namespace result_persistence

@@ -376,10 +376,125 @@ void testRollbackAndReplayOptionality() {
   assert(queryInt(database.get(), "SELECT COUNT(*) FROM replay_events") == 0);
 }
 
+void testReservationReleaseAndModernPendingLifecycle() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replay.db");
+  assert(repository.EnsureSchema());
+  const auto completed = result(7, 'e');
+  const auto reserved = repository.ReserveModernReplayPath(
+      completed.attemptId, completed.score.chartSha256,
+      completed.playedAtUnixMillis);
+  assert(reserved.reservation);
+  auto wrong = *reserved.reservation;
+  wrong.createdAtUnixMillis += 1;
+  assert(repository.ReleaseModernReplayPathReservation(wrong).status ==
+         ModernReplayReservationReleaseStatus::IntegrityConflict);
+  assert(repository.ReleaseModernReplayPathReservation(*reserved.reservation)
+             .status == ModernReplayReservationReleaseStatus::Released);
+  assert(repository.ReleaseModernReplayPathReservation(*reserved.reservation)
+             .status == ModernReplayReservationReleaseStatus::NotFound);
+  const auto advanced = repository.ReserveModernReplayPath(
+      completed.attemptId, completed.score.chartSha256,
+      completed.playedAtUnixMillis);
+  assert(advanced.reservation &&
+         advanced.reservation->identity.historyIndex == 1);
+
+  const auto staged = repository.StageModernChartResult(
+      completed, std::nullopt, attachment(*advanced.reservation), {});
+  assert(staged.status == ModernChartStageStatus::Staged && staged.receipt);
+  const auto pending =
+      repository.LoadPendingModernChartScore(completed.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found &&
+         pending.value && pending.value->replayId == 0 &&
+         pending.value->modernResultId == staged.receipt->resultId &&
+         pending.value->hasExactlyOneOwner() &&
+         pending.value->score == completed.score);
+  const auto batch = repository.ListPendingModernChartScores();
+  assert(batch.storageAvailable && batch.entries.size() == 1 &&
+         batch.entries.front().status ==
+             result_persistence::PendingReadStatus::Found &&
+         batch.entries.front().value &&
+         batch.entries.front().value->attemptId == pending.value->attemptId &&
+         batch.entries.front().value->modernResultId ==
+             pending.value->modernResultId &&
+         batch.entries.front().value->score == pending.value->score);
+  assert(repository
+             .RecordPendingModernChartScoreRecoveryAttempt(
+                 completed.attemptId,
+                 result_persistence::RecoveryAttemptKind::StorageFailure)
+             .status == result_persistence::RecoveryMarkStatus::Recorded);
+  assert(repository
+             .AcknowledgePendingModernChartScore(completed.attemptId,
+                                                 staged.receipt->resultId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  assert(repository.LoadPendingModernChartScore(completed.attemptId).status ==
+         result_persistence::PendingReadStatus::NotFound);
+  assert(repository
+             .AcknowledgePendingModernChartScore(completed.attemptId,
+                                                 staged.receipt->resultId)
+             .status ==
+         result_persistence::AcknowledgeStatus::AlreadyAcknowledged);
+}
+
+void testPendingOwnerCorruptionFailsClosed() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  const auto completed = result(8, 'f');
+  {
+    ReplayRepository repository(databasePath);
+    assert(repository.EnsureSchema());
+    assert(
+        repository
+            .StageModernChartResult(completed, std::nullopt, std::nullopt, {})
+            .status == ModernChartStageStatus::Staged);
+  }
+  {
+    auto database = openDatabase(databasePath);
+    exec(database.get(), "PRAGMA foreign_keys=OFF");
+    exec(database.get(), "DELETE FROM modern_chart_results");
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM "
+                                    "modern_pending_chart_score_writes") == 1);
+  }
+  ReplayRepository reopened(databasePath);
+  assert(reopened.LoadPendingModernChartScore(completed.attemptId).status ==
+         result_persistence::PendingReadStatus::IntegrityConflict);
+  const auto batch = reopened.ListPendingModernChartScores();
+  assert(batch.storageAvailable && batch.entries.size() == 1 &&
+         batch.entries.front().status ==
+             result_persistence::PendingReadStatus::IntegrityConflict);
+}
+
+void testPendingTimestampComesFromResultOwner() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  {
+    auto database = openDatabase(databasePath);
+    exec(database.get(),
+         "CREATE TRIGGER force_modern_result_timestamp AFTER INSERT ON "
+         "modern_chart_results BEGIN UPDATE modern_chart_results SET "
+         "created_at='2001-02-03 04:05:06' WHERE id=NEW.id; END");
+  }
+  const auto completed = result(9, '1');
+  const auto staged = repository.StageModernChartResult(completed, std::nullopt,
+                                                        std::nullopt, {});
+  assert(staged.status == ModernChartStageStatus::Staged && staged.receipt &&
+         staged.receipt->createdAt == "2001-02-03 04:05:06");
+  const auto pending =
+      repository.LoadPendingModernChartScore(completed.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found &&
+         pending.value &&
+         pending.value->createdAt == staged.receipt->createdAt);
+}
+
 } // namespace
 
 int main() {
   testSchemaReservationAtomicStageAndExactRetry();
   testRollbackAndReplayOptionality();
+  testReservationReleaseAndModernPendingLifecycle();
+  testPendingOwnerCorruptionFailsClosed();
+  testPendingTimestampComesFromResultOwner();
   return 0;
 }
