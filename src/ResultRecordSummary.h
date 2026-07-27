@@ -114,3 +114,9 @@ makeLocalResultRecord(ReplaySummary summary);
     std::span<const ReplaySummary> local,
     std::span<const ir::IrRemoteScore> remote,
     std::string_view providerId, std::string_view serverOrigin);
+
+[[nodiscard]] std::vector<ResultRecordSummary> mergeResultRecords(
+    std::span<const ReplaySummary> local,
+    std::span<const ResultRecordSummary> modern,
+    std::span<const ir::IrRemoteScore> remote,
+    std::string_view providerId, std::string_view serverOrigin);

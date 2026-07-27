@@ -355,6 +355,15 @@ std::vector<ResultRecordSummary> mergeResultRecords(
     std::span<const ReplaySummary> local,
     std::span<const ir::IrRemoteScore> remote,
     std::string_view providerId, std::string_view serverOrigin) {
+  return mergeResultRecords(local, std::span<const ResultRecordSummary>{},
+                            remote, providerId, serverOrigin);
+}
+
+std::vector<ResultRecordSummary> mergeResultRecords(
+    std::span<const ReplaySummary> local,
+    std::span<const ResultRecordSummary> modern,
+    std::span<const ir::IrRemoteScore> remote,
+    std::string_view providerId, std::string_view serverOrigin) {
   std::unordered_set<std::string> linkedRemoteScoreIds;
   linkedRemoteScoreIds.reserve(local.size());
   for (const ReplaySummary &summary : local) {
@@ -366,9 +375,16 @@ std::vector<ResultRecordSummary> mergeResultRecords(
   }
 
   std::vector<ResultRecordSummary> result;
-  result.reserve(local.size() + remote.size());
+  result.reserve(local.size() + modern.size() + remote.size());
   for (const ReplaySummary &summary : local) {
     result.push_back(makeLocalResultRecord(summary));
+  }
+  for (const ResultRecordSummary &summary : modern) {
+    if (!summary.isModernChart() || !summary.modern.has_value() ||
+        summary.local.has_value() || summary.remote.has_value()) {
+      throw std::invalid_argument("modern record projection is invalid");
+    }
+    result.push_back(summary);
   }
   for (const ir::IrRemoteScore &score : remote) {
     if (!linkedRemoteScoreIds.contains(score.remoteScoreId)) {
