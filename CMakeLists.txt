@@ -871,6 +871,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -1284,6 +1285,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
         src/ScoreProvenance.cpp
@@ -1405,6 +1407,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -1439,6 +1442,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -1479,6 +1483,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -1524,6 +1529,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -1591,6 +1597,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
@@ -1666,6 +1673,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
@@ -1725,6 +1733,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -1781,6 +1790,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -2223,6 +2233,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -3405,6 +3416,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -3477,6 +3489,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
@@ -3544,6 +3557,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
