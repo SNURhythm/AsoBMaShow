@@ -211,6 +211,16 @@ void testDoublePlaySetupFingerprintContract() {
              normalCourse.resultFingerprint,
          "course fingerprint binds each stage double-play option");
 
+  auto inconsistentCourse = normalCourse;
+  inconsistentCourse.provenance.stages[1].doublePlayOption =
+      replay::DoublePlayOption::Flip;
+  inconsistentCourse.resultFingerprint =
+      result_persistence::resultFingerprint(inconsistentCourse);
+  std::string diagnostic;
+  expect(!result_persistence::validatePersistedCourseResult(
+             inconsistentCourse, diagnostic),
+         "course aggregate provenance must equal its ordered stage proofs");
+
   auto schemaFourNormal = normal;
   schemaFourNormal.score.provenance.schemaVersion = 4;
   schemaFourNormal.score.provenance.stages.front().doublePlayOption =

@@ -163,6 +163,86 @@ CompletedChartAttempt validAttempt() {
   return attempt;
 }
 
+CompletedChartAttempt verifiedAttempt() {
+  auto attempt = validAttempt();
+  auto &result = attempt.result;
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = result.score.chartMd5;
+  input.chartMeta.SHA256 = result.score.chartSha256;
+  input.chartMeta.KeyMode = result.keyMode;
+  input.chartMeta.Rank = 1;
+  input.chartMeta.TotalNotes = result.score.maxScore / 2;
+  input.chartMeta.HasTotal = true;
+  input.chartMeta.Total = 200.0;
+  input.longNoteMode = result.score.longNoteMode;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-330'000, 420'000}},
+      {Kpoor, {-500'000, 150'000}},
+  };
+  input.totalNotes = input.chartMeta.TotalNotes;
+  input.authoredGaugeTotal = input.chartMeta.Total;
+  input.effectiveGaugeTotal = input.chartMeta.Total;
+  input.doublePlayOption = replay::DoublePlayOption::Flip;
+  result.score.provenance = makeScoreProvenance(input);
+  result.resultFingerprint = resultFingerprint(result);
+
+  auto &setup = attempt.replay.setup;
+  setup.doublePlayOption = input.doublePlayOption;
+  setup.playbackRulesetId = input.ruleset.id;
+  setup.playbackRulesetRevision = input.ruleset.version;
+  setup.startingGaugePercent = 20.0F;
+
+  std::string diagnostic;
+  const auto snapshot = ir::captureIrSubmissionSnapshot(result, diagnostic);
+  expect(snapshot.has_value(), "verified fixture IR snapshot captures");
+  if (snapshot.has_value()) {
+    attempt.irSnapshot = *snapshot;
+  }
+  return attempt;
+}
+
+CompletedCourseAttempt verifiedCourseAttempt() {
+  const auto chart = verifiedAttempt();
+  CompletedCourseAttempt attempt;
+  auto &result = attempt.result;
+  result.attemptId = "123e4567-e89b-42d3-a456-426614174001";
+  result.courseKey = "course:v1:" + repeated('c', 64);
+  result.courseName = "Course";
+  result.courseGroupName = "Tests";
+  result.constraintJson = "[]";
+  result.completedCharts = 1;
+  result.totalCharts = 1;
+  result.requestedPlayOption = chart.result.score.provenance.player1.option;
+  result.assistOption = chart.result.score.provenance.assistOption;
+  result.initialGaugeType = chart.result.score.provenance.gaugeType;
+  result.gaugeProfile = chart.result.score.provenance.gaugeProfile;
+  result.gaugeAutoShift = chart.result.score.provenance.gaugeAutoShift;
+  result.gaugeAutoShiftLowerBound =
+      chart.result.score.provenance.gaugeAutoShiftLowerBound;
+  result.longNoteMode = chart.result.score.longNoteMode;
+  result.finalScore = chart.result.score.score;
+  result.maxScore = chart.result.score.maxScore;
+  result.maxCombo = chart.result.score.maxCombo;
+  result.finalGauge = chart.result.score.finalGauge;
+  result.clearType = chart.result.score.clearType;
+  result.provenance = chart.result.score.provenance;
+  result.stages = {{.stageIndex = 0,
+                    .score = chart.result.score,
+                    .keyMode = chart.result.keyMode,
+                    .adoptedGaugeType = chart.result.adoptedGaugeType,
+                    .adoptedGaugeHistory =
+                        chart.result.adoptedGaugeHistory,
+                    .judgementTiming = chart.result.judgementTiming}};
+  result.entryFacts = {{.totalNotes = chart.result.score.maxScore / 2,
+                        .playLengthMicros = 2'000'000}};
+  result.playedAtUnixMillis = chart.result.playedAtUnixMillis;
+  result.resultFingerprint = resultFingerprint(result);
+  attempt.replay.stages = {chart.replay};
+  attempt.replay.restMicrosAfterStage = {0};
+  return attempt;
+}
+
 struct Harness {
   CompletedChartAttempt attempt = validAttempt();
   std::vector<std::string> events;
@@ -328,6 +408,41 @@ void testValidationStopsBeforeSideEffects() {
   expect(harness.events.empty(), "invalid attempt has no persistence effects");
 }
 
+void testSetupAuthorityStopsBeforeSideEffects() {
+  {
+    Harness harness;
+    harness.attempt = verifiedAttempt();
+    harness.attempt.replay.setup.doublePlayOption =
+        replay::DoublePlayOption::Normal;
+    Coordinator coordinator(harness.dependencies());
+    const auto outcome = coordinator.persist(harness.attempt);
+    expect(outcome.state == SaveState::InvalidAttempt,
+           "DP mismatch is invalid before persistence");
+    expect(harness.events.empty(),
+           "DP mismatch creates no reservation, file, result, or IR draft");
+  }
+  {
+    Harness harness;
+    harness.attempt = verifiedAttempt();
+    harness.attempt.replay.setup.playbackRatePercent = 95;
+    Coordinator coordinator(harness.dependencies());
+    const auto outcome = coordinator.persist(harness.attempt);
+    expect(outcome.state == SaveState::InvalidAttempt,
+           "non-DP setup mismatch uses the same creation-time authority");
+    expect(harness.events.empty(),
+           "complete setup mismatch stops before persistence effects");
+  }
+  {
+    auto attempt = verifiedCourseAttempt();
+    attempt.replay.stages.front().setup.doublePlayOption =
+        replay::DoublePlayOption::Normal;
+    Coordinator coordinator(Dependencies{});
+    const auto outcome = coordinator.persistCourse(attempt);
+    expect(outcome.state == SaveState::InvalidAttempt,
+           "course DP mismatch is invalid before persistence");
+  }
+}
+
 void testPhaseFailuresStopAtTheirBoundary() {
   {
     Harness harness;
@@ -464,6 +579,7 @@ void testRecoveryUsesResultIdentity() {
 int main() {
   testFileFirstSuccessOrdering();
   testValidationStopsBeforeSideEffects();
+  testSetupAuthorityStopsBeforeSideEffects();
   testPhaseFailuresStopAtTheirBoundary();
   testRetryAndMetadataIntegrity();
   testPendingProjectionStates();

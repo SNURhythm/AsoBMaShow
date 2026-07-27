@@ -3,6 +3,7 @@
 #include "CourseConstraintUtils.h"
 #include "FileChecksum.h"
 #include "ProfileDatabaseActivity.h"
+#include "replay/ReplaySetupAuthority.h"
 
 #include <algorithm>
 #include <set>
@@ -126,12 +127,13 @@ bool validateCompletedAttempt(const CompletedChartAttempt &attempt,
     }
     return false;
   }
-  const auto &setup = attempt.replay.setup;
-  if (setup.chartMd5 != attempt.result.score.chartMd5 ||
-      setup.chartSha256 != attempt.result.score.chartSha256 ||
-      setup.keyMode != attempt.result.keyMode ||
-      setup.longNoteMode != attempt.result.score.longNoteMode) {
-    diagnostic = "replay setup differs from the completed result";
+  const auto setup = replay::setup_authority::resolveForResult(
+      attempt.replay.setup, attempt.result.score, attempt.result.keyMode,
+      replay::setup_authority::Source::CapturedAttempt, false);
+  if (!setup.resolved()) {
+    diagnostic = setup.diagnostic.empty()
+                     ? "replay setup differs from the completed result"
+                     : setup.diagnostic;
     return false;
   }
   std::set<std::string> providers;
@@ -166,14 +168,18 @@ bool validateCompletedCourseAttempt(const CompletedCourseAttempt &attempt,
   }
   for (std::size_t index = 0; index < result.stages.size(); ++index) {
     const auto &stage = result.stages[index];
-    const auto &setup = attempt.replay.stages[index].setup;
     if (stage.stageIndex != static_cast<int>(index) ||
-        setup.chartMd5 != stage.score.chartMd5 ||
-        setup.chartSha256 != stage.score.chartSha256 ||
-        setup.keyMode != stage.keyMode ||
-        setup.longNoteMode != stage.score.longNoteMode ||
         attempt.replay.restMicrosAfterStage[index] < 0) {
       diagnostic = "course replay stage differs from its compact result";
+      return false;
+    }
+    const auto setup = replay::setup_authority::resolveForResult(
+        attempt.replay.stages[index].setup, stage.score, stage.keyMode,
+        replay::setup_authority::Source::CapturedAttempt, index > 0U);
+    if (!setup.resolved()) {
+      diagnostic = setup.diagnostic.empty()
+                       ? "course replay stage differs from its compact result"
+                       : setup.diagnostic;
       return false;
     }
   }

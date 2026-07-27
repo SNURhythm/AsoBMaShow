@@ -1018,6 +1018,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
+        src/replay/ReplaySetupAuthority.cpp
         src/ResultPersistenceModel.cpp
 
         src/ScoreProvenance.cpp
@@ -1147,6 +1148,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/Base64Url.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
+        src/replay/ReplaySetupAuthority.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -1462,6 +1464,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayGaugeRules.cpp
     )
 
+    add_executable(replay_setup_authority_tests
+        tests/replay_setup_authority_tests.cpp
+        src/replay/ReplaySetupAuthority.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(replay_setup_authority_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_setup_authority_tests PRIVATE cxx_std_23)
+
     add_executable(ir_submission_snapshot_tests
         tests/ir_submission_snapshot_tests.cpp
         src/FileChecksum.cpp
@@ -1552,6 +1567,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/FileChecksum.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
+        src/replay/ReplaySetupAuthority.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionSnapshot.cpp
@@ -1602,6 +1618,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
         src/replay/ReplayFileActionService.cpp
+        src/replay/ReplaySetupAuthority.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
 
@@ -2798,6 +2815,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
+        src/replay/ReplaySetupAuthority.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionSnapshot.cpp
@@ -2869,6 +2887,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
+        src/replay/ReplaySetupAuthority.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionSnapshot.cpp
@@ -2936,6 +2955,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
+        src/replay/ReplaySetupAuthority.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionSnapshot.cpp
@@ -3163,6 +3183,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_library_scanner_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
+        replay_setup_authority_tests
         ir_submission_snapshot_tests
         replay_duration_arithmetic_tests
         result_recall_builder_tests

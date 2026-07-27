@@ -672,6 +672,29 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
         return false;
       }
     }
+    const bool hasCurrentBoundProvenance =
+        result.provenance.schemaVersion >=
+            ScoreProvenance::kDoublePlayOptionSchemaVersion &&
+        result.provenance.eligibility !=
+            ScoreEligibility::LegacyUnverified &&
+        std::ranges::all_of(result.stages, [](const auto &stage) {
+          return stage.score.provenance.schemaVersion >=
+                     ScoreProvenance::kDoublePlayOptionSchemaVersion &&
+                 stage.score.provenance.eligibility !=
+                     ScoreEligibility::LegacyUnverified;
+        });
+    if (hasCurrentBoundProvenance) {
+      std::vector<ScoreProvenance> stageProvenance;
+      stageProvenance.reserve(result.stages.size());
+      for (const auto &stage : result.stages) {
+        stageProvenance.push_back(stage.score.provenance);
+      }
+      if (mergeCourseProvenance(stageProvenance) != result.provenance) {
+        diagnostic =
+            "course provenance disagrees with its ordered stage proofs";
+        return false;
+      }
+    }
     if (stageScore != result.finalScore || courseMaxScore != result.maxScore) {
       diagnostic = "course totals disagree with entries or ordered stages";
       return false;

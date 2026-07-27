@@ -901,6 +901,13 @@ void testChartReplayRejectsSetupThatDiffersFromSavedProvenance() {
           "player-two option seed",
           [](auto &playback, auto &) { playback.setup.playOption2Seed = 202; }},
       SetupMismatchCase{
+          "double-play option",
+          [](auto &playback, auto &result) {
+            playback.setup.keyMode = 14;
+            result.keyMode = 14;
+            playback.setup.doublePlayOption = replay::DoublePlayOption::Flip;
+          }},
+      SetupMismatchCase{
           "assist option",
           [](auto &playback, auto &) {
             playback.setup.assistOption = assist_options::kDrag;
@@ -1158,6 +1165,20 @@ void testCourseReplayRejectsStageSetupThatDiffersFromSavedProvenance() {
                  CourseReplayPlaybackReadOutcome::Status::IntegrityConflict,
          "course replay rejects a stage setup inconsistent with stage "
          "provenance");
+
+  playback = {.stages = {samplePlayback()}, .restMicrosAfterStage = {0}};
+  playback.stages.front().setup.keyMode = 14;
+  playback.stages.front().setup.doublePlayOption =
+      replay::DoublePlayOption::Flip;
+  result = validCourseResult(replayAttemptId(110));
+  result.stages.front().keyMode = 14;
+  const auto dpLoaded = stageAndLoadCourseReplay(
+      repository, temporary.path(), playback, std::move(result), 110,
+      "course stage double-play option");
+  expect(dpLoaded.has_value() &&
+             dpLoaded->status ==
+                 CourseReplayPlaybackReadOutcome::Status::IntegrityConflict,
+         "course replay binds each stage double-play option to provenance");
 }
 
 void testCourseReplayComparesResolvedGaugeProfileSemantics() {
@@ -1298,6 +1319,7 @@ void testChartReplayRejectsStemThatOmitsDecodedLongNotePrefix() {
 
   auto result = validResult(std::string(attempt));
   result.score.longNoteMode = 2;
+  result.score.provenance.stages.front().longNoteMode = 2;
   result.resultFingerprint = result_persistence::resultFingerprint(result);
   const auto snapshot = snapshotFor(result);
   const ReplayFileReference reference{
@@ -1323,7 +1345,8 @@ void testChartReplayRejectsStemThatOmitsDecodedLongNotePrefix() {
       repository.loadChartReplayPlayback(staged.receipt->resultId);
   expect(loaded.status ==
              ChartReplayPlaybackReadOutcome::Status::IntegrityConflict,
-         "chart replay rejects a filename stem missing its decoded LN prefix");
+         "chart replay rejects a filename stem missing its decoded LN prefix: " +
+             loaded.diagnostic);
 }
 
 void testFreshCompactSchema() {
