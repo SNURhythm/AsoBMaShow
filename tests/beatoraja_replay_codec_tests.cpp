@@ -745,12 +745,17 @@ void testEncodeValidatesRandomAndGaugeEnums() {
     diagnostic.clear();
     expect(!codec.encodeChart(candidate, 1'000, diagnostic), message);
     expect(!diagnostic.empty(),
-           "invalid random or gauge setup reports an encode diagnostic");
+           "invalid replay setup reports an encode diagnostic");
   };
 
   auto supportedPrng = extensionReplay();
   expect(codec.encodeChart(supportedPrng, 1'000, diagnostic).has_value(),
          "the parser-declared replay PRNG remains encodable");
+
+  auto missingLaneCoverState = extensionReplay();
+  missingLaneCoverState.setup.initialLaneCoverPercent.reset();
+  rejected(missingLaneCoverState,
+           "a durable replay cannot omit its initial lane-cover state");
 
   auto resolvedGaugeProfile = extensionReplay();
   resolvedGaugeProfile.setup.keyMode = 5;

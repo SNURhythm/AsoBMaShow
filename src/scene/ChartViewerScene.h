@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../LongNoteModeUtils.h"
 #include "../repositories/ChartRepository.h"
 #include "../repositories/ReplayRepository.h"
 #include "../bms_parser.hpp"
@@ -26,6 +27,39 @@ class TextView;
 class View;
 
 namespace chart_viewer_practice {
+struct ViewerReplayPlayOptions {
+  std::optional<std::string> playOption;
+  std::optional<long long> playOptionSeed;
+  std::optional<std::string> playOption2;
+  std::optional<long long> playOption2Seed;
+  replay::DoublePlayOption doublePlayOption =
+      replay::DoublePlayOption::Normal;
+
+  bool operator==(const ViewerReplayPlayOptions &) const = default;
+};
+
+[[nodiscard]] inline ViewerReplayPlayOptions
+viewerReplayPlayOptions(const JudgedPlaybackData &replayData) {
+  return {
+      .playOption = replayData.setup.playOption,
+      .playOptionSeed = replayData.setup.playOptionSeed,
+      .playOption2 = replayData.setup.playOption2,
+      .playOption2Seed = replayData.setup.playOption2Seed,
+      .doublePlayOption = replayData.setup.doublePlayOption,
+  };
+}
+
+[[nodiscard]] inline int practiceLongNoteModeForChart(
+    const bms_parser::ChartMeta &materializedChart,
+    const std::string &configuredMode) {
+  const int materializedMode =
+      long_note_mode::normalizeValue(materializedChart.LnMode);
+  return materializedMode > long_note_mode::kUnknownValue
+             ? materializedMode
+             : long_note_mode::valueFromId(configuredMode,
+                                            long_note_mode::kLnValue);
+}
+
 struct GhostRefreshState {
   long long chartEndMicros = 0;
   practice::Configuration configuration;

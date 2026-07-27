@@ -551,6 +551,36 @@ void testLoadResultUsabilityAndNotices() {
                  "Practice presets were created by a newer version.",
          "failed loads without diagnostics still receive a concise status");
 }
+
+void testViewerGhostOptionsComeFromCompleteReplaySetup() {
+  JudgedPlaybackData replay;
+  replay.setup.playOption = "R-RANDOM";
+  replay.setup.playOptionSeed = 17;
+  replay.setup.playOption2 = "MIRROR";
+  replay.setup.playOption2Seed = 29;
+  replay.setup.doublePlayOption = replay::DoublePlayOption::Flip;
+
+  const auto options =
+      chart_viewer_practice::viewerReplayPlayOptions(replay);
+  expect(options.playOption == replay.setup.playOption &&
+             options.playOptionSeed == replay.setup.playOptionSeed &&
+             options.playOption2 == replay.setup.playOption2 &&
+             options.playOption2Seed == replay.setup.playOption2Seed &&
+             options.doublePlayOption == replay::DoublePlayOption::Flip,
+         "Chart Viewer ghosts retain DP FLIP and both player options from "
+         "the same replay setup");
+}
+
+void testViewerPracticeUsesMaterializedGhostLongNoteMode() {
+  bms_parser::ChartMeta ghostChart;
+  ghostChart.LnMode = long_note_mode::kHcnValue;
+
+  expect(chart_viewer_practice::practiceLongNoteModeForChart(
+             ghostChart, AppSettings::kDefaultLnMode) ==
+             long_note_mode::kHcnValue,
+         "practice launched from an undefined-LN ghost keeps the ghost's "
+         "materialized HCN mode");
+}
 } // namespace
 
 int main() {
@@ -566,6 +596,8 @@ int main() {
   testFirstSaveAsSeedsLastUsedFromSuppliedConfiguration();
   testFailedAtomicReplacePreservesPreviousFile();
   testLoadResultUsabilityAndNotices();
+  testViewerGhostOptionsComeFromCompleteReplaySetup();
+  testViewerPracticeUsesMaterializedGhostLongNoteMode();
   if (failures == 0) {
     std::cout << "practice preset store tests passed\n";
   }

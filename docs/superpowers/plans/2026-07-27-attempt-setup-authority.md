@@ -299,9 +299,11 @@ duplicate RANDOM, P1/P2 option, assist, and gauge fields temporarily so this
 task remains buildable while Tasks 4 and 5 move consumers. Populate those
 compatibility fields only through one private `copyCompatibilitySetupFields`
 helper, never with another call-site field list. Task 6 removes the helper and
-fields. Keep `chartMeta`, judgement/result facts, touch/lane-cover presentation
-data, and `PlaybackAnalysisContext` because they are not duplicate BRD setup
-storage.
+fields. Keep `chartMeta`, judgement/result facts, and touch/lane-cover
+presentation data. Keep `PlaybackAnalysisContext` only for proof that cannot
+be derived from `ChartPlaybackSetup` (the full ruleset descriptor, optional
+explicit starting percentage, and policy/window evidence); it must not repeat
+semantic setup.
 
 Update `makeAdapterBase` to assign:
 

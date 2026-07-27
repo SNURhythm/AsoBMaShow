@@ -674,15 +674,7 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
     }
     const bool hasCurrentBoundProvenance =
         result.provenance.schemaVersion >=
-            ScoreProvenance::kDoublePlayOptionSchemaVersion &&
-        result.provenance.eligibility !=
-            ScoreEligibility::LegacyUnverified &&
-        std::ranges::all_of(result.stages, [](const auto &stage) {
-          return stage.score.provenance.schemaVersion >=
-                     ScoreProvenance::kDoublePlayOptionSchemaVersion &&
-                 stage.score.provenance.eligibility !=
-                     ScoreEligibility::LegacyUnverified;
-        });
+        ScoreProvenance::kDoublePlayOptionSchemaVersion;
     if (hasCurrentBoundProvenance) {
       std::vector<ScoreProvenance> stageProvenance;
       stageProvenance.reserve(result.stages.size());

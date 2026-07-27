@@ -5372,6 +5372,9 @@ void MainMenuScene::startCourseDirect(
         options.playOption2 = playInfo.option2;
         options.playOption2Seed = playInfo.seed2;
         options.longNoteMode = selectedLongNoteMode;
+        options.hasUndefinedLongNotes =
+            play_start_detail::hasUndefinedLongNotes(
+                session->entries.front().meta);
         options.assistOption = session->assistOption;
         options.playback = course_rules::kRequiredPlaybackRate;
         options.clubMode = context.settings.gameplayClubModeEnabled;
@@ -5488,6 +5491,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .gaugeAutoShiftLowerBound =
                                         gaugeAutoShiftLowerBound,
                                     .longNoteMode = selectedLongNoteMode,
+                                    .hasUndefinedLongNotes =
+                                        play_start_detail::
+                                            hasUndefinedLongNotes(record.meta),
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,
                                     .playback = playback,
@@ -5543,6 +5549,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .playOption2 = playInfo.option2,
                                       .playOption2Seed = playInfo.seed2,
                                       .longNoteMode = selectedLongNoteMode,
+                                      .hasUndefinedLongNotes =
+                                          play_start_detail::
+                                              hasUndefinedLongNotes(
+                                                  record.meta),
                                       .assistOption = assistOption,
                                       .pacemakerTarget = pacemakerTarget,
                                       .playback = playback,
@@ -5568,6 +5578,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                          .gaugeAutoShiftLowerBound =
                                              gaugeAutoShiftLowerBound,
                                          .longNoteMode = selectedLongNoteMode,
+                                         .hasUndefinedLongNotes =
+                                             play_start_detail::
+                                                 hasUndefinedLongNotes(
+                                                     record.meta),
                                          .assistOption = assistOption,
                                          .pacemakerTarget = pacemakerTarget,
                                          .playback = playback,
@@ -9526,6 +9540,9 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                          .playOption2Seed = playInfo.seed2,
                          .longNoteMode = long_note_mode::valueFromId(
                              profileSelections.longNoteMode),
+                         .hasUndefinedLongNotes =
+                             play_start_detail::hasUndefinedLongNotes(
+                                 record.meta),
                          .assistOption = profileSelections.assistOption,
                          .pacemakerTarget = pacemaker::kTargetOff,
                          .playback = autoPlayPlayback,
@@ -9615,7 +9632,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                 selectedReplayRenderGhosts,
         };
         if (legacyReplay != nullptr) {
-          applyJudgedPlaybackContextToStartOptions(replayOptions, *legacyReplay);
+          applyJudgedPlaybackSetupToStartOptions(replayOptions, *legacyReplay);
         } else {
           applyReplayPlaybackToStartOptions(replayOptions, playback);
         }
@@ -9744,7 +9761,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
             .ruleset = ruleset,
         };
         applyGBattleReplayChartSetupToStartOptions(
-            gbattleOptions, *recordData, *replayPlayback);
+            gbattleOptions, *recordData);
         changeToGameplayScene(chart, std::move(gbattleOptions));
         willStart.store(false);
         return true;
@@ -10527,7 +10544,8 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
             *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
             autoPlayPlayback, playInfo.option, playInfo.seed, playInfo.option2,
             playInfo.seed2, autoPlayAssistOption, autoPlayClubMode,
-            autoPlayGaugeAutoShiftLowerBound, autoPlayRuleset);
+            autoPlayGaugeAutoShiftLowerBound, autoPlayRuleset,
+            play_start_detail::hasUndefinedLongNotes(record.meta));
         ReplayVideoExportOptions exportOptions = options;
         exportOptions.renderTouchPoints = false;
         exportOptions.renderReplayGhosts = false;

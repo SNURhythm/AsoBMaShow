@@ -817,6 +817,8 @@ void testNonRealtimeScratchHandoffRoundTripsWithoutPhysicalBackspin() {
   replay::ReplayPlaybackData recorded;
   recorded.setup.chartSha256 = std::string(64, 'a');
   recorded.setup.keyMode = 7;
+  recorded.setup.initialLaneCoverPercent = 0;
+  recorded.setup.laneCoverEnabled = false;
   replay::ReplayInputCaptureBuffer capture;
   std::string diagnostic;
   LogicalGameplayInputAdapter adapter(

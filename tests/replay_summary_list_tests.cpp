@@ -1,10 +1,12 @@
 #include "../src/ReplaySummaryFormatting.h"
+#include "../src/ReplayVideoProjection.h"
 #include "../src/analysis/JudgedPlaybackResultState.h"
 #include "../src/ReplayAutoPlay.h"
 #include "../src/scene/play/Pacemaker.h"
 
 #include <cmath>
 #include <iostream>
+#include <stdexcept>
 
 #define ASSERT_CONTAINS(haystack, needle, label)                               \
   if ((haystack).find(needle) == std::string::npos) {                          \
@@ -47,6 +49,14 @@ void addClassicLongNote(bms_parser::Chart &chart, long long headMicros,
   measure->TimeLines.push_back(tailTimeline);
   chart.Measures.push_back(measure);
 }
+
+JudgedPlaybackData makeLegacyReplay() {
+  JudgedPlaybackData replay;
+  replay.context.ruleset = RulesetDescriptor::Legacy();
+  replay.setup.playbackRulesetId = replay.context.ruleset.id;
+  replay.setup.playbackRulesetRevision = replay.context.ruleset.version;
+  return replay;
+}
 } // namespace
 
 int main() {
@@ -76,8 +86,8 @@ int main() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 1;
   chart.Meta.Total = 100.0;
-  JudgedPlaybackData practiceGaugeReplay;
-  practiceGaugeReplay.initialGaugeType = GaugeType::Normal;
+  JudgedPlaybackData practiceGaugeReplay = makeLegacyReplay();
+  practiceGaugeReplay.setup.initialGaugeType = GaugeType::Normal;
   practiceGaugeReplay.context.startingGaugePercent = 37;
   const RhythmState practiceGaugeState =
       analysis::BuildResultState(chart, practiceGaugeReplay);
@@ -87,9 +97,9 @@ int main() {
     return 1;
   }
 
-  JudgedPlaybackData bestClearReplay;
-  bestClearReplay.initialGaugeType = GaugeType::Normal;
-  bestClearReplay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  JudgedPlaybackData bestClearReplay = makeLegacyReplay();
+  bestClearReplay.setup.initialGaugeType = GaugeType::Normal;
+  bestClearReplay.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   bestClearReplay.context.startingGaugePercent = 37;
   const RhythmState bestClearInitial =
       analysis::BuildInitialGaugeState(chart, bestClearReplay);
@@ -125,10 +135,14 @@ int main() {
   }
 
   JudgedPlaybackData lr2RulesetReplay;
-  lr2RulesetReplay.initialGaugeType = GaugeType::Normal;
-  lr2RulesetReplay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  lr2RulesetReplay.setup.initialGaugeType = GaugeType::Normal;
+  lr2RulesetReplay.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   lr2RulesetReplay.context.ruleset =
       RulesetDescriptor::For(GameplayRuleset::LR2);
+  lr2RulesetReplay.setup.playbackRulesetId =
+      lr2RulesetReplay.context.ruleset.id;
+  lr2RulesetReplay.setup.playbackRulesetRevision =
+      lr2RulesetReplay.context.ruleset.version;
   lr2RulesetReplay.events.push_back({.action = ReplayEventAction::Release,
                                      .judgement = Bad,
                                      .gauge = 40.0f,
@@ -155,8 +169,8 @@ int main() {
   bms_parser::Chart multiBadChart;
   multiBadChart.Meta.TotalNotes = 2;
   multiBadChart.Meta.Total = 100.0;
-  JudgedPlaybackData multiBadReplay;
-  multiBadReplay.initialGaugeType = GaugeType::Normal;
+  JudgedPlaybackData multiBadReplay = makeLegacyReplay();
+  multiBadReplay.setup.initialGaugeType = GaugeType::Normal;
   multiBadReplay.events = {
       {.action = ReplayEventAction::MultiBad,
        .lane = 1,
@@ -196,11 +210,32 @@ int main() {
 
   JudgedPlaybackData legacyRulesetReplay = lr2RulesetReplay;
   legacyRulesetReplay.context.ruleset = RulesetDescriptor::Legacy();
+  legacyRulesetReplay.setup.playbackRulesetId =
+      legacyRulesetReplay.context.ruleset.id;
+  legacyRulesetReplay.setup.playbackRulesetRevision =
+      legacyRulesetReplay.context.ruleset.version;
   const RhythmState legacyRulesetResult =
       analysis::BuildResultState(chart, legacyRulesetReplay);
   if (legacyRulesetResult.gaugeRules().ruleset !=
       GameplayRuleset::Beatoraja) {
     std::cerr << "legacy replay result gauge reconstruction remains Beatoraja"
+              << std::endl;
+    return 1;
+  }
+
+  JudgedPlaybackData futureLegacyReplay = legacyRulesetReplay;
+  ++futureLegacyReplay.setup.playbackRulesetRevision;
+  futureLegacyReplay.context.ruleset.version =
+      futureLegacyReplay.setup.playbackRulesetRevision;
+  bool futureLegacyRejected = false;
+  try {
+    (void)analysis::BuildInitialGaugeState(chart, futureLegacyReplay);
+  } catch (const std::invalid_argument &) {
+    futureLegacyRejected = true;
+  }
+  if (!futureLegacyRejected) {
+    std::cerr << "result reconstruction must not treat a future legacy-marker "
+                 "revision as the exact fallback"
               << std::endl;
     return 1;
   }
@@ -211,9 +246,13 @@ int main() {
   terminalLongHeadChart.Meta.TotalNotes = 1;
   terminalLongHeadChart.Meta.TotalLongNotes = 1;
   addClassicLongNote(terminalLongHeadChart, 1'000'000, 2'000'000, 1);
-  JudgedPlaybackData terminalLongHeadReplay;
+  JudgedPlaybackData terminalLongHeadReplay = makeLegacyReplay();
   terminalLongHeadReplay.context.ruleset =
       RulesetDescriptor::For(GameplayRuleset::LR2);
+  terminalLongHeadReplay.setup.playbackRulesetId =
+      terminalLongHeadReplay.context.ruleset.id;
+  terminalLongHeadReplay.setup.playbackRulesetRevision =
+      terminalLongHeadReplay.context.ruleset.version;
   terminalLongHeadReplay.events.push_back({
       .action = ReplayEventAction::Press,
       .lane = 1,
@@ -290,8 +329,8 @@ int main() {
     return 1;
   }
 
-  JudgedPlaybackData firstCourseStage;
-  firstCourseStage.initialGaugeType = GaugeType::Hard;
+  JudgedPlaybackData firstCourseStage = makeLegacyReplay();
+  firstCourseStage.setup.initialGaugeType = GaugeType::Hard;
   firstCourseStage.events.push_back({.action = ReplayEventAction::Gauge,
                                      .songTimeMicros = 500,
                                      .gauge = 42.0f,
@@ -299,8 +338,8 @@ int main() {
   const RhythmState firstCourseResult =
       analysis::BuildResultState(chart, firstCourseStage);
   const GaugeStateSnapshot carriedGauge = firstCourseResult.gaugeSnapshot();
-  JudgedPlaybackData secondCourseStage;
-  secondCourseStage.initialGaugeType = GaugeType::Hard;
+  JudgedPlaybackData secondCourseStage = makeLegacyReplay();
+  secondCourseStage.setup.initialGaugeType = GaugeType::Hard;
   const RhythmState secondCourseInitial =
       analysis::BuildInitialGaugeState(
           chart, secondCourseStage, GaugeProfile::Standard, &carriedGauge);
@@ -311,8 +350,8 @@ int main() {
     return 1;
   }
 
-  JudgedPlaybackData failedReplay;
-  failedReplay.initialGaugeType = GaugeType::Hard;
+  JudgedPlaybackData failedReplay = makeLegacyReplay();
+  failedReplay.setup.initialGaugeType = GaugeType::Hard;
   failedReplay.events.push_back({.action = ReplayEventAction::Gauge,
                                  .songTimeMicros = 500,
                                  .gauge = 0.0f,
@@ -328,9 +367,39 @@ int main() {
     return 1;
   }
 
-  JudgedPlaybackData continuedReplay;
-  continuedReplay.initialGaugeType = GaugeType::Hard;
-  continuedReplay.gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  JudgedPlaybackData courseProfileReplay = makeLegacyReplay();
+  courseProfileReplay.setup.initialGaugeType = GaugeType::Normal;
+  courseProfileReplay.setup.gaugeProfile = GaugeProfile::CourseDefault;
+  courseProfileReplay.events = {
+      {.action = ReplayEventAction::Gauge,
+       .songTimeMicros = 500,
+       .gauge = 0.0f,
+       .gaugeType = GaugeType::Normal,
+       .combo = 1,
+       .score = 2},
+      {.action = ReplayEventAction::Gauge,
+       .songTimeMicros = 900,
+       .gauge = 20.0f,
+       .gaugeType = GaugeType::Normal,
+       .combo = 2,
+       .score = 4},
+  };
+  const auto courseProfileFailure =
+      replay_video_detail::projectGaugeFailure(chart, courseProfileReplay);
+  if (courseProfileFailure.failureMicros != 500 ||
+      courseProfileFailure.resultReplay.events.size() != 1 ||
+      courseProfileFailure.resultReplay.finalScore != 2 ||
+      courseProfileFailure.resultReplay.maxCombo != 1 ||
+      courseProfileFailure.resultReplay.clearType != kClearTypeFailedRank) {
+    std::cerr << "video result truncation must use the replay setup gauge "
+                 "profile and discard post-failure events"
+              << std::endl;
+    return 1;
+  }
+
+  JudgedPlaybackData continuedReplay = makeLegacyReplay();
+  continuedReplay.setup.initialGaugeType = GaugeType::Hard;
+  continuedReplay.setup.gaugeAutoShift = GaugeAutoShiftMode::Continue;
   continuedReplay.context.startingGaugePercent = 0;
   if (analysis::FindGaugeFailureMicros(chart, continuedReplay)
           .has_value()) {
@@ -339,10 +408,10 @@ int main() {
     return 1;
   }
 
-  JudgedPlaybackData survivalOnlyReplay;
-  survivalOnlyReplay.initialGaugeType = GaugeType::ExHard;
-  survivalOnlyReplay.gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
-  survivalOnlyReplay.gaugeAutoShiftLowerBound = GaugeType::Hard;
+  JudgedPlaybackData survivalOnlyReplay = makeLegacyReplay();
+  survivalOnlyReplay.setup.initialGaugeType = GaugeType::ExHard;
+  survivalOnlyReplay.setup.gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
+  survivalOnlyReplay.setup.gaugeAutoShiftLowerBound = GaugeType::Hard;
   survivalOnlyReplay.context.startingGaugePercent = 0;
   if (analysis::FindGaugeFailureMicros(chart, survivalOnlyReplay) != 0) {
     std::cerr << "survival-only GAS export must fail at a zero percent start"
@@ -350,13 +419,13 @@ int main() {
     return 1;
   }
 
-  JudgedPlaybackData assistedReplay;
-  assistedReplay.initialGaugeType = GaugeType::Hard;
+  JudgedPlaybackData assistedReplay = makeLegacyReplay();
+  assistedReplay.setup.initialGaugeType = GaugeType::Hard;
   assistedReplay.maxCombo = 1;
   assistedReplay.finalGauge = 100.0f;
   assistedReplay.clearType = kClearTypeFullComboRank;
-  assistedReplay.context.playback = {
-      .percent = 75, .mode = audio::PlaybackMode::PitchShift};
+  assistedReplay.setup.playbackRatePercent = 75;
+  assistedReplay.setup.playbackMode = audio::PlaybackMode::PitchShift;
   assistedReplay.events.push_back({.action = ReplayEventAction::Release,
                                    .judgement = PGreat,
                                    .gauge = 100.0f,
@@ -372,7 +441,8 @@ int main() {
   }
 
   JudgedPlaybackData neutralReplay = assistedReplay;
-  neutralReplay.context.playback = {};
+  neutralReplay.setup.playbackRatePercent = 100;
+  neutralReplay.setup.playbackMode = audio::PlaybackMode::PitchShift;
   const RhythmState neutralState =
       analysis::BuildResultState(chart, neutralReplay);
   if (neutralState.getClearTypeRank() != kClearTypeHardClearRank) {
@@ -385,16 +455,16 @@ int main() {
       chart, GaugeType::Normal, GaugeAutoShiftMode::None, {.percent = 200},
       std::nullopt, std::nullopt, std::nullopt, std::nullopt,
       assist_options::kOff, true, GaugeType::Hard);
-  if (autoExport.context.playback.percent != 200) {
+  if (autoExport.setup.playbackRatePercent != 200) {
     std::cerr << "synthetic Auto export retains the selected playback rate"
               << std::endl;
     return 1;
   }
-  if (!autoExport.context.clubMode) {
+  if (!autoExport.setup.clubMode) {
     std::cerr << "synthetic Auto export retains Club Beat" << std::endl;
     return 1;
   }
-  if (autoExport.gaugeAutoShiftLowerBound != GaugeType::Hard) {
+  if (autoExport.setup.gaugeAutoShiftLowerBound != GaugeType::Hard) {
     std::cerr << "synthetic Auto export retains the GAS lower bound"
               << std::endl;
     return 1;

@@ -192,8 +192,9 @@ std::optional<std::size_t> sectionForEvent(const ChartLayout &layout,
 TimingConditions conditionsFor(const bms_parser::Chart &chart,
                                const JudgedPlaybackData &replay) {
   TimingConditions result{
-      .playback = replay.context.playback,
-      .judgeWindowScalePercent = replay.context.judgeWindowScalePercent,
+      .playback = {.percent = replay.setup.playbackRatePercent,
+                   .mode = replay.setup.playbackMode},
+      .judgeWindowScalePercent = replay.setup.judgeWindowScalePercent,
   };
   if (!replay.context.policy.has_value()) {
     if (replay.context.ruleset.version > 0) {
@@ -306,8 +307,10 @@ Analysis analyzeAttempts(const bms_parser::Chart &chart,
 
 Analysis analyze(const bms_parser::Chart &chart, const JudgedPlaybackData &replay) {
   const JudgedPlaybackData *attempt = &replay;
-  return analyzeAttempts(chart, std::span(&attempt, 1),
-                         replay.context.playback);
+  return analyzeAttempts(
+      chart, std::span(&attempt, 1),
+      {.percent = replay.setup.playbackRatePercent,
+       .mode = replay.setup.playbackMode});
 }
 
 std::vector<AnalysisGroup>

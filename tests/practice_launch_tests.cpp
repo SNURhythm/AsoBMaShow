@@ -149,9 +149,9 @@ void testReplayMetadataCannotReplaceTheCurrentPlayedChartIdentityOrPath() {
   staleReplay.chartMeta.SHA256 = std::string(64, 'b');
   staleReplay.chartMeta.BmsPath = std::filesystem::path("BMS/stale/chart.bms");
   staleReplay.chartMeta.Title = "Stale replay chart";
-  staleReplay.randomSeed = 42;
-  staleReplay.randomPrng = "replay-prng";
-  staleReplay.randomValues = {2, 1, 3};
+  staleReplay.setup.randomSeed = 42;
+  staleReplay.setup.randomPrng = "replay-prng";
+  staleReplay.setup.randomValues = {2, 1, 3};
 
   const auto merged =
       practice::mergeReplayLaunchChartMeta(current, staleReplay);
@@ -159,9 +159,9 @@ void testReplayMetadataCannotReplaceTheCurrentPlayedChartIdentityOrPath() {
               merged.BmsPath == current.BmsPath &&
               merged.Title == current.Title,
           "current parsed identity, path, and metadata beat stale replay data");
-  require(merged.RandomSeed == staleReplay.randomSeed &&
-              merged.RandomPrng == staleReplay.randomPrng &&
-              merged.RandomValues == staleReplay.randomValues,
+  require(merged.RandomSeed == staleReplay.setup.randomSeed &&
+              merged.RandomPrng == staleReplay.setup.randomPrng &&
+              merged.RandomValues == staleReplay.setup.randomValues,
           "missing replay-specific randomization metadata is backfilled");
 
   staleReplay.chartMeta.BmsPath.clear();
@@ -223,17 +223,20 @@ void testParsedChartIdentityGatesLaunchApplication() {
 
 void testReplayPlayOptionsAreCarriedIntoSectionLaunch() {
   JudgedPlaybackData replay;
-  replay.playOption = "RANDOM";
-  replay.playOptionSeed = 1234;
-  replay.playOption2 = "MIRROR";
-  replay.playOption2Seed = 5678;
+  replay.setup.playOption = "RANDOM";
+  replay.setup.playOptionSeed = 1234;
+  replay.setup.playOption2 = "MIRROR";
+  replay.setup.playOption2Seed = 5678;
+  replay.setup.doublePlayOption = replay::DoublePlayOption::Flip;
 
   const auto options = practice::launchPlayOptionsFromReplay(replay);
-  require(options.playOption == replay.playOption &&
-              options.playOptionSeed == replay.playOptionSeed &&
-              options.playOption2 == replay.playOption2 &&
-              options.playOption2Seed == replay.playOption2Seed,
-          "replay section launch retains both players' options and seeds");
+  require(options.playOption == replay.setup.playOption &&
+              options.playOptionSeed == replay.setup.playOptionSeed &&
+              options.playOption2 == replay.setup.playOption2 &&
+              options.playOption2Seed == replay.setup.playOption2Seed &&
+              options.doublePlayOption == replay::DoublePlayOption::Flip,
+          "judged replay section launch retains DP FLIP and both players' "
+          "options and seeds");
 
   replay::ChartPlaybackSetup rawSetup;
   rawSetup.playOption = "R-RANDOM";

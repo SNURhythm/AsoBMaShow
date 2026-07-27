@@ -665,63 +665,25 @@ void testPlayStartCaptureIsImmutableAndShared() {
   recordedMeta.SHA256 = std::string(64, 'b');
   replay.context = analysis::playbackContextFrom(captured, recordedMeta);
   assert(replay.context.ruleset == scoreProvenance.ruleset);
-  assert(replay.context.playback == scoreProvenance.playback);
   assert(replay.context.policy.has_value());
 }
 
 void testReplayStartRestoresPracticeProvenance() {
   JudgedPlaybackData replay;
-  replay.context.playback = {.percent = 75,
-                                .mode = audio::PlaybackMode::PitchShift};
-  replay.context.judgeWindowScalePercent = 80;
   replay.context.startingGaugePercent = 37;
+  replay.setup.playbackRatePercent = 75;
+  replay.setup.playbackMode = audio::PlaybackMode::PitchShift;
+  replay.setup.judgeWindowScalePercent = 80;
+  replay.setup.startingGaugePercent = 37.0F;
 
   StartOptions options;
   options.playback = {.percent = 150, .mode = audio::PlaybackMode::PitchShift};
-  applyJudgedPlaybackContextToStartOptions(options, replay);
-  assert(options.playback == replay.context.playback);
+  applyJudgedPlaybackSetupToStartOptions(options, replay);
+  assert(options.playback ==
+         (audio::PlaybackRate{.percent = replay.setup.playbackRatePercent,
+                              .mode = replay.setup.playbackMode}));
   assert(options.judgeWindowScalePercent == 80);
   assert(options.startingGaugePercent == 37);
-}
-
-void testResultRetryPlaybackAuthority() {
-  ScoreProvenance attempt = sampleVerifiedProvenance("result-retry");
-  attempt.playback = {.percent = 75, .mode = audio::PlaybackMode::PitchShift};
-
-  const audio::PlaybackRate samePattern =
-      resultRetryPlayback(attempt, std::nullopt);
-  const audio::PlaybackRate newPattern =
-      resultRetryPlayback(attempt, std::nullopt);
-  assert(samePattern == attempt.playback);
-  assert(newPattern == attempt.playback);
-
-  practice::Configuration practiceConfiguration;
-  practiceConfiguration.playback = {.percent = 125,
-                                    .mode = audio::PlaybackMode::PitchShift};
-  assert(resultRetryPlayback(attempt, practiceConfiguration) ==
-         practiceConfiguration.playback);
-}
-
-void testResultRetryLongNoteModeAuthority() {
-  ScoreProvenance attempt = sampleVerifiedProvenance("result-retry-ln-mode");
-  attempt.stages.front().chartMd5 = std::string(32, 'b');
-  attempt.stages.front().chartSha256 = std::string(64, 'a');
-  attempt.stages.front().longNoteMode = long_note_mode::kCnValue;
-
-  bms_parser::ChartMeta noLongNotes;
-  noLongNotes.MD5 = attempt.stages.front().chartMd5;
-  noLongNotes.SHA256 = attempt.stages.front().chartSha256;
-  noLongNotes.TotalLongNotes = 0;
-  noLongNotes.TotalBackSpinNotes = 0;
-  noLongNotes.LnMode = long_note_mode::kUnknownValue;
-  assert(resultRetryLongNoteMode(noLongNotes, attempt) ==
-         long_note_mode::kCnValue);
-
-  bms_parser::ChartMeta forcedLongNotes = noLongNotes;
-  forcedLongNotes.TotalLongNotes = 1;
-  forcedLongNotes.LnMode = long_note_mode::kHcnValue;
-  assert(resultRetryLongNoteMode(forcedLongNotes, attempt) ==
-         long_note_mode::kHcnValue);
 }
 
 std::vector<JudgeWindowProvenance> provenanceWindows(
@@ -776,10 +738,10 @@ void testReplayUsesPersistedJudgeWindowsAsAuthority() {
       serializeScoreProvenance(provenance), error);
   assert(error.empty());
   assert(decoded.has_value());
-  replay.context = analysis::playbackContextFrom(*decoded, replay.chartMeta);
+  replay = analysis::retrySourceFromProvenance(replay.chartMeta, *decoded);
 
   StartOptions options;
-  applyJudgedPlaybackContextToStartOptions(options, replay);
+  applyJudgedPlaybackSetupToStartOptions(options, replay);
   assert(options.replayRulesetOverride.has_value());
 
   bms_parser::ChartMeta currentMeta = replay.chartMeta;
@@ -802,10 +764,10 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   replay.chartMeta.KeyMode = 7;
   auto provenance = sampleVerifiedProvenance("replay-validation");
   provenance.stages = {replayStage(sha, md5, persisted)};
-  replay.context = analysis::playbackContextFrom(provenance, replay.chartMeta);
+  replay = analysis::retrySourceFromProvenance(replay.chartMeta, provenance);
 
   StartOptions options;
-  applyJudgedPlaybackContextToStartOptions(options, replay);
+  applyJudgedPlaybackSetupToStartOptions(options, replay);
   assert(options.replayRulesetOverride.has_value());
 
   bms_parser::ChartMeta differentChart = replay.chartMeta;
@@ -816,9 +778,9 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   assert(fallback.timingWindows == Judge(differentChart.Rank).timingWindows);
 
   provenance.stages.front().effectiveJudgeWindows.pop_back();
-  replay.context = analysis::playbackContextFrom(provenance, replay.chartMeta);
+  replay = analysis::retrySourceFromProvenance(replay.chartMeta, provenance);
   StartOptions incompleteOptions;
-  applyJudgedPlaybackContextToStartOptions(incompleteOptions, replay);
+  applyJudgedPlaybackSetupToStartOptions(incompleteOptions, replay);
   assert(incompleteOptions.replayRulesetOverride.has_value());
   const auto incompletePolicy = buildGameplayRulesetPolicyAtPlayStart(
       incompleteOptions, replay.chartMeta,
@@ -828,8 +790,10 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   assert(!incompletePolicy.policy.has_value());
 
   replay.context = {};
+  replay.setup.playbackRulesetId = RulesetDescriptor::Legacy().id;
+  replay.setup.playbackRulesetRevision = RulesetDescriptor::Legacy().version;
   StartOptions legacyOptions;
-  applyJudgedPlaybackContextToStartOptions(legacyOptions, replay);
+  applyJudgedPlaybackSetupToStartOptions(legacyOptions, replay);
   assert(!legacyOptions.replayRulesetOverride.has_value());
 }
 
@@ -844,17 +808,17 @@ void testCourseReplaySelectsMatchingStageJudgeWindows() {
       {Bad, {-401, 402}},    {Kpoor, {-501, 502}},
   };
 
-  auto stageReplay = std::make_shared<JudgedPlaybackData>();
-  stageReplay->chartMeta.SHA256 = secondSha;
-  stageReplay->chartMeta.MD5 = secondMd5;
-  stageReplay->chartMeta.Rank = 3;
+  bms_parser::ChartMeta stageMeta;
+  stageMeta.SHA256 = secondSha;
+  stageMeta.MD5 = secondMd5;
+  stageMeta.Rank = 3;
   auto provenance = sampleVerifiedProvenance("course-replay-stage");
   provenance.stages = {
       replayStage(firstSha, firstMd5, firstWindows),
       replayStage(secondSha, secondMd5, secondWindows),
   };
-  stageReplay->context =
-      analysis::playbackContextFrom(provenance, stageReplay->chartMeta);
+  auto stageReplay = std::make_shared<JudgedPlaybackData>(
+      analysis::retrySourceFromProvenance(stageMeta, provenance));
 
   auto session = std::make_shared<CoursePlaySession>();
   session->constraints.judgement = CourseJudgementConstraint::NoGood;
@@ -1015,8 +979,6 @@ int main() {
   testCourseMergePreservesStagesAndWorstEligibility();
   testPlayStartCaptureIsImmutableAndShared();
   testReplayStartRestoresPracticeProvenance();
-  testResultRetryPlaybackAuthority();
-  testResultRetryLongNoteModeAuthority();
   testReplayUsesPersistedJudgeWindowsAsAuthority();
   testReplayJudgeOverrideValidatesChartAndWindows();
   testCourseReplaySelectsMatchingStageJudgeWindows();

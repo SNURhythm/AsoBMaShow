@@ -18,7 +18,6 @@ constexpr const char *kAttemptId =
 
 ScoreProvenance verifiedProvenance(GaugeType gauge = GaugeType::Hard) {
   ScoreProvenance provenance = ScoreProvenance::Legacy();
-  provenance.schemaVersion = ScoreProvenance::kSchemaVersion;
   provenance.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
   provenance.gaugeType = gauge;
   provenance.eligibility = ScoreEligibility::Verified;
@@ -346,12 +345,14 @@ void testRawReplayPreparationAppliesDoublePlayFlip() {
   {
     std::ofstream chart(chartPath, std::ios::binary);
     chart << "#PLAYER 2\n#TITLE DP FLIP\n#ARTIST TEST\n#BPM 120\n"
+             "#LNTYPE 1\n"
              "#WAV01 player-one-key.wav\n"
              "#WAV02 player-two-key.wav\n"
              "#WAV03 player-one-scratch.wav\n"
              "#WAV04 player-two-scratch.wav\n"
              "#WAV05 player-one-seventh-key.wav\n"
-             "#00111:01\n#00118:05\n#00121:02\n#00116:03\n#00126:04\n";
+             "#00111:01\n#00118:05\n#00121:02\n#00116:03\n#00126:04\n"
+             "#00251:0505\n";
     assert(chart.good());
   }
 
@@ -368,6 +369,7 @@ void testRawReplayPreparationAppliesDoublePlayFlip() {
   playback.setup.playOption = "NORMAL";
   playback.setup.playOption2 = "NORMAL";
   playback.setup.doublePlayOption = replay::DoublePlayOption::Flip;
+  playback.setup.longNoteMode = long_note_mode::kCnValue;
 
   auto prepared =
       play_options::prepareReplayChart(chartPath, playback, cancelled);
@@ -387,6 +389,29 @@ void testRawReplayPreparationAppliesDoublePlayFlip() {
   assert(wavAtLane(8) == 1);
   assert(wavAtLane(7) == 4);
   assert(wavAtLane(15) == 3);
+
+  JudgedPlaybackData judged;
+  judged.chartMeta = parsed->Meta;
+  judged.setup = playback.setup;
+  auto judgedPrepared =
+      play_options::prepareReplayChart(chartPath, judged, cancelled);
+  assert(judgedPrepared != nullptr);
+  const auto judgedWavAtLane = [&judgedPrepared](int lane) {
+    for (const auto *measure : judgedPrepared->Measures) {
+      for (const auto *timeline : measure->TimeLines) {
+        if (lane >= 0 && lane < static_cast<int>(timeline->Notes.size()) &&
+            timeline->Notes[static_cast<std::size_t>(lane)] != nullptr) {
+          return timeline->Notes[static_cast<std::size_t>(lane)]->Wav;
+        }
+      }
+    }
+    return -1;
+  };
+  assert(judgedWavAtLane(0) == 2);
+  assert(judgedWavAtLane(8) == 1);
+  assert(judgedWavAtLane(7) == 4);
+  assert(judgedWavAtLane(15) == 3);
+  assert(judgedPrepared->Meta.LnMode == long_note_mode::kCnValue);
 
   std::error_code ignored;
   std::filesystem::remove_all(directory, ignored);

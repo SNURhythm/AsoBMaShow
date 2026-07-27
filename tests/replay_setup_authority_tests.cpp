@@ -255,6 +255,21 @@ void testLegacyAndPreviousSchemaAuthority() {
          "schema-four unknown DP does not invent a Normal comparison");
 }
 
+void testUnsupportedFullRulesetDescriptorIsInvalid() {
+  auto value = fixture();
+  value.score.provenance.ruleset.judgementModel =
+      "future-judgement-model";
+
+  const auto outcome = replay::setup_authority::resolveForResult(
+      value.setup, value.score, value.keyMode, Source::AsoExtension, false);
+
+  expect(outcome.status == Status::Invalid &&
+             outcome.field == "ruleset descriptor" &&
+             !outcome.setup.has_value(),
+         "matching ruleset ID and revision cannot hide an unsupported full "
+         "descriptor");
+}
+
 void testCarriedGaugeAndInvalidEvidence() {
   auto value = fixture();
   value.score.provenance.startingGaugePercent.reset();
@@ -296,6 +311,7 @@ int main() {
   testFullSetupMismatchMatrix();
   testStockEnrichmentAndOwnedFields();
   testLegacyAndPreviousSchemaAuthority();
+  testUnsupportedFullRulesetDescriptorIsInvalid();
   testCarriedGaugeAndInvalidEvidence();
   if (failures != 0) {
     std::cerr << failures << " replay setup authority test(s) failed\n";

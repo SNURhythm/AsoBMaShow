@@ -231,6 +231,64 @@ void testDoublePlaySetupFingerprintContract() {
   expect(result_persistence::resultFingerprint(schemaFourNormal) ==
              result_persistence::resultFingerprint(schemaFourFlip),
          "schema-four fingerprints remain independent of unavailable DP data");
+
+  std::vector<ScoreProvenance> schemaFourStages = stageProvenance;
+  for (auto &provenance : schemaFourStages) {
+    provenance.schemaVersion = ScoreProvenance::kPolicyProofSchemaVersion;
+    for (auto &stage : provenance.stages) {
+      stage.doublePlayOption.reset();
+    }
+  }
+  const ScoreProvenance mergedSchemaFour =
+      mergeCourseProvenance(schemaFourStages);
+  std::string serializationError;
+  expect(mergedSchemaFour.schemaVersion ==
+             ScoreProvenance::kPolicyProofSchemaVersion &&
+             serializeValidatedScoreProvenance(mergedSchemaFour,
+                                                serializationError)
+                 .has_value(),
+         "merging schema-four stage proofs remains serializable as schema four");
+
+  auto legacyEligibilityAggregate = normalCourse;
+  legacyEligibilityAggregate.provenance.eligibility =
+      ScoreEligibility::LegacyUnverified;
+  legacyEligibilityAggregate.resultFingerprint =
+      result_persistence::resultFingerprint(legacyEligibilityAggregate);
+  diagnostic.clear();
+  expect(!result_persistence::validatePersistedCourseResult(
+             legacyEligibilityAggregate, diagnostic),
+         "schema-five aggregate eligibility remains bound to stage proofs");
+
+  auto mixedSchemaCourse = normalCourse;
+  mixedSchemaCourse.stages.back().score.provenance.schemaVersion =
+      ScoreProvenance::kPolicyProofSchemaVersion;
+  mixedSchemaCourse.stages.back()
+      .score.provenance.stages.front()
+      .doublePlayOption.reset();
+  mixedSchemaCourse.resultFingerprint =
+      result_persistence::resultFingerprint(mixedSchemaCourse);
+  diagnostic.clear();
+  expect(!result_persistence::validatePersistedCourseResult(
+             mixedSchemaCourse, diagnostic),
+         "schema-five aggregate rejects mixed-version ordered stage proofs");
+
+  auto allSchemaFourCourse = normalCourse;
+  allSchemaFourCourse.provenance.schemaVersion =
+      ScoreProvenance::kPolicyProofSchemaVersion;
+  for (auto &stage : allSchemaFourCourse.provenance.stages) {
+    stage.doublePlayOption.reset();
+  }
+  for (auto &stage : allSchemaFourCourse.stages) {
+    stage.score.provenance.schemaVersion =
+        ScoreProvenance::kPolicyProofSchemaVersion;
+    stage.score.provenance.stages.front().doublePlayOption.reset();
+  }
+  allSchemaFourCourse.resultFingerprint =
+      result_persistence::resultFingerprint(allSchemaFourCourse);
+  diagnostic.clear();
+  expect(result_persistence::validatePersistedCourseResult(allSchemaFourCourse,
+                                                           diagnostic),
+         "all-schema-four course provenance remains backward compatible");
 }
 
 void testChartValidation() {

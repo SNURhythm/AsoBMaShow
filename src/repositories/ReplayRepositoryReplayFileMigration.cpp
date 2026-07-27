@@ -662,8 +662,6 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
     return false;
   }
 
-  auto &score = persisted.score;
-
   std::vector<bool> gaugeHistoryEvents = countedEvents;
   for (std::size_t index = 0; index < chart.events.size(); ++index) {
     const auto &event = chart.events[index].event;
@@ -754,10 +752,13 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
   setup.startingGaugePercent = startingGauge.currentGauge;
   setup.startingGaugeState = startingGauge.gaugeSnapshot();
   setup.clubMode = chart.provenance.clubMode;
+  setup.initialLaneCoverPercent = 0;
+  setup.laneCoverEnabled = false;
   for (const auto &cover : chart.laneCoverEvents) {
     if (cover.songTimeMicros <= 0) {
       setup.initialLaneCoverPercent = cover.noteStartPositionPercent;
-      setup.laneCoverEnabled = setup.initialLaneCoverPercent > 0;
+      setup.laneCoverEnabled =
+          setup.initialLaneCoverPercent.value_or(0) > 0;
     }
   }
 

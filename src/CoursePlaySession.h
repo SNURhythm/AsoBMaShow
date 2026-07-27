@@ -361,34 +361,34 @@ struct CoursePlaySession {
   }
 
   void snapshotRulesetFromReplay(const JudgedPlaybackData &replay) {
-    if (replay.context.ruleset == RulesetDescriptor::Legacy()) {
+    if (isLegacyRulesetIdentity(replay.setup.playbackRulesetId,
+                                replay.setup.playbackRulesetRevision)) {
       ruleset = GameplayRuleset::Beatoraja;
       rulesetDescriptor = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
       return;
     }
-    rulesetDescriptor = replay.context.ruleset;
-    if (const auto recorded = gameplayRulesetFromId(rulesetDescriptor.id)) {
+    rulesetDescriptor = rulesetDescriptorFromReplayIdentity(
+        replay.setup.playbackRulesetId,
+        replay.setup.playbackRulesetRevision);
+    if (const auto recorded =
+            gameplayRulesetFromId(replay.setup.playbackRulesetId)) {
       ruleset = *recorded;
+      if (replay.context.ruleset.id == replay.setup.playbackRulesetId &&
+          replay.context.ruleset.version ==
+              replay.setup.playbackRulesetRevision) {
+        rulesetDescriptor = replay.context.ruleset;
+      }
     }
   }
 
   void snapshotRulesetFromPlayback(const replay::ReplayPlaybackData &playback) {
-    const auto recorded =
-        gameplayRulesetFromId(playback.setup.playbackRulesetId);
-    if (!recorded.has_value()) {
-      rulesetDescriptor = RulesetDescriptor::Legacy();
-      rulesetDescriptor.id = playback.setup.playbackRulesetId;
-      rulesetDescriptor.version = playback.setup.playbackRulesetRevision;
-      return;
-    }
-    const auto descriptor = RulesetDescriptor::For(*recorded);
-    if (descriptor.version != playback.setup.playbackRulesetRevision) {
+    rulesetDescriptor = rulesetDescriptorFromReplayIdentity(
+        playback.setup.playbackRulesetId,
+        playback.setup.playbackRulesetRevision);
+    if (const auto recorded =
+            gameplayRulesetFromId(playback.setup.playbackRulesetId)) {
       ruleset = *recorded;
-      rulesetDescriptor = RulesetDescriptor::Legacy();
-      return;
     }
-    ruleset = *recorded;
-    rulesetDescriptor = descriptor;
   }
 
   [[nodiscard]] bool hasNextChart() const {
@@ -441,10 +441,10 @@ struct CoursePlaySession {
   }
 
   void applyReplayStagePlayOptions(const JudgedPlaybackData &replay) {
-    playOption = replay.playOption;
-    playOptionSeed = replay.playOptionSeed;
-    playOption2 = replay.playOption2;
-    playOption2Seed = replay.playOption2Seed;
+    playOption = replay.setup.playOption;
+    playOptionSeed = replay.setup.playOptionSeed;
+    playOption2 = replay.setup.playOption2;
+    playOption2Seed = replay.setup.playOption2Seed;
   }
 
   void applyReplayStagePlayOptions(const replay::ReplayPlaybackData &replay) {

@@ -172,8 +172,17 @@ bool validateChartScoreReplaySemantics(
         "score provenance stage long-note mode is outside the canonical "
         "range");
   }
+  const bool chartRequiresLongNoteMode =
+      std::max(0, chartMeta.TotalLongNotes) +
+              std::max(0, chartMeta.TotalBackSpinNotes) >
+          0;
   if (stage != nullptr &&
-      stage->longNoteMode <= long_note_mode::kUnknownValue) {
+      stage->longNoteMode <= long_note_mode::kUnknownValue &&
+      (score.longNoteMode > long_note_mode::kUnknownValue ||
+       storedReplayChartLongNoteMode.value_or(
+           long_note_mode::kUnknownValue) >
+           long_note_mode::kUnknownValue ||
+       chartRequiresLongNoteMode)) {
     return reject("score provenance stage long-note mode is unspecified");
   }
   if (storedReplayChartLongNoteMode.has_value()) {

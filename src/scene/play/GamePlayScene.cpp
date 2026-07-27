@@ -315,42 +315,12 @@ void markReplayMissedNote(bms_parser::Note *note, long long judgedTime) {
 }
 
 std::string gameplayPlayOptionLabel(const StartOptions &options) {
-  std::optional<std::string> option = options.playOption;
-  std::optional<long long> seed = options.playOptionSeed;
-  std::optional<std::string> option2 = options.playOption2;
-  std::optional<long long> seed2 = options.playOption2Seed;
-
-  if (options.replayData != nullptr) {
-    if (!option.has_value()) {
-      option = options.replayData->playOption;
-    }
-    if (!seed.has_value()) {
-      seed = options.replayData->playOptionSeed;
-    }
-    if (!option2.has_value()) {
-      option2 = options.replayData->playOption2;
-    }
-    if (!seed2.has_value()) {
-      seed2 = options.replayData->playOption2Seed;
-    }
+  std::string label = play_options::formatPlayOptionLabel(
+      options.playOption, options.playOptionSeed, options.playOption2,
+      options.playOption2Seed);
+  if (options.doublePlayOption == replay::DoublePlayOption::Flip) {
+    label = label.empty() ? "FLIP" : "FLIP + " + label;
   }
-  if (options.gbattleRecordData != nullptr) {
-    if (!option.has_value()) {
-      option = options.gbattleRecordData->playOption;
-    }
-    if (!seed.has_value()) {
-      seed = options.gbattleRecordData->playOptionSeed;
-    }
-    if (!option2.has_value()) {
-      option2 = options.gbattleRecordData->playOption2;
-    }
-    if (!seed2.has_value()) {
-      seed2 = options.gbattleRecordData->playOption2Seed;
-    }
-  }
-
-  const std::string label =
-      play_options::formatPlayOptionLabel(option, seed, option2, seed2);
   return label.empty() ? "" : "Option: " + label;
 }
 
@@ -374,27 +344,8 @@ Judge presentationJudgeForPolicy(
 
 bool gameplayHasSamePatternRandomization(const bms_parser::Chart &chart,
                                          const StartOptions &options) {
-  std::optional<std::string> option = options.playOption;
-  std::optional<std::string> option2 = options.playOption2;
-
-  if (options.replayData != nullptr) {
-    if (!option.has_value()) {
-      option = options.replayData->playOption;
-    }
-    if (!option2.has_value()) {
-      option2 = options.replayData->playOption2;
-    }
-  }
-  if (options.gbattleRecordData != nullptr) {
-    if (!option.has_value()) {
-      option = options.gbattleRecordData->playOption;
-    }
-    if (!option2.has_value()) {
-      option2 = options.gbattleRecordData->playOption2;
-    }
-  }
-
-  return play_options::hasSamePatternRandomization(chart.Meta, option, option2);
+  return play_options::hasSamePatternRandomization(
+      chart.Meta, options.playOption, options.playOption2);
 }
 
 int noSpeedGreenNumberForChart(const bms_parser::Chart *chart) {
@@ -427,41 +378,23 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
   retryOptions.playOption2Seed.reset();
   retryOptions.ownsChart = true;
 
-  std::optional<std::string> playOption = sourceOptions.playOption;
-  std::optional<std::string> playOption2 = sourceOptions.playOption2;
-  if (sourceOptions.replayData != nullptr) {
-    if (!playOption.has_value()) {
-      playOption = sourceOptions.replayData->playOption;
-    }
-    if (!playOption2.has_value()) {
-      playOption2 = sourceOptions.replayData->playOption2;
-    }
-  }
-  if (sourceOptions.gbattleRecordData != nullptr) {
-    if (!playOption.has_value()) {
-      playOption = sourceOptions.gbattleRecordData->playOption;
-    }
-    if (!playOption2.has_value()) {
-      playOption2 = sourceOptions.gbattleRecordData->playOption2;
-    }
-  }
-
   if (!play_options::applyReplayDoublePlayOption(
           *retryChart, sourceOptions.doublePlayOption)) {
     return false;
   }
 
-  if (playOption.has_value() &&
+  if (sourceOptions.playOption.has_value() &&
       !play_options::applyPlayOptionModifier(
-          *retryChart, *playOption, std::nullopt, 0, retryOptions.playOption,
+          *retryChart, *sourceOptions.playOption, std::nullopt, 0,
+          retryOptions.playOption,
           retryOptions.playOptionSeed, "retry")) {
     return false;
   }
 
-  if (retryChart->Meta.IsDP && playOption2.has_value() &&
+  if (retryChart->Meta.IsDP && sourceOptions.playOption2.has_value() &&
       !play_options::applyPlayOptionModifier(
-          *retryChart, *playOption2, std::nullopt, 1, retryOptions.playOption2,
-          retryOptions.playOption2Seed, "retry")) {
+          *retryChart, *sourceOptions.playOption2, std::nullopt, 1,
+          retryOptions.playOption2, retryOptions.playOption2Seed, "retry")) {
     return false;
   }
 
@@ -1545,8 +1478,11 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              .automaticPoorLateMicros()
                        : judge.timingWindows[Bad].second;
   if (rulesetPolicyBuild.policy.has_value()) {
-    attemptProvenance = captureScoreProvenanceAtPlayStart(
+    capturedAttemptSetup = capturePlaybackSetupAtPlayStart(
         this->options, this->chart->Meta, *rulesetPolicyBuild.policy);
+    attemptProvenance = captureScoreProvenanceAtPlayStart(
+        this->options, this->chart->Meta, *rulesetPolicyBuild.policy,
+        capturedAttemptSetup);
   }
 }
 
@@ -1570,8 +1506,11 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              .automaticPoorLateMicros()
                        : judge.timingWindows[Bad].second;
   if (rulesetPolicyBuild.policy.has_value()) {
-    attemptProvenance = captureScoreProvenanceAtPlayStart(
+    capturedAttemptSetup = capturePlaybackSetupAtPlayStart(
         this->options, this->chart->Meta, *rulesetPolicyBuild.policy);
+    attemptProvenance = captureScoreProvenanceAtPlayStart(
+        this->options, this->chart->Meta, *rulesetPolicyBuild.policy,
+        capturedAttemptSetup);
   }
 }
 
@@ -1593,15 +1532,7 @@ void GamePlayScene::init() {
     return;
   }
   if (chart != nullptr) {
-    const int replayLongNoteMode =
-        options.replayData != nullptr
-            ? options.replayData->chartMeta.LnMode
-            : (options.gbattleRecordData != nullptr
-                   ? options.gbattleRecordData->chartMeta.LnMode
-                   : 0);
-    applyEffectiveLongNoteModeToChart(*chart, replayLongNoteMode > 0
-                                                  ? replayLongNoteMode
-                                                  : options.longNoteMode);
+    applyEffectiveLongNoteModeToChart(*chart, options.longNoteMode);
   }
   ownedRenderer = std::make_unique<BMSRenderer>(
       chart, judge.timingWindows, effectiveVisibleTimeGreenNumber(), true,
@@ -1979,33 +1910,8 @@ bool GamePlayScene::reset() {
   ownedState = std::make_unique<RhythmState>(
       chart, false, rulesetPolicyBuild.policy->gauge);
   state = ownedState.get();
-  const bool courseReplayPlayback = isReplayPlayback() && isCoursePlayback() &&
-                                    options.courseSession != nullptr &&
-                                    options.courseSession->courseReplayPlayback;
-  const auto *rawSetup = options.replayPlayback != nullptr
-                             ? &options.replayPlayback->setup
-                             : nullptr;
-  const GaugeType initialGaugeType =
-      courseReplayPlayback
-          ? options.gaugeType
-          : (options.replayData != nullptr
-                 ? options.replayData->initialGaugeType
-                 : (rawSetup != nullptr ? rawSetup->initialGaugeType
-                                        : options.gaugeType));
-  const GaugeProfile gaugeProfile =
-      rawSetup != nullptr
-          ? rawSetup->gaugeProfile
-          : (options.replayData != nullptr && !isCoursePlayback()
-                 ? GaugeProfile::Standard
-                 : options.gaugeProfile);
-  const GaugeAutoShiftMode gaugeAutoShift =
-      courseReplayPlayback
-          ? options.gaugeAutoShift
-          : (options.replayData != nullptr
-                 ? options.replayData->gaugeAutoShift
-                 : (rawSetup != nullptr ? rawSetup->gaugeAutoShift
-                                        : options.gaugeAutoShift));
-  state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile,
+  state->configureGauge(options.gaugeType, options.gaugeAutoShift,
+                        options.gaugeProfile,
                         options.gaugeAutoShiftLowerBound);
   if (options.startingGaugeState.has_value()) {
     state->restoreGaugeState(*options.startingGaugeState);
@@ -2022,13 +1928,8 @@ bool GamePlayScene::reset() {
     state->combo = options.courseSession->carriedCombo;
     state->maxCombo = options.courseSession->maxCombo;
   }
-  const std::string assistOption =
-      options.replayData != nullptr
-          ? options.replayData->assistOption
-          : (rawSetup != nullptr ? rawSetup->assistOption
-                                 : options.assistOption);
   state->setAssistClearMark(
-      assist_options::isEnabled(assistOption) ||
+      assist_options::isEnabled(options.assistOption) ||
       clear_policy::assistClearRequired(options.playback));
   initializeStartPositionState();
   configurePacemakerTarget();
@@ -2457,12 +2358,8 @@ int GamePlayScene::effectiveNoteStartPositionPercent() const {
   if (courseNoSpeed()) {
     return AppSettings::kDefaultNoteStartPositionPercent;
   }
-  if (options.replayPlayback != nullptr) {
-    return options.replayPlayback->setup.laneCoverEnabled
-               ? options.replayPlayback->setup.initialLaneCoverPercent
-               : 0;
-  }
-  return context.settings.noteStartPositionPercent;
+  return replayInitialLaneCoverPercent(
+      options, context.settings.noteStartPositionPercent);
 }
 
 bool GamePlayScene::shouldRecordReplay() const {
@@ -2694,6 +2591,9 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   nextOptions.playOption2 = playInfo.option2;
   nextOptions.playOption2Seed = playInfo.seed2;
   nextOptions.longNoteMode = session->longNoteMode;
+  nextOptions.hasUndefinedLongNotes =
+      play_start_detail::hasUndefinedLongNotes(
+          session->entries[session->currentIndex].meta);
   nextOptions.assistOption = session->assistOption;
   nextOptions.playback = course_rules::kRequiredPlaybackRate;
   nextOptions.clubMode = options.clubMode;
@@ -2731,11 +2631,24 @@ void GamePlayScene::beginReplayRecording() {
   replayInputCapture.reset();
   recordedPlaybackReplay = {};
   lastRecordedTouchSamples.clear();
+  capturedAttemptSetup.startingGaugePercent =
+      state != nullptr ? state->currentGauge
+                       : static_cast<float>(options.startingGaugePercent
+                                                .value_or(20));
+  capturedAttemptSetup.startingGaugeState =
+      state != nullptr
+          ? std::optional<GaugeStateSnapshot>(state->gaugeSnapshot())
+          : std::nullopt;
+  capturedAttemptSetup.initialLaneCoverPercent =
+      effectiveNoteStartPositionPercent();
+  capturedAttemptSetup.laneCoverEnabled =
+      capturedAttemptSetup.initialLaneCoverPercent.value_or(0) > 0;
   const auto capturePolicy = resultCapturePolicy();
   analyticsReplay = {};
   if (capturePolicy.captureAnalytics) {
     analyticsReplay.autoPlay = options.autoPlay;
     analyticsReplay.chartMeta = chart->Meta;
+    analyticsReplay.setup = capturedAttemptSetup;
     analyticsReplay.context =
         analysis::playbackContextFrom(attemptProvenance, chart->Meta);
     analyticsReplay.events.reserve(
@@ -2748,20 +2661,9 @@ void GamePlayScene::beginReplayRecording() {
 
   recordedReplay = {};
   recordedReplay.chartMeta = chart->Meta;
-  recordedReplay.randomSeed = chart->Meta.RandomSeed;
-  recordedReplay.randomPrng = chart->Meta.RandomPrng;
-  recordedReplay.randomValues = chart->Meta.RandomValues;
-  recordedReplay.playOption = options.playOption;
-  recordedReplay.playOptionSeed = options.playOptionSeed;
-  recordedReplay.playOption2 = options.playOption2;
-  recordedReplay.playOption2Seed = options.playOption2Seed;
-  recordedReplay.assistOption = assist_options::normalize(options.assistOption);
+  recordedReplay.setup = capturedAttemptSetup;
   recordedReplay.context =
       analysis::playbackContextFrom(attemptProvenance, chart->Meta);
-  recordedReplay.initialGaugeType = options.gaugeType;
-  recordedReplay.gaugeProfile = options.gaugeProfile;
-  recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
-  recordedReplay.gaugeAutoShiftLowerBound = options.gaugeAutoShiftLowerBound;
   recordedReplay.finalScore = 0;
   recordedReplay.finalGauge = state != nullptr ? state->currentGauge : 0.0f;
   recordedReplay.clearType = kClearTypeFailedRank;
@@ -2770,54 +2672,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.touchSamples.reserve(1024);
   recordedReplay.laneCoverEvents.reserve(128);
 
-  auto &setup = recordedPlaybackReplay.setup;
-  setup.chartMd5 = chart->Meta.MD5;
-  setup.chartSha256 = chart->Meta.SHA256;
-  std::ranges::transform(setup.chartMd5, setup.chartMd5.begin(),
-                         [](unsigned char value) {
-                           return static_cast<char>(std::tolower(value));
-                         });
-  std::ranges::transform(setup.chartSha256, setup.chartSha256.begin(),
-                         [](unsigned char value) {
-                           return static_cast<char>(std::tolower(value));
-                         });
-  setup.keyMode = chart->Meta.KeyMode;
-  setup.longNoteMode = scoreLongNoteModeForClearLamp(chart->Meta);
-  setup.hasUndefinedLongNotes = replay::hasUndefinedLongNotesForReplay(
-      chart->Meta.LnMode, chart->Meta.TotalLongNotes,
-      chart->Meta.TotalBackSpinNotes);
-  setup.randomSeed = chart->Meta.RandomSeed;
-  setup.randomPrng = chart->Meta.RandomPrng;
-  setup.randomValues = chart->Meta.RandomValues;
-  setup.playOption = options.playOption;
-  setup.playOptionSeed = options.playOptionSeed;
-  setup.playOption2 = options.playOption2;
-  setup.playOption2Seed = options.playOption2Seed;
-  setup.doublePlayOption = options.doublePlayOption;
-  setup.assistOption = assist_options::normalize(options.assistOption);
-  setup.initialGaugeType = options.gaugeType;
-  setup.gaugeProfile = options.gaugeProfile;
-  setup.gaugeAutoShift = options.gaugeAutoShift;
-  setup.gaugeAutoShiftLowerBound = options.gaugeAutoShiftLowerBound;
-  setup.playbackRulesetId = attemptProvenance.ruleset.id;
-  setup.playbackRulesetRevision = attemptProvenance.ruleset.version;
-  setup.playbackRatePercent = options.playback.percent;
-  setup.playbackMode = options.playback.mode;
-  if (rulesetPolicyBuild.policy.has_value()) {
-    setup.candidateSelection =
-        rulesetPolicyBuild.policy->judge.rules().candidateSelection;
-  }
-  setup.judgeWindowScalePercent = options.judgeWindowScalePercent;
-  setup.startingGaugePercent =
-      state != nullptr ? state->currentGauge
-                       : static_cast<float>(options.startingGaugePercent
-                                                .value_or(20));
-  if (state != nullptr) {
-    setup.startingGaugeState = state->gaugeSnapshot();
-  }
-  setup.clubMode = options.clubMode;
-  setup.initialLaneCoverPercent = effectiveNoteStartPositionPercent();
-  setup.laneCoverEnabled = setup.initialLaneCoverPercent > 0;
+  recordedPlaybackReplay.setup = capturedAttemptSetup;
   replayInputCapture =
       std::make_unique<replay::ReplayInputCaptureBuffer>();
   recordedPlaybackReplay.touchSamples.reserve(1024);

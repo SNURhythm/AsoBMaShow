@@ -95,6 +95,44 @@ inline RulesetDescriptor RulesetDescriptor::Legacy() {
 }
 
 [[nodiscard]] inline bool
+isLegacyRulesetIdentity(std::string_view id, int version) noexcept {
+  const RulesetDescriptor legacy = RulesetDescriptor::Legacy();
+  return id == legacy.id && version == legacy.version;
+}
+
+[[nodiscard]] inline std::optional<GameplayRuleset>
+gameplayRulesetFromSupportedIdentity(std::string_view id,
+                                     int version) noexcept {
+  const auto ruleset = gameplayRulesetFromId(id);
+  if (!ruleset.has_value() ||
+      RulesetDescriptor::For(*ruleset).version != version) {
+    return std::nullopt;
+  }
+  return ruleset;
+}
+
+[[nodiscard]] inline std::optional<GameplayRuleset>
+gameplayRulesetFromReplayIdentity(std::string_view id,
+                                  int version) noexcept {
+  if (isLegacyRulesetIdentity(id, version)) {
+    return GameplayRuleset::Beatoraja;
+  }
+  return gameplayRulesetFromSupportedIdentity(id, version);
+}
+
+[[nodiscard]] inline RulesetDescriptor
+rulesetDescriptorFromReplayIdentity(std::string_view id, int version) {
+  if (const auto ruleset =
+          gameplayRulesetFromSupportedIdentity(id, version)) {
+    return RulesetDescriptor::For(*ruleset);
+  }
+  RulesetDescriptor descriptor = RulesetDescriptor::Legacy();
+  descriptor.id = std::string(id);
+  descriptor.version = version;
+  return descriptor;
+}
+
+[[nodiscard]] inline bool
 isSupportedRulesetDescriptor(const RulesetDescriptor &descriptor) noexcept {
   return descriptor == RulesetDescriptor::For(GameplayRuleset::LR2) ||
          descriptor == RulesetDescriptor::For(GameplayRuleset::Beatoraja);

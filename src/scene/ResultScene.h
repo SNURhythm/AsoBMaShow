@@ -1,6 +1,7 @@
 #pragma once
 #include "../analysis/JudgedPlaybackData.h"
 #include "../analysis/JudgedPlaybackContext.h"
+#include "../PlayOptionUtils.h"
 #include "../ResultPersistenceCoordinator.h"
 #include "../ir/IrSubmission.h"
 #include "../ir/IrSubmissionSnapshot.h"
@@ -131,6 +132,20 @@ remoteResultSceneActions(bool rankingsAvailable) noexcept {
 }
 
 namespace result_scene_detail {
+[[nodiscard]] inline play_options::PlayModeDisplayLabel
+selectCoursePlayModeDisplayLabel(
+    const play_options::PlayModeDisplayLabel &retainedStageDisplay,
+    play_options::PlayModeDisplayLabel sessionDisplay,
+    bool courseReplayPlayback) {
+  if (courseReplayPlayback) {
+    return retainedStageDisplay;
+  }
+  if (sessionDisplay.mode.empty()) {
+    sessionDisplay.mode = "COURSE";
+  }
+  return sessionDisplay;
+}
+
 [[nodiscard]] inline bool
 cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
                                    const std::function<bool()> &cleanup) {
@@ -268,7 +283,13 @@ retrySourceForLocalResult(
     return *presentationReplay;
   }
   if (rawReplayPlayback != nullptr) {
-    return std::nullopt;
+    JudgedPlaybackData result =
+        analysis::retrySourceFromProvenance(meta, attemptProvenance);
+    result.setup = rawReplayPlayback->setup;
+    result.chartMeta.RandomSeed = result.setup.randomSeed;
+    result.chartMeta.RandomPrng = result.setup.randomPrng;
+    result.chartMeta.RandomValues = result.setup.randomValues;
+    return result;
   }
   return analysis::retrySourceFromProvenance(meta, attemptProvenance);
 }

@@ -859,6 +859,55 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
   }
 }
 
+void testMigrationDefaultsMissingInitialLaneCoverState() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(
+      database.get(),
+      "DELETE FROM replay_lane_cover_events WHERE replay_id=42 AND "
+      "song_time_micros<=0");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::Migrated,
+         "migration accepts an old replay without an initial lane-cover row");
+  if (outcome.status != replay_repository_detail::ReplayMigrationOutcome::
+                            Status::Migrated) {
+    return;
+  }
+
+  const replay::ReplayFileMetadata metadata{
+      .relativePath = text(database.get(),
+                           "SELECT relative_path FROM replay_files WHERE "
+                           "chart_result_id=42"),
+      .sha256 = text(database.get(),
+                     "SELECT content_sha256 FROM replay_files WHERE "
+                     "chart_result_id=42"),
+      .compressedSize = static_cast<std::uint64_t>(integer(
+          database.get(), "SELECT compressed_size FROM replay_files WHERE "
+                          "chart_result_id=42")),
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
+  const auto decoded = store.load(metadata, codec);
+  expect(decoded.chart.has_value() &&
+             decoded.chart->setup.initialLaneCoverPercent.has_value() &&
+             *decoded.chart->setup.initialLaneCoverPercent == 0 &&
+             !decoded.chart->setup.laneCoverEnabled,
+         "migration records an explicit disabled lane-cover fallback");
+  expect(decoded.chart.has_value() &&
+             decoded.chart->laneCoverEvents.size() == 1 &&
+             decoded.chart->laneCoverEvents.front().songTimeMicros == 5000 &&
+             decoded.chart->laneCoverEvents.front()
+                     .noteStartPositionPercent == 45,
+         "migration preserves later timed lane-cover changes");
+}
+
 void testCurrentChartMigrationSynthesizesDeterministicStartingGaugeState() {
   TemporaryDirectory temporary;
   Database database(temporary.path() / "replay.db");
@@ -2440,6 +2489,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
 
 int main() {
   testMigratesChartRowsToReplayFileAndCompactResult();
+  testMigrationDefaultsMissingInitialLaneCoverState();
   testCurrentChartMigrationSynthesizesDeterministicStartingGaugeState();
   testCurrentCourseMigrationSynthesizesRulesetGaugeState();
   testPreservesEmptyLegacyReplayInput();

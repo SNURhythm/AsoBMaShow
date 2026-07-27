@@ -134,6 +134,14 @@ void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
   configuration.startingGaugePercent = 37;
 
   StartOptions options;
+  options.startingGaugeState = GaugeStateSnapshot{
+      .gaugeType = GaugeType::Hard,
+      .selectedGaugeType = GaugeType::Hard,
+      .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+      .gaugeProfile = GaugeProfile::Standard,
+      .gaugeAutoShift = GaugeAutoShiftMode::None,
+      .currentGauge = 100.0F,
+  };
   applyPracticeConfigurationToStartOptions(options, configuration);
   assert(options.startPosition == 2'000'000);
   assert(options.gaugeType == GaugeType::ExHard);
@@ -141,6 +149,7 @@ void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
   assert(options.playback.percent == 75);
   assert(options.judgeWindowScalePercent == 80);
   assert(options.startingGaugePercent == 37);
+  assert(!options.startingGaugeState.has_value());
 }
 
 std::map<Judgement, std::pair<long long, long long>>
@@ -179,12 +188,10 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
   assert(error.empty());
   assert(persisted.has_value());
 
-  JudgedPlaybackData replay;
-  replay.chartMeta = meta;
-  replay.initialGaugeType = GaugeType::Hard;
-  replay.context = analysis::playbackContextFrom(*persisted, meta);
+  JudgedPlaybackData replay =
+      analysis::retrySourceFromProvenance(meta, *persisted);
   StartOptions replayOptions;
-  applyJudgedPlaybackContextToStartOptions(replayOptions, replay);
+  applyJudgedPlaybackSetupToStartOptions(replayOptions, replay);
 
   const Judge restoredJudge =
       makeEffectiveJudgeAtPlayStart(replayOptions, meta);
@@ -196,7 +203,7 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 100;
   RhythmState restoredState(&chart, false);
-  restoredState.configureGauge(replay.initialGaugeType,
+  restoredState.configureGauge(replay.setup.initialGaugeType,
                                GaugeAutoShiftMode::None);
   assert(replayOptions.startingGaugePercent.has_value());
   restoredState.setStartingGaugePercent(*replayOptions.startingGaugePercent);

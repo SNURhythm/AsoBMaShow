@@ -307,9 +307,10 @@ inline bool hasSamePatternRandomization(
 }
 
 inline bool hasSamePatternRandomization(const JudgedPlaybackData &replay) {
-  return !replay.randomValues.empty() ||
-         hasSamePatternRandomization(replay.chartMeta, replay.playOption,
-                                     replay.playOption2);
+  return !replay.setup.randomValues.empty() ||
+         hasSamePatternRandomization(replay.chartMeta,
+                                     replay.setup.playOption,
+                                     replay.setup.playOption2);
 }
 
 inline std::string
@@ -376,11 +377,13 @@ inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
   return display;
 }
 
+inline PlayModeDisplayLabel formatReplayPlaybackModeDisplayLabel(
+    const bms_parser::ChartMeta &meta,
+    const replay::ChartPlaybackSetup &setup);
+
 inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
     const JudgedPlaybackData &replay) {
-  return formatPlayModeDisplayLabel(
-      replay.chartMeta, replay.playOption, replay.playOptionSeed,
-      replay.playOption2, replay.playOption2Seed);
+  return formatReplayPlaybackModeDisplayLabel(replay.chartMeta, replay.setup);
 }
 
 inline PlayModeDisplayLabel formatReplayPlaybackModeDisplayLabel(
@@ -496,45 +499,36 @@ inline bool applyReplayDoublePlayOption(
                                  "raw replay DP FLIP");
 }
 
-inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
-                                   const JudgedPlaybackData &replay) {
-  std::optional<std::string> ignoredOption;
-  std::optional<long long> ignoredSeed;
-  if (replay.playOption.has_value() &&
-      !applyPlayOptionModifier(chart, *replay.playOption, replay.playOptionSeed,
-                               0, ignoredOption, ignoredSeed, "replay")) {
-    return false;
-  }
-  if (chart.Meta.IsDP && replay.playOption2.has_value() &&
-      !applyPlayOptionModifier(chart, *replay.playOption2,
-                               replay.playOption2Seed, 1, ignoredOption,
-                               ignoredSeed, "replay")) {
-    return false;
-  }
-  return true;
-}
-
 inline bool applyReplayPlayOptions(
-    bms_parser::Chart &chart, const replay::ReplayPlaybackData &playback) {
+    bms_parser::Chart &chart, const replay::ChartPlaybackSetup &setup,
+    std::string_view logContext) {
   std::optional<std::string> ignoredOption;
   std::optional<long long> ignoredSeed;
-  const auto &setup = playback.setup;
   if (!applyReplayDoublePlayOption(chart, setup.doublePlayOption)) {
     return false;
   }
   if (setup.playOption.has_value() &&
-      !applyPlayOptionModifier(chart, *setup.playOption,
-                               setup.playOptionSeed, 0, ignoredOption,
-                               ignoredSeed, "raw replay")) {
+      !applyPlayOptionModifier(chart, *setup.playOption, setup.playOptionSeed,
+                               0, ignoredOption, ignoredSeed, logContext)) {
     return false;
   }
   if (chart.Meta.IsDP && setup.playOption2.has_value() &&
       !applyPlayOptionModifier(chart, *setup.playOption2,
                                setup.playOption2Seed, 1, ignoredOption,
-                               ignoredSeed, "raw replay")) {
+                               ignoredSeed, logContext)) {
     return false;
   }
   return true;
+}
+
+inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
+                                   const JudgedPlaybackData &replay) {
+  return applyReplayPlayOptions(chart, replay.setup, "replay");
+}
+
+inline bool applyReplayPlayOptions(
+    bms_parser::Chart &chart, const replay::ReplayPlaybackData &playback) {
+  return applyReplayPlayOptions(chart, playback.setup, "raw replay");
 }
 
 inline PlayOptionReplayInfo
@@ -723,8 +717,8 @@ prepareCourseChart(const bms_parser::ChartMeta &frozenMeta,
 inline std::unique_ptr<bms_parser::Chart>
 parseChartForReplay(const std::filesystem::path &path, const JudgedPlaybackData &replay,
                     std::atomic_bool &cancelled) {
-  return parseChart(path, replay.randomSeed, replay.randomPrng,
-                    randomValuesOrNull(replay.randomValues), cancelled,
+  return parseChart(path, replay.setup.randomSeed, replay.setup.randomPrng,
+                    randomValuesOrNull(replay.setup.randomValues), cancelled,
                     "replay");
 }
 
@@ -732,10 +726,14 @@ inline std::unique_ptr<bms_parser::Chart>
 prepareReplayChart(const std::filesystem::path &path, const JudgedPlaybackData &replay,
                    std::atomic_bool &cancelled) {
   auto chart = parseChartForReplay(path, replay, cancelled);
-  if (chart == nullptr || cancelled || !applyReplayPlayOptions(*chart, replay)) {
+  if (chart == nullptr || cancelled ||
+      !replay::storedChartIdentityMatches(
+          replay.setup.chartSha256, replay.setup.chartMd5,
+          chart->Meta.SHA256, chart->Meta.MD5) ||
+      !applyReplayPlayOptions(*chart, replay)) {
     return nullptr;
   }
-  applyEffectiveLongNoteModeToChart(*chart, replay.chartMeta.LnMode);
+  applyEffectiveLongNoteModeToChart(*chart, replay.setup.longNoteMode);
   return chart;
 }
 
@@ -767,27 +765,16 @@ struct ResultRetryPatternAuthority {
 };
 
 [[nodiscard]] inline ResultRetryPatternAuthority resultRetryPatternAuthority(
-    const JudgedPlaybackData &retrySource,
-    const bms_parser::ChartMeta &fallbackMeta, bool samePattern) {
+    const JudgedPlaybackData &retrySource, bool samePattern) {
   if (!samePattern) {
     return {};
   }
-  const bms_parser::ChartMeta &chartMeta = retrySource.chartMeta.BmsPath.empty()
-                                               ? fallbackMeta
-                                               : retrySource.chartMeta;
   return {
-      .chartRandomSeed = retrySource.randomSeed.has_value()
-                             ? retrySource.randomSeed
-                             : chartMeta.RandomSeed,
-      .chartRandomPrng = retrySource.randomPrng.has_value()
-                             ? retrySource.randomPrng
-                             : chartMeta.RandomPrng,
-      .chartRandomValues =
-          !retrySource.randomValues.empty()
-              ? randomValuesOrNull(retrySource.randomValues)
-              : randomValuesOrNull(chartMeta.RandomValues),
-      .playOptionSeed = retrySource.playOptionSeed,
-      .playOption2Seed = retrySource.playOption2Seed,
+      .chartRandomSeed = retrySource.setup.randomSeed,
+      .chartRandomPrng = retrySource.setup.randomPrng,
+      .chartRandomValues = randomValuesOrNull(retrySource.setup.randomValues),
+      .playOptionSeed = retrySource.setup.playOptionSeed,
+      .playOption2Seed = retrySource.setup.playOption2Seed,
   };
 }
 
@@ -799,10 +786,16 @@ parseChartForRetry(const JudgedPlaybackData &retrySource,
                                                ? fallbackMeta
                                                : retrySource.chartMeta;
   const ResultRetryPatternAuthority pattern =
-      resultRetryPatternAuthority(retrySource, fallbackMeta, samePattern);
+      resultRetryPatternAuthority(retrySource, samePattern);
   auto chart = parseChart(chartMeta.BmsPath, pattern.chartRandomSeed,
                           pattern.chartRandomPrng,
                           pattern.chartRandomValues, cancelled, "retry");
+  if (chart != nullptr && !cancelled &&
+      !replay::storedChartIdentityMatches(
+          retrySource.setup.chartSha256, retrySource.setup.chartMd5,
+          chart->Meta.SHA256, chart->Meta.MD5)) {
+    return nullptr;
+  }
   if (chart != nullptr && !cancelled && chart->Meta.LnMode == 0 &&
       normalizeChartLongNoteModeValue(chartMeta.LnMode) > 0) {
     chart->Meta.LnMode = chartMeta.LnMode;

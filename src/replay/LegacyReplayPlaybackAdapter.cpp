@@ -23,21 +23,8 @@ JudgedPlaybackData makeAdapterBase(
 
   JudgedPlaybackData adapted;
   adapted.chartMeta = std::move(chartMeta);
-  adapted.randomSeed = setup.randomSeed;
-  adapted.randomPrng = setup.randomPrng;
-  adapted.randomValues = setup.randomValues;
-  adapted.playOption = setup.playOption;
-  adapted.playOptionSeed = setup.playOptionSeed;
-  adapted.playOption2 = setup.playOption2;
-  adapted.playOption2Seed = setup.playOption2Seed;
-  adapted.assistOption = setup.assistOption;
-  adapted.initialGaugeType = setup.initialGaugeType;
-  adapted.gaugeProfile = setup.gaugeProfile;
-  adapted.gaugeAutoShift = setup.gaugeAutoShift;
-  adapted.gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound;
+  adapted.setup = setup;
   adapted.touchSamples = playback.touchSamples;
-  adapted.initialLaneCoverPercent = setup.initialLaneCoverPercent;
-  adapted.laneCoverEnabled = setup.laneCoverEnabled;
   adapted.laneCoverEvents = playback.laneCoverEvents;
   adapted.context = analysis::playbackContextFrom(setup);
   return adapted;

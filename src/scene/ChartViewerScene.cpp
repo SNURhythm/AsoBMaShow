@@ -151,8 +151,8 @@ ReplaySummary replaySummaryFromReplay(const JudgedPlaybackData &replay,
                                       const std::string &createdAt) {
   ReplaySummary summary;
   summary.id = summaryId;
-  summary.initialGaugeType = replay.initialGaugeType;
-  summary.gaugeAutoShift = replay.gaugeAutoShift;
+  summary.initialGaugeType = replay.setup.initialGaugeType;
+  summary.gaugeAutoShift = replay.setup.gaugeAutoShift;
   summary.finalScore = replay.finalScore;
   summary.maxScore = std::max(0, replay.chartMeta.TotalNotes) * 2;
   summary.maxCombo = replay.maxCombo;
@@ -160,11 +160,11 @@ ReplaySummary replaySummaryFromReplay(const JudgedPlaybackData &replay,
   summary.clearType = replay.clearType;
   summary.createdAt = createdAt;
   summary.chartMeta = replay.chartMeta;
-  summary.playOption = replay.playOption;
-  summary.playOptionSeed = replay.playOptionSeed;
-  summary.playOption2 = replay.playOption2;
-  summary.playOption2Seed = replay.playOption2Seed;
-  summary.assistOption = replay.assistOption;
+  summary.playOption = replay.setup.playOption;
+  summary.playOptionSeed = replay.setup.playOptionSeed;
+  summary.playOption2 = replay.setup.playOption2;
+  summary.playOption2Seed = replay.setup.playOption2Seed;
+  summary.assistOption = replay.setup.assistOption;
   return summary;
 }
 
@@ -3460,15 +3460,26 @@ bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData
     }
     return false;
   }
+  if (!replay::storedChartIdentityMatches(
+          replayData.setup.chartSha256, replayData.setup.chartMd5,
+          replayChart->Meta.SHA256, replayChart->Meta.MD5)) {
+    if (statusText != nullptr) {
+      statusText->setText("Ghost chart identity changed");
+    }
+    return false;
+  }
 
   const auto previousPlayOption = viewerPlayOption;
   const auto previousPlayOptionSeed = viewerPlayOptionSeed;
   const auto previousPlayOption2 = viewerPlayOption2;
   const auto previousPlayOption2Seed = viewerPlayOption2Seed;
   const auto previousDoublePlayOption = viewerDoublePlayOption;
-  viewerDoublePlayOption = replay::DoublePlayOption::Normal;
-  setViewerPlayOptions(replayData.playOption, replayData.playOptionSeed,
-                       replayData.playOption2, replayData.playOption2Seed);
+  const auto replayOptions =
+      chart_viewer_practice::viewerReplayPlayOptions(replayData);
+  viewerDoublePlayOption = replayOptions.doublePlayOption;
+  setViewerPlayOptions(
+      replayOptions.playOption, replayOptions.playOptionSeed,
+      replayOptions.playOption2, replayOptions.playOption2Seed);
   if (!applyViewerPlayOptions(*replayChart, "ghost replay")) {
     viewerPlayOption = previousPlayOption;
     viewerPlayOptionSeed = previousPlayOptionSeed;
@@ -3480,6 +3491,8 @@ bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData
     }
     return false;
   }
+  applyEffectiveLongNoteModeToChart(*replayChart,
+                                    replayData.setup.longNoteMode);
 
   retainLoadedListenResourcesForChartChange();
 
@@ -4484,10 +4497,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
   const bool autoKeySound = autoPlay || !context.settings.inputKeysoundEnabled;
   const std::string assistOption = viewerAssistOption;
   const int selectedLongNoteMode =
-      normalizeChartLongNoteModeValue(record.meta.LnMode) > 0
-          ? normalizeChartLongNoteModeValue(record.meta.LnMode)
-          : long_note_mode::valueFromId(context.settings.selectedLnMode,
-                                        long_note_mode::kLnValue);
+      chart_viewer_practice::practiceLongNoteModeForChart(
+          chart->Meta, context.settings.selectedLnMode);
   const bool canReuseJukeboxResources =
       listenAudioLoaded || retainedListenResourcesForReload;
 
@@ -4576,6 +4587,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .playOption2Seed = viewerPlayOption2Seed,
                     .doublePlayOption = viewerDoublePlayOption,
                     .longNoteMode = selectedLongNoteMode,
+                    .hasUndefinedLongNotes =
+                        play_start_detail::hasUndefinedLongNotes(record.meta),
                     .assistOption = assistOption,
                     .pacemakerTarget = pacemaker::kTargetOff,
                     .ownsChart = true,

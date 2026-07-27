@@ -225,14 +225,38 @@ void testReplayStartRebuildsCanonicalPolicyWithoutSnapshot() {
   auto replay = std::make_shared<JudgedPlaybackData>();
   replay->chartMeta = meta;
   replay->context.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+  replay->setup.playbackRulesetId = replay->context.ruleset.id;
+  replay->setup.playbackRulesetRevision = replay->context.ruleset.version;
   StartOptions options{.replayData = replay};
-  applyJudgedPlaybackContextToStartOptions(options, *replay);
+  applyJudgedPlaybackSetupToStartOptions(options, *replay);
   const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
       options, meta, AppSettings::NotePriorityMode::Lowest);
   require(
       outcome.built() && outcome.policy->canonical &&
           outcome.policy->id == GameplayRuleset::LR2,
       "a stock replay setup rebuilds its canonical policy from chart metadata");
+}
+
+void testJudgedReplayPreservesCompleteRulesetProof() {
+  const auto meta = chartMeta(GameplayRuleset::LR2);
+  auto replay = std::make_shared<JudgedPlaybackData>();
+  replay->chartMeta = meta;
+  replay->context.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+  replay->context.ruleset.judgementModel = "future-judgement-model";
+  replay->setup.playbackRulesetId = replay->context.ruleset.id;
+  replay->setup.playbackRulesetRevision = replay->context.ruleset.version;
+
+  StartOptions options{.replayData = replay};
+  applyJudgedPlaybackSetupToStartOptions(options, *replay);
+  const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
+      options, meta, AppSettings::NotePriorityMode::Lowest);
+
+  require(options.requiredRulesetDescriptor == replay->context.ruleset &&
+              outcome.status ==
+                  gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset &&
+              !outcome.policy.has_value(),
+          "a judged replay preserves and rejects an unsupported full ruleset "
+          "proof instead of canonicalizing its ID and version");
 }
 
 void testRawReplayUnknownRulesetDoesNotFallBack() {
@@ -280,8 +304,10 @@ void testLegacyReplayUsesBeatorajaFallback() {
   auto replay = std::make_shared<JudgedPlaybackData>();
   replay->chartMeta = meta;
   replay->context.ruleset = RulesetDescriptor::Legacy();
+  replay->setup.playbackRulesetId = replay->context.ruleset.id;
+  replay->setup.playbackRulesetRevision = replay->context.ruleset.version;
   StartOptions options{.replayData = replay};
-  applyJudgedPlaybackContextToStartOptions(options, *replay);
+  applyJudgedPlaybackSetupToStartOptions(options, *replay);
 
   const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
       options, meta, AppSettings::NotePriorityMode::Lowest);
@@ -297,7 +323,7 @@ void testLegacyReplayUsesBeatorajaFallback() {
   replay->context =
       analysis::playbackContextFrom(legacyProvenanceWithStage, meta);
   StartOptions legacyWithStage{.replayData = replay};
-  applyJudgedPlaybackContextToStartOptions(legacyWithStage, *replay);
+  applyJudgedPlaybackSetupToStartOptions(legacyWithStage, *replay);
   const auto stagedLegacyOutcome = buildGameplayRulesetPolicyAtPlayStart(
       legacyWithStage, meta, AppSettings::NotePriorityMode::Lowest);
   require(!legacyWithStage.replayRulesetOverride.has_value() &&
@@ -317,6 +343,84 @@ void testLegacyReplayUsesBeatorajaFallback() {
               courseOutcome.built() &&
               courseOutcome.policy->id == GameplayRuleset::Beatoraja,
           "a migrated legacy course replay uses the same Beatoraja fallback");
+}
+
+void testFutureLegacyMarkerDoesNotFallBack() {
+  const auto meta = chartMeta(GameplayRuleset::Beatoraja);
+  auto replay = std::make_shared<JudgedPlaybackData>();
+  replay->chartMeta = meta;
+  replay->context.ruleset = RulesetDescriptor::Legacy();
+  replay->context.ruleset.version = 1;
+  replay->setup.playbackRulesetId = replay->context.ruleset.id;
+  replay->setup.playbackRulesetRevision = replay->context.ruleset.version;
+
+  StartOptions chartOptions{.replayData = replay};
+  applyJudgedPlaybackSetupToStartOptions(chartOptions, *replay);
+  const auto chartOutcome = buildGameplayRulesetPolicyAtPlayStart(
+      chartOptions, meta, AppSettings::NotePriorityMode::Lowest);
+
+  auto session = std::make_shared<CoursePlaySession>();
+  session->snapshotRulesetFromReplay(*replay);
+  const StartOptions courseOptions =
+      makeCourseReplayStageStartOptions(session, replay);
+  const auto courseOutcome = buildGameplayRulesetPolicyAtPlayStart(
+      courseOptions, meta, AppSettings::NotePriorityMode::Lowest);
+
+  require(chartOptions.requiredRulesetDescriptor.has_value() &&
+              chartOptions.requiredRulesetDescriptor->id == "legacy-unknown" &&
+              chartOptions.requiredRulesetDescriptor->version == 1 &&
+              chartOutcome.status ==
+                  gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset &&
+              !chartOutcome.policy.has_value() &&
+              session->rulesetDescriptor.id == "legacy-unknown" &&
+              session->rulesetDescriptor.version == 1 &&
+              courseOutcome.status ==
+                  gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset &&
+              !courseOutcome.policy.has_value(),
+          "a future legacy-marker revision is preserved and rejected in chart "
+          "and course playback");
+}
+
+void testFutureKnownRevisionDoesNotBecomeLegacyMarker() {
+  const auto meta = chartMeta(GameplayRuleset::LR2);
+  replay::ChartPlaybackSetup setup;
+  setup.playbackRulesetId = gameplayRulesetId(GameplayRuleset::LR2);
+  setup.playbackRulesetRevision =
+      RulesetDescriptor::For(GameplayRuleset::LR2).version + 1;
+
+  auto judged = std::make_shared<JudgedPlaybackData>();
+  judged->setup = setup;
+  judged->context = analysis::playbackContextFrom(setup);
+  auto judgedSession = std::make_shared<CoursePlaySession>();
+  judgedSession->snapshotRulesetFromReplay(*judged);
+  const auto judgedOptions =
+      makeCourseReplayStageStartOptions(judgedSession, judged);
+  const auto judgedOutcome = buildGameplayRulesetPolicyAtPlayStart(
+      judgedOptions, meta, AppSettings::NotePriorityMode::Lowest);
+
+  auto raw = std::make_shared<replay::ReplayPlaybackData>();
+  raw->setup = setup;
+  auto rawSession = std::make_shared<CoursePlaySession>();
+  rawSession->snapshotRulesetFromPlayback(*raw);
+  const auto rawOptions = makeCourseReplayStageStartOptions(rawSession, raw);
+  const auto rawOutcome = buildGameplayRulesetPolicyAtPlayStart(
+      rawOptions, meta, AppSettings::NotePriorityMode::Lowest);
+
+  const auto preservesFutureIdentity = [&](const RulesetDescriptor &value) {
+    return value.id == setup.playbackRulesetId &&
+           value.version == setup.playbackRulesetRevision;
+  };
+  require(preservesFutureIdentity(judged->context.ruleset) &&
+              preservesFutureIdentity(judgedSession->rulesetDescriptor) &&
+              judgedOutcome.status ==
+                  gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset &&
+              !judgedOutcome.policy.has_value() &&
+              preservesFutureIdentity(rawSession->rulesetDescriptor) &&
+              rawOutcome.status ==
+                  gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset &&
+              !rawOutcome.policy.has_value(),
+          "a future revision of a known ruleset remains unsupported evidence "
+          "instead of becoming the exact legacy marker");
 }
 
 void testRawCourseReplayRestTimingIsPreserved() {
@@ -376,9 +480,12 @@ int main() {
   testValidatedReplayAndCourseConsistency();
   testCanonicalReplaySnapshotStaysCanonical();
   testReplayStartRebuildsCanonicalPolicyWithoutSnapshot();
+  testJudgedReplayPreservesCompleteRulesetProof();
   testRawCourseReplayUnknownRulesetDoesNotFallBack();
   testRawReplayUnknownRulesetDoesNotFallBack();
   testLegacyReplayUsesBeatorajaFallback();
+  testFutureLegacyMarkerDoesNotFallBack();
+  testFutureKnownRevisionDoesNotBecomeLegacyMarker();
   testRawCourseReplayRestTimingIsPreserved();
   testRawCourseReplayMaterializationAppliesSavedJudgementConstraint();
   return 0;

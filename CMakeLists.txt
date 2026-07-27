@@ -2435,8 +2435,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gameplay_playback_startup_tests
         tests/gameplay_playback_startup_tests.cpp
         src/ScoreProvenance.cpp
+        src/Utils.cpp
         src/bms_parser.cpp
+        src/path.cpp
+        src/replay/ReplaySetupAuthority.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(gameplay_playback_startup_tests PRIVATE

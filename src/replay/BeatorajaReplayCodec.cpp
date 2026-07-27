@@ -660,8 +660,9 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
   if (!projectSetupOptions(setup, diagnostic)) {
     return false;
   }
-  if (setup.initialLaneCoverPercent < 0 ||
-      setup.initialLaneCoverPercent > 100) {
+  if (!setup.initialLaneCoverPercent.has_value() ||
+      *setup.initialLaneCoverPercent < 0 ||
+      *setup.initialLaneCoverPercent > 100) {
     return fail(diagnostic, "Replay initial lane cover is out of range");
   }
   if (!audio::PlaybackRate{.percent = setup.playbackRatePercent,
@@ -799,7 +800,7 @@ Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
       {"startingGaugePercent", setup.startingGaugePercent},
       {"startingGaugeState", std::move(startingGaugeState)},
       {"clubMode", setup.clubMode},
-      {"initialLaneCoverPercent", setup.initialLaneCoverPercent},
+      {"initialLaneCoverPercent", *setup.initialLaneCoverPercent},
       {"laneCoverEnabled", setup.laneCoverEnabled},
   };
 }
@@ -1024,7 +1025,7 @@ encodeStage(const ReplayPlaybackData &replay, std::int64_t playedAtUnixMillis,
       {"randomoption2seed", replay.setup.playOption2Seed.value_or(-1)},
       {"doubleoption", static_cast<int>(replay.setup.doublePlayOption)},
       {"config",
-       {{"lanecover", replay.setup.initialLaneCoverPercent / 100.0F},
+       {{"lanecover", *replay.setup.initialLaneCoverPercent / 100.0F},
         {"enablelanecover", replay.setup.laneCoverEnabled}}},
       {"asobmashow", std::move(extension)},
   };
@@ -1079,6 +1080,7 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
   int initialGaugeType = 0;
   int playbackMode = 0;
   int candidateSelection = 0;
+  int initialLaneCoverPercent = 0;
   if (!readRequired(source, "chartSha256", setup.chartSha256, diagnostic) ||
       !readRequired(source, "chartMd5", setup.chartMd5, diagnostic) ||
       !readRequired(source, "keyMode", setup.keyMode, diagnostic) ||
@@ -1116,11 +1118,12 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
                     diagnostic) ||
       !readRequired(source, "clubMode", setup.clubMode, diagnostic) ||
       !readRequired(source, "initialLaneCoverPercent",
-                    setup.initialLaneCoverPercent, diagnostic) ||
+                    initialLaneCoverPercent, diagnostic) ||
       !readRequired(source, "laneCoverEnabled", setup.laneCoverEnabled,
                     diagnostic)) {
     return false;
   }
+  setup.initialLaneCoverPercent = initialLaneCoverPercent;
   const auto doublePlayOption = source.find("doublePlayOption");
   if (doublePlayOption != source.end()) {
     int value = 0;
@@ -1412,6 +1415,10 @@ bool decodeStockSetup(const Json &stage, ChartPlaybackSetup &setup,
       RulesetDescriptor::For(GameplayRuleset::Beatoraja).version;
   setup.playbackMode = audio::PlaybackMode::PitchShift;
   setup.candidateSelection = gameplay::CandidateSelectionMode::Lowest;
+  // Preserve the pre-optional stock fallback when an older Beatoraja file has
+  // no config object.
+  setup.initialLaneCoverPercent = 0;
+  setup.laneCoverEnabled = false;
 
   const auto rand = stage.find("rand");
   if (rand != stage.end()) {

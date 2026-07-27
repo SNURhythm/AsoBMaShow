@@ -1,4 +1,5 @@
 #include "PlayOptionUtils.h"
+#include "replay/ReplaySetupAuthority.h"
 #include "scene/play/GamePlayStartup.h"
 #include "scene/play/GamePlayStartOptions.h"
 
@@ -18,13 +19,13 @@ bool expect(bool condition, const char *message) {
 
 int main() {
   JudgedPlaybackData replay;
-  replay.context.playback = {
-      .percent = 75,
-      .mode = audio::PlaybackMode::TimeStretch,
-  };
-  replay.context.clubMode = true;
+  replay.setup.playbackRatePercent = 75;
+  replay.setup.playbackMode = audio::PlaybackMode::TimeStretch;
+  replay.setup.clubMode = true;
+  replay.setup.playbackRulesetId = "beatoraja";
+  replay.setup.playbackRulesetRevision = 2;
   StartOptions replayOptions{.replayData = std::make_shared<JudgedPlaybackData>(replay)};
-  applyJudgedPlaybackContextToStartOptions(replayOptions, replay);
+  applyJudgedPlaybackSetupToStartOptions(replayOptions, replay);
 
   const auto failure = gameplay_startup::playbackInitializationResult(
       false, "TimeStretch playback mode is not supported");
@@ -56,6 +57,99 @@ int main() {
   const auto success = gameplay_startup::playbackInitializationResult(true, {});
   if (!expect(success.mayStartAttempt && success.visibleStatus.empty(),
               "successful PitchShift or normal playback may start")) {
+    return 1;
+  }
+
+  bms_parser::ChartMeta captureMeta;
+  captureMeta.MD5 = std::string(32, 'c');
+  captureMeta.SHA256 = std::string(64, 'd');
+  captureMeta.KeyMode = 14;
+  captureMeta.IsDP = true;
+  captureMeta.LnMode = 2;
+  captureMeta.RandomSeed = 71U;
+  captureMeta.RandomPrng = "std::mt19937_64";
+  captureMeta.RandomValues = {4, 2};
+  captureMeta.TotalNotes = 1;
+  StartOptions captureOptions;
+  captureOptions.gaugeType = GaugeType::Hard;
+  captureOptions.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  captureOptions.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  captureOptions.playOption = "MIRROR";
+  captureOptions.playOptionSeed = 31;
+  captureOptions.playOption2 = "RANDOM";
+  captureOptions.playOption2Seed = 37;
+  captureOptions.doublePlayOption = replay::DoublePlayOption::Flip;
+  captureOptions.assistOption = assist_options::kDrag;
+  captureOptions.playback = {.percent = 75,
+                             .mode = audio::PlaybackMode::TimeStretch};
+  captureOptions.clubMode = true;
+  captureOptions.judgeWindowScalePercent = 90;
+  captureOptions.startingGaugePercent = 37;
+  const auto capturePolicy = buildGameplayRulesetPolicyAtPlayStart(
+      captureOptions, captureMeta, AppSettings::NotePriorityMode::Score);
+  if (!expect(capturePolicy.policy.has_value(),
+              "capture invariant fixture builds a gameplay policy")) {
+    return 1;
+  }
+  const auto capturedSetup = capturePlaybackSetupAtPlayStart(
+      captureOptions, captureMeta, *capturePolicy.policy);
+  const auto capturedProvenance = captureScoreProvenanceAtPlayStart(
+      captureOptions, captureMeta, *capturePolicy.policy, capturedSetup);
+  if (!expect(capturedSetup.doublePlayOption ==
+                  replay::DoublePlayOption::Flip &&
+                  capturedProvenance.stages.size() == 1 &&
+                  capturedProvenance.stages.front().doublePlayOption ==
+                      replay::DoublePlayOption::Flip &&
+                  capturedSetup.playOption ==
+                      capturedProvenance.player1.option &&
+                  capturedSetup.playOption2 ==
+                      capturedProvenance.player2.option &&
+                  capturedSetup.randomValues == capturedProvenance.stages.front()
+                                                    .chartRandomValues &&
+                  capturedSetup.playbackRatePercent ==
+                      capturedProvenance.playback.percent,
+              "one captured setup feeds raw replay and provenance facts")) {
+    return 1;
+  }
+  const result_persistence::ChartScoreWrite capturedScore{
+      .chartMd5 = captureMeta.MD5,
+      .chartSha256 = captureMeta.SHA256,
+      .longNoteMode = capturedSetup.longNoteMode,
+      .provenance = capturedProvenance,
+  };
+  const auto capturedResolution = replay::setup_authority::resolveForResult(
+      capturedSetup, capturedScore, captureMeta.KeyMode,
+      replay::setup_authority::Source::CapturedAttempt, false);
+  if (!expect(capturedResolution.resolved(),
+              "captured setup and provenance satisfy the persistence "
+              "authority without reconstruction")) {
+    return 1;
+  }
+
+  bms_parser::ChartMeta undefinedLongNoteMeta = captureMeta;
+  undefinedLongNoteMeta.LnMode = long_note_mode::kUnknownValue;
+  undefinedLongNoteMeta.TotalLongNotes = 1;
+  StartOptions undefinedLongNoteOptions = captureOptions;
+  undefinedLongNoteOptions.longNoteMode = long_note_mode::kHcnValue;
+  undefinedLongNoteOptions.hasUndefinedLongNotes = true;
+  bms_parser::ChartMeta materializedUndefinedLongNoteMeta =
+      undefinedLongNoteMeta;
+  materializedUndefinedLongNoteMeta.LnMode = long_note_mode::kHcnValue;
+  const auto undefinedLongNotePolicy = buildGameplayRulesetPolicyAtPlayStart(
+      undefinedLongNoteOptions, materializedUndefinedLongNoteMeta,
+      AppSettings::NotePriorityMode::Score);
+  if (!expect(undefinedLongNotePolicy.policy.has_value(),
+              "undefined-LN capture fixture builds a gameplay policy")) {
+    return 1;
+  }
+  const auto undefinedLongNoteSetup = capturePlaybackSetupAtPlayStart(
+      undefinedLongNoteOptions, materializedUndefinedLongNoteMeta,
+      *undefinedLongNotePolicy.policy);
+  if (!expect(undefinedLongNoteSetup.hasUndefinedLongNotes &&
+                  undefinedLongNoteSetup.longNoteMode ==
+                      long_note_mode::kHcnValue,
+              "capture retains that LN mode was selected for an undefined-LN "
+              "chart before chart metadata is materialized")) {
     return 1;
   }
 
@@ -94,21 +188,23 @@ int main() {
 
   auto gbattleRecord = std::make_shared<JudgedPlaybackData>();
   gbattleRecord->chartMeta.LnMode = 2;
-  gbattleRecord->playOption = "S-RANDOM";
-  gbattleRecord->playOptionSeed = 41;
-  gbattleRecord->playOption2 = "MIRROR";
-  gbattleRecord->playOption2Seed = 43;
-  gbattleRecord->assistOption = "AUTO-SCRATCH";
+  gbattleRecord->setup = raw->setup;
+  gbattleRecord->setup.playOption = "S-RANDOM";
+  gbattleRecord->setup.playOptionSeed = 41;
+  gbattleRecord->setup.playOption2 = "MIRROR";
+  gbattleRecord->setup.playOption2Seed = 43;
+  gbattleRecord->setup.assistOption = "AUTO-SCRATCH";
 
-  StartOptions materializedGBattleOptions;
+  StartOptions materializedGBattleOptions{
+      .gaugeType = GaugeType::Easy,
+      .playback = {.percent = 150},
+  };
   applyGBattleReplayChartSetupToStartOptions(
-      materializedGBattleOptions, *gbattleRecord, *raw);
+      materializedGBattleOptions, *gbattleRecord);
 
-  replay::ReplayPlaybackData legacyRaw = *raw;
-  legacyRaw.legacy.emplace();
   StartOptions legacyGBattleOptions;
   applyGBattleReplayChartSetupToStartOptions(legacyGBattleOptions,
-                                             *gbattleRecord, legacyRaw);
+                                             *gbattleRecord);
 
   const bool materializedGBattlePreservesFlip = expect(
       materializedGBattleOptions.doublePlayOption ==
@@ -121,17 +217,14 @@ int main() {
       !expect(materializedGBattleOptions.playOption == "S-RANDOM" &&
                   materializedGBattleOptions.playOptionSeed == 41 &&
                   materializedGBattleOptions.playOption2 == "MIRROR" &&
-                  materializedGBattleOptions.playOption2Seed == 43,
-              "G-Battle keeps per-player options from judged playback")) {
+                  materializedGBattleOptions.playOption2Seed == 43 &&
+                  materializedGBattleOptions.gaugeType == GaugeType::Easy &&
+                  materializedGBattleOptions.playback.percent == 150,
+              "G-Battle keeps chart setup from judged playback without "
+              "overwriting the live player's gauge or playback")) {
     return 1;
   }
 
-  if (!expect(resultRetryDoublePlayOption(
-                  false, replay::DoublePlayOption::Normal, raw.get()) ==
-                  replay::DoublePlayOption::Flip,
-              "raw replay retry preserves its recorded DP FLIP option")) {
-    return 1;
-  }
   StartOptions rawOptions;
   applyReplayPlaybackToStartOptions(rawOptions, raw);
   auto rawAnalysis = std::make_shared<JudgedPlaybackData>();
@@ -245,7 +338,9 @@ int main() {
       .chartRandomPrng = "std::mt19937_64",
       .chartRandomValues = {2, 1},
       .candidateSelection = gameplay::CandidateSelectionMode::Combo,
+      .doublePlayOption = replay::DoublePlayOption::Flip,
   }};
+  recalledProvenance.schemaVersion = ScoreProvenance::kSchemaVersion;
   recalledProvenance.gaugeType = GaugeType::Hard;
   recalledProvenance.gaugeProfile = GaugeProfile::Standard;
   recalledProvenance.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
@@ -267,47 +362,81 @@ int main() {
                                           recalledProvenance);
   const auto recalledDisplay =
       play_options::formatPlayModeDisplayLabel(recalledRetry);
-  if (!expect(recalledRetry.initialGaugeType == GaugeType::Hard &&
-                  recalledRetry.gaugeProfile == GaugeProfile::Standard &&
-                  recalledRetry.gaugeAutoShift ==
+  if (!expect(recalledRetry.setup.initialGaugeType == GaugeType::Hard &&
+                  recalledRetry.setup.gaugeProfile == GaugeProfile::Standard &&
+                  recalledRetry.setup.gaugeAutoShift ==
                       GaugeAutoShiftMode::BestClear &&
-                  recalledRetry.gaugeAutoShiftLowerBound == GaugeType::Easy &&
-                  recalledRetry.assistOption == assist_options::kDrag,
-              "saved-result recall rebuilds non-default retry gauge and "
-              "assist setup from provenance") ||
-      !expect(recalledRetry.playOption == "MIRROR" &&
-                  recalledRetry.playOptionSeed == 17 &&
-                  recalledRetry.playOption2 == "RANDOM" &&
-                  recalledRetry.playOption2Seed == 29 &&
-                  recalledDisplay.mode == "MIRROR #17 / RANDOM #29",
+                  recalledRetry.setup.gaugeAutoShiftLowerBound ==
+                      GaugeType::Easy &&
+                  recalledRetry.setup.assistOption == assist_options::kDrag &&
+                  recalledRetry.setup.doublePlayOption ==
+                      replay::DoublePlayOption::Flip,
+              "saved-result recall retains one complete setup including DP "
+              "FLIP") ||
+      !expect(recalledRetry.setup.playOption == "MIRROR" &&
+                  recalledRetry.setup.playOptionSeed == 17 &&
+                  recalledRetry.setup.playOption2 == "RANDOM" &&
+                  recalledRetry.setup.playOption2Seed == 29 &&
+                  recalledDisplay.mode ==
+                      "FLIP + MIRROR #17 / RANDOM #29",
               "saved-result recall rebuilds its displayed and retried lane "
               "pattern from provenance") ||
-      !expect(recalledRetry.randomSeed == 123U &&
-                  recalledRetry.randomPrng == "std::mt19937_64" &&
-                  recalledRetry.randomValues == std::vector<int>({2, 1}) &&
+      !expect(recalledRetry.setup.randomSeed == 123U &&
+                  recalledRetry.setup.randomPrng == "std::mt19937_64" &&
+                  recalledRetry.setup.randomValues ==
+                      std::vector<int>({2, 1}) &&
                   recalledRetry.chartMeta.RandomSeed == 123U &&
                   recalledRetry.chartMeta.RandomPrng == "std::mt19937_64" &&
                   recalledRetry.chartMeta.RandomValues ==
                       std::vector<int>({2, 1}),
               "Retry Same uses the persisted chart branch instead of the "
               "freshly parsed result chart") ||
-      !expect(recalledRetry.context.candidateSelection ==
+      !expect(recalledRetry.setup.candidateSelection ==
                       gameplay::CandidateSelectionMode::Combo &&
-                  recalledRetry.context.playback ==
-                      recalledProvenance.playback &&
-                  recalledRetry.context.judgeWindowScalePercent == 90 &&
+                  recalledRetry.setup.playbackRatePercent ==
+                      recalledProvenance.playback.percent &&
+                  recalledRetry.setup.playbackMode ==
+                      recalledProvenance.playback.mode &&
+                  recalledRetry.setup.judgeWindowScalePercent == 90 &&
                   recalledRetry.context.startingGaugePercent == 37 &&
-                  recalledRetry.context.clubMode,
+                  recalledRetry.setup.clubMode,
               "saved-result retry restores the persisted gameplay context")) {
     return 1;
   }
 
+  ScoreProvenance schema4Provenance = recalledProvenance;
+  schema4Provenance.schemaVersion = 4;
+  schema4Provenance.stages.front().doublePlayOption.reset();
+  const JudgedPlaybackData schema4Retry =
+      analysis::retrySourceFromProvenance(recalledResultMeta,
+                                          schema4Provenance);
+  if (!expect(!schema4Provenance.stages.front().doublePlayOption.has_value() &&
+                  schema4Retry.setup.doublePlayOption ==
+                      replay::DoublePlayOption::Normal,
+              "schema-v4 retry keeps DP provenance unknown and uses the "
+              "documented runtime Normal fallback")) {
+    return 1;
+  }
+
+  ScoreProvenance defaultHardProvenance = recalledProvenance;
+  defaultHardProvenance.startingGaugePercent.reset();
+  const JudgedPlaybackData defaultHardRetry =
+      analysis::retrySourceFromProvenance(recalledResultMeta,
+                                          defaultHardProvenance);
+  StartOptions defaultHardRetryOptions;
+  applyResultRetrySetupToStartOptions(defaultHardRetryOptions,
+                                      defaultHardRetry);
+  if (!expect(defaultHardRetry.setup.startingGaugePercent == 100.0F &&
+                  !defaultHardRetryOptions.startingGaugePercent.has_value(),
+              "a provenance-only Hard retry retains the ruleset default "
+              "instead of forcing an explicit 20-percent start")) {
+    return 1;
+  }
+
   const auto samePatternAuthority =
-      play_options::resultRetryPatternAuthority(recalledRetry,
-                                                recalledResultMeta, true);
+      play_options::resultRetryPatternAuthority(recalledRetry, true);
   const auto newPatternAuthority =
-      play_options::resultRetryPatternAuthority(recalledRetry,
-                                                recalledResultMeta, false);
+      play_options::resultRetryPatternAuthority(recalledRetry, false);
   if (!expect(samePatternAuthority.chartRandomSeed == 123U &&
                   samePatternAuthority.chartRandomPrng ==
                       "std::mt19937_64" &&
@@ -340,6 +469,8 @@ int main() {
                       recalledProvenance.playback &&
                   recalledRetryOptions.judgeWindowScalePercent == 90 &&
                   recalledRetryOptions.startingGaugePercent == 37 &&
+                  recalledRetryOptions.doublePlayOption ==
+                      replay::DoublePlayOption::Flip &&
                   recalledRetryOptions.clubMode,
               "View Result retry startup applies the reconstructed provenance "
               "context")) {
@@ -357,6 +488,26 @@ int main() {
                   !isSupportedRulesetDescriptor(*required),
               "raw replay preserves an unsupported recorded ruleset "
               "revision")) {
+    return 1;
+  }
+
+  auto judgedLaneCover = std::make_shared<JudgedPlaybackData>();
+  judgedLaneCover->setup.initialLaneCoverPercent = 64;
+  judgedLaneCover->setup.laneCoverEnabled = true;
+  StartOptions judgedLaneCoverOptions{.replayData = judgedLaneCover};
+  if (!expect(replayInitialLaneCoverPercent(judgedLaneCoverOptions, 19) == 64,
+              "judged replay watch starts from its retained lane cover")) {
+    return 1;
+  }
+  judgedLaneCover->setup.laneCoverEnabled = false;
+  if (!expect(replayInitialLaneCoverPercent(judgedLaneCoverOptions, 19) == 0,
+              "a replay remembers a disabled nonzero lane cover")) {
+    return 1;
+  }
+  judgedLaneCover->setup.initialLaneCoverPercent.reset();
+  if (!expect(replayInitialLaneCoverPercent(judgedLaneCoverOptions, 19) == 19,
+              "a provenance-only replay without lane-cover proof keeps the "
+              "settings fallback")) {
     return 1;
   }
 

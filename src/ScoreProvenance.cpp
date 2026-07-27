@@ -1108,6 +1108,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
 
   ScoreEligibility eligibility = ScoreEligibility::Verified;
   bool inconsistent = false;
+  bool allCurrentSchema = true;
   for (const auto &stage : stages) {
     result.stages.insert(result.stages.end(), stage.stages.begin(),
                          stage.stages.end());
@@ -1118,6 +1119,10 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
     result.practice = result.practice || stage.practice;
     result.clubMode = result.clubMode || stage.clubMode;
     eligibility = mergeEligibility(eligibility, stage.eligibility);
+    allCurrentSchema =
+        allCurrentSchema &&
+        stage.schemaVersion >=
+            ScoreProvenance::kDoublePlayOptionSchemaVersion;
 
     inconsistent =
         inconsistent ||
@@ -1147,7 +1152,9 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
   if (eligibility == ScoreEligibility::LegacyUnverified) {
     result.ruleset = RulesetDescriptor::Legacy();
   }
-  result.schemaVersion = ScoreProvenance::kSchemaVersion;
+  result.schemaVersion =
+      allCurrentSchema ? ScoreProvenance::kSchemaVersion
+                       : ScoreProvenance::kPolicyProofSchemaVersion;
   result.eligibility = eligibility;
   return result;
 }

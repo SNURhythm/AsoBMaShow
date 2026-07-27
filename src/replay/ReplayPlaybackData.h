@@ -78,11 +78,23 @@ struct ChartPlaybackSetup {
   float startingGaugePercent = 20.0F;
   std::optional<GaugeStateSnapshot> startingGaugeState;
   bool clubMode = false;
-  int initialLaneCoverPercent = 0;
+  // Empty only for judged/provenance projections that have no raw replay
+  // proof. A durable replay records the remembered percentage even when lane
+  // cover is disabled.
+  std::optional<int> initialLaneCoverPercent;
   bool laneCoverEnabled = false;
 
   bool operator==(const ChartPlaybackSetup &) const = default;
 };
+
+[[nodiscard]] inline int initialLaneCoverPercentForRendering(
+    const ChartPlaybackSetup &setup,
+    int settingsFallbackPercent) noexcept {
+  if (!setup.initialLaneCoverPercent.has_value()) {
+    return settingsFallbackPercent;
+  }
+  return setup.laneCoverEnabled ? *setup.initialLaneCoverPercent : 0;
+}
 
 enum class LegacyPlaybackAction : std::uint8_t {
   Press = 0,

@@ -15,17 +15,13 @@ namespace analysis {
     const ScoreProvenance &source, const bms_parser::ChartMeta &chartMeta) {
   PlaybackAnalysisContext result{
       .ruleset = source.ruleset,
-      .playback = source.playback,
-      .judgeWindowScalePercent = source.judgeWindowScalePercent,
       .startingGaugePercent = source.startingGaugePercent,
-      .clubMode = source.clubMode,
   };
   const ScoreStageProvenance *stage =
       score_provenance::uniqueStageForChart(source, chartMeta);
   if (stage == nullptr) {
     return result;
   }
-  result.candidateSelection = stage->candidateSelection;
   PlaybackPolicySnapshot policy{
       .chartMd5 = stage->chartMd5,
       .chartSha256 = stage->chartSha256,
@@ -56,58 +52,75 @@ namespace analysis {
     bms_parser::ChartMeta chartMeta, const ScoreProvenance &source) {
   JudgedPlaybackData result;
   result.chartMeta = std::move(chartMeta);
-  result.randomSeed = result.chartMeta.RandomSeed;
-  result.randomPrng = result.chartMeta.RandomPrng;
-  result.randomValues = result.chartMeta.RandomValues;
+  replay::ChartPlaybackSetup setup{
+      .chartMd5 = result.chartMeta.MD5,
+      .chartSha256 = result.chartMeta.SHA256,
+      .keyMode = result.chartMeta.KeyMode,
+      .longNoteMode = result.chartMeta.LnMode >= 1 && result.chartMeta.LnMode <= 3
+                          ? result.chartMeta.LnMode
+                          : 0,
+      .hasUndefinedLongNotes = replay::hasUndefinedLongNotesForReplay(
+          result.chartMeta.LnMode, result.chartMeta.TotalLongNotes,
+          result.chartMeta.TotalBackSpinNotes),
+      .randomSeed = result.chartMeta.RandomSeed,
+      .randomPrng = result.chartMeta.RandomPrng,
+      .randomValues = result.chartMeta.RandomValues,
+      .playOption = source.player1.option,
+      .playOptionSeed = source.player1.seed,
+      .playOption2 = source.player2.option,
+      .playOption2Seed = source.player2.seed,
+      .assistOption = source.assistOption,
+      .initialGaugeType = source.gaugeType,
+      .gaugeProfile = source.gaugeProfile,
+      .gaugeAutoShift = source.gaugeAutoShift,
+      .gaugeAutoShiftLowerBound = source.gaugeAutoShiftLowerBound,
+      .playbackRulesetId = source.ruleset.id,
+      .playbackRulesetRevision = source.ruleset.version,
+      .playbackRatePercent = source.playback.percent,
+      .playbackMode = source.playback.mode,
+      .judgeWindowScalePercent = source.judgeWindowScalePercent,
+      .startingGaugePercent =
+          source.startingGaugePercent.has_value()
+              ? static_cast<float>(*source.startingGaugePercent)
+              : gaugeInitialValue(source.gaugeType, source.gaugeProfile),
+      .clubMode = source.clubMode,
+  };
 
   if (const ScoreStageProvenance *stage =
           score_provenance::uniqueStageForChart(source, result.chartMeta)) {
-    result.randomSeed.reset();
+    setup.chartMd5 = stage->chartMd5;
+    setup.chartSha256 = stage->chartSha256;
+    setup.longNoteMode = stage->longNoteMode;
+    setup.randomSeed.reset();
     if (stage->chartRandomSeed.has_value() &&
         *stage->chartRandomSeed <=
             std::numeric_limits<unsigned int>::max()) {
-      result.randomSeed =
+      setup.randomSeed =
           static_cast<unsigned int>(*stage->chartRandomSeed);
     }
-    result.randomPrng = stage->chartRandomPrng;
-    result.randomValues = stage->chartRandomValues;
-    result.chartMeta.RandomSeed = result.randomSeed;
-    result.chartMeta.RandomPrng = result.randomPrng;
-    result.chartMeta.RandomValues = result.randomValues;
+    setup.randomPrng = stage->chartRandomPrng;
+    setup.randomValues = stage->chartRandomValues;
+    setup.doublePlayOption = stage->doublePlayOption.value_or(
+        replay::DoublePlayOption::Normal);
+    setup.candidateSelection = stage->candidateSelection;
   }
 
   result.autoPlay = source.autoPlay;
-  result.playOption = source.player1.option;
-  result.playOptionSeed = source.player1.seed;
-  result.playOption2 = source.player2.option;
-  result.playOption2Seed = source.player2.seed;
-  result.assistOption = source.assistOption;
-  result.initialGaugeType = source.gaugeType;
-  result.gaugeProfile = source.gaugeProfile;
-  result.gaugeAutoShift = source.gaugeAutoShift;
-  result.gaugeAutoShiftLowerBound = source.gaugeAutoShiftLowerBound;
+  result.setup = std::move(setup);
+  result.chartMeta.RandomSeed = result.setup.randomSeed;
+  result.chartMeta.RandomPrng = result.setup.randomPrng;
+  result.chartMeta.RandomValues = result.setup.randomValues;
   result.context = playbackContextFrom(source, result.chartMeta);
   return result;
 }
 
 [[nodiscard]] inline PlaybackAnalysisContext playbackContextFrom(
     const replay::ChartPlaybackSetup &setup) {
-  RulesetDescriptor descriptor = RulesetDescriptor::Legacy();
-  if (const auto ruleset = gameplayRulesetFromId(setup.playbackRulesetId)) {
-    const auto supported = RulesetDescriptor::For(*ruleset);
-    if (supported.version == setup.playbackRulesetRevision) {
-      descriptor = supported;
-    }
-  }
   return {
-      .ruleset = std::move(descriptor),
-      .playback = {.percent = setup.playbackRatePercent,
-                   .mode = setup.playbackMode},
-      .candidateSelection = setup.candidateSelection,
-      .judgeWindowScalePercent = setup.judgeWindowScalePercent,
+      .ruleset = rulesetDescriptorFromReplayIdentity(
+          setup.playbackRulesetId, setup.playbackRulesetRevision),
       .startingGaugePercent =
           static_cast<int>(std::lround(setup.startingGaugePercent)),
-      .clubMode = setup.clubMode,
   };
 }
 

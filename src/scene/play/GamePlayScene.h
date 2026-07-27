@@ -167,6 +167,7 @@ private:
   StartOptions options;
   gameplay::GameplayPolicyBuildOutcome rulesetPolicyBuild;
   Judge judge;
+  replay::ChartPlaybackSetup capturedAttemptSetup;
   ScoreProvenance attemptProvenance;
   void checkPassedTimeline(long long time);
   void detonateLandmine(bms_parser::LandmineNote *note, long long songTimeMicros,

@@ -9,18 +9,19 @@
 namespace analysis {
 RhythmState BuildInitialGaugeState(
     bms_parser::Chart &chart, const JudgedPlaybackData &replay,
-    GaugeProfile gaugeProfile = GaugeProfile::Standard,
+    std::optional<GaugeProfile> gaugeProfile = std::nullopt,
     const GaugeStateSnapshot *carriedGauge = nullptr);
 
 RhythmState BuildResultState(bms_parser::Chart &chart,
                              const JudgedPlaybackData &replay,
-                             GaugeProfile gaugeProfile = GaugeProfile::Standard,
+                             std::optional<GaugeProfile> gaugeProfile =
+                                 std::nullopt,
                              const GaugeStateSnapshot *carriedGauge = nullptr,
                              int carriedCombo = 0,
                              int carriedMaxCombo = 0);
 
 std::optional<long long> FindGaugeFailureMicros(
     bms_parser::Chart &chart, const JudgedPlaybackData &replay,
-    GaugeProfile gaugeProfile = GaugeProfile::Standard,
+    std::optional<GaugeProfile> gaugeProfile = std::nullopt,
     const GaugeStateSnapshot *carriedGauge = nullptr);
 }

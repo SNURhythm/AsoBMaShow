@@ -55,8 +55,8 @@ JudgedPlaybackData makeAttempt(int lane, long long noteMicros, long long diffMic
                        int playbackPercent = 100, bool autoPlay = false) {
   JudgedPlaybackData replay;
   replay.autoPlay = autoPlay;
-  replay.context.playback.percent = playbackPercent;
-  replay.context.judgeWindowScalePercent = 100;
+  replay.setup.playbackRatePercent = playbackPercent;
+  replay.setup.judgeWindowScalePercent = 100;
   replay.context.ruleset = RulesetDescriptor::Current();
   replay.context.policy = analysis::PlaybackPolicySnapshot{
       .chartMd5 = std::string(32, 'b'),

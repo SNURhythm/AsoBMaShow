@@ -238,6 +238,8 @@ replay::ReplayPlaybackData samplePlayback() {
   playback.setup.playbackRulesetId = RulesetDescriptor::Current().id;
   playback.setup.playbackRulesetRevision =
       RulesetDescriptor::Current().version;
+  playback.setup.initialLaneCoverPercent = 0;
+  playback.setup.laneCoverEnabled = false;
   playback.input = {
       {.songTimeMicros = 1000,
        .control = {.kind = replay::LogicalControlKind::Lane,

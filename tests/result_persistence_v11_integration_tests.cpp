@@ -299,6 +299,15 @@ CompletedChartAttempt validAttempt(std::string attemptId, int salt = 0) {
   return attempt;
 }
 
+void refreshCourseProvenance(CompletedCourseAttempt &attempt) {
+  std::vector<ScoreProvenance> stages;
+  stages.reserve(attempt.result.stages.size());
+  for (const auto &stage : attempt.result.stages) {
+    stages.push_back(stage.score.provenance);
+  }
+  attempt.result.provenance = mergeCourseProvenance(stages);
+}
+
 CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
   const auto first = validAttempt("123e4567-e89b-42d3-a456-426614174010", 0);
   const auto second = validAttempt("123e4567-e89b-42d3-a456-426614174011", 1);
@@ -332,7 +341,6 @@ CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
   result.maxCombo = 8;
   result.finalGauge = second.result.score.finalGauge;
   result.clearType = kClearTypeNormalClearRank;
-  result.provenance = first.result.score.provenance;
   result.playedAtUnixMillis = 1'700'000'999'000LL;
   result.stages = {
       {.stageIndex = 0,
@@ -356,6 +364,7 @@ CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
   };
   result.finalScore = first.result.score.score + second.result.score.score;
   result.maxScore = first.result.score.maxScore + second.result.score.maxScore;
+  refreshCourseProvenance(attempt);
   result.resultFingerprint = resultFingerprint(result);
   return attempt;
 }
@@ -874,6 +883,7 @@ void setCourseStageLongNoteContext(CompletedCourseAttempt &attempt,
   auto &score = attempt.result.stages[index].score;
   score.longNoteMode = 2;
   score.provenance.stages.front().longNoteMode = 2;
+  refreshCourseProvenance(attempt);
 }
 
 void testCourseStockFallbackPreservesUnknownLongNotePathFact() {
@@ -932,6 +942,7 @@ void testStockFallbackAcceptsNoLongNoteResults() {
         validAttempt("123e4567-e89b-42d3-a456-426614174035");
     attempt.result.score.longNoteMode = 0;
     attempt.replay.setup.longNoteMode = 0;
+    attempt.result.score.provenance.stages.front().longNoteMode = 0;
     attempt.result.resultFingerprint = resultFingerprint(attempt.result);
     std::string snapshotDiagnostic;
     const auto snapshot =
@@ -943,6 +954,10 @@ void testStockFallbackAcceptsNoLongNoteResults() {
     attempt.irSnapshot = *snapshot;
 
     const auto saved = environment.coordinator.persist(attempt);
+    if (!saved.saved()) {
+      std::cerr << "no-LN chart state=" << static_cast<int>(saved.state)
+                << " diagnostic=" << saved.diagnostic << '\n';
+    }
     expect(saved.saved() && saved.receipt.has_value(),
            "no-LN chart persists before fallback");
     if (!saved.receipt.has_value()) {
@@ -976,7 +991,10 @@ void testStockFallbackAcceptsNoLongNoteResults() {
     for (std::size_t index = 0; index < attempt.replay.stages.size(); ++index) {
       attempt.replay.stages[index].setup.longNoteMode = 0;
       attempt.result.stages[index].score.longNoteMode = 0;
+      attempt.result.stages[index].score.provenance.stages.front().longNoteMode =
+          0;
     }
+    refreshCourseProvenance(attempt);
     attempt.result.resultFingerprint = resultFingerprint(attempt.result);
     const auto saved = environment.coordinator.persistCourse(attempt);
     expect(saved.saved() && saved.receipt.has_value(),
@@ -1056,6 +1074,7 @@ void testManualAssignmentFallbackFailsClosed() {
     attempt.replay.stages[1].setup.playOption = "ASSIGN:S2134567";
     attempt.result.stages[1].score.provenance.player1.option =
         "ASSIGN:S2134567";
+    refreshCourseProvenance(attempt);
     attempt.result.resultFingerprint = resultFingerprint(attempt.result);
 
     const auto saved = environment.coordinator.persistCourse(attempt);

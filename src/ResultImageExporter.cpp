@@ -934,7 +934,13 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
       replay.completedCharts, replay.totalCharts, replay.stages.size(),
       courseState, courseMeta);
   const int clearRank = clear_policy::fullComboRankForPlayback(
-      replay.clearType, fullCombo, replay.context.playback);
+      replay.clearType, fullCombo,
+      replay.stages.empty()
+          ? audio::PlaybackRate{}
+          : audio::PlaybackRate{
+                .percent =
+                    replay.stages.back().replay.setup.playbackRatePercent,
+                .mode = replay.stages.back().replay.setup.playbackMode});
   clearLabelOverride = clearTypeRankToLabel(clearRank);
   clearRankOverride = clearRank;
   const auto courseResult = renderResultImage(

@@ -120,6 +120,11 @@ Outcome resolveForResult(ChartPlaybackSetup setup,
   if (provenance.eligibility == ScoreEligibility::LegacyUnverified) {
     return resolved(std::move(setup));
   }
+  if (!isSupportedRulesetDescriptor(provenance.ruleset)) {
+    return invalid(
+        "ruleset descriptor",
+        "Result provenance gameplay ruleset descriptor is not supported.");
+  }
 
   if (!hasFullSetup) {
     setup.chartMd5 = normalizedHash(score.chartMd5);

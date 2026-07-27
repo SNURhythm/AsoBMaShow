@@ -1,3 +1,4 @@
+#include "PlayOptionUtils.h"
 #include "scene/ResultScene.h"
 #include "scene/ResultCoursePersistence.h"
 #include "scene/RemoteResultRecallController.h"
@@ -753,26 +754,32 @@ void testSavedResultBuildsRetrySourceFromPersistedProvenance() {
   require(retrySource.has_value(),
           "a compact saved result receives a provenance retry source");
   const JudgedPlaybackData &retry = *retrySource;
-  require(retry.initialGaugeType == GaugeType::Hard &&
-              retry.playOption == "MIRROR" &&
-              retry.playOptionSeed == 73 && retry.randomSeed == 41U &&
-              retry.randomValues == std::vector<int>({2}),
+  require(retry.setup.initialGaugeType == GaugeType::Hard &&
+              retry.setup.playOption == "MIRROR" &&
+              retry.setup.playOptionSeed == 73 &&
+              retry.setup.randomSeed == 41U &&
+              retry.setup.randomValues == std::vector<int>({2}),
           "View Result derives retry authority from persisted provenance when "
           "no replay projection is present");
 
   JudgedPlaybackData explicitRetry;
-  explicitRetry.playOption = "RANDOM";
+  explicitRetry.setup.playOption = "RANDOM";
   const auto selected = result_scene_detail::retrySourceForLocalResult(
       meta, provenance, nullptr, &explicitRetry, nullptr);
-  require(selected.has_value() && selected->playOption == "RANDOM",
+  require(selected.has_value() && selected->setup.playOption == "RANDOM",
           "an explicit live retry source remains authoritative");
 
   replay::ReplayPlaybackData rawPlayback;
-  require(!result_scene_detail::retrySourceForLocalResult(
-               meta, provenance, nullptr, nullptr, &rawPlayback)
-               .has_value(),
-          "a raw replay result keeps BRD setup authority instead of gaining a "
-          "competing provenance projection");
+  rawPlayback.setup = retry.setup;
+  rawPlayback.setup.doublePlayOption = replay::DoublePlayOption::Flip;
+  const auto rawRetry = result_scene_detail::retrySourceForLocalResult(
+      meta, provenance, nullptr, nullptr, &rawPlayback);
+  require(rawRetry.has_value() &&
+              rawRetry->setup == rawPlayback.setup &&
+              rawRetry->setup.doublePlayOption ==
+                  replay::DoublePlayOption::Flip,
+          "a raw replay result projects the complete BRD setup for retry, "
+          "including schema-v4 DP FLIP");
 
   bms_parser::Chart retainedResultChart;
   require(!result_scene_detail::shouldReuseResultRetryChart(
@@ -789,6 +796,45 @@ void testSavedResultBuildsRetrySourceFromPersistedProvenance() {
   require(result_scene_detail::retrySourceProvidesTimingAnalytics(judgedRetry),
           "a retry projection with real judged events remains an analytics "
           "source");
+}
+
+void testCourseReplayResultLabelRetainsStageSetupFlip() {
+  bms_parser::ChartMeta meta;
+  meta.KeyMode = 14;
+  meta.IsDP = true;
+  replay::ChartPlaybackSetup stageSetup{
+      .playOption = "MIRROR",
+      .playOptionSeed = 17,
+      .playOption2 = "RANDOM",
+      .playOption2Seed = 29,
+      .doublePlayOption = replay::DoublePlayOption::Flip,
+  };
+  const auto retainedStage =
+      play_options::formatReplayPlaybackModeDisplayLabel(meta, stageSetup);
+  const auto sessionOptions = play_options::formatPlayModeDisplayLabel(
+      meta, stageSetup.playOption, stageSetup.playOptionSeed,
+      stageSetup.playOption2, stageSetup.playOption2Seed);
+
+  const auto replayDisplay =
+      result_scene_detail::selectCoursePlayModeDisplayLabel(
+          retainedStage, sessionOptions, true);
+  require(replayDisplay.mode == "FLIP + MIRROR #17 / RANDOM #29" &&
+              replayDisplay.laneOrder.empty(),
+          "a course replay result keeps the stage setup DP FLIP label");
+
+  const auto liveDisplay =
+      result_scene_detail::selectCoursePlayModeDisplayLabel(
+          retainedStage, sessionOptions, false);
+  require(liveDisplay.mode == "MIRROR #17 / RANDOM #29" &&
+              liveDisplay.laneOrder == sessionOptions.laneOrder,
+          "a live course result keeps the session play-option label");
+
+  const auto defaultLiveDisplay =
+      result_scene_detail::selectCoursePlayModeDisplayLabel(
+          retainedStage, {}, false);
+  require(defaultLiveDisplay.mode == "COURSE" &&
+              defaultLiveDisplay.laneOrder.empty(),
+          "a live course without an explicit option keeps the COURSE fallback");
 }
 
 } // namespace
@@ -812,6 +858,7 @@ int main() {
   testLocalRegressionContractsRemainPresent();
   testRawAndLegacyPlaybackAreClassifiedAsReplayResults();
   testSavedResultBuildsRetrySourceFromPersistedProvenance();
+  testCourseReplayResultLabelRetainsStageSetupFlip();
   std::cout << "remote result scene tests passed\n";
   return 0;
 }

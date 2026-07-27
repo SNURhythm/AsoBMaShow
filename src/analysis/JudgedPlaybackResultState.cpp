@@ -3,6 +3,7 @@
 #include "../CoursePlaySession.h"
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -125,17 +126,25 @@ void syncReplayResultGaugeSnapshot(RhythmState &state,
 namespace analysis {
 RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
                                    const JudgedPlaybackData &replay,
-                                   GaugeProfile gaugeProfile,
+                                   std::optional<GaugeProfile> gaugeProfile,
                                    const GaugeStateSnapshot *carriedGauge) {
-  GameplayRuleset ruleset = GameplayRuleset::Beatoraja;
-  if (isSupportedRulesetDescriptor(replay.context.ruleset)) {
-    ruleset = gameplayRulesetFromId(replay.context.ruleset.id)
-                  .value_or(GameplayRuleset::Beatoraja);
+  const auto recordedRuleset = gameplayRulesetFromReplayIdentity(
+      replay.setup.playbackRulesetId,
+      replay.setup.playbackRulesetRevision);
+  if (!recordedRuleset.has_value()) {
+    throw std::invalid_argument(
+        "Replay result has an unsupported gameplay ruleset identity");
   }
-  RhythmState state(&chart, false, ruleset, gaugeProfile);
-  state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
-                       gaugeProfile, replay.gaugeAutoShiftLowerBound);
-  if (replay.context.startingGaugePercent.has_value()) {
+  const GaugeProfile effectiveGaugeProfile =
+      gaugeProfile.value_or(replay.setup.gaugeProfile);
+  RhythmState state(&chart, false, *recordedRuleset,
+                    effectiveGaugeProfile);
+  state.configureGauge(replay.setup.initialGaugeType,
+                       replay.setup.gaugeAutoShift, effectiveGaugeProfile,
+                       replay.setup.gaugeAutoShiftLowerBound);
+  if (replay.setup.startingGaugeState.has_value()) {
+    state.restoreGaugeState(*replay.setup.startingGaugeState);
+  } else if (replay.context.startingGaugePercent.has_value()) {
     state.setStartingGaugePercent(*replay.context.startingGaugePercent);
   }
   if (carriedGauge != nullptr) {
@@ -143,15 +152,19 @@ RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
     adjustedCarry.gaugeProfile = state.gaugeProfile;
     state.restoreGaugeState(adjustedCarry);
   }
+  const audio::PlaybackRate playback{
+      .percent = replay.setup.playbackRatePercent,
+      .mode = replay.setup.playbackMode,
+  };
   state.setAssistClearMark(
-      assist_options::isEnabled(replay.assistOption) ||
-      clear_policy::assistClearRequired(replay.context.playback));
+      assist_options::isEnabled(replay.setup.assistOption) ||
+      clear_policy::assistClearRequired(playback));
   return state;
 }
 
 RhythmState BuildResultState(bms_parser::Chart &chart,
                              const JudgedPlaybackData &replay,
-                             GaugeProfile gaugeProfile,
+                             std::optional<GaugeProfile> gaugeProfile,
                              const GaugeStateSnapshot *carriedGauge,
                              int carriedCombo, int carriedMaxCombo) {
   const auto lookup = buildReplayNoteLookup(chart);
@@ -211,9 +224,9 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
 
 std::optional<long long>
 FindGaugeFailureMicros(bms_parser::Chart &chart, const JudgedPlaybackData &replay,
-                       GaugeProfile gaugeProfile,
+                       std::optional<GaugeProfile> gaugeProfile,
                        const GaugeStateSnapshot *carriedGauge) {
-  if (replay.gaugeAutoShift == GaugeAutoShiftMode::Continue) {
+  if (replay.setup.gaugeAutoShift == GaugeAutoShiftMode::Continue) {
     return std::nullopt;
   }
   const RhythmState initialState =

@@ -39,13 +39,13 @@ mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
                            const JudgedPlaybackData &replay) {
   bms_parser::ChartMeta result = authoritative;
   if (!result.RandomSeed.has_value()) {
-    result.RandomSeed = replay.randomSeed;
+    result.RandomSeed = replay.setup.randomSeed;
   }
   if (!result.RandomPrng.has_value()) {
-    result.RandomPrng = replay.randomPrng;
+    result.RandomPrng = replay.setup.randomPrng;
   }
   if (result.RandomValues.empty()) {
-    result.RandomValues = replay.randomValues;
+    result.RandomValues = replay.setup.randomValues;
   }
   return result;
 }
@@ -67,12 +67,7 @@ bms_parser::ChartMeta mergeReplayLaunchChartMeta(
 }
 
 ReplayPlayOptions launchPlayOptionsFromReplay(const JudgedPlaybackData &replay) {
-  return {
-      .playOption = replay.playOption,
-      .playOptionSeed = replay.playOptionSeed,
-      .playOption2 = replay.playOption2,
-      .playOption2Seed = replay.playOption2Seed,
-  };
+  return launchPlayOptionsFromReplay(replay.setup);
 }
 
 ReplayPlayOptions

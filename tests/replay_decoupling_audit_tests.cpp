@@ -16,6 +16,37 @@
 #error "ASOBMASHOW_SOURCE_ROOT must identify the repository root"
 #endif
 
+template <typename T>
+concept HasDuplicatedJudgedSetupField =
+    requires(T value) { value.randomSeed; } ||
+    requires(T value) { value.randomPrng; } ||
+    requires(T value) { value.randomValues; } ||
+    requires(T value) { value.playOption; } ||
+    requires(T value) { value.playOptionSeed; } ||
+    requires(T value) { value.playOption2; } ||
+    requires(T value) { value.playOption2Seed; } ||
+    requires(T value) { value.assistOption; } ||
+    requires(T value) { value.initialGaugeType; } ||
+    requires(T value) { value.gaugeProfile; } ||
+    requires(T value) { value.gaugeAutoShift; } ||
+    requires(T value) { value.gaugeAutoShiftLowerBound; } ||
+    requires(T value) { value.initialLaneCoverPercent; } ||
+    requires(T value) { value.laneCoverEnabled; };
+
+static_assert(!HasDuplicatedJudgedSetupField<JudgedPlaybackData>,
+              "Judged playback setup must remain a single value object");
+
+template <typename T>
+concept HasDuplicatedAnalysisSetupField =
+    requires(T value) { value.playback; } ||
+    requires(T value) { value.candidateSelection; } ||
+    requires(T value) { value.judgeWindowScalePercent; } ||
+    requires(T value) { value.clubMode; };
+
+static_assert(
+    !HasDuplicatedAnalysisSetupField<analysis::PlaybackAnalysisContext>,
+    "Playback analysis context must contain proof-only facts, not setup");
+
 namespace {
 
 int failures = 0;
@@ -81,7 +112,8 @@ void testProductionSourceBoundaries() {
   const std::vector<std::string_view> removedRuntimeSymbols{
       "struct ReplayData", "ChartResultAttempt", "SaveReplay(",
       "SaveCourseReplay(", "LoadReplayResult",
-      "applyScoreProvenanceToStartOptions", "insertReplayEvent(",
+      "applyScoreProvenanceToStartOptions",
+      "applyJudgedPlaybackContextToStartOptions", "insertReplayEvent(",
       "insertReplayTouchSample(", "insertReplayLaneCoverEvent(",
       "readReplaySummary("};
   const std::vector<std::string_view> rowPayloadTables{

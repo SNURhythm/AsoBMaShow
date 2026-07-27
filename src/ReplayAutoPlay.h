@@ -103,24 +103,13 @@ inline JudgedPlaybackData BuildReplayData(
     const std::string &assistOption = assist_options::kOff,
     bool clubMode = false,
     GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
-    GameplayRuleset ruleset = kDefaultGameplayRuleset) {
+    GameplayRuleset ruleset = kDefaultGameplayRuleset,
+    std::optional<bool> hasUndefinedLongNotes = std::nullopt) {
   JudgedPlaybackData replay;
   replay.autoPlay = true;
   replay.chartMeta = chart.Meta;
-  replay.randomSeed = chart.Meta.RandomSeed;
-  replay.randomPrng = chart.Meta.RandomPrng;
-  replay.randomValues = chart.Meta.RandomValues;
-  replay.playOption = playOption;
-  replay.playOptionSeed = playOptionSeed;
-  replay.playOption2 = playOption2;
-  replay.playOption2Seed = playOption2Seed;
-  replay.assistOption = assist_options::normalize(assistOption);
-  replay.initialGaugeType = gaugeType;
-  replay.gaugeAutoShift = gaugeAutoShift;
-  replay.gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound;
-  replay.context.playback = playback;
-  replay.context.ruleset = RulesetDescriptor::For(ruleset);
-  replay.context.clubMode = clubMode;
+  const RulesetDescriptor rulesetDescriptor = RulesetDescriptor::For(ruleset);
+  replay.context.ruleset = rulesetDescriptor;
   replay.createdAt = kLabel;
   replay.events.reserve(static_cast<size_t>(std::max(0, chart.Meta.TotalNotes)) *
                         2U);
@@ -128,7 +117,37 @@ inline JudgedPlaybackData BuildReplayData(
   RhythmState state(&chart, false, ruleset);
   state.configureGauge(gaugeType, gaugeAutoShift, GaugeProfile::Standard,
                        gaugeAutoShiftLowerBound);
-  state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));
+  ::replay::ChartPlaybackSetup setup{
+      .chartMd5 = chart.Meta.MD5,
+      .chartSha256 = chart.Meta.SHA256,
+      .keyMode = chart.Meta.KeyMode,
+      .longNoteMode = normalizeChartLongNoteModeValue(chart.Meta.LnMode),
+      .hasUndefinedLongNotes = hasUndefinedLongNotes.value_or(
+          ::replay::hasUndefinedLongNotesForReplay(
+              chart.Meta.LnMode, chart.Meta.TotalLongNotes,
+              chart.Meta.TotalBackSpinNotes)),
+      .randomSeed = chart.Meta.RandomSeed,
+      .randomPrng = chart.Meta.RandomPrng,
+      .randomValues = chart.Meta.RandomValues,
+      .playOption = playOption,
+      .playOptionSeed = playOptionSeed,
+      .playOption2 = playOption2,
+      .playOption2Seed = playOption2Seed,
+      .assistOption = assist_options::normalize(assistOption),
+      .initialGaugeType = gaugeType,
+      .gaugeProfile = state.gaugeProfile,
+      .gaugeAutoShift = gaugeAutoShift,
+      .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
+      .playbackRulesetId = rulesetDescriptor.id,
+      .playbackRulesetRevision = rulesetDescriptor.version,
+      .playbackRatePercent = playback.percent,
+      .playbackMode = playback.mode,
+      .startingGaugePercent = state.currentGauge,
+      .startingGaugeState = state.gaugeSnapshot(),
+      .clubMode = clubMode,
+  };
+  replay.setup = std::move(setup);
+  state.setAssistClearMark(assist_options::isEnabled(replay.setup.assistOption));
   const JudgeResult perfect(PGreat, 0);
   const JudgeResult noJudge(None, 0);
 
@@ -177,7 +196,8 @@ inline JudgedPlaybackData BuildReplayData(
   replay.finalGauge = state.currentGauge;
   replay.clearType = clear_policy::fullComboRankForPlayback(
       state.getClearTypeRank(), state.comboBreak == 0,
-      replay.context.playback);
+      {.percent = replay.setup.playbackRatePercent,
+       .mode = replay.setup.playbackMode});
   return replay;
 }
 } // namespace replay_autoplay

@@ -323,13 +323,16 @@ ResultScene::ResultScene(
   local.playModeLabel = display.mode;
   local.laneOrderLabel = display.laneOrder;
   if (local.courseOptions.session != nullptr) {
-    const auto courseDisplay = play_options::formatPlayModeDisplayLabel(
+    const auto sessionDisplay = play_options::formatPlayModeDisplayLabel(
         local.meta, local.courseOptions.session->playOption,
         local.courseOptions.session->playOptionSeed,
         local.courseOptions.session->playOption2,
         local.courseOptions.session->playOption2Seed);
-    local.playModeLabel =
-        courseDisplay.mode.empty() ? "COURSE" : courseDisplay.mode;
+    const auto courseDisplay =
+        result_scene_detail::selectCoursePlayModeDisplayLabel(
+            display, sessionDisplay,
+            local.courseOptions.session->courseReplayPlayback);
+    local.playModeLabel = courseDisplay.mode;
     local.laneOrderLabel = courseDisplay.laneOrder;
   }
   if (isCourseStageResult()) {
@@ -2125,6 +2128,9 @@ void ResultScene::continueCourse() {
   nextOptions.playOption2 = playInfo.option2;
   nextOptions.playOption2Seed = playInfo.seed2;
   nextOptions.longNoteMode = session->longNoteMode;
+  nextOptions.hasUndefinedLongNotes =
+      play_start_detail::hasUndefinedLongNotes(
+          session->entries[session->currentIndex].meta);
   nextOptions.assistOption = session->assistOption;
   nextOptions.courseSession = session;
   nextOptions.courseConstraints = session->constraints;
@@ -2201,37 +2207,26 @@ void ResultScene::startRetry(bool samePattern) {
           ? std::optional<practice::Configuration>(
                 local->practiceOptions.session->configuration())
           : std::nullopt;
-  const audio::PlaybackRate retryPlayback =
-      resultRetryPlayback(local->attemptProvenance, practiceConfiguration);
   const auto retryPracticeSession =
       freshPracticeSessionForRetry(local->practiceOptions.session);
-  JudgedPlaybackData retrySource;
-  if (local->retryData.has_value()) {
-    retrySource = *local->retryData;
-  } else {
-    retrySource.chartMeta = local->meta;
-    retrySource.randomSeed = local->meta.RandomSeed;
-    retrySource.randomPrng = local->meta.RandomPrng;
-    retrySource.randomValues = local->meta.RandomValues;
-  }
+  JudgedPlaybackData retrySource =
+      local->retryData.value_or(analysis::retrySourceFromProvenance(
+          local->meta, local->attemptProvenance));
   if (local->practiceOptions.enabled) {
-    retrySource.playOption = local->practiceOptions.playOption;
-    retrySource.playOptionSeed = local->practiceOptions.playOptionSeed;
-    retrySource.playOption2 = local->practiceOptions.playOption2;
-    retrySource.playOption2Seed = local->practiceOptions.playOption2Seed;
-    retrySource.assistOption = local->practiceOptions.assistOption;
-    retrySource.initialGaugeType =
-        practiceConfiguration.has_value()
-            ? practiceConfiguration->gaugeType
-            : local->practiceOptions.gaugeType;
-    retrySource.gaugeAutoShift = local->practiceOptions.gaugeAutoShift;
-    retrySource.gaugeAutoShiftLowerBound =
-        local->practiceOptions.gaugeAutoShiftLowerBound;
+    retrySource.setup.playOption = local->practiceOptions.playOption;
+    retrySource.setup.playOptionSeed = local->practiceOptions.playOptionSeed;
+    retrySource.setup.playOption2 = local->practiceOptions.playOption2;
+    retrySource.setup.playOption2Seed =
+        local->practiceOptions.playOption2Seed;
+    retrySource.setup.doublePlayOption =
+        local->practiceOptions.doublePlayOption;
+    retrySource.setup.longNoteMode = local->practiceOptions.longNoteMode;
+    retrySource.setup.assistOption = local->practiceOptions.assistOption;
   }
 
   context.jukebox.stop();
   defer(
-      [this, retrySource, samePattern, practiceConfiguration, retryPlayback,
+      [this, retrySource, samePattern, practiceConfiguration,
        retryPracticeSession]() {
         auto *local = localSource();
         if (local == nullptr) {
@@ -2243,8 +2238,8 @@ void ResultScene::startRetry(bool samePattern) {
                 samePattern, local->reusableRetryChart,
                 local->reusableRetryChartMatchesRetrySource);
         const play_options::ResultRetryPatternAuthority patternAuthority =
-            play_options::resultRetryPatternAuthority(
-                retrySource, local->meta, samePattern);
+            play_options::resultRetryPatternAuthority(retrySource,
+                                                      samePattern);
         std::unique_ptr<bms_parser::Chart> ownedRetryChart;
         bms_parser::Chart *retryChart = nullptr;
         if (reuseCurrentPattern) {
@@ -2264,9 +2259,7 @@ void ResultScene::startRetry(bool samePattern) {
         }
 
         StartOptions options;
-        if (!local->practiceOptions.enabled) {
-          applyResultRetrySetupToStartOptions(options, retrySource);
-        }
+        applyResultRetrySetupToStartOptions(options, retrySource);
         options.startPosition = local->practiceOptions.enabled
                                     ? (practiceConfiguration.has_value()
                                            ? static_cast<unsigned long long>(
@@ -2280,42 +2273,30 @@ void ResultScene::startRetry(bool samePattern) {
             local->practiceOptions.enabled
                 ? (local->practiceOptions.autoPlay ||
                    local->practiceOptions.autoKeySound)
-                                    : !context.settings.inputKeysoundEnabled;
+                : !context.settings.inputKeysoundEnabled;
         options.autoPlay =
             local->practiceOptions.enabled ? local->practiceOptions.autoPlay
                                            : false;
-        options.gaugeType = practiceConfiguration.has_value()
-                                ? practiceConfiguration->gaugeType
-                                : retrySource.initialGaugeType;
-        options.gaugeAutoShift =
-            practiceConfiguration.has_value()
-                ? practiceConfiguration->gaugeAutoShift
-                : retrySource.gaugeAutoShift;
-        options.gaugeAutoShiftLowerBound =
-            practiceConfiguration.has_value()
-                ? practiceConfiguration->gaugeAutoShiftLowerBound
-                : retrySource.gaugeAutoShiftLowerBound;
-        options.longNoteMode = resultRetryLongNoteMode(
-            retrySource.chartMeta, local->attemptProvenance);
-        options.assistOption = retrySource.assistOption;
-        options.clubMode = local->attemptProvenance.clubMode;
         options.pacemakerTarget =
             local->practiceOptions.enabled
                 ? pacemaker::kTargetOff
                 : pacemaker::normalizeTargetId(
                       context.settings.selectedPacemakerTarget);
-        options.playback = retryPlayback;
         options.ownsChart = true;
-        options.doublePlayOption = resultRetryDoublePlayOption(
-            local->practiceOptions.enabled,
-            local->practiceOptions.doublePlayOption,
-            local->rawReplayPlayback.get());
-        options.requiredRulesetDescriptor = local->attemptProvenance.ruleset;
-        if (const auto completedRuleset =
-                gameplayRulesetFromId(local->attemptProvenance.ruleset.id)) {
-          options.ruleset = *completedRuleset;
-        }
         if (local->practiceOptions.enabled) {
+          if (practiceConfiguration.has_value()) {
+            applyPracticeConfigurationToStartOptions(
+                options, *practiceConfiguration);
+          } else {
+            options.gaugeType = local->practiceOptions.gaugeType;
+            options.gaugeAutoShift = local->practiceOptions.gaugeAutoShift;
+            options.gaugeAutoShiftLowerBound =
+                local->practiceOptions.gaugeAutoShiftLowerBound;
+          }
+          options.longNoteMode = local->practiceOptions.longNoteMode;
+          options.assistOption = local->practiceOptions.assistOption;
+          options.doublePlayOption =
+              local->practiceOptions.doublePlayOption;
           options.practiceSession = retryPracticeSession;
           options.practiceMode = retryPracticeSession == nullptr;
           options.practiceLeadInMicros =
@@ -2325,10 +2306,7 @@ void ResultScene::startRetry(bool samePattern) {
           if (practiceConfiguration.has_value()) {
             options.judgeWindowScalePercent =
                 practiceConfiguration->judge.scalePercent;
-            options.startingGaugePercent =
-                practiceConfiguration->startingGaugePercent;
           }
-          options.longNoteMode = local->practiceOptions.longNoteMode;
           options.returnScene = local->practiceOptions.returnScene;
           if (!options.autoPlay) {
             options.practiceGhostCallback =
@@ -2341,24 +2319,24 @@ void ResultScene::startRetry(bool samePattern) {
         }
 
         if (reuseCurrentPattern) {
-          options.playOption = retrySource.playOption;
+          options.playOption = retrySource.setup.playOption;
           options.playOptionSeed = patternAuthority.playOptionSeed;
           if (retryChart->Meta.IsDP) {
-            options.playOption2 = retrySource.playOption2;
+            options.playOption2 = retrySource.setup.playOption2;
             options.playOption2Seed = patternAuthority.playOption2Seed;
           }
         } else if (!play_options::applyReplayDoublePlayOption(
                        *retryChart, options.doublePlayOption)) {
           return true;
-        } else if (retrySource.playOption.has_value()) {
+        } else if (retrySource.setup.playOption.has_value()) {
           if (samePattern &&
-              play_options::usesRandomizer(*retrySource.playOption) &&
+              play_options::usesRandomizer(*retrySource.setup.playOption) &&
               !patternAuthority.playOptionSeed.has_value()) {
             SDL_Log("Cannot retry same pattern: missing play option seed");
             return true;
           }
           if (!play_options::applyPlayOptionModifier(
-                  *retryChart, *retrySource.playOption,
+                  *retryChart, *retrySource.setup.playOption,
                   patternAuthority.playOptionSeed, 0,
                   options.playOption, options.playOptionSeed, "retry")) {
             return true;
@@ -2366,19 +2344,23 @@ void ResultScene::startRetry(bool samePattern) {
         }
 
         if (!reuseCurrentPattern && retryChart->Meta.IsDP &&
-            retrySource.playOption2.has_value()) {
+            retrySource.setup.playOption2.has_value()) {
           if (samePattern &&
-              play_options::usesRandomizer(*retrySource.playOption2) &&
+              play_options::usesRandomizer(*retrySource.setup.playOption2) &&
               !patternAuthority.playOption2Seed.has_value()) {
             SDL_Log("Cannot retry same pattern: missing P2 play option seed");
             return true;
           }
           if (!play_options::applyPlayOptionModifier(
-                  *retryChart, *retrySource.playOption2,
+                  *retryChart, *retrySource.setup.playOption2,
                   patternAuthority.playOption2Seed, 1,
                   options.playOption2, options.playOption2Seed, "retry")) {
             return true;
           }
+        }
+        if (!reuseCurrentPattern) {
+          applyEffectiveLongNoteModeToChart(*retryChart,
+                                            options.longNoteMode);
         }
 
         context.jukebox.stop();
@@ -2492,13 +2474,11 @@ void ResultScene::startReplay() {
             .startPosition = 0,
             .autoKeySound = false,
             .autoPlay = false,
-            .gaugeType = replayData->initialGaugeType,
-            .gaugeAutoShift = replayData->gaugeAutoShift,
             .replayData = replayData,
             .replayResultContext = replayResultContext,
             .ownsChart = true,
         };
-        applyJudgedPlaybackContextToStartOptions(replayOptions, *replayData);
+        applyJudgedPlaybackSetupToStartOptions(replayOptions, *replayData);
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(
                 context, std::move(replayChart), std::move(replayOptions)),

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../AssistOptionUtils.h"
 #include "../CourseIdentity.h"
 #include "../audio/PlaybackRate.h"
 #include "../bms_parser.hpp"
@@ -15,7 +14,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace analysis {
@@ -71,13 +69,9 @@ struct PlaybackPolicySnapshot {
 
 struct PlaybackAnalysisContext {
   RulesetDescriptor ruleset = RulesetDescriptor::Legacy();
-  audio::PlaybackRate playback;
-  gameplay::CandidateSelectionMode candidateSelection =
-      gameplay::CandidateSelectionMode::Lowest;
-  int judgeWindowScalePercent = 100;
+  // Proof-only context that cannot be represented by the raw BRD setup.
   std::optional<int> startingGaugePercent;
   std::optional<PlaybackPolicySnapshot> policy;
-  bool clubMode = false;
 
   bool operator==(const PlaybackAnalysisContext &) const = default;
 };
@@ -89,18 +83,10 @@ struct PlaybackAnalysisContext {
 struct JudgedPlaybackData {
   bool autoPlay = false;
   bms_parser::ChartMeta chartMeta;
-  std::optional<unsigned int> randomSeed;
-  std::optional<std::string> randomPrng;
-  std::vector<int> randomValues;
-  std::optional<std::string> playOption;
-  std::optional<long long> playOptionSeed;
-  std::optional<std::string> playOption2;
-  std::optional<long long> playOption2Seed;
-  std::string assistOption = assist_options::kOff;
-  GaugeType initialGaugeType = GaugeType::Normal;
-  GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
-  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+  // The single authoritative semantic setup retained from the attempt or its
+  // durable proof. Presentation-only playback context may supplement this
+  // with exact judge windows, but must never duplicate these values.
+  replay::ChartPlaybackSetup setup;
   int finalScore = 0;
   int maxCombo = 0;
   float finalGauge = 0.0F;
@@ -108,21 +94,9 @@ struct JudgedPlaybackData {
   std::string createdAt;
   std::vector<JudgedPlaybackEvent> events;
   std::vector<replay::ReplayTouchSample> touchSamples;
-  // Empty for judged projections that predate raw playback setup ownership.
-  std::optional<int> initialLaneCoverPercent;
-  bool laneCoverEnabled = false;
   std::vector<replay::ReplayLaneCoverEvent> laneCoverEvents;
   PlaybackAnalysisContext context;
 };
-
-[[nodiscard]] inline int
-initialLaneCoverPercentForRendering(const JudgedPlaybackData &playback,
-                                    int settingsFallbackPercent) noexcept {
-  if (!playback.initialLaneCoverPercent.has_value()) {
-    return settingsFallbackPercent;
-  }
-  return playback.laneCoverEnabled ? *playback.initialLaneCoverPercent : 0;
-}
 
 struct JudgedCoursePlaybackStage {
   JudgedPlaybackData replay;

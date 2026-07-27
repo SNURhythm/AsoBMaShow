@@ -101,9 +101,9 @@ policySnapshot(std::string sha256, std::string md5,
 
 JudgedPlaybackData makeReplay() {
   JudgedPlaybackData replay;
-  replay.context.playback = {.percent = 75,
-                                .mode = audio::PlaybackMode::PitchShift};
-  replay.context.judgeWindowScalePercent = 80;
+  replay.setup.playbackRatePercent = 75;
+  replay.setup.playbackMode = audio::PlaybackMode::PitchShift;
+  replay.setup.judgeWindowScalePercent = 80;
   replay.context.ruleset = RulesetDescriptor::Current();
   replay.context.policy = analysis::PlaybackPolicySnapshot{
       .chartMd5 = std::string(32, 'b'),
@@ -240,7 +240,7 @@ void testEmptyAnalysisHasNullStatistics() {
 void testHistogramUsesSparseStableBins() {
   auto chart = makeChart();
   auto replay = makeReplay();
-  replay.context.playback.percent = 100;
+  replay.setup.playbackRatePercent = 100;
   replay.events = {
       event(ReplayEventAction::Press, 3, 0, Great, -1'000'000),
       event(ReplayEventAction::Press, 3, 0, Great, -1),
@@ -271,7 +271,7 @@ void testHistogramSeparatesOverflowFromFiniteEndpointBins() {
 
   auto chart = makeChart();
   auto replay = makeReplay();
-  replay.context.playback.percent = 100;
+  replay.setup.playbackRatePercent = 100;
   replay.events = {
       event(ReplayEventAction::Press, 3, 0, Great,
             std::numeric_limits<long long>::min()),
@@ -306,14 +306,14 @@ void testCompatibleAttemptGroups() {
   auto compatible = first;
   compatible.events.front().diffMicros = 7'500;
   auto differentRate = first;
-  differentRate.context.playback.percent = 100;
+  differentRate.setup.playbackRatePercent = 100;
   auto differentScale = first;
-  differentScale.context.judgeWindowScalePercent = 100;
+  differentScale.setup.judgeWindowScalePercent = 100;
   auto differentWindows = first;
   differentWindows.context.policy->effectiveJudgeWindows =
       windows(-10'001);
   auto differentMode = first;
-  differentMode.context.playback.mode = audio::PlaybackMode::TimeStretch;
+  differentMode.setup.playbackMode = audio::PlaybackMode::TimeStretch;
 
   const std::vector<JudgedPlaybackData> attempts = {
       first,          compatible,       differentRate,
@@ -395,8 +395,9 @@ void testTimingConditionsUseStrictDurableStageIdentity() {
 void testUnresolvedTimingConditionsAlwaysUseSingletonGroups() {
   auto chart = makeChart();
   const auto useNeutralConditions = [](JudgedPlaybackData &replay) {
-    replay.context.playback = {};
-    replay.context.judgeWindowScalePercent = 100;
+    replay.setup.playbackRatePercent = 100;
+    replay.setup.playbackMode = audio::PlaybackMode::PitchShift;
+    replay.setup.judgeWindowScalePercent = 100;
   };
 
   auto ambiguousA = makeReplay();
