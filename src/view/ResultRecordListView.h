@@ -175,8 +175,8 @@ public:
     if (badge.visible) {
       irBadgeCallbackStableKey_ = boundStableKey_;
       const ResultRecordSummary boundSummary = summary;
-      if (summary.isLocal() && summary.local.has_value() &&
-          summary.capabilities.irUpload && badge.actionable) {
+      if (summary.isLocal() && summary.capabilities.irUpload &&
+          badge.actionable) {
         const auto boundHandler = irUploadHandler;
         irBadge->setOnClickListener([boundSummary, boundHandler]() {
           if (boundHandler) {

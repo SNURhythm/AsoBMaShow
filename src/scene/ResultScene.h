@@ -151,6 +151,7 @@ struct LocalResultSource {
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
   std::optional<ResultPacemakerData> pacemakerOverride;
+  std::optional<std::string> modernReplayAttemptId;
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;
@@ -159,6 +160,7 @@ struct LocalResultSource {
   std::optional<int> currentClearRankOverride;
   ResultPresentationModel presentation;
   bool replayResult = false;
+  bool retrySameAllowed = true;
   bool autoPlayResult = false;
   bool previousBestLoaded = false;
   bool persistenceContinueChosen = false;
@@ -222,7 +224,9 @@ public:
       std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart = nullptr,
       bms_parser::Chart *reusableRetryChart = nullptr,
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
-      const ReplayData *analyticsSource = nullptr);
+      const ReplayData *analyticsSource = nullptr,
+      std::optional<std::string> modernReplayAttemptId = std::nullopt,
+      bool retrySameAllowed = true);
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override = default;
 

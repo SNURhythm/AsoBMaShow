@@ -317,7 +317,9 @@ ResultScene::ResultScene(
     std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
     bms_parser::Chart *reusableRetryChart,
     std::optional<ResultPacemakerData> pacemakerOverride,
-    const ReplayData *analyticsSource)
+    const ReplayData *analyticsSource,
+    std::optional<std::string> modernReplayAttemptId,
+    bool retrySameAllowed)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -344,7 +346,10 @@ ResultScene::ResultScene(
                   ? context.settings.selectedPacemakerTarget
                   : pacemakerTarget),
           .pacemakerOverride = std::move(pacemakerOverride),
-          .replayResult = replay == nullptr && retrySource != nullptr,
+          .modernReplayAttemptId = modernReplayAttemptId,
+          .replayResult = replay == nullptr && retrySource != nullptr &&
+                          !modernReplayAttemptId.has_value(),
+          .retrySameAllowed = retrySameAllowed,
           .autoPlayResult =
               autoPlayResult ||
               (retrySource != nullptr && retrySource->autoPlay),
@@ -1363,9 +1368,10 @@ void ResultScene::addRetryButtons() {
                                  ui_theme::cyan()));
   } else {
     const bool canRetrySame =
-        local->retryData.has_value()
+        local->retrySameAllowed && local->retryData.has_value()
             ? play_options::hasSamePatternRandomization(*local->retryData)
-            : play_options::hasSamePatternRandomization(local->meta);
+            : (local->retrySameAllowed &&
+               play_options::hasSamePatternRandomization(local->meta));
     retryRow->addView(makeButton("Retry", !canRetrySame, false,
                                  ui_theme::primaryAction(),
                                  ui_theme::primaryActionHover(),
@@ -2392,8 +2398,11 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
   const practice::LaunchSource source =
       local->practiceOptions.enabled
           ? practice::LaunchSource::PracticeResult
-          : (local->replayResult ? practice::LaunchSource::ReplayResult
-                                 : practice::LaunchSource::NormalResult);
+          : ((local->replayResult ||
+              (local->modernReplayAttemptId.has_value() &&
+               local->retryData.has_value()))
+                 ? practice::LaunchSource::ReplayResult
+                 : practice::LaunchSource::NormalResult);
   bms_parser::ChartMeta chartMeta = local->meta;
   if (source == practice::LaunchSource::ReplayResult &&
       local->retryData.has_value()) {
@@ -2424,7 +2433,11 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
   }
   if (source == practice::LaunchSource::ReplayResult &&
       local->retryData.has_value()) {
-    request.replayId = local->retryData->id;
+    if (local->modernReplayAttemptId.has_value()) {
+      request.modernReplayAttemptId = local->modernReplayAttemptId;
+    } else {
+      request.replayId = local->retryData->id;
+    }
     request.replayPlayOptions =
         practice::launchPlayOptionsFromReplay(*local->retryData);
   }

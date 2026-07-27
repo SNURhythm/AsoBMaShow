@@ -311,6 +311,30 @@ int main() {
             "remote row selection retains its selected index");
     require(remoteList.get(0).capabilities.resultRecall,
             "remote row selection remains available for View Result");
+
+    ResultRecordSummary modern;
+    modern.identity = ModernChartRecordId{
+        .attemptId = "123e4567-e89b-42d3-a456-426614174000"};
+    modern.capabilities.irUpload = true;
+    modern.irState = ir::IrRecordState::Eligible;
+    modern.displayedTime = "2026-07-19 12:04:00";
+    modern.score = 1'800;
+    modern.maxScore = 2'000;
+    ResultRecordListView modernList;
+    modernList.setSize(700, 160);
+    modernList.applyYogaLayout();
+    std::optional<std::string> modernUpload;
+    modernList.onIrUploadRequested =
+        [&](const ResultRecordSummary &record) {
+          modernUpload = record.stableKey();
+        };
+    modernList.setResultRecords({modern});
+    auto *modernBadge = badge(modernList);
+    require(modernBadge != nullptr && modernBadge->isEnabled(),
+            "modern snapshot-backed result exposes its IR action");
+    clickThroughList(modernList, *modernBadge);
+    require(modernUpload == modern.stableKey(),
+            "modern IR action binds the durable attempt identity");
   }
 
   rendering::UniformCache::getInstance().destroyAll();
