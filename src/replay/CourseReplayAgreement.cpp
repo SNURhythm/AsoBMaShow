@@ -2,8 +2,6 @@
 
 #include "ReplaySetupProvenance.h"
 
-#include "../CourseConstraintUtils.h"
-
 #include <utility>
 
 namespace replay {
@@ -18,22 +16,6 @@ CourseReplayAgreement disagreement(CourseReplayAgreementIssue issue,
 }
 
 } // namespace
-
-CoursePathInput courseReplayPathInputForResult(
-    const result_persistence::ModernCourseResult &result,
-    bool hasUndefinedLongNotes) {
-  CoursePathInput path{
-      .longNoteMode = result.longNoteMode,
-      .hasUndefinedLongNotes = hasUndefinedLongNotes,
-      .beatorajaConstraintIds =
-          beatorajaCourseConstraintIdsFromJson(result.constraintJson),
-  };
-  path.stageSha256.reserve(result.stages.size());
-  for (const auto &stage : result.stages) {
-    path.stageSha256.push_back(stage.score.chartSha256);
-  }
-  return path;
-}
 
 CourseReplayAgreement compareCourseReplayPathToResult(
     const CoursePathInput &path,

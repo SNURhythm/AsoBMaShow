@@ -2,6 +2,7 @@
 
 #include "BeatorajaReplayPath.h"
 #include "ChartReplayAgreement.h"
+#include "ReplayReferenceAgreement.h"
 
 #include <memory>
 #include <utility>
@@ -33,32 +34,6 @@ ChartReplayContextState fileFailureState(ReplayFileState state) noexcept {
     return ChartReplayContextState::FileIoFailure;
   }
   return ChartReplayContextState::FileIoFailure;
-}
-
-bool referenceAgrees(const ModernReplayFileReference &reference,
-                     const result_persistence::ModernChartResult &result,
-                     const ReplayLimits &limits,
-                     std::string &diagnostic) {
-  if (reference.id <= 0 || reference.resultId != result.resultId ||
-      reference.identity.relativePath != reference.metadata.relativePath ||
-      !chartStemMatches(reference.identity.stem, result.score.chartSha256,
-                        result.score.longNoteMode, std::nullopt, diagnostic,
-                        limits)) {
-    if (diagnostic.empty()) {
-      diagnostic = "Replay reference does not belong to the saved result.";
-    }
-    return false;
-  }
-  const auto canonical = pathForStem(reference.identity.stem,
-                                     reference.identity.historyIndex,
-                                     diagnostic, limits);
-  if (!canonical || *canonical != reference.identity) {
-    if (diagnostic.empty()) {
-      diagnostic = "Replay reference path identity is inconsistent.";
-    }
-    return false;
-  }
-  return true;
 }
 
 } // namespace
@@ -194,9 +169,11 @@ ChartReplayContextOutcome ChartReplayContext::load(
 
     std::optional<ModernReplayFileReference> reference =
         *loaded.record->replayFile;
-    if (!referenceAgrees(*reference, stored, limits_, diagnostic)) {
+    const auto referenceAgreement =
+        compareChartReplayReferenceToResult(*reference, stored, limits_);
+    if (!referenceAgreement.matches) {
       return failure(ChartReplayContextState::ReferenceMismatch,
-                     std::move(diagnostic), preservedResult,
+                     referenceAgreement.diagnostic, preservedResult,
                      std::move(reference));
     }
     if (reference->metadata.codecVersion !=

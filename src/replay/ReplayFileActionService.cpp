@@ -1,6 +1,7 @@
 #include "ReplayFileActionService.h"
 
 #include "BeatorajaReplayPath.h"
+#include "ReplayReferenceAgreement.h"
 
 namespace replay {
 namespace {
@@ -31,6 +32,7 @@ std::optional<ReplayFileActionService::ResolvedReference>
 ReplayFileActionService::resolve(const ReplayFileActionRequest &request,
                                  ReplayFileActionOutcome &outcome) {
   std::optional<ModernReplayFileReference> reference;
+  ReplayReferenceAgreement referenceAgreement;
   if (request.owner == ModernReplayOwnerKind::ChartResult) {
     const auto loaded =
         repository_.LoadModernChartResultByAttempt(request.attemptId);
@@ -50,6 +52,10 @@ ReplayFileActionService::resolve(const ReplayFileActionRequest &request,
       return std::nullopt;
     }
     reference = loaded.record->replayFile;
+    if (reference) {
+      referenceAgreement = compareChartReplayReferenceToResult(
+          *reference, loaded.record->result);
+    }
   } else {
     const auto loaded =
         repository_.LoadModernCourseResultByAttempt(request.attemptId);
@@ -68,22 +74,21 @@ ReplayFileActionService::resolve(const ReplayFileActionRequest &request,
       return std::nullopt;
     }
     reference = loaded.record->replayFile;
+    if (reference) {
+      referenceAgreement = compareCourseReplayReferenceToResult(
+          *reference, loaded.record->result);
+    }
   }
   if (!reference) {
     outcome.state = ReplayFileActionState::Missing;
     outcome.diagnostic = "The result has no replay file reference.";
     return std::nullopt;
   }
-  std::string diagnostic;
-  const auto canonical = pathForStem(reference->identity.stem,
-                                     reference->identity.historyIndex,
-                                     diagnostic);
-  if (!canonical || *canonical != reference->identity ||
-      reference->metadata.relativePath != reference->identity.relativePath) {
+  if (!referenceAgreement.matches) {
     outcome.state = ReplayFileActionState::Invalid;
-    outcome.diagnostic = diagnostic.empty()
+    outcome.diagnostic = referenceAgreement.diagnostic.empty()
                              ? "The replay reference is inconsistent."
-                             : std::move(diagnostic);
+                             : std::move(referenceAgreement.diagnostic);
     return std::nullopt;
   }
   return ResolvedReference{.owner = request.owner,
@@ -138,6 +143,13 @@ ReplayFileActionService::remove(const ReplayFileActionRequest &request) {
   const auto resolved = resolve(request, outcome);
   if (!resolved) {
     return outcome;
+  }
+  const auto inspected = inspectResolved(*resolved);
+  if (inspected.state != ReplayFileActionState::Verified &&
+      inspected.state != ReplayFileActionState::Corrupt &&
+      inspected.state != ReplayFileActionState::Mismatched &&
+      inspected.state != ReplayFileActionState::UserDeleted) {
+    return inspected;
   }
   const auto mutation = repository_.MarkModernReplayFileUserDeleted(
       resolved->owner, resolved->attemptId, resolved->reference);

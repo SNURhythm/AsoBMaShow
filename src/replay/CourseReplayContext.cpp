@@ -2,6 +2,7 @@
 
 #include "BeatorajaReplayPath.h"
 #include "CourseReplayAgreement.h"
+#include "ReplayReferenceAgreement.h"
 
 #include <algorithm>
 #include <memory>
@@ -62,38 +63,6 @@ CourseReplayContextState agreementFailureState(
     return CourseReplayContextState::ReplayInvalid;
   }
   return CourseReplayContextState::ReplayInvalid;
-}
-
-bool referenceAgrees(const ModernReplayFileReference &reference,
-                     const result_persistence::ModernCourseResult &result,
-                     const CoursePathInput &pathInput,
-                     const ReplayLimits &limits,
-                     std::string &diagnostic) {
-  const auto agreement =
-      compareCourseReplayPathToResult(pathInput, result, limits);
-  if (!agreement.agrees()) {
-    diagnostic = agreement.diagnostic;
-    return false;
-  }
-  const auto expectedStem = courseStem(pathInput, diagnostic, limits);
-  if (reference.id <= 0 || reference.resultId != result.resultId ||
-      reference.identity.relativePath != reference.metadata.relativePath ||
-      !expectedStem || reference.identity.stem != *expectedStem) {
-    if (diagnostic.empty()) {
-      diagnostic = "Replay reference does not belong to the saved course.";
-    }
-    return false;
-  }
-  const auto canonical = pathForStem(reference.identity.stem,
-                                     reference.identity.historyIndex,
-                                     diagnostic, limits);
-  if (!canonical || *canonical != reference.identity) {
-    if (diagnostic.empty()) {
-      diagnostic = "Replay reference path identity is inconsistent.";
-    }
-    return false;
-  }
-  return true;
 }
 
 } // namespace
@@ -220,11 +189,11 @@ CourseReplayContextOutcome CourseReplayContext::load(
 
     std::optional<ModernReplayFileReference> reference =
         *loaded.record->replayFile;
-    const auto parsedPath =
-        courseReplayPathInputForResult(stored, hasUndefinedLongNotes);
-    if (!referenceAgrees(*reference, stored, parsedPath, limits_, diagnostic)) {
+    const auto referenceAgreement = compareCourseReplayReferenceToResult(
+        *reference, stored, hasUndefinedLongNotes, limits_);
+    if (!referenceAgreement.matches) {
       return failure(CourseReplayContextState::ReferenceMismatch,
-                     std::move(diagnostic), preservedResult,
+                     referenceAgreement.diagnostic, preservedResult,
                      std::move(reference));
     }
     if (reference->metadata.codecVersion !=
@@ -332,9 +301,12 @@ CourseReplayContextOutcome CourseReplayContext::load(
     }
     const auto decodedPath = courseReplayPathInputForResult(
         stored, decodedUndefinedLongNotes.value_or(hasUndefinedLongNotes));
-    if (!referenceAgrees(*reference, stored, decodedPath, limits_, diagnostic)) {
+    const auto decodedReferenceAgreement =
+        compareCourseReplayReferenceToResult(
+            *reference, stored, decodedPath.hasUndefinedLongNotes, limits_);
+    if (!decodedReferenceAgreement.matches) {
       return failure(CourseReplayContextState::ReferenceMismatch,
-                     std::move(diagnostic), preservedResult,
+                     decodedReferenceAgreement.diagnostic, preservedResult,
                      std::move(reference));
     }
 

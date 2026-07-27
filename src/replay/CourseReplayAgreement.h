@@ -2,6 +2,7 @@
 
 #include "BeatorajaReplayCodec.h"
 #include "BeatorajaReplayPath.h"
+#include "ReplayReferenceAgreement.h"
 
 #include "../ModernResult.h"
 
@@ -30,10 +31,6 @@ struct CourseReplayAgreement {
     return issue == CourseReplayAgreementIssue::None;
   }
 };
-
-[[nodiscard]] CoursePathInput courseReplayPathInputForResult(
-    const result_persistence::ModernCourseResult &result,
-    bool hasUndefinedLongNotes);
 
 [[nodiscard]] CourseReplayAgreement compareCourseReplayPathToResult(
     const CoursePathInput &path,

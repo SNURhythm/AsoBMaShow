@@ -861,6 +861,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/path.cpp
         src/replay/BeatorajaReplayPath.cpp
         src/replay/ReplayFileActionService.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/replay/ReplayFileLifecycle.cpp
         src/replay/ReplayFileStore.cpp
         src/repositories/ReplayRepository.cpp
@@ -1016,6 +1017,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/replay/BeatorajaReplayPath.cpp
         src/replay/CourseReplayAgreement.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/replay/CourseReplayCapture.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplaySetup.cpp
@@ -1606,6 +1608,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/BeatorajaReplayPath.cpp
         src/replay/CourseReplayAgreement.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/replay/CourseReplayCapture.cpp
         src/replay/CourseReplayPersistence.cpp
         src/replay/CourseResultPersistence.cpp
@@ -1669,6 +1672,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ChartReplayAgreement.cpp
         src/replay/ReplaySetupProvenance.cpp
         src/replay/ChartReplayContext.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileLifecycle.cpp
         src/replay/ReplayFileStore.cpp
@@ -1723,6 +1727,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/CourseReplayAgreement.cpp
         src/replay/CourseReplayContext.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileLifecycle.cpp
         src/replay/ReplayFileStore.cpp
