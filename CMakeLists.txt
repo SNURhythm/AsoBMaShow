@@ -910,6 +910,32 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         cxx_std_23
     )
 
+    add_executable(course_continuation_tests
+        tests/course_continuation_tests.cpp
+        src/ScoreProvenance.cpp
+        src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(course_continuation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_continuation_tests PRIVATE cxx_std_23)
+
+    add_executable(modern_course_persistence_contract_tests
+        tests/modern_course_persistence_contract_tests.cpp
+    )
+    target_include_directories(modern_course_persistence_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(modern_course_persistence_contract_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(modern_course_persistence_contract_tests PRIVATE
+        cxx_std_23
+    )
+
     add_executable(result_record_summary_tests
         tests/result_record_summary_tests.cpp
         src/ResultRecordSummary.cpp
@@ -3338,6 +3364,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_playback_tests
         replay_input_recorder_tests
         modern_chart_persistence_contract_tests
+        course_continuation_tests
+        modern_course_persistence_contract_tests
         modern_result_tests
         result_contract_tests
         ir_submission_snapshot_tests

@@ -252,6 +252,11 @@ void testCollectionCountsAndSupplementalValues() {
 }
 
 void testCourseEnvelopeSupportsMixedStageSources() {
+  replay::CourseReplayPlaybackData empty;
+  expect(replay::validateCourseReplayPlayback(empty, {}, {}).issue ==
+             replay::ReplayPlaybackIssue::CourseStageCount,
+         "empty course replay is rejected");
+
   replay::CourseReplayPlaybackData course;
   course.stages = {validPlayback(), validPlayback()};
   course.stages[1].setup.chart.md5.clear();
@@ -272,6 +277,13 @@ void testCourseEnvelopeSupportsMixedStageSources() {
   expect(badRest.issue == replay::ReplayPlaybackIssue::CourseRest &&
              badRest.stageIndex == 0,
          "course reports the stage with oversized rest");
+
+  course.restMicrosAfterStage[0] = -1;
+  const auto negativeRest =
+      replay::validateCourseReplayPlayback(course, sources, bounds);
+  expect(negativeRest.issue == replay::ReplayPlaybackIssue::CourseRest &&
+             negativeRest.stageIndex == 0,
+         "course reports the stage with negative rest");
 
   course.restMicrosAfterStage = {0};
   expect(replay::validateCourseReplayPlayback(course, sources, bounds).issue ==

@@ -175,6 +175,28 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
                ownershipForbidden);
 }
 
+void testCourseContinuationAndConsumerBoundaries() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  requireToken(root / "src/replay/CourseContinuation.cpp",
+               "advanceCourseContinuation",
+               "course continuation transition authority");
+  requireToken(root / "src/replay/CourseReplayConsumer.cpp",
+               "advanceCourseContinuation",
+               "course replay materialization continuation authority");
+  requireToken(root / "src/scene/play/GamePlayScene.cpp",
+               "advanceCourseContinuation",
+               "live course continuation authority");
+  requireToken(root / "src/ReplayVideoExporter.cpp",
+               "CourseReplayConsumer",
+               "modern course video consumer");
+
+  constexpr std::array<std::string_view, 3> forbidden{
+      "ReplayFileStore", "BeatorajaReplayCodec", "readVerified"};
+  rejectTokens(root / "src/scene/MainMenuScene.cpp", forbidden);
+  rejectTokens(root / "src/scene/ResultScene.cpp", forbidden);
+  rejectTokens(root / "src/ReplayVideoExporter.cpp", forbidden);
+}
+
 void requireToken(const std::filesystem::path &path, std::string_view token,
                   std::string_view authority) {
   if (!readText(path).contains(token)) {
@@ -262,6 +284,7 @@ int main() {
   testModernResultAndSnapshotBoundary();
   testSharedModernResultAuthorities();
   testActivatedChartConsumersUseTheSharedPipeline();
+  testCourseContinuationAndConsumerBoundaries();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;
