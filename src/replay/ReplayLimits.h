@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../DurablePayloadLimits.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -14,9 +16,9 @@ struct ReplayLimits {
   std::size_t maxTouchSamples = 1'000'000U;
   std::size_t maxLaneCoverEvents = 100'000U;
   std::size_t maxRandomValues = 100'000U;
-  std::size_t maxCourseStages = 256U;
+  std::size_t maxCourseStages = durable_payload::kMaximumCourseStages;
   std::size_t maxJsonDepth = 64U;
-  std::size_t maxStringBytes = 16U * 1024U;
+  std::size_t maxStringBytes = durable_payload::kMaximumStringBytes;
   std::size_t maxFilenameBytes = 255U;
   std::int64_t minimumSongTimeMicros = -30'000'000LL;
   std::int64_t maxCourseRestMicros = 60LL * 60LL * 1'000'000LL;

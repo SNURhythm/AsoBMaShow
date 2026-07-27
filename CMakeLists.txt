@@ -749,6 +749,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_limits_tests PRIVATE cxx_std_23)
 
+    add_executable(durable_payload_contract_tests
+        tests/durable_payload_contract_tests.cpp
+    )
+    target_include_directories(durable_payload_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(durable_payload_contract_tests PRIVATE cxx_std_23)
+
     add_executable(replay_format_authority_tests
         tests/replay_format_authority_tests.cpp
     )
@@ -2962,6 +2970,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         replay_capabilities_tests
         replay_limits_tests
+        durable_payload_contract_tests
         replay_format_authority_tests
         replay_setup_tests
         beatoraja_replay_path_tests
