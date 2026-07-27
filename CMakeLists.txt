@@ -1490,6 +1490,40 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2)
     endif()
 
+    add_executable(modern_result_recall_tests
+        tests/modern_result_recall_tests.cpp
+        src/ModernResultRecallBuilder.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/ModernResult.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(modern_result_recall_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(modern_result_recall_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(modern_result_recall_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(modern_result_recall_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(modern_result_recall_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(result_recall_builder_tests
         tests/result_recall_builder_tests.cpp
         src/ArchiveFile.cpp
@@ -3057,6 +3091,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_playback_tests
         modern_result_tests
         ir_submission_snapshot_tests
+        modern_result_recall_tests
         result_record_summary_tests
         course_identity_tests
         ir_driver_tests

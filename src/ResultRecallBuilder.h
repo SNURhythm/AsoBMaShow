@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoursePlaySession.h"
+#include "ModernResultRecallBuilder.h"
 #include "ResultPersistenceCoordinator.h"
 #include "ir/IrSubmission.h"
 #include "repositories/ReplayRepository.h"
