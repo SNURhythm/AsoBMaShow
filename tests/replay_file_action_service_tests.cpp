@@ -179,10 +179,6 @@ void testMissingFileDoesNotCreateADeletionTombstone() {
       repository.LoadModernChartResultByAttempt(installed.result.attemptId);
   assert(loaded.record && loaded.record->replayFile &&
          !loaded.record->replayFile->userDeleted);
-  const auto inventory =
-      replay::loadAgreedModernReplayFileInventory(repository);
-  assert(inventory.status ==
-         ModernReplayFileInventoryStatus::IntegrityConflict);
 }
 
 void testResultMismatchedReferenceCannotBeInspectedOrDeleted() {
@@ -233,6 +229,10 @@ void testResultMismatchedReferenceCannotBeInspectedOrDeleted() {
       repository.LoadModernChartResultByAttempt(installed.result.attemptId);
   assert(loaded.record && loaded.record->replayFile &&
          !loaded.record->replayFile->userDeleted);
+  const auto inventory =
+      replay::loadAgreedModernReplayFileInventory(repository);
+  assert(inventory.status ==
+         ModernReplayFileInventoryStatus::IntegrityConflict);
 }
 
 } // namespace

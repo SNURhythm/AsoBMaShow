@@ -862,6 +862,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/ReplayFileActionService.cpp
         src/replay/ReplayReferenceAgreement.cpp
+        src/replay/ReplayProfileInventory.cpp
         src/replay/ReplayFileLifecycle.cpp
         src/replay/ReplayFileStore.cpp
         src/repositories/ReplayRepository.cpp
@@ -3372,6 +3373,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplayFileLifecycle.cpp
         src/replay/ReplayFileStore.cpp
         src/replay/ReplayProfileTransfer.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -3443,6 +3446,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplayFileLifecycle.cpp
         src/replay/ReplayFileStore.cpp
         src/replay/ReplayProfileTransfer.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -3507,6 +3512,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplayFileLifecycle.cpp
         src/replay/ReplayFileStore.cpp
         src/replay/ReplayProfileTransfer.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c

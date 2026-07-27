@@ -23,6 +23,7 @@ struct ReplayReferenceAgreement {
 [[nodiscard]] ReplayReferenceAgreement compareChartReplayReferenceToResult(
     const ModernReplayFileReference &reference,
     const result_persistence::ModernChartResult &result,
+    std::optional<bool> hasUndefinedLongNotes = std::nullopt,
     const ReplayLimits &limits = kReplayLimits) noexcept;
 
 [[nodiscard]] ReplayReferenceAgreement compareCourseReplayReferenceToResult(

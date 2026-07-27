@@ -54,6 +54,7 @@ CoursePathInput courseReplayPathInputForResult(
 ReplayReferenceAgreement compareChartReplayReferenceToResult(
     const ModernReplayFileReference &reference,
     const result_persistence::ModernChartResult &result,
+    std::optional<bool> hasUndefinedLongNotes,
     const ReplayLimits &limits) noexcept {
   try {
     std::string diagnostic;
@@ -63,8 +64,8 @@ ReplayReferenceAgreement compareChartReplayReferenceToResult(
     }
     if (!baseReferenceAgrees(reference, result.resultId, limits, diagnostic) ||
         !chartStemMatches(reference.identity.stem, result.score.chartSha256,
-                          result.score.longNoteMode, std::nullopt, diagnostic,
-                          limits)) {
+                          result.score.longNoteMode, hasUndefinedLongNotes,
+                          diagnostic, limits)) {
       return mismatch(diagnostic.empty()
                           ? "Replay reference does not match the saved chart."
                           : std::move(diagnostic));

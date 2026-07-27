@@ -3,6 +3,7 @@
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
 #include "replay/ReplayFileReconciler.h"
+#include "replay/ReplayProfileInventory.h"
 #include "replay/ReplayFileStore.h"
 #include "bgfx_helper.h"
 #include "rendering/BgfxInitLimits.h"
@@ -1483,8 +1484,8 @@ int run() {
                     context.replayRepository.GetResolvedProfileRoot());
                 replay::ReplayFileReconciler reconciler({
                     .listReferences = [&context] {
-                      return context.replayRepository
-                          .ListModernReplayFileReferences();
+                      return replay::loadAgreedModernReplayFileInventory(
+                          context.replayRepository);
                     },
                     .removeReferencedEntry =
                         [&store](const replay::ReplayFileMetadata &metadata,

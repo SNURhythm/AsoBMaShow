@@ -170,7 +170,8 @@ ChartReplayContextOutcome ChartReplayContext::load(
     std::optional<ModernReplayFileReference> reference =
         *loaded.record->replayFile;
     const auto referenceAgreement =
-        compareChartReplayReferenceToResult(*reference, stored, limits_);
+        compareChartReplayReferenceToResult(*reference, stored, std::nullopt,
+                                            limits_);
     if (!referenceAgreement.matches) {
       return failure(ChartReplayContextState::ReferenceMismatch,
                      referenceAgreement.diagnostic, preservedResult,
@@ -242,12 +243,12 @@ ChartReplayContextOutcome ChartReplayContext::load(
                      "Decoded chart replay violates the playback contract.",
                      preservedResult, std::move(reference));
     }
-    if (!chartStemMatches(reference->identity.stem, stored.score.chartSha256,
-                          stored.score.longNoteMode,
-                          decoded.chart->playback.setup.hasUndefinedLongNotes,
-                          diagnostic, limits_)) {
+    const auto decodedReferenceAgreement = compareChartReplayReferenceToResult(
+        *reference, stored,
+        decoded.chart->playback.setup.hasUndefinedLongNotes, limits_);
+    if (!decodedReferenceAgreement.matches) {
       return failure(ChartReplayContextState::ReferenceMismatch,
-                     "Replay path identity differs from decoded setup.",
+                     decodedReferenceAgreement.diagnostic,
                      preservedResult, std::move(reference));
     }
 

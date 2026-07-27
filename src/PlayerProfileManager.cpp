@@ -11,6 +11,7 @@
 #include "input/InputProfileStore.h"
 #include "practice/PracticePresetStore.h"
 #include "replay/ReplayProfileTransfer.h"
+#include "replay/ReplayProfileInventory.h"
 
 #include "../yoga/lib/nlohmann/json.hpp"
 
@@ -1430,7 +1431,8 @@ ProfileResult buildProfile(
   std::vector<std::filesystem::path> transferredReplayFiles;
   if (mode == BuildMode::Duplicate) {
     ReplayRepository stagedRepository(staging.replaysDb);
-    const auto inventory = stagedRepository.ListModernReplayFileReferences();
+    const auto inventory =
+        replay::loadAgreedModernReplayFileInventory(stagedRepository);
     if (inventory.status != ModernReplayFileInventoryStatus::Loaded) {
       return fail(ProfileError::IntegrityFailure,
                   "unable to load replay file ownership for duplication: " +
@@ -2353,7 +2355,7 @@ ProfileResult PlayerProfileManager::installProfile(
   }
   ReplayRepository stagedReplayRepository(staging.replaysDb);
   const auto replayInventory =
-      stagedReplayRepository.ListModernReplayFileReferences();
+      replay::loadAgreedModernReplayFileInventory(stagedReplayRepository);
   if (replayInventory.status != ModernReplayFileInventoryStatus::Loaded) {
     return cleanStagingAndFail(
         ProfileError::IntegrityFailure,

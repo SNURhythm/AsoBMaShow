@@ -12,6 +12,7 @@
 #include "practice/PracticePresetStore.h"
 #include "replay/BeatorajaReplayPath.h"
 #include "replay/ReplayProfileTransfer.h"
+#include "replay/ReplayProfileInventory.h"
 
 #include "../yoga/lib/nlohmann/json.hpp"
 
@@ -1466,7 +1467,8 @@ validateArchive(const std::filesystem::path &archivePath,
     return {.error = ProfileError::IntegrityFailure,
             .message = "archive replay ownership could not be loaded"};
   }
-  const auto inventory = replayRepository.ListModernReplayFileReferences();
+  const auto inventory =
+      replay::loadAgreedModernReplayFileInventory(replayRepository);
   if (inventory.status != ModernReplayFileInventoryStatus::Loaded) {
     return {.error = ProfileError::IntegrityFailure,
             .message = inventory.diagnostic.empty()
@@ -1635,7 +1637,7 @@ ProfileArchiveService::Export(std::string_view profileId,
                    "unable to load replay ownership for export");
   }
   const auto replayInventory =
-      replayRepository.ListModernReplayFileReferences();
+      replay::loadAgreedModernReplayFileInventory(replayRepository);
   if (replayInventory.status != ModernReplayFileInventoryStatus::Loaded) {
     return failure(ProfileError::IntegrityFailure,
                    "unable to load replay ownership for export: " +
