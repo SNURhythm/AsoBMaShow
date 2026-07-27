@@ -8,6 +8,7 @@
 #include "../src/practice/PracticePresetStore.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreRepository.h"
+#include "../src/replay/ReplayFileStore.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/sqlite3.h"
 #include "../yoga/lib/nlohmann/json.hpp"
@@ -18,6 +19,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -673,6 +675,77 @@ struct Fixture {
   }
 };
 
+std::string repeated(char value, std::size_t count) {
+  return std::string(count, value);
+}
+
+result_persistence::ModernChartResult portableReplayResult(int suffix,
+                                                           char hash) {
+  result_persistence::ModernChartResult value;
+  value.attemptId = "123e4567-e89b-42d3-a456-42661417400" +
+                    std::to_string(suffix);
+  value.score.chartPath = "portable/chart.bms";
+  value.score.chartMd5 = repeated(hash, 32);
+  value.score.chartSha256 = repeated(hash, 64);
+  value.score.chartTitle = "Portable Replay";
+  value.score.chartArtist = "Archive Contract";
+  value.score.longNoteMode = 1;
+  value.score.score = 7;
+  value.score.maxScore = 10;
+  value.score.maxCombo = 4;
+  value.score.comboBreak = 1;
+  value.score.pGreat = 3;
+  value.score.great = 1;
+  value.score.good = 1;
+  value.score.finalGauge = 82.5F;
+  value.score.clearType = kClearTypeNormalClearRank;
+  value.score.provenance = ScoreProvenance::Legacy();
+  value.keyMode = 7;
+  value.adoptedGaugeType = GaugeType::Normal;
+  value.adoptedGaugeHistory = {20.0F, 82.5F};
+  value.playedAtUnixMillis = 1'700'000'000'000LL + suffix;
+  value.resultFingerprint = result_persistence::modernResultFingerprint(value);
+  return value;
+}
+
+ModernReplayFileReference installPortableReplay(
+    const PlayerProfilePaths &paths, ReplayRepository &repository, int suffix,
+    char hash, bool userDeleted = false) {
+  const auto result = portableReplayResult(suffix, hash);
+  const auto reserved = repository.ReserveModernReplayPath(
+      result.attemptId, result.score.chartSha256, result.playedAtUnixMillis);
+  expect(reserved.status == ModernReplayReservationStatus::Reserved &&
+             reserved.reservation,
+         "portable replay path reserves");
+  const std::string payload = "portable replay " + std::to_string(suffix);
+  const auto raw = std::as_bytes(std::span(payload.data(), payload.size()));
+  const std::vector<std::byte> bytes(raw.begin(), raw.end());
+  replay::ReplayFileStore store(paths.root);
+  const auto fileReservation = store.reserve(
+      reserved.reservation->identity, bytes, result.attemptId);
+  const auto installed = store.install(*fileReservation.reservation, bytes);
+  expect(installed.file.has_value(), "portable replay file installs");
+  const ModernReplayFileAttachment attachment{
+      .identity = reserved.reservation->identity,
+      .metadata = installed.file->metadata};
+  expect(repository.StageModernChartResult(result, std::nullopt, attachment, {})
+             .status == ModernChartStageStatus::Staged,
+         "portable modern result stages");
+  const auto loaded =
+      repository.LoadModernChartResultByAttempt(result.attemptId);
+  ModernReplayFileReference reference = *loaded.record->replayFile;
+  if (userDeleted) {
+    expect(repository
+               .MarkModernReplayFileUserDeleted(
+                   ModernReplayOwnerKind::ChartResult, result.attemptId,
+                   reference)
+               .status == ModernReplayFileMutationStatus::Changed,
+           "portable replay deletion state persists");
+    reference.userDeleted = true;
+  }
+  return reference;
+}
+
 void testStreamingSha256() {
   expect(file_checksum::sha256("") == "e3b0c44298fc1c149afbf4c8996fb924"
                                       "27ae41e4649b934ca495991b7852b855",
@@ -708,6 +781,12 @@ std::filesystem::path exportFixture(Fixture &fixture, std::string_view name) {
   return archive;
 }
 
+void expectRejectedWithoutMutation(
+    Fixture &fixture, const std::vector<ArchiveMember> &members,
+    std::string_view label,
+    ProfileError expected = ProfileError::IntegrityFailure,
+    std::string_view messageNeedle = {});
+
 void testExportIsDeterministicAndStrict() {
   Fixture fixture;
   const auto first = exportFixture(fixture, "first.asobprofile");
@@ -741,7 +820,7 @@ void testExportIsDeterministicAndStrict() {
   expect(manifest != members.end(), "export manifest is present");
   if (manifest != members.end()) {
     const Json document = Json::parse(manifest->contents, nullptr, false);
-    expect(!document.is_discarded() && document.at("formatVersion") == 2 &&
+    expect(!document.is_discarded() && document.at("formatVersion") == 3 &&
                document.at("practiceSchemaVersion") == 1 &&
                document.at("profileUuid") == fixture.sourceId &&
                document.at("profileDisplayName") == "Portable Profile" &&
@@ -751,6 +830,77 @@ void testExportIsDeterministicAndStrict() {
                    ReplayRepository::kCurrentSchemaVersion,
            "export manifest records portable version metadata");
   }
+}
+
+void testReplayFilesRoundTripByVerifiedOwnership() {
+  Fixture fixture;
+  const auto source = fixture.manager.pathsFor(fixture.sourceId);
+  ReplayRepository repository(source.replaysDb);
+  expect(repository.EnsureSchema(), "portable replay repository opens");
+  const auto active = installPortableReplay(source, repository, 1, 'a');
+  const auto missing = installPortableReplay(source, repository, 2, 'b');
+  std::filesystem::remove(source.root / missing.metadata.relativePath);
+  const auto deleted =
+      installPortableReplay(source, repository, 3, 'c', true);
+  writeFile(source.replayDirectory / "unreferenced.brd", "unreferenced");
+
+  const auto archive = exportFixture(fixture, "owned-replays.asobprofile");
+  std::string error;
+  auto members = readArchive(archive, error);
+  const std::string activeName = active.metadata.relativePath.generic_string();
+  const std::string missingName = missing.metadata.relativePath.generic_string();
+  const std::string deletedName = deleted.metadata.relativePath.generic_string();
+  expect(error.empty() && findMember(members, activeName) != nullptr &&
+             findMember(members, missingName) == nullptr &&
+             findMember(members, deletedName) == nullptr &&
+             findMember(members, "replay/unreferenced.brd") == nullptr,
+         "archive contains only active verified owned replay bytes");
+  expect(std::filesystem::exists(source.replayDirectory / "unreferenced.brd"),
+         "export leaves unreferenced source bytes untouched");
+
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(archive);
+  expect(imported.ok() && imported.profile,
+         "owned replay archive imports: " + imported.message);
+  if (imported.profile) {
+    const auto installed = fixture.manager.pathsFor(imported.profile->id);
+    replay::ReplayFileStore installedStore(installed.root);
+    expect(installedStore.inspect(active.metadata).state ==
+               replay::ReplayFileState::Available &&
+               !std::filesystem::exists(installed.root /
+                                        missing.metadata.relativePath) &&
+               !std::filesystem::exists(installed.root /
+                                        deleted.metadata.relativePath),
+           "import restores verified bytes while preserving optional omissions");
+    ReplayRepository installedRepository(installed.replaysDb);
+    expect(installedRepository.EnsureSchema(),
+           "imported replay repository opens");
+    const auto inventory =
+        installedRepository.ListModernReplayFileReferences();
+    expect(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+               inventory.entries.size() == 3,
+           "import preserves result references independently of replay bytes");
+  }
+
+  ArchiveMember deletedMember{
+      .name = deletedName,
+      .contents = readFile(source.root / deleted.metadata.relativePath)};
+  auto insertion = std::ranges::find_if(members, [&](const ArchiveMember &item) {
+    return item.name == "checksums.sha256" ||
+           (item.name.starts_with("replay/") && item.name > deletedName);
+  });
+  members.insert(insertion, std::move(deletedMember));
+  refreshChecksums(members);
+  expectRejectedWithoutMutation(fixture, members,
+                                "user-deleted-replay-member");
+
+  writeFile(source.root / active.metadata.relativePath, "corrupt");
+  const auto destination = fixture.exchange.path() / "corrupt-replay.zip";
+  writeFile(destination, "existing archive");
+  const auto corruptExport = service.Export(fixture.sourceId, destination);
+  expect(corruptExport.error == ProfileError::IntegrityFailure &&
+             readFile(destination) == "existing archive",
+         "corrupt owned replay aborts export without replacing destination");
 }
 
 void testIrOperationalStateIsNotProfilePortable() {
@@ -1515,9 +1665,8 @@ void testOverwriteRollbackRestoresOriginalProfile() {
 
 void expectRejectedWithoutMutation(
     Fixture &fixture, const std::vector<ArchiveMember> &members,
-    std::string_view label,
-    ProfileError expected = ProfileError::IntegrityFailure,
-    std::string_view messageNeedle = {}) {
+    std::string_view label, ProfileError expected,
+    std::string_view messageNeedle) {
   const auto archive = fixture.temp.path() / (std::string(label) + ".zip");
   std::string error;
   expect(writeArchive(archive, members, error),
@@ -2815,6 +2964,7 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
 int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
+  testReplayFilesRoundTripByVerifiedOwnership();
   testIrOperationalStateIsNotProfilePortable();
   testExportRejectsSupportedOlderSourceBeforeWritingArchive();
   testPresetStoreSidecarRemainsProfilePortable();
