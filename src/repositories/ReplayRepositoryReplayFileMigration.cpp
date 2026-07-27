@@ -9,6 +9,7 @@
 #include "../ScoreProvenance.h"
 #include "../replay/BeatorajaReplayCodec.h"
 #include "../replay/BeatorajaReplayPath.h"
+#include "../replay/LegacyReplayInputProjection.h"
 #include "../replay/LegacyReplayIdentity.h"
 #include "../replay/ReplayFileStore.h"
 #include "../scene/play/GameplayGaugeRules.h"
@@ -29,7 +30,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -880,56 +880,26 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
     }
   }
 
-  std::vector<replay::InputTransition> candidates;
-  candidates.reserve(chart.events.size());
-  bool scratchBestEffort = false;
-  for (const auto &entry : chart.events) {
-    const auto action = entry.event.action;
-    if (action != replay::LegacyPlaybackAction::Press &&
-        action != replay::LegacyPlaybackAction::Release) {
-      continue;
-    }
-    const auto control =
-        legacyReplayControlForPhysicalLane(entry.event.lane, setup.keyMode);
-    if (!control.has_value()) {
-      diagnostic = "legacy replay input physical lane " +
-                   std::to_string(entry.event.lane) +
-                   " cannot be mapped for resolved key mode " +
-                   std::to_string(setup.keyMode);
-      return false;
-    }
-    if (entry.event.songTimeMicros < replay::kMinimumReplaySongTimeMicros) {
-      continue;
-    }
-    scratchBestEffort |=
-        control->kind == replay::LogicalControlKind::ScratchClockwise ||
-        control->kind == replay::LogicalControlKind::ScratchCounterClockwise;
-    candidates.push_back({
-        .songTimeMicros = entry.event.songTimeMicros,
-        .control = *control,
-        .pressed = action == replay::LegacyPlaybackAction::Press,
-    });
-  }
-  std::map<std::tuple<int, int, int>, bool> states;
-  for (const auto &transition : candidates) {
-    const auto key =
-        std::tuple(static_cast<int>(transition.control.kind),
-                   transition.control.player, transition.control.lane);
-    const bool pressed = transition.pressed;
-    if (states[key] == pressed) {
-      continue;
-    }
-    states[key] = pressed;
-    chart.playback.input.push_back(transition);
-  }
-  chart.playback.touchSamples = chart.touchSamples;
-  chart.playback.laneCoverEvents = chart.laneCoverEvents;
   replay::LegacyPlaybackTrack legacy;
-  legacy.stockScratchDirectionBestEffort = scratchBestEffort;
   legacy.events.reserve(chart.events.size());
   for (const auto &entry : chart.events) {
     legacy.events.push_back(entry.event);
   }
+  int invalidPhysicalLane = -1;
+  auto input = replay::projectLegacyReplayInput(legacy.events, setup.keyMode,
+                                                &invalidPhysicalLane);
+  if (!input.has_value()) {
+    diagnostic = "legacy replay input physical lane " +
+                 std::to_string(invalidPhysicalLane) +
+                 " cannot be mapped for resolved key mode " +
+                 std::to_string(setup.keyMode);
+    return false;
+  }
+  chart.playback.input = std::move(input->input);
+  chart.playback.touchSamples = chart.touchSamples;
+  chart.playback.laneCoverEvents = chart.laneCoverEvents;
+  legacy.stockScratchDirectionBestEffort =
+      input->stockScratchDirectionBestEffort;
   chart.playback.legacy = std::move(legacy);
 
   const auto stem = replay::chartStem(chart.chartSha256, setup.longNoteMode,
@@ -1950,77 +1920,7 @@ void setReplayMigrationChartTopologyResolver(
 
 std::optional<replay::LogicalControl>
 legacyReplayControlForPhysicalLane(int physicalLane, int keyMode) noexcept {
-  const auto lane = [](int player, int logicalLane) {
-    return replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
-                                  .player = player,
-                                  .lane = logicalLane};
-  };
-  const auto scratch = [](int player) {
-    return replay::LogicalControl{
-        .kind = replay::LogicalControlKind::ScratchClockwise,
-        .player = player,
-        .lane = -1};
-  };
-  if (physicalLane < 0) {
-    return std::nullopt;
-  }
-  switch (keyMode) {
-  case 5:
-    if (physicalLane < 5) {
-      return lane(1, physicalLane);
-    }
-    return physicalLane == 7 ? std::optional<replay::LogicalControl>(scratch(1))
-               : std::nullopt;
-  case 7:
-    if (physicalLane < 7) {
-      return lane(1, physicalLane);
-    }
-    return physicalLane == 7 ? std::optional<replay::LogicalControl>(scratch(1))
-               : std::nullopt;
-  case 9:
-    return physicalLane < 9
-               ? std::optional<replay::LogicalControl>(lane(1, physicalLane))
-               : std::nullopt;
-  case 10:
-    if (physicalLane < 5) {
-      return lane(1, physicalLane);
-    }
-    if (physicalLane == 7) {
-      return scratch(1);
-    }
-    if (physicalLane >= 8 && physicalLane < 13) {
-      return lane(2, physicalLane - 8);
-    }
-    return physicalLane == 15
-               ? std::optional<replay::LogicalControl>(scratch(2))
-               : std::nullopt;
-  case 14:
-    if (physicalLane < 7) {
-      return lane(1, physicalLane);
-    }
-    if (physicalLane == 7) {
-      return scratch(1);
-    }
-    if (physicalLane >= 8 && physicalLane < 15) {
-      return lane(2, physicalLane - 8);
-    }
-    return physicalLane == 15
-               ? std::optional<replay::LogicalControl>(scratch(2))
-               : std::nullopt;
-  case 24:
-    return physicalLane < 26
-               ? std::optional<replay::LogicalControl>(lane(1, physicalLane))
-               : std::nullopt;
-  case 48:
-    if (physicalLane < 26) {
-      return lane(1, physicalLane);
-    }
-    return physicalLane < 52 ? std::optional<replay::LogicalControl>(
-                     lane(2, physicalLane - 26))
-               : std::nullopt;
-  default:
-    return std::nullopt;
-  }
+  return replay::legacyReplayControlForPhysicalLane(physicalLane, keyMode);
 }
 
 ReplayMigrationChartMetadataResolver makeChartDatabaseReplayMetadataResolver(

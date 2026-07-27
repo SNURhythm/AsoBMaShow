@@ -14,7 +14,7 @@ namespace replay {
 [[nodiscard]] std::optional<JudgedPlaybackData> makeLegacyPlaybackAdapter(
     const ReplayPlaybackData &playback,
     const result_persistence::PersistedChartResult &result,
-    bms_parser::ChartMeta chartMeta);
+    bms_parser::Chart &chart, ReplayMaterializationSeed seed = {});
 
 // Compatibility bridge for consumers that still render judged JudgedPlaybackData.
 // This derived value must never be persisted or used for IR.

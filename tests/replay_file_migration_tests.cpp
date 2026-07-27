@@ -1,6 +1,7 @@
 #include "ScoreProvenance.h"
 #include "CourseIdentity.h"
 #include "replay/BeatorajaReplayCodec.h"
+#include "replay/LegacyReplayPlaybackAdapter.h"
 #include "replay/ReplayFileStore.h"
 #include "repositories/ReplayRepositoryReplayFileMigration.h"
 #include "repositories/ReplayRepository.h"
@@ -833,6 +834,15 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
   Database database(databasePath);
   replay_schema10_fixture::createExactSchema(database.get());
   const FixtureFacts fixture = insertChartFixture(database.get());
+  executeOrThrow(
+      database.get(),
+      "UPDATE replay_events SET gauge=21.0 WHERE replay_id=42 AND "
+      "event_index=0;"
+      "UPDATE replay_events SET action=0,lane=1,gauge=22.0 WHERE "
+      "replay_id=42 AND event_index=1;"
+      "UPDATE replays SET final_gauge=22.0 WHERE id=42;"
+      "UPDATE pending_chart_score_writes SET final_gauge=22.0 WHERE "
+      "replay_id=42;");
 
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
@@ -927,6 +937,51 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
                decoded.chart->legacy->events.size() == 2,
            "migration-only legacy playback annotations remain in extension");
   }
+
+  bms_parser::Chart chart;
+  chart.Meta.BmsPath = "BMS/chart.bms";
+  chart.Meta.MD5 = fixture.md5;
+  chart.Meta.SHA256 = fixture.sha256;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 2.0;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 1'000;
+  timeline->SetNote(0,
+                    new bms_parser::Note(bms_parser::Parser::NoWav));
+  timeline->SetNote(1,
+                    new bms_parser::Note(bms_parser::Parser::NoWav));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  result_persistence::PersistedChartResult migratedResult;
+  migratedResult.score.chartPath = "BMS/chart.bms";
+  migratedResult.score.chartMd5 = fixture.md5;
+  migratedResult.score.chartSha256 = fixture.sha256;
+  migratedResult.score.chartTitle = "Migration Chart";
+  migratedResult.score.chartArtist = "Artist";
+  migratedResult.score.longNoteMode = 1;
+  migratedResult.score.score = 3;
+  migratedResult.score.maxScore = 4;
+  migratedResult.score.maxCombo = 2;
+  migratedResult.score.pGreat = 1;
+  migratedResult.score.great = 1;
+  migratedResult.score.slow = 2;
+  migratedResult.score.finalGauge = 22.0F;
+  migratedResult.score.clearType = kClearTypeNormalClearRank;
+  migratedResult.keyMode = 7;
+  migratedResult.adoptedGaugeType = GaugeType::Normal;
+  migratedResult.adoptedGaugeHistory = {21.0F, 22.0F};
+  migratedResult.judgementTiming.emplace();
+  migratedResult.judgementTiming->byJudgement[PGreat].slow = 1;
+  migratedResult.judgementTiming->byJudgement[Great].slow = 1;
+  const bool adapts =
+      decoded.chart.has_value() &&
+      replay::makeLegacyPlaybackAdapter(*decoded.chart, migratedResult, chart)
+          .has_value();
+  expect(adapts,
+         "real migrated annotations agree with their compact saved result");
 }
 
 void testMigrationDefaultsMissingInitialLaneCoverState() {

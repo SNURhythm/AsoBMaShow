@@ -1219,10 +1219,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_file_migration_tests
         tests/replay_file_migration_tests.cpp
+        src/analysis/JudgedPlaybackResultState.cpp
         src/AtomicFile.cpp
+        src/bms_parser.cpp
         src/FileChecksum.cpp
         src/MinizBridge.c
         src/replay/GzipCodec.cpp
+        src/replay/LegacyReplayPlaybackAdapter.cpp
         src/replay/Base64Url.cpp
         src/replay/BeatorajaReplayPath.cpp
         src/replay/BeatorajaReplayCodec.cpp
@@ -1237,6 +1240,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/path.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
         src/sqlite3.c
@@ -1286,9 +1290,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_playback_adapter_tests
         tests/replay_playback_adapter_tests.cpp
+        src/analysis/JudgedPlaybackResultState.cpp
         src/ScoreProvenance.cpp
+        src/bms_parser.cpp
         src/replay/LegacyReplayPlaybackAdapter.cpp
         src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
     )

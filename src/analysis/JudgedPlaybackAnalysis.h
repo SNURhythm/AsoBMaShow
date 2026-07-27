@@ -47,10 +47,11 @@ materializationSeedAfterJudgedPlayback(
 makeJudgedPlaybackForAnalysis(
     const ReplayPlaybackData &playback,
     const result_persistence::PersistedChartResult &result,
-    const bms_parser::Chart &replayChart,
+    bms_parser::Chart &replayChart,
     JudgedPlaybackAnalysisOptions options = {}) {
   if (playback.legacy.has_value()) {
-    return makeLegacyPlaybackAdapter(playback, result, replayChart.Meta);
+    return makeLegacyPlaybackAdapter(playback, result, replayChart,
+                                     options.materializationSeed);
   }
 
   auto sharedPlayback = std::make_shared<const ReplayPlaybackData>(playback);
