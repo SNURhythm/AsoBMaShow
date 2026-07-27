@@ -45,6 +45,7 @@ void testSuccessRunsBodyExactlyOnce() {
   int initializeCalls = 0;
   int reportCalls = 0;
   int runtimeCalls = 0;
+  int reconciliationCalls = 0;
   std::vector<std::string_view> events;
   const int exitCode = application_startup::execute(
       true,
@@ -58,6 +59,10 @@ void testSuccessRunsBodyExactlyOnce() {
                           .music = true};
           },
           .reportFatal = [&](const Result &) { ++reportCalls; },
+          .reconcileReplayFiles = [&] {
+            ++reconciliationCalls;
+            events.push_back("reconcile");
+          },
           .runReadyApplication = [&] {
             ++runtimeCalls;
             events.push_back("runtime");
@@ -67,8 +72,29 @@ void testSuccessRunsBodyExactlyOnce() {
   expect(initializeCalls == 1, "success initializes databases once");
   expect(reportCalls == 0, "success does not report fatal");
   expect(runtimeCalls == 1, "success runs application once");
-  expect(events == std::vector<std::string_view>{"databases", "runtime"},
-         "database readiness precedes runtime");
+  expect(reconciliationCalls == 1, "success reconciles replay files once");
+  expect(events == std::vector<std::string_view>{"databases", "reconcile",
+                                                 "runtime"},
+         "database readiness and reconciliation precede runtime");
+}
+
+void testReplayReconciliationFailureDoesNotBlockResultsOrRuntime() {
+  int runtimeCalls = 0;
+  const int exitCode = application_startup::execute(
+      true,
+      Dependencies{
+          .initializeDatabases = [] {
+            return Status{.chart = true,
+                          .score = true,
+                          .replay = true,
+                          .music = true};
+          },
+          .reportFatal = [](const Result &) { assert(false); },
+          .reconcileReplayFiles = [] { throw 42; },
+          .runReadyApplication = [&] { ++runtimeCalls; },
+      });
+  expect(exitCode == EXIT_SUCCESS && runtimeCalls == 1,
+         "best-effort replay reconciliation cannot block startup");
 }
 
 void testProfileFailureShortCircuitsEverything() {
@@ -182,6 +208,7 @@ void testBgfxTransientBuffersAreExpanded() {
 
 int main() {
   testSuccessRunsBodyExactlyOnce();
+  testReplayReconciliationFailureDoesNotBlockResultsOrRuntime();
   testProfileFailureShortCircuitsEverything();
   testDatabaseFailuresFailClosed();
   testBgfxTransientBuffersAreExpanded();

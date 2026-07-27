@@ -892,6 +892,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_file_action_service_tests PRIVATE SDL2)
     endif()
 
+    add_executable(replay_file_reconciler_tests
+        tests/replay_file_reconciler_tests.cpp
+        src/replay/ReplayFileReconciler.cpp
+    )
+    target_include_directories(replay_file_reconciler_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_reconciler_tests PRIVATE cxx_std_23)
+
     add_executable(replay_codec_store_contract_tests
         tests/replay_codec_store_contract_tests.cpp
         src/AtomicFile.cpp
@@ -3646,6 +3655,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_file_lifecycle_tests
         replay_file_store_tests
         replay_file_action_service_tests
+        replay_file_reconciler_tests
         replay_codec_store_contract_tests
         replay_playback_tests
         replay_input_recorder_tests
