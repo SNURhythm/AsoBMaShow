@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PlayerProfileManager.h"
+#include "replay/ReplayLimits.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -10,7 +11,7 @@
 #include <string_view>
 
 struct ProfileArchiveManifest {
-  static constexpr int kFormatVersion = 2;
+  static constexpr int kFormatVersion = 3;
 
   int formatVersion = kFormatVersion;
   std::string sourceApplicationVersion;
@@ -47,6 +48,8 @@ struct ProfileArchiveSizePolicy {
   static constexpr std::uint64_t kMaximumTotalBytes = 4ULL * 1024 * 1024 * 1024;
   static constexpr std::uint64_t kMaximumExistingArchiveBytes =
       kMaximumTotalBytes + kMaximumMetadataBytes;
+  static constexpr std::uint64_t kMaximumReplayFileBytes =
+      replay::kReplayLimits.maxCompressedBytes;
 
   [[nodiscard]] static bool memberSizeAllowed(std::string_view memberName,
                                               std::uint64_t bytes);

@@ -1342,10 +1342,36 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
 
 void testVersionOneArchiveImportsWithEmptyPracticeDirectory() {
   Fixture fixture;
-  const auto exported = exportFixture(fixture, "version-two.asobprofile");
+  const auto exported = exportFixture(fixture, "version-three.asobprofile");
   std::string error;
   auto members = readArchive(exported, error);
   expect(error.empty(), "v1 compatibility fixture reads: " + error);
+  auto versionTwoMembers = members;
+  ArchiveMember *versionTwoManifest =
+      findMember(versionTwoMembers, "manifest.json");
+  expect(versionTwoManifest != nullptr, "v2 compatibility manifest exists");
+  if (versionTwoManifest) {
+    Json versionTwo =
+        Json::parse(versionTwoManifest->contents, nullptr, false);
+    versionTwo["formatVersion"] = 2;
+    versionTwoManifest->contents = versionTwo.dump(2) + "\n";
+    refreshChecksums(versionTwoMembers);
+    const auto versionTwoArchive =
+        fixture.exchange.path() / "version-two.asobprofile";
+    expect(writeArchive(versionTwoArchive, versionTwoMembers, error),
+           "v2 compatibility archive writes: " + error);
+    ProfileArchiveService service(fixture.manager);
+    const auto imported = service.Import(versionTwoArchive);
+    expect(imported.ok() && imported.profile,
+           "version-two profile archive still imports: " +
+               imported.message);
+    if (imported.profile) {
+      expect(std::filesystem::is_empty(
+                 fixture.manager.pathsFor(imported.profile->id)
+                     .replayDirectory),
+             "version-two archive imports with an empty replay directory");
+    }
+  }
   std::erase_if(members, [](const ArchiveMember &member) {
     return member.name.starts_with("practice/");
   });
@@ -1957,6 +1983,17 @@ void testSizePolicyBoundariesWithoutLargeAllocations() {
           !Policy::memberSizeAllowed("scores.db",
                                      Policy::kMaximumDatabaseBytes + 1),
       "database declared-size boundary is enforced");
+  std::string replayDiagnostic;
+  const auto replayStem = replay::chartStem(std::string(64, 'a'), 1, false,
+                                            replayDiagnostic);
+  const auto replayPath =
+      replay::pathForStem(*replayStem, 0, replayDiagnostic);
+  const std::string replayMember = replayPath->relativePath.generic_string();
+  expect(Policy::memberSizeAllowed(replayMember,
+                                   Policy::kMaximumReplayFileBytes) &&
+             !Policy::memberSizeAllowed(
+                 replayMember, Policy::kMaximumReplayFileBytes + 1),
+         "replay member declared-size boundary shares the BRD file limit");
   expect(Policy::additionAllowed("scores.db", Policy::kMaximumDatabaseBytes, 0,
                                  0) &&
              !Policy::additionAllowed("scores.db",
