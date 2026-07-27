@@ -3,6 +3,7 @@
 #include "repositories/ReplayRepository.h"
 #include "replay/ReplayFileStore.h"
 #include "replay/BeatorajaReplayPath.h"
+#include "replay/ReplayProfileInventory.h"
 #include "sqlite3.h"
 
 #include <cassert>
@@ -178,6 +179,10 @@ void testMissingFileDoesNotCreateADeletionTombstone() {
       repository.LoadModernChartResultByAttempt(installed.result.attemptId);
   assert(loaded.record && loaded.record->replayFile &&
          !loaded.record->replayFile->userDeleted);
+  const auto inventory =
+      replay::loadAgreedModernReplayFileInventory(repository);
+  assert(inventory.status ==
+         ModernReplayFileInventoryStatus::IntegrityConflict);
 }
 
 void testResultMismatchedReferenceCannotBeInspectedOrDeleted() {
