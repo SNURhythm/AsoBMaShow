@@ -1,0 +1,157 @@
+#include "replay/ReplayInputRecorder.h"
+
+#include <cstdlib>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace {
+
+void require(bool condition, const char *message) {
+  if (!condition) {
+    std::cerr << message << '\n';
+    std::exit(1);
+  }
+}
+
+struct ClockFixture {
+  std::int64_t offset = 0;
+  bool available = true;
+
+  static std::optional<std::int64_t> map(void *context,
+                                         std::int64_t steadyMicros) {
+    auto &clock = *static_cast<ClockFixture *>(context);
+    if (!clock.available) {
+      return std::nullopt;
+    }
+    return steadyMicros + clock.offset;
+  }
+};
+
+replay::LogicalControl lane(int laneIndex = 0, int player = 1) {
+  return {.kind = replay::LogicalControlKind::Lane,
+          .player = player,
+          .lane = laneIndex};
+}
+
+void testRecordsSignedMonotonicSongTimeWithoutSorting() {
+  ClockFixture clock{.offset = -2'000};
+  replay::ReplayInputRecorder recorder(
+      {.context = &clock, .mapSteadyToSong = &ClockFixture::map});
+  std::string diagnostic;
+
+  require(recorder.record(1'000, lane(), true, diagnostic),
+          "mapped pre-roll press is accepted");
+  require(recorder.recordSongTime(-500, lane(), false, diagnostic),
+          "direct signed-time release is accepted");
+  require(recorder.recordSongTime(
+              0,
+              {.kind = replay::LogicalControlKind::Start,
+               .player = 1,
+               .lane = -1},
+              true, diagnostic),
+          "stock Start input is accepted");
+
+  const auto result = recorder.finish(
+      {.completionSongTimeMicros = 5'000}, diagnostic);
+  require(result.has_value() && diagnostic.empty(),
+          "valid capture finishes exactly once");
+  require(*result ==
+              std::vector<replay::InputTransition>{
+                  {.songTimeMicros = -1'000,
+                   .control = lane(),
+                   .pressed = true},
+                  {.songTimeMicros = -500,
+                   .control = lane(),
+                   .pressed = false},
+                  {.songTimeMicros = 0,
+                   .control = {.kind = replay::LogicalControlKind::Start,
+                               .player = 1,
+                               .lane = -1},
+                   .pressed = true}},
+          "capture preserves accepted source order and signed timestamps");
+  require(!recorder.finish({.completionSongTimeMicros = 5'000}, diagnostic)
+               .has_value(),
+          "finished capture cannot be read twice");
+}
+
+void testTimeReversalAndOverflowInvalidateTheWholeAttachment() {
+  replay::ReplayLimits bounded = replay::kReplayLimits;
+  bounded.maxInputTransitions = 2;
+  std::string diagnostic;
+
+  replay::ReplayInputRecorder reversed({}, bounded);
+  require(reversed.recordSongTime(-10, lane(), true, diagnostic),
+          "reversal fixture accepts first edge");
+  require(!reversed.recordSongTime(-11, lane(), false, diagnostic),
+          "decreasing time is rejected instead of sorted");
+  require(!reversed.finish({.completionSongTimeMicros = 10}, diagnostic)
+               .has_value() &&
+              diagnostic.find("decreased") != std::string::npos,
+          "time reversal discards the accepted prefix");
+
+  replay::ReplayInputRecorder overflow({}, bounded);
+  require(overflow.recordSongTime(0, lane(), true, diagnostic) &&
+              overflow.recordSongTime(1, lane(), false, diagnostic),
+          "overflow fixture fills its exact capacity");
+  require(!overflow.recordSongTime(2, lane(1), true, diagnostic),
+          "one excess transition is rejected");
+  require(!overflow.finish({.completionSongTimeMicros = 10}, diagnostic)
+               .has_value() &&
+              diagnostic.find("limit") != std::string::npos,
+          "capacity failure never saves a truncated replay");
+}
+
+void testClockAndCompletionBoundsFailClosed() {
+  std::string diagnostic;
+  replay::ReplayInputRecorder noClock;
+  require(!noClock.record(1, lane(), true, diagnostic) &&
+              diagnostic.find("clock") != std::string::npos,
+          "steady-time recording requires an explicit song clock");
+  require(!noClock.finish({.completionSongTimeMicros = 10}, diagnostic)
+               .has_value(),
+          "clock failure permanently invalidates the attachment");
+
+  replay::ReplayInputRecorder tooLate;
+  require(tooLate.recordSongTime(11, lane(), true, diagnostic),
+          "completion is validated when its final bound is known");
+  require(!tooLate.finish({.completionSongTimeMicros = 10}, diagnostic)
+               .has_value() &&
+              diagnostic.find("bounds") != std::string::npos,
+          "capture beyond completion is rejected as a whole");
+}
+
+void testRedundantStateAndUnsupportedControlsFailClosed() {
+  std::string diagnostic;
+  replay::ReplayInputRecorder redundant;
+  require(redundant.recordSongTime(0, lane(), true, diagnostic),
+          "state fixture accepts initial press");
+  require(!redundant.recordSongTime(1, lane(), true, diagnostic),
+          "duplicate state is rejected");
+  require(!redundant.finish({.completionSongTimeMicros = 10}, diagnostic)
+               .has_value(),
+          "observer contract violations cannot leave a partial attachment");
+
+  replay::ReplayInputRecorder unsupported;
+  require(!unsupported.recordSongTime(
+              0,
+              {.kind = replay::LogicalControlKind::Lane,
+               .player = 3,
+               .lane = 0},
+              true, diagnostic),
+          "unknown replay players are rejected");
+  require(!unsupported.finish({.completionSongTimeMicros = 10}, diagnostic)
+               .has_value(),
+          "unsupported controls invalidate capture");
+}
+
+} // namespace
+
+int main() {
+  testRecordsSignedMonotonicSongTimeWithoutSorting();
+  testTimeReversalAndOverflowInvalidateTheWholeAttachment();
+  testClockAndCompletionBoundsFailClosed();
+  testRedundantStateAndUnsupportedControlsFailClosed();
+  return 0;
+}

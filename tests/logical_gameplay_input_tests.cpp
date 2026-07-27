@@ -237,6 +237,60 @@ void testCommandsNeverReachRhythmControl() {
   }
 }
 
+void testAppliedObserverSeesOneCanonicalReplayStream() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &value) { applied.push_back(value); });
+
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 2),
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 2),
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 2, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::ScratchClockwise, true),
+      transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+                 true),
+      transition({1, 7}, input::LogicalActionKind::ScratchClockwise, false, 0,
+                 0.0F),
+      transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+                 false, 0, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::Start, true),
+      transition({1, 7}, input::LogicalActionKind::Start, false, 0, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::Select, true),
+      transition({1, 7}, input::LogicalActionKind::Select, false, 0, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::Pause, true),
+  });
+
+  require(applied.size() == 10,
+          "observer sees effective lane, scratch, Start, and Select only");
+  require(applied[0].control ==
+                  replay::LogicalControl{.kind =
+                                             replay::LogicalControlKind::Lane,
+                                         .player = 1,
+                                         .lane = 2} &&
+              applied[0].pressed && !applied[0].replayOnly,
+          "lane observer uses the canonical replay control");
+  require(applied[2].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              applied[2].pressed &&
+              applied[3].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              !applied[3].pressed &&
+              applied[4].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              applied[4].pressed,
+          "scratch reversal is an ordered release and press in replay space");
+  require(applied[6].control.kind == replay::LogicalControlKind::Start &&
+              applied[6].pressed &&
+              applied[7].control.kind == replay::LogicalControlKind::Start &&
+              !applied[7].pressed &&
+              applied[8].control.kind == replay::LogicalControlKind::Select &&
+              applied[8].pressed &&
+              applied[9].control.kind == replay::LogicalControlKind::Select &&
+              !applied[9].pressed,
+          "Start and Select share the replay observer boundary");
+}
+
 void testResetReleasesOnlyHeldLogicalLanes() {
   RecordingControl control;
   LogicalGameplayInputAdapter adapter(control, {});
@@ -977,6 +1031,7 @@ int main() {
   testSecondPlayerScratchUsesLaneFifteen();
   testResolverOrderedScratchReversalUsesBackspinRelease();
   testCommandsNeverReachRhythmControl();
+  testAppliedObserverSeesOneCanonicalReplayStream();
   testResetReleasesOnlyHeldLogicalLanes();
   testDefaultProfileRoutesThroughResolverAndAdapter();
   testDirectKeyboardPolicyDoesNotReplayQueuedRegistryTap();

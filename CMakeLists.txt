@@ -871,6 +871,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_playback_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_input_recorder_tests
+        tests/replay_input_recorder_tests.cpp
+    )
+    target_include_directories(replay_input_recorder_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_input_recorder_tests PRIVATE cxx_std_23)
+
+    add_executable(modern_chart_persistence_contract_tests
+        tests/modern_chart_persistence_contract_tests.cpp
+    )
+    target_include_directories(modern_chart_persistence_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(modern_chart_persistence_contract_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(modern_chart_persistence_contract_tests PRIVATE
+        cxx_std_23
+    )
+
     add_executable(result_record_summary_tests
         tests/result_record_summary_tests.cpp
         src/ResultRecordSummary.cpp
@@ -3097,6 +3118,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_file_store_tests
         replay_codec_store_contract_tests
         replay_playback_tests
+        replay_input_recorder_tests
+        modern_chart_persistence_contract_tests
         modern_result_tests
         result_contract_tests
         ir_submission_snapshot_tests
