@@ -800,6 +800,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(beatoraja_replay_codec_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_file_lifecycle_tests
+        tests/replay_file_lifecycle_tests.cpp
+        src/replay/ReplayFileLifecycle.cpp
+    )
+    target_include_directories(replay_file_lifecycle_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_lifecycle_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_file_store_tests
+        tests/replay_file_store_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+    )
+    target_include_directories(replay_file_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_store_tests PRIVATE cxx_std_23)
+
     add_executable(replay_playback_tests
         tests/replay_playback_tests.cpp
         src/replay/ReplayPlayback.cpp
@@ -2913,6 +2935,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         beatoraja_replay_path_tests
         replay_codec_primitive_tests
         beatoraja_replay_codec_tests
+        replay_file_lifecycle_tests
+        replay_file_store_tests
         replay_playback_tests
         result_record_summary_tests
         course_identity_tests
