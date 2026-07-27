@@ -98,11 +98,49 @@ void testLiveCourseUsesOneModernResultFirstRoute() {
           "live course gameplay still enters the legacy result route");
 }
 
+void testModernCourseRecordsUseResultAndVerifiedReplayAuthorities() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  const auto summary = root / "src/ResultRecordSummary.h";
+  const auto menu = root / "src/scene/MainMenuScene.cpp";
+  const auto resultScene = root / "src/scene/ResultScene.cpp";
+
+  requireToken(summary, "ModernCourseRecordId",
+               "modern course Records have no durable tagged identity");
+  requireToken(summary, "makeModernCourseResultRecord",
+               "strict modern course rows are not projected into Records");
+  requireToken(menu, "ListModernCourseResults",
+               "course Records do not query strict history by course key");
+  requireToken(menu, "startModernCourseReplayPlayback",
+               "course Watch is not separated from the legacy adapter");
+  requireToken(menu, "startModernCourseReplayResultRecall",
+               "course View Result is not separated from legacy replay recall");
+  requireToken(menu, "startModernCourseReplayVideoExport",
+               "course video is not separated from the legacy adapter");
+  requireToken(menu, "makeRuntimeCourseReplayConsumer",
+               "modern course replay actions bypass the sole consumer");
+  requireToken(resultScene, "modernCourseResultBrowsing",
+               "course result browsing still requires replay detail");
+
+  const std::string modernRecall = read(menu);
+  const auto begin = modernRecall.find("startModernCourseReplayResultRecall");
+  require(begin != std::string::npos,
+          "modern course result recall entry point is missing");
+  const auto end = modernRecall.find("finishReplayResultRecallFailure", begin);
+  require(end != std::string::npos,
+          "modern course result recall boundary is malformed");
+  const std::string_view recallBody(modernRecall.data() + begin, end - begin);
+  require(recallBody.contains("BuildCourseResult") &&
+              !recallBody.contains("CourseReplayConsumer") &&
+              !recallBody.contains("LoadCourseReplay"),
+          "modern course View Result must use strict result rows without BRD or legacy replay loading");
+}
+
 } // namespace
 
 int main() {
   testModernCourseSchemaAndExclusiveOwnershipBoundary();
   testCourseResultAndReplayStayIndependentAtRuntime();
   testLiveCourseUsesOneModernResultFirstRoute();
+  testModernCourseRecordsUseResultAndVerifiedReplayAuthorities();
   return 0;
 }

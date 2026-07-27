@@ -67,12 +67,15 @@ void testAbsentReplayKeepsModernResultAndIr() {
       ReplayState::Missing,
   };
   for (ReplayState state : states) {
-    expect(replay::capabilitiesFor({
-               .origin = RecordOrigin::ModernChartResult,
-               .replayState = state,
-               .postponedIrSnapshotEligible = true,
-           }) == modernRecordOnly(true),
-           "absent replay changes no modern result or IR capability");
+    for (RecordOrigin origin : {RecordOrigin::ModernChartResult,
+                                RecordOrigin::ModernCourseResult}) {
+      expect(replay::capabilitiesFor({
+                 .origin = origin,
+                 .replayState = state,
+                 .postponedIrSnapshotEligible = true,
+             }) == modernRecordOnly(true),
+             "absent replay changes no modern result or IR capability");
+    }
   }
 }
 
@@ -83,13 +86,16 @@ void testInvalidReplayIsOnlyDeletable() {
       ReplayState::UnsupportedExtension,
   };
   for (ReplayState state : states) {
-    ReplayCapabilities expected = modernRecordOnly(false);
-    expected.deleteReplayFile = true;
-    expect(replay::capabilitiesFor({
-               .origin = RecordOrigin::ModernChartResult,
-               .replayState = state,
-           }) == expected,
-           "existing invalid replay is deletable but not playable");
+    for (RecordOrigin origin : {RecordOrigin::ModernChartResult,
+                                RecordOrigin::ModernCourseResult}) {
+      ReplayCapabilities expected = modernRecordOnly(false);
+      expected.deleteReplayFile = true;
+      expect(replay::capabilitiesFor({
+                 .origin = origin,
+                 .replayState = state,
+             }) == expected,
+             "existing invalid replay is deletable but not playable");
+    }
   }
 }
 
