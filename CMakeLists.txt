@@ -1402,6 +1402,51 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             SDL2)
     endif()
 
+    add_executable(replay_repository_modern_course_tests
+        tests/replay_repository_modern_course_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(replay_repository_modern_course_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_repository_modern_course_tests PRIVATE
+        cxx_std_23
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(replay_repository_modern_course_tests PRIVATE
+            SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(replay_repository_modern_course_tests PRIVATE
+            SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(replay_repository_modern_course_tests PRIVATE
+            SDL2)
+    endif()
+
     add_executable(chart_replay_persistence_tests
         tests/chart_replay_persistence_tests.cpp
         src/AtomicFile.cpp
@@ -3425,6 +3470,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_ranking_modal_tests
         replay_repository_tests
         replay_repository_modern_chart_tests
+        replay_repository_modern_course_tests
         chart_replay_persistence_tests
         chart_replay_context_tests
         replay_playback_driver_tests
