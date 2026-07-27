@@ -78,7 +78,8 @@ struct ScoreStageProvenance {
 };
 
 struct ScoreProvenance {
-  static constexpr int kSchemaVersion = 4;
+  static constexpr int kDoublePlayFlipSchemaVersion = 5;
+  static constexpr int kSchemaVersion = kDoublePlayFlipSchemaVersion;
 
   int schemaVersion = kSchemaVersion;
   RulesetDescriptor ruleset;
@@ -89,6 +90,7 @@ struct ScoreProvenance {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
+  bool doublePlayFlip = false;
   std::string assistOption = assist_options::kOff;
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;
@@ -134,6 +136,7 @@ struct ScoreProvenanceBuildInput {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
+  bool doublePlayFlip = false;
   std::string assistOption = assist_options::kOff;
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;

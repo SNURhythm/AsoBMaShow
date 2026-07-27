@@ -42,46 +42,6 @@ ChartReplayAgreement disagreement(ChartReplayAgreementIssue issue,
   return {.issue = issue, .diagnostic = std::move(diagnostic)};
 }
 
-bool samePlayerOption(const ReplayPlayerOption &replay,
-                      const PlayerOptionProvenance &result) noexcept {
-  return replay.option == result.option && replay.seed == result.seed;
-}
-
-bool sameStartingGauge(const ReplaySetup &setup,
-                       const ScoreProvenance &provenance) noexcept {
-  if (!provenance.startingGaugePercent.has_value()) {
-    return true;
-  }
-  return setup.startingGaugePercent ==
-         static_cast<float>(*provenance.startingGaugePercent);
-}
-
-bool sharedSetupAgrees(const ReplaySetup &setup,
-                       const result_persistence::ModernChartResult &result) {
-  const auto &provenance = result.score.provenance;
-  if (provenance.stages.size() != 1) {
-    return false;
-  }
-  const auto &stage = provenance.stages.front();
-  return setup.chartRandomSeed == stage.chartRandomSeed &&
-         setup.chartRandomPrng == stage.chartRandomPrng &&
-         setup.chartRandomValues == stage.chartRandomValues &&
-         samePlayerOption(setup.player1, provenance.player1) &&
-         samePlayerOption(setup.player2, provenance.player2) &&
-         setup.assistOption == provenance.assistOption &&
-         setup.initialGaugeType == provenance.gaugeType &&
-         setup.gaugeProfile == provenance.gaugeProfile &&
-         setup.gaugeAutoShift == provenance.gaugeAutoShift &&
-         setup.gaugeAutoShiftLowerBound ==
-             provenance.gaugeAutoShiftLowerBound &&
-         setup.ruleset == provenance.ruleset &&
-         setup.playback == provenance.playback &&
-         setup.candidateSelection == stage.candidateSelection &&
-         setup.judgeWindowScalePercent == provenance.judgeWindowScalePercent &&
-         setup.clubMode == provenance.clubMode &&
-         sameStartingGauge(setup, provenance);
-}
-
 ChartReplayPersistenceState savedState(bool replayAttached) noexcept {
   return replayAttached ? ChartReplayPersistenceState::SavedWithReplay
                         : ChartReplayPersistenceState::SavedWithoutReplay;
@@ -129,7 +89,8 @@ ChartReplayAgreement compareChartReplayToResult(
       return disagreement(ChartReplayAgreementIssue::LongNoteMode,
                           "replay long-note mode differs from the result");
     }
-    if (!sharedSetupAgrees(replay.playback.setup, result)) {
+    if (!replaySetupAgreesWithProvenance(replay.playback.setup,
+                                         result.score.provenance)) {
       return disagreement(ChartReplayAgreementIssue::SharedSetup,
                           "replay setup differs from result provenance");
     }

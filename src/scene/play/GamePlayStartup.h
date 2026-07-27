@@ -31,4 +31,19 @@ inline FailureReturnTarget failureReturnTarget(bool requestedSceneIsLive) {
                               : FailureReturnTarget::MainMenu;
 }
 
+enum class CompletedAttemptPersistenceRoute {
+  None,
+  ModernChartFile,
+  LegacyCourse,
+};
+
+inline CompletedAttemptPersistenceRoute
+completedAttemptPersistenceRoute(bool persistResult, bool course) noexcept {
+  if (!persistResult) {
+    return CompletedAttemptPersistenceRoute::None;
+  }
+  return course ? CompletedAttemptPersistenceRoute::LegacyCourse
+                : CompletedAttemptPersistenceRoute::ModernChartFile;
+}
+
 } // namespace gameplay_startup

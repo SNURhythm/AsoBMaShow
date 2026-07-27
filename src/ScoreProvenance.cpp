@@ -829,6 +829,7 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
       gaugeTypeName(canonical.gaugeAutoShiftLowerBound);
   root["player1"] = playerOptionToJson(canonical.player1);
   root["player2"] = playerOptionToJson(canonical.player2);
+  root["doublePlayFlip"] = canonical.doublePlayFlip;
   root["assistOption"] = canonical.assistOption;
 
   Json devices = Json::array();
@@ -900,6 +901,14 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
     }
     if (const auto player = root.find("player2"); player != root.end()) {
       result.player2 = playerOptionFromJson(*player);
+    }
+    if (schemaVersion >= ScoreProvenance::kDoublePlayFlipSchemaVersion) {
+      const auto flip = root.find("doublePlayFlip");
+      if (flip == root.end() || !flip->is_boolean()) {
+        throw std::runtime_error(
+            "Score provenance double-play orientation is missing or malformed.");
+      }
+      result.doublePlayFlip = flip->get<bool>();
     }
     result.assistOption = root.value("assistOption", result.assistOption);
 
@@ -1031,6 +1040,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   result.gaugeAutoShiftLowerBound = input.gaugeAutoShiftLowerBound;
   result.player1 = input.player1;
   result.player2 = input.player2;
+  result.doublePlayFlip = input.doublePlayFlip;
   result.assistOption = assist_options::normalize(input.assistOption);
   result.inputDevices = input.inputDevices;
   canonicalizeDevices(result.inputDevices);
@@ -1084,6 +1094,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
             stages.front().gaugeAutoShiftLowerBound ||
         stage.player1.option != stages.front().player1.option ||
         stage.player2.option != stages.front().player2.option ||
+        stage.doublePlayFlip != stages.front().doublePlayFlip ||
         stage.assistOption != stages.front().assistOption ||
         stage.playback != stages.front().playback ||
         stage.judgeWindowScalePercent !=

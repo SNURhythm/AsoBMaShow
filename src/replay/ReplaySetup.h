@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+struct ScoreProvenance;
+
 namespace replay {
 
 using ReplayChartIdentity = result_contract::ChartIdentity;
@@ -57,6 +59,16 @@ struct ReplaySetup {
   bool clubMode = false;
 
   bool operator==(const ReplaySetup &) const = default;
+};
+
+struct LocalReplaySetupFacts {
+  ReplayChartIdentity chart;
+  int longNoteMode = 0;
+  bool hasUndefinedLongNotes = false;
+  std::optional<std::vector<int>> player1LaneShufflePattern;
+  std::optional<std::vector<int>> player2LaneShufflePattern;
+  int initialLaneCoverPercent = 0;
+  bool laneCoverEnabled = false;
 };
 
 enum class ReplaySetupSource : std::uint8_t {
@@ -104,6 +116,15 @@ struct ReplaySetupValidation {
 [[nodiscard]] ReplaySetupValidation
 validateReplaySetup(const ReplaySetup &setup, ReplaySetupSource source,
                     const ReplayLimits &limits = kReplayLimits);
+
+[[nodiscard]] std::optional<ReplaySetup>
+captureLocalReplaySetup(const LocalReplaySetupFacts &facts,
+                        const ScoreProvenance &provenance,
+                        std::string &diagnostic) noexcept;
+
+[[nodiscard]] bool
+replaySetupAgreesWithProvenance(const ReplaySetup &setup,
+                                const ScoreProvenance &provenance) noexcept;
 
 using ReplayChartMatch = result_contract::ChartIdentityMatch;
 
