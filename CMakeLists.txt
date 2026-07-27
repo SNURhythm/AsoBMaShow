@@ -738,6 +738,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_limits_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_setup_tests
+        tests/replay_setup_tests.cpp
+        src/replay/ReplaySetup.cpp
+    )
+    target_include_directories(replay_setup_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_setup_tests PRIVATE cxx_std_23)
+
     add_executable(result_record_summary_tests
         tests/result_record_summary_tests.cpp
         src/ResultRecordSummary.cpp
@@ -2836,6 +2845,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         replay_capabilities_tests
         replay_limits_tests
+        replay_setup_tests
         result_record_summary_tests
         course_identity_tests
         ir_driver_tests
