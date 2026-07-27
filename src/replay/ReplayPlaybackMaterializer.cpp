@@ -1,4 +1,5 @@
 #include "ReplayPlaybackMaterializer.h"
+#include "ReplaySetupAdapter.h"
 
 #include "../AssistOptionUtils.h"
 #include "../ReplayData.h"
@@ -281,33 +282,26 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     return outcome;
   }
 
-  ReplayData replay;
-  replay.chartMeta = chart.Meta;
+  std::string setupDiagnostic;
+  auto replayValue = makeReplayDataFromSetup(
+      setup, savedResult.score.provenance, chart.Meta, setupDiagnostic);
+  if (!replayValue.has_value()) {
+    outcome.state = ReplayPlaybackMaterializationState::JudgingFailed;
+    outcome.diagnostic = std::move(setupDiagnostic);
+    outcome.replayData.reset();
+    return outcome;
+  }
+  ReplayData replay = std::move(*replayValue);
   replay.chartMeta.BmsPath = savedResult.score.chartPath;
   replay.chartMeta.MD5 = savedResult.score.chartMd5;
   replay.chartMeta.SHA256 = savedResult.score.chartSha256;
   replay.chartMeta.Title = savedResult.score.chartTitle;
   replay.chartMeta.Artist = savedResult.score.chartArtist;
   replay.chartMeta.LnMode = savedResult.score.longNoteMode;
-  if (setup.chartRandomSeed.has_value() &&
-      *setup.chartRandomSeed <= std::numeric_limits<unsigned int>::max()) {
-    replay.randomSeed = static_cast<unsigned int>(*setup.chartRandomSeed);
-  }
-  replay.randomPrng = setup.chartRandomPrng;
-  replay.randomValues = setup.chartRandomValues;
-  replay.playOption = setup.player1.option;
-  replay.playOptionSeed = setup.player1.seed;
-  replay.playOption2 = setup.player2.option;
-  replay.playOption2Seed = setup.player2.seed;
-  replay.assistOption = setup.assistOption;
-  replay.initialGaugeType = setup.initialGaugeType;
-  replay.gaugeAutoShift = setup.gaugeAutoShift;
-  replay.gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound;
   replay.finalScore = savedResult.score.score;
   replay.maxCombo = savedResult.score.maxCombo;
   replay.finalGauge = savedResult.score.finalGauge;
   replay.clearType = savedResult.score.clearType;
-  replay.provenance = savedResult.score.provenance;
   const auto events = simulation.replayEvents();
   replay.events.reserve(events.size());
   for (const auto &event : events) {

@@ -1470,6 +1470,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplayPlaybackDriver.cpp
         src/replay/ReplayPlaybackMaterializer.cpp
         src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupAdapter.cpp
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayCandidateRules.cpp

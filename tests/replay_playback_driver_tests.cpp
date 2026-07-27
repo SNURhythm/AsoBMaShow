@@ -183,7 +183,7 @@ void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
   replay.playback.setup.chartRandomValues = {2, 1, 3};
   replay.playback.setup.player1 = {.option = "RANDOM", .seed = 1234};
   replay.playback.setup.player2 = {.option = "MIRROR", .seed = 5678};
-  replay.playback.setup.assistOption = assist_options::kAutoScratch;
+  replay.playback.setup.assistOption = assist_options::kDrag;
   replay.playback.setup.initialGaugeType = GaugeType::Hard;
   replay.playback.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   replay.playback.setup.gaugeAutoShiftLowerBound = GaugeType::Easy;
@@ -212,7 +212,7 @@ void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
              translated->playOptionSeed == 1234 &&
              translated->playOption2 == "MIRROR" &&
              translated->playOption2Seed == 5678 &&
-             translated->assistOption == assist_options::kAutoScratch &&
+             translated->assistOption == assist_options::kDrag &&
              translated->initialGaugeType == GaugeType::Hard &&
              translated->provenance == provenance,
          "one adapter projects complete setup for every chart consumer");
