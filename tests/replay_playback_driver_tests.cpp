@@ -1,6 +1,7 @@
 #include "replay/ReplayPlaybackDriver.h"
 #include "replay/ReplayPlaybackMaterializer.h"
 
+#include "ReplayData.h"
 #include "ScoreProvenance.h"
 #include "bms_parser.hpp"
 
@@ -47,7 +48,7 @@ ReplayChartDocument document() {
        .pressed = false},
   };
   value.playback.touchSamples = {
-      {.action = ReplayTouchAction::Down,
+      {.action = replay::ReplayTouchAction::Down,
        .fingerId = 4,
        .songTimeMicros = 150,
        .x = 0.25F,
@@ -155,7 +156,7 @@ void testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement() {
   const auto first = ReplayPlaybackMaterializer::materializeForConsumers(
       replay, ReplaySetupSource::LocalCapture, saved, chart);
   expect(first.state == ReplayPlaybackMaterializationState::ResultMismatch &&
-             first.judgedResult.has_value() && !first.replayData.has_value(),
+             first.judgedResult.has_value() && !first.replayData,
          "consumer track stays unavailable when replay judging disagrees");
   if (!first.judgedResult.has_value()) {
     return;
@@ -164,7 +165,7 @@ void testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement() {
   saved = *first.judgedResult;
   const auto matched = ReplayPlaybackMaterializer::materializeForConsumers(
       replay, ReplaySetupSource::LocalCapture, saved, chart);
-  expect(matched.matched() && matched.replayData.has_value() &&
+  expect(matched.matched() && matched.replayData &&
              !matched.replayData->events.empty() &&
              matched.replayData->finalScore == saved.score.score &&
              matched.replayData->provenance == saved.score.provenance,
@@ -183,11 +184,12 @@ void testDriverMergesStreamsWithoutChangingTheirTiming() {
         delivered.push_back("input:" + std::to_string(event.songTimeMicros));
         return true;
       },
-      .touch = [&](const ReplayTouchSample &event, std::string &) {
+      .touch = [&](const replay::ReplayTouchSample &event, std::string &) {
         delivered.push_back("touch:" + std::to_string(event.songTimeMicros));
         return true;
       },
-      .laneCover = [&](const ReplayLaneCoverEvent &event, std::string &) {
+      .laneCover = [&](const replay::ReplayLaneCoverEvent &event,
+                       std::string &) {
         delivered.push_back("cover:" + std::to_string(event.songTimeMicros));
         return true;
       }};

@@ -1470,8 +1470,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplayPlaybackDriver.cpp
         src/replay/ReplayPlaybackMaterializer.cpp
         src/replay/ReplaySetup.cpp
+        src/bms_parser.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
+        src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(replay_playback_driver_tests PRIVATE

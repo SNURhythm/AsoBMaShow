@@ -6,6 +6,7 @@
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeSession.h"
 #include "Pacemaker.h"
+#include "GameplayCandidateSelection.h"
 #include "GameplayRulesetPolicy.h"
 
 #include <algorithm>
@@ -285,21 +286,6 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
     options.replayRulesetOverride =
         play_start_detail::replayJudgeOverrideForChart(replay.provenance,
                                                        replay.chartMeta);
-  }
-}
-
-[[nodiscard]] inline gameplay::CandidateSelectionMode
-candidateSelectionForNotePriority(AppSettings::NotePriorityMode mode) {
-  switch (mode) {
-  case AppSettings::NotePriorityMode::Combo:
-    return gameplay::CandidateSelectionMode::Combo;
-  case AppSettings::NotePriorityMode::Duration:
-    return gameplay::CandidateSelectionMode::Duration;
-  case AppSettings::NotePriorityMode::Score:
-    return gameplay::CandidateSelectionMode::Score;
-  case AppSettings::NotePriorityMode::Lowest:
-  default:
-    return gameplay::CandidateSelectionMode::Lowest;
   }
 }
 
