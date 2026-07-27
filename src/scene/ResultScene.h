@@ -240,6 +240,7 @@ private:
   void loadPreviousBest();
   void saveCourseScore();
   void saveCourseReplay();
+  bool persistModernCourseResult();
   void addResultPersistenceStatus();
   void retryResultPersistence();
   void continueWithoutSaving();

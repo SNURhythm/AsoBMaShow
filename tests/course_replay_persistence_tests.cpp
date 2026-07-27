@@ -59,6 +59,17 @@ int queryInt(const std::filesystem::path &databasePath,
   return sqlite3_column_int(statement.get(), 0);
 }
 
+void execute(const std::filesystem::path &databasePath,
+             const std::string &query) {
+  sqlite3 *raw = nullptr;
+  expect(sqlite3_open(databasePath.string().c_str(), &raw) == SQLITE_OK,
+         "test database opens for mutation");
+  SqliteConnectionHandle database(raw);
+  expect(sqlite3_exec(database.get(), query.c_str(), nullptr, nullptr,
+                      nullptr) == SQLITE_OK,
+         "test mutation succeeds");
+}
+
 ScoreProvenance provenance(char hash, int keyMode) {
   ScoreProvenanceBuildInput input;
   input.chartMeta.MD5 = repeated(hash, 32);
@@ -83,10 +94,8 @@ ScoreProvenance provenance(char hash, int keyMode) {
   return makeScoreProvenance(input);
 }
 
-result_persistence::ModernCourseStageResult stage(int index, char hash,
-                                                   int keyMode,
-                                                   int maximumCombo,
-                                                   float gauge) {
+result_persistence::ModernCourseStageResult
+stage(int index, char hash, int keyMode, int maximumCombo, float gauge) {
   result_persistence::ModernCourseStageResult value;
   value.stageIndex = index;
   value.score.chartPath = "library/stage.bms";
@@ -111,7 +120,8 @@ result_persistence::ModernCourseStageResult stage(int index, char hash,
   return value;
 }
 
-CapturedCourseReplayAttempt attempt(bool withReplay = true) {
+CapturedCourseReplayAttempt attempt(bool withReplay = true,
+                                    bool complete = false) {
   result_persistence::ModernCourseResultCapture capture{
       .attemptId = "123e4567-e89b-42d3-a456-426614174000",
       .courseKey = "course:v1:" + repeated('c', 64),
@@ -125,16 +135,18 @@ CapturedCourseReplayAttempt attempt(bool withReplay = true) {
       .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
       .longNoteMode = 1,
       .clearType = kClearTypeHardClearRank,
-      .stages = {stage(0, 'a', 7, 4, 76.0F),
-                 stage(1, 'b', 14, 8, 62.5F)},
+      .stages = {stage(0, 'a', 7, 4, 76.0F), stage(1, 'b', 14, 8, 62.5F)},
       .entryFacts = {{.totalNotes = 5, .playLengthMicros = 1'000'000},
                      {.totalNotes = 5, .playLengthMicros = 2'000'000},
                      {.totalNotes = 5, .playLengthMicros = 3'000'000}},
       .playedAtUnixMillis = 1'700'000'100'000LL,
   };
+  if (complete) {
+    capture.entryFacts.resize(2);
+  }
   std::string diagnostic;
-  auto result = result_persistence::captureModernCourseResult(capture,
-                                                               diagnostic);
+  auto result =
+      result_persistence::captureModernCourseResult(capture, diagnostic);
   expect(result.has_value(), "course result fixture captures");
   CapturedCourseReplayAttempt value{
       .result = *result,
@@ -153,21 +165,17 @@ CapturedCourseReplayAttempt attempt(bool withReplay = true) {
                   .keyMode = saved.keyMode},
         .longNoteMode = saved.score.longNoteMode,
     };
-    auto setup = captureLocalReplaySetup(facts, saved.score.provenance,
-                                         diagnostic);
+    auto setup =
+        captureLocalReplaySetup(facts, saved.score.provenance, diagnostic);
     expect(setup.has_value(), "course stage setup fixture captures");
     ReplayPlaybackData playback;
     playback.setup = *setup;
     playback.input = {
         {.songTimeMicros = 0,
-         .control = {.kind = LogicalControlKind::Lane,
-                     .player = 1,
-                     .lane = 0},
+         .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
          .pressed = true},
         {.songTimeMicros = 1,
-         .control = {.kind = LogicalControlKind::Lane,
-                     .player = 1,
-                     .lane = 0},
+         .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
          .pressed = false},
     };
     document.playback.stages.push_back(std::move(playback));
@@ -185,8 +193,7 @@ struct Harness {
       .status = ModernCourseResultReadStatus::NotFound};
   ModernCourseStageOutcome staged{
       .status = ModernCourseStageStatus::Staged,
-      .receipt = ModernCourseStageReceipt{
-          .attemptId = value.result.attemptId,
+      .receipt = ModernCourseStageReceipt{.attemptId = value.result.attemptId,
           .resultId = 9,
           .createdAt = "2026-07-27 12:00:00"}};
   bool encodeSucceeds = true;
@@ -204,14 +211,16 @@ struct Harness {
     };
     installed = {
         .state = ReplayInstallState::InstalledVerified,
-        .file = ReplayInstalledFile{
+        .file =
+            ReplayInstalledFile{
             .metadata = metadata,
             .attemptToken = value.result.attemptId,
             .lifecycle =
                 {.state = ReplayFileLifecycleState::InstalledUnassociated,
                  .attemptToken = value.result.attemptId,
-                 .receipt = ReplayFileOwnershipReceipt{
-                     .attemptToken = value.result.attemptId,
+                     .receipt =
+                         ReplayFileOwnershipReceipt{.attemptToken =
+                                                        value.result.attemptId,
                      .metadata = metadata}}},
     };
   }
@@ -223,8 +232,7 @@ struct Harness {
               events.emplace_back("load-result");
               return existing;
             },
-        .encode =
-            [this](const ReplayCourseDocument &, std::int64_t,
+        .encode = [this](const ReplayCourseDocument &, std::int64_t,
                    std::string &diagnostic)
                 -> std::optional<std::vector<std::byte>> {
               events.emplace_back("encode");
@@ -313,10 +321,9 @@ void testReplayBackedSummaryOnlyAndExactRetry() {
   const auto saved = persistence.persist(harness.value);
   expect(saved.state == CourseReplayPersistenceState::SavedWithReplay &&
              saved.saved() && saved.replayAttached && saved.receipt &&
-             harness.events ==
-                 std::vector<std::string>({"load-result", "reserve-path",
-                                           "encode", "reserve-file", "install",
-                                           "stage-file"}),
+             harness.events == std::vector<std::string>(
+                                   {"load-result", "reserve-path", "encode",
+                                    "reserve-file", "install", "stage-file"}),
          "course persistence associates one BRD with its strict result");
 
   Harness replayless;
@@ -407,7 +414,8 @@ void testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows() {
   TemporaryDirectory profile;
   const auto databasePath = profile.path / "replay.db";
   ReplayRepository repository(databasePath);
-  expect(repository.EnsureSchema(), "course integration repository initializes");
+  expect(repository.EnsureSchema(),
+         "course integration repository initializes");
   CourseReplayPersistence persistence(repository);
   const auto value = attempt();
   const auto saved = persistence.persist(value);
@@ -439,8 +447,8 @@ void testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows() {
     }
   }
 
-  for (const std::string_view table : {"replay_events", "replay_touch_samples",
-                                       "replay_lane_cover_events",
+  for (const std::string_view table :
+       {"replay_events", "replay_touch_samples", "replay_lane_cover_events",
                                        "course_replay_stages"}) {
     expect(queryInt(databasePath,
                     "SELECT COUNT(*) FROM " + std::string(table)) == 0,
@@ -464,7 +472,8 @@ void testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult() {
                    "result-first coordinator preserves captured facts");
             return CourseReplayPersistenceOutcome{
                 .state = CourseReplayPersistenceState::SavedWithReplay,
-                .receipt = ModernCourseStageReceipt{
+                .receipt =
+                    ModernCourseStageReceipt{
                     .attemptId = value.result.attemptId,
                     .resultId = 91,
                     .createdAt = "2026-07-27 13:00:00"},
@@ -507,6 +516,34 @@ void testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult() {
   expect(pending.state == CourseResultPersistenceState::Retryable &&
              projectionCalls == 1,
          "score projection never runs before a durable modern result");
+
+  int pendingProjectionCalls = 0;
+  CourseResultPersistence pendingScore(CourseResultPersistenceDependencies{
+      .persistResult =
+          [&](const CapturedCourseReplayAttempt &) {
+            return CourseReplayPersistenceOutcome{
+                .state = CourseReplayPersistenceState::SavedWithoutReplay,
+                .receipt = ModernCourseStageReceipt{
+                    .attemptId = value.result.attemptId,
+                    .resultId = 91,
+                    .createdAt = "2026-07-27 13:00:00"}};
+          },
+      .projectScore =
+          [&](const result_persistence::PendingCourseScoreWrite &) {
+            ++pendingProjectionCalls;
+            return result_persistence::ProjectionOutcome{
+                .status =
+                    pendingProjectionCalls == 1
+                        ? result_persistence::ProjectionStatus::StorageFailure
+                        : result_persistence::ProjectionStatus::AlreadyPresent};
+          },
+  });
+  expect(pendingScore.persist(value).state ==
+                 CourseResultPersistenceState::PendingScore &&
+             pendingScore.persist(value).state ==
+                 CourseResultPersistenceState::SavedWithoutReplay &&
+             pendingProjectionCalls == 2,
+         "retryable score projection reuses the exact durable course result");
 }
 
 void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
@@ -533,11 +570,11 @@ void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
                       partial.result.attemptId +
                       "' AND modern_result_id > 0") == 1,
          "course score row retains exact attempt/result ownership");
-  for (const std::string_view table : {"replay_events", "replay_touch_samples",
-                                       "replay_lane_cover_events",
+  for (const std::string_view table :
+       {"replay_events", "replay_touch_samples", "replay_lane_cover_events",
                                        "course_replay_stages"}) {
-    expect(queryInt(replayPath,
-                    "SELECT COUNT(*) FROM " + std::string(table)) == 0,
+    expect(queryInt(replayPath, "SELECT COUNT(*) FROM " + std::string(table)) ==
+               0,
            "result-first course persistence writes no legacy raw rows");
   }
 
@@ -549,20 +586,42 @@ void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
              queryInt(scorePath, "SELECT COUNT(*) FROM course_scores") == 1,
          "exact final-result retry is idempotent across both databases");
 
+  execute(scorePath, "UPDATE course_scores SET score = score + 1");
+  const auto conflictingProjection = persistence.persist(partial);
+  expect(conflictingProjection.state ==
+             CourseResultPersistenceState::IntegrityConflict,
+         "exact retry rejects a score row that disagrees with modern facts");
+
+  TemporaryDirectory completeProfile;
+  ReplayRepository completeReplay(completeProfile.path / "replay.db");
+  ScoreRepository completeScores(completeProfile.path / "score.db");
+  expect(completeReplay.EnsureSchema() && completeScores.EnsureSchema(),
+         "complete-course integration repositories initialize");
+  CourseResultPersistence completePersistence(completeScores, completeReplay);
+  const auto complete = completePersistence.persist(attempt(true, true));
+  expect(complete.state == CourseResultPersistenceState::SavedWithReplay &&
+             complete.saved() &&
+             queryInt(completeProfile.path / "score.db",
+                      "SELECT COUNT(*) FROM course_scores") == 1 &&
+             queryInt(completeProfile.path / "replay.db",
+                      "SELECT COUNT(*) FROM modern_replay_files") == 1,
+         "complete course saves its modern result, score, and one BRD");
+
   TemporaryDirectory summaryProfile;
   ReplayRepository summaryReplay(summaryProfile.path / "replay.db");
   ScoreRepository summaryScores(summaryProfile.path / "score.db");
   expect(summaryReplay.EnsureSchema() && summaryScores.EnsureSchema(),
          "summary-only integration repositories initialize");
   CourseResultPersistence summaryPersistence(summaryScores, summaryReplay);
-  const auto summary = summaryPersistence.persist(attempt(false));
+  const auto summary = summaryPersistence.persist(attempt(false, true));
   expect(summary.state == CourseResultPersistenceState::SavedWithoutReplay &&
              summary.saved() &&
              queryInt(summaryProfile.path / "score.db",
                       "SELECT COUNT(*) FROM course_scores") == 1 &&
              queryInt(summaryProfile.path / "replay.db",
                       "SELECT COUNT(*) FROM modern_replay_files") == 0,
-         "missing raw capture preserves result and score history without BRD");
+         "missing raw capture preserves complete result and score history "
+         "without BRD");
 }
 
 } // namespace

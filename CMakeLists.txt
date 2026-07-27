@@ -1538,6 +1538,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/CourseReplayCapture.cpp
         src/replay/CourseReplayPersistence.cpp
+        src/replay/CourseResultPersistence.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileAssociationCoordinator.cpp
         src/replay/ReplayFileLifecycle.cpp

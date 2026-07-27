@@ -1,6 +1,7 @@
 #if __has_include("replay/CourseReplayCapture.h")
 #include "replay/CourseReplayCapture.h"
 #include "replay/ReplaySetupProvenance.h"
+#include "CourseConstraintUtils.h"
 #define ASOBMASHOW_HAS_COURSE_REPLAY_CAPTURE 1
 #else
 #define ASOBMASHOW_HAS_COURSE_REPLAY_CAPTURE 0
@@ -52,10 +53,8 @@ ScoreProvenance provenance(char hash, int keyMode) {
   return makeScoreProvenance(input);
 }
 
-result_persistence::ModernCourseStageResult stage(int index, char hash,
-                                                   int keyMode,
-                                                   int maximumCombo,
-                                                   float gauge) {
+result_persistence::ModernCourseStageResult
+stage(int index, char hash, int keyMode, int maximumCombo, float gauge) {
   result_persistence::ModernCourseStageResult value;
   value.stageIndex = index;
   value.score.chartPath = "library/stage-" + std::to_string(index) + ".bms";
@@ -96,8 +95,7 @@ result_persistence::ModernCourseResultCapture resultCapture() {
       .gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
       .longNoteMode = 1,
       .clearType = kClearTypeHardClearRank,
-      .stages = {stage(0, 'a', 7, 4, 76.0F),
-                 stage(1, 'b', 14, 8, 62.5F)},
+      .stages = {stage(0, 'a', 7, 4, 76.0F), stage(1, 'b', 14, 8, 62.5F)},
       .entryFacts = {{.totalNotes = 5, .playLengthMicros = 1'000'000},
                      {.totalNotes = 5, .playLengthMicros = 2'000'000},
                      {.totalNotes = 5, .playLengthMicros = 3'000'000}},
@@ -105,8 +103,8 @@ result_persistence::ModernCourseResultCapture resultCapture() {
   };
 }
 
-replay::ReplayPlaybackData playback(
-    const result_persistence::ModernCourseStageResult &saved) {
+replay::ReplayPlaybackData
+playback(const result_persistence::ModernCourseStageResult &saved) {
   replay::LocalReplaySetupFacts facts{
       .chart = {.md5 = saved.score.chartMd5,
                 .sha256 = saved.score.chartSha256,
@@ -114,8 +112,8 @@ replay::ReplayPlaybackData playback(
       .longNoteMode = saved.score.longNoteMode,
   };
   std::string diagnostic;
-  auto setup = replay::captureLocalReplaySetup(
-      facts, saved.score.provenance, diagnostic);
+  auto setup = replay::captureLocalReplaySetup(facts, saved.score.provenance,
+                                               diagnostic);
   expect(setup.has_value(), "stage setup fixture captures");
   replay::ReplayPlaybackData value;
   if (setup) {
@@ -153,8 +151,7 @@ void testResultCaptureDerivesPartialAggregateFromOrderedFacts() {
                  mergeCourseProvenance(expectedProvenance) &&
              !captured->resultFingerprint.empty(),
          "course aggregate and fingerprint come from the ordered prefix");
-  expect(captured &&
-             result_persistence::validateModernCourseResult(*captured,
+  expect(captured && result_persistence::validateModernCourseResult(*captured,
                                                              diagnostic),
          "captured course result passes the strict reader validator");
 
@@ -170,8 +167,8 @@ void testResultCaptureDerivesPartialAggregateFromOrderedFacts() {
       repeatedChart.stages[0].score.chartSha256;
   repeatedChart.stages[1].score.provenance =
       repeatedChart.stages[0].score.provenance;
-  expect(result_persistence::captureModernCourseResult(repeatedChart,
-                                                        diagnostic)
+  expect(
+      result_persistence::captureModernCourseResult(repeatedChart, diagnostic)
              .has_value(),
          "repeated chart identities remain valid at distinct stage indices");
 }
@@ -187,7 +184,8 @@ void testRawCaptureDropsOnlyReplayAttachment() {
 
   replay::CourseReplayCapture capture{
       .result = *result,
-      .stages = {
+      .stages =
+          {
           {.playback = playback(result->stages[0]),
            .timeBounds = {.completionSongTimeMicros = 5'000'000},
            .restMicrosAfterStage =
@@ -202,8 +200,8 @@ void testRawCaptureDropsOnlyReplayAttachment() {
   expect(accepted && accepted->result == *result && accepted->replay &&
              accepted->replay->playback.stages.size() == 2 &&
              accepted->pathInput.stageSha256 ==
-                 std::vector<std::string>({repeated('a', 64),
-                                           repeated('b', 64)}) &&
+                 std::vector<std::string>(
+                     {repeated('a', 64), repeated('b', 64)}) &&
              accepted->pathInput.beatorajaConstraintIds ==
                  std::vector<int>({4}),
          "course capture retains canonical raw stages and path identity");
@@ -222,6 +220,15 @@ void testRawCaptureDropsOnlyReplayAttachment() {
          "invalid rest drops only the BRD attachment with a diagnostic");
 }
 
+void testBeatorajaConstraintIdentityIsCanonical() {
+  const auto identifiers = beatorajaCourseConstraintIdsFromJson(
+      R"(["hcn", "grade", "no-speed", "hcn", "gauge_7k", "unknown"])");
+  expect(identifiers == std::vector<int>({1, 4, 9, 14}),
+         "course replay path uses sorted unique Beatoraja constraint ids");
+  expect(beatorajaCourseConstraintIdsFromJson("not-json").empty(),
+         "malformed constraint metadata cannot invent replay identity");
+}
+
 #endif
 
 } // namespace
@@ -230,6 +237,7 @@ int main() {
 #if ASOBMASHOW_HAS_COURSE_REPLAY_CAPTURE
   testResultCaptureDerivesPartialAggregateFromOrderedFacts();
   testRawCaptureDropsOnlyReplayAttachment();
+  testBeatorajaConstraintIdentityIsCanonical();
 #else
   expect(false, "CourseReplayCapture contract is not implemented");
 #endif

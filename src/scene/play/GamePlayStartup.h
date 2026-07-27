@@ -34,7 +34,7 @@ inline FailureReturnTarget failureReturnTarget(bool requestedSceneIsLive) {
 enum class CompletedAttemptPersistenceRoute {
   None,
   ModernChartFile,
-  LegacyCourse,
+  ModernCourseFile,
 };
 
 inline CompletedAttemptPersistenceRoute
@@ -42,7 +42,7 @@ completedAttemptPersistenceRoute(bool persistResult, bool course) noexcept {
   if (!persistResult) {
     return CompletedAttemptPersistenceRoute::None;
   }
-  return course ? CompletedAttemptPersistenceRoute::LegacyCourse
+  return course ? CompletedAttemptPersistenceRoute::ModernCourseFile
                 : CompletedAttemptPersistenceRoute::ModernChartFile;
 }
 

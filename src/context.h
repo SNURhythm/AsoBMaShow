@@ -23,6 +23,7 @@
 #include "ResultPersistenceCoordinator.h"
 #include "repositories/ScoreRepository.h"
 #include "replay/ChartReplayPersistence.h"
+#include "replay/CourseResultPersistence.h"
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
@@ -314,8 +315,8 @@ public:
       result_persistence::RecoverySummary summary =
           resultPersistence.recoverAll();
       if (profileInitializationResult.ok()) {
-        replay::ChartReplayPersistence modernPersistence(
-            scoreRepository, replayRepository);
+        replay::ChartReplayPersistence modernPersistence(scoreRepository,
+                                                         replayRepository);
         const auto modern = modernPersistence.recoverAll();
         SDL_Log("Modern chart recovery completed: attempted=%zu saved=%zu "
                 "pending=%zu conflicts=%zu",
@@ -341,16 +342,16 @@ public:
     }
   }
 
-  [[nodiscard]] replay::ChartReplayPersistenceOutcome persistModernChart(
-      const replay::ChartReplayPersistenceAttempt &attempt,
+  [[nodiscard]] replay::ChartReplayPersistenceOutcome
+  persistModernChart(const replay::ChartReplayPersistenceAttempt &attempt,
       std::span<const ir::IrOutboxDraft> drafts = {}) noexcept {
     try {
       if (!profileInitializationResult.ok()) {
         return {.state = replay::ChartReplayPersistenceState::Retryable,
                 .diagnostic = "Player profiles are not initialized."};
       }
-      replay::ChartReplayPersistence persistence(
-          scoreRepository, replayRepository);
+      replay::ChartReplayPersistence persistence(scoreRepository,
+                                                 replayRepository);
       return persistence.persist(attempt, drafts);
     } catch (const std::exception &error) {
       return {.state = replay::ChartReplayPersistenceState::Retryable,
@@ -359,6 +360,26 @@ public:
     } catch (...) {
       return {.state = replay::ChartReplayPersistenceState::Retryable,
               .diagnostic = "Modern chart persistence failed."};
+    }
+  }
+
+  [[nodiscard]] replay::CourseResultPersistenceOutcome persistModernCourse(
+      const replay::CapturedCourseReplayAttempt &attempt) noexcept {
+    try {
+      if (!profileInitializationResult.ok()) {
+        return {.state = replay::CourseResultPersistenceState::Retryable,
+                .diagnostic = "Player profiles are not initialized."};
+      }
+      replay::CourseResultPersistence persistence(scoreRepository,
+                                                  replayRepository);
+      return persistence.persist(attempt);
+    } catch (const std::exception &error) {
+      return {.state = replay::CourseResultPersistenceState::Retryable,
+              .diagnostic = std::string("Modern course persistence failed: ") +
+                            error.what()};
+    } catch (...) {
+      return {.state = replay::CourseResultPersistenceState::Retryable,
+              .diagnostic = "Modern course persistence failed."};
     }
   }
 
@@ -407,15 +428,14 @@ public:
       }
       const auto state = replayRepository.LoadIrRemoteScoreMirrorState(
           providerId, serverOrigin);
-      if (state.status !=
-          ir::IrRemoteScoreMirrorStateOutcome::Status::Loaded) {
+      if (state.status != ir::IrRemoteScoreMirrorStateOutcome::Status::Loaded) {
         diagnostic = state.diagnostic.empty()
                          ? "The synchronized IR score mirror is unavailable."
                          : state.diagnostic;
         return false;
       }
-      if (scoreRepository.ImportedIrScoresAreCurrent(
-              providerId, serverOrigin, state.syncGeneration,
+      if (scoreRepository.ImportedIrScoresAreCurrent(providerId, serverOrigin,
+                                                     state.syncGeneration,
               state.scoreCount)) {
         return true;
       }
@@ -433,8 +453,7 @@ public:
       const auto projected = scoreRepository.ReplaceImportedIrScores(
           providerId, serverOrigin, generation, mirrored.scores);
       if (projected.status == ImportedIrScoreProjectionStatus::Applied ||
-          projected.status ==
-              ImportedIrScoreProjectionStatus::AlreadyCurrent) {
+          projected.status == ImportedIrScoreProjectionStatus::AlreadyCurrent) {
         return true;
       }
       diagnostic = projected.diagnostic.empty()
@@ -453,8 +472,8 @@ public:
       ir::IrProviderSettings provider = stored;
       ir::sanitizeProviderSettings(provider);
       std::string diagnostic;
-      if (!projectMirroredIrScores(profileId, providerId,
-                                   provider.serverOrigin, diagnostic)) {
+      if (!projectMirroredIrScores(profileId, providerId, provider.serverOrigin,
+                                   diagnostic)) {
         SDL_Log("Synchronized IR score import could not be restored: %s",
                 diagnostic.c_str());
       }
@@ -526,8 +545,7 @@ public:
         };
         options.remoteSnapshotApplied =
             [this](std::string_view profileId, std::string_view providerId,
-                   std::string_view serverOrigin,
-                   std::int64_t syncGeneration,
+                   std::string_view serverOrigin, std::int64_t syncGeneration,
                    std::span<const ir::IrRemoteScore> scores,
                    std::string &diagnostic) {
               if (!profileReady() ||

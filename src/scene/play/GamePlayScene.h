@@ -16,6 +16,7 @@
 #include "../../input/IRhythmControl.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeResultFlow.h"
+#include "../../replay/ChartReplayCapture.h"
 #include "../../replay/ReplayInputRecorder.h"
 #include "../../view/TextView.h"
 #include "../ResultScene.h"
@@ -64,6 +65,12 @@ public:
 
 private:
   struct RealtimeGameplaySession;
+  struct CompletedModernReplayCapture {
+    std::optional<std::vector<replay::InputTransition>> acceptedInput;
+    std::vector<replay::ReplayTouchSample> touchSamples;
+    std::vector<replay::ReplayLaneCoverEvent> laneCoverEvents;
+    replay::ReplayTimeBounds timeBounds;
+  };
   bool reset();
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
@@ -119,6 +126,8 @@ private:
   void renderCoursePauseHoldRing();
   void beginReplayRecording();
   void finishReplayRecording();
+  [[nodiscard]] CompletedModernReplayCapture completeModernReplayCapture();
+  void recordModernCourseStage(const CompletedModernReplayCapture &capture);
   void captureModernReplayInput(replay::LogicalControl control, bool pressed,
                                 bool replayOnly);
   void publishPracticeGhost();
@@ -160,11 +169,10 @@ private:
   Judge judge;
   ScoreProvenance attemptProvenance;
   void checkPassedTimeline(long long time);
-  void detonateLandmine(bms_parser::LandmineNote *note, long long songTimeMicros,
-                        long long judgeTimeMicros);
+  void detonateLandmine(bms_parser::LandmineNote *note,
+                        long long songTimeMicros, long long judgeTimeMicros);
   void expireGimmickNote(bms_parser::Note *note, long long judgeTimeMicros);
-  void onJudge(const JudgeResult &judgeResult,
-               bool recordTimingSample = true);
+  void onJudge(const JudgeResult &judgeResult, bool recordTimingSample = true);
   void appendReplayEvent(ReplayEventAction action, int lane,
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
@@ -176,13 +184,10 @@ private:
                                   bool resetVisibleTimeReference);
   bool handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
-  bool handleTouchInputAtGameplayTime(SDL_FingerID fingerIndex,
-                                      ReplayTouchAction action,
-                                      Vector3 normalizedLocation,
-                                      long long gameplayTimeMicros,
-                                      std::optional<long long>
-                                          visualGameplayTimeMicros =
-                                              std::nullopt);
+  bool handleTouchInputAtGameplayTime(
+      SDL_FingerID fingerIndex, ReplayTouchAction action,
+      Vector3 normalizedLocation, long long gameplayTimeMicros,
+      std::optional<long long> visualGameplayTimeMicros = std::nullopt);
   bool handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
                                     ReplayTouchAction action,
                                     Vector3 normalizedLocation,

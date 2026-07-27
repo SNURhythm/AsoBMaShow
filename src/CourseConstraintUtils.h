@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 enum class CourseConstraintType {
@@ -34,9 +36,9 @@ inline std::string normalizeCourseConstraintName(std::string name) {
              std::find_if(name.begin(), name.end(), [](unsigned char c) {
                return std::isspace(c) == 0;
              }));
-  name.erase(std::find_if(name.rbegin(), name.rend(), [](unsigned char c) {
-               return std::isspace(c) == 0;
-             }).base(),
+  name.erase(std::find_if(name.rbegin(), name.rend(),
+                          [](unsigned char c) { return std::isspace(c) == 0; })
+                 .base(),
              name.end());
   std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
     if (c == '-') {
@@ -60,7 +62,50 @@ inline void collectCourseConstraintNames(const nlohmann::json &value,
   }
 }
 
-inline CourseConstraintType courseConstraintType(const std::string &constraint) {
+inline std::vector<int>
+beatorajaCourseConstraintIdsFromJson(const std::string &constraintJson) {
+  if (constraintJson.empty()) {
+    return {};
+  }
+  const auto parsed = nlohmann::json::parse(constraintJson, nullptr, false);
+  if (parsed.is_discarded()) {
+    return {};
+  }
+  std::vector<std::string> names;
+  collectCourseConstraintNames(parsed, names);
+  constexpr std::array<std::pair<std::string_view, int>, 14> mapping{{
+      {"grade", 1},
+      {"grade_mirror", 2},
+      {"grade_random", 3},
+      {"no_speed", 4},
+      {"no_good", 5},
+      {"no_great", 6},
+      {"gauge_lr2", 7},
+      {"gauge_5k", 8},
+      {"gauge_7k", 9},
+      {"gauge_9k", 10},
+      {"gauge_24k", 11},
+      {"ln", 12},
+      {"cn", 13},
+      {"hcn", 14},
+  }};
+  std::vector<int> identifiers;
+  for (const auto &name : names) {
+    for (const auto &[knownName, identifier] : mapping) {
+      if (name == knownName) {
+        identifiers.push_back(identifier);
+        break;
+      }
+    }
+  }
+  std::ranges::sort(identifiers);
+  identifiers.erase(std::unique(identifiers.begin(), identifiers.end()),
+                    identifiers.end());
+  return identifiers;
+}
+
+inline CourseConstraintType
+courseConstraintType(const std::string &constraint) {
   if (constraint == "grade" || constraint == "grade_mirror" ||
       constraint == "grade_random") {
     return CourseConstraintType::Grade;
