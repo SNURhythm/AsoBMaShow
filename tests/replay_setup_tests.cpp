@@ -132,6 +132,35 @@ void testUndefinedLongNoteContract() {
          "undefined long notes require an effective LN/CN/HCN mode");
 }
 
+void testAttemptSetupPercentagesMatchExistingCaptureContract() {
+  for (int percent : {25, 30, 100, 195, 200}) {
+    auto setup = validSetup();
+    setup.judgeWindowScalePercent = percent;
+    expect(replay::validateReplaySetup(
+               setup, replay::ReplaySetupSource::LocalCapture).valid(),
+           "capturable stepped judge scale is replay-valid");
+  }
+  for (int percent : {20, 26, 205}) {
+    auto setup = validSetup();
+    setup.judgeWindowScalePercent = percent;
+    expect(replay::validateReplaySetup(
+               setup, replay::ReplaySetupSource::LocalCapture).issue ==
+               replay::ReplaySetupIssue::JudgeWindowScale,
+           "uncapturable judge scale is replay-invalid");
+  }
+
+  auto maximumGauge = validSetup();
+  maximumGauge.startingGaugePercent = 120.0F;
+  expect(replay::validateReplaySetup(
+             maximumGauge, replay::ReplaySetupSource::LocalCapture).valid(),
+         "existing 120-percent gauge maximum is replay-valid");
+  maximumGauge.startingGaugePercent = 120.01F;
+  expect(replay::validateReplaySetup(
+             maximumGauge, replay::ReplaySetupSource::LocalCapture).issue ==
+             replay::ReplaySetupIssue::StartingGauge,
+         "gauge start above the shared maximum is replay-invalid");
+}
+
 void testInvalidFieldMatrix() {
   struct Case {
     replay::ReplaySetupIssue issue;
@@ -181,9 +210,9 @@ void testInvalidFieldMatrix() {
              static_cast<gameplay::CandidateSelectionMode>(99);
        }},
       {replay::ReplaySetupIssue::JudgeWindowScale,
-       [](auto &v) { v.judgeWindowScalePercent = 0; }},
+       [](auto &v) { v.judgeWindowScalePercent = 20; }},
       {replay::ReplaySetupIssue::StartingGauge,
-       [](auto &v) { v.startingGaugePercent = 101.0F; }},
+       [](auto &v) { v.startingGaugePercent = 121.0F; }},
       {replay::ReplaySetupIssue::InitialLaneCover,
        [](auto &v) { v.initialLaneCoverPercent = 101; }},
   };
@@ -236,6 +265,7 @@ int main() {
   testUnknownSetupSourceFailsClosed();
   testSupportedKeyModesAndDoublePlayOption();
   testUndefinedLongNoteContract();
+  testAttemptSetupPercentagesMatchExistingCaptureContract();
   testInvalidFieldMatrix();
   testChartIdentityAgreementUsesParsedIdentity();
   if (failures != 0) {

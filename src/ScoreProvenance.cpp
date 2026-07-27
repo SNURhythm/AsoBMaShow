@@ -1,6 +1,7 @@
 #include "ScoreProvenance.h"
 
 #include "BmsMetadataText.h"
+#include "scene/play/GameplayAttemptSetup.h"
 #include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
@@ -288,14 +289,13 @@ void validatePracticePercentages(const ScoreProvenance &value) {
   if (!value.playback.valid()) {
     throw std::runtime_error("Score provenance playback is invalid.");
   }
-  if (value.judgeWindowScalePercent < 25 ||
-      value.judgeWindowScalePercent > 200 ||
-      value.judgeWindowScalePercent % 5 != 0) {
+  if (!gameplay::validJudgeWindowScalePercent(
+          value.judgeWindowScalePercent)) {
     throw std::runtime_error(
         "Score provenance judge window scale percentage is out of range.");
   }
   if (value.startingGaugePercent.has_value() &&
-      (*value.startingGaugePercent < 0 || *value.startingGaugePercent > 120)) {
+      !gameplay::validStartingGaugePercent(*value.startingGaugePercent)) {
     throw std::runtime_error(
         "Score provenance starting gauge percentage is out of range.");
   }

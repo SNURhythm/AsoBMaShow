@@ -1,5 +1,7 @@
 #include "PracticeConfiguration.h"
 
+#include "../scene/play/GameplayAttemptSetup.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -220,7 +222,9 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
                  "count-in beats were clamped to 0 through 16");
 
   if (value.startingGaugePercent) {
-    const int maximum = std::clamp(startingGaugeMaximumPercent, 0, 120);
+    const int maximum = std::clamp(
+        startingGaugeMaximumPercent, 0,
+        gameplay::kMaximumStartingGaugePercent);
     const int originalGauge = *value.startingGaugePercent;
     *value.startingGaugePercent =
         std::clamp(*value.startingGaugePercent, 0, maximum);
@@ -239,7 +243,11 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
   }
 
   const int originalJudgeScale = value.judge.scalePercent;
-  value.judge.scalePercent = nearestStep(value.judge.scalePercent, 25, 200, 5);
+  value.judge.scalePercent = nearestStep(
+      value.judge.scalePercent,
+      gameplay::kMinimumJudgeWindowScalePercent,
+      gameplay::kMaximumJudgeWindowScalePercent,
+      gameplay::kJudgeWindowScaleStepPercent);
   diagnoseChange(originalJudgeScale != value.judge.scalePercent,
                  "judge scale was clamped to a supported five-percent step");
   if (value.judge.kind != JudgeOverrideKind::Scale) {

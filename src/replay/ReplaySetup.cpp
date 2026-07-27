@@ -1,10 +1,10 @@
 #include "ReplaySetup.h"
 
 #include "../bms_parser.hpp"
+#include "../scene/play/GameplayAttemptSetup.h"
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <ranges>
 #include <string_view>
 
@@ -191,13 +191,11 @@ ReplaySetupValidation validateReplaySetup(
           static_cast<int>(gameplay::CandidateSelectionMode::Score))) {
     return invalid(ReplaySetupIssue::CandidateSelection);
   }
-  if (setup.judgeWindowScalePercent <= 0 ||
-      setup.judgeWindowScalePercent > 1000) {
+  if (!gameplay::validJudgeWindowScalePercent(
+          setup.judgeWindowScalePercent)) {
     return invalid(ReplaySetupIssue::JudgeWindowScale);
   }
-  if (!std::isfinite(setup.startingGaugePercent) ||
-      setup.startingGaugePercent < 0.0F ||
-      setup.startingGaugePercent > 100.0F) {
+  if (!gameplay::validStartingGaugePercent(setup.startingGaugePercent)) {
     return invalid(ReplaySetupIssue::StartingGauge);
   }
   if (setup.initialLaneCoverPercent < 0 ||
