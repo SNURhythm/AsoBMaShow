@@ -117,6 +117,10 @@ struct Harness {
               auto outcome = installed;
               if (outcome.file) {
                 outcome.file->metadata = reservation.expectedMetadata;
+                if (outcome.file->lifecycle.receipt) {
+                  outcome.file->lifecycle.receipt->metadata =
+                      reservation.expectedMetadata;
+                }
               }
               return outcome;
             },

@@ -2,7 +2,7 @@
 
 #include "BeatorajaReplayCodec.h"
 #include "ChartReplayAgreement.h"
-#include "ReplayFileStore.h"
+#include "ReplayFileAssociationCoordinator.h"
 
 #include "../ModernResult.h"
 #include "../ir/IrOutboxModels.h"
@@ -69,24 +69,10 @@ struct ChartReplayRecoverySummary {
 
 struct ChartReplayPersistenceDependencies {
   std::function<ModernChartResultReadOutcome(std::string_view)> loadResult;
-  std::function<ModernReplayReservationOutcome(std::string_view,
-                                               std::string_view, std::int64_t)>
-      reservePath;
-  std::function<ModernReplayReservationReleaseOutcome(
-      const ModernReplayPathReservation &)>
-      releasePath;
+  ReplayFileAssociationCoordinatorDependencies fileAssociation;
   std::function<std::optional<std::vector<std::byte>>(
       const ReplayChartDocument &, std::int64_t, std::string &)>
       encode;
-  std::function<ReplayReservationOutcome(
-      const ReplayPathIdentity &, std::span<const std::byte>, std::string_view)>
-      reserveFile;
-  std::function<ReplayInstallOutcome(const ReplayFileReservation &,
-                                     std::span<const std::byte>)>
-      installFile;
-  std::function<ReplayFileInspection(const ReplayFileMetadata &)> inspectFile;
-  std::function<bool(const ReplayFileMetadata &, std::string &)>
-      removeIfMatches;
   std::function<ModernChartStageOutcome(
       const result_persistence::ModernChartResult &,
       const std::optional<ir::IrSubmissionSnapshot> &,

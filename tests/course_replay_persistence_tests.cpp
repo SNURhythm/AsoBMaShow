@@ -1,8 +1,12 @@
 #include "replay/CourseReplayPersistence.h"
+#include "replay/ReplayFileStore.h"
 #include "replay/ReplaySetupProvenance.h"
+#include "repositories/SqliteRAII.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -23,6 +27,35 @@ void expect(bool condition, std::string_view message) {
 
 std::string repeated(char value, std::size_t count) {
   return std::string(count, value);
+}
+
+class TemporaryDirectory {
+public:
+  TemporaryDirectory() {
+    path = std::filesystem::temp_directory_path() /
+           ("asobmashow-course-replay-persistence-" +
+            std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(path);
+  }
+  ~TemporaryDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path, ignored);
+  }
+  std::filesystem::path path;
+};
+
+int queryInt(const std::filesystem::path &databasePath,
+             const std::string &query) {
+  sqlite3 *raw = nullptr;
+  expect(sqlite3_open(databasePath.string().c_str(), &raw) == SQLITE_OK,
+         "test database opens");
+  SqliteConnectionHandle database(raw);
+  SqliteStatementHandle statement;
+  expect(prepareSqliteStatement(database.get(), query, statement) == SQLITE_OK,
+         "test query prepares");
+  expect(sqlite3_step(statement.get()) == SQLITE_ROW, "test query returns");
+  return sqlite3_column_int(statement.get(), 0);
 }
 
 ScoreProvenance provenance(char hash, int keyMode) {
@@ -244,6 +277,10 @@ struct Harness {
                    auto outcome = installed;
                    if (outcome.file) {
                      outcome.file->metadata = reservation.expectedMetadata;
+                     if (outcome.file->lifecycle.receipt) {
+                       outcome.file->lifecycle.receipt->metadata =
+                           reservation.expectedMetadata;
+                     }
                    }
                    return outcome;
                  },
@@ -365,11 +402,61 @@ void testReplayFailuresAndDatabaseAmbiguity() {
          "definitive course rejection cleans only exact attempt bytes");
 }
 
+void testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows() {
+  TemporaryDirectory profile;
+  const auto databasePath = profile.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(), "course integration repository initializes");
+  CourseReplayPersistence persistence(repository);
+  const auto value = attempt();
+  const auto saved = persistence.persist(value);
+  expect(saved.state == CourseReplayPersistenceState::SavedWithReplay &&
+             saved.receipt && saved.replayAttached,
+         "real course persistence saves a partial result and BRD");
+
+  const auto loaded =
+      repository.LoadModernCourseResultByAttempt(value.result.attemptId);
+  expect(loaded.status == ModernCourseResultReadStatus::Loaded &&
+             loaded.record && loaded.record->result.completedCharts == 2 &&
+             loaded.record->result.totalCharts == 3 &&
+             loaded.record->replayFile,
+         "partial result facts and file ownership load independently");
+  if (loaded.record && loaded.record->replayFile) {
+    ReplayFileStore store(profile.path);
+    const auto bytes = store.readVerified(loaded.record->replayFile->metadata);
+    expect(bytes.state == ReplayFileState::Available && bytes.bytes,
+           "installed course BRD verifies by saved metadata");
+    if (bytes.bytes) {
+      BeatorajaReplayCodec codec;
+      ReplayDecodeContext context{
+          .stageKeyModes = {7, 14},
+          .stageTimeBounds = value.replay->timeBounds,
+      };
+      const auto decoded = codec.decode(*bytes.bytes, context);
+      expect(decoded.course && *decoded.course == *value.replay,
+             "installed course BRD round-trips its ordered completed prefix");
+    }
+  }
+
+  for (const std::string_view table : {"replay_events", "replay_touch_samples",
+                                       "replay_lane_cover_events",
+                                       "course_replay_stages"}) {
+    expect(queryInt(databasePath,
+                    "SELECT COUNT(*) FROM " + std::string(table)) == 0,
+           "modern course persistence writes no legacy raw rows");
+  }
+  const auto retried = persistence.persist(value);
+  expect(retried.state == CourseReplayPersistenceState::SavedWithReplay &&
+             retried.receipt == saved.receipt,
+         "real exact course retry reuses the same result and BRD ownership");
+}
+
 } // namespace
 
 int main() {
   testReplayBackedSummaryOnlyAndExactRetry();
   testReplayFailuresAndDatabaseAmbiguity();
+  testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows();
   if (failures != 0) {
     std::cerr << failures << " course replay persistence test(s) failed\n";
     return 1;

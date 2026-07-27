@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CanonicalDigest.h"
+
 #include <optional>
 #include <span>
 #include <string>
@@ -10,7 +12,11 @@ struct CoursePlaySession;
 
 namespace course_identity {
 
-[[nodiscard]] bool isCanonicalKey(std::string_view key) noexcept;
+[[nodiscard]] inline bool isCanonicalKey(std::string_view key) noexcept {
+  constexpr std::string_view prefix = "course:v1:";
+  return key.starts_with(prefix) &&
+         canonical_digest::isCanonicalLowerHex(key.substr(prefix.size()), 64);
+}
 
 struct ChartIdentity {
   std::string sha256;

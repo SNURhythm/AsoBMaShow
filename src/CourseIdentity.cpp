@@ -1,7 +1,6 @@
 #include "CourseIdentity.h"
 
 #include "BmsMetadataText.h"
-#include "CanonicalDigest.h"
 #include "CourseConstraintUtils.h"
 #include "FileChecksum.h"
 
@@ -99,12 +98,6 @@ std::string canonicalConstraintName(std::string name) {
 }
 
 } // namespace
-
-bool isCanonicalKey(std::string_view key) noexcept {
-  constexpr std::string_view prefix = "course:v1:";
-  return key.starts_with(prefix) &&
-         canonical_digest::isCanonicalLowerHex(key.substr(prefix.size()), 64);
-}
 
 std::string canonicalConstraintPayload(std::string_view constraintJson) {
   if (constraintJson.empty()) {

@@ -1,28 +1,17 @@
 #include "ChartReplayPersistence.h"
 
 #include "BeatorajaReplayPath.h"
+#include "ReplayFileStore.h"
 
 #include "../ProfileDatabaseActivity.h"
 #include "../ResultPersistenceCoordinator.h"
 
-#include <algorithm>
-#include <cmath>
 #include <memory>
-#include <ranges>
 #include <string>
 #include <utility>
 
 namespace replay {
 namespace {
-
-constexpr std::size_t kMaximumOccupiedSlotRetries = 64;
-
-enum class InstalledOwnership {
-  None,
-  CreatedByAttempt,
-  PreexistingIdentical,
-  Ambiguous,
-};
 
 void appendDiagnostic(std::string &destination, std::string_view phase,
                       std::string_view diagnostic) {
@@ -42,18 +31,6 @@ ChartReplayPersistenceState savedState(bool replayAttached) noexcept {
                         : ChartReplayPersistenceState::SavedWithoutReplay;
 }
 
-bool releaseReservation(const ChartReplayPersistenceDependencies &dependencies,
-                        const ModernReplayPathReservation &reservation,
-                        std::string &diagnostic) {
-  const auto released = dependencies.releasePath(reservation);
-  if (released.status == ModernReplayReservationReleaseStatus::Released ||
-      released.status == ModernReplayReservationReleaseStatus::NotFound) {
-    return true;
-  }
-  appendDiagnostic(diagnostic, "reservation release", released.diagnostic);
-  return false;
-}
-
 } // namespace
 
 ChartReplayPersistence::ChartReplayPersistence(
@@ -66,39 +43,42 @@ ChartReplayPersistence::ChartReplayPersistence(
           [&repository](std::string_view attemptId) {
             return repository.LoadModernChartResultByAttempt(attemptId);
           },
-      .reservePath =
-          [&repository](std::string_view attemptId, std::string_view stem,
-                        std::int64_t playedAt) {
-            return repository.ReserveModernReplayPath(attemptId, stem,
-                                                      playedAt);
-          },
-      .releasePath =
-          [&repository](const auto &reservation) {
-            return repository.ReleaseModernReplayPathReservation(reservation);
-          },
+      .fileAssociation =
+          {.reservePath =
+               [&repository](std::string_view attemptId,
+                             std::string_view stem, std::int64_t playedAt) {
+                 return repository.ReserveModernReplayPath(attemptId, stem,
+                                                           playedAt);
+               },
+           .releasePath =
+               [&repository](const auto &reservation) {
+                 return repository.ReleaseModernReplayPathReservation(
+                     reservation);
+               },
+           .reserveFile =
+               [store](const ReplayPathIdentity &identity,
+                       std::span<const std::byte> bytes,
+                       std::string_view attemptToken) {
+                 return store->reserve(identity, bytes, attemptToken);
+               },
+           .installFile =
+               [store](const ReplayFileReservation &reservation,
+                       std::span<const std::byte> bytes) {
+                 return store->install(reservation, bytes);
+               },
+           .inspectFile =
+               [store](const ReplayFileMetadata &metadata) {
+                 return store->inspect(metadata);
+               },
+           .removeIfMatches =
+               [store](const ReplayFileMetadata &metadata,
+                       std::string &diagnostic) {
+                 return store->removeIfMatches(metadata, diagnostic);
+               }},
       .encode =
           [codec](const ReplayChartDocument &replay, std::int64_t playedAt,
                   std::string &diagnostic) {
             return codec->encodeChart(replay, playedAt, diagnostic);
-          },
-      .reserveFile =
-          [store](const ReplayPathIdentity &identity,
-                  std::span<const std::byte> bytes,
-                  std::string_view attemptToken) {
-            return store->reserve(identity, bytes, attemptToken);
-          },
-      .installFile =
-          [store](const ReplayFileReservation &reservation,
-                  std::span<const std::byte> bytes) {
-            return store->install(reservation, bytes);
-          },
-      .inspectFile =
-          [store](const ReplayFileMetadata &metadata) {
-            return store->inspect(metadata);
-          },
-      .removeIfMatches =
-          [store](const ReplayFileMetadata &metadata, std::string &diagnostic) {
-            return store->removeIfMatches(metadata, diagnostic);
           },
       .stage =
           [&repository](const auto &result, const auto &snapshot,
@@ -197,9 +177,9 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
                               : existing.diagnostic};
   }
 
-  std::optional<ModernReplayPathReservation> pathReservation;
-  std::optional<ReplayFileMetadata> installedMetadata;
-  InstalledOwnership installedOwnership = InstalledOwnership::None;
+  ReplayFileAssociationCoordinator fileCoordinator(
+      dependencies_.fileAssociation);
+  std::optional<ReplayFileAssociation> fileAssociation;
   if (!attachment && !suppressNewReplay && attempt.replay.has_value()) {
     const auto agreement =
         compareChartReplayToResult(*attempt.replay, attempt.result);
@@ -213,118 +193,36 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
       if (!stem) {
         appendDiagnostic(diagnostic, "replay omitted", pathDiagnostic);
       } else {
-        auto reserved = dependencies_.reservePath(
-            attempt.result.attemptId, *stem, attempt.result.playedAtUnixMillis);
-        if (reserved.reservation &&
-            (reserved.status == ModernReplayReservationStatus::Reserved ||
-             reserved.status ==
-                 ModernReplayReservationStatus::AlreadyReserved)) {
-          pathReservation = *reserved.reservation;
-        } else if (reserved.status ==
-                   ModernReplayReservationStatus::IntegrityConflict) {
+        const auto associated = fileCoordinator.associate(
+            attempt.result.attemptId, *stem,
+            attempt.result.playedAtUnixMillis,
+            [this, &attempt](std::string &encodeDiagnostic) {
+              return dependencies_.encode(
+                  *attempt.replay, attempt.result.playedAtUnixMillis,
+                  encodeDiagnostic);
+            });
+        appendDiagnostic(diagnostic, "file association",
+                         associated.diagnostic);
+        if (associated.status ==
+            ReplayFileAssociationStatus::IntegrityConflict) {
           return {.state = ChartReplayPersistenceState::IntegrityConflict,
-                  .diagnostic = reserved.diagnostic.empty()
-                                    ? "replay reservation conflicts"
-                                    : std::move(reserved.diagnostic)};
-        } else {
-          appendDiagnostic(diagnostic, "replay reservation",
-                           reserved.diagnostic);
+                  .diagnostic = std::move(diagnostic)};
+        }
+        if (associated.status == ReplayFileAssociationStatus::Attached &&
+            associated.association) {
+          fileAssociation = *associated.association;
+          attachment = fileAssociation->attachment;
         }
       }
     }
-  }
-
-  std::optional<std::vector<std::byte>> encoded;
-  if (pathReservation) {
-    std::string encodeDiagnostic;
-    encoded = dependencies_.encode(
-        *attempt.replay, attempt.result.playedAtUnixMillis, encodeDiagnostic);
-    if (!encoded) {
-      appendDiagnostic(diagnostic, "replay omitted", encodeDiagnostic);
-      releaseReservation(dependencies_, *pathReservation, diagnostic);
-      pathReservation.reset();
-    }
-  }
-
-  for (std::size_t occupied = 0; pathReservation && encoded && !attachment;
-       ++occupied) {
-    auto fileReservation = dependencies_.reserveFile(
-        pathReservation->identity, *encoded, attempt.result.attemptId);
-    if (!fileReservation.reservation) {
-      appendDiagnostic(diagnostic, "replay omitted",
-                       fileReservation.diagnostic);
-      releaseReservation(dependencies_, *pathReservation, diagnostic);
-      pathReservation.reset();
-      break;
-    }
-    const auto installed =
-        dependencies_.installFile(*fileReservation.reservation, *encoded);
-    if (installed.state == ReplayInstallState::InstalledVerified &&
-        installed.file) {
-      installedMetadata = installed.file->metadata;
-      installedOwnership = installed.existingIdenticalFile
-                               ? InstalledOwnership::PreexistingIdentical
-                               : InstalledOwnership::CreatedByAttempt;
-      attachment =
-          ModernReplayFileAttachment{.identity = pathReservation->identity,
-                                     .metadata = installed.file->metadata};
-      break;
-    }
-    if (installed.state == ReplayInstallState::Occupied &&
-        occupied < kMaximumOccupiedSlotRetries) {
-      if (!releaseReservation(dependencies_, *pathReservation, diagnostic)) {
-        break;
-      }
-      auto next = dependencies_.reservePath(attempt.result.attemptId,
-                                            pathReservation->identity.stem,
-                                            attempt.result.playedAtUnixMillis);
-      if (!next.reservation ||
-          (next.status != ModernReplayReservationStatus::Reserved &&
-           next.status != ModernReplayReservationStatus::AlreadyReserved)) {
-        appendDiagnostic(diagnostic, "replay reservation", next.diagnostic);
-        pathReservation.reset();
-        break;
-      }
-      pathReservation = *next.reservation;
-      continue;
-    }
-
-    const auto inspection = dependencies_.inspectFile(
-        fileReservation.reservation->expectedMetadata);
-    if (inspection.state == ReplayFileState::Available) {
-      installedMetadata = fileReservation.reservation->expectedMetadata;
-      installedOwnership = InstalledOwnership::Ambiguous;
-      attachment = ModernReplayFileAttachment{
-          .identity = pathReservation->identity,
-          .metadata = fileReservation.reservation->expectedMetadata};
-      break;
-    }
-    appendDiagnostic(diagnostic, "replay omitted",
-                     installed.diagnostic.empty() ? inspection.diagnostic
-                                                  : installed.diagnostic);
-    if (inspection.state == ReplayFileState::Missing) {
-      releaseReservation(dependencies_, *pathReservation, diagnostic);
-      pathReservation.reset();
-    }
-    break;
   }
 
   const auto staged = dependencies_.stage(attempt.result, attempt.irSnapshot,
                                           attachment, irDrafts);
   switch (staged.status) {
   case ModernChartStageStatus::Invalid:
-    if (installedMetadata && pathReservation &&
-        installedOwnership == InstalledOwnership::CreatedByAttempt) {
-      std::string cleanupDiagnostic;
-      if (dependencies_.removeIfMatches(*installedMetadata,
-                                        cleanupDiagnostic)) {
-        releaseReservation(dependencies_, *pathReservation, diagnostic);
-      } else {
-        appendDiagnostic(diagnostic, "replay cleanup", cleanupDiagnostic);
-      }
-    } else if (pathReservation &&
-               installedOwnership == InstalledOwnership::PreexistingIdentical) {
-      releaseReservation(dependencies_, *pathReservation, diagnostic);
+    if (fileAssociation) {
+      fileCoordinator.abandonDefinitively(*fileAssociation, diagnostic);
     }
     appendDiagnostic(diagnostic, "staging", staged.diagnostic);
     return {.state = ChartReplayPersistenceState::InvalidAttempt,

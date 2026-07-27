@@ -284,29 +284,71 @@ struct Harness {
               events.emplace_back("load-result");
               return existing;
             },
-        .reservePath =
-            [this](std::string_view attemptId, std::string_view stem,
-                   std::int64_t playedAt) {
-              events.emplace_back("reserve-path");
-              if (nextHistory == 0) {
-                ++nextHistory;
-                return reserved;
-              }
-              std::string diagnostic;
-              const auto identity =
-                  pathForStem(stem, nextHistory++, diagnostic);
-              return ModernReplayReservationOutcome{
-                  .status = ModernReplayReservationStatus::Reserved,
-                  .reservation = ModernReplayPathReservation{
-                      .attemptId = std::string(attemptId),
-                      .identity = *identity,
-                      .createdAtUnixMillis = playedAt}};
-            },
-        .releasePath =
-            [this](const auto &) {
-              events.emplace_back("release-path");
-              return released;
-            },
+        .fileAssociation =
+            {.reservePath =
+                 [this](std::string_view attemptId, std::string_view stem,
+                        std::int64_t playedAt) {
+                   events.emplace_back("reserve-path");
+                   if (nextHistory == 0) {
+                     ++nextHistory;
+                     return reserved;
+                   }
+                   std::string diagnostic;
+                   const auto identity =
+                       pathForStem(stem, nextHistory++, diagnostic);
+                   return ModernReplayReservationOutcome{
+                       .status = ModernReplayReservationStatus::Reserved,
+                       .reservation = ModernReplayPathReservation{
+                           .attemptId = std::string(attemptId),
+                           .identity = *identity,
+                           .createdAtUnixMillis = playedAt}};
+                 },
+             .releasePath =
+                 [this](const auto &) {
+                   events.emplace_back("release-path");
+                   return released;
+                 },
+             .reserveFile =
+                 [this](const auto &identity, auto,
+                        std::string_view token) {
+                   events.emplace_back("reserve-file");
+                   if (!fileReservationSucceeds) {
+                     return ReplayReservationOutcome{
+                         .diagnostic = "file reserve failed"};
+                   }
+                   return ReplayReservationOutcome{
+                       .reservation = ReplayFileReservation{
+                           .identity = identity,
+                           .attemptToken = std::string(token),
+                           .expectedMetadata = metadata(identity),
+                           .temporaryRelativePath = "replay/private.tmp"}};
+                 },
+             .installFile =
+                 [this](const auto &reservation, auto) {
+                   events.emplace_back("install");
+                   auto outcome = installed;
+                   if (outcome.file) {
+                     outcome.file->metadata = reservation.expectedMetadata;
+                     if (outcome.file->lifecycle.receipt) {
+                       outcome.file->lifecycle.receipt->metadata =
+                           reservation.expectedMetadata;
+                     }
+                   }
+                   return outcome;
+                 },
+             .inspectFile =
+                 [this](const auto &) {
+                   events.emplace_back("inspect");
+                   return inspected;
+                 },
+             .removeIfMatches =
+                 [this](const auto &, std::string &diagnostic) {
+                   events.emplace_back("cleanup");
+                   if (!cleanupSucceeds) {
+                     diagnostic = "cleanup failed";
+                   }
+                   return cleanupSucceeds;
+                 }},
         .encode = [this](const auto &, std::int64_t, std::string &diagnostic)
             -> std::optional<std::vector<std::byte>> {
           events.emplace_back("encode");
@@ -316,42 +358,6 @@ struct Harness {
           }
           return std::vector<std::byte>{std::byte{0x42}};
         },
-        .reserveFile =
-            [this](const auto &identity, auto, std::string_view token) {
-              events.emplace_back("reserve-file");
-              if (!fileReservationSucceeds) {
-                return ReplayReservationOutcome{.diagnostic =
-                                                    "file reserve failed"};
-              }
-              return ReplayReservationOutcome{
-                  .reservation = ReplayFileReservation{
-                      .identity = identity,
-                      .attemptToken = std::string(token),
-                      .expectedMetadata = metadata(identity),
-                      .temporaryRelativePath = "replay/private.tmp"}};
-            },
-        .installFile =
-            [this](const auto &reservation, auto) {
-              events.emplace_back("install");
-              auto outcome = installed;
-              if (outcome.file) {
-                outcome.file->metadata = reservation.expectedMetadata;
-              }
-              return outcome;
-            },
-        .inspectFile =
-            [this](const auto &) {
-              events.emplace_back("inspect");
-              return inspected;
-            },
-        .removeIfMatches =
-            [this](const auto &, std::string &diagnostic) {
-              events.emplace_back("cleanup");
-              if (!cleanupSucceeds) {
-                diagnostic = "cleanup failed";
-              }
-              return cleanupSucceeds;
-            },
         .stage =
             [this](const auto &, const auto &, const auto &attachment, auto) {
               events.emplace_back(attachment ? "stage-file" : "stage-summary");
@@ -487,9 +493,9 @@ void testAmbiguousInstallOccupiedSlotAndCleanupBoundaries() {
     Harness harness;
     int installs = 0;
     auto dependencies = harness.dependencies();
-    const auto baseInstall = dependencies.installFile;
-    dependencies.installFile = [&, baseInstall](const auto &reservation,
-                                                auto bytes) {
+    const auto baseInstall = dependencies.fileAssociation.installFile;
+    dependencies.fileAssociation.installFile =
+        [&, baseInstall](const auto &reservation, auto bytes) {
       if (installs++ == 0) {
         harness.events.emplace_back("install");
         return ReplayInstallOutcome{.state = ReplayInstallState::Occupied,
