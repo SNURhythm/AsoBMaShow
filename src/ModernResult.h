@@ -1,6 +1,6 @@
 #pragma once
 
-#include "CanonicalDigest.h"
+#include "ResultContracts.h"
 #include "ScoreProvenance.h"
 
 #include <array>
@@ -105,9 +105,8 @@ describeChartScoreDifference(const ChartScoreWrite &expected,
 
 [[nodiscard]] inline bool
 hasProjectableChartIdentity(const ChartScoreWrite &score) noexcept {
-  return canonical_digest::isCanonicalLowerHex(score.chartSha256, 64) &&
-         (score.chartMd5.empty() ||
-          canonical_digest::isCanonicalLowerHex(score.chartMd5, 32));
+  return result_contract::canonicalChartHashes(score.chartMd5,
+                                               score.chartSha256, false);
 }
 
 struct ChartJudgementTiming {

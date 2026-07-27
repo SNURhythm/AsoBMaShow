@@ -3,6 +3,7 @@
 #include "ReplayLimits.h"
 
 #include "../AssistOptionUtils.h"
+#include "../ResultContracts.h"
 #include "../audio/PlaybackRate.h"
 #include "../scene/play/GameplayGaugeTypes.h"
 #include "../scene/play/GameplayJudgeRules.h"
@@ -15,13 +16,7 @@
 
 namespace replay {
 
-struct ReplayChartIdentity {
-  std::string md5;
-  std::string sha256;
-  int keyMode = 0;
-
-  bool operator==(const ReplayChartIdentity &) const = default;
-};
+using ReplayChartIdentity = result_contract::ChartIdentity;
 
 struct ReplayPlayerOption {
   std::string option = "NORMAL";
@@ -110,12 +105,7 @@ struct ReplaySetupValidation {
 validateReplaySetup(const ReplaySetup &setup, ReplaySetupSource source,
                     const ReplayLimits &limits = kReplayLimits);
 
-enum class ReplayChartMatch : std::uint8_t {
-  Match,
-  Sha256Mismatch,
-  Md5Mismatch,
-  KeyModeMismatch,
-};
+using ReplayChartMatch = result_contract::ChartIdentityMatch;
 
 [[nodiscard]] ReplayChartMatch
 compareReplayChartIdentity(const ReplayChartIdentity &recorded,

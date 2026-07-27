@@ -231,6 +231,13 @@ void testChartValidationAndFactAgreement() {
          "modern chart identity is canonical lowercase");
 
   invalid = validChartResult();
+  invalid.keyMode = 6;
+  invalid.resultFingerprint =
+      result_persistence::modernResultFingerprint(invalid);
+  expect(!result_persistence::validateModernChartResult(invalid, diagnostic),
+         "modern results reject key modes outside the shared play contract");
+
+  invalid = validChartResult();
   invalid.adoptedGaugeHistory.push_back(std::numeric_limits<float>::infinity());
   invalid.resultFingerprint.clear();
   expect(!result_persistence::validateModernChartResult(invalid, diagnostic),

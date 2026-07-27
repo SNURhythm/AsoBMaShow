@@ -1464,6 +1464,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(modern_result_tests PRIVATE SDL2)
     endif()
 
+    add_executable(result_contract_tests
+        tests/result_contract_tests.cpp
+    )
+    target_include_directories(result_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_contract_tests PRIVATE cxx_std_23)
+
     add_executable(ir_submission_snapshot_tests
         tests/ir_submission_snapshot_tests.cpp
         src/ir/IrSubmissionSnapshot.cpp
@@ -3090,6 +3098,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_codec_store_contract_tests
         replay_playback_tests
         modern_result_tests
+        result_contract_tests
         ir_submission_snapshot_tests
         modern_result_recall_tests
         result_record_summary_tests

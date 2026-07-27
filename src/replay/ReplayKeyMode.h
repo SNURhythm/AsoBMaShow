@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../ResultContracts.h"
+
 #include <array>
 #include <optional>
 #include <string_view>
@@ -27,6 +29,26 @@ inline constexpr std::array<ReplayKeyModeLayout, 7> kReplayKeyModeLayouts{{
     {24, 1, 26, 26, false, false, ""},
     {48, 2, 26, 26, false, false, ""},
 }};
+
+static_assert(kReplayKeyModeLayouts.size() ==
+              result_contract::kSupportedKeyModes.size());
+static_assert([] {
+  for (const int supported : result_contract::kSupportedKeyModes) {
+    int matches = 0;
+    for (const auto &layout : kReplayKeyModeLayouts) {
+      matches += layout.keyMode == supported ? 1 : 0;
+    }
+    if (matches != 1) {
+      return false;
+    }
+  }
+  for (const auto &layout : kReplayKeyModeLayouts) {
+    if (!result_contract::isSupportedKeyMode(layout.keyMode)) {
+      return false;
+    }
+  }
+  return true;
+}());
 
 [[nodiscard]] inline constexpr std::optional<ReplayKeyModeLayout>
 replayKeyModeLayout(int keyMode) noexcept {

@@ -3,13 +3,13 @@
 #include "BmsMetadataText.h"
 #include "DurablePayloadLimits.h"
 #include "FileChecksum.h"
+#include "ResultContracts.h"
 #include "Utils.h"
 #include "Uuid.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -97,37 +97,6 @@ bool sameFloatVector(std::span<const float> left,
          std::ranges::equal(left, right, sameFloatBits);
 }
 
-bool knownGaugeType(GaugeType value) noexcept {
-  const int index = static_cast<int>(value);
-  return index >= 0 && index < static_cast<int>(kGaugeTypeCount);
-}
-
-bool knownGaugeProfile(GaugeProfile value) noexcept {
-  const int index = static_cast<int>(value);
-  return index >= static_cast<int>(GaugeProfile::Standard) &&
-         index <= static_cast<int>(GaugeProfile::Standard24Keys);
-}
-
-bool knownGaugeAutoShift(GaugeAutoShiftMode value) noexcept {
-  const int index = static_cast<int>(value);
-  return index >= static_cast<int>(GaugeAutoShiftMode::None) &&
-         index <= static_cast<int>(GaugeAutoShiftMode::BestClear);
-}
-
-bool knownClearRank(int value) noexcept {
-  constexpr std::array ranks{
-      kClearTypeFailedRank,
-      kClearTypeAssistedEasyClearRank,
-      kClearTypeLightAssistedEasyClearRank,
-      kClearTypeEasyClearRank,
-      kClearTypeNormalClearRank,
-      kClearTypeHardClearRank,
-      kClearTypeExHardClearRank,
-      kClearTypeFullComboRank,
-  };
-  return std::ranges::find(ranks, value) != ranks.end();
-}
-
 bool validScoreStrings(const ChartScoreWrite &score) noexcept {
   return durable_payload::validString(score.chartPath, false) &&
          durable_payload::validString(score.chartMd5, true) &&
@@ -136,32 +105,13 @@ bool validScoreStrings(const ChartScoreWrite &score) noexcept {
          durable_payload::validString(score.chartArtist, true);
 }
 
-bool validateScore(const ChartScoreWrite &score,
-                   std::int64_t maximumAllowedCombo, std::string &diagnostic) {
+bool validateScore(const ChartScoreWrite &score, std::string &diagnostic) {
   if (!validScoreStrings(score) || !hasProjectableChartIdentity(score)) {
     diagnostic = "chart result identity or display facts are invalid";
     return false;
   }
-  const std::array counts{score.score,      score.maxScore, score.maxCombo,
-                          score.comboBreak, score.pGreat,   score.great,
-                          score.good,       score.bad,      score.poor,
-                          score.kPoor,      score.fast,     score.slow};
-  if (std::ranges::any_of(counts, [](int value) { return value < 0; }) ||
-      score.longNoteMode < 0 || score.longNoteMode > 3) {
-    diagnostic = "chart result counters or long-note mode are invalid";
-    return false;
-  }
-  if (score.maxScore <= 0 || score.maxScore % 2 != 0 ||
-      score.score > score.maxScore ||
-      static_cast<std::int64_t>(score.maxCombo) > maximumAllowedCombo ||
-      static_cast<std::int64_t>(score.pGreat) * 2LL + score.great !=
-          score.score) {
-    diagnostic = "chart result score arithmetic is inconsistent";
-    return false;
-  }
-  if (!std::isfinite(score.finalGauge) || score.finalGauge < 0.0F ||
-      !knownClearRank(score.clearType)) {
-    diagnostic = "chart result gauge or clear type is invalid";
+  if (!result_contract::isKnownLongNoteMode(score.longNoteMode)) {
+    diagnostic = "chart result long-note mode is invalid";
     return false;
   }
   std::string provenanceDiagnostic;
@@ -218,19 +168,36 @@ bool validateResultFacts(const ChartScoreWrite &score, int keyMode,
                          const std::optional<ChartJudgementTiming> &timing,
                          std::int64_t maximumAllowedCombo,
                          std::string &diagnostic) {
-  if (keyMode <= 0 || !knownGaugeType(adoptedGaugeType)) {
+  if (!result_contract::isSupportedKeyMode(keyMode) ||
+      !result_contract::isKnownGaugeType(adoptedGaugeType)) {
     diagnostic = "chart result key mode or adopted gauge is invalid";
     return false;
   }
-  if (!validateScore(score, maximumAllowedCombo, diagnostic) ||
-      !validateTiming(score, timing, diagnostic)) {
+  if (!validateScore(score, diagnostic)) {
     return false;
   }
-  if (!durable_payload::withinLimit(
-          gaugeHistory.size(), durable_payload::kMaximumResultGaugeSamples) ||
-      std::ranges::any_of(gaugeHistory,
-                          [](float value) { return !std::isfinite(value); })) {
-    diagnostic = "adopted gauge history is invalid or oversized";
+  const result_contract::ResultOutcomeFacts outcome{
+      .score = score.score,
+      .maxScore = score.maxScore,
+      .maxCombo = score.maxCombo,
+      .comboBreak = score.comboBreak,
+      .pGreat = score.pGreat,
+      .great = score.great,
+      .good = score.good,
+      .bad = score.bad,
+      .poor = score.poor,
+      .kPoor = score.kPoor,
+      .fast = score.fast,
+      .slow = score.slow,
+      .finalGauge = score.finalGauge,
+      .clearType = score.clearType,
+      .gaugeHistory = gaugeHistory,
+  };
+  if (!result_contract::validResultOutcome(outcome, maximumAllowedCombo)) {
+    diagnostic = "chart result outcome facts are invalid or inconsistent";
+    return false;
+  }
+  if (!validateTiming(score, timing, diagnostic)) {
     return false;
   }
   return true;
@@ -480,15 +447,15 @@ bool validateModernCourseResult(const ModernCourseResult &result,
       diagnostic = "modern course completion prefix is malformed";
       return false;
     }
-    if (!knownGaugeType(result.initialGaugeType) ||
-        !knownGaugeProfile(result.gaugeProfile) ||
-        !knownGaugeAutoShift(result.gaugeAutoShift) ||
-        !knownGaugeType(result.gaugeAutoShiftLowerBound) ||
-        result.longNoteMode < 0 || result.longNoteMode > 3 ||
+    if (!result_contract::isKnownGaugeType(result.initialGaugeType) ||
+        !result_contract::isKnownGaugeProfile(result.gaugeProfile) ||
+        !result_contract::isKnownGaugeAutoShift(result.gaugeAutoShift) ||
+        !result_contract::isKnownGaugeType(result.gaugeAutoShiftLowerBound) ||
+        !result_contract::isKnownLongNoteMode(result.longNoteMode) ||
         result.finalScore < 0 || result.maxScore <= 0 ||
         result.finalScore > result.maxScore || result.maxCombo < 0 ||
         !std::isfinite(result.finalGauge) || result.finalGauge < 0.0F ||
-        !knownClearRank(result.clearType)) {
+        !result_contract::isKnownClearRank(result.clearType)) {
       diagnostic = "modern course setup or aggregate facts are invalid";
       return false;
     }

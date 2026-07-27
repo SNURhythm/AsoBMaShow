@@ -1,3 +1,6 @@
+#include "ModernResult.h"
+#include "ModernResultRecallBuilder.h"
+#include "ir/IrSubmissionSnapshot.h"
 #include "replay/ReplayCapabilities.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/ReplayFileLifecycle.h"
@@ -26,9 +29,16 @@ concept HasResultFact = requires(T value) { value.finalScore; } ||
                         requires(T value) { value.resultFingerprint; };
 
 template <typename T>
-concept HasRawReplayCollection = requires(T value) { value.events; } ||
-                                 requires(T value) { value.touchSamples; } ||
-                                 requires(T value) { value.laneCoverEvents; };
+concept HasRawReplayCollection =
+    requires(T value) { value.events; } || requires(T value) { value.input; } ||
+    requires(T value) { value.touchSamples; } ||
+    requires(T value) { value.laneCoverEvents; };
+
+template <typename T>
+concept HasReplayFileFact = requires(T value) { value.relativePath; } ||
+                            requires(T value) { value.compressedSize; } ||
+                            requires(T value) { value.codecVersion; } ||
+                            requires(T value) { value.replayFile; };
 
 static_assert(!HasResultFact<replay::ReplaySetup>);
 static_assert(!HasRawReplayCollection<replay::ReplaySetup>);
@@ -38,6 +48,14 @@ static_assert(!HasResultFact<replay::ReplayCapabilities>);
 static_assert(!HasResultFact<replay::ReplayChartDocument>);
 static_assert(!HasResultFact<replay::ReplayCourseDocument>);
 static_assert(!HasResultFact<replay::ReplayFileMetadata>);
+static_assert(!HasRawReplayCollection<result_persistence::ChartScoreWrite>);
+static_assert(!HasRawReplayCollection<result_persistence::ModernChartResult>);
+static_assert(!HasRawReplayCollection<result_persistence::ModernCourseResult>);
+static_assert(!HasRawReplayCollection<ir::IrSubmissionSnapshot>);
+static_assert(!HasReplayFileFact<result_persistence::ChartScoreWrite>);
+static_assert(!HasReplayFileFact<result_persistence::ModernChartResult>);
+static_assert(!HasReplayFileFact<result_persistence::ModernCourseResult>);
+static_assert(!HasReplayFileFact<ir::IrSubmissionSnapshot>);
 
 namespace {
 
@@ -49,8 +67,9 @@ std::string readText(const std::filesystem::path &path) {
           std::istreambuf_iterator<char>()};
 }
 
+template <std::size_t Size>
 void rejectTokens(const std::filesystem::path &path,
-                  const std::array<std::string_view, 12> &tokens) {
+                  const std::array<std::string_view, Size> &tokens) {
   const std::string text = readText(path);
   for (std::string_view token : tokens) {
     if (text.contains(token)) {
@@ -59,6 +78,54 @@ void rejectTokens(const std::filesystem::path &path,
       ++failures;
     }
   }
+}
+
+void requireToken(const std::filesystem::path &path, std::string_view token,
+                  std::string_view authority);
+
+void testModernResultAndSnapshotBoundary() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  constexpr std::array<std::string_view, 12> forbidden{
+      "ReplayData",      "ReplayPlaybackData", "ReplayFileMetadata",
+      "ReplayFileStore", "ReplayRepository",   "sqlite3",
+      "IrOutbox",        "StageReceipt",       ".events",
+      "touchSamples",    "laneCoverEvents",    "materialize",
+  };
+  rejectTokens(root / "src/ModernResult.h", forbidden);
+  rejectTokens(root / "src/ModernResult.cpp", forbidden);
+  rejectTokens(root / "src/ir/IrSubmissionSnapshot.h", forbidden);
+  rejectTokens(root / "src/ir/IrSubmissionSnapshot.cpp", forbidden);
+  rejectTokens(root / "src/ModernResultRecallBuilder.h", forbidden);
+  rejectTokens(root / "src/ModernResultRecallBuilder.cpp", forbidden);
+
+  constexpr std::array<std::string_view, 4> materializationForbidden{
+      "BuildResultState",
+      "prepareReplayChart",
+      "parseChartForReplay",
+      "replay.events",
+  };
+  rejectTokens(root / "src/ModernResultRecallBuilder.cpp",
+               materializationForbidden);
+
+  requireToken(root / "src/ResultPersistenceModel.cpp",
+               "projectModernResultFromLegacyAttempt",
+               "explicitly named legacy result adapter");
+  requireToken(root / "src/ir/IrSubmissionLegacyAdapter.cpp",
+               "ChartResultAttempt", "explicitly isolated legacy IR adapter");
+}
+
+void testSharedModernResultAuthorities() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  requireToken(root / "src/ModernResult.cpp",
+               "result_contract::", "modern result fact authority");
+  requireToken(root / "src/ir/IrSubmission.cpp",
+               "result_contract::", "IR result fact authority");
+  requireToken(root / "src/ModernResultRecallBuilder.cpp",
+               "result_contract::compareChartIdentity",
+               "modern recall identity agreement authority");
+  requireToken(root / "src/replay/ReplaySetup.cpp",
+               "result_contract::compareChartIdentity",
+               "replay identity agreement authority");
 }
 
 void requireToken(const std::filesystem::path &path, std::string_view token,
@@ -145,6 +212,8 @@ int main() {
   testCapabilityPolicyBoundary();
   testCodecAndFileBoundary();
   testSharedFormatAuthorities();
+  testModernResultAndSnapshotBoundary();
+  testSharedModernResultAuthorities();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;

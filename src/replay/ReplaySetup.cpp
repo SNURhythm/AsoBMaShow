@@ -81,18 +81,19 @@ ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
   if (!limits.valid()) {
     return invalid(ReplaySetupIssue::Limits);
   }
-  if (!isCanonicalLowerHex(setup.chart.sha256, 64)) {
+  if (!result_contract::canonicalChartHashes({}, setup.chart.sha256, false)) {
     return invalid(ReplaySetupIssue::ChartSha256);
   }
   const bool md5Required = source != ReplaySetupSource::StockBeatoraja;
-  if ((md5Required && !isCanonicalLowerHex(setup.chart.md5, 32)) ||
-      (!setup.chart.md5.empty() && !isCanonicalLowerHex(setup.chart.md5, 32))) {
+  if (!result_contract::canonicalChartHashes(setup.chart.md5,
+                                             setup.chart.sha256, md5Required)) {
     return invalid(ReplaySetupIssue::ChartMd5);
   }
-  if (!replayKeyModeLayout(setup.chart.keyMode)) {
+  if (!result_contract::isSupportedKeyMode(setup.chart.keyMode) ||
+      !replayKeyModeLayout(setup.chart.keyMode)) {
     return invalid(ReplaySetupIssue::KeyMode);
   }
-  if (setup.longNoteMode < 0 || setup.longNoteMode > 3 ||
+  if (!result_contract::isKnownLongNoteMode(setup.longNoteMode) ||
       (setup.hasUndefinedLongNotes && setup.longNoteMode == 0)) {
     return invalid(ReplaySetupIssue::LongNoteMode);
   }
@@ -129,24 +130,16 @@ ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
       assist_options::normalize(setup.assistOption) != setup.assistOption) {
     return invalid(ReplaySetupIssue::AssistOption);
   }
-  if (!enumBetween(static_cast<int>(setup.initialGaugeType),
-                   static_cast<int>(GaugeType::AssistedEasy),
-                   static_cast<int>(GaugeType::Hazard))) {
+  if (!result_contract::isKnownGaugeType(setup.initialGaugeType)) {
     return invalid(ReplaySetupIssue::GaugeType);
   }
-  if (!enumBetween(static_cast<int>(setup.gaugeProfile),
-                   static_cast<int>(GaugeProfile::Standard),
-                   static_cast<int>(GaugeProfile::Standard24Keys))) {
+  if (!result_contract::isKnownGaugeProfile(setup.gaugeProfile)) {
     return invalid(ReplaySetupIssue::GaugeProfile);
   }
-  if (!enumBetween(static_cast<int>(setup.gaugeAutoShift),
-                   static_cast<int>(GaugeAutoShiftMode::None),
-                   static_cast<int>(GaugeAutoShiftMode::BestClear))) {
+  if (!result_contract::isKnownGaugeAutoShift(setup.gaugeAutoShift)) {
     return invalid(ReplaySetupIssue::GaugeAutoShift);
   }
-  if (!enumBetween(static_cast<int>(setup.gaugeAutoShiftLowerBound),
-                   static_cast<int>(GaugeType::AssistedEasy),
-                   static_cast<int>(GaugeType::Hazard))) {
+  if (!result_contract::isKnownGaugeType(setup.gaugeAutoShiftLowerBound)) {
     return invalid(ReplaySetupIssue::GaugeAutoShiftLowerBound);
   }
   if (!isSupportedRulesetDescriptor(setup.ruleset) ||
@@ -178,16 +171,7 @@ ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
 ReplayChartMatch
 compareReplayChartIdentity(const ReplayChartIdentity &recorded,
                            const ReplayChartIdentity &selected) noexcept {
-  if (recorded.sha256 != selected.sha256) {
-    return ReplayChartMatch::Sha256Mismatch;
-  }
-  if (!recorded.md5.empty() && recorded.md5 != selected.md5) {
-    return ReplayChartMatch::Md5Mismatch;
-  }
-  if (recorded.keyMode != selected.keyMode) {
-    return ReplayChartMatch::KeyModeMismatch;
-  }
-  return ReplayChartMatch::Match;
+  return result_contract::compareChartIdentity(recorded, selected);
 }
 
 } // namespace replay

@@ -1,31 +1,14 @@
 #include "IrSubmission.h"
 
-#include "../CanonicalDigest.h"
-#include "../DurablePayloadLimits.h"
+#include "../ResultContracts.h"
 #include "../Uuid.h"
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdint>
-#include <limits>
 
 namespace ir {
 namespace {
-
-bool isKnownClearRank(int value) noexcept {
-  constexpr std::array ranks{
-      kClearTypeFailedRank,
-      kClearTypeAssistedEasyClearRank,
-      kClearTypeLightAssistedEasyClearRank,
-      kClearTypeEasyClearRank,
-      kClearTypeNormalClearRank,
-      kClearTypeHardClearRank,
-      kClearTypeExHardClearRank,
-      kClearTypeFullComboRank,
-  };
-  return std::ranges::find(ranks, value) != ranks.end();
-}
 
 bool timingPairMatches(int early, int late, int total) noexcept {
   return static_cast<std::int64_t>(early) + static_cast<std::int64_t>(late) ==
@@ -39,38 +22,40 @@ bool validateIrSubmission(const IrSubmission &submission,
   try {
     diagnostic.clear();
     if (!uuid::isCanonicalLowerV4(submission.attemptId) ||
-        submission.keyMode <= 0 ||
-        (!submission.chartMd5.empty() &&
-         !canonical_digest::isCanonicalLowerHex(submission.chartMd5, 32)) ||
-        !canonical_digest::isCanonicalLowerHex(submission.chartSha256, 64) ||
+        !result_contract::isSupportedKeyMode(submission.keyMode) ||
+        !result_contract::canonicalChartHashes(submission.chartMd5,
+                                               submission.chartSha256, false) ||
         submission.playedAtUnixMillis <= 0) {
       diagnostic = "IR submission identity is invalid";
       return false;
     }
-    const std::array counts{
-        submission.score,      submission.maxScore,   submission.maxCombo,
-        submission.comboBreak, submission.pGreat,     submission.great,
-        submission.good,       submission.bad,        submission.poor,
-        submission.kPoor,      submission.fast,       submission.slow,
+    const result_contract::ResultOutcomeFacts outcome{
+        .score = submission.score,
+        .maxScore = submission.maxScore,
+        .maxCombo = submission.maxCombo,
+        .comboBreak = submission.comboBreak,
+        .pGreat = submission.pGreat,
+        .great = submission.great,
+        .good = submission.good,
+        .bad = submission.bad,
+        .poor = submission.poor,
+        .kPoor = submission.kPoor,
+        .fast = submission.fast,
+        .slow = submission.slow,
+        .finalGauge = submission.finalGauge,
+        .clearType = submission.clearType,
+        .gaugeHistory = submission.gaugeHistory,
+    };
+    const std::array timingCounts{
         submission.pGreatFast, submission.pGreatSlow, submission.earlyPGreat,
         submission.latePGreat, submission.earlyGreat, submission.lateGreat,
         submission.earlyGood,  submission.lateGood,   submission.earlyBad,
         submission.lateBad,    submission.earlyPoor,  submission.latePoor,
     };
-    if (std::ranges::any_of(counts, [](int value) { return value < 0; }) ||
-        submission.maxScore <= 0 || submission.score > submission.maxScore ||
-        submission.maxScore % 2 != 0 ||
-        submission.maxCombo > submission.maxScore / 2 ||
-        static_cast<std::int64_t>(submission.pGreat) * 2LL + submission.great !=
-            submission.score ||
-        !std::isfinite(submission.finalGauge) || submission.finalGauge < 0.0F ||
-        !isKnownClearRank(submission.clearType) ||
-        !durable_payload::withinLimit(
-            submission.gaugeHistory.size(),
-            durable_payload::kMaximumResultGaugeSamples) ||
-        std::ranges::any_of(
-            submission.gaugeHistory,
-            [](float value) { return !std::isfinite(value); })) {
+    if (!result_contract::validResultOutcome(
+            outcome, static_cast<std::int64_t>(submission.maxScore) / 2LL) ||
+        std::ranges::any_of(timingCounts,
+                            [](int value) { return value < 0; })) {
       diagnostic = "IR submission result facts are invalid";
       return false;
     }

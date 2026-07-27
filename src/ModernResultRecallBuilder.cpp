@@ -2,7 +2,7 @@
 
 #include "ArchiveFile.h"
 #include "BmsMetadataText.h"
-#include "CanonicalDigest.h"
+#include "ResultContracts.h"
 #include "repositories/ChartStorageIdentity.h"
 
 #include <exception>
@@ -31,14 +31,21 @@ bool chartIdentityAgrees(const result_persistence::ChartScoreWrite &score,
                          int keyMode,
                          const bms_parser::ChartMeta &parsed) noexcept {
   using asobmshow::bms_metadata::normalizedHash;
-  const std::string parsedSha256 = normalizedHash(parsed.SHA256);
-  const std::string parsedMd5 = normalizedHash(parsed.MD5);
-  if (!canonical_digest::isCanonicalLowerHex(parsedSha256, 64) ||
-      parsedSha256 != score.chartSha256 ||
-      (!score.chartMd5.empty() &&
-       (!canonical_digest::isCanonicalLowerHex(parsedMd5, 32) ||
-        parsedMd5 != score.chartMd5)) ||
-      parsed.KeyMode != keyMode || parsed.TotalNotes <= 0 ||
+  const result_contract::ChartIdentity expected{
+      .md5 = score.chartMd5,
+      .sha256 = score.chartSha256,
+      .keyMode = keyMode,
+  };
+  const result_contract::ChartIdentity selected{
+      .md5 = normalizedHash(parsed.MD5),
+      .sha256 = normalizedHash(parsed.SHA256),
+      .keyMode = parsed.KeyMode,
+  };
+  if (!result_contract::canonicalChartIdentity(selected,
+                                               !expected.md5.empty()) ||
+      result_contract::compareChartIdentity(expected, selected) !=
+          result_contract::ChartIdentityMatch::Match ||
+      parsed.TotalNotes <= 0 ||
       parsed.TotalNotes > std::numeric_limits<int>::max() / 2 ||
       parsed.TotalNotes * 2 != score.maxScore) {
     return false;

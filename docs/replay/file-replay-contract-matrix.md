@@ -20,3 +20,18 @@ G-Battle and practice ghost are chart-only. A replay file never grants result
 or IR authority. A result or saved IR snapshot never makes an absent replay
 playable. Invalid-file deletion means deletion of an existing contained file;
 missing and user-deleted states are already absent.
+
+## Activated contract authorities
+
+| Contract | Current authority | Replay-file dependency | Delivery status |
+| --- | --- | --- | --- |
+| Modern chart result facts | `result_persistence::ModernChartResult` validation, fingerprinting, agreement, and recall | none | active; SQLite ownership is Slice 4 |
+| Modern course result facts | `result_persistence::ModernCourseResult` validation, fingerprinting, ordered-stage agreement, and atomic recall | none | active; SQLite ownership is Slice 4 |
+| Shared result/setup domains | `result_contract` key modes, chart identity agreement, gauge/clear domains, and score arithmetic | none | active for replay setup, modern results, recall, and IR |
+| Postponed IR payload | canonical `ir::IrSubmissionSnapshot` captured from a validated modern result | none | active; outbox persistence is Slice 4 |
+| Legacy result and IR bridge | explicitly named legacy projection/adapter functions | legacy in-memory detail only | temporary until the Slice 7 schema cutover |
+
+The activated result and postponed-IR contracts do not accept a replay path,
+file reference, playback collection, repository handle, outbox receipt, or
+SQLite handle. Rich result recall reads the stored chart path and rejects chart
+identity disagreement before applying independently saved display facts.
