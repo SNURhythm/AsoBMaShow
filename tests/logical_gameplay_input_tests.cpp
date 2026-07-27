@@ -845,13 +845,117 @@ void testRealtimePhysicalInputPreservesNativeTimestamp() {
               output[0].type ==
                   input::RealtimePhysicalInputTransitionType::Press &&
               output[0].lane == 3 &&
+              output[0].hasReplayControl &&
+              output[0].replayControl ==
+                  replay::LogicalControl{.kind =
+                                             replay::LogicalControlKind::Lane,
+                                         .player = 1,
+                                         .lane = 3} &&
               output[0].steadyTimestampMicros == 1234567 &&
               output[1].type ==
                   input::RealtimePhysicalInputTransitionType::Release &&
               output[1].lane == 3 &&
+              output[1].hasReplayControl &&
+              output[1].replayControl == output[0].replayControl &&
               output[1].steadyTimestampMicros == 1234999,
           "native physical edges reach realtime lanes with their source "
           "timestamps");
+}
+
+void testRealtimeScratchReversalCarriesCanonicalDirections() {
+  InputProfile profile;
+  const input::PhysicalControl clockwise{
+      .deviceId = "pad:scratch",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 1};
+  const input::PhysicalControl counterClockwise{
+      .deviceId = "pad:scratch",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 2};
+  profile.bindings.push_back({.id = "scratch-cw",
+                              .scope = {1, 7},
+                              .action = {input::LogicalActionKind::
+                                             ScratchClockwise},
+                              .control = clockwise});
+  profile.bindings.push_back({.id = "scratch-ccw",
+                              .scope = {1, 7},
+                              .action = {input::LogicalActionKind::
+                                             ScratchCounterClockwise},
+                              .control = counterClockwise});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &value) {
+        output.push_back(value);
+        return true;
+      });
+  router.setGameplayEnabled(true, 50);
+  router.consume(controlEvent(clockwise, true), 100);
+  router.consume(controlEvent(counterClockwise, true), 200);
+  router.consume(controlEvent(clockwise, false), 250);
+  router.consume(controlEvent(counterClockwise, false), 300);
+
+  require(output.size() == 4 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[0].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].backSpin &&
+              output[1].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              output[2].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[2].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              output[3].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[3].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise,
+          "realtime scratch reversal keeps the exact ordered logical sides");
+}
+
+void testRealtimeStartProducesCommandAndReplayEdge() {
+  InputProfile profile;
+  const input::PhysicalControl start{
+      .deviceId = "pad:start",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 7};
+  profile.bindings.push_back({.id = "start",
+                              .scope = {1, 7},
+                              .action = {input::LogicalActionKind::Start},
+                              .control = start});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &value) {
+        output.push_back(value);
+        return true;
+      });
+  router.setGameplayEnabled(true, 50);
+  router.consume(controlEvent(start, true), 100);
+  router.consume(controlEvent(start, false), 200);
+
+  require(output.size() == 4 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Command &&
+              output[1].replayOnly && output[1].hasReplayControl &&
+              output[1].replayControl.kind ==
+                  replay::LogicalControlKind::Start &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[2].type ==
+                  input::RealtimePhysicalInputTransitionType::Command &&
+              output[3].replayOnly &&
+              output[3].replayControl.kind ==
+                  replay::LogicalControlKind::Start &&
+              output[3].type ==
+                  input::RealtimePhysicalInputTransitionType::Release,
+          "Start remains a UI command and also enters the raw replay stream");
 }
 
 void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
@@ -1049,6 +1153,8 @@ int main() {
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
+  testRealtimeScratchReversalCarriesCanonicalDirections();
+  testRealtimeStartProducesCommandAndReplayEdge();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
   testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();

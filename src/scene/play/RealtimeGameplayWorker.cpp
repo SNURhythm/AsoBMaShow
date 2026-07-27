@@ -190,6 +190,14 @@ RealtimeGameplayWorker::copyReplayEventsAfterStop() const {
   return {events.begin(), events.end()};
 }
 
+std::optional<std::vector<replay::InputTransition>>
+RealtimeGameplayWorker::copyAcceptedReplayInputAfterStop() const {
+  if (running() || !replayCaptureValid_) {
+    return std::nullopt;
+  }
+  return acceptedReplayInput_;
+}
+
 std::vector<float>
 RealtimeGameplayWorker::copyGaugeHistoryAfterStop() const {
   if (running()) {
@@ -283,6 +291,10 @@ void RealtimeGameplayWorker::processInput(
     latchFault(RealtimeGameplayFault::ClockUnavailable);
     return;
   }
+  if (input.replayOnly) {
+    recordAcceptedReplayInput(input, *songTime);
+    return;
+  }
   const bool preparationInput =
       config_.activationSongTimeMicros.has_value() &&
       *songTime < *config_.activationSongTimeMicros;
@@ -314,6 +326,7 @@ void RealtimeGameplayWorker::processInput(
         recordTransaction(transaction);
       }
     }
+    recordAcceptedReplayInput(input, *songTime);
     return;
   }
 
@@ -358,6 +371,7 @@ void RealtimeGameplayWorker::processInput(
       recordTransaction(transaction);
     }
   }
+  recordAcceptedReplayInput(input, *songTime);
   if (!requiresSound) {
     return;
   }
@@ -377,6 +391,36 @@ void RealtimeGameplayWorker::processInput(
   }
   if (!config_.audio.commit(config_.audio.context, reservation, preview)) {
     latchFault(RealtimeGameplayFault::AudioCommitFailed);
+  }
+}
+
+void RealtimeGameplayWorker::recordAcceptedReplayInput(
+    const RealtimeGameplayInput &input,
+    std::int64_t songTimeMicros) noexcept {
+  if (!input.hasReplayControl || !replayCaptureValid_) {
+    return;
+  }
+  const std::size_t maximum = std::min(
+      config_.maximumReplayInputTransitions,
+      replay::kReplayLimits.maxInputTransitions);
+  if (maximum == 0 || acceptedReplayInput_.size() >= maximum ||
+      songTimeMicros < replay::kReplayLimits.minimumSongTimeMicros ||
+      (lastReplaySongTimeMicros_.has_value() &&
+       songTimeMicros < *lastReplaySongTimeMicros_)) {
+    replayCaptureValid_ = false;
+    acceptedReplayInput_.clear();
+    return;
+  }
+  try {
+    acceptedReplayInput_.push_back(
+        {.songTimeMicros = songTimeMicros,
+         .control = input.replayControl,
+         .pressed = input.type == RealtimeGameplayInputType::Press,
+         .replayOnly = input.replayOnly});
+    lastReplaySongTimeMicros_ = songTimeMicros;
+  } catch (...) {
+    replayCaptureValid_ = false;
+    acceptedReplayInput_.clear();
   }
 }
 

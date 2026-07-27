@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <string_view>
@@ -18,6 +19,9 @@ struct RealtimePhysicalInputTransition {
       RealtimePhysicalInputTransitionType::Press;
   int lane = 0;
   bool backSpin = false;
+  bool hasReplayControl = false;
+  replay::LogicalControl replayControl;
+  bool replayOnly = false;
   LogicalInputTransition command;
   std::int64_t steadyTimestampMicros = 0;
 };
@@ -45,8 +49,13 @@ private:
   bms_parser::Note *pressLane(int lane, double inputDelay) override;
   bms_parser::Note *releaseLane(int lane, double inputDelay,
                                 bool isBackSpin) override;
-  bool emit(RealtimePhysicalInputTransitionType, int lane,
-            bool backSpin = false);
+  void prepare(RealtimePhysicalInputTransitionType, int lane,
+               bool backSpin = false);
+  void emitApplied(const LogicalGameplayInputAdapter::AppliedTransition &);
+  bool emit(RealtimePhysicalInputTransitionType, int lane, bool backSpin,
+            replay::LogicalControl);
+  bool emitReplayOnly(RealtimePhysicalInputTransitionType,
+                      replay::LogicalControl);
   void emitCommand(const LogicalInputTransition &);
 
   std::mutex mutex_;
@@ -55,6 +64,11 @@ private:
   bool gameplayEnabled_ = false;
   std::array<bool, kTrackedLaneCapacity> desiredLanePressed_{};
   std::array<bool, kTrackedLaneCapacity> publishedLanePressed_{};
+  std::array<replay::LogicalControl, kTrackedLaneCapacity>
+      desiredReplayControls_{};
+  std::array<replay::LogicalControl, kTrackedLaneCapacity>
+      publishedReplayControls_{};
+  std::deque<RealtimePhysicalInputTransition> pendingTransitions_;
   LogicalGameplayInputPipeline pipeline_;
 };
 

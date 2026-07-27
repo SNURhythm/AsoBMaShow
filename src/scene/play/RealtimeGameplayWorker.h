@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameplaySimulation.h"
+#include "../../replay/ReplayPlayback.h"
 
 #include <array>
 #include <atomic>
@@ -29,6 +30,9 @@ struct RealtimeGameplayInput {
   bool backSpin = false;
   std::int64_t steadyTimestampMicros = 0;
   std::int64_t inputDelayMicros = 0;
+  bool hasReplayControl = false;
+  replay::LogicalControl replayControl;
+  bool replayOnly = false;
 };
 
 struct RealtimeGameplayAudioReservation {
@@ -66,6 +70,8 @@ struct RealtimeGameplayWorkerConfig {
   RealtimeGameplayClock clock;
   RealtimeGameplayAudioSink audio;
   bool inputTriggeredKeysounds = true;
+  std::size_t maximumReplayInputTransitions =
+      replay::kReplayLimits.maxInputTransitions;
   std::optional<std::int64_t> activationSongTimeMicros;
   std::optional<std::int64_t> practiceCompletionSongTimeMicros;
 };
@@ -205,6 +211,8 @@ public:
   [[nodiscard]] bool running() const noexcept;
   [[nodiscard]] std::vector<GameplayReplayEvent>
   copyReplayEventsAfterStop() const;
+  [[nodiscard]] std::optional<std::vector<replay::InputTransition>>
+  copyAcceptedReplayInputAfterStop() const;
   [[nodiscard]] std::vector<float> copyGaugeHistoryAfterStop() const;
   [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesAfterStop() const;
 
@@ -217,6 +225,8 @@ private:
   void run();
   void signal() noexcept;
   void processInput(const RealtimeGameplayInput &input);
+  void recordAcceptedReplayInput(const RealtimeGameplayInput &,
+                                 std::int64_t songTimeMicros) noexcept;
   bool advanceAutomatic();
   bool commitAutomaticTransactions(
       std::span<const GameplayInputResult> transactions);
@@ -235,6 +245,9 @@ private:
   std::uint64_t snapshotGeneration_ = 0;
   std::uint64_t transactionSequence_ = 0;
   GameplayInputResult latestTransaction_;
+  std::vector<replay::InputTransition> acceptedReplayInput_;
+  std::optional<std::int64_t> lastReplaySongTimeMicros_;
+  bool replayCaptureValid_ = true;
   std::array<RealtimeGameplayTransaction,
              kRealtimeGameplayTransactionHistorySize>
       transactionHistory_{};

@@ -214,6 +214,88 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
   worker.stop();
 }
 
+void testWorkerTransfersAcceptedRawReplayInputInOrder() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "raw replay worker starts");
+  const replay::LogicalControl laneControl{
+      .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 1};
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 1,
+               .compensateLane = 1,
+               .steadyTimestampMicros = 1'000'000,
+               .hasReplayControl = true,
+               .replayControl = laneControl}),
+          "raw replay press enters fixed ingress");
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Release,
+               .lane = 1,
+               .steadyTimestampMicros = 1'010'000,
+               .hasReplayControl = true,
+               .replayControl = laneControl}),
+          "raw replay release enters fixed ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 2;
+          }),
+          "raw replay input is accepted by gameplay");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() &&
+              *replayInput ==
+                  std::vector<replay::InputTransition>{
+                      {.songTimeMicros = 1'000'000,
+                       .control = laneControl,
+                       .pressed = true},
+                      {.songTimeMicros = 1'010'000,
+                       .control = laneControl,
+                       .pressed = false}},
+          "worker transfers the exact accepted logical stream after stop");
+}
+
+void testReplayCaptureOverflowDoesNotInvalidateGameplay() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.maximumReplayInputTransitions = 1;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           std::move(config));
+  require(worker.start(), "bounded replay worker starts");
+  const replay::LogicalControl laneControl{
+      .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 1};
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 1,
+               .compensateLane = 1,
+               .steadyTimestampMicros = 1'000'000,
+               .hasReplayControl = true,
+               .replayControl = laneControl}) &&
+              worker.enqueueInput(
+                  {.epoch = 7,
+                   .type = gameplay::RealtimeGameplayInputType::Release,
+                   .lane = 1,
+                   .steadyTimestampMicros = 1'010'000,
+                   .hasReplayControl = true,
+                   .replayControl = laneControl}),
+          "overflow fixture enqueues both gameplay edges");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 2;
+          }),
+          "gameplay still accepts edges after replay capture overflow");
+  worker.stop();
+  require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+              !worker.copyAcceptedReplayInputAfterStop().has_value(),
+          "replay overflow drops only the attachment, not the result");
+}
+
 void testInputDelayCompensationPrecedesWorkerAutomaticDeadline() {
   FakeClock clock;
   FakeAudio audio;
@@ -752,6 +834,8 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
 
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
+  testWorkerTransfersAcceptedRawReplayInputInOrder();
+  testReplayCaptureOverflowDoesNotInvalidateGameplay();
   testInputDelayCompensationPrecedesWorkerAutomaticDeadline();
   testInputPreadvancePublishesAutomaticTransactions();
   testSnapshotPublishesHeldLongNoteByLane();

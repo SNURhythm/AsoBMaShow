@@ -5,6 +5,7 @@
 #include "InputBindingResolver.h"
 #include "InputProfile.h"
 #include "InputTypes.h"
+#include "../replay/ReplayPlayback.h"
 
 #include <functional>
 #include <map>
@@ -26,8 +27,17 @@ class LogicalGameplayInputAdapter {
 public:
   using CommandCallback =
       std::function<void(const input::LogicalInputTransition &)>;
+  struct AppliedTransition {
+    input::LogicalInputTransition source;
+    replay::LogicalControl control;
+    bool pressed = false;
+    bool replayOnly = false;
+  };
+  using AppliedTransitionCallback =
+      std::function<void(const AppliedTransition &)>;
 
-  LogicalGameplayInputAdapter(IRhythmControl &, CommandCallback);
+  LogicalGameplayInputAdapter(IRhythmControl &, CommandCallback,
+                              AppliedTransitionCallback = {});
 
   void apply(std::span<const input::LogicalInputTransition> transitions);
   void reset();
@@ -41,15 +51,29 @@ private:
 
   static int scratchLane(input::InputScope scope);
   [[nodiscard]] bool isLaneHeld(int lane) const;
+  void pressPhysicalLane(int lane);
+  void releasePhysicalLane(int lane, bool backSpin);
   void applyLane(const input::LogicalInputTransition &transition);
   void applyScratch(const input::LogicalInputTransition &transition,
                     ScratchDirection direction, bool reversing = false,
                     bool oppositeReleasedInBatch = false);
+  [[nodiscard]] static replay::LogicalControl
+  replayLaneControl(const input::LogicalInputTransition &transition);
+  [[nodiscard]] std::optional<replay::LogicalControl>
+  effectiveScratchReplayControl(int lane) const;
+  void synchronizeScratchReplayControl(
+      const input::LogicalInputTransition &transition, int lane);
+  void notifyApplied(const input::LogicalInputTransition &,
+                     replay::LogicalControl, bool pressed);
+  void notifyCommandApplied(const input::LogicalInputTransition &);
 
   IRhythmControl &control_;
   CommandCallback commandCallback_;
+  AppliedTransitionCallback appliedTransitionCallback_;
   std::map<int, std::set<input::InputScope>> heldLaneScopes_;
   std::map<int, ScratchLaneState> scratchLaneStates_;
+  std::map<int, replay::LogicalControl> recordedScratchControls_;
+  std::map<int, std::size_t> pendingPhysicalEdges_;
 };
 
 struct LogicalGameplayRegistryPolicy {
@@ -62,7 +86,9 @@ public:
       IRhythmControl &, const InputProfile &,
       std::vector<input::InputScope> activeScopes,
       LogicalGameplayInputAdapter::CommandCallback commandCallback = {},
-      LogicalGameplayRegistryPolicy registryPolicy = {});
+      LogicalGameplayRegistryPolicy registryPolicy = {},
+      LogicalGameplayInputAdapter::AppliedTransitionCallback
+          appliedTransitionCallback = {});
   LogicalGameplayInputPipeline(const LogicalGameplayInputPipeline &) = delete;
   LogicalGameplayInputPipeline &
   operator=(const LogicalGameplayInputPipeline &) = delete;

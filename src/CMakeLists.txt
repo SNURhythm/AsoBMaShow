@@ -14,6 +14,7 @@ target_sources(main PRIVATE ArchiveFile.cpp MinizBridge.c bgfx_helper.cpp bms_pa
 target_sources(main PRIVATE replay/ReplayCapabilities.cpp)
 target_sources(main PRIVATE replay/ReplaySetup.cpp)
 target_sources(main PRIVATE replay/ReplayPlayback.cpp)
+target_sources(main PRIVATE replay/ReplayInputRecorder.cpp)
 target_sources(main PRIVATE replay/BeatorajaReplayPath.cpp)
 target_sources(main PRIVATE replay/Base64Url.cpp)
 target_sources(main PRIVATE replay/GzipCodec.cpp)

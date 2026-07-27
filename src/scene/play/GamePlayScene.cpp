@@ -745,7 +745,10 @@ struct GamePlayScene::RealtimeGameplaySession {
          .lane = transition.lane,
          .compensateLane = transition.lane,
          .backSpin = transition.backSpin,
-         .steadyTimestampMicros = transition.steadyTimestampMicros});
+         .steadyTimestampMicros = transition.steadyTimestampMicros,
+         .hasReplayControl = transition.hasReplayControl,
+         .replayControl = transition.replayControl,
+         .replayOnly = transition.replayOnly});
   }
 
   static int SDLCALL sdlInputWatch(void *context, SDL_Event *event) {
