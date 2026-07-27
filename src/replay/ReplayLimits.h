@@ -45,6 +45,8 @@ withinReplayCountLimit(std::size_t count, std::size_t maximum) noexcept {
 struct ReplayTimeBounds {
   std::int64_t completionSongTimeMicros = -1;
 
+  bool operator==(const ReplayTimeBounds &) const = default;
+
   [[nodiscard]] constexpr bool valid() const noexcept {
     return completionSongTimeMicros >= 0;
   }
@@ -58,29 +60,28 @@ struct ReplayTimeBounds {
   }
 };
 
-[[nodiscard]] constexpr bool isMonotonicReplayTime(
-    std::int64_t previousSongTimeMicros, std::int64_t nextSongTimeMicros,
-    ReplayTimeBounds bounds,
-    const ReplayLimits &limits = kReplayLimits) noexcept {
+[[nodiscard]] constexpr bool
+isMonotonicReplayTime(std::int64_t previousSongTimeMicros,
+                      std::int64_t nextSongTimeMicros, ReplayTimeBounds bounds,
+                      const ReplayLimits &limits = kReplayLimits) noexcept {
   return nextSongTimeMicros >= previousSongTimeMicros &&
          bounds.contains(nextSongTimeMicros, limits);
 }
 
-[[nodiscard]] constexpr bool validCourseRestMicros(
-    std::int64_t restMicros,
-    const ReplayLimits &limits = kReplayLimits) noexcept {
+[[nodiscard]] constexpr bool
+validCourseRestMicros(std::int64_t restMicros,
+                      const ReplayLimits &limits = kReplayLimits) noexcept {
   return limits.valid() && restMicros >= 0 &&
          restMicros <= limits.maxCourseRestMicros;
 }
 
-[[nodiscard]] constexpr std::int64_t clampCourseRestMicros(
-    std::int64_t restMicros,
-    const ReplayLimits &limits = kReplayLimits) noexcept {
+[[nodiscard]] constexpr std::int64_t
+clampCourseRestMicros(std::int64_t restMicros,
+                      const ReplayLimits &limits = kReplayLimits) noexcept {
   if (!limits.valid()) {
     return 0;
   }
-  return std::clamp(restMicros, std::int64_t{0},
-                    limits.maxCourseRestMicros);
+  return std::clamp(restMicros, std::int64_t{0}, limits.maxCourseRestMicros);
 }
 
 } // namespace replay
