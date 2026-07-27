@@ -25,6 +25,7 @@ struct RealtimeTouchLayout {
   std::array<int, kRealtimeTouchLaneCapacity> lanes{};
   std::array<bool, kRealtimeTouchLaneCapacity> scratch{};
   std::size_t laneCount = 0;
+  int keyMode = 7;
   bool dragMode = false;
 };
 
@@ -72,6 +73,7 @@ private:
     bool pressed = false;
     bool scratch = false;
     int scratchDirection = 0;
+    replay::LogicalControl replayControl;
     float lastX = 0.0F;
     float lastY = 0.0F;
     std::int64_t cancelDeadlineMicros = 0;
@@ -84,6 +86,7 @@ private:
   [[nodiscard]] bool laneOccupied(int lane,
                                   std::int64_t exceptFinger) const noexcept;
   bool emit(RealtimeGameplayInputType type, int lane,
+            replay::LogicalControl replayControl,
             std::int64_t timestampMicros, bool backSpin = false) noexcept;
   bool beginLane(FingerState &finger, std::size_t laneIndex,
                  const RealtimeTouchSample &sample) noexcept;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ReplayKeyMode.h"
 #include "ReplaySetup.h"
 
 #include <cstddef>
@@ -24,6 +25,37 @@ struct LogicalControl {
 
   bool operator==(const LogicalControl &) const = default;
 };
+
+[[nodiscard]] inline std::optional<LogicalControl>
+logicalControlForChartLane(
+    int keyMode, int chartLane, bool scratch,
+    LogicalControlKind scratchKind =
+        LogicalControlKind::ScratchClockwise) noexcept {
+  const auto layout = replayKeyModeLayout(keyMode);
+  if (!layout || chartLane < 0) {
+    return std::nullopt;
+  }
+  const int playerOffset = keyMode == 48 ? 26 : 8;
+  const int player = layout->players == 2 && chartLane >= playerOffset ? 2 : 1;
+  const int playerLane = player == 2 ? chartLane - playerOffset : chartLane;
+  if (scratch) {
+    const int expectedScratch = player == 2 ? 15 : 7;
+    if (!layout->hasDirectionalScratch || chartLane != expectedScratch ||
+        (scratchKind != LogicalControlKind::ScratchClockwise &&
+         scratchKind != LogicalControlKind::ScratchCounterClockwise)) {
+      return std::nullopt;
+    }
+    return LogicalControl{.kind = scratchKind,
+                          .player = player,
+                          .lane = -1};
+  }
+  if (playerLane < 0 || playerLane >= layout->logicalLanesPerPlayer) {
+    return std::nullopt;
+  }
+  return LogicalControl{.kind = LogicalControlKind::Lane,
+                        .player = player,
+                        .lane = playerLane};
+}
 
 struct InputTransition {
   std::int64_t songTimeMicros = 0;

@@ -91,6 +91,41 @@ gameplay::RealtimeTouchLayout makeLayout(bool dragMode = false) {
   return layout;
 }
 
+void testChartLaneMappingCoversEveryReplayKeyMode() {
+  for (const auto &layout : replay::kReplayKeyModeLayouts) {
+    const auto first = replay::logicalControlForChartLane(
+        layout.keyMode, 0, false);
+    require(first == replay::LogicalControl{
+                         .kind = replay::LogicalControlKind::Lane,
+                         .player = 1,
+                         .lane = 0},
+            "the first chart lane maps to player one's first logical lane");
+
+    if (layout.players == 2) {
+      const int offset = layout.keyMode == 48 ? 26 : 8;
+      const auto second = replay::logicalControlForChartLane(
+          layout.keyMode, offset, false);
+      require(second == replay::LogicalControl{
+                            .kind = replay::LogicalControlKind::Lane,
+                            .player = 2,
+                            .lane = 0},
+              "double-play chart lanes use the shared player offset");
+    }
+
+    if (layout.hasDirectionalScratch) {
+      const auto scratch = replay::logicalControlForChartLane(
+          layout.keyMode, 7, true,
+          replay::LogicalControlKind::ScratchCounterClockwise);
+      require(scratch == replay::LogicalControl{
+                             .kind = replay::LogicalControlKind::
+                                 ScratchCounterClockwise,
+                             .player = 1,
+                             .lane = -1},
+              "directional scratch maps through the shared lane authority");
+    }
+  }
+}
+
 void testDirectTouchEmitsTimestampedLaneEdges() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -387,6 +422,7 @@ void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
 
 int main() {
   testTouchPresentationUsesUiNormalizedCoordinates();
+  testChartLaneMappingCoversEveryReplayKeyMode();
   testDirectTouchEmitsTimestampedLaneEdges();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();

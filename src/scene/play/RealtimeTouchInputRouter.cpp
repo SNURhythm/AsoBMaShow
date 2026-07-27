@@ -89,6 +89,7 @@ bool RealtimeTouchInputRouter::laneOccupied(
 }
 
 bool RealtimeTouchInputRouter::emit(RealtimeGameplayInputType type, int lane,
+                                    replay::LogicalControl replayControl,
                                     std::int64_t timestampMicros,
                                     bool backSpin) noexcept {
   return sink_.emit != nullptr &&
@@ -98,7 +99,9 @@ bool RealtimeTouchInputRouter::emit(RealtimeGameplayInputType type, int lane,
                      .lane = lane,
                      .compensateLane = lane,
                      .backSpin = backSpin,
-                     .steadyTimestampMicros = timestampMicros});
+                     .steadyTimestampMicros = timestampMicros,
+                     .hasReplayControl = true,
+                     .replayControl = replayControl});
 }
 
 bool RealtimeTouchInputRouter::beginLane(
@@ -113,6 +116,13 @@ bool RealtimeTouchInputRouter::beginLane(
   }
   finger.lane = lane;
   finger.scratch = layout_.scratch[laneIndex];
+  const auto replayControl = replay::logicalControlForChartLane(
+      layout_.keyMode, lane, finger.scratch);
+  if (!replayControl.has_value()) {
+    finger.lane = -1;
+    return false;
+  }
+  finger.replayControl = *replayControl;
   finger.pressed = false;
   finger.scratchDirection = 0;
   finger.lastX = sample.normalizedX;
@@ -121,7 +131,7 @@ bool RealtimeTouchInputRouter::beginLane(
   if (finger.scratch) {
     return true;
   }
-  if (!emit(RealtimeGameplayInputType::Press, lane,
+  if (!emit(RealtimeGameplayInputType::Press, lane, finger.replayControl,
             sample.steadyTimestampMicros)) {
     finger.lane = -1;
     return false;
@@ -134,7 +144,8 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
                                            std::int64_t timestampMicros,
                                            bool backSpin) noexcept {
   const int lane = finger.lane;
-  const bool shouldEmit = lane >= 0 && (finger.pressed || finger.scratch);
+  const bool shouldEmit = lane >= 0 && finger.pressed;
+  const auto replayControl = finger.replayControl;
   finger.lane = -1;
   finger.pressed = false;
   finger.scratch = false;
@@ -143,7 +154,8 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
   if (!shouldEmit) {
     return true;
   }
-  return emit(RealtimeGameplayInputType::Release, lane, timestampMicros,
+  return emit(RealtimeGameplayInputType::Release, lane, replayControl,
+              timestampMicros,
               backSpin);
 }
 
@@ -169,16 +181,22 @@ bool RealtimeTouchInputRouter::handleScratchMove(
   }
   if (finger.pressed &&
       !emit(RealtimeGameplayInputType::Release, finger.lane,
-            sample.steadyTimestampMicros, true)) {
+            finger.replayControl, sample.steadyTimestampMicros, true)) {
     return false;
   }
   finger.pressed = false;
-  if (!emit(RealtimeGameplayInputType::Press, finger.lane,
+  const auto replayControl = replay::logicalControlForChartLane(
+      layout_.keyMode, finger.lane, true,
+      direction > 0 ? replay::LogicalControlKind::ScratchClockwise
+                    : replay::LogicalControlKind::ScratchCounterClockwise);
+  if (!replayControl.has_value() ||
+      !emit(RealtimeGameplayInputType::Press, finger.lane, *replayControl,
             sample.steadyTimestampMicros)) {
     return false;
   }
   finger.pressed = true;
   finger.scratchDirection = direction;
+  finger.replayControl = *replayControl;
   return true;
 }
 

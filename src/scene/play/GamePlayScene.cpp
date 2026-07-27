@@ -521,6 +521,7 @@ buildRealtimeTouchLayout(const bms_parser::Chart &chart, BMSRenderer &renderer,
   layout.topLeft = normalizedScreenPoint((*touchBounds)[2]);
   layout.topRight = normalizedScreenPoint((*touchBounds)[3]);
   layout.laneCount = lanes.size();
+  layout.keyMode = chart.Meta.KeyMode;
   layout.dragMode = dragMode;
   for (std::size_t index = 0; index < lanes.size(); ++index) {
     layout.lanes[index] = lanes[index];

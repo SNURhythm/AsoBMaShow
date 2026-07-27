@@ -290,18 +290,16 @@ void LogicalGameplayInputAdapter::applyScratch(
 
 replay::LogicalControl LogicalGameplayInputAdapter::replayLaneControl(
     const input::LogicalInputTransition &transition) {
-  int lane = transition.action.lane;
-  if (transition.scope.player == 2) {
-    lane -= transition.scope.keyMode == 48 ? 26 : 8;
-  }
   const bool digitalScratch =
       (transition.scope.keyMode == 5 || transition.scope.keyMode == 7 ||
        transition.scope.keyMode == 10 || transition.scope.keyMode == 14) &&
       transition.action.lane == scratchLane(transition.scope);
-  return {.kind = digitalScratch ? replay::LogicalControlKind::ScratchClockwise
-                                 : replay::LogicalControlKind::Lane,
-          .player = transition.scope.player,
-          .lane = digitalScratch ? -1 : lane};
+  const auto control = replay::logicalControlForChartLane(
+      transition.scope.keyMode, transition.action.lane, digitalScratch);
+  return control.value_or(replay::LogicalControl{
+      .kind = replay::LogicalControlKind::Lane,
+      .player = transition.scope.player,
+      .lane = -1});
 }
 
 std::optional<replay::LogicalControl>
