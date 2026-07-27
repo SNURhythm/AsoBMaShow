@@ -1,5 +1,7 @@
 #include "PracticeLaunchRequest.h"
 
+#include "../Uuid.h"
+
 #include <algorithm>
 #include <cctype>
 #include <string_view>
@@ -73,13 +75,23 @@ std::optional<std::string> validateLaunchRequest(const LaunchRequest &request) {
     return "Practice range unavailable";
   }
   if (request.source == LaunchSource::ReplayResult) {
-    if (!request.replayId.has_value() || *request.replayId <= 0) {
+    const bool validLegacy =
+        request.replayId.has_value() && *request.replayId > 0;
+    const bool validModern = request.modernReplayAttemptId.has_value() &&
+                             uuid::isCanonicalLowerV4(
+                                 *request.modernReplayAttemptId);
+    if (request.replayId.has_value() &&
+        request.modernReplayAttemptId.has_value()) {
+      return "Replay identity is ambiguous";
+    }
+    if (!validLegacy && !validModern) {
       return "Replay unavailable";
     }
     if (!request.replayPlayOptions.has_value()) {
       return "Replay options unavailable";
     }
   } else if (request.replayId.has_value() ||
+             request.modernReplayAttemptId.has_value() ||
              request.replayPlayOptions.has_value()) {
     return "Unexpected replay metadata";
   }

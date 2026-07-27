@@ -135,7 +135,8 @@ ParsedChartReplayFacts parsedFacts(
                     .sha256 = saved.score.chartSha256,
                     .keyMode = saved.keyMode},
           .longNoteMode = saved.score.longNoteMode,
-          .timeBounds = {.completionSongTimeMicros = 5'000'000}};
+          .timeBounds = ReplayTimeBounds{
+              .completionSongTimeMicros = 5'000'000}};
 }
 
 ParsedChartReplayFacts identityOnlyFacts(

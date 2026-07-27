@@ -725,6 +725,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(replay_record_filters_tests
         tests/replay_record_filters_tests.cpp
         src/ResultRecordSummary.cpp
+        src/replay/ReplayCapabilities.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/bms_parser.cpp
@@ -912,8 +913,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(result_record_summary_tests
         tests/result_record_summary_tests.cpp
         src/ResultRecordSummary.cpp
+        src/ScoreProvenance.cpp
+        src/replay/ReplayCapabilities.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(result_record_summary_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -2264,6 +2269,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(result_record_list_view_tests
         tests/result_record_list_view_tests.cpp
         src/ResultRecordSummary.cpp
+        src/replay/ReplayCapabilities.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/bms_parser.cpp
@@ -2824,6 +2830,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(practice_launch_tests
         tests/practice_launch_tests.cpp
         src/ScoreProvenance.cpp
+        src/Uuid.cpp
         src/practice/PracticeConfiguration.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticeLaunchRequest.cpp
@@ -2895,6 +2902,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRemoteScoreModels.cpp
         src/rendering/Color.cpp
         src/ResultRecordSummary.cpp
+        src/replay/ReplayCapabilities.cpp
         src/ScoreProvenance.cpp
         src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp

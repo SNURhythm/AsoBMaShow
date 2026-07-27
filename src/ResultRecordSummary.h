@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ir/IrProfileSettings.h"
+#include "replay/ReplayCapabilities.h"
 #include "repositories/ReplayRepository.h"
 
 #include <cstddef>
@@ -28,8 +29,14 @@ struct IrRemoteRecordId {
   bool operator==(const IrRemoteRecordId &) const = default;
 };
 
+struct ModernChartRecordId {
+  std::string attemptId;
+
+  bool operator==(const ModernChartRecordId &) const = default;
+};
+
 using ResultRecordIdentity =
-    std::variant<LocalReplayRecordId, IrRemoteRecordId>;
+    std::variant<LocalReplayRecordId, ModernChartRecordId, IrRemoteRecordId>;
 
 struct ResultRecordIdentityHash {
   [[nodiscard]] std::size_t
@@ -38,9 +45,13 @@ struct ResultRecordIdentityHash {
 
 struct ResultRecordCapabilities {
   bool watch = false;
+  bool retrySame = false;
   bool gBattle = false;
+  bool practiceGhost = false;
   bool resultRecall = false;
   bool videoExport = false;
+  bool shareOrCopy = false;
+  bool deleteReplayFile = false;
   bool irUpload = false;
 
   bool operator==(const ResultRecordCapabilities &) const = default;
@@ -68,11 +79,16 @@ struct ResultRecordSummary {
   std::optional<std::string> playOption;
   ir::IrRecordState irState = ir::IrRecordState::Hidden;
   std::optional<ReplaySummary> local;
+  std::optional<ModernChartResultRecord> modern;
+  replay::ReplayState replayState = replay::ReplayState::NotApplicable;
   std::optional<ir::IrRemoteScore> remote;
 
   [[nodiscard]] bool isLocal() const noexcept;
+  [[nodiscard]] bool isModernChart() const noexcept;
   [[nodiscard]] bool isRemote() const noexcept;
   [[nodiscard]] std::optional<int> localReplayId() const noexcept;
+  [[nodiscard]] std::optional<std::string_view>
+  modernAttemptId() const noexcept;
   [[nodiscard]] std::optional<std::string_view>
   remoteScoreId() const noexcept;
   [[nodiscard]] std::string stableKey() const;
@@ -80,6 +96,10 @@ struct ResultRecordSummary {
 
 [[nodiscard]] ResultRecordSummary
 makeLocalResultRecord(ReplaySummary summary);
+
+[[nodiscard]] ResultRecordSummary makeModernChartResultRecord(
+    ModernChartResultRecord record, replay::ReplayState replayState,
+    bool postponedIrSnapshotEligible);
 
 // Throws std::invalid_argument when the provider/origin identity is not
 // canonical or when the copied remote score fails stored-model validation.

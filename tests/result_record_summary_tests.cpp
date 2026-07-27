@@ -125,8 +125,7 @@ result_persistence::ModernChartResult validModernResult() {
   result.adoptedGaugeType = GaugeType::Hard;
   result.adoptedGaugeHistory = {100.0F, 78.5F};
   result.playedAtUnixMillis = 1'704'164'645'123LL;
-  result.resultFingerprint =
-      result_persistence::modernResultFingerprint(result);
+  result.resultFingerprint = std::string(64, 'c');
   return result;
 }
 

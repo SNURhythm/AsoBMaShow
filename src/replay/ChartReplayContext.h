@@ -19,7 +19,7 @@ namespace replay {
 struct ParsedChartReplayFacts {
   ReplayChartIdentity chart;
   int longNoteMode = 0;
-  ReplayTimeBounds timeBounds;
+  std::optional<ReplayTimeBounds> timeBounds;
 
   bool operator==(const ParsedChartReplayFacts &) const = default;
 };

@@ -501,7 +501,7 @@ void testContextAndUntrustedStructureFailClosed() {
              embeddedBounds.chart->timeBounds == source.timeBounds,
          "local Aso extension supplies its validated completion bound");
 
-  const auto stockFixture = readFixture("beatoraja-chart-v0.brd");
+  const auto stockFixture = readFixture("beatoraja-chart.brd");
   expect(!codec.decode(stockFixture, embeddedBoundsContext).chart,
          "stock-only BRD still requires an authoritative chart time bound");
 

@@ -996,7 +996,7 @@ struct StageDecode {
 
 bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
                  std::size_t expectedCount, int expectedKeyMode,
-                 ReplayTimeBounds expectedTimeBounds,
+                 std::optional<ReplayTimeBounds> expectedTimeBounds,
                  const ReplayLimits &limits, StageDecode &output,
                  std::string &diagnostic) {
   ReplaySetup stockSetup;
@@ -1012,11 +1012,16 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
 
   const auto extension = stage.find("asobmashow");
   if (extension == stage.end()) {
+    if (!expectedTimeBounds.has_value()) {
+      return fail(diagnostic,
+                  "Stock replay requires an authoritative time bound");
+    }
     output.playback.setup = std::move(stockSetup);
     output.playback.input = *stockInput;
-    output.timeBounds = expectedTimeBounds;
+    output.timeBounds = *expectedTimeBounds;
     const auto validation = validateReplayPlayback(
-        output.playback, ReplaySetupSource::StockBeatoraja, expectedTimeBounds,
+        output.playback, ReplaySetupSource::StockBeatoraja,
+        *expectedTimeBounds,
         limits);
     if (!validation.valid()) {
       return fail(diagnostic,
@@ -1032,12 +1037,17 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
     return false;
   }
   if (schemaVersion != kAsoSchemaVersion) {
+    output.unsupportedExtension = true;
+    if (!expectedTimeBounds.has_value()) {
+      return fail(diagnostic,
+                  "Unsupported Aso extension requires a stock time bound");
+    }
     output.playback.setup = std::move(stockSetup);
     output.playback.input = *stockInput;
-    output.timeBounds = expectedTimeBounds;
-    output.unsupportedExtension = true;
+    output.timeBounds = *expectedTimeBounds;
     const auto validation = validateReplayPlayback(
-        output.playback, ReplaySetupSource::StockBeatoraja, expectedTimeBounds,
+        output.playback, ReplaySetupSource::StockBeatoraja,
+        *expectedTimeBounds,
         limits);
     if (!validation.valid()) {
       return fail(diagnostic,
@@ -1074,8 +1084,8 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
   if (envelope != (course ? "course-stage" : "chart") ||
       output.stageIndex != expectedIndex ||
       output.stageCount != expectedCount ||
-      output.timeBounds.completionSongTimeMicros !=
-          expectedTimeBounds.completionSongTimeMicros ||
+      (expectedTimeBounds.has_value() &&
+       output.timeBounds != *expectedTimeBounds) ||
       !validCourseRestMicros(output.restMicrosAfterStage, limits) ||
       (!course && output.restMicrosAfterStage != 0) ||
       output.playback.setup.chart.keyMode != expectedKeyMode) {
@@ -1240,7 +1250,8 @@ BeatorajaReplayCodec::decode(std::span<const std::byte> encoded,
     return outcome;
   }
   if (context.stageKeyModes.empty() ||
-      context.stageKeyModes.size() != context.stageTimeBounds.size() ||
+      (!context.stageTimeBounds.empty() &&
+       context.stageKeyModes.size() != context.stageTimeBounds.size()) ||
       std::ranges::any_of(context.stageTimeBounds, [](ReplayTimeBounds value) {
         return !value.valid();
       })) {
@@ -1285,11 +1296,16 @@ BeatorajaReplayCodec::decode(std::span<const std::byte> encoded,
   for (std::size_t index = 0; index < stageCount; ++index) {
     StageDecode stage;
     const Json &stageJson = course ? document[index] : document;
+    const std::optional<ReplayTimeBounds> expectedTimeBounds =
+        context.stageTimeBounds.empty()
+            ? std::nullopt
+            : std::optional(context.stageTimeBounds[index]);
     if (!decodeStage(stageJson, course, index, stageCount,
                      context.stageKeyModes[index],
-                     context.stageTimeBounds[index], limits_, stage,
+                     expectedTimeBounds, limits_, stage,
                      outcome.diagnostic) ||
         !aggregate.include(stage.playback, limits_, outcome.diagnostic)) {
+      outcome.unsupportedAsoExtension |= stage.unsupportedExtension;
       return outcome;
     }
     stages.push_back(std::move(stage));

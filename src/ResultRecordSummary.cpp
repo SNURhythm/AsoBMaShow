@@ -161,6 +161,8 @@ std::size_t ResultRecordIdentityHash::operator()(
         using Value = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Value, LocalReplayRecordId>) {
           combineHash(seed, std::hash<int>{}(value.replayId));
+        } else if constexpr (std::is_same_v<Value, ModernChartRecordId>) {
+          combineHash(seed, std::hash<std::string>{}(value.attemptId));
         } else {
           combineHash(seed, std::hash<std::string>{}(value.providerId));
           combineHash(seed, std::hash<std::string>{}(value.serverOrigin));
@@ -172,11 +174,24 @@ std::size_t ResultRecordIdentityHash::operator()(
 }
 
 bool ResultRecordSummary::isLocal() const noexcept {
-  return std::holds_alternative<LocalReplayRecordId>(identity);
+  return std::holds_alternative<LocalReplayRecordId>(identity) ||
+         std::holds_alternative<ModernChartRecordId>(identity);
+}
+
+bool ResultRecordSummary::isModernChart() const noexcept {
+  return std::holds_alternative<ModernChartRecordId>(identity);
 }
 
 bool ResultRecordSummary::isRemote() const noexcept {
   return std::holds_alternative<IrRemoteRecordId>(identity);
+}
+
+std::optional<std::string_view>
+ResultRecordSummary::modernAttemptId() const noexcept {
+  const auto *modernIdentity = std::get_if<ModernChartRecordId>(&identity);
+  return modernIdentity
+             ? std::optional<std::string_view>(modernIdentity->attemptId)
+             : std::nullopt;
 }
 
 std::optional<int> ResultRecordSummary::localReplayId() const noexcept {
@@ -197,6 +212,10 @@ std::string ResultRecordSummary::stableKey() const {
   if (const auto *localIdentity =
           std::get_if<LocalReplayRecordId>(&identity)) {
     return "l:" + std::to_string(localIdentity->replayId);
+  }
+  if (const auto *modernIdentity =
+          std::get_if<ModernChartRecordId>(&identity)) {
+    return "m:" + modernIdentity->attemptId;
   }
 
   const auto &remoteIdentity = std::get<IrRemoteRecordId>(identity);
@@ -233,9 +252,56 @@ ResultRecordSummary makeLocalResultRecord(ReplaySummary summary) {
       .playOption = summary.playOption,
       .irState = summary.irRecordState,
       .local = std::move(summary),
+      .modern = std::nullopt,
+      .replayState = replay::ReplayState::NotApplicable,
       .remote = std::nullopt,
   };
   return result;
+}
+
+ResultRecordSummary makeModernChartResultRecord(
+    ModernChartResultRecord record, replay::ReplayState replayState,
+    bool postponedIrSnapshotEligible) {
+  if (record.result.resultId <= 0 || record.result.attemptId.empty()) {
+    throw std::invalid_argument("modern chart result is invalid");
+  }
+  const auto capabilities = replay::capabilitiesFor({
+      .origin = replay::RecordOrigin::ModernChartResult,
+      .replayState = replayState,
+      .postponedIrSnapshotEligible = postponedIrSnapshotEligible,
+  });
+  const auto &result = record.result;
+  ResultRecordSummary summary{
+      .identity = ModernChartRecordId{.attemptId = result.attemptId},
+      .capabilities =
+          {
+              .watch = capabilities.watch,
+              .retrySame = capabilities.retrySame,
+              .gBattle = capabilities.gBattle,
+              .practiceGhost = capabilities.practiceGhost,
+              .resultRecall = capabilities.viewResult,
+              .videoExport = capabilities.videoExport,
+              .shareOrCopy = capabilities.shareOrCopy,
+              .deleteReplayFile = capabilities.deleteReplayFile,
+              .irUpload = capabilities.irUpload,
+          },
+      .course = false,
+      .autoPlay = false,
+      .score = result.score.score,
+      .maxScore = result.score.maxScore,
+      .maxCombo = result.score.maxCombo,
+      .clearRank = result.score.clearType,
+      .displayedTimeUnixMillis = result.playedAtUnixMillis,
+      .displayedTime = formatUnixMillis(result.playedAtUnixMillis),
+      .playOption = result.score.provenance.player1.option,
+      .irState = postponedIrSnapshotEligible ? ir::IrRecordState::Eligible
+                                             : ir::IrRecordState::Hidden,
+      .local = std::nullopt,
+      .modern = std::move(record),
+      .replayState = replayState,
+      .remote = std::nullopt,
+  };
+  return summary;
 }
 
 ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
@@ -278,6 +344,8 @@ ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
       .playOption = score.random,
       .irState = ir::IrRecordState::Uploaded,
       .local = std::nullopt,
+      .modern = std::nullopt,
+      .replayState = replay::ReplayState::NotApplicable,
       .remote = std::move(score),
   };
   return result;
