@@ -312,15 +312,6 @@ bool isHexDigest(std::string_view value, std::size_t expectedSize) {
          });
 }
 
-bool isCanonicalLowerHexDigest(std::string_view value,
-                               std::size_t expectedSize) noexcept {
-  return value.size() == expectedSize &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isdigit(character) != 0 ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
 struct NormalizedChartIdentity {
   std::string sha256;
   std::string md5;
@@ -364,12 +355,6 @@ std::optional<ChartResultAttempt> rejected(std::string_view invariant,
 }
 
 } // namespace
-
-bool hasProjectableChartIdentity(const ChartScoreWrite &score) noexcept {
-  return isCanonicalLowerHexDigest(score.chartSha256, 64) &&
-         (score.chartMd5.empty() ||
-          isCanonicalLowerHexDigest(score.chartMd5, 32));
-}
 
 ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
                                        const RhythmState &state,
