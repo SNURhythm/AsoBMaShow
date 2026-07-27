@@ -3,6 +3,8 @@
 #include "Base64Url.h"
 #include "BeatorajaLongNoteMode.h"
 #include "GzipCodec.h"
+#include "ReplayKeyMode.h"
+#include "ReplayOption.h"
 
 #include "../bms_parser.hpp"
 #include "../scene/play/GameplayScoreState.h"
@@ -10,7 +12,6 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -31,10 +32,6 @@ using Bytes = std::vector<std::byte>;
 
 constexpr int kAsoSchemaVersion = BeatorajaReplayCodec::kCodecVersion;
 constexpr std::size_t kKeyRecordSize = 9;
-constexpr std::array<std::string_view, 10> kStockOptions{
-    "NORMAL", "MIRROR",   "RANDOM",  "R-RANDOM",  "S-RANDOM",
-    "SPIRAL", "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX",
-};
 
 bool fail(std::string &diagnostic, std::string message) {
   diagnostic = std::move(message);
@@ -70,29 +67,6 @@ bool validJsonDepth(std::string_view source, std::size_t maximum,
   return true;
 }
 
-int playerCount(int keyMode) noexcept {
-  return keyMode == 10 || keyMode == 14 || keyMode == 48 ? 2 : 1;
-}
-
-std::optional<int> stockOptionIndex(std::string_view option) noexcept {
-  for (std::size_t index = 0; index < kStockOptions.size(); ++index) {
-    if (option == kStockOptions[index]) {
-      return static_cast<int>(index);
-    }
-  }
-  if (option.starts_with("ASSIGN:")) {
-    return 0;
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> stockOptionName(int index) {
-  if (index < 0 || index >= static_cast<int>(kStockOptions.size())) {
-    return std::nullopt;
-  }
-  return std::string(kStockOptions[static_cast<std::size_t>(index)]);
-}
-
 std::int64_t littleEndianInt64(std::span<const std::byte> value,
                                std::size_t offset) noexcept {
   std::uint64_t result = 0;
@@ -125,39 +99,23 @@ struct AssignmentLayout {
 };
 
 std::optional<AssignmentLayout> assignmentLayout(int keyMode) {
+  const auto keyLayout = replayKeyModeLayout(keyMode);
+  if (!keyLayout || !keyLayout->hasDirectionalScratch ||
+      keyLayout->manualAssignmentSymbols.empty()) {
+    return std::nullopt;
+  }
   AssignmentLayout result;
+  result.symbols = keyLayout->manualAssignmentSymbols;
   const auto addKeys = [&](int player, int count) {
     for (int index = 0; index < count; ++index) {
       result.controls.push_back(lane(player, index));
     }
   };
-  switch (keyMode) {
-  case 5:
-    result.symbols = "S12345";
-    result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 1));
-    addKeys(1, 5);
-    break;
-  case 7:
-    result.symbols = "S1234567";
-    result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 1));
-    addKeys(1, 7);
-    break;
-  case 10:
-    result.symbols = "L123456789AR";
-    result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 1));
-    addKeys(1, 5);
-    addKeys(2, 5);
+  result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 1));
+  addKeys(1, keyLayout->logicalLanesPerPlayer);
+  if (keyLayout->players == 2) {
+    addKeys(2, keyLayout->logicalLanesPerPlayer);
     result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 2));
-    break;
-  case 14:
-    result.symbols = "L123456789ABCDER";
-    result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 1));
-    addKeys(1, 7);
-    addKeys(2, 7);
-    result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 2));
-    break;
-  default:
-    return std::nullopt;
   }
   return result;
 }
@@ -760,8 +718,11 @@ bool decodeLaneShufflePatterns(const Json &stage, int keyMode,
     setup.player2.laneShufflePattern.reset();
     return true;
   }
-  const std::size_t expectedRows =
-      static_cast<std::size_t>(playerCount(keyMode));
+  const auto layout = replayKeyModeLayout(keyMode);
+  if (!layout) {
+    return fail(diagnostic, "Replay stock key mode is unsupported");
+  }
+  const std::size_t expectedRows = static_cast<std::size_t>(layout->players);
   if (!found->is_array() || found->size() != expectedRows) {
     return fail(diagnostic, "Replay stock lane-shuffle row count is invalid");
   }
@@ -816,8 +777,8 @@ bool decodeStockSetup(const Json &stage, int keyMode, bool course,
     return false;
   }
   const auto applicationMode = applicationLongNoteMode(stockMode);
-  const auto name1 = stockOptionName(option1);
-  const auto name2 = stockOptionName(option2);
+  const auto name1 = beatorajaReplayOptionName(option1);
+  const auto name2 = beatorajaReplayOptionName(option2);
   if (!applicationMode || !name1 || !name2 || gauge < 0 ||
       gauge >= static_cast<int>(kGaugeTypeCount) || doubleOption < 0 ||
       doubleOption > static_cast<int>(DoublePlayOption::Flip)) {
@@ -880,8 +841,9 @@ bool decodeStockSetup(const Json &stage, int keyMode, bool course,
         static_cast<int>(std::lround(cover * 100.0F));
     setup.laneCoverEnabled = enabled;
   }
-  if (setup.doublePlayOption == DoublePlayOption::Flip && keyMode != 10 &&
-      keyMode != 14) {
+  const auto layout = replayKeyModeLayout(keyMode);
+  if (setup.doublePlayOption == DoublePlayOption::Flip &&
+      (!layout || !layout->supportsDoublePlayFlip)) {
     return fail(diagnostic,
                 "Replay double-play option is invalid for its key mode");
   }
@@ -896,7 +858,8 @@ bool decodeStockSetup(const Json &stage, int keyMode, bool course,
 Json encodeStockLanePatterns(const ReplaySetup &setup) {
   Json output = Json::array();
   output.push_back(optionalJson(setup.player1.laneShufflePattern));
-  if (playerCount(setup.chart.keyMode) == 2) {
+  const auto layout = replayKeyModeLayout(setup.chart.keyMode);
+  if (layout && layout->players == 2) {
     output.push_back(optionalJson(setup.player2.laneShufflePattern));
   }
   return output;
@@ -919,8 +882,10 @@ encodeStage(const ReplayPlaybackData &playback, ReplayTimeBounds timeBounds,
     fail(diagnostic, "Replay stage fails canonical playback validation");
     return std::nullopt;
   }
-  const auto option1 = stockOptionIndex(playback.setup.player1.option);
-  const auto option2 = stockOptionIndex(playback.setup.player2.option);
+  const auto option1 =
+      projectedBeatorajaReplayOptionIndex(playback.setup.player1.option);
+  const auto option2 =
+      projectedBeatorajaReplayOptionIndex(playback.setup.player2.option);
   const auto stockMode = stockLongNoteMode(playback.setup.longNoteMode);
   if (!option1 || !option2 || !stockMode) {
     fail(diagnostic, "Replay setup cannot be represented by stock Beatoraja");
@@ -977,10 +942,14 @@ bool stockProjectionAgrees(const ReplaySetup &stock,
                            const ReplayPlaybackData &extension,
                            const ReplayLimits &limits,
                            std::string &diagnostic) {
-  const auto option1 = stockOptionIndex(extension.setup.player1.option);
-  const auto option2 = stockOptionIndex(extension.setup.player2.option);
-  const auto expected1 = option1 ? stockOptionName(*option1) : std::nullopt;
-  const auto expected2 = option2 ? stockOptionName(*option2) : std::nullopt;
+  const auto option1 =
+      projectedBeatorajaReplayOptionIndex(extension.setup.player1.option);
+  const auto option2 =
+      projectedBeatorajaReplayOptionIndex(extension.setup.player2.option);
+  const auto expected1 =
+      option1 ? beatorajaReplayOptionName(*option1) : std::nullopt;
+  const auto expected2 =
+      option2 ? beatorajaReplayOptionName(*option2) : std::nullopt;
   const auto stockMode = stockLongNoteMode(stock.longNoteMode);
   const auto extensionMode = stockLongNoteMode(extension.setup.longNoteMode);
   if (!expected1 || !expected2 || !stockMode || !extensionMode ||
@@ -1363,159 +1332,56 @@ BeatorajaReplayCodec::decode(std::span<const std::byte> encoded,
 std::optional<int>
 BeatorajaReplayCodec::beatorajaKeyCode(const LogicalControl &control,
                                        int keyMode) noexcept {
-  const auto scratchCode = [&](int clockwise1P,
-                               int clockwise2P) -> std::optional<int> {
-    if (control.lane != -1 || control.player < 1 ||
-        control.player > playerCount(keyMode)) {
-      return std::nullopt;
-    }
-    const int clockwise = control.player == 1 ? clockwise1P : clockwise2P;
-    if (clockwise < 0) {
-      return std::nullopt;
-    }
-    if (control.kind == LogicalControlKind::ScratchClockwise) {
-      return clockwise;
-    }
-    if (control.kind == LogicalControlKind::ScratchCounterClockwise) {
-      return clockwise + 1;
-    }
+  const auto layout = replayKeyModeLayout(keyMode);
+  if (!layout) {
     return std::nullopt;
-  };
-
+  }
+  if (control.player < 1 || control.player > layout->players) {
+    return std::nullopt;
+  }
+  const int playerWidth =
+      layout->logicalLanesPerPlayer + (layout->hasDirectionalScratch ? 2 : 0);
+  const int playerOffset = (control.player - 1) * playerWidth;
   if (control.kind == LogicalControlKind::Lane) {
-    if (control.player < 1 || control.player > playerCount(keyMode) ||
-        control.lane < 0) {
-      return std::nullopt;
-    }
-    switch (keyMode) {
-    case 5:
-      return control.player == 1 && control.lane < 5
-                 ? std::optional<int>(control.lane)
-                 : std::nullopt;
-    case 7:
-      return control.player == 1 && control.lane < 7
-                 ? std::optional<int>(control.lane)
-                 : std::nullopt;
-    case 9:
-      return control.player == 1 && control.lane < 9
-                 ? std::optional<int>(control.lane)
-                 : std::nullopt;
-    case 10:
-      return control.lane < 5
-                 ? std::optional<int>(control.lane +
-                                      (control.player == 2 ? 7 : 0))
-                 : std::nullopt;
-    case 14:
-      return control.lane < 7
-                 ? std::optional<int>(control.lane +
-                                      (control.player == 2 ? 9 : 0))
-                 : std::nullopt;
-    case 24:
-      return control.player == 1 && control.lane < 26
-                 ? std::optional<int>(control.lane)
-                 : std::nullopt;
-    case 48:
-      return control.lane < 26
-                 ? std::optional<int>(control.lane +
-                                      (control.player == 2 ? 26 : 0))
-                 : std::nullopt;
-    default:
-      return std::nullopt;
-    }
+    return control.lane >= 0 && control.lane < layout->logicalLanesPerPlayer
+               ? std::optional<int>(playerOffset + control.lane)
+               : std::nullopt;
   }
-  switch (keyMode) {
-  case 5:
-    return scratchCode(5, -1);
-  case 7:
-    return scratchCode(7, -1);
-  case 10:
-    return scratchCode(5, 12);
-  case 14:
-    return scratchCode(7, 16);
-  default:
+  if (control.lane != -1 || !layout->hasDirectionalScratch) {
     return std::nullopt;
   }
+  if (control.kind == LogicalControlKind::ScratchClockwise) {
+    return playerOffset + layout->logicalLanesPerPlayer;
+  }
+  if (control.kind == LogicalControlKind::ScratchCounterClockwise) {
+    return playerOffset + layout->logicalLanesPerPlayer + 1;
+  }
+  return std::nullopt;
 }
 
 std::optional<LogicalControl>
 BeatorajaReplayCodec::logicalControl(int keyCode, int keyMode) noexcept {
-  if (keyCode < 0) {
+  const auto layout = replayKeyModeLayout(keyMode);
+  if (!layout || keyCode < 0) {
     return std::nullopt;
   }
-  switch (keyMode) {
-  case 5:
-    if (keyCode < 5) {
-      return lane(1, keyCode);
-    }
-    if (keyCode == 5) {
-      return scratch(LogicalControlKind::ScratchClockwise, 1);
-    }
-    if (keyCode == 6) {
-      return scratch(LogicalControlKind::ScratchCounterClockwise, 1);
-    }
-    return std::nullopt;
-  case 7:
-    if (keyCode < 7) {
-      return lane(1, keyCode);
-    }
-    if (keyCode == 7) {
-      return scratch(LogicalControlKind::ScratchClockwise, 1);
-    }
-    if (keyCode == 8) {
-      return scratch(LogicalControlKind::ScratchCounterClockwise, 1);
-    }
-    return std::nullopt;
-  case 9:
-    return keyCode < 9 ? std::optional<LogicalControl>(lane(1, keyCode))
-                       : std::nullopt;
-  case 10:
-    if (keyCode < 5) {
-      return lane(1, keyCode);
-    }
-    if (keyCode == 5 || keyCode == 6) {
-      return scratch(keyCode == 5 ? LogicalControlKind::ScratchClockwise
-                                  : LogicalControlKind::ScratchCounterClockwise,
-                     1);
-    }
-    if (keyCode >= 7 && keyCode < 12) {
-      return lane(2, keyCode - 7);
-    }
-    if (keyCode == 12 || keyCode == 13) {
-      return scratch(keyCode == 12
-                         ? LogicalControlKind::ScratchClockwise
-                         : LogicalControlKind::ScratchCounterClockwise,
-                     2);
-    }
-    return std::nullopt;
-  case 14:
-    if (keyCode < 7) {
-      return lane(1, keyCode);
-    }
-    if (keyCode == 7 || keyCode == 8) {
-      return scratch(keyCode == 7 ? LogicalControlKind::ScratchClockwise
-                                  : LogicalControlKind::ScratchCounterClockwise,
-                     1);
-    }
-    if (keyCode >= 9 && keyCode < 16) {
-      return lane(2, keyCode - 9);
-    }
-    if (keyCode == 16 || keyCode == 17) {
-      return scratch(keyCode == 16
-                         ? LogicalControlKind::ScratchClockwise
-                         : LogicalControlKind::ScratchCounterClockwise,
-                     2);
-    }
-    return std::nullopt;
-  case 24:
-    return keyCode < 26 ? std::optional<LogicalControl>(lane(1, keyCode))
-                        : std::nullopt;
-  case 48:
-    return keyCode < 52 ? std::optional<LogicalControl>(
-                              lane(keyCode < 26 ? 1 : 2, keyCode % 26))
-                        : std::nullopt;
-  default:
+  const int playerWidth =
+      layout->logicalLanesPerPlayer + (layout->hasDirectionalScratch ? 2 : 0);
+  const int player = keyCode / playerWidth + 1;
+  const int offset = keyCode % playerWidth;
+  if (player > layout->players) {
     return std::nullopt;
   }
+  if (offset < layout->logicalLanesPerPlayer) {
+    return lane(player, offset);
+  }
+  if (!layout->hasDirectionalScratch) {
+    return std::nullopt;
+  }
+  return scratch(offset == layout->logicalLanesPerPlayer
+                     ? LogicalControlKind::ScratchClockwise
+                     : LogicalControlKind::ScratchCounterClockwise,
+                 player);
 }
 
 } // namespace replay

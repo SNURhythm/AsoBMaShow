@@ -1,5 +1,7 @@
 #include "ReplayPlayback.h"
 
+#include "ReplayKeyMode.h"
+
 #include <array>
 #include <cmath>
 #include <optional>
@@ -11,49 +13,22 @@ ReplayPlaybackValidation invalid(ReplayPlaybackIssue issue) noexcept {
   return {.issue = issue};
 }
 
-int playerCount(int keyMode) noexcept {
-  return keyMode == 10 || keyMode == 14 || keyMode == 48 ? 2 : 1;
-}
-
-int laneCountPerPlayer(int keyMode) noexcept {
-  switch (keyMode) {
-  case 5:
-  case 10:
-    return 5;
-  case 7:
-  case 14:
-    return 7;
-  case 9:
-    return 9;
-  case 24:
-  case 48:
-    return 26;
-  default:
-    return 0;
-  }
-}
-
-bool scratchMode(int keyMode) noexcept {
-  return keyMode == 5 || keyMode == 7 || keyMode == 10 || keyMode == 14;
-}
-
 bool scratchKind(LogicalControlKind kind) noexcept {
   return kind == LogicalControlKind::ScratchClockwise ||
          kind == LogicalControlKind::ScratchCounterClockwise;
 }
 
 bool validControl(const LogicalControl &control, int keyMode) noexcept {
-  const int players = playerCount(keyMode);
-  if (control.player < 1 || control.player > players) {
+  const auto layout = replayKeyModeLayout(keyMode);
+  if (!layout || control.player < 1 || control.player > layout->players) {
     return false;
   }
   switch (control.kind) {
   case LogicalControlKind::Lane:
-    return control.lane >= 0 &&
-           control.lane < laneCountPerPlayer(keyMode);
+    return control.lane >= 0 && control.lane < layout->logicalLanesPerPlayer;
   case LogicalControlKind::ScratchClockwise:
   case LogicalControlKind::ScratchCounterClockwise:
-    return scratchMode(keyMode) && control.lane == -1;
+    return layout->hasDirectionalScratch && control.lane == -1;
   case LogicalControlKind::Start:
   case LogicalControlKind::Select:
     return control.lane == -1;
@@ -83,9 +58,9 @@ struct PendingScratchHandoff {
   bool active = false;
 };
 
-ReplayPlaybackIssue validateInput(
-    std::span<const InputTransition> input, int keyMode,
-    ReplayTimeBounds bounds, const ReplayLimits &limits) noexcept {
+ReplayPlaybackIssue validateInput(std::span<const InputTransition> input,
+                                  int keyMode, ReplayTimeBounds bounds,
+                                  const ReplayLimits &limits) noexcept {
   if (!withinReplayCountLimit(input.size(), limits.maxInputTransitions)) {
     return ReplayPlaybackIssue::InputCount;
   }
@@ -128,8 +103,7 @@ ReplayPlaybackIssue validateInput(
       auto &active = activeScratch[static_cast<std::size_t>(player)];
       auto &handoff = pending[static_cast<std::size_t>(player)];
       if (!transition.pressed) {
-        if (handoff.active || !active ||
-            *active != transition.control.kind) {
+        if (handoff.active || !active || *active != transition.control.kind) {
           return ReplayPlaybackIssue::ScratchHandoff;
         }
         handoff = {.songTimeMicros = transition.songTimeMicros,
@@ -179,9 +153,9 @@ bool validTouchAction(ReplayTouchAction action) noexcept {
   return false;
 }
 
-ReplayPlaybackIssue validateTouch(
-    std::span<const ReplayTouchSample> samples, ReplayTimeBounds bounds,
-    const ReplayLimits &limits) noexcept {
+ReplayPlaybackIssue validateTouch(std::span<const ReplayTouchSample> samples,
+                                  ReplayTimeBounds bounds,
+                                  const ReplayLimits &limits) noexcept {
   if (!withinReplayCountLimit(samples.size(), limits.maxTouchSamples)) {
     return ReplayPlaybackIssue::TouchCount;
   }
@@ -208,9 +182,10 @@ ReplayPlaybackIssue validateTouch(
   return ReplayPlaybackIssue::None;
 }
 
-ReplayPlaybackIssue validateLaneCover(
-    std::span<const ReplayLaneCoverEvent> events, ReplayTimeBounds bounds,
-    const ReplayLimits &limits) noexcept {
+ReplayPlaybackIssue
+validateLaneCover(std::span<const ReplayLaneCoverEvent> events,
+                  ReplayTimeBounds bounds,
+                  const ReplayLimits &limits) noexcept {
   if (!withinReplayCountLimit(events.size(), limits.maxLaneCoverEvents)) {
     return ReplayPlaybackIssue::LaneCoverCount;
   }
@@ -235,13 +210,13 @@ ReplayPlaybackIssue validateLaneCover(
 
 } // namespace
 
-ReplayPlaybackValidation validateReplayPlayback(
-    const ReplayPlaybackData &data, ReplaySetupSource source,
-    ReplayTimeBounds timeBounds, const ReplayLimits &limits) {
+ReplayPlaybackValidation validateReplayPlayback(const ReplayPlaybackData &data,
+                                                ReplaySetupSource source,
+                                                ReplayTimeBounds timeBounds,
+                                                const ReplayLimits &limits) {
   const auto setup = validateReplaySetup(data.setup, source, limits);
   if (!setup.valid()) {
-    return {.issue = ReplayPlaybackIssue::Setup,
-            .setupIssue = setup.issue};
+    return {.issue = ReplayPlaybackIssue::Setup, .setupIssue = setup.issue};
   }
   if (!timeBounds.valid()) {
     return invalid(ReplayPlaybackIssue::TimeBounds);
@@ -263,11 +238,11 @@ ReplayPlaybackValidation validateReplayPlayback(
   return {};
 }
 
-ReplayPlaybackValidation validateCourseReplayPlayback(
-    const CourseReplayPlaybackData &data,
-    std::span<const ReplaySetupSource> sources,
-    std::span<const ReplayTimeBounds> timeBounds,
-    const ReplayLimits &limits) {
+ReplayPlaybackValidation
+validateCourseReplayPlayback(const CourseReplayPlaybackData &data,
+                             std::span<const ReplaySetupSource> sources,
+                             std::span<const ReplayTimeBounds> timeBounds,
+                             const ReplayLimits &limits) {
   if (!limits.valid() || data.stages.empty() ||
       !withinReplayCountLimit(data.stages.size(), limits.maxCourseStages)) {
     return invalid(ReplayPlaybackIssue::CourseStageCount);
@@ -285,8 +260,7 @@ ReplayPlaybackValidation validateCourseReplayPlayback(
       return stage;
     }
     if (!validCourseRestMicros(data.restMicrosAfterStage[index], limits)) {
-      return {.issue = ReplayPlaybackIssue::CourseRest,
-              .stageIndex = index};
+      return {.issue = ReplayPlaybackIssue::CourseRest, .stageIndex = index};
     }
   }
   return {};

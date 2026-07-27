@@ -1,8 +1,10 @@
 #include "BeatorajaReplayPath.h"
 
 #include "BeatorajaLongNoteMode.h"
+#include "ReplayFormat.h"
 
 #include <array>
+#include <charconv>
 #include <limits>
 #include <ranges>
 
@@ -13,12 +15,6 @@ constexpr std::array<std::string_view, 3> kLongNotePrefixes{"", "C", "H"};
 constexpr std::size_t kReplayExtensionBytes = 4;
 constexpr std::size_t kMaximumHistorySuffixBytes =
     1 + std::numeric_limits<std::int64_t>::digits10 + 1 + kReplayExtensionBytes;
-
-bool isLowerSha256(std::string_view value) noexcept {
-  return value.size() == 64 && std::ranges::all_of(value, [](unsigned char ch) {
-           return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
-         });
-}
 
 std::optional<std::string_view> longNotePrefix(int longNoteMode,
                                                bool hasUndefinedLongNotes,
@@ -34,7 +30,27 @@ std::optional<std::string_view> longNotePrefix(int longNoteMode,
   return kLongNotePrefixes[static_cast<std::size_t>(*stockMode)];
 }
 
-bool isCanonicalStem(std::string_view stem) noexcept {
+bool isCanonicalConstraintSuffix(std::string_view constraints) noexcept {
+  if (constraints.empty() || constraints.size() % 2 != 0) {
+    return false;
+  }
+  for (std::size_t offset = 0; offset < constraints.size(); offset += 2) {
+    const char tens = constraints[offset];
+    const char ones = constraints[offset + 1];
+    if (tens < '0' || tens > '9' || ones < '0' || ones > '9') {
+      return false;
+    }
+    const int id = (tens - '0') * 10 + (ones - '0');
+    if (id <= kBeatorajaLastExcludedCourseMarkerId ||
+        id > kBeatorajaLastConstraintId) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isCanonicalStem(std::string_view stem,
+                     const ReplayLimits &limits) noexcept {
   if (stem.empty()) {
     return false;
   }
@@ -43,19 +59,17 @@ bool isCanonicalStem(std::string_view stem) noexcept {
   }
   const std::size_t separator = stem.find('_');
   const std::string_view hashes = stem.substr(0, separator);
-  if (hashes.size() < 10 || !std::ranges::all_of(hashes, [](unsigned char ch) {
-        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
-      })) {
+  const bool chart = isCanonicalLowerHex(hashes, 64);
+  const bool course = hashes.size() >= 10 && hashes.size() % 10 == 0 &&
+                      hashes.size() / 10 <= limits.maxCourseStages &&
+                      isCanonicalLowerHex(hashes, hashes.size());
+  if (!chart && !course) {
     return false;
   }
   if (separator == std::string_view::npos) {
     return true;
   }
-  const std::string_view constraints = stem.substr(separator + 1);
-  return !constraints.empty() && constraints.size() % 2 == 0 &&
-         std::ranges::all_of(constraints, [](unsigned char ch) {
-           return ch >= '0' && ch <= '9';
-         });
+  return course && isCanonicalConstraintSuffix(stem.substr(separator + 1));
 }
 
 void appendTwoDigits(std::string &value, int number) {
@@ -71,7 +85,7 @@ std::optional<std::string> chartStem(std::string_view lowerSha256,
                                      std::string &diagnostic,
                                      const ReplayLimits &limits) {
   diagnostic.clear();
-  if (!limits.valid() || !isLowerSha256(lowerSha256)) {
+  if (!limits.valid() || !isCanonicalLowerHex(lowerSha256, 64)) {
     diagnostic = "Replay chart SHA-256 must be canonical lowercase hex";
     return std::nullopt;
   }
@@ -120,7 +134,7 @@ std::optional<std::string> courseStem(const CoursePathInput &input,
   result.reserve(prefix->size() + input.stageSha256.size() * 10 +
                  input.beatorajaConstraintIds.size() * 2 + 1);
   for (const auto &sha256 : input.stageSha256) {
-    if (!isLowerSha256(sha256)) {
+    if (!isCanonicalLowerHex(sha256, 64)) {
       diagnostic =
           "Replay course stage SHA-256 must be canonical lowercase hex";
       return std::nullopt;
@@ -170,7 +184,7 @@ std::optional<ReplayPathIdentity> pathForStem(std::string_view stem,
                                               std::string &diagnostic,
                                               const ReplayLimits &limits) {
   diagnostic.clear();
-  if (!limits.valid() || !isCanonicalStem(stem)) {
+  if (!limits.valid() || !isCanonicalStem(stem, limits)) {
     diagnostic = "Replay filename stem is not canonical";
     return std::nullopt;
   }
@@ -193,6 +207,54 @@ std::optional<ReplayPathIdentity> pathForStem(std::string_view stem,
       .historyIndex = historyIndex,
       .relativePath = std::filesystem::path("replay") / filename,
   };
+}
+
+bool isCanonicalReplayRelativePath(const std::filesystem::path &relativePath,
+                                   std::string &diagnostic,
+                                   const ReplayLimits &limits) {
+  diagnostic.clear();
+  if (!limits.valid() || relativePath.empty() || relativePath.is_absolute() ||
+      relativePath.has_root_path() ||
+      relativePath.lexically_normal() != relativePath ||
+      relativePath.parent_path() != "replay") {
+    diagnostic = "Replay path is outside the contained replay directory";
+    return false;
+  }
+  const std::string filename = relativePath.filename().string();
+  if (filename.empty() || filename.size() > limits.maxFilenameBytes ||
+      !filename.ends_with(".brd") || filename.contains('/') ||
+      filename.contains('\\')) {
+    diagnostic = "Replay filename is not canonical";
+    return false;
+  }
+
+  std::string_view stem(filename);
+  stem.remove_suffix(kReplayExtensionBytes);
+  std::string rebuildDiagnostic;
+  if (const auto direct = pathForStem(stem, 0, rebuildDiagnostic, limits);
+      direct && direct->relativePath == relativePath) {
+    return true;
+  }
+
+  const std::size_t separator = stem.rfind('_');
+  if (separator != std::string_view::npos && separator + 1 < stem.size()) {
+    const std::string_view historyText = stem.substr(separator + 1);
+    std::int64_t historyIndex = 0;
+    const auto [end, error] =
+        std::from_chars(historyText.data(),
+                        historyText.data() + historyText.size(), historyIndex);
+    if (error == std::errc{} &&
+        end == historyText.data() + historyText.size() && historyIndex > 0) {
+      if (const auto history =
+              pathForStem(stem.substr(0, separator), historyIndex,
+                          rebuildDiagnostic, limits);
+          history && history->relativePath == relativePath) {
+        return true;
+      }
+    }
+  }
+  diagnostic = "Replay path does not match the Beatoraja path grammar";
+  return false;
 }
 
 } // namespace replay

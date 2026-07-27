@@ -749,6 +749,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_limits_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_format_authority_tests
+        tests/replay_format_authority_tests.cpp
+    )
+    target_include_directories(replay_format_authority_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_format_authority_tests PRIVATE cxx_std_23)
+
     add_executable(replay_setup_tests
         tests/replay_setup_tests.cpp
         src/replay/ReplaySetup.cpp
@@ -802,6 +810,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_file_lifecycle_tests
         tests/replay_file_lifecycle_tests.cpp
+        src/replay/BeatorajaReplayPath.cpp
         src/replay/ReplayFileLifecycle.cpp
     )
     target_include_directories(replay_file_lifecycle_tests PRIVATE
@@ -2953,6 +2962,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         replay_capabilities_tests
         replay_limits_tests
+        replay_format_authority_tests
         replay_setup_tests
         beatoraja_replay_path_tests
         replay_codec_primitive_tests

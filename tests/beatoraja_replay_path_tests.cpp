@@ -120,6 +120,23 @@ void testMalformedAndUnsafeIdentityFailsClosed() {
          "formatted filename cannot exceed the shared byte limit");
 }
 
+void testRelativePathValidationSharesBuilderGrammar() {
+  std::string diagnostic;
+  const auto stem = replay::chartStem(kShaA, 1, false, diagnostic);
+  const auto canonical = replay::pathForStem(*stem, 17, diagnostic);
+  expect(canonical && replay::isCanonicalReplayRelativePath(
+                          canonical->relativePath, diagnostic),
+         "builder output is accepted by the shared relative-path validator");
+  for (const auto &unsafe :
+       {std::filesystem::path("replay/not-a-stock-stem.brd"),
+        std::filesystem::path("../replay/") / (std::string(kShaA) + ".brd"),
+        std::filesystem::path("replay/nested") / (std::string(kShaA) + ".brd"),
+        std::filesystem::absolute(std::string(kShaA) + ".brd")}) {
+    expect(!replay::isCanonicalReplayRelativePath(unsafe, diagnostic),
+           "metadata path outside builder grammar is rejected");
+  }
+}
+
 void testStemMatchingUsesParsedLongNoteContext() {
   std::string diagnostic;
   expect(
@@ -164,6 +181,7 @@ int main() {
   testCoursePathAndConstraintProjection();
   testPlaybackStageLimitIsNotAPathLimit();
   testMalformedAndUnsafeIdentityFailsClosed();
+  testRelativePathValidationSharesBuilderGrammar();
   testStemMatchingUsesParsedLongNoteContext();
   testUndefinedLongNoteDetectionIncludesBackspins();
   if (failures != 0) {

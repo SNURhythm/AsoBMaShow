@@ -1,6 +1,7 @@
 #include "ReplayFileStore.h"
 
 #include "BeatorajaReplayCodec.h"
+#include "ReplayFormat.h"
 #include "../AtomicFile.h"
 #include "../FileChecksum.h"
 
@@ -20,13 +21,6 @@ constexpr std::size_t kAttemptDigestBytes = 64;
 constexpr std::size_t kContentDigestPrefixBytes = 16;
 constexpr std::string_view kTemporarySuffix = ".tmp";
 
-bool canonicalHex(std::string_view value, std::size_t size) noexcept {
-  return value.size() == size &&
-         std::ranges::all_of(value, [](unsigned char ch) {
-           return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
-         });
-}
-
 std::string hashBytes(std::span<const std::byte> bytes) {
   return file_checksum::sha256(
       {reinterpret_cast<const char *>(bytes.data()), bytes.size()});
@@ -38,19 +32,6 @@ bool canonicalIdentity(const ReplayPathIdentity &identity,
   const auto rebuilt =
       pathForStem(identity.stem, identity.historyIndex, diagnostic, limits);
   return rebuilt && *rebuilt == identity;
-}
-
-bool safeRelativePath(const std::filesystem::path &path,
-                      const ReplayLimits &limits) {
-  if (path.empty() || path.is_absolute() || path.has_root_path() ||
-      path.lexically_normal() != path || path.parent_path() != "replay") {
-    return false;
-  }
-  const std::string filename = path.filename().string();
-  return !filename.empty() && filename.size() <= limits.maxFilenameBytes &&
-         filename.ends_with(".brd") &&
-         filename.find('/') == std::string::npos &&
-         filename.find('\\') == std::string::npos;
 }
 
 bool safeTemporaryRelativePath(const std::filesystem::path &path) {
@@ -163,8 +144,11 @@ ReplayFileInspection inspectAt(const std::filesystem::path &profileRoot,
                                const ReplayFileMetadata &metadata,
                                const ReplayLimits &limits) {
   ReplayFileInspection outcome;
-  if (!safeRelativePath(metadata.relativePath, limits) ||
-      !canonicalHex(metadata.sha256, 64) || metadata.compressedSize == 0 ||
+  std::string pathDiagnostic;
+  if (!isCanonicalReplayRelativePath(metadata.relativePath, pathDiagnostic,
+                                     limits) ||
+      !isCanonicalLowerHex(metadata.sha256, 64) ||
+      metadata.compressedSize == 0 ||
       metadata.compressedSize > limits.maxCompressedBytes ||
       metadata.codecVersion <= 0) {
     outcome.state = ReplayFileState::Unsafe;
@@ -286,8 +270,8 @@ bool isPrivateReplayTemporaryFilename(std::string_view filename) noexcept {
   const std::string_view content =
       filename.substr(0, kContentDigestPrefixBytes);
   filename.remove_prefix(kContentDigestPrefixBytes);
-  return canonicalHex(attempt, kAttemptDigestBytes) &&
-         canonicalHex(content, kContentDigestPrefixBytes) &&
+  return isCanonicalLowerHex(attempt, kAttemptDigestBytes) &&
+         isCanonicalLowerHex(content, kContentDigestPrefixBytes) &&
          filename == kTemporarySuffix;
 }
 
@@ -570,7 +554,8 @@ bool ReplayFileStore::removeIfMatches(const ReplayFileMetadata &metadata,
 bool ReplayFileStore::removeReferencedEntry(const ReplayFileMetadata &metadata,
                                             std::string &diagnostic) const {
   diagnostic.clear();
-  if (!safeRelativePath(metadata.relativePath, limits_)) {
+  if (!isCanonicalReplayRelativePath(metadata.relativePath, diagnostic,
+                                     limits_)) {
     diagnostic = "Replay metadata path is unsafe";
     return false;
   }

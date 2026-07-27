@@ -57,4 +57,9 @@ pathForStem(std::string_view stem, std::int64_t historyIndex,
             std::string &diagnostic,
             const ReplayLimits &limits = kReplayLimits);
 
+[[nodiscard]] bool
+isCanonicalReplayRelativePath(const std::filesystem::path &relativePath,
+                              std::string &diagnostic,
+                              const ReplayLimits &limits = kReplayLimits);
+
 } // namespace replay

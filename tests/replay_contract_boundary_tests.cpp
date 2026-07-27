@@ -61,6 +61,15 @@ void rejectTokens(const std::filesystem::path &path,
   }
 }
 
+void requireToken(const std::filesystem::path &path, std::string_view token,
+                  std::string_view authority) {
+  if (!readText(path).contains(token)) {
+    std::cerr << "FAIL: " << path.filename().string() << " bypasses shared "
+              << authority << '\n';
+    ++failures;
+  }
+}
+
 void testPlaybackSetupBoundary() {
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
   constexpr std::array<std::string_view, 12> forbidden{
@@ -111,12 +120,31 @@ void testCodecAndFileBoundary() {
   rejectTokens(root / "src/replay/ReplayFileStore.cpp", storeForbidden);
 }
 
+void testSharedFormatAuthorities() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  requireToken(root / "src/replay/ReplaySetup.cpp",
+               "validReplayPlayerOptionName", "replay option authority");
+  requireToken(root / "src/replay/ReplayPlayback.cpp", "replayKeyModeLayout",
+               "replay key-mode authority");
+  requireToken(root / "src/replay/BeatorajaReplayCodec.cpp",
+               "projectedBeatorajaReplayOptionIndex",
+               "stock option projection authority");
+  requireToken(root / "src/replay/ReplayFileStore.cpp",
+               "isCanonicalReplayRelativePath", "replay path authority");
+  requireToken(root / "src/PlayOptionUtils.h",
+               "kPlayOptions = replay::kBeatorajaReplayOptions",
+               "application and replay option table");
+  requireToken(root / "src/AppSettings.cpp", "beatorajaReplayOptionIndex",
+               "settings and replay option validation");
+}
+
 } // namespace
 
 int main() {
   testPlaybackSetupBoundary();
   testCapabilityPolicyBoundary();
   testCodecAndFileBoundary();
+  testSharedFormatAuthorities();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;

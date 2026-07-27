@@ -5,6 +5,7 @@
 #include "ReplayData.h"
 #include "bms_parser.hpp"
 #include "path.h"
+#include "replay/ReplayOption.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -33,9 +34,7 @@ struct PlayModeDisplayLabel {
   std::string laneOrder;
 };
 
-inline constexpr std::array<const char *, 10> kPlayOptions = {
-    "NORMAL", "MIRROR",   "RANDOM",  "R-RANDOM",  "S-RANDOM",
-    "SPIRAL", "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX"};
+inline constexpr auto kPlayOptions = replay::kBeatorajaReplayOptions;
 
 inline void trimOptionWhitespace(std::string &value) {
   value.erase(value.begin(),
@@ -144,7 +143,7 @@ inline std::string normalizePlayOption(std::string option) {
   if (option == "OFF") {
     return "NORMAL";
   }
-  for (const char *candidate : kPlayOptions) {
+  for (std::string_view candidate : kPlayOptions) {
     if (option == candidate) {
       return option;
     }

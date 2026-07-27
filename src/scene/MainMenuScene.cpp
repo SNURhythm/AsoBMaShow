@@ -8179,9 +8179,10 @@ void MainMenuScene::buildReplayModal() {
   };
   addFilterButton(filterRow, filterIndex, 4,
                   makePlayOptionFilterButton("All", std::nullopt));
-  for (const char *option : play_options::kPlayOptions) {
+  for (std::string_view option : play_options::kPlayOptions) {
+    const std::string optionName(option);
     addFilterButton(filterRow, filterIndex, 4,
-                    makePlayOptionFilterButton(option, std::string(option)));
+                    makePlayOptionFilterButton(optionName, optionName));
   }
 
   filterContent->addView(makeModalLabel("Score Rank"));

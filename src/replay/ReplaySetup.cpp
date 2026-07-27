@@ -1,80 +1,27 @@
 #include "ReplaySetup.h"
 
+#include "ReplayFormat.h"
+#include "ReplayKeyMode.h"
+#include "ReplayOption.h"
+
 #include "../bms_parser.hpp"
 #include "../scene/play/GameplayAttemptSetup.h"
 
 #include <algorithm>
-#include <array>
 #include <ranges>
-#include <string_view>
 
 namespace replay {
 namespace {
 
-bool canonicalHex(std::string_view value, std::size_t size) noexcept {
-  return value.size() == size &&
-         std::ranges::all_of(value, [](unsigned char ch) {
-           return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
-         });
-}
-
-bool supportedKeyMode(int keyMode) noexcept {
-  constexpr std::array modes{5, 7, 9, 10, 14, 24, 48};
-  return std::ranges::find(modes, keyMode) != modes.end();
-}
-
 bool enumBetween(int value, int first, int last) noexcept {
   return value >= first && value <= last;
-}
-
-std::string_view assignmentSymbols(int keyMode) noexcept {
-  switch (keyMode) {
-  case 5:
-    return "S12345";
-  case 7:
-    return "S1234567";
-  case 10:
-    return "L123456789AR";
-  case 14:
-    return "L123456789ABCDER";
-  default:
-    return {};
-  }
-}
-
-bool validManualOption(std::string_view option, int keyMode) noexcept {
-  constexpr std::string_view prefix = "ASSIGN:";
-  if (!option.starts_with(prefix)) {
-    return false;
-  }
-  const std::string_view symbols = assignmentSymbols(keyMode);
-  const std::string_view notation = option.substr(prefix.size());
-  if (symbols.empty() || notation.size() != symbols.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < notation.size(); ++index) {
-    if (!symbols.contains(notation[index]) ||
-        notation.find(notation[index]) != index) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool validStockOption(std::string_view option) noexcept {
-  constexpr std::array<std::string_view, 10> options{
-      "NORMAL", "MIRROR",   "RANDOM",  "R-RANDOM",  "S-RANDOM",
-      "SPIRAL", "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX",
-  };
-  return std::ranges::find(options, option) != options.end();
 }
 
 bool validOption(const ReplayPlayerOption &option, int keyMode,
                  const ReplayLimits &limits) noexcept {
   return option.option.size() <= limits.maxStringBytes &&
          (!option.seed.has_value() || *option.seed >= 0) &&
-         (validStockOption(option.option) ||
-          validManualOption(option.option, keyMode));
+         validReplayPlayerOptionName(option.option, keyMode);
 }
 
 bool optionsCompatible(const ReplayPlayerOption &first,
@@ -93,34 +40,19 @@ bool optionsCompatible(const ReplayPlayerOption &first,
   return true;
 }
 
-std::size_t laneShuffleSize(int keyMode) noexcept {
-  switch (keyMode) {
-  case 5:
-  case 10:
-    return 6;
-  case 7:
-  case 14:
-    return 8;
-  case 9:
-    return 9;
-  case 24:
-  case 48:
-    return 26;
-  default:
-    return 0;
-  }
-}
-
 bool validLaneShufflePattern(const ReplayPlayerOption &option,
                              int keyMode) noexcept {
   if (!option.laneShufflePattern.has_value()) {
     return true;
   }
   const auto &pattern = *option.laneShufflePattern;
-  const std::size_t expected = laneShuffleSize(keyMode);
-  if (expected == 0 || pattern.size() != expected) {
+  const auto layout = replayKeyModeLayout(keyMode);
+  if (!layout ||
+      pattern.size() != static_cast<std::size_t>(layout->stockShuffleWidth)) {
     return false;
   }
+  const std::size_t expected =
+      static_cast<std::size_t>(layout->stockShuffleWidth);
   std::vector<bool> seen(expected, false);
   for (const int lane : pattern) {
     if (lane < 0 || static_cast<std::size_t>(lane) >= expected ||
@@ -149,15 +81,15 @@ ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
   if (!limits.valid()) {
     return invalid(ReplaySetupIssue::Limits);
   }
-  if (!canonicalHex(setup.chart.sha256, 64)) {
+  if (!isCanonicalLowerHex(setup.chart.sha256, 64)) {
     return invalid(ReplaySetupIssue::ChartSha256);
   }
   const bool md5Required = source != ReplaySetupSource::StockBeatoraja;
-  if ((md5Required && !canonicalHex(setup.chart.md5, 32)) ||
-      (!setup.chart.md5.empty() && !canonicalHex(setup.chart.md5, 32))) {
+  if ((md5Required && !isCanonicalLowerHex(setup.chart.md5, 32)) ||
+      (!setup.chart.md5.empty() && !isCanonicalLowerHex(setup.chart.md5, 32))) {
     return invalid(ReplaySetupIssue::ChartMd5);
   }
-  if (!supportedKeyMode(setup.chart.keyMode)) {
+  if (!replayKeyModeLayout(setup.chart.keyMode)) {
     return invalid(ReplaySetupIssue::KeyMode);
   }
   if (setup.longNoteMode < 0 || setup.longNoteMode > 3 ||
@@ -186,10 +118,11 @@ ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
     return invalid(ReplaySetupIssue::LaneShufflePattern);
   }
   const int doublePlayOption = static_cast<int>(setup.doublePlayOption);
+  const auto keyModeLayout = replayKeyModeLayout(setup.chart.keyMode);
   if (!enumBetween(doublePlayOption, static_cast<int>(DoublePlayOption::Normal),
                    static_cast<int>(DoublePlayOption::Flip)) ||
       (setup.doublePlayOption == DoublePlayOption::Flip &&
-       setup.chart.keyMode != 10 && setup.chart.keyMode != 14)) {
+       (!keyModeLayout || !keyModeLayout->supportsDoublePlayFlip))) {
     return invalid(ReplaySetupIssue::DoublePlayOption);
   }
   if (setup.assistOption.size() > limits.maxStringBytes ||

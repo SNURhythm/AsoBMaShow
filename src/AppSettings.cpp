@@ -1,5 +1,6 @@
 #include "AppSettings.h"
 #include "LongNoteModeUtils.h"
+#include "replay/ReplayOption.h"
 #include "scene/play/GameplayRuleset.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -352,11 +353,7 @@ std::string normalizePlayOptionId(std::string value) {
 std::string parsePlayOptionId(const std::string &value,
                               const std::string &fallback) {
   const std::string normalized = normalizePlayOptionId(value);
-  if (normalized == "NORMAL" || normalized == "MIRROR" ||
-      normalized == "RANDOM" || normalized == "R-RANDOM" ||
-      normalized == "S-RANDOM" || normalized == "SPIRAL" ||
-      normalized == "H-RANDOM" || normalized == "ALL-SCR" ||
-      normalized == "RANDOM-EX" || normalized == "S-RANDOM-EX") {
+  if (replay::beatorajaReplayOptionIndex(normalized)) {
     return normalized;
   }
   return fallback;

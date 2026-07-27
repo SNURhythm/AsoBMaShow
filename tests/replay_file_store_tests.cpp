@@ -116,6 +116,15 @@ void testContainmentAndSymlinksFailClosed() {
   expect(!store.reserve(identity(), payload, "").reservation,
          "empty attempt token cannot reserve a file");
 
+  replay::ReplayFileMetadata nonCanonical{
+      .relativePath = "replay/not-a-stock-stem.brd",
+      .sha256 = std::string(64, 'a'),
+      .compressedSize = 1,
+      .codecVersion = 3,
+  };
+  expect(store.inspect(nonCanonical).state == replay::ReplayFileState::Unsafe,
+         "metadata inspection uses the same path grammar as reservation");
+
   TempDirectory outside;
   std::filesystem::create_directory_symlink(outside.path,
                                             profile.path / "replay");

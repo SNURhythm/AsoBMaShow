@@ -1,22 +1,20 @@
 #include "ReplayFileLifecycle.h"
 
-#include <algorithm>
+#include "BeatorajaReplayPath.h"
+#include "ReplayFormat.h"
+
 #include <string_view>
 
 namespace replay {
 namespace {
 
-bool canonicalSha256(std::string_view value) noexcept {
-  return value.size() == 64 && std::ranges::all_of(value, [](unsigned char ch) {
-           return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
-         });
-}
-
 bool validReceipt(const ReplayFileOwnershipReceipt &receipt,
-                  std::string_view attemptToken) noexcept {
+                  std::string_view attemptToken) {
+  std::string diagnostic;
   return !attemptToken.empty() && receipt.attemptToken == attemptToken &&
-         !receipt.metadata.relativePath.empty() &&
-         canonicalSha256(receipt.metadata.sha256) &&
+         isCanonicalReplayRelativePath(receipt.metadata.relativePath,
+                                       diagnostic) &&
+         isCanonicalLowerHex(receipt.metadata.sha256, 64) &&
          receipt.metadata.compressedSize > 0 &&
          receipt.metadata.codecVersion > 0;
 }
