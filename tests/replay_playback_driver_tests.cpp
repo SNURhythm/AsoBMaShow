@@ -1,5 +1,6 @@
 #include "replay/ReplayPlaybackDriver.h"
 #include "replay/ReplayPlaybackMaterializer.h"
+#include "replay/ReplaySetupAdapter.h"
 
 #include "ReplayData.h"
 #include "ScoreProvenance.h"
@@ -173,6 +174,54 @@ void testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement() {
   expect(matched.replayData && matched.replayData->touchSamples.size() == 1 &&
              matched.replayData->laneCoverEvents.size() == 1,
          "consumer track preserves BRD-owned touch and lane-cover streams");
+}
+
+void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
+  auto replay = document();
+  replay.playback.setup.chartRandomSeed = 42;
+  replay.playback.setup.chartRandomPrng = bms_parser::Parser::RandomPrngId;
+  replay.playback.setup.chartRandomValues = {2, 1, 3};
+  replay.playback.setup.player1 = {.option = "RANDOM", .seed = 1234};
+  replay.playback.setup.player2 = {.option = "MIRROR", .seed = 5678};
+  replay.playback.setup.assistOption = assist_options::kAutoScratch;
+  replay.playback.setup.initialGaugeType = GaugeType::Hard;
+  replay.playback.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  replay.playback.setup.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  replay.playback.setup.doublePlayOption = DoublePlayOption::Flip;
+  replay.playback.setup.playback = {
+      .percent = 125, .mode = audio::PlaybackMode::TimeStretch};
+  replay.playback.setup.clubMode = true;
+  auto provenance = savedResult().score.provenance;
+  provenance.doublePlayFlip = true;
+  provenance.playback = replay.playback.setup.playback;
+  provenance.clubMode = true;
+
+  bms_parser::ChartMeta meta;
+  meta.BmsPath = "library/chart.bms";
+  meta.MD5 = replay.playback.setup.chart.md5;
+  meta.SHA256 = replay.playback.setup.chart.sha256;
+  meta.KeyMode = 14;
+  replay.playback.setup.chart.keyMode = 14;
+  std::string diagnostic;
+  const auto translated = makeReplayDataFromSetup(
+      replay.playback.setup, provenance, meta, diagnostic);
+  expect(translated.has_value() && translated->randomSeed == 42 &&
+             translated->randomPrng == bms_parser::Parser::RandomPrngId &&
+             translated->randomValues == std::vector<int>({2, 1, 3}) &&
+             translated->playOption == "RANDOM" &&
+             translated->playOptionSeed == 1234 &&
+             translated->playOption2 == "MIRROR" &&
+             translated->playOption2Seed == 5678 &&
+             translated->assistOption == assist_options::kAutoScratch &&
+             translated->initialGaugeType == GaugeType::Hard &&
+             translated->provenance == provenance,
+         "one adapter projects complete setup for every chart consumer");
+
+  replay.playback.setup.chartRandomSeed =
+      static_cast<std::uint64_t>(std::numeric_limits<unsigned int>::max()) + 1;
+  expect(!makeReplayDataFromSetup(replay.playback.setup, provenance, meta,
+                                  diagnostic),
+         "setup translation fails closed when the parser seed cannot round-trip");
 }
 
 void testDriverMergesStreamsWithoutChangingTheirTiming() {
@@ -376,6 +425,7 @@ int main() {
   testLogicalGameplayAdapterOwnsLaneAndScratchMapping();
   testMaterializerUsesDriverAndOnlyComparesSavedFacts();
   testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement();
+  testConsumerSetupAdapterOwnsEveryReplaySetupTranslation();
   testMaterializationBudgetStopsBeforeResultConstruction();
   if (failures != 0) {
     std::cerr << failures << " replay playback driver test(s) failed\n";
