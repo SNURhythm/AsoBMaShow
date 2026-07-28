@@ -3420,6 +3420,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/FileChecksum.cpp
         src/ProfileSessionCoordinator.cpp
         src/replay/ReplayFileReconciler.cpp
+        src/replay/ReplayProfileReconciliation.cpp
         src/PlayerProfileManager.cpp
         src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
