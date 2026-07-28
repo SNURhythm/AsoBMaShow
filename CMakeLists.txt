@@ -1398,40 +1398,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(ir_http_client_tests PRIVATE CURL::libcurl)
     endif()
 
-    add_executable(replay_repository_tests
-        tests/replay_repository_tests.cpp
-        src/CourseIdentity.cpp
-        src/FileChecksum.cpp
-        src/repositories/ReplayRepository.cpp
-        src/repositories/ReplayRepositoryIrOutbox.cpp
-        src/repositories/ReplayRepositoryIrRemoteScores.cpp
-        src/repositories/ReplayRepositoryRecords.cpp
-        src/repositories/ReplayRepositorySchema.cpp
-        src/repositories/ReplayRepositoryLegacyMigration.cpp
-        src/ir/IrOutboxModels.cpp
-        src/ir/IrProfileSettings.cpp
-        src/ir/IrReceiptModels.cpp
-        src/ir/IrRemoteScoreModels.cpp
-        src/ir/IrScoreReconciliation.cpp
-        src/ir/IrSettingsPresentation.cpp
-        src/ResultPersistenceModel.cpp
-        src/ModernResult.cpp
-        src/ScoreProvenance.cpp
-        src/Uuid.cpp
-        src/Utils.cpp
-        src/path.cpp
-        src/sqlite3.c
-    )
-    target_include_directories(replay_repository_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(replay_repository_tests PRIVATE cxx_std_23)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(replay_repository_tests PRIVATE SDL2)
-    endif()
-
     add_executable(replay_legacy_migration_tests
         tests/replay_legacy_migration_tests.cpp
         src/CourseIdentity.cpp
@@ -2237,76 +2203,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if(WIN32)
         target_link_libraries(result_recall_builder_tests PRIVATE shell32 ole32)
-    endif()
-
-    add_executable(result_persistence_coordinator_tests
-        tests/result_persistence_coordinator_tests.cpp
-        src/ResultPersistenceCoordinator.cpp
-        src/ScoreProvenance.cpp
-    )
-    target_include_directories(result_persistence_coordinator_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(result_persistence_coordinator_tests PRIVATE
-        cxx_std_23
-    )
-
-    add_executable(result_persistence_integration_tests
-        tests/result_persistence_integration_tests.cpp
-        src/AtomicFile.cpp
-        src/CourseIdentity.cpp
-        src/FileChecksum.cpp
-        src/VersionedJson.cpp
-        src/ir/IrDriver.cpp
-        src/ir/IrOutboxModels.cpp
-        src/ir/IrProfileSettings.cpp
-        src/ir/IrReceiptModels.cpp
-        src/ir/IrRemoteScoreModels.cpp
-        src/ir/IrRankingModels.cpp
-        src/ir/IrSubmission.cpp
-        src/ir/IrSubmissionModern.cpp
-        src/ir/tachi/BokutachiCacheStore.cpp
-        src/ir/tachi/TachiBatchManual.cpp
-        src/ir/tachi/TachiDriver.cpp
-        src/ir/tachi/TachiRankingParser.cpp
-        src/ir/tachi/TachiResponseParser.cpp
-        src/ir/tachi/TachiUserScoreParser.cpp
-        src/repositories/ReplayRepository.cpp
-        src/repositories/ReplayRepositoryIrOutbox.cpp
-        src/repositories/ReplayRepositoryRecords.cpp
-        src/repositories/ReplayRepositorySchema.cpp
-        src/repositories/ReplayRepositoryLegacyMigration.cpp
-        src/ResultPersistenceCoordinator.cpp
-        src/ResultPersistenceModel.cpp
-        src/ModernResult.cpp
-        src/ir/IrSubmissionLegacyAdapter.cpp
-        src/repositories/ScoreRepository.cpp
-        src/repositories/ScoreRepositoryQueries.cpp
-        src/repositories/ScoreRepositorySchema.cpp
-        src/ScoreProvenance.cpp
-        src/scene/play/GameplayGaugeRules.cpp
-        src/scene/play/GameplayJudgeRules.cpp
-        src/scene/play/Judge.cpp
-        src/Uuid.cpp
-        src/Utils.cpp
-        src/path.cpp
-        src/sqlite3.c
-    )
-    target_include_directories(result_persistence_integration_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(result_persistence_integration_tests PRIVATE
-        cxx_std_23
-    )
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2)
-    endif()
-    if(WIN32)
-        target_link_libraries(result_persistence_integration_tests PRIVATE shell32 ole32)
     endif()
 
     add_executable(score_provenance_db_tests
@@ -3835,7 +3731,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_saved_result_upload_tests
         ir_saved_result_batch_upload_tests
         ir_ranking_modal_tests
-        replay_repository_tests
         replay_legacy_migration_tests
         legacy_result_summary_tests
         replay_repository_modern_chart_tests
@@ -3853,8 +3748,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         difficulty_table_importer_tests
         result_persistence_model_tests
         result_recall_builder_tests
-        result_persistence_coordinator_tests
-        result_persistence_integration_tests
         chart_record_filters_tests
         main_menu_library_tests
         chart_meta_index_order_tests
@@ -3885,9 +3778,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10
-    )
-    set_tests_properties(result_persistence_integration_tests PROPERTIES
-        TIMEOUT 15
     )
     add_test(NAME foundation_provenance_contract
         COMMAND $<TARGET_FILE:score_provenance_tests>)

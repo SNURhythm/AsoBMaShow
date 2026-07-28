@@ -35,13 +35,10 @@ constexpr const char *kIrRemoteScoreColumns =
     "input_device,client,sync_generation";
 
 constexpr std::string_view kReceiptOwnerMatchesOutboxAttempt =
-    "((receipt.replay_id IS NOT NULL AND EXISTS(SELECT 1 FROM replays replay "
-    "WHERE replay.id=receipt.replay_id AND "
-    "replay.attempt_id=ir_outbox.attempt_id)) OR "
     "(receipt.modern_chart_result_id IS NOT NULL AND EXISTS(SELECT 1 FROM "
     "modern_chart_results result WHERE "
     "result.id=receipt.modern_chart_result_id AND "
-    "result.attempt_id=ir_outbox.attempt_id)))";
+    "result.attempt_id=ir_outbox.attempt_id))";
 
 bool validProviderId(std::string_view value) {
   if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||

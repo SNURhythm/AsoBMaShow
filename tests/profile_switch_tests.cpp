@@ -441,7 +441,7 @@ struct SwitchFixture {
   bool pauseObservedOldBindings = false;
   bool activationObservedTargetState = false;
   bool restoreObservedOldState = false;
-  result_persistence::RecoverySummary recoverySummary;
+  replay::ChartReplayRecoverySummary recoverySummary;
   std::vector<std::string> switchEvents;
   std::vector<std::string> inputReplacementEvents;
   std::vector<input::GyroscopeTurntableConfig> runtimeGyroscopeApplications;
@@ -921,7 +921,6 @@ void testRecoveryWarningDoesNotRollbackSuccessfulSwitch() {
       .saved = 1,
       .pending = 1,
       .conflicts = 0,
-      .userMessage = std::string(result_persistence::recoveryUserMessage()),
       .diagnostic = "attempt-private: /private/profile/replays.db",
   };
 
@@ -929,7 +928,7 @@ void testRecoveryWarningDoesNotRollbackSuccessfulSwitch() {
       fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
 
   expect(result.ok(), "pending recovery warning keeps switch successful");
-  expect(result.message == result_persistence::recoveryUserMessage(),
+  expect(result.message == replay::chartReplayRecoveryUserMessage(),
          "successful switch preserves only the aggregate recovery warning");
   expect(fixture.manager.activeProfile().id == fixture.secondId &&
              fixture.score.GetDatabasePath() == fixture.secondPaths.scoresDb &&
@@ -951,7 +950,7 @@ void testRecoveryExceptionBecomesSanitizedWarning() {
 
     expect(result.ok(),
            "recovery callback exception does not roll back profile switch");
-    expect(result.message == result_persistence::recoveryUserMessage(),
+    expect(result.message == replay::chartReplayRecoveryUserMessage(),
            "recovery callback exception becomes the sanitized aggregate "
            "warning");
     expect(result.message.find("attempt-private") == std::string::npos &&

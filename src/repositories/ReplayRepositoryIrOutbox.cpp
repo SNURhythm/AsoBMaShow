@@ -344,34 +344,26 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
 
   SqliteStatementHandle owner;
   constexpr const char *ownerQuery =
-      "SELECT id,NULL FROM replays WHERE attempt_id=? UNION ALL "
-      "SELECT NULL,id FROM modern_chart_results WHERE attempt_id=?";
+      "SELECT id FROM modern_chart_results WHERE attempt_id=?";
   if (prepareSqliteStatement(database, ownerQuery, owner) != SQLITE_OK ||
-      !bindSqliteText(owner.get(), 1, claimed.attemptId) ||
-      !bindSqliteText(owner.get(), 2, claimed.attemptId)) {
+      !bindSqliteText(owner.get(), 1, claimed.attemptId)) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
             .diagnostic = "could not prepare IR receipt result lookup"};
   }
   const int ownerStep = sqlite3_step(owner.get());
-  if (ownerStep != SQLITE_ROW || !nullableInteger(owner.get(), 0) ||
-      !nullableInteger(owner.get(), 1)) {
+  if (ownerStep != SQLITE_ROW ||
+      sqlite3_column_type(owner.get(), 0) != SQLITE_INTEGER) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
             .diagnostic = ownerStep == SQLITE_DONE
                               ? "IR receipt durable result is missing"
                               : "IR receipt result lookup did not complete"};
   }
-  const std::optional<std::int64_t> replayId = optionalInteger(owner.get(), 0);
-  const std::optional<std::int64_t> modernResultId =
-      optionalInteger(owner.get(), 1);
-  if (replayId.has_value() == modernResultId.has_value() ||
-      (replayId &&
-       (*replayId <= 0 || *replayId > std::numeric_limits<int>::max())) ||
-      (modernResultId && (*modernResultId <= 0 ||
-                          *modernResultId > std::numeric_limits<int>::max())) ||
+  const sqlite3_int64 modernResultId = sqlite3_column_int64(owner.get(), 0);
+  if (modernResultId <= 0 ||
+      modernResultId > std::numeric_limits<int>::max() ||
       sqlite3_step(owner.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic =
-                "IR receipt result ownership is ambiguous or invalid"};
+            .diagnostic = "IR receipt result ownership is invalid"};
   }
 
   const ir::IrSuccessfulReceiptDraft &receipt = *update.successfulReceipt;
@@ -398,13 +390,9 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
           SQLITE_OK ||
       !bindSqliteText(receiptStatement.get(), 1, claimed.providerId) ||
       !bindSqliteText(receiptStatement.get(), 2, receipt.serverOrigin) ||
-      (replayId ? sqlite3_bind_int64(receiptStatement.get(), 3, *replayId) !=
-                      SQLITE_OK
-                : sqlite3_bind_null(receiptStatement.get(), 3) != SQLITE_OK) ||
-      (modernResultId
-           ? sqlite3_bind_int64(receiptStatement.get(), 4, *modernResultId) !=
-                 SQLITE_OK
-           : sqlite3_bind_null(receiptStatement.get(), 4) != SQLITE_OK) ||
+      sqlite3_bind_null(receiptStatement.get(), 3) != SQLITE_OK ||
+      sqlite3_bind_int64(receiptStatement.get(), 4, modernResultId) !=
+          SQLITE_OK ||
       !bindSqliteText(receiptStatement.get(), 5, claimed.attemptId) ||
       (claimed.chartMd5.empty()
            ? sqlite3_bind_null(receiptStatement.get(), 6) != SQLITE_OK

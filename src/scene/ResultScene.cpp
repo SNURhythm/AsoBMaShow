@@ -56,6 +56,41 @@ std::int64_t nowUnixMillis() {
       .count();
 }
 
+void applyModernCoursePersistencePresentation(
+    CoursePlaySession &session, ResultPersistenceOptions &presentation) {
+  const auto &outcome = *session.modernCoursePersistenceOutcome;
+  result_persistence::SaveState presentationState =
+      result_persistence::SaveState::Unstaged;
+  switch (outcome.state) {
+  case replay::CourseResultPersistenceState::SavedWithReplay:
+  case replay::CourseResultPersistenceState::SavedWithoutReplay:
+    presentationState = result_persistence::SaveState::Saved;
+    session.courseScoreSaved = true;
+    break;
+  case replay::CourseResultPersistenceState::PendingScore:
+    presentationState = result_persistence::SaveState::PendingScore;
+    break;
+  case replay::CourseResultPersistenceState::Retryable:
+    presentationState = result_persistence::SaveState::Unstaged;
+    break;
+  case replay::CourseResultPersistenceState::InvalidAttempt:
+    presentationState = result_persistence::SaveState::InvalidAttempt;
+    break;
+  case replay::CourseResultPersistenceState::IntegrityConflict:
+    presentationState = result_persistence::SaveState::UnstagedConflict;
+    break;
+  }
+  presentation.outcome = {
+      .state = presentationState,
+      .userMessage = outcome.saved()
+                         ? std::string{}
+                         : std::string(result_persistence::saveStateUserMessage(
+                               presentationState)),
+      .diagnostic = outcome.diagnostic.empty() ? session.modernCourseDiagnostic
+                                               : outcome.diagnostic,
+  };
+}
+
 std::optional<int> rankingBadPoints(const RhythmState &state) {
   const auto count = [&](Judgement judgement) {
     const auto it = state.judgeCount.find(judgement);
@@ -369,7 +404,6 @@ ResultScene::ResultScene(
   local.reusableRetryChart = local.ownedReusableRetryChart != nullptr
                                  ? local.ownedReusableRetryChart.get()
                                  : reusableRetryChart;
-  applyResultPersistenceReceipt();
   const play_options::PlayModeDisplayLabel display =
       resultPlayModeDisplayLabel(local.meta, local.presentationReplay,
                                  local.retryData, local.practiceOptions);
@@ -515,30 +549,6 @@ void ResultScene::rebuildLocalPresentation(
        .timingAnalytics = std::move(analyticsModel)});
 }
 
-void ResultScene::saveCourseScore() {
-  auto *local = localSource();
-  if (local == nullptr || !isCourseFinalResult() ||
-      local->courseOptions.session == nullptr ||
-      local->courseOptions.savedResultBrowsing ||
-      local->courseOptions.session->courseReplayPlayback ||
-      local->courseOptions.session->courseScoreSaved) {
-    return;
-  }
-
-  const int completedCharts =
-      static_cast<int>(local->courseOptions.session->completedResults.size());
-  const int totalCharts =
-      static_cast<int>(local->courseOptions.session->entries.size());
-  if (context.scoreRepository.SaveCourseScore(
-          *local->courseOptions.session, local->resultState, completedCharts,
-          totalCharts, local->attemptProvenance)) {
-    local->courseOptions.session->courseScoreSaved = true;
-  } else {
-    SDL_Log("Failed to save course score: %s",
-            local->courseOptions.session->courseName.c_str());
-  }
-}
-
 bool ResultScene::persistModernCourseResult() {
   auto *local = localSource();
   if (local == nullptr || !isCourseFinalResult() ||
@@ -549,7 +559,15 @@ bool ResultScene::persistModernCourseResult() {
   }
   auto &session = *local->courseOptions.session;
   if (session.modernCourseAttemptId.empty()) {
-    return false;
+    session.modernCourseDiagnostic =
+        "Modern course completion has no durable attempt identity.";
+    session.modernCoursePersistenceOutcome =
+        replay::CourseResultPersistenceOutcome{
+            .state = replay::CourseResultPersistenceState::InvalidAttempt,
+            .diagnostic = session.modernCourseDiagnostic};
+    applyModernCoursePersistencePresentation(session,
+                                             local->persistenceOptions);
+    return true;
   }
 
   // Once a live course has entered the modern capture path, every terminal
@@ -646,36 +664,7 @@ bool ResultScene::persistModernCourseResult() {
         context.persistModernCourse(*session.modernCourseAttempt);
   }
   const auto &outcome = *session.modernCoursePersistenceOutcome;
-  result_persistence::SaveState presentationState =
-      result_persistence::SaveState::Unstaged;
-  switch (outcome.state) {
-  case replay::CourseResultPersistenceState::SavedWithReplay:
-  case replay::CourseResultPersistenceState::SavedWithoutReplay:
-    presentationState = result_persistence::SaveState::Saved;
-    session.courseScoreSaved = true;
-    break;
-  case replay::CourseResultPersistenceState::PendingScore:
-    presentationState = result_persistence::SaveState::PendingScore;
-    break;
-  case replay::CourseResultPersistenceState::Retryable:
-    presentationState = result_persistence::SaveState::Unstaged;
-    break;
-  case replay::CourseResultPersistenceState::InvalidAttempt:
-    presentationState = result_persistence::SaveState::InvalidAttempt;
-    break;
-  case replay::CourseResultPersistenceState::IntegrityConflict:
-    presentationState = result_persistence::SaveState::UnstagedConflict;
-    break;
-  }
-  local->persistenceOptions.outcome = {
-      .state = presentationState,
-      .userMessage = outcome.saved()
-                         ? std::string{}
-                         : std::string(result_persistence::saveStateUserMessage(
-                               presentationState)),
-      .diagnostic = outcome.diagnostic.empty() ? session.modernCourseDiagnostic
-                                               : outcome.diagnostic,
-  };
+  applyModernCoursePersistencePresentation(session, local->persistenceOptions);
   SDL_Log("Modern course persistence state=%d diagnostic=%s",
           static_cast<int>(outcome.state),
           local->persistenceOptions.outcome.diagnostic.c_str());
@@ -693,12 +682,10 @@ void ResultScene::loadPreviousBest() {
 
   std::optional<std::string> beforeCreatedAt;
   std::optional<std::string> excludeAttemptId;
-  const auto *receipt = persistenceOptions.attempt == nullptr
-          ? nullptr
-          : persistenceOptions.outcome.validatedReceiptFor(
-                *persistenceOptions.attempt);
-  if (receipt != nullptr) {
-    excludeAttemptId = persistenceOptions.attempt->attemptId;
+  if (persistenceOptions.chartAttempt != nullptr &&
+      persistenceOptions.chartOutcome.has_value() &&
+      persistenceOptions.chartOutcome->durable()) {
+    excludeAttemptId = persistenceOptions.chartAttempt->result.attemptId;
   } else if (local->replayResult && local->retryData.has_value() &&
              !local->retryData->autoPlay &&
              !local->retryData->createdAt.empty()) {
@@ -729,70 +716,11 @@ void ResultScene::loadDifficultyLabel() {
       context.chartRepository, local->meta);
 }
 
-void ResultScene::saveCourseReplay() {
-  auto *local = localSource();
-  if (local == nullptr) {
-    return;
-  }
-  auto session = local->courseOptions.session;
-  if (!isCourseFinalResult() || session == nullptr ||
-      local->courseOptions.savedResultBrowsing ||
-      session->courseReplayPlayback || session->courseReplaySaved) {
-    return;
-  }
-
-  auto pendingCourseReplay = courseReplayDataForSession(
-      *session, local->resultState, local->attemptProvenance);
-  if (!pendingCourseReplay.has_value()) {
-    SDL_Log("Refusing incomplete or non-contiguous course replay: %s",
-            session->courseName.c_str());
-    return;
-  }
-  auto courseReplay =
-      std::make_shared<CourseReplayData>(std::move(*pendingCourseReplay));
-
-  auto replayId = context.replayRepository.SaveCourseReplay(*courseReplay);
-  if (!replayId.has_value()) {
-    SDL_Log("Failed to save course replay: %s", session->courseName.c_str());
-    return;
-  }
-
-  courseReplay->id = *replayId;
-  session->savedCourseReplayId = *replayId;
-  session->courseReplaySaved = true;
-  session->courseReplayData = std::move(courseReplay);
-}
-
-void ResultScene::applyResultPersistenceReceipt() {
-  auto *local = localSource();
-  if (local == nullptr) {
-    return;
-  }
-  const auto *receipt =
-      local->persistenceOptions.attempt == nullptr
-          ? nullptr
-          : local->persistenceOptions.outcome.validatedReceiptFor(
-                *local->persistenceOptions.attempt);
-  if (receipt == nullptr) {
-    return;
-  }
-
-  const auto applyReceipt = [receipt](std::optional<ReplayData> &replay) {
-    if (!replay.has_value()) {
-      return;
-    }
-    replay->id = receipt->replayId;
-    replay->createdAt = receipt->createdAt;
-  };
-  applyReceipt(local->presentationReplay);
-  applyReceipt(local->retryData);
-}
-
 bool ResultScene::persistenceDecisionRequired() const {
   const auto *local = localSource();
   return local != nullptr &&
          local->persistenceOptions.outcome.requiresUserDecision(
-             local->persistenceOptions.attempt != nullptr,
+             local->persistenceOptions.chartAttempt != nullptr,
              local->persistenceContinueChosen);
 }
 
@@ -882,7 +810,7 @@ void ResultScene::addResultPersistenceStatus() {
 
   normalResultActions = rootLayout->findViewByName("resultActions");
   const bool hasPersistenceResult =
-      persistenceOptions.attempt != nullptr ||
+      persistenceOptions.chartAttempt != nullptr ||
       !persistenceOptions.outcome.userMessage.empty();
   if (!hasPersistenceResult) {
     return;
@@ -949,7 +877,7 @@ void ResultScene::addResultPersistenceStatus() {
           .has_value() &&
       local->courseOptions.session->modernCoursePersistenceOutcome->retryable();
   persistenceRetryButton->setEnabled(courseRetryable ||
-                                     (persistenceOptions.attempt != nullptr &&
+                                     (persistenceOptions.chartAttempt != nullptr &&
                                       persistenceOptions.outcome.retryable()));
   actions->addView(persistenceRetryButton);
   persistenceDetailsButton = makeButton(
@@ -960,10 +888,10 @@ void ResultScene::addResultPersistenceStatus() {
           return;
         }
         const std::string_view attemptId =
-            current->persistenceOptions.attempt == nullptr
+            current->persistenceOptions.chartAttempt == nullptr
                 ? std::string_view{}
                 : std::string_view(
-                      current->persistenceOptions.attempt->attemptId);
+                      current->persistenceOptions.chartAttempt->result.attemptId);
         const auto details = result_persistence::saveConflictDetails(
             current->persistenceOptions.outcome, attemptId);
         if (!details.has_value()) {
@@ -990,9 +918,9 @@ void ResultScene::addResultPersistenceStatus() {
         persistenceDetailsModalRoot->applyYogaLayout();
       });
   const std::string_view attemptId =
-      persistenceOptions.attempt == nullptr
+      persistenceOptions.chartAttempt == nullptr
           ? std::string_view{}
-          : std::string_view(persistenceOptions.attempt->attemptId);
+          : std::string_view(persistenceOptions.chartAttempt->result.attemptId);
   const bool hasConflictDetails = result_persistence::saveConflictDetails(
                                       persistenceOptions.outcome, attemptId)
           .has_value();
@@ -1364,7 +1292,7 @@ void ResultScene::retryResultPersistence() {
         0, true);
     return;
   }
-  if (local->persistenceOptions.attempt == nullptr ||
+  if (local->persistenceOptions.chartAttempt == nullptr ||
       !local->persistenceOptions.outcome.retryable()) {
     return;
   }
@@ -1376,16 +1304,18 @@ void ResultScene::retryResultPersistence() {
     automaticDrafts = context.irDrivers.buildAutomaticDrafts(
         context.settings.irProviders, *persistenceOptions.irSubmission);
   }
-  persistenceOptions.outcome = context.resultPersistence.persist(
-      *persistenceOptions.attempt, automaticDrafts);
-  if (persistenceOptions.outcome.saved() && !automaticDrafts.empty() &&
+  persistenceOptions.chartOutcome = context.persistModernChart(
+      *persistenceOptions.chartAttempt, automaticDrafts);
+  persistenceOptions.outcome =
+      chartResultPersistencePresentation(*persistenceOptions.chartOutcome);
+  if (persistenceOptions.chartOutcome->durable() &&
+      !automaticDrafts.empty() &&
       context.irSubmissionService) {
     context.irSubmissionService->notifyOutboxChanged();
   }
   SDL_Log("Result persistence retry state=%d diagnostic=%s",
           static_cast<int>(persistenceOptions.outcome.state),
           persistenceOptions.outcome.diagnostic.c_str());
-  applyResultPersistenceReceipt();
   local->previousBestLoaded = false;
   loadPreviousBest();
   rebuildLocalPresentation(makeTimingAnalyticsModel());
@@ -1437,13 +1367,14 @@ void ResultScene::updateResultPersistencePresentation() {
         local->courseOptions.session->modernCoursePersistenceOutcome
             ->retryable();
     persistenceRetryButton->setEnabled(
-        courseRetryable || (local->persistenceOptions.attempt != nullptr &&
+        courseRetryable || (local->persistenceOptions.chartAttempt != nullptr &&
                             local->persistenceOptions.outcome.retryable()));
   }
   const std::string_view attemptId =
-      local->persistenceOptions.attempt == nullptr
+      local->persistenceOptions.chartAttempt == nullptr
           ? std::string_view{}
-          : std::string_view(local->persistenceOptions.attempt->attemptId);
+          : std::string_view(
+                local->persistenceOptions.chartAttempt->result.attemptId);
   const bool hasConflictDetails =
       result_persistence::saveConflictDetails(local->persistenceOptions.outcome,
                                               attemptId)
@@ -2889,12 +2820,9 @@ void ResultScene::init() {
     }
     loadDifficultyLabel();
     loadPreviousBest();
-    if (!persistModernCourseResult()) {
-      // Temporary compatibility path for legacy in-memory course adapters.
-      // New live courses always carry typed modern stage capture.
-    saveCourseScore();
-    saveCourseReplay();
-  }
+    if (isCourseFinalResult()) {
+      (void)persistModernCourseResult();
+    }
   }
 
   rootLayout =

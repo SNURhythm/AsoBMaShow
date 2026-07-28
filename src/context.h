@@ -20,7 +20,6 @@
 #include "ProfileSessionCoordinator.h"
 #include "repositories/ChartRepository.h"
 #include "repositories/ReplayRepository.h"
-#include "ResultPersistenceCoordinator.h"
 #include "repositories/ScoreRepository.h"
 #include "replay/ChartReplayPersistence.h"
 #include "replay/CourseResultPersistence.h"
@@ -112,7 +111,6 @@ public:
   ScoreRepository scoreRepository;
   ReplayRepository replayRepository;
   MusicPlaylistRepository musicPlaylistRepository;
-  result_persistence::Coordinator resultPersistence;
   std::shared_ptr<ir::tachi::BokutachiCacheStore> bokutachiCacheStore;
   ir::IrDriverRegistry irDrivers;
   std::unique_ptr<ir::IrHttpClient> irHttpClient;
@@ -168,7 +166,6 @@ public:
             profileManager, profileInitializationResult)),
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
-        resultPersistence(scoreRepository, replayRepository),
         bokutachiCacheStore(std::make_shared<ir::tachi::BokutachiCacheStore>()),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
@@ -309,20 +306,15 @@ public:
         metadataVisibilityError);
   }
 
-  [[nodiscard]] result_persistence::RecoverySummary
+  [[nodiscard]] replay::ChartReplayRecoverySummary
   recoverPendingResults() noexcept {
     try {
-      result_persistence::RecoverySummary summary =
-          resultPersistence.recoverAll();
-      if (profileInitializationResult.ok()) {
-        replay::ChartReplayPersistence modernPersistence(scoreRepository,
-                                                         replayRepository);
-        const auto modern = modernPersistence.recoverAll();
-        SDL_Log("Modern chart recovery completed: attempted=%zu saved=%zu "
-                "pending=%zu conflicts=%zu",
-                modern.attempted, modern.saved, modern.pending,
-                modern.conflicts);
+      if (!profileInitializationResult.ok()) {
+        return {};
       }
+      replay::ChartReplayPersistence persistence(scoreRepository,
+                                                  replayRepository);
+      const auto summary = persistence.recoverAll();
       SDL_Log("Result recovery completed: attempted=%zu saved=%zu pending=%zu "
               "conflicts=%zu",
               summary.attempted, summary.saved, summary.pending,
@@ -333,12 +325,14 @@ public:
       return summary;
     } catch (const std::exception &) {
       SDL_Log("Result recovery raised a standard exception");
-      return result_persistence::recoveryFailureSummary(
-          "result recovery raised a standard exception");
+      return {.pending = 1,
+              .diagnostic =
+                  "modern result recovery raised a standard exception"};
     } catch (...) {
       SDL_Log("Result recovery raised a non-standard exception");
-      return result_persistence::recoveryFailureSummary(
-          "result recovery raised a non-standard exception");
+      return {.pending = 1,
+              .diagnostic =
+                  "modern result recovery raised a non-standard exception"};
     }
   }
 

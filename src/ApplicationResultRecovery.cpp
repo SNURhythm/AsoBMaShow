@@ -3,8 +3,8 @@
 namespace application_result_recovery {
 
 void execute(const Dependencies &dependencies) {
-  const result_persistence::RecoverySummary summary = dependencies.recover();
-  if (!summary.userMessage.empty()) {
+  const replay::ChartReplayRecoverySummary summary = dependencies.recover();
+  if (summary.pending != 0 || summary.conflicts != 0) {
     dependencies.reportWarning(summary);
   }
   if (dependencies.startProfileServices) {

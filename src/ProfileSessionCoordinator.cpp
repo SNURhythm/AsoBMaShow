@@ -67,7 +67,7 @@ ProfileSessionCoordinator::ProfileSessionCoordinator(
   }
   if (!dependencies_.recoverPendingResults) {
     dependencies_.recoverPendingResults = [] {
-      return result_persistence::RecoverySummary{};
+      return replay::ChartReplayRecoverySummary{};
     };
   }
   if (!dependencies_.pauseProfileServices) {
@@ -285,17 +285,15 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
 
   std::string recoveryWarning;
   try {
-    result_persistence::RecoverySummary recovery =
+    replay::ChartReplayRecoverySummary recovery =
         dependencies_.recoverPendingResults();
-    if (!recovery.userMessage.empty()) {
-      recoveryWarning = std::move(recovery.userMessage);
-    } else if (recovery.pending != 0 || recovery.conflicts != 0) {
-      recoveryWarning = result_persistence::recoveryUserMessage();
+    if (recovery.pending != 0 || recovery.conflicts != 0) {
+      recoveryWarning = replay::chartReplayRecoveryUserMessage();
     }
   } catch (const std::exception &) {
-    recoveryWarning = result_persistence::recoveryUserMessage();
+    recoveryWarning = replay::chartReplayRecoveryUserMessage();
   } catch (...) {
-    recoveryWarning = result_persistence::recoveryUserMessage();
+    recoveryWarning = replay::chartReplayRecoveryUserMessage();
   }
 
   inputApplyAttempted = true;

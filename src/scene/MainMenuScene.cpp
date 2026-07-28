@@ -11105,7 +11105,7 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
         auto result = std::move(*recalled.value);
         ResultPersistenceOptions persistence;
         if (result.historicalIr.has_value()) {
-          persistence.attempt = result.historicalIr->attempt;
+          persistence.legacyRecallAttempt = result.historicalIr->attempt;
           persistence.irSubmission = result.historicalIr->submission;
           persistence.outcome = result.historicalIr->saveOutcome;
         }

@@ -267,10 +267,9 @@ PendingScoreCompletionOutcome completePendingChartScore(
           .diagnostic = "pending score completion state is unknown"};
 }
 
-RecoverySummary
-recoverPendingChartScores(PendingScoreOwnerKind ownerKind,
-                          const PendingScoreRecoveryDependencies &dependencies,
-                          std::size_t limit) {
+RecoverySummary recoverPendingChartScores(
+    const PendingScoreRecoveryDependencies &dependencies,
+    std::size_t limit) {
   const std::size_t effectiveLimit = std::min(limit, std::size_t{256});
   PendingBatchOutcome batch = dependencies.listPending(effectiveLimit);
   RecoverySummary summary;
@@ -361,18 +360,12 @@ recoverPendingChartScores(PendingScoreOwnerKind ownerKind,
              "pending recovery entry identity does not match its payload");
       continue;
     }
-    const bool ownerAgrees =
-        pending.hasExactlyOneOwner() &&
-        ((ownerKind == PendingScoreOwnerKind::LegacyReplay &&
-          pending.replayId > 0 && pending.modernResultId == 0) ||
-         (ownerKind == PendingScoreOwnerKind::ModernResult &&
-          pending.replayId == 0 && pending.modernResultId > 0));
+    const bool ownerAgrees = pending.hasExactlyOneOwner() &&
+                             pending.replayId == 0 &&
+                             pending.modernResultId > 0;
     if (!ownerAgrees || pending.createdAt.empty()) {
       retain(entry, RecoveryAttemptKind::IntegrityConflict,
-             ownerKind == PendingScoreOwnerKind::LegacyReplay
-                 ? "pending recovery payload has invalid replay metadata"
-                 : "pending recovery payload has invalid modern result "
-                   "metadata");
+             "pending recovery payload has invalid modern result metadata");
       continue;
     }
     const auto completed =
@@ -397,37 +390,6 @@ recoverPendingChartScores(PendingScoreOwnerKind ownerKind,
   }
   return summary;
 }
-
-Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
-    : Coordinator(Dependencies{
-          .stage =
-              [&replay](const ChartResultAttempt &attempt,
-                        std::span<const ir::IrOutboxDraft> irDrafts) {
-                return replay.StageChartResult(attempt, irDrafts);
-              },
-          .loadPending =
-              [&replay](std::string_view attemptId) {
-                return replay.LoadPendingChartScore(attemptId);
-              },
-          .listPending =
-              [&replay](std::size_t limit) {
-                return replay.ListPendingChartScores(limit);
-              },
-          .project =
-              [&score](const PendingChartScoreWrite &pending) {
-                return score.SaveProjectedScore(pending);
-              },
-          .acknowledgeAndActivate =
-              [&replay](std::string_view attemptId, int replayId) {
-                return replay.AcknowledgePendingChartScoreAndActivateIr(
-                    attemptId, replayId);
-              },
-          .recordRecoveryAttempt =
-              [&replay](std::string_view attemptId, RecoveryAttemptKind kind) {
-                return replay.RecordPendingChartScoreRecoveryAttempt(attemptId,
-                                                                     kind);
-              },
-      }) {}
 
 Coordinator::Coordinator(Dependencies dependencies)
     : dependencies_(std::move(dependencies)) {}
@@ -594,17 +556,6 @@ SaveOutcome Coordinator::persist(
   receipt.scorePending = false;
   return durableOutcome(SaveState::Saved, receipt,
                         std::move(staged.diagnostic));
-}
-
-RecoverySummary Coordinator::recoverAll(std::size_t limit) {
-  profile_database_activity::WriteGuard bindingLease;
-  return recoverPendingChartScores(
-      PendingScoreOwnerKind::LegacyReplay,
-      {.listPending = dependencies_.listPending,
-       .completion = {.project = dependencies_.project,
-                      .acknowledge = dependencies_.acknowledgeAndActivate},
-       .recordRecoveryAttempt = dependencies_.recordRecoveryAttempt},
-      limit);
 }
 
 } // namespace result_persistence

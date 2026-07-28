@@ -744,10 +744,11 @@ static void reportStartupFailure(const ApplicationContext &context,
 }
 
 static void reportResultRecoveryWarning(
-    const result_persistence::RecoverySummary &recovery) {
+    const replay::ChartReplayRecoverySummary &) {
   if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
                                "AsoBMaShow Result Recovery",
-                               recovery.userMessage.c_str(), s_window) != 0) {
+                               replay::chartReplayRecoveryUserMessage().data(),
+                               s_window) != 0) {
     SDL_Log("Unable to show the result recovery warning: %s", SDL_GetError());
   }
 }

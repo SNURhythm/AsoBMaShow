@@ -13,6 +13,10 @@
 namespace replay {
 namespace {
 
+constexpr std::string_view kRecoveryMessage =
+    "Some previously completed results are still waiting to be saved. They "
+    "were kept safely and will be retried later.";
+
 void appendDiagnostic(std::string &destination, std::string_view phase,
                       std::string_view diagnostic) {
   if (diagnostic.empty()) {
@@ -32,6 +36,10 @@ ChartReplayPersistenceState savedState(bool replayAttached) noexcept {
 }
 
 } // namespace
+
+std::string_view chartReplayRecoveryUserMessage() noexcept {
+  return kRecoveryMessage;
+}
 
 ChartReplayPersistence::ChartReplayPersistence(
     ScoreRepository &score, ReplayRepository &repository) {
@@ -329,7 +337,6 @@ ChartReplayRecoverySummary
 ChartReplayPersistence::recoverAll(std::size_t limit) {
   profile_database_activity::WriteGuard bindingLease;
   const auto recovered = result_persistence::recoverPendingChartScores(
-      result_persistence::PendingScoreOwnerKind::ModernResult,
       {.listPending = dependencies_.listPending,
        .completion = {.project = dependencies_.project,
                       .acknowledge = dependencies_.acknowledge},

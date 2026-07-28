@@ -3236,25 +3236,25 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       auto attempt = replay::captureChartReplayPersistenceAttempt(
           capture, constructionDiagnostic);
       if (attempt.has_value()) {
-        if (attempt->irSnapshot.has_value()) {
+        auto retainedAttempt =
+            std::make_shared<const replay::ChartReplayPersistenceAttempt>(
+                std::move(*attempt));
+        resultPersistenceOptions.chartAttempt = retainedAttempt;
+        if (retainedAttempt->irSnapshot.has_value()) {
           resultPersistenceOptions.irSubmission =
               std::make_shared<const ir::IrSubmission>(
-                  attempt->irSnapshot->submission);
+                  retainedAttempt->irSnapshot->submission);
         }
         const std::vector<ir::IrOutboxDraft> automaticDrafts =
-            attempt->irSnapshot ? context.irDrivers.buildAutomaticDrafts(
+            retainedAttempt->irSnapshot
+                ? context.irDrivers.buildAutomaticDrafts(
                       context.settings.irProviders,
-                      attempt->irSnapshot->submission)
+                      retainedAttempt->irSnapshot->submission)
                 : std::vector<ir::IrOutboxDraft>{};
-        persistenceOutcome =
-            context.persistModernChart(*attempt, automaticDrafts);
-        resultPersistenceOptions.outcome.state =
-            persistenceOutcome.saved()
-                ? result_persistence::SaveState::Saved
-                : result_persistence::SaveState::Unstaged;
-        resultPersistenceOptions.outcome.diagnostic =
-            persistenceOutcome.diagnostic;
-        if (!automaticDrafts.empty() && context.irSubmissionService) {
+        persistenceOutcome = context.persistModernChart(*retainedAttempt,
+                                                        automaticDrafts);
+        if (persistenceOutcome.durable() && !automaticDrafts.empty() &&
+            context.irSubmissionService) {
           context.irSubmissionService->notifyOutboxChanged();
         }
       } else {
@@ -3264,6 +3264,9 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
                 : constructionDiagnostic;
       }
     }
+    resultPersistenceOptions.chartOutcome = persistenceOutcome;
+    resultPersistenceOptions.outcome =
+        chartResultPersistencePresentation(persistenceOutcome);
     if (!modernReplayCaptureDiagnostic.empty()) {
       SDL_Log("Modern replay capture diagnostic=%s",
               modernReplayCaptureDiagnostic.c_str());
@@ -3370,7 +3373,14 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
                                      options.replayData->autoPlay),
                 courseResultOptions, resultPacemakerTarget,
                 std::move(ownedReusableRetryChart), reusableRetryChart,
-                gbattleResultPacemaker, analyticsSource),
+                gbattleResultPacemaker, analyticsSource,
+                resultPersistenceOptions.chartAttempt != nullptr &&
+                        resultPersistenceOptions.chartOutcome.has_value() &&
+                        resultPersistenceOptions.chartOutcome->durable()
+                    ? std::optional<std::string>(
+                          resultPersistenceOptions.chartAttempt->result.attemptId)
+                    : std::nullopt,
+                true),
             false);
         return false;
       },

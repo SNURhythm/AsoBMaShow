@@ -539,21 +539,6 @@ public:
   result_persistence::RecoveryMarkOutcome
   RecordPendingModernChartScoreRecoveryAttempt(
       std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);
-  std::optional<int> SaveReplay(const ReplayData &replay);
-  std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
-  result_persistence::StageOutcome
-  StageChartResult(const result_persistence::ChartResultAttempt &attempt,
-                   std::span<const ir::IrOutboxDraft> irDrafts);
-  result_persistence::PendingReadOutcome
-  LoadPendingChartScore(std::string_view attemptId);
-  result_persistence::PendingBatchOutcome
-  ListPendingChartScores(std::size_t limit = 256);
-  result_persistence::AcknowledgeOutcome
-  AcknowledgePendingChartScoreAndActivateIr(std::string_view attemptId,
-                                            int replayId);
-  result_persistence::RecoveryMarkOutcome
-  RecordPendingChartScoreRecoveryAttempt(
-      std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);
   ir::IrOutboxInsertOutcome
   EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft, bool userIntent);
   ir::IrManualBatchEnqueueOutcome

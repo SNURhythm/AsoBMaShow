@@ -90,11 +90,6 @@ struct PendingScoreCompletionDependencies {
     const PendingChartScoreWrite &pending,
     const PendingScoreCompletionDependencies &dependencies);
 
-enum class PendingScoreOwnerKind {
-  LegacyReplay,
-  ModernResult,
-};
-
 struct PendingScoreRecoveryDependencies {
   std::function<PendingBatchOutcome(std::size_t)> listPending;
   PendingScoreCompletionDependencies completion;
@@ -103,8 +98,7 @@ struct PendingScoreRecoveryDependencies {
 };
 
 [[nodiscard]] RecoverySummary
-recoverPendingChartScores(PendingScoreOwnerKind ownerKind,
-                          const PendingScoreRecoveryDependencies &dependencies,
+recoverPendingChartScores(const PendingScoreRecoveryDependencies &dependencies,
                           std::size_t limit = 256);
 
 [[nodiscard]] std::string_view recoveryUserMessage() noexcept;
@@ -115,22 +109,17 @@ struct Dependencies {
                              std::span<const ir::IrOutboxDraft>)>
       stage;
   std::function<PendingReadOutcome(std::string_view)> loadPending;
-  std::function<PendingBatchOutcome(std::size_t)> listPending;
   std::function<ProjectionOutcome(const PendingChartScoreWrite &)> project;
   std::function<AcknowledgeOutcome(std::string_view, int)>
       acknowledgeAndActivate;
-  std::function<RecoveryMarkOutcome(std::string_view, RecoveryAttemptKind)>
-      recordRecoveryAttempt;
 };
 
 class Coordinator {
 public:
-  Coordinator(ScoreRepository &score, ReplayRepository &replay);
   explicit Coordinator(Dependencies dependencies);
 
   SaveOutcome persist(const ChartResultAttempt &attempt,
                       std::span<const ir::IrOutboxDraft> irDrafts = {});
-  RecoverySummary recoverAll(std::size_t limit = 256);
 
 private:
   Dependencies dependencies_;

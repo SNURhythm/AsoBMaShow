@@ -67,6 +67,8 @@ struct ChartReplayRecoverySummary {
   std::string diagnostic;
 };
 
+[[nodiscard]] std::string_view chartReplayRecoveryUserMessage() noexcept;
+
 struct ChartReplayPersistenceDependencies {
   std::function<ModernChartResultReadOutcome(std::string_view)> loadResult;
   ReplayFileAssociationCoordinatorDependencies fileAssociation;

@@ -2,7 +2,7 @@
 
 #include "AppSettings.h"
 #include "PlayerProfileManager.h"
-#include "ResultPersistenceCoordinator.h"
+#include "replay/ChartReplayPersistence.h"
 
 #include <filesystem>
 #include <functional>
@@ -47,7 +47,7 @@ struct ProfileSessionDependencies {
   std::function<bool(ReplayRepository &, const std::filesystem::path &,
                      std::string &)>
       bindReplay;
-  std::function<result_persistence::RecoverySummary()> recoverPendingResults;
+  std::function<replay::ChartReplayRecoverySummary()> recoverPendingResults;
   std::function<void()> beforeInputReplacement;
   std::function<bool(std::string &)> pauseProfileServices;
   std::function<bool(std::string_view, const AppSettings &, std::string &)>

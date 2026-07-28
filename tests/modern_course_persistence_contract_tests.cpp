@@ -35,8 +35,8 @@ void requireToken(const std::filesystem::path &path, std::string_view token,
 }
 
 void testModernCourseSchemaAndExclusiveOwnershipBoundary() {
-  require(ReplayRepository::kCurrentSchemaVersion == 13,
-          "Slice 5 advances the additive replay schema to version 12");
+  require(ReplayRepository::kCurrentSchemaVersion == 14,
+          "summary-only replay persistence requires schema version 14");
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
   const auto schema =
       root / "src/repositories/ReplayRepositorySchema.cpp";
@@ -48,8 +48,8 @@ void testModernCourseSchemaAndExclusiveOwnershipBoundary() {
   requireToken(schema, "modern_course_result_id",
                "course replay ownership column is missing");
   requireToken(schema,
-               "(modern_chart_result_id IS NOT NULL) != "
-               "(modern_course_result_id IS NOT NULL)",
+               "CHECK((modern_chart_result_id IS NOT NULL) != "
+               "(modern_course_result_id IS ",
                "chart-or-course replay ownership is not exclusive");
 }
 

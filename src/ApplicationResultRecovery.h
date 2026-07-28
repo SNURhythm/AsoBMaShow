@@ -1,14 +1,14 @@
 #pragma once
 
-#include "ResultPersistenceCoordinator.h"
+#include "replay/ChartReplayPersistence.h"
 
 #include <functional>
 
 namespace application_result_recovery {
 
 struct Dependencies {
-  std::function<result_persistence::RecoverySummary()> recover;
-  std::function<void(const result_persistence::RecoverySummary &)>
+  std::function<replay::ChartReplayRecoverySummary()> recover;
+  std::function<void(const replay::ChartReplayRecoverySummary &)>
       reportWarning;
   std::function<void()> startProfileServices;
   std::function<void()> runReadyRuntime;

@@ -1,6 +1,7 @@
 #pragma once
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
+#include "../replay/ChartReplayPersistence.h"
 #include "../ir/IrSubmission.h"
 #include "../ir/IrResultPresentation.h"
 #include "../ir/IrRankingModal.h"
@@ -67,10 +68,48 @@ struct ResultCourseOptions {
 };
 
 struct ResultPersistenceOptions {
-  std::shared_ptr<const result_persistence::ChartResultAttempt> attempt;
+  std::shared_ptr<const replay::ChartReplayPersistenceAttempt> chartAttempt;
+  std::optional<replay::ChartReplayPersistenceOutcome> chartOutcome;
+  // Removed with the legacy result-recall consumer in the next cutover task.
+  // ResultScene never persists or retries this compatibility payload.
+  std::shared_ptr<const result_persistence::ChartResultAttempt>
+      legacyRecallAttempt;
   std::shared_ptr<const ir::IrSubmission> irSubmission;
   result_persistence::SaveOutcome outcome;
 };
+
+[[nodiscard]] inline result_persistence::SaveOutcome
+chartResultPersistencePresentation(
+    const replay::ChartReplayPersistenceOutcome &outcome) {
+  result_persistence::SaveState state = result_persistence::SaveState::Unstaged;
+  switch (outcome.state) {
+  case replay::ChartReplayPersistenceState::SavedWithReplay:
+  case replay::ChartReplayPersistenceState::SavedWithoutReplay:
+    state = result_persistence::SaveState::Saved;
+    break;
+  case replay::ChartReplayPersistenceState::PendingScore:
+    state = result_persistence::SaveState::PendingScore;
+    break;
+  case replay::ChartReplayPersistenceState::PendingAcknowledgement:
+    state = result_persistence::SaveState::PendingAcknowledgement;
+    break;
+  case replay::ChartReplayPersistenceState::Retryable:
+    state = result_persistence::SaveState::Unstaged;
+    break;
+  case replay::ChartReplayPersistenceState::InvalidAttempt:
+    state = result_persistence::SaveState::InvalidAttempt;
+    break;
+  case replay::ChartReplayPersistenceState::IntegrityConflict:
+    state = outcome.durable() ? result_persistence::SaveState::PendingConflict
+                              : result_persistence::SaveState::UnstagedConflict;
+    break;
+  }
+  return {
+      .state = state,
+      .userMessage = std::string(result_persistence::saveStateUserMessage(state)),
+      .diagnostic = outcome.diagnostic,
+  };
+}
 
 struct ResultRemoteOptions {
   ir::IrRemoteScore score;
@@ -238,13 +277,10 @@ public:
 private:
   void loadDifficultyLabel();
   void loadPreviousBest();
-  void saveCourseScore();
-  void saveCourseReplay();
   bool persistModernCourseResult();
   void addResultPersistenceStatus();
   void retryResultPersistence();
   void continueWithoutSaving();
-  void applyResultPersistenceReceipt();
   void updateResultPersistencePresentation();
   void addIrResultStatus();
   void updateIrResultPresentation(bool force = false);
