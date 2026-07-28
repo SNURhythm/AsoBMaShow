@@ -70,10 +70,6 @@ struct ResultCourseOptions {
 struct ResultPersistenceOptions {
   std::shared_ptr<const replay::ChartReplayPersistenceAttempt> chartAttempt;
   std::optional<replay::ChartReplayPersistenceOutcome> chartOutcome;
-  // Removed with the legacy result-recall consumer in the next cutover task.
-  // ResultScene never persists or retries this compatibility payload.
-  std::shared_ptr<const result_persistence::ChartResultAttempt>
-      legacyRecallAttempt;
   std::shared_ptr<const ir::IrSubmission> irSubmission;
   result_persistence::SaveOutcome outcome;
 };

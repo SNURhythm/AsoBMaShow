@@ -42,22 +42,24 @@ bool sameColor(const Color &left, const Color &right) {
          left.a == right.a;
 }
 
-ResultRecordSummary localRecord(int id, ir::IrRecordState state,
-                                std::string createdAt, int score, int maxCombo,
-                                int clearRank,
-                                std::optional<std::string> option) {
-  ReplaySummary replay;
-  replay.id = id;
-  replay.createdAt = std::move(createdAt);
-  replay.finalScore = score;
-  replay.maxScore = 2'000;
-  replay.maxCombo = maxCombo;
-  replay.clearType = clearRank;
-  replay.playOption = std::move(option);
-  replay.initialGaugeType = GaugeType::Hard;
-  replay.finalGauge = 76.5F;
-  replay.irRecordState = state;
-  return makeLocalResultRecord(std::move(replay));
+ResultRecordSummary modernRecord(int id, ir::IrRecordState state,
+                                 std::string displayedTime, int score,
+                                 int maxCombo, int clearRank,
+                                 std::optional<std::string> option) {
+  ResultRecordSummary summary;
+  summary.identity =
+      ModernChartRecordId{.attemptId = "list-attempt-" + std::to_string(id)};
+  summary.score = score;
+  summary.maxScore = 2'000;
+  summary.maxCombo = maxCombo;
+  summary.clearRank = clearRank;
+  summary.playOption = option.value_or("NORMAL");
+  summary.displayedTime = std::move(displayedTime);
+  summary.irState = state;
+  summary.capabilities.irUpload =
+      state == ir::IrRecordState::Eligible ||
+      state == ir::IrRecordState::Failed;
+  return summary;
 }
 
 ResultRecordSummary remoteRecord() {
@@ -86,7 +88,7 @@ ResultRecordSummary remoteRecord() {
       .displayedTime = "2024-07-19 12:30:45.000",
       .playOption = "RANDOM",
       .irState = ir::IrRecordState::Uploaded,
-      .local = std::nullopt,
+      .autoPlayReplay = std::nullopt,
       .remote = std::nullopt,
   };
 }
@@ -158,7 +160,7 @@ int main() {
     };
 
     ResultRecordSummary eligible =
-        localRecord(11, ir::IrRecordState::Eligible, "2026-07-19 12:00:00",
+        modernRecord(11, ir::IrRecordState::Eligible, "2026-07-19 12:00:00",
                     1'500, 700, kClearTypeHardClearRank, "MIRROR");
     list.setResultRecords({eligible});
     auto *reusedRow =
@@ -194,7 +196,7 @@ int main() {
             "eligible badge uploads only its bound local row and consumes tap");
 
     ResultRecordSummary uploading =
-        localRecord(12, ir::IrRecordState::Uploading, "2026-07-19 12:01:00",
+        modernRecord(12, ir::IrRecordState::Uploading, "2026-07-19 12:01:00",
                     1'200, 500, kClearTypeEasyClearRank, "R-RANDOM");
     reusedRow->setSummary(uploading);
     auto *row = reusedRow;
@@ -215,7 +217,7 @@ int main() {
             "uploading badge clears upload action and consumes tap as status");
 
     ResultRecordSummary uploaded =
-        localRecord(13, ir::IrRecordState::Uploaded, "2026-07-19 12:02:00",
+        modernRecord(13, ir::IrRecordState::Uploaded, "2026-07-19 12:02:00",
                     1'900, 900, kClearTypeFullComboRank, std::nullopt);
     reusedRow->setSummary(uploaded);
     row = reusedRow;
@@ -254,14 +256,14 @@ int main() {
             "remote badge consumes taps and can never upload a local replay");
 
     ResultRecordSummary hidden =
-        localRecord(55, ir::IrRecordState::Hidden, {}, 0, 0,
+        modernRecord(55, ir::IrRecordState::Hidden, {}, 0, 0,
                     kClearTypeFailedRank, std::nullopt);
     reusedRow->setSummary(hidden);
     row = reusedRow;
     irBadge = badge(list);
     require(row == reusedRow && row->boundStableKey() == hidden.stableKey(),
             "hidden rebind replaces the remote stable row identity");
-    require(rowText(*row, "recordTitle")->getText() == "Replay #55" &&
+    require(rowText(*row, "recordTitle")->getText() == "IR Record" &&
                 rowText(*row, "recordScore")->getText() == "0" &&
                 rowText(*row, "recordRank")->getText() == "F",
             "hidden rebind replaces all remote labels");
@@ -276,7 +278,7 @@ int main() {
             "hidden row cannot invoke the recycled remote callback");
 
     ResultRecordSummary denied =
-        localRecord(66, ir::IrRecordState::Eligible, "2026-07-19 12:03:00",
+        modernRecord(66, ir::IrRecordState::Eligible, "2026-07-19 12:03:00",
                     1'000, 400, kClearTypeNormalClearRank, "RANDOM");
     denied.capabilities.irUpload = false;
     reusedRow->setSummary(denied);
@@ -321,14 +323,9 @@ int main() {
     require(remoteList.get(0).capabilities.resultRecall,
             "remote row selection remains available for View Result");
 
-    ResultRecordSummary modern;
-    modern.identity = ModernChartRecordId{
-        .attemptId = "123e4567-e89b-42d3-a456-426614174000"};
-    modern.capabilities.irUpload = true;
-    modern.irState = ir::IrRecordState::Eligible;
-    modern.displayedTime = "2026-07-19 12:04:00";
-    modern.score = 1'800;
-    modern.maxScore = 2'000;
+    ResultRecordSummary modern = modernRecord(
+        77, ir::IrRecordState::Eligible, "2026-07-19 12:04:00", 1'800,
+        800, kClearTypeHardClearRank, "NORMAL");
     ResultRecordListView modernList;
     modernList.setSize(700, 160);
     modernList.applyYogaLayout();

@@ -173,8 +173,8 @@ inline bool hasActiveCriteria(const ReplayRecordFilters &filters) {
 
 inline bool matchesPlayOption(const ResultRecordSummary &summary,
                               const std::string &filterOption) {
-  if (summary.local.has_value()) {
-    return matchesPlayOption(*summary.local, filterOption);
+  if (summary.autoPlayReplay.has_value()) {
+    return matchesPlayOption(*summary.autoPlayReplay, filterOption);
   }
   if (!summary.playOption.has_value()) {
     return false;
@@ -296,11 +296,6 @@ apply(const std::vector<ResultRecordSummary> &summaries,
         }
         if (a.displayedTimeUnixMillis != b.displayedTimeUnixMillis) {
           return a.displayedTimeUnixMillis > b.displayedTimeUnixMillis;
-        }
-        const auto aReplayId = a.localReplayId();
-        const auto bReplayId = b.localReplayId();
-        if (aReplayId.has_value() && bReplayId.has_value()) {
-          return *aReplayId > *bReplayId;
         }
         return a.stableKey() < b.stableKey();
       });

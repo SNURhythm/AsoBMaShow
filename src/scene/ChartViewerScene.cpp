@@ -3361,7 +3361,6 @@ void ChartViewerScene::showGhostModal() {
     return;
   }
 
-  const auto legacy = context.replayRepository.ListReplays(chart->Meta);
   std::vector<ResultRecordSummary> modern;
   const auto history =
       context.replayRepository.ListModernChartResults(chart->Meta.SHA256);
@@ -3381,9 +3380,7 @@ void ChartViewerScene::showGhostModal() {
       }
     }
   }
-  ghostReplaySummaries = mergeResultRecords(
-      legacy, modern, std::span<const ir::IrRemoteScore>{},
-      std::string_view{}, std::string_view{});
+  ghostReplaySummaries = std::move(modern);
   selectedGhostReplayIndex = -1;
   ghostReplayListView->setResultRecords(ghostReplaySummaries);
   if (ghostModalEmptyText != nullptr) {
@@ -3557,7 +3554,10 @@ void ChartViewerScene::loadSelectedGhostReplay() {
           return true;
         }
 
-        if (selected.modern.has_value()) {
+        if (resultRecordActionTarget(
+                selected, ResultRecordAction::PracticeGhost) ==
+                ResultRecordActionTarget::ModernChart &&
+            selected.modern.has_value()) {
           std::atomic_bool parseCancelled = false;
           auto consumer = replay::makeRuntimeChartReplayConsumer(
               context.replayRepository);
@@ -3580,29 +3580,9 @@ void ChartViewerScene::loadSelectedGhostReplay() {
                                        "Saved ghost loaded");
           return true;
         }
-
-        const auto replayId = selected.localReplayId();
-        if (!replayId.has_value()) {
-          if (statusText != nullptr) {
-            statusText->setText("Ghost load failed");
-          }
-          return true;
+        if (statusText != nullptr) {
+          statusText->setText("Ghost load failed");
         }
-
-        const bms_parser::ChartMeta &loadMeta =
-            chart != nullptr ? chart->Meta : record.meta;
-        auto replay =
-            context.replayRepository.LoadReplay(*replayId, loadMeta);
-        if (!replay.has_value()) {
-          if (statusText != nullptr) {
-            statusText->setText("Ghost load failed");
-          }
-          return true;
-        }
-
-        applyGhostReplayData(*replay, replay->id,
-                             "Ghost #" + std::to_string(replay->id) +
-                                 " loaded");
         return true;
       },
       0, true);

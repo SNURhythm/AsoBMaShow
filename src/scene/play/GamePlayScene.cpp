@@ -2507,7 +2507,7 @@ void GamePlayScene::configurePacemakerTarget() {
     }
 
     activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
-        context.replayRepository, *chart, *options.replayData, selected,
+        *chart, *options.replayData, selected,
         result_presentation::previousBestForReplayChart(
             context.scoreRepository, chart->Meta, *options.replayData));
     renderer->setPacemakerTarget(activePacemakerTarget);
@@ -2515,37 +2515,12 @@ void GamePlayScene::configurePacemakerTarget() {
   }
 
   std::optional<ScoreBestSnapshot> best;
-  std::optional<ReplayData> bestReplay;
   if (selected == pacemaker::kTargetBest) {
     best = context.scoreRepository.LoadBestScore(chart->Meta);
-    if (best.has_value() && best->score > 0) {
-      const auto summaries =
-          context.replayRepository.ListReplays(chart->Meta, 100);
-      for (const ReplaySummary &summary : summaries) {
-        if (summary.courseReplay || summary.autoPlay ||
-            summary.finalScore != best->score || summary.eventCount <= 0) {
-          continue;
-        }
-
-        auto replay =
-            context.replayRepository.LoadReplay(summary.id, chart->Meta);
-        if (!replay.has_value() || replay->finalScore != best->score) {
-          continue;
-        }
-
-        const std::vector<int> progression =
-            pacemaker::buildReplayScoreProgression(*chart, *replay);
-        if (!progression.empty() && progression.back() == best->score) {
-          bestReplay = std::move(*replay);
-          break;
-        }
-      }
-    }
   }
 
-  activePacemakerTarget = pacemaker::targetFromSelection(
-      *chart, selected, best,
-      bestReplay.has_value() ? &bestReplay.value() : nullptr);
+  activePacemakerTarget =
+      pacemaker::targetFromSelection(*chart, selected, best, nullptr);
   renderer->setPacemakerTarget(activePacemakerTarget);
 }
 

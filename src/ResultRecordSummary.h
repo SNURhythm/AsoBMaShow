@@ -15,10 +15,8 @@
 #include <variant>
 #include <vector>
 
-struct LocalReplayRecordId {
-  int replayId = 0;
-
-  bool operator==(const LocalReplayRecordId &) const = default;
+struct AutoPlayRecordId {
+  bool operator==(const AutoPlayRecordId &) const = default;
 };
 
 struct IrRemoteRecordId {
@@ -54,7 +52,7 @@ struct LegacyCourseRecordId {
 };
 
 using ResultRecordIdentity =
-    std::variant<LocalReplayRecordId, ModernChartRecordId, ModernCourseRecordId,
+    std::variant<AutoPlayRecordId, ModernChartRecordId, ModernCourseRecordId,
                  LegacyChartRecordId, LegacyCourseRecordId, IrRemoteRecordId>;
 
 struct ResultRecordIdentityHash {
@@ -100,7 +98,7 @@ struct ResultRecordSummary {
   std::string displayedTime;
   std::optional<std::string> playOption;
   ir::IrRecordState irState = ir::IrRecordState::Hidden;
-  std::optional<ReplaySummary> local;
+  std::optional<ReplaySummary> autoPlayReplay;
   std::optional<ModernChartResultRecord> modern;
   std::optional<ModernCourseResultRecord> modernCourse;
   replay::ReplayState replayState = replay::ReplayState::NotApplicable;
@@ -114,14 +112,44 @@ struct ResultRecordSummary {
   [[nodiscard]] bool isLegacyChart() const noexcept;
   [[nodiscard]] bool isLegacyCourse() const noexcept;
   [[nodiscard]] bool isRemote() const noexcept;
-  [[nodiscard]] std::optional<int> localReplayId() const noexcept;
   [[nodiscard]] std::optional<std::string_view>
   modernAttemptId() const noexcept;
   [[nodiscard]] std::optional<std::string_view> remoteScoreId() const noexcept;
   [[nodiscard]] std::string stableKey() const;
 };
 
-[[nodiscard]] ResultRecordSummary makeLocalResultRecord(ReplaySummary summary);
+enum class ResultRecordAction {
+  Watch,
+  RetrySame,
+  GBattle,
+  PracticeGhost,
+  ResultRecall,
+  VideoExport,
+  ShareOrCopy,
+  DeleteReplayFile,
+  IrUpload,
+};
+
+enum class ResultRecordActionTarget {
+  None,
+  AutoPlay,
+  ModernChart,
+  ModernCourse,
+  Remote,
+};
+
+// Resolves an action only when capability, tagged identity, and the attached
+// payload all agree. Integer ID collisions and forged capability bits cannot
+// cross this boundary.
+[[nodiscard]] ResultRecordActionTarget
+resultRecordActionTarget(const ResultRecordSummary &summary,
+                         ResultRecordAction action) noexcept;
+
+// Auto Play is the only ReplaySummary-backed Records row after the summary-only
+// cutover. The factory rejects positive IDs, course rows, and non-Auto Play
+// summaries so legacy replay identity cannot re-enter action routing.
+[[nodiscard]] ResultRecordSummary
+makeAutoPlayResultRecord(ReplaySummary summary);
 
 [[nodiscard]] ResultRecordSummary
 makeLegacyChartResultRecord(LegacyChartResultSummary summary);
@@ -148,12 +176,12 @@ makeRemoteResultRecord(std::string_view providerId,
 // remote mirror. Only an exact receipt in the requested scope suppresses its
 // linked standalone remote row; all local attempts remain visible.
 [[nodiscard]] std::vector<ResultRecordSummary>
-mergeResultRecords(std::span<const ReplaySummary> local,
+mergeResultRecords(std::span<const ReplaySummary> autoPlay,
                    std::span<const ir::IrRemoteScore> remote,
                    std::string_view providerId, std::string_view serverOrigin);
 
 [[nodiscard]] std::vector<ResultRecordSummary>
-mergeResultRecords(std::span<const ReplaySummary> local,
-                   std::span<const ResultRecordSummary> modern,
+mergeResultRecords(std::span<const ReplaySummary> autoPlay,
+                   std::span<const ResultRecordSummary> projected,
                    std::span<const ir::IrRemoteScore> remote,
                    std::string_view providerId, std::string_view serverOrigin);

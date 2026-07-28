@@ -1,6 +1,5 @@
 #include "IrUploadsScene.h"
 
-#include "../ResultRecallBuilder.h"
 #include "../ir/IrCredentialStore.h"
 #include "../ir/IrProfileSettings.h"
 #include "../ir/IrSubmissionService.h"
@@ -568,40 +567,11 @@ void IrUploadsScene::startUpload() {
                                     candidates = std::move(candidates)](
                                        const std::stop_token &stopToken) {
     ir_uploads::PreparationDependencies dependencies;
-    dependencies.verify = [this](const ir::IrUploadCandidate &candidate,
-                                 const std::stop_token &stopToken) {
-      auto stored = context.replayRepository.LoadReplayResult(
-          candidate.replayId(), candidate.chart.meta);
-      std::atomic_bool cancelled{stopToken.stop_requested()};
-#if !defined(__ANDROID__) || defined(__cpp_lib_jthread)
-      std::stop_callback stopCallback(stopToken,
-                                      [&cancelled] { cancelled = true; });
-#endif
-      if (!stored) {
-        return ir_uploads::VerificationOutcome{
-            .diagnostic = "Saved replay data could not be loaded."};
-      }
-      auto recalled =
-          result_recall::BuildChartResult(std::move(*stored), cancelled);
-      if (!recalled.value) {
-        return ir_uploads::VerificationOutcome{
-            .diagnostic = recalled.diagnostic.empty()
-                              ? "This saved result could not be reconstructed."
-                              : ir::sanitizeDiagnostic(recalled.diagnostic)};
-      }
-      if (!recalled.value->historicalIr ||
-          !recalled.value->historicalIr->submission) {
-        return ir_uploads::VerificationOutcome{
-            .diagnostic =
-                recalled.value->historicalIrDiagnostic.empty()
-                    ? "IR verification failed because historical proof "
-                      "reconstruction returned no analysis. This score cannot "
-                      "be uploaded safely."
-                    : ir::sanitizeDiagnostic(
-                          recalled.value->historicalIrDiagnostic)};
-      }
+    dependencies.verify = [](const ir::IrUploadCandidate &,
+                             const std::stop_token &) {
       return ir_uploads::VerificationOutcome{
-          .submission = *recalled.value->historicalIr->submission};
+          .diagnostic =
+              "Legacy replay uploads are unavailable after summary migration."};
     };
     dependencies.enqueueBatch =
         [this](std::span<const ir::IrSubmission> submissions) {

@@ -147,16 +147,13 @@ public:
     titleText->setText(
         summary.autoPlay
             ? "AUTO PLAY"
-            : (!summary.displayedTime.empty()
-                   ? summary.displayedTime
-                   : (summary.localReplayId().has_value()
-                          ? "Replay #" +
-                                std::to_string(*summary.localReplayId())
-                          : "IR Record")));
+            : (!summary.displayedTime.empty() ? summary.displayedTime
+                                              : "IR Record"));
     if (summary.legacyChart.has_value() || summary.legacyCourse.has_value()) {
       detailText->setText("Legacy summary");
-    } else if (summary.local.has_value()) {
-      detailText->setText(replay_summary_ui::detailLabel(*summary.local));
+    } else if (summary.autoPlayReplay.has_value()) {
+      detailText->setText(
+          replay_summary_ui::detailLabel(*summary.autoPlayReplay));
     } else {
       std::string detail = "IR";
       if (summary.playOption.has_value() && !summary.playOption->empty()) {

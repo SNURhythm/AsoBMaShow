@@ -508,7 +508,6 @@ private:
   bool chartDifficultyMinDropdownOpen = false;
   bool chartDifficultyMaxDropdownOpen = false;
   std::optional<int> chartDifficultyRangeTableId;
-  std::vector<ReplaySummary> replaySummaries;
   std::vector<ResultRecordSummary> resultRecordSummaries;
   std::vector<ResultRecordSummary> visibleResultRecordSummaries;
   std::optional<std::string> selectedResultRecordStableKey;
@@ -516,7 +515,6 @@ private:
   std::string publishedResultRecordDiagnostic;
   ReplayRecordFilters replayRecordFilters;
   ChartMetaRecord replayModalChart;
-  std::optional<ReplaySummary> selectedReplaySummary;
   std::optional<ResultRecordSummary> replayExportSelection;
   platform_document_handoff::PlatformDocumentHandoffOperation
       replayFileDocumentHandoff;
@@ -818,42 +816,33 @@ private:
       std::unique_ptr<bms_parser::Chart> &preparedChart,
       play_options::PlayOptionReplayInfo &playInfo,
       std::atomic_bool &parseCancelled) const;
-  void startReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startAutoPlayPlayback(const ChartMetaRecord &record);
   void startModernReplayPlayback(const ChartMetaRecord &record,
                                  ModernChartResultRecord modern);
   void startModernCourseReplayPlayback(const ChartMetaRecord &record,
                                        ModernCourseResultRecord modern);
-  void startGBattlePlayback(const ChartMetaRecord &record, int replayId);
   void startModernGBattlePlayback(const ChartMetaRecord &record,
                                   ModernChartResultRecord modern);
-  void startCourseReplayPlayback(const ChartMetaRecord &record, int replayId);
   void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
-  void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
-                              ReplayVideoExportOptions options);
+  void startAutoPlayVideoExport(const ChartMetaRecord &record,
+                                ReplayVideoExportOptions options);
   void startModernReplayVideoExport(const ChartMetaRecord &record,
                                     ModernChartResultRecord modern,
                                     ReplayVideoExportOptions options);
   void startModernCourseReplayVideoExport(
       ModernCourseResultRecord modern, ReplayVideoExportOptions options);
-  void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
   void startModernReplayResultRecall(const ChartMetaRecord &record,
                                      ModernChartResultRecord modern);
   void startModernCourseReplayResultRecall(ModernCourseResultRecord modern,
                                            bool retrySameAllowed);
   void startRemoteResultRecall(IrRemoteRecordId identity,
                                std::string selectedStableKey);
-  void startReplayIrUpload(const ChartMetaRecord &record,
-                           ReplaySummary summary);
   void startModernReplayIrUpload(ModernChartResultRecord modern);
-  void finishReplayIrUpload(int replayId, std::string message);
+  void finishReplayIrUpload(std::string attemptId, std::string message);
   void publishReplayIrStatusFeedback(ir::IrRecordState state);
   void observeReplayIrServiceRevisions();
   [[nodiscard]] std::optional<std::string>
   activeReplayIrServerOrigin() const;
-  void refreshReplayIrMarker(
-      int replayId,
-      ir::IrRecordActivity activity = ir::IrRecordActivity::None);
-  void startCourseReplayResultRecall(int replayId);
   void finishReplayResultRecallFailure(std::string diagnostic = {});
   void finishRemoteResultRecallFailure(std::string diagnostic = {});
   void applyReplayExportProgress();

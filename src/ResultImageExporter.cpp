@@ -837,7 +837,7 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
         pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
                                 : pacemakerTarget;
     pacemaker = result_presentation::pacemakerDataForReplayResult(
-        context.replayRepository, chart, state, replay, target, previousBest);
+        chart, state, replay, target, previousBest);
   }
   std::string difficultyLabel =
       result_presentation::difficultyLabelForChart(context.chartRepository,

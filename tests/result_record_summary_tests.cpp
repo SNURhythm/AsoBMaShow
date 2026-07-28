@@ -60,14 +60,12 @@ void testReplayFileActionsUseModernIdentityAndCapabilitiesOnly() {
                  ModernReplayOwnerKind::CourseResult,
          "corrupt course remains deletable but not shareable");
 
-  ReplaySummary legacyReplay;
-  legacyReplay.id = 7;
-  legacyReplay.finalScore = 1;
-  legacyReplay.maxScore = 2;
-  legacyReplay.createdAt = "2026-01-01 00:00:00";
-  auto legacy = makeLocalResultRecord(legacyReplay);
+  LegacyChartResultSummary legacySummary;
+  legacySummary.legacyReplayId = chartRecord.result.resultId;
+  auto legacy = makeLegacyChartResultRecord(legacySummary);
   legacy.capabilities.shareOrCopy = true;
   legacy.capabilities.deleteReplayFile = true;
+  legacy.modern = chartRecord;
   const auto legacyActions = replay::replayFileActionSelection(legacy, true);
   expect(!legacyActions.request && !legacyActions.shareVisible &&
              !legacyActions.deleteVisible,
@@ -127,10 +125,10 @@ void testRecordActionsRequireTypedIdentityAndPayloadAgreement() {
   autoPlaySummary.id = -1;
   autoPlaySummary.autoPlay = true;
   autoPlaySummary.maxScore = 2;
-  auto autoPlay = makeLocalResultRecord(autoPlaySummary);
+  auto autoPlay = makeAutoPlayResultRecord(autoPlaySummary);
   auto legacyAutoplayCollision = legacyChart;
   legacyAutoplayCollision.autoPlay = true;
-  legacyAutoplayCollision.local = autoPlay.local;
+  legacyAutoplayCollision.autoPlayReplay = autoPlay.autoPlayReplay;
   expect(resultRecordActionTarget(autoPlay, ResultRecordAction::Watch) ==
              ResultRecordActionTarget::AutoPlay &&
              resultRecordActionTarget(legacyAutoplayCollision,
@@ -280,8 +278,7 @@ void testModernConversionUsesSharedReplayCapabilities() {
   const auto absent =
       makeModernChartResultRecord(record, replay::ReplayState::Missing, true);
   expect(absent.isLocal() && absent.isModernChart() && !absent.isRemote() &&
-             absent.modernAttemptId() == record.result.attemptId &&
-             !absent.localReplayId(),
+             absent.modernAttemptId() == record.result.attemptId,
          "modern result has a durable tagged attempt identity");
   expect(absent.capabilities.resultRecall && absent.capabilities.irUpload &&
              !absent.capabilities.watch && !absent.capabilities.gBattle &&
@@ -361,8 +358,8 @@ void testLegacySummariesExposeRecordsOnly() {
   chart.createdAt = "2026-07-20 01:02:03";
   chart.partial = true;
   const auto chartRecord = makeLegacyChartResultRecord(chart);
-  expect(chartRecord.isLocal() && !chartRecord.localReplayId() &&
-             chartRecord.legacyChart == chart && !chartRecord.legacyCourse,
+  expect(chartRecord.isLocal() && chartRecord.legacyChart == chart &&
+             !chartRecord.legacyCourse,
          "legacy chart has an explicit non-replay identity");
   expect(chartRecord.capabilities == ResultRecordCapabilities{} &&
              chartRecord.stableKey() == "lc:11",
@@ -378,8 +375,8 @@ void testLegacySummariesExposeRecordsOnly() {
   course.clearType = kClearTypeHardClearRank;
   course.partial = true;
   const auto courseRecord = makeLegacyCourseResultRecord(course);
-  expect(courseRecord.course && !courseRecord.localReplayId() &&
-             courseRecord.legacyCourse == course && !courseRecord.legacyChart,
+  expect(courseRecord.course && courseRecord.legacyCourse == course &&
+             !courseRecord.legacyChart,
          "legacy course has an explicit summary identity");
   expect(courseRecord.capabilities == ResultRecordCapabilities{} &&
              courseRecord.stableKey() == "lco:21" &&
@@ -388,73 +385,47 @@ void testLegacySummariesExposeRecordsOnly() {
          "legacy course projects only independently stored header facts");
 }
 
-void testLocalConversionPreservesRecordSemantics() {
+void testAutoPlayIsTheOnlyReplaySummaryBackedRecord() {
   ReplaySummary replay;
-  replay.id = 73;
-  replay.finalScore = 987;
+  replay.id = -1;
+  replay.autoPlay = true;
+  replay.finalScore = 1'000;
   replay.maxScore = 1'000;
   replay.maxCombo = 500;
   replay.clearType = kClearTypeNormalClearRank;
-  replay.createdAt = "2024-01-02 03:04:05";
+  replay.createdAt = "AUTO PLAY";
   replay.playOption = "MIRROR";
   replay.irRecordState = ir::IrRecordState::Eligible;
-  replay.irSubmissionEligible = true;
 
-  const ResultRecordSummary result = makeLocalResultRecord(replay);
-
-  expect(result.isLocal() && !result.isRemote(),
-         "local conversion keeps the local tag");
-  expect(result.localReplayId() == 73 && !result.remoteScoreId(),
-         "local conversion exposes only the replay identity");
-  expect(std::get<LocalReplayRecordId>(result.identity).replayId == 73,
-         "local identity preserves the replay ID");
-  expect(result.capabilities.watch && result.capabilities.gBattle &&
-             result.capabilities.resultRecall &&
-             result.capabilities.videoExport && result.capabilities.irUpload,
-         "normal local replay preserves all current actions");
-  expect(!result.course && !result.autoPlay && result.score == 987 &&
-             result.maxScore == 1'000 && result.maxCombo == 500,
-         "local score fields are preserved");
-  expect(result.clearRank == kClearTypeFullComboRank,
-         "local conversion preserves effective full-combo clear behavior");
-  expect(result.displayedTimeUnixMillis == 1'704'164'645'000LL &&
-             result.displayedTime == replay.createdAt,
-         "local timestamp keeps display text and obtains a sortable time");
-  expect(result.playOption == replay.playOption &&
-             result.irState == ir::IrRecordState::Eligible,
-         "local option and semantic IR state are preserved");
-  expect(result.local && result.local->id == replay.id && !result.remote,
-         "local conversion nests the original replay-only summary");
-
-  replay.courseReplay = true;
-  replay.irRecordState = ir::IrRecordState::Hidden;
-  const ResultRecordSummary course = makeLocalResultRecord(replay);
-  expect(course.course && course.capabilities.watch &&
-             !course.capabilities.gBattle && course.capabilities.resultRecall &&
-             course.capabilities.videoExport && !course.capabilities.irUpload,
-         "course replay keeps current browsing actions");
-
-  replay.courseReplay = false;
-  replay.autoPlay = true;
-  replay.id = -1;
-  const ResultRecordSummary autoPlay = makeLocalResultRecord(replay);
-  expect(autoPlay.autoPlay && autoPlay.localReplayId() == -1 &&
-             autoPlay.capabilities.watch && !autoPlay.capabilities.gBattle &&
-             !autoPlay.capabilities.resultRecall &&
-             autoPlay.capabilities.videoExport &&
-             !autoPlay.capabilities.irUpload,
-         "Auto Play keeps its current local capability semantics");
+  const ResultRecordSummary result = makeAutoPlayResultRecord(replay);
+  expect(result.isLocal() && !result.isRemote() && result.autoPlay &&
+             std::holds_alternative<AutoPlayRecordId>(result.identity) &&
+             result.stableKey() == "a:auto-play",
+         "Auto Play has a dedicated non-integer Records identity");
+  expect(result.capabilities.watch && result.capabilities.videoExport &&
+             !result.capabilities.gBattle &&
+             !result.capabilities.resultRecall &&
+             !result.capabilities.irUpload,
+         "Auto Play exposes only its synthetic playback actions");
+  expect(result.autoPlayReplay && result.autoPlayReplay->id == -1 &&
+             result.irState == ir::IrRecordState::Hidden && !result.remote,
+         "Auto Play retains only the synthetic playback payload");
 
   replay.autoPlay = false;
-  replay.id = 74;
-  replay.irRecordState = ir::IrRecordState::Failed;
-  expect(makeLocalResultRecord(replay).capabilities.irUpload,
-         "failed local IR upload remains retryable");
-  replay.irRecordState = ir::IrRecordState::Uploaded;
-  const ResultRecordSummary uploaded = makeLocalResultRecord(replay);
-  expect(!uploaded.capabilities.irUpload &&
-             uploaded.irState == ir::IrRecordState::Uploaded,
-         "uploaded local IR state is visible but not uploadable");
+  replay.id = 73;
+  expectInvalid(
+      [&] { static_cast<void>(makeAutoPlayResultRecord(replay)); },
+      "positive legacy replay summaries cannot enter modern action routing");
+  replay.autoPlay = true;
+  replay.id = 0;
+  expectInvalid(
+      [&] { static_cast<void>(makeAutoPlayResultRecord(replay)); },
+      "noncanonical Auto Play sentinel IDs are rejected");
+  replay.id = -1;
+  replay.courseReplay = true;
+  expectInvalid(
+      [&] { static_cast<void>(makeAutoPlayResultRecord(replay)); },
+      "course summaries cannot impersonate Auto Play");
 }
 
 void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
@@ -464,8 +435,7 @@ void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
 
   expect(result.isRemote() && !result.isLocal(),
          "remote conversion keeps the remote tag");
-  expect(!result.localReplayId() &&
-             result.remoteScoreId() == score.remoteScoreId,
+  expect(result.remoteScoreId() == score.remoteScoreId,
          "remote conversion exposes only the remote score identity");
   const auto &identity = std::get<IrRemoteRecordId>(result.identity);
   expect(identity.providerId == "tachi" &&
@@ -486,7 +456,7 @@ void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
   expect(result.playOption == score.random &&
              result.irState == ir::IrRecordState::Uploaded,
          "remote option remains optional and IR is read-only uploaded");
-  expect(!result.local && result.remote &&
+  expect(!result.autoPlayReplay && result.remote &&
              result.remote->remoteScoreId == score.remoteScoreId,
          "remote conversion nests only the validated stored score model");
 
@@ -546,9 +516,12 @@ void testRemoteConversionFailsClosed() {
 }
 
 void testIdentityEqualityHashAndStableKeys() {
-  const ResultRecordIdentity localA = LocalReplayRecordId{.replayId = 42};
-  const ResultRecordIdentity localB = LocalReplayRecordId{.replayId = 42};
-  const ResultRecordIdentity localOther = LocalReplayRecordId{.replayId = 43};
+  const ResultRecordIdentity autoPlayA = AutoPlayRecordId{};
+  const ResultRecordIdentity autoPlayB = AutoPlayRecordId{};
+  const ResultRecordIdentity modernA =
+      ModernChartRecordId{.attemptId = "attempt-42"};
+  const ResultRecordIdentity modernOther =
+      ModernChartRecordId{.attemptId = "attempt-43"};
   const ResultRecordIdentity remoteA = IrRemoteRecordId{
       .providerId = "tachi",
       .serverOrigin = "https://boku.tachi.ac",
@@ -561,27 +534,31 @@ void testIdentityEqualityHashAndStableKeys() {
       .remoteScoreId = "score:42",
   };
 
-  expect(localA == localB && localA != localOther && localA != remoteA &&
+  expect(autoPlayA == autoPlayB && autoPlayA != modernA &&
+             modernA != modernOther && autoPlayA != remoteA &&
              remoteA == remoteB && remoteA != remoteOther,
          "tagged identity equality includes type and every remote scope");
   std::unordered_set<ResultRecordIdentity, ResultRecordIdentityHash> values;
-  values.insert(localA);
-  values.insert(localB);
+  values.insert(autoPlayA);
+  values.insert(autoPlayB);
+  values.insert(modernA);
+  values.insert(modernOther);
   values.insert(remoteA);
   values.insert(remoteB);
   values.insert(remoteOther);
-  expect(values.size() == 3,
+  expect(values.size() == 5,
          "identity hash agrees with tagged identity equality");
 
   ReplaySummary replay;
-  replay.id = 42;
-  const ResultRecordSummary local = makeLocalResultRecord(replay);
+  replay.id = -1;
+  replay.autoPlay = true;
+  const ResultRecordSummary autoPlay = makeAutoPlayResultRecord(replay);
   ir::IrRemoteScore score = validRemoteScore();
-  score.remoteScoreId = "42";
+  score.remoteScoreId = "auto-play";
   const ResultRecordSummary remote =
       makeRemoteResultRecord("tachi", "https://boku.tachi.ac", score);
-  expect(local.stableKey() != remote.stableKey(),
-         "local and remote display keys cannot collide");
+  expect(autoPlay.stableKey() != remote.stableKey(),
+         "Auto Play and remote display keys cannot collide");
 
   score.remoteScoreId = "bc";
   const ResultRecordSummary componentA =
@@ -599,127 +576,82 @@ void testIdentityEqualityHashAndStableKeys() {
          "validated display keys have an explicit UI-safe size bound");
 }
 
-ReplaySummary localRecord(int id, std::string createdAt) {
+ReplaySummary autoPlayRecord() {
   ReplaySummary replay;
-  replay.id = id;
-  replay.finalScore = 1'500;
+  replay.id = -1;
+  replay.autoPlay = true;
+  replay.finalScore = 2'000;
   replay.maxScore = 2'000;
-  replay.maxCombo = 500;
-  replay.clearType = kClearTypeHardClearRank;
-  replay.createdAt = std::move(createdAt);
+  replay.maxCombo = 1'000;
+  replay.clearType = kClearTypeFullComboRank;
+  replay.createdAt = "AUTO PLAY";
   return replay;
 }
 
-void testMergeSuppressesOnlyExactCurrentOriginReceipt() {
-  constexpr std::string_view provider = "tachi";
-  constexpr std::string_view origin = "https://boku.tachi.ac";
-
-  ReplaySummary linked = localRecord(10, "2024-01-02 03:04:05");
-  linked.hasIrReceipt = true;
-  linked.receiptProviderId = provider;
-  linked.receiptServerOrigin = origin;
-  linked.receiptRemoteScoreId = "linked-score";
-
-  ReplaySummary equivalentAttempt = linked;
-  equivalentAttempt.id = 11;
-  equivalentAttempt.hasIrReceipt = false;
-  equivalentAttempt.receiptProviderId.clear();
-  equivalentAttempt.receiptServerOrigin.clear();
-  equivalentAttempt.receiptRemoteScoreId.clear();
-
-  ReplaySummary otherOrigin = localRecord(12, "2024-01-02 03:04:04");
-  otherOrigin.hasIrReceipt = true;
-  otherOrigin.receiptProviderId = provider;
-  otherOrigin.receiptServerOrigin = "https://other.example";
-  otherOrigin.receiptRemoteScoreId = "other-origin-score";
-
-  ReplaySummary receiptWithoutId = localRecord(13, "2024-01-02 03:04:03");
-  receiptWithoutId.hasIrReceipt = true;
-  receiptWithoutId.receiptProviderId = provider;
-  receiptWithoutId.receiptServerOrigin = origin;
-
-  ir::IrRemoteScore linkedRemote = validRemoteScore();
-  linkedRemote.remoteScoreId = "linked-score";
-  ir::IrRemoteScore unrelatedRemote = validRemoteScore();
-  unrelatedRemote.remoteScoreId = "unrelated-score";
-  ir::IrRemoteScore otherOriginLinkedRemote = validRemoteScore();
-  otherOriginLinkedRemote.remoteScoreId = "other-origin-score";
-  ir::IrRemoteScore receiptlessEquivalentRemote = validRemoteScore();
-  receiptlessEquivalentRemote.remoteScoreId = "receiptless-equivalent";
-  receiptlessEquivalentRemote.noteCount = 1'000;
-  receiptlessEquivalentRemote.score = receiptWithoutId.finalScore;
-  receiptlessEquivalentRemote.maxCombo = receiptWithoutId.maxCombo;
-  receiptlessEquivalentRemote.random.reset();
-
-  const std::vector<ReplaySummary> local{linked, equivalentAttempt, otherOrigin,
-                                         receiptWithoutId};
-  const std::vector<ir::IrRemoteScore> remote{linkedRemote, unrelatedRemote,
-                                              otherOriginLinkedRemote,
-                                              receiptlessEquivalentRemote};
-  const auto merged = mergeResultRecords(local, remote, provider, origin);
-
-  expect(merged.size() == 7,
-         "exact linked remote suppression removes only one standalone row");
-  for (int replayId : {10, 11, 12, 13}) {
-    expect(std::ranges::any_of(merged,
-                               [replayId](const auto &record) {
-                                 return record.localReplayId() == replayId;
-                               }),
-           "merge preserves every local replay including equivalent attempts");
-  }
-  expect(!std::ranges::any_of(merged,
-                              [](const auto &record) {
-                                return record.remoteScoreId() == "linked-score";
-                              }),
-         "current provider and origin receipt suppresses the exact remote ID");
-  expect(std::ranges::any_of(merged,
-                             [](const auto &record) {
-                               return record.remoteScoreId() ==
-                                      "unrelated-score";
-                             }),
-         "unrelated local and remote rows coexist");
-  expect(std::ranges::any_of(merged,
-                             [](const auto &record) {
-                               return record.remoteScoreId() ==
-                                      "other-origin-score";
-                             }),
-         "receipt linked only to another origin does not suppress");
-  expect(std::ranges::any_of(merged,
-                             [](const auto &record) {
-                               return record.remoteScoreId() ==
-                                      "receiptless-equivalent";
-                             }),
-         "receipt without a remote ID does not guess an equivalent row");
+ResultRecordSummary modernRecord(std::string attemptId,
+                                 std::int64_t playedAtUnixMillis) {
+  auto result = validModernResult();
+  result.attemptId = std::move(attemptId);
+  result.playedAtUnixMillis = playedAtUnixMillis;
+  return makeModernChartResultRecord(
+      ModernChartResultRecord{.result = std::move(result)},
+      replay::ReplayState::Missing, false);
 }
 
 void testMergeIncludesModernResultsWithoutChangingTheirCapabilities() {
   auto modernResult = validModernResult();
   modernResult.playedAtUnixMillis = 1'704'164'646'000LL;
   ModernChartResultRecord modernRecord{.result = modernResult};
-  const std::vector<ResultRecordSummary> modern{makeModernChartResultRecord(
-      modernRecord, replay::ReplayState::Missing, true)};
-  const std::vector<ReplaySummary> local{
-      localRecord(44, "2024-01-02 03:04:05")};
+  LegacyChartResultSummary legacy;
+  legacy.legacyReplayId = 77;
+  legacy.createdAt = "2024-01-02 03:04:30";
+  const std::vector<ResultRecordSummary> modern{
+      makeModernChartResultRecord(modernRecord, replay::ReplayState::Missing,
+                                  true),
+      makeLegacyChartResultRecord(legacy)};
+  const std::vector<ReplaySummary> autoPlay{autoPlayRecord()};
   const std::vector<ir::IrRemoteScore> remote;
 
-  const auto merged = mergeResultRecords(local, modern, remote, "tachi",
+  const auto merged = mergeResultRecords(autoPlay, modern, remote, "tachi",
                                          "https://boku.tachi.ac");
-  expect(merged.size() == 2 && merged.front().isModernChart() &&
-             merged.front().modernAttemptId() == modernResult.attemptId,
-         "Records merge includes strict modern results newest-first");
-  expect(merged.front().capabilities.resultRecall &&
-             merged.front().capabilities.irUpload &&
-             !merged.front().capabilities.watch,
+  const auto mergedModern = std::ranges::find_if(
+      merged, [](const ResultRecordSummary &record) {
+        return record.isModernChart();
+      });
+  expect(merged.size() == 3 && mergedModern != merged.end() &&
+             mergedModern->modernAttemptId() == modernResult.attemptId,
+         "Records merge includes modern results and legacy summaries");
+  expect(std::ranges::any_of(merged,
+                             [](const ResultRecordSummary &record) {
+                               return record.isLegacyChart() &&
+                                      record.capabilities ==
+                                          ResultRecordCapabilities{};
+                             }),
+         "merged legacy summary remains Records-only");
+  expect(mergedModern != merged.end() &&
+             mergedModern->capabilities.resultRecall &&
+             mergedModern->capabilities.irUpload &&
+             !mergedModern->capabilities.watch,
          "Records merge preserves file-independent modern capabilities");
+
+  ReplaySummary legacyReplay;
+  legacyReplay.id = 44;
+  expectInvalid(
+      [&] {
+        static_cast<void>(mergeResultRecords(
+            std::span<const ReplaySummary>(&legacyReplay, 1), modern, remote,
+            "tachi", "https://boku.tachi.ac"));
+      },
+      "Records merge rejects positive replay summaries at its public boundary");
 }
 
 void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
-  ReplaySummary autoPlay = localRecord(-1, {});
-  autoPlay.autoPlay = true;
-  ReplaySummary newestLocal = localRecord(20, "2024-01-02 03:05:01");
-  ReplaySummary tiedLocalB = localRecord(30, "2024-01-02 03:05:00");
-  ReplaySummary tiedLocalA = localRecord(3, "2024-01-02 03:05:00");
-  ReplaySummary oldestLocal = localRecord(40, "2024-01-02 03:04:04");
+  const std::vector<ReplaySummary> autoPlay{autoPlayRecord()};
+  const std::vector<ResultRecordSummary> projected{
+      modernRecord("newest", 1'704'164'701'000LL),
+      modernRecord("tied-b", 1'704'164'700'000LL),
+      modernRecord("tied-a", 1'704'164'700'000LL),
+      modernRecord("oldest", 1'704'164'644'000LL)};
 
   ir::IrRemoteScore achieved = validRemoteScore();
   achieved.remoteScoreId = "achieved";
@@ -730,24 +662,22 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
   fallback.timeAchievedUnixMillis.reset();
   fallback.timeAddedUnixMillis = 1'704'164'645'456LL;
 
-  const std::vector<ReplaySummary> local{oldestLocal, tiedLocalB, autoPlay,
-                                         newestLocal, tiedLocalA};
   const std::vector<ir::IrRemoteScore> remote{fallback, achieved};
-  const auto merged =
-      mergeResultRecords(local, remote, "tachi", "https://boku.tachi.ac");
+  const auto merged = mergeResultRecords(
+      autoPlay, projected, remote, "tachi", "https://boku.tachi.ac");
 
   expect(merged.size() == 7 && merged[0].autoPlay,
          "Auto Play remains first under newest sorting");
-  expect(merged[1].localReplayId() == 20 &&
+  expect(merged[1].modernAttemptId() == "newest" &&
              merged[2].remoteScoreId() == "achieved",
-         "remote achieved time sorts alongside newer local timestamps");
+         "remote achieved time sorts alongside newer modern timestamps");
   expect(merged[3].stableKey() < merged[4].stableKey() &&
              merged[3].displayedTimeUnixMillis ==
                  merged[4].displayedTimeUnixMillis,
          "equal newest timestamps use deterministic stable-key ordering");
   expect(merged[5].remoteScoreId() == "fallback" &&
-             merged[6].localReplayId() == 40,
-         "remote added-time fallback sorts alongside older local timestamps");
+             merged[6].modernAttemptId() == "oldest",
+         "remote added-time fallback sorts alongside older modern timestamps");
 }
 
 } // namespace
@@ -755,14 +685,13 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
 int main() {
   testRecordActionsRequireTypedIdentityAndPayloadAgreement();
   testReplayFileActionsUseModernIdentityAndCapabilitiesOnly();
-  testLocalConversionPreservesRecordSemantics();
+  testAutoPlayIsTheOnlyReplaySummaryBackedRecord();
   testModernConversionUsesSharedReplayCapabilities();
   testModernCourseConversionKeepsResultWithoutReplay();
   testLegacySummariesExposeRecordsOnly();
   testRemoteConversionIsReadOnlyAndRetainsOptionalValues();
   testRemoteConversionFailsClosed();
   testIdentityEqualityHashAndStableKeys();
-  testMergeSuppressesOnlyExactCurrentOriginReceipt();
   testMergeIncludesModernResultsWithoutChangingTheirCapabilities();
   testMergeSortsNewestWithAutoPlayFirstAndStableTies();
 

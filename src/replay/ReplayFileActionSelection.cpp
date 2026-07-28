@@ -5,11 +5,20 @@ namespace replay {
 ReplayFileActionSelection replayFileActionSelection(
     const ResultRecordSummary &summary, bool interactive) noexcept {
   ReplayFileActionSelection selection;
-  if (summary.modern.has_value()) {
+  const auto shareTarget = resultRecordActionTarget(
+      summary, ResultRecordAction::ShareOrCopy);
+  const auto deleteTarget = resultRecordActionTarget(
+      summary, ResultRecordAction::DeleteReplayFile);
+  const auto target = shareTarget != ResultRecordActionTarget::None
+                          ? shareTarget
+                          : deleteTarget;
+  if (target == ResultRecordActionTarget::ModernChart &&
+      summary.modern.has_value()) {
     selection.request = ReplayFileActionRequest{
         .owner = ModernReplayOwnerKind::ChartResult,
         .attemptId = summary.modern->result.attemptId};
-  } else if (summary.modernCourse.has_value()) {
+  } else if (target == ResultRecordActionTarget::ModernCourse &&
+             summary.modernCourse.has_value()) {
     selection.request = ReplayFileActionRequest{
         .owner = ModernReplayOwnerKind::CourseResult,
         .attemptId = summary.modernCourse->result.attemptId};
@@ -20,8 +29,8 @@ ReplayFileActionSelection replayFileActionSelection(
     selection.request.reset();
     return selection;
   }
-  selection.shareVisible = summary.capabilities.shareOrCopy;
-  selection.deleteVisible = summary.capabilities.deleteReplayFile;
+  selection.shareVisible = shareTarget != ResultRecordActionTarget::None;
+  selection.deleteVisible = deleteTarget != ResultRecordActionTarget::None;
   selection.enabled = interactive &&
                       (selection.shareVisible || selection.deleteVisible);
   return selection;

@@ -233,13 +233,6 @@ struct IrUploadReplayReadOutcome {
 
 inline constexpr std::size_t kMaximumIrUploadCandidateRows = 16384;
 
-struct ReplayResultRecord {
-  ReplayData replay;
-  std::optional<std::string> attemptId;
-  std::optional<std::string> attemptFingerprint;
-  std::int64_t playedAtUnixMillis = 0;
-};
-
 struct CourseReplayLookup {
   std::string courseKey;
   int legacyCourseId = 0;
@@ -626,25 +619,6 @@ public:
   static bool
   ClearIrAccountDataSnapshot(const std::filesystem::path &snapshotDatabasePath,
                              std::string &errorMessage);
-  // Pass limit <= 0 to return all matching rows.
-  std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
-                                         int limit = 100,
-                                         std::string_view irProviderId = {},
-                                         std::string_view irServerOrigin = {});
-  std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
-                                               int limit = 100);
-  std::optional<ReplayData> LoadReplay(int replayId,
-                                       const bms_parser::ChartMeta &chartMeta);
-  std::optional<ReplayResultRecord>
-  LoadReplayResult(int replayId, const bms_parser::ChartMeta &chartMeta);
-  std::optional<CourseReplayData> LoadCourseReplay(int replayId);
-  bool
-  RecoverCourseRecords(std::span<const course_identity::Definition> definitions,
-                       std::span<const CourseScoreEvidence> scoreEvidence,
-                       std::string &errorMessage);
-  std::optional<ReplayData>
-  LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
-
 private:
   struct Impl;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;

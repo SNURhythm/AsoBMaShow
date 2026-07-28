@@ -1,5 +1,6 @@
 #include "ResultRecordSummary.h"
 
+#include "ReplayAutoPlay.h"
 #include "ReplayClearMarkUtils.h"
 
 #include <algorithm>
@@ -12,7 +13,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
-#include <unordered_set>
 #include <utility>
 
 namespace {
@@ -132,9 +132,29 @@ std::string formatUnixMillis(std::int64_t unixMillis) {
   return output.str();
 }
 
-bool irUploadActionable(ir::IrRecordState state) noexcept {
-  return state == ir::IrRecordState::Eligible ||
-         state == ir::IrRecordState::Failed;
+bool actionEnabled(const ResultRecordCapabilities &capabilities,
+                   ResultRecordAction action) noexcept {
+  switch (action) {
+  case ResultRecordAction::Watch:
+    return capabilities.watch;
+  case ResultRecordAction::RetrySame:
+    return capabilities.retrySame;
+  case ResultRecordAction::GBattle:
+    return capabilities.gBattle;
+  case ResultRecordAction::PracticeGhost:
+    return capabilities.practiceGhost;
+  case ResultRecordAction::ResultRecall:
+    return capabilities.resultRecall;
+  case ResultRecordAction::VideoExport:
+    return capabilities.videoExport;
+  case ResultRecordAction::ShareOrCopy:
+    return capabilities.shareOrCopy;
+  case ResultRecordAction::DeleteReplayFile:
+    return capabilities.deleteReplayFile;
+  case ResultRecordAction::IrUpload:
+    return capabilities.irUpload;
+  }
+  return false;
 }
 
 void appendFramed(std::string &key, std::string_view value) {
@@ -171,8 +191,8 @@ std::size_t ResultRecordIdentityHash::operator()(
   std::visit(
       [&seed](const auto &value) {
         using Value = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<Value, LocalReplayRecordId>) {
-          combineHash(seed, std::hash<int>{}(value.replayId));
+        if constexpr (std::is_same_v<Value, AutoPlayRecordId>) {
+          // The variant tag fully identifies the single synthetic row.
         } else if constexpr (std::is_same_v<Value, LegacyChartRecordId>) {
           combineHash(seed, std::hash<int>{}(value.legacyReplayId));
         } else if constexpr (std::is_same_v<Value, LegacyCourseRecordId>) {
@@ -191,7 +211,7 @@ std::size_t ResultRecordIdentityHash::operator()(
 }
 
 bool ResultRecordSummary::isLocal() const noexcept {
-  return std::holds_alternative<LocalReplayRecordId>(identity) ||
+  return std::holds_alternative<AutoPlayRecordId>(identity) ||
          std::holds_alternative<ModernChartRecordId>(identity) ||
          std::holds_alternative<ModernCourseRecordId>(identity) ||
          isLegacyChart() || isLegacyCourse();
@@ -230,12 +250,6 @@ ResultRecordSummary::modernAttemptId() const noexcept {
   return std::nullopt;
 }
 
-std::optional<int> ResultRecordSummary::localReplayId() const noexcept {
-  const auto *localIdentity = std::get_if<LocalReplayRecordId>(&identity);
-  return localIdentity ? std::optional<int>(localIdentity->replayId)
-                       : std::nullopt;
-}
-
 std::optional<std::string_view>
 ResultRecordSummary::remoteScoreId() const noexcept {
   const auto *remoteIdentity = std::get_if<IrRemoteRecordId>(&identity);
@@ -245,8 +259,8 @@ ResultRecordSummary::remoteScoreId() const noexcept {
 }
 
 std::string ResultRecordSummary::stableKey() const {
-  if (const auto *localIdentity = std::get_if<LocalReplayRecordId>(&identity)) {
-    return "l:" + std::to_string(localIdentity->replayId);
+  if (std::holds_alternative<AutoPlayRecordId>(identity)) {
+    return "a:auto-play";
   }
   if (const auto *modernIdentity =
           std::get_if<ModernChartRecordId>(&identity)) {
@@ -277,19 +291,101 @@ std::string ResultRecordSummary::stableKey() const {
   return key;
 }
 
-ResultRecordSummary makeLocalResultRecord(ReplaySummary summary) {
+ResultRecordActionTarget
+resultRecordActionTarget(const ResultRecordSummary &summary,
+                         ResultRecordAction action) noexcept {
+  if (!actionEnabled(summary.capabilities, action) ||
+      summary.legacyChart.has_value() || summary.legacyCourse.has_value()) {
+    return ResultRecordActionTarget::None;
+  }
+
+  ResultRecordActionTarget target = ResultRecordActionTarget::None;
+  if (const auto *identity =
+          std::get_if<ModernChartRecordId>(&summary.identity);
+      identity != nullptr && summary.modern.has_value() &&
+      summary.modern->result.attemptId == identity->attemptId &&
+      !summary.autoPlayReplay.has_value() &&
+      !summary.modernCourse.has_value() &&
+      !summary.remote.has_value() && !summary.autoPlay && !summary.course) {
+    target = ResultRecordActionTarget::ModernChart;
+  } else if (const auto *identity =
+                 std::get_if<ModernCourseRecordId>(&summary.identity);
+             identity != nullptr && summary.modernCourse.has_value() &&
+             summary.modernCourse->result.attemptId == identity->attemptId &&
+             !summary.autoPlayReplay.has_value() &&
+             !summary.modern.has_value() &&
+             !summary.remote.has_value() && !summary.autoPlay &&
+             summary.course) {
+    target = ResultRecordActionTarget::ModernCourse;
+  } else if (const auto *identity =
+                 std::get_if<IrRemoteRecordId>(&summary.identity);
+             identity != nullptr && summary.remote.has_value() &&
+             summary.remote->remoteScoreId == identity->remoteScoreId &&
+             !summary.autoPlayReplay.has_value() &&
+             !summary.modern.has_value() &&
+             !summary.modernCourse.has_value() && !summary.autoPlay &&
+             !summary.course) {
+    target = ResultRecordActionTarget::Remote;
+  } else if (std::holds_alternative<AutoPlayRecordId>(summary.identity) &&
+             summary.autoPlayReplay.has_value() &&
+             summary.autoPlayReplay->id == replay_autoplay::kReplayId &&
+             summary.autoPlayReplay->autoPlay && summary.autoPlay &&
+             !summary.course &&
+             !summary.modern.has_value() && !summary.modernCourse.has_value() &&
+             !summary.remote.has_value()) {
+    target = ResultRecordActionTarget::AutoPlay;
+  }
+
+  switch (action) {
+  case ResultRecordAction::Watch:
+  case ResultRecordAction::VideoExport:
+    return target == ResultRecordActionTarget::AutoPlay ||
+                   target == ResultRecordActionTarget::ModernChart ||
+                   target == ResultRecordActionTarget::ModernCourse
+               ? target
+               : ResultRecordActionTarget::None;
+  case ResultRecordAction::RetrySame:
+    return target == ResultRecordActionTarget::ModernChart ||
+                   target == ResultRecordActionTarget::ModernCourse
+               ? target
+               : ResultRecordActionTarget::None;
+  case ResultRecordAction::GBattle:
+  case ResultRecordAction::PracticeGhost:
+  case ResultRecordAction::IrUpload:
+    return target == ResultRecordActionTarget::ModernChart
+               ? target
+               : ResultRecordActionTarget::None;
+  case ResultRecordAction::ResultRecall:
+    return target == ResultRecordActionTarget::ModernChart ||
+                   target == ResultRecordActionTarget::ModernCourse ||
+                   target == ResultRecordActionTarget::Remote
+               ? target
+               : ResultRecordActionTarget::None;
+  case ResultRecordAction::ShareOrCopy:
+  case ResultRecordAction::DeleteReplayFile:
+    return target == ResultRecordActionTarget::ModernChart ||
+                   target == ResultRecordActionTarget::ModernCourse
+               ? target
+               : ResultRecordActionTarget::None;
+  }
+  return ResultRecordActionTarget::None;
+}
+
+ResultRecordSummary makeAutoPlayResultRecord(ReplaySummary summary) {
+  if (!summary.autoPlay || summary.courseReplay ||
+      summary.id != replay_autoplay::kReplayId) {
+    throw std::invalid_argument(
+        "only the synthetic Auto Play summary may enter Records");
+  }
   ResultRecordSummary result{
-      .identity = LocalReplayRecordId{.replayId = summary.id},
+      .identity = AutoPlayRecordId{},
       .capabilities =
           {
               .watch = true,
-              .gBattle = !summary.autoPlay && !summary.courseReplay,
-              .resultRecall = !summary.autoPlay,
               .videoExport = true,
-              .irUpload = irUploadActionable(summary.irRecordState),
           },
-      .course = summary.courseReplay,
-      .autoPlay = summary.autoPlay,
+      .course = false,
+      .autoPlay = true,
       .score = summary.finalScore,
       .maxScore = summary.maxScore,
       .maxCombo = summary.maxCombo,
@@ -297,8 +393,8 @@ ResultRecordSummary makeLocalResultRecord(ReplaySummary summary) {
       .displayedTimeUnixMillis = parseDisplayedTime(summary.createdAt),
       .displayedTime = summary.createdAt,
       .playOption = summary.playOption,
-      .irState = summary.irRecordState,
-      .local = std::move(summary),
+      .irState = ir::IrRecordState::Hidden,
+      .autoPlayReplay = std::move(summary),
       .modern = std::nullopt,
       .modernCourse = std::nullopt,
       .replayState = replay::ReplayState::NotApplicable,
@@ -333,7 +429,7 @@ makeLegacyChartResultRecord(LegacyChartResultSummary summary) {
       .displayedTime = summary.createdAt.value_or(""),
       .playOption = std::nullopt,
       .irState = ir::IrRecordState::Hidden,
-      .local = std::nullopt,
+      .autoPlayReplay = std::nullopt,
       .modern = std::nullopt,
       .modernCourse = std::nullopt,
       .replayState = replay::ReplayState::NotApplicable,
@@ -370,7 +466,7 @@ makeLegacyCourseResultRecord(LegacyCourseResultSummary summary) {
       .displayedTime = summary.createdAt.value_or(""),
       .playOption = std::nullopt,
       .irState = ir::IrRecordState::Hidden,
-      .local = std::nullopt,
+      .autoPlayReplay = std::nullopt,
       .modern = std::nullopt,
       .modernCourse = std::nullopt,
       .replayState = replay::ReplayState::NotApplicable,
@@ -407,7 +503,7 @@ makeModernChartResultRecord(ModernChartResultRecord record,
       .playOption = result.score.provenance.player1.option,
       .irState = postponedIrSnapshotEligible ? ir::IrRecordState::Eligible
                                              : ir::IrRecordState::Hidden,
-      .local = std::nullopt,
+      .autoPlayReplay = std::nullopt,
       .modern = std::move(record),
       .modernCourse = std::nullopt,
       .replayState = replayState,
@@ -441,7 +537,7 @@ makeModernCourseResultRecord(ModernCourseResultRecord record,
       .displayedTime = formatUnixMillis(result.playedAtUnixMillis),
       .playOption = result.requestedPlayOption,
       .irState = ir::IrRecordState::Hidden,
-      .local = std::nullopt,
+      .autoPlayReplay = std::nullopt,
       .modern = std::nullopt,
       .modernCourse = std::move(record),
       .replayState = replayState,
@@ -489,7 +585,7 @@ ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
       .displayedTime = formatUnixMillis(displayedTime),
       .playOption = score.random,
       .irState = ir::IrRecordState::Uploaded,
-      .local = std::nullopt,
+      .autoPlayReplay = std::nullopt,
       .modern = std::nullopt,
       .modernCourse = std::nullopt,
       .replayState = replay::ReplayState::NotApplicable,
@@ -499,50 +595,47 @@ ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
 }
 
 std::vector<ResultRecordSummary>
-mergeResultRecords(std::span<const ReplaySummary> local,
+mergeResultRecords(std::span<const ReplaySummary> autoPlay,
                    std::span<const ir::IrRemoteScore> remote,
                    std::string_view providerId, std::string_view serverOrigin) {
-  return mergeResultRecords(local, std::span<const ResultRecordSummary>{},
+  return mergeResultRecords(autoPlay, std::span<const ResultRecordSummary>{},
                             remote, providerId, serverOrigin);
 }
 
 std::vector<ResultRecordSummary>
-mergeResultRecords(std::span<const ReplaySummary> local,
-                   std::span<const ResultRecordSummary> modern,
+mergeResultRecords(std::span<const ReplaySummary> autoPlay,
+                   std::span<const ResultRecordSummary> projected,
                    std::span<const ir::IrRemoteScore> remote,
                    std::string_view providerId, std::string_view serverOrigin) {
-  std::unordered_set<std::string> linkedRemoteScoreIds;
-  linkedRemoteScoreIds.reserve(local.size());
-  for (const ReplaySummary &summary : local) {
-    if (summary.hasIrReceipt && summary.receiptProviderId == providerId &&
-        summary.receiptServerOrigin == serverOrigin &&
-        !summary.receiptRemoteScoreId.empty()) {
-      linkedRemoteScoreIds.emplace(summary.receiptRemoteScoreId);
-    }
-  }
-
   std::vector<ResultRecordSummary> result;
-  result.reserve(local.size() + modern.size() + remote.size());
-  for (const ReplaySummary &summary : local) {
-    result.push_back(makeLocalResultRecord(summary));
+  result.reserve(autoPlay.size() + projected.size() + remote.size());
+  for (const ReplaySummary &summary : autoPlay) {
+    result.push_back(makeAutoPlayResultRecord(summary));
   }
-  for (const ResultRecordSummary &summary : modern) {
+  for (const ResultRecordSummary &summary : projected) {
     const bool validChart = summary.isModernChart() &&
                             summary.modern.has_value() &&
                             !summary.modernCourse.has_value();
     const bool validCourse = summary.isModernCourse() &&
                              summary.modernCourse.has_value() &&
                              !summary.modern.has_value();
-    if ((!validChart && !validCourse) || summary.local.has_value() ||
-        summary.remote.has_value()) {
-      throw std::invalid_argument("modern record projection is invalid");
+    const bool validLegacyChart =
+        summary.isLegacyChart() && summary.legacyChart.has_value() &&
+        !summary.legacyCourse.has_value() && !summary.modern.has_value() &&
+        !summary.modernCourse.has_value();
+    const bool validLegacyCourse =
+        summary.isLegacyCourse() && summary.legacyCourse.has_value() &&
+        !summary.legacyChart.has_value() && !summary.modern.has_value() &&
+        !summary.modernCourse.has_value();
+    if ((!validChart && !validCourse && !validLegacyChart &&
+         !validLegacyCourse) ||
+        summary.autoPlayReplay.has_value() || summary.remote.has_value()) {
+      throw std::invalid_argument("projected result record is invalid");
     }
     result.push_back(summary);
   }
   for (const ir::IrRemoteScore &score : remote) {
-    if (!linkedRemoteScoreIds.contains(score.remoteScoreId)) {
-      result.push_back(makeRemoteResultRecord(providerId, serverOrigin, score));
-    }
+    result.push_back(makeRemoteResultRecord(providerId, serverOrigin, score));
   }
 
   std::sort(
