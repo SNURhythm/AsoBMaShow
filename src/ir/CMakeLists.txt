@@ -23,6 +23,7 @@ target_sources(main PRIVATE
     IrUploadCandidates.cpp
     tachi/BokutachiCacheStore.cpp
     tachi/TachiBatchManual.cpp
+    tachi/TachiEligibility.cpp
     tachi/TachiDriver.cpp
     tachi/TachiRankingParser.cpp
     tachi/TachiResponseParser.cpp

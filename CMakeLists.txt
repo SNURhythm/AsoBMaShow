@@ -502,6 +502,21 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_library(ir_submission_eligibility_test_support STATIC
+        src/ir/tachi/TachiEligibility.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_submission_eligibility_test_support PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_submission_eligibility_test_support PRIVATE
+        cxx_std_23
+    )
     add_test(NAME find_bms_archive_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_find_bms_archive_flow.py
@@ -3632,6 +3647,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
     endfunction()
+
+    foreach(eligibility_target IN ITEMS
+        chart_replay_context_tests
+        chart_replay_persistence_tests
+        course_replay_context_tests
+        course_replay_persistence_tests
+        ir_submission_service_tests
+        ir_upload_candidate_list_view_tests
+        ir_upload_candidates_tests
+        legacy_result_summary_tests
+        player_profile_manager_tests
+        profile_archive_tests
+        profile_switch_tests
+        replay_file_action_service_tests
+        replay_legacy_migration_tests
+        replay_repository_modern_chart_tests
+        replay_repository_modern_course_tests
+        tachi_batch_manual_tests
+        tachi_driver_tests
+    )
+        target_link_libraries(${eligibility_target} PRIVATE
+            ir_submission_eligibility_test_support
+        )
+    endforeach()
 
     asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(replay_contract_boundary_tests)

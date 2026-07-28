@@ -104,6 +104,12 @@ struct IrUploadRecordReadOutcome {
     const IrUploadCandidateSource &source, std::string_view providerId,
     std::string_view serverOrigin, std::string &diagnostic) noexcept;
 
+// Provider eligibility is evaluated from the immutable snapshot submission at
+// every Records, manual-upload, and reconciliation projection boundary.
+[[nodiscard]] bool isSubmissionEligibleForProvider(
+    std::string_view providerId,
+    const IrSubmission &submission) noexcept;
+
 [[nodiscard]] IrUploadRecordProjection projectIrUploadRecords(
     std::span<const IrUploadCandidateSource> sources,
     std::string_view providerId, std::string_view serverOrigin) noexcept;

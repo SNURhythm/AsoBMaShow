@@ -449,32 +449,29 @@ void testRollbackAndReplayOptionality() {
            std::to_string(snapshotOnly.score.clearType) + ",0)");
 
   const auto manual = repository.ListIrUploadCandidates(
-      "fake", "https://example.invalid");
+      "tachi", "https://boku.tachi.ac");
   assert(manual.status == ir::IrUploadCandidateReadStatus::Loaded &&
-         manual.candidates.size() == 1 &&
-         manual.candidates.front().modernChartResultId ==
-             snapshotStaged.receipt->resultId &&
-         manual.candidates.front().attemptId() == snapshotOnly.attemptId &&
-         manual.candidates.front().snapshot == storedSnapshot);
+         manual.candidates.empty());
   const auto records = repository.ListIrUploadRecords(
-      "fake", "https://example.invalid");
+      "tachi", "https://boku.tachi.ac");
   assert(records.status == ir::IrUploadRecordReadStatus::Loaded &&
          records.records.size() == 1 &&
          records.records.front().modernChartResultId ==
              snapshotStaged.receipt->resultId &&
          records.records.front().attemptId == snapshotOnly.attemptId &&
          records.records.front().resolvedState() ==
-             ir::IrRecordState::Eligible);
+             ir::IrRecordState::Hidden);
 
   const auto reconciliation = repository.LoadIrReconciliationCandidates(
-      "fake", "https://example.invalid");
+      "tachi", "https://boku.tachi.ac");
   assert(reconciliation.status ==
              ir::IrReconciliationReadOutcome::Status::Loaded &&
          reconciliation.candidates.size() == 1 &&
          reconciliation.candidates.front().modernChartResultId ==
              snapshotStaged.receipt->resultId &&
          reconciliation.candidates.front().attemptId ==
-             snapshotOnly.attemptId);
+             snapshotOnly.attemptId &&
+         !reconciliation.candidates.front().eligible);
 }
 
 void testReservationReleaseAndModernPendingLifecycle() {

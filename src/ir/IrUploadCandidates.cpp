@@ -1,6 +1,7 @@
 #include "IrUploadCandidates.h"
 
 #include "IrProfileSettings.h"
+#include "tachi/TachiEligibility.h"
 
 #include <ranges>
 #include <unordered_map>
@@ -88,6 +89,13 @@ void setOmissionDiagnostic(Projection &result) {
 
 } // namespace
 
+bool isSubmissionEligibleForProvider(
+    std::string_view providerId,
+    const IrSubmission &submission) noexcept {
+  return providerId == tachi::kProviderId &&
+         tachi::validateBokutachiEligibility(submission).eligible();
+}
+
 bool validateIrUploadCandidateSource(
     const IrUploadCandidateSource &source, std::string_view providerId,
     std::string_view serverOrigin, std::string &diagnostic) noexcept {
@@ -139,8 +147,11 @@ IrUploadRecordProjection projectIrUploadRecords(
         ++result.omittedRows;
         continue;
       }
+      const bool eligible =
+          isSubmissionEligibleForProvider(providerId,
+                                          source.snapshot.submission);
       const IrRecordState state = resolveIrRecordState({
-          .eligible = true,
+          .eligible = eligible,
           .hasReceipt = source.receipt.has_value(),
           .outboxState = source.outbox
                              ? std::optional(source.outbox->state)
@@ -149,7 +160,7 @@ IrUploadRecordProjection projectIrUploadRecords(
       result.records.push_back({
           .modernChartResultId = source.modernChartResultId,
           .attemptId = source.result.attemptId,
-          .eligible = true,
+          .eligible = eligible,
           .hasReceipt = source.receipt.has_value(),
           .outboxState = source.outbox
                              ? std::optional(source.outbox->state)
@@ -192,7 +203,9 @@ IrUploadCandidateProjection projectIrUploadCandidates(
       }
       const IrUploadRecord &record = *found->second;
       const IrRecordState state = record.resolvedState();
-      if (state != IrRecordState::Eligible && state != IrRecordState::Failed) {
+      if (!record.eligible ||
+          (state != IrRecordState::Eligible &&
+           state != IrRecordState::Failed)) {
         continue;
       }
       result.candidates.push_back({

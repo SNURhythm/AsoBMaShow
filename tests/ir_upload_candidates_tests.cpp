@@ -52,7 +52,31 @@ result_persistence::ModernChartResult modernResult(int suffix) {
   result.score.great = 100;
   result.score.finalGauge = 82.5F;
   result.score.clearType = kClearTypeHardClearRank;
-  result.score.provenance = ScoreProvenance::Legacy();
+  bms_parser::ChartMeta meta;
+  meta.KeyMode = 7;
+  meta.MD5 = result.score.chartMd5;
+  meta.SHA256 = result.score.chartSha256;
+  meta.Rank = 2;
+  meta.TotalNotes = result.score.maxScore / 2;
+  meta.HasTotal = true;
+  meta.Total = 200.5;
+  const auto judge =
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, meta.Rank);
+  result.score.provenance = makeScoreProvenance({
+      .chartMeta = meta,
+      .longNoteMode = result.score.longNoteMode,
+      .judgeRankSource = JudgeRankSource::Chart,
+      .sourceJudgeRank = meta.Rank,
+      .effectiveJudgeContexts = judge.contexts,
+      .totalNotes = meta.TotalNotes,
+      .authoredGaugeTotal = meta.Total,
+      .effectiveGaugeTotal =
+          resolveEffectiveGaugeTotal(GameplayRuleset::LR2, meta),
+      .candidateSelection = gameplay::CandidateSelectionMode::LR2,
+      .gaugeType = GaugeType::Hard,
+      .inputDevices = {InputDeviceCategory::Keyboard},
+      .ruleset = RulesetDescriptor::For(GameplayRuleset::LR2),
+  });
   result.keyMode = 7;
   result.adoptedGaugeType = GaugeType::Hard;
   result.adoptedGaugeHistory = {20.0F, 82.5F};
@@ -77,6 +101,12 @@ ir::IrUploadCandidateSource source(int suffix) {
   return {.modernChartResultId = result.resultId,
           .result = result,
           .snapshot = snapshotFor(result)};
+}
+
+void refreshSnapshot(ir::IrUploadCandidateSource &value) {
+  value.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(value.result);
+  value.snapshot = snapshotFor(value.result);
 }
 
 ir::IrOutboxEntry outboxFor(const ir::IrUploadCandidateSource &source,
@@ -240,11 +270,32 @@ void testStoredSnapshotSubmissionNeedsNoReplayFileOrChartHydration() {
          "result/snapshot disagreement fails at the shared preparation boundary");
 }
 
+void testProviderEligibilityHidesModifiedModernResults() {
+  auto modified = source(31);
+  modified.result.score.provenance.eligibility = ScoreEligibility::Modified;
+  refreshSnapshot(modified);
+
+  const auto records = ir::projectIrUploadRecords(
+      std::vector{modified}, kProvider, kOrigin);
+  const auto candidates = ir::projectIrUploadCandidates(
+      std::vector{modified}, kProvider, kOrigin);
+
+  expect(records.records.size() == 1 && !records.records.front().eligible &&
+             records.records.front().resolvedState() ==
+                 ir::IrRecordState::Hidden,
+         "provider-ineligible modern snapshots publish no Records upload "
+         "action");
+  expect(candidates.candidates.empty(),
+         "provider-ineligible modern snapshots are not manual upload "
+         "candidates");
+}
+
 } // namespace
 
 int main() {
   testSelectionIndexesCanonicalAttemptIdsOnce();
   testProjectsOnlySnapshotBackedModernAttempts();
   testStoredSnapshotSubmissionNeedsNoReplayFileOrChartHydration();
+  testProviderEligibilityHidesModifiedModernResults();
   return failures == 0 ? 0 : 1;
 }

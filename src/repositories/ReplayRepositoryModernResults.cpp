@@ -2598,7 +2598,8 @@ ReplayRepository::LoadIrReconciliationCandidates(
         .chartSha256 = source.result.score.chartSha256,
         .score = source.result.score.score,
         .lampRank = source.result.score.clearType,
-        .eligible = true,
+        .eligible = ir::isSubmissionEligibleForProvider(
+            providerId, source.snapshot.submission),
         .currentReceipt = std::move(source.receipt),
     };
     if (source.outbox) {
