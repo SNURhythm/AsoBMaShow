@@ -578,6 +578,14 @@ constexpr const char *kModernPendingChartScoresTableSql =
     "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
     "ON DELETE CASCADE)";
 
+constexpr const char *kModernPendingCourseScoresTableSql =
+    "CREATE TABLE modern_pending_course_score_writes("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,"
+    "modern_course_result_id INTEGER NOT NULL UNIQUE,"
+    "created_at TEXT NOT NULL,"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
 constexpr const char *kModernChartShaIndexSql =
     "CREATE INDEX idx_modern_chart_results_sha256_played ON "
     "modern_chart_results(chart_sha256,played_at_unix_ms DESC,id DESC)";
@@ -1260,9 +1268,22 @@ bool inspectModernCourseSchemaV12(sqlite3 *database) {
       database, kModernReplayFilesTableSqlV12);
 }
 
-bool inspectModernCourseSchema(sqlite3 *database) {
+bool inspectModernCourseSchemaV14(sqlite3 *database) {
   return inspectModernCourseSchemaWithReplayTable(database,
                                                   kModernReplayFilesTableSql);
+}
+
+bool inspectModernCourseSchema(sqlite3 *database) {
+  if (!inspectModernCourseSchemaV14(database)) {
+    return false;
+  }
+  NamedSchemaObjectInspection pendingCourseScores;
+  return inspectNamedSchemaObject(
+             database, "modern_pending_course_score_writes", "table",
+             "modern_pending_course_score_writes",
+             kModernPendingCourseScoresTableSql, pendingCourseScores,
+             "reading pending modern course score schema") &&
+         pendingCourseScores.present && pendingCourseScores.exact;
 }
 
 bool createModernChartSchema(sqlite3 *database) {
@@ -1272,6 +1293,7 @@ bool createModernChartSchema(sqlite3 *database) {
   // fail inside the caller's migration transaction.
   if (inspectModernChartSchemaV11(database) ||
       inspectModernCourseSchemaV12(database) ||
+      inspectModernCourseSchemaV14(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1300,6 +1322,7 @@ bool createModernChartSchema(sqlite3 *database) {
 
 bool migrateModernCourseSchema(sqlite3 *database) {
   if (inspectModernCourseSchemaV12(database) ||
+      inspectModernCourseSchemaV14(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1344,7 +1367,8 @@ bool migrateModernCourseSchema(sqlite3 *database) {
 }
 
 bool migrateModernReplayDeletionSchema(sqlite3 *database) {
-  if (inspectModernCourseSchema(database)) {
+  if (inspectModernCourseSchemaV14(database) ||
+      inspectModernCourseSchema(database)) {
     return true;
   }
   if (!inspectModernCourseSchemaV12(database)) {
@@ -1377,6 +1401,27 @@ bool migrateModernReplayDeletionSchema(sqlite3 *database) {
                "creating chart replay owner index") ||
       !execSql(database, kModernReplayCourseResultIndexSql,
                "creating course replay owner index")) {
+    return false;
+  }
+  return inspectModernCourseSchemaV14(database);
+}
+
+bool migrateModernCourseScoreOutbox(sqlite3 *database) {
+  if (inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernCourseSchemaV14(database)) {
+    SDL_Log("Refusing course score outbox migration from a partial or "
+            "unexpected version 14 schema");
+    return false;
+  }
+  if (!execSql(database, kModernPendingCourseScoresTableSql,
+               "creating pending modern course scores") ||
+      !execSql(database,
+               "INSERT INTO modern_pending_course_score_writes("
+               "attempt_id,modern_course_result_id,created_at) "
+               "SELECT attempt_id,id,created_at FROM modern_course_results",
+               "backfilling pending modern course scores")) {
     return false;
   }
   return inspectModernCourseSchema(database);
@@ -1480,6 +1525,48 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (!transaction.active()) {
     logSqlErrorText("starting replay database migration", transactionError);
     return false;
+  }
+
+  if (*version == 14) {
+    ReplayResultOutboxSchemaState resultOutboxState{};
+    IrOutboxSchemaState irOutboxState{};
+    IrSubmissionReceiptsSchemaState receiptState{};
+    IrRemoteScoresSchemaState remoteScoresState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
+        !inspectIrOutboxSchema(db, irOutboxState) ||
+        !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
+        !inspectIrRemoteScoresSchema(db, remoteScoresState)) {
+      SDL_Log("Could not inspect version 14 replay database for course score "
+              "outbox migration");
+      return false;
+    }
+    const bool modernCourseSchemaExact = inspectModernCourseSchemaV14(db);
+    const bool summarySchemaExact =
+        replay_repository_legacy::inspectCurrentSchema(db);
+    if (resultOutboxState != ReplayResultOutboxSchemaState::Absent ||
+        irOutboxState != IrOutboxSchemaState::Exact ||
+        receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
+        remoteScoresState != IrRemoteScoresSchemaState::Exact ||
+        !modernCourseSchemaExact || !summarySchemaExact) {
+      SDL_Log("Refusing course score outbox migration from a partial or "
+              "unexpected version 14 database (%d,%d,%d,%d,%d,%d)",
+              static_cast<int>(resultOutboxState),
+              static_cast<int>(irOutboxState),
+              static_cast<int>(receiptState),
+              static_cast<int>(remoteScoresState), modernCourseSchemaExact,
+              summarySchemaExact);
+      return false;
+    }
+    if (!migrateModernCourseScoreOutbox(db) ||
+        !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
+      return false;
+    }
+    if (!transaction.commit(transactionError)) {
+      logSqlErrorText("committing course score outbox migration",
+                      transactionError);
+      return false;
+    }
+    return true;
   }
 
   if (*version < 1 && !normalizeReplayChartIdentityHashes(db)) {
@@ -1720,12 +1807,15 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       legacyIrOutboxState != IrOutboxSchemaState::Exact ||
       legacyReceiptState != IrSubmissionReceiptsSchemaState::ReplayOwnedExact ||
       legacyRemoteScoresState != IrRemoteScoresSchemaState::Exact ||
-      !inspectModernCourseSchema(db)) {
+      !inspectModernCourseSchemaV14(db)) {
     SDL_Log("Refusing summary cutover from a partial or unexpected version "
             "13 schema");
     return false;
   }
   if (!replay_repository_legacy::migrateToSummarySchema(db, *version)) {
+    return false;
+  }
+  if (!migrateModernCourseScoreOutbox(db)) {
     return false;
   }
 
@@ -1846,7 +1936,7 @@ bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
     logSqlErrorText("starting replay schema ensure", transactionError);
     return false;
   }
-  if (*existingVersion < kReplayDatabaseSchemaVersion) {
+  if (*existingVersion < 14) {
     const char *replayQuery =
         "CREATE TABLE IF NOT EXISTS replays ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"

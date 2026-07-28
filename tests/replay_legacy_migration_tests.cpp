@@ -392,7 +392,7 @@ void testHeaderOnlyCutover() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
 
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
@@ -440,7 +440,7 @@ void testSchema10LegacySummaryBoundaryIsHeaderOnly() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
   assert(queryInt(database.get(),
                   "SELECT final_score FROM legacy_chart_result_summaries "
                   "WHERE legacy_replay_id=11") == 1111);
@@ -460,7 +460,7 @@ void testVersion10MigrationPreservesLegacyReceiptOwnership() {
   createVersion10ReceiptFixture(path);
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
   assert(queryInt(database.get(),
                   "SELECT replay_id FROM ir_submission_receipts WHERE id=77") ==
          11);
@@ -480,7 +480,7 @@ void testFreshSchemaHasNoRawReplayTables() {
   assert(repository.EnsureSchema());
   repository.Shutdown();
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
   assert(tableExists(database.get(), "legacy_chart_result_summaries"));
   assert(tableExists(database.get(), "legacy_course_result_summaries"));
   assert(!tableExists(database.get(), "replays"));
@@ -495,7 +495,7 @@ void testDurableReceiptsAndOutboxWorkSurvive() {
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
 
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
   assert(queryInt(database.get(),
@@ -545,7 +545,7 @@ void testMalformedProvenanceDoesNotBlockHeaderMigration() {
            std::string(malformedProvenance) + "' WHERE id=21");
 
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
   assert(queryText(database.get(),
                    "SELECT chart_title FROM legacy_chart_result_summaries "
                    "WHERE legacy_replay_id=12") == "Ready");
@@ -586,6 +586,15 @@ void testCurrentSchemaRejectsSummaryShapeDrift() {
   assert(!repository.EnsureSchema());
 }
 
+int denyPendingCourseScoreTable(void *, int action, const char *first,
+                                const char *, const char *, const char *) {
+  if (action == SQLITE_CREATE_TABLE && first != nullptr &&
+      std::string_view(first) == "modern_pending_course_score_writes") {
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
 struct DatabaseFileState {
   bool exists = false;
   std::string bytes;
@@ -612,6 +621,41 @@ snapshotDatabaseFamily(const std::filesystem::path &databasePath) {
     }
   }
   return snapshot;
+}
+
+void testVersion14CourseScoreOutboxMigrationRollsBackAtomically() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    repository.Shutdown();
+  }
+  {
+    auto database = openDatabase(path);
+    exec(database.get(), "DROP TABLE modern_pending_course_score_writes");
+    exec(database.get(), "PRAGMA user_version=14");
+  }
+  const auto before = snapshotDatabaseFamily(path);
+  {
+    auto database = openDatabase(path);
+    assert(sqlite3_set_authorizer(database.get(), denyPendingCourseScoreTable,
+                                  nullptr) == SQLITE_OK);
+    assert(!replay_repository_test::RunSchemaMigration(database.get()));
+    assert(sqlite3_set_authorizer(database.get(), nullptr, nullptr) ==
+           SQLITE_OK);
+  }
+  assert(snapshotDatabaseFamily(path) == before);
+  {
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+    assert(!tableExists(database.get(),
+                        "modern_pending_course_score_writes"));
+    assert(replay_repository_test::RunSchemaMigration(database.get()));
+    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+    assert(tableExists(database.get(),
+                       "modern_pending_course_score_writes"));
+  }
 }
 
 enum class MigrationPhase : std::uint8_t {
@@ -771,14 +815,14 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
     removeMigrationProbe(database.get());
   }
   auto database = openDatabase(successPath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
   assert(!tableExists(database.get(), "replays"));
 }
 
 } // namespace
 
 int main() {
-  static_assert(ReplayRepository::kCurrentSchemaVersion == 14);
+  static_assert(ReplayRepository::kCurrentSchemaVersion == 15);
   testHeaderOnlyCutover();
   testSchema10LegacySummaryBoundaryIsHeaderOnly();
   testVersion10MigrationPreservesLegacyReceiptOwnership();
@@ -786,6 +830,7 @@ int main() {
   testDurableReceiptsAndOutboxWorkSurvive();
   testMalformedProvenanceDoesNotBlockHeaderMigration();
   testCurrentSchemaRejectsSummaryShapeDrift();
+  testVersion14CourseScoreOutboxMigrationRollsBackAtomically();
   testRollbackFaultMatrixPreservesOriginalDatabase();
   std::cout << "legacy replay migration tests passed\n";
   return 0;

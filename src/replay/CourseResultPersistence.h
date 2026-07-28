@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace replay {
 
@@ -50,6 +51,8 @@ struct CourseResultPersistenceDependencies {
   std::function<result_persistence::ProjectionOutcome(
       const result_persistence::PendingCourseScoreWrite &)>
       projectScore;
+  std::function<result_persistence::AcknowledgeOutcome(std::string_view, int)>
+      acknowledgeScore;
   std::function<ModernCourseScoreSourceBatchOutcome(int, std::size_t)>
       listScoreSources;
 };

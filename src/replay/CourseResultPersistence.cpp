@@ -86,6 +86,11 @@ CourseResultPersistence::CourseResultPersistence(
           [&score](const result_persistence::PendingCourseScoreWrite &pending) {
             return score.SaveProjectedCourseScore(pending);
           },
+      .acknowledgeScore =
+          [&replayRepository](std::string_view attemptId, int resultId) {
+            return replayRepository.AcknowledgePendingModernCourseScore(
+                attemptId, resultId);
+          },
       .listScoreSources =
           [&replayRepository](int afterResultId, std::size_t limit) {
             return replayRepository.ListModernCourseScoreSourcesAfter(
@@ -133,13 +138,39 @@ CourseResultPersistenceOutcome CourseResultPersistence::persist(
                    projection.diagnostic);
   switch (projection.status) {
   case result_persistence::ProjectionStatus::Inserted:
-  case result_persistence::ProjectionStatus::AlreadyPresent:
+  case result_persistence::ProjectionStatus::AlreadyPresent: {
+    if (!dependencies_.acknowledgeScore) {
+      appendDiagnostic(resultOutcome.diagnostic, "course score checkpoint",
+                       "course score acknowledgement is not configured");
+      return {.state = CourseResultPersistenceState::PendingScore,
+              .receipt = resultOutcome.receipt,
+              .replayAttached = resultOutcome.replayAttached,
+              .diagnostic = std::move(resultOutcome.diagnostic)};
+    }
+    const auto acknowledged = dependencies_.acknowledgeScore(
+        pending->attemptId, pending->modernResultId);
+    appendDiagnostic(resultOutcome.diagnostic, "course score checkpoint",
+                     acknowledged.diagnostic);
+    if (acknowledged.status ==
+            result_persistence::AcknowledgeStatus::StorageFailure ||
+        acknowledged.status ==
+            result_persistence::AcknowledgeStatus::IntegrityConflict) {
+      return {.state =
+                  acknowledged.status ==
+                          result_persistence::AcknowledgeStatus::StorageFailure
+                      ? CourseResultPersistenceState::PendingScore
+                      : CourseResultPersistenceState::IntegrityConflict,
+              .receipt = resultOutcome.receipt,
+              .replayAttached = resultOutcome.replayAttached,
+              .diagnostic = std::move(resultOutcome.diagnostic)};
+    }
     return {.state = resultOutcome.replayAttached
                          ? CourseResultPersistenceState::SavedWithReplay
                          : CourseResultPersistenceState::SavedWithoutReplay,
             .receipt = resultOutcome.receipt,
             .replayAttached = resultOutcome.replayAttached,
             .diagnostic = std::move(resultOutcome.diagnostic)};
+  }
   case result_persistence::ProjectionStatus::StorageFailure:
     return {.state = CourseResultPersistenceState::PendingScore,
             .receipt = resultOutcome.receipt,
@@ -162,7 +193,8 @@ CourseResultPersistence::recoverAll(std::size_t pageLimit) const {
   profile_database_activity::WriteGuard bindingLease;
   CourseResultRecoverySummary summary;
   if (!dependencies_.listScoreSources || !dependencies_.projectScore ||
-      pageLimit == 0 || pageLimit > kMaximumModernCourseScoreSourceRows) {
+      !dependencies_.acknowledgeScore || pageLimit == 0 ||
+      pageLimit > kMaximumModernCourseScoreSourceRows) {
     summary.pending = 1;
     summary.diagnostic = "course score recovery is not configured";
     return summary;
@@ -230,9 +262,23 @@ CourseResultPersistence::recoverAll(std::size_t pageLimit) const {
       appendDiagnostic(summary.diagnostic, phase, projected.diagnostic);
       switch (projected.status) {
       case result_persistence::ProjectionStatus::Inserted:
-      case result_persistence::ProjectionStatus::AlreadyPresent:
-        ++summary.saved;
+      case result_persistence::ProjectionStatus::AlreadyPresent: {
+        const auto acknowledged = dependencies_.acknowledgeScore(
+            pending->attemptId, pending->modernResultId);
+        appendDiagnostic(summary.diagnostic, phase, acknowledged.diagnostic);
+        if (acknowledged.status ==
+                result_persistence::AcknowledgeStatus::Acknowledged ||
+            acknowledged.status ==
+                result_persistence::AcknowledgeStatus::AlreadyAcknowledged) {
+          ++summary.saved;
+        } else if (acknowledged.status ==
+                   result_persistence::AcknowledgeStatus::StorageFailure) {
+          ++summary.pending;
+        } else {
+          ++summary.conflicts;
+        }
         break;
+      }
       case result_persistence::ProjectionStatus::StorageFailure:
         ++summary.pending;
         break;

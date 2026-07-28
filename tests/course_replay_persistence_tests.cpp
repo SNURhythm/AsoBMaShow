@@ -493,6 +493,7 @@ void testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult() {
   const auto value = attempt();
   int resultCalls = 0;
   int projectionCalls = 0;
+  int acknowledgementCalls = 0;
   CourseResultPersistence coordinator(CourseResultPersistenceDependencies{
       .persistResult =
           [&](const CapturedCourseReplayAttempt &received) {
@@ -519,11 +520,21 @@ void testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult() {
             return result_persistence::ProjectionOutcome{
                 .status = result_persistence::ProjectionStatus::Inserted};
           },
+      .acknowledgeScore =
+          [&](std::string_view attemptId, int resultId) {
+            ++acknowledgementCalls;
+            expect(attemptId == value.result.attemptId && resultId == 91,
+                   "score checkpoint receives exact result ownership");
+            return result_persistence::AcknowledgeOutcome{
+                .status =
+                    result_persistence::AcknowledgeStatus::Acknowledged};
+          },
   });
 
   const auto saved = coordinator.persist(value);
   expect(saved.state == CourseResultPersistenceState::SavedWithReplay &&
-             saved.saved() && resultCalls == 1 && projectionCalls == 1,
+             saved.saved() && resultCalls == 1 && projectionCalls == 1 &&
+             acknowledgementCalls == 1,
          "one course completion invokes one result-first modern path");
 
   CourseResultPersistence unavailable(CourseResultPersistenceDependencies{
@@ -565,6 +576,12 @@ void testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult() {
                     pendingProjectionCalls == 1
                         ? result_persistence::ProjectionStatus::StorageFailure
                         : result_persistence::ProjectionStatus::AlreadyPresent};
+          },
+      .acknowledgeScore =
+          [](std::string_view, int) {
+            return result_persistence::AcknowledgeOutcome{
+                .status =
+                    result_persistence::AcknowledgeStatus::Acknowledged};
           },
   });
   expect(pendingScore.persist(value).state ==
@@ -661,6 +678,7 @@ void testCourseScoreRecoveryPaginatesAndClassifiesEveryStoredResult() {
   int listCalls = 0;
   std::vector<int> cursors;
   std::vector<int> projectedIds;
+  std::vector<int> acknowledgedIds;
   CourseResultPersistence persistence(CourseResultPersistenceDependencies{
       .persistResult = {},
       .projectScore =
@@ -674,6 +692,13 @@ void testCourseScoreRecoveryPaginatesAndClassifiesEveryStoredResult() {
                 .diagnostic = pending.modernResultId == 3
                                   ? "score database unavailable"
                                   : std::string{}};
+          },
+      .acknowledgeScore =
+          [&](std::string_view, int resultId) {
+            acknowledgedIds.push_back(resultId);
+            return result_persistence::AcknowledgeOutcome{
+                .status =
+                    result_persistence::AcknowledgeStatus::Acknowledged};
           },
       .listScoreSources =
           [&](int afterResultId, std::size_t limit) {
@@ -714,6 +739,7 @@ void testCourseScoreRecoveryPaginatesAndClassifiesEveryStoredResult() {
   const auto recovered = persistence.recoverAll(2);
   expect(listCalls == 2 && cursors == std::vector<int>({0, 1}) &&
              projectedIds == std::vector<int>({1, 3}) &&
+             acknowledgedIds == std::vector<int>({1}) &&
              recovered.attempted == 3 && recovered.saved == 1 &&
              recovered.pending == 1 && recovered.conflicts == 1 &&
              recovered.diagnostic.contains("malformed") &&
@@ -755,14 +781,21 @@ void testCourseScoreProjectionRecoversAfterRestartWithoutReplayFile() {
 
   CourseResultPersistence restarted(scoreRepository, replayRepository);
   const auto recovered = restarted.recoverAll(1);
+  const auto recoveredAgain = restarted.recoverAll(1);
   expect(recovered.attempted == 1 && recovered.saved == 1 &&
              recovered.pending == 0 && recovered.conflicts == 0 &&
+             recoveredAgain.attempted == 0 && recoveredAgain.saved == 0 &&
+             recoveredAgain.pending == 0 && recoveredAgain.conflicts == 0 &&
+             queryInt(replayPath,
+                      "SELECT COUNT(*) FROM "
+                      "modern_pending_course_score_writes") == 0 &&
              queryInt(scorePath, "SELECT COUNT(*) FROM course_scores") == 1 &&
              queryInt(scorePath,
                       "SELECT COUNT(*) FROM course_scores WHERE attempt_id='" +
                           replayless.result.attemptId +
                           "' AND modern_result_id > 0") == 1,
-         "startup reprojects the exact stored course result without a BRD");
+         "startup reprojects the exact stored course result once without a "
+         "BRD");
 }
 
 } // namespace

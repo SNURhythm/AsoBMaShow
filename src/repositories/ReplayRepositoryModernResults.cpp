@@ -2069,6 +2069,20 @@ ModernCourseStageOutcome ReplayRepository::StageModernCourseResult(
     return {.status = ModernCourseStageStatus::StorageFailure,
             .diagnostic = "could not insert modern course result"};
   }
+  SqliteStatementHandle pendingScore;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "INSERT INTO modern_pending_course_score_writes(attempt_id,"
+          "modern_course_result_id,created_at) SELECT attempt_id,id,created_at "
+          "FROM modern_course_results WHERE id=? AND attempt_id=?",
+          pendingScore) != SQLITE_OK ||
+      sqlite3_bind_int(pendingScore.get(), 1, resultId) != SQLITE_OK ||
+      !bindText(pendingScore.get(), 2, result.attemptId) ||
+      sqlite3_step(pendingScore.get()) != SQLITE_DONE ||
+      sqlite3_changes(impl_->sessionDatabase) != 1) {
+    return {.status = ModernCourseStageStatus::StorageFailure,
+            .diagnostic = "could not stage modern course score work"};
+  }
   if (replayFile) {
     SqliteStatementHandle statement;
     constexpr const char *query =
@@ -2297,7 +2311,9 @@ ReplayRepository::ListModernCourseScoreSourcesAfter(int afterResultId,
 
   SqliteStatementHandle statement;
   constexpr const char *query =
-      "SELECT id FROM modern_course_results WHERE id>? ORDER BY id LIMIT ?";
+      "SELECT modern_course_result_id FROM "
+      "modern_pending_course_score_writes WHERE modern_course_result_id>? "
+      "ORDER BY modern_course_result_id LIMIT ?";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
           SQLITE_OK ||
       sqlite3_bind_int(statement.get(), 1, afterResultId) != SQLITE_OK ||
@@ -2367,6 +2383,102 @@ ReplayRepository::ListModernCourseScoreSourcesAfter(int afterResultId,
             .diagnostic = "could not finish modern course score source read"};
   }
   return outcome;
+}
+
+result_persistence::AcknowledgeOutcome
+ReplayRepository::AcknowledgePendingModernCourseScore(
+    std::string_view attemptId, int modernResultId) {
+  using result_persistence::AcknowledgeStatus;
+  profile_database_activity::WriteGuard writeGuard;
+  if (!uuid::isCanonicalLowerV4(attemptId) || modernResultId <= 0) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic =
+                "modern course score acknowledgement identity is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic =
+                "could not start modern course score acknowledgement"};
+  }
+
+  SqliteStatementHandle pending;
+  constexpr const char *pendingQuery =
+      "SELECT pending.modern_course_result_id,pending.created_at,"
+      "result.created_at,result.attempt_id FROM "
+      "modern_pending_course_score_writes pending LEFT JOIN "
+      "modern_course_results result ON result.id="
+      "pending.modern_course_result_id WHERE pending.attempt_id=?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, pendingQuery, pending) !=
+          SQLITE_OK ||
+      !bindText(pending.get(), 1, attemptId)) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic =
+                "could not prepare modern course score acknowledgement"};
+  }
+  const int rc = sqlite3_step(pending.get());
+  if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "could not read pending modern course score"};
+  }
+  if (rc == SQLITE_ROW) {
+    if (sqlite3_column_type(pending.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(pending.get(), 1) != SQLITE_TEXT ||
+        sqlite3_column_type(pending.get(), 2) != SQLITE_TEXT ||
+        sqlite3_column_type(pending.get(), 3) != SQLITE_TEXT ||
+        sqlite3_column_int64(pending.get(), 0) != modernResultId ||
+        sqliteColumnTextView(pending.get(), 1) !=
+            sqliteColumnTextView(pending.get(), 2) ||
+        sqliteColumnTextView(pending.get(), 3) != attemptId ||
+        sqlite3_step(pending.get()) != SQLITE_DONE) {
+      return {.status = AcknowledgeStatus::IntegrityConflict,
+              .diagnostic =
+                  "pending modern course score names a different result"};
+    }
+    pending.reset();
+    SqliteStatementHandle remove;
+    if (prepareSqliteStatement(
+            impl_->sessionDatabase,
+            "DELETE FROM modern_pending_course_score_writes WHERE "
+            "attempt_id=? AND modern_course_result_id=?",
+            remove) != SQLITE_OK ||
+        !bindText(remove.get(), 1, attemptId) ||
+        sqlite3_bind_int(remove.get(), 2, modernResultId) != SQLITE_OK ||
+        sqlite3_step(remove.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1 ||
+        !transaction.commit(transactionError)) {
+      return {.status = AcknowledgeStatus::StorageFailure,
+              .diagnostic =
+                  "could not commit modern course score acknowledgement"};
+    }
+    return {.status = AcknowledgeStatus::Acknowledged};
+  }
+
+  auto existing =
+      readCourseResult(impl_->sessionDatabase, "attempt_id=?", attemptId, 0);
+  if (existing.status == ReadRecordStatus::StorageFailure) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status != ReadRecordStatus::Loaded || !existing.result ||
+      existing.result->resultId != modernResultId) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic =
+                "acknowledged modern course score has no matching result"};
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic =
+                "could not verify modern course score acknowledgement"};
+  }
+  return {.status = AcknowledgeStatus::AlreadyAcknowledged};
 }
 
 ModernReplayFileMutationOutcome ReplayRepository::MarkModernReplayFileUserDeleted(

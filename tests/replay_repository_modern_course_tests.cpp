@@ -177,7 +177,8 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
   ReplayRepository repository(databasePath);
   assert(repository.EnsureSchema());
   auto database = openDatabase(databasePath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   for (const std::string_view table : {"modern_course_results",
                                        "modern_course_stages",
                                        "modern_course_entries"}) {
@@ -348,23 +349,30 @@ void testCourseScoreSourcesPageWithoutReplayOwnership() {
                            "modern_course_result_id=" +
                            std::to_string(firstStage.receipt->resultId));
 
+  const auto acknowledged = repository.AcknowledgePendingModernCourseScore(
+      first.attemptId, firstStage.receipt->resultId);
+  assert(acknowledged.status ==
+         result_persistence::AcknowledgeStatus::Acknowledged);
+  const auto acknowledgedAgain =
+      repository.AcknowledgePendingModernCourseScore(
+          first.attemptId, firstStage.receipt->resultId);
+  assert(acknowledgedAgain.status ==
+         result_persistence::AcknowledgeStatus::AlreadyAcknowledged);
+
   const auto firstPage = repository.ListModernCourseScoreSourcesAfter(0, 2);
   assert(firstPage.status == ModernCourseScoreSourceBatchStatus::Loaded &&
-         firstPage.entries.size() == 2 && firstPage.hasMore &&
+         firstPage.entries.size() == 2 && !firstPage.hasMore &&
          firstPage.entries[0].status ==
              ModernCourseScoreSourceEntryStatus::Loaded &&
          firstPage.entries[0].source &&
-         firstPage.entries[0].source->result.attemptId == first.attemptId &&
+         firstPage.entries[0].source->result.attemptId == second.attemptId &&
          !firstPage.entries[0].source->createdAt.empty() &&
          firstPage.entries[1].source &&
-         firstPage.entries[1].source->result.attemptId == second.attemptId);
-  const auto secondPage = repository.ListModernCourseScoreSourcesAfter(
+         firstPage.entries[1].source->result.attemptId == third.attemptId);
+  const auto exhausted = repository.ListModernCourseScoreSourcesAfter(
       firstPage.entries.back().resultId, 2);
-  assert(secondPage.status == ModernCourseScoreSourceBatchStatus::Loaded &&
-         secondPage.entries.size() == 1 && !secondPage.hasMore &&
-         secondPage.entries.front().source &&
-         secondPage.entries.front().source->result.attemptId ==
-             third.attemptId);
+  assert(exhausted.status == ModernCourseScoreSourceBatchStatus::Loaded &&
+         exhausted.entries.empty() && !exhausted.hasMore);
 }
 
 #endif

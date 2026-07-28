@@ -489,7 +489,7 @@ struct ModernIrSnapshotReadOutcome {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 14;
+  static constexpr int kCurrentSchemaVersion = 15;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -536,6 +536,9 @@ public:
   ListModernCourseResults(std::string_view courseKey, std::size_t limit = 100);
   ModernCourseScoreSourceBatchOutcome
   ListModernCourseScoreSourcesAfter(int afterResultId, std::size_t limit = 256);
+  result_persistence::AcknowledgeOutcome
+  AcknowledgePendingModernCourseScore(std::string_view attemptId,
+                                      int modernResultId);
   std::vector<LegacyCourseResultSummary>
   ListLegacyCourseSummaries(const CourseReplayLookup &lookup,
                             std::size_t limit = 100);
