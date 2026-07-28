@@ -90,6 +90,9 @@ struct ResultRecordSummary {
   int score = 0;
   int maxScore = 0;
   std::optional<int> maxCombo;
+  std::optional<double> finalGauge;
+  std::optional<int> completedCharts;
+  std::optional<int> totalCharts;
   int clearRank = kClearTypeFailedRank;
   bool scoreAvailable = true;
   bool maxScoreAvailable = true;

@@ -288,6 +288,8 @@ void testModernConversionUsesSharedReplayCapabilities() {
   expect(absent.modern && absent.modern->result == record.result &&
              absent.score == record.result.score.score &&
              absent.maxScore == record.result.score.maxScore &&
+             absent.finalGauge == record.result.score.finalGauge &&
+             !absent.completedCharts && !absent.totalCharts &&
              absent.playOption ==
                  record.result.score.provenance.player1.option &&
              absent.stableKey() == "m:" + record.result.attemptId,
@@ -362,6 +364,9 @@ void testModernCourseConversionKeepsResultWithoutReplay() {
              missing.score == record.result.finalScore &&
              missing.maxScore == record.result.maxScore &&
              missing.maxCombo == record.result.maxCombo &&
+             missing.finalGauge == record.result.finalGauge &&
+             missing.completedCharts == record.result.completedCharts &&
+             missing.totalCharts == record.result.totalCharts &&
              missing.playOption == record.result.requestedPlayOption &&
              missing.stableKey() == "c:" + record.result.attemptId,
          "course projection reads display facts only from its strict row");
@@ -392,6 +397,8 @@ void testLegacySummariesExposeRecordsOnly() {
   LegacyChartResultSummary chart;
   chart.legacyReplayId = 11;
   chart.chartTitle = "Legacy chart";
+  chart.maxCombo = 555;
+  chart.finalGauge = 62.5;
   chart.createdAt = "2026-07-20 01:02:03";
   chart.partial = true;
   const auto chartRecord = makeLegacyChartResultRecord(chart);
@@ -402,14 +409,19 @@ void testLegacySummariesExposeRecordsOnly() {
              chartRecord.stableKey() == "lc:11",
          "legacy chart exposes Records without replay or result actions");
   expect(!chartRecord.scoreAvailable && !chartRecord.maxScoreAvailable &&
-             !chartRecord.clearRankAvailable && !chartRecord.maxCombo,
-         "unknown legacy chart facts remain unavailable");
+             !chartRecord.clearRankAvailable && chartRecord.maxCombo == 555 &&
+             chartRecord.finalGauge == 62.5 && !chartRecord.completedCharts &&
+             !chartRecord.totalCharts,
+         "legacy chart distinguishes available from missing header facts");
 
   LegacyCourseResultSummary course;
   course.legacyCourseReplayId = 21;
   course.finalScore = 2100;
   course.maxCombo = 321;
+  course.finalGauge = 48.0;
   course.clearType = kClearTypeHardClearRank;
+  course.completedCharts = 3;
+  course.totalCharts = 5;
   course.partial = true;
   const auto courseRecord = makeLegacyCourseResultRecord(course);
   expect(courseRecord.course && courseRecord.legacyCourse == course &&
@@ -418,7 +430,9 @@ void testLegacySummariesExposeRecordsOnly() {
   expect(courseRecord.capabilities == ResultRecordCapabilities{} &&
              courseRecord.stableKey() == "lco:21" &&
              courseRecord.scoreAvailable && !courseRecord.maxScoreAvailable &&
-             courseRecord.clearRankAvailable && courseRecord.maxCombo == 321,
+             courseRecord.clearRankAvailable && courseRecord.maxCombo == 321 &&
+             courseRecord.finalGauge == 48.0 &&
+             courseRecord.completedCharts == 3 && courseRecord.totalCharts == 5,
          "legacy course projects only independently stored header facts");
 }
 
@@ -429,6 +443,7 @@ void testAutoPlayIsTheOnlyReplaySummaryBackedRecord() {
   replay.finalScore = 1'000;
   replay.maxScore = 1'000;
   replay.maxCombo = 500;
+  replay.finalGauge = 64.5F;
   replay.clearType = kClearTypeNormalClearRank;
   replay.createdAt = "AUTO PLAY";
   replay.playOption = "MIRROR";
@@ -445,6 +460,7 @@ void testAutoPlayIsTheOnlyReplaySummaryBackedRecord() {
              !result.capabilities.irUpload,
          "Auto Play exposes only its synthetic playback actions");
   expect(result.autoPlayReplay && result.autoPlayReplay->id == -1 &&
+             result.finalGauge == 64.5 &&
              result.irState == ir::IrRecordState::Hidden && !result.remote,
          "Auto Play retains only the synthetic playback payload");
 
@@ -485,6 +501,7 @@ void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
          "remote records expose View Result only");
   expect(!result.course && !result.autoPlay && result.score == score.score &&
              result.maxScore == 2'468 && result.maxCombo == score.maxCombo &&
+             result.finalGauge == score.finalGauge &&
              result.clearRank == score.lampRank,
          "remote score conversion preserves supplied values and derives max");
   expect(result.displayedTimeUnixMillis == *score.timeAchievedUnixMillis &&
