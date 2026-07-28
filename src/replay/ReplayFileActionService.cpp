@@ -1,5 +1,6 @@
 #include "ReplayFileActionService.h"
 
+#include "BeatorajaReplayCodec.h"
 #include "BeatorajaReplayPath.h"
 #include "ReplayReferenceAgreement.h"
 
@@ -37,6 +38,8 @@ ReplayState replayStateForFileAction(ReplayFileActionState state) noexcept {
     return ReplayState::Corrupt;
   case ReplayFileActionState::Mismatched:
     return ReplayState::Mismatched;
+  case ReplayFileActionState::UnsupportedCodecVersion:
+    return ReplayState::UnsupportedExtension;
   case ReplayFileActionState::ResultNotFound:
   case ReplayFileActionState::Invalid:
     return ReplayState::NotApplicable;
@@ -126,6 +129,12 @@ ReplayFileActionOutcome ReplayFileActionService::inspectResolved(
   if (resolved.reference.userDeleted) {
     return {.state = ReplayFileActionState::UserDeleted};
   }
+  if (resolved.reference.metadata.codecVersion !=
+      BeatorajaReplayCodec::kCodecVersion) {
+    return {.state = ReplayFileActionState::UnsupportedCodecVersion,
+            .diagnostic =
+                "The replay uses an unsupported codec version."};
+  }
   const auto inspected = store_.inspect(resolved.reference.metadata);
   return {.state = actionState(inspected.state),
           .diagnostic = inspected.diagnostic};
@@ -173,6 +182,7 @@ ReplayFileActionService::remove(const ReplayFileActionRequest &request) {
   if (inspected.state != ReplayFileActionState::Verified &&
       inspected.state != ReplayFileActionState::Corrupt &&
       inspected.state != ReplayFileActionState::Mismatched &&
+      inspected.state != ReplayFileActionState::UnsupportedCodecVersion &&
       inspected.state != ReplayFileActionState::UserDeleted) {
     return inspected;
   }

@@ -8875,13 +8875,11 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         replayModalChart.meta.SHA256);
     if (history.status == ModernChartHistoryReadStatus::Loaded) {
       modernSummaries.reserve(modernSummaries.size() + history.records.size());
-      replay::ChartReplayContext replayContext(
-          context.replayRepository);
+      replay::ReplayFileActionService replayActions(context.replayRepository);
       for (const ModernChartResultRecord &modern : history.records) {
-        const auto facts = replay::makeParsedChartReplayFacts(
-            replayModalChart.meta, modern.result.score.longNoteMode);
-        const auto replayLoad =
-            replayContext.load(modern.result.attemptId, facts);
+        const auto inspected = replayActions.inspect(
+            {.owner = ModernReplayOwnerKind::ChartResult,
+             .attemptId = modern.result.attemptId});
         ir::IrRecordState irState = ir::IrRecordState::Hidden;
         const auto storedIr =
             irRecordsByAttempt.find(modern.result.attemptId);
@@ -8895,7 +8893,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
               recordActivityFor(serviceStatus.activeRequest));
         }
         modernSummaries.push_back(makeModernChartResultRecord(
-            modern, replayLoad.replayState(), irState));
+            modern, replay::replayStateForFileAction(inspected.state),
+            irState));
       }
     } else {
       modernHistoryReadSucceeded = false;

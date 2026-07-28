@@ -23,6 +23,7 @@ enum class ReplayFileActionState {
   Missing,
   Corrupt,
   Mismatched,
+  UnsupportedCodecVersion,
   IoFailure,
   ResultNotFound,
   Invalid,

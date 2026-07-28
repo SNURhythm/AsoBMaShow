@@ -235,6 +235,46 @@ void testResultMismatchedReferenceCannotBeInspectedOrDeleted() {
          ModernReplayFileInventoryStatus::IntegrityConflict);
 }
 
+void testUnsupportedCodecSkipsMaterializationAndRemainsDeletable() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replays.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  replay::ReplayFileStore store(temporary.path);
+  const auto installed = installResult(repository, store, 5, 'e');
+  const auto path = temporary.path / installed.reference.metadata.relativePath;
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << "would be corrupt if inspected";
+  }
+  repository.Shutdown();
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  assert(sqlite3_exec(database, "PRAGMA ignore_check_constraints=ON", nullptr,
+                      nullptr, nullptr) == SQLITE_OK);
+  const std::string update =
+      "UPDATE modern_replay_files SET codec_version=" +
+      std::to_string(replay::BeatorajaReplayCodec::kCodecVersion + 1) +
+      " WHERE id=" + std::to_string(installed.reference.id);
+  assert(sqlite3_exec(database, update.c_str(), nullptr, nullptr, nullptr) ==
+         SQLITE_OK);
+  sqlite3_close(database);
+
+  replay::ReplayFileActionService actions(repository, store);
+  const replay::ReplayFileActionRequest request{
+      .owner = ModernReplayOwnerKind::ChartResult,
+      .attemptId = installed.result.attemptId};
+  assert(actions.inspect(request).state ==
+         replay::ReplayFileActionState::UnsupportedCodecVersion);
+  const auto shared = actions.prepareShare(request);
+  assert(shared.state ==
+             replay::ReplayFileActionState::UnsupportedCodecVersion &&
+         !shared.share);
+  const auto removed = actions.remove(request);
+  assert(removed.state == replay::ReplayFileActionState::UserDeleted &&
+         removed.changed && !std::filesystem::exists(path));
+}
+
 void testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization() {
   using replay::ReplayFileActionState;
   using replay::ReplayState;
@@ -250,6 +290,9 @@ void testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization() {
          ReplayState::Corrupt);
   assert(replay::replayStateForFileAction(ReplayFileActionState::Mismatched) ==
          ReplayState::Mismatched);
+  assert(replay::replayStateForFileAction(
+             ReplayFileActionState::UnsupportedCodecVersion) ==
+         ReplayState::UnsupportedExtension);
   assert(replay::replayStateForFileAction(ReplayFileActionState::Invalid) ==
          ReplayState::NotApplicable);
   assert(replay::replayStateForFileAction(ReplayFileActionState::ResultNotFound) ==
@@ -263,6 +306,7 @@ int main() {
   testCorruptOwnedEntryRemainsDeletable();
   testMissingFileDoesNotCreateADeletionTombstone();
   testResultMismatchedReferenceCannotBeInspectedOrDeleted();
+  testUnsupportedCodecSkipsMaterializationAndRemainsDeletable();
   testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization();
   return 0;
 }

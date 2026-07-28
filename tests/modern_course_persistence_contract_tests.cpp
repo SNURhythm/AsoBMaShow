@@ -183,9 +183,12 @@ void testModernCourseRecordsUseResultAndVerifiedReplayAuthorities() {
                                   listEnd - listBegin);
   require(listBody.contains("ReplayFileActionService") &&
               listBody.contains("replayStateForFileAction") &&
+              !listBody.contains("ChartReplayContext") &&
+              !listBody.contains("makeParsedChartReplayFacts") &&
               !listBody.contains("makeRuntimeCourseReplayConsumer") &&
               !listBody.contains("consumer.load"),
-          "course Records must inspect owned file state without decoding or materializing stages");
+          "Records must inspect owned file state without decoding or "
+          "materializing chart or course replay data");
 }
 
 } // namespace
