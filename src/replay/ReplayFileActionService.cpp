@@ -24,6 +24,26 @@ ReplayFileActionState actionState(ReplayFileState state) noexcept {
 
 } // namespace
 
+ReplayState replayStateForFileAction(ReplayFileActionState state) noexcept {
+  switch (state) {
+  case ReplayFileActionState::Verified:
+    return ReplayState::Verified;
+  case ReplayFileActionState::UserDeleted:
+    return ReplayState::UserDeleted;
+  case ReplayFileActionState::Missing:
+  case ReplayFileActionState::IoFailure:
+    return ReplayState::Missing;
+  case ReplayFileActionState::Corrupt:
+    return ReplayState::Corrupt;
+  case ReplayFileActionState::Mismatched:
+    return ReplayState::Mismatched;
+  case ReplayFileActionState::ResultNotFound:
+  case ReplayFileActionState::Invalid:
+    return ReplayState::NotApplicable;
+  }
+  return ReplayState::NotApplicable;
+}
+
 ReplayFileActionService::ReplayFileActionService(ReplayRepository &repository)
     : ownedStore_(std::make_unique<ReplayFileStore>(
           repository.GetResolvedProfileRoot())),

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ReplayCapabilities.h"
 #include "ReplayFileStore.h"
 
 #include "../repositories/ReplayRepository.h"
@@ -26,6 +27,13 @@ enum class ReplayFileActionState {
   ResultNotFound,
   Invalid,
 };
+
+// Projects the cheap reference/file inspection state into the shared Records
+// capability vocabulary. This deliberately does not claim that a verified
+// file has decoded or materialized successfully; action consumers perform
+// those stronger checks when the user selects a replay-dependent action.
+[[nodiscard]] ReplayState
+replayStateForFileAction(ReplayFileActionState state) noexcept;
 
 struct ReplaySharePreparation {
   std::filesystem::path sourcePath;

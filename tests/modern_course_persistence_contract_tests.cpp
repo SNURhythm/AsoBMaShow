@@ -145,6 +145,20 @@ void testModernCourseRecordsUseResultAndVerifiedReplayAuthorities() {
               !recallBody.contains("CourseReplayConsumer") &&
               !recallBody.contains("LoadCourseReplay"),
           "modern course View Result must use strict result rows without BRD or legacy replay loading");
+
+  const auto listBegin = modernRecall.find(
+      "void MainMenuScene::reloadReplayRecordModels");
+  const auto listEnd = modernRecall.find(
+      "void MainMenuScene::showReplayListModal", listBegin);
+  require(listBegin != std::string::npos && listEnd != std::string::npos,
+          "modern Records list boundary is malformed");
+  const std::string_view listBody(modernRecall.data() + listBegin,
+                                  listEnd - listBegin);
+  require(listBody.contains("ReplayFileActionService") &&
+              listBody.contains("replayStateForFileAction") &&
+              !listBody.contains("makeRuntimeCourseReplayConsumer") &&
+              !listBody.contains("consumer.load"),
+          "course Records must inspect owned file state without decoding or materializing stages");
 }
 
 } // namespace

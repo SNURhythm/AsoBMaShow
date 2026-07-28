@@ -235,6 +235,27 @@ void testResultMismatchedReferenceCannotBeInspectedOrDeleted() {
          ModernReplayFileInventoryStatus::IntegrityConflict);
 }
 
+void testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization() {
+  using replay::ReplayFileActionState;
+  using replay::ReplayState;
+  assert(replay::replayStateForFileAction(ReplayFileActionState::Verified) ==
+         ReplayState::Verified);
+  assert(replay::replayStateForFileAction(ReplayFileActionState::UserDeleted) ==
+         ReplayState::UserDeleted);
+  assert(replay::replayStateForFileAction(ReplayFileActionState::Missing) ==
+         ReplayState::Missing);
+  assert(replay::replayStateForFileAction(ReplayFileActionState::IoFailure) ==
+         ReplayState::Missing);
+  assert(replay::replayStateForFileAction(ReplayFileActionState::Corrupt) ==
+         ReplayState::Corrupt);
+  assert(replay::replayStateForFileAction(ReplayFileActionState::Mismatched) ==
+         ReplayState::Mismatched);
+  assert(replay::replayStateForFileAction(ReplayFileActionState::Invalid) ==
+         ReplayState::NotApplicable);
+  assert(replay::replayStateForFileAction(ReplayFileActionState::ResultNotFound) ==
+         ReplayState::NotApplicable);
+}
+
 } // namespace
 
 int main() {
@@ -242,5 +263,6 @@ int main() {
   testCorruptOwnedEntryRemainsDeletable();
   testMissingFileDoesNotCreateADeletionTombstone();
   testResultMismatchedReferenceCannotBeInspectedOrDeleted();
+  testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization();
   return 0;
 }

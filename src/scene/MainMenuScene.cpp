@@ -8810,18 +8810,14 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         activeFolder.courseKey);
     if (history.status == ModernCourseHistoryReadStatus::Loaded) {
       modernSummaries.reserve(modernSummaries.size() + history.records.size());
-      auto consumer = replay::makeRuntimeCourseReplayConsumer(
-          context.replayRepository);
+      replay::ReplayFileActionService replayActions(context.replayRepository);
       for (const ModernCourseResultRecord &modern : history.records) {
-        std::vector<std::filesystem::path> chartPaths;
-        chartPaths.reserve(modern.result.stages.size());
-        for (const auto &stage : modern.result.stages) {
-          chartPaths.push_back(stage.score.chartPath);
-        }
-        std::atomic_bool cancelled = false;
-        const auto replayLoad = consumer.load(modern, chartPaths, cancelled);
+        const auto inspected = replayActions.inspect(
+            {.owner = ModernReplayOwnerKind::CourseResult,
+             .attemptId = modern.result.attemptId});
         modernSummaries.push_back(
-            makeModernCourseResultRecord(modern, replayLoad.replayState()));
+            makeModernCourseResultRecord(
+                modern, replay::replayStateForFileAction(inspected.state)));
       }
     } else {
       modernHistoryReadSucceeded = false;
