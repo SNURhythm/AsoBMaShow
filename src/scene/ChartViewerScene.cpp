@@ -11,6 +11,7 @@
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayGhostUtils.h"
 #include "../replay/ChartReplayConsumer.h"
+#include "../replay/ReplayFileActionService.h"
 #include "../path.h"
 #include "../practice/PracticeConfiguration.h"
 #include "../practice/PracticeLaunchRequest.h"
@@ -3369,8 +3370,7 @@ void ChartViewerScene::showGhostModal() {
   const auto history =
       context.replayRepository.ListModernChartResults(chart->Meta.SHA256);
   if (history.status == ModernChartHistoryReadStatus::Loaded) {
-    replay::ChartReplayContext replayContext(
-        context.replayRepository);
+    replay::ReplayFileActionService replayActions(context.replayRepository);
     modern.reserve(history.records.size());
     for (const ModernChartResultRecord &record : history.records) {
       const auto replayLongNoteMode =
@@ -3378,12 +3378,13 @@ void ChartViewerScene::showGhostModal() {
       if (!replayLongNoteMode) {
         continue;
       }
-      const auto facts = replay::makeParsedChartReplayFacts(
-          chart->Meta, *replayLongNoteMode);
-      const auto replayLoad =
-          replayContext.load(record.result.attemptId, facts);
+      const auto inspected = replayActions.inspect({
+          .owner = ModernReplayOwnerKind::ChartResult,
+          .attemptId = record.result.attemptId,
+      });
       auto summary = makeModernChartResultRecord(
-          record, replayLoad.replayState(), ir::IrRecordState::Hidden);
+          record, replay::replayStateForFileAction(inspected.state),
+          ir::IrRecordState::Hidden);
       if (summary.capabilities.practiceGhost) {
         modern.push_back(std::move(summary));
       }

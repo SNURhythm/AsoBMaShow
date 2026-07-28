@@ -273,8 +273,11 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
                "makeRuntimeChartReplayConsumer",
                "modern practice ghost consumer");
   requireToken(root / "src/scene/ChartViewerScene.cpp",
-               "makeParsedChartReplayFacts",
-               "modern practice replay availability projection");
+               "ReplayFileActionService",
+               "deferred practice ghost file inspection");
+  constexpr std::array<std::string_view, 1> eagerGhostDecode{
+      "ChartReplayContext replayContext"};
+  rejectTokens(root / "src/scene/ChartViewerScene.cpp", eagerGhostDecode);
   requireToken(root / "src/replay/ChartReplayConsumer.cpp",
                "makeParsedChartReplayFacts",
                "modern replay consumer selected-chart projection");
