@@ -257,10 +257,9 @@ ProvenanceFields provenanceValue(sqlite3_stmt *source, int rulesetColumn,
     return {};
   }
   try {
-    if (serializeScoreProvenance(*decoded) != *json) {
-      partial = true;
-      return {};
-    }
+    return {.rulesetVersion = ruleset,
+            .eligibility = eligibility,
+            .json = serializeScoreProvenance(*decoded)};
   } catch (const std::runtime_error &) {
     // Older provenance schemas admitted incomplete stage facts that the
     // current canonical serializer rejects. They are an unavailable optional
@@ -268,7 +267,6 @@ ProvenanceFields provenanceValue(sqlite3_stmt *source, int rulesetColumn,
     partial = true;
     return {};
   }
-  return {.rulesetVersion = ruleset, .eligibility = eligibility, .json = json};
 }
 
 bool bindTextOrNull(sqlite3_stmt *statement, int column,

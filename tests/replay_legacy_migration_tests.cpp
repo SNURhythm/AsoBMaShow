@@ -1,6 +1,9 @@
 #include "repositories/ReplayRepository.h"
 #include "repositories/ReplayRepositoryMigrationTestAccess.h"
 #include "repositories/SqliteRAII.h"
+#include "ScoreProvenance.h"
+
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <array>
@@ -566,6 +569,49 @@ void testMalformedProvenanceDoesNotBlockHeaderMigration() {
   assert(queryInt(database.get(),
                   "SELECT partial FROM legacy_course_result_summaries WHERE "
                   "legacy_course_replay_id=21") == 1);
+}
+
+void testOlderCanonicalProvenanceMigratesSemantically() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  createVersion13Fixture(path);
+  auto database = openDatabase(path);
+
+  const std::string currentCanonical =
+      serializeScoreProvenance(ScoreProvenance::Legacy());
+  auto older = nlohmann::ordered_json::parse(currentCanonical);
+  older["schemaVersion"] = 4;
+  older.erase("doublePlayFlip");
+  const std::string olderCanonical = older.dump();
+  exec(database.get(),
+       "UPDATE replays SET provenance_json='" + olderCanonical +
+           "' WHERE id=12; UPDATE course_replays SET provenance_json='" +
+           olderCanonical + "' WHERE id=21");
+
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
+  assert(queryText(database.get(),
+                   "SELECT provenance_json FROM "
+                   "legacy_chart_result_summaries WHERE legacy_replay_id=12") ==
+         currentCanonical);
+  assert(queryText(database.get(),
+                   "SELECT provenance_json FROM "
+                   "legacy_course_result_summaries WHERE "
+                   "legacy_course_replay_id=21") == currentCanonical);
+  assert(queryInt(database.get(),
+                  "SELECT ruleset_version FROM "
+                  "legacy_chart_result_summaries WHERE legacy_replay_id=12") ==
+         0);
+  assert(queryInt(database.get(),
+                  "SELECT eligibility FROM "
+                  "legacy_course_result_summaries WHERE "
+                  "legacy_course_replay_id=21") ==
+         static_cast<int>(ScoreEligibility::LegacyUnverified));
+  assert(queryInt(database.get(),
+                  "SELECT partial FROM legacy_chart_result_summaries WHERE "
+                  "legacy_replay_id=12") == 0);
+  assert(queryInt(database.get(),
+                  "SELECT partial FROM legacy_course_result_summaries WHERE "
+                  "legacy_course_replay_id=21") == 0);
 }
 
 void testCurrentSchemaRejectsSummaryShapeDrift() {
@@ -1237,6 +1283,7 @@ int main() {
   testFreshSchemaHasNoRawReplayTables();
   testDurableReceiptsAndOutboxWorkSurvive();
   testMalformedProvenanceDoesNotBlockHeaderMigration();
+  testOlderCanonicalProvenanceMigratesSemantically();
   testCurrentSchemaRejectsSummaryShapeDrift();
   testVersion14CourseScoreOutboxMigrationRollsBackAtomically();
   testVersion15OwnershipMigrationPreservesPathOnlyReservations();
