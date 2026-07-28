@@ -777,7 +777,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(replay_setup_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
-    target_compile_features(replay_setup_tests PRIVATE cxx_std_23)
+    target_compile_features(replay_setup_tests PRIVATE cxx_std_20)
+    set_property(TARGET replay_setup_tests PROPERTY CXX_STANDARD 20)
 
     add_executable(beatoraja_replay_path_tests
         tests/beatoraja_replay_path_tests.cpp
@@ -786,7 +787,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(beatoraja_replay_path_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
-    target_compile_features(beatoraja_replay_path_tests PRIVATE cxx_std_23)
+    target_compile_features(beatoraja_replay_path_tests PRIVATE cxx_std_20)
+    set_property(TARGET beatoraja_replay_path_tests PROPERTY CXX_STANDARD 20)
 
     add_executable(replay_codec_primitive_tests
         tests/replay_codec_primitive_tests.cpp

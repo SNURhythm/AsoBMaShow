@@ -54,7 +54,7 @@ validReplayPlayerOptionName(std::string_view name, int keyMode) noexcept {
     return false;
   }
   for (std::size_t index = 0; index < notation.size(); ++index) {
-    if (!symbols.contains(notation[index]) ||
+    if (symbols.find(notation[index]) == std::string_view::npos ||
         notation.find(notation[index]) != index) {
       return false;
     }

@@ -222,8 +222,8 @@ bool isCanonicalReplayRelativePath(const std::filesystem::path &relativePath,
   }
   const std::string filename = relativePath.filename().string();
   if (filename.empty() || filename.size() > limits.maxFilenameBytes ||
-      !filename.ends_with(".brd") || filename.contains('/') ||
-      filename.contains('\\')) {
+      !filename.ends_with(".brd") || filename.find('/') != std::string::npos ||
+      filename.find('\\') != std::string::npos) {
     diagnostic = "Replay filename is not canonical";
     return false;
   }
