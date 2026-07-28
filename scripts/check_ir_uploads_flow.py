@@ -47,8 +47,10 @@ require(
     "configuration targets the IR tab",
 )
 require(
-    "ListIrUploadCandidates" in uploads_scene,
-    "the page reads snapshot-backed modern candidates in one batch",
+    "ListIrUploadCandidates" in uploads_scene
+    and "nextBeforeModernChartResultId" in uploads_scene,
+    "the page reads snapshot-backed modern candidates through the paged "
+    "repository boundary",
 )
 reject(
     "ListIrUploadCandidateReplays" in uploads_scene
@@ -60,7 +62,7 @@ reject(
     "the page must not queue selections one by one",
 )
 require(
-    "loadDiagnostic = candidateRead.diagnostic" in uploads_scene,
+    "loadDiagnostic = page.diagnostic" in uploads_scene,
     "IR Uploads forwards durable result/snapshot agreement diagnostics",
 )
 reject(
