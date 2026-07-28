@@ -217,6 +217,8 @@ void testProjectsOnlySnapshotBackedModernAttempts() {
              records.records[2].resolvedState() == ir::IrRecordState::Queued &&
              records.records[3].resolvedState() == ir::IrRecordState::Uploaded,
          "record and upload pages share one durable state authority");
+  expect(records.records[3].receiptRemoteScoreId == "remote-score",
+         "record projection retains the scoped receipt's remote score ID");
   expect(records.records[2].resolvedState(
              ir::IrRecordActivity::Submitting) ==
              ir::IrRecordState::Uploading &&

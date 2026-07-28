@@ -34,6 +34,7 @@ struct IrUploadRecord {
   std::string attemptId;
   bool eligible = false;
   bool hasReceipt = false;
+  std::optional<std::string> receiptRemoteScoreId;
   std::optional<IrOutboxState> outboxState;
   std::string failureReason;
 

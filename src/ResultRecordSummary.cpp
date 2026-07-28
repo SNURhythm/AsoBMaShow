@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 namespace {
@@ -22,6 +23,18 @@ bool validRemoteOriginIdentity(std::string_view providerId,
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
   return ir::isValidProviderId(providerId) && normalizedOrigin &&
          *normalizedOrigin == serverOrigin;
+}
+
+bool validLinkedRemoteIdentity(const IrRemoteRecordId &identity) noexcept {
+  return validRemoteOriginIdentity(identity.providerId,
+                                   identity.serverOrigin) &&
+         !identity.remoteScoreId.empty() &&
+         identity.remoteScoreId.size() <= ir::kMaximumIrRemoteValueBytes &&
+         std::ranges::none_of(identity.remoteScoreId,
+                              [](unsigned char character) {
+                                return character < 0x20U ||
+                                       character == 0x7fU;
+                              });
 }
 
 bool isLeapYear(int year) noexcept {
@@ -466,8 +479,10 @@ makeLegacyCourseResultRecord(LegacyCourseResultSummary summary) {
 ResultRecordSummary
 makeModernChartResultRecord(ModernChartResultRecord record,
                             replay::ReplayState replayState,
-                            ir::IrRecordState irState) {
-  if (record.result.resultId <= 0 || record.result.attemptId.empty()) {
+                            ir::IrRecordState irState,
+                            std::optional<IrRemoteRecordId> linkedRemote) {
+  if (record.result.resultId <= 0 || record.result.attemptId.empty() ||
+      (linkedRemote && !validLinkedRemoteIdentity(*linkedRemote))) {
     throw std::invalid_argument("modern chart result is invalid");
   }
   const auto capabilities = replay::capabilitiesFor({
@@ -491,6 +506,7 @@ makeModernChartResultRecord(ModernChartResultRecord record,
       .playOption = result.score.provenance.player1.option,
       .playOption2 = result.score.provenance.player2.option,
       .irState = irState,
+      .linkedRemote = std::move(linkedRemote),
       .autoPlayReplay = std::nullopt,
       .modern = std::move(record),
       .modernCourse = std::nullopt,
@@ -602,6 +618,8 @@ mergeResultRecords(std::span<const ReplaySummary> autoPlay,
                    std::span<const ir::IrRemoteScore> remote,
                    std::string_view providerId, std::string_view serverOrigin) {
   std::vector<ResultRecordSummary> result;
+  std::unordered_set<std::string> linkedRemoteScoreIds;
+  linkedRemoteScoreIds.reserve(projected.size());
   result.reserve(autoPlay.size() + projected.size() + remote.size());
   for (const ReplaySummary &summary : autoPlay) {
     result.push_back(makeAutoPlayResultRecord(summary));
@@ -623,13 +641,25 @@ mergeResultRecords(std::span<const ReplaySummary> autoPlay,
         !summary.modernCourse.has_value();
     if ((!validChart && !validCourse && !validLegacyChart &&
          !validLegacyCourse) ||
-        summary.autoPlayReplay.has_value() || summary.remote.has_value()) {
+        summary.autoPlayReplay.has_value() || summary.remote.has_value() ||
+        (summary.linkedRemote.has_value() &&
+         (!validChart ||
+          !validLinkedRemoteIdentity(*summary.linkedRemote)))) {
       throw std::invalid_argument("projected result record is invalid");
+    }
+    if (summary.linkedRemote &&
+        summary.linkedRemote->providerId == providerId &&
+        summary.linkedRemote->serverOrigin == serverOrigin) {
+      linkedRemoteScoreIds.emplace(summary.linkedRemote->remoteScoreId);
     }
     result.push_back(summary);
   }
   for (const ir::IrRemoteScore &score : remote) {
-    result.push_back(makeRemoteResultRecord(providerId, serverOrigin, score));
+    auto remoteSummary =
+        makeRemoteResultRecord(providerId, serverOrigin, score);
+    if (!linkedRemoteScoreIds.contains(score.remoteScoreId)) {
+      result.push_back(std::move(remoteSummary));
+    }
   }
 
   std::sort(

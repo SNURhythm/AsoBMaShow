@@ -170,6 +170,10 @@ IrUploadRecordProjection projectIrUploadRecords(
           .attemptId = source.result.attemptId,
           .eligible = eligible,
           .hasReceipt = source.receipt.has_value(),
+          .receiptRemoteScoreId =
+              source.receipt && !source.receipt->remoteScoreId.empty()
+                  ? std::optional(source.receipt->remoteScoreId)
+                  : std::nullopt,
           .outboxState = source.outbox
                              ? std::optional(source.outbox->state)
                              : std::nullopt,

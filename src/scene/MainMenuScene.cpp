@@ -8881,6 +8881,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
             {.owner = ModernReplayOwnerKind::ChartResult,
              .attemptId = modern.result.attemptId});
         ir::IrRecordState irState = ir::IrRecordState::Hidden;
+        std::optional<IrRemoteRecordId> linkedRemote;
         const auto storedIr =
             irRecordsByAttempt.find(modern.result.attemptId);
         if (storedIr != irRecordsByAttempt.end()) {
@@ -8891,10 +8892,18 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
                   : ir::IrAttemptStatusSnapshot{};
           irState = storedIr->second.resolvedState(
               recordActivityFor(serviceStatus.activeRequest));
+          if (storedIr->second.receiptRemoteScoreId && irServerOrigin) {
+            linkedRemote = IrRemoteRecordId{
+                .providerId = std::string(ir::kTachiProviderId),
+                .serverOrigin = *irServerOrigin,
+                .remoteScoreId =
+                    *storedIr->second.receiptRemoteScoreId,
+            };
+          }
         }
         modernSummaries.push_back(makeModernChartResultRecord(
             modern, replay::replayStateForFileAction(inspected.state),
-            irState));
+            irState, std::move(linkedRemote)));
       }
     } else {
       modernHistoryReadSucceeded = false;

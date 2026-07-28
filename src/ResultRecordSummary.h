@@ -102,6 +102,7 @@ struct ResultRecordSummary {
   std::optional<std::string> playOption;
   std::optional<std::string> playOption2;
   ir::IrRecordState irState = ir::IrRecordState::Hidden;
+  std::optional<IrRemoteRecordId> linkedRemote;
   std::optional<ReplaySummary> autoPlayReplay;
   std::optional<ModernChartResultRecord> modern;
   std::optional<ModernCourseResultRecord> modernCourse;
@@ -164,7 +165,9 @@ makeLegacyCourseResultRecord(LegacyCourseResultSummary summary);
 [[nodiscard]] ResultRecordSummary
 makeModernChartResultRecord(ModernChartResultRecord record,
                             replay::ReplayState replayState,
-                            ir::IrRecordState irState);
+                            ir::IrRecordState irState,
+                            std::optional<IrRemoteRecordId> linkedRemote =
+                                std::nullopt);
 
 [[nodiscard]] ResultRecordSummary
 makeModernCourseResultRecord(ModernCourseResultRecord record,

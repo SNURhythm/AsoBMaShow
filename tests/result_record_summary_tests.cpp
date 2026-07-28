@@ -734,6 +734,48 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
          "remote added-time fallback sorts alongside older modern timestamps");
 }
 
+void testMergeSuppressesOnlyReceiptLinkedRemoteRow() {
+  auto linked = modernRecord("linked-local", 1'704'164'700'000LL);
+  linked.linkedRemote = IrRemoteRecordId{
+      .providerId = "tachi",
+      .serverOrigin = "https://boku.tachi.ac",
+      .remoteScoreId = "receipt-linked",
+  };
+  const std::vector<ResultRecordSummary> projected{
+      linked, modernRecord("equivalent-local", 1'704'164'700'000LL)};
+
+  auto receiptLinked = validRemoteScore();
+  receiptLinked.remoteScoreId = "receipt-linked";
+  auto independent = validRemoteScore();
+  independent.remoteScoreId = "independent";
+  const std::vector<ir::IrRemoteScore> remote{receiptLinked, independent};
+
+  const auto merged = mergeResultRecords(
+      std::span<const ReplaySummary>{}, projected, remote, "tachi",
+      "https://boku.tachi.ac");
+  expect(merged.size() == 3 &&
+             std::ranges::count_if(merged, [](const auto &record) {
+               return record.isModernChart();
+             }) == 2 &&
+             std::ranges::none_of(merged, [](const auto &record) {
+               return record.remoteScoreId() == "receipt-linked";
+             }) &&
+             std::ranges::any_of(merged, [](const auto &record) {
+               return record.remoteScoreId() == "independent";
+             }),
+         "Records suppresses only the exact receipt-linked remote mirror");
+
+  linked.linkedRemote->serverOrigin = "https://other.example.test";
+  const auto otherScope = mergeResultRecords(
+      std::span<const ReplaySummary>{},
+      std::span<const ResultRecordSummary>(&linked, 1),
+      std::span<const ir::IrRemoteScore>(&receiptLinked, 1), "tachi",
+      "https://boku.tachi.ac");
+  expect(otherScope.size() == 2 && otherScope[0].isModernChart() !=
+                                       otherScope[1].isModernChart(),
+         "a receipt from another origin cannot hide the active remote row");
+}
+
 } // namespace
 
 int main() {
@@ -749,6 +791,7 @@ int main() {
   testIdentityEqualityHashAndStableKeys();
   testMergeIncludesModernResultsWithoutChangingTheirCapabilities();
   testMergeSortsNewestWithAutoPlayFirstAndStableTies();
+  testMergeSuppressesOnlyReceiptLinkedRemoteRow();
 
   if (failures != 0) {
     std::cerr << failures << " result record summary assertion(s) failed\n";
