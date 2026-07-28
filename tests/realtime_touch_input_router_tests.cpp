@@ -328,7 +328,7 @@ void testLayoutReplacementCancelsOldLaneBeforeNewMapping() {
           "layout replacement releases the old projected lane first");
 }
 
-void testPausePreservesHeldFingerWithoutSyntheticRelease() {
+void testPauseReleasesHeldFingerBeforeDisablingGameplay() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
       10, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
@@ -338,21 +338,23 @@ void testPausePreservesHeldFingerWithoutSyntheticRelease() {
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 110}),
           "pause fixture presses a lane");
-  router.setGameplayEnabled(false);
-  require(capture.events.size() == 1,
-          "closing the touch gate emits no synthetic release");
-  router.setGameplayEnabled(true);
+  require(router.setGameplayEnabled(false, 115),
+          "closing the touch gate releases every active finger");
+  require(capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().steadyTimestampMicros == 115,
+          "pause publishes the release before touch gameplay is disabled");
+  require(router.setGameplayEnabled(true, 116),
+          "resuming reopens touch gameplay");
   require(router.consume({.fingerId = 23,
                           .phase = gameplay::RealtimeTouchPhase::Up,
                           .normalizedX = 0.31F,
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 120}),
-          "held finger remains routable after resume");
-  require(capture.events.size() == 2 &&
-              capture.events.back().type ==
-                  gameplay::RealtimeGameplayInputType::Release &&
-              capture.events.back().steadyTimestampMicros == 120,
-          "the real post-resume lift releases the held lane");
+          "the stale post-resume lift is harmless");
+  require(capture.events.size() == 2,
+          "a finger released at pause cannot strand or duplicate a lane edge");
 }
 
 void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
@@ -434,7 +436,7 @@ int main() {
   testNormalModeMapsTouchesBelowProjectedPlayfield();
   testUiExcludedFingerNeverEmitsGameplayEdges();
   testLayoutReplacementCancelsOldLaneBeforeNewMapping();
-  testPausePreservesHeldFingerWithoutSyntheticRelease();
+  testPauseReleasesHeldFingerBeforeDisablingGameplay();
   testCancelledTouchUsesGraceAndContinuationCancelsExpiry();
   return 0;
 }

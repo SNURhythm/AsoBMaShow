@@ -1230,24 +1230,27 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
     return;
   }
   auto &session = *realtimeGameplaySession;
+  const auto timestampMicros = nowMicros();
   if (session.physicalInputRouter != nullptr) {
-    session.physicalInputRouter->setGameplayEnabled(enabled, nowMicros());
+    session.physicalInputRouter->setGameplayEnabled(enabled, timestampMicros);
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (enabled) {
     if (session.touchRouter != nullptr) {
-      session.touchRouter->setGameplayEnabled(true);
+      (void)session.touchRouter->setGameplayEnabled(true, timestampMicros);
     }
     session.acceptingTouch.store(true, std::memory_order_release);
     IOSSetRawTouchEventSink(&RealtimeGameplaySession::rawTouchSink, &session);
     return;
   }
+  if (session.touchRouter != nullptr &&
+      !session.touchRouter->setGameplayEnabled(false, timestampMicros)) {
+    SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                 "Realtime touch release failed while closing ingress");
+  }
   session.acceptingTouch.store(false, std::memory_order_release);
   IOSSetRawTouchEventSink(nullptr, nullptr);
   session.clearUiOwnedFingers();
-  if (session.touchRouter != nullptr) {
-    session.touchRouter->setGameplayEnabled(false);
-  }
 #else
   (void)enabled;
 #endif

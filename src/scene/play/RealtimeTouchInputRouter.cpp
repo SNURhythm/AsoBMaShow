@@ -314,8 +314,14 @@ bool RealtimeTouchInputRouter::consume(
   return false;
 }
 
-void RealtimeTouchInputRouter::setGameplayEnabled(bool enabled) noexcept {
+bool RealtimeTouchInputRouter::setGameplayEnabled(
+    bool enabled, std::int64_t steadyTimestampMicros) noexcept {
+  if (gameplayEnabled_ == enabled) {
+    return true;
+  }
+  const bool released = enabled || cancelAll(steadyTimestampMicros);
   gameplayEnabled_ = enabled;
+  return released;
 }
 
 void RealtimeTouchInputRouter::reset() noexcept {
