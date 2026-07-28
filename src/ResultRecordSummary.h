@@ -41,9 +41,21 @@ struct ModernCourseRecordId {
   bool operator==(const ModernCourseRecordId &) const = default;
 };
 
+struct LegacyChartRecordId {
+  int legacyReplayId = 0;
+
+  bool operator==(const LegacyChartRecordId &) const = default;
+};
+
+struct LegacyCourseRecordId {
+  int legacyCourseReplayId = 0;
+
+  bool operator==(const LegacyCourseRecordId &) const = default;
+};
+
 using ResultRecordIdentity =
-    std::variant<LocalReplayRecordId, ModernChartRecordId,
-                 ModernCourseRecordId, IrRemoteRecordId>;
+    std::variant<LocalReplayRecordId, ModernChartRecordId, ModernCourseRecordId,
+                 LegacyChartRecordId, LegacyCourseRecordId, IrRemoteRecordId>;
 
 struct ResultRecordIdentityHash {
   [[nodiscard]] std::size_t
@@ -81,6 +93,9 @@ struct ResultRecordSummary {
   int maxScore = 0;
   std::optional<int> maxCombo;
   int clearRank = kClearTypeFailedRank;
+  bool scoreAvailable = true;
+  bool maxScoreAvailable = true;
+  bool clearRankAvailable = true;
   std::int64_t displayedTimeUnixMillis = 0;
   std::string displayedTime;
   std::optional<std::string> playOption;
@@ -90,45 +105,55 @@ struct ResultRecordSummary {
   std::optional<ModernCourseResultRecord> modernCourse;
   replay::ReplayState replayState = replay::ReplayState::NotApplicable;
   std::optional<ir::IrRemoteScore> remote;
+  std::optional<LegacyChartResultSummary> legacyChart;
+  std::optional<LegacyCourseResultSummary> legacyCourse;
 
   [[nodiscard]] bool isLocal() const noexcept;
   [[nodiscard]] bool isModernChart() const noexcept;
   [[nodiscard]] bool isModernCourse() const noexcept;
+  [[nodiscard]] bool isLegacyChart() const noexcept;
+  [[nodiscard]] bool isLegacyCourse() const noexcept;
   [[nodiscard]] bool isRemote() const noexcept;
   [[nodiscard]] std::optional<int> localReplayId() const noexcept;
   [[nodiscard]] std::optional<std::string_view>
   modernAttemptId() const noexcept;
-  [[nodiscard]] std::optional<std::string_view>
-  remoteScoreId() const noexcept;
+  [[nodiscard]] std::optional<std::string_view> remoteScoreId() const noexcept;
   [[nodiscard]] std::string stableKey() const;
 };
 
+[[nodiscard]] ResultRecordSummary makeLocalResultRecord(ReplaySummary summary);
+
 [[nodiscard]] ResultRecordSummary
-makeLocalResultRecord(ReplaySummary summary);
+makeLegacyChartResultRecord(LegacyChartResultSummary summary);
 
-[[nodiscard]] ResultRecordSummary makeModernChartResultRecord(
-    ModernChartResultRecord record, replay::ReplayState replayState,
-    bool postponedIrSnapshotEligible);
+[[nodiscard]] ResultRecordSummary
+makeLegacyCourseResultRecord(LegacyCourseResultSummary summary);
 
-[[nodiscard]] ResultRecordSummary makeModernCourseResultRecord(
-    ModernCourseResultRecord record, replay::ReplayState replayState);
+[[nodiscard]] ResultRecordSummary
+makeModernChartResultRecord(ModernChartResultRecord record,
+                            replay::ReplayState replayState,
+                            bool postponedIrSnapshotEligible);
+
+[[nodiscard]] ResultRecordSummary
+makeModernCourseResultRecord(ModernCourseResultRecord record,
+                             replay::ReplayState replayState);
 
 // Throws std::invalid_argument when the provider/origin identity is not
 // canonical or when the copied remote score fails stored-model validation.
-[[nodiscard]] ResultRecordSummary makeRemoteResultRecord(
-    std::string_view providerId, std::string_view serverOrigin,
-    ir::IrRemoteScore score);
+[[nodiscard]] ResultRecordSummary
+makeRemoteResultRecord(std::string_view providerId,
+                       std::string_view serverOrigin, ir::IrRemoteScore score);
 
 // Produces the complete newest-first Records projection without mutating the
 // remote mirror. Only an exact receipt in the requested scope suppresses its
 // linked standalone remote row; all local attempts remain visible.
-[[nodiscard]] std::vector<ResultRecordSummary> mergeResultRecords(
-    std::span<const ReplaySummary> local,
-    std::span<const ir::IrRemoteScore> remote,
-    std::string_view providerId, std::string_view serverOrigin);
+[[nodiscard]] std::vector<ResultRecordSummary>
+mergeResultRecords(std::span<const ReplaySummary> local,
+                   std::span<const ir::IrRemoteScore> remote,
+                   std::string_view providerId, std::string_view serverOrigin);
 
-[[nodiscard]] std::vector<ResultRecordSummary> mergeResultRecords(
-    std::span<const ReplaySummary> local,
-    std::span<const ResultRecordSummary> modern,
-    std::span<const ir::IrRemoteScore> remote,
-    std::string_view providerId, std::string_view serverOrigin);
+[[nodiscard]] std::vector<ResultRecordSummary>
+mergeResultRecords(std::span<const ReplaySummary> local,
+                   std::span<const ResultRecordSummary> modern,
+                   std::span<const ir::IrRemoteScore> remote,
+                   std::string_view providerId, std::string_view serverOrigin);

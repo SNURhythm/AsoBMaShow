@@ -43,8 +43,8 @@ bool sameColor(const Color &left, const Color &right) {
 }
 
 ResultRecordSummary localRecord(int id, ir::IrRecordState state,
-                                std::string createdAt, int score,
-                                int maxCombo, int clearRank,
+                                std::string createdAt, int score, int maxCombo,
+                                int clearRank,
                                 std::optional<std::string> option) {
   ReplaySummary replay;
   replay.id = id;
@@ -148,27 +148,26 @@ int main() {
       ++uploads;
       uploadedKey = record.stableKey();
     };
-    list.onIrStatusFeedbackRequested =
-        [&](const ResultRecordSummary &record) {
-          ++feedback;
-          feedbackKey = record.stableKey();
-        };
+    list.onIrStatusFeedbackRequested = [&](const ResultRecordSummary &record) {
+      ++feedback;
+      feedbackKey = record.stableKey();
+    };
     list.onSelectionChanged = [&](int index) {
       ++selections;
       selectedKey = list.get(index).stableKey();
     };
 
-    ResultRecordSummary eligible = localRecord(
-        11, ir::IrRecordState::Eligible, "2026-07-19 12:00:00", 1'500,
-        700, kClearTypeHardClearRank, "MIRROR");
+    ResultRecordSummary eligible =
+        localRecord(11, ir::IrRecordState::Eligible, "2026-07-19 12:00:00",
+                    1'500, 700, kClearTypeHardClearRank, "MIRROR");
     list.setResultRecords({eligible});
-    auto *reusedRow = dynamic_cast<ResultRecordListItemView *>(
-        list.getViewByIndex(0));
+    auto *reusedRow =
+        dynamic_cast<ResultRecordListItemView *>(list.getViewByIndex(0));
     require(reusedRow != nullptr, "local eligible record binds a row");
     require(reusedRow->boundStableKey() == eligible.stableKey(),
             "eligible bind installs its stable row identity");
     require(rowText(*reusedRow, "recordTitle")->getText() ==
-                eligible.displayedTime &&
+                    eligible.displayedTime &&
                 rowText(*reusedRow, "recordScore")->getText() == "1500" &&
                 rowText(*reusedRow, "recordRank")->getText() == "A",
             "eligible bind installs every visible label");
@@ -177,8 +176,7 @@ int main() {
             "eligible bind installs local detail text");
 
     auto *irBadge = badge(list);
-    require(irBadge != nullptr && irBadge->getVisible() &&
-                irBadge->isEnabled(),
+    require(irBadge != nullptr && irBadge->getVisible() && irBadge->isEnabled(),
             "eligible local record exposes an event-consuming badge");
     require(badgeText(*irBadge, "irBadgeLabel")->getText() == "IR" &&
                 badgeText(*irBadge, "irBadgeIcon")->getText() ==
@@ -186,8 +184,7 @@ int main() {
             "eligible badge resets semantic text and upload glyph");
     require(reusedRow->irBadgeIconFontPath() ==
                     std::string(ui_icons::kFontAwesomeSolidPath) &&
-                sameColor(reusedRow->currentIrBadgeAccent(),
-                          ui_theme::amber()),
+                sameColor(reusedRow->currentIrBadgeAccent(), ui_theme::amber()),
             "eligible badge resets FontAwesome font and amber color");
     require(reusedRow->irBadgeCallbackStableKey() == eligible.stableKey(),
             "eligible badge callback is bound to the current stable key");
@@ -196,9 +193,9 @@ int main() {
                 feedback == 0 && selections == 0,
             "eligible badge uploads only its bound local row and consumes tap");
 
-    ResultRecordSummary uploading = localRecord(
-        12, ir::IrRecordState::Uploading, "2026-07-19 12:01:00", 1'200,
-        500, kClearTypeEasyClearRank, "R-RANDOM");
+    ResultRecordSummary uploading =
+        localRecord(12, ir::IrRecordState::Uploading, "2026-07-19 12:01:00",
+                    1'200, 500, kClearTypeEasyClearRank, "R-RANDOM");
     reusedRow->setSummary(uploading);
     auto *row = reusedRow;
     require(row == reusedRow && row->boundStableKey() == uploading.stableKey(),
@@ -217,9 +214,9 @@ int main() {
                 feedbackKey == uploading.stableKey() && selections == 0,
             "uploading badge clears upload action and consumes tap as status");
 
-    ResultRecordSummary uploaded = localRecord(
-        13, ir::IrRecordState::Uploaded, "2026-07-19 12:02:00", 1'900,
-        900, kClearTypeFullComboRank, std::nullopt);
+    ResultRecordSummary uploaded =
+        localRecord(13, ir::IrRecordState::Uploaded, "2026-07-19 12:02:00",
+                    1'900, 900, kClearTypeFullComboRank, std::nullopt);
     reusedRow->setSummary(uploaded);
     row = reusedRow;
     irBadge = badge(list);
@@ -241,8 +238,7 @@ int main() {
     require(row == reusedRow && row->boundStableKey() == remote.stableKey() &&
                 row->irBadgeCallbackStableKey() == remote.stableKey(),
             "remote rebind replaces local row and badge stable identities");
-    require(rowText(*row, "recordTitle")->getText() ==
-                    remote.displayedTime &&
+    require(rowText(*row, "recordTitle")->getText() == remote.displayedTime &&
                 rowText(*row, "recordScore")->getText() == "1777" &&
                 rowText(*row, "recordRank")->getText() == "AA",
             "remote rebind replaces every prior local label");
@@ -257,9 +253,9 @@ int main() {
                 feedbackKey == remote.stableKey() && selections == 0,
             "remote badge consumes taps and can never upload a local replay");
 
-    ResultRecordSummary hidden = localRecord(
-        55, ir::IrRecordState::Hidden, {}, 0, 0, kClearTypeFailedRank,
-        std::nullopt);
+    ResultRecordSummary hidden =
+        localRecord(55, ir::IrRecordState::Hidden, {}, 0, 0,
+                    kClearTypeFailedRank, std::nullopt);
     reusedRow->setSummary(hidden);
     row = reusedRow;
     irBadge = badge(list);
@@ -279,9 +275,9 @@ int main() {
     require(uploads == 1 && feedback == 3,
             "hidden row cannot invoke the recycled remote callback");
 
-    ResultRecordSummary denied = localRecord(
-        66, ir::IrRecordState::Eligible, "2026-07-19 12:03:00", 1'000,
-        400, kClearTypeNormalClearRank, "RANDOM");
+    ResultRecordSummary denied =
+        localRecord(66, ir::IrRecordState::Eligible, "2026-07-19 12:03:00",
+                    1'000, 400, kClearTypeNormalClearRank, "RANDOM");
     denied.capabilities.irUpload = false;
     reusedRow->setSummary(denied);
     row = reusedRow;
@@ -291,6 +287,19 @@ int main() {
                 feedbackKey == denied.stableKey() &&
                 row->irBadgeCallbackStableKey() == denied.stableKey(),
             "eligible-looking local badge obeys explicit upload capability");
+
+    LegacyChartResultSummary legacySummary;
+    legacySummary.legacyReplayId = 88;
+    legacySummary.createdAt = "2026-07-19 12:03:30";
+    legacySummary.partial = true;
+    const auto legacy = makeLegacyChartResultRecord(legacySummary);
+    reusedRow->setSummary(legacy);
+    require(rowText(*reusedRow, "recordScore")->getText() == "Unavailable" &&
+                rowText(*reusedRow, "recordRank")->getText() == "Unavailable" &&
+                rowText(*reusedRow, "recordDetail")->getText() ==
+                    "Legacy summary" &&
+                !badge(list)->getVisible(),
+            "partial legacy row renders unavailable facts and no actions");
 
     ResultRecordListView remoteList;
     remoteList.setSize(700, 160);
@@ -324,10 +333,9 @@ int main() {
     modernList.setSize(700, 160);
     modernList.applyYogaLayout();
     std::optional<std::string> modernUpload;
-    modernList.onIrUploadRequested =
-        [&](const ResultRecordSummary &record) {
-          modernUpload = record.stableKey();
-        };
+    modernList.onIrUploadRequested = [&](const ResultRecordSummary &record) {
+      modernUpload = record.stableKey();
+    };
     modernList.setResultRecords({modern});
     auto *modernBadge = badge(modernList);
     require(modernBadge != nullptr && modernBadge->isEnabled(),

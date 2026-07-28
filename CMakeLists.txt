@@ -1473,6 +1473,48 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_legacy_migration_tests PRIVATE SDL2)
     endif()
 
+    add_executable(legacy_result_summary_tests
+        tests/legacy_result_summary_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/repositories/ReplayRepositoryLegacySummaries.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(legacy_result_summary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(legacy_result_summary_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2)
+    endif()
+
     add_executable(replay_repository_modern_chart_tests
         tests/replay_repository_modern_chart_tests.cpp
         src/CourseIdentity.cpp
@@ -3795,6 +3837,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_ranking_modal_tests
         replay_repository_tests
         replay_legacy_migration_tests
+        legacy_result_summary_tests
         replay_repository_modern_chart_tests
         replay_repository_modern_course_tests
         chart_replay_persistence_tests

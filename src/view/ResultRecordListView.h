@@ -110,8 +110,8 @@ public:
     onUnselected();
   }
 
-  void setIrUploadHandler(
-      std::function<void(const ResultRecordSummary &)> handler) {
+  void
+  setIrUploadHandler(std::function<void(const ResultRecordSummary &)> handler) {
     irUploadHandler = std::move(handler);
   }
 
@@ -153,25 +153,32 @@ public:
                           ? "Replay #" +
                                 std::to_string(*summary.localReplayId())
                           : "IR Record")));
-    if (summary.local.has_value()) {
+    if (summary.legacyChart.has_value() || summary.legacyCourse.has_value()) {
+      detailText->setText("Legacy summary");
+    } else if (summary.local.has_value()) {
       detailText->setText(replay_summary_ui::detailLabel(*summary.local));
     } else {
       std::string detail = "IR";
-      if (summary.playOption.has_value() &&
-          !summary.playOption->empty()) {
+      if (summary.playOption.has_value() && !summary.playOption->empty()) {
         detail += "  " + *summary.playOption;
       }
       detailText->setText(detail);
     }
     scoreText->setText(summary.autoPlay ? "AUTO"
-                                        : std::to_string(summary.score));
-    currentRank = score_rank::labelForScore(summary.score, summary.maxScore);
-    rankText->setText(score_rank::displayLabel(currentRank));
+                                        : (summary.scoreAvailable
+                                               ? std::to_string(summary.score)
+                                               : "Unavailable"));
+    if (summary.scoreAvailable && summary.maxScoreAvailable) {
+      currentRank = score_rank::labelForScore(summary.score, summary.maxScore);
+      rankText->setText(score_rank::displayLabel(currentRank));
+    } else {
+      currentRank.clear();
+      rankText->setText("Unavailable");
+    }
 
     const record_list_ui::IrBadgeBinding badge =
         record_list_ui::bindingForIrRecordState(
-            summary.isRemote() ? ir::IrRecordState::Uploaded
-                               : summary.irState);
+            summary.isRemote() ? ir::IrRecordState::Uploaded : summary.irState);
     if (badge.visible) {
       irBadgeCallbackStableKey_ = boundStableKey_;
       const ResultRecordSummary boundSummary = summary;
@@ -203,14 +210,13 @@ public:
     const auto accent = badge.accent;
     currentIrBadgeAccent_ = accent();
     irBadge->setThemedBackgroundColors(
-        accent,
-        [accent] { return ui_theme::withAlpha(accent(), 226); },
+        accent, [accent] { return ui_theme::withAlpha(accent(), 226); },
         [accent] { return ui_theme::withAlpha(accent(), 194); });
     const auto foreground = [accent] { return ui_theme::textOn(accent()); };
     irBadgeLabel->setThemedColor(foreground);
     irBadgeIcon->setThemedColor(foreground);
 
-    if (hasClearLampColor(summary.clearRank)) {
+    if (summary.clearRankAvailable && hasClearLampColor(summary.clearRank)) {
       clearLamp->setBackgroundColor(clearLampColorForRank(summary.clearRank));
     } else {
       clearLamp->clearBackgroundColor();
@@ -246,9 +252,12 @@ public:
 
 private:
   void applyRankColor() {
+    if (currentRank.empty()) {
+      rankText->setThemedColor(ui_theme::textMuted);
+      return;
+    }
     const std::string rank = score_rank::displayLabel(currentRank);
-    rankText->setThemedColor(
-        [rank] { return ui_theme::scoreRankColor(rank); });
+    rankText->setThemedColor([rank] { return ui_theme::scoreRankColor(rank); });
   }
 
   View *clearLamp = nullptr;
@@ -274,19 +283,17 @@ class ResultRecordListView : public RecyclerView<ResultRecordSummary> {
 public:
   ResultRecordListView()
       : RecyclerView<ResultRecordSummary>(
-            [](const ResultRecordSummary &a,
-               const ResultRecordSummary &b) {
+            [](const ResultRecordSummary &a, const ResultRecordSummary &b) {
               return a.identity == b.identity;
             }) {
     itemHeight = 74;
     onCreateView = [this](const ResultRecordSummary &) {
       auto *itemView = new ResultRecordListItemView();
-      itemView->setIrUploadHandler(
-          [this](const ResultRecordSummary &summary) {
-            if (onIrUploadRequested) {
-              onIrUploadRequested(summary);
-            }
-          });
+      itemView->setIrUploadHandler([this](const ResultRecordSummary &summary) {
+        if (onIrUploadRequested) {
+          onIrUploadRequested(summary);
+        }
+      });
       itemView->setIrStatusFeedbackHandler(
           [this](const ResultRecordSummary &summary) {
             if (onIrStatusFeedbackRequested) {
@@ -347,14 +354,11 @@ public:
     }
   }
 
-  [[nodiscard]] int selectedResultRecordIndex() const {
-    return selectedIndex;
-  }
+  [[nodiscard]] int selectedResultRecordIndex() const { return selectedIndex; }
 
   std::function<void(int)> onSelectionChanged;
   std::function<void(const ResultRecordSummary &)> onIrUploadRequested;
-  std::function<void(const ResultRecordSummary &)>
-      onIrStatusFeedbackRequested;
+  std::function<void(const ResultRecordSummary &)> onIrStatusFeedbackRequested;
 
 private:
   int lastSelectedIndex = -1;

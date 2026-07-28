@@ -45,17 +45,19 @@ void testReplayFileActionsUseModernIdentityAndCapabilitiesOnly() {
   const auto chartActions = replay::replayFileActionSelection(chart, true);
   expect(chartActions.request.has_value() && chartActions.shareVisible &&
              chartActions.deleteVisible && chartActions.enabled &&
-             chartActions.request->owner == ModernReplayOwnerKind::ChartResult &&
+             chartActions.request->owner ==
+                 ModernReplayOwnerKind::ChartResult &&
              chartActions.request->attemptId == chartRecord.result.attemptId,
          "verified chart actions use modern attempt identity and capabilities");
 
   ModernCourseResultRecord courseRecord{.result = validModernCourseResult()};
-  const auto course = makeModernCourseResultRecord(
-      courseRecord, replay::ReplayState::Corrupt);
+  const auto course =
+      makeModernCourseResultRecord(courseRecord, replay::ReplayState::Corrupt);
   const auto courseActions = replay::replayFileActionSelection(course, true);
   expect(courseActions.request.has_value() && !courseActions.shareVisible &&
              courseActions.deleteVisible &&
-             courseActions.request->owner == ModernReplayOwnerKind::CourseResult,
+             courseActions.request->owner ==
+                 ModernReplayOwnerKind::CourseResult,
          "corrupt course remains deletable but not shareable");
 
   ReplaySummary legacyReplay;
@@ -95,11 +97,8 @@ ir::IrRemoteScore validRemoteScore() {
       .lampRank = kClearTypeHardClearRank,
       .timeAchievedUnixMillis = 1'704'164'645'123LL,
       .timeAddedUnixMillis = 1'704'164'700'456LL,
-      .judgements = {.pGreat = 900,
-                     .great = 200,
-                     .good = 50,
-                     .bad = 40,
-                     .poor = 44},
+      .judgements =
+          {.pGreat = 900, .great = 200, .good = 50, .bad = 40, .poor = 44},
       .timing = {.earlyPGreat = 450,
                  .latePGreat = 450,
                  .earlyGreat = 100,
@@ -202,8 +201,8 @@ result_persistence::ModernCourseResult validModernCourseResult() {
                     .adoptedGaugeType = chart.adoptedGaugeType,
                     .adoptedGaugeHistory = chart.adoptedGaugeHistory,
                     .judgementTiming = chart.judgementTiming}};
-  result.entryFacts = {{.totalNotes = chart.score.maxScore / 2,
-                        .playLengthMicros = 3'000'000}};
+  result.entryFacts = {
+      {.totalNotes = chart.score.maxScore / 2, .playLengthMicros = 3'000'000}};
   result.playedAtUnixMillis = chart.playedAtUnixMillis + 1'000;
   result.resultFingerprint = std::string(64, 'd');
   return result;
@@ -211,8 +210,8 @@ result_persistence::ModernCourseResult validModernCourseResult() {
 
 void testModernConversionUsesSharedReplayCapabilities() {
   ModernChartResultRecord record{.result = validModernResult()};
-  const auto absent = makeModernChartResultRecord(
-      record, replay::ReplayState::Missing, true);
+  const auto absent =
+      makeModernChartResultRecord(record, replay::ReplayState::Missing, true);
   expect(absent.isLocal() && absent.isModernChart() && !absent.isRemote() &&
              absent.modernAttemptId() == record.result.attemptId &&
              !absent.localReplayId(),
@@ -229,48 +228,46 @@ void testModernConversionUsesSharedReplayCapabilities() {
              absent.stableKey() == "m:" + record.result.attemptId,
          "modern projection reads display facts only from the strict result");
 
-  const auto verified = makeModernChartResultRecord(
-      record, replay::ReplayState::Verified, false);
+  const auto verified =
+      makeModernChartResultRecord(record, replay::ReplayState::Verified, false);
   expect(verified.capabilities.watch && verified.capabilities.gBattle &&
              verified.capabilities.resultRecall &&
              verified.capabilities.videoExport &&
              !verified.capabilities.irUpload,
          "verified BRD enables projected replay consumers via the matrix");
 
-  const auto corrupt = makeModernChartResultRecord(
-      record, replay::ReplayState::Corrupt, false);
+  const auto corrupt =
+      makeModernChartResultRecord(record, replay::ReplayState::Corrupt, false);
   expect(!corrupt.capabilities.watch && corrupt.capabilities.deleteReplayFile,
          "invalid present BRD remains deletable but not playable");
 }
 
 void testModernCourseConversionKeepsResultWithoutReplay() {
   ModernCourseResultRecord record{.result = validModernCourseResult()};
-  const auto missing = makeModernCourseResultRecord(
-      record, replay::ReplayState::Missing);
+  const auto missing =
+      makeModernCourseResultRecord(record, replay::ReplayState::Missing);
   expect(missing.isLocal() && missing.isModernCourse() &&
              !missing.isModernChart() && !missing.isRemote() &&
              missing.modernAttemptId() == record.result.attemptId,
          "modern course result has a distinct durable identity");
   expect(missing.course && missing.capabilities.resultRecall &&
-             !missing.capabilities.watch &&
-             !missing.capabilities.retrySame &&
+             !missing.capabilities.watch && !missing.capabilities.retrySame &&
              !missing.capabilities.videoExport &&
              !missing.capabilities.gBattle &&
              !missing.capabilities.practiceGhost,
          "missing course BRD leaves only result-domain actions");
   expect(missing.modernCourse &&
-             missing.modernCourse->result == record.result &&
-             !missing.modern && missing.score == record.result.finalScore &&
+             missing.modernCourse->result == record.result && !missing.modern &&
+             missing.score == record.result.finalScore &&
              missing.maxScore == record.result.maxScore &&
              missing.maxCombo == record.result.maxCombo &&
              missing.playOption == record.result.requestedPlayOption &&
              missing.stableKey() == "c:" + record.result.attemptId,
          "course projection reads display facts only from its strict row");
 
-  const auto verified = makeModernCourseResultRecord(
-      record, replay::ReplayState::Verified);
-  expect(verified.capabilities.watch &&
-             verified.capabilities.retrySame &&
+  const auto verified =
+      makeModernCourseResultRecord(record, replay::ReplayState::Verified);
+  expect(verified.capabilities.watch && verified.capabilities.retrySame &&
              verified.capabilities.videoExport &&
              verified.capabilities.resultRecall &&
              !verified.capabilities.gBattle &&
@@ -278,17 +275,50 @@ void testModernCourseConversionKeepsResultWithoutReplay() {
              !verified.capabilities.irUpload,
          "verified course BRD enables only supported replay actions");
 
-  for (const auto state : {replay::ReplayState::Corrupt,
-                           replay::ReplayState::Mismatched,
-                           replay::ReplayState::UnsupportedExtension}) {
+  for (const auto state :
+       {replay::ReplayState::Corrupt, replay::ReplayState::Mismatched,
+        replay::ReplayState::UnsupportedExtension}) {
     const auto invalid = makeModernCourseResultRecord(record, state);
-    expect(invalid.capabilities.resultRecall &&
-               !invalid.capabilities.watch &&
+    expect(invalid.capabilities.resultRecall && !invalid.capabilities.watch &&
                !invalid.capabilities.retrySame &&
                !invalid.capabilities.videoExport &&
                invalid.capabilities.deleteReplayFile,
            "invalid course BRD disables playback but remains diagnosable");
   }
+}
+
+void testLegacySummariesExposeRecordsOnly() {
+  LegacyChartResultSummary chart;
+  chart.legacyReplayId = 11;
+  chart.chartTitle = "Legacy chart";
+  chart.createdAt = "2026-07-20 01:02:03";
+  chart.partial = true;
+  const auto chartRecord = makeLegacyChartResultRecord(chart);
+  expect(chartRecord.isLocal() && !chartRecord.localReplayId() &&
+             chartRecord.legacyChart == chart && !chartRecord.legacyCourse,
+         "legacy chart has an explicit non-replay identity");
+  expect(chartRecord.capabilities == ResultRecordCapabilities{} &&
+             chartRecord.stableKey() == "lc:11",
+         "legacy chart exposes Records without replay or result actions");
+  expect(!chartRecord.scoreAvailable && !chartRecord.maxScoreAvailable &&
+             !chartRecord.clearRankAvailable && !chartRecord.maxCombo,
+         "unknown legacy chart facts remain unavailable");
+
+  LegacyCourseResultSummary course;
+  course.legacyCourseReplayId = 21;
+  course.finalScore = 2100;
+  course.maxCombo = 321;
+  course.clearType = kClearTypeHardClearRank;
+  course.partial = true;
+  const auto courseRecord = makeLegacyCourseResultRecord(course);
+  expect(courseRecord.course && !courseRecord.localReplayId() &&
+             courseRecord.legacyCourse == course && !courseRecord.legacyChart,
+         "legacy course has an explicit summary identity");
+  expect(courseRecord.capabilities == ResultRecordCapabilities{} &&
+             courseRecord.stableKey() == "lco:21" &&
+             courseRecord.scoreAvailable && !courseRecord.maxScoreAvailable &&
+             courseRecord.clearRankAvailable && courseRecord.maxCombo == 321,
+         "legacy course projects only independently stored header facts");
 }
 
 void testLocalConversionPreservesRecordSemantics() {
@@ -333,8 +363,7 @@ void testLocalConversionPreservesRecordSemantics() {
   replay.irRecordState = ir::IrRecordState::Hidden;
   const ResultRecordSummary course = makeLocalResultRecord(replay);
   expect(course.course && course.capabilities.watch &&
-             !course.capabilities.gBattle &&
-             course.capabilities.resultRecall &&
+             !course.capabilities.gBattle && course.capabilities.resultRecall &&
              course.capabilities.videoExport && !course.capabilities.irUpload,
          "course replay keeps current browsing actions");
 
@@ -363,8 +392,8 @@ void testLocalConversionPreservesRecordSemantics() {
 
 void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
   const ir::IrRemoteScore score = validRemoteScore();
-  const ResultRecordSummary result = makeRemoteResultRecord(
-      "tachi", "https://boku.tachi.ac", score);
+  const ResultRecordSummary result =
+      makeRemoteResultRecord("tachi", "https://boku.tachi.ac", score);
 
   expect(result.isRemote() && !result.isLocal(),
          "remote conversion keeps the remote tag");
@@ -378,15 +407,13 @@ void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
          "remote identity is scoped by provider and normalized origin");
   expect(!result.capabilities.watch && !result.capabilities.gBattle &&
              result.capabilities.resultRecall &&
-             !result.capabilities.videoExport &&
-             !result.capabilities.irUpload,
+             !result.capabilities.videoExport && !result.capabilities.irUpload,
          "remote records expose View Result only");
   expect(!result.course && !result.autoPlay && result.score == score.score &&
              result.maxScore == 2'468 && result.maxCombo == score.maxCombo &&
              result.clearRank == score.lampRank,
          "remote score conversion preserves supplied values and derives max");
-  expect(result.displayedTimeUnixMillis ==
-                 *score.timeAchievedUnixMillis &&
+  expect(result.displayedTimeUnixMillis == *score.timeAchievedUnixMillis &&
              result.displayedTime == "2024-01-02 03:04:05.123",
          "remote display time prefers timeAchieved");
   expect(result.playOption == score.random &&
@@ -399,8 +426,8 @@ void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
   ir::IrRemoteScore fallback = score;
   fallback.remoteScoreId = "fallback-time";
   fallback.timeAchievedUnixMillis.reset();
-  const ResultRecordSummary fallbackResult = makeRemoteResultRecord(
-      "tachi", "https://boku.tachi.ac", fallback);
+  const ResultRecordSummary fallbackResult =
+      makeRemoteResultRecord("tachi", "https://boku.tachi.ac", fallback);
   expect(fallbackResult.displayedTimeUnixMillis ==
                  fallback.timeAddedUnixMillis &&
              fallbackResult.displayedTime == "2024-01-02 03:05:00.456",
@@ -409,8 +436,8 @@ void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
   fallback.remoteScoreId = "missing-optionals";
   fallback.maxCombo.reset();
   fallback.random.reset();
-  const ResultRecordSummary missing = makeRemoteResultRecord(
-      "tachi", "https://boku.tachi.ac", fallback);
+  const ResultRecordSummary missing =
+      makeRemoteResultRecord("tachi", "https://boku.tachi.ac", fallback);
   expect(!missing.maxCombo && !missing.playOption && missing.remote &&
              !missing.remote->maxCombo && !missing.remote->random,
          "remote nullable fields remain absent instead of becoming sentinels");
@@ -420,8 +447,8 @@ void testRemoteConversionFailsClosed() {
   const ir::IrRemoteScore valid = validRemoteScore();
   expectInvalid(
       [&] {
-        static_cast<void>(makeRemoteResultRecord(
-            "Tachi", "https://boku.tachi.ac", valid));
+        static_cast<void>(
+            makeRemoteResultRecord("Tachi", "https://boku.tachi.ac", valid));
       },
       "noncanonical provider ID is rejected");
   expectInvalid(
@@ -484,25 +511,24 @@ void testIdentityEqualityHashAndStableKeys() {
   const ResultRecordSummary local = makeLocalResultRecord(replay);
   ir::IrRemoteScore score = validRemoteScore();
   score.remoteScoreId = "42";
-  const ResultRecordSummary remote = makeRemoteResultRecord(
-      "tachi", "https://boku.tachi.ac", score);
+  const ResultRecordSummary remote =
+      makeRemoteResultRecord("tachi", "https://boku.tachi.ac", score);
   expect(local.stableKey() != remote.stableKey(),
          "local and remote display keys cannot collide");
 
   score.remoteScoreId = "bc";
-  const ResultRecordSummary componentA = makeRemoteResultRecord(
-      "tachi", "https://a.example", score);
+  const ResultRecordSummary componentA =
+      makeRemoteResultRecord("tachi", "https://a.example", score);
   score.remoteScoreId = "c";
-  const ResultRecordSummary componentB = makeRemoteResultRecord(
-      "tachi", "https://a.exampleb", score);
+  const ResultRecordSummary componentB =
+      makeRemoteResultRecord("tachi", "https://a.exampleb", score);
   expect(componentA.stableKey() != componentB.stableKey(),
          "remote display keys frame identity components unambiguously");
 
   score.remoteScoreId.assign(ir::kMaximumIrRemoteScoreIdBytes, 's');
-  const ResultRecordSummary maximumId = makeRemoteResultRecord(
-      "tachi", "https://boku.tachi.ac", score);
-  expect(maximumId.stableKey().size() <=
-             kMaximumResultRecordStableKeyBytes,
+  const ResultRecordSummary maximumId =
+      makeRemoteResultRecord("tachi", "https://boku.tachi.ac", score);
+  expect(maximumId.stableKey().size() <= kMaximumResultRecordStableKeyBytes,
          "validated display keys have an explicit UI-safe size bound");
 }
 
@@ -558,36 +584,44 @@ void testMergeSuppressesOnlyExactCurrentOriginReceipt() {
   receiptlessEquivalentRemote.maxCombo = receiptWithoutId.maxCombo;
   receiptlessEquivalentRemote.random.reset();
 
-  const std::vector<ReplaySummary> local{
-      linked, equivalentAttempt, otherOrigin, receiptWithoutId};
-  const std::vector<ir::IrRemoteScore> remote{
-      linkedRemote, unrelatedRemote, otherOriginLinkedRemote,
-      receiptlessEquivalentRemote};
+  const std::vector<ReplaySummary> local{linked, equivalentAttempt, otherOrigin,
+                                         receiptWithoutId};
+  const std::vector<ir::IrRemoteScore> remote{linkedRemote, unrelatedRemote,
+                                              otherOriginLinkedRemote,
+                                              receiptlessEquivalentRemote};
   const auto merged = mergeResultRecords(local, remote, provider, origin);
 
   expect(merged.size() == 7,
          "exact linked remote suppression removes only one standalone row");
   for (int replayId : {10, 11, 12, 13}) {
-    expect(std::ranges::any_of(merged, [replayId](const auto &record) {
-             return record.localReplayId() == replayId;
-           }),
+    expect(std::ranges::any_of(merged,
+                               [replayId](const auto &record) {
+                                 return record.localReplayId() == replayId;
+                               }),
            "merge preserves every local replay including equivalent attempts");
   }
-  expect(!std::ranges::any_of(merged, [](const auto &record) {
-           return record.remoteScoreId() == "linked-score";
-         }),
+  expect(!std::ranges::any_of(merged,
+                              [](const auto &record) {
+                                return record.remoteScoreId() == "linked-score";
+                              }),
          "current provider and origin receipt suppresses the exact remote ID");
-  expect(std::ranges::any_of(merged, [](const auto &record) {
-           return record.remoteScoreId() == "unrelated-score";
-         }),
+  expect(std::ranges::any_of(merged,
+                             [](const auto &record) {
+                               return record.remoteScoreId() ==
+                                      "unrelated-score";
+                             }),
          "unrelated local and remote rows coexist");
-  expect(std::ranges::any_of(merged, [](const auto &record) {
-           return record.remoteScoreId() == "other-origin-score";
-         }),
+  expect(std::ranges::any_of(merged,
+                             [](const auto &record) {
+                               return record.remoteScoreId() ==
+                                      "other-origin-score";
+                             }),
          "receipt linked only to another origin does not suppress");
-  expect(std::ranges::any_of(merged, [](const auto &record) {
-           return record.remoteScoreId() == "receiptless-equivalent";
-         }),
+  expect(std::ranges::any_of(merged,
+                             [](const auto &record) {
+                               return record.remoteScoreId() ==
+                                      "receiptless-equivalent";
+                             }),
          "receipt without a remote ID does not guess an equivalent row");
 }
 
@@ -595,9 +629,8 @@ void testMergeIncludesModernResultsWithoutChangingTheirCapabilities() {
   auto modernResult = validModernResult();
   modernResult.playedAtUnixMillis = 1'704'164'646'000LL;
   ModernChartResultRecord modernRecord{.result = modernResult};
-  const std::vector<ResultRecordSummary> modern{
-      makeModernChartResultRecord(modernRecord, replay::ReplayState::Missing,
-                                  true)};
+  const std::vector<ResultRecordSummary> modern{makeModernChartResultRecord(
+      modernRecord, replay::ReplayState::Missing, true)};
   const std::vector<ReplaySummary> local{
       localRecord(44, "2024-01-02 03:04:05")};
   const std::vector<ir::IrRemoteScore> remote;
@@ -630,11 +663,11 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
   fallback.timeAchievedUnixMillis.reset();
   fallback.timeAddedUnixMillis = 1'704'164'645'456LL;
 
-  const std::vector<ReplaySummary> local{
-      oldestLocal, tiedLocalB, autoPlay, newestLocal, tiedLocalA};
+  const std::vector<ReplaySummary> local{oldestLocal, tiedLocalB, autoPlay,
+                                         newestLocal, tiedLocalA};
   const std::vector<ir::IrRemoteScore> remote{fallback, achieved};
-  const auto merged = mergeResultRecords(
-      local, remote, "tachi", "https://boku.tachi.ac");
+  const auto merged =
+      mergeResultRecords(local, remote, "tachi", "https://boku.tachi.ac");
 
   expect(merged.size() == 7 && merged[0].autoPlay,
          "Auto Play remains first under newest sorting");
@@ -657,6 +690,7 @@ int main() {
   testLocalConversionPreservesRecordSemantics();
   testModernConversionUsesSharedReplayCapabilities();
   testModernCourseConversionKeepsResultWithoutReplay();
+  testLegacySummariesExposeRecordsOnly();
   testRemoteConversionIsReadOnlyAndRetainsOptionalValues();
   testRemoteConversionFailsClosed();
   testIdentityEqualityHashAndStableKeys();

@@ -14,6 +14,7 @@
 #include "../ir/IrRemoteScoreModels.h"
 #include "../ir/IrScoreReconciliation.h"
 #include "ScoreRepositoryModels.h"
+#include "LegacyResultSummary.h"
 #include "../bms_parser.hpp"
 
 #include <cstddef>
@@ -506,6 +507,9 @@ public:
   ModernChartResultReadOutcome LoadModernChartResult(int resultId);
   ModernChartHistoryReadOutcome
   ListModernChartResults(std::string_view chartSha256, std::size_t limit = 100);
+  std::vector<LegacyChartResultSummary>
+  ListLegacyChartSummaries(const bms_parser::ChartMeta &chartMeta,
+                           std::size_t limit = 100);
   ModernCourseStageOutcome StageModernCourseResult(
       const result_persistence::ModernCourseResult &result,
       const std::optional<ModernReplayFileAttachment> &replayFile,
@@ -515,9 +519,13 @@ public:
   ModernCourseResultReadOutcome LoadModernCourseResult(int resultId);
   ModernCourseHistoryReadOutcome
   ListModernCourseResults(std::string_view courseKey, std::size_t limit = 100);
-  ModernReplayFileMutationOutcome MarkModernReplayFileUserDeleted(
-      ModernReplayOwnerKind owner, std::string_view attemptId,
-      const ModernReplayFileReference &expected);
+  std::vector<LegacyCourseResultSummary>
+  ListLegacyCourseSummaries(const CourseReplayLookup &lookup,
+                            std::size_t limit = 100);
+  ModernReplayFileMutationOutcome
+  MarkModernReplayFileUserDeleted(ModernReplayOwnerKind owner,
+                                  std::string_view attemptId,
+                                  const ModernReplayFileReference &expected);
   ModernReplayFileInventoryOutcome ListModernReplayFileReferences();
   ModernIrSnapshotReadOutcome
   LoadModernIrSubmissionSnapshot(std::string_view attemptId);
