@@ -78,6 +78,73 @@ void testReplayFileActionsUseModernIdentityAndCapabilitiesOnly() {
          "busy UI preserves action visibility while disabling interaction");
 }
 
+void testRecordActionsRequireTypedIdentityAndPayloadAgreement() {
+  ModernChartResultRecord chartRecord{.result = validModernResult()};
+  auto modernChart = makeModernChartResultRecord(
+      chartRecord, replay::ReplayState::Verified, false);
+  expect(resultRecordActionTarget(modernChart, ResultRecordAction::Watch) ==
+             ResultRecordActionTarget::ModernChart &&
+             resultRecordActionTarget(modernChart,
+                                      ResultRecordAction::GBattle) ==
+                 ResultRecordActionTarget::ModernChart,
+         "verified modern chart dispatches through its typed identity");
+
+  ModernCourseResultRecord courseRecord{.result = validModernCourseResult()};
+  auto modernCourse = makeModernCourseResultRecord(
+      courseRecord, replay::ReplayState::Verified);
+  expect(resultRecordActionTarget(modernCourse, ResultRecordAction::Watch) ==
+             ResultRecordActionTarget::ModernCourse &&
+             resultRecordActionTarget(modernCourse,
+                                      ResultRecordAction::RetrySame) ==
+                 ResultRecordActionTarget::ModernCourse,
+         "verified modern course dispatches through its typed identity");
+
+  LegacyChartResultSummary legacyChartSummary;
+  legacyChartSummary.legacyReplayId = chartRecord.result.resultId;
+  auto legacyChart = makeLegacyChartResultRecord(legacyChartSummary);
+  legacyChart.capabilities = modernChart.capabilities;
+  legacyChart.modern = chartRecord;
+  expect(resultRecordActionTarget(legacyChart, ResultRecordAction::Watch) ==
+             ResultRecordActionTarget::None &&
+             resultRecordActionTarget(legacyChart,
+                                      ResultRecordAction::ResultRecall) ==
+                 ResultRecordActionTarget::None,
+         "legacy chart ID collision cannot dispatch modern chart actions");
+
+  LegacyCourseResultSummary legacyCourseSummary;
+  legacyCourseSummary.legacyCourseReplayId = courseRecord.result.resultId;
+  auto legacyCourse = makeLegacyCourseResultRecord(legacyCourseSummary);
+  legacyCourse.capabilities = modernCourse.capabilities;
+  legacyCourse.modernCourse = courseRecord;
+  expect(resultRecordActionTarget(legacyCourse, ResultRecordAction::Watch) ==
+             ResultRecordActionTarget::None &&
+             resultRecordActionTarget(legacyCourse,
+                                      ResultRecordAction::RetrySame) ==
+                 ResultRecordActionTarget::None,
+         "legacy course ID collision cannot dispatch modern course actions");
+
+  ReplaySummary autoPlaySummary;
+  autoPlaySummary.id = -1;
+  autoPlaySummary.autoPlay = true;
+  autoPlaySummary.maxScore = 2;
+  auto autoPlay = makeLocalResultRecord(autoPlaySummary);
+  auto legacyAutoplayCollision = legacyChart;
+  legacyAutoplayCollision.autoPlay = true;
+  legacyAutoplayCollision.local = autoPlay.local;
+  expect(resultRecordActionTarget(autoPlay, ResultRecordAction::Watch) ==
+             ResultRecordActionTarget::AutoPlay &&
+             resultRecordActionTarget(legacyAutoplayCollision,
+                                      ResultRecordAction::Watch) ==
+                 ResultRecordActionTarget::None,
+         "legacy identity cannot impersonate the autoplay action target");
+
+  modernChart.modern->result.attemptId =
+      "123e4567-e89b-42d3-a456-426614174099";
+  expect(resultRecordActionTarget(modernChart, ResultRecordAction::Watch) ==
+             ResultRecordActionTarget::None,
+         "modern payload disagreement disables every replay action");
+}
+
 ir::IrRemoteScore validRemoteScore() {
   return {
       .remoteUserId = 42,
@@ -686,6 +753,7 @@ void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
 } // namespace
 
 int main() {
+  testRecordActionsRequireTypedIdentityAndPayloadAgreement();
   testReplayFileActionsUseModernIdentityAndCapabilitiesOnly();
   testLocalConversionPreservesRecordSemantics();
   testModernConversionUsesSharedReplayCapabilities();
