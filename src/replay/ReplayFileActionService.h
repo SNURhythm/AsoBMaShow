@@ -74,7 +74,9 @@ private:
   resolve(const ReplayFileActionRequest &request,
           ReplayFileActionOutcome &outcome);
   [[nodiscard]] ReplayFileActionOutcome
-  inspectResolved(const ResolvedReference &resolved) const;
+  inspectResolved(
+      const ResolvedReference &resolved,
+      std::optional<ReplayFileMetadata> *observedMetadata = nullptr) const;
 
   std::unique_ptr<ReplayFileStore> ownedStore_;
   ReplayRepository &repository_;

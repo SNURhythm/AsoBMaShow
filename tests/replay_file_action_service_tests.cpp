@@ -667,6 +667,41 @@ void testRestartTombstoneCleanupPreservesReplacementBytes() {
   assert(preserved == "replacement replay bytes");
 }
 
+void testInteractiveDeletionPreservesReplacementAfterInspection() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replays.db");
+  assert(repository.EnsureSchema());
+  replay::ReplayFileStore installStore(temporary.path);
+  const auto installed = installResult(repository, installStore, 9, 'f');
+  const auto path = temporary.path / installed.reference.metadata.relativePath;
+
+  bool replaced = false;
+  replay::ReplayFileStore actionStore(
+      temporary.path,
+      {.failAt = [&](std::string_view point) {
+        if (!replaced && point == "remove-before-quarantine") {
+          std::ofstream output(path, std::ios::binary | std::ios::trunc);
+          output << "replacement replay bytes";
+          replaced = true;
+        }
+        return false;
+      }});
+  replay::ReplayFileActionService actions(repository, actionStore);
+  const auto removed = actions.remove({
+      .owner = ModernReplayOwnerKind::ChartResult,
+      .attemptId = installed.result.attemptId,
+  });
+
+  assert(replaced &&
+         removed.state == replay::ReplayFileActionState::UserDeleted &&
+         removed.changed && removed.cleanupPending &&
+         std::filesystem::exists(path));
+  std::ifstream input(path, std::ios::binary);
+  const std::string preserved((std::istreambuf_iterator<char>(input)),
+                              std::istreambuf_iterator<char>());
+  assert(preserved == "replacement replay bytes");
+}
+
 void testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization() {
   using replay::ReplayFileActionState;
   using replay::ReplayState;
@@ -704,6 +739,7 @@ int main() {
   testCrashAfterFinalInstallUsesPreinstalledOwnershipJournal();
   testRestartReconciliationReleasesPathOnlyReservationWithoutDeletingOccupant();
   testRestartTombstoneCleanupPreservesReplacementBytes();
+  testInteractiveDeletionPreservesReplacementAfterInspection();
   testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization();
   return 0;
 }

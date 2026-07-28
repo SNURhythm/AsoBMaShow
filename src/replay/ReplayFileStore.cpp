@@ -341,17 +341,29 @@ ReplayFileInspection inspectFileAtPath(const std::filesystem::path &path,
     outcome.diagnostic = "Unable to read replay size: " + error.message();
     return outcome;
   }
-  if (size != metadata.compressedSize) {
-    outcome.state = ReplayFileState::Corrupt;
-    outcome.diagnostic = "Replay file size does not match metadata";
-    return outcome;
-  }
+  const bool sizeMatches = size == metadata.compressedSize;
   std::string checksumError;
   const auto checksum =
       file_checksum::sha256File(path, checksumError, limits.maxCompressedBytes);
   if (!checksum) {
-    outcome.state = ReplayFileState::IoFailure;
-    outcome.diagnostic = std::move(checksumError);
+    outcome.state = sizeMatches ? ReplayFileState::IoFailure
+                                : ReplayFileState::Corrupt;
+    outcome.diagnostic = sizeMatches
+                             ? std::move(checksumError)
+                             : "Replay file size does not match metadata";
+    return outcome;
+  }
+  if (size > 0) {
+    outcome.observedMetadata = ReplayFileMetadata{
+        .relativePath = metadata.relativePath,
+        .compressedSize = size,
+        .sha256 = *checksum,
+        .codecVersion = metadata.codecVersion,
+    };
+  }
+  if (!sizeMatches) {
+    outcome.state = ReplayFileState::Corrupt;
+    outcome.diagnostic = "Replay file size does not match metadata";
     return outcome;
   }
   if (*checksum != metadata.sha256) {

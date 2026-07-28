@@ -125,17 +125,31 @@ ReplayFileActionService::resolve(const ReplayFileActionRequest &request,
 }
 
 ReplayFileActionOutcome ReplayFileActionService::inspectResolved(
-    const ResolvedReference &resolved) const {
+    const ResolvedReference &resolved,
+    std::optional<ReplayFileMetadata> *observedMetadata) const {
+  if (observedMetadata != nullptr) {
+    observedMetadata->reset();
+  }
   if (resolved.reference.userDeleted) {
+    if (observedMetadata != nullptr) {
+      *observedMetadata = resolved.reference.metadata;
+    }
     return {.state = ReplayFileActionState::UserDeleted};
   }
   if (resolved.reference.metadata.codecVersion !=
       BeatorajaReplayCodec::kCodecVersion) {
+    if (observedMetadata != nullptr) {
+      *observedMetadata =
+          store_.inspect(resolved.reference.metadata).observedMetadata;
+    }
     return {.state = ReplayFileActionState::UnsupportedCodecVersion,
             .diagnostic =
                 "The replay uses an unsupported codec version."};
   }
   const auto inspected = store_.inspect(resolved.reference.metadata);
+  if (observedMetadata != nullptr) {
+    *observedMetadata = inspected.observedMetadata;
+  }
   return {.state = actionState(inspected.state),
           .diagnostic = inspected.diagnostic};
 }
@@ -178,7 +192,8 @@ ReplayFileActionService::remove(const ReplayFileActionRequest &request) {
   if (!resolved) {
     return outcome;
   }
-  const auto inspected = inspectResolved(*resolved);
+  std::optional<ReplayFileMetadata> observedMetadata;
+  const auto inspected = inspectResolved(*resolved, &observedMetadata);
   if (inspected.state != ReplayFileActionState::Verified &&
       inspected.state != ReplayFileActionState::Corrupt &&
       inspected.state != ReplayFileActionState::Mismatched &&
@@ -210,8 +225,14 @@ ReplayFileActionService::remove(const ReplayFileActionRequest &request) {
   }
 
   std::string cleanupDiagnostic;
-  const bool removed = store_.removeReferencedEntry(
-      resolved->reference.metadata, cleanupDiagnostic);
+  const bool removed =
+      observedMetadata.has_value() &&
+      store_.removeIfMatches(*observedMetadata, cleanupDiagnostic);
+  if (!observedMetadata && cleanupDiagnostic.empty()) {
+    cleanupDiagnostic =
+        "Replay cleanup is pending because the selected occupant could not "
+        "be proven.";
+  }
   outcome.state = ReplayFileActionState::UserDeleted;
   outcome.cleanupPending = !removed;
   outcome.diagnostic = std::move(cleanupDiagnostic);

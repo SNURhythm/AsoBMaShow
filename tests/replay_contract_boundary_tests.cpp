@@ -425,6 +425,12 @@ void testSharedFormatAuthorities() {
                "stock option projection authority");
   requireToken(root / "src/replay/ReplayFileStore.cpp",
                "isCanonicalReplayRelativePath", "replay path authority");
+  requireToken(root / "src/replay/ReplayFileActionService.cpp",
+               "removeIfMatches", "ownership-safe replay cleanup authority");
+  constexpr std::array<std::string_view, 1> pathOnlyDeletion{
+      "removeReferencedEntry"};
+  rejectTokens(root / "src/replay/ReplayFileActionService.cpp",
+               pathOnlyDeletion);
   requireToken(root / "src/PlayOptionUtils.h",
                "kPlayOptions = replay::kBeatorajaReplayOptions",
                "application and replay option table");

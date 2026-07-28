@@ -29,6 +29,7 @@ enum class ReplayFileState {
 
 struct ReplayFileInspection {
   ReplayFileState state = ReplayFileState::IoFailure;
+  std::optional<ReplayFileMetadata> observedMetadata;
   std::string diagnostic;
 };
 
