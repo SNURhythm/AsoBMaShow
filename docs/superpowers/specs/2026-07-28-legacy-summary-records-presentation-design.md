@@ -94,4 +94,3 @@ only when their entire presentation slot has no other durable fact.
   projection tests remain green.
 - The full configured CTest suite, desktop `main`, and non-deploying iOS compile
   verification run before publishing.
-
