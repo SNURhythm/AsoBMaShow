@@ -325,6 +325,40 @@ void createVersion13Fixture(const std::filesystem::path &path) {
   exec(database.get(), "PRAGMA foreign_keys=ON");
 }
 
+void createVersion10ReceiptFixture(const std::filesystem::path &path) {
+  createVersion13Fixture(path);
+  auto database = openDatabase(path);
+  exec(database.get(), "PRAGMA foreign_keys=OFF");
+  exec(database.get(), "DROP TABLE ir_submission_receipts");
+  exec(database.get(),
+       "CREATE TABLE ir_submission_receipts("
+       "id INTEGER PRIMARY KEY AUTOINCREMENT,provider_id TEXT NOT NULL,"
+       "server_origin TEXT NOT NULL,replay_id INTEGER NOT NULL,"
+       "attempt_id TEXT NOT NULL,chart_md5 TEXT,chart_sha256 TEXT NOT NULL,"
+       "remote_user_id INTEGER,remote_chart_id TEXT,remote_score_id TEXT,"
+       "confirmation_source INTEGER NOT NULL,observed_in_snapshot INTEGER "
+       "NOT NULL DEFAULT 0,confirmed_at_ms INTEGER NOT NULL,"
+       "UNIQUE(provider_id,server_origin,replay_id),"
+       "CHECK(observed_in_snapshot IN(0,1)),FOREIGN KEY(replay_id) "
+       "REFERENCES replays(id) ON DELETE CASCADE)");
+  exec(database.get(),
+       "CREATE INDEX idx_ir_submission_receipts_attempt ON "
+       "ir_submission_receipts(provider_id,server_origin,attempt_id)");
+  exec(database.get(),
+       "CREATE INDEX idx_ir_submission_receipts_remote_score ON "
+       "ir_submission_receipts(provider_id,server_origin,remote_score_id)");
+  exec(database.get(),
+       "INSERT INTO ir_submission_receipts(id,provider_id,server_origin,"
+       "replay_id,attempt_id,chart_md5,chart_sha256,remote_user_id,"
+       "remote_chart_id,remote_score_id,confirmation_source,"
+       "observed_in_snapshot,confirmed_at_ms) VALUES(77,'provider',"
+       "'https://example.invalid',11,'legacy-inactive',NULL,"
+       "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
+       "42,'chart-42','score-77',0,1,7777)");
+  exec(database.get(), "PRAGMA user_version=10");
+  exec(database.get(), "PRAGMA foreign_keys=ON");
+}
+
 struct DetailReadGuard {
   int readAttempts = 0;
 };
@@ -394,6 +428,49 @@ void testHeaderOnlyCutover() {
   for (const auto table : rawTables) {
     assert(!tableExists(database.get(), table));
   }
+}
+
+void testSchema10LegacySummaryBoundaryIsHeaderOnly() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  createVersion10ReceiptFixture(path);
+  auto database = openDatabase(path);
+  DetailReadGuard guard;
+  assert(sqlite3_set_authorizer(database.get(), denyDetailReads, &guard) ==
+         SQLITE_OK);
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
+  assert(guard.readAttempts == 0);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(),
+                  "SELECT final_score FROM legacy_chart_result_summaries "
+                  "WHERE legacy_replay_id=11") == 1111);
+  assert(queryInt(database.get(),
+                  "SELECT final_score FROM legacy_course_result_summaries "
+                  "WHERE legacy_course_replay_id=21") == 3333);
+  for (const std::string_view table :
+       {"replay_events", "replay_touch_samples", "replay_lane_cover_events",
+        "course_replay_stages"}) {
+    assert(!tableExists(database.get(), table));
+  }
+}
+
+void testVersion10MigrationPreservesLegacyReceiptOwnership() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  createVersion10ReceiptFixture(path);
+  auto database = openDatabase(path);
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
+  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(),
+                  "SELECT replay_id FROM ir_submission_receipts WHERE id=77") ==
+         11);
+  assert(queryInt(database.get(),
+                  "SELECT modern_chart_result_id IS NULL FROM "
+                  "ir_submission_receipts WHERE id=77") == 1);
+  assert(queryText(database.get(),
+                   "SELECT \"table\" FROM pragma_foreign_key_list("
+                   "'ir_submission_receipts') WHERE \"from\"='replay_id'") ==
+         "legacy_chart_result_summaries");
 }
 
 void testFreshSchemaHasNoRawReplayTables() {
@@ -703,6 +780,8 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
 int main() {
   static_assert(ReplayRepository::kCurrentSchemaVersion == 14);
   testHeaderOnlyCutover();
+  testSchema10LegacySummaryBoundaryIsHeaderOnly();
+  testVersion10MigrationPreservesLegacyReceiptOwnership();
   testFreshSchemaHasNoRawReplayTables();
   testDurableReceiptsAndOutboxWorkSurvive();
   testMalformedProvenanceDoesNotBlockHeaderMigration();

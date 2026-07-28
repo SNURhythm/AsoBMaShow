@@ -4901,57 +4901,6 @@ void assertExactIrSubmissionReceiptSchema(sqlite3 *db) {
                       "on_delete='CASCADE'") == 1);
 }
 
-void testVersion10MigrationPreservesLegacyReceiptOwnership(
-    const std::filesystem::path &root) {
-  const auto path = root / "version-10-shared-receipt-owner" / "replay.db";
-  ReplayRepository helper(path);
-  assert(helper.EnsureSchema());
-  helper.Shutdown();
-
-  constexpr std::string_view attemptId = "123e4567-e89b-42d3-a456-426614174088";
-  const std::string chartMd5(32, 'a');
-  const std::string chartSha256(64, 'b');
-  auto db = openDatabase(path);
-  execOrAbort(db.get(), "DROP TABLE ir_submission_receipts");
-  execOrAbort(db.get(), kExpectedLegacyIrSubmissionReceiptsTableSql);
-  execOrAbort(db.get(), kExpectedIrSubmissionReceiptsAttemptIndexSql);
-  execOrAbort(db.get(), kExpectedIrSubmissionReceiptsRemoteScoreIndexSql);
-  execOrAbort(
-      db.get(),
-      "INSERT INTO replays(chart_path,chart_md5,chart_sha256,chart_title,"
-      "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,max_combo,"
-      "final_gauge,clear_type,assist_option,ruleset_version,eligibility,"
-      "provenance_json,attempt_id,attempt_fingerprint) VALUES('chart.bms','" +
-          chartMd5 + "','" + chartSha256 +
-          "','Title','Artist',1,0,0,7,4,82.5,300,'off',0,2,'" +
-          kLegacyProvenanceJson + "','" + std::string(attemptId) + "',NULL)");
-  const int replayId = queryInt(db.get(), "SELECT last_insert_rowid()");
-  execOrAbort(
-      db.get(),
-      "INSERT INTO ir_submission_receipts(provider_id,server_origin,replay_id,"
-      "attempt_id,chart_md5,chart_sha256,remote_user_id,remote_chart_id,"
-      "remote_score_id,confirmation_source,observed_in_snapshot,"
-      "confirmed_at_ms) VALUES('tachi','https://boku.tachi.ac'," +
-          std::to_string(replayId) + ",'" + std::string(attemptId) + "','" +
-          chartMd5 + "','" + chartSha256 +
-          "',42,'chart','score',0,1,1700000000000)");
-  execOrAbort(db.get(), "PRAGMA user_version=10");
-  db.reset();
-
-  assert(helper.EnsureSchema());
-  const auto receipt = helper.LoadIrSubmissionReceipt(
-      "tachi", "https://boku.tachi.ac", attemptId);
-  assert(receipt.status == ir::IrReceiptReadStatus::Found && receipt.receipt &&
-         receipt.receipt->replayId == replayId &&
-         receipt.receipt->modernChartResultId == 0 &&
-         receipt.receipt->observedInSnapshot);
-  helper.Shutdown();
-  db = openDatabase(path);
-  assertExactIrSubmissionReceiptSchema(db.get());
-  assert(queryInt(db.get(), "PRAGMA user_version") ==
-         ReplayRepository::kCurrentSchemaVersion);
-}
-
 constexpr const char *kExpectedIrRemoteScoresTableSql =
     "CREATE TABLE ir_remote_scores ("
     "provider_id TEXT NOT NULL,"
@@ -8045,104 +7994,6 @@ void testExistingListLimits(const std::filesystem::path &root) {
   assert(allCourse.back().id == 1);
 }
 
-void testSchema10LegacySummaryBoundaryIsHeaderOnly(
-    const std::filesystem::path &root) {
-  static_assert(ReplayRepository::kCurrentSchemaVersion > 10);
-  const auto path = root / "schema10-summary-boundary" / "replay.db";
-  ReplayRepository repository(path);
-  assert(repository.EnsureSchema());
-  repository.Shutdown();
-  auto db = openDatabase(path);
-  for (const char *statement : {
-           "DROP TABLE ir_submission_receipts",
-           "DROP TABLE modern_pending_chart_score_writes",
-           "DROP TABLE ir_submission_snapshots",
-           "DROP TABLE modern_replay_files",
-           "DROP TABLE modern_replay_file_reservations",
-           "DROP TABLE modern_replay_stem_sequences",
-           "DROP TABLE modern_chart_results",
-           kExpectedLegacyIrSubmissionReceiptsTableSql,
-           kExpectedIrSubmissionReceiptsAttemptIndexSql,
-           kExpectedIrSubmissionReceiptsRemoteScoreIndexSql,
-           "PRAGMA user_version=10",
-       }) {
-    execOrAbort(db.get(), statement);
-  }
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
-
-  constexpr std::array chartHeaderFacts{
-      "id",
-      "chart_path",
-      "chart_md5",
-      "chart_sha256",
-      "chart_title",
-      "chart_artist",
-      "ln_mode",
-      "final_score",
-      "max_combo",
-      "final_gauge",
-      "clear_type",
-      "created_at",
-      "ruleset_version",
-      "eligibility",
-      "provenance_json",
-  };
-  for (const char *column : chartHeaderFacts) {
-    assert(columnExists(db.get(), "replays", column));
-  }
-
-  constexpr std::array courseHeaderFacts{
-      "id",
-      "course_id",
-      "course_key",
-      "course_name",
-      "course_group_name",
-      "constraint_json",
-      "final_score",
-      "max_combo",
-      "final_gauge",
-      "clear_type",
-      "completed_charts",
-      "total_charts",
-      "created_at",
-      "ruleset_version",
-      "eligibility",
-      "provenance_json",
-  };
-  for (const char *column : courseHeaderFacts) {
-    assert(columnExists(db.get(), "course_replays", column));
-  }
-
-  constexpr std::array eventDerivedFacts{
-      "max_score",
-      "p_great",
-      "great",
-      "good",
-      "bad",
-      "poor",
-      "k_poor",
-      "fast",
-      "slow",
-      "gauge_history_json",
-      "judgement_history_json",
-      "timing_history_json",
-  };
-  for (const char *column : eventDerivedFacts) {
-    assert(!columnExists(db.get(), "replays", column));
-    assert(!columnExists(db.get(), "course_replays", column));
-  }
-
-  assert(tableExists(db.get(), "replay_events"));
-  assert(tableExists(db.get(), "replay_touch_samples"));
-  assert(tableExists(db.get(), "replay_lane_cover_events"));
-  assert(tableExists(db.get(), "course_replay_stages"));
-  for (const char *column :
-       {"judgement", "diff_micros", "gauge", "gauge_type", "combo",
-        "score"}) {
-    assert(columnExists(db.get(), "replay_events", column));
-  }
-}
-
 } // namespace
 
 int main() {
@@ -8195,7 +8046,6 @@ int main() {
   testCurrentVersionRejectsMalformedRulesetProofSchema(root);
   testFreshDatabaseCreatesIrSubmissionReceipts(root);
   testVersion8MigrationAddsIrSubmissionReceipts(root);
-  testVersion10MigrationPreservesLegacyReceiptOwnership(root);
   testVersion8MigrationRejectsMalformedExistingOutbox(root);
   testCurrentVersionRejectsMalformedIrSubmissionReceiptSchema(root);
   testFreshDatabaseCreatesIrRemoteScores(root);
@@ -8262,7 +8112,6 @@ int main() {
   testPendingSemanticConflictsAreRetainedByAcknowledgement(root);
   testPendingBatchHardCapsAt256(root);
   testMalformedPendingIdentitiesCanRotate(root);
-  testSchema10LegacySummaryBoundaryIsHeaderOnly(root);
   testExistingListLimits(root);
 
   std::filesystem::remove_all(root);
