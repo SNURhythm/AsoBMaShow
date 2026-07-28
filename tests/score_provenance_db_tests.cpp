@@ -1594,9 +1594,12 @@ void testCourseWritesUseAuthoritativeKeysAndExactMode(
          long_note_mode::kHcnValue);
   db.reset();
 
-  CoursePlaySession fallback = session;
+  CoursePlaySession fallback;
   fallback.courseId = 72;
-  fallback.courseKey.clear();
+  fallback.courseName = session.courseName;
+  fallback.courseGroupName = session.courseGroupName;
+  fallback.constraintJson = session.constraintJson;
+  fallback.entries = session.entries;
   fallback.longNoteMode = 99;
   assert(helper.SaveCourseScore(fallback, sampleState(4, 1), 1, 1));
   db = openDatabase(path);
@@ -1692,14 +1695,19 @@ void testCourseReadsAreKeyAndModeAuthoritative(
   const auto byKey = helper.LoadBestCourseScore(renamed);
   assert(byKey.has_value() && byKey->score == 200);
 
-  CoursePlaySession mismatchingKey = renamed;
-  mismatchingKey.courseId = 11;
-  mismatchingKey.courseKey = missingKey;
+  const auto lookupSession = [&](int courseId, std::string courseKey) {
+    CoursePlaySession lookup;
+    lookup.courseId = courseId;
+    lookup.courseKey = std::move(courseKey);
+    lookup.courseName = renamed.courseName;
+    lookup.longNoteMode = renamed.longNoteMode;
+    return lookup;
+  };
+
+  CoursePlaySession mismatchingKey = lookupSession(11, missingKey);
   assert(!helper.LoadBestCourseScore(mismatchingKey).has_value());
 
-  CoursePlaySession blankFallback = renamed;
-  blankFallback.courseId = 66;
-  blankFallback.courseKey = missingKey;
+  CoursePlaySession blankFallback = lookupSession(66, missingKey);
   const auto byBlankId = helper.LoadBestCourseScore(blankFallback);
   assert(byBlankId.has_value() && byBlankId->score == 300);
 
@@ -1709,14 +1717,10 @@ void testCourseReadsAreKeyAndModeAuthoritative(
   const auto blankRequestById = helper.LoadBestCourseScore(emptyRequestedKey);
   assert(blankRequestById.has_value() && blankRequestById->score == 300);
 
-  CoursePlaySession malformedDoesNotFallback = renamed;
-  malformedDoesNotFallback.courseId = 77;
-  malformedDoesNotFallback.courseKey = missingKey;
+  CoursePlaySession malformedDoesNotFallback = lookupSession(77, missingKey);
   assert(!helper.LoadBestCourseScore(malformedDoesNotFallback).has_value());
 
-  CoursePlaySession wildcard = renamed;
-  wildcard.courseId = 88;
-  wildcard.courseKey = wildcardKey;
+  CoursePlaySession wildcard = lookupSession(88, wildcardKey);
   for (int mode : long_note_mode::kPlayableValues) {
     wildcard.longNoteMode = mode;
     const auto score = helper.LoadBestCourseScore(wildcard);

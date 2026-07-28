@@ -47,32 +47,41 @@ require(
     "configuration targets the IR tab",
 )
 require(
+    "ListIrUploadCandidates" in uploads_scene,
+    "the page reads snapshot-backed modern candidates in one batch",
+)
+reject(
     "ListIrUploadCandidateReplays" in uploads_scene
-    and "SelectChartMetaByPaths" in uploads_scene,
-    "the page uses explicit batch reads",
+    or "SelectChartMetaByPaths" in uploads_scene,
+    "the page must not hydrate replay rows or chart metadata",
 )
 reject(
     "enqueueManual(" in uploads_scene,
     "the page must not queue selections one by one",
 )
 require(
-    "historicalIrDiagnostic" in uploads_scene,
-    "IR Uploads forwards historical proof rejection analysis",
+    "loadDiagnostic = candidateRead.diagnostic" in uploads_scene,
+    "IR Uploads forwards durable result/snapshot agreement diagnostics",
 )
 reject(
     "This saved result has no verifiable IR proof." in uploads_scene,
     "IR Uploads must not replace proof analysis with a generic rejection",
 )
 
-load_position = uploads_scene.find("LoadReplayResult")
-rebuild_position = uploads_scene.find("result_recall::BuildChartResult", load_position)
-enqueue_position = uploads_scene.find("enqueueManualBatch", rebuild_position)
+verify_position = uploads_scene.find("submissionForIrUploadCandidate")
+batch_position = uploads_scene.find("executeIrSavedResultBatchUpload", verify_position)
+enqueue_position = uploads_scene.find("enqueueManualBatch", batch_position)
 require(
-    load_position >= 0
-    and rebuild_position > load_position
-    and enqueue_position > rebuild_position
+    verify_position >= 0
+    and batch_position > verify_position
+    and enqueue_position > batch_position
     and uploads_scene.count("enqueueManualBatch") == 1,
-    "saved-result reconstruction must precede exactly one batch enqueue",
+    "stored result agreement must precede exactly one batch enqueue",
+)
+reject(
+    "LoadReplayResult" in uploads_scene
+    or "result_recall::BuildChartResult" in uploads_scene,
+    "manual IR upload must not reconstruct a replay",
 )
 require(
     "openIrSettingsButton->setOnClickListener" in uploads_scene

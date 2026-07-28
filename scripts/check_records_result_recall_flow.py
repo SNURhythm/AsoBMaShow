@@ -4,65 +4,72 @@ import sys
 root = Path(sys.argv[1])
 header = (root / "src/scene/MainMenuScene.h").read_text()
 source = (root / "src/scene/MainMenuScene.cpp").read_text()
-record_state_source = (root / "src/ir/IrReplayRecordState.cpp").read_text()
+combined = header + source
+
 required = [
     "replayModalResultButton",
     "replayResultRecallInProgress",
-    "startReplayResultRecall",
     'makeModalButton("View Result"',
-    "LoadReplayResult",
-    "BuildChartResult",
-    "BuildCourseResult",
+    "resultRecordActionTarget(",
+    "startModernReplayResultRecall",
+    "startModernCourseReplayResultRecall",
+    "startRemoteResultRecall",
+    "LoadModernChartResultByAttempt",
+    "LoadModernCourseResultByAttempt",
+    "result_recall::BuildChartResult",
+    "result_recall::BuildCourseResult",
     ".savedResultBrowsing = true",
     "onIrUploadRequested",
-    "startReplayIrUpload",
+    "startModernReplayIrUpload",
     "finishReplayIrUpload",
-    "refreshReplayIrMarker",
     "replayIrUploadInProgress",
+    "LoadModernIrSubmissionSnapshot",
     "executeIrSavedResultUpload",
     "observeReplayIrServiceRevisions",
     "replayIrObservedRevisions",
     "status.revision",
 ]
-combined = header + source
 missing = [token for token in required if token not in combined]
-missing += ["record-state:" + token for token in [
-    "void resolveReplayIrRecordState",
-    "tachi::isReplayEligibleForBokutachi(",
-    "summary.irRecordState = resolveIrRecordState({",
-    ".eligible = summary.irSubmissionEligible",
-    ".hasReceipt = summary.hasIrReceipt",
-    ".outboxState = summary.requestedIrOutboxState",
-    ".activity = activity",
-] if token not in record_state_source]
-missing += ["marker:" + token for token in [
-    "ir::resolveReplayIrRecordState(*latest, activity);",
-] if token not in source]
-recall_start = source.index("void MainMenuScene::startReplayResultRecall")
-recall_end = source.index("void MainMenuScene::startCourseReplayResultRecall",
-                          recall_start)
-recall_source = source[recall_start:recall_end]
-missing += ["recall:" + token for token in [
+
+chart_recall_start = source.index(
+    "void MainMenuScene::startModernReplayResultRecall")
+chart_recall_end = source.index(
+    "\nvoid MainMenuScene::startModernCourseReplayResultRecall",
+    chart_recall_start)
+chart_recall = source[chart_recall_start:chart_recall_end]
+missing += ["chart-recall:" + token for token in [
     "cancelActivePreviewLoading();",
     "loadThread.join()",
     "joinRetiredPreviewLoadThreads()",
-] if token not in recall_source]
-if "void MainMenuScene::startReplayIrUpload" in source:
-    upload_start = source.index("void MainMenuScene::startReplayIrUpload")
-    upload_end = source.index("void MainMenuScene::finishReplayIrUpload",
-                              upload_start)
-    upload_source = source[upload_start:upload_end]
-    missing += ["upload:" + token for token in [
-        "LoadReplayResult",
-        "BuildChartResult",
-        "historicalIr",
-        "loadOutbox",
-        "buildDraft",
-        "enqueueManual",
-        "retry",
-    ] if token not in upload_source]
-else:
-    missing.append("upload:startReplayIrUpload definition")
+    "LoadModernChartResultByAttempt(",
+    "result_recall::BuildChartResult(",
+] if token not in chart_recall]
+
+course_recall_start = chart_recall_end + 1
+course_recall_end = source.index(
+    "\nvoid MainMenuScene::startRemoteResultRecall", course_recall_start)
+course_recall = source[course_recall_start:course_recall_end]
+missing += ["course-recall:" + token for token in [
+    "cancelActivePreviewLoading();",
+    "loadThread.join()",
+    "joinRetiredPreviewLoadThreads()",
+    "LoadModernCourseResultByAttempt(",
+    "result_recall::BuildCourseResult(",
+    ".savedResultBrowsing = true",
+] if token not in course_recall]
+
+upload_start = source.index("void MainMenuScene::startModernReplayIrUpload")
+upload_end = source.index("\nvoid MainMenuScene::finishReplayIrUpload",
+                          upload_start)
+upload_source = source[upload_start:upload_end]
+missing += ["upload:" + token for token in [
+    "LoadModernIrSubmissionSnapshot",
+    "snapshot.snapshot->submission",
+    "loadOutbox",
+    "buildDraft",
+    "enqueueManual",
+    "retry",
+] if token not in upload_source]
 
 cleanup_tokens = [
     "replayIrUploadInProgress = false",
@@ -70,7 +77,12 @@ cleanup_tokens = [
 ]
 missing += ["cleanup:" + token for token in cleanup_tokens
             if token not in combined]
+
 forbidden = [
+    "LoadReplayResult",
+    "startReplayResultRecall",
+    "startReplayIrUpload",
+    "refreshReplayIrMarker",
     "replayModalPhotoButton",
     "startReplayImageExport",
     'makeModalButton("Export Photo"',

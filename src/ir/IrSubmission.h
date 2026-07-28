@@ -7,10 +7,6 @@
 #include <string>
 #include <vector>
 
-namespace result_persistence {
-struct ChartResultAttempt;
-}
-
 namespace ir {
 
 struct IrSubmission {
@@ -62,9 +58,5 @@ struct IrSubmissionBuildOutcome {
 
 [[nodiscard]] IrSubmissionBuildOutcome
 makeIrSubmission(const result_persistence::ModernChartResult &result) noexcept;
-
-[[nodiscard]] IrSubmissionBuildOutcome
-makeIrSubmission(const result_persistence::ChartResultAttempt &attempt,
-                 std::int64_t playedAtUnixMillis) noexcept;
 
 } // namespace ir

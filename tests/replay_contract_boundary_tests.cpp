@@ -107,11 +107,21 @@ void testModernResultAndSnapshotBoundary() {
   rejectTokens(root / "src/ModernResultRecallBuilder.cpp",
                materializationForbidden);
 
-  requireToken(root / "src/ResultPersistenceModel.cpp",
-               "projectModernResultFromLegacyAttempt",
-               "explicitly named legacy result adapter");
-  requireToken(root / "src/ir/IrSubmissionLegacyAdapter.cpp",
-               "ChartResultAttempt", "explicitly isolated legacy IR adapter");
+  constexpr std::array<std::string_view, 2> legacyIrForbidden{
+      "ChartResultAttempt", "projectModernResultFromLegacyAttempt"};
+  rejectTokens(root / "src/ir/IrSubmission.h", legacyIrForbidden);
+  rejectTokens(root / "src/ir/IrSubmissionModern.cpp", legacyIrForbidden);
+  constexpr std::array<std::string_view, 1> legacyProjectionForbidden{
+      "projectModernResultFromLegacyAttempt"};
+  rejectTokens(root / "src/ResultPersistenceModel.h",
+               legacyProjectionForbidden);
+  rejectTokens(root / "src/ResultPersistenceModel.cpp",
+               legacyProjectionForbidden);
+  if (std::filesystem::exists(root /
+                              "src/ir/IrSubmissionLegacyAdapter.cpp")) {
+    std::cerr << "FAIL: legacy IR submission adapter still exists\n";
+    ++failures;
+  }
 }
 
 void testSharedModernResultAuthorities() {

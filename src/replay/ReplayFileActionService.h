@@ -43,6 +43,7 @@ struct ReplayFileActionOutcome {
 
 class ReplayFileActionService {
 public:
+  explicit ReplayFileActionService(ReplayRepository &repository);
   ReplayFileActionService(ReplayRepository &repository,
                           ReplayFileStore &store);
 
@@ -66,6 +67,7 @@ private:
   [[nodiscard]] ReplayFileActionOutcome
   inspectResolved(const ResolvedReference &resolved) const;
 
+  std::unique_ptr<ReplayFileStore> ownedStore_;
   ReplayRepository &repository_;
   ReplayFileStore &store_;
 };

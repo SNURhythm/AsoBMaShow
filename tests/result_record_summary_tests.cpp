@@ -41,7 +41,7 @@ result_persistence::ModernCourseResult validModernCourseResult();
 void testReplayFileActionsUseModernIdentityAndCapabilitiesOnly() {
   ModernChartResultRecord chartRecord{.result = validModernResult()};
   const auto chart = makeModernChartResultRecord(
-      chartRecord, replay::ReplayState::Verified, false);
+      chartRecord, replay::ReplayState::Verified, ir::IrRecordState::Hidden);
   const auto chartActions = replay::replayFileActionSelection(chart, true);
   expect(chartActions.request.has_value() && chartActions.shareVisible &&
              chartActions.deleteVisible && chartActions.enabled &&
@@ -79,7 +79,7 @@ void testReplayFileActionsUseModernIdentityAndCapabilitiesOnly() {
 void testRecordActionsRequireTypedIdentityAndPayloadAgreement() {
   ModernChartResultRecord chartRecord{.result = validModernResult()};
   auto modernChart = makeModernChartResultRecord(
-      chartRecord, replay::ReplayState::Verified, false);
+      chartRecord, replay::ReplayState::Verified, ir::IrRecordState::Hidden);
   expect(resultRecordActionTarget(modernChart, ResultRecordAction::Watch) ==
              ResultRecordActionTarget::ModernChart &&
              resultRecordActionTarget(modernChart,
@@ -276,7 +276,8 @@ result_persistence::ModernCourseResult validModernCourseResult() {
 void testModernConversionUsesSharedReplayCapabilities() {
   ModernChartResultRecord record{.result = validModernResult()};
   const auto absent =
-      makeModernChartResultRecord(record, replay::ReplayState::Missing, true);
+      makeModernChartResultRecord(record, replay::ReplayState::Missing,
+                                  ir::IrRecordState::Eligible);
   expect(absent.isLocal() && absent.isModernChart() && !absent.isRemote() &&
              absent.modernAttemptId() == record.result.attemptId,
          "modern result has a durable tagged attempt identity");
@@ -293,7 +294,8 @@ void testModernConversionUsesSharedReplayCapabilities() {
          "modern projection reads display facts only from the strict result");
 
   const auto verified =
-      makeModernChartResultRecord(record, replay::ReplayState::Verified, false);
+      makeModernChartResultRecord(record, replay::ReplayState::Verified,
+                                  ir::IrRecordState::Hidden);
   expect(verified.capabilities.watch && verified.capabilities.gBattle &&
              verified.capabilities.resultRecall &&
              verified.capabilities.videoExport &&
@@ -301,7 +303,8 @@ void testModernConversionUsesSharedReplayCapabilities() {
          "verified BRD enables projected replay consumers via the matrix");
 
   const auto corrupt =
-      makeModernChartResultRecord(record, replay::ReplayState::Corrupt, false);
+      makeModernChartResultRecord(record, replay::ReplayState::Corrupt,
+                                  ir::IrRecordState::Hidden);
   expect(!corrupt.capabilities.watch && corrupt.capabilities.deleteReplayFile,
          "invalid present BRD remains deletable but not playable");
 }
@@ -595,7 +598,7 @@ ResultRecordSummary modernRecord(std::string attemptId,
   result.playedAtUnixMillis = playedAtUnixMillis;
   return makeModernChartResultRecord(
       ModernChartResultRecord{.result = std::move(result)},
-      replay::ReplayState::Missing, false);
+      replay::ReplayState::Missing, ir::IrRecordState::Hidden);
 }
 
 void testMergeIncludesModernResultsWithoutChangingTheirCapabilities() {
@@ -607,7 +610,7 @@ void testMergeIncludesModernResultsWithoutChangingTheirCapabilities() {
   legacy.createdAt = "2024-01-02 03:04:30";
   const std::vector<ResultRecordSummary> modern{
       makeModernChartResultRecord(modernRecord, replay::ReplayState::Missing,
-                                  true),
+                                  ir::IrRecordState::Eligible),
       makeLegacyChartResultRecord(legacy)};
   const std::vector<ReplaySummary> autoPlay{autoPlayRecord()};
   const std::vector<ir::IrRemoteScore> remote;

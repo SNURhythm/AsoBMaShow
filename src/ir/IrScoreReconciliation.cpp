@@ -80,7 +80,7 @@ bool knownLampRank(int value) {
 
 bool validLocalCandidate(const IrLocalReceiptCandidate &candidate,
                          std::string &diagnostic) {
-  if (candidate.replayId <= 0 ||
+  if (candidate.modernChartResultId <= 0 ||
       !uuid::isCanonicalLowerV4(candidate.attemptId)) {
     diagnostic = "IR reconciliation local identity is invalid";
     return false;
@@ -190,7 +190,8 @@ IrSubmissionReceipt snapshotReceipt(std::string_view providerId,
       .id = 0,
       .providerId = std::string(providerId),
       .serverOrigin = std::string(serverOrigin),
-      .replayId = local.replayId,
+      .replayId = 0,
+      .modernChartResultId = local.modernChartResultId,
       .attemptId = local.attemptId,
       .chartMd5 = local.chartMd5.empty() ? remote.chartMd5 : local.chartMd5,
       .chartSha256 =
@@ -244,10 +245,10 @@ IrScoreReconciliationPlan planScoreReconciliation(
       remote.size() > kMaximumIrRemoteScoreSnapshotEntries) {
     return invalidPlan("IR reconciliation input is oversized");
   }
-  std::unordered_set<int> replayIds;
+  std::unordered_set<int> modernResultIds;
   std::unordered_set<std::string_view> attemptIds;
   std::unordered_set<std::int64_t> outboxIds;
-  replayIds.reserve(local.size());
+  modernResultIds.reserve(local.size());
   attemptIds.reserve(local.size());
   outboxIds.reserve(local.size());
   for (const auto &candidate : local) {
@@ -255,7 +256,7 @@ IrScoreReconciliationPlan planScoreReconciliation(
     if (!validLocalCandidate(candidate, diagnostic)) {
       return invalidPlan(diagnostic);
     }
-    if (!replayIds.emplace(candidate.replayId).second ||
+    if (!modernResultIds.emplace(candidate.modernChartResultId).second ||
         !attemptIds.emplace(candidate.attemptId).second ||
         (candidate.outboxRowId &&
          !outboxIds.emplace(*candidate.outboxRowId).second)) {
@@ -269,7 +270,9 @@ IrScoreReconciliationPlan planScoreReconciliation(
         candidate.currentReceipt->providerId == providerId &&
         candidate.currentReceipt->serverOrigin == serverOrigin) {
       if (!validateIrSubmissionReceipt(*candidate.currentReceipt, diagnostic) ||
-          candidate.currentReceipt->replayId != candidate.replayId ||
+          candidate.currentReceipt->replayId != 0 ||
+          candidate.currentReceipt->modernChartResultId !=
+              candidate.modernChartResultId ||
           candidate.currentReceipt->attemptId != candidate.attemptId ||
           (!candidate.chartMd5.empty() &&
            !candidate.currentReceipt->chartMd5.empty() &&
@@ -278,7 +281,7 @@ IrScoreReconciliationPlan planScoreReconciliation(
            candidate.currentReceipt->chartSha256 != candidate.chartSha256)) {
         return invalidPlan(diagnostic.empty()
                                ? "IR reconciliation receipt disagrees with "
-                                 "its local replay"
+                                 "its modern result"
                                : diagnostic);
       }
     }
@@ -374,7 +377,8 @@ IrScoreReconciliationPlan planScoreReconciliation(
     plan.upsertedReceipts.push_back(std::move(receipt));
     recordRepresentedOutbox(candidate, submissionOwnsDelivery, plan);
   }
-  std::ranges::sort(plan.upsertedReceipts, {}, &IrSubmissionReceipt::replayId);
+  std::ranges::sort(plan.upsertedReceipts, {},
+                    &IrSubmissionReceipt::modernChartResultId);
   std::ranges::sort(plan.deletedReceiptIds);
   std::ranges::sort(plan.settledOutboxRowIds);
   std::ranges::sort(plan.purgedSucceededOutboxRowIds);

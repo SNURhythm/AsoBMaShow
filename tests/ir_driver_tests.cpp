@@ -2,7 +2,7 @@
 #include "ir/IrHttpClient.h"
 #include "ir/IrRankingModels.h"
 #include "ir/IrSubmission.h"
-#include "ResultPersistenceModel.h"
+#include "ModernResult.h"
 
 #include <iostream>
 #include <limits>
@@ -28,34 +28,42 @@ std::string repeated(char value, std::size_t count) {
   return std::string(count, value);
 }
 
-result_persistence::ChartResultAttempt validAttempt() {
-  result_persistence::ChartResultAttempt attempt;
-  attempt.attemptId = "123e4567-e89b-42d3-a456-426614174000";
-  attempt.replay.chartMeta.KeyMode = 7;
-  attempt.replay.chartMeta.MD5 = repeated('B', 32);
-  attempt.replay.chartMeta.SHA256 = repeated('A', 64);
-  attempt.replay.chartMeta.TotalNotes = 5;
-  attempt.score.chartPath = "sample/song.bms";
-  attempt.score.chartMd5 = repeated('b', 32);
-  attempt.score.chartSha256 = repeated('a', 64);
-  attempt.score.score = 7;
-  attempt.score.maxScore = 10;
-  attempt.score.maxCombo = 4;
-  attempt.score.comboBreak = 1;
-  attempt.score.pGreat = 3;
-  attempt.score.great = 1;
-  attempt.score.good = 1;
-  attempt.score.bad = 0;
-  attempt.score.poor = 0;
-  attempt.score.kPoor = 0;
-  attempt.score.fast = 2;
-  attempt.score.slow = 1;
-  attempt.score.finalGauge = 82.5F;
-  attempt.score.clearType = kClearTypeNormalClearRank;
-  attempt.score.provenance = ScoreProvenance::Legacy();
-  attempt.keyMode = 7;
-  attempt.adoptedGaugeType = GaugeType::Normal;
-  return attempt;
+result_persistence::ModernChartResult validResult() {
+  result_persistence::ModernChartResult result;
+  result.attemptId = "123e4567-e89b-42d3-a456-426614174000";
+  result.score.chartPath = "sample/song.bms";
+  result.score.chartMd5 = repeated('b', 32);
+  result.score.chartSha256 = repeated('a', 64);
+  result.score.score = 7;
+  result.score.maxScore = 10;
+  result.score.maxCombo = 4;
+  result.score.comboBreak = 1;
+  result.score.pGreat = 3;
+  result.score.great = 1;
+  result.score.good = 1;
+  result.score.bad = 0;
+  result.score.poor = 0;
+  result.score.kPoor = 0;
+  result.score.fast = 2;
+  result.score.slow = 1;
+  result.score.finalGauge = 82.5F;
+  result.score.clearType = kClearTypeNormalClearRank;
+  result.score.provenance = ScoreProvenance::Legacy();
+  result.keyMode = 7;
+  result.adoptedGaugeType = GaugeType::Normal;
+  result.playedAtUnixMillis = 1'700'000'000'123LL;
+  result.resultFingerprint =
+      result_persistence::modernResultFingerprint(result);
+  return result;
+}
+
+ir::IrSubmissionBuildOutcome buildSubmission(
+    result_persistence::ModernChartResult result,
+    std::int64_t playedAtUnixMillis = 1'700'000'000'123LL) {
+  result.playedAtUnixMillis = playedAtUnixMillis;
+  result.resultFingerprint =
+      result_persistence::modernResultFingerprint(result);
+  return ir::makeIrSubmission(result);
 }
 
 class FakeDriver : public ir::IrDriver {
@@ -129,8 +137,8 @@ private:
   ir::IrDriverCapabilities capabilities_;
 };
 
-void testCanonicalSubmissionBuildsFromAttempt() {
-  const auto outcome = ir::makeIrSubmission(validAttempt(), 1700000000123LL);
+void testCanonicalSubmissionBuildsFromModernResult() {
+  const auto outcome = buildSubmission(validResult());
   expect(outcome.value.has_value(), "valid result builds canonical submission");
   if (!outcome.value.has_value()) {
     return;
@@ -153,76 +161,32 @@ void testCanonicalSubmissionBuildsFromAttempt() {
 }
 
 void testCanonicalSubmissionRejectsInvalidInput() {
-  auto attempt = validAttempt();
+  auto attempt = validResult();
   attempt.attemptId = "123E4567-E89B-42D3-A456-426614174000";
-  expect(!ir::makeIrSubmission(attempt, 1700000000123LL).value.has_value(),
+  expect(!buildSubmission(attempt).value.has_value(),
          "submission rejects non-canonical attempt id");
 
-  attempt = validAttempt();
+  attempt = validResult();
   attempt.score.score = 8;
-  expect(!ir::makeIrSubmission(attempt, 1700000000123LL).value.has_value(),
+  expect(!buildSubmission(attempt).value.has_value(),
          "submission rejects inconsistent EX score");
 
-  attempt = validAttempt();
+  attempt = validResult();
   attempt.score.chartSha256 = "not-a-hash";
-  expect(!ir::makeIrSubmission(attempt, 1700000000123LL).value.has_value(),
+  expect(!buildSubmission(attempt).value.has_value(),
          "submission rejects malformed present hash");
 
-  expect(!ir::makeIrSubmission(validAttempt(), 0).value.has_value(),
+  expect(!buildSubmission(validResult(), 0).value.has_value(),
          "submission rejects nonpositive capture time");
 }
 
 void testCanonicalSubmissionUsesCapturedResultMetrics() {
-  auto attempt = validAttempt();
-  attempt.replay.chartMeta.TotalNotes = 7;
+  auto attempt = validResult();
   attempt.score.maxScore = 14;
   attempt.score.bad = 1;
   attempt.score.poor = 1;
   attempt.score.fast = 3;
   attempt.score.slow = 2;
-  attempt.replay.events = {
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = -12'000,
-       .gauge = 24.0F,
-       .score = 2},
-      {.action = ReplayEventAction::Release,
-       .judgement = PGreat,
-       .diffMicros = 8'000,
-       .gauge = 25.5F,
-       .score = 4},
-      {.action = ReplayEventAction::Press,
-       .judgement = Great,
-       .diffMicros = -6'000,
-       .gauge = 27.0F,
-       .score = 5},
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = 0,
-       .gauge = 28.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Press,
-       .judgement = Good,
-       .diffMicros = -4'000,
-       .gauge = 26.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Release,
-       .judgement = Bad,
-       .diffMicros = 7'000,
-       .gauge = 22.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Miss,
-       .judgement = Poor,
-       .diffMicros = 0,
-       .gauge = 18.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Press,
-       .judgement = None,
-       .diffMicros = -1'000,
-       .gauge = 99.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Mine, .gauge = 11.0F, .score = 7},
-  };
   attempt.adoptedGaugeHistory = {24.0F, 25.5F, 27.0F, 28.0F,
                                  26.0F, 22.0F, 18.0F, 11.0F};
   result_persistence::ChartJudgementTiming timing;
@@ -232,7 +196,7 @@ void testCanonicalSubmissionUsesCapturedResultMetrics() {
   timing.byJudgement[Bad] = {.fast = 0, .slow = 1};
   attempt.judgementTiming = timing;
 
-  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  const auto outcome = buildSubmission(attempt);
   expect(outcome.value.has_value(), "captured result metrics build");
   if (outcome.value) {
     expect(outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
@@ -251,58 +215,10 @@ void testCanonicalSubmissionUsesCapturedResultMetrics() {
 }
 
 void testCanonicalSubmissionUsesCapturedTimingForClassicLongNotes() {
-  auto attempt = validAttempt();
-  attempt.replay.chartMeta.TotalNotes = 6;
+  auto attempt = validResult();
   attempt.score.maxScore = 12;
   attempt.score.bad = 1;
   attempt.score.slow = 3;
-  attempt.replay.events = {
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = -20'000,
-       .gauge = 20.0F,
-       .score = 0},
-      {.action = ReplayEventAction::Release,
-       .judgement = PGreat,
-       .diffMicros = 8'000,
-       .gauge = 22.0F,
-       .score = 2},
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = -12'000,
-       .gauge = 24.0F,
-       .score = 4},
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = 0,
-       .gauge = 26.0F,
-       .score = 6},
-      {.action = ReplayEventAction::Press,
-       .judgement = Great,
-       .diffMicros = 6'000,
-       .gauge = 28.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Press,
-       .judgement = Good,
-       .diffMicros = -8'000,
-       .gauge = 27.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Release,
-       .judgement = Good,
-       .diffMicros = -5'000,
-       .gauge = 26.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Press,
-       .judgement = Bad,
-       .diffMicros = 9'000,
-       .gauge = 22.0F,
-       .score = 7},
-      {.action = ReplayEventAction::Release,
-       .judgement = Bad,
-       .diffMicros = 7'000,
-       .gauge = 18.0F,
-       .score = 7},
-  };
   attempt.adoptedGaugeHistory = {41.0F, 57.5F, 82.5F};
   result_persistence::ChartJudgementTiming timing;
   timing.byJudgement[PGreat] = {.fast = 1, .slow = 1};
@@ -311,7 +227,7 @@ void testCanonicalSubmissionUsesCapturedTimingForClassicLongNotes() {
   timing.byJudgement[Bad] = {.fast = 0, .slow = 1};
   attempt.judgementTiming = timing;
 
-  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  const auto outcome = buildSubmission(attempt);
   expect(outcome.value.has_value(), "classic long-note result builds");
   if (outcome.value) {
     expect(outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
@@ -328,118 +244,43 @@ void testCanonicalSubmissionUsesCapturedTimingForClassicLongNotes() {
   }
 }
 
-void testCanonicalSubmissionIgnoresReplayOnlyDetailedEvidence() {
-  auto attempt = validAttempt();
-  attempt.replay.events = {
-      {.action = ReplayEventAction::Gauge,
-       .judgement = Great,
-       .diffMicros = 0,
-       .gauge = 19.0F,
-       .score = 1},
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = -12'000,
-       .gauge = 21.0F,
-       .score = 3},
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = 8'000,
-       .gauge = 23.0F,
-       .score = 5},
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = 0,
-       .gauge = 25.0F,
-       .score = 7},
-  };
-
-  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
-  expect(outcome.value.has_value(), "replay-only evidence builds safely");
-  if (outcome.value) {
-    expect(outcome.value->gaugeHistory.empty(),
-           "replay gauge events cannot become submission history");
-    expect(!outcome.value->judgementTimingBreakdownAvailable &&
-               outcome.value->earlyGreat == 0 && outcome.value->lateGreat == 0,
-           "replay judgements cannot become submission timing evidence");
-  }
-}
-
 void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
-  auto attempt = validAttempt();
-  attempt.replay.events = {
-      {.action = ReplayEventAction::Press,
-       .judgement = PGreat,
-       .diffMicros = -12'000,
-       .gauge = 72.0F,
-       .gaugeType = GaugeType::Hard,
-       .score = 2},
-      {.action = ReplayEventAction::Release,
-       .judgement = PGreat,
-       .diffMicros = 8'000,
-       .gauge = 24.0F,
-       .gaugeType = GaugeType::Normal,
-       .score = 4},
-      {.action = ReplayEventAction::Press,
-       .judgement = Great,
-       .diffMicros = -6'000,
-       .gauge = 64.0F,
-       .gaugeType = GaugeType::Hard,
-       .score = 5},
-      {.action = ReplayEventAction::Mine,
-       .gauge = 26.0F,
-       .gaugeType = GaugeType::Normal,
-       .score = 5},
-  };
-
-  auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  auto attempt = validResult();
+  auto outcome = buildSubmission(attempt);
   expect(outcome.value && outcome.value->gaugeHistory.empty(),
-         "missing adopted history does not fall back to replay gauges");
+         "missing adopted history remains absent");
   expect(outcome.value && outcome.value->pGreatFast == 0 &&
              outcome.value->pGreatSlow == 0,
-         "missing captured timing does not fall back to replay timing");
+         "missing captured timing remains absent");
 
   attempt.adoptedGaugeHistory = {41.0F, 57.5F, 82.5F};
-  outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  outcome = buildSubmission(attempt);
   expect(outcome.value &&
              outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
-         "state-derived adopted history takes priority over replay fallback");
+         "durable adopted history becomes the submission history");
 }
 
 void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
-  auto attempt = validAttempt();
+  auto attempt = validResult();
   attempt.adoptedGaugeHistory = {std::numeric_limits<float>::quiet_NaN()};
-  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+  expect(!buildSubmission(attempt).value,
          "non-finite captured gauge history is rejected");
 
-  attempt = validAttempt();
-  attempt.replay.events = {
-      {.action = ReplayEventAction::Press,
-       .judgement = Great,
-       .gauge = std::numeric_limits<float>::quiet_NaN(),
-       .gaugeType = GaugeType::Hard},
-      {.action = ReplayEventAction::Press,
-       .judgement = Great,
-       .gauge = 20.0F,
-       .gaugeType = GaugeType::Normal},
-  };
-  expect(ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value.has_value(),
-         "non-authoritative replay gauge values are not projected");
-
-  attempt = validAttempt();
+  attempt = validResult();
   attempt.score.fast = 0;
   result_persistence::ChartJudgementTiming timing;
   timing.byJudgement[PGreat] = {.fast = 1, .slow = 1};
   attempt.judgementTiming = timing;
-  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+  expect(!buildSubmission(attempt).value,
          "captured timing must match aggregate timing");
 
-  attempt = validAttempt();
+  attempt = validResult();
   attempt.score.fast = 2;
   attempt.score.slow = 0;
   timing = {};
   timing.byJudgement[Good] = {.fast = 2, .slow = 0};
   attempt.judgementTiming = timing;
-  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+  expect(!buildSubmission(attempt).value,
          "captured timing cannot exceed its judgement total");
 }
 
@@ -665,7 +506,7 @@ void testReadOnlyDriverCannotBuildSubmissionDraft() {
   std::string diagnostic;
   expect(registry.registerDriver(driver, diagnostic),
          "read-only driver registers");
-  const auto submission = ir::makeIrSubmission(validAttempt(), 1700000000123LL);
+  const auto submission = buildSubmission(validResult());
   expect(submission.value.has_value(), "test submission is valid");
   if (!submission.value.has_value()) {
     return;
@@ -686,7 +527,7 @@ void testReadOnlyDriverCannotBuildSubmissionDraft() {
 
 void testBaseBuildDraftIsUnsupported() {
   FakeDriver driver("ranking", {.chartRankings = true});
-  const auto submission = ir::makeIrSubmission(validAttempt(), 1700000000123LL);
+  const auto submission = buildSubmission(validResult());
   expect(submission.value.has_value(),
          "test submission is valid for base call");
   if (!submission.value.has_value()) {
@@ -700,11 +541,10 @@ void testBaseBuildDraftIsUnsupported() {
 } // namespace
 
 int main() {
-  testCanonicalSubmissionBuildsFromAttempt();
+  testCanonicalSubmissionBuildsFromModernResult();
   testCanonicalSubmissionRejectsInvalidInput();
   testCanonicalSubmissionUsesCapturedResultMetrics();
   testCanonicalSubmissionUsesCapturedTimingForClassicLongNotes();
-  testCanonicalSubmissionIgnoresReplayOnlyDetailedEvidence();
   testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory();
   testCanonicalSubmissionRejectsInvalidDetailedEvidence();
   testChartQueryNormalizesIdentity();

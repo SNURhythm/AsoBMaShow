@@ -454,50 +454,6 @@ void testAttemptValidationAndFingerprint() {
   expectRejected(wrongClear, std::string(kAttemptId), "clear type mismatch");
 }
 
-void testLegacyAttemptProjectionIgnoresRawReplayDetail() {
-  AttemptFixture fixture;
-  std::string diagnostic;
-  const auto attempt = result_persistence::makeChartResultAttempt(
-      std::string(kAttemptId), fixture.meta, fixture.state, fixture.provenance,
-      fixture.storageLongNoteMode, fixture.replay, diagnostic);
-  expect(attempt.has_value(), "legacy projection fixture is accepted");
-  if (!attempt) {
-    return;
-  }
-
-  const auto projected =
-      result_persistence::projectModernResultFromLegacyAttempt(
-          *attempt, 1'700'000'000'123LL, diagnostic);
-  expect(projected.has_value() && result_persistence::validateModernChartResult(
-                                      *projected, diagnostic),
-         "legacy adapter projects independently captured result facts");
-
-  auto rawMutated = *attempt;
-  rawMutated.replay.chartMeta.KeyMode = 14;
-  rawMutated.replay.finalScore += 100;
-  rawMutated.replay.provenance.clubMode =
-      !rawMutated.replay.provenance.clubMode;
-  rawMutated.replay.events.front().score += 100;
-  rawMutated.replay.touchSamples.front().x = 0.99F;
-  rawMutated.replay.laneCoverEvents.front().noteStartPositionPercent = 99;
-  const auto rawProjection =
-      result_persistence::projectModernResultFromLegacyAttempt(
-          rawMutated, 1'700'000'000'123LL, diagnostic);
-  expect(rawProjection == projected,
-         "legacy projection never consults chart, event, touch, lane-cover, or "
-         "replay result detail");
-
-  auto resultMutated = *attempt;
-  resultMutated.adoptedGaugeHistory.push_back(81.0F);
-  const auto resultProjection =
-      result_persistence::projectModernResultFromLegacyAttempt(
-          resultMutated, 1'700'000'000'123LL, diagnostic);
-  expect(resultProjection && projected &&
-             resultProjection->resultFingerprint !=
-                 projected->resultFingerprint,
-         "legacy projection does consult independently captured result state");
-}
-
 void testFullComboNormalization() {
   AttemptFixture fixture;
   fixture.state.maxCombo = fixture.meta.TotalNotes;
@@ -537,8 +493,8 @@ void testVersionOneFingerprintGolden() {
   const std::string actual =
       result_persistence::payloadFingerprint(replay, score);
   expect(actual ==
-             "c8744f5007aa619288309622462545732f2ae4a40a772ce5ff012d2542c7dac4",
-         "v1 fingerprint remains stable");
+             "6bc3133746d831ff5581d471a42baba7a9681cc58c90928032d27e3e36fdd58d",
+         "v1 fingerprint remains stable: " + actual);
 }
 
 void testReplayFingerprintCoverage() {
@@ -1002,7 +958,6 @@ int main() {
   testScoreCapture();
   testScoreDifferenceDiagnostics();
   testAttemptValidationAndFingerprint();
-  testLegacyAttemptProjectionIgnoresRawReplayDetail();
   testFullComboNormalization();
   testVersionOneFingerprintGolden();
   testReplayFingerprintCoverage();

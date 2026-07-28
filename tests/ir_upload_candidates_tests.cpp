@@ -49,7 +49,7 @@ result_persistence::ModernChartResult modernResult(int suffix) {
   result.score.maxCombo = 450;
   result.score.comboBreak = 2;
   result.score.pGreat = 400;
-  result.score.great = 50;
+  result.score.great = 100;
   result.score.finalGauge = 82.5F;
   result.score.clearType = kClearTypeHardClearRank;
   result.score.provenance = ScoreProvenance::Legacy();
@@ -139,7 +139,8 @@ struct CountingCandidate {
 };
 
 void testSelectionIndexesCanonicalAttemptIdsOnce() {
-  constexpr std::size_t candidateCount = kMaximumIrUploadCandidateRows;
+  constexpr std::size_t candidateCount =
+      ir::kMaximumIrUploadCandidateRows;
   std::size_t candidateReads = 0;
   std::vector<CountingCandidate> candidates;
   candidates.reserve(candidateCount);
@@ -175,9 +176,24 @@ void testProjectsOnlySnapshotBackedModernAttempts() {
 
   const std::vector sources{eligible, failed, queued, uploaded, mismatched,
                             missingOwner};
+  const auto records = ir::projectIrUploadRecords(sources, kProvider, kOrigin);
   const auto projected =
       ir::projectIrUploadCandidates(sources, kProvider, kOrigin);
 
+  expect(records.records.size() == 4 && records.omittedRows == 2,
+         "record projection retains every valid durable IR state");
+  expect(records.records[0].resolvedState() == ir::IrRecordState::Eligible &&
+             records.records[1].resolvedState() == ir::IrRecordState::Failed &&
+             records.records[2].resolvedState() == ir::IrRecordState::Queued &&
+             records.records[3].resolvedState() == ir::IrRecordState::Uploaded,
+         "record and upload pages share one durable state authority");
+  expect(records.records[2].resolvedState(
+             ir::IrRecordActivity::Submitting) ==
+             ir::IrRecordState::Uploading &&
+             records.records[3].resolvedState(
+                 ir::IrRecordActivity::Polling) ==
+                 ir::IrRecordState::Uploaded,
+         "live activity overlays durable state without overriding receipts");
   expect(projected.candidates.size() == 2,
          "only eligible and failed modern snapshots remain selectable");
   expect(projected.candidates[0].attemptId() == eligible.result.attemptId &&

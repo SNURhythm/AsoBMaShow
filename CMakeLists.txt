@@ -877,6 +877,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -1074,8 +1075,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
-        src/ir/IrSubmissionLegacyAdapter.cpp
-        src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
         src/FileChecksum.cpp
         src/ScoreProvenance.cpp
@@ -1106,13 +1105,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrOutboxModels.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/FileChecksum.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
         src/Uuid.cpp
+        src/Utils.cpp
         src/ArchiveFile.cpp
         src/bms_parser.cpp
         src/MinizBridge.c
@@ -1273,7 +1277,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRankingModels.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ir/IrSubmissionService.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/tachi/BokutachiCacheStore.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/ir/tachi/TachiDriver.cpp
@@ -1283,11 +1290,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
+        src/replay/BeatorajaReplayPath.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
@@ -1414,6 +1423,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -1456,6 +1466,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -1497,6 +1508,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -1543,6 +1555,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -1614,6 +1627,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -1690,6 +1704,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -1747,6 +1762,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -1804,6 +1820,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -2178,6 +2195,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
+        src/bms_parser.cpp
         src/sqlite3.c
         src/scene/play/GameplayGaugeRules.cpp
     )
@@ -2607,13 +2625,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrOutboxModels.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/FileChecksum.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
         src/Uuid.cpp
+        src/Utils.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/ArchiveFile.cpp
         src/MinizBridge.c
@@ -3301,6 +3324,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
         src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrUploadCandidates.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -3365,6 +3389,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
         src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrUploadCandidates.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -3442,6 +3467,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
         src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrUploadCandidates.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp

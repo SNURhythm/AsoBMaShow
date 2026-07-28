@@ -37,9 +37,4 @@ struct StageReceipt {
 [[nodiscard]] std::string payloadFingerprint(const ReplayData &replay,
                                              const ChartScoreWrite &score);
 
-[[nodiscard]] std::optional<ModernChartResult>
-projectModernResultFromLegacyAttempt(const ChartResultAttempt &attempt,
-                                     std::int64_t playedAtUnixMillis,
-                                     std::string &diagnostic) noexcept;
-
 } // namespace result_persistence

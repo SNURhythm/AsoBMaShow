@@ -393,31 +393,6 @@ std::optional<ChartResultAttempt> makeChartResultAttempt(
                             .payloadFingerprint = fingerprint};
 }
 
-std::optional<ModernChartResult>
-projectModernResultFromLegacyAttempt(const ChartResultAttempt &attempt,
-                                     std::int64_t playedAtUnixMillis,
-                                     std::string &diagnostic) noexcept {
-  try {
-    ModernChartResult result{
-        .attemptId = attempt.attemptId,
-        .score = attempt.score,
-        .keyMode = attempt.keyMode,
-        .adoptedGaugeType = attempt.adoptedGaugeType,
-        .adoptedGaugeHistory = attempt.adoptedGaugeHistory,
-        .judgementTiming = attempt.judgementTiming,
-        .playedAtUnixMillis = playedAtUnixMillis,
-    };
-    result.resultFingerprint = modernResultFingerprint(result);
-    if (!validateModernChartResult(result, diagnostic)) {
-      return std::nullopt;
-    }
-    return result;
-  } catch (...) {
-    diagnostic = "legacy result projection failed";
-    return std::nullopt;
-  }
-}
-
 std::string payloadFingerprint(const ReplayData &replay,
                                const ChartScoreWrite &score) {
   CanonicalEncoder encoder;

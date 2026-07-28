@@ -300,6 +300,13 @@ void testSchemaReservationAtomicStageAndExactRetry() {
 
   const auto outbox =
       repository.LoadIrOutbox(outboxDraft.providerId, completed.attemptId);
+  const auto queuedRecords = repository.ListIrUploadRecords(
+      outboxDraft.providerId, "https://example.invalid");
+  assert(queuedRecords.status == ir::IrUploadRecordReadStatus::Loaded &&
+         queuedRecords.records.size() == 1 &&
+         queuedRecords.records.front().attemptId == completed.attemptId &&
+         queuedRecords.records.front().resolvedState() ==
+             ir::IrRecordState::Queued);
   assert(outbox.status == ir::IrOutboxReadStatus::Found && outbox.entry &&
          repository
                  .ClaimIrOutbox(outbox.entry->id, ir::IrOutboxState::Pending,
@@ -324,6 +331,12 @@ void testSchemaReservationAtomicStageAndExactRetry() {
   assert(receipt.status == ir::IrReceiptReadStatus::Found && receipt.receipt &&
          receipt.receipt->replayId == 0 &&
          receipt.receipt->modernChartResultId == staged.receipt->resultId);
+  const auto uploadedRecords = repository.ListIrUploadRecords(
+      outboxDraft.providerId, "https://example.invalid");
+  assert(uploadedRecords.status == ir::IrUploadRecordReadStatus::Loaded &&
+         uploadedRecords.records.size() == 1 &&
+         uploadedRecords.records.front().resolvedState(
+             ir::IrRecordActivity::Polling) == ir::IrRecordState::Uploaded);
 
   char *ownershipError = nullptr;
   const std::string ambiguousOwner =
@@ -443,6 +456,15 @@ void testRollbackAndReplayOptionality() {
              snapshotStaged.receipt->resultId &&
          manual.candidates.front().attemptId() == snapshotOnly.attemptId &&
          manual.candidates.front().snapshot == storedSnapshot);
+  const auto records = repository.ListIrUploadRecords(
+      "fake", "https://example.invalid");
+  assert(records.status == ir::IrUploadRecordReadStatus::Loaded &&
+         records.records.size() == 1 &&
+         records.records.front().modernChartResultId ==
+             snapshotStaged.receipt->resultId &&
+         records.records.front().attemptId == snapshotOnly.attemptId &&
+         records.records.front().resolvedState() ==
+             ir::IrRecordState::Eligible);
 
   const auto reconciliation = repository.LoadIrReconciliationCandidates(
       "fake", "https://example.invalid");

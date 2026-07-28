@@ -160,7 +160,7 @@ makeLegacyCourseResultRecord(LegacyCourseResultSummary summary);
 [[nodiscard]] ResultRecordSummary
 makeModernChartResultRecord(ModernChartResultRecord record,
                             replay::ReplayState replayState,
-                            bool postponedIrSnapshotEligible);
+                            ir::IrRecordState irState);
 
 [[nodiscard]] ResultRecordSummary
 makeModernCourseResultRecord(ModernCourseResultRecord record,

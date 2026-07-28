@@ -9,6 +9,7 @@
 #include <SDL2/SDL.h>
 
 #include <cstdlib>
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <unordered_set>
@@ -74,25 +75,32 @@ void click(IrUploadCandidateListView &list, const Button &target) {
   list.handleEvents(up);
 }
 
-ir::IrUploadCandidate candidate(int replayId, std::string title,
+std::string attemptId(int suffix) {
+  char value[37]{};
+  std::snprintf(value, sizeof(value), "123e4567-e89b-42d3-a456-426614174%03d",
+                suffix);
+  return value;
+}
+
+ir::IrUploadCandidate candidate(int resultId, std::string title,
                                 std::string artist, std::string jacket,
                                 ir::IrRecordState state) {
   ir::IrUploadCandidate value;
-  value.replay.id = replayId;
-  value.replay.createdAt = "2026-07-20 19:30:00";
-  value.replay.initialGaugeType = GaugeType::Hard;
-  value.replay.finalGauge = 82.5F;
-  value.replay.playOption = "RANDOM";
-  value.replay.finalScore = 1'500;
-  value.replay.maxScore = 2'000;
-  value.replay.maxCombo = 777;
-  value.replay.clearType = kClearTypeHardClearRank;
-  value.chart.meta.Title = std::move(title);
-  value.chart.meta.Artist = std::move(artist);
-  value.chart.meta.Folder = "/charts/first";
-  value.chart.meta.StageFile = std::move(jacket);
-  value.chart.meta.PlayLevel = 12.0;
-  value.chart.meta.KeyMode = 7;
+  value.modernChartResultId = resultId;
+  value.result.resultId = resultId;
+  value.result.attemptId = attemptId(resultId);
+  value.result.score.chartTitle = std::move(title);
+  value.result.score.chartArtist = std::move(artist);
+  value.result.score.score = 1'500;
+  value.result.score.maxScore = 2'000;
+  value.result.score.maxCombo = 777;
+  value.result.score.finalGauge = 82.5F;
+  value.result.score.clearType = kClearTypeHardClearRank;
+  value.result.score.provenance = ScoreProvenance::Legacy();
+  value.result.score.provenance.player1.option = "RANDOM";
+  value.result.keyMode = 7;
+  value.result.adoptedGaugeType = GaugeType::Hard;
+  (void)jacket;
   value.state = state;
   return value;
 }
@@ -107,37 +115,33 @@ int main() {
   expect(bgfx::init(init), "headless bgfx initializes for IR upload list");
 
   {
-    const path_t firstJacket = "/charts/first/first.png";
-    const path_t secondJacket = "/charts/second/second.png";
-    const path_t fourthJacket = "/charts/fourth/fourth.png";
     auto first = candidate(41, "First Song", "First Artist", "first.png",
                            ir::IrRecordState::Eligible);
     auto second = candidate(42, "Second Song", "Second Artist", "second.png",
                             ir::IrRecordState::Failed);
     second.failureReason = "provider rejected this score";
-    second.replay.id = first.replayId();
-    second.chart.meta.Folder = "/charts/second";
-    second.replay.createdAt = "2026-07-20 20:00:00";
-    second.replay.initialGaugeType = GaugeType::Normal;
-    second.replay.finalGauge = 0.0F;
-    second.replay.playOption.reset();
-    second.replay.finalScore = 0;
-    second.replay.maxScore = 0;
-    second.replay.maxCombo = 0;
-    second.replay.clearType = -1;
-    second.chart.meta.PlayLevel = 0.0;
-    second.chart.meta.KeyMode = 14;
+    second.result.resultId = first.result.resultId;
+    second.modernChartResultId = first.modernChartResultId;
+    second.result.attemptId = first.result.attemptId;
+    second.result.adoptedGaugeType = GaugeType::Normal;
+    second.result.score.finalGauge = 0.0F;
+    second.result.score.provenance.player1.option = "NORMAL";
+    second.result.score.score = 0;
+    second.result.score.maxScore = 0;
+    second.result.score.maxCombo = 0;
+    second.result.score.clearType = -1;
+    second.result.keyMode = 14;
 
     IrUploadCandidateListView list;
     list.setSize(960, 140);
     list.applyYogaLayout();
-    std::unordered_set<int> selected{first.replayId()};
+    std::unordered_set<std::string> selected{first.result.attemptId};
     int toggles = 0;
-    int toggledReplayId = 0;
+    std::string toggledAttemptId;
     int rowSelections = 0;
-    list.onSelectionToggle = [&](int replayId) {
+    list.onSelectionToggle = [&](std::string attemptId) {
       ++toggles;
-      toggledReplayId = replayId;
+      toggledAttemptId = std::move(attemptId);
     };
     list.onSelected = [&](const ir::IrUploadCandidate &, int) {
       ++rowSelections;
@@ -151,10 +155,10 @@ int main() {
            "eligible candidate binds a selectable row");
     expect(text(row, "irUploadTitle")->getText() == "First Song",
            "row shows chart title");
-    expect(image(row, "irUploadJacket")->imagePath() == firstJacket,
-           "row shows the first jacket");
+    expect(image(row, "irUploadJacket")->imagePath().empty(),
+           "snapshot-only row does not hydrate chart artwork");
     expect(text(row, "irUploadArtist")->getText() == "First Artist" &&
-               text(row, "irUploadAttempt")->getText().find("2026-07-20") !=
+               text(row, "irUploadAttempt")->getText().find("Attempt") !=
                    std::string::npos &&
                text(row, "irUploadAttempt")->getText().find("Combo 777") !=
                    std::string::npos &&
@@ -162,11 +166,11 @@ int main() {
                    std::string::npos &&
                text(row, "irUploadAttempt")->getText().find("RANDOM") !=
                    std::string::npos &&
-               text(row, "irUploadDifficulty")->getText() == "12" &&
+               text(row, "irUploadDifficulty")->getText().empty() &&
                text(row, "irUploadKeyMode")->getText() == "7K" &&
                text(row, "irUploadScore")->getText() == "1500" &&
                text(row, "irUploadRank")->getText() == "A",
-           "row shows chart, combo, date, option, and replay metadata");
+           "row shows durable modern result and provenance facts");
     expect(selection->isSelected(), "row reflects external checkbox selection");
     auto *selectionContent = dynamic_cast<CheckboxButtonContent *>(
         selection->getContentView());
@@ -182,9 +186,9 @@ int main() {
                      ui_theme::sdl(ui_theme::cyan())),
            "selected IR upload checkbox tints the glyph cyan");
     click(list, *selection);
-    expect(toggles == 1 && toggledReplayId == first.replayId() &&
+    expect(toggles == 1 && toggledAttemptId == first.result.attemptId &&
                rowSelections == 0,
-           "checkbox toggles its replay ID without selecting the recycler row");
+           "checkbox toggles its attempt ID without selecting the row");
 
     list.setCandidates({second}, {});
     row = list.getViewByIndex(0);
@@ -192,8 +196,8 @@ int main() {
     selectionContent = dynamic_cast<CheckboxButtonContent *>(
         selection->getContentView());
     expect(row == firstRow &&
-               image(row, "irUploadJacket")->imagePath() == secondJacket,
-           "rebind replaces jacket identity");
+               image(row, "irUploadJacket")->imagePath().empty(),
+           "rebind remains independent of chart artwork");
     expect(!selection->hasStyledBackgroundStyle(),
            "unchecked IR upload checkbox remains unboxed");
     expect(sameColor(selectionContent->iconView()->currentColor(),
@@ -221,24 +225,23 @@ int main() {
             !dynamic_cast<IrUploadCandidateListItemView *>(row)->hasClearLamp(),
         "rebind clears checkbox, optional metadata, score rank, and lamp");
 
-    second.replay.maxScore = 2'000;
+    second.result.score.maxScore = 2'000;
     list.setCandidates({second}, {});
     row = list.getViewByIndex(0);
     expect(text(row, "irUploadScore")->getText() == "0" &&
                text(row, "irUploadRank")->getText() == "F",
            "a legitimate zero score keeps its score and rank metadata");
 
-    second.chart.meta.StageFile.clear();
     list.setCandidates({second}, {});
     row = list.getViewByIndex(0);
     expect(image(row, "irUploadJacket")->imagePath().empty(),
            "no jacket clears a recycled image identity");
 
     auto third = first;
-    third.replay.id = 99;
+    third.result.resultId = 99;
+    third.modernChartResultId = 99;
+    third.result.attemptId = attemptId(99);
     third.failureReason.clear();
-    third.chart.meta.Folder = "/charts/third";
-    third.chart.meta.StageFile = "third.png";
     list.setCandidates({third}, {});
     row = list.getViewByIndex(0);
     expect(text(row, "irUploadAttempt")->getText().find("Failed:") ==
@@ -246,26 +249,26 @@ int main() {
            "recycled eligible row clears another attempt's failure suffix");
 
     auto fourth = second;
-    fourth.replay.id = 100;
-    fourth.chart.meta.Folder = "/charts/fourth";
-    fourth.chart.meta.StageFile = "fourth.png";
+    fourth.result.resultId = 100;
+    fourth.modernChartResultId = 100;
+    fourth.result.attemptId = attemptId(100);
     list.setCandidates({fourth}, {});
     row = list.getViewByIndex(0);
     selection = button(row, "irUploadSelection");
     expect(row == firstRow &&
-               image(row, "irUploadJacket")->imagePath() == fourthJacket,
-           "recycled row receives its next jacket identity");
+               image(row, "irUploadJacket")->imagePath().empty(),
+           "recycled row stays free of chart-library identity");
     const float preservedScrollOffset = list.scrollOffset;
-    list.setSelectedReplayIds({fourth.replayId()});
+    list.setSelectedAttemptIds({fourth.result.attemptId});
     row = list.getViewByIndex(0);
     selection = button(row, "irUploadSelection");
     expect(selection->isSelected() &&
                list.scrollOffset == preservedScrollOffset,
            "selection-only rebind preserves the current viewport");
     click(list, *selection);
-    expect(toggles == 2 && toggledReplayId == fourth.replayId() &&
+    expect(toggles == 2 && toggledAttemptId == fourth.result.attemptId &&
                rowSelections == 0,
-           "recycled checkbox callback captures its current replay ID");
+           "recycled checkbox callback captures its current attempt ID");
 
     list.setSelectionLocked(true);
     selection = button(row, "irUploadSelection");

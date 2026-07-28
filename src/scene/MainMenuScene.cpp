@@ -21,7 +21,6 @@
 #include "../repositories/SqliteRAII.h"
 #include "../ir/tachi/TachiBatchManual.h"
 #include "../ir/IrProfileSettings.h"
-#include "../ir/IrReplayRecordState.h"
 #include "../ir/IrSavedResultUpload.h"
 #include "../ir/IrSubmissionService.h"
 #include "../path.h"
@@ -29,7 +28,6 @@
 #include "../replay/CourseReplayConsumer.h"
 #include "../replay/ReplayFileActionSelection.h"
 #include "../replay/ReplayFileActionService.h"
-#include "../replay/ReplayFileStore.h"
 #include "../view/ChartListItemView.h"
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
@@ -63,6 +61,7 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #ifdef _WIN32
@@ -129,6 +128,19 @@ constexpr uint32_t kIconFileLines = 0xf15c;
 constexpr uint32_t kIconCalculator = 0xf1ec;
 constexpr uint32_t kIconShare = 0xf1e0;
 constexpr uint32_t kIconTrash = 0xf1f8;
+
+ir::IrRecordActivity
+recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
+  switch (activeRequest) {
+  case ir::IrActiveRequestKind::None:
+    return ir::IrRecordActivity::None;
+  case ir::IrActiveRequestKind::Submit:
+    return ir::IrRecordActivity::Submitting;
+  case ir::IrActiveRequestKind::Poll:
+    return ir::IrRecordActivity::Polling;
+  }
+  return ir::IrRecordActivity::None;
+}
 
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
@@ -8746,6 +8758,47 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
     }
   }
 
+  const std::optional<std::string> irServerOrigin =
+      activeReplayIrServerOrigin();
+  std::unordered_map<std::string, ir::IrUploadRecord> irRecordsByAttempt;
+  bool modernIrReadSucceeded = courseReplayList;
+  if (!courseReplayList && irServerOrigin.has_value()) {
+    auto records = context.replayRepository.ListIrUploadRecords(
+        ir::kTachiProviderId, *irServerOrigin);
+    if (records.status == ir::IrUploadRecordReadStatus::Loaded) {
+      irRecordsByAttempt.reserve(records.records.size());
+      for (auto &record : records.records) {
+        irRecordsByAttempt.emplace(record.attemptId, std::move(record));
+      }
+      modernIrReadSucceeded = records.diagnostic.empty();
+      if (!records.diagnostic.empty() &&
+          records.diagnostic != publishedResultRecordDiagnostic) {
+        publishedResultRecordDiagnostic = records.diagnostic;
+        SDL_Log("%s", records.diagnostic.c_str());
+        archive_file::appendDebugLogLine(records.diagnostic);
+      }
+    } else {
+      const std::string diagnostic = ir::sanitizeDiagnostic(
+          records.diagnostic.empty()
+              ? "Modern IR Records unavailable: state could not be read"
+              : std::string("Modern IR Records unavailable: ") +
+                    records.diagnostic);
+      if (diagnostic != publishedResultRecordDiagnostic) {
+        publishedResultRecordDiagnostic = diagnostic;
+        SDL_Log("%s", diagnostic.c_str());
+        archive_file::appendDebugLogLine(diagnostic);
+      }
+    }
+  } else if (!courseReplayList) {
+    const std::string diagnostic =
+        "Modern IR Records unavailable: provider origin is invalid";
+    if (diagnostic != publishedResultRecordDiagnostic) {
+      publishedResultRecordDiagnostic = diagnostic;
+      SDL_Log("%s", diagnostic.c_str());
+      archive_file::appendDebugLogLine(diagnostic);
+    }
+  }
+
   bool modernHistoryReadSucceeded = true;
   if (courseReplayList && !activeFolder.courseKey.empty()) {
     const auto history = context.replayRepository.ListModernCourseResults(
@@ -8790,13 +8843,20 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
             replayModalChart.meta, modern.result.score.longNoteMode);
         const auto replayLoad =
             replayContext.load(modern.result.attemptId, facts);
-        const auto snapshot =
-            context.replayRepository.LoadModernIrSubmissionSnapshot(
-                modern.result.attemptId);
+        ir::IrRecordState irState = ir::IrRecordState::Hidden;
+        const auto storedIr =
+            irRecordsByAttempt.find(modern.result.attemptId);
+        if (storedIr != irRecordsByAttempt.end()) {
+          const auto serviceStatus =
+              context.irSubmissionService != nullptr
+                  ? context.irSubmissionService->status(
+                        ir::kTachiProviderId, modern.result.attemptId)
+                  : ir::IrAttemptStatusSnapshot{};
+          irState = storedIr->second.resolvedState(
+              recordActivityFor(serviceStatus.activeRequest));
+        }
         modernSummaries.push_back(makeModernChartResultRecord(
-            modern, replayLoad.replayState(),
-            snapshot.status == ModernIrSnapshotReadStatus::Loaded &&
-                snapshot.snapshot.has_value()));
+            modern, replayLoad.replayState(), irState));
       }
     } else {
       modernHistoryReadSucceeded = false;
@@ -8822,9 +8882,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
     if (providerSettings == context.settings.irProviders.end() ||
         !providerSettings->second.enabled) {
       remoteReadSucceeded = true;
-    } else if (const auto normalizedOrigin = ir::normalizeServerOrigin(
-                   providerSettings->second.serverOrigin)) {
-      mergeOrigin = *normalizedOrigin;
+    } else if (irServerOrigin.has_value()) {
+      mergeOrigin = *irServerOrigin;
       auto loaded = context.replayRepository.ListIrRemoteScoresForChart(
           ir::kTachiProviderId, mergeOrigin, replayModalChart.meta.MD5,
           replayModalChart.meta.SHA256);
@@ -8863,7 +8922,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
             ? std::span<const ir::IrRemoteScore>(remoteScores)
             : std::span<const ir::IrRemoteScore>{},
         ir::kTachiProviderId, mergeOrigin);
-    if (remoteReadSucceeded && modernHistoryReadSucceeded) {
+    if (remoteReadSucceeded && modernHistoryReadSucceeded &&
+        modernIrReadSucceeded) {
       publishedResultRecordDiagnostic.clear();
     }
   } catch (...) {
@@ -9021,9 +9081,7 @@ void MainMenuScene::startSelectedReplayFileShare() {
     return;
   }
 
-  replay::ReplayFileStore store(
-      context.replayRepository.GetResolvedProfileRoot());
-  replay::ReplayFileActionService actions(context.replayRepository, store);
+  replay::ReplayFileActionService actions(context.replayRepository);
   auto prepared = actions.prepareShare(*selection.request);
   if (prepared.state != replay::ReplayFileActionState::Verified ||
       !prepared.share) {
@@ -9069,9 +9127,7 @@ void MainMenuScene::deleteSelectedReplayFile() {
     return;
   }
 
-  replay::ReplayFileStore store(
-      context.replayRepository.GetResolvedProfileRoot());
-  replay::ReplayFileActionService actions(context.replayRepository, store);
+  replay::ReplayFileActionService actions(context.replayRepository);
   const auto removed = actions.remove(*selection.request);
   if (removed.state == replay::ReplayFileActionState::UserDeleted) {
     if (replayStatusText != nullptr) {
@@ -10451,7 +10507,7 @@ MainMenuScene::activeReplayIrServerOrigin() const {
   const auto settings = context.settings.irProviders.find(
       std::string(ir::kTachiProviderId));
   if (settings == context.settings.irProviders.end()) {
-    return std::nullopt;
+    return std::string(ir::kDefaultTachiServerOrigin);
   }
   return ir::normalizeServerOrigin(settings->second.serverOrigin);
 }

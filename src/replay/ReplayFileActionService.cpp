@@ -24,6 +24,11 @@ ReplayFileActionState actionState(ReplayFileState state) noexcept {
 
 } // namespace
 
+ReplayFileActionService::ReplayFileActionService(ReplayRepository &repository)
+    : ownedStore_(std::make_unique<ReplayFileStore>(
+          repository.GetResolvedProfileRoot())),
+      repository_(repository), store_(*ownedStore_) {}
+
 ReplayFileActionService::ReplayFileActionService(ReplayRepository &repository,
                                                  ReplayFileStore &store)
     : repository_(repository), store_(store) {}

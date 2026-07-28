@@ -289,13 +289,13 @@ void IrUploadsScene::buildView() {
   candidateList->setFlex(1);
   candidateList->clearBackgroundColor();
   candidateList->setBorderWidth(0);
-  candidateList->onSelectionToggle = [this](int replayId) {
-    controller.toggle(replayId);
+  candidateList->onSelectionToggle = [this](std::string attemptId) {
+    controller.toggle(attemptId);
     refreshUi();
   };
   candidateList->onSelected = [this](const ir::IrUploadCandidate &candidate,
                                      int) {
-    controller.toggle(candidate.replayId());
+    controller.toggle(candidate.result.attemptId);
     refreshUi();
   };
   listPanel->addView(candidateList);
@@ -351,52 +351,22 @@ void IrUploadsScene::reloadCandidates() {
   refreshProviderState();
 
   const std::string origin = serverOrigin();
-  const auto replayRead = context.replayRepository.ListIrUploadCandidateReplays(
+  auto candidateRead = context.replayRepository.ListIrUploadCandidates(
       ir::kTachiProviderId, origin);
-  if (replayRead.status != IrUploadReplayReadStatus::Loaded) {
-    loadError = replayRead.diagnostic.empty()
+  if (candidateRead.status != ir::IrUploadCandidateReadStatus::Loaded) {
+    loadError = candidateRead.diagnostic.empty()
                     ? "Saved results could not be loaded."
-                    : ir::sanitizeDiagnostic(replayRead.diagnostic);
+                    : ir::sanitizeDiagnostic(candidateRead.diagnostic);
     controller.applyCandidateRefresh(std::nullopt);
     refreshUi();
     return;
   }
 
-  std::vector<std::filesystem::path> paths;
-  paths.reserve(replayRead.replays.size());
-  for (const ReplaySummary &replay : replayRead.replays) {
-    if (replay.chartMeta.has_value()) {
-      paths.push_back(replay.chartMeta->BmsPath);
-    }
-  }
-
-  auto chartSession = context.chartRepository.OpenSession();
-  if (!chartSession.has_value()) {
-    loadError = "The chart library could not be opened.";
-    controller.applyCandidateRefresh(std::nullopt);
-    refreshUi();
-    return;
-  }
-  const auto chartRead = chartSession->SelectChartMetaByPaths(paths);
-  if (chartRead.status != ChartMetaPathBatchReadStatus::Loaded) {
-    loadError = chartRead.diagnostic.empty()
-                    ? "Chart details could not be loaded."
-                    : ir::sanitizeDiagnostic(chartRead.diagnostic);
-    controller.applyCandidateRefresh(std::nullopt);
-    refreshUi();
-    return;
-  }
-
-  auto projection =
-      ir::projectIrUploadCandidates(replayRead.replays, chartRead.records);
-  loadDiagnostic = projection.diagnostic;
-  if (loadDiagnostic.empty()) {
-    loadDiagnostic = replayRead.diagnostic;
-  }
-  controller.applyCandidateRefresh(std::move(projection.candidates));
+  loadDiagnostic = candidateRead.diagnostic;
+  controller.applyCandidateRefresh(std::move(candidateRead.candidates));
   if (candidateList != nullptr) {
     candidateList->setCandidates(controller.candidates(),
-                                 controller.selectedReplayIds());
+                                 controller.selectedAttemptIds());
     candidateList->scrollOffset = scrollOffset;
   }
   refreshUi();
@@ -471,7 +441,7 @@ void IrUploadsScene::refreshUi() {
     uploadButton->setEnabled(!locked && providerCanSubmit && selectedCount > 0);
   }
   if (candidateList != nullptr) {
-    candidateList->setSelectedReplayIds(controller.selectedReplayIds());
+    candidateList->setSelectedAttemptIds(controller.selectedAttemptIds());
     candidateList->setSelectionLocked(locked);
     candidateList->setVisible(loadError.empty() && candidateCount > 0);
   }
@@ -567,11 +537,14 @@ void IrUploadsScene::startUpload() {
                                     candidates = std::move(candidates)](
                                        const std::stop_token &stopToken) {
     ir_uploads::PreparationDependencies dependencies;
-    dependencies.verify = [](const ir::IrUploadCandidate &,
+    dependencies.verify = [](const ir::IrUploadCandidate &candidate,
                              const std::stop_token &) {
+      std::string diagnostic;
+      auto submission =
+          ir::submissionForIrUploadCandidate(candidate, diagnostic);
       return ir_uploads::VerificationOutcome{
-          .diagnostic =
-              "Legacy replay uploads are unavailable after summary migration."};
+          .submission = std::move(submission),
+          .diagnostic = std::move(diagnostic)};
     };
     dependencies.enqueueBatch =
         [this](std::span<const ir::IrSubmission> submissions) {

@@ -13,7 +13,7 @@
 namespace ir {
 
 struct IrLocalReceiptCandidate {
-  int replayId = 0;
+  int modernChartResultId = 0;
   std::string attemptId;
   int keyMode = 0;
   std::string chartMd5;

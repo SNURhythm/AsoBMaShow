@@ -1,117 +1,261 @@
 #include "IrUploadCandidates.h"
 
-#include "IrOutboxModels.h"
-#include "../repositories/ChartStorageIdentity.h"
+#include "IrProfileSettings.h"
 
-#include <limits>
+#include <ranges>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace ir {
 namespace {
 
-bool hashesMatchWhenPresent(const std::string &stored,
-                            const std::string &hydrated) noexcept {
-  return stored.empty() || hydrated.empty() || stored == hydrated;
+bool validProviderId(std::string_view value) noexcept {
+  if (value.empty() || value.size() > kMaximumIrProviderIdBytes ||
+      value.front() < 'a' || value.front() > 'z') {
+    return false;
+  }
+  return std::ranges::all_of(value, [](unsigned char character) {
+    return (character >= 'a' && character <= 'z') ||
+           (character >= '0' && character <= '9') || character == '_' ||
+           character == '-';
+  });
 }
 
-void setOmissionDiagnostic(IrUploadCandidateProjection &result) {
+bool sourceAgrees(const IrUploadCandidateSource &source,
+                  std::string_view providerId, std::string_view serverOrigin,
+                  std::string &diagnostic) noexcept {
+  if (source.modernChartResultId <= 0 ||
+      source.result.resultId != source.modernChartResultId ||
+      !result_persistence::validateModernChartResult(source.result,
+                                                     diagnostic)) {
+    if (diagnostic.empty()) {
+      diagnostic = "IR upload modern result ownership is invalid";
+    }
+    return false;
+  }
+
+  const auto expectedSnapshot =
+      captureIrSubmissionSnapshot(source.result, diagnostic);
+  if (!expectedSnapshot || *expectedSnapshot != source.snapshot) {
+    if (diagnostic.empty()) {
+      diagnostic = "IR upload snapshot disagrees with its modern result";
+    }
+    return false;
+  }
+
+  const auto &submission = source.snapshot.submission;
+  if (submission.attemptId != source.result.attemptId ||
+      submission.chartMd5 != source.result.score.chartMd5 ||
+      submission.chartSha256 != source.result.score.chartSha256) {
+    diagnostic = "IR upload snapshot identity disagrees with its modern result";
+    return false;
+  }
+
+  if (source.receipt) {
+    if (!validateIrSubmissionReceipt(*source.receipt, diagnostic) ||
+        source.receipt->providerId != providerId ||
+        source.receipt->serverOrigin != serverOrigin ||
+        source.receipt->replayId != 0 ||
+        source.receipt->modernChartResultId != source.modernChartResultId ||
+        source.receipt->attemptId != source.result.attemptId ||
+        (!source.result.score.chartMd5.empty() &&
+         !source.receipt->chartMd5.empty() &&
+         source.receipt->chartMd5 != source.result.score.chartMd5) ||
+        source.receipt->chartSha256 != source.result.score.chartSha256) {
+      if (diagnostic.empty()) {
+        diagnostic = "IR upload receipt disagrees with its modern result";
+      }
+      return false;
+    }
+  }
+
+  if (source.outbox) {
+    if (!validateIrOutboxEntry(*source.outbox, diagnostic) ||
+        source.outbox->providerId != providerId ||
+        source.outbox->attemptId != source.result.attemptId ||
+        !source.outbox->localResultReady ||
+        (!source.result.score.chartMd5.empty() &&
+         !source.outbox->chartMd5.empty() &&
+         source.outbox->chartMd5 != source.result.score.chartMd5) ||
+        source.outbox->chartSha256 != source.result.score.chartSha256) {
+      if (diagnostic.empty()) {
+        diagnostic = "IR upload outbox row disagrees with its modern result";
+      }
+      return false;
+    }
+  }
+  diagnostic.clear();
+  return true;
+}
+
+template <typename Projection>
+void setOmissionDiagnostic(Projection &result) {
   if (result.omittedRows == 0) {
     return;
   }
   result.diagnostic = sanitizeDiagnostic(
       std::to_string(result.omittedRows) +
-      " replay rows were omitted because they could not be safely prepared.");
+      " modern result rows were omitted because durable IR facts disagreed.");
 }
 
 } // namespace
 
-IrUploadCandidateProjection projectIrUploadCandidates(
-    std::span<const ReplaySummary> replays,
-    std::span<const ChartMetaRecord> charts) noexcept {
-  IrUploadCandidateProjection result;
+bool validateIrUploadCandidateSource(
+    const IrUploadCandidateSource &source, std::string_view providerId,
+    std::string_view serverOrigin, std::string &diagnostic) noexcept {
+  diagnostic.clear();
   try {
-    std::unordered_map<std::string, const ChartMetaRecord *> chartsByPath;
-    std::unordered_set<std::string> ambiguousPaths;
-    chartsByPath.reserve(charts.size());
-    ambiguousPaths.reserve(charts.size());
+    const auto normalizedOrigin = normalizeServerOrigin(serverOrigin);
+    if (!validProviderId(providerId) || !normalizedOrigin ||
+        *normalizedOrigin != serverOrigin) {
+      diagnostic = "IR upload candidate scope is invalid";
+      return false;
+    }
+    return sourceAgrees(source, providerId, serverOrigin, diagnostic);
+  } catch (...) {
+    diagnostic = "IR upload candidate validation failed";
+    return false;
+  }
+}
 
-    for (const ChartMetaRecord &chart : charts) {
-      const std::string path =
-          chart_storage_identity::StoredPathText(chart.meta.BmsPath);
-      if (path.empty()) {
-        continue;
-      }
-      const auto [it, inserted] = chartsByPath.emplace(path, &chart);
-      if (!inserted) {
-        ambiguousPaths.insert(path);
-      }
+IrUploadRecordProjection projectIrUploadRecords(
+    std::span<const IrUploadCandidateSource> sources,
+    std::string_view providerId, std::string_view serverOrigin) noexcept {
+  IrUploadRecordProjection result;
+  try {
+    const auto normalizedOrigin = normalizeServerOrigin(serverOrigin);
+    if (!validProviderId(providerId) || !normalizedOrigin ||
+        *normalizedOrigin != serverOrigin ||
+        sources.size() > kMaximumIrUploadCandidateRows) {
+      result.omittedRows = sources.size();
+      result.diagnostic = "IR upload candidate scope is invalid or oversized.";
+      return result;
     }
 
-    result.candidates.reserve(replays.size());
-    for (const ReplaySummary &replay : replays) {
-      if (replay.id <= 0 || replay.courseReplay || replay.autoPlay ||
-          !replay.chartMeta.has_value()) {
+    std::unordered_map<int, std::size_t> ownerCounts;
+    std::unordered_map<std::string_view, std::size_t> attemptCounts;
+    ownerCounts.reserve(sources.size());
+    attemptCounts.reserve(sources.size());
+    for (const auto &source : sources) {
+      ++ownerCounts[source.modernChartResultId];
+      ++attemptCounts[source.result.attemptId];
+    }
+
+    result.records.reserve(sources.size());
+    for (const auto &source : sources) {
+      std::string diagnostic;
+      if (ownerCounts[source.modernChartResultId] != 1 ||
+          attemptCounts[source.result.attemptId] != 1 ||
+          !validateIrUploadCandidateSource(source, providerId, serverOrigin,
+                                           diagnostic)) {
         ++result.omittedRows;
         continue;
       }
-
-      const bms_parser::ChartMeta &stored = *replay.chartMeta;
-      const std::string path =
-          chart_storage_identity::StoredPathText(stored.BmsPath);
-      if (path.empty() || ambiguousPaths.contains(path)) {
-        ++result.omittedRows;
-        continue;
-      }
-
-      const auto found = chartsByPath.find(path);
-      if (found == chartsByPath.end()) {
-        ++result.omittedRows;
-        continue;
-      }
-
-      const ChartMetaRecord &chart = *found->second;
-      if (!hashesMatchWhenPresent(stored.MD5, chart.meta.MD5) ||
-          !hashesMatchWhenPresent(stored.SHA256, chart.meta.SHA256) ||
-          chart.meta.TotalNotes <= 0 ||
-          chart.meta.TotalNotes > std::numeric_limits<int>::max() / 2) {
-        ++result.omittedRows;
-        continue;
-      }
-
-      ReplaySummary hydrated = replay;
-      hydrated.chartMeta = chart.meta;
-      hydrated.maxScore = chart.meta.TotalNotes * 2;
-      resolveReplayIrRecordState(hydrated);
-      if (hydrated.irRecordState != IrRecordState::Eligible &&
-          hydrated.irRecordState != IrRecordState::Failed) {
-        continue;
-      }
-      const IrRecordState state = hydrated.irRecordState;
-      std::string failureReason;
-      if (state == IrRecordState::Failed) {
-        failureReason =
-            sanitizeDiagnostic(hydrated.requestedIrOutboxDiagnostic);
-      }
-      result.candidates.push_back({.replay = std::move(hydrated),
-                                   .chart = chart,
-                                   .state = state,
-                                   .failureReason = std::move(failureReason)});
+      const IrRecordState state = resolveIrRecordState({
+          .eligible = true,
+          .hasReceipt = source.receipt.has_value(),
+          .outboxState = source.outbox
+                             ? std::optional(source.outbox->state)
+                             : std::nullopt,
+      });
+      result.records.push_back({
+          .modernChartResultId = source.modernChartResultId,
+          .attemptId = source.result.attemptId,
+          .eligible = true,
+          .hasReceipt = source.receipt.has_value(),
+          .outboxState = source.outbox
+                             ? std::optional(source.outbox->state)
+                             : std::nullopt,
+          .failureReason =
+              state == IrRecordState::Failed && source.outbox
+                  ? sanitizeDiagnostic(source.outbox->lastErrorMessage)
+                  : std::string{},
+      });
     }
     setOmissionDiagnostic(result);
   } catch (...) {
-    result.candidates.clear();
-    result.omittedRows = replays.size();
-    result.diagnostic =
-        sanitizeDiagnostic("IR upload candidates are unavailable.");
+    result.records.clear();
+    result.omittedRows = sources.size();
+    result.diagnostic = "IR upload records are unavailable.";
   }
   return result;
 }
 
+IrUploadCandidateProjection projectIrUploadCandidates(
+    std::span<const IrUploadCandidateSource> sources,
+    std::string_view providerId, std::string_view serverOrigin) noexcept {
+  IrUploadCandidateProjection result;
+  try {
+    auto records = projectIrUploadRecords(sources, providerId, serverOrigin);
+    result.omittedRows = records.omittedRows;
+    result.diagnostic = std::move(records.diagnostic);
+
+    std::unordered_map<int, const IrUploadRecord *> recordsByOwner;
+    recordsByOwner.reserve(records.records.size());
+    for (const auto &record : records.records) {
+      recordsByOwner.emplace(record.modernChartResultId, &record);
+    }
+
+    result.candidates.reserve(records.records.size());
+    for (const auto &source : sources) {
+      const auto found = recordsByOwner.find(source.modernChartResultId);
+      if (found == recordsByOwner.end()) {
+        continue;
+      }
+      const IrUploadRecord &record = *found->second;
+      const IrRecordState state = record.resolvedState();
+      if (state != IrRecordState::Eligible && state != IrRecordState::Failed) {
+        continue;
+      }
+      result.candidates.push_back({
+          .modernChartResultId = source.modernChartResultId,
+          .result = source.result,
+          .snapshot = source.snapshot,
+          .state = state,
+          .failureReason = record.failureReason,
+      });
+    }
+  } catch (...) {
+    result.candidates.clear();
+    result.omittedRows = sources.size();
+    result.diagnostic = "IR upload candidates are unavailable.";
+  }
+  return result;
+}
+
+std::optional<IrSubmission>
+submissionForIrUploadCandidate(const IrUploadCandidate &candidate,
+                               std::string &diagnostic) noexcept {
+  diagnostic.clear();
+  try {
+    if (candidate.modernChartResultId <= 0 ||
+        candidate.result.resultId != candidate.modernChartResultId ||
+        !result_persistence::validateModernChartResult(candidate.result,
+                                                       diagnostic)) {
+      if (diagnostic.empty()) {
+        diagnostic = "IR upload candidate result is invalid";
+      }
+      return std::nullopt;
+    }
+    const auto expected =
+        captureIrSubmissionSnapshot(candidate.result, diagnostic);
+    if (!expected || *expected != candidate.snapshot) {
+      if (diagnostic.empty()) {
+        diagnostic = "IR upload candidate snapshot disagrees with its result";
+      }
+      return std::nullopt;
+    }
+    return candidate.snapshot.submission;
+  } catch (...) {
+    diagnostic = "IR upload candidate validation failed";
+    return std::nullopt;
+  }
+}
+
 void intersectIrUploadSelection(
-    std::unordered_set<int> &selectedReplayIds,
+    std::unordered_set<std::string> &selectedAttemptIds,
     std::span<const IrUploadCandidate> candidates) {
-  detail::intersectIrUploadSelectionIndexed(selectedReplayIds, candidates);
+  detail::intersectIrUploadSelectionIndexed(selectedAttemptIds, candidates);
 }
 
 } // namespace ir

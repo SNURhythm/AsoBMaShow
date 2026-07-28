@@ -479,14 +479,14 @@ makeLegacyCourseResultRecord(LegacyCourseResultSummary summary) {
 ResultRecordSummary
 makeModernChartResultRecord(ModernChartResultRecord record,
                             replay::ReplayState replayState,
-                            bool postponedIrSnapshotEligible) {
+                            ir::IrRecordState irState) {
   if (record.result.resultId <= 0 || record.result.attemptId.empty()) {
     throw std::invalid_argument("modern chart result is invalid");
   }
   const auto capabilities = replay::capabilitiesFor({
       .origin = replay::RecordOrigin::ModernChartResult,
       .replayState = replayState,
-      .postponedIrSnapshotEligible = postponedIrSnapshotEligible,
+      .postponedIrSnapshotEligible = irState != ir::IrRecordState::Hidden,
   });
   const auto &result = record.result;
   ResultRecordSummary summary{
@@ -501,8 +501,7 @@ makeModernChartResultRecord(ModernChartResultRecord record,
       .displayedTimeUnixMillis = result.playedAtUnixMillis,
       .displayedTime = formatUnixMillis(result.playedAtUnixMillis),
       .playOption = result.score.provenance.player1.option,
-      .irState = postponedIrSnapshotEligible ? ir::IrRecordState::Eligible
-                                             : ir::IrRecordState::Hidden,
+      .irState = irState,
       .autoPlayReplay = std::nullopt,
       .modern = std::move(record),
       .modernCourse = std::nullopt,

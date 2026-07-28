@@ -3374,7 +3374,7 @@ void ChartViewerScene::showGhostModal() {
       const auto replayLoad =
           replayContext.load(record.result.attemptId, facts);
       auto summary = makeModernChartResultRecord(
-          record, replayLoad.replayState(), false);
+          record, replayLoad.replayState(), ir::IrRecordState::Hidden);
       if (summary.capabilities.practiceGhost) {
         modern.push_back(std::move(summary));
       }
