@@ -286,10 +286,14 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
   std::vector<std::string> calls;
   ChartReplayConsumer consumer({
       .parseBaseChart = [&](const std::filesystem::path &path,
-                            std::atomic_bool &) {
+                            const ReplayChartIdentity &identity,
+                            const ScoreProvenance &savedProvenance,
+                            std::atomic_bool &, std::string &) {
         calls.emplace_back("parse");
-        expect(path == "selected/chart.bms",
-               "consumer parses the selected chart path");
+        expect(path == "selected/chart.bms" &&
+                   identity.sha256 == listed.result.score.chartSha256 &&
+                   savedProvenance == listed.result.score.provenance,
+               "consumer parses the selected chart on its saved random branch");
         return oneNoteChartPointer();
       },
       .loadContext = [&](std::string_view attemptId,
@@ -351,7 +355,9 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
   calls.clear();
   ChartReplayConsumer missing({
       .parseBaseChart = [&](const std::filesystem::path &,
-                            std::atomic_bool &) {
+                            const ReplayChartIdentity &,
+                            const ScoreProvenance &, std::atomic_bool &,
+                            std::string &) {
         calls.emplace_back("parse");
         return oneNoteChartPointer();
       },

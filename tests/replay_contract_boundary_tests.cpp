@@ -453,6 +453,26 @@ void testSharedAssistClearMarkAuthority() {
   }
 }
 
+void testReplayIdentityParsingUsesSavedRandomBranch() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  constexpr std::array<std::string_view, 2> consumers{
+      "src/replay/ChartReplayConsumerRuntime.cpp",
+      "src/replay/CourseReplayConsumerRuntime.cpp",
+  };
+  constexpr std::array<std::string_view, 1> unseededIdentityParse{
+      "parseChart(path, cancelled",
+  };
+  for (std::string_view consumer : consumers) {
+    const auto path = root / consumer;
+    requireToken(path, "savedChartRandomParseSetup",
+                 "saved random-branch identity parse authority");
+    rejectTokens(path, unseededIdentityParse);
+  }
+  requireToken(root / "src/ModernResultRecallBuilder.cpp",
+               "savedChartRandomParseSetup",
+               "saved random-branch result recall authority");
+}
+
 } // namespace
 
 int main() {
@@ -461,6 +481,7 @@ int main() {
   testCodecAndFileBoundary();
   testSharedFormatAuthorities();
   testSharedAssistClearMarkAuthority();
+  testReplayIdentityParsingUsesSavedRandomBranch();
   testModernResultAndSnapshotBoundary();
   testSharedModernResultAuthorities();
   testSharedIrProviderIdentityAuthority();

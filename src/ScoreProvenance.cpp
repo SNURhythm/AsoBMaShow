@@ -796,6 +796,47 @@ uniqueStageForChart(const ScoreProvenance &provenance,
   return matching;
 }
 
+std::optional<SavedChartRandomParseSetup>
+savedChartRandomParseSetup(const ScoreProvenance &provenance,
+                           const bms_parser::ChartMeta &chartMeta,
+                           std::string &diagnostic) noexcept {
+  diagnostic.clear();
+  try {
+    const auto *stage = uniqueStageForChart(provenance, chartMeta);
+    if (stage == nullptr) {
+      diagnostic = "Saved result has no unique chart random branch.";
+      return std::nullopt;
+    }
+    if (stage->chartRandomSeed &&
+        *stage->chartRandomSeed >
+            std::numeric_limits<unsigned int>::max()) {
+      diagnostic = "Saved chart random seed is unsupported.";
+      return std::nullopt;
+    }
+    if (stage->chartRandomPrng &&
+        !bms_parser::Parser::IsSupportedRandomPrng(
+            *stage->chartRandomPrng)) {
+      diagnostic = "Saved chart random PRNG is unsupported.";
+      return std::nullopt;
+    }
+    return SavedChartRandomParseSetup{
+        .randomSeed =
+            stage->chartRandomSeed
+                ? std::optional<unsigned int>(
+                      static_cast<unsigned int>(*stage->chartRandomSeed))
+                : std::nullopt,
+        .randomPrng = stage->chartRandomPrng,
+        .randomValues =
+            stage->chartRandomValues.empty()
+                ? std::nullopt
+                : std::optional(stage->chartRandomValues),
+    };
+  } catch (...) {
+    diagnostic = "Saved chart random branch is invalid.";
+    return std::nullopt;
+  }
+}
+
 } // namespace score_provenance
 
 ScoreProvenance ScoreProvenance::Legacy() {

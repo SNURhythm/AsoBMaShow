@@ -223,11 +223,20 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
         return failure(CourseReplayConsumerState::InvalidRequest,
                        "A selected course chart path is empty.");
       }
-      auto chart = dependencies_.parseBaseChart(completedChartPaths[index],
-                                                cancelled);
+      const auto &savedStage = listedResult.stages[index];
+      const ReplayChartIdentity savedIdentity{
+          .md5 = savedStage.score.chartMd5,
+          .sha256 = savedStage.score.chartSha256,
+          .keyMode = savedStage.keyMode,
+      };
+      auto chart = dependencies_.parseBaseChart(
+          completedChartPaths[index], savedIdentity,
+          savedStage.score.provenance, cancelled, diagnostic);
       if (!chart || cancelled.load()) {
         return failure(CourseReplayConsumerState::ChartUnavailable,
-                       "A selected course chart could not be parsed.");
+                       diagnostic.empty()
+                           ? "A selected course chart could not be parsed."
+                           : std::move(diagnostic));
       }
       const auto expectedLongNoteMode =
           result_persistence::replaySetupLongNoteMode(

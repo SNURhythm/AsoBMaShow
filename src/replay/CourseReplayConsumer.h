@@ -68,7 +68,8 @@ enum class CourseReplayLaunchMode {
 
 struct CourseReplayConsumerDependencies {
   std::function<std::unique_ptr<bms_parser::Chart>(
-      const std::filesystem::path &, std::atomic_bool &)>
+      const std::filesystem::path &, const ReplayChartIdentity &,
+      const ScoreProvenance &, std::atomic_bool &, std::string &)>
       parseBaseChart;
   std::function<CourseReplayContextOutcome(
       std::string_view, const ParsedCourseReplayFacts &)>

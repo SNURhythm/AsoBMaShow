@@ -85,6 +85,38 @@ bool testLocalReplaySetupCapture() {
   return true;
 }
 
+bool testSavedChartRandomBranchAuthority() {
+  bms_parser::ChartMeta identity;
+  identity.MD5 = std::string(32, 'b');
+  identity.SHA256 = std::string(64, 'a');
+  ScoreProvenance provenance;
+  provenance.stages = {{.chartMd5 = identity.MD5,
+                        .chartSha256 = identity.SHA256,
+                        .chartRandomSeed = 42,
+                        .chartRandomPrng =
+                            bms_parser::Parser::RandomPrngId,
+                        .chartRandomValues = {3, 1, 4}}};
+
+  std::string diagnostic;
+  const auto setup = score_provenance::savedChartRandomParseSetup(
+      provenance, identity, diagnostic);
+  if (!expect(setup.has_value() && diagnostic.empty() &&
+                  setup->randomSeed == 42 &&
+                  setup->randomPrng == bms_parser::Parser::RandomPrngId &&
+                  setup->randomValues ==
+                      std::optional<std::vector<int>>({3, 1, 4}),
+              "saved result provenance restores the authored random branch")) {
+    return false;
+  }
+
+  provenance.stages.push_back(provenance.stages.front());
+  return expect(!score_provenance::savedChartRandomParseSetup(
+                     provenance, identity, diagnostic)
+                     .has_value() &&
+                    !diagnostic.empty(),
+                "ambiguous random-branch provenance fails closed");
+}
+
 bool testCompletionPersistenceRoutes() {
   return expect(
              gameplay_startup::completedAttemptPersistenceRoute(true, false) ==
@@ -189,7 +221,9 @@ int main() {
     return 1;
   }
 
-  if (!testLocalReplaySetupCapture() || !testCompletionPersistenceRoutes() ||
+  if (!testLocalReplaySetupCapture() ||
+      !testSavedChartRandomBranchAuthority() ||
+      !testCompletionPersistenceRoutes() ||
       !testCourseRetrySameUsesValidatedSetupWithoutReplayInput()) {
     return 1;
   }

@@ -209,9 +209,16 @@ struct ConsumerHarness {
   CourseReplayConsumer makeConsumer() {
     return CourseReplayConsumer({
         .parseBaseChart = [this](const std::filesystem::path &path,
-                                 std::atomic_bool &) {
+                                 const ReplayChartIdentity &identity,
+                                 const ScoreProvenance &provenance,
+                                 std::atomic_bool &, std::string &) {
           const std::size_t index = path.filename() == "stage-0.bms" ? 0 : 1;
           calls.push_back("parse-" + std::to_string(index));
+          expect(identity.sha256 ==
+                     listed.result.stages[index].score.chartSha256 &&
+                     provenance ==
+                         listed.result.stages[index].score.provenance,
+                 "consumer parses each stage on its saved random branch");
           return chartFor(listed.result.stages[index]);
         },
         .loadContext = [this](std::string_view attemptId,

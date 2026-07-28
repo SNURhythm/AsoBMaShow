@@ -15,9 +15,21 @@ ChartReplayConsumer makeRuntimeChartReplayConsumer(
       repository, limits);
   return ChartReplayConsumer({
       .parseBaseChart = [](const std::filesystem::path &path,
-                           std::atomic_bool &cancelled) {
-        return play_options::parseChart(path, cancelled,
-                                        "modern replay identity");
+                           const ReplayChartIdentity &identity,
+                           const ScoreProvenance &provenance,
+                           std::atomic_bool &cancelled,
+                           std::string &diagnostic) {
+        bms_parser::ChartMeta savedChart;
+        savedChart.MD5 = identity.md5;
+        savedChart.SHA256 = identity.sha256;
+        const auto setup = score_provenance::savedChartRandomParseSetup(
+            provenance, savedChart, diagnostic);
+        if (!setup) {
+          return std::unique_ptr<bms_parser::Chart>{};
+        }
+        return play_options::parseChart(
+            path, setup->randomSeed, setup->randomPrng, setup->randomValues,
+            cancelled, "modern replay identity");
       },
       .loadContext =
           [context](std::string_view attemptId,

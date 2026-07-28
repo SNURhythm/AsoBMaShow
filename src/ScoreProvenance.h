@@ -108,12 +108,23 @@ struct ScoreProvenance {
 
 namespace score_provenance {
 
+struct SavedChartRandomParseSetup {
+  std::optional<unsigned int> randomSeed;
+  std::optional<std::string> randomPrng;
+  std::optional<std::vector<int>> randomValues;
+};
+
 [[nodiscard]] bool stageMatchesChart(const ScoreStageProvenance &stage,
                                      const bms_parser::ChartMeta &chartMeta);
 
 [[nodiscard]] const ScoreStageProvenance *
 uniqueStageForChart(const ScoreProvenance &provenance,
                     const bms_parser::ChartMeta &chartMeta);
+
+[[nodiscard]] std::optional<SavedChartRandomParseSetup>
+savedChartRandomParseSetup(const ScoreProvenance &provenance,
+                           const bms_parser::ChartMeta &chartMeta,
+                           std::string &diagnostic) noexcept;
 
 } // namespace score_provenance
 

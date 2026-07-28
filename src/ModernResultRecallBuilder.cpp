@@ -6,7 +6,6 @@
 #include "repositories/ChartStorageIdentity.h"
 
 #include <exception>
-#include <limits>
 #include <utility>
 
 namespace result_recall {
@@ -50,27 +49,17 @@ savedChartSetup(const result_persistence::ChartScoreWrite &score,
     diagnostic = "saved chart setup disagrees with result facts";
     return std::nullopt;
   }
-  if (stage->chartRandomSeed &&
-      *stage->chartRandomSeed >
-          std::numeric_limits<unsigned int>::max()) {
-    diagnostic = "saved chart setup has an unsupported random seed";
-    return std::nullopt;
-  }
-  if (stage->chartRandomPrng &&
-      !bms_parser::Parser::IsSupportedRandomPrng(*stage->chartRandomPrng)) {
-    diagnostic = "saved chart setup has an unsupported random PRNG";
+  const auto randomSetup = score_provenance::savedChartRandomParseSetup(
+      score.provenance, savedIdentity, diagnostic);
+  if (!randomSetup) {
     return std::nullopt;
   }
 
   return SavedChartSetup{
       .longNoteMode = *replayLongNoteMode,
-      .randomSeed =
-          stage->chartRandomSeed
-              ? std::optional<unsigned int>(
-                    static_cast<unsigned int>(*stage->chartRandomSeed))
-              : std::nullopt,
-      .randomPrng = stage->chartRandomPrng,
-      .randomValues = stage->chartRandomValues,
+      .randomSeed = randomSetup->randomSeed,
+      .randomPrng = randomSetup->randomPrng,
+      .randomValues = randomSetup->randomValues.value_or(std::vector<int>{}),
       .expectedTotalNotes = stage->totalNotes,
       .provenanceBacked = true,
   };

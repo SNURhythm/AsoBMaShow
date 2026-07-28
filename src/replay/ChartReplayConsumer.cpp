@@ -44,11 +44,19 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
                          : std::move(diagnostic));
     }
 
-    auto baseChart =
-        dependencies_.parseBaseChart(selectedChartPath, cancelled);
+    const ReplayChartIdentity savedIdentity{
+        .md5 = listedRecord.result.score.chartMd5,
+        .sha256 = listedRecord.result.score.chartSha256,
+        .keyMode = listedRecord.result.keyMode,
+    };
+    auto baseChart = dependencies_.parseBaseChart(
+        selectedChartPath, savedIdentity,
+        listedRecord.result.score.provenance, cancelled, diagnostic);
     if (baseChart == nullptr || cancelled.load()) {
       return failure(ChartReplayConsumerState::ChartUnavailable,
-                     "The selected chart could not be parsed.");
+                     diagnostic.empty()
+                         ? "The selected chart could not be parsed."
+                         : std::move(diagnostic));
     }
 
     const auto expectedLongNoteMode =
@@ -91,11 +99,6 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
         .md5 = preparedChart->Meta.MD5,
         .sha256 = preparedChart->Meta.SHA256,
         .keyMode = preparedChart->Meta.KeyMode,
-    };
-    const ReplayChartIdentity savedIdentity{
-        .md5 = verified.result.score.chartMd5,
-        .sha256 = verified.result.score.chartSha256,
-        .keyMode = verified.result.keyMode,
     };
     const int preparedLongNoteMode =
         long_note_mode::normalizeValue(preparedChart->Meta.LnMode);
