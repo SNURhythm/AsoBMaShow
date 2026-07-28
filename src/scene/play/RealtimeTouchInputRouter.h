@@ -44,12 +44,15 @@ struct RealtimeTouchSample {
   float normalizedY = 0.0F;
   std::int64_t steadyTimestampMicros = 0;
   bool excludedFromGameplay = false;
+
+  bool operator==(const RealtimeTouchSample &) const = default;
 };
 
 struct RealtimeTouchInputSink {
   void *context = nullptr;
   bool (*emit)(void *, const RealtimeGameplayInput &) = nullptr;
   bool (*scratchLongNoteHeld)(void *, int lane) = nullptr;
+  bool (*cancelTouchLifecycle)(void *, const RealtimeTouchSample &) = nullptr;
 };
 
 class RealtimeTouchInputRouter {

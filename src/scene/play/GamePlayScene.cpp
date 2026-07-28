@@ -787,6 +787,16 @@ struct GamePlayScene::RealtimeGameplaySession {
            snapshot->longNoteHoldingByLane[static_cast<std::size_t>(lane)];
   }
 
+  static bool cancelTouchLifecycle(
+      void *context, const gameplay::RealtimeTouchSample &sample) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (session.auxiliaryTouches.tryPush(sample)) {
+      return true;
+    }
+    session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
+    return false;
+  }
+
   static bool
   emitPhysicalInput(void *context,
                     const input::RealtimePhysicalInputTransition &transition) {
@@ -1125,7 +1135,9 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
             .context = session.get(),
             .emit = &RealtimeGameplaySession::emitTouchInput,
             .scratchLongNoteHeld =
-                &RealtimeGameplaySession::scratchLongNoteHeld});
+                &RealtimeGameplaySession::scratchLongNoteHeld,
+            .cancelTouchLifecycle =
+                &RealtimeGameplaySession::cancelTouchLifecycle});
   }
 #endif
   if (!options.autoPlay) {
@@ -1243,12 +1255,13 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
     IOSSetRawTouchEventSink(&RealtimeGameplaySession::rawTouchSink, &session);
     return;
   }
+  session.acceptingTouch.store(false, std::memory_order_release);
   if (session.touchRouter != nullptr &&
       !session.touchRouter->setGameplayEnabled(false, timestampMicros)) {
     SDL_LogError(SDL_LOG_CATEGORY_INPUT,
                  "Realtime touch release failed while closing ingress");
   }
-  session.acceptingTouch.store(false, std::memory_order_release);
+  drainRealtimeTouchSamples();
   IOSSetRawTouchEventSink(nullptr, nullptr);
   session.clearUiOwnedFingers();
 #else

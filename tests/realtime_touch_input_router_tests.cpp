@@ -62,6 +62,7 @@ void testTouchPresentationUsesUiNormalizedCoordinates() {
 
 struct InputCapture {
   std::vector<gameplay::RealtimeGameplayInput> events;
+  std::vector<gameplay::RealtimeTouchSample> cancelledTouches;
   bool scratchLongNoteHeld = false;
 
   static bool emit(void *context,
@@ -72,6 +73,12 @@ struct InputCapture {
 
   static bool longScratchNoteHeld(void *context, int) {
     return static_cast<InputCapture *>(context)->scratchLongNoteHeld;
+  }
+
+  static bool cancelTouchLifecycle(
+      void *context, const gameplay::RealtimeTouchSample &sample) {
+    static_cast<InputCapture *>(context)->cancelledTouches.push_back(sample);
+    return true;
   }
 };
 
@@ -331,13 +338,22 @@ void testLayoutReplacementCancelsOldLaneBeforeNewMapping() {
 void testPauseReleasesHeldFingerBeforeDisablingGameplay() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
-      10, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+      10, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
   require(router.consume({.fingerId = 23,
                           .phase = gameplay::RealtimeTouchPhase::Down,
                           .normalizedX = 0.31F,
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 110}),
           "pause fixture presses a lane");
+  require(router.consume({.fingerId = 23,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.35F,
+                          .normalizedY = 0.45F,
+                          .steadyTimestampMicros = 112}),
+          "pause fixture tracks the finger's latest presentation point");
   require(router.setGameplayEnabled(false, 115),
           "closing the touch gate releases every active finger");
   require(capture.events.size() == 2 &&
@@ -345,6 +361,15 @@ void testPauseReleasesHeldFingerBeforeDisablingGameplay() {
                   gameplay::RealtimeGameplayInputType::Release &&
               capture.events.back().steadyTimestampMicros == 115,
           "pause publishes the release before touch gameplay is disabled");
+  require(capture.cancelledTouches ==
+              std::vector<gameplay::RealtimeTouchSample>{{
+                  .fingerId = 23,
+                  .phase = gameplay::RealtimeTouchPhase::Cancel,
+                  .normalizedX = 0.35F,
+                  .normalizedY = 0.45F,
+                  .steadyTimestampMicros = 115,
+              }},
+          "pause closes the recorded touch lifecycle before detaching input");
   require(router.setGameplayEnabled(true, 116),
           "resuming reopens touch gameplay");
   require(router.consume({.fingerId = 23,

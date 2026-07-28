@@ -218,6 +218,8 @@ bool RealtimeTouchInputRouter::consume(
       finger->lastY = sample.normalizedY;
       return true;
     }
+    finger->lastX = sample.normalizedX;
+    finger->lastY = sample.normalizedY;
     if (sample.excludedFromGameplay) {
       finger->excluded = true;
       return true;
@@ -247,24 +249,40 @@ bool RealtimeTouchInputRouter::consume(
     }
     finger->cancelDeadlineMicros = 0;
     if (finger->excluded) {
+      finger->lastX = sample.normalizedX;
+      finger->lastY = sample.normalizedY;
       return true;
     }
     if (sample.excludedFromGameplay) {
+      finger->lastX = sample.normalizedX;
+      finger->lastY = sample.normalizedY;
       const bool released =
           releaseLane(*finger, sample.steadyTimestampMicros);
       finger->excluded = true;
       return released;
     }
     if (!layout_.dragMode) {
-      return !finger->scratch || handleScratchMove(*finger, sample);
+      if (finger->scratch) {
+        return handleScratchMove(*finger, sample);
+      }
+      finger->lastX = sample.normalizedX;
+      finger->lastY = sample.normalizedY;
+      return true;
     }
     const auto lane = laneIndexAt(sample.normalizedX, sample.normalizedY, true);
     if (!lane.has_value()) {
+      finger->lastX = sample.normalizedX;
+      finger->lastY = sample.normalizedY;
       return releaseLane(*finger, sample.steadyTimestampMicros);
     }
     const int nextLane = layout_.lanes[*lane];
     if (finger->lane == nextLane) {
-      return !finger->scratch || handleScratchMove(*finger, sample);
+      if (finger->scratch) {
+        return handleScratchMove(*finger, sample);
+      }
+      finger->lastX = sample.normalizedX;
+      finger->lastY = sample.normalizedY;
+      return true;
     }
     if (!releaseLane(*finger, sample.steadyTimestampMicros)) {
       return false;
@@ -288,6 +306,8 @@ bool RealtimeTouchInputRouter::consume(
     if (finger == nullptr) {
       return true;
     }
+    finger->lastX = sample.normalizedX;
+    finger->lastY = sample.normalizedY;
     finger->cancelDeadlineMicros =
         sample.steadyTimestampMicros >
                 std::numeric_limits<std::int64_t>::max() -
@@ -336,6 +356,17 @@ bool RealtimeTouchInputRouter::cancelAll(
   for (auto &finger : fingers_) {
     if (!finger.active) {
       continue;
+    }
+    if (sink_.cancelTouchLifecycle != nullptr) {
+      success = sink_.cancelTouchLifecycle(
+                    sink_.context,
+                    {.fingerId = finger.fingerId,
+                     .phase = RealtimeTouchPhase::Cancel,
+                     .normalizedX = finger.lastX,
+                     .normalizedY = finger.lastY,
+                     .steadyTimestampMicros = steadyTimestampMicros,
+                     .excludedFromGameplay = finger.excluded}) &&
+                success;
     }
     success = releaseLane(finger, steadyTimestampMicros) && success;
     finger.active = false;
