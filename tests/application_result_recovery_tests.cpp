@@ -10,11 +10,7 @@
 namespace {
 
 using application_result_recovery::Dependencies;
-using result_persistence::RecoverySummary;
-
-constexpr std::string_view kRecoveryMessage =
-    "Some previously completed results are still waiting to be saved. They "
-    "were kept safely and will be retried later.";
+using replay::ChartReplayRecoverySummary;
 
 void testCleanRecoveryRunsRuntimeWithoutWarning() {
   std::vector<std::string> events;
@@ -28,10 +24,10 @@ void testCleanRecoveryRunsRuntimeWithoutWarning() {
           [&] {
             ++recoverCalls;
             events.emplace_back("recover");
-            return RecoverySummary{};
+            return ChartReplayRecoverySummary{};
           },
       .reportWarning =
-          [&](const RecoverySummary &) {
+          [&](const ChartReplayRecoverySummary &) {
             ++warningCalls;
             events.emplace_back("warning");
           },
@@ -61,24 +57,23 @@ void testPendingRecoveryWarnsBeforeRuntime() {
   int warningCalls = 0;
   int serviceStartCalls = 0;
   int runtimeCalls = 0;
-  RecoverySummary reported;
+  ChartReplayRecoverySummary reported;
 
   application_result_recovery::execute(Dependencies{
       .recover =
           [&] {
             ++recoverCalls;
             events.emplace_back("recover");
-            return RecoverySummary{
+            return ChartReplayRecoverySummary{
                 .attempted = 3,
                 .saved = 2,
                 .pending = 1,
                 .conflicts = 0,
-                .userMessage = std::string(kRecoveryMessage),
                 .diagnostic = "attempt-private: /private/profile/replays.db",
             };
           },
       .reportWarning =
-          [&](const RecoverySummary &summary) {
+          [&](const ChartReplayRecoverySummary &summary) {
             ++warningCalls;
             events.emplace_back("warning");
             reported = summary;
@@ -100,7 +95,6 @@ void testPendingRecoveryWarnsBeforeRuntime() {
   assert(serviceStartCalls == 1);
   assert(runtimeCalls == 1);
   assert(reported.pending == 1);
-  assert(reported.userMessage == kRecoveryMessage);
   assert(events == std::vector<std::string>(
                        {"recover", "warning", "services", "runtime"}));
 }
@@ -111,24 +105,23 @@ void testConflictRecoveryWarnsBeforeRuntime() {
   int warningCalls = 0;
   int serviceStartCalls = 0;
   int runtimeCalls = 0;
-  RecoverySummary reported;
+  ChartReplayRecoverySummary reported;
 
   application_result_recovery::execute(Dependencies{
       .recover =
           [&] {
             ++recoverCalls;
             events.emplace_back("recover");
-            return RecoverySummary{
+            return ChartReplayRecoverySummary{
                 .attempted = 2,
                 .saved = 0,
                 .pending = 0,
                 .conflicts = 2,
-                .userMessage = std::string(kRecoveryMessage),
                 .diagnostic = "integrity conflict",
             };
           },
       .reportWarning =
-          [&](const RecoverySummary &summary) {
+          [&](const ChartReplayRecoverySummary &summary) {
             ++warningCalls;
             events.emplace_back("warning");
             reported = summary;
@@ -150,7 +143,6 @@ void testConflictRecoveryWarnsBeforeRuntime() {
   assert(serviceStartCalls == 1);
   assert(runtimeCalls == 1);
   assert(reported.conflicts == 2);
-  assert(reported.userMessage == kRecoveryMessage);
   assert(events == std::vector<std::string>(
                        {"recover", "warning", "services", "runtime"}));
 }
@@ -161,10 +153,12 @@ void testIrStartupFailureDoesNotBlockReadyRuntime() {
       .recover =
           [&] {
             events.emplace_back("recover");
-            return RecoverySummary{};
+            return ChartReplayRecoverySummary{};
           },
       .reportWarning =
-          [&](const RecoverySummary &) { events.emplace_back("warning"); },
+          [&](const ChartReplayRecoverySummary &) {
+            events.emplace_back("warning");
+          },
       .startProfileServices =
           [&] {
             events.emplace_back("services");

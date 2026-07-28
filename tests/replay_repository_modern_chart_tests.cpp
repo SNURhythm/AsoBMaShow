@@ -161,7 +161,7 @@ void testSchemaReservationAtomicStageAndExactRetry() {
   assert(repository.EnsureSchema());
 
   auto database = openDatabase(databasePath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 13);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
   for (const std::string_view table :
        {"modern_chart_results", "modern_replay_files",
         "modern_replay_file_reservations", "modern_replay_stem_sequences",
@@ -173,6 +173,12 @@ void testSchemaReservationAtomicStageAndExactRetry() {
                       "modern_chart_result_id"));
   assert(columnExists(database.get(), "modern_replay_files",
                       "user_deleted"));
+  for (const std::string_view table :
+       {"replays", "replay_events", "replay_touch_samples",
+        "replay_lane_cover_events", "course_replays",
+        "course_replay_stages"}) {
+    assert(!tableExists(database.get(), table));
+  }
 
   const auto completed = result(1);
   const auto savedSnapshot = snapshot(completed);
@@ -223,9 +229,10 @@ void testSchemaReservationAtomicStageAndExactRetry() {
       queryInt(database.get(),
                "SELECT COUNT(*) FROM modern_replay_file_reservations") == 0);
   for (const std::string_view table :
-       {"replay_events", "replay_touch_samples", "replay_lane_cover_events"}) {
-    assert(queryInt(database.get(),
-                    "SELECT COUNT(*) FROM " + std::string(table)) == 0);
+       {"replays", "replay_events", "replay_touch_samples",
+        "replay_lane_cover_events", "course_replays",
+        "course_replay_stages"}) {
+    assert(!tableExists(database.get(), table));
   }
 
   const auto loaded =
@@ -412,7 +419,7 @@ void testRollbackAndReplayOptionality() {
   assert(
       repository.LoadModernIrSubmissionSnapshot(resultOnly.attemptId).status ==
       ModernIrSnapshotReadStatus::NotFound);
-  assert(queryInt(database.get(), "SELECT COUNT(*) FROM replay_events") == 0);
+  assert(!tableExists(database.get(), "replay_events"));
 }
 
 void testReservationReleaseAndModernPendingLifecycle() {

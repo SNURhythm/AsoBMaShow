@@ -96,6 +96,14 @@ void testLiveCourseUsesOneModernResultFirstRoute() {
                                    "                                         "
                                    "LegacyCourse"),
           "live course gameplay still enters the legacy result route");
+  const std::string resultSource = read(resultScene);
+  require(!resultSource.contains("saveCourseReplay") &&
+              !resultSource.contains("SaveCourseReplay("),
+          "final course result still has a legacy replay fallback");
+  const std::string repository =
+      read(root / "src/repositories/ReplayRepository.h");
+  require(!repository.contains("SaveCourseReplay("),
+          "legacy course persistence API is still public");
 }
 
 void testModernCourseRecordsUseResultAndVerifiedReplayAuthorities() {

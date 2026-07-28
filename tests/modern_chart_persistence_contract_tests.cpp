@@ -55,10 +55,39 @@ void testChartRuntimeUsesModernPersistenceBoundary() {
                "captureIrSubmissionSnapshot");
 }
 
+void testLegacyChartPersistenceSurfaceIsGone() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  const std::string context = read(root / "src/context.h");
+  const std::string repository =
+      read(root / "src/repositories/ReplayRepository.h");
+  const std::string records =
+      read(root / "src/repositories/ReplayRepositoryRecords.cpp");
+  const std::string resultScene = read(root / "src/scene/ResultScene.cpp");
+
+  require(!context.contains("resultPersistence"),
+          "application context still owns the legacy persistence coordinator");
+  require(!repository.contains("SaveReplay(") &&
+              !repository.contains("StageChartResult(") &&
+              !repository.contains("LoadPendingChartScore(") &&
+              !repository.contains("ListPendingChartScores(") &&
+              !repository.contains("AcknowledgePendingChartScoreAndActivateIr(") &&
+              !repository.contains("RecordPendingChartScoreRecoveryAttempt("),
+          "legacy chart persistence API is still public");
+  require(!records.contains("INSERT INTO replays") &&
+              !records.contains("INSERT INTO replay_events") &&
+              !records.contains("INSERT INTO replay_touch_samples") &&
+              !records.contains("INSERT INTO replay_lane_cover_events") &&
+              !records.contains("pending_chart_score_writes"),
+          "legacy chart row or pending-score SQL is still compiled");
+  require(!resultScene.contains("context.resultPersistence"),
+          "ResultScene still retries through legacy chart persistence");
+}
+
 } // namespace
 
 int main() {
   testAdditiveModernChartSchemaBoundary();
   testChartRuntimeUsesModernPersistenceBoundary();
+  testLegacyChartPersistenceSurfaceIsGone();
   return 0;
 }

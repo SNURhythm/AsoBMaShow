@@ -59,6 +59,25 @@ int queryInt(const std::filesystem::path &databasePath,
   return sqlite3_column_int(statement.get(), 0);
 }
 
+bool tableExists(const std::filesystem::path &databasePath,
+                 std::string_view table) {
+  sqlite3 *raw = nullptr;
+  expect(sqlite3_open(databasePath.string().c_str(), &raw) == SQLITE_OK,
+         "test database opens for schema inspection");
+  SqliteConnectionHandle database(raw);
+  SqliteStatementHandle statement;
+  expect(prepareSqliteStatement(
+             database.get(),
+             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+             statement) == SQLITE_OK,
+         "test schema query prepares");
+  expect(sqlite3_bind_text(statement.get(), 1, table.data(),
+                           static_cast<int>(table.size()),
+                           SQLITE_TRANSIENT) == SQLITE_OK,
+         "test schema query binds");
+  return sqlite3_step(statement.get()) == SQLITE_ROW;
+}
+
 void execute(const std::filesystem::path &databasePath,
              const std::string &query) {
   sqlite3 *raw = nullptr;
@@ -458,11 +477,11 @@ void testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows() {
   }
 
   for (const std::string_view table :
-       {"replay_events", "replay_touch_samples", "replay_lane_cover_events",
-                                       "course_replay_stages"}) {
-    expect(queryInt(databasePath,
-                    "SELECT COUNT(*) FROM " + std::string(table)) == 0,
-           "modern course persistence writes no legacy raw rows");
+       {"replays", "replay_events", "replay_touch_samples",
+        "replay_lane_cover_events", "course_replays",
+        "course_replay_stages"}) {
+    expect(!tableExists(databasePath, table),
+           "modern course persistence leaves no legacy raw table");
   }
   const auto retried = persistence.persist(value);
   expect(retried.state == CourseReplayPersistenceState::SavedWithReplay &&
@@ -581,11 +600,11 @@ void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
                       "' AND modern_result_id > 0") == 1,
          "course score row retains exact attempt/result ownership");
   for (const std::string_view table :
-       {"replay_events", "replay_touch_samples", "replay_lane_cover_events",
-                                       "course_replay_stages"}) {
-    expect(queryInt(replayPath, "SELECT COUNT(*) FROM " + std::string(table)) ==
-               0,
-           "result-first course persistence writes no legacy raw rows");
+       {"replays", "replay_events", "replay_touch_samples",
+        "replay_lane_cover_events", "course_replays",
+        "course_replay_stages"}) {
+    expect(!tableExists(replayPath, table),
+           "result-first course persistence leaves no legacy raw table");
   }
 
   const auto retried = persistence.persist(partial);

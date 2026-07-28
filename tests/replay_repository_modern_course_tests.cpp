@@ -177,11 +177,17 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
   ReplayRepository repository(databasePath);
   assert(repository.EnsureSchema());
   auto database = openDatabase(databasePath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 13);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
   for (const std::string_view table : {"modern_course_results",
                                        "modern_course_stages",
                                        "modern_course_entries"}) {
     assert(tableExists(database.get(), table));
+  }
+  for (const std::string_view table :
+       {"replays", "replay_events", "replay_touch_samples",
+        "replay_lane_cover_events", "course_replays",
+        "course_replay_stages"}) {
+    assert(!tableExists(database.get(), table));
   }
 
   const auto completed = result(1);
@@ -201,11 +207,11 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
              1 &&
          queryInt(database.get(),
                   "SELECT COUNT(*) FROM modern_replay_file_reservations") == 0);
-  for (const std::string_view table : {"replay_events", "replay_touch_samples",
-                                       "replay_lane_cover_events",
-                                       "course_replay_stages"}) {
-    assert(queryInt(database.get(),
-                    "SELECT COUNT(*) FROM " + std::string(table)) == 0);
+  for (const std::string_view table :
+       {"replays", "replay_events", "replay_touch_samples",
+        "replay_lane_cover_events", "course_replays",
+        "course_replay_stages"}) {
+    assert(!tableExists(database.get(), table));
   }
 
   const auto loaded =
