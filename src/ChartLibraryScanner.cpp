@@ -3,6 +3,7 @@
 #include "ArchiveFile.h"
 #include "BmsChartFile.h"
 #include "BmsMetadataText.h"
+#include "CanonicalDigest.h"
 #include "ThreadCompat.h"
 #include "Utils.h"
 #include "path.h"
@@ -93,19 +94,12 @@ bool stopRequested(const std::stop_token *stopToken) {
   return stopToken != nullptr && stopToken->stop_requested();
 }
 
-bool hashLooksComplete(const std::string &value, size_t expectedLength) {
-  if (value.size() != expectedLength) {
-    return false;
-  }
-  return std::all_of(value.begin(), value.end(),
-                     [](unsigned char ch) { return std::isxdigit(ch) != 0; });
-}
-
 bool parsedChartMetaHasStableIdentity(const bms_parser::ChartMeta &meta) {
   const std::string md5 = normalizedHash(meta.MD5);
   const std::string sha256 = normalizedHash(meta.SHA256);
-  return !meta.BmsPath.empty() && hashLooksComplete(md5, 32) &&
-         hashLooksComplete(sha256, 64);
+  return !meta.BmsPath.empty() &&
+         canonical_digest::isCanonicalLowerHex(md5, 32) &&
+         canonical_digest::isCanonicalLowerHex(sha256, 64);
 }
 
 bool parsedChartMetaLooksInsertable(const bms_parser::ChartMeta &meta) {

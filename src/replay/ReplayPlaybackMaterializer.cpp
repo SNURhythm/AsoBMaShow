@@ -3,6 +3,7 @@
 
 #include "../AssistOptionUtils.h"
 #include "../ReplayData.h"
+#include "../ResultContracts.h"
 #include "../bms_parser.hpp"
 #include "../scene/play/GameplayCandidateSelection.h"
 #include "../scene/play/GameplayDefinition.h"
@@ -11,7 +12,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <utility>
 
 namespace replay {
@@ -185,8 +185,9 @@ ReplayPlaybackMaterializer::materializeForConsumers(
 
   const auto definition =
       gameplay::buildGameplayDefinition(chart, setup.longNoteMode);
-  if (definition.metadata().totalNotes <= 0 ||
-      definition.metadata().totalNotes > std::numeric_limits<int>::max() / 2) {
+  const auto maximumScore = result_contract::maximumScoreForNotes(
+      definition.metadata().totalNotes);
+  if (definition.metadata().totalNotes <= 0 || !maximumScore) {
     return {.state = ReplayPlaybackMaterializationState::JudgingFailed,
             .diagnostic = "Replay chart note count is invalid."};
   }
@@ -271,7 +272,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     const auto &state = simulation.scoreState();
     result_persistence::ModernChartResult judged = savedResult;
     judged.score.score = state.getScore();
-    judged.score.maxScore = definition.metadata().totalNotes * 2;
+    judged.score.maxScore = *maximumScore;
     judged.score.maxCombo = state.maxCombo;
     judged.score.comboBreak = state.comboBreak;
     judged.score.pGreat = judgeCount(state, PGreat);

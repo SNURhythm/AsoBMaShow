@@ -6,6 +6,7 @@
 #include "../ChartPlaybackDuration.h"
 #include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
+#include "../ResultContracts.h"
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayGhostUtils.h"
 #include "../replay/ChartReplayConsumer.h"
@@ -155,7 +156,9 @@ ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
   summary.initialGaugeType = replay.initialGaugeType;
   summary.gaugeAutoShift = replay.gaugeAutoShift;
   summary.finalScore = replay.finalScore;
-  summary.maxScore = std::max(0, replay.chartMeta.TotalNotes) * 2;
+  summary.maxScore = result_contract::maximumScoreForNotes(
+                         replay.chartMeta.TotalNotes)
+                         .value_or(0);
   summary.maxCombo = replay.maxCombo;
   summary.finalGauge = replay.finalGauge;
   summary.clearType = replay.clearType;

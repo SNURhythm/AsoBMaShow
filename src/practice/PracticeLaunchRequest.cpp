@@ -1,5 +1,6 @@
 #include "PracticeLaunchRequest.h"
 
+#include "../CanonicalDigest.h"
 #include "../Uuid.h"
 
 #include <algorithm>
@@ -8,13 +9,6 @@
 
 namespace practice {
 namespace {
-
-bool isSha256(std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
-}
 
 bool isKnownSource(LaunchSource source) {
   switch (source) {
@@ -32,6 +26,11 @@ std::string normalizedSha256(std::string value) {
     return static_cast<char>(std::tolower(character));
   });
   return value;
+}
+
+bool isSha256(std::string_view value) {
+  return canonical_digest::isCanonicalLowerHex(
+      normalizedSha256(std::string(value)), 64);
 }
 
 } // namespace

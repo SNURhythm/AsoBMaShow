@@ -136,6 +136,110 @@ void testSharedModernResultAuthorities() {
   requireToken(root / "src/replay/ReplaySetup.cpp",
                "result_contract::compareChartIdentity",
                "replay identity agreement authority");
+  requireToken(root / "src/ir/IrRankingModels.cpp",
+               "asobmshow::bms_metadata::normalizedHash",
+               "chart hash normalization authority");
+  constexpr std::array<std::string_view, 1> duplicateHashNormalization{
+      "std::string normalizedHash"};
+  rejectTokens(root / "src/ir/IrRankingModels.cpp",
+               duplicateHashNormalization);
+
+  constexpr std::array<std::string_view, 24> digestConsumers{
+      "src/ChartLibraryScanner.cpp",
+      "src/CourseIdentity.cpp",
+      "src/ResultPersistenceModel.cpp",
+      "src/ScoreProvenance.cpp",
+      "src/bms_search/ArchiveDecision.cpp",
+      "src/bms_search/ArchiveSupport.cpp",
+      "src/bms_search/DownloadedArchiveWorkflow.cpp",
+      "src/repositories/ReplayRepositoryIrRemoteScores.cpp",
+      "src/repositories/ReplayRepositoryLegacyMigration.cpp",
+      "src/ir/IrReceiptModels.cpp",
+      "src/ir/IrRemoteScoreModels.cpp",
+      "src/ir/IrRankingModels.cpp",
+      "src/ir/IrRankingService.cpp",
+      "src/ir/IrOutboxModels.cpp",
+      "src/ir/IrScoreReconciliation.cpp",
+      "src/ir/tachi/TachiBatchManual.cpp",
+      "src/ir/tachi/BokutachiCacheStore.cpp",
+      "src/ir/tachi/TachiDriver.cpp",
+      "src/ir/tachi/TachiUserScoreParser.cpp",
+      "src/ir/IrRankingModal.cpp",
+      "src/practice/PracticeConfiguration.cpp",
+      "src/practice/PracticeLaunchRequest.cpp",
+      "src/practice/PracticePresetStore.cpp",
+      "src/scene/ResultScene.h",
+  };
+  for (const std::string_view consumer : digestConsumers) {
+    const auto path = root / consumer;
+    requireToken(path, "canonical_digest::isCanonicalLowerHex",
+                 "canonical chart digest authority");
+    constexpr std::array<std::string_view, 4> duplicateDigestAuthority{
+        "bool isLowerHexDigest", "bool lowerHex", "bool isHexDigest",
+        "bool validSha256("};
+    rejectTokens(path, duplicateDigestAuthority);
+  }
+}
+
+void testSharedIrProviderIdentityAuthority() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  constexpr std::array<std::string_view, 11> consumers{
+      "src/ResultRecordSummary.cpp",
+      "src/ir/IrCredentialStore.cpp",
+      "src/ir/IrDriver.cpp",
+      "src/ir/IrOutboxModels.cpp",
+      "src/ir/IrRankingModels.cpp",
+      "src/ir/IrReceiptModels.cpp",
+      "src/ir/IrScoreReconciliation.cpp",
+      "src/ir/IrUploadCandidates.cpp",
+      "src/repositories/ReplayRepositoryIrOutbox.cpp",
+      "src/repositories/ReplayRepositoryIrRemoteScores.cpp",
+      "src/repositories/ScoreRepositoryIrImport.cpp",
+  };
+  for (const std::string_view consumer : consumers) {
+    const auto path = root / consumer;
+    requireToken(path, "ir::isValidProviderId",
+                 "IR provider identity authority");
+    constexpr std::array<std::string_view, 2> duplicateAuthority{
+        "bool validProviderId(", "bool isValidProviderId("};
+    rejectTokens(path, duplicateAuthority);
+  }
+}
+
+void testSharedMaximumScoreAuthority() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  constexpr std::array<std::string_view, 20> consumers{
+      "src/ModernResult.cpp",
+      "src/ModernResultRecallBuilder.cpp",
+      "src/ResultRecordSummary.cpp",
+      "src/ReplayAutoPlay.h",
+      "src/GBattleMode.h",
+      "src/ir/IrRankingModels.cpp",
+      "src/ir/IrRankingModal.cpp",
+      "src/ir/IrRemoteScoreModels.cpp",
+      "src/ir/tachi/TachiBatchManual.cpp",
+      "src/ir/tachi/TachiDriver.cpp",
+      "src/ir/tachi/TachiRankingParser.cpp",
+      "src/ir/tachi/TachiUserScoreParser.cpp",
+      "src/replay/ReplayPlaybackMaterializer.cpp",
+      "src/repositories/ScoreRepositoryIrImport.cpp",
+      "src/repositories/ScoreRepositoryQueries.cpp",
+      "src/scene/ChartViewerScene.cpp",
+      "src/scene/MainMenuScene.cpp",
+      "src/scene/ResultPresentationModel.cpp",
+      "src/scene/ResultScene.cpp",
+      "src/scene/play/Pacemaker.h",
+  };
+  for (const std::string_view consumer : consumers) {
+    const auto path = root / consumer;
+    requireToken(path, "result_contract::maximumScoreForNotes",
+                 "maximum-score arithmetic authority");
+    constexpr std::array<std::string_view, 7> duplicateArithmetic{
+        "TotalNotes * 2", "TotalNotes) * 2", "totalNotes * 2",
+        "totalNotes) * 2", "noteCount * 2", "noteCount) * 2",
+        "courseTotalNotes * 2"};
+    rejectTokens(path, duplicateArithmetic);
+  }
 }
 
 void testActivatedChartConsumersUseTheSharedPipeline() {
@@ -293,6 +397,8 @@ int main() {
   testSharedFormatAuthorities();
   testModernResultAndSnapshotBoundary();
   testSharedModernResultAuthorities();
+  testSharedIrProviderIdentityAuthority();
+  testSharedMaximumScoreAuthority();
   testActivatedChartConsumersUseTheSharedPipeline();
   testCourseContinuationAndConsumerBoundaries();
   if (failures != 0) {

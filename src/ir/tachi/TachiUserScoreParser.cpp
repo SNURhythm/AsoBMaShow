@@ -1,5 +1,7 @@
 #include "TachiUserScoreParser.h"
 
+#include "../../CanonicalDigest.h"
+#include "../../ResultContracts.h"
 #include "../../scene/play/GameplayGaugeTypes.h"
 
 #include "nlohmann/json.hpp"
@@ -124,14 +126,6 @@ std::optional<double> requiredFiniteNumber(const Json &object,
 bool requiredTrue(const Json &object, std::string_view key) {
   const auto value = object.find(key);
   return value != object.end() && value->is_boolean() && value->get<bool>();
-}
-
-bool isLowerHexDigest(std::string_view value, std::size_t expectedBytes) {
-  return value.size() == expectedBytes &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
 }
 
 std::optional<int> mapBmsLamp(std::string_view lamp) {
@@ -345,9 +339,10 @@ std::optional<ChartMap> parseCharts(const Json &charts,
     auto sha256 =
         requiredString(*data, "hashSHA256", kMaximumIrRemoteScoreIdBytes, true);
     if (!songId || !embeddedTitle || !embeddedArtist || !noteCount ||
-        *noteCount < 0 || *noteCount > std::numeric_limits<int>::max() / 2 ||
-        !md5 || !sha256 || !isLowerHexDigest(*md5, 32) ||
-        !isLowerHexDigest(*sha256, 64)) {
+        !result_contract::maximumScoreForNotes(*noteCount) ||
+        !md5 || !sha256 ||
+        !canonical_digest::isCanonicalLowerHex(*md5, 32) ||
+        !canonical_digest::isCanonicalLowerHex(*sha256, 64)) {
       return std::nullopt;
     }
     const auto relatedSong = songs.find(*songId);

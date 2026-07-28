@@ -1,4 +1,6 @@
 #include "IrRankingModal.h"
+#include "../CanonicalDigest.h"
+#include "../ResultContracts.h"
 #include "../view/View.h"
 
 #include <algorithm>
@@ -6,7 +8,6 @@
 #include <chrono>
 #include <ctime>
 #include <iomanip>
-#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -106,12 +107,9 @@ makeBokutachiRankingQuery(const bms_parser::ChartMeta &meta) noexcept {
       return static_cast<char>(std::tolower(value));
     });
     const bool validSha =
-        sha256.size() == 64 &&
-        std::ranges::all_of(sha256, [](unsigned char value) {
-          return std::isdigit(value) != 0 || (value >= 'a' && value <= 'f');
-        });
+        canonical_digest::isCanonicalLowerHex(sha256, 64);
     if ((meta.KeyMode != 7 && meta.KeyMode != 14) || meta.TotalNotes <= 0 ||
-        meta.TotalNotes > std::numeric_limits<int>::max() / 2 || !validSha) {
+        !result_contract::maximumScoreForNotes(meta.TotalNotes) || !validSha) {
       return {.diagnostic =
                   "Bokutachi rankings require a 7-key or 14-key chart with "
                   "positive notes and SHA-256 identity"};
@@ -121,9 +119,7 @@ makeBokutachiRankingQuery(const bms_parser::ChartMeta &meta) noexcept {
       return static_cast<char>(std::tolower(value));
     });
     const bool validMd5 =
-        md5.size() == 32 && std::ranges::all_of(md5, [](unsigned char value) {
-          return std::isdigit(value) != 0 || (value >= 'a' && value <= 'f');
-        });
+        canonical_digest::isCanonicalLowerHex(md5, 32);
     return {.value = IrChartQuery{.keyMode = meta.KeyMode,
                                   .chartMd5 = validMd5 ? md5 : std::string{},
                                   .chartSha256 = std::move(sha256),

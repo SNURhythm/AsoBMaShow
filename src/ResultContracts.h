@@ -7,6 +7,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -63,6 +65,14 @@ isKnownGaugeAutoShift(GaugeAutoShiftMode value) noexcept {
     }
   }
   return false;
+}
+
+[[nodiscard]] inline constexpr std::optional<int>
+maximumScoreForNotes(int totalNotes) noexcept {
+  if (totalNotes < 0 || totalNotes > std::numeric_limits<int>::max() / 2) {
+    return std::nullopt;
+  }
+  return totalNotes * 2;
 }
 
 struct ChartIdentity {

@@ -1061,6 +1061,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(course_identity_tests
         tests/course_identity_tests.cpp
+        src/bms_parser.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ScoreProvenance.cpp
@@ -2678,6 +2679,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
+        src/bms_parser.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp

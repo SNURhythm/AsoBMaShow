@@ -1,6 +1,7 @@
 #include "ResultContracts.h"
 
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -71,6 +72,14 @@ void testSharedChartIdentityAgreement() {
 }
 
 void testSharedResultArithmetic() {
+  expect(result_contract::maximumScoreForNotes(0) == 0 &&
+             result_contract::maximumScoreForNotes(5) == 10,
+         "note counts derive one bounded maximum score");
+  expect(!result_contract::maximumScoreForNotes(-1) &&
+             !result_contract::maximumScoreForNotes(
+                 std::numeric_limits<int>::max()),
+         "invalid or overflowing note counts fail centrally");
+
   const std::vector<float> history{20.0F, 80.0F};
   result_contract::ResultOutcomeFacts facts{
       .score = 7,

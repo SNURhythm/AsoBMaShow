@@ -568,6 +568,9 @@ void testCacheIdentityAndCredentialFreeDebugTypes() {
       request("profile-a", "fake", "https://RANK.example.test:443/"));
   expect(normalized.value == base.value,
          "cache key normalizes equivalent server origins");
+  expect(!ir::makeIrRankingCacheKey(request("profile-a", "bad.provider"))
+              .value,
+         "cache key rejects provider IDs that durable IR layers reject");
 
   std::vector<ir::IrRankingRequest> variants;
   variants.push_back(request("profile-b"));

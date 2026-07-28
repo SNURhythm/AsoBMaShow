@@ -6,6 +6,7 @@
 #include "../repositories/ReplayRepository.h"
 #include "../replay/CourseReplayConsumer.h"
 #include "../ResultImageExporter.h"
+#include "../ResultContracts.h"
 #include "../ResultPresentationUtils.h"
 #include "../repositories/ScoreRepository.h"
 #include "../path.h"
@@ -1746,7 +1747,9 @@ void ResultScene::openRankings() {
     comparison = ir::IrLocalComparison{
         .label = "This Play",
         .score = remote->score.score,
-        .maxScore = std::max(0, remote->score.noteCount) * 2,
+        .maxScore = result_contract::maximumScoreForNotes(
+                        remote->score.noteCount)
+                        .value_or(0),
         .clearType = remote->score.lampRank,
         .badPoints = remote->score.badPoints,
         .maxCombo = remote->score.maxCombo,
@@ -1761,7 +1764,9 @@ void ResultScene::openRankings() {
       comparison = ir::IrLocalComparison{
           .label = "This Play",
           .score = local->resultState.getScore(),
-          .maxScore = std::max(0, local->meta.TotalNotes) * 2,
+          .maxScore = result_contract::maximumScoreForNotes(
+                          local->meta.TotalNotes)
+                          .value_or(0),
           .clearType = local->resultState.getClearTypeRank(),
           .badPoints = rankingBadPoints(local->resultState),
           .maxCombo = local->resultState.maxCombo,

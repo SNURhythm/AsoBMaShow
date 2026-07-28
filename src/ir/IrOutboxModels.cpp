@@ -1,11 +1,11 @@
 #include "IrOutboxModels.h"
 
+#include "../CanonicalDigest.h"
 #include "../Uuid.h"
 
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
-#include <cctype>
 
 namespace ir {
 namespace {
@@ -19,34 +19,16 @@ std::size_t utf8Boundary(std::string_view value, std::size_t maximum) {
   return length;
 }
 
-bool lowerHex(std::string_view value, std::size_t size) {
-  return value.size() == size &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isdigit(character) != 0 ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
-bool validProviderId(std::string_view value) {
-  if (value.empty() || value.size() > kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
-
 bool validPayload(std::string_view payload) {
   return !payload.empty() && payload.size() <= kMaximumIrPayloadBytes &&
          nlohmann::json::accept(payload);
 }
 
 bool validRulesetProof(const IrRulesetProof &proof) {
-  return validProviderId(proof.rulesetId) && proof.rulesetRevision > 0 &&
-         lowerHex(proof.validationFingerprint, 64);
+  return ir::isValidProviderId(proof.rulesetId) &&
+         proof.rulesetRevision > 0 &&
+         canonical_digest::isCanonicalLowerHex(proof.validationFingerprint,
+                                                64);
 }
 
 bool legacyRulesetProof(const IrRulesetProof &proof) {
@@ -56,13 +38,14 @@ bool legacyRulesetProof(const IrRulesetProof &proof) {
 
 bool validateDraft(const IrOutboxDraft &draft, bool allowLegacyProof,
                    std::string &diagnostic) {
-  if (!validProviderId(draft.providerId)) {
+  if (!ir::isValidProviderId(draft.providerId)) {
     diagnostic = "IR provider ID is invalid";
   } else if (!uuid::isCanonicalLowerV4(draft.attemptId)) {
     diagnostic = "IR attempt ID is invalid";
-  } else if (!draft.chartMd5.empty() && !lowerHex(draft.chartMd5, 32)) {
+  } else if (!draft.chartMd5.empty() &&
+             !canonical_digest::isCanonicalLowerHex(draft.chartMd5, 32)) {
     diagnostic = "IR chart MD5 is invalid";
-  } else if (!lowerHex(draft.chartSha256, 64)) {
+  } else if (!canonical_digest::isCanonicalLowerHex(draft.chartSha256, 64)) {
     diagnostic = "IR chart SHA-256 is invalid";
   } else if (!validPayload(draft.payloadJson)) {
     diagnostic = "IR payload is malformed or oversized";

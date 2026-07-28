@@ -2,6 +2,7 @@
 
 #include "SqliteRAII.h"
 
+#include "../CanonicalDigest.h"
 #include "../ResultContracts.h"
 #include "../ScoreProvenance.h"
 #include "../replay/ReplayLimits.h"
@@ -211,21 +212,13 @@ std::optional<double> numberValue(sqlite3_stmt *source, int column,
   return value;
 }
 
-bool lowerHex(std::string_view value, std::size_t size) {
-  return value.size() == size &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
 std::optional<std::string> hashValue(sqlite3_stmt *source, int column,
                                      std::size_t size, bool &partial) {
   auto value = textValue(source, column, true, partial);
   if (!value || value->empty()) {
     return std::nullopt;
   }
-  if (!lowerHex(*value, size)) {
+  if (!canonical_digest::isCanonicalLowerHex(*value, size)) {
     partial = true;
     return std::nullopt;
   }

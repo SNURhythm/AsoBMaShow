@@ -1,12 +1,12 @@
 #include "ScoreProvenance.h"
 
 #include "BmsMetadataText.h"
+#include "CanonicalDigest.h"
 #include "scene/play/GameplayAttemptSetup.h"
 #include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -19,10 +19,7 @@ using Json = nlohmann::ordered_json;
 std::optional<std::string> normalizedHexHash(const std::string &value,
                                              std::size_t expectedSize) {
   std::string normalized = asobmshow::bms_metadata::normalizedHash(value);
-  if (normalized.size() != expectedSize ||
-      !std::ranges::all_of(normalized, [](unsigned char character) {
-        return std::isxdigit(character) != 0;
-      })) {
+  if (!canonical_digest::isCanonicalLowerHex(normalized, expectedSize)) {
     return std::nullopt;
   }
   return normalized;

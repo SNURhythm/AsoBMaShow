@@ -1,12 +1,12 @@
 #include "IrScoreReconciliation.h"
 
+#include "../CanonicalDigest.h"
 #include "IrProfileSettings.h"
 #include "../Uuid.h"
 #include "../scene/play/GameplayGaugeTypes.h"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -44,26 +44,6 @@ IrScoreReconciliationPlan invalidPlan(std::string_view diagnostic) {
           .diagnostic = sanitizeDiagnostic(diagnostic)};
 }
 
-bool validProviderId(std::string_view value) {
-  if (value.empty() || value.size() > kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
-
-bool lowerHex(std::string_view value, std::size_t size) {
-  return value.size() == size &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isdigit(character) != 0 ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
 bool knownLampRank(int value) {
   constexpr std::array ranks{
       kClearTypeFailedRank,
@@ -90,9 +70,10 @@ bool validLocalCandidate(const IrLocalReceiptCandidate &candidate,
     diagnostic = "IR reconciliation local key mode is invalid";
     return false;
   }
-  if ((!candidate.chartMd5.empty() && !lowerHex(candidate.chartMd5, 32)) ||
+  if ((!candidate.chartMd5.empty() &&
+       !canonical_digest::isCanonicalLowerHex(candidate.chartMd5, 32)) ||
       (!candidate.chartSha256.empty() &&
-       !lowerHex(candidate.chartSha256, 64)) ||
+       !canonical_digest::isCanonicalLowerHex(candidate.chartSha256, 64)) ||
       (candidate.chartMd5.empty() && candidate.chartSha256.empty())) {
     diagnostic = "IR reconciliation local chart hash is invalid";
     return false;
@@ -236,7 +217,7 @@ IrScoreReconciliationPlan planScoreReconciliation(
     std::span<const IrRemoteScore> remote, std::int64_t confirmedAtUnixMillis) {
   IrScoreReconciliationPlan plan;
   const auto normalizedOrigin = normalizeServerOrigin(serverOrigin);
-  if (!validProviderId(providerId) || !normalizedOrigin ||
+  if (!ir::isValidProviderId(providerId) || !normalizedOrigin ||
       *normalizedOrigin != serverOrigin || confirmedAtUnixMillis <= 0) {
     return invalidPlan("IR reconciliation identity or confirmation time is "
                        "invalid");

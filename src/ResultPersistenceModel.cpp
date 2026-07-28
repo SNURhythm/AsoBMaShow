@@ -1,6 +1,7 @@
 #include "ResultPersistenceModel.h"
 
 #include "BmsMetadataText.h"
+#include "CanonicalDigest.h"
 #include "FileChecksum.h"
 #include "Utils.h"
 #include "Uuid.h"
@@ -8,7 +9,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -288,13 +288,6 @@ void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
   appendProvenance(encoder, score.provenance);
 }
 
-bool isHexDigest(std::string_view value, std::size_t expectedSize) {
-  return value.size() == expectedSize &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
-}
-
 struct NormalizedChartIdentity {
   std::string sha256;
   std::string md5;
@@ -304,8 +297,10 @@ std::optional<NormalizedChartIdentity>
 chartIdentity(const bms_parser::ChartMeta &meta) {
   NormalizedChartIdentity identity{.sha256 = normalizedHash(meta.SHA256),
                                    .md5 = normalizedHash(meta.MD5)};
-  if ((!meta.SHA256.empty() && !isHexDigest(identity.sha256, 64)) ||
-      (!meta.MD5.empty() && !isHexDigest(identity.md5, 32)) ||
+  if ((!meta.SHA256.empty() &&
+       !canonical_digest::isCanonicalLowerHex(identity.sha256, 64)) ||
+      (!meta.MD5.empty() &&
+       !canonical_digest::isCanonicalLowerHex(identity.md5, 32)) ||
       (identity.sha256.empty() && identity.md5.empty())) {
     return std::nullopt;
   }

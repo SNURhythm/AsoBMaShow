@@ -1,7 +1,9 @@
 #include "TachiBatchManual.h"
 
 #include "../../BmsMetadataText.h"
+#include "../../CanonicalDigest.h"
 #include "../../FileChecksum.h"
+#include "../../ResultContracts.h"
 #include "../../Uuid.h"
 #include "../../scene/play/GameplayGaugeRules.h"
 #include "../../scene/play/GameplayJudgeRules.h"
@@ -10,7 +12,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -21,14 +22,6 @@
 
 namespace ir::tachi {
 namespace {
-
-bool isLowerHexDigest(std::string_view value, std::size_t expectedSize) {
-  return value.size() == expectedSize &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isdigit(character) != 0 ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
 
 std::optional<std::string_view> lampForClearRank(int clearType) {
   switch (clearType) {
@@ -312,9 +305,10 @@ bool isReplayEligibleForBokutachi(std::string_view attemptId,
                                   bool hasCanonicalAttemptFingerprint,
                                   const bms_parser::ChartMeta &meta,
                                   const ScoreProvenance &provenance) noexcept {
+  const auto maximumScore =
+      result_contract::maximumScoreForNotes(meta.TotalNotes);
   if (!uuid::isCanonicalLowerV4(attemptId) || !hasCanonicalAttemptFingerprint ||
-      meta.TotalNotes <= 0 ||
-      meta.TotalNotes > std::numeric_limits<int>::max() / 2) {
+      meta.TotalNotes <= 0 || !maximumScore) {
     return false;
   }
 
@@ -323,7 +317,7 @@ bool isReplayEligibleForBokutachi(std::string_view attemptId,
   probe.keyMode = meta.KeyMode;
   probe.chartMd5 = asobmshow::bms_metadata::normalizedHash(meta.MD5);
   probe.chartSha256 = asobmshow::bms_metadata::normalizedHash(meta.SHA256);
-  probe.maxScore = meta.TotalNotes * 2;
+  probe.maxScore = *maximumScore;
   probe.provenance = provenance;
   return validateBokutachiEligibility(probe).reason ==
          SubmissionEligibilityReason::Eligible;
@@ -349,8 +343,10 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
     }
     const bool hasSha256 = !submission.chartSha256.empty();
     const bool hasMd5 = !submission.chartMd5.empty();
-    if ((hasSha256 && !isLowerHexDigest(submission.chartSha256, 64)) ||
-        (hasMd5 && !isLowerHexDigest(submission.chartMd5, 32)) ||
+    if ((hasSha256 && !canonical_digest::isCanonicalLowerHex(
+                          submission.chartSha256, 64)) ||
+        (hasMd5 && !canonical_digest::isCanonicalLowerHex(
+                       submission.chartMd5, 32)) ||
         (!hasSha256 && !hasMd5)) {
       return invalid("submission chart hash is malformed");
     }

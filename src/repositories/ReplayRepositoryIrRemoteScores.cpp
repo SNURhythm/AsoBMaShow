@@ -1,6 +1,7 @@
 #include "ReplayRepository.h"
 #include "ReplayRepositoryInternal.h"
 
+#include "../CanonicalDigest.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../ir/IrProfileSettings.h"
 #include <nlohmann/json.hpp>
@@ -40,32 +41,11 @@ constexpr std::string_view kReceiptOwnerMatchesOutboxAttempt =
     "result.id=receipt.modern_chart_result_id AND "
     "result.attempt_id=ir_outbox.attempt_id))";
 
-bool validProviderId(std::string_view value) {
-  if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
-
 bool validOriginIdentity(std::string_view providerId,
                          std::string_view serverOrigin) {
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
-  return validProviderId(providerId) && normalizedOrigin &&
+  return ir::isValidProviderId(providerId) && normalizedOrigin &&
          *normalizedOrigin == serverOrigin;
-}
-
-bool isLowerHexDigest(std::string_view value,
-                      std::size_t expectedBytes) noexcept {
-  return value.size() == expectedBytes &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
 }
 
 bool validRemoteScoreId(std::string_view value) noexcept {
@@ -1156,8 +1136,10 @@ ir::IrRemoteScoreReadOutcome ReplayRepository::ListIrRemoteScoresForChart(
     std::string_view chartMd5, std::string_view chartSha256) {
   const bool shaAvailable = !chartSha256.empty();
   if (!validOriginIdentity(providerId, serverOrigin) ||
-      (shaAvailable && !isLowerHexDigest(chartSha256, 64)) ||
-      (!chartMd5.empty() && !isLowerHexDigest(chartMd5, 32)) ||
+      (shaAvailable &&
+       !canonical_digest::isCanonicalLowerHex(chartSha256, 64)) ||
+      (!chartMd5.empty() &&
+       !canonical_digest::isCanonicalLowerHex(chartMd5, 32)) ||
       (!shaAvailable && chartMd5.empty())) {
     return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
             .diagnostic = "IR remote chart score identity is invalid"};
@@ -1435,7 +1417,7 @@ ReplayRepository::ClearIrAccountEvidence(std::string_view providerId,
 
 ir::IrOutboxMutationOutcome ReplayRepository::ClearIrProviderAccountEvidence(
     std::string_view providerId) {
-  if (!validProviderId(providerId)) {
+  if (!ir::isValidProviderId(providerId)) {
     return invalidClearIdentity();
   }
   profile_database_activity::WriteGuard operation;

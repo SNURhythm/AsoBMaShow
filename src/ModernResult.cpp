@@ -279,11 +279,10 @@ ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
                                        const RhythmState &state,
                                        const ScoreProvenance &provenance,
                                        int storageLongNoteMode) {
+  const auto derivedMaximum =
+      result_contract::maximumScoreForNotes(meta.TotalNotes);
   const int maximumScore =
-      meta.TotalNotes > 0 &&
-              meta.TotalNotes <= std::numeric_limits<int>::max() / 2
-          ? meta.TotalNotes * 2
-          : -1;
+      meta.TotalNotes > 0 && derivedMaximum ? *derivedMaximum : -1;
   return {
       .chartPath =
           Utils::GetStoragePathUtf8RelativeToDocuments(meta.BmsPath, "BMS/"),
@@ -400,16 +399,15 @@ captureModernCourseResult(const ModernCourseResultCapture &capture,
       stageProvenance.push_back(stage.score.provenance);
     }
     for (const auto &entry : capture.entryFacts) {
-      const std::int64_t entryMaximum =
-          static_cast<std::int64_t>(entry.totalNotes) * 2;
-      if (entry.totalNotes <= 0 ||
-          entry.totalNotes > std::numeric_limits<int>::max() / 2 ||
-          entry.playLengthMicros < 0 || entryMaximum < 0 ||
-          maximumScore > std::numeric_limits<int>::max() - entryMaximum) {
+      const auto entryMaximum =
+          result_contract::maximumScoreForNotes(entry.totalNotes);
+      if (entry.totalNotes <= 0 || !entryMaximum ||
+          entry.playLengthMicros < 0 ||
+          maximumScore > std::numeric_limits<int>::max() - *entryMaximum) {
         diagnostic = "modern course entry facts are invalid";
         return std::nullopt;
       }
-      maximumScore += entryMaximum;
+      maximumScore += *entryMaximum;
     }
 
     ModernCourseResult result{
@@ -535,12 +533,14 @@ bool validateModernCourseResult(const ModernCourseResult &result,
 
     std::int64_t maximumScore = 0;
     for (const auto &entry : result.entryFacts) {
+      const auto entryMaximum =
+          result_contract::maximumScoreForNotes(entry.totalNotes);
       if (entry.totalNotes <= 0 || entry.playLengthMicros < 0 ||
-          entry.totalNotes > std::numeric_limits<int>::max() / 2) {
+          !entryMaximum) {
         diagnostic = "modern course entry facts are invalid";
         return false;
       }
-      maximumScore += static_cast<std::int64_t>(entry.totalNotes) * 2LL;
+      maximumScore += *entryMaximum;
     }
     if (maximumScore != result.maxScore) {
       diagnostic = "modern course maximum score disagrees with entries";

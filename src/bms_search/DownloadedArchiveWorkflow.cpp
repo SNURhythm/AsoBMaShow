@@ -1,6 +1,7 @@
 #include "DownloadedArchiveWorkflow.h"
 
 #include "../BmsChartFile.h"
+#include "../CanonicalDigest.h"
 
 #include <algorithm>
 #include <cctype>
@@ -32,13 +33,6 @@ std::string normalizedKey(const std::string &value) {
                    return static_cast<char>(std::tolower(character));
                  });
   return result;
-}
-
-bool isHexKey(const std::string &value, std::size_t length) {
-  return value.size() == length &&
-         std::all_of(value.begin(), value.end(), [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
 }
 
 std::optional<std::vector<unsigned char>>
@@ -121,8 +115,9 @@ decideExtractedArchive(const std::filesystem::path &root,
   }
 
   const std::string key = normalizedKey(archiveKey);
-  const bool matchSha256 = isHexKey(key, 64);
-  const bool matchMd5 = isHexKey(key, 32);
+  const bool matchSha256 =
+      canonical_digest::isCanonicalLowerHex(key, 64);
+  const bool matchMd5 = canonical_digest::isCanonicalLowerHex(key, 32);
   bool foundBmsFile = false;
   bool incompleteRead = false;
   std::filesystem::recursive_directory_iterator iterator(

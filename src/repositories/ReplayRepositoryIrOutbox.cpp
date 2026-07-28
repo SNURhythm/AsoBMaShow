@@ -25,18 +25,6 @@ using replay_repository_detail::columnIs;
 using replay_repository_detail::nullableInteger;
 using replay_repository_detail::optionalInteger;
 
-bool validProviderId(std::string_view value) {
-  if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
-
 enum class RowLookupStatus { Found, NotFound, StorageFailure, Invalid };
 
 struct RowLookup {
@@ -730,7 +718,8 @@ ir::IrManualBatchEnqueueOutcome ReplayRepository::EnqueueReadyIrOutboxDrafts(
 ir::IrOutboxReadOutcome
 ReplayRepository::LoadIrOutbox(std::string_view providerId,
                                std::string_view attemptId) {
-  if (!validProviderId(providerId) || !uuid::isCanonicalLowerV4(attemptId)) {
+  if (!ir::isValidProviderId(providerId) ||
+      !uuid::isCanonicalLowerV4(attemptId)) {
     return {.status = ir::IrOutboxReadStatus::Invalid,
             .diagnostic = "IR outbox identity is invalid"};
   }
@@ -807,7 +796,7 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(std::int64_t nowMs,
 
 ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(
     std::string_view providerId, std::int64_t nowMs, std::size_t limit) {
-  if (!validProviderId(providerId) || nowMs < 0 || limit > 256) {
+  if (!ir::isValidProviderId(providerId) || nowMs < 0 || limit > 256) {
     return {.status = ir::IrOutboxBatchStatus::Invalid,
             .diagnostic = "IR provider outbox due query is invalid"};
   }
@@ -858,7 +847,7 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(
 
 std::optional<std::int64_t> ReplayRepository::NextIrOutboxAttemptAfter(
     std::string_view providerId, std::int64_t nowMs) {
-  if (!validProviderId(providerId) || nowMs < 0) {
+  if (!ir::isValidProviderId(providerId) || nowMs < 0) {
     return std::nullopt;
   }
   profile_database_activity::ReadGuard operation;
@@ -1171,7 +1160,7 @@ ir::IrReceiptReadOutcome ReplayRepository::LoadIrSubmissionReceipt(
     std::string_view providerId, std::string_view serverOrigin,
     std::string_view attemptId) {
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
-  if (!validProviderId(providerId) ||
+  if (!ir::isValidProviderId(providerId) ||
       !uuid::isCanonicalLowerV4(attemptId) || !normalizedOrigin ||
       *normalizedOrigin != serverOrigin) {
     return {.status = ir::IrReceiptReadStatus::Invalid,
@@ -1227,7 +1216,7 @@ ir::IrReceiptReadOutcome ReplayRepository::LoadIrSubmissionReceipt(
 ir::IrOutboxMutationOutcome ReplayRepository::ClearIrSubmissionReceipts(
     std::string_view providerId, std::string_view serverOrigin) {
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
-  if (!validProviderId(providerId) || !normalizedOrigin ||
+  if (!ir::isValidProviderId(providerId) || !normalizedOrigin ||
       *normalizedOrigin != serverOrigin) {
     return {.status = ir::IrOutboxMutationStatus::Invalid,
             .diagnostic = "IR receipt identity is invalid"};
@@ -1354,7 +1343,7 @@ ReplayRepository::RetryIrOutbox(std::int64_t rowId, std::int64_t nowMs) {
 ir::IrOutboxMutationOutcome
 ReplayRepository::RetryAllIrOutbox(std::string_view providerId,
                                    std::int64_t nowMs) {
-  if (!validProviderId(providerId) || nowMs < 0) {
+  if (!ir::isValidProviderId(providerId) || nowMs < 0) {
     return {.status = ir::IrOutboxMutationStatus::Invalid};
   }
   profile_database_activity::WriteGuard operation;
@@ -1392,7 +1381,7 @@ ReplayRepository::RetryAllIrOutbox(std::string_view providerId,
 ir::IrOutboxMutationOutcome
 ReplayRepository::UnblockIrOutbox(std::string_view providerId,
                                   std::int64_t nowMs) {
-  if (!validProviderId(providerId) || nowMs < 0) {
+  if (!ir::isValidProviderId(providerId) || nowMs < 0) {
     return {.status = ir::IrOutboxMutationStatus::Invalid};
   }
   profile_database_activity::WriteGuard operation;
@@ -1443,7 +1432,7 @@ ReplayRepository::DiscardIrOutbox(std::int64_t rowId) {
 
 ir::IrOutboxCounts
 ReplayRepository::CountIrOutbox(std::string_view providerId) {
-  if (!validProviderId(providerId)) {
+  if (!ir::isValidProviderId(providerId)) {
     return {.diagnostic = "IR provider ID is invalid"};
   }
   profile_database_activity::ReadGuard operation;

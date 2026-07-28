@@ -2,6 +2,7 @@
 
 #include "IrOutboxModels.h"
 #include "IrProfileSettings.h"
+#include "../CanonicalDigest.h"
 #include "../Uuid.h"
 
 #include <algorithm>
@@ -9,27 +10,6 @@
 
 namespace ir {
 namespace {
-
-bool isLowerHexDigest(std::string_view value,
-                      std::size_t expectedSize) noexcept {
-  return value.size() == expectedSize &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
-bool isValidProviderId(std::string_view value) noexcept {
-  if (value.empty() || value.size() > kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
 
 bool isBoundedRemoteId(std::string_view value) noexcept {
   return value.size() <= kMaximumIrRemoteValueBytes &&
@@ -115,7 +95,7 @@ bool validateIrSubmissionReceipt(const IrSubmissionReceipt &receipt,
   try {
     if (receipt.id <= 0) {
       diagnostic = "IR receipt row ID is invalid";
-    } else if (!isValidProviderId(receipt.providerId)) {
+    } else if (!ir::isValidProviderId(receipt.providerId)) {
       diagnostic = "IR receipt provider ID is invalid";
     } else if (receipt.replayId < 0 || receipt.modernChartResultId < 0 ||
                (receipt.replayId > 0) == (receipt.modernChartResultId > 0)) {
@@ -123,9 +103,10 @@ bool validateIrSubmissionReceipt(const IrSubmissionReceipt &receipt,
     } else if (!uuid::isCanonicalLowerV4(receipt.attemptId)) {
       diagnostic = "IR receipt attempt ID is invalid";
     } else if (!receipt.chartMd5.empty() &&
-               !isLowerHexDigest(receipt.chartMd5, 32)) {
+               !canonical_digest::isCanonicalLowerHex(receipt.chartMd5, 32)) {
       diagnostic = "IR receipt chart MD5 is invalid";
-    } else if (!isLowerHexDigest(receipt.chartSha256, 64)) {
+    } else if (!canonical_digest::isCanonicalLowerHex(receipt.chartSha256,
+                                                        64)) {
       diagnostic = "IR receipt chart SHA-256 is invalid";
     } else {
       const IrSuccessfulReceiptDraft draft{

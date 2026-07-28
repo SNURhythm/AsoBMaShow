@@ -486,6 +486,15 @@ void testRegistryRejectsInvalidAndDuplicateDrivers() {
   expect(!diagnostic.empty(), "invalid provider has diagnostic");
 
   diagnostic.clear();
+  expect(
+      !registry.registerDriver(
+          std::make_shared<FakeDriver>(
+              "bad.provider",
+              ir::IrDriverCapabilities{.chartRankings = true}),
+          diagnostic),
+      "registry rejects provider IDs that durable IR consumers cannot store");
+
+  diagnostic.clear();
   expect(registry.registerDriver(
              std::make_shared<FakeDriver>(
                  "tachi", ir::IrDriverCapabilities{.chartRankings = true}),

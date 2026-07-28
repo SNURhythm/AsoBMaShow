@@ -1,5 +1,6 @@
 #include "PracticeConfiguration.h"
 
+#include "../CanonicalDigest.h"
 #include "../scene/play/GameplayAttemptSetup.h"
 
 #include <algorithm>
@@ -33,17 +34,16 @@ constexpr std::array<GaugeOption, 5> kGaugeAutoShiftOptions = {{
      .gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder},
 }};
 
-bool isSha256(std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
-}
-
 void normalizeSha256(std::string &value) {
   std::ranges::transform(value, value.begin(), [](unsigned char character) {
     return static_cast<char>(std::tolower(character));
   });
+}
+
+bool isSha256(std::string_view value) {
+  std::string normalized(value);
+  normalizeSha256(normalized);
+  return canonical_digest::isCanonicalLowerHex(normalized, 64);
 }
 
 int nearestStep(int value, int minimum, int maximum, int step) {

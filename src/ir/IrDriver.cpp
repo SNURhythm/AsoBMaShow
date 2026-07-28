@@ -1,4 +1,5 @@
 #include "IrDriver.h"
+#include "IrProfileSettings.h"
 
 #include <algorithm>
 #include <cctype>
@@ -45,15 +46,6 @@ unsupportedReconciliation(std::string_view diagnostic) {
   return {.status = IrUserScoreSnapshotStatus::Unsupported,
           .code = "unsupported_operation",
           .diagnostic = sanitizeDiagnostic(diagnostic)};
-}
-
-bool validProviderId(std::string_view value) {
-  return !value.empty() && value.size() <= 64 &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= 'a' && character <= 'z') ||
-                  (character >= '0' && character <= '9') || character == '-' ||
-                  character == '_' || character == '.';
-         });
 }
 
 } // namespace
@@ -148,7 +140,7 @@ bool IrDriverRegistry::registerDriver(std::shared_ptr<const IrDriver> driver,
     return false;
   }
   const std::string providerId(driver->providerId());
-  if (!validProviderId(providerId)) {
+  if (!ir::isValidProviderId(providerId)) {
     diagnostic = "IR driver provider ID is invalid";
     return false;
   }

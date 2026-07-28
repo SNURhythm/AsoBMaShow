@@ -6,7 +6,6 @@
 #include "repositories/ChartStorageIdentity.h"
 
 #include <exception>
-#include <limits>
 #include <utility>
 
 namespace result_recall {
@@ -41,13 +40,14 @@ bool chartIdentityAgrees(const result_persistence::ChartScoreWrite &score,
       .sha256 = normalizedHash(parsed.SHA256),
       .keyMode = parsed.KeyMode,
   };
+  const auto maximumScore =
+      result_contract::maximumScoreForNotes(parsed.TotalNotes);
   if (!result_contract::canonicalChartIdentity(selected,
                                                !expected.md5.empty()) ||
       result_contract::compareChartIdentity(expected, selected) !=
           result_contract::ChartIdentityMatch::Match ||
-      parsed.TotalNotes <= 0 ||
-      parsed.TotalNotes > std::numeric_limits<int>::max() / 2 ||
-      parsed.TotalNotes * 2 != score.maxScore) {
+      parsed.TotalNotes <= 0 || !maximumScore ||
+      *maximumScore != score.maxScore) {
     return false;
   }
   return true;

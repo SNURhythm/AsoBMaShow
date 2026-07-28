@@ -8,6 +8,7 @@
 #include "../LongNoteModeUtils.h"
 #include "../ProfileDatabaseActivity.h"
 #include "ReplayRepository.h"
+#include "../ResultContracts.h"
 #include "../ResultPersistenceModel.h"
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
@@ -746,8 +747,20 @@ bool score_repository_detail::InsertCourseScoreOnConnection(
   }
 
   int courseTotalNotes = 0;
+  int courseMaximumScore = 0;
   for (const auto &entry : session.entries) {
-    courseTotalNotes += std::max(0, entry.meta.TotalNotes);
+    const int stageNotes = std::max(0, entry.meta.TotalNotes);
+    const auto stageMaximum =
+        result_contract::maximumScoreForNotes(stageNotes);
+    if (!stageMaximum ||
+        courseTotalNotes > std::numeric_limits<int>::max() - stageNotes ||
+        courseMaximumScore >
+            std::numeric_limits<int>::max() - *stageMaximum) {
+      SDL_Log("Refusing to save course score with an invalid note count");
+      return false;
+    }
+    courseTotalNotes += stageNotes;
+    courseMaximumScore += *stageMaximum;
   }
 
   int bindIndex = 1;
@@ -769,7 +782,7 @@ bool score_repository_detail::InsertCourseScoreOnConnection(
   sqlite3_bind_int(stmt.get(), bindIndex++, completedCharts);
   sqlite3_bind_int(stmt.get(), bindIndex++, totalCharts);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.getScore());
-  sqlite3_bind_int(stmt.get(), bindIndex++, courseTotalNotes * 2);
+  sqlite3_bind_int(stmt.get(), bindIndex++, courseMaximumScore);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.maxCombo);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.comboBreak);
   sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, PGreat));

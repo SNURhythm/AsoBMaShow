@@ -1,5 +1,6 @@
 #include "ResultPresentationModel.h"
 
+#include "../ResultContracts.h"
 #include "../ScoreRankUtils.h"
 #include "../view/ClearLampColors.h"
 #include "../view/UiTheme.h"
@@ -385,7 +386,8 @@ makeLocalResultPresentation(const bms_parser::ChartMeta &meta,
   model.playtype = nonEmptyText(localPlaytype(meta.KeyMode));
   model.gaugeType = gaugeDisplayShortLabel(state.gaugeType, state.gaugeProfile);
   model.score = state.getScore();
-  model.maxScore = meta.TotalNotes * 2;
+  model.maxScore =
+      result_contract::maximumScoreForNotes(meta.TotalNotes).value_or(0);
   model.lampRank =
       options.currentClearRankOverride.value_or(state.getClearTypeRank());
   model.finalGauge = state.currentGauge;
@@ -450,8 +452,10 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
   model.random = nonEmptyOptional(score.random);
   model.gaugeType = nonEmptyOptional(score.gauge);
   model.score = score.score;
-  if (score.noteCount > 0) {
-    model.maxScore = score.noteCount * 2;
+  const auto maximumScore =
+      result_contract::maximumScoreForNotes(score.noteCount);
+  if (score.noteCount > 0 && maximumScore) {
+    model.maxScore = *maximumScore;
     model.scoreComparison = ResultComparisonCard{
         .title = "SCORE",
         .current = {.label = "CURRENT",

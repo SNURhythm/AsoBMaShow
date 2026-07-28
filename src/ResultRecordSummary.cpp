@@ -2,13 +2,13 @@
 
 #include "ReplayAutoPlay.h"
 #include "ReplayClearMarkUtils.h"
+#include "ResultContracts.h"
 
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <ctime>
 #include <iomanip>
-#include <limits>
 #include <ranges>
 #include <sstream>
 #include <stdexcept>
@@ -17,30 +17,11 @@
 
 namespace {
 
-bool validProviderId(std::string_view value) noexcept {
-  if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
-
 bool validRemoteOriginIdentity(std::string_view providerId,
                                std::string_view serverOrigin) noexcept {
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
-  return validProviderId(providerId) && normalizedOrigin &&
+  return ir::isValidProviderId(providerId) && normalizedOrigin &&
          *normalizedOrigin == serverOrigin;
-}
-
-std::optional<int> checkedMaximumScore(int noteCount) noexcept {
-  if (noteCount < 0 || noteCount > std::numeric_limits<int>::max() / 2) {
-    return std::nullopt;
-  }
-  return noteCount * 2;
 }
 
 bool isLeapYear(int year) noexcept {
@@ -550,7 +531,8 @@ ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
   if (!validRemoteOriginIdentity(providerId, serverOrigin)) {
     throw std::invalid_argument("IR remote record origin identity is invalid");
   }
-  const std::optional<int> maximumScore = checkedMaximumScore(score.noteCount);
+  const std::optional<int> maximumScore =
+      result_contract::maximumScoreForNotes(score.noteCount);
   std::string diagnostic;
   if (!maximumScore || !ir::validateIrRemoteScore(score, diagnostic)) {
     throw std::invalid_argument("IR remote record score is invalid");

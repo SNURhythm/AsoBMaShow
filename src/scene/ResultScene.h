@@ -1,4 +1,5 @@
 #pragma once
+#include "../CanonicalDigest.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
 #include "../replay/ChartReplayPersistence.h"
@@ -137,17 +138,6 @@ remoteResultSceneActions(bool rankingsAvailable) noexcept {
           .readOnlyIrUploaded = true};
 }
 
-namespace result_scene_detail {
-[[nodiscard]] inline bool isLowerHexDigest(std::string_view value,
-                                           std::size_t size) noexcept {
-  return value.size() == size &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-} // namespace result_scene_detail
-
 [[nodiscard]] inline std::optional<ir::IrChartQuery>
 makeRemoteResultRankingQuery(const ir::IrRemoteScore &score) noexcept {
   try {
@@ -155,9 +145,9 @@ makeRemoteResultRankingQuery(const ir::IrRemoteScore &score) noexcept {
     if (!ir::validateIrRemoteScore(score, diagnostic) ||
         (score.game != "bms-7k" && score.game != "bms-14k") ||
         score.noteCount <= 0 ||
-        !result_scene_detail::isLowerHexDigest(score.chartSha256, 64) ||
+        !canonical_digest::isCanonicalLowerHex(score.chartSha256, 64) ||
         (!score.chartMd5.empty() &&
-         !result_scene_detail::isLowerHexDigest(score.chartMd5, 32))) {
+         !canonical_digest::isCanonicalLowerHex(score.chartMd5, 32))) {
       return std::nullopt;
     }
     return ir::IrChartQuery{

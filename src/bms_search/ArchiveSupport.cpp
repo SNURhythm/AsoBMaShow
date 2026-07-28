@@ -1,6 +1,7 @@
 #include "Internal.h"
 
 #include "../BmsChartFile.h"
+#include "../CanonicalDigest.h"
 
 #if ASOBMSHOW_HAS_LIBARCHIVE
 #include "../ArchiveRAII.h"
@@ -617,10 +618,7 @@ bool containsBmsFile(const std::filesystem::path &root) {
 }
 
 bool isHexStringOfLength(const std::string &value, size_t length) {
-  return value.size() == length &&
-         std::all_of(value.begin(), value.end(), [](unsigned char c) {
-           return std::isxdigit(c) != 0;
-         });
+  return canonical_digest::isCanonicalLowerHex(value, length);
 }
 
 std::optional<std::vector<unsigned char>>
@@ -663,8 +661,9 @@ std::optional<std::filesystem::path> findMatchingBmsChartByHash(
     const std::filesystem::path &root, const std::string &archiveKey,
     std::string &errorMessage) {
   const std::string key = lowerCopy(trimCopy(archiveKey));
-  const bool matchSha256 = isHexStringOfLength(key, 64);
-  const bool matchMd5 = isHexStringOfLength(key, 32);
+  const bool matchSha256 =
+      canonical_digest::isCanonicalLowerHex(key, 64);
+  const bool matchMd5 = canonical_digest::isCanonicalLowerHex(key, 32);
   if (!matchSha256 && !matchMd5) {
     return std::nullopt;
   }

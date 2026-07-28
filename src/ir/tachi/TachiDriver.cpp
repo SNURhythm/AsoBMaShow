@@ -1,6 +1,8 @@
 #include "TachiDriver.h"
 
+#include "../../CanonicalDigest.h"
 #include "../../FileChecksum.h"
+#include "../../ResultContracts.h"
 #include "BokutachiCacheStore.h"
 #include "TachiBatchManual.h"
 #include "TachiRankingParser.h"
@@ -249,17 +251,16 @@ std::optional<std::string> normalizedSha256(std::string_view value) {
   if (value.size() != 64) {
     return std::nullopt;
   }
-  std::string normalized;
-  normalized.reserve(value.size());
-  for (const unsigned char character : value) {
-    if ((character >= '0' && character <= '9') ||
-        (character >= 'a' && character <= 'f')) {
-      normalized.push_back(static_cast<char>(character));
-    } else if (character >= 'A' && character <= 'F') {
-      normalized.push_back(static_cast<char>(character - 'A' + 'a'));
-    } else {
-      return std::nullopt;
-    }
+  std::string normalized(value);
+  std::ranges::transform(
+      normalized, normalized.begin(), [](unsigned char character) {
+        if (character >= 'A' && character <= 'F') {
+          return static_cast<char>(character - 'A' + 'a');
+        }
+        return static_cast<char>(character);
+      });
+  if (!canonical_digest::isCanonicalLowerHex(normalized, 64)) {
+    return std::nullopt;
   }
   return normalized;
 }
@@ -732,7 +733,7 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
   }
   const auto sha256 = normalizedSha256(query.chartSha256);
   if (!sha256 || query.totalNotes <= 0 ||
-      query.totalNotes > std::numeric_limits<int>::max() / 2) {
+      !result_contract::maximumScoreForNotes(query.totalNotes)) {
     return rankingFailure(ChartRankingStatus::MalformedResponse,
                           "Tachi ranking chart query is invalid");
   }
@@ -860,7 +861,7 @@ ChartRankingOutcome TachiDriver::fetchChartRankingPage(
   const auto origin = normalizeServerOrigin(config.serverOrigin);
   const auto sha256 = normalizedSha256(query.chartSha256);
   if (!origin || !sha256 || query.totalNotes <= 0 ||
-      query.totalNotes > std::numeric_limits<int>::max() / 2) {
+      !result_contract::maximumScoreForNotes(query.totalNotes)) {
     return rankingFailure(ChartRankingStatus::MalformedResponse,
                           "Tachi ranking continuation request is invalid");
   }

@@ -1,6 +1,7 @@
 #include "ArchiveDecision.h"
 
 #include "../BmsChartFile.h"
+#include "../CanonicalDigest.h"
 
 #include <algorithm>
 #include <cctype>
@@ -30,13 +31,6 @@ std::string normalizedKey(const std::string &value) {
                    return static_cast<char>(std::tolower(character));
                  });
   return result;
-}
-
-bool isHexKey(const std::string &value, std::size_t length) {
-  return value.size() == length &&
-         std::all_of(value.begin(), value.end(), [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
 }
 
 bool completeRead(const std::vector<std::filesystem::path> &requested,
@@ -124,8 +118,9 @@ DirectArchiveDecision decideDownloadedArchive(
   }
 
   const std::string key = normalizedKey(archiveKey);
-  const bool matchSha256 = isHexKey(key, 64);
-  const bool matchMd5 = isHexKey(key, 32);
+  const bool matchSha256 =
+      canonical_digest::isCanonicalLowerHex(key, 64);
+  const bool matchMd5 = canonical_digest::isCanonicalLowerHex(key, 32);
   if (!matchSha256 && !matchMd5 && bmsPaths.empty()) {
     return {.disposition = DirectArchiveDisposition::KeepArchive,
             .foundBmsFile = false,

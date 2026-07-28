@@ -14,6 +14,7 @@
 #include "../ReplayVideoExporter.h"
 #include "../ModernResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
+#include "../ResultContracts.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../PlatformDocumentHandoff.h"
 #include "../RAII.h"
@@ -2712,7 +2713,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
           item.meta,
           long_note_mode::valueFromId(profileSelections.longNoteMode));
       if (bestScore.has_value()) {
-        const int fallbackMaxScore = std::max(0, item.meta.TotalNotes) * 2;
+        const int fallbackMaxScore =
+            result_contract::maximumScoreForNotes(item.meta.TotalNotes)
+                .value_or(0);
         chartListItemView->setBestScoreRank(
             bestScore->score,
             bestScore->maxScore > 0 ? bestScore->maxScore : fallbackMaxScore);
@@ -4727,7 +4730,9 @@ void MainMenuScene::openRankingsForSelection() {
         .score = best->score,
         .maxScore = best->maxScore > 0
                         ? best->maxScore
-                        : std::max(0, record->meta.TotalNotes) * 2,
+                        : result_contract::maximumScoreForNotes(
+                              record->meta.TotalNotes)
+                              .value_or(0),
         .clearType = best->clearType,
         .badPoints = best->badPoints,
         .maxCombo = best->maxCombo,

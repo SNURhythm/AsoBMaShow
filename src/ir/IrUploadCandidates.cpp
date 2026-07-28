@@ -9,18 +9,6 @@
 namespace ir {
 namespace {
 
-bool validProviderId(std::string_view value) noexcept {
-  if (value.empty() || value.size() > kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
-
 bool sourceAgrees(const IrUploadCandidateSource &source,
                   std::string_view providerId, std::string_view serverOrigin,
                   std::string &diagnostic) noexcept {
@@ -106,7 +94,7 @@ bool validateIrUploadCandidateSource(
   diagnostic.clear();
   try {
     const auto normalizedOrigin = normalizeServerOrigin(serverOrigin);
-    if (!validProviderId(providerId) || !normalizedOrigin ||
+    if (!ir::isValidProviderId(providerId) || !normalizedOrigin ||
         *normalizedOrigin != serverOrigin) {
       diagnostic = "IR upload candidate scope is invalid";
       return false;
@@ -124,7 +112,7 @@ IrUploadRecordProjection projectIrUploadRecords(
   IrUploadRecordProjection result;
   try {
     const auto normalizedOrigin = normalizeServerOrigin(serverOrigin);
-    if (!validProviderId(providerId) || !normalizedOrigin ||
+    if (!ir::isValidProviderId(providerId) || !normalizedOrigin ||
         *normalizedOrigin != serverOrigin ||
         sources.size() > kMaximumIrUploadCandidateRows) {
       result.omittedRows = sources.size();
