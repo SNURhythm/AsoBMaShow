@@ -599,13 +599,25 @@ public:
                             std::string_view serverOrigin);
   ir::IrReconciliationReadOutcome
   LoadIrReconciliationCandidates(std::string_view providerId,
-                                 std::string_view serverOrigin);
+                                 std::string_view serverOrigin,
+                                 std::optional<int> beforeModernChartResultId =
+                                     std::nullopt,
+                                 std::size_t limit =
+                                     ir::kDefaultIrUploadSourcePageRows);
   ir::IrUploadRecordReadOutcome
   ListIrUploadRecords(std::string_view providerId,
-                      std::string_view serverOrigin);
+                      std::string_view serverOrigin,
+                      std::optional<int> beforeModernChartResultId =
+                          std::nullopt,
+                      std::size_t limit =
+                          ir::kDefaultIrUploadSourcePageRows);
   ir::IrUploadCandidateReadOutcome
   ListIrUploadCandidates(std::string_view providerId,
-                         std::string_view serverOrigin);
+                         std::string_view serverOrigin,
+                         std::optional<int> beforeModernChartResultId =
+                             std::nullopt,
+                         std::size_t limit =
+                             ir::kDefaultIrUploadSourcePageRows);
   ir::IrRemoteSnapshotApplyOutcome
   ApplyIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation);
   // Record sync uses these two phases so score projection can complete after

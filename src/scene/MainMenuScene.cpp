@@ -8802,26 +8802,42 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
   std::unordered_map<std::string, ir::IrUploadRecord> irRecordsByAttempt;
   bool modernIrReadSucceeded = courseReplayList;
   if (!courseReplayList && irServerOrigin.has_value()) {
-    auto records = context.replayRepository.ListIrUploadRecords(
-        ir::kTachiProviderId, *irServerOrigin);
-    if (records.status == ir::IrUploadRecordReadStatus::Loaded) {
-      irRecordsByAttempt.reserve(records.records.size());
-      for (auto &record : records.records) {
+    std::optional<int> beforeResultId;
+    std::string irReadDiagnostic;
+    bool irReadFailed = false;
+    do {
+      auto page = context.replayRepository.ListIrUploadRecords(
+          ir::kTachiProviderId, *irServerOrigin, beforeResultId);
+      if (page.status != ir::IrUploadRecordReadStatus::Loaded) {
+        irReadFailed = true;
+        irReadDiagnostic =
+            page.diagnostic.empty()
+                ? "Modern IR Records unavailable: state could not be read"
+                : std::string("Modern IR Records unavailable: ") +
+                      page.diagnostic;
+        break;
+      }
+      irRecordsByAttempt.reserve(irRecordsByAttempt.size() +
+                                 page.records.size());
+      for (auto &record : page.records) {
         irRecordsByAttempt.emplace(record.attemptId, std::move(record));
       }
-      modernIrReadSucceeded = records.diagnostic.empty();
-      if (!records.diagnostic.empty() &&
-          records.diagnostic != publishedResultRecordDiagnostic) {
-        publishedResultRecordDiagnostic = records.diagnostic;
-        SDL_Log("%s", records.diagnostic.c_str());
-        archive_file::appendDebugLogLine(records.diagnostic);
+      if (irReadDiagnostic.empty() && !page.diagnostic.empty()) {
+        irReadDiagnostic = page.diagnostic;
       }
-    } else {
-      const std::string diagnostic = ir::sanitizeDiagnostic(
-          records.diagnostic.empty()
-              ? "Modern IR Records unavailable: state could not be read"
-              : std::string("Modern IR Records unavailable: ") +
-                    records.diagnostic);
+      if (page.nextBeforeModernChartResultId && beforeResultId &&
+          *page.nextBeforeModernChartResultId >= *beforeResultId) {
+        irReadFailed = true;
+        irReadDiagnostic = "Modern IR Records pagination did not advance";
+        break;
+      }
+      beforeResultId = page.nextBeforeModernChartResultId;
+    } while (beforeResultId.has_value());
+
+    modernIrReadSucceeded = !irReadFailed && irReadDiagnostic.empty();
+    if (!irReadDiagnostic.empty()) {
+      const std::string diagnostic =
+          ir::sanitizeDiagnostic(irReadDiagnostic);
       if (diagnostic != publishedResultRecordDiagnostic) {
         publishedResultRecordDiagnostic = diagnostic;
         SDL_Log("%s", diagnostic.c_str());

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
+#include <iterator>
 #include <span>
 #include <stop_token>
 #include <utility>
@@ -351,19 +352,49 @@ void IrUploadsScene::reloadCandidates() {
   refreshProviderState();
 
   const std::string origin = serverOrigin();
-  auto candidateRead = context.replayRepository.ListIrUploadCandidates(
-      ir::kTachiProviderId, origin);
-  if (candidateRead.status != ir::IrUploadCandidateReadStatus::Loaded) {
-    loadError = candidateRead.diagnostic.empty()
-                    ? "Saved results could not be loaded."
-                    : ir::sanitizeDiagnostic(candidateRead.diagnostic);
-    controller.applyCandidateRefresh(std::nullopt);
-    refreshUi();
-    return;
-  }
+  std::vector<ir::IrUploadCandidate> candidates;
+  std::optional<int> beforeResultId;
+  do {
+    auto page = context.replayRepository.ListIrUploadCandidates(
+        ir::kTachiProviderId, origin, beforeResultId);
+    if (page.status != ir::IrUploadCandidateReadStatus::Loaded) {
+      loadError = page.diagnostic.empty()
+                      ? "Saved results could not be loaded."
+                      : ir::sanitizeDiagnostic(page.diagnostic);
+      controller.applyCandidateRefresh(std::nullopt);
+      refreshUi();
+      return;
+    }
+    if (loadDiagnostic.empty() && !page.diagnostic.empty()) {
+      loadDiagnostic = page.diagnostic;
+    }
+    const std::size_t available =
+        ir::kMaximumIrUploadCandidateRows - candidates.size();
+    const std::size_t accepted = std::min(available, page.candidates.size());
+    candidates.insert(candidates.end(),
+                      std::make_move_iterator(page.candidates.begin()),
+                      std::make_move_iterator(page.candidates.begin() +
+                                              static_cast<std::ptrdiff_t>(
+                                                  accepted)));
+    if (accepted != page.candidates.size() ||
+        (candidates.size() == ir::kMaximumIrUploadCandidateRows &&
+         page.nextBeforeModernChartResultId)) {
+      if (loadDiagnostic.empty()) {
+        loadDiagnostic = "Only the newest saved IR candidates are shown.";
+      }
+      break;
+    }
+    if (page.nextBeforeModernChartResultId && beforeResultId &&
+        *page.nextBeforeModernChartResultId >= *beforeResultId) {
+      loadError = "Saved result pagination did not advance.";
+      controller.applyCandidateRefresh(std::nullopt);
+      refreshUi();
+      return;
+    }
+    beforeResultId = page.nextBeforeModernChartResultId;
+  } while (beforeResultId.has_value());
 
-  loadDiagnostic = candidateRead.diagnostic;
-  controller.applyCandidateRefresh(std::move(candidateRead.candidates));
+  controller.applyCandidateRefresh(std::move(candidates));
   if (candidateList != nullptr) {
     candidateList->setCandidates(controller.candidates(),
                                  controller.selectedAttemptIds());

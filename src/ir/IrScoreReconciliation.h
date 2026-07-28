@@ -48,6 +48,8 @@ struct IrReconciliationReadOutcome {
 
   Status status = Status::StorageFailure;
   std::vector<IrLocalReceiptCandidate> candidates;
+  // Exclusive keyset cursor for the next older page, when one exists.
+  std::optional<int> nextBeforeModernChartResultId;
   std::string diagnostic;
 };
 

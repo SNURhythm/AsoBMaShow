@@ -473,6 +473,26 @@ void testRollbackAndReplayOptionality() {
          reconciliation.candidates.front().attemptId ==
              snapshotOnly.attemptId &&
          !reconciliation.candidates.front().eligible);
+
+  const auto newerSnapshotResult = result(11, 'f');
+  const auto newerSnapshot = snapshot(newerSnapshotResult);
+  const auto newerSnapshotStage = repository.StageModernChartResult(
+      newerSnapshotResult, newerSnapshot, std::nullopt, {});
+  assert(newerSnapshotStage.status == ModernChartStageStatus::Staged &&
+         newerSnapshotStage.receipt);
+  const auto newestPage = repository.ListIrUploadRecords(
+      "tachi", "https://boku.tachi.ac", std::nullopt, 1);
+  assert(newestPage.status == ir::IrUploadRecordReadStatus::Loaded &&
+         newestPage.records.size() == 1 &&
+         newestPage.records.front().attemptId == newerSnapshotResult.attemptId &&
+         newestPage.nextBeforeModernChartResultId.has_value());
+  const auto olderPage = repository.ListIrUploadRecords(
+      "tachi", "https://boku.tachi.ac",
+      newestPage.nextBeforeModernChartResultId, 1);
+  assert(olderPage.status == ir::IrUploadRecordReadStatus::Loaded &&
+         olderPage.records.size() == 1 &&
+         olderPage.records.front().attemptId == snapshotOnly.attemptId &&
+         !olderPage.nextBeforeModernChartResultId.has_value());
 }
 
 void testReservationReleaseAndModernPendingLifecycle() {
@@ -535,6 +555,74 @@ void testReservationReleaseAndModernPendingLifecycle() {
          result_persistence::AcknowledgeStatus::AlreadyAcknowledged);
 }
 
+void testIrSourceHistoryOverGlobalBoundReturnsKeysetPages() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  const auto seed = result(12, '1');
+  const auto seedStage = repository.StageModernChartResult(
+      seed, snapshot(seed), std::nullopt, {});
+  assert(seedStage.status == ModernChartStageStatus::Staged &&
+         seedStage.receipt);
+  repository.Shutdown();
+
+  auto database = openDatabase(databasePath);
+  exec(database.get(),
+       "WITH RECURSIVE seq(value) AS (SELECT 1 UNION ALL SELECT value+1 "
+       "FROM seq WHERE value<" +
+           std::to_string(ir::kMaximumIrUploadCandidateRows) +
+           ") INSERT INTO modern_chart_results("
+           "attempt_id,chart_path,chart_md5,chart_sha256,chart_title,"
+           "chart_artist,long_note_mode,score,max_score,max_combo,combo_break,"
+           "p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,"
+           "clear_type,key_mode,adopted_gauge_type,gauge_history_json,"
+           "judgement_timing_json,provenance_json,result_fingerprint,"
+           "played_at_unix_ms) SELECT "
+           "printf('20000000-0000-4000-8000-%012x',value),chart_path,"
+           "chart_md5,chart_sha256,chart_title,chart_artist,long_note_mode,"
+           "score,max_score,max_combo,combo_break,p_great,great,good,bad,"
+           "poor,k_poor,fast,slow,final_gauge,clear_type,key_mode,"
+           "adopted_gauge_type,gauge_history_json,judgement_timing_json,"
+           "provenance_json,result_fingerprint,played_at_unix_ms+value "
+           "FROM modern_chart_results,seq WHERE id=" +
+           std::to_string(seedStage.receipt->resultId));
+  exec(database.get(),
+       "INSERT INTO ir_submission_snapshots(modern_chart_result_id,attempt_id,"
+       "schema_version,payload_json,fingerprint) SELECT cloned.id,"
+       "cloned.attempt_id,source.schema_version,source.payload_json,"
+       "source.fingerprint FROM modern_chart_results cloned JOIN "
+       "ir_submission_snapshots source ON source.modern_chart_result_id=" +
+           std::to_string(seedStage.receipt->resultId) +
+           " WHERE cloned.id!=" +
+           std::to_string(seedStage.receipt->resultId));
+  database.reset();
+
+  const auto newest = result(13, '2');
+  const auto newestStage = repository.StageModernChartResult(
+      newest, snapshot(newest), std::nullopt, {});
+  assert(newestStage.status == ModernChartStageStatus::Staged &&
+         newestStage.receipt);
+
+  const auto records = repository.ListIrUploadRecords(
+      "tachi", "https://boku.tachi.ac");
+  assert(records.status == ir::IrUploadRecordReadStatus::Loaded &&
+         records.records.size() == 1 &&
+         records.records.front().attemptId == newest.attemptId &&
+         records.nextBeforeModernChartResultId.has_value());
+  const auto candidates = repository.ListIrUploadCandidates(
+      "tachi", "https://boku.tachi.ac", std::nullopt, 1);
+  assert(candidates.status == ir::IrUploadCandidateReadStatus::Loaded &&
+         candidates.nextBeforeModernChartResultId.has_value());
+  const auto reconciliation = repository.LoadIrReconciliationCandidates(
+      "tachi", "https://boku.tachi.ac", std::nullopt, 1);
+  assert(reconciliation.status ==
+             ir::IrReconciliationReadOutcome::Status::Loaded &&
+         reconciliation.candidates.size() == 1 &&
+         reconciliation.candidates.front().attemptId == newest.attemptId &&
+         reconciliation.nextBeforeModernChartResultId.has_value());
+}
+
 void testPendingOwnerCorruptionFailsClosed() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path / "replay.db";
@@ -592,6 +680,7 @@ void testPendingTimestampComesFromResultOwner() {
 int main() {
   testSchemaReservationAtomicStageAndExactRetry();
   testRollbackAndReplayOptionality();
+  testIrSourceHistoryOverGlobalBoundReturnsKeysetPages();
   testReservationReleaseAndModernPendingLifecycle();
   testPendingOwnerCorruptionFailsClosed();
   testPendingTimestampComesFromResultOwner();

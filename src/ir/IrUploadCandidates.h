@@ -14,6 +14,7 @@
 namespace ir {
 
 inline constexpr std::size_t kMaximumIrUploadCandidateRows = 16384;
+inline constexpr std::size_t kDefaultIrUploadSourcePageRows = 512;
 
 // Repository-owned facts read from one SQLite snapshot. Replay files and
 // legacy summary rows are deliberately absent from this input contract.
@@ -81,6 +82,8 @@ struct IrUploadCandidateReadOutcome {
       IrUploadCandidateReadStatus::StorageFailure;
   std::vector<IrUploadCandidate> candidates;
   std::size_t omittedRows = 0;
+  // Exclusive keyset cursor for the next older page, when one exists.
+  std::optional<int> nextBeforeModernChartResultId;
   std::string diagnostic;
 };
 
@@ -95,6 +98,8 @@ struct IrUploadRecordReadOutcome {
   IrUploadRecordReadStatus status = IrUploadRecordReadStatus::StorageFailure;
   std::vector<IrUploadRecord> records;
   std::size_t omittedRows = 0;
+  // Exclusive keyset cursor for the next older page, when one exists.
+  std::optional<int> nextBeforeModernChartResultId;
   std::string diagnostic;
 };
 
@@ -105,7 +110,9 @@ struct IrUploadRecordReadOutcome {
     std::string_view serverOrigin, std::string &diagnostic) noexcept;
 
 // Provider eligibility is evaluated from the immutable snapshot submission at
-// every Records, manual-upload, and reconciliation projection boundary.
+// every Records, manual-upload, and reconciliation projection boundary. Known
+// providers may narrow the provider-neutral verified-provenance floor; the
+// driver's draft builder remains authoritative for delivery-specific policy.
 [[nodiscard]] bool isSubmissionEligibleForProvider(
     std::string_view providerId,
     const IrSubmission &submission) noexcept;

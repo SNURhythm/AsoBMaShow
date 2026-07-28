@@ -559,34 +559,51 @@ struct IrSourceReadOutcome {
   IrSourceReadStatus status = IrSourceReadStatus::StorageFailure;
   std::vector<ir::IrUploadCandidateSource> sources;
   std::size_t omittedRows = 0;
+  std::optional<int> nextBeforeModernChartResultId;
   std::string diagnostic;
 };
 
 IrSourceReadOutcome loadIrSourcesOnConnection(
     sqlite3 *database, std::string_view providerId,
-    std::string_view serverOrigin) {
+    std::string_view serverOrigin,
+    std::optional<int> beforeModernChartResultId, std::size_t limit) {
   const auto scope = ir::projectIrUploadCandidates({}, providerId, serverOrigin);
-  if (!scope.diagnostic.empty()) {
+  if (!scope.diagnostic.empty() ||
+      (beforeModernChartResultId && *beforeModernChartResultId <= 0) ||
+      limit == 0 || limit > ir::kMaximumIrUploadCandidateRows) {
     return {.status = IrSourceReadStatus::Invalid,
-            .diagnostic = std::move(scope.diagnostic)};
+            .diagnostic = scope.diagnostic.empty()
+                              ? "modern IR result page is invalid"
+                              : std::move(scope.diagnostic)};
   }
 
   SqliteStatementHandle statement;
-  constexpr const char *query =
+  std::string query =
       "SELECT result.id FROM modern_chart_results result INNER JOIN "
       "ir_submission_snapshots snapshot ON "
-      "snapshot.modern_chart_result_id=result.id ORDER BY result.id DESC "
-      "LIMIT ?";
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
-      sqlite3_bind_int64(
-          statement.get(), 1,
-          static_cast<sqlite3_int64>(ir::kMaximumIrUploadCandidateRows + 1)) !=
-          SQLITE_OK) {
+      "snapshot.modern_chart_result_id=result.id ";
+  if (beforeModernChartResultId) {
+    query += "WHERE result.id<? ";
+  }
+  query += "ORDER BY result.id DESC LIMIT ?";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return {.status = IrSourceReadStatus::StorageFailure,
             .diagnostic = "could not prepare modern IR result scan"};
   }
+  int binding = 1;
+  if (beforeModernChartResultId &&
+      sqlite3_bind_int(statement.get(), binding++,
+                       *beforeModernChartResultId) != SQLITE_OK) {
+    return {.status = IrSourceReadStatus::StorageFailure,
+            .diagnostic = "could not bind modern IR result cursor"};
+  }
+  if (sqlite3_bind_int64(statement.get(), binding,
+                         static_cast<sqlite3_int64>(limit + 1)) != SQLITE_OK) {
+    return {.status = IrSourceReadStatus::StorageFailure,
+            .diagnostic = "could not bind modern IR result page limit"};
+  }
   std::vector<int> resultIds;
-  resultIds.reserve(ir::kMaximumIrUploadCandidateRows);
+  resultIds.reserve(limit + 1);
   int rc = SQLITE_OK;
   while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
     if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER) {
@@ -605,12 +622,12 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
             .diagnostic = "modern IR result scan did not complete"};
   }
   statement.reset();
-  if (resultIds.size() > ir::kMaximumIrUploadCandidateRows) {
-    return {.status = IrSourceReadStatus::Invalid,
-            .diagnostic = "modern IR result snapshot is oversized"};
-  }
 
   IrSourceReadOutcome outcome{.status = IrSourceReadStatus::Loaded};
+  if (resultIds.size() > limit) {
+    resultIds.resize(limit);
+    outcome.nextBeforeModernChartResultId = resultIds.back();
+  }
   outcome.sources.reserve(resultIds.size());
   for (const int resultId : resultIds) {
     auto loaded = readModernResult(database, "id=?", {}, resultId);
@@ -2702,7 +2719,8 @@ ReplayRepository::LoadModernIrSubmissionSnapshot(std::string_view attemptId) {
 }
 
 ir::IrUploadRecordReadOutcome ReplayRepository::ListIrUploadRecords(
-    std::string_view providerId, std::string_view serverOrigin) {
+    std::string_view providerId, std::string_view serverOrigin,
+    std::optional<int> beforeModernChartResultId, std::size_t limit) {
   profile_database_activity::ReadGuard readGuard;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
@@ -2717,7 +2735,8 @@ ir::IrUploadRecordReadOutcome ReplayRepository::ListIrUploadRecords(
             .diagnostic = "could not start modern IR record read"};
   }
   auto loaded = loadIrSourcesOnConnection(impl_->sessionDatabase, providerId,
-                                          serverOrigin);
+                                          serverOrigin,
+                                          beforeModernChartResultId, limit);
   if (loaded.status == IrSourceReadStatus::Invalid) {
     return {.status = ir::IrUploadRecordReadStatus::Invalid,
             .diagnostic = std::move(loaded.diagnostic)};
@@ -2742,11 +2761,14 @@ ir::IrUploadRecordReadOutcome ReplayRepository::ListIrUploadRecords(
   return {.status = ir::IrUploadRecordReadStatus::Loaded,
           .records = std::move(projected.records),
           .omittedRows = loaded.omittedRows + projected.omittedRows,
+          .nextBeforeModernChartResultId =
+              loaded.nextBeforeModernChartResultId,
           .diagnostic = ir::sanitizeDiagnostic(diagnostic)};
 }
 
 ir::IrUploadCandidateReadOutcome ReplayRepository::ListIrUploadCandidates(
-    std::string_view providerId, std::string_view serverOrigin) {
+    std::string_view providerId, std::string_view serverOrigin,
+    std::optional<int> beforeModernChartResultId, std::size_t limit) {
   profile_database_activity::ReadGuard readGuard;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
@@ -2761,7 +2783,8 @@ ir::IrUploadCandidateReadOutcome ReplayRepository::ListIrUploadCandidates(
             .diagnostic = "could not start modern IR candidate read"};
   }
   auto loaded = loadIrSourcesOnConnection(impl_->sessionDatabase, providerId,
-                                          serverOrigin);
+                                          serverOrigin,
+                                          beforeModernChartResultId, limit);
   if (loaded.status == IrSourceReadStatus::Invalid) {
     return {.status = ir::IrUploadCandidateReadStatus::Invalid,
             .diagnostic = std::move(loaded.diagnostic)};
@@ -2786,12 +2809,15 @@ ir::IrUploadCandidateReadOutcome ReplayRepository::ListIrUploadCandidates(
   return {.status = ir::IrUploadCandidateReadStatus::Loaded,
           .candidates = std::move(projected.candidates),
           .omittedRows = loaded.omittedRows + projected.omittedRows,
+          .nextBeforeModernChartResultId =
+              loaded.nextBeforeModernChartResultId,
           .diagnostic = ir::sanitizeDiagnostic(diagnostic)};
 }
 
 ir::IrReconciliationReadOutcome
 ReplayRepository::LoadIrReconciliationCandidates(
-    std::string_view providerId, std::string_view serverOrigin) {
+    std::string_view providerId, std::string_view serverOrigin,
+    std::optional<int> beforeModernChartResultId, std::size_t limit) {
   using Status = ir::IrReconciliationReadOutcome::Status;
   profile_database_activity::ReadGuard readGuard;
   std::lock_guard lock(impl_->sessionMutex);
@@ -2807,7 +2833,8 @@ ReplayRepository::LoadIrReconciliationCandidates(
             .diagnostic = "could not start modern IR reconciliation read"};
   }
   auto loaded = loadIrSourcesOnConnection(impl_->sessionDatabase, providerId,
-                                          serverOrigin);
+                                          serverOrigin,
+                                          beforeModernChartResultId, limit);
   if (loaded.status == IrSourceReadStatus::Invalid) {
     return {.status = Status::Invalid,
             .diagnostic = std::move(loaded.diagnostic)};
@@ -2817,8 +2844,10 @@ ReplayRepository::LoadIrReconciliationCandidates(
             .diagnostic = std::move(loaded.diagnostic)};
   }
 
-  ir::IrReconciliationReadOutcome outcome{.status = Status::Loaded,
-                                           .diagnostic = loaded.diagnostic};
+  ir::IrReconciliationReadOutcome outcome{
+      .status = Status::Loaded,
+      .nextBeforeModernChartResultId = loaded.nextBeforeModernChartResultId,
+      .diagnostic = loaded.diagnostic};
   outcome.candidates.reserve(loaded.sources.size());
   for (auto &source : loaded.sources) {
     ir::IrLocalReceiptCandidate candidate{
