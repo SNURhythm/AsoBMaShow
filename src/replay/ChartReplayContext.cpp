@@ -144,7 +144,10 @@ ChartReplayContextOutcome ChartReplayContext::load(
                      "Parsed chart identity differs from the saved result.",
                      preservedResult);
     }
-    if (parsedChart.longNoteMode != stored.score.longNoteMode) {
+    const auto expectedLongNoteMode =
+        result_persistence::replaySetupLongNoteMode(stored.score);
+    if (!expectedLongNoteMode ||
+        parsedChart.longNoteMode != *expectedLongNoteMode) {
       return failure(
           ChartReplayContextState::LongNoteModeMismatch,
           "Parsed chart long-note mode differs from the saved result.",

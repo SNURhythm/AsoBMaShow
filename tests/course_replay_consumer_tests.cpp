@@ -71,7 +71,7 @@ result_persistence::ModernCourseStageResult stage(int index, char hash,
   value.score.chartSha256 = repeated(hash, 64);
   value.score.chartTitle = "Stage";
   value.score.chartArtist = "Artist";
-  value.score.longNoteMode = 1;
+  value.score.longNoteMode = 0;
   value.score.score = 7;
   value.score.maxScore = 10;
   value.score.maxCombo = maximumCombo;
@@ -129,7 +129,8 @@ ReplaySetup setup(const result_persistence::ModernCourseResult &result,
   value.chart = {.md5 = saved.score.chartMd5,
                  .sha256 = saved.score.chartSha256,
                  .keyMode = saved.keyMode};
-  value.longNoteMode = saved.score.longNoteMode;
+  value.longNoteMode =
+      result_persistence::replaySetupLongNoteMode(saved.score).value_or(-1);
   value.player1.option = result.requestedPlayOption;
   value.assistOption = result.assistOption;
   value.initialGaugeType = result.initialGaugeType;
@@ -163,7 +164,8 @@ std::unique_ptr<bms_parser::Chart> chartFor(
   chart->Meta.MD5 = stage.score.chartMd5;
   chart->Meta.SHA256 = stage.score.chartSha256;
   chart->Meta.KeyMode = stage.keyMode;
-  chart->Meta.LnMode = stage.score.longNoteMode;
+  chart->Meta.LnMode =
+      result_persistence::replaySetupLongNoteMode(stage.score).value_or(-1);
   chart->Meta.TotalNotes = 5;
   return chart;
 }

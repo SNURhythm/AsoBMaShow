@@ -25,8 +25,14 @@ std::optional<SavedChartSetup>
 savedChartSetup(const result_persistence::ChartScoreWrite &score,
                 std::string &diagnostic) {
   diagnostic.clear();
+  const auto replayLongNoteMode =
+      result_persistence::replaySetupLongNoteMode(score);
+  if (!replayLongNoteMode.has_value()) {
+    diagnostic = "saved chart setup has no unique provenance stage";
+    return std::nullopt;
+  }
   if (score.provenance.stages.empty()) {
-    return SavedChartSetup{.longNoteMode = score.longNoteMode};
+    return SavedChartSetup{.longNoteMode = *replayLongNoteMode};
   }
 
   bms_parser::ChartMeta savedIdentity;
@@ -40,8 +46,7 @@ savedChartSetup(const result_persistence::ChartScoreWrite &score,
   }
   const auto maximumScore =
       result_contract::maximumScoreForNotes(stage->totalNotes);
-  if (stage->longNoteMode != score.longNoteMode || !maximumScore ||
-      *maximumScore != score.maxScore) {
+  if (!maximumScore || *maximumScore != score.maxScore) {
     diagnostic = "saved chart setup disagrees with result facts";
     return std::nullopt;
   }
@@ -58,7 +63,7 @@ savedChartSetup(const result_persistence::ChartScoreWrite &score,
   }
 
   return SavedChartSetup{
-      .longNoteMode = stage->longNoteMode,
+      .longNoteMode = *replayLongNoteMode,
       .randomSeed =
           stage->chartRandomSeed
               ? std::optional<unsigned int>(
@@ -133,6 +138,7 @@ bool chartIdentityAgrees(const result_persistence::ChartScoreWrite &score,
 }
 
 void applySavedDisplayFacts(const result_persistence::ChartScoreWrite &score,
+                            int replayLongNoteMode,
                             bms_parser::ChartMeta &meta) {
   if (!score.chartTitle.empty()) {
     meta.Title = score.chartTitle;
@@ -140,7 +146,7 @@ void applySavedDisplayFacts(const result_persistence::ChartScoreWrite &score,
   if (!score.chartArtist.empty()) {
     meta.Artist = score.chartArtist;
   }
-  meta.LnMode = score.longNoteMode;
+  meta.LnMode = replayLongNoteMode;
 }
 
 GameplayRuleset rulesetFor(const ScoreProvenance &provenance) noexcept {
@@ -261,7 +267,7 @@ ModernChartBuildOutcome BuildChartResult(
       return {.diagnostic = "saved chart identity does not match"};
     }
 
-    applySavedDisplayFacts(result.score, chart->Meta);
+    applySavedDisplayFacts(result.score, setup->longNoteMode, chart->Meta);
     RhythmState state = chartResultState(*chart, result);
     return {.value = ModernChartResultView{.chart = std::move(chart),
                                            .result = std::move(result),
@@ -323,7 +329,7 @@ ModernCourseBuildOutcome BuildCourseResult(
       if (!chartIdentityAgrees(stage.score, stage.keyMode, loaded->Meta)) {
         return {.diagnostic = "saved course stage identity does not match"};
       }
-      applySavedDisplayFacts(stage.score, loaded->Meta);
+      applySavedDisplayFacts(stage.score, setup->longNoteMode, loaded->Meta);
       auto chart = std::shared_ptr<bms_parser::Chart>(std::move(loaded));
       RhythmState state = courseStageResultState(*chart, result, stage);
       completedStages.push_back({.chart = std::move(chart),

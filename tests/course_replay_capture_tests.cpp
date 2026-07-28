@@ -62,7 +62,7 @@ stage(int index, char hash, int keyMode, int maximumCombo, float gauge) {
   value.score.chartSha256 = repeated(hash, 64);
   value.score.chartTitle = "Stage";
   value.score.chartArtist = "Artist";
-  value.score.longNoteMode = 1;
+  value.score.longNoteMode = 0;
   value.score.score = 7;
   value.score.maxScore = 10;
   value.score.maxCombo = maximumCombo;
@@ -109,7 +109,9 @@ playback(const result_persistence::ModernCourseStageResult &saved) {
       .chart = {.md5 = saved.score.chartMd5,
                 .sha256 = saved.score.chartSha256,
                 .keyMode = saved.keyMode},
-      .longNoteMode = saved.score.longNoteMode,
+      .longNoteMode =
+          result_persistence::replaySetupLongNoteMode(saved.score)
+              .value_or(-1),
   };
   std::string diagnostic;
   auto setup = replay::captureLocalReplaySetup(facts, saved.score.provenance,
@@ -205,6 +207,11 @@ void testRawCaptureDropsOnlyReplayAttachment() {
              accepted->pathInput.beatorajaConstraintIds ==
                  std::vector<int>({4}),
          "course capture retains canonical raw stages and path identity");
+  expect(accepted && accepted->replay &&
+             accepted->replay->playback.stages.front().setup.longNoteMode ==
+                 1 &&
+             accepted->result.stages.front().score.longNoteMode == 0,
+         "course no-LN score buckets retain the actual stage setup mode");
 
   capture.stages[1].playback.reset();
   const auto missing = replay::captureCourseReplayAttempt(capture, diagnostic);

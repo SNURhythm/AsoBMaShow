@@ -129,6 +129,13 @@ struct ModernChartResult {
   bool operator==(const ModernChartResult &) const = default;
 };
 
+// Result history may use LN mode 0 as the shared clear-lamp bucket for charts
+// whose notes are unaffected by the selected LN/CN/HCN interpretation. Replay
+// and result-recall setup must instead use the effective mode captured in the
+// unique provenance stage.
+[[nodiscard]] std::optional<int>
+replaySetupLongNoteMode(const ChartScoreWrite &score) noexcept;
+
 struct ModernCourseStageResult {
   int stageIndex = 0;
   ChartScoreWrite score;

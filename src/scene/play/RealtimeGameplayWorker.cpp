@@ -292,6 +292,20 @@ void RealtimeGameplayWorker::processInput(
     return;
   }
 
+  if (input.hasReplayControl &&
+      (input.replayControl.kind == replay::LogicalControlKind::Start ||
+       input.replayControl.kind == replay::LogicalControlKind::Select)) {
+    // Start and Select are stock BRD commands without a physical chart lane.
+    // They bypass lane ownership; replayOnly is reserved for scratch handoffs.
+    auto command = input;
+    command.source = RealtimeGameplayInputSource::Independent;
+    command.lane = -1;
+    command.compensateLane = -1;
+    command.replayOnly = false;
+    recordAcceptedReplayInput(command, *songTime);
+    return;
+  }
+
   if (input.source == RealtimeGameplayInputSource::Independent) {
     if (input.replayOnly) {
       recordAcceptedReplayInput(input, *songTime);

@@ -584,6 +584,79 @@ void testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction() {
           "each replay-only release and opposite press shares one timestamp");
 }
 
+void testLegacyStartSelectCommandsRemainStockReplayInput() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  gameplay::RealtimeGameplayInputBridge bridge(
+      7, 7,
+      {.context = &worker,
+       .emit = [](void *context,
+                  const gameplay::RealtimeGameplayInput &input) {
+         return static_cast<gameplay::RealtimeGameplayWorker *>(context)
+             ->enqueueInput(input);
+       }});
+  LegacyBridgeControl control(bridge);
+  LogicalGameplayInputAdapter adapter(
+      control, [](const auto &) {}, [&](const auto &applied) {
+        require(bridge.emitApplied(applied.control, applied.pressed,
+                                   applied.replayOnly,
+                                   control.nextTimestamp()),
+                "legacy command callback reaches the realtime bridge");
+      });
+  require(worker.start(), "legacy command replay worker starts");
+  const auto before = worker.acquireLatestSnapshot();
+  const auto beforeGeneration = before ? before->generation : 0;
+
+  const auto startDown = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Start},
+      .pressed = true,
+      .value = 1.0F};
+  const auto startUp = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Start},
+      .pressed = false,
+      .value = 0.0F};
+  const auto selectDown = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Select},
+      .pressed = true,
+      .value = 1.0F};
+  const auto selectUp = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Select},
+      .pressed = false,
+      .value = 0.0F};
+  adapter.apply(std::span(&startDown, 1));
+  adapter.apply(std::span(&startUp, 1));
+  adapter.apply(std::span(&selectDown, 1));
+  adapter.apply(std::span(&selectUp, 1));
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->generation > beforeGeneration;
+          }),
+          "legacy commands drain through the realtime worker");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() && replayInput->size() == 4,
+          "Start and Select press and release survive live replay capture");
+  replay::ReplayPlaybackData playback;
+  playback.setup.chart.md5 = std::string(32, 'b');
+  playback.setup.chart.sha256 = std::string(64, 'a');
+  playback.setup.chart.keyMode = 7;
+  playback.setup.longNoteMode = 1;
+  playback.input = *replayInput;
+  const auto validation = replay::validateReplayPlayback(
+      playback, replay::ReplaySetupSource::LocalCapture,
+      {.completionSongTimeMicros = 5'000'000});
+  require(validation.valid(),
+          "Start and Select remain stock BRD commands, not replay-only "
+          "scratch handoffs");
+}
+
 void testReplayCaptureOverflowDoesNotInvalidateGameplay() {
   FakeClock clock;
   FakeAudio audio;
@@ -1164,6 +1237,7 @@ int main() {
   testRealtimeIngressCoalescesTouchAndHardwareScratchOwnership();
   testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges();
   testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction();
+  testLegacyStartSelectCommandsRemainStockReplayInput();
   testReplayCaptureOverflowDoesNotInvalidateGameplay();
   testInputDelayCompensationPrecedesWorkerAutomaticDeadline();
   testInputPreadvancePublishesAutomaticTransactions();

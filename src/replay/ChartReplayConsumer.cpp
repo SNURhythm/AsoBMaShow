@@ -51,8 +51,14 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
                      "The selected chart could not be parsed.");
     }
 
+    const auto expectedLongNoteMode =
+        result_persistence::replaySetupLongNoteMode(listedRecord.result.score);
+    if (!expectedLongNoteMode) {
+      return failure(ChartReplayConsumerState::InvalidRequest,
+                     "Saved result has no unique replay setup.");
+    }
     const ParsedChartReplayFacts facts = makeParsedChartReplayFacts(
-        baseChart->Meta, listedRecord.result.score.longNoteMode);
+        baseChart->Meta, *expectedLongNoteMode);
     auto context = dependencies_.loadContext(listedRecord.result.attemptId,
                                              facts);
     if (!context.replayAvailable() || !context.verified.has_value()) {
@@ -95,7 +101,7 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
         long_note_mode::normalizeValue(preparedChart->Meta.LnMode);
     if (compareReplayChartIdentity(preparedIdentity, savedIdentity) !=
             ReplayChartMatch::Match ||
-        preparedLongNoteMode != verified.result.score.longNoteMode) {
+        preparedLongNoteMode != *expectedLongNoteMode) {
       return failure(ChartReplayConsumerState::PreparedChartMismatch,
                      "Prepared replay chart differs from the saved result.",
                      std::move(context));

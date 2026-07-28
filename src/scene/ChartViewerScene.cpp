@@ -5,6 +5,7 @@
 #include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
 #include "../LongNoteModeUtils.h"
+#include "../ModernResult.h"
 #include "../PlayOptionUtils.h"
 #include "../ResultContracts.h"
 #include "../repositories/ReplayRepository.h"
@@ -3372,8 +3373,13 @@ void ChartViewerScene::showGhostModal() {
         context.replayRepository);
     modern.reserve(history.records.size());
     for (const ModernChartResultRecord &record : history.records) {
+      const auto replayLongNoteMode =
+          result_persistence::replaySetupLongNoteMode(record.result.score);
+      if (!replayLongNoteMode) {
+        continue;
+      }
       const auto facts = replay::makeParsedChartReplayFacts(
-          chart->Meta, record.result.score.longNoteMode);
+          chart->Meta, *replayLongNoteMode);
       const auto replayLoad =
           replayContext.load(record.result.attemptId, facts);
       auto summary = makeModernChartResultRecord(

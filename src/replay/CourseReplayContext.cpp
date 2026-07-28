@@ -144,6 +144,8 @@ CourseReplayContextOutcome CourseReplayContext::load(
     for (std::size_t index = 0; index < stored.stages.size(); ++index) {
       const auto &parsed = parsedCourse.stages[index];
       const auto &saved = stored.stages[index];
+      const auto expectedLongNoteMode =
+          result_persistence::replaySetupLongNoteMode(saved.score);
       const ReplayChartIdentity expected{.md5 = saved.score.chartMd5,
                                          .sha256 = saved.score.chartSha256,
                                          .keyMode = saved.keyMode};
@@ -154,7 +156,8 @@ CourseReplayContextOutcome CourseReplayContext::load(
             "Parsed course stage identity differs from the saved result.",
             preservedResult);
       }
-      if (parsed.longNoteMode != saved.score.longNoteMode ||
+      if (!expectedLongNoteMode ||
+          parsed.longNoteMode != *expectedLongNoteMode ||
           parsed.longNoteMode != stored.longNoteMode) {
         return failure(
             CourseReplayContextState::LongNoteModeMismatch,

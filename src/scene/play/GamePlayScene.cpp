@@ -2880,7 +2880,9 @@ void GamePlayScene::recordModernCourseStage(
       .chart = {.md5 = result->score.chartMd5,
                 .sha256 = result->score.chartSha256,
                 .keyMode = result->keyMode},
-      .longNoteMode = longNoteMode,
+      .longNoteMode =
+          result_persistence::replaySetupLongNoteMode(result->score)
+              .value_or(-1),
       .hasUndefinedLongNotes = chartContainsUndefinedLongNote(*chart),
       .initialLaneCoverPercent = initialLaneCover,
       .laneCoverEnabled = initialLaneCover > 0,
@@ -3233,6 +3235,9 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
           .sha256 = result->score.chartSha256,
           .keyMode = result->keyMode,
       };
+      const int replayLongNoteMode =
+          result_persistence::replaySetupLongNoteMode(result->score)
+              .value_or(-1);
       const int initialLaneCover =
           recordedReplay.laneCoverEvents.empty()
               ? effectiveNoteStartPositionPercent()
@@ -3240,7 +3245,7 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       const replay::ChartReplayCapture capture{
           .result = std::move(*result),
           .setupFacts = {.chart = resultIdentity,
-               .longNoteMode = resultLongNoteMode,
+               .longNoteMode = replayLongNoteMode,
                .hasUndefinedLongNotes =
                    chartContainsUndefinedLongNote(*chart),
                .initialLaneCoverPercent = initialLaneCover,

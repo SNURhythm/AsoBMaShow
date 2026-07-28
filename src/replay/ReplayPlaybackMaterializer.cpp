@@ -316,7 +316,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   replay.chartMeta.SHA256 = savedResult.score.chartSha256;
   replay.chartMeta.Title = savedResult.score.chartTitle;
   replay.chartMeta.Artist = savedResult.score.chartArtist;
-  replay.chartMeta.LnMode = savedResult.score.longNoteMode;
+  replay.chartMeta.LnMode = setup.longNoteMode;
   replay.finalScore = savedResult.score.score;
   replay.maxCombo = savedResult.score.maxCombo;
   replay.finalGauge = savedResult.score.finalGauge;

@@ -877,6 +877,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/path.cpp
         src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileAssociationCoordinator.cpp
         src/replay/ReplayFileActionService.cpp
         src/replay/ReplayFileReconciler.cpp
         src/replay/ReplayReferenceAgreement.cpp
@@ -1632,7 +1633,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ChartReplayPersistence.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayFileAssociationCoordinator.cpp
+        src/replay/ReplayFileActionService.cpp
+        src/replay/ReplayCapabilities.cpp
         src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/replay/ReplayFileStore.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplaySetup.cpp

@@ -39,7 +39,10 @@ ChartReplayAgreement compareChartReplayToResult(
       return disagreement(ChartReplayAgreementIssue::ChartIdentity,
                           "replay chart identity differs from the result");
     }
-    if (replay.playback.setup.longNoteMode != result.score.longNoteMode) {
+    const auto expectedLongNoteMode =
+        result_persistence::replaySetupLongNoteMode(result.score);
+    if (!expectedLongNoteMode ||
+        replay.playback.setup.longNoteMode != *expectedLongNoteMode) {
       return disagreement(ChartReplayAgreementIssue::LongNoteMode,
                           "replay long-note mode differs from the result");
     }

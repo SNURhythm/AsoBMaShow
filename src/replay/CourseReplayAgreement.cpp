@@ -80,6 +80,8 @@ CourseReplayAgreement compareCourseReplayToResult(
     for (std::size_t index = 0; index < result.stages.size(); ++index) {
       const auto &setup = replay.playback.stages[index].setup;
       const auto &stage = result.stages[index];
+      const auto expectedLongNoteMode =
+          result_persistence::replaySetupLongNoteMode(stage.score);
       const ReplayChartIdentity expected{.md5 = stage.score.chartMd5,
                                          .sha256 = stage.score.chartSha256,
                                          .keyMode = stage.keyMode};
@@ -90,7 +92,8 @@ CourseReplayAgreement compareCourseReplayToResult(
             "course replay stage identity differs from the saved result",
             index);
       }
-      if (setup.longNoteMode != stage.score.longNoteMode ||
+      if (!expectedLongNoteMode ||
+          setup.longNoteMode != *expectedLongNoteMode ||
           setup.longNoteMode != result.longNoteMode) {
         return disagreement(
             CourseReplayAgreementIssue::LongNoteMode,

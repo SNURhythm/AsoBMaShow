@@ -86,7 +86,8 @@ ReplayChartDocument replayDocument(
   replay.playback.setup.chart = {.md5 = saved.score.chartMd5,
                                  .sha256 = saved.score.chartSha256,
                                  .keyMode = saved.keyMode};
-  replay.playback.setup.longNoteMode = saved.score.longNoteMode;
+  replay.playback.setup.longNoteMode =
+      result_persistence::replaySetupLongNoteMode(saved.score).value_or(-1);
   replay.playback.setup.initialGaugeType = saved.score.provenance.gaugeType;
   replay.playback.setup.gaugeProfile = saved.score.provenance.gaugeProfile;
   replay.playback.setup.gaugeAutoShift = saved.score.provenance.gaugeAutoShift;
@@ -135,7 +136,9 @@ ParsedChartReplayFacts parsedFacts(
   return {.chart = {.md5 = saved.score.chartMd5,
                     .sha256 = saved.score.chartSha256,
                     .keyMode = saved.keyMode},
-          .longNoteMode = saved.score.longNoteMode,
+          .longNoteMode =
+              result_persistence::replaySetupLongNoteMode(saved.score)
+                  .value_or(-1),
           .timeBounds = ReplayTimeBounds{
               .completionSongTimeMicros = 5'000'000}};
 }
@@ -251,6 +254,19 @@ void testVerifiedContextUsesStrictLoadOrder() {
          "context loads result before verified bytes and decode");
   expect(loaded.replayState() == ReplayState::Verified,
          "ready context maps to the shared verified capability state");
+}
+
+void testNoLongNoteScoreBucketUsesProvenanceSetupAuthority() {
+  Harness harness;
+  harness.result.score.longNoteMode = 0;
+  harness.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(harness.result);
+  harness.replay = replayDocument(harness.result);
+  auto context = harness.makeContext();
+  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  expect(loaded.state == ChartReplayContextState::Ready && loaded.verified &&
+             loaded.verified->document.playback.setup.longNoteMode == 1,
+         "a no-LN score bucket verifies with the provenance setup mode");
 }
 
 void testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate() {
@@ -396,6 +412,7 @@ void testInvalidResultNeverTouchesReplayFile() {
 int main() {
   testParsedFactsUseOneLongNoteAndIdentityAuthority();
   testVerifiedContextUsesStrictLoadOrder();
+  testNoLongNoteScoreBucketUsesProvenanceSetupAuthority();
   testUserDeletedReferenceNeverTouchesFilesystem();
   testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate();
   testFileFailuresRetainResultAndFailReplayClosed();

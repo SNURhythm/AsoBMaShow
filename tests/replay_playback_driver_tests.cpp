@@ -240,13 +240,32 @@ void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
 
 void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
   auto listed = ModernChartResultRecord{.result = savedResult()};
+  ScoreProvenanceBuildInput provenance;
+  provenance.chartMeta.MD5 = listed.result.score.chartMd5;
+  provenance.chartMeta.SHA256 = listed.result.score.chartSha256;
+  provenance.chartMeta.KeyMode = listed.result.keyMode;
+  provenance.chartMeta.Rank = 2;
+  provenance.chartMeta.TotalNotes = listed.result.score.maxScore / 2;
+  provenance.longNoteMode = 1;
+  provenance.sourceJudgeRank = 2;
+  provenance.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  provenance.totalNotes = listed.result.score.maxScore / 2;
+  provenance.effectiveGaugeTotal = 200.0;
+  listed.result.score.provenance = makeScoreProvenance(provenance);
+  listed.result.score.longNoteMode = 0;
+  listed.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(listed.result);
   auto replay = document();
   replay.playback.setup.ruleset = listed.result.score.provenance.ruleset;
   replay.playback.setup.gaugeProfile =
       listed.result.score.provenance.gaugeProfile;
   replay.playback.setup.initialGaugeType =
       listed.result.score.provenance.gaugeType;
-  replay.playback.setup.longNoteMode = listed.result.score.longNoteMode;
+  replay.playback.setup.longNoteMode = 1;
 
   std::vector<std::string> calls;
   ChartReplayConsumer consumer({
@@ -262,7 +281,7 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
         calls.emplace_back("context");
         expect(attemptId == listed.result.attemptId &&
                    facts.chart.sha256 == listed.result.score.chartSha256 &&
-                   facts.longNoteMode == listed.result.score.longNoteMode &&
+                   facts.longNoteMode == 1 &&
                    !facts.timeBounds.has_value(),
                "consumer supplies parsed identity without inventing time");
         VerifiedChartReplay verified{
@@ -310,7 +329,8 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
   expect(loaded.ready() && loaded.chart && loaded.replayData &&
              calls == std::vector<std::string>{"parse", "context", "prepare",
                                                "materialize"},
-         "every chart replay action receives one fully verified preparation");
+         "every chart replay action receives one fully verified preparation, "
+         "including a no-LN score bucket");
 
   calls.clear();
   ChartReplayConsumer missing({

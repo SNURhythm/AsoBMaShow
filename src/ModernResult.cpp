@@ -275,6 +275,26 @@ ChartJudgementTiming captureChartJudgementTiming(const RhythmState &state) {
   return timing;
 }
 
+std::optional<int>
+replaySetupLongNoteMode(const ChartScoreWrite &score) noexcept {
+  try {
+    if (score.provenance.stages.empty()) {
+      return score.longNoteMode;
+    }
+    bms_parser::ChartMeta identity;
+    identity.MD5 = score.chartMd5;
+    identity.SHA256 = score.chartSha256;
+    const auto *stage =
+        score_provenance::uniqueStageForChart(score.provenance, identity);
+    if (stage == nullptr) {
+      return std::nullopt;
+    }
+    return stage->longNoteMode;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
                                        const RhythmState &state,
                                        const ScoreProvenance &provenance,

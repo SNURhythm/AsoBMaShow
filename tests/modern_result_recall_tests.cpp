@@ -1,10 +1,13 @@
 #include "ModernResultRecallBuilder.h"
 
+#include "BmsMetadataText.h"
 #include "LongNoteModeUtils.h"
+#include "PlayOptionUtils.h"
 #include "replay/ReplayCapabilities.h"
 
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -338,6 +341,105 @@ void testMovedChartRecallUsesCurrentLocationAndSavedIdentity() {
          "against saved identity facts");
 }
 
+void testFreshProvenanceBackedResultRecallsFromParsedChart() {
+  const auto directory = std::filesystem::temp_directory_path() /
+                         "asobmashow-modern-result-recall";
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+  std::filesystem::create_directories(directory);
+  const auto path = directory / "fresh.bms";
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << "#PLAYER 1\n#TITLE Fresh Recall\n#ARTIST Test\n"
+              "#BPM 120\n#PLAYLEVEL 1\n#RANK 2\n#TOTAL 200\n"
+              "#WAV01 test.wav\n#RANDOM 2\n#IF 1\n#00111:01\n"
+              "#ELSE\n#00112:01\n#ENDIF\n";
+  }
+
+  std::atomic_bool cancelled{false};
+  auto parsed = play_options::parseChart(path, cancelled, "fresh result");
+  expect(parsed != nullptr && parsed->Meta.TotalNotes > 0 &&
+             !parsed->Meta.MD5.empty() && !parsed->Meta.SHA256.empty(),
+         "fresh-result fixture parses with canonical identity");
+  if (!parsed) {
+    std::filesystem::remove_all(directory, error);
+    return;
+  }
+
+  auto saved = chartResult();
+  saved.score.chartPath = path.string();
+  saved.score.chartMd5 =
+      asobmshow::bms_metadata::normalizedHash(parsed->Meta.MD5);
+  saved.score.chartSha256 =
+      asobmshow::bms_metadata::normalizedHash(parsed->Meta.SHA256);
+  saved.score.chartTitle = parsed->Meta.Title;
+  saved.score.chartArtist = parsed->Meta.Artist;
+  saved.score.longNoteMode =
+      normalizeChartLongNoteModeValue(parsed->Meta.LnMode);
+  saved.score.maxScore = parsed->Meta.TotalNotes * 2;
+  saved.score.score = 0;
+  saved.score.maxCombo = 0;
+  saved.score.comboBreak = parsed->Meta.TotalNotes;
+  saved.score.pGreat = 0;
+  saved.score.great = 0;
+  saved.score.good = 0;
+  saved.score.bad = 0;
+  saved.score.poor = parsed->Meta.TotalNotes;
+  saved.score.kPoor = 0;
+  saved.score.fast = 0;
+  saved.score.slow = 0;
+  saved.score.finalGauge = 0.0F;
+  saved.score.clearType = kClearTypeFailedRank;
+  saved.score.provenance = provenanceFor(saved.score, parsed->Meta.RandomValues);
+  auto &stage = saved.score.provenance.stages.front();
+  stage.chartRandomSeed = parsed->Meta.RandomSeed;
+  stage.chartRandomPrng = parsed->Meta.RandomPrng;
+  stage.chartRandomValues = parsed->Meta.RandomValues;
+  saved.keyMode = parsed->Meta.KeyMode;
+  saved.adoptedGaugeHistory = {20.0F, 0.0F};
+  saved.judgementTiming = result_persistence::ChartJudgementTiming{};
+  saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+
+  const auto outcome = result_recall::BuildChartResult(
+      std::move(saved), cancelled, path);
+  expect(outcome.value.has_value(),
+         std::string("fresh provenance-backed result recalls through the real "
+                     "chart loader: ") +
+             outcome.diagnostic);
+  std::filesystem::remove_all(directory, error);
+}
+
+void testNoLongNoteScoreBucketRecallsWithActualSetupMode() {
+  auto saved = chartResult();
+  auto setupScore = saved.score;
+  setupScore.longNoteMode = 1;
+  saved.score.longNoteMode = 0;
+  saved.score.provenance = provenanceFor(setupScore, {});
+  saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+  std::atomic_bool cancelled{false};
+
+  const auto outcome = result_recall::BuildChartResult(
+      std::move(saved), cancelled,
+      [&](const std::filesystem::path &,
+          std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
+        auto parsed = parsedChartFor(setupScore);
+        parsed->Meta.LnMode = long_note_mode::kUnknownValue;
+        parsed->Meta.RandomSeed = 42;
+        parsed->Meta.RandomPrng = bms_parser::Parser::RandomPrngId;
+        auto *measure = new bms_parser::Measure();
+        auto *timeline = new bms_parser::TimeLine(8, false);
+        for (int lane = 0; lane < 5; ++lane) {
+          timeline->SetNote(lane, new bms_parser::Note(lane + 1));
+        }
+        measure->TimeLines.push_back(timeline);
+        parsed->Measures.push_back(measure);
+        return parsed;
+      });
+  expect(outcome.value.has_value(),
+         std::string("a no-LN score bucket recalls with its provenance setup: ") +
+             outcome.diagnostic);
+}
+
 void testCourseRecallIsOrderedCompleteAndAtomic() {
   const auto saved = courseResult();
   std::atomic_bool cancelled{false};
@@ -467,6 +569,8 @@ int main() {
   testChartRecallReappliesSavedRandomAndLongNoteSetup();
   testChartRecallFailsClosedBeforePublishing();
   testMovedChartRecallUsesCurrentLocationAndSavedIdentity();
+  testFreshProvenanceBackedResultRecallsFromParsedChart();
+  testNoLongNoteScoreBucketRecallsWithActualSetupMode();
   testCourseRecallIsOrderedCompleteAndAtomic();
   testCourseRecallReappliesEachStageSetupBeforeAgreement();
   testMovedCourseRecallUsesCurrentOrderedLocations();

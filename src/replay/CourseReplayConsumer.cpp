@@ -229,8 +229,15 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
         return failure(CourseReplayConsumerState::ChartUnavailable,
                        "A selected course chart could not be parsed.");
       }
+      const auto expectedLongNoteMode =
+          result_persistence::replaySetupLongNoteMode(
+              listedResult.stages[index].score);
+      if (!expectedLongNoteMode) {
+        return failure(CourseReplayConsumerState::InvalidRequest,
+                       "A saved course stage has no unique replay setup.");
+      }
       parsedFacts.stages.push_back(makeParsedCourseReplayStageFacts(
-          chart->Meta, listedResult.stages[index].score.longNoteMode,
+          chart->Meta, *expectedLongNoteMode,
           chartContainsUndefinedLongNote(*chart)));
       parsedCharts.push_back(std::move(chart));
     }
@@ -272,6 +279,13 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
     for (std::size_t index = 0; index < parsedCharts.size(); ++index) {
       const auto &savedStage = verified.result.stages[index];
       const auto &stagePlayback = verified.document.playback.stages[index];
+      const auto expectedLongNoteMode =
+          result_persistence::replaySetupLongNoteMode(savedStage.score);
+      if (!expectedLongNoteMode) {
+        return failure(CourseReplayConsumerState::InvalidRequest,
+                       "A saved course stage has no unique replay setup.",
+                       std::move(context));
+      }
       auto prepared = dependencies_.prepareChart(
           completedChartPaths[index], stagePlayback.setup,
           savedStage.score.provenance, parsedCharts[index]->Meta, cancelled,
@@ -297,7 +311,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
       if (compareReplayChartIdentity(preparedIdentity, savedIdentity) !=
               ReplayChartMatch::Match ||
           long_note_mode::normalizeValue(prepared->Meta.LnMode) !=
-              savedStage.score.longNoteMode) {
+              *expectedLongNoteMode) {
         return failure(CourseReplayConsumerState::PreparedStageMismatch,
                        "A prepared course stage differs from its saved result.",
                        std::move(context));
