@@ -2,12 +2,15 @@
 
 #include "repositories/ChartRepository.h"
 #include "ReplayData.h"
+#include "replay/BestReplayResolver.h"
 #include "repositories/ScoreRepository.h"
 #include "scene/play/Pacemaker.h"
 #include "skin/SkinTypes.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -28,6 +31,7 @@ previousBestDataFromSnapshot(const ScoreBestSnapshot &snapshot) {
       .finalGauge = *snapshot.finalGauge,
       .clearType = snapshot.clearType,
       .createdAt = *snapshot.createdAt,
+      .attemptId = snapshot.attemptId,
   };
 }
 
@@ -39,7 +43,22 @@ scoreBestSnapshotFromPreviousBest(const ResultPreviousBestData &previousBest) {
           .comboBreak = previousBest.comboBreak,
           .finalGauge = previousBest.finalGauge,
           .clearType = previousBest.clearType,
-          .createdAt = previousBest.createdAt};
+          .createdAt = previousBest.createdAt,
+          .attemptId = previousBest.attemptId};
+}
+
+inline std::shared_ptr<ReplayData> replayForPreviousBestChart(
+    ApplicationContext &context, const bms_parser::ChartMeta &meta,
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const std::string &targetId,
+    std::atomic_bool &cancelled) {
+  if (pacemaker::normalizeTargetId(targetId) != pacemaker::kTargetBest ||
+      !previousBest.has_value() || !previousBest->attemptId.has_value()) {
+    return {};
+  }
+  auto resolver =
+      replay::makeRuntimeBestReplayResolver(context.replayRepository);
+  return resolver.load(*previousBest->attemptId, meta.BmsPath, cancelled);
 }
 
 inline std::optional<ResultPacemakerData> pacemakerDataForResult(
@@ -74,7 +93,8 @@ inline std::optional<ResultPacemakerData> pacemakerDataForResult(
 inline pacemaker::Target pacemakerTargetForReplay(
     bms_parser::Chart &chart, const ReplayData &replay,
     const std::string &targetId,
-    const std::optional<ResultPreviousBestData> &previousBest) {
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const ReplayData *bestReplay) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
   if (replay.autoPlay || normalized == pacemaker::kTargetOff) {
     return {};
@@ -84,15 +104,17 @@ inline pacemaker::Target pacemakerTargetForReplay(
   if (previousBest.has_value()) {
     best = scoreBestSnapshotFromPreviousBest(*previousBest);
   }
-  return pacemaker::targetFromSelection(chart, normalized, best, nullptr);
+  return pacemaker::targetFromSelection(chart, normalized, best, bestReplay);
 }
 
 inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
     bms_parser::Chart &chart, const RhythmState &state,
     const ReplayData &replay, const std::string &targetId,
-    const std::optional<ResultPreviousBestData> &previousBest) {
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const ReplayData *bestReplay) {
   const pacemaker::Target target =
-      pacemakerTargetForReplay(chart, replay, targetId, previousBest);
+      pacemakerTargetForReplay(chart, replay, targetId, previousBest,
+                              bestReplay);
   if (!target.enabled) {
     return std::nullopt;
   }

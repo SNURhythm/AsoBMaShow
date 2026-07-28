@@ -2556,10 +2556,13 @@ void GamePlayScene::configurePacemakerTarget() {
       return;
     }
 
-    activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
-        *chart, *options.replayData, selected,
+    const auto previousBest =
         result_presentation::previousBestForReplayChart(
-            context.scoreRepository, chart->Meta, *options.replayData));
+            context.scoreRepository, chart->Meta, *options.replayData);
+    const auto bestReplay = result_presentation::replayForPreviousBestChart(
+        context, chart->Meta, previousBest, selected, isCancelled);
+    activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
+        *chart, *options.replayData, selected, previousBest, bestReplay.get());
     renderer->setPacemakerTarget(activePacemakerTarget);
     return;
   }

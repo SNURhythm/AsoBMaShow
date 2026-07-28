@@ -483,6 +483,25 @@ void testReplayIdentityParsingUsesSavedRandomBranch() {
                "saved random-branch result recall authority");
 }
 
+void testBestPacemakerUsesTheRetainedReplayConsumer() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  requireToken(root / "src/ResultPresentationUtils.h",
+               "makeRuntimeBestReplayResolver",
+               "BEST replay resolution authority");
+  constexpr std::array<std::string_view, 3> consumers{
+      "src/scene/play/GamePlayScene.cpp",
+      "src/ReplayVideoExporter.cpp",
+      "src/ResultImageExporter.cpp",
+  };
+  for (std::string_view consumer : consumers) {
+    const auto path = root / consumer;
+    requireToken(path, "replayForPreviousBestChart",
+                 "retained BEST replay resolution");
+    requireToken(path, "bestReplay.get()",
+                 "retained BEST replay progression");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -492,6 +511,7 @@ int main() {
   testSharedFormatAuthorities();
   testSharedAssistClearMarkAuthority();
   testReplayIdentityParsingUsesSavedRandomBranch();
+  testBestPacemakerUsesTheRetainedReplayConsumer();
   testModernResultAndSnapshotBoundary();
   testSharedModernResultAuthorities();
   testSharedIrProviderIdentityAuthority();

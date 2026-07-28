@@ -2822,9 +2822,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resolvedOptions.pacemakerTarget.empty()
           ? settings.selectedPacemakerTarget
           : resolvedOptions.pacemakerTarget;
+  const auto bestReplay = result_presentation::replayForPreviousBestChart(
+      context, chart.Meta, previousBest, selectedPacemakerTarget,
+      visualLoadCancelled);
   const pacemaker::Target activePacemakerTarget =
       result_presentation::pacemakerTargetForReplay(
-          chart, replay, selectedPacemakerTarget, previousBest);
+          chart, replay, selectedPacemakerTarget, previousBest,
+          bestReplay.get());
   RhythmState pacemakerState(&chart, false);
   pacemakerState.configureGauge(replay.initialGaugeType,
                                 replay.gaugeAutoShift,
@@ -2893,7 +2897,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultSkinData.pacemaker =
         result_presentation::pacemakerDataForReplayResult(
             chart, replayResultState, replay, selectedPacemakerTarget,
-            previousBest);
+            previousBest, bestReplay.get());
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
     resultAnalytics =

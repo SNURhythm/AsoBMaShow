@@ -1272,7 +1272,8 @@ score_repository_detail::LoadBestScoreOnConnection(
       "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
       "CAST(kpoor AS INTEGER), final_gauge, ";
   query += effectiveClearRank +
-           ", created_at, provenance_json, score_source FROM scores s WHERE ";
+           ", created_at, provenance_json, score_source, attempt_id "
+           "FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
   query += " AND " +
            score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
@@ -1337,6 +1338,9 @@ score_repository_detail::LoadBestScoreOnConnection(
     }
     snapshot.clearType = sqlite3_column_int(stmt.get(), 6);
     snapshot.createdAt = sqliteColumnString(stmt.get(), 7);
+    if (sqlite3_column_type(stmt.get(), 10) == SQLITE_TEXT) {
+      snapshot.attemptId = sqliteColumnString(stmt.get(), 10);
+    }
     snapshot.source =
         imported ? ScoreBestSource::ImportedIr : ScoreBestSource::Local;
     return snapshot;

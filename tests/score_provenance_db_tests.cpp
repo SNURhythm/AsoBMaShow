@@ -1104,6 +1104,7 @@ void testProjectedScoreUsesReplayTimestamp(const std::filesystem::path &root) {
       helper.LoadBestScore(sampleMeta(root, "projected-score-timestamp"));
   assert(best.has_value());
   assert(best->createdAt == pending.createdAt);
+  assert(best->attemptId == pending.attemptId);
 }
 
 void testProjectedRetryUpdatesSummaryCachesOnce(
