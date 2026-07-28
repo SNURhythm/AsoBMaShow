@@ -92,8 +92,16 @@ void setOmissionDiagnostic(Projection &result) {
 bool isSubmissionEligibleForProvider(
     std::string_view providerId,
     const IrSubmission &submission) noexcept {
-  return providerId == tachi::kProviderId &&
-         tachi::validateBokutachiEligibility(submission).eligible();
+  if (!ir::isValidProviderId(providerId)) {
+    return false;
+  }
+  if (providerId == tachi::kProviderId) {
+    return tachi::validateBokutachiEligibility(submission).eligible();
+  }
+
+  std::string diagnostic;
+  return validateIrSubmission(submission, diagnostic) &&
+         submission.provenance.eligibility == ScoreEligibility::Verified;
 }
 
 bool validateIrUploadCandidateSource(

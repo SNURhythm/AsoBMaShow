@@ -290,6 +290,29 @@ void testProviderEligibilityHidesModifiedModernResults() {
          "candidates");
 }
 
+void testProviderNeutralEligibilitySupportsOtherDrivers() {
+  auto verified = source(32);
+  auto modified = source(33);
+  modified.result.score.provenance.eligibility = ScoreEligibility::Modified;
+  refreshSnapshot(modified);
+
+  constexpr std::string_view provider = "fake";
+  constexpr std::string_view origin = "https://fake.example.test";
+  const auto records = ir::projectIrUploadRecords(
+      std::vector{verified, modified}, provider, origin);
+  const auto candidates = ir::projectIrUploadCandidates(
+      std::vector{verified, modified}, provider, origin);
+
+  expect(records.records.size() == 2 && records.records[0].eligible &&
+             !records.records[1].eligible,
+         "provider-neutral verified provenance remains available to modular "
+         "drivers without admitting modified results");
+  expect(candidates.candidates.size() == 1 &&
+             candidates.candidates.front().attemptId() ==
+                 verified.result.attemptId,
+         "other drivers receive only provider-neutral eligible snapshots");
+}
+
 } // namespace
 
 int main() {
@@ -297,5 +320,6 @@ int main() {
   testProjectsOnlySnapshotBackedModernAttempts();
   testStoredSnapshotSubmissionNeedsNoReplayFileOrChartHydration();
   testProviderEligibilityHidesModifiedModernResults();
+  testProviderNeutralEligibilitySupportsOtherDrivers();
   return failures == 0 ? 0 : 1;
 }
