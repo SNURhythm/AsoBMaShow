@@ -58,14 +58,13 @@ private:
   std::map<SDL_FingerID, Uint32> cancelGraceExpiry;
   std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)>
       touchEventCallback;
-  LogicalGameplayInputAdapter::AppliedTransitionCallback
-      appliedTransitionCallback;
   bool notifyTouchEvent(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
   void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
   void releaseExpiredCancelledTouches();
-  void notifyTouchLaneApplied(int lane, bool pressed,
-                              std::optional<int> scratchDirection);
+  [[nodiscard]] bms_parser::Note *
+  applyTouchLane(int lane, bool pressed,
+                 std::optional<int> scratchDirection);
 
 public:
   IRhythmControl *control;

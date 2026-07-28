@@ -721,6 +721,86 @@ void testSameLaneAcrossScopesUsesReferenceSemantics() {
           "logical scopes sharing a lane release only after the final hold");
 }
 
+void testTouchAndHardwareShareOneLaneOwnershipBoundary() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputPipeline pipeline(
+      control, makeDefaultInputProfile(), makeGameplayInputScopes(7), {}, {},
+      [&](const auto &value) { applied.push_back(value); });
+  const auto touchDown =
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 0);
+  const auto touchUp =
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 0, 0.0F);
+
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, true);
+  (void)pipeline.consumeTouchTransition(touchDown);
+  (void)pipeline.consumeTouchTransition(touchUp);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, false);
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 0},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 0,
+                   .backSpin = false}},
+          "touch release cannot end an overlapping hardware lane hold");
+  require(applied.size() == 2 && applied.front().pressed &&
+              !applied.back().pressed,
+          "overlapping touch and hardware owners emit one replay edge pair");
+
+  control.calls.clear();
+  applied.clear();
+  (void)pipeline.consumeTouchTransition(touchDown);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, true);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, false);
+  (void)pipeline.consumeTouchTransition(touchUp);
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 0},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 0,
+                   .backSpin = false}},
+          "hardware release cannot end an overlapping touch lane hold");
+  require(applied.size() == 2 && applied.front().pressed &&
+              !applied.back().pressed,
+          "touch-first overlap still emits one replay edge pair");
+}
+
+void testTouchScratchAndDigitalScratchShareOneOwnershipBoundary() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &value) { applied.push_back(value); });
+  const auto digitalDown =
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 7);
+  const auto digitalUp =
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 7, 0.0F);
+  const auto touchDown = transition(
+      {1, 7}, input::LogicalActionKind::ScratchClockwise, true);
+  const auto touchUp = transition(
+      {1, 7}, input::LogicalActionKind::ScratchClockwise, false, 0, 0.0F);
+
+  adapter.apply(std::span(&digitalDown, 1));
+  (void)adapter.applyTouch(touchDown);
+  (void)adapter.applyTouch(touchUp);
+  adapter.apply(std::span(&digitalUp, 1));
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 7},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 7,
+                   .backSpin = false}},
+          "touch scratch release preserves an overlapping digital hold");
+  require(applied.size() == 2 && applied.front().pressed &&
+              !applied.back().pressed &&
+              applied.front().control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              applied.back().control == applied.front().control,
+          "overlapping scratch owners emit one canonical replay edge pair");
+}
+
 void testScratchReversalKeepsAnOverlappingDigitalHoldCoherent() {
   RecordingControl control;
   LogicalGameplayInputAdapter adapter(control, {});
@@ -1149,6 +1229,8 @@ int main() {
   testLegacyKeyboardCallbacksPreservePhysicalScancodes();
   testLaneAndDirectionalScratchShareOneEffectiveLaneHold();
   testSameLaneAcrossScopesUsesReferenceSemantics();
+  testTouchAndHardwareShareOneLaneOwnershipBoundary();
+  testTouchScratchAndDigitalScratchShareOneOwnershipBoundary();
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();

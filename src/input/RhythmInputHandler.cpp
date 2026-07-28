@@ -94,9 +94,8 @@ void RhythmInputHandler::beginFingerLane(SDL_FingerID fingerIndex, int lane,
   }
 
   flickStates.erase(fingerIndex);
-  control->pressLane(lane);
+  (void)applyTouchLane(lane, true, std::nullopt);
   fingerLanePressed[fingerIndex] = true;
-  notifyTouchLaneApplied(lane, true, std::nullopt);
 }
 
 void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
@@ -120,8 +119,7 @@ void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
   fingerLanePressed.erase(fingerIndex);
   flickStates.erase(fingerIndex);
   if (shouldRelease) {
-    control->releaseLane(lane, 0.0, false);
-    notifyTouchLaneApplied(lane, false, scratchDirection);
+    (void)applyTouchLane(lane, false, scratchDirection);
   }
 }
 
@@ -160,17 +158,15 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
       const int previousDirection = flickState.lastFlickDirection;
       flickState.lastFlickDirection = direction;
       if (hasActiveScratchPress) {
-        control->releaseLane(lane, 0.0, true);
+        (void)applyTouchLane(lane, false, previousDirection);
         fingerLanePressed[fingerIndex] = false;
-        notifyTouchLaneApplied(lane, false, previousDirection);
       }
-      auto *note = control->pressLane(lane);
+      auto *note = applyTouchLane(lane, true, direction);
       flickState.activeLongNote =
           note != nullptr && note->IsLongNote()
               ? static_cast<bms_parser::LongNote *>(note)
               : nullptr;
       fingerLanePressed[fingerIndex] = true;
-      notifyTouchLaneApplied(lane, true, direction);
     }
   }
 }
@@ -349,6 +345,15 @@ void RhythmInputHandler::stopListen() {
   cancelGraceExpiry.clear();
 }
 void RhythmInputHandler::discardPendingTouchEvents() {
+  std::vector<SDL_FingerID> activeFingers;
+  activeFingers.reserve(fingerToLane.size());
+  for (const auto &[fingerId, lane] : fingerToLane) {
+    (void)lane;
+    activeFingers.push_back(fingerId);
+  }
+  for (const SDL_FingerID fingerId : activeFingers) {
+    releaseFingerLane(fingerId);
+  }
   fingerToLane.clear();
   fingerLanePressed.clear();
   flickStates.clear();
@@ -482,12 +487,10 @@ RhythmInputHandler::RhythmInputHandler(
     float configuredPlayAreaWidth, LogicalGameplayRegistryPolicy registryPolicy,
     LogicalGameplayInputAdapter::AppliedTransitionCallback
         configuredAppliedTransitionCallback)
-    : inputDeviceRegistry(&registry), keyMode(meta.KeyMode),
-      appliedTransitionCallback(std::move(configuredAppliedTransitionCallback)),
-      control(control) {
+    : inputDeviceRegistry(&registry), keyMode(meta.KeyMode), control(control) {
   logicalInputPipeline = std::make_unique<LogicalGameplayInputPipeline>(
       *control, profile, std::move(activeScopes), std::move(commandCallback),
-      registryPolicy, appliedTransitionCallback);
+      registryPolicy, std::move(configuredAppliedTransitionCallback));
   laneOrder = meta.GetTotalLaneIndices();
   totalLaneCount = static_cast<int>(laneOrder.size());
   scratchLaneCount = meta.GetScratchLaneCount();
@@ -501,31 +504,26 @@ RhythmInputHandler::RhythmInputHandler(
 
 RhythmInputHandler::~RhythmInputHandler() { stopListen(); }
 
-void RhythmInputHandler::notifyTouchLaneApplied(
+bms_parser::Note *RhythmInputHandler::applyTouchLane(
     int lane, bool pressed, std::optional<int> scratchDirection) {
-  if (!appliedTransitionCallback) {
-    return;
-  }
   const bool scratch = scratchDirection.has_value();
-  const auto control = replay::logicalControlForChartLane(
+  const auto replayControl = replay::logicalControlForChartLane(
       keyMode, lane, scratch,
       scratch && *scratchDirection < 0
           ? replay::LogicalControlKind::ScratchCounterClockwise
           : replay::LogicalControlKind::ScratchClockwise);
-  if (!control) {
-    return;
+  if (!replayControl || logicalInputPipeline == nullptr) {
+    return nullptr;
   }
   const input::LogicalActionKind action =
       !scratch ? input::LogicalActionKind::Lane
       : *scratchDirection > 0
           ? input::LogicalActionKind::ScratchClockwise
           : input::LogicalActionKind::ScratchCounterClockwise;
-  appliedTransitionCallback({
-      .source = {.scope = {.player = control->player, .keyMode = keyMode},
-                 .action = {.kind = action, .lane = lane},
-                 .pressed = pressed,
-                 .value = pressed ? 1.0F : 0.0F},
-      .control = *control,
+  return logicalInputPipeline->consumeTouchTransition({
+      .scope = {.player = replayControl->player, .keyMode = keyMode},
+      .action = {.kind = action, .lane = lane},
       .pressed = pressed,
+      .value = pressed ? 1.0F : 0.0F,
   });
 }
