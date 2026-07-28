@@ -2,15 +2,20 @@
 #include "replay/CourseResultPersistence.h"
 #include "replay/ReplayFileStore.h"
 #include "replay/ReplaySetupProvenance.h"
+#include "ProfileDatabaseActivity.h"
 #include "repositories/SqliteRAII.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <condition_variable>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -592,6 +597,86 @@ void testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult() {
          "retryable score projection reuses the exact durable course result");
 }
 
+void testProfileSwitchCannotAcquireGateMidCoursePersist() {
+  const auto value = attempt();
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool projectionEntered = false;
+  bool releaseProjection = false;
+  bool resultObservedWriteLease = false;
+  bool projectionObservedWriteLease = false;
+  bool acknowledgementObservedWriteLease = false;
+
+  CourseResultPersistence persistence(CourseResultPersistenceDependencies{
+      .persistResult =
+          [&](const CapturedCourseReplayAttempt &) {
+            resultObservedWriteLease =
+                profile_database_activity::writesActive();
+            return CourseReplayPersistenceOutcome{
+                .state = CourseReplayPersistenceState::SavedWithoutReplay,
+                .receipt = ModernCourseStageReceipt{
+                    .attemptId = value.result.attemptId,
+                    .resultId = 91,
+                    .createdAt = "2026-07-27 13:00:00"}};
+          },
+      .projectScore =
+          [&](const result_persistence::PendingCourseScoreWrite &) {
+            projectionObservedWriteLease =
+                profile_database_activity::writesActive();
+            {
+              std::lock_guard lock(mutex);
+              projectionEntered = true;
+            }
+            condition.notify_all();
+            std::unique_lock lock(mutex);
+            condition.wait(lock, [&] { return releaseProjection; });
+            return result_persistence::ProjectionOutcome{
+                .status = result_persistence::ProjectionStatus::Inserted};
+          },
+      .acknowledgeScore =
+          [&](std::string_view, int) {
+            acknowledgementObservedWriteLease =
+                profile_database_activity::writesActive();
+            return result_persistence::AcknowledgeOutcome{
+                .status =
+                    result_persistence::AcknowledgeStatus::Acknowledged};
+          },
+  });
+
+  std::optional<CourseResultPersistenceOutcome> outcome;
+  std::thread persistThread([&] { outcome = persistence.persist(value); });
+  bool projectionReached = false;
+  {
+    std::unique_lock lock(mutex);
+    projectionReached = condition.wait_for(
+        lock, std::chrono::seconds(5), [&] { return projectionEntered; });
+  }
+
+  bool switchOwnedDuringPersist = true;
+  if (projectionReached) {
+    std::thread switchThread([&] {
+      profile_database_activity::SwitchGuard switchGuard;
+      switchOwnedDuringPersist = switchGuard.ownsLock();
+    });
+    switchThread.join();
+  }
+  {
+    std::lock_guard lock(mutex);
+    releaseProjection = true;
+  }
+  condition.notify_all();
+  persistThread.join();
+
+  profile_database_activity::SwitchGuard afterPersist;
+  expect(projectionReached && resultObservedWriteLease &&
+             projectionObservedWriteLease &&
+             acknowledgementObservedWriteLease &&
+             !switchOwnedDuringPersist && afterPersist.ownsLock() && outcome &&
+             outcome->saved(),
+         "one course write lease spans result staging, score projection, and "
+         "checkpoint acknowledgement");
+}
+
 void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
   TemporaryDirectory profile;
   const auto replayPath = profile.path / "replay.db";
@@ -805,6 +890,7 @@ int main() {
   testReplayFailuresAndDatabaseAmbiguity();
   testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows();
   testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult();
+  testProfileSwitchCannotAcquireGateMidCoursePersist();
   testRealResultFirstPersistenceIsIdempotentAndReplayIndependent();
   testCourseScoreRecoveryPaginatesAndClassifiesEveryStoredResult();
   testCourseScoreProjectionRecoversAfterRestartWithoutReplayFile();

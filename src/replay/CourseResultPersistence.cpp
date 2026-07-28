@@ -105,6 +105,7 @@ CourseResultPersistence::CourseResultPersistence(
 
 CourseResultPersistenceOutcome CourseResultPersistence::persist(
     const CapturedCourseReplayAttempt &attempt) const {
+  profile_database_activity::WriteGuard bindingLease;
   auto resultOutcome = dependencies_.persistResult(attempt);
   if (!resultOutcome.saved()) {
     return {.state = failedResultState(resultOutcome.state),
