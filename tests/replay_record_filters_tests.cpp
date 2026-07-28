@@ -106,6 +106,22 @@ int main() {
   ASSERT_EQ(1U, filtered.size(), "effective full combo filter size");
   ASSERT_EQ(4, filtered[0].id, "effective full combo filter id");
 
+  ResultRecordSummary splitDoublePlay =
+      makeResultRecord(7, kClearTypeHardClearRank, 700, 1000, 350, 700,
+                       "NORMAL");
+  splitDoublePlay.playOption2 = "RANDOM";
+  ReplayRecordFilters doublePlayFilter;
+  doublePlayFilter.playOption = "RANDOM";
+  auto filteredResults = replay_record_filters::apply(
+      std::vector<ResultRecordSummary>{splitDoublePlay}, doublePlayFilter);
+  ASSERT_EQ(1U, filteredResults.size(),
+            "player-two random option filter size");
+  doublePlayFilter.playOption = "NORMAL";
+  filteredResults = replay_record_filters::apply(
+      std::vector<ResultRecordSummary>{splitDoublePlay}, doublePlayFilter);
+  ASSERT_EQ(0U, filteredResults.size(),
+            "normal filter requires both players to be normal");
+
   ReplaySummary assistedFullCombo =
       makeSummary(6, kClearTypeNormalClearRank, 700, 1000, 500);
   assistedFullCombo.playback = {.percent = 75,

@@ -309,6 +309,40 @@ void testModernConversionUsesSharedReplayCapabilities() {
          "invalid present BRD remains deletable but not playable");
 }
 
+void testModernChartProjectionUsesEffectiveLampAndBothPlayerOptions() {
+  auto result = validModernResult();
+  result.score.clearType = kClearTypeHardClearRank;
+  result.score.maxCombo = result.score.maxScore / 2;
+  result.score.comboBreak = 0;
+  result.score.provenance.player1.option = "NORMAL";
+  result.score.provenance.player2.option = "RANDOM";
+
+  const auto fullCombo = makeModernChartResultRecord(
+      ModernChartResultRecord{.result = result},
+      replay::ReplayState::Missing, ir::IrRecordState::Hidden);
+  expect(fullCombo.clearRank == kClearTypeFullComboRank &&
+             fullCombo.playOption == "NORMAL" &&
+             fullCombo.playOption2 == "RANDOM",
+         "modern Records projects the effective lamp and both player options");
+
+  result.score.comboBreak = 1;
+  const auto brokenCombo = makeModernChartResultRecord(
+      ModernChartResultRecord{.result = result},
+      replay::ReplayState::Missing, ir::IrRecordState::Hidden);
+  expect(brokenCombo.clearRank == kClearTypeHardClearRank,
+         "modern Records does not infer full combo when combo-break facts "
+         "disagree");
+
+  result.score.comboBreak = 0;
+  result.score.provenance.playback = {
+      .percent = 75, .mode = audio::PlaybackMode::PitchShift};
+  const auto assisted = makeModernChartResultRecord(
+      ModernChartResultRecord{.result = result},
+      replay::ReplayState::Missing, ir::IrRecordState::Hidden);
+  expect(assisted.clearRank == kClearTypeAssistedEasyClearRank,
+         "modern Records applies the captured playback-rate lamp cap");
+}
+
 void testModernCourseConversionKeepsResultWithoutReplay() {
   ModernCourseResultRecord record{.result = validModernCourseResult()};
   const auto missing =
@@ -690,6 +724,7 @@ int main() {
   testReplayFileActionsUseModernIdentityAndCapabilitiesOnly();
   testAutoPlayIsTheOnlyReplaySummaryBackedRecord();
   testModernConversionUsesSharedReplayCapabilities();
+  testModernChartProjectionUsesEffectiveLampAndBothPlayerOptions();
   testModernCourseConversionKeepsResultWithoutReplay();
   testLegacySummariesExposeRecordsOnly();
   testRemoteConversionIsReadOnlyAndRetainsOptionalValues();

@@ -179,8 +179,17 @@ inline bool matchesPlayOption(const ResultRecordSummary &summary,
   if (!summary.playOption.has_value()) {
     return false;
   }
-  return play_options::normalizePlayOption(*summary.playOption) ==
-         play_options::normalizePlayOption(filterOption);
+  const std::string normalizedFilter =
+      play_options::normalizePlayOption(filterOption);
+  const std::string option =
+      normalizedPlayOptionForFilter(summary.playOption);
+  const std::string option2 =
+      normalizedPlayOptionForFilter(summary.playOption2);
+  if (normalizedFilter == "NORMAL") {
+    return play_options::isNormalPlayOption(option) &&
+           play_options::isNormalPlayOption(option2);
+  }
+  return option == normalizedFilter || option2 == normalizedFilter;
 }
 
 inline bool matches(const ResultRecordSummary &summary,

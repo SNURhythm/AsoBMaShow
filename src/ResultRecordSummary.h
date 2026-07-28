@@ -97,6 +97,7 @@ struct ResultRecordSummary {
   std::int64_t displayedTimeUnixMillis = 0;
   std::string displayedTime;
   std::optional<std::string> playOption;
+  std::optional<std::string> playOption2;
   ir::IrRecordState irState = ir::IrRecordState::Hidden;
   std::optional<ReplaySummary> autoPlayReplay;
   std::optional<ModernChartResultRecord> modern;
