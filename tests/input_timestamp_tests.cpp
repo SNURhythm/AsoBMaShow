@@ -1,4 +1,7 @@
 #include "input/InputTimestamp.h"
+#if defined(__APPLE__)
+#include "input/AppleInputTimestamp.h"
+#endif
 
 #include <cstdlib>
 #include <iostream>
@@ -33,6 +36,30 @@ void testRebaseSaturatesInsteadOfOverflowing() {
           "timestamp rebasing saturates at the signed clock limit");
 }
 
+void testFixedEpochMappingKeepsEqualNativeSamplesEqual() {
+  constexpr input::TimestampEpochMapping mapping{
+      .sourceEpochMicros = 10'000,
+      .steadyEpochMicros = 1'000'000,
+  };
+
+  require(mapping.toSteadyMicros(7'500) == 997'500 &&
+              mapping.toSteadyMicros(7'501) == 997'501,
+          "one native timestamp has one stable steady-clock value");
+}
+
+#if defined(__APPLE__)
+void testAppleHostTimestampConversionUsesOneEpochMapping() {
+  const auto sourceTimestamp = input::apple::hostNowMicros();
+  const auto expected =
+      input::apple::steadyMicrosFromHostMicros(sourceTimestamp);
+  for (int sample = 0; sample < 10'000; ++sample) {
+    require(input::apple::steadyMicrosFromHostMicros(sourceTimestamp) ==
+                expected,
+            "equal Apple host timestamps remain equal across conversions");
+  }
+}
+#endif
+
 void testRebasesWrappingSdlMillisecondTimestamps() {
   require(input::rebaseWrappingTimestampMillis(9'997, 10'000, 1'000'000) ==
               997'000,
@@ -52,6 +79,10 @@ int main() {
   testRebasesPastNativeTimestampIntoSteadyClockDomain();
   testRebasesFutureNativeTimestampIntoSteadyClockDomain();
   testRebaseSaturatesInsteadOfOverflowing();
+  testFixedEpochMappingKeepsEqualNativeSamplesEqual();
+#if defined(__APPLE__)
+  testAppleHostTimestampConversionUsesOneEpochMapping();
+#endif
   testRebasesWrappingSdlMillisecondTimestamps();
   return 0;
 }

@@ -81,6 +81,21 @@ constexpr std::int64_t rebaseTimestampMicros(
                    steadyNowMicros, sourceTimestampMicros - sourceNowMicros);
 }
 
+// One native clock epoch must map to one process steady-clock epoch for the
+// lifetime of an input session. Re-sampling both clocks for every event can
+// make equal native timestamps move by a few microseconds, which in turn can
+// make simultaneous input appear out of order.
+struct TimestampEpochMapping {
+  std::uint64_t sourceEpochMicros = 0;
+  std::int64_t steadyEpochMicros = 0;
+
+  [[nodiscard]] constexpr std::int64_t
+  toSteadyMicros(std::uint64_t sourceTimestampMicros) const noexcept {
+    return rebaseTimestampMicros(sourceTimestampMicros, sourceEpochMicros,
+                                 steadyEpochMicros);
+  }
+};
+
 // SDL event timestamps are 32-bit milliseconds and wrap. Treat differences
 // within half the counter range as signed offsets from the current SDL tick,
 // then move that offset into the process steady-clock epoch.

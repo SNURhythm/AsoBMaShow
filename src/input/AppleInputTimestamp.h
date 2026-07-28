@@ -36,14 +36,21 @@ inline std::int64_t steadyNowMicros() noexcept {
       .count();
 }
 
-inline std::int64_t
-steadyMicrosFromHostMicros(std::uint64_t hostTimestampMicros) noexcept {
+inline TimestampEpochMapping hostToSteadyEpochMapping() noexcept {
   const std::int64_t steadyBefore = steadyNowMicros();
   const std::uint64_t hostNow = hostNowMicros();
   const std::int64_t steadyAfter = steadyNowMicros();
-  const std::int64_t steadyMidpoint =
-      steadyBefore + (steadyAfter - steadyBefore) / 2;
-  return rebaseTimestampMicros(hostTimestampMicros, hostNow, steadyMidpoint);
+  return {
+      .sourceEpochMicros = hostNow,
+      .steadyEpochMicros =
+          steadyBefore + (steadyAfter - steadyBefore) / 2,
+  };
+}
+
+inline std::int64_t
+steadyMicrosFromHostMicros(std::uint64_t hostTimestampMicros) noexcept {
+  static const TimestampEpochMapping mapping = hostToSteadyEpochMapping();
+  return mapping.toSteadyMicros(hostTimestampMicros);
 }
 
 } // namespace input::apple
