@@ -161,7 +161,8 @@ void testSchemaReservationAtomicStageAndExactRetry() {
   assert(repository.EnsureSchema());
 
   auto database = openDatabase(databasePath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(database.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   for (const std::string_view table :
        {"modern_chart_results", "modern_replay_files",
         "modern_replay_file_reservations", "modern_replay_stem_sequences",
