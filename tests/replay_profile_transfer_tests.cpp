@@ -161,11 +161,33 @@ void testDestinationValidationRejectsMismatchAndUnreferencedFiles() {
          "mismatched referenced destination file is rejected");
 }
 
+void testFutureCodecReplayIsOmittedWithoutFailingResultTransfer() {
+  TemporaryDirectory temporary;
+  const auto source = temporary.path / "source";
+  const auto destination = temporary.path / "destination";
+  std::filesystem::create_directories(source);
+  std::filesystem::create_directories(destination);
+  auto future = install(source, 0, "attempt-future", "future replay");
+  future.reference.metadata.codecVersion =
+      replay::BeatorajaReplayCodec::kCodecVersion + 1;
+
+  replay::ReplayProfileTransfer transfer(source, destination);
+  const auto outcome = transfer.copy({future});
+  expect(outcome.state == replay::ReplayProfileTransferState::Succeeded &&
+             outcome.copiedRelativePaths.empty() &&
+             outcome.omittedUnsupportedCodec == 1 &&
+             !std::filesystem::exists(
+                 destination / future.reference.metadata.relativePath),
+         "unsupported replay bytes are omitted without aborting result "
+         "transfer");
+}
+
 } // namespace
 
 int main() {
   testCopiesOnlyActiveVerifiedReferences();
   testCorruptionAndInjectedFailureLeaveNoCopiedFiles();
   testDestinationValidationRejectsMismatchAndUnreferencedFiles();
+  testFutureCodecReplayIsOmittedWithoutFailingResultTransfer();
   return failures == 0 ? 0 : 1;
 }

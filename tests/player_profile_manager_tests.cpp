@@ -203,6 +203,19 @@ Database openDatabase(const std::filesystem::path &path) {
   return Database(raw);
 }
 
+void setReplayCodecVersion(const std::filesystem::path &path,
+                           std::int64_t referenceId, int codecVersion) {
+  auto database = openDatabase(path);
+  expect(database != nullptr, "future-codec replay database opens");
+  const std::string sql =
+      "UPDATE modern_replay_files SET codec_version=" +
+      std::to_string(codecVersion) + " WHERE id=" +
+      std::to_string(referenceId);
+  expect(database && execute(database.get(), sql.c_str()) &&
+             sqlite3_changes(database.get()) == 1,
+         "future-codec replay metadata updates within the schema contract");
+}
+
 PlayerProfileManagerDependencies
 dependenciesFor(std::string uuid = "11111111-1111-4111-8111-111111111111",
                 std::string timestamp = "2026-07-10T12:34:56Z") {
@@ -2781,6 +2794,12 @@ void testReplayDirectoryDuplicationUsesOwnedVerifiedInventory() {
   const auto missing = installModernReplay(source, repository, 2, 'b');
   std::filesystem::remove(source.root / missing.metadata.relativePath);
   const auto deleted = installModernReplay(source, repository, 3, 'c', true);
+  auto future = installModernReplay(source, repository, 4, 'd');
+  repository.Shutdown();
+  future.metadata.codecVersion =
+      replay::BeatorajaReplayCodec::kCodecVersion + 1;
+  setReplayCodecVersion(source.replaysDb, future.id,
+                        future.metadata.codecVersion);
   writeFile(source.replayDirectory / "unreferenced.brd", "unreferenced");
 
   const auto duplicate = manager.duplicateProfile(
@@ -2796,16 +2815,19 @@ void testReplayDirectoryDuplicationUsesOwnedVerifiedInventory() {
                                         missing.metadata.relativePath) &&
                !std::filesystem::exists(copied.root /
                                         deleted.metadata.relativePath) &&
+               !std::filesystem::exists(copied.root /
+                                        future.metadata.relativePath) &&
                !std::filesystem::exists(copied.replayDirectory /
                                         "unreferenced.brd"),
-           "duplicate contains only active verified owned replay bytes");
+           "duplicate contains only current-codec verified replay bytes");
     ReplayRepository copiedRepository(copied.replaysDb);
     expect(copiedRepository.EnsureSchema(),
            "duplicated replay repository opens");
     const auto inventory = copiedRepository.ListModernReplayFileReferences();
     expect(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
-               inventory.entries.size() == 3,
-           "duplicate preserves result references when bytes are omitted");
+               inventory.entries.size() == 4,
+           "duplicate preserves result references when optional or "
+           "unsupported bytes are omitted");
   }
   expect(std::filesystem::exists(source.replayDirectory / "unreferenced.brd"),
          "duplication never mutates unreferenced source bytes");

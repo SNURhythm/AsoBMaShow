@@ -27,6 +27,7 @@ struct ReplayProfileTransferOutcome {
   std::vector<std::filesystem::path> copiedRelativePaths;
   std::size_t omittedMissing = 0;
   std::size_t omittedUserDeleted = 0;
+  std::size_t omittedUnsupportedCodec = 0;
   std::string diagnostic;
 };
 

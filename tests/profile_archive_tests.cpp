@@ -231,6 +231,19 @@ Database openDatabase(const std::filesystem::path &path) {
   return Database(raw);
 }
 
+void setReplayCodecVersion(const std::filesystem::path &path,
+                           std::int64_t referenceId, int codecVersion) {
+  auto database = openDatabase(path);
+  expect(database != nullptr, "future-codec archive database opens");
+  const std::string sql =
+      "UPDATE modern_replay_files SET codec_version=" +
+      std::to_string(codecVersion) + " WHERE id=" +
+      std::to_string(referenceId);
+  expect(database && execute(database.get(), sql) &&
+             sqlite3_changes(database.get()) == 1,
+         "future-codec archive metadata updates within the schema contract");
+}
+
 void setDatabaseVersion(const std::filesystem::path &path, int version,
                         std::string_view label) {
   Database database = openDatabase(path);
@@ -852,6 +865,12 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
   std::filesystem::remove(source.root / missing.metadata.relativePath);
   const auto deleted =
       installPortableReplay(source, repository, 3, 'c', true);
+  auto future = installPortableReplay(source, repository, 4, 'd');
+  repository.Shutdown();
+  future.metadata.codecVersion =
+      replay::BeatorajaReplayCodec::kCodecVersion + 1;
+  setReplayCodecVersion(source.replaysDb, future.id,
+                        future.metadata.codecVersion);
   writeFile(source.replayDirectory / "unreferenced.brd", "unreferenced");
 
   const auto archive = exportFixture(fixture, "owned-replays.asobprofile");
@@ -860,11 +879,13 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
   const std::string activeName = active.metadata.relativePath.generic_string();
   const std::string missingName = missing.metadata.relativePath.generic_string();
   const std::string deletedName = deleted.metadata.relativePath.generic_string();
+  const std::string futureName = future.metadata.relativePath.generic_string();
   expect(error.empty() && findMember(members, activeName) != nullptr &&
              findMember(members, missingName) == nullptr &&
              findMember(members, deletedName) == nullptr &&
+             findMember(members, futureName) == nullptr &&
              findMember(members, "replay/unreferenced.brd") == nullptr,
-         "archive contains only active verified owned replay bytes");
+         "archive contains only current-codec verified replay bytes");
   expect(std::filesystem::exists(source.replayDirectory / "unreferenced.brd"),
          "export leaves unreferenced source bytes untouched");
 
@@ -880,7 +901,9 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
                !std::filesystem::exists(installed.root /
                                         missing.metadata.relativePath) &&
                !std::filesystem::exists(installed.root /
-                                        deleted.metadata.relativePath),
+                                        deleted.metadata.relativePath) &&
+               !std::filesystem::exists(installed.root /
+                                        future.metadata.relativePath),
            "import restores verified bytes while preserving optional omissions");
     ReplayRepository installedRepository(installed.replaysDb);
     expect(installedRepository.EnsureSchema(),
@@ -888,7 +911,7 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
     const auto inventory =
         installedRepository.ListModernReplayFileReferences();
     expect(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
-               inventory.entries.size() == 3,
+               inventory.entries.size() == 4,
            "import preserves result references independently of replay bytes");
   }
 

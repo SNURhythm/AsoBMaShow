@@ -91,6 +91,11 @@ ReplayProfileTransferOutcome ReplayProfileTransfer::copy(
       ++outcome.omittedUserDeleted;
       continue;
     }
+    if (entry.reference.metadata.codecVersion !=
+        BeatorajaReplayCodec::kCodecVersion) {
+      ++outcome.omittedUnsupportedCodec;
+      continue;
+    }
     if (fault(faults_, "before-copy")) {
       return fail(ReplayProfileTransferState::DestinationFailure,
                   "Injected replay transfer failure before copy");
