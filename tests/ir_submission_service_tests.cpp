@@ -2880,6 +2880,11 @@ void testProjectionFailureKeepsReceiptsAndOutboxRetryable() {
   if (!local.entry) {
     return;
   }
+  expect(harness.repository
+                 .RetryIrOutbox(local.entry->id,
+                                harness.now.load() + 60'000)
+                 .status == ir::IrOutboxMutationStatus::Updated,
+         "projection-failure fixture defers competing delivery work");
   harness.projectionShouldSucceed = false;
   harness.driver->pushReconciliation({
       .status = ir::IrUserScoreSnapshotStatus::Succeeded,
@@ -2907,10 +2912,12 @@ void testProjectionFailureKeepsReceiptsAndOutboxRetryable() {
              mirror.scores.front().remoteScoreId ==
                  "projection-failure-score",
          "projection failure leaves the durable mirror available for retry");
-  expect(receipt.status == ir::IrReceiptReadStatus::NotFound &&
-             outbox.status == ir::IrOutboxReadStatus::Found &&
-             outbox.entry && outbox.entry->id == local.entry->id,
-         "projection failure leaves receipts absent and upload work retryable");
+  expect(receipt.status == ir::IrReceiptReadStatus::NotFound,
+         "projection failure leaves receipts absent");
+  expect(outbox.status == ir::IrOutboxReadStatus::Found && outbox.entry,
+         "projection failure leaves upload work retryable");
+  expect(outbox.entry && outbox.entry->id == local.entry->id,
+         "projection failure preserves the original upload-work identity");
   std::lock_guard lock(harness.projectionMutex);
   expect(harness.projectionCalls == 1 &&
              harness.projectionSawCommittedMirror,
