@@ -11,8 +11,23 @@
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <ranges>
 #include <system_error>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace replay {
 namespace {
@@ -21,6 +36,127 @@ constexpr std::string_view kTemporaryPrefix = ".asobmashow-replay-";
 constexpr std::size_t kAttemptDigestBytes = 64;
 constexpr std::size_t kContentDigestPrefixBytes = 16;
 constexpr std::string_view kTemporarySuffix = ".tmp";
+constexpr std::string_view kRemovalDirectoryPrefix =
+    ".asobmashow-replay-removal-";
+constexpr std::string_view kCleanupLeaseFilename =
+    ".asobmashow-replay-cleanup.lock";
+
+std::mutex &cleanupThreadMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+class ReplayCleanupLease {
+public:
+  ReplayCleanupLease() = default;
+
+  bool acquire(const std::filesystem::path &profileRoot,
+               std::string &diagnostic) {
+    threadLock_ =
+        std::unique_lock<std::mutex>(cleanupThreadMutex(), std::try_to_lock);
+    if (!threadLock_.owns_lock()) {
+      diagnostic = "Replay cleanup is already in progress";
+      return false;
+    }
+
+    const auto path = profileRoot / std::string(kCleanupLeaseFilename);
+#if defined(_WIN32)
+    handle_ = CreateFileW(
+        path.c_str(), GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+        FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, nullptr);
+    if (handle_ == INVALID_HANDLE_VALUE) {
+      diagnostic = "Unable to open replay cleanup lease: " +
+                   std::to_string(GetLastError());
+      return false;
+    }
+    FILE_ATTRIBUTE_TAG_INFO attributes{};
+    BY_HANDLE_FILE_INFORMATION identity{};
+    if (!GetFileInformationByHandleEx(handle_, FileAttributeTagInfo,
+                                      &attributes, sizeof(attributes)) ||
+        !GetFileInformationByHandle(handle_, &identity) ||
+        (attributes.FileAttributes &
+         (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0 ||
+        identity.nNumberOfLinks != 1) {
+      diagnostic = "Replay cleanup lease is unsafe";
+      return false;
+    }
+    OVERLAPPED overlapped{};
+    if (!LockFileEx(handle_,
+                    LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1,
+                    0, &overlapped)) {
+      diagnostic = GetLastError() == ERROR_LOCK_VIOLATION
+                       ? "Replay cleanup is already in progress"
+                       : "Unable to lock replay cleanup lease: " +
+                             std::to_string(GetLastError());
+      return false;
+    }
+    locked_ = true;
+#else
+    int flags = O_RDWR | O_CREAT;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+    flags |= O_NOFOLLOW;
+#endif
+    descriptor_ = ::open(path.c_str(), flags, 0600);
+    if (descriptor_ < 0) {
+      diagnostic = "Unable to open replay cleanup lease: " +
+                   std::string(std::strerror(errno));
+      return false;
+    }
+    struct stat status{};
+    if (::fstat(descriptor_, &status) != 0 || !S_ISREG(status.st_mode) ||
+        status.st_uid != geteuid() || status.st_nlink != 1 ||
+        ::fchmod(descriptor_, 0600) != 0 ||
+        ::fstat(descriptor_, &status) != 0 || (status.st_mode & 0777) != 0600) {
+      diagnostic = "Replay cleanup lease is unsafe";
+      return false;
+    }
+    if (::flock(descriptor_, LOCK_EX | LOCK_NB) != 0) {
+      diagnostic = errno == EWOULDBLOCK || errno == EAGAIN
+                       ? "Replay cleanup is already in progress"
+                       : "Unable to lock replay cleanup lease: " +
+                             std::string(std::strerror(errno));
+      return false;
+    }
+    locked_ = true;
+#endif
+    return true;
+  }
+
+  ~ReplayCleanupLease() {
+#if defined(_WIN32)
+    if (locked_) {
+      OVERLAPPED overlapped{};
+      (void)UnlockFileEx(handle_, 0, 1, 0, &overlapped);
+    }
+    if (handle_ != INVALID_HANDLE_VALUE) {
+      (void)CloseHandle(handle_);
+    }
+#else
+    if (locked_) {
+      (void)::flock(descriptor_, LOCK_UN);
+    }
+    if (descriptor_ >= 0) {
+      (void)::close(descriptor_);
+    }
+#endif
+  }
+
+  ReplayCleanupLease(const ReplayCleanupLease &) = delete;
+  ReplayCleanupLease &operator=(const ReplayCleanupLease &) = delete;
+
+private:
+  std::unique_lock<std::mutex> threadLock_;
+  bool locked_ = false;
+#if defined(_WIN32)
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+  int descriptor_ = -1;
+#endif
+};
 
 std::string hashBytes(std::span<const std::byte> bytes) {
   return file_checksum::sha256(
@@ -33,6 +169,19 @@ bool canonicalIdentity(const ReplayPathIdentity &identity,
   const auto rebuilt =
       pathForStem(identity.stem, identity.historyIndex, diagnostic, limits);
   return rebuilt && *rebuilt == identity;
+}
+
+bool canonicalMetadata(const ReplayFileMetadata &metadata,
+                       const ReplayLimits &limits, std::string &diagnostic) {
+  if (isCanonicalReplayRelativePath(metadata.relativePath, diagnostic,
+                                    limits) &&
+      isCanonicalLowerHex(metadata.sha256, 64) && metadata.compressedSize > 0 &&
+      metadata.compressedSize <= limits.maxCompressedBytes &&
+      metadata.codecVersion > 0) {
+    return true;
+  }
+  diagnostic = "Replay metadata is unsafe";
+  return false;
 }
 
 bool safeTemporaryRelativePath(const std::filesystem::path &path) {
@@ -141,19 +290,19 @@ bool fault(const ReplayFileStoreFaults &faults, std::string_view point) {
   return faults.failAt && faults.failAt(point);
 }
 
+ReplayFileInspection inspectFileAtPath(const std::filesystem::path &path,
+                                       const ReplayFileMetadata &metadata,
+                                       const ReplayLimits &limits);
+bool removeEntryAndSync(const std::filesystem::path &path,
+                        const std::filesystem::path &directory,
+                        std::string &diagnostic);
+
 ReplayFileInspection inspectAt(const std::filesystem::path &profileRoot,
                                const ReplayFileMetadata &metadata,
                                const ReplayLimits &limits) {
   ReplayFileInspection outcome;
-  std::string pathDiagnostic;
-  if (!isCanonicalReplayRelativePath(metadata.relativePath, pathDiagnostic,
-                                     limits) ||
-      !isCanonicalLowerHex(metadata.sha256, 64) ||
-      metadata.compressedSize == 0 ||
-      metadata.compressedSize > limits.maxCompressedBytes ||
-      metadata.codecVersion <= 0) {
+  if (!canonicalMetadata(metadata, limits, outcome.diagnostic)) {
     outcome.state = ReplayFileState::Unsafe;
-    outcome.diagnostic = "Replay metadata is unsafe";
     return outcome;
   }
   std::filesystem::path replayDirectory;
@@ -164,6 +313,13 @@ ReplayFileInspection inspectAt(const std::filesystem::path &profileRoot,
     return outcome;
   }
   const auto path = profileRoot / metadata.relativePath;
+  return inspectFileAtPath(path, metadata, limits);
+}
+
+ReplayFileInspection inspectFileAtPath(const std::filesystem::path &path,
+                                       const ReplayFileMetadata &metadata,
+                                       const ReplayLimits &limits) {
+  ReplayFileInspection outcome;
   const auto kind = entryKind(path, outcome.diagnostic);
   if (kind == EntryKind::Missing) {
     outcome.state = ReplayFileState::Missing;
@@ -205,6 +361,67 @@ ReplayFileInspection inspectAt(const std::filesystem::path &profileRoot,
   }
   outcome.state = ReplayFileState::Available;
   return outcome;
+}
+
+std::filesystem::path
+removalDirectoryFor(const std::filesystem::path &replayDirectory,
+                    const ReplayFileMetadata &metadata) {
+  const std::string ownershipKey = metadata.relativePath.generic_string() +
+                                   "\n" + metadata.sha256 + "\n" +
+                                   std::to_string(metadata.compressedSize) +
+                                   "\n" + std::to_string(metadata.codecVersion);
+  return replayDirectory / (std::string(kRemovalDirectoryPrefix) +
+                            file_checksum::sha256(ownershipKey));
+}
+
+bool removeEmptyDirectoryAndSync(const std::filesystem::path &directory,
+                                 const std::filesystem::path &parent,
+                                 std::string &diagnostic) {
+  const auto kind = entryKind(directory, diagnostic);
+  if (kind == EntryKind::Missing) {
+    return true;
+  }
+  if (kind != EntryKind::Directory) {
+    if (diagnostic.empty()) {
+      diagnostic = "Replay cleanup directory is unsafe";
+    }
+    return false;
+  }
+  std::error_code error;
+  const bool removed = std::filesystem::remove(directory, error);
+  if (error) {
+    diagnostic =
+        "Unable to remove replay cleanup directory: " + error.message();
+    return false;
+  }
+  if (!removed) {
+    diagnostic = "Replay cleanup directory contains unexpected entries";
+    return false;
+  }
+  return atomic_file::syncDirectory(parent, diagnostic);
+}
+
+bool restoreQuarantinedRegularFile(
+    const std::filesystem::path &quarantined,
+    const std::filesystem::path &original,
+    const std::filesystem::path &quarantineDirectory,
+    const std::filesystem::path &replayDirectory, std::string &diagnostic) {
+  std::error_code linkError;
+  std::filesystem::create_hard_link(quarantined, original, linkError);
+  if (linkError) {
+    diagnostic += diagnostic.empty() ? "" : "; ";
+    diagnostic += "Unmatched replay bytes were preserved in private cleanup "
+                  "quarantine '" +
+                  quarantined.string() + "': " + linkError.message();
+    return false;
+  }
+  if (!atomic_file::syncDirectory(replayDirectory, diagnostic) ||
+      !removeEntryAndSync(quarantined, quarantineDirectory, diagnostic) ||
+      !removeEmptyDirectoryAndSync(quarantineDirectory, replayDirectory,
+                                   diagnostic)) {
+    return false;
+  }
+  return true;
 }
 
 std::optional<ReplayInstalledFile>
@@ -655,17 +872,111 @@ ReplayFileSnapshotOutcome ReplayFileStore::stageVerifiedSnapshot(
 bool ReplayFileStore::removeIfMatches(const ReplayFileMetadata &metadata,
                                       std::string &diagnostic) const {
   diagnostic.clear();
-  const auto inspection = inspect(metadata);
-  if (inspection.state == ReplayFileState::Missing) {
-    return true;
-  }
-  if (inspection.state != ReplayFileState::Available) {
-    diagnostic = inspection.diagnostic.empty()
-                     ? "Replay bytes do not match expected ownership"
-                     : inspection.diagnostic;
+  if (!canonicalMetadata(metadata, limits_, diagnostic)) {
     return false;
   }
-  return removeReferencedEntry(metadata, diagnostic);
+
+  std::filesystem::path replayDirectory;
+  ReplayFileState absent = ReplayFileState::IoFailure;
+  if (!existingReplayDirectory(profileRoot_, replayDirectory, absent,
+                               diagnostic)) {
+    return absent == ReplayFileState::Missing;
+  }
+  ReplayCleanupLease cleanupLease;
+  if (!cleanupLease.acquire(profileRoot_, diagnostic)) {
+    return false;
+  }
+  const auto finalPath = profileRoot_ / metadata.relativePath;
+  const auto quarantineDirectory =
+      removalDirectoryFor(replayDirectory, metadata);
+  const auto quarantinePath = quarantineDirectory / "owned.brd";
+
+  auto quarantineKind = entryKind(quarantineDirectory, diagnostic);
+  if (quarantineKind == EntryKind::Missing) {
+    std::error_code createError;
+    if (!std::filesystem::create_directory(quarantineDirectory, createError) ||
+        createError) {
+      diagnostic = "Unable to reserve replay cleanup quarantine: " +
+                   createError.message();
+      return false;
+    }
+    std::error_code permissionError;
+#ifndef _WIN32
+    std::filesystem::permissions(
+        quarantineDirectory, std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::replace, permissionError);
+#endif
+    if (permissionError ||
+        !atomic_file::syncDirectory(replayDirectory, diagnostic)) {
+      if (diagnostic.empty()) {
+        diagnostic = "Unable to protect replay cleanup quarantine: " +
+                     permissionError.message();
+      }
+      return false;
+    }
+    quarantineKind = EntryKind::Directory;
+  }
+  if (quarantineKind != EntryKind::Directory) {
+    if (diagnostic.empty()) {
+      diagnostic = "Replay cleanup quarantine is unsafe";
+    }
+    return false;
+  }
+
+  auto quarantinedKind = entryKind(quarantinePath, diagnostic);
+  if (quarantinedKind == EntryKind::Missing) {
+    const auto finalKind = entryKind(finalPath, diagnostic);
+    if (finalKind == EntryKind::Missing) {
+      return removeEmptyDirectoryAndSync(quarantineDirectory, replayDirectory,
+                                         diagnostic);
+    }
+    if (finalKind != EntryKind::Regular) {
+      if (diagnostic.empty()) {
+        diagnostic = "Replay cleanup target is unsafe";
+      }
+      return false;
+    }
+    if (fault(faults_, "remove-before-quarantine")) {
+      diagnostic = "Injected replay cleanup interruption before quarantine";
+      return false;
+    }
+    if (!atomic_file::renameDurably(finalPath, quarantinePath, diagnostic) ||
+        !atomic_file::syncDirectory(replayDirectory, diagnostic) ||
+        !atomic_file::syncDirectory(quarantineDirectory, diagnostic)) {
+      return false;
+    }
+    quarantinedKind = entryKind(quarantinePath, diagnostic);
+  }
+  if (quarantinedKind != EntryKind::Regular) {
+    if (diagnostic.empty()) {
+      diagnostic = "Quarantined replay cleanup target is unsafe";
+    }
+    return false;
+  }
+  if (fault(faults_, "remove-after-quarantine")) {
+    diagnostic = "Injected replay cleanup interruption after quarantine";
+    return false;
+  }
+
+  const auto inspection = inspectFileAtPath(quarantinePath, metadata, limits_);
+  if (inspection.state != ReplayFileState::Available) {
+    const std::string mismatchDiagnostic =
+        inspection.diagnostic.empty()
+            ? "Replay bytes do not match expected ownership"
+            : inspection.diagnostic;
+    std::string restoreDiagnostic;
+    const bool restored = restoreQuarantinedRegularFile(
+        quarantinePath, finalPath, quarantineDirectory, replayDirectory,
+        restoreDiagnostic);
+    diagnostic = mismatchDiagnostic;
+    if (!restored && !restoreDiagnostic.empty()) {
+      diagnostic += "; " + restoreDiagnostic;
+    }
+    return false;
+  }
+  return removeEntryAndSync(quarantinePath, quarantineDirectory, diagnostic) &&
+         removeEmptyDirectoryAndSync(quarantineDirectory, replayDirectory,
+                                     diagnostic);
 }
 
 bool ReplayFileStore::removeReferencedEntry(const ReplayFileMetadata &metadata,

@@ -51,9 +51,18 @@ using asobmshow::chart_sql::normalizedSqlHash;
 using StagedMigrationFault = replay_repository_test::PathMigrationFault;
 replay_repository_test::PathMigrationFault gPathMigrationFault =
     replay_repository_test::PathMigrationFault::None;
+void *gPathMigrationAfterSnapshotContext = nullptr;
+replay_repository_test::PathMigrationAfterSnapshotHook
+    gPathMigrationAfterSnapshotHook = nullptr;
 
 bool pathMigrationFault(StagedMigrationFault fault) noexcept {
   return gPathMigrationFault == fault;
+}
+
+void runPathMigrationAfterSnapshotHook() {
+  if (gPathMigrationAfterSnapshotHook != nullptr) {
+    gPathMigrationAfterSnapshotHook(gPathMigrationAfterSnapshotContext);
+  }
 }
 #else
 enum class StagedMigrationFault {
@@ -65,6 +74,7 @@ enum class StagedMigrationFault {
 };
 
 bool pathMigrationFault(StagedMigrationFault) noexcept { return false; }
+void runPathMigrationAfterSnapshotHook() {}
 #endif
 
 void logSqlErrorText(const char *context, const std::string &error) {
@@ -2172,6 +2182,76 @@ bool replayDatabaseIntegrityIsValid(sqlite3 *database) {
   return true;
 }
 
+class ReplayMigrationExclusiveOwnership {
+public:
+  explicit ReplayMigrationExclusiveOwnership(sqlite3 *database)
+      : database_(database) {}
+
+  bool acquire() {
+    if (database_ == nullptr ||
+        !execSql(database_, "PRAGMA locking_mode=EXCLUSIVE",
+                 "entering exclusive replay migration mode")) {
+      return false;
+    }
+    acquired_ = true;
+    if (!execSql(database_, "BEGIN EXCLUSIVE",
+                 "acquiring exclusive replay migration ownership")) {
+      (void)release();
+      return false;
+    }
+    if (!execSql(database_, "COMMIT",
+                 "retaining exclusive replay migration ownership")) {
+      (void)executeSqlite(database_, "ROLLBACK");
+      (void)release();
+      return false;
+    }
+    return true;
+  }
+
+  bool release() {
+    if (!acquired_) {
+      return true;
+    }
+    if (!execSql(database_, "PRAGMA locking_mode=NORMAL",
+                 "leaving exclusive replay migration mode") ||
+        !execSql(database_, "BEGIN IMMEDIATE",
+                 "starting replay migration ownership release") ||
+        !execSql(database_, "COMMIT",
+                 "releasing exclusive replay migration ownership")) {
+      (void)executeSqlite(database_, "ROLLBACK");
+      SDL_Log("Could not release exclusive replay migration ownership");
+      return false;
+    }
+    acquired_ = false;
+    return true;
+  }
+
+  ~ReplayMigrationExclusiveOwnership() { (void)release(); }
+
+  ReplayMigrationExclusiveOwnership(const ReplayMigrationExclusiveOwnership &) =
+      delete;
+  ReplayMigrationExclusiveOwnership &
+  operator=(const ReplayMigrationExclusiveOwnership &) = delete;
+
+private:
+  sqlite3 *database_ = nullptr;
+  bool acquired_ = false;
+};
+
+bool truncateReplayMigrationWal(sqlite3 *database, const char *context) {
+  int logFrames = 0;
+  int checkpointedFrames = 0;
+  const int rc =
+      sqlite3_wal_checkpoint_v2(database, "main", SQLITE_CHECKPOINT_TRUNCATE,
+                                &logFrames, &checkpointedFrames);
+  if (rc == SQLITE_OK) {
+    return true;
+  }
+  SDL_Log("Replay database migration could not %s: %s", context,
+          sqlite3_errmsg(database));
+  return false;
+}
+
 bool prepareReplayDatabaseWithCompaction(
     sqlite3 *database, const std::filesystem::path &databasePath) {
   const auto temporaryPath = replayMigrationTemporaryPath(databasePath);
@@ -2180,6 +2260,10 @@ bool prepareReplayDatabaseWithCompaction(
     return false;
   }
   ReplayMigrationTemporaryFile temporary(*temporaryPath);
+  ReplayMigrationExclusiveOwnership ownership(database);
+  if (!ownership.acquire()) {
+    return false;
+  }
 
   sqlite3 *rawStaged = nullptr;
   const std::string stagedPath = fspath_to_utf8(temporary.path());
@@ -2201,6 +2285,7 @@ bool prepareReplayDatabaseWithCompaction(
                           "copying the original into migration staging")) {
     return false;
   }
+  runPathMigrationAfterSnapshotHook();
   int foreignKeysEnabled = 0;
   if (sqlite3_db_config(staged.get(), SQLITE_DBCONFIG_ENABLE_FKEY, 1,
                         &foreignKeysEnabled) != SQLITE_OK ||
@@ -2220,6 +2305,13 @@ bool prepareReplayDatabaseWithCompaction(
     return false;
   }
 
+  // The compact image remains retryable until its pages are durably installed
+  // in the main database. A failed checkpoint therefore cannot publish v17
+  // solely from a WAL that still sits beside the old large main file.
+  if (!setDatabaseUserVersion(staged.get(), kReplayDatabaseSchemaVersion - 1)) {
+    return false;
+  }
+
   const bool interruptInstall =
       pathMigrationFault(StagedMigrationFault::Installation);
   if (!copyReplayDatabase(database, staged.get(), interruptInstall,
@@ -2227,17 +2319,16 @@ bool prepareReplayDatabaseWithCompaction(
     return false;
   }
 
-  int logFrames = 0;
-  int checkpointedFrames = 0;
-  const int checkpointRc = sqlite3_wal_checkpoint_v2(
-      database, "main", SQLITE_CHECKPOINT_TRUNCATE, &logFrames,
-      &checkpointedFrames);
-  if (checkpointRc != SQLITE_OK) {
-    SDL_Log("Compact replay migration committed but WAL truncation is "
-            "pending: %s",
-            sqlite3_errmsg(database));
+  if (!truncateReplayMigrationWal(database,
+                                  "checkpoint the compact retryable image")) {
+    return false;
   }
-  return true;
+  if (!setDatabaseUserVersion(database, kReplayDatabaseSchemaVersion) ||
+      !truncateReplayMigrationWal(database,
+                                  "checkpoint the completed schema marker")) {
+    return false;
+  }
+  return ownership.release();
 }
 
 sqlite3 *openReplayDatabase(const std::filesystem::path &path,
@@ -2524,5 +2615,11 @@ bool replay_repository_test::RunSchemaMigration(sqlite3 *database) {
 
 void replay_repository_test::SetPathMigrationFault(PathMigrationFault fault) {
   gPathMigrationFault = fault;
+}
+
+void replay_repository_test::SetPathMigrationAfterSnapshotHook(
+    void *context, PathMigrationAfterSnapshotHook hook) {
+  gPathMigrationAfterSnapshotContext = context;
+  gPathMigrationAfterSnapshotHook = hook;
 }
 #endif

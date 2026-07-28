@@ -986,6 +986,59 @@ void testVersion16CompactionMarkerReclaimsAlreadyDroppedPages() {
   assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
 }
 
+struct ConcurrentMigrationWriteProbe {
+  std::filesystem::path path;
+  bool attempted = false;
+  bool readStarted = false;
+  bool committed = false;
+};
+
+void tryConcurrentMigrationWrite(void *context) {
+  auto &probe = *static_cast<ConcurrentMigrationWriteProbe *>(context);
+  probe.attempted = true;
+  sqlite3 *raw = nullptr;
+  assert(sqlite3_open(probe.path.string().c_str(), &raw) == SQLITE_OK);
+  SqliteConnectionHandle concurrent(raw);
+  sqlite3_busy_timeout(concurrent.get(), 0);
+  SqliteStatementHandle read;
+  if (prepareSqliteStatement(concurrent.get(),
+                             "SELECT chart_title FROM replays",
+                             read) == SQLITE_OK) {
+    probe.readStarted = sqlite3_step(read.get()) == SQLITE_ROW;
+  }
+  probe.committed =
+      sqlite3_exec(concurrent.get(),
+                   "UPDATE replays SET chart_title='Concurrent write' "
+                   "WHERE id=11",
+                   nullptr, nullptr, nullptr) == SQLITE_OK;
+}
+
+void testPathMigrationRetainsWriteOwnershipAcrossInstall() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "concurrent-writer.db";
+  createVersion13Fixture(path);
+  ConcurrentMigrationWriteProbe probe{.path = path};
+  replay_repository_test::SetPathMigrationAfterSnapshotHook(
+      &probe, tryConcurrentMigrationWrite);
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    auto released = openDatabase(path);
+    assert(queryInt(released.get(), "PRAGMA user_version") == 17);
+    repository.Shutdown();
+  }
+  replay_repository_test::SetPathMigrationAfterSnapshotHook(nullptr, nullptr);
+
+  assert(probe.attempted);
+  assert(!probe.readStarted);
+  assert(!probe.committed);
+  auto database = openDatabase(path);
+  assert(queryText(database.get(),
+                   "SELECT chart_title FROM legacy_chart_result_summaries "
+                   "WHERE legacy_replay_id=11") == "Inactive");
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+}
+
 void testPathMigrationFaultsPreserveOriginalDatabase() {
   TemporaryDirectory temporary;
   const auto pristinePath = temporary.path / "path-pristine.db";
@@ -1190,6 +1243,7 @@ int main() {
   testRollbackFaultMatrixPreservesOriginalDatabase();
   testPathMigrationReclaimsDroppedReplayDetailPages();
   testVersion16CompactionMarkerReclaimsAlreadyDroppedPages();
+  testPathMigrationRetainsWriteOwnershipAcrossInstall();
   testPathMigrationFaultsPreserveOriginalDatabase();
   testVersion15OwnershipMigrationRollbackFaultMatrix();
   std::cout << "legacy replay migration tests passed\n";

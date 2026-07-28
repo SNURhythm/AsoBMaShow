@@ -11,6 +11,13 @@
 #include <string_view>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 namespace {
 
 using Bytes = std::vector<std::byte>;
@@ -255,6 +262,185 @@ void testReservationCleanupRequiresExactOwnedMetadata() {
          "restart cleanup rejects unsafe ownership metadata");
 }
 
+void testAutomaticCleanupCannotUnlinkARacingReplacement() {
+  const Bytes payload = bytes("owned replay");
+  {
+    TempDirectory profile;
+    replay::ReplayFileStore installer(profile.path);
+    const auto reservation = installer.reserve(identity(), payload, "attempt");
+    const auto installed = installer.install(*reservation.reservation, payload);
+    expect(installed.file.has_value(),
+           "competing cleanup fixture installs owned replay");
+    if (!installed.file) {
+      return;
+    }
+    const auto path = profile.path / installed.file->metadata.relativePath;
+    replay::ReplayFileStore competitor(profile.path);
+    bool competitorRemoved = false;
+    replay::ReplayFileStore cleanup(
+        profile.path, {.failAt = [&](std::string_view point) {
+          if (point == "remove-before-quarantine") {
+            std::string competingDiagnostic;
+            competitorRemoved = competitor.removeIfMatches(
+                installed.file->metadata, competingDiagnostic);
+            return true;
+          }
+          return false;
+        }});
+
+    std::string diagnostic;
+    expect(!cleanup.removeIfMatches(installed.file->metadata, diagnostic) &&
+               !competitorRemoved && std::filesystem::exists(path),
+           "one cleanup lease excludes a competing cleanup before quarantine");
+  }
+  {
+    TempDirectory profile;
+    replay::ReplayFileStore installer(profile.path);
+    const auto reservation = installer.reserve(identity(), payload, "attempt");
+    const auto installed = installer.install(*reservation.reservation, payload);
+    expect(installed.file.has_value(), "race fixture installs owned replay");
+    if (!installed.file) {
+      return;
+    }
+    const auto path = profile.path / installed.file->metadata.relativePath;
+    bool replaced = false;
+    replay::ReplayFileStore cleanup(
+        profile.path, {.failAt = [&](std::string_view point) {
+          if (point == "remove-before-quarantine") {
+            std::error_code removeError;
+            std::filesystem::remove(path, removeError);
+            write(path, "racing replacement");
+            replaced = true;
+          }
+          return false;
+        }});
+
+    std::string diagnostic;
+    expect(!cleanup.removeIfMatches(installed.file->metadata, diagnostic) &&
+               replaced && std::filesystem::exists(path),
+           "automatic cleanup refuses a replacement moved into quarantine");
+    std::ifstream input(path, std::ios::binary);
+    const std::string preserved{std::istreambuf_iterator<char>(input),
+                                std::istreambuf_iterator<char>()};
+    expect(preserved == "racing replacement",
+           "automatic cleanup restores the quarantined replacement bytes");
+  }
+  {
+    TempDirectory profile;
+    replay::ReplayFileStore installer(profile.path);
+    const auto reservation = installer.reserve(identity(), payload, "attempt");
+    const auto installed = installer.install(*reservation.reservation, payload);
+    const auto path = profile.path / installed.file->metadata.relativePath;
+    replay::ReplayFileStore cleanup(
+        profile.path, {.failAt = [&](std::string_view point) {
+          if (point == "remove-after-quarantine") {
+            write(path, "post-quarantine replacement");
+          }
+          return false;
+        }});
+    std::string diagnostic;
+    expect(cleanup.removeIfMatches(installed.file->metadata, diagnostic),
+           "cleanup removes only the owned inode after quarantine");
+    std::ifstream input(path, std::ios::binary);
+    const std::string preserved{std::istreambuf_iterator<char>(input),
+                                std::istreambuf_iterator<char>()};
+    expect(preserved == "post-quarantine replacement",
+           "cleanup never unlinks a replacement created after quarantine");
+  }
+  {
+    TempDirectory profile;
+    replay::ReplayFileStore installer(profile.path);
+    const auto reservation = installer.reserve(identity(), payload, "attempt");
+    const auto installed = installer.install(*reservation.reservation, payload);
+    const auto path = profile.path / installed.file->metadata.relativePath;
+    replay::ReplayFileStore interrupted(
+        profile.path, {.failAt = [](std::string_view point) {
+          return point == "remove-after-quarantine";
+        }});
+    std::string diagnostic;
+    expect(!interrupted.removeIfMatches(installed.file->metadata, diagnostic) &&
+               !std::filesystem::exists(path),
+           "interrupted cleanup retains the owned inode in quarantine");
+    replay::ReplayFileStore retry(profile.path);
+    expect(retry.removeIfMatches(installed.file->metadata, diagnostic) &&
+               !std::filesystem::exists(path) &&
+               std::filesystem::is_empty(profile.path / "replay"),
+           "restart resumes deterministic quarantined cleanup");
+  }
+}
+
+#if !defined(_WIN32)
+void testAutomaticCleanupHonorsInterprocessLease() {
+  TempDirectory profile;
+  replay::ReplayFileStore store(profile.path);
+  const Bytes payload = bytes("interprocess-owned replay");
+  const auto reservation = store.reserve(identity(), payload, "attempt");
+  const auto installed = store.install(*reservation.reservation, payload);
+  expect(installed.file.has_value(),
+         "interprocess cleanup fixture installs owned replay");
+  if (!installed.file) {
+    return;
+  }
+  const auto path = profile.path / installed.file->metadata.relativePath;
+
+  int readyPipe[2]{};
+  int releasePipe[2]{};
+  if (::pipe(readyPipe) != 0 || ::pipe(releasePipe) != 0) {
+    expect(false, "interprocess cleanup fixture creates synchronization pipes");
+    return;
+  }
+  const pid_t child = ::fork();
+  if (child < 0) {
+    ::close(readyPipe[0]);
+    ::close(readyPipe[1]);
+    ::close(releasePipe[0]);
+    ::close(releasePipe[1]);
+    expect(false, "interprocess cleanup fixture forks a lease holder");
+    return;
+  }
+  if (child == 0) {
+    ::close(readyPipe[0]);
+    ::close(releasePipe[1]);
+    const auto leasePath = profile.path / ".asobmashow-replay-cleanup.lock";
+    const int lease = ::open(leasePath.c_str(), O_RDWR | O_CREAT, 0600);
+    const bool acquired = lease >= 0 && ::flock(lease, LOCK_EX) == 0;
+    const char ready = acquired ? '1' : '0';
+    (void)::write(readyPipe[1], &ready, 1);
+    char release = 0;
+    (void)::read(releasePipe[0], &release, 1);
+    if (acquired) {
+      (void)::flock(lease, LOCK_UN);
+    }
+    if (lease >= 0) {
+      (void)::close(lease);
+    }
+    ::close(readyPipe[1]);
+    ::close(releasePipe[0]);
+    _exit(acquired ? 0 : 1);
+  }
+  ::close(readyPipe[1]);
+  ::close(releasePipe[0]);
+  char ready = 0;
+  const bool childLocked = ::read(readyPipe[0], &ready, 1) == 1 && ready == '1';
+  std::string diagnostic;
+  const bool removedWhileLocked =
+      store.removeIfMatches(installed.file->metadata, diagnostic);
+  expect(childLocked && !removedWhileLocked && std::filesystem::exists(path),
+         "interprocess lease defers cleanup without moving or deleting bytes");
+  const char release = '1';
+  (void)::write(releasePipe[1], &release, 1);
+  ::close(readyPipe[0]);
+  ::close(releasePipe[1]);
+  int status = 0;
+  (void)::waitpid(child, &status, 0);
+  expect(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+         "interprocess cleanup lease holder exits cleanly");
+  expect(store.removeIfMatches(installed.file->metadata, diagnostic) &&
+             !std::filesystem::exists(path),
+         "cleanup resumes after the interprocess lease is released");
+}
+#endif
+
 void testStaleCleanupOnlyRecognizesPrivateTemporaryGrammar() {
   TempDirectory profile;
   replay::ReplayFileStore store(profile.path);
@@ -293,6 +479,10 @@ int main() {
   testFaultsAreRecoverableAtExactReservation();
   testCorruptUserDeletionAndAutomaticOwnershipGuard();
   testReservationCleanupRequiresExactOwnedMetadata();
+  testAutomaticCleanupCannotUnlinkARacingReplacement();
+#if !defined(_WIN32)
+  testAutomaticCleanupHonorsInterprocessLease();
+#endif
   testStaleCleanupOnlyRecognizesPrivateTemporaryGrammar();
   if (failures != 0) {
     std::cerr << failures << " replay file store test(s) failed\n";

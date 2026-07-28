@@ -12,9 +12,13 @@ enum class PathMigrationFault {
   Installation,
 };
 
+using PathMigrationAfterSnapshotHook = void (*)(void *context);
+
 // Test-only seam for transaction fault injection around the schema owner.
 // Production callers migrate through ReplayRepository::EnsureSchema().
 [[nodiscard]] bool RunSchemaMigration(sqlite3 *database);
 void SetPathMigrationFault(PathMigrationFault fault);
+void SetPathMigrationAfterSnapshotHook(void *context,
+                                       PathMigrationAfterSnapshotHook hook);
 
 } // namespace replay_repository_test

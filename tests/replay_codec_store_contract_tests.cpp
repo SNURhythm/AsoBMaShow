@@ -55,6 +55,18 @@ replay::ReplayChartDocument document() {
                    .player = 1,
                    .lane = 0},
        .pressed = false},
+      {.songTimeMicros = 2'000,
+       .control = {.kind = replay::LogicalControlKind::Start, .player = 1},
+       .pressed = true},
+      {.songTimeMicros = 3'000,
+       .control = {.kind = replay::LogicalControlKind::Start, .player = 1},
+       .pressed = false},
+      {.songTimeMicros = 4'000,
+       .control = {.kind = replay::LogicalControlKind::Select, .player = 1},
+       .pressed = true},
+      {.songTimeMicros = 5'000,
+       .control = {.kind = replay::LogicalControlKind::Select, .player = 1},
+       .pressed = false},
   };
   return value;
 }
@@ -110,7 +122,8 @@ void testProducerCodecStoreConsumerClosure() {
   };
   const auto decoded = codec.decode(*read.bytes, context);
   expect(decoded.chart == std::optional(source),
-         "stored producer bytes close through the same consumer contract");
+         "stored producer bytes, including Start and Select edges, close "
+         "through the same consumer contract");
 
   expect(store.removeIfMatches(installed.file->metadata, diagnostic) &&
              store.inspect(installed.file->metadata).state ==
