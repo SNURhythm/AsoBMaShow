@@ -455,6 +455,45 @@ void testDurableReceiptsAndOutboxWorkSurvive() {
                    "attempt_id='legacy-inactive'") == "legacy_result_cutover");
 }
 
+void testMalformedProvenanceDoesNotBlockHeaderMigration() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  createVersion13Fixture(path);
+  auto database = openDatabase(path);
+  constexpr std::string_view malformedProvenance =
+      "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},"
+      "\"stages\":[{}],\"eligibility\":\"legacy-unverified\"}";
+  exec(database.get(),
+       "UPDATE replays SET provenance_json='" +
+           std::string(malformedProvenance) +
+           "' WHERE id=12; UPDATE course_replays SET provenance_json='" +
+           std::string(malformedProvenance) + "' WHERE id=21");
+
+  assert(
+      replay_repository_detail::CreateReplayTablesOnConnection(database.get()));
+  assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+  assert(queryText(database.get(),
+                   "SELECT chart_title FROM legacy_chart_result_summaries "
+                   "WHERE legacy_replay_id=12") == "Ready");
+  assert(queryText(database.get(),
+                   "SELECT typeof(provenance_json) FROM "
+                   "legacy_chart_result_summaries WHERE legacy_replay_id=12") ==
+         "null");
+  assert(queryInt(database.get(),
+                  "SELECT partial FROM legacy_chart_result_summaries WHERE "
+                  "legacy_replay_id=12") == 1);
+  assert(queryText(database.get(),
+                   "SELECT course_name FROM legacy_course_result_summaries "
+                   "WHERE legacy_course_replay_id=21") == "Course");
+  assert(queryText(database.get(),
+                   "SELECT typeof(provenance_json) FROM "
+                   "legacy_course_result_summaries WHERE "
+                   "legacy_course_replay_id=21") == "null");
+  assert(queryInt(database.get(),
+                  "SELECT partial FROM legacy_course_result_summaries WHERE "
+                  "legacy_course_replay_id=21") == 1);
+}
+
 void testCurrentSchemaRejectsSummaryShapeDrift() {
   TemporaryDirectory temporary;
   const auto path = temporary.path / "replay.db";
@@ -672,6 +711,7 @@ int main() {
   testHeaderOnlyCutover();
   testFreshSchemaHasNoRawReplayTables();
   testDurableReceiptsAndOutboxWorkSurvive();
+  testMalformedProvenanceDoesNotBlockHeaderMigration();
   testCurrentSchemaRejectsSummaryShapeDrift();
   testRollbackFaultMatrixPreservesOriginalDatabase();
   std::cout << "legacy replay migration tests passed\n";

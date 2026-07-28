@@ -16,6 +16,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -258,8 +259,19 @@ ProvenanceFields provenanceValue(sqlite3_stmt *source, int rulesetColumn,
   std::string error;
   const auto decoded = deserializeScoreProvenance(*json, error);
   if (!decoded || decoded->ruleset.version != *ruleset ||
-      static_cast<int>(decoded->eligibility) != *eligibility ||
-      serializeScoreProvenance(*decoded) != *json) {
+      static_cast<int>(decoded->eligibility) != *eligibility) {
+    partial = true;
+    return {};
+  }
+  try {
+    if (serializeScoreProvenance(*decoded) != *json) {
+      partial = true;
+      return {};
+    }
+  } catch (const std::runtime_error &) {
+    // Older provenance schemas admitted incomplete stage facts that the
+    // current canonical serializer rejects. They are an unavailable optional
+    // header field, not a reason to lose the independently stored result row.
     partial = true;
     return {};
   }
