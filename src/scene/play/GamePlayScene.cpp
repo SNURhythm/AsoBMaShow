@@ -45,9 +45,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <sstream>
@@ -594,6 +596,7 @@ struct GamePlayScene::RealtimeGameplaySession {
   GamePlayScene *scene = nullptr;
   AudioWrapper *audio = nullptr;
   long long audioOffsetMicros = 0;
+  int keyMode = 7;
   std::uint64_t epoch = 0;
   std::atomic_bool acceptingTouch{false};
   std::atomic_bool acceptingNativeInput{false};
@@ -603,6 +606,8 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
   std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
+  std::mutex legacyInputMutex;
+  std::deque<gameplay::RealtimeGameplayInput> pendingLegacyInputs;
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::unique_ptr<NativeCallbackLifetime> touchCallbackLifetime;
 #endif
@@ -745,8 +750,66 @@ struct GamePlayScene::RealtimeGameplaySession {
   static bool emitTouchInput(void *context,
                              const gameplay::RealtimeGameplayInput &input) {
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    return session.acceptingTouch.load(std::memory_order_acquire) &&
-           session.worker != nullptr && session.worker->enqueueInput(input);
+    if (!session.acceptingTouch.load(std::memory_order_acquire) ||
+        session.worker == nullptr) {
+      return false;
+    }
+    auto owned = input;
+    owned.source = gameplay::RealtimeGameplayInputSource::Touch;
+    return session.worker->enqueueInput(owned);
+  }
+
+  bool prepareLegacyInput(gameplay::RealtimeGameplayInputType type, int lane,
+                          int compensateLane, bool backSpin,
+                          std::int64_t inputDelayMicros) {
+    const std::lock_guard lock(legacyInputMutex);
+    pendingLegacyInputs.push_back(
+        {.epoch = epoch,
+         .type = type,
+         .source = gameplay::RealtimeGameplayInputSource::LegacyAdapter,
+         .lane = lane,
+         .compensateLane = compensateLane,
+         .backSpin = backSpin,
+         .steadyTimestampMicros = nowMicros(),
+         .inputDelayMicros = inputDelayMicros});
+    return true;
+  }
+
+  bool emitLegacyApplied(replay::LogicalControl control, bool pressed,
+                         bool replayOnly) {
+    if (worker == nullptr) {
+      return false;
+    }
+    const auto controlLane = replay::physicalChartLaneForLogicalControl(
+        keyMode, control);
+    gameplay::RealtimeGameplayInput input{
+        .epoch = epoch,
+        .type = pressed ? gameplay::RealtimeGameplayInputType::Press
+                        : gameplay::RealtimeGameplayInputType::Release,
+        .source = gameplay::RealtimeGameplayInputSource::LegacyAdapter,
+        .lane = controlLane.value_or(-1),
+        .compensateLane = controlLane.value_or(-1),
+        .steadyTimestampMicros = nowMicros(),
+        .hasReplayControl = true,
+        .replayControl = control,
+        .replayOnly = true,
+    };
+    if (!replayOnly && controlLane.has_value()) {
+      const std::lock_guard lock(legacyInputMutex);
+      const auto pending = std::ranges::find_if(
+          pendingLegacyInputs, [&](const auto &candidate) {
+            return candidate.lane == *controlLane &&
+                   candidate.type == input.type;
+          });
+      if (pending != pendingLegacyInputs.end()) {
+        input = *pending;
+        pendingLegacyInputs.erase(pending);
+        input.hasReplayControl = true;
+        input.replayControl = control;
+        input.replayOnly = false;
+      }
+    }
+    return worker->enqueueInput(input);
   }
 
   static bool scratchLongNoteHeld(void *context, int lane) {
@@ -780,6 +843,7 @@ struct GamePlayScene::RealtimeGameplaySession {
                          input::RealtimePhysicalInputTransitionType::Press
                      ? gameplay::RealtimeGameplayInputType::Press
                      : gameplay::RealtimeGameplayInputType::Release,
+         .source = gameplay::RealtimeGameplayInputSource::Physical,
          .lane = transition.lane,
          .compensateLane = transition.lane,
          .backSpin = transition.backSpin,
@@ -1023,6 +1087,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   session->audio = &context.jukebox.audioRuntime();
   session->inputRegistry = &context.inputDeviceRegistry;
   session->audioOffsetMicros = getAudioOffsetMicros();
+  session->keyMode = chart->Meta.KeyMode;
   session->epoch = ++realtimeGameplayEpoch;
   session->notes = buildRealtimeGameplayNoteLookup(*chart);
   if (session->notes.size() != definition.noteCount()) {
@@ -2733,8 +2798,12 @@ void GamePlayScene::beginReplayRecording() {
 
 void GamePlayScene::captureModernReplayInput(replay::LogicalControl control,
                                              bool pressed, bool replayOnly) {
-  if (modernReplayInputRecorder == nullptr ||
-      realtimeGameplayAuthorityActive()) {
+  if (realtimeGameplayAuthorityActive()) {
+    (void)realtimeGameplaySession->emitLegacyApplied(control, pressed,
+                                                     replayOnly);
+    return;
+  }
+  if (modernReplayInputRecorder == nullptr) {
     return;
   }
   std::string diagnostic;
@@ -3811,14 +3880,9 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     return nullptr;
   }
   if (realtimeGameplayAuthorityActive()) {
-    const long long timestamp = nowMicros();
-    (void)realtimeGameplaySession->worker->enqueueInput(
-        {.epoch = realtimeGameplaySession->epoch,
-         .type = gameplay::RealtimeGameplayInputType::Press,
-         .lane = mainLane,
-         .compensateLane = compensateLane,
-         .steadyTimestampMicros = timestamp,
-         .inputDelayMicros = static_cast<long long>(inputDelay * 1000000.0)});
+    (void)realtimeGameplaySession->prepareLegacyInput(
+        gameplay::RealtimeGameplayInputType::Press, mainLane, compensateLane,
+        false, static_cast<long long>(inputDelay * 1000000.0));
     return nullptr;
   }
   if (laneInputController == nullptr) {
@@ -3878,14 +3942,9 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
     return nullptr;
   }
   if (realtimeGameplayAuthorityActive()) {
-    const long long timestamp = nowMicros();
-    (void)realtimeGameplaySession->worker->enqueueInput(
-        {.epoch = realtimeGameplaySession->epoch,
-         .type = gameplay::RealtimeGameplayInputType::Release,
-         .lane = lane,
-         .backSpin = isBackSpin,
-         .steadyTimestampMicros = timestamp,
-         .inputDelayMicros = static_cast<long long>(inputDelay * 1000000.0)});
+    (void)realtimeGameplaySession->prepareLegacyInput(
+        gameplay::RealtimeGameplayInputType::Release, lane, lane, isBackSpin,
+        static_cast<long long>(inputDelay * 1000000.0));
     return nullptr;
   }
   if (laneInputController == nullptr) {

@@ -22,9 +22,18 @@ inline constexpr std::size_t kRealtimeGameplayTransactionHistorySize = 256;
 
 enum class RealtimeGameplayInputType : std::uint8_t { Press, Release };
 
+enum class RealtimeGameplayInputSource : std::uint8_t {
+  Independent,
+  Physical,
+  Touch,
+  LegacyAdapter,
+};
+
 struct RealtimeGameplayInput {
   std::uint64_t epoch = 0;
   RealtimeGameplayInputType type = RealtimeGameplayInputType::Press;
+  RealtimeGameplayInputSource source =
+      RealtimeGameplayInputSource::Independent;
   int lane = -1;
   int compensateLane = -1;
   bool backSpin = false;
@@ -217,6 +226,26 @@ public:
   [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesAfterStop() const;
 
 private:
+  static constexpr std::size_t kOwnedInputSourceCount = 3;
+
+  struct OwnedInputSourceState {
+    bool held = false;
+    bool hasReplayControl = false;
+    replay::LogicalControl replayControl;
+    std::uint64_t claimSequence = 0;
+  };
+
+  struct OwnedLaneState {
+    std::array<OwnedInputSourceState, kOwnedInputSourceCount> sources{};
+  };
+
+  struct OwnedInputDecision {
+    std::array<RealtimeGameplayInput, 2> gameplay{};
+    std::size_t gameplayCount = 0;
+    std::array<RealtimeGameplayInput, 2> replay{};
+    std::size_t replayCount = 0;
+  };
+
   struct SnapshotBuffer {
     RealtimeGameplaySnapshot snapshot;
     mutable std::atomic<std::uint32_t> readers{0};
@@ -225,6 +254,10 @@ private:
   void run();
   void signal() noexcept;
   void processInput(const RealtimeGameplayInput &input);
+  [[nodiscard]] OwnedInputDecision
+  coalesceOwnedInput(const RealtimeGameplayInput &input) noexcept;
+  [[nodiscard]] bool processGameplayInput(
+      const RealtimeGameplayInput &input, std::int64_t songTimeMicros);
   void recordAcceptedReplayInput(const RealtimeGameplayInput &,
                                  std::int64_t songTimeMicros) noexcept;
   bool advanceAutomatic();
@@ -238,6 +271,8 @@ private:
   GameplayDefinition definition_;
   RealtimeGameplayWorkerConfig config_;
   GameplaySimulation simulation_;
+  std::array<OwnedLaneState, 64> ownedInputLanes_{};
+  std::uint64_t ownedInputClaimSequence_ = 0;
   BoundedMpscQueue<RealtimeGameplayInput, kRealtimeGameplayIngressSize>
       ingress_;
   std::array<SnapshotBuffer, 3> snapshots_{};

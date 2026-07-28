@@ -147,6 +147,8 @@ void testDirectTouchEmitsTimestampedLaneEdges() {
       capture.events.size() == 2 && capture.events[0].epoch == 42 &&
           capture.events[0].type ==
               gameplay::RealtimeGameplayInputType::Press &&
+          capture.events[0].source ==
+              gameplay::RealtimeGameplayInputSource::Touch &&
           capture.events[0].lane == 0 && capture.events[0].hasReplayControl &&
           capture.events[0].replayControl ==
               replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
@@ -155,6 +157,8 @@ void testDirectTouchEmitsTimestampedLaneEdges() {
           capture.events[0].steadyTimestampMicros == 123'456 &&
           capture.events[1].type ==
               gameplay::RealtimeGameplayInputType::Release &&
+          capture.events[1].source ==
+              gameplay::RealtimeGameplayInputSource::Touch &&
           capture.events[1].lane == 0,
       "native samples preserve their timestamp and lane edge order");
 }
