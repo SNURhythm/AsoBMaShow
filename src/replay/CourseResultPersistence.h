@@ -4,6 +4,7 @@
 
 #include "../repositories/ScoreRepository.h"
 
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <string>
@@ -49,6 +50,16 @@ struct CourseResultPersistenceDependencies {
   std::function<result_persistence::ProjectionOutcome(
       const result_persistence::PendingCourseScoreWrite &)>
       projectScore;
+  std::function<ModernCourseScoreSourceBatchOutcome(int, std::size_t)>
+      listScoreSources;
+};
+
+struct CourseResultRecoverySummary {
+  std::size_t attempted = 0;
+  std::size_t saved = 0;
+  std::size_t pending = 0;
+  std::size_t conflicts = 0;
+  std::string diagnostic;
 };
 
 class CourseResultPersistence {
@@ -60,6 +71,8 @@ public:
 
   [[nodiscard]] CourseResultPersistenceOutcome
   persist(const CapturedCourseReplayAttempt &attempt) const;
+  [[nodiscard]] CourseResultRecoverySummary
+  recoverAll(std::size_t pageLimit = 256) const;
 
 private:
   CourseResultPersistenceDependencies dependencies_;

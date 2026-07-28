@@ -983,7 +983,14 @@ struct ReadCourseRecordOutcome {
   std::string diagnostic;
 };
 
-ReadCourseRecordOutcome readCourseRecord(sqlite3 *database,
+struct ReadCourseResultOutcome {
+  ReadRecordStatus status = ReadRecordStatus::StorageFailure;
+  std::optional<result_persistence::ModernCourseResult> result;
+  std::string createdAt;
+  std::string diagnostic;
+};
+
+ReadCourseResultOutcome readCourseResult(sqlite3 *database,
                                          const char *predicate,
                                          std::string_view textValue,
                                          int intValue) {
@@ -1131,8 +1138,24 @@ ReadCourseRecordOutcome readCourseRecord(sqlite3 *database,
     return {.status = ReadRecordStatus::Invalid,
             .diagnostic = std::move(diagnostic)};
   }
+  return {.status = ReadRecordStatus::Loaded,
+          .result = std::move(result),
+          .createdAt = createdAt};
+}
+
+ReadCourseRecordOutcome readCourseRecord(sqlite3 *database,
+                                         const char *predicate,
+                                         std::string_view textValue,
+                                         int intValue) {
+  auto loaded = readCourseResult(database, predicate, textValue, intValue);
+  if (loaded.status != ReadRecordStatus::Loaded || !loaded.result) {
+    return {.status = loaded.status,
+            .createdAt = std::move(loaded.createdAt),
+            .diagnostic = std::move(loaded.diagnostic)};
+  }
+  std::string diagnostic;
   bool referenceFound = false;
-  auto reference = readReplayReference(database, result.resultId,
+  auto reference = readReplayReference(database, loaded.result->resultId,
                                        referenceFound, diagnostic, true);
   if (!reference && !diagnostic.empty()) {
     return {.status = referenceFound ? ReadRecordStatus::Invalid
@@ -1141,9 +1164,9 @@ ReadCourseRecordOutcome readCourseRecord(sqlite3 *database,
   }
   return {.status = ReadRecordStatus::Loaded,
           .record =
-              ModernCourseResultRecord{.result = std::move(result),
+              ModernCourseResultRecord{.result = std::move(*loaded.result),
                                        .replayFile = std::move(reference)},
-          .createdAt = createdAt};
+          .createdAt = std::move(loaded.createdAt)};
 }
 
 bool insertModernCourseResult(
@@ -2246,6 +2269,102 @@ ReplayRepository::ListModernCourseResults(std::string_view courseKey,
   if (!transaction.commit(transactionError)) {
     return {.status = ModernCourseHistoryReadStatus::StorageFailure,
             .diagnostic = "could not finish modern course history read"};
+  }
+  return outcome;
+}
+
+ModernCourseScoreSourceBatchOutcome
+ReplayRepository::ListModernCourseScoreSourcesAfter(int afterResultId,
+                                                    std::size_t limit) {
+  profile_database_activity::ReadGuard readGuard;
+  if (afterResultId < 0 || limit == 0 ||
+      limit > kMaximumModernCourseScoreSourceRows) {
+    return {.status = ModernCourseScoreSourceBatchStatus::Invalid,
+            .diagnostic = "modern course score source request is invalid"};
+  }
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernCourseScoreSourceBatchStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->sessionDatabase,
+                                      "BEGIN TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ModernCourseScoreSourceBatchStatus::StorageFailure,
+            .diagnostic = "could not start modern course score source read"};
+  }
+
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT id FROM modern_course_results WHERE id>? ORDER BY id LIMIT ?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 1, afterResultId) != SQLITE_OK ||
+      sqlite3_bind_int64(statement.get(), 2,
+                         static_cast<sqlite3_int64>(limit + 1)) != SQLITE_OK) {
+    return {.status = ModernCourseScoreSourceBatchStatus::StorageFailure,
+            .diagnostic = "could not prepare modern course score source scan"};
+  }
+  std::vector<int> resultIds;
+  resultIds.reserve(limit + 1);
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER) {
+      return {.status = ModernCourseScoreSourceBatchStatus::IntegrityConflict,
+              .diagnostic =
+                  "modern course score source ID has an invalid type"};
+    }
+    const sqlite3_int64 rawId = sqlite3_column_int64(statement.get(), 0);
+    if (rawId <= afterResultId || rawId > std::numeric_limits<int>::max()) {
+      return {.status = ModernCourseScoreSourceBatchStatus::IntegrityConflict,
+              .diagnostic = "modern course score source ID is out of range"};
+    }
+    resultIds.push_back(static_cast<int>(rawId));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ModernCourseScoreSourceBatchStatus::StorageFailure,
+            .diagnostic = "modern course score source scan did not complete"};
+  }
+  statement.reset();
+
+  ModernCourseScoreSourceBatchOutcome outcome{
+      .status = ModernCourseScoreSourceBatchStatus::Loaded};
+  outcome.hasMore = resultIds.size() > limit;
+  if (outcome.hasMore) {
+    resultIds.resize(limit);
+  }
+  outcome.entries.reserve(resultIds.size());
+  for (const int resultId : resultIds) {
+    auto loaded =
+        readCourseResult(impl_->sessionDatabase, "id=?", {}, resultId);
+    if (loaded.status == ReadRecordStatus::StorageFailure) {
+      return {.status = ModernCourseScoreSourceBatchStatus::StorageFailure,
+              .diagnostic = std::move(loaded.diagnostic)};
+    }
+    if (loaded.status != ReadRecordStatus::Loaded || !loaded.result ||
+        loaded.result->resultId != resultId || loaded.createdAt.empty()) {
+      outcome.entries.push_back({
+          .status = ModernCourseScoreSourceEntryStatus::IntegrityConflict,
+          .resultId = resultId,
+          .diagnostic = loaded.diagnostic.empty()
+                            ? "modern course score source row is inconsistent"
+                            : std::move(loaded.diagnostic),
+      });
+      continue;
+    }
+    outcome.entries.push_back({
+        .status = ModernCourseScoreSourceEntryStatus::Loaded,
+        .resultId = resultId,
+        .source =
+            ModernCourseScoreSource{.resultId = resultId,
+                                    .createdAt = std::move(loaded.createdAt),
+                                    .result = std::move(*loaded.result)},
+    });
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = ModernCourseScoreSourceBatchStatus::StorageFailure,
+            .diagnostic = "could not finish modern course score source read"};
   }
   return outcome;
 }

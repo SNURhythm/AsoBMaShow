@@ -418,8 +418,45 @@ struct ModernCourseHistoryReadOutcome {
   std::string diagnostic;
 };
 
+// A result-only source for idempotent score projection recovery. Replay file
+// ownership is intentionally absent: a missing, deleted, or corrupt BRD cannot
+// prevent durable course facts from restoring their score projection.
+struct ModernCourseScoreSource {
+  int resultId = 0;
+  std::string createdAt;
+  result_persistence::ModernCourseResult result;
+
+  bool operator==(const ModernCourseScoreSource &) const = default;
+};
+
+enum class ModernCourseScoreSourceEntryStatus { Loaded, IntegrityConflict };
+
+struct ModernCourseScoreSourceEntry {
+  ModernCourseScoreSourceEntryStatus status =
+      ModernCourseScoreSourceEntryStatus::IntegrityConflict;
+  int resultId = 0;
+  std::optional<ModernCourseScoreSource> source;
+  std::string diagnostic;
+};
+
+enum class ModernCourseScoreSourceBatchStatus {
+  Loaded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernCourseScoreSourceBatchOutcome {
+  ModernCourseScoreSourceBatchStatus status =
+      ModernCourseScoreSourceBatchStatus::StorageFailure;
+  std::vector<ModernCourseScoreSourceEntry> entries;
+  bool hasMore = false;
+  std::string diagnostic;
+};
+
 inline constexpr std::size_t kMaximumModernChartHistoryRows = 1024;
 inline constexpr std::size_t kMaximumModernCourseHistoryRows = 1024;
+inline constexpr std::size_t kMaximumModernCourseScoreSourceRows = 256;
 
 enum class ModernChartHistoryReadStatus {
   Loaded,
@@ -497,6 +534,8 @@ public:
   ModernCourseResultReadOutcome LoadModernCourseResult(int resultId);
   ModernCourseHistoryReadOutcome
   ListModernCourseResults(std::string_view courseKey, std::size_t limit = 100);
+  ModernCourseScoreSourceBatchOutcome
+  ListModernCourseScoreSourcesAfter(int afterResultId, std::size_t limit = 256);
   std::vector<LegacyCourseResultSummary>
   ListLegacyCourseSummaries(const CourseReplayLookup &lookup,
                             std::size_t limit = 100);

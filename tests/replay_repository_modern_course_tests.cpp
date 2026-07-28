@@ -324,6 +324,49 @@ void testReplayFileOwnerCheckRejectsBothAndNeither() {
   sqlite3_free(error);
 }
 
+void testCourseScoreSourcesPageWithoutReplayOwnership() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  const auto first = result(6, false);
+  const auto reservation = reserve(repository, first);
+  const auto firstStage = repository.StageModernCourseResult(
+      first, attachment(reservation), coursePathInput(first));
+  const auto second = result(7, false);
+  const auto third = result(8, false);
+  const auto secondStage =
+      repository.StageModernCourseResult(second, std::nullopt);
+  const auto thirdStage =
+      repository.StageModernCourseResult(third, std::nullopt);
+  assert(firstStage.receipt && secondStage.receipt && thirdStage.receipt);
+
+  auto database = openDatabase(databasePath);
+  exec(database.get(), "UPDATE modern_replay_files SET stem='" +
+                           repeated('e', 64) +
+                           "' WHERE "
+                           "modern_course_result_id=" +
+                           std::to_string(firstStage.receipt->resultId));
+
+  const auto firstPage = repository.ListModernCourseScoreSourcesAfter(0, 2);
+  assert(firstPage.status == ModernCourseScoreSourceBatchStatus::Loaded &&
+         firstPage.entries.size() == 2 && firstPage.hasMore &&
+         firstPage.entries[0].status ==
+             ModernCourseScoreSourceEntryStatus::Loaded &&
+         firstPage.entries[0].source &&
+         firstPage.entries[0].source->result.attemptId == first.attemptId &&
+         !firstPage.entries[0].source->createdAt.empty() &&
+         firstPage.entries[1].source &&
+         firstPage.entries[1].source->result.attemptId == second.attemptId);
+  const auto secondPage = repository.ListModernCourseScoreSourcesAfter(
+      firstPage.entries.back().resultId, 2);
+  assert(secondPage.status == ModernCourseScoreSourceBatchStatus::Loaded &&
+         secondPage.entries.size() == 1 && !secondPage.hasMore &&
+         secondPage.entries.front().source &&
+         secondPage.entries.front().source->result.attemptId ==
+             third.attemptId);
+}
+
 #endif
 
 } // namespace
@@ -333,6 +376,7 @@ int main() {
   testAtomicCourseStageExactRetryAndStrictRead();
   testResultOnlyHistoryAndRollbackPreserveReservation();
   testReplayFileOwnerCheckRejectsBothAndNeither();
+  testCourseScoreSourcesPageWithoutReplayOwnership();
 #else
   std::cerr << "FAIL: modern course repository contract is not implemented\n";
   return 1;

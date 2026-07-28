@@ -88,6 +88,9 @@ void testLiveCourseUsesOneModernResultFirstRoute() {
                "final course result does not use one modern persistence path");
   requireToken(context, "CourseResultPersistence",
                "application context does not own the modern course boundary");
+  requireToken(
+      context, "courseRecovery = coursePersistence.recoverAll()",
+      "startup does not retry course score projection from modern results");
   requireToken(scores, "SaveProjectedCourseScore",
                "course-score history is not projected from modern results");
 

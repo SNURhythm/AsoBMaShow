@@ -312,9 +312,23 @@ public:
       if (!profileInitializationResult.ok()) {
         return {};
       }
-      replay::ChartReplayPersistence persistence(scoreRepository,
-                                                  replayRepository);
-      const auto summary = persistence.recoverAll();
+      replay::ChartReplayPersistence chartPersistence(scoreRepository,
+                                                      replayRepository);
+      auto summary = chartPersistence.recoverAll();
+      replay::CourseResultPersistence coursePersistence(scoreRepository,
+                                                        replayRepository);
+      const auto courseRecovery = coursePersistence.recoverAll();
+      summary.attempted += courseRecovery.attempted;
+      summary.saved += courseRecovery.saved;
+      summary.pending += courseRecovery.pending;
+      summary.conflicts += courseRecovery.conflicts;
+      if (!courseRecovery.diagnostic.empty()) {
+        if (!summary.diagnostic.empty()) {
+          summary.diagnostic.push_back('\n');
+        }
+        summary.diagnostic.append("course score recovery: ");
+        summary.diagnostic.append(courseRecovery.diagnostic);
+      }
       SDL_Log("Result recovery completed: attempted=%zu saved=%zu pending=%zu "
               "conflicts=%zu",
               summary.attempted, summary.saved, summary.pending,

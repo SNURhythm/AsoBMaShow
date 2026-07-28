@@ -1,22 +1,58 @@
 #include "CourseResultPersistence.h"
 
+#include "../ProfileDatabaseActivity.h"
+
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace replay {
 namespace {
 
+constexpr std::size_t kMaximumRecoveryDiagnosticBytes = 4096;
+
 void appendDiagnostic(std::string &destination, std::string_view phase,
                       std::string_view diagnostic) {
-  if (diagnostic.empty()) {
+  if (diagnostic.empty() ||
+      destination.size() >= kMaximumRecoveryDiagnosticBytes) {
     return;
   }
+  const auto appendBounded = [&](std::string_view value) {
+    const std::size_t available =
+        kMaximumRecoveryDiagnosticBytes - destination.size();
+    destination.append(value.substr(0, available));
+  };
   if (!destination.empty()) {
-    destination.push_back('\n');
+    appendBounded("\n");
   }
-  destination.append(phase);
-  destination.append(": ");
-  destination.append(diagnostic);
+  appendBounded(phase);
+  appendBounded(": ");
+  appendBounded(diagnostic);
+}
+
+std::optional<result_persistence::PendingCourseScoreWrite>
+makePendingScoreWrite(result_persistence::ModernCourseResult result,
+                      std::string_view expectedAttemptId, int resultId,
+                      std::string createdAt, std::string &diagnostic) {
+  if (resultId <= 0 || createdAt.empty() ||
+      result.attemptId != expectedAttemptId ||
+      (result.resultId != 0 && result.resultId != resultId)) {
+    diagnostic = "course result identity disagrees with its durable owner";
+    return std::nullopt;
+  }
+  result.resultId = 0;
+  if (!result_persistence::validateModernCourseResult(result, diagnostic)) {
+    if (diagnostic.empty()) {
+      diagnostic = "course result facts are invalid";
+    }
+    return std::nullopt;
+  }
+  return result_persistence::PendingCourseScoreWrite{
+      .attemptId = std::string(expectedAttemptId),
+      .modernResultId = resultId,
+      .createdAt = std::move(createdAt),
+      .result = std::move(result),
+  };
 }
 
 CourseResultPersistenceState
@@ -50,6 +86,11 @@ CourseResultPersistence::CourseResultPersistence(
           [&score](const result_persistence::PendingCourseScoreWrite &pending) {
             return score.SaveProjectedCourseScore(pending);
           },
+      .listScoreSources =
+          [&replayRepository](int afterResultId, std::size_t limit) {
+            return replayRepository.ListModernCourseScoreSourcesAfter(
+                afterResultId, limit);
+          },
   };
 }
 
@@ -66,25 +107,27 @@ CourseResultPersistenceOutcome CourseResultPersistence::persist(
             .replayAttached = resultOutcome.replayAttached,
             .diagnostic = std::move(resultOutcome.diagnostic)};
   }
+  std::string pendingDiagnostic;
+  auto pending = resultOutcome.receipt
+                     ? makePendingScoreWrite(
+                           attempt.result, resultOutcome.receipt->attemptId,
+                           resultOutcome.receipt->resultId,
+                           resultOutcome.receipt->createdAt, pendingDiagnostic)
+                     : std::nullopt;
   if (!resultOutcome.receipt ||
       resultOutcome.receipt->attemptId != attempt.result.attemptId ||
-      resultOutcome.receipt->resultId <= 0 ||
-      resultOutcome.receipt->createdAt.empty()) {
+      !pending) {
     appendDiagnostic(resultOutcome.diagnostic, "course result",
-                     "durable receipt disagrees with the captured attempt");
+                     pendingDiagnostic.empty()
+                         ? "durable receipt disagrees with the captured attempt"
+                         : pendingDiagnostic);
     return {.state = CourseResultPersistenceState::IntegrityConflict,
             .receipt = resultOutcome.receipt,
             .replayAttached = resultOutcome.replayAttached,
             .diagnostic = std::move(resultOutcome.diagnostic)};
   }
 
-  const result_persistence::PendingCourseScoreWrite pending{
-      .attemptId = attempt.result.attemptId,
-      .modernResultId = resultOutcome.receipt->resultId,
-      .createdAt = resultOutcome.receipt->createdAt,
-      .result = attempt.result,
-  };
-  const auto projection = dependencies_.projectScore(pending);
+  const auto projection = dependencies_.projectScore(*pending);
   appendDiagnostic(resultOutcome.diagnostic, "course score projection",
                    projection.diagnostic);
   switch (projection.status) {
@@ -111,6 +154,96 @@ CourseResultPersistenceOutcome CourseResultPersistence::persist(
           .receipt = resultOutcome.receipt,
           .replayAttached = resultOutcome.replayAttached,
           .diagnostic = "course score projection returned an unknown state"};
+}
+
+CourseResultRecoverySummary
+CourseResultPersistence::recoverAll(std::size_t pageLimit) const {
+  profile_database_activity::WriteGuard bindingLease;
+  CourseResultRecoverySummary summary;
+  if (!dependencies_.listScoreSources || !dependencies_.projectScore ||
+      pageLimit == 0 || pageLimit > kMaximumModernCourseScoreSourceRows) {
+    summary.pending = 1;
+    summary.diagnostic = "course score recovery is not configured";
+    return summary;
+  }
+
+  int cursor = 0;
+  while (true) {
+    auto batch = dependencies_.listScoreSources(cursor, pageLimit);
+    appendDiagnostic(summary.diagnostic, "course score source",
+                     batch.diagnostic);
+    if (batch.status != ModernCourseScoreSourceBatchStatus::Loaded) {
+      if (batch.status == ModernCourseScoreSourceBatchStatus::StorageFailure) {
+        ++summary.pending;
+      } else {
+        ++summary.conflicts;
+      }
+      return summary;
+    }
+    if (batch.entries.empty()) {
+      if (batch.hasMore) {
+        ++summary.conflicts;
+        appendDiagnostic(summary.diagnostic, "course score source",
+                         "pagination made no forward progress");
+      }
+      return summary;
+    }
+
+    bool pageOrderInvalid = false;
+    for (auto &entry : batch.entries) {
+      ++summary.attempted;
+      if (entry.resultId <= cursor) {
+        ++summary.conflicts;
+        appendDiagnostic(summary.diagnostic, "course score source",
+                         "result IDs are not strictly increasing");
+        pageOrderInvalid = true;
+        break;
+      }
+      cursor = entry.resultId;
+      const std::string phase =
+          "course result " + std::to_string(entry.resultId);
+      if (entry.status != ModernCourseScoreSourceEntryStatus::Loaded ||
+          !entry.source || entry.source->resultId != entry.resultId) {
+        ++summary.conflicts;
+        appendDiagnostic(summary.diagnostic, phase,
+                         entry.diagnostic.empty()
+                             ? "stored score source is inconsistent"
+                             : entry.diagnostic);
+        continue;
+      }
+
+      std::string pendingDiagnostic;
+      const std::string attemptId = entry.source->result.attemptId;
+      const int resultId = entry.source->resultId;
+      std::string createdAt = std::move(entry.source->createdAt);
+      auto storedResult = std::move(entry.source->result);
+      auto pending =
+          makePendingScoreWrite(std::move(storedResult), attemptId, resultId,
+                                std::move(createdAt), pendingDiagnostic);
+      if (!pending) {
+        ++summary.conflicts;
+        appendDiagnostic(summary.diagnostic, phase, pendingDiagnostic);
+        continue;
+      }
+      const auto projected = dependencies_.projectScore(*pending);
+      appendDiagnostic(summary.diagnostic, phase, projected.diagnostic);
+      switch (projected.status) {
+      case result_persistence::ProjectionStatus::Inserted:
+      case result_persistence::ProjectionStatus::AlreadyPresent:
+        ++summary.saved;
+        break;
+      case result_persistence::ProjectionStatus::StorageFailure:
+        ++summary.pending;
+        break;
+      case result_persistence::ProjectionStatus::IntegrityConflict:
+        ++summary.conflicts;
+        break;
+      }
+    }
+    if (pageOrderInvalid || !batch.hasMore) {
+      return summary;
+    }
+  }
 }
 
 } // namespace replay

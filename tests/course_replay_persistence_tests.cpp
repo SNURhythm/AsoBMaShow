@@ -653,6 +653,118 @@ void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
          "without BRD");
 }
 
+void testCourseScoreRecoveryPaginatesAndClassifiesEveryStoredResult() {
+  auto firstResult = attempt(false, true).result;
+  firstResult.resultId = 1;
+  auto thirdResult = firstResult;
+  thirdResult.resultId = 3;
+  int listCalls = 0;
+  std::vector<int> cursors;
+  std::vector<int> projectedIds;
+  CourseResultPersistence persistence(CourseResultPersistenceDependencies{
+      .persistResult = {},
+      .projectScore =
+          [&](const result_persistence::PendingCourseScoreWrite &pending) {
+            projectedIds.push_back(pending.modernResultId);
+            return result_persistence::ProjectionOutcome{
+                .status =
+                    pending.modernResultId == 1
+                        ? result_persistence::ProjectionStatus::Inserted
+                        : result_persistence::ProjectionStatus::StorageFailure,
+                .diagnostic = pending.modernResultId == 3
+                                  ? "score database unavailable"
+                                  : std::string{}};
+          },
+      .listScoreSources =
+          [&](int afterResultId, std::size_t limit) {
+            ++listCalls;
+            cursors.push_back(afterResultId);
+            expect(limit == 2, "course recovery preserves its page bound");
+            if (afterResultId == 0) {
+              return ModernCourseScoreSourceBatchOutcome{
+                  .status = ModernCourseScoreSourceBatchStatus::Loaded,
+                  .entries = {ModernCourseScoreSourceEntry{
+                      .status = ModernCourseScoreSourceEntryStatus::Loaded,
+                      .resultId = 1,
+                      .source =
+                          ModernCourseScoreSource{.resultId = 1,
+                                                  .createdAt =
+                                                      "2026-07-27 13:00:00",
+                                                  .result = firstResult}}},
+                  .hasMore = true};
+            }
+            return ModernCourseScoreSourceBatchOutcome{
+                .status = ModernCourseScoreSourceBatchStatus::Loaded,
+                .entries = {
+                    ModernCourseScoreSourceEntry{
+                        .status = ModernCourseScoreSourceEntryStatus::
+                            IntegrityConflict,
+                        .resultId = 2,
+                        .diagnostic = "stored course result is malformed"},
+                    ModernCourseScoreSourceEntry{
+                        .status = ModernCourseScoreSourceEntryStatus::Loaded,
+                        .resultId = 3,
+                        .source = ModernCourseScoreSource{
+                            .resultId = 3,
+                            .createdAt = "2026-07-27 13:00:01",
+                            .result = thirdResult}}}};
+          },
+  });
+
+  const auto recovered = persistence.recoverAll(2);
+  expect(listCalls == 2 && cursors == std::vector<int>({0, 1}) &&
+             projectedIds == std::vector<int>({1, 3}) &&
+             recovered.attempted == 3 && recovered.saved == 1 &&
+             recovered.pending == 1 && recovered.conflicts == 1 &&
+             recovered.diagnostic.contains("malformed") &&
+             recovered.diagnostic.contains("score database unavailable"),
+         "course recovery pages to exhaustion and isolates row failures");
+}
+
+void testCourseScoreProjectionRecoversAfterRestartWithoutReplayFile() {
+  TemporaryDirectory profile;
+  const auto replayPath = profile.path / "replay.db";
+  const auto scorePath = profile.path / "score.db";
+  ReplayRepository replayRepository(replayPath);
+  ScoreRepository scoreRepository(scorePath);
+  expect(replayRepository.EnsureSchema() && scoreRepository.EnsureSchema(),
+         "restart recovery repositories initialize");
+  CourseReplayPersistence durableResults(replayRepository);
+  CourseResultPersistence interrupted(CourseResultPersistenceDependencies{
+      .persistResult =
+          [&](const CapturedCourseReplayAttempt &captured) {
+            return durableResults.persist(captured);
+          },
+      .projectScore =
+          [](const result_persistence::PendingCourseScoreWrite &) {
+            return result_persistence::ProjectionOutcome{
+                .status = result_persistence::ProjectionStatus::StorageFailure,
+                .diagnostic = "injected score write failure"};
+          },
+  });
+  const auto replayless = attempt(false, true);
+  const auto interruptedSave = interrupted.persist(replayless);
+  expect(interruptedSave.state == CourseResultPersistenceState::PendingScore &&
+             interruptedSave.durableResult() &&
+             queryInt(replayPath,
+                      "SELECT COUNT(*) FROM modern_course_results") == 1 &&
+             queryInt(replayPath, "SELECT COUNT(*) FROM modern_replay_files") ==
+                 0 &&
+             queryInt(scorePath, "SELECT COUNT(*) FROM course_scores") == 0,
+         "injected projection failure leaves a replay-independent result");
+
+  CourseResultPersistence restarted(scoreRepository, replayRepository);
+  const auto recovered = restarted.recoverAll(1);
+  expect(recovered.attempted == 1 && recovered.saved == 1 &&
+             recovered.pending == 0 && recovered.conflicts == 0 &&
+             queryInt(scorePath, "SELECT COUNT(*) FROM course_scores") == 1 &&
+             queryInt(scorePath,
+                      "SELECT COUNT(*) FROM course_scores WHERE attempt_id='" +
+                          replayless.result.attemptId +
+                          "' AND modern_result_id > 0") == 1,
+         "startup reprojects the exact stored course result without a BRD");
+}
+
 } // namespace
 
 int main() {
@@ -661,6 +773,8 @@ int main() {
   testRealRepositoryPersistsPartialCourseBrdWithoutLegacyRows();
   testResultFirstCoordinatorProjectsScoreOnlyAfterDurableResult();
   testRealResultFirstPersistenceIsIdempotentAndReplayIndependent();
+  testCourseScoreRecoveryPaginatesAndClassifiesEveryStoredResult();
+  testCourseScoreProjectionRecoversAfterRestartWithoutReplayFile();
   if (failures != 0) {
     std::cerr << failures << " course replay persistence test(s) failed\n";
     return 1;
