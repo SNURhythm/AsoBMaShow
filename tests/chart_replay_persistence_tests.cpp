@@ -183,6 +183,21 @@ void testCompletionCaptureBuildsIndependentResultSnapshotAndReplay() {
                  capture.laneCoverEvents,
          "completion captures compact result, IR snapshot, and raw BRD facts");
 
+  capture.timeBounds = {.completionSongTimeMicros = 500};
+  const auto capturedAfterLateInput =
+      captureChartReplayPersistenceAttempt(capture, diagnostic);
+  expect(capturedAfterLateInput && capturedAfterLateInput->replay &&
+             capturedAfterLateInput->replay->timeBounds ==
+                 ReplayTimeBounds{.completionSongTimeMicros = 1'000},
+         "completion bounds include the last accepted realtime input");
+
+  capture.timeBounds = {};
+  const auto capturedWithoutCompletion =
+      captureChartReplayPersistenceAttempt(capture, diagnostic);
+  expect(capturedWithoutCompletion && !capturedWithoutCompletion->replay,
+         "accepted input cannot invent a missing completion observation");
+  capture.timeBounds = {.completionSongTimeMicros = 5'000'000};
+
   capture.acceptedInput.reset();
   const auto replayless =
       captureChartReplayPersistenceAttempt(capture, diagnostic);

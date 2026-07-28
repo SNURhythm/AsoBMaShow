@@ -67,6 +67,9 @@ captureChartReplayPersistenceAttempt(const ChartReplayCapture &capture,
                      .laneCoverEvents = capture.laneCoverEvents},
         .timeBounds = capture.timeBounds,
     };
+    document.timeBounds = replayCaptureTimeBounds(
+        document.timeBounds, document.playback.input,
+        document.playback.touchSamples, document.playback.laneCoverEvents);
     const auto validation = validateReplayPlayback(
         document.playback, ReplaySetupSource::LocalCapture,
         document.timeBounds);

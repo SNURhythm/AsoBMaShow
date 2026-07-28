@@ -2818,8 +2818,6 @@ GamePlayScene::completeModernReplayCapture() {
                                     .songTimeMicros = sample.songTimeMicros,
                                     .x = sample.x,
                                     .y = sample.y});
-    completionSongTimeMicros =
-        std::max(completionSongTimeMicros, sample.songTimeMicros);
   }
   capture.laneCoverEvents.reserve(recordedReplay.laneCoverEvents.size());
   for (const auto &event : recordedReplay.laneCoverEvents) {
@@ -2828,10 +2826,10 @@ GamePlayScene::completeModernReplayCapture() {
         .noteStartPositionPercent = event.noteStartPositionPercent,
         .resetVisibleTimeReference = event.resetVisibleTimeReference,
     });
-    completionSongTimeMicros =
-        std::max(completionSongTimeMicros, event.songTimeMicros);
   }
-  capture.timeBounds = {.completionSongTimeMicros = completionSongTimeMicros};
+  capture.timeBounds = replay::replayCaptureTimeBounds(
+      {.completionSongTimeMicros = completionSongTimeMicros}, {},
+      capture.touchSamples, capture.laneCoverEvents);
   if (!completedModernReplayInput.has_value() &&
       modernReplayInputRecorder != nullptr) {
     std::string diagnostic;
@@ -2845,6 +2843,11 @@ GamePlayScene::completeModernReplayCapture() {
     modernReplayInputRecorder.reset();
   }
   capture.acceptedInput = completedModernReplayInput;
+  if (capture.acceptedInput.has_value()) {
+    capture.timeBounds = replay::replayCaptureTimeBounds(
+        capture.timeBounds, *capture.acceptedInput, capture.touchSamples,
+        capture.laneCoverEvents);
+  }
   return capture;
 }
 

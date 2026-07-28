@@ -213,6 +213,15 @@ void testRawCaptureDropsOnlyReplayAttachment() {
              accepted->result.stages.front().score.longNoteMode == 0,
          "course no-LN score buckets retain the actual stage setup mode");
 
+  capture.stages[0].timeBounds = {.completionSongTimeMicros = 0};
+  const auto acceptedAfterLateInput =
+      replay::captureCourseReplayAttempt(capture, diagnostic);
+  expect(acceptedAfterLateInput && acceptedAfterLateInput->replay &&
+             acceptedAfterLateInput->replay->timeBounds.front() ==
+                 replay::ReplayTimeBounds{.completionSongTimeMicros = 1},
+         "course stage completion bounds include its last accepted input");
+  capture.stages[0].timeBounds = {.completionSongTimeMicros = 5'000'000};
+
   capture.stages[1].playback.reset();
   const auto missing = replay::captureCourseReplayAttempt(capture, diagnostic);
   expect(missing && missing->result == *result && !missing->replay,

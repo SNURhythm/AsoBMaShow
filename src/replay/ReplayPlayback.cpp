@@ -2,6 +2,7 @@
 
 #include "ReplayKeyMode.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
@@ -204,6 +205,28 @@ validateLaneCover(std::span<const ReplayLaneCoverEvent> events,
 }
 
 } // namespace
+
+ReplayTimeBounds replayCaptureTimeBounds(
+    ReplayTimeBounds observed, std::span<const InputTransition> input,
+    std::span<const ReplayTouchSample> touchSamples,
+    std::span<const ReplayLaneCoverEvent> laneCoverEvents) noexcept {
+  if (!observed.valid()) {
+    return observed;
+  }
+  for (const auto &transition : input) {
+    observed.completionSongTimeMicros =
+        std::max(observed.completionSongTimeMicros, transition.songTimeMicros);
+  }
+  for (const auto &sample : touchSamples) {
+    observed.completionSongTimeMicros =
+        std::max(observed.completionSongTimeMicros, sample.songTimeMicros);
+  }
+  for (const auto &event : laneCoverEvents) {
+    observed.completionSongTimeMicros =
+        std::max(observed.completionSongTimeMicros, event.songTimeMicros);
+  }
+  return observed;
+}
 
 ReplayPlaybackValidation validateReplayPlayback(const ReplayPlaybackData &data,
                                                 ReplaySetupSource source,

@@ -62,8 +62,11 @@ captureCourseReplayAttempt(const CourseReplayCapture &capture,
                              std::to_string(index + 1));
         return attempt;
       }
+      const ReplayTimeBounds timeBounds = replayCaptureTimeBounds(
+          raw.timeBounds, raw.playback->input, raw.playback->touchSamples,
+          raw.playback->laneCoverEvents);
       const auto validation = validateReplayPlayback(
-          *raw.playback, ReplaySetupSource::LocalCapture, raw.timeBounds);
+          *raw.playback, ReplaySetupSource::LocalCapture, timeBounds);
       if (!validation.valid() ||
           !validCourseRestMicros(raw.restMicrosAfterStage)) {
         appendDiagnostic(diagnostic,
@@ -77,7 +80,7 @@ captureCourseReplayAttempt(const CourseReplayCapture &capture,
       document.playback.stages.push_back(*raw.playback);
       document.playback.restMicrosAfterStage.push_back(
           raw.restMicrosAfterStage);
-      document.timeBounds.push_back(raw.timeBounds);
+      document.timeBounds.push_back(timeBounds);
       sources.push_back(ReplaySetupSource::LocalCapture);
     }
 

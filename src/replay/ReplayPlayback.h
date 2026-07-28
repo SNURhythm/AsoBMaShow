@@ -169,6 +169,15 @@ struct ReplayPlaybackValidation {
   }
 };
 
+// Final capture can race the audio cursor by a small amount because accepted
+// realtime inputs retain their original steady-clock timestamp. The durable
+// completion bound must cover every accepted replay stream rather than one
+// later observation of the playback clock.
+[[nodiscard]] ReplayTimeBounds replayCaptureTimeBounds(
+    ReplayTimeBounds observed, std::span<const InputTransition> input,
+    std::span<const ReplayTouchSample> touchSamples,
+    std::span<const ReplayLaneCoverEvent> laneCoverEvents) noexcept;
+
 [[nodiscard]] ReplayPlaybackValidation validateReplayPlayback(
     const ReplayPlaybackData &data, ReplaySetupSource source,
     ReplayTimeBounds timeBounds,
