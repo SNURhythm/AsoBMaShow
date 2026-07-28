@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ReplaySummaryFormatting.h"
+#include "../ResultRecordFormatting.h"
 #include "../ResultRecordSummary.h"
 #include "../ScoreRankUtils.h"
 #include "Button.h"
@@ -149,29 +149,10 @@ public:
             ? "AUTO PLAY"
             : (!summary.displayedTime.empty() ? summary.displayedTime
                                               : "IR Record"));
-    if (summary.legacyChart.has_value() || summary.legacyCourse.has_value()) {
-      detailText->setText("Legacy summary");
-    } else if (summary.autoPlayReplay.has_value()) {
-      detailText->setText(
-          replay_summary_ui::detailLabel(*summary.autoPlayReplay));
-    } else {
-      std::string detail = "IR";
-      if (summary.playOption.has_value() && !summary.playOption->empty()) {
-        detail += "  " + *summary.playOption;
-      }
-      detailText->setText(detail);
-    }
-    scoreText->setText(summary.autoPlay ? "AUTO"
-                                        : (summary.scoreAvailable
-                                               ? std::to_string(summary.score)
-                                               : "Unavailable"));
-    if (summary.scoreAvailable && summary.maxScoreAvailable) {
-      currentRank = score_rank::labelForScore(summary.score, summary.maxScore);
-      rankText->setText(score_rank::displayLabel(currentRank));
-    } else {
-      currentRank.clear();
-      rankText->setText("Unavailable");
-    }
+    detailText->setText(result_record_ui::detailLabel(summary));
+    scoreText->setText(result_record_ui::scoreLabel(summary));
+    currentRank = result_record_ui::scoreRank(summary).value_or("");
+    rankText->setText(result_record_ui::secondaryScoreLabel(summary));
 
     const record_list_ui::IrBadgeBinding badge =
         record_list_ui::bindingForIrRecordState(

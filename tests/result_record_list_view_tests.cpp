@@ -292,16 +292,53 @@ int main() {
 
     LegacyChartResultSummary legacySummary;
     legacySummary.legacyReplayId = 88;
+    legacySummary.finalScore = 1'432;
+    legacySummary.maxCombo = 555;
+    legacySummary.finalGauge = 62.5;
+    legacySummary.clearType = kClearTypeHardClearRank;
     legacySummary.createdAt = "2026-07-19 12:03:30";
     legacySummary.partial = true;
     const auto legacy = makeLegacyChartResultRecord(legacySummary);
     reusedRow->setSummary(legacy);
-    require(rowText(*reusedRow, "recordScore")->getText() == "Unavailable" &&
-                rowText(*reusedRow, "recordRank")->getText() == "Unavailable" &&
+    require(rowText(*reusedRow, "recordScore")->getText() == "1432" &&
+                rowText(*reusedRow, "recordRank")->getText() == "HARD CLEAR" &&
                 rowText(*reusedRow, "recordDetail")->getText() ==
-                    "Legacy summary" &&
+                    "Gauge 62.5%  Combo 555" &&
                 !badge(list)->getVisible(),
-            "partial legacy row renders unavailable facts and no actions");
+            "legacy chart row renders every available header fact");
+
+    LegacyCourseResultSummary legacyCourseSummary;
+    legacyCourseSummary.legacyCourseReplayId = 89;
+    legacyCourseSummary.finalScore = 2'100;
+    legacyCourseSummary.maxCombo = 321;
+    legacyCourseSummary.finalGauge = 48.0;
+    legacyCourseSummary.clearType = kClearTypeHardClearRank;
+    legacyCourseSummary.completedCharts = 3;
+    legacyCourseSummary.totalCharts = 5;
+    legacyCourseSummary.createdAt = "2026-07-19 12:03:45";
+    legacyCourseSummary.partial = true;
+    const auto legacyCourse =
+        makeLegacyCourseResultRecord(legacyCourseSummary);
+    reusedRow->setSummary(legacyCourse);
+    require(rowText(*reusedRow, "recordScore")->getText() == "2100" &&
+                rowText(*reusedRow, "recordRank")->getText() == "HARD CLEAR" &&
+                rowText(*reusedRow, "recordDetail")->getText() ==
+                    "Gauge 48.0%  Combo 321  Course 3/5" &&
+                !badge(list)->getVisible(),
+            "legacy course row renders every available header fact");
+
+    LegacyChartResultSummary emptyLegacySummary;
+    emptyLegacySummary.legacyReplayId = 90;
+    emptyLegacySummary.partial = true;
+    const auto emptyLegacy =
+        makeLegacyChartResultRecord(emptyLegacySummary);
+    reusedRow->setSummary(emptyLegacy);
+    require(rowText(*reusedRow, "recordScore")->getText() == "—" &&
+                rowText(*reusedRow, "recordRank")->getText() == "—" &&
+                rowText(*reusedRow, "recordDetail")->getText() == "—" &&
+                !badge(list)->getVisible(),
+            "empty partial legacy row renders neutral placeholders and no "
+            "actions");
 
     ResultRecordListView remoteList;
     remoteList.setSize(700, 160);
