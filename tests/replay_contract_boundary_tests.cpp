@@ -290,13 +290,15 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   requireToken(root / "src/scene/ResultScene.cpp",
                "modernReplayAttemptId",
                "modern practice replay identity");
-  requireToken(root / "src/replay/ReplayFileReconciler.cpp",
+  const auto profileReconciliation =
+      root / "src/replay/ReplayProfileReconciliation.cpp";
+  requireToken(profileReconciliation,
                "loadAgreedModernReplayTombstoneInventory",
                "shared tombstone-only replay cleanup inventory");
-  requireToken(root / "src/replay/ReplayFileReconciler.cpp",
+  requireToken(profileReconciliation,
                "removeTombstonedEntryIfMatches",
                "tombstone cleanup ownership agreement");
-  requireToken(root / "src/replay/ReplayFileReconciler.cpp", "removeIfMatches",
+  requireToken(profileReconciliation, "removeIfMatches",
                "tombstone byte-identity verification");
   requireToken(root / "src/main.cpp", "reconcileProfileReplayFiles",
                "startup shared replay cleanup boundary");
@@ -320,8 +322,7 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   constexpr std::array<std::string_view, 1> startupFullScanForbidden{
       "loadAgreedModernReplayFileInventory"};
   rejectTokens(root / "src/main.cpp", startupFullScanForbidden);
-  rejectTokens(root / "src/replay/ReplayFileReconciler.cpp",
-               startupFullScanForbidden);
+  rejectTokens(profileReconciliation, startupFullScanForbidden);
 
   constexpr std::array<std::string_view, 1> ownershipForbidden{
       "GetResolvedDatabasePath"};
