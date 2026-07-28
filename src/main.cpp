@@ -3,8 +3,6 @@
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
 #include "replay/ReplayFileReconciler.h"
-#include "replay/ReplayProfileInventory.h"
-#include "replay/ReplayFileStore.h"
 #include "bgfx_helper.h"
 #include "rendering/BgfxInitLimits.h"
 #include "rendering/ShaderManager.h"
@@ -1481,41 +1479,9 @@ int run() {
               },
           .reconcileReplayFiles =
               [&context] {
-                replay::ReplayFileStore store(
-                    context.replayRepository.GetResolvedProfileRoot());
-                replay::ReplayFileReconciler reconciler({
-                    .listTombstones = [&context] {
-                      return replay::loadAgreedModernReplayTombstoneInventory(
-                          context.replayRepository);
-                    },
-                    .removeTombstonedEntryIfMatches =
-                        [&store](const replay::ReplayFileMetadata &metadata,
-                                 std::string &diagnostic) {
-                          return store.removeIfMatches(metadata, diagnostic);
-                        },
-                    .removeStaleTemporaryFiles =
-                        [&store](auto cutoff) {
-                          store.removeStaleTemporaryFiles(cutoff);
-                        },
-                    .listReservations = [&context] {
-                      return replay::
-                          loadAgreedModernReplayPathReservationInventory(
-                              context.replayRepository);
-                    },
-                    .removeOwnedReservedEntry =
-                        [&store](const replay::ReplayFileMetadata &metadata,
-                                 std::string &diagnostic) {
-                          return store.removeIfMatches(metadata, diagnostic);
-                        },
-                    .releaseReservation =
-                        [&context](const auto &reservation) {
-                          return context.replayRepository
-                              .ReleaseModernReplayPathReservation(reservation);
-                        },
-                });
-                const auto report = reconciler.reconcile(
-                    std::chrono::system_clock::now() -
-                    std::chrono::hours(24));
+                const auto report = replay::reconcileProfileReplayFiles(
+                    context.replayRepository,
+                    std::chrono::system_clock::now() - std::chrono::hours(24));
                 for (const auto &failure : report.failures) {
                   SDL_Log("Replay reconciliation deferred: %s",
                           failure.c_str());

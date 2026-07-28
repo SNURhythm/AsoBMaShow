@@ -954,10 +954,16 @@ ManifestParseResult parseManifest(std::string_view contents) {
 
 std::string canonicalChecksums(const std::filesystem::path &directory,
                                std::span<const std::string> memberNames,
-                               std::string &errorMessage) {
+                               std::string &errorMessage,
+                               bool includeReplayFiles = false) {
   std::string result;
   for (const std::string_view name : memberNames) {
-    if (name == "checksums.sha256") {
+    // ReplayRepository metadata is the single checksum/size authority for BRD
+    // files, and ReplayProfileTransfer validates it after extraction. Keeping
+    // replay paths out of this bounded metadata manifest also makes archive
+    // size scale with replay bytes instead of duplicated inventory text.
+    if (name == "checksums.sha256" ||
+        (!includeReplayFiles && isReplayMember(name))) {
       continue;
     }
     const auto digest =
@@ -1337,7 +1343,20 @@ validateArchive(const std::filesystem::path &archivePath,
   if (!errorMessage.empty()) {
     return {.error = ProfileError::IoFailure, .message = errorMessage};
   }
-  if (!constantTimeEqual(*checksums, expected)) {
+  bool checksumsMatch = constantTimeEqual(*checksums, expected);
+  if (!checksumsMatch) {
+    // Format-v3 archives created before replay ownership became the sole BRD
+    // checksum authority included replay lines here. They were already
+    // bounded by the old 1 MiB metadata limit, so accept that canonical form
+    // while new exports remain independent of inventory cardinality.
+    const std::string legacyExpected = canonicalChecksums(
+        extractDirectory, canonicalMemberNames, errorMessage, true);
+    if (!errorMessage.empty()) {
+      return {.error = ProfileError::IoFailure, .message = errorMessage};
+    }
+    checksumsMatch = constantTimeEqual(*checksums, legacyExpected);
+  }
+  if (!checksumsMatch) {
     return {.error = ProfileError::IntegrityFailure,
             .message = "archive checksum verification failed"};
   }

@@ -5,7 +5,11 @@
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
 #include "input/InputProfileStore.h"
+#include "replay/ReplayFileReconciler.h"
 
+#include <SDL2/SDL_log.h>
+
+#include <chrono>
 #include <exception>
 #include <utility>
 
@@ -281,6 +285,13 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
     return rollback(ProfileError::IoFailure,
                     "Unable to bind target replay database: " +
                         std::string(error.what()));
+  }
+
+  const auto replayReconciliation = replay::reconcileProfileReplayFiles(
+      replay_, std::chrono::system_clock::now() - std::chrono::hours(24));
+  for (const auto &failure : replayReconciliation.failures) {
+    SDL_Log("Replay reconciliation deferred after profile switch: %s",
+            failure.c_str());
   }
 
   std::string recoveryWarning;

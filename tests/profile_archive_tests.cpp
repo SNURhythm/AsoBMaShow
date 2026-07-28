@@ -518,10 +518,12 @@ ArchiveMember *findMember(std::vector<ArchiveMember> &members,
   return found == members.end() ? nullptr : &*found;
 }
 
-std::string canonicalChecksums(const std::vector<ArchiveMember> &members) {
+std::string canonicalChecksums(const std::vector<ArchiveMember> &members,
+                               bool includeReplayFiles = false) {
   std::string result;
   for (const auto &member : members) {
-    if (member.name == "checksums.sha256") {
+    if (member.name == "checksums.sha256" ||
+        (!includeReplayFiles && member.name.starts_with("replay/"))) {
       continue;
     }
     result += file_checksum::sha256(member.contents);
@@ -886,10 +888,39 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
              findMember(members, futureName) == nullptr &&
              findMember(members, "replay/unreferenced.brd") == nullptr,
          "archive contains only current-codec verified replay bytes");
+  const auto *checksums = findMember(members, "checksums.sha256");
+  expect(checksums != nullptr &&
+             checksums->contents.find("replay/") == std::string::npos &&
+             checksums->contents.size() <=
+                 ProfileArchiveService::kMaximumMetadataBytes,
+         "replay inventory size does not grow the bounded checksum manifest");
   expect(std::filesystem::exists(source.replayDirectory / "unreferenced.brd"),
          "export leaves unreferenced source bytes untouched");
 
   ProfileArchiveService service(fixture.manager);
+  auto legacyChecksumMembers = members;
+  findMember(legacyChecksumMembers, "checksums.sha256")->contents =
+      canonicalChecksums(legacyChecksumMembers, true);
+  const auto legacyChecksumArchive =
+      fixture.exchange.path() / "legacy-replay-checksums.asobprofile";
+  expect(writeArchive(legacyChecksumArchive, legacyChecksumMembers, error),
+         "legacy replay-checksum archive writes: " + error);
+  const auto legacyChecksumImport = service.Import(legacyChecksumArchive);
+  expect(legacyChecksumImport.ok(),
+         "existing archives with replay checksum lines remain compatible: " +
+             legacyChecksumImport.message);
+
+  auto corruptReplayMembers = members;
+  auto *corruptReplay = findMember(corruptReplayMembers, activeName);
+  expect(corruptReplay != nullptr, "owned replay is available for corruption");
+  if (corruptReplay != nullptr) {
+    corruptReplay->contents = "corrupt replay bytes";
+    refreshChecksums(corruptReplayMembers);
+    expectRejectedWithoutMutation(
+        fixture, corruptReplayMembers, "corrupt-owned-replay-member",
+        ProfileError::IntegrityFailure, "Replay file");
+  }
+
   const auto imported = service.Import(archive);
   expect(imported.ok() && imported.profile,
          "owned replay archive imports: " + imported.message);

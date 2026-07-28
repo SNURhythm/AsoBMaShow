@@ -51,4 +51,11 @@ private:
   ReplayFileReconcilerDependencies dependencies_;
 };
 
+// Startup and profile switching share this complete profile-boundary cleanup
+// so neither lifecycle can leave tombstones, reservations, or private
+// temporaries behind until a later process launch.
+[[nodiscard]] ReplayFileReconciliationReport reconcileProfileReplayFiles(
+    ReplayRepository &repository,
+    std::chrono::system_clock::time_point staleTemporaryCutoff) noexcept;
+
 } // namespace replay

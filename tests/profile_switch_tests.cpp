@@ -887,6 +887,33 @@ void testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh() {
          "only after the target is committed");
 }
 
+void testTargetReplayFilesAreReconciledAfterProfileSwitch() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+
+  const auto pendingResult = sampleModernResult(1700, 4);
+  {
+    ReplayRepository target(fixture.secondPaths.replaysDb);
+    const auto reserved = target.ReserveModernReplayPath(
+        pendingResult.attemptId, pendingResult.score.chartSha256,
+        pendingResult.playedAtUnixMillis);
+    expect(reserved.status == ModernReplayReservationStatus::Reserved &&
+               reserved.reservation.has_value(),
+           "target replay cleanup fixture reserves an unassociated path");
+  }
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  const auto reservations = fixture.replay.ListModernReplayPathReservations();
+
+  expect(result.ok(), "profile switch with replay reconciliation succeeds");
+  expect(reservations.status == ModernReplayFileInventoryStatus::Loaded &&
+             reservations.reservations.empty(),
+         "profile switch runs target replay reservation reconciliation");
+}
+
 void testServicePauseFailureAndActivationRollback() {
   SwitchFixture pauseFailure;
   if (pauseFailure.firstId.empty() || pauseFailure.secondId.empty()) {
@@ -2441,6 +2468,7 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
 int main() {
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
   testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh();
+  testTargetReplayFilesAreReconciledAfterProfileSwitch();
   testServicePauseFailureAndActivationRollback();
   testRecoveryWarningDoesNotRollbackSuccessfulSwitch();
   testRecoveryExceptionBecomesSanitizedWarning();

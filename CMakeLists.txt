@@ -3418,6 +3418,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ProfileSessionCoordinator.cpp
+        src/replay/ReplayFileReconciler.cpp
         src/PlayerProfileManager.cpp
         src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
