@@ -40,7 +40,7 @@ ir::IrLocalReceiptCandidate localCandidate(int suffix = 1) {
   std::string attemptId = "00000000-0000-4000-8000-000000000000";
   attemptId.back() = "0123456789abcdef"[suffix];
   return {
-      .replayId = suffix,
+      .modernChartResultId = suffix,
       .attemptId = std::move(attemptId),
       .keyMode = 7,
       .chartMd5 = std::string(32, 'b'),
@@ -55,10 +55,11 @@ ir::IrSubmissionReceipt receiptFor(const ir::IrLocalReceiptCandidate &local,
                                    std::string remoteScoreId,
                                    bool observed = false) {
   return {
-      .id = 100 + local.replayId,
+      .id = 100 + local.modernChartResultId,
       .providerId = std::string(kProvider),
       .serverOrigin = std::string(kOrigin),
-      .replayId = local.replayId,
+      .replayId = 0,
+      .modernChartResultId = local.modernChartResultId,
       .attemptId = local.attemptId,
       .chartMd5 = local.chartMd5,
       .chartSha256 = local.chartSha256,
@@ -105,7 +106,8 @@ void testEligibleLocalProofCreatesSnapshotReceipt() {
   assert(receipt.id == 0);
   assert(receipt.providerId == kProvider);
   assert(receipt.serverOrigin == kOrigin);
-  assert(receipt.replayId == local.replayId);
+  assert(receipt.replayId == 0);
+  assert(receipt.modernChartResultId == local.modernChartResultId);
   assert(receipt.attemptId == local.attemptId);
   assert(receipt.chartMd5 == local.chartMd5);
   assert(receipt.chartSha256 == local.chartSha256);
@@ -210,7 +212,9 @@ void testAwaitingRemoteResultDoesNotBlockUnrelatedReconciliation() {
 
   assert(plan.status == ir::IrScoreReconciliationPlan::Status::Planned);
   assert(plan.upsertedReceipts.size() == 1);
-  assert(plan.upsertedReceipts.front().replayId == unrelated.replayId);
+  assert(plan.upsertedReceipts.front().replayId == 0);
+  assert(plan.upsertedReceipts.front().modernChartResultId ==
+         unrelated.modernChartResultId);
   assert(plan.settledOutboxRowIds.empty());
   assert(plan.purgedSucceededOutboxRowIds.empty());
 }
@@ -232,8 +236,8 @@ void testPlanMutationsHaveDeterministicIdentityOrder() {
 
   assert(plan.status == ir::IrScoreReconciliationPlan::Status::Planned);
   assert(plan.upsertedReceipts.size() == 2);
-  assert(plan.upsertedReceipts[0].replayId == 8);
-  assert(plan.upsertedReceipts[1].replayId == 9);
+  assert(plan.upsertedReceipts[0].modernChartResultId == 8);
+  assert(plan.upsertedReceipts[1].modernChartResultId == 9);
   assert(plan.settledOutboxRowIds == std::vector<std::int64_t>{309});
   assert(plan.purgedSucceededOutboxRowIds == std::vector<std::int64_t>{308});
 }
@@ -360,8 +364,10 @@ void testIdenticalLocalProofsShareOneDeterministicRemoteIdentity() {
       kProvider, kOrigin, local, std::span{&remote, 1}, kConfirmedAt);
 
   assert(plan.upsertedReceipts.size() == 2);
-  assert(plan.upsertedReceipts[0].replayId == first.replayId &&
-         plan.upsertedReceipts[1].replayId == second.replayId);
+  assert(plan.upsertedReceipts[0].modernChartResultId ==
+             first.modernChartResultId &&
+         plan.upsertedReceipts[1].modernChartResultId ==
+             second.modernChartResultId);
   assert(plan.upsertedReceipts[0].remoteScoreId == "shared-remote" &&
          plan.upsertedReceipts[1].remoteScoreId == "shared-remote");
 }

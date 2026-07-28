@@ -1,21 +1,18 @@
 #include "ir/IrUploadCandidates.h"
 
-#include "FileChecksum.h"
-#include "ScoreProvenance.h"
-#include "scene/play/GameplayGaugeRules.h"
-#include "scene/play/GameplayJudgeRules.h"
-
 #include <algorithm>
-#include <array>
+#include <cassert>
+#include <cstdio>
 #include <iostream>
-#include <limits>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
 
 namespace {
+
+constexpr std::string_view kProvider = "tachi";
+constexpr std::string_view kOrigin = "https://boku.tachi.ac";
 
 int failures = 0;
 
@@ -30,237 +27,208 @@ std::string repeated(char value, std::size_t count) {
   return std::string(count, value);
 }
 
-ChartMetaRecord complete7kChart(std::string path) {
-  ChartMetaRecord chart;
-  chart.meta.BmsPath = std::move(path);
-  chart.meta.KeyMode = 7;
-  chart.meta.Rank = 2;
-  chart.meta.TotalNotes = 600;
-  chart.meta.HasTotal = true;
-  chart.meta.Total = 200.5;
-  chart.meta.MD5 = repeated('b', 32);
-  chart.meta.SHA256 = repeated('a', 64);
-  return chart;
-}
-
-std::shared_ptr<const ScoreProvenance>
-verifiedLr2Provenance(const bms_parser::ChartMeta &chart) {
-  const auto judge = gameplay::compileGameplayJudgeRules(
-      GameplayRuleset::LR2, chart.Rank);
-  return std::make_shared<const ScoreProvenance>(makeScoreProvenance({
-      .chartMeta = chart,
-      .longNoteMode = 2,
-      .judgeRankSource = JudgeRankSource::Chart,
-      .sourceJudgeRank = chart.Rank,
-      .effectiveJudgeContexts = judge.contexts,
-      .totalNotes = chart.TotalNotes,
-      .authoredGaugeTotal = chart.Total,
-      .effectiveGaugeTotal =
-          resolveEffectiveGaugeTotal(GameplayRuleset::LR2, chart),
-      .candidateSelection = gameplay::CandidateSelectionMode::LR2,
-      .gaugeType = GaugeType::Hard,
-      .player1 = {.option = "RANDOM", .seed = 1234},
-      .inputDevices = {InputDeviceCategory::Keyboard},
-      .ruleset = RulesetDescriptor::For(GameplayRuleset::LR2),
-  }));
-}
-
-ReplaySummary replay(int id, const ChartMetaRecord &chart) {
-  ReplaySummary value;
-  value.id = id;
-  value.attemptId = "123e4567-e89b-42d3-a456-426614174000";
-  value.hasCanonicalAttemptFingerprint = true;
-  value.chartMeta = chart.meta;
-  value.provenance = verifiedLr2Provenance(chart.meta);
+std::string attemptId(int suffix) {
+  char value[37]{};
+  std::snprintf(value, sizeof(value), "123e4567-e89b-42d3-a456-426614174%03d",
+                suffix);
   return value;
 }
 
+result_persistence::ModernChartResult modernResult(int suffix) {
+  result_persistence::ModernChartResult result;
+  result.resultId = suffix;
+  result.attemptId = attemptId(suffix);
+  result.score.chartPath = "library/chart.bms";
+  result.score.chartMd5 = repeated('b', 32);
+  result.score.chartSha256 = repeated('a', 64);
+  result.score.chartTitle = "Stored title";
+  result.score.chartArtist = "Stored artist";
+  result.score.longNoteMode = 1;
+  result.score.score = 900;
+  result.score.maxScore = 1'000;
+  result.score.maxCombo = 450;
+  result.score.comboBreak = 2;
+  result.score.pGreat = 400;
+  result.score.great = 50;
+  result.score.finalGauge = 82.5F;
+  result.score.clearType = kClearTypeHardClearRank;
+  result.score.provenance = ScoreProvenance::Legacy();
+  result.keyMode = 7;
+  result.adoptedGaugeType = GaugeType::Hard;
+  result.adoptedGaugeHistory = {20.0F, 82.5F};
+  result.playedAtUnixMillis = 1'700'000'000'000LL + suffix;
+  result.resultFingerprint =
+      result_persistence::modernResultFingerprint(result);
+  std::string diagnostic;
+  assert(result_persistence::validateModernChartResult(result, diagnostic));
+  return result;
+}
+
+ir::IrSubmissionSnapshot snapshotFor(
+    const result_persistence::ModernChartResult &result) {
+  std::string diagnostic;
+  const auto snapshot = ir::captureIrSubmissionSnapshot(result, diagnostic);
+  assert(snapshot.has_value());
+  return *snapshot;
+}
+
+ir::IrUploadCandidateSource source(int suffix) {
+  auto result = modernResult(suffix);
+  return {.modernChartResultId = result.resultId,
+          .result = result,
+          .snapshot = snapshotFor(result)};
+}
+
+ir::IrOutboxEntry outboxFor(const ir::IrUploadCandidateSource &source,
+                            ir::IrOutboxState state) {
+  ir::IrOutboxEntry entry{
+      .id = 1'000 + source.modernChartResultId,
+      .providerId = std::string(kProvider),
+      .attemptId = source.result.attemptId,
+      .chartMd5 = source.result.score.chartMd5,
+      .chartSha256 = source.result.score.chartSha256,
+      .payloadJson = "{}",
+      .rulesetProof = {.rulesetId = "test-rules",
+                       .rulesetRevision = 1,
+                       .validationFingerprint = repeated('d', 64)},
+      .state = state,
+      .localResultReady = true,
+      .lastErrorMessage = state == ir::IrOutboxState::FailedPermanent
+                              ? std::string("invalid\x01 payload")
+                              : std::string{},
+      .createdAtUnixMillis = source.result.playedAtUnixMillis,
+      .updatedAtUnixMillis = source.result.playedAtUnixMillis,
+  };
+  if (state == ir::IrOutboxState::Succeeded) {
+    entry.completedAtUnixMillis = source.result.playedAtUnixMillis;
+  }
+  std::string diagnostic;
+  assert(ir::validateIrOutboxEntry(entry, diagnostic));
+  return entry;
+}
+
+ir::IrSubmissionReceipt receiptFor(
+    const ir::IrUploadCandidateSource &source) {
+  ir::IrSubmissionReceipt receipt{
+      .id = 2'000 + source.modernChartResultId,
+      .providerId = std::string(kProvider),
+      .serverOrigin = std::string(kOrigin),
+      .replayId = 0,
+      .modernChartResultId = source.modernChartResultId,
+      .attemptId = source.result.attemptId,
+      .chartMd5 = source.result.score.chartMd5,
+      .chartSha256 = source.result.score.chartSha256,
+      .remoteUserId = 42,
+      .remoteChartId = "remote-chart",
+      .remoteScoreId = "remote-score",
+      .confirmedAtUnixMillis = source.result.playedAtUnixMillis,
+  };
+  std::string diagnostic;
+  assert(ir::validateIrSubmissionReceipt(receipt, diagnostic));
+  return receipt;
+}
+
 struct CountingCandidate {
-  int id = 0;
+  std::string id;
   std::size_t *reads = nullptr;
 
-  [[nodiscard]] int replayId() const noexcept {
+  [[nodiscard]] std::string_view attemptId() const noexcept {
     ++*reads;
     return id;
   }
 };
 
-void testSelectionIndexesTheSupportedCandidateBoundOnce() {
+void testSelectionIndexesCanonicalAttemptIdsOnce() {
   constexpr std::size_t candidateCount = kMaximumIrUploadCandidateRows;
   std::size_t candidateReads = 0;
   std::vector<CountingCandidate> candidates;
   candidates.reserve(candidateCount);
-  std::unordered_set<int> selected;
+  std::unordered_set<std::string> selected;
   selected.reserve(candidateCount);
 
-  for (std::size_t index = 1; index <= candidateCount; ++index) {
-    const int replayId = static_cast<int>(index);
-    candidates.push_back({.id = replayId, .reads = &candidateReads});
-    selected.insert(index % 2 == 0
-                        ? replayId
-                        : static_cast<int>(candidateCount + index));
+  for (std::size_t index = 0; index < candidateCount; ++index) {
+    const std::string id = "attempt-" + std::to_string(index);
+    candidates.push_back({.id = id, .reads = &candidateReads});
+    selected.insert(index % 2 == 0 ? id : "stale-" + std::to_string(index));
   }
 
   ir::detail::intersectIrUploadSelectionIndexed(selected, candidates);
 
   expect(candidateReads == candidateCount,
-         "selection indexes each candidate replay ID exactly once");
+         "selection indexes each candidate attempt ID exactly once");
   expect(selected.size() == candidateCount / 2,
-         "large selection retains only published replay IDs");
-  expect(std::ranges::all_of(selected, [](int replayId) {
-           return replayId > 0 &&
-                  replayId <=
-                      static_cast<int>(kMaximumIrUploadCandidateRows) &&
-                  replayId % 2 == 0;
-         }),
-         "large selection removes every stale replay ID");
+         "large selection retains only published attempt IDs");
 }
 
-void testProjectsOnlyCanonicalActionableAttempts() {
-  const ChartMetaRecord chart = complete7kChart("library/alpha/chart.bms");
-  ReplaySummary eligible = replay(11, chart);
-  ReplaySummary failed = replay(12, chart);
-  failed.requestedIrOutboxState = ir::IrOutboxState::FailedPermanent;
-  failed.requestedIrOutboxDiagnostic =
-      std::string("invalid chart") + static_cast<char>(0x01) + " payload";
-  ReplaySummary queued = replay(13, chart);
-  queued.requestedIrOutboxState = ir::IrOutboxState::Pending;
-  ReplaySummary uploaded = replay(14, chart);
-  uploaded.hasIrReceipt = true;
-  ReplaySummary hidden = replay(15, chart);
-  hidden.provenance.reset();
-  hidden.irRecordState = ir::IrRecordState::Eligible;
-  ReplaySummary duplicateEligible = replay(16, chart);
-  duplicateEligible.attemptId = "123e4567-e89b-42d3-a456-426614174001";
+void testProjectsOnlySnapshotBackedModernAttempts() {
+  auto eligible = source(11);
+  auto failed = source(12);
+  failed.outbox = outboxFor(failed, ir::IrOutboxState::FailedPermanent);
+  auto queued = source(13);
+  queued.outbox = outboxFor(queued, ir::IrOutboxState::Pending);
+  auto uploaded = source(14);
+  uploaded.receipt = receiptFor(uploaded);
+  auto mismatched = source(15);
+  mismatched.snapshot = source(16).snapshot;
+  auto missingOwner = source(17);
+  missingOwner.modernChartResultId = 0;
 
-  const std::array replays{eligible, failed, queued, uploaded, hidden,
-                           duplicateEligible};
-  const std::array charts{chart};
-  const auto projected = ir::projectIrUploadCandidates(replays, charts);
+  const std::vector sources{eligible, failed, queued, uploaded, mismatched,
+                            missingOwner};
+  const auto projected =
+      ir::projectIrUploadCandidates(sources, kProvider, kOrigin);
 
-  expect(projected.candidates.size() == 3,
-         "only eligible, failed, and duplicate eligible attempts remain");
-  expect(projected.candidates[0].replayId() == eligible.id &&
-             projected.candidates[1].replayId() == failed.id &&
-             projected.candidates[2].replayId() == duplicateEligible.id,
-         "projection preserves newest-first replay order");
-  expect(projected.candidates[0].replay.chartMeta->BmsPath == chart.meta.BmsPath &&
-             projected.candidates[0].replay.chartMeta->TotalNotes ==
-                 chart.meta.TotalNotes,
-         "projection hydrates replay chart metadata from the chart record");
-  expect(projected.candidates[0].replay.maxScore == chart.meta.TotalNotes * 2,
-         "projection derives max score from hydrated chart notes");
-  expect(projected.candidates[0].replay.irSubmissionEligible &&
-             projected.candidates[0].state == ir::IrRecordState::Eligible,
-         "projection reruns the canonical resolver after hydration");
-  expect(projected.candidates[1].state == ir::IrRecordState::Failed,
-         "permanently failed rows remain retry candidates");
-  expect(projected.candidates[0].failureReason.empty() &&
-             projected.candidates[1].failureReason ==
-                 "invalid chart  payload" &&
-             projected.candidates[2].failureReason.empty(),
-         "projection carries a sanitized durable reason only on its failed "
-         "row");
+  expect(projected.candidates.size() == 2,
+         "only eligible and failed modern snapshots remain selectable");
+  expect(projected.candidates[0].attemptId() == eligible.result.attemptId &&
+             projected.candidates[1].attemptId() == failed.result.attemptId,
+         "projection preserves stable modern attempt identity");
+  expect(projected.candidates[0].modernChartResultId ==
+                 eligible.modernChartResultId &&
+             projected.candidates[0].result == eligible.result &&
+             projected.candidates[0].snapshot == eligible.snapshot,
+         "candidate display and submission facts come from durable modern rows");
+  expect(projected.candidates[1].state == ir::IrRecordState::Failed &&
+             projected.candidates[1].failureReason == "invalid  payload",
+         "failed outbox work remains retryable with a sanitized reason");
+  expect(projected.omittedRows == 2 && !projected.diagnostic.empty(),
+         "mismatched snapshot and owner rows fail closed without hiding state");
 
-  std::unordered_set<int> selected{eligible.id, queued.id, 99999};
+  std::unordered_set<std::string> selected{
+      eligible.result.attemptId, queued.result.attemptId, "stale-attempt"};
   ir::intersectIrUploadSelection(selected, projected.candidates);
-  expect(selected == std::unordered_set<int>{eligible.id},
-         "refresh retains only still-published replay IDs");
+  expect(selected ==
+             std::unordered_set<std::string>{eligible.result.attemptId},
+         "refresh retains only published modern attempt IDs");
 }
 
-void testFailsClosedForAmbiguousAndInvalidHydration() {
-  const ChartMetaRecord chart = complete7kChart("private/chart-path.bms");
-  ChartMetaRecord duplicatePath = chart;
-  ChartMetaRecord invalidNotes = complete7kChart("private/invalid.bms");
-  invalidNotes.meta.TotalNotes = std::numeric_limits<int>::max();
-  ChartMetaRecord ineligibleChart =
-      complete7kChart("private/ineligible.bms");
+void testStoredSnapshotSubmissionNeedsNoReplayFileOrChartHydration() {
+  const auto projected = ir::projectIrUploadCandidates(
+      std::vector{source(21)}, kProvider, kOrigin);
+  expect(projected.candidates.size() == 1,
+         "snapshot-backed result is selectable without a replay reference");
 
-  ReplaySummary missingPath = replay(21, chart);
-  missingPath.chartMeta->BmsPath = "private/missing.bms";
-  ReplaySummary ambiguousPath = replay(22, chart);
-  ReplaySummary mismatchedHash = replay(23, chart);
-  mismatchedHash.chartMeta->SHA256 = repeated('c', 64);
-  ReplaySummary invalidMaxScore = replay(24, invalidNotes);
-  ReplaySummary prelabelledButIneligible = replay(25, ineligibleChart);
-  ScoreProvenance modified = *prelabelledButIneligible.provenance;
-  modified.eligibility = ScoreEligibility::Modified;
-  prelabelledButIneligible.provenance =
-      std::make_shared<const ScoreProvenance>(std::move(modified));
-  prelabelledButIneligible.irRecordState = ir::IrRecordState::Eligible;
-  ReplaySummary invalidId = replay(0, ineligibleChart);
-  ReplaySummary courseReplay = replay(26, ineligibleChart);
-  courseReplay.courseReplay = true;
-  ReplaySummary autoPlay = replay(27, ineligibleChart);
-  autoPlay.autoPlay = true;
+  std::string diagnostic;
+  const auto submission =
+      ir::submissionForIrUploadCandidate(projected.candidates.front(),
+                                         diagnostic);
+  expect(submission.has_value() &&
+             *submission == projected.candidates.front().snapshot.submission &&
+             submission->attemptId == projected.candidates.front().attemptId(),
+         "manual preparation returns the already validated stored submission");
 
-  const std::array replays{missingPath, ambiguousPath, mismatchedHash,
-                           invalidMaxScore, prelabelledButIneligible,
-                           invalidId, courseReplay, autoPlay};
-  const std::array charts{chart, duplicatePath, invalidNotes, ineligibleChart};
-  const auto projected = ir::projectIrUploadCandidates(replays, charts);
-
-  expect(projected.candidates.empty(),
-         "missing, ambiguous, invalid, and ineligible rows fail closed");
-  expect(projected.omittedRows == 7,
-         "unpreparable rows are counted once each");
-  expect(projected.diagnostic ==
-             "7 replay rows were omitted because they could not be safely "
-             "prepared.",
-         "aggregate omission diagnostic covers every preparation failure");
-  expect(!projected.diagnostic.empty() &&
-             projected.diagnostic.size() <= ir::kMaximumDiagnosticBytes,
-         "omissions produce one bounded diagnostic");
-  expect(projected.diagnostic.find("private/chart-path.bms") ==
-             std::string::npos &&
-             projected.diagnostic.find("RANDOM") == std::string::npos,
-         "projection diagnostic excludes filesystem paths and provenance data");
-}
-
-void testProjectsBulkHydratedChartsAndOmitsMissingPaths() {
-  const ChartMetaRecord first = complete7kChart("library/first/chart.bms");
-  ChartMetaRecord second = complete7kChart("library/second/chart.bms");
-  second.meta.TotalNotes = 900;
-  second.meta.StageFile = "second-stage.png";
-  ReplaySummary firstReplay = replay(31, first);
-  ReplaySummary missingReplay = replay(32, first);
-  missingReplay.chartMeta->BmsPath = "library/missing/chart.bms";
-  ReplaySummary secondReplay = replay(33, second);
-
-  const std::array replayPaths{firstReplay.chartMeta->BmsPath,
-                               missingReplay.chartMeta->BmsPath,
-                               secondReplay.chartMeta->BmsPath};
-  ChartMetaPathBatchReadOutcome bulkCharts;
-  bulkCharts.status = ChartMetaPathBatchReadStatus::Loaded;
-  bulkCharts.records = {first, second};
-  bulkCharts.missingPaths = 1;
-
-  const std::array replays{firstReplay, missingReplay, secondReplay};
-  const auto projected = ir::projectIrUploadCandidates(replays, bulkCharts.records);
-
-  expect(replayPaths.size() == bulkCharts.records.size() + bulkCharts.missingPaths,
-         "bulk result accounts for every replay chart path");
-  expect(projected.candidates.size() == 2 && projected.omittedRows == 1,
-         "missing bulk chart paths are omitted from the projection");
-  expect(projected.candidates[0].replay.chartMeta.has_value() &&
-             projected.candidates[0].replay.chartMeta->BmsPath ==
-                 first.meta.BmsPath &&
-             projected.candidates[0].replay.chartMeta->TotalNotes ==
-                 projected.candidates[0].chart.meta.TotalNotes &&
-             projected.candidates[1].replay.chartMeta.has_value() &&
-             projected.candidates[1].replay.chartMeta->BmsPath ==
-                 second.meta.BmsPath &&
-             projected.candidates[1].replay.chartMeta->TotalNotes ==
-                 projected.candidates[1].chart.meta.TotalNotes,
-         "complete bulk-hydrated charts resolve identically to chart records");
+  auto tampered = projected.candidates.front();
+  tampered.result.score.score += 1;
+  expect(!ir::submissionForIrUploadCandidate(tampered, diagnostic) &&
+             !diagnostic.empty(),
+         "result/snapshot disagreement fails at the shared preparation boundary");
 }
 
 } // namespace
 
 int main() {
-  testSelectionIndexesTheSupportedCandidateBoundOnce();
-  testProjectsOnlyCanonicalActionableAttempts();
-  testFailsClosedForAmbiguousAndInvalidHydration();
-  testProjectsBulkHydratedChartsAndOmitsMissingPaths();
+  testSelectionIndexesCanonicalAttemptIdsOnce();
+  testProjectsOnlySnapshotBackedModernAttempts();
+  testStoredSnapshotSubmissionNeedsNoReplayFileOrChartHydration();
   return failures == 0 ? 0 : 1;
 }

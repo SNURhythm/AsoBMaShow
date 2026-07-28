@@ -420,6 +420,39 @@ void testRollbackAndReplayOptionality() {
       repository.LoadModernIrSubmissionSnapshot(resultOnly.attemptId).status ==
       ModernIrSnapshotReadStatus::NotFound);
   assert(!tableExists(database.get(), "replay_events"));
+
+  const auto snapshotOnly = result(10, 'e');
+  const auto storedSnapshot = snapshot(snapshotOnly);
+  const auto snapshotStaged = repository.StageModernChartResult(
+      snapshotOnly, storedSnapshot, std::nullopt, {});
+  assert(snapshotStaged.status == ModernChartStageStatus::Staged &&
+         snapshotStaged.receipt);
+  exec(database.get(),
+       "INSERT INTO legacy_chart_result_summaries(legacy_replay_id,"
+       "chart_md5,chart_sha256,final_score,clear_type,partial) VALUES(901,'" +
+           snapshotOnly.score.chartMd5 + "','" +
+           snapshotOnly.score.chartSha256 + "'," +
+           std::to_string(snapshotOnly.score.score) + "," +
+           std::to_string(snapshotOnly.score.clearType) + ",0)");
+
+  const auto manual = repository.ListIrUploadCandidates(
+      "fake", "https://example.invalid");
+  assert(manual.status == ir::IrUploadCandidateReadStatus::Loaded &&
+         manual.candidates.size() == 1 &&
+         manual.candidates.front().modernChartResultId ==
+             snapshotStaged.receipt->resultId &&
+         manual.candidates.front().attemptId() == snapshotOnly.attemptId &&
+         manual.candidates.front().snapshot == storedSnapshot);
+
+  const auto reconciliation = repository.LoadIrReconciliationCandidates(
+      "fake", "https://example.invalid");
+  assert(reconciliation.status ==
+             ir::IrReconciliationReadOutcome::Status::Loaded &&
+         reconciliation.candidates.size() == 1 &&
+         reconciliation.candidates.front().modernChartResultId ==
+             snapshotStaged.receipt->resultId &&
+         reconciliation.candidates.front().attemptId ==
+             snapshotOnly.attemptId);
 }
 
 void testReservationReleaseAndModernPendingLifecycle() {
