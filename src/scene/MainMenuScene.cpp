@@ -8801,40 +8801,26 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
       activeReplayIrServerOrigin();
   std::unordered_map<std::string, ir::IrUploadRecord> irRecordsByAttempt;
   bool modernIrReadSucceeded = courseReplayList;
-  if (!courseReplayList && irServerOrigin.has_value()) {
-    std::optional<int> beforeResultId;
+  if (!courseReplayList && irServerOrigin.has_value() &&
+      !replayModalChart.meta.SHA256.empty()) {
+    auto records = context.replayRepository.ListIrUploadRecordsForChart(
+        ir::kTachiProviderId, *irServerOrigin,
+        replayModalChart.meta.SHA256);
     std::string irReadDiagnostic;
-    bool irReadFailed = false;
-    do {
-      auto page = context.replayRepository.ListIrUploadRecords(
-          ir::kTachiProviderId, *irServerOrigin, beforeResultId);
-      if (page.status != ir::IrUploadRecordReadStatus::Loaded) {
-        irReadFailed = true;
-        irReadDiagnostic =
-            page.diagnostic.empty()
-                ? "Modern IR Records unavailable: state could not be read"
-                : std::string("Modern IR Records unavailable: ") +
-                      page.diagnostic;
-        break;
-      }
-      irRecordsByAttempt.reserve(irRecordsByAttempt.size() +
-                                 page.records.size());
-      for (auto &record : page.records) {
+    if (records.status != ir::IrUploadRecordReadStatus::Loaded) {
+      irReadDiagnostic =
+          records.diagnostic.empty()
+              ? "Modern IR Records unavailable: state could not be read"
+              : std::string("Modern IR Records unavailable: ") +
+                    records.diagnostic;
+    } else {
+      irRecordsByAttempt.reserve(records.records.size());
+      for (auto &record : records.records) {
         irRecordsByAttempt.emplace(record.attemptId, std::move(record));
       }
-      if (irReadDiagnostic.empty() && !page.diagnostic.empty()) {
-        irReadDiagnostic = page.diagnostic;
-      }
-      if (page.nextBeforeModernChartResultId && beforeResultId &&
-          *page.nextBeforeModernChartResultId >= *beforeResultId) {
-        irReadFailed = true;
-        irReadDiagnostic = "Modern IR Records pagination did not advance";
-        break;
-      }
-      beforeResultId = page.nextBeforeModernChartResultId;
-    } while (beforeResultId.has_value());
-
-    modernIrReadSucceeded = !irReadFailed && irReadDiagnostic.empty();
+      irReadDiagnostic = std::move(records.diagnostic);
+    }
+    modernIrReadSucceeded = irReadDiagnostic.empty();
     if (!irReadDiagnostic.empty()) {
       const std::string diagnostic =
           ir::sanitizeDiagnostic(irReadDiagnostic);
@@ -8844,7 +8830,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         archive_file::appendDebugLogLine(diagnostic);
       }
     }
-  } else if (!courseReplayList) {
+  } else if (!courseReplayList && !irServerOrigin.has_value()) {
     const std::string diagnostic =
         "Modern IR Records unavailable: provider origin is invalid";
     if (diagnostic != publishedResultRecordDiagnostic) {
@@ -8852,6 +8838,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
       SDL_Log("%s", diagnostic.c_str());
       archive_file::appendDebugLogLine(diagnostic);
     }
+  } else if (!courseReplayList) {
+    modernIrReadSucceeded = true;
   }
 
   bool modernHistoryReadSucceeded = true;

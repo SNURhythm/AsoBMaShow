@@ -623,6 +623,45 @@ void testIrSourceHistoryOverGlobalBoundReturnsKeysetPages() {
          reconciliation.nextBeforeModernChartResultId.has_value());
 }
 
+void testChartScopedIrRecordsIgnoreUnrelatedHistory() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replay.db");
+  assert(repository.EnsureSchema());
+
+  const auto selected = result(14, '3');
+  const auto unrelated = result(15, '4');
+  const auto selectedStage = repository.StageModernChartResult(
+      selected, snapshot(selected), std::nullopt, {});
+  const auto unrelatedStage = repository.StageModernChartResult(
+      unrelated, snapshot(unrelated), std::nullopt, {});
+  assert(selectedStage.status == ModernChartStageStatus::Staged &&
+         selectedStage.receipt &&
+         unrelatedStage.status == ModernChartStageStatus::Staged &&
+         unrelatedStage.receipt &&
+         unrelatedStage.receipt->resultId > selectedStage.receipt->resultId);
+
+  const auto scoped = repository.ListIrUploadRecordsForChart(
+      "tachi", "https://boku.tachi.ac", selected.score.chartSha256, 1);
+  assert(scoped.status == ir::IrUploadRecordReadStatus::Loaded &&
+         scoped.records.size() == 1 &&
+         scoped.records.front().attemptId == selected.attemptId &&
+         !scoped.nextBeforeModernChartResultId.has_value());
+  assert(repository
+             .ListIrUploadRecordsForChart("tachi",
+                                          "https://boku.tachi.ac", "bad", 1)
+             .status == ir::IrUploadRecordReadStatus::Invalid);
+  assert(repository
+             .ListIrUploadRecordsForChart("tachi",
+                                          "https://boku.tachi.ac", {}, 1)
+             .status == ir::IrUploadRecordReadStatus::Invalid);
+  assert(repository
+             .ListIrUploadRecordsForChart(
+                 "tachi", "https://boku.tachi.ac",
+                 selected.score.chartSha256,
+                 kMaximumModernChartHistoryRows + 1)
+             .status == ir::IrUploadRecordReadStatus::Invalid);
+}
+
 void testPendingOwnerCorruptionFailsClosed() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path / "replay.db";
@@ -681,6 +720,7 @@ int main() {
   testSchemaReservationAtomicStageAndExactRetry();
   testRollbackAndReplayOptionality();
   testIrSourceHistoryOverGlobalBoundReturnsKeysetPages();
+  testChartScopedIrRecordsIgnoreUnrelatedHistory();
   testReservationReleaseAndModernPendingLifecycle();
   testPendingOwnerCorruptionFailsClosed();
   testPendingTimestampComesFromResultOwner();

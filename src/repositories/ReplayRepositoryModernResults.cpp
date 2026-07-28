@@ -566,10 +566,15 @@ struct IrSourceReadOutcome {
 IrSourceReadOutcome loadIrSourcesOnConnection(
     sqlite3 *database, std::string_view providerId,
     std::string_view serverOrigin,
-    std::optional<int> beforeModernChartResultId, std::size_t limit) {
+    std::optional<int> beforeModernChartResultId, std::size_t limit,
+    std::string_view chartSha256 = {}) {
   const auto scope = ir::projectIrUploadCandidates({}, providerId, serverOrigin);
+  const bool chartScoped = !chartSha256.empty();
   if (!scope.diagnostic.empty() ||
       (beforeModernChartResultId && *beforeModernChartResultId <= 0) ||
+      (chartScoped &&
+       (!replay::isCanonicalLowerHex(chartSha256, 64) ||
+        beforeModernChartResultId.has_value())) ||
       limit == 0 || limit > ir::kMaximumIrUploadCandidateRows) {
     return {.status = IrSourceReadStatus::Invalid,
             .diagnostic = scope.diagnostic.empty()
@@ -582,28 +587,37 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
       "SELECT result.id FROM modern_chart_results result INNER JOIN "
       "ir_submission_snapshots snapshot ON "
       "snapshot.modern_chart_result_id=result.id ";
-  if (beforeModernChartResultId) {
+  if (chartScoped) {
+    query += "WHERE result.chart_sha256=? ";
+  } else if (beforeModernChartResultId) {
     query += "WHERE result.id<? ";
   }
-  query += "ORDER BY result.id DESC LIMIT ?";
+  query += chartScoped
+               ? "ORDER BY result.played_at_unix_ms DESC,result.id DESC LIMIT ?"
+               : "ORDER BY result.id DESC LIMIT ?";
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return {.status = IrSourceReadStatus::StorageFailure,
             .diagnostic = "could not prepare modern IR result scan"};
   }
   int binding = 1;
-  if (beforeModernChartResultId &&
+  if (chartScoped && !bindText(statement.get(), binding++, chartSha256)) {
+    return {.status = IrSourceReadStatus::StorageFailure,
+            .diagnostic = "could not bind modern IR chart scope"};
+  }
+  if (!chartScoped && beforeModernChartResultId &&
       sqlite3_bind_int(statement.get(), binding++,
                        *beforeModernChartResultId) != SQLITE_OK) {
     return {.status = IrSourceReadStatus::StorageFailure,
             .diagnostic = "could not bind modern IR result cursor"};
   }
   if (sqlite3_bind_int64(statement.get(), binding,
-                         static_cast<sqlite3_int64>(limit + 1)) != SQLITE_OK) {
+                         static_cast<sqlite3_int64>(
+                             limit + (chartScoped ? 0 : 1))) != SQLITE_OK) {
     return {.status = IrSourceReadStatus::StorageFailure,
             .diagnostic = "could not bind modern IR result page limit"};
   }
   std::vector<int> resultIds;
-  resultIds.reserve(limit + 1);
+  resultIds.reserve(limit + (chartScoped ? 0 : 1));
   int rc = SQLITE_OK;
   while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
     if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER) {
@@ -624,7 +638,7 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
   statement.reset();
 
   IrSourceReadOutcome outcome{.status = IrSourceReadStatus::Loaded};
-  if (resultIds.size() > limit) {
+  if (!chartScoped && resultIds.size() > limit) {
     resultIds.resize(limit);
     outcome.nextBeforeModernChartResultId = resultIds.back();
   }
@@ -690,6 +704,50 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
         " modern IR rows were omitted because durable facts disagreed.");
   }
   return outcome;
+}
+
+ir::IrUploadRecordReadOutcome readIrUploadRecordsOnConnection(
+    sqlite3 *database, std::string_view providerId,
+    std::string_view serverOrigin,
+    std::optional<int> beforeModernChartResultId, std::size_t limit,
+    std::string_view chartSha256 = {}) {
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    return {.status = ir::IrUploadRecordReadStatus::StorageFailure,
+            .diagnostic = "could not start modern IR record read"};
+  }
+  auto loaded = loadIrSourcesOnConnection(
+      database, providerId, serverOrigin, beforeModernChartResultId, limit,
+      chartSha256);
+  if (loaded.status == IrSourceReadStatus::Invalid) {
+    return {.status = ir::IrUploadRecordReadStatus::Invalid,
+            .diagnostic = std::move(loaded.diagnostic)};
+  }
+  if (loaded.status == IrSourceReadStatus::StorageFailure) {
+    return {.status = ir::IrUploadRecordReadStatus::StorageFailure,
+            .diagnostic = std::move(loaded.diagnostic)};
+  }
+  auto projected =
+      ir::projectIrUploadRecords(loaded.sources, providerId, serverOrigin);
+  if (!transaction.commit(transactionError)) {
+    return {.status = ir::IrUploadRecordReadStatus::StorageFailure,
+            .diagnostic = "could not finish modern IR record read"};
+  }
+  std::string diagnostic = std::move(loaded.diagnostic);
+  if (!projected.diagnostic.empty()) {
+    if (!diagnostic.empty()) {
+      diagnostic += ' ';
+    }
+    diagnostic += projected.diagnostic;
+  }
+  return {.status = ir::IrUploadRecordReadStatus::Loaded,
+          .records = std::move(projected.records),
+          .omittedRows = loaded.omittedRows + projected.omittedRows,
+          .nextBeforeModernChartResultId =
+              loaded.nextBeforeModernChartResultId,
+          .diagnostic = ir::sanitizeDiagnostic(diagnostic)};
 }
 
 bool validateDrafts(const result_persistence::ModernChartResult &result,
@@ -2727,43 +2785,28 @@ ir::IrUploadRecordReadOutcome ReplayRepository::ListIrUploadRecords(
     return {.status = ir::IrUploadRecordReadStatus::StorageFailure,
             .diagnostic = "replay storage is unavailable"};
   }
-  std::string transactionError;
-  SqliteTransactionHandle transaction(impl_->sessionDatabase,
-                                      "BEGIN TRANSACTION", transactionError);
-  if (!transaction.active()) {
-    return {.status = ir::IrUploadRecordReadStatus::StorageFailure,
-            .diagnostic = "could not start modern IR record read"};
-  }
-  auto loaded = loadIrSourcesOnConnection(impl_->sessionDatabase, providerId,
-                                          serverOrigin,
-                                          beforeModernChartResultId, limit);
-  if (loaded.status == IrSourceReadStatus::Invalid) {
+  return readIrUploadRecordsOnConnection(
+      impl_->sessionDatabase, providerId, serverOrigin,
+      beforeModernChartResultId, limit);
+}
+
+ir::IrUploadRecordReadOutcome ReplayRepository::ListIrUploadRecordsForChart(
+    std::string_view providerId, std::string_view serverOrigin,
+    std::string_view chartSha256, std::size_t limit) {
+  profile_database_activity::ReadGuard readGuard;
+  if (!replay::isCanonicalLowerHex(chartSha256, 64) || limit == 0 ||
+      limit > kMaximumModernChartHistoryRows) {
     return {.status = ir::IrUploadRecordReadStatus::Invalid,
-            .diagnostic = std::move(loaded.diagnostic)};
+            .diagnostic = "modern IR chart record request is invalid"};
   }
-  if (loaded.status == IrSourceReadStatus::StorageFailure) {
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
     return {.status = ir::IrUploadRecordReadStatus::StorageFailure,
-            .diagnostic = std::move(loaded.diagnostic)};
+            .diagnostic = "replay storage is unavailable"};
   }
-  auto projected =
-      ir::projectIrUploadRecords(loaded.sources, providerId, serverOrigin);
-  if (!transaction.commit(transactionError)) {
-    return {.status = ir::IrUploadRecordReadStatus::StorageFailure,
-            .diagnostic = "could not finish modern IR record read"};
-  }
-  std::string diagnostic = std::move(loaded.diagnostic);
-  if (!projected.diagnostic.empty()) {
-    if (!diagnostic.empty()) {
-      diagnostic += ' ';
-    }
-    diagnostic += projected.diagnostic;
-  }
-  return {.status = ir::IrUploadRecordReadStatus::Loaded,
-          .records = std::move(projected.records),
-          .omittedRows = loaded.omittedRows + projected.omittedRows,
-          .nextBeforeModernChartResultId =
-              loaded.nextBeforeModernChartResultId,
-          .diagnostic = ir::sanitizeDiagnostic(diagnostic)};
+  return readIrUploadRecordsOnConnection(
+      impl_->sessionDatabase, providerId, serverOrigin, std::nullopt, limit,
+      chartSha256);
 }
 
 ir::IrUploadCandidateReadOutcome ReplayRepository::ListIrUploadCandidates(

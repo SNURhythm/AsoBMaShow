@@ -20,7 +20,7 @@ filter_restore = menu[filter_start:filter_end]
 
 required = {
     "repository": [
-        "ReplayRepository::ListIrUploadRecords(",
+        "ReplayRepository::ListIrUploadRecordsForChart(",
         "loadIrSourcesOnConnection",
         "projectIrUploadRecords",
         "BEGIN TRANSACTION",
@@ -44,7 +44,7 @@ required = {
         "reloadReplayRecordModels(true)",
     ],
     "reload": [
-        "ListIrUploadRecords(",
+        "ListIrUploadRecordsForChart(",
         "irRecordsByAttempt",
         "resolvedState(",
         "recordActivityFor(serviceStatus.activeRequest)",
@@ -87,6 +87,8 @@ forbidden_reload_tokens = [
     "ListReplays(",
     "LoadReplayResult(",
     "resolveReplayIrRecordState(",
+    "ListIrUploadRecords(",
+    "nextBeforeModernChartResultId",
 ]
 legacy_reads = [token for token in forbidden_reload_tokens if token in reload]
 if legacy_reads:

@@ -455,6 +455,7 @@ struct ModernCourseScoreSourceBatchOutcome {
 };
 
 inline constexpr std::size_t kMaximumModernChartHistoryRows = 1024;
+inline constexpr std::size_t kDefaultModernChartHistoryRows = 100;
 inline constexpr std::size_t kMaximumModernCourseHistoryRows = 1024;
 inline constexpr std::size_t kMaximumModernCourseScoreSourceRows = 256;
 
@@ -521,7 +522,9 @@ public:
   LoadModernChartResultByAttempt(std::string_view attemptId);
   ModernChartResultReadOutcome LoadModernChartResult(int resultId);
   ModernChartHistoryReadOutcome
-  ListModernChartResults(std::string_view chartSha256, std::size_t limit = 100);
+  ListModernChartResults(
+      std::string_view chartSha256,
+      std::size_t limit = kDefaultModernChartHistoryRows);
   std::vector<LegacyChartResultSummary>
   ListLegacyChartSummaries(const bms_parser::ChartMeta &chartMeta,
                            std::size_t limit = 100);
@@ -611,6 +614,10 @@ public:
                           std::nullopt,
                       std::size_t limit =
                           ir::kDefaultIrUploadSourcePageRows);
+  ir::IrUploadRecordReadOutcome ListIrUploadRecordsForChart(
+      std::string_view providerId, std::string_view serverOrigin,
+      std::string_view chartSha256,
+      std::size_t limit = kDefaultModernChartHistoryRows);
   ir::IrUploadCandidateReadOutcome
   ListIrUploadCandidates(std::string_view providerId,
                          std::string_view serverOrigin,
