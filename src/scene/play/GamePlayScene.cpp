@@ -2065,9 +2065,8 @@ bool GamePlayScene::reset() {
   const std::string assistOption = isReplayPlayback()
                                        ? options.replayData->assistOption
                                        : options.assistOption;
-  state->setAssistClearMark(
-      assist_options::isEnabled(assistOption) ||
-      clear_policy::assistClearRequired(options.playback));
+  state->setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::isEnabled(assistOption), options.playback));
   initializeStartPositionState();
   configurePacemakerTarget();
   updatePacemakerStatus();

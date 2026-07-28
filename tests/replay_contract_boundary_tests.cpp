@@ -432,6 +432,27 @@ void testSharedFormatAuthorities() {
                "settings and replay option validation");
 }
 
+void testSharedAssistClearMarkAuthority() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  requireToken(root / "src/scene/play/GameplayGaugeTypes.h",
+               "assistClearMarkRequired", "assist clear-mark authority");
+  constexpr std::array<std::string_view, 5> consumers{
+      "src/scene/play/GamePlayScene.cpp",
+      "src/replay/ReplayPlaybackMaterializer.cpp",
+      "src/ReplayResultStateBuilder.cpp",
+      "src/ModernResultRecallBuilder.cpp",
+      "src/ReplayAutoPlay.h",
+  };
+  constexpr std::array<std::string_view, 1> duplicateAuthority{
+      "clear_policy::assistClearRequired("};
+  for (std::string_view consumer : consumers) {
+    const auto path = root / consumer;
+    requireToken(path, "clear_policy::assistClearMarkRequired",
+                 "assist clear-mark authority");
+    rejectTokens(path, duplicateAuthority);
+  }
+}
+
 } // namespace
 
 int main() {
@@ -439,6 +460,7 @@ int main() {
   testCapabilityPolicyBoundary();
   testCodecAndFileBoundary();
   testSharedFormatAuthorities();
+  testSharedAssistClearMarkAuthority();
   testModernResultAndSnapshotBoundary();
   testSharedModernResultAuthorities();
   testSharedIrProviderIdentityAuthority();

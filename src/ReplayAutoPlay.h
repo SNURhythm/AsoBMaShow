@@ -134,7 +134,9 @@ inline ReplayData BuildReplayData(
   RhythmState state(&chart, false, ruleset);
   state.configureGauge(gaugeType, gaugeAutoShift, GaugeProfile::Standard,
                        gaugeAutoShiftLowerBound);
-  state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::isEnabled(replay.assistOption),
+      replay.provenance.playback));
   const JudgeResult perfect(PGreat, 0);
   const JudgeResult noJudge(None, 0);
 

@@ -143,9 +143,9 @@ RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
     adjustedCarry.gaugeProfile = state.gaugeProfile;
     state.restoreGaugeState(adjustedCarry);
   }
-  state.setAssistClearMark(
-      assist_options::isEnabled(replay.assistOption) ||
-      clear_policy::assistClearRequired(replay.provenance.playback));
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::isEnabled(replay.assistOption),
+      replay.provenance.playback));
   return state;
 }
 

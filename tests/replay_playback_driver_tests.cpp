@@ -188,6 +188,22 @@ void testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement() {
   expect(matched.replayData && matched.replayData->touchSamples.size() == 1 &&
              matched.replayData->laneCoverEvents.size() == 1,
          "consumer track preserves BRD-owned touch and lane-cover streams");
+
+  auto alteredRateReplay = replay;
+  alteredRateReplay.playback.setup.playback = {.percent = 90};
+  auto alteredRateSaved = saved;
+  alteredRateSaved.score.provenance.playback =
+      alteredRateReplay.playback.setup.playback;
+  alteredRateSaved.score.clearType = kClearTypeAssistedEasyClearRank;
+  alteredRateSaved.resultFingerprint =
+      result_persistence::modernResultFingerprint(alteredRateSaved);
+  const auto alteredRate =
+      ReplayPlaybackMaterializer::materializeForConsumers(
+          alteredRateReplay, ReplaySetupSource::LocalCapture,
+          alteredRateSaved, chart);
+  expect(alteredRate.matched() && alteredRate.replayData,
+         std::string("altered-rate replay preserves the live assisted clear: ") +
+             alteredRate.diagnostic);
 }
 
 void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {

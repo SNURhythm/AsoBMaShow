@@ -170,9 +170,8 @@ RhythmState resultStateFrom(
   if (score.provenance.startingGaugePercent.has_value()) {
     state.setStartingGaugePercent(*score.provenance.startingGaugePercent);
   }
-  state.setAssistClearMark(
-      assist_options::isEnabled(assistOption) ||
-      clear_policy::assistClearRequired(score.provenance.playback));
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::isEnabled(assistOption), score.provenance.playback));
 
   state.resetJudgeCounts();
   state.judgeCount[PGreat] = score.pGreat;

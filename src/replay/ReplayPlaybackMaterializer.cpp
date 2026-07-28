@@ -7,6 +7,7 @@
 #include "../bms_parser.hpp"
 #include "../scene/play/GameplayCandidateSelection.h"
 #include "../scene/play/GameplayDefinition.h"
+#include "../scene/play/GameplayGaugeTypes.h"
 #include "../scene/play/GameplayRulesetPolicy.h"
 #include "../scene/play/GameplaySimulation.h"
 
@@ -212,7 +213,8 @@ ReplayPlaybackMaterializer::materializeForConsumers(
             .carriedGauge = carry.gauge,
             .carriedCombo = carry.combo,
             .carriedMaxCombo = carry.maximumCombo,
-            .assistClearMark = assist_options::isEnabled(setup.assistOption),
+            .assistClearMark = clear_policy::assistClearMarkRequired(
+                assist_options::isEnabled(setup.assistOption), setup.playback),
             .autoPlay = false,
             .replayCapacity = capacity,
             .automaticResultCapacity = capacity,
