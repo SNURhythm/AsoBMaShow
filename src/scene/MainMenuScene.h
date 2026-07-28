@@ -493,6 +493,11 @@ private:
     int firstMissingIndex = -1;
     std::vector<ChartMetaRecord> records;
   };
+  struct CurrentCourseSelection {
+    std::vector<ChartMetaRecord> records;
+    std::vector<std::filesystem::path> completedChartPaths;
+    bool completeCourse = false;
+  };
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
@@ -707,6 +712,9 @@ private:
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
   const CourseValidationCache &courseValidationForActiveFolder();
+  [[nodiscard]] std::optional<CurrentCourseSelection>
+  currentCourseSelectionFor(
+      const result_persistence::ModernCourseResult &result);
   void refreshStartButtonForActiveFolder();
   void startSelectedCourse();
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);

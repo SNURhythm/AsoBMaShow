@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -46,8 +47,17 @@ struct ModernCourseBuildOutcome {
 BuildChartResult(result_persistence::ModernChartResult result,
                  std::atomic_bool &cancelled, ModernChartLoader loader = {});
 
+[[nodiscard]] ModernChartBuildOutcome BuildChartResult(
+    result_persistence::ModernChartResult result, std::atomic_bool &cancelled,
+    const std::filesystem::path &currentPath, ModernChartLoader loader = {});
+
 [[nodiscard]] ModernCourseBuildOutcome
 BuildCourseResult(result_persistence::ModernCourseResult result,
                   std::atomic_bool &cancelled, ModernChartLoader loader = {});
+
+[[nodiscard]] ModernCourseBuildOutcome BuildCourseResult(
+    result_persistence::ModernCourseResult result, std::atomic_bool &cancelled,
+    std::span<const std::filesystem::path> currentPaths,
+    ModernChartLoader loader = {});
 
 } // namespace result_recall

@@ -233,6 +233,24 @@ void testChartRecallFailsClosedBeforePublishing() {
          "missing chart content disables only rich result recall");
 }
 
+void testMovedChartRecallUsesCurrentLocationAndSavedIdentity() {
+  const auto saved = chartResult();
+  const std::filesystem::path currentPath =
+      "moved-library/current-stage.bms";
+  std::atomic_bool cancelled{false};
+  std::filesystem::path requestedPath;
+  const auto outcome = result_recall::BuildChartResult(
+      result_persistence::ModernChartResult(saved), cancelled, currentPath,
+      [&](const std::filesystem::path &path,
+          std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
+        requestedPath = path;
+        return parsedChartFor(saved.score);
+      });
+  expect(outcome.value && requestedPath == currentPath,
+         "moved chart recall loads the current Records path and validates it "
+         "against saved identity facts");
+}
+
 void testCourseRecallIsOrderedCompleteAndAtomic() {
   const auto saved = courseResult();
   std::atomic_bool cancelled{false};
@@ -290,12 +308,49 @@ void testCourseRecallIsOrderedCompleteAndAtomic() {
          "malformed course ordering is rejected before any chart load");
 }
 
+void testMovedCourseRecallUsesCurrentOrderedLocations() {
+  const auto saved = courseResult();
+  const std::vector<std::filesystem::path> currentPaths{
+      "moved-course/current-stage-0.bms",
+      "moved-course/current-stage-1.bms"};
+  std::atomic_bool cancelled{false};
+  std::vector<std::filesystem::path> requestedPaths;
+  const auto outcome = result_recall::BuildCourseResult(
+      result_persistence::ModernCourseResult(saved), cancelled, currentPaths,
+      [&](const std::filesystem::path &path,
+          std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
+        requestedPaths.push_back(path);
+        const std::size_t index = requestedPaths.size() - 1;
+        return parsedChartFor(saved.stages[index].score);
+      });
+  expect(outcome.value && requestedPaths == currentPaths,
+         "moved course recall loads current Records paths in stage order and "
+         "validates each against saved identity facts");
+
+  requestedPaths.clear();
+  const std::span<const std::filesystem::path> incompletePaths(currentPaths.data(),
+                                                                1);
+  const auto incomplete = result_recall::BuildCourseResult(
+      result_persistence::ModernCourseResult(saved), cancelled,
+      incompletePaths,
+      [&](const std::filesystem::path &path,
+          std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
+        requestedPaths.push_back(path);
+        return parsedChartFor(saved.stages.front().score);
+      });
+  expect(!incomplete.value && requestedPaths.empty(),
+         "course recall rejects an incomplete current-location projection "
+         "before loading any stage");
+}
+
 } // namespace
 
 int main() {
   testChartRecallUsesOnlySavedFacts();
   testChartRecallFailsClosedBeforePublishing();
+  testMovedChartRecallUsesCurrentLocationAndSavedIdentity();
   testCourseRecallIsOrderedCompleteAndAtomic();
+  testMovedCourseRecallUsesCurrentOrderedLocations();
   if (failures != 0) {
     std::cerr << failures << " modern result recall test(s) failed\n";
     return 1;

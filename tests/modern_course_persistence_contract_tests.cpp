@@ -144,10 +144,34 @@ void testModernCourseRecordsUseResultAndVerifiedReplayAuthorities() {
   require(end != std::string::npos,
           "modern course result recall boundary is malformed");
   const std::string_view recallBody(modernRecall.data() + begin, end - begin);
-  require(recallBody.contains("BuildCourseResult") &&
+  require(recallBody.contains("currentSelection") &&
+              recallBody.contains("BuildCourseResult") &&
               !recallBody.contains("CourseReplayConsumer") &&
               !recallBody.contains("LoadCourseReplay"),
-          "modern course View Result must use strict result rows without BRD or legacy replay loading");
+          "modern course View Result must resolve current chart locations and "
+          "use strict result rows without BRD or legacy replay loading");
+
+  const auto playbackBegin = modernRecall.find(
+      "void MainMenuScene::startModernCourseReplayPlayback");
+  const auto playbackEnd = modernRecall.find(
+      "void MainMenuScene::startCourseReplayDirect", playbackBegin);
+  const auto videoBegin = modernRecall.find(
+      "void MainMenuScene::startModernCourseReplayVideoExport");
+  const auto videoEnd = modernRecall.find(
+      "std::optional<std::string>", videoBegin);
+  require(playbackBegin != std::string::npos &&
+              playbackEnd != std::string::npos &&
+              videoBegin != std::string::npos && videoEnd != std::string::npos,
+          "modern course consumer boundaries are malformed");
+  const std::string_view playbackBody(modernRecall.data() + playbackBegin,
+                                      playbackEnd - playbackBegin);
+  const std::string_view videoBody(modernRecall.data() + videoBegin,
+                                   videoEnd - videoBegin);
+  require(playbackBody.contains("currentCourseSelectionFor") &&
+              videoBody.contains("currentCourseSelectionFor") &&
+              !playbackBody.contains("stage.score.chartPath") &&
+              !videoBody.contains("stage.score.chartPath"),
+          "course replay consumers must share current location resolution");
 
   const auto listBegin = modernRecall.find(
       "void MainMenuScene::reloadReplayRecordModels");

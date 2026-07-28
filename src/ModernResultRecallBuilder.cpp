@@ -148,6 +148,14 @@ RhythmState courseStageResultState(
 ModernChartBuildOutcome
 BuildChartResult(result_persistence::ModernChartResult result,
                  std::atomic_bool &cancelled, ModernChartLoader loader) {
+  const std::filesystem::path storedPath = result.score.chartPath;
+  return BuildChartResult(std::move(result), cancelled, storedPath,
+                          std::move(loader));
+}
+
+ModernChartBuildOutcome BuildChartResult(
+    result_persistence::ModernChartResult result, std::atomic_bool &cancelled,
+    const std::filesystem::path &currentPath, ModernChartLoader loader) {
   try {
     std::string validationDiagnostic;
     if (!result_persistence::validateModernChartResult(result,
@@ -157,7 +165,7 @@ BuildChartResult(result_persistence::ModernChartResult result,
     }
 
     auto loadChart = effectiveLoader(std::move(loader));
-    auto chart = loadChart(result.score.chartPath, cancelled);
+    auto chart = loadChart(currentPath, cancelled);
     if (chart == nullptr || cancelled.load()) {
       return {.diagnostic = "saved chart is unavailable"};
     }
@@ -180,6 +188,19 @@ BuildChartResult(result_persistence::ModernChartResult result,
 ModernCourseBuildOutcome
 BuildCourseResult(result_persistence::ModernCourseResult result,
                   std::atomic_bool &cancelled, ModernChartLoader loader) {
+  std::vector<std::filesystem::path> storedPaths;
+  storedPaths.reserve(result.stages.size());
+  for (const auto &stage : result.stages) {
+    storedPaths.push_back(stage.score.chartPath);
+  }
+  return BuildCourseResult(std::move(result), cancelled, storedPaths,
+                           std::move(loader));
+}
+
+ModernCourseBuildOutcome BuildCourseResult(
+    result_persistence::ModernCourseResult result, std::atomic_bool &cancelled,
+    std::span<const std::filesystem::path> currentPaths,
+    ModernChartLoader loader) {
   try {
     std::string validationDiagnostic;
     if (!result_persistence::validateModernCourseResult(result,
@@ -187,12 +208,17 @@ BuildCourseResult(result_persistence::ModernCourseResult result,
       return {.diagnostic =
                   "saved course result is invalid: " + validationDiagnostic};
     }
+    if (currentPaths.size() != result.stages.size()) {
+      return {.diagnostic =
+                  "current course selection does not cover saved stages"};
+    }
 
     auto loadChart = effectiveLoader(std::move(loader));
     std::vector<ModernCourseStageView> completedStages;
     completedStages.reserve(result.stages.size());
-    for (const auto &stage : result.stages) {
-      auto loaded = loadChart(stage.score.chartPath, cancelled);
+    for (std::size_t index = 0; index < result.stages.size(); ++index) {
+      const auto &stage = result.stages[index];
+      auto loaded = loadChart(currentPaths[index], cancelled);
       if (loaded == nullptr || cancelled.load()) {
         return {.diagnostic = "saved course stage is unavailable"};
       }

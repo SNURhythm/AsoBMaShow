@@ -5132,6 +5132,40 @@ MainMenuScene::courseValidationForActiveFolder() {
   return courseValidationCache;
 }
 
+std::optional<MainMenuScene::CurrentCourseSelection>
+MainMenuScene::currentCourseSelectionFor(
+    const result_persistence::ModernCourseResult &result) {
+  if (activeFolder.type != LibraryFolderItem::Type::Course ||
+      activeFolder.courseKey != result.courseKey || result.totalCharts <= 0) {
+    return std::nullopt;
+  }
+  const auto &validation = courseValidationForActiveFolder();
+  if (result.stages.size() > validation.records.size() ||
+      std::ranges::any_of(
+          validation.records.begin(),
+          validation.records.begin() +
+              static_cast<std::ptrdiff_t>(result.stages.size()),
+          [](const auto &record) {
+            return record.solidArchive || record.unavailable ||
+                   record.meta.BmsPath.empty();
+          })) {
+    return std::nullopt;
+  }
+  CurrentCourseSelection selection{
+      .records = validation.records,
+      .completeCourse =
+          validation.records.size() ==
+              static_cast<std::size_t>(result.totalCharts) &&
+          validation.firstMissingIndex < 0,
+  };
+  selection.completedChartPaths.reserve(result.stages.size());
+  for (std::size_t index = 0; index < result.stages.size(); ++index) {
+    selection.completedChartPaths.push_back(
+        selection.records[index].meta.BmsPath);
+  }
+  return selection;
+}
+
 void MainMenuScene::refreshStartButtonForActiveFolder() {
   if (startButtonText == nullptr || willStart.load()) {
     return;
@@ -9851,6 +9885,11 @@ void MainMenuScene::startModernCourseReplayPlayback(
   if (!record.courseStart || willStart.load()) {
     return;
   }
+  auto currentSelection = currentCourseSelectionFor(modern.result);
+  if (!currentSelection) {
+    return;
+  }
+  auto chartPaths = std::move(currentSelection->completedChartPaths);
 
   willStart.store(true);
   cancelActivePreviewLoading();
@@ -9858,7 +9897,8 @@ void MainMenuScene::startModernCourseReplayPlayback(
     replayWatchButtonText->setText("Loading...");
   }
   defer(
-      [this, modern = std::move(modern)]() mutable {
+      [this, modern = std::move(modern),
+       chartPaths = std::move(chartPaths)]() mutable {
         auto failReplayLoad = [this]() {
           resetReplayWatchLoadingUi();
           reloadReplayRecordModels(true);
@@ -9869,11 +9909,6 @@ void MainMenuScene::startModernCourseReplayPlayback(
         }
         joinRetiredPreviewLoadThreads();
 
-        std::vector<std::filesystem::path> chartPaths;
-        chartPaths.reserve(modern.result.stages.size());
-        for (const auto &stage : modern.result.stages) {
-          chartPaths.push_back(stage.score.chartPath);
-        }
         std::atomic_bool cancelled = false;
         auto consumer = replay::makeRuntimeCourseReplayConsumer(
             context.replayRepository);
@@ -10431,6 +10466,11 @@ void MainMenuScene::startModernReplayVideoExport(
 
 void MainMenuScene::startModernCourseReplayVideoExport(
     ModernCourseResultRecord modern, ReplayVideoExportOptions options) {
+  auto currentSelection = currentCourseSelectionFor(modern.result);
+  if (!currentSelection) {
+    return;
+  }
+  auto chartPaths = std::move(currentSelection->completedChartPaths);
   if (!beginReplayExport("Exporting Course Replay", "Preparing export",
                          "Exporting...")) {
     return;
@@ -10453,8 +10493,9 @@ void MainMenuScene::startModernCourseReplayVideoExport(
   auto complete = [this](const ReplayVideoExportResult &result) {
     queueReplayExportResult(result);
   };
-  auto runExport = [this, modern = std::move(modern), options,
-                    complete](const std::stop_token *stopToken) mutable {
+  auto runExport = [this, modern = std::move(modern), options, complete,
+                    chartPaths = std::move(chartPaths)](
+                       const std::stop_token *stopToken) mutable {
     try {
       if (loadThread.joinable()) {
         loadThread.join();
@@ -10466,11 +10507,6 @@ void MainMenuScene::startModernCourseReplayVideoExport(
         return;
       }
 
-      std::vector<std::filesystem::path> chartPaths;
-      chartPaths.reserve(modern.result.stages.size());
-      for (const auto &stage : modern.result.stages) {
-        chartPaths.push_back(stage.score.chartPath);
-      }
       std::atomic_bool cancelled = false;
       auto consumer = replay::makeRuntimeCourseReplayConsumer(
           context.replayRepository);
@@ -10738,8 +10774,9 @@ void MainMenuScene::startModernReplayResultRecall(
         }
 
         std::atomic_bool cancelled = false;
+        const std::filesystem::path currentChartPath = record.meta.BmsPath;
         auto recalled = result_recall::BuildChartResult(
-            exact.record->result, cancelled);
+            exact.record->result, cancelled, currentChartPath);
         if (!recalled.value.has_value()) {
           finishReplayResultRecallFailure(
               recalled.diagnostic.empty() ? "saved result was not found"
@@ -10783,18 +10820,14 @@ void MainMenuScene::startModernCourseReplayResultRecall(
     return;
   }
 
-  std::vector<ChartMetaRecord> currentCourseRecords;
-  if (activeFolder.type == LibraryFolderItem::Type::Course &&
-      activeFolder.courseKey == modern.result.courseKey) {
-    currentCourseRecords = courseValidationForActiveFolder().records;
-  }
+  auto currentSelection = currentCourseSelectionFor(modern.result);
 
   replayResultRecallInProgress = true;
   refreshReplayModalActions();
   cancelActivePreviewLoading();
   defer(
       [this, modern = std::move(modern), retrySameAllowed,
-       currentCourseRecords = std::move(currentCourseRecords)]() mutable {
+       currentSelection = std::move(currentSelection)]() mutable {
         if (loadThread.joinable()) {
           loadThread.join();
         }
@@ -10813,8 +10846,16 @@ void MainMenuScene::startModernCourseReplayResultRecall(
         }
 
         std::atomic_bool cancelled = false;
+        if (!currentSelection ||
+            currentSelection->completedChartPaths.size() !=
+                exact.record->result.stages.size()) {
+          finishReplayResultRecallFailure(
+              "current course charts are unavailable");
+          return true;
+        }
         auto recalled = result_recall::BuildCourseResult(
-            exact.record->result, cancelled);
+            exact.record->result, cancelled,
+            currentSelection->completedChartPaths);
         if (!recalled.value.has_value() ||
             recalled.value->completedStages.empty()) {
           finishReplayResultRecallFailure(
@@ -10839,16 +10880,11 @@ void MainMenuScene::startModernCourseReplayResultRecall(
           session->entries[index].meta.PlayLength =
               view.result.entryFacts[index].playLengthMicros;
         }
-        const bool completeCurrentCourse =
-            currentCourseRecords.size() == session->entries.size() &&
-            std::ranges::all_of(currentCourseRecords, [](const auto &record) {
-              return !record.solidArchive && !record.unavailable &&
-                     !record.meta.BmsPath.empty();
-            });
-        if (completeCurrentCourse) {
-          for (std::size_t index = 0; index < session->entries.size(); ++index) {
-            session->entries[index].meta = currentCourseRecords[index].meta;
-          }
+        for (std::size_t index = 0;
+             index < currentSelection->records.size() &&
+             index < session->entries.size();
+             ++index) {
+          session->entries[index].meta = currentSelection->records[index].meta;
         }
         session->stageProvenance.resize(view.completedStages.size());
         session->completedResults.reserve(view.completedStages.size());
@@ -10863,14 +10899,14 @@ void MainMenuScene::startModernCourseReplayResultRecall(
           session->ownedResultBrowseCharts.push_back(stage.chart);
           session->stageProvenance[index] = stage.result.score.provenance;
           session->modernCourseChartPaths.push_back(
-              stage.result.score.chartPath);
+              stage.chart->Meta.BmsPath);
         }
         session->modernCourseAttemptId = view.result.attemptId;
         session->modernCoursePlayedAtUnixMillis =
             view.result.playedAtUnixMillis;
         session->modernCourseResultBrowsing = true;
         session->modernCourseRetrySameAllowed =
-            retrySameAllowed && completeCurrentCourse;
+            retrySameAllowed && currentSelection->completeCourse;
         session->gaugeType = view.result.initialGaugeType;
         session->gaugeProfile = view.result.gaugeProfile;
         session->gaugeAutoShift = view.result.gaugeAutoShift;

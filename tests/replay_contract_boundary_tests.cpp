@@ -265,6 +265,9 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   requireToken(root / "src/scene/MainMenuScene.cpp",
                "result_recall::BuildChartResult",
                "replay-independent modern result recall");
+  requireToken(root / "src/scene/MainMenuScene.cpp", "currentChartPath",
+               "modern result recall does not resolve the current chart "
+               "location");
   requireToken(root / "src/scene/ResultScene.cpp",
                "modernReplayAttemptId",
                "modern practice replay identity");
