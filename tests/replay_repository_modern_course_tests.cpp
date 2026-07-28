@@ -194,6 +194,17 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
   const auto completed = result(1);
   const auto reservation = reserve(repository, completed);
   const auto file = attachment(reservation);
+  auto futureFile = file;
+  ++futureFile.metadata.codecVersion;
+  assert(repository
+             .StageModernCourseResult(completed, futureFile,
+                                      coursePathInput(completed))
+             .status == ModernCourseStageStatus::Invalid);
+  assert(queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_course_results") == 0 &&
+         queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_replay_file_reservations") ==
+             1);
   const auto staged = repository.StageModernCourseResult(
       completed, file, coursePathInput(completed));
   assert(staged.status == ModernCourseStageStatus::Staged && staged.receipt &&
@@ -375,6 +386,44 @@ void testCourseScoreSourcesPageWithoutReplayOwnership() {
          exhausted.entries.empty() && !exhausted.hasMore);
 }
 
+void testFutureCodecReferencePreservesCourseResultHistory() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  const auto completed = result(9, false);
+  const auto reservation = reserve(repository, completed);
+  const auto staged = repository.StageModernCourseResult(
+      completed, attachment(reservation), coursePathInput(completed));
+  assert(staged.status == ModernCourseStageStatus::Staged && staged.receipt);
+  repository.Shutdown();
+  {
+    auto database = openDatabase(databasePath);
+    exec(database.get(), "PRAGMA ignore_check_constraints=ON");
+    exec(database.get(),
+         "UPDATE modern_replay_files SET codec_version=" +
+             std::to_string(replay::BeatorajaReplayCodec::kCodecVersion + 1) +
+             " WHERE modern_course_result_id=" +
+             std::to_string(staged.receipt->resultId));
+  }
+
+  const auto loaded =
+      repository.LoadModernCourseResultByAttempt(completed.attemptId);
+  assert(loaded.status == ModernCourseResultReadStatus::Loaded &&
+         loaded.record && loaded.record->replayFile &&
+         loaded.record->result.courseKey == completed.courseKey &&
+         loaded.record->replayFile->metadata.codecVersion ==
+             replay::BeatorajaReplayCodec::kCodecVersion + 1);
+  const auto history = repository.ListModernCourseResults(completed.courseKey);
+  const auto inventory = repository.ListModernReplayFileReferences();
+  assert(history.status == ModernCourseHistoryReadStatus::Loaded &&
+         history.records.size() == 1 && history.records.front().replayFile &&
+         inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+         inventory.entries.size() == 1 &&
+         inventory.entries.front().reference.metadata.codecVersion ==
+             replay::BeatorajaReplayCodec::kCodecVersion + 1);
+}
+
 #endif
 
 } // namespace
@@ -385,6 +434,7 @@ int main() {
   testResultOnlyHistoryAndRollbackPreserveReservation();
   testReplayFileOwnerCheckRejectsBothAndNeither();
   testCourseScoreSourcesPageWithoutReplayOwnership();
+  testFutureCodecReferencePreservesCourseResultHistory();
 #else
   std::cerr << "FAIL: modern course repository contract is not implemented\n";
   return 1;

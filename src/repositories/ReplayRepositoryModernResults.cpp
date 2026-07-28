@@ -117,8 +117,8 @@ deserializeJudgementTiming(std::string_view serialized) {
   }
 }
 
-bool validAttachment(const ModernReplayFileAttachment &attachment,
-                     std::string &diagnostic) {
+bool validStoredAttachment(const ModernReplayFileAttachment &attachment,
+                           std::string &diagnostic) {
   diagnostic.clear();
   const auto rebuilt = replay::pathForStem(
       attachment.identity.stem, attachment.identity.historyIndex, diagnostic);
@@ -128,11 +128,23 @@ bool validAttachment(const ModernReplayFileAttachment &attachment,
       attachment.metadata.compressedSize == 0 ||
       attachment.metadata.compressedSize >
           replay::kReplayLimits.maxCompressedBytes ||
-      attachment.metadata.codecVersion !=
-          replay::BeatorajaReplayCodec::kCodecVersion) {
+      attachment.metadata.codecVersion <= 0) {
     if (diagnostic.empty()) {
       diagnostic = "modern replay attachment is malformed";
     }
+    return false;
+  }
+  return true;
+}
+
+bool validCurrentAttachment(const ModernReplayFileAttachment &attachment,
+                            std::string &diagnostic) {
+  if (!validStoredAttachment(attachment, diagnostic)) {
+    return false;
+  }
+  if (attachment.metadata.codecVersion !=
+      replay::BeatorajaReplayCodec::kCodecVersion) {
+    diagnostic = "modern replay attachment uses an unsupported codec version";
     return false;
   }
   return true;
@@ -339,7 +351,7 @@ readReplayReference(sqlite3 *database, int resultId, bool &found,
   if (reference.id <= 0 || reference.resultId != resultId ||
       (sqlite3_column_int(statement.get(), 8) != 0 &&
        sqlite3_column_int(statement.get(), 8) != 1) ||
-      !validAttachment(attachment, diagnostic) ||
+      !validStoredAttachment(attachment, diagnostic) ||
       sqlite3_step(statement.get()) != SQLITE_DONE) {
     if (diagnostic.empty()) {
       diagnostic = "modern replay reference row is inconsistent";
@@ -1687,7 +1699,7 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
   }
   bool replayIdentityAgrees = true;
   if (replayFile.has_value()) {
-    replayIdentityAgrees = validAttachment(*replayFile, diagnostic) &&
+    replayIdentityAgrees = validCurrentAttachment(*replayFile, diagnostic) &&
                            replay::chartStemMatches(replayFile->identity.stem,
                                                     result.score.chartSha256,
                                                     result.score.longNoteMode,
@@ -2052,7 +2064,7 @@ ModernCourseStageOutcome ReplayRepository::StageModernCourseResult(
     for (const auto &stage : result.stages) {
       stageSha256.push_back(stage.score.chartSha256);
     }
-    if (!validAttachment(*replayFile, diagnostic) ||
+    if (!validCurrentAttachment(*replayFile, diagnostic) ||
         replayPath->stageSha256 != stageSha256 ||
         replayPath->longNoteMode != result.longNoteMode ||
         !replay::courseStemMatches(replayFile->identity.stem, *replayPath,
@@ -2564,7 +2576,8 @@ ModernReplayFileMutationOutcome ReplayRepository::MarkModernReplayFileUserDelete
                                         .metadata = expected.metadata};
   std::string diagnostic;
   if (!uuid::isCanonicalLowerV4(attemptId) || expected.id <= 0 ||
-      expected.resultId <= 0 || !validAttachment(attachment, diagnostic)) {
+      expected.resultId <= 0 ||
+      !validStoredAttachment(attachment, diagnostic)) {
     return {.status = ModernReplayFileMutationStatus::Invalid,
             .diagnostic = diagnostic.empty()
                               ? "modern replay deletion request is invalid"
@@ -2730,7 +2743,7 @@ ReplayRepository::ListModernReplayFileReferences() {
         (deleted != 0 && deleted != 1) || entry.reference.id <= 0 ||
         entry.reference.resultId <= 0 ||
         !uuid::isCanonicalLowerV4(entry.attemptId) ||
-        !validAttachment(attachment, validation)) {
+        !validStoredAttachment(attachment, validation)) {
       return {.status = ModernReplayFileInventoryStatus::IntegrityConflict,
               .diagnostic = validation.empty()
                                 ? "modern replay inventory is inconsistent"

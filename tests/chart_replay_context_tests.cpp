@@ -176,6 +176,7 @@ struct Harness {
       ModernChartResultReadStatus::Loaded;
   bool attachReplay = true;
   bool userDeleted = false;
+  int codecVersion = BeatorajaReplayCodec::kCodecVersion;
   ReplayFileState fileState = ReplayFileState::Available;
   bool throwDuringFileRead = false;
   bool unsupportedExtension = false;
@@ -190,6 +191,7 @@ struct Harness {
           if (resultStatus == ModernChartResultReadStatus::Loaded) {
             auto reference = replayReference(result);
             reference.userDeleted = userDeleted;
+            reference.metadata.codecVersion = codecVersion;
             outcome.record = ModernChartResultRecord{
                 .result = result,
                 .replayFile = attachReplay
@@ -342,10 +344,20 @@ void testParsedIdentityAndLongNoteAgreementPrecedeFileAccess() {
 }
 
 void testDecodedReplayMustAgreeWithResultAndSupportedContract() {
+  Harness futureCodec;
+  ++futureCodec.codecVersion;
+  auto futureCodecContext = futureCodec.makeContext();
+  auto loaded = futureCodecContext.load(kAttemptId,
+                                        parsedFacts(futureCodec.result));
+  expect(loaded.state == ChartReplayContextState::UnsupportedCodecVersion &&
+             loaded.resultAvailable() && !loaded.replayAvailable() &&
+             futureCodec.calls == std::vector<std::string>{"result"},
+         "unsupported chart codec preserves result without reading the file");
+
   Harness harness;
   harness.replay.playback.setup.judgeWindowScalePercent = 75;
   auto context = harness.makeContext();
-  auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  loaded = context.load(kAttemptId, parsedFacts(harness.result));
   expect(loaded.state == ChartReplayContextState::SharedFactsMismatch &&
              loaded.resultAvailable() && !loaded.replayAvailable(),
          "decoded setup disagreement cannot enable replay actions");

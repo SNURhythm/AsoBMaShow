@@ -210,6 +210,17 @@ void testSchemaReservationAtomicStageAndExactRetry() {
              .status == ModernReplayReservationStatus::IntegrityConflict);
 
   const auto file = attachment(*reserved.reservation);
+  auto futureFile = file;
+  ++futureFile.metadata.codecVersion;
+  assert(repository
+             .StageModernChartResult(completed, savedSnapshot, futureFile,
+                                     std::vector{outboxDraft})
+             .status == ModernChartStageStatus::Invalid);
+  assert(queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_chart_results") == 0 &&
+         queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_replay_file_reservations") ==
+             1);
   const std::vector drafts{outboxDraft};
   const auto staged =
       repository.StageModernChartResult(completed, savedSnapshot, file, drafts);
@@ -714,6 +725,48 @@ void testPendingTimestampComesFromResultOwner() {
          pending.value->createdAt == staged.receipt->createdAt);
 }
 
+void testFutureCodecReferencePreservesChartResultHistory() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  const auto completed = result(16, '5');
+  const auto reserved = repository.ReserveModernReplayPath(
+      completed.attemptId, completed.score.chartSha256,
+      completed.playedAtUnixMillis);
+  assert(reserved.reservation);
+  const auto staged = repository.StageModernChartResult(
+      completed, std::nullopt, attachment(*reserved.reservation), {});
+  assert(staged.status == ModernChartStageStatus::Staged && staged.receipt);
+  repository.Shutdown();
+  {
+    auto database = openDatabase(databasePath);
+    exec(database.get(), "PRAGMA ignore_check_constraints=ON");
+    exec(database.get(),
+         "UPDATE modern_replay_files SET codec_version=" +
+             std::to_string(replay::BeatorajaReplayCodec::kCodecVersion + 1) +
+             " WHERE modern_chart_result_id=" +
+             std::to_string(staged.receipt->resultId));
+  }
+
+  const auto loaded =
+      repository.LoadModernChartResultByAttempt(completed.attemptId);
+  assert(loaded.status == ModernChartResultReadStatus::Loaded &&
+         loaded.record && loaded.record->replayFile &&
+         loaded.record->result.score == completed.score &&
+         loaded.record->replayFile->metadata.codecVersion ==
+             replay::BeatorajaReplayCodec::kCodecVersion + 1);
+  const auto history = repository.ListModernChartResults(
+      completed.score.chartSha256);
+  const auto inventory = repository.ListModernReplayFileReferences();
+  assert(history.status == ModernChartHistoryReadStatus::Loaded &&
+         history.records.size() == 1 && history.records.front().replayFile &&
+         inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+         inventory.entries.size() == 1 &&
+         inventory.entries.front().reference.metadata.codecVersion ==
+             replay::BeatorajaReplayCodec::kCodecVersion + 1);
+}
+
 } // namespace
 
 int main() {
@@ -724,5 +777,6 @@ int main() {
   testReservationReleaseAndModernPendingLifecycle();
   testPendingOwnerCorruptionFailsClosed();
   testPendingTimestampComesFromResultOwner();
+  testFutureCodecReferencePreservesChartResultHistory();
   return 0;
 }
