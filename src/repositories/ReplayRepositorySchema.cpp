@@ -1,6 +1,9 @@
 #include "ReplayRepository.h"
 #include "ReplayRepositoryInternal.h"
 #include "ReplayRepositoryLegacyMigration.h"
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+#include "ReplayRepositoryMigrationTestAccess.h"
+#endif
 
 #include "../BmsMetadataText.h"
 #include "ChartSqlExpressions.h"
@@ -2051,3 +2054,9 @@ bool replay_repository_detail::EquivalentDatabasePaths(
 bool replay_repository_detail::MigrateSchema(sqlite3 *database) {
   return migrateReplayDatabaseSchema(database);
 }
+
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+bool replay_repository_test::RunSchemaMigration(sqlite3 *database) {
+  return replay_repository_detail::CreateReplayTablesOnConnection(database);
+}
+#endif

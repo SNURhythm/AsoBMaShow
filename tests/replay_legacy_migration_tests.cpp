@@ -1,5 +1,5 @@
 #include "repositories/ReplayRepository.h"
-#include "repositories/ReplayRepositoryInternal.h"
+#include "repositories/ReplayRepositoryMigrationTestAccess.h"
 #include "repositories/SqliteRAII.h"
 
 #include <algorithm>
@@ -356,8 +356,7 @@ void testHeaderOnlyCutover() {
   DetailReadGuard guard;
   assert(sqlite3_set_authorizer(database.get(), denyDetailReads, &guard) ==
          SQLITE_OK);
-  assert(
-      replay_repository_detail::CreateReplayTablesOnConnection(database.get()));
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
   assert(queryInt(database.get(), "PRAGMA user_version") == 14);
 
@@ -417,8 +416,7 @@ void testDurableReceiptsAndOutboxWorkSurvive() {
   const auto path = temporary.path / "replay.db";
   createVersion13Fixture(path);
   auto database = openDatabase(path);
-  assert(
-      replay_repository_detail::CreateReplayTablesOnConnection(database.get()));
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
 
   assert(queryInt(database.get(), "PRAGMA user_version") == 14);
   assert(queryInt(database.get(),
@@ -469,8 +467,7 @@ void testMalformedProvenanceDoesNotBlockHeaderMigration() {
            "' WHERE id=12; UPDATE course_replays SET provenance_json='" +
            std::string(malformedProvenance) + "' WHERE id=21");
 
-  assert(
-      replay_repository_detail::CreateReplayTablesOnConnection(database.get()));
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(queryInt(database.get(), "PRAGMA user_version") == 14);
   assert(queryText(database.get(),
                    "SELECT chart_title FROM legacy_chart_result_summaries "
@@ -647,8 +644,7 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
   {
     auto database = openDatabase(dryRunPath);
     installMigrationProbe(database.get(), dryRun);
-    assert(replay_repository_detail::CreateReplayTablesOnConnection(
-        database.get()));
+    assert(replay_repository_test::RunSchemaMigration(database.get()));
     removeMigrationProbe(database.get());
   }
   assert(std::ranges::all_of(dryRun.firstCallback,
@@ -669,8 +665,7 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
     {
       auto database = openDatabase(trialPath);
       installMigrationProbe(database.get(), probe);
-      assert(!replay_repository_detail::CreateReplayTablesOnConnection(
-          database.get()));
+      assert(!replay_repository_test::RunSchemaMigration(database.get()));
       assert(probe.fired);
       removeMigrationProbe(database.get());
     }
@@ -694,8 +689,7 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
   {
     auto database = openDatabase(successPath);
     installMigrationProbe(database.get(), success);
-    assert(replay_repository_detail::CreateReplayTablesOnConnection(
-        database.get()));
+    assert(replay_repository_test::RunSchemaMigration(database.get()));
     assert(!success.fired);
     removeMigrationProbe(database.get());
   }
