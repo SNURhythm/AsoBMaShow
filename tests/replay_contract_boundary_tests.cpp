@@ -251,8 +251,8 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
                "makeRuntimeChartReplayConsumer",
                "modern Watch, G-Battle, recall, and video consumer");
   requireToken(root / "src/scene/MainMenuScene.cpp",
-               "makeParsedChartReplayFacts",
-               "modern Records replay availability projection");
+               "ReplayFileActionService",
+               "modern Records deferred replay availability inspection");
   requireToken(root / "src/scene/ChartViewerScene.cpp",
                "makeRuntimeChartReplayConsumer",
                "modern practice ghost consumer");
@@ -271,6 +271,12 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   requireToken(root / "src/scene/ResultScene.cpp",
                "modernReplayAttemptId",
                "modern practice replay identity");
+  requireToken(root / "src/main.cpp",
+               "loadAgreedModernReplayTombstoneInventory",
+               "startup tombstone-only replay cleanup inventory");
+  requireToken(root / "src/PlayerProfileManager.cpp",
+               "loadAgreedModernReplayFileInventory",
+               "profile transfer complete replay ownership inventory");
 
   constexpr std::array<std::string_view, 3> forbidden{
       "BeatorajaReplayCodec", "ReplayFileStore", "readVerified"};
@@ -278,6 +284,10 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   rejectTokens(root / "src/scene/ChartViewerScene.cpp", forbidden);
   rejectTokens(root / "src/scene/ResultScene.cpp", forbidden);
   rejectTokens(root / "src/ReplayVideoExporter.cpp", forbidden);
+
+  constexpr std::array<std::string_view, 1> startupFullScanForbidden{
+      "loadAgreedModernReplayFileInventory"};
+  rejectTokens(root / "src/main.cpp", startupFullScanForbidden);
 
   constexpr std::array<std::string_view, 1> ownershipForbidden{
       "GetResolvedDatabasePath"};

@@ -219,9 +219,15 @@ void testResultMismatchedReferenceCannotBeInspectedOrDeleted() {
   assert(repository.EnsureSchema());
   replay::ReplayFileStore store(temporary.path);
   const auto installed = installResult(repository, store, 4, 'd');
+  const auto deleted = installResult(repository, store, 5, 'e');
+  replay::ReplayFileActionService deletionActions(repository, store);
+  assert(deletionActions
+             .remove({.owner = ModernReplayOwnerKind::ChartResult,
+                      .attemptId = deleted.result.attemptId})
+             .state == replay::ReplayFileActionState::UserDeleted);
   std::string diagnostic;
   const auto otherStem =
-      replay::chartStem(std::string(64, 'e'), 1, false, diagnostic);
+      replay::chartStem(std::string(64, 'f'), 1, false, diagnostic);
   const auto otherIdentity = replay::pathForStem(*otherStem, 0, diagnostic);
   std::filesystem::rename(
       temporary.path / installed.reference.metadata.relativePath,
@@ -264,6 +270,12 @@ void testResultMismatchedReferenceCannotBeInspectedOrDeleted() {
       replay::loadAgreedModernReplayFileInventory(repository);
   assert(inventory.status ==
          ModernReplayFileInventoryStatus::IntegrityConflict);
+  const auto tombstones =
+      replay::loadAgreedModernReplayTombstoneInventory(repository);
+  assert(tombstones.status == ModernReplayFileInventoryStatus::Loaded &&
+         tombstones.entries.size() == 1 &&
+         tombstones.entries.front().attemptId == deleted.result.attemptId &&
+         tombstones.entries.front().reference.userDeleted);
 }
 
 void testUnsupportedCodecSkipsMaterializationAndRemainsDeletable() {
@@ -400,8 +412,8 @@ void testRestartReconciliationRemovesOnlyUnattachedFinalFiles() {
   insertReservation(databasePath, retainedAfterCommit);
 
   replay::ReplayFileReconciler reconciler({
-      .listReferences = [&] {
-        return replay::loadAgreedModernReplayFileInventory(repository);
+      .listTombstones = [&] {
+        return replay::loadAgreedModernReplayTombstoneInventory(repository);
       },
       .removeReferencedEntry =
           [&](const replay::ReplayFileMetadata &metadata,

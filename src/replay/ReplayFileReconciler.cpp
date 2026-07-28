@@ -20,26 +20,28 @@ ReplayFileReconciliationReport ReplayFileReconciler::reconcile(
   }
 
   ModernReplayFileInventoryOutcome inventory;
-  bool referenceInventoryReturned = false;
+  bool tombstoneInventoryReturned = false;
   try {
-    if (!dependencies_.listReferences) {
-      report.failures.emplace_back("replay reference inventory is unavailable");
+    if (!dependencies_.listTombstones) {
+      report.failures.emplace_back("replay tombstone inventory is unavailable");
     } else {
-      inventory = dependencies_.listReferences();
-      referenceInventoryReturned = true;
+      inventory = dependencies_.listTombstones();
+      tombstoneInventoryReturned = true;
     }
   } catch (...) {
-    report.failures.emplace_back("replay reference inventory failed");
+    report.failures.emplace_back("replay tombstone inventory failed");
   }
-  if (referenceInventoryReturned &&
+  if (tombstoneInventoryReturned &&
       inventory.status != ModernReplayFileInventoryStatus::Loaded) {
     report.failures.push_back(
-        inventory.diagnostic.empty() ? "replay reference inventory failed"
+        inventory.diagnostic.empty() ? "replay tombstone inventory failed"
                                      : std::move(inventory.diagnostic));
-  } else if (referenceInventoryReturned) {
+  } else if (tombstoneInventoryReturned) {
     report.referencesScanned = inventory.entries.size();
     for (const auto &entry : inventory.entries) {
       if (!entry.reference.userDeleted) {
+        report.failures.emplace_back(
+            "replay tombstone inventory contained an active reference");
         continue;
       }
       ++report.tombstonesFound;

@@ -1484,8 +1484,8 @@ int run() {
                 replay::ReplayFileStore store(
                     context.replayRepository.GetResolvedProfileRoot());
                 replay::ReplayFileReconciler reconciler({
-                    .listReferences = [&context] {
-                      return replay::loadAgreedModernReplayFileInventory(
+                    .listTombstones = [&context] {
+                      return replay::loadAgreedModernReplayTombstoneInventory(
                           context.replayRepository);
                     },
                     .removeReferencedEntry =

@@ -24,50 +24,68 @@ ModernReplayReservationReconciliationOutcome reservationStorageFailure(
           .diagnostic = std::move(diagnostic)};
 }
 
+ModernReplayFileInventoryOutcome validateAgreedInventory(
+    ReplayRepository &repository,
+    ModernReplayFileInventoryOutcome inventory) {
+  if (inventory.status != ModernReplayFileInventoryStatus::Loaded) {
+    return inventory;
+  }
+  for (const auto &entry : inventory.entries) {
+    if (entry.owner == ModernReplayOwnerKind::ChartResult) {
+      const auto loaded =
+          repository.LoadModernChartResultByAttempt(entry.attemptId);
+      if (loaded.status != ModernChartResultReadStatus::Loaded ||
+          !loaded.record || !loaded.record->replayFile ||
+          *loaded.record->replayFile != entry.reference) {
+        return conflict(
+            "Chart replay inventory does not match its exact result");
+      }
+      const auto agreement = compareChartReplayReferenceToResult(
+          entry.reference, loaded.record->result);
+      if (!agreement.matches) {
+        return conflict(agreement.diagnostic);
+      }
+      continue;
+    }
+    const auto loaded =
+        repository.LoadModernCourseResultByAttempt(entry.attemptId);
+    if (loaded.status != ModernCourseResultReadStatus::Loaded ||
+        !loaded.record || !loaded.record->replayFile ||
+        *loaded.record->replayFile != entry.reference) {
+      return conflict(
+          "Course replay inventory does not match its exact result");
+    }
+    const auto agreement = compareCourseReplayReferenceToResult(
+        entry.reference, loaded.record->result);
+    if (!agreement.matches) {
+      return conflict(agreement.diagnostic);
+    }
+  }
+  return inventory;
+}
+
 } // namespace
 
 ModernReplayFileInventoryOutcome
 loadAgreedModernReplayFileInventory(ReplayRepository &repository) noexcept {
   try {
-    auto inventory = repository.ListModernReplayFileReferences();
-    if (inventory.status != ModernReplayFileInventoryStatus::Loaded) {
-      return inventory;
-    }
-    for (const auto &entry : inventory.entries) {
-      if (entry.owner == ModernReplayOwnerKind::ChartResult) {
-        const auto loaded =
-            repository.LoadModernChartResultByAttempt(entry.attemptId);
-        if (loaded.status != ModernChartResultReadStatus::Loaded ||
-            !loaded.record || !loaded.record->replayFile ||
-            *loaded.record->replayFile != entry.reference) {
-          return conflict(
-              "Chart replay inventory does not match its exact result");
-        }
-        const auto agreement = compareChartReplayReferenceToResult(
-            entry.reference, loaded.record->result);
-        if (!agreement.matches) {
-          return conflict(agreement.diagnostic);
-        }
-        continue;
-      }
-      const auto loaded =
-          repository.LoadModernCourseResultByAttempt(entry.attemptId);
-      if (loaded.status != ModernCourseResultReadStatus::Loaded ||
-          !loaded.record || !loaded.record->replayFile ||
-          *loaded.record->replayFile != entry.reference) {
-        return conflict(
-            "Course replay inventory does not match its exact result");
-      }
-      const auto agreement = compareCourseReplayReferenceToResult(
-          entry.reference, loaded.record->result);
-      if (!agreement.matches) {
-        return conflict(agreement.diagnostic);
-      }
-    }
-    return inventory;
+    return validateAgreedInventory(
+        repository, repository.ListModernReplayFileReferences());
   } catch (...) {
     return {.status = ModernReplayFileInventoryStatus::StorageFailure,
             .diagnostic = "Replay ownership inventory failed"};
+  }
+}
+
+ModernReplayFileInventoryOutcome
+loadAgreedModernReplayTombstoneInventory(
+    ReplayRepository &repository) noexcept {
+  try {
+    return validateAgreedInventory(
+        repository, repository.ListUserDeletedModernReplayFileReferences());
+  } catch (...) {
+    return {.status = ModernReplayFileInventoryStatus::StorageFailure,
+            .diagnostic = "Replay tombstone ownership inventory failed"};
   }
 }
 

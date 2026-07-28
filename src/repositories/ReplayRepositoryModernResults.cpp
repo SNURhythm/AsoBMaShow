@@ -2717,6 +2717,16 @@ ModernReplayFileMutationOutcome ReplayRepository::MarkModernReplayFileUserDelete
 
 ModernReplayFileInventoryOutcome
 ReplayRepository::ListModernReplayFileReferences() {
+  return ListModernReplayFileReferences(false);
+}
+
+ModernReplayFileInventoryOutcome
+ReplayRepository::ListUserDeletedModernReplayFileReferences() {
+  return ListModernReplayFileReferences(true);
+}
+
+ModernReplayFileInventoryOutcome
+ReplayRepository::ListModernReplayFileReferences(bool userDeletedOnly) {
   profile_database_activity::ReadGuard readGuard;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
@@ -2732,9 +2742,12 @@ ReplayRepository::ListModernReplayFileReferences() {
       "f.user_deleted FROM modern_replay_files f "
       "LEFT JOIN modern_chart_results c ON c.id=f.modern_chart_result_id "
       "LEFT JOIN modern_course_results k ON k.id=f.modern_course_result_id "
+      "WHERE (?=0 OR f.user_deleted=1) "
       "ORDER BY f.id";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
-      SQLITE_OK) {
+          SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 1, userDeletedOnly ? 1 : 0) !=
+          SQLITE_OK) {
     return {.status = ModernReplayFileInventoryStatus::StorageFailure,
             .diagnostic = "could not prepare modern replay inventory"};
   }

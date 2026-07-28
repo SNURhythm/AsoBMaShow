@@ -559,6 +559,8 @@ public:
                                   std::string_view attemptId,
                                   const ModernReplayFileReference &expected);
   ModernReplayFileInventoryOutcome ListModernReplayFileReferences();
+  ModernReplayFileInventoryOutcome
+  ListUserDeletedModernReplayFileReferences();
   ModernIrSnapshotReadOutcome
   LoadModernIrSubmissionSnapshot(std::string_view attemptId);
   result_persistence::PendingReadOutcome
@@ -679,6 +681,8 @@ public:
                              std::string &errorMessage);
 private:
   struct Impl;
+  ModernReplayFileInventoryOutcome
+  ListModernReplayFileReferences(bool userDeletedOnly);
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;
   bool EnsureSessionDatabaseLocked();
   void ShutdownLocked();

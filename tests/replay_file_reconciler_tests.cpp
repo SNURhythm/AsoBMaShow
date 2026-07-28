@@ -46,16 +46,15 @@ replay::ModernReplayReservationReconciliationEntry reservation(
 }
 
 void testOnlyTombstonedOwnershipIsRemoved() {
-  const auto active = entry(1, false);
   const auto deleted = entry(2, true);
   const auto failed = entry(3, true);
   bool staleCleanupCalled = false;
   std::vector<std::filesystem::path> removed;
   replay::ReplayFileReconciler reconciler({
-      .listReferences = [&] {
+      .listTombstones = [&] {
         return ModernReplayFileInventoryOutcome{
             .status = ModernReplayFileInventoryStatus::Loaded,
-            .entries = {active, deleted, failed}};
+            .entries = {deleted, failed}};
       },
       .removeReferencedEntry =
           [&](const replay::ReplayFileMetadata &metadata,
@@ -78,7 +77,7 @@ void testOnlyTombstonedOwnershipIsRemoved() {
   const std::vector<std::filesystem::path> expectedRemoved{
       deleted.reference.metadata.relativePath,
       failed.reference.metadata.relativePath};
-  assert(staleCleanupCalled && report.referencesScanned == 3 &&
+  assert(staleCleanupCalled && report.referencesScanned == 2 &&
          report.tombstonesFound == 2 && report.filesRemoved == 1 &&
          report.failures.size() == 1 &&
          removed == expectedRemoved);
@@ -86,7 +85,7 @@ void testOnlyTombstonedOwnershipIsRemoved() {
 
 void testInventoryFailureIsNonThrowingAndConservative() {
   replay::ReplayFileReconciler reconciler({
-      .listReferences = [] {
+      .listTombstones = [] {
         return ModernReplayFileInventoryOutcome{
             .status = ModernReplayFileInventoryStatus::StorageFailure,
             .diagnostic = "database unavailable"};
@@ -119,7 +118,7 @@ void testStaleReservationsRemoveOnlyUncommittedReplayPaths() {
   std::vector<std::filesystem::path> removed;
   std::vector<std::string> released;
   replay::ReplayFileReconciler reconciler({
-      .listReferences = [] {
+      .listTombstones = [] {
         return ModernReplayFileInventoryOutcome{
             .status = ModernReplayFileInventoryStatus::Loaded};
       },

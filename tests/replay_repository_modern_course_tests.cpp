@@ -481,6 +481,45 @@ void testReservationInventoryChecksWhetherCourseStagingCommitted() {
              replay::ModernReplayReservationCommitState::ResultOnly);
 }
 
+void testCourseTombstoneInventoryFiltersActiveHistory() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replay.db");
+  assert(repository.EnsureSchema());
+  const auto active = result(12, false);
+  const auto activeReservation = reserve(repository, active);
+  assert(repository
+             .StageModernCourseResult(active, attachment(activeReservation),
+                                      coursePathInput(active))
+             .status == ModernCourseStageStatus::Staged);
+  const auto deleted = result(13, false);
+  const auto deletedReservation = reserve(repository, deleted);
+  assert(repository
+             .StageModernCourseResult(deleted,
+                                      attachment(deletedReservation),
+                                      coursePathInput(deleted))
+             .status == ModernCourseStageStatus::Staged);
+  const auto loaded =
+      repository.LoadModernCourseResultByAttempt(deleted.attemptId);
+  assert(loaded.record && loaded.record->replayFile &&
+         repository
+                 .MarkModernReplayFileUserDeleted(
+                     ModernReplayOwnerKind::CourseResult, deleted.attemptId,
+                     *loaded.record->replayFile)
+                 .status == ModernReplayFileMutationStatus::Changed);
+
+  const auto full = replay::loadAgreedModernReplayFileInventory(repository);
+  const auto tombstones =
+      replay::loadAgreedModernReplayTombstoneInventory(repository);
+  assert(full.status == ModernReplayFileInventoryStatus::Loaded &&
+         full.entries.size() == 2 &&
+         tombstones.status == ModernReplayFileInventoryStatus::Loaded &&
+         tombstones.entries.size() == 1 &&
+         tombstones.entries.front().owner ==
+             ModernReplayOwnerKind::CourseResult &&
+         tombstones.entries.front().attemptId == deleted.attemptId &&
+         tombstones.entries.front().reference.userDeleted);
+}
+
 #endif
 
 } // namespace
@@ -493,6 +532,7 @@ int main() {
   testCourseScoreSourcesPageWithoutReplayOwnership();
   testFutureCodecReferencePreservesCourseResultHistory();
   testReservationInventoryChecksWhetherCourseStagingCommitted();
+  testCourseTombstoneInventoryFiltersActiveHistory();
 #else
   std::cerr << "FAIL: modern course repository contract is not implemented\n";
   return 1;

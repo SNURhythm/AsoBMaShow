@@ -26,10 +26,16 @@ struct ModernReplayReservationReconciliationOutcome {
   std::string diagnostic;
 };
 
-// Loads replay ownership only after every reference agrees with its exact
-// saved result. Cleanup and profile transfer consume this strict snapshot.
+// Loads complete replay ownership only after every reference agrees with its
+// exact saved result. Profile transfer consumes this strict snapshot.
 [[nodiscard]] ModernReplayFileInventoryOutcome
 loadAgreedModernReplayFileInventory(ReplayRepository &repository) noexcept;
+
+// Loads only deletion tombstones for startup cleanup while applying the same
+// exact result/reference agreement as complete profile inventories.
+[[nodiscard]] ModernReplayFileInventoryOutcome
+loadAgreedModernReplayTombstoneInventory(
+    ReplayRepository &repository) noexcept;
 
 // Classifies only durable path reservations, consulting both result owners so
 // restart cleanup never removes a final file whose attachment committed even
