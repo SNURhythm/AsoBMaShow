@@ -2,6 +2,7 @@
 
 #include "IrDriver.h"
 #include "IrProfileSettings.h"
+#include "IrScoreReconciliation.h"
 
 #include <chrono>
 #include <cstdint>
@@ -100,6 +101,13 @@ struct IrSubmissionServiceOptions {
       std::string_view serverOrigin, std::int64_t syncGeneration,
       std::span<const IrRemoteScore> scores, std::string &diagnostic)>
       remoteSnapshotApplied;
+  // Optional persistence seam. The service uses ReplayRepository by default;
+  // injected loaders must honor the stop token while waiting.
+  std::function<IrReconciliationReadOutcome(
+      std::string_view providerId, std::string_view serverOrigin,
+      std::optional<int> beforeModernChartResultId, std::size_t limit,
+      std::stop_token requestToken)>
+      reconciliationCandidateLoader;
 };
 
 class IrSubmissionService {

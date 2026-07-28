@@ -598,13 +598,36 @@ struct IrSubmissionService::Impl {
       return;
     }
 
+    const auto reconciliationCancelled = [&] {
+      if (requestToken.stop_requested()) {
+        return true;
+      }
+      std::lock_guard lock(mutex);
+      return !reconciliationIsCurrentLocked(command);
+    };
+
     const std::int64_t synchronizedAt = safeNow(options);
     IrReconciliationReadOutcome candidates{
         .status = IrReconciliationReadOutcome::Status::Loaded};
     std::optional<int> beforeResultId;
     do {
-      auto page = repository.LoadIrReconciliationCandidates(
-          command.providerId, command.serverOrigin, beforeResultId);
+      if (reconciliationCancelled()) {
+        failReconciliation(command, "IR reconciliation was cancelled");
+        return;
+      }
+      auto page = options.reconciliationCandidateLoader
+                      ? options.reconciliationCandidateLoader(
+                            command.providerId, command.serverOrigin,
+                            beforeResultId, kDefaultIrUploadSourcePageRows,
+                            requestToken)
+                      : repository.LoadIrReconciliationCandidates(
+                            command.providerId, command.serverOrigin,
+                            beforeResultId,
+                            kDefaultIrUploadSourcePageRows);
+      if (reconciliationCancelled()) {
+        failReconciliation(command, "IR reconciliation was cancelled");
+        return;
+      }
       if (page.status != IrReconciliationReadOutcome::Status::Loaded) {
         failReconciliation(
             command, page.diagnostic.empty()
@@ -632,6 +655,10 @@ struct IrSubmissionService::Impl {
       }
       beforeResultId = page.nextBeforeModernChartResultId;
     } while (beforeResultId.has_value());
+    if (reconciliationCancelled()) {
+      failReconciliation(command, "IR reconciliation was cancelled");
+      return;
+    }
     IrScoreReconciliationPlan plan = planScoreReconciliation(
         command.providerId, command.serverOrigin, candidates.candidates,
         fetched.snapshot->scores, synchronizedAt);
@@ -640,6 +667,10 @@ struct IrSubmissionService::Impl {
                          plan.diagnostic.empty()
                              ? "Could not plan IR reconciliation"
                              : std::move(plan.diagnostic));
+      return;
+    }
+    if (reconciliationCancelled()) {
+      failReconciliation(command, "IR reconciliation was cancelled");
       return;
     }
 

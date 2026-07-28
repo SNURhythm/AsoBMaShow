@@ -707,6 +707,18 @@ public:
           }
           return true;
         };
+    options.reconciliationCandidateLoader =
+        [this](std::string_view providerId, std::string_view serverOrigin,
+               std::optional<int> beforeModernChartResultId,
+               std::size_t limit, std::stop_token requestToken) {
+          if (reconciliationCandidateLoader) {
+            return reconciliationCandidateLoader(
+                providerId, serverOrigin, beforeModernChartResultId, limit,
+                requestToken);
+          }
+          return repository.LoadIrReconciliationCandidates(
+              providerId, serverOrigin, beforeModernChartResultId, limit);
+        };
     service = std::make_unique<ir::IrSubmissionService>(
         repository, registry, http, std::move(options));
   }
@@ -841,6 +853,10 @@ public:
   std::int64_t projectedGeneration = 0;
   std::vector<std::string> projectedScoreIds;
   bool projectionSawCommittedMirror = false;
+  std::function<ir::IrReconciliationReadOutcome(
+      std::string_view, std::string_view, std::optional<int>, std::size_t,
+      std::stop_token)>
+      reconciliationCandidateLoader;
   std::unique_ptr<ir::IrSubmissionService> service;
 };
 
@@ -2587,6 +2603,72 @@ void testPauseCancelsAQueuedReconciliationBeforeAnyApply() {
          "paused queued reconciliation performs no fetch or repository apply");
 }
 
+void testPauseCancelsReconciliationBetweenLocalCandidatePages() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+
+  std::mutex pageMutex;
+  std::condition_variable_any pageChanged;
+  bool firstPageEntered = false;
+  int pageCalls = 0;
+  std::size_t observedLimit = 0;
+  harness.reconciliationCandidateLoader =
+      [&](std::string_view, std::string_view,
+          std::optional<int> beforeModernChartResultId, std::size_t limit,
+          std::stop_token token) {
+        std::unique_lock lock(pageMutex);
+        ++pageCalls;
+        observedLimit = limit;
+        if (!beforeModernChartResultId) {
+          firstPageEntered = true;
+          pageChanged.notify_all();
+          pageChanged.wait(lock, token,
+                           [&] { return token.stop_requested(); });
+          return ir::IrReconciliationReadOutcome{
+              .status = ir::IrReconciliationReadOutcome::Status::Loaded,
+              .nextBeforeModernChartResultId = 500};
+        }
+        return ir::IrReconciliationReadOutcome{
+            .status = ir::IrReconciliationReadOutcome::Status::Loaded};
+      };
+
+  harness.driver->releaseReconciliationStage(2);
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted,
+         "multi-page cancellation fixture starts reconciliation");
+  bool reachedFirstPage = false;
+  {
+    std::unique_lock lock(pageMutex);
+    reachedFirstPage = pageChanged.wait_for(
+        lock, 3s, [&] { return firstPageEntered; });
+  }
+  harness.service->pauseAndCancel();
+
+  int completedPageCalls = 0;
+  std::size_t completedObservedLimit = 0;
+  {
+    std::lock_guard lock(pageMutex);
+    completedPageCalls = pageCalls;
+    completedObservedLimit = observedLimit;
+  }
+  const auto status = harness.service->reconciliationStatus("fake");
+  const auto mirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://boku.tachi.ac");
+  expect(reachedFirstPage && completedPageCalls == 1 &&
+             completedObservedLimit == ir::kDefaultIrUploadSourcePageRows &&
+             status.phase == ir::IrReconciliationPhase::Failed &&
+             mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             mirror.scores.empty(),
+         "pause stops paged local reconciliation before a second read or "
+         "snapshot apply");
+}
+
 void testReconciliationCoalescesAndSerializesNewOutboxDelivery() {
   Harness harness({.readOnly = false,
                    .chartRankings = false,
@@ -3242,6 +3324,7 @@ int main() {
   testReconciliationPublishesEverySuccessfulWorkerPhase();
   testQueuedReconciliationRejectsAChangedCredentialGeneration();
   testPauseCancelsAQueuedReconciliationBeforeAnyApply();
+  testPauseCancelsReconciliationBetweenLocalCandidatePages();
   testReconciliationCoalescesAndSerializesNewOutboxDelivery();
   testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure();
   testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();
