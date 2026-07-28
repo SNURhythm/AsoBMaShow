@@ -1,5 +1,6 @@
 #include "ModernResultRecallBuilder.h"
 
+#include "LongNoteModeUtils.h"
 #include "replay/ReplayCapabilities.h"
 
 #include <atomic>
@@ -55,6 +56,33 @@ result_persistence::ChartJudgementTiming timingForScore() {
   timing.byJudgement[static_cast<std::size_t>(PGreat)] = {.fast = 1, .slow = 0};
   timing.byJudgement[static_cast<std::size_t>(Great)] = {.fast = 0, .slow = 1};
   return timing;
+}
+
+ScoreProvenance provenanceFor(
+    const result_persistence::ChartScoreWrite &score,
+    std::vector<int> randomValues) {
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = score.chartMd5;
+  input.chartMeta.SHA256 = score.chartSha256;
+  input.chartMeta.KeyMode = 7;
+  input.chartMeta.Rank = 2;
+  input.chartMeta.TotalNotes = score.maxScore / 2;
+  input.chartMeta.HasTotal = true;
+  input.chartMeta.Total = 200.0;
+  input.chartMeta.RandomSeed = 42;
+  input.chartMeta.RandomPrng = bms_parser::Parser::RandomPrngId;
+  input.chartMeta.RandomValues = std::move(randomValues);
+  input.longNoteMode = score.longNoteMode;
+  input.sourceJudgeRank = 2;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = score.maxScore / 2;
+  input.authoredGaugeTotal = 200.0;
+  input.effectiveGaugeTotal = 200.0;
+  return makeScoreProvenance(input);
 }
 
 result_persistence::ModernChartResult chartResult() {
@@ -132,6 +160,65 @@ parsedChartFor(const result_persistence::ChartScoreWrite &score,
   chart->Meta.KeyMode = 7;
   chart->Meta.TotalNotes = 5;
   return chart;
+}
+
+std::unique_ptr<bms_parser::Chart> parsedUndefinedLongNoteChartFor(
+    const result_persistence::ChartScoreWrite &score,
+    std::vector<int> randomValues, int rawTotalNotes) {
+  auto chart = parsedChartFor(score);
+  chart->Meta.LnMode = long_note_mode::kUnknownValue;
+  chart->Meta.TotalNotes = rawTotalNotes;
+  chart->Meta.RandomSeed = 42;
+  chart->Meta.RandomPrng = bms_parser::Parser::RandomPrngId;
+  chart->Meta.RandomValues = std::move(randomValues);
+
+  auto *measure = new bms_parser::Measure();
+  auto *headTimeline = new bms_parser::TimeLine(8, false);
+  for (int lane = 0; lane < 4; ++lane) {
+    headTimeline->SetNote(lane, new bms_parser::Note(lane + 1));
+  }
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  auto *head = new bms_parser::LongNote(
+      bms_parser::Parser::NoWav, bms_parser::LongNoteType::Undefined);
+  auto *tail = new bms_parser::LongNote(
+      bms_parser::Parser::NoWav, bms_parser::LongNoteType::Undefined);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(4, head);
+  tailTimeline->SetNote(4, tail);
+  measure->TimeLines.push_back(headTimeline);
+  measure->TimeLines.push_back(tailTimeline);
+  chart->Measures.push_back(measure);
+  return chart;
+}
+
+void testChartRecallReappliesSavedRandomAndLongNoteSetup() {
+  auto saved = chartResult();
+  saved.score.provenance = provenanceFor(saved.score, {2, 1, 3});
+  saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+  std::atomic_bool cancelled{false};
+
+  const auto restored = result_recall::BuildChartResult(
+      result_persistence::ModernChartResult(saved), cancelled,
+      [&](const std::filesystem::path &,
+          std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
+        return parsedUndefinedLongNoteChartFor(saved.score, {2, 1, 3}, 6);
+      });
+  expect(restored.value && restored.value->chart->Meta.TotalNotes == 5 &&
+             restored.value->chart->Meta.LnMode ==
+                 long_note_mode::kLnValue,
+         "chart recall applies the saved long-note mode before maximum-score "
+         "agreement");
+
+  const auto wrongBranch = result_recall::BuildChartResult(
+      result_persistence::ModernChartResult(saved), cancelled,
+      [&](const std::filesystem::path &,
+          std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
+        return parsedUndefinedLongNoteChartFor(saved.score, {1, 2, 3}, 5);
+      });
+  expect(!wrongBranch.value &&
+             wrongBranch.diagnostic.find("setup") != std::string::npos,
+         "equal-note-count random branches must agree with saved provenance");
 }
 
 void testChartRecallUsesOnlySavedFacts() {
@@ -308,6 +395,36 @@ void testCourseRecallIsOrderedCompleteAndAtomic() {
          "malformed course ordering is rejected before any chart load");
 }
 
+void testCourseRecallReappliesEachStageSetupBeforeAgreement() {
+  auto saved = courseResult();
+  std::vector<ScoreProvenance> stageProvenance;
+  for (std::size_t index = 0; index < saved.stages.size(); ++index) {
+    auto &score = saved.stages[index].score;
+    score.provenance =
+        provenanceFor(score, {static_cast<int>(index) + 1, 3});
+    stageProvenance.push_back(score.provenance);
+  }
+  saved.provenance = mergeCourseProvenance(stageProvenance);
+  saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+
+  std::atomic_bool cancelled{false};
+  const auto restored = result_recall::BuildCourseResult(
+      result_persistence::ModernCourseResult(saved), cancelled,
+      [&](const std::filesystem::path &path,
+          std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
+        const std::size_t index =
+            path == saved.stages.front().score.chartPath ? 0 : 1;
+        return parsedUndefinedLongNoteChartFor(
+            saved.stages[index].score,
+            {static_cast<int>(index) + 1, 3}, 6);
+      });
+  expect(restored.value && restored.value->completedStages.size() == 2 &&
+             restored.value->completedStages[0].chart->Meta.TotalNotes == 5 &&
+             restored.value->completedStages[1].chart->Meta.TotalNotes == 5,
+         "course recall applies each saved stage setup before publishing the "
+         "ordered result");
+}
+
 void testMovedCourseRecallUsesCurrentOrderedLocations() {
   const auto saved = courseResult();
   const std::vector<std::filesystem::path> currentPaths{
@@ -347,9 +464,11 @@ void testMovedCourseRecallUsesCurrentOrderedLocations() {
 
 int main() {
   testChartRecallUsesOnlySavedFacts();
+  testChartRecallReappliesSavedRandomAndLongNoteSetup();
   testChartRecallFailsClosedBeforePublishing();
   testMovedChartRecallUsesCurrentLocationAndSavedIdentity();
   testCourseRecallIsOrderedCompleteAndAtomic();
+  testCourseRecallReappliesEachStageSetupBeforeAgreement();
   testMovedCourseRecallUsesCurrentOrderedLocations();
   if (failures != 0) {
     std::cerr << failures << " modern result recall test(s) failed\n";

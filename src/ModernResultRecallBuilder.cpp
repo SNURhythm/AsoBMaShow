@@ -1,29 +1,108 @@
 #include "ModernResultRecallBuilder.h"
 
-#include "ArchiveFile.h"
 #include "BmsMetadataText.h"
+#include "PlayOptionUtils.h"
 #include "ResultContracts.h"
 #include "repositories/ChartStorageIdentity.h"
 
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace result_recall {
 namespace {
 
-ModernChartLoader effectiveLoader(ModernChartLoader loader) {
-  if (loader) {
-    return loader;
+struct SavedChartSetup {
+  int longNoteMode = long_note_mode::kUnknownValue;
+  std::optional<unsigned int> randomSeed;
+  std::optional<std::string> randomPrng;
+  std::vector<int> randomValues;
+  int expectedTotalNotes = 0;
+  bool provenanceBacked = false;
+};
+
+std::optional<SavedChartSetup>
+savedChartSetup(const result_persistence::ChartScoreWrite &score,
+                std::string &diagnostic) {
+  diagnostic.clear();
+  if (score.provenance.stages.empty()) {
+    return SavedChartSetup{.longNoteMode = score.longNoteMode};
   }
-  return [](const std::filesystem::path &storedPath,
-            std::atomic_bool &cancelled) {
-    std::filesystem::path path = storedPath;
-    chart_storage_identity::ToAbsolutePath(path);
-    bms_parser::Parser parser;
-    bms_parser::Chart *parsed = nullptr;
-    archive_file::parseChart(parser, path, &parsed, false, false, cancelled);
-    return std::unique_ptr<bms_parser::Chart>(parsed);
+
+  bms_parser::ChartMeta savedIdentity;
+  savedIdentity.MD5 = score.chartMd5;
+  savedIdentity.SHA256 = score.chartSha256;
+  const ScoreStageProvenance *stage =
+      score_provenance::uniqueStageForChart(score.provenance, savedIdentity);
+  if (stage == nullptr) {
+    diagnostic = "saved chart setup has no unique provenance stage";
+    return std::nullopt;
+  }
+  const auto maximumScore =
+      result_contract::maximumScoreForNotes(stage->totalNotes);
+  if (stage->longNoteMode != score.longNoteMode || !maximumScore ||
+      *maximumScore != score.maxScore) {
+    diagnostic = "saved chart setup disagrees with result facts";
+    return std::nullopt;
+  }
+  if (stage->chartRandomSeed &&
+      *stage->chartRandomSeed >
+          std::numeric_limits<unsigned int>::max()) {
+    diagnostic = "saved chart setup has an unsupported random seed";
+    return std::nullopt;
+  }
+  if (stage->chartRandomPrng &&
+      !bms_parser::Parser::IsSupportedRandomPrng(*stage->chartRandomPrng)) {
+    diagnostic = "saved chart setup has an unsupported random PRNG";
+    return std::nullopt;
+  }
+
+  return SavedChartSetup{
+      .longNoteMode = stage->longNoteMode,
+      .randomSeed =
+          stage->chartRandomSeed
+              ? std::optional<unsigned int>(
+                    static_cast<unsigned int>(*stage->chartRandomSeed))
+              : std::nullopt,
+      .randomPrng = stage->chartRandomPrng,
+      .randomValues = stage->chartRandomValues,
+      .expectedTotalNotes = stage->totalNotes,
+      .provenanceBacked = true,
   };
+}
+
+std::unique_ptr<bms_parser::Chart>
+loadSavedChart(const std::filesystem::path &path,
+               const SavedChartSetup &setup, std::atomic_bool &cancelled,
+               const ModernChartLoader &loader) {
+  if (loader) {
+    return loader(path, cancelled);
+  }
+  std::filesystem::path absolutePath = path;
+  chart_storage_identity::ToAbsolutePath(absolutePath);
+  const std::optional<std::vector<int>> randomValues =
+      setup.provenanceBacked && !setup.randomValues.empty()
+          ? std::optional(setup.randomValues)
+          : std::nullopt;
+  return play_options::parseChart(absolutePath, setup.randomSeed,
+                                  setup.randomPrng, randomValues, cancelled,
+                                  "result recall");
+}
+
+bool chartSetupAgrees(const SavedChartSetup &setup,
+                      const bms_parser::Chart &chart) {
+  if (!setup.provenanceBacked) {
+    return true;
+  }
+  if ((setup.randomSeed && chart.Meta.RandomSeed != setup.randomSeed) ||
+      (setup.randomPrng && chart.Meta.RandomPrng != setup.randomPrng) ||
+      chart.Meta.RandomValues != setup.randomValues ||
+      chart.Meta.TotalNotes != setup.expectedTotalNotes) {
+    return false;
+  }
+  return !chartContainsLongNote(chart) ||
+         normalizeChartLongNoteModeValue(chart.Meta.LnMode) ==
+             setup.longNoteMode;
 }
 
 bool chartIdentityAgrees(const result_persistence::ChartScoreWrite &score,
@@ -164,10 +243,19 @@ ModernChartBuildOutcome BuildChartResult(
                   "saved chart result is invalid: " + validationDiagnostic};
     }
 
-    auto loadChart = effectiveLoader(std::move(loader));
-    auto chart = loadChart(currentPath, cancelled);
+    auto setup = savedChartSetup(result.score, validationDiagnostic);
+    if (!setup) {
+      return {.diagnostic = validationDiagnostic};
+    }
+    auto chart = loadSavedChart(currentPath, *setup, cancelled, loader);
     if (chart == nullptr || cancelled.load()) {
       return {.diagnostic = "saved chart is unavailable"};
+    }
+    if (setup->provenanceBacked) {
+      applyEffectiveLongNoteModeToChart(*chart, setup->longNoteMode);
+    }
+    if (!chartSetupAgrees(*setup, *chart)) {
+      return {.diagnostic = "saved chart setup does not match"};
     }
     if (!chartIdentityAgrees(result.score, result.keyMode, chart->Meta)) {
       return {.diagnostic = "saved chart identity does not match"};
@@ -213,14 +301,24 @@ ModernCourseBuildOutcome BuildCourseResult(
                   "current course selection does not cover saved stages"};
     }
 
-    auto loadChart = effectiveLoader(std::move(loader));
     std::vector<ModernCourseStageView> completedStages;
     completedStages.reserve(result.stages.size());
     for (std::size_t index = 0; index < result.stages.size(); ++index) {
       const auto &stage = result.stages[index];
-      auto loaded = loadChart(currentPaths[index], cancelled);
+      auto setup = savedChartSetup(stage.score, validationDiagnostic);
+      if (!setup) {
+        return {.diagnostic = validationDiagnostic};
+      }
+      auto loaded =
+          loadSavedChart(currentPaths[index], *setup, cancelled, loader);
       if (loaded == nullptr || cancelled.load()) {
         return {.diagnostic = "saved course stage is unavailable"};
+      }
+      if (setup->provenanceBacked) {
+        applyEffectiveLongNoteModeToChart(*loaded, setup->longNoteMode);
+      }
+      if (!chartSetupAgrees(*setup, *loaded)) {
+        return {.diagnostic = "saved course stage setup does not match"};
       }
       if (!chartIdentityAgrees(stage.score, stage.keyMode, loaded->Meta)) {
         return {.diagnostic = "saved course stage identity does not match"};
