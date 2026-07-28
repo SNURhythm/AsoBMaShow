@@ -36,6 +36,8 @@ bool EquivalentDatabasePaths(const std::filesystem::path &first,
 bool MigrateSchema(sqlite3 *database);
 
 bool CreateReplayTablesOnConnection(sqlite3 *database);
+bool PrepareReplayDatabaseOnConnection(sqlite3 *database,
+                                       const std::filesystem::path &path);
 std::vector<LegacyChartResultSummary>
 ListLegacyChartSummariesOnConnection(sqlite3 *database,
                                      const bms_parser::ChartMeta &chartMeta,

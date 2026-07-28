@@ -47,6 +47,26 @@ using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::normalizedSqlHash;
 
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+using StagedMigrationFault = replay_repository_test::PathMigrationFault;
+replay_repository_test::PathMigrationFault gPathMigrationFault =
+    replay_repository_test::PathMigrationFault::None;
+
+bool pathMigrationFault(StagedMigrationFault fault) noexcept {
+  return gPathMigrationFault == fault;
+}
+#else
+enum class StagedMigrationFault {
+  None,
+  SnapshotCopy,
+  SchemaMigration,
+  Compaction,
+  Installation,
+};
+
+bool pathMigrationFault(StagedMigrationFault) noexcept { return false; }
+#endif
+
 void logSqlErrorText(const char *context, const std::string &error) {
   SDL_Log("SQL error while %s: %s", context, error.c_str());
 }
@@ -1648,6 +1668,34 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
 
+  if (*version == 16) {
+    ReplayResultOutboxSchemaState resultOutboxState{};
+    IrOutboxSchemaState irOutboxState{};
+    IrSubmissionReceiptsSchemaState receiptState{};
+    IrRemoteScoresSchemaState remoteScoresState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
+        !inspectIrOutboxSchema(db, irOutboxState) ||
+        !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
+        !inspectIrRemoteScoresSchema(db, remoteScoresState) ||
+        resultOutboxState != ReplayResultOutboxSchemaState::Absent ||
+        irOutboxState != IrOutboxSchemaState::Exact ||
+        receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
+        remoteScoresState != IrRemoteScoresSchemaState::Exact ||
+        !inspectModernCourseSchema(db) ||
+        !replay_repository_legacy::inspectCurrentSchema(db) ||
+        !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
+      SDL_Log("Refusing version 16 replay database with a partial or "
+              "unexpected current schema");
+      return false;
+    }
+    if (!transaction.commit(transactionError)) {
+      logSqlErrorText("committing replay compaction marker migration",
+                      transactionError);
+      return false;
+    }
+    return true;
+  }
+
   if (*version == 15 || *version == 14) {
     ReplayResultOutboxSchemaState resultOutboxState{};
     IrOutboxSchemaState irOutboxState{};
@@ -2021,6 +2069,177 @@ bool equivalentReplayDatabasePaths(const std::filesystem::path &first,
          normalizedReplayDatabasePath(second);
 }
 
+class ReplayMigrationTemporaryFile {
+public:
+  explicit ReplayMigrationTemporaryFile(std::filesystem::path path)
+      : path_(std::move(path)) {}
+
+  ~ReplayMigrationTemporaryFile() {
+    for (const std::string_view suffix : {
+             std::string_view(""), std::string_view("-journal"),
+             std::string_view("-wal"), std::string_view("-shm")}) {
+      std::error_code ignored;
+      std::filesystem::remove(
+          std::filesystem::path(path_.string() + std::string(suffix)),
+          ignored);
+    }
+  }
+
+  [[nodiscard]] const std::filesystem::path &path() const noexcept {
+    return path_;
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+std::optional<std::filesystem::path>
+replayMigrationTemporaryPath(const std::filesystem::path &databasePath) {
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    std::filesystem::path filename = databasePath.filename();
+    filename += ".migration-" + uuid::generateV4() + ".tmp";
+    const auto candidate = databasePath.parent_path() / filename;
+    std::error_code error;
+    const bool exists = std::filesystem::exists(candidate, error);
+    if (!error && !exists) {
+      return candidate;
+    }
+  }
+  return std::nullopt;
+}
+
+bool hasReplayUserSchema(sqlite3 *database, bool &hasSchema) {
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1",
+          statement) != SQLITE_OK) {
+    return false;
+  }
+  const int rc = sqlite3_step(statement.get());
+  hasSchema = rc == SQLITE_ROW;
+  return rc == SQLITE_ROW || rc == SQLITE_DONE;
+}
+
+bool copyReplayDatabase(sqlite3 *destination, sqlite3 *source,
+                        bool interruptAfterFirstPage,
+                        std::string_view context) {
+  sqlite3_backup *backup =
+      sqlite3_backup_init(destination, "main", source, "main");
+  if (backup == nullptr) {
+    logSqlError(std::string(context).c_str(), destination);
+    return false;
+  }
+
+  if (interruptAfterFirstPage) {
+    (void)sqlite3_backup_step(backup, 1);
+    (void)sqlite3_backup_finish(backup);
+    SDL_Log("Replay database migration fault injected while %s",
+            std::string(context).c_str());
+    return false;
+  }
+
+  int rc = SQLITE_OK;
+  int retries = 0;
+  do {
+    rc = sqlite3_backup_step(backup, 128);
+    if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
+      if (++retries > 100) {
+        break;
+      }
+      sqlite3_sleep(10);
+    }
+  } while (rc == SQLITE_OK || rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
+  const int finishRc = sqlite3_backup_finish(backup);
+  if (rc != SQLITE_DONE || finishRc != SQLITE_OK) {
+    SDL_Log("Replay database migration failed while %s: %s",
+            std::string(context).c_str(), sqlite3_errmsg(destination));
+    return false;
+  }
+  return true;
+}
+
+bool replayDatabaseIntegrityIsValid(sqlite3 *database) {
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, "PRAGMA integrity_check", statement) !=
+          SQLITE_OK ||
+      sqlite3_step(statement.get()) != SQLITE_ROW ||
+      sqliteColumnTextView(statement.get(), 0) != "ok" ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("validating compact replay database", database);
+    return false;
+  }
+  return true;
+}
+
+bool prepareReplayDatabaseWithCompaction(
+    sqlite3 *database, const std::filesystem::path &databasePath) {
+  const auto temporaryPath = replayMigrationTemporaryPath(databasePath);
+  if (!temporaryPath) {
+    SDL_Log("Could not reserve a replay migration staging path");
+    return false;
+  }
+  ReplayMigrationTemporaryFile temporary(*temporaryPath);
+
+  sqlite3 *rawStaged = nullptr;
+  const std::string stagedPath = fspath_to_utf8(temporary.path());
+  const int openRc = sqlite3_open_v2(
+      stagedPath.c_str(), &rawStaged,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_PRIVATECACHE,
+      nullptr);
+  SqliteConnectionHandle staged(rawStaged);
+  if (openRc != SQLITE_OK || !staged) {
+    SDL_Log("Could not open compact replay migration staging database: %s",
+            rawStaged != nullptr ? sqlite3_errmsg(rawStaged)
+                                 : "SQLite open failed");
+    return false;
+  }
+  sqlite3_busy_timeout(staged.get(), 1000);
+
+  if (pathMigrationFault(StagedMigrationFault::SnapshotCopy) ||
+      !copyReplayDatabase(staged.get(), database, false,
+                          "copying the original into migration staging")) {
+    return false;
+  }
+  int foreignKeysEnabled = 0;
+  if (sqlite3_db_config(staged.get(), SQLITE_DBCONFIG_ENABLE_FKEY, 1,
+                        &foreignKeysEnabled) != SQLITE_OK ||
+      foreignKeysEnabled != 1 ||
+      !replay_repository_detail::CreateReplayTablesOnConnection(
+          staged.get()) ||
+      pathMigrationFault(StagedMigrationFault::SchemaMigration)) {
+    SDL_Log("Replay database staging schema migration failed");
+    return false;
+  }
+  if (!execSql(staged.get(), "VACUUM",
+               "compacting staged replay database") ||
+      pathMigrationFault(StagedMigrationFault::Compaction) ||
+      !replay_repository_detail::CreateReplayTablesOnConnection(
+          staged.get()) ||
+      !replayDatabaseIntegrityIsValid(staged.get())) {
+    return false;
+  }
+
+  const bool interruptInstall =
+      pathMigrationFault(StagedMigrationFault::Installation);
+  if (!copyReplayDatabase(database, staged.get(), interruptInstall,
+                          "installing the compact replay database")) {
+    return false;
+  }
+
+  int logFrames = 0;
+  int checkpointedFrames = 0;
+  const int checkpointRc = sqlite3_wal_checkpoint_v2(
+      database, "main", SQLITE_CHECKPOINT_TRUNCATE, &logFrames,
+      &checkpointedFrames);
+  if (checkpointRc != SQLITE_OK) {
+    SDL_Log("Compact replay migration committed but WAL truncation is "
+            "pending: %s",
+            sqlite3_errmsg(database));
+  }
+  return true;
+}
+
 sqlite3 *openReplayDatabase(const std::filesystem::path &path,
                             std::string &errorMessage) {
   const std::filesystem::path directory = path.parent_path();
@@ -2255,6 +2474,29 @@ bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
   return true;
 }
 
+bool replay_repository_detail::PrepareReplayDatabaseOnConnection(
+    sqlite3 *database, const std::filesystem::path &path) {
+  if (database == nullptr || rejectFutureReplayDatabase(database)) {
+    return false;
+  }
+  std::string versionError;
+  const auto version = readSqliteUserVersion(database, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading replay schema preparation version", versionError);
+    return false;
+  }
+  bool hasSchema = false;
+  if (!hasReplayUserSchema(database, hasSchema)) {
+    logSqlError("inspecting replay schema before migration", database);
+    return false;
+  }
+  if (*version >= kReplayDatabaseSchemaVersion ||
+      (*version == 0 && !hasSchema)) {
+    return CreateReplayTablesOnConnection(database);
+  }
+  return prepareReplayDatabaseWithCompaction(database, path);
+}
+
 sqlite3 *
 replay_repository_detail::OpenDatabase(const std::filesystem::path &path,
                                        std::string &errorMessage) {
@@ -2278,5 +2520,9 @@ bool replay_repository_detail::MigrateSchema(sqlite3 *database) {
 #ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
 bool replay_repository_test::RunSchemaMigration(sqlite3 *database) {
   return replay_repository_detail::CreateReplayTablesOnConnection(database);
+}
+
+void replay_repository_test::SetPathMigrationFault(PathMigrationFault fault) {
+  gPathMigrationFault = fault;
 }
 #endif

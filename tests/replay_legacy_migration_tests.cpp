@@ -392,7 +392,7 @@ void testHeaderOnlyCutover() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
 
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
@@ -440,7 +440,7 @@ void testSchema10LegacySummaryBoundaryIsHeaderOnly() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
   assert(queryInt(database.get(),
                   "SELECT final_score FROM legacy_chart_result_summaries "
                   "WHERE legacy_replay_id=11") == 1111);
@@ -460,7 +460,7 @@ void testVersion10MigrationPreservesLegacyReceiptOwnership() {
   createVersion10ReceiptFixture(path);
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
   assert(queryInt(database.get(),
                   "SELECT replay_id FROM ir_submission_receipts WHERE id=77") ==
          11);
@@ -480,7 +480,7 @@ void testFreshSchemaHasNoRawReplayTables() {
   assert(repository.EnsureSchema());
   repository.Shutdown();
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
   assert(tableExists(database.get(), "legacy_chart_result_summaries"));
   assert(tableExists(database.get(), "legacy_course_result_summaries"));
   assert(!tableExists(database.get(), "replays"));
@@ -495,7 +495,7 @@ void testDurableReceiptsAndOutboxWorkSurvive() {
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
 
-  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
   assert(queryInt(database.get(),
@@ -545,7 +545,7 @@ void testMalformedProvenanceDoesNotBlockHeaderMigration() {
            std::string(malformedProvenance) + "' WHERE id=21");
 
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
   assert(queryText(database.get(),
                    "SELECT chart_title FROM legacy_chart_result_summaries "
                    "WHERE legacy_replay_id=12") == "Ready");
@@ -711,7 +711,7 @@ void testVersion15OwnershipMigrationPreservesPathOnlyReservations() {
          !reservations.reservations.front().ownedFile);
   repository.Shutdown();
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
   assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
 }
 
@@ -744,7 +744,7 @@ void testVersion14CourseScoreOutboxMigrationRollsBackAtomically() {
     assert(!tableExists(database.get(),
                         "modern_pending_course_score_writes"));
     assert(replay_repository_test::RunSchemaMigration(database.get()));
-    assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 17);
     assert(tableExists(database.get(),
                        "modern_pending_course_score_writes"));
   }
@@ -907,8 +907,134 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
     removeMigrationProbe(database.get());
   }
   auto database = openDatabase(successPath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
   assert(!tableExists(database.get(), "replays"));
+}
+
+std::uintmax_t databaseFamilySize(const std::filesystem::path &path) {
+  std::uintmax_t total = 0;
+  for (const std::string_view suffix : {std::string_view(""),
+                                        std::string_view("-wal"),
+                                        std::string_view("-shm")}) {
+    const auto member =
+        std::filesystem::path(path.string() + std::string(suffix));
+    std::error_code error;
+    if (std::filesystem::exists(member, error)) {
+      assert(!error);
+      total += std::filesystem::file_size(member, error);
+      assert(!error);
+    } else {
+      assert(!error);
+    }
+  }
+  return total;
+}
+
+void testPathMigrationReclaimsDroppedReplayDetailPages() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "large-legacy.db";
+  createVersion13Fixture(path);
+  {
+    auto database = openDatabase(path);
+    exec(database.get(),
+         "WITH RECURSIVE rows(value) AS (VALUES(1) UNION ALL SELECT value+1 "
+         "FROM rows WHERE value<1536) INSERT INTO replay_events(id,replay_id) "
+         "SELECT value+100,zeroblob(4096) FROM rows");
+    exec(database.get(), "PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+  const auto before = databaseFamilySize(path);
+  assert(before > 4U * 1024U * 1024U);
+
+  ReplayRepository repository(path);
+  assert(repository.EnsureSchema());
+  repository.Shutdown();
+
+  const auto after = databaseFamilySize(path);
+  auto database = openDatabase(path);
+  assert(queryInt(database.get(), "PRAGMA freelist_count") == 0);
+  assert(after < before / 2U);
+  assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
+  assert(!tableExists(database.get(), "replay_events"));
+}
+
+void testVersion16CompactionMarkerReclaimsAlreadyDroppedPages() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "released-version-16.db";
+  createVersion13Fixture(path);
+  {
+    auto database = openDatabase(path);
+    exec(database.get(),
+         "WITH RECURSIVE rows(value) AS (VALUES(1) UNION ALL SELECT value+1 "
+         "FROM rows WHERE value<1536) INSERT INTO replay_events(id,replay_id) "
+         "SELECT value+100,zeroblob(4096) FROM rows");
+    assert(replay_repository_test::RunSchemaMigration(database.get()));
+    exec(database.get(), "PRAGMA user_version=16");
+    exec(database.get(), "PRAGMA wal_checkpoint(TRUNCATE)");
+    assert(queryInt(database.get(), "PRAGMA freelist_count") > 1000);
+  }
+  const auto before = databaseFamilySize(path);
+
+  ReplayRepository repository(path);
+  assert(repository.EnsureSchema());
+  repository.Shutdown();
+
+  const auto after = databaseFamilySize(path);
+  auto database = openDatabase(path);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA freelist_count") == 0);
+  assert(after < before / 2U);
+  assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
+}
+
+void testPathMigrationFaultsPreserveOriginalDatabase() {
+  TemporaryDirectory temporary;
+  const auto pristinePath = temporary.path / "path-pristine.db";
+  createVersion13Fixture(pristinePath);
+  {
+    auto database = openDatabase(pristinePath);
+    exec(database.get(), "PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+  const std::string pristineBytes = readFile(pristinePath);
+  const std::array faults{
+      replay_repository_test::PathMigrationFault::SnapshotCopy,
+      replay_repository_test::PathMigrationFault::SchemaMigration,
+      replay_repository_test::PathMigrationFault::Compaction,
+      replay_repository_test::PathMigrationFault::Installation,
+  };
+
+  for (std::size_t index = 0; index < faults.size(); ++index) {
+    const auto path = temporary.path /
+                      ("path-fault-" + std::to_string(index) + ".db");
+    assert(std::filesystem::copy_file(pristinePath, path));
+    replay_repository_test::SetPathMigrationFault(faults[index]);
+    {
+      ReplayRepository repository(path);
+      assert(!repository.EnsureSchema());
+    }
+    replay_repository_test::SetPathMigrationFault(
+        replay_repository_test::PathMigrationFault::None);
+
+    assert(readFile(path) == pristineBytes);
+    const auto walPath = std::filesystem::path(path.string() + "-wal");
+    std::error_code walError;
+    if (std::filesystem::exists(walPath, walError)) {
+      assert(!walError);
+      assert(std::filesystem::file_size(walPath, walError) == 0);
+      assert(!walError);
+    } else {
+      assert(!walError);
+    }
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 13);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM replays") == 2);
+    assert(!tableExists(database.get(), "legacy_chart_result_summaries"));
+    assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
+    for (const auto &entry : std::filesystem::directory_iterator(
+             temporary.path)) {
+      assert(entry.path().filename().string().find(".migration-") ==
+             std::string::npos);
+    }
+  }
 }
 
 enum class OwnershipMigrationPhase : std::uint8_t {
@@ -1051,7 +1177,7 @@ void testVersion15OwnershipMigrationRollbackFaultMatrix() {
 } // namespace
 
 int main() {
-  static_assert(ReplayRepository::kCurrentSchemaVersion == 16);
+  static_assert(ReplayRepository::kCurrentSchemaVersion == 17);
   testHeaderOnlyCutover();
   testSchema10LegacySummaryBoundaryIsHeaderOnly();
   testVersion10MigrationPreservesLegacyReceiptOwnership();
@@ -1062,6 +1188,9 @@ int main() {
   testVersion14CourseScoreOutboxMigrationRollsBackAtomically();
   testVersion15OwnershipMigrationPreservesPathOnlyReservations();
   testRollbackFaultMatrixPreservesOriginalDatabase();
+  testPathMigrationReclaimsDroppedReplayDetailPages();
+  testVersion16CompactionMarkerReclaimsAlreadyDroppedPages();
+  testPathMigrationFaultsPreserveOriginalDatabase();
   testVersion15OwnershipMigrationRollbackFaultMatrix();
   std::cout << "legacy replay migration tests passed\n";
   return 0;
