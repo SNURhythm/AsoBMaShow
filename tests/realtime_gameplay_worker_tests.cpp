@@ -1,6 +1,8 @@
 #include "scene/play/RealtimeGameplayWorker.h"
 
 #include "bms_parser.hpp"
+#include "input/LogicalGameplayInputAdapter.h"
+#include "scene/play/RealtimeGameplayInputBridge.h"
 #include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/Judge.h"
 
@@ -455,6 +457,131 @@ void testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges() {
                                        .pressed = false},
           "opposite scratch owners produce canonical same-time replay-only "
           "handoffs");
+}
+
+class LegacyBridgeControl final : public IRhythmControl {
+public:
+  explicit LegacyBridgeControl(
+      gameplay::RealtimeGameplayInputBridge &bridge) noexcept
+      : bridge_(bridge) {}
+
+  bms_parser::Note *pressLane(int mainLane, int compensateLane,
+                              double inputDelay) override {
+    prepared_ = bridge_.prepare(
+                    gameplay::RealtimeGameplayInputType::Press, mainLane,
+                    compensateLane, false, nextTimestamp(),
+                    static_cast<std::int64_t>(inputDelay * 1'000'000.0)) &&
+                prepared_;
+    return nullptr;
+  }
+
+  bms_parser::Note *pressLane(int lane, double inputDelay) override {
+    return pressLane(lane, lane, inputDelay);
+  }
+
+  bms_parser::Note *releaseLane(int lane, double inputDelay,
+                                bool backSpin) override {
+    prepared_ = bridge_.prepare(
+                    gameplay::RealtimeGameplayInputType::Release, lane, lane,
+                    backSpin, nextTimestamp(),
+                    static_cast<std::int64_t>(inputDelay * 1'000'000.0)) &&
+                prepared_;
+    return nullptr;
+  }
+
+  [[nodiscard]] std::int64_t nextTimestamp() noexcept {
+    const auto result = timestamp_;
+    timestamp_ += 1'000;
+    return result;
+  }
+
+  [[nodiscard]] bool prepared() const noexcept { return prepared_; }
+
+private:
+  gameplay::RealtimeGameplayInputBridge &bridge_;
+  std::int64_t timestamp_ = 1'000'000;
+  bool prepared_ = true;
+};
+
+void testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
+                                           makeConfig(clock, audio));
+  gameplay::RealtimeGameplayInputBridge bridge(
+      7, 7,
+      {.context = &worker,
+       .emit = [](void *context,
+                  const gameplay::RealtimeGameplayInput &input) {
+         return static_cast<gameplay::RealtimeGameplayWorker *>(context)
+             ->enqueueInput(input);
+       }});
+  LegacyBridgeControl control(bridge);
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &applied) {
+        require(bridge.emitApplied(applied.control, applied.pressed,
+                                   applied.replayOnly,
+                                   control.nextTimestamp()),
+                "legacy adapter callback reaches the realtime bridge");
+      });
+  require(worker.start(), "legacy adapter replay worker starts");
+
+  const auto digitalDown = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Lane, .lane = 7},
+      .pressed = true,
+      .value = 1.0F};
+  const auto digitalUp = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Lane, .lane = 7},
+      .pressed = false,
+      .value = 0.0F};
+  const auto counterClockwiseDown = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind =
+                     input::LogicalActionKind::ScratchCounterClockwise},
+      .pressed = true,
+      .value = 1.0F};
+  const auto counterClockwiseUp = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind =
+                     input::LogicalActionKind::ScratchCounterClockwise},
+      .pressed = false,
+      .value = 0.0F};
+
+  adapter.apply(std::span(&digitalDown, 1));
+  adapter.apply(std::span(&counterClockwiseDown, 1));
+  adapter.apply(std::span(&counterClockwiseUp, 1));
+  adapter.apply(std::span(&digitalUp, 1));
+  require(control.prepared(),
+          "every legacy physical edge is staged for its applied callback");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && !snapshot->lanePressed[7] &&
+                   snapshot->transactionSequence >= 2;
+          }),
+          "legacy adapter input drains through the realtime worker");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() && replayInput->size() == 6,
+          "legacy adapter produces a balanced directional scratch stream");
+  replay::ReplayPlaybackData playback;
+  playback.setup.chart.md5 = std::string(32, 'b');
+  playback.setup.chart.sha256 = std::string(64, 'a');
+  playback.setup.chart.keyMode = 7;
+  playback.setup.longNoteMode = 1;
+  playback.input = *replayInput;
+  const auto validation = replay::validateReplayPlayback(
+      playback, replay::ReplaySetupSource::LocalCapture,
+      {.completionSongTimeMicros = 5'000'000});
+  require(validation.valid(),
+          "adapter scratch ownership handoffs satisfy replay validation");
+  require((*replayInput)[1].songTimeMicros ==
+              (*replayInput)[2].songTimeMicros &&
+              (*replayInput)[3].songTimeMicros ==
+                  (*replayInput)[4].songTimeMicros,
+          "each replay-only release and opposite press shares one timestamp");
 }
 
 void testReplayCaptureOverflowDoesNotInvalidateGameplay() {
@@ -1036,6 +1163,7 @@ int main() {
   testRealtimeIngressCoalescesTouchAndHardwareLaneOwnership();
   testRealtimeIngressCoalescesTouchAndHardwareScratchOwnership();
   testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges();
+  testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction();
   testReplayCaptureOverflowDoesNotInvalidateGameplay();
   testInputDelayCompensationPrecedesWorkerAutomaticDeadline();
   testInputPreadvancePublishesAutomaticTransactions();

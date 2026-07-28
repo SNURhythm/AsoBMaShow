@@ -18,6 +18,12 @@ enum class LogicalControlKind : std::uint8_t {
   Select,
 };
 
+[[nodiscard]] inline constexpr bool
+isDirectionalScratchControl(LogicalControlKind kind) noexcept {
+  return kind == LogicalControlKind::ScratchClockwise ||
+         kind == LogicalControlKind::ScratchCounterClockwise;
+}
+
 struct LogicalControl {
   LogicalControlKind kind = LogicalControlKind::Lane;
   int player = 1;
@@ -41,8 +47,7 @@ logicalControlForChartLane(
   if (scratch) {
     const int expectedScratch = player == 2 ? 15 : 7;
     if (!layout->hasDirectionalScratch || chartLane != expectedScratch ||
-        (scratchKind != LogicalControlKind::ScratchClockwise &&
-         scratchKind != LogicalControlKind::ScratchCounterClockwise)) {
+        !isDirectionalScratchControl(scratchKind)) {
       return std::nullopt;
     }
     return LogicalControl{.kind = scratchKind,
@@ -64,8 +69,7 @@ physicalChartLaneForLogicalControl(int keyMode,
   if (!layout || control.player < 1 || control.player > layout->players) {
     return std::nullopt;
   }
-  if (control.kind == LogicalControlKind::ScratchClockwise ||
-      control.kind == LogicalControlKind::ScratchCounterClockwise) {
+  if (isDirectionalScratchControl(control.kind)) {
     if (!layout->hasDirectionalScratch || control.lane != -1) {
       return std::nullopt;
     }

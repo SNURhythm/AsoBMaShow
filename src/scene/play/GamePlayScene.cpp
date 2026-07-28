@@ -23,6 +23,7 @@
 #include "GameplayNoteJudgeRole.h"
 #include "RealtimeGameplayAuthorityPolicy.h"
 #include "RhythmLaneInputController.h"
+#include "RealtimeGameplayInputBridge.h"
 #include "RealtimeGameplayWorker.h"
 #include "ReplayKeysoundSchedule.h"
 #include "RealtimeTouchInputRouter.h"
@@ -45,11 +46,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <deque>
 #include <iomanip>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <new>
 #include <optional>
 #include <sstream>
@@ -596,7 +595,6 @@ struct GamePlayScene::RealtimeGameplaySession {
   GamePlayScene *scene = nullptr;
   AudioWrapper *audio = nullptr;
   long long audioOffsetMicros = 0;
-  int keyMode = 7;
   std::uint64_t epoch = 0;
   std::atomic_bool acceptingTouch{false};
   std::atomic_bool acceptingNativeInput{false};
@@ -604,10 +602,9 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::vector<std::optional<audio::RealtimeSoundHandle>> soundHandles;
   std::vector<bms_parser::Note *> notes;
   std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
+  std::unique_ptr<gameplay::RealtimeGameplayInputBridge> legacyInputBridge;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
   std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
-  std::mutex legacyInputMutex;
-  std::deque<gameplay::RealtimeGameplayInput> pendingLegacyInputs;
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::unique_ptr<NativeCallbackLifetime> touchCallbackLifetime;
 #endif
@@ -759,57 +756,25 @@ struct GamePlayScene::RealtimeGameplaySession {
     return session.worker->enqueueInput(owned);
   }
 
+  static bool emitLegacyInput(void *context,
+                              const gameplay::RealtimeGameplayInput &input) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    return session.worker != nullptr && session.worker->enqueueInput(input);
+  }
+
   bool prepareLegacyInput(gameplay::RealtimeGameplayInputType type, int lane,
                           int compensateLane, bool backSpin,
                           std::int64_t inputDelayMicros) {
-    const std::lock_guard lock(legacyInputMutex);
-    pendingLegacyInputs.push_back(
-        {.epoch = epoch,
-         .type = type,
-         .source = gameplay::RealtimeGameplayInputSource::LegacyAdapter,
-         .lane = lane,
-         .compensateLane = compensateLane,
-         .backSpin = backSpin,
-         .steadyTimestampMicros = nowMicros(),
-         .inputDelayMicros = inputDelayMicros});
-    return true;
+    return legacyInputBridge != nullptr &&
+           legacyInputBridge->prepare(type, lane, compensateLane, backSpin,
+                                      nowMicros(), inputDelayMicros);
   }
 
   bool emitLegacyApplied(replay::LogicalControl control, bool pressed,
                          bool replayOnly) {
-    if (worker == nullptr) {
-      return false;
-    }
-    const auto controlLane = replay::physicalChartLaneForLogicalControl(
-        keyMode, control);
-    gameplay::RealtimeGameplayInput input{
-        .epoch = epoch,
-        .type = pressed ? gameplay::RealtimeGameplayInputType::Press
-                        : gameplay::RealtimeGameplayInputType::Release,
-        .source = gameplay::RealtimeGameplayInputSource::LegacyAdapter,
-        .lane = controlLane.value_or(-1),
-        .compensateLane = controlLane.value_or(-1),
-        .steadyTimestampMicros = nowMicros(),
-        .hasReplayControl = true,
-        .replayControl = control,
-        .replayOnly = true,
-    };
-    if (!replayOnly && controlLane.has_value()) {
-      const std::lock_guard lock(legacyInputMutex);
-      const auto pending = std::ranges::find_if(
-          pendingLegacyInputs, [&](const auto &candidate) {
-            return candidate.lane == *controlLane &&
-                   candidate.type == input.type;
-          });
-      if (pending != pendingLegacyInputs.end()) {
-        input = *pending;
-        pendingLegacyInputs.erase(pending);
-        input.hasReplayControl = true;
-        input.replayControl = control;
-        input.replayOnly = false;
-      }
-    }
-    return worker->enqueueInput(input);
+    return legacyInputBridge != nullptr &&
+           legacyInputBridge->emitApplied(control, pressed, replayOnly,
+                                          nowMicros());
   }
 
   static bool scratchLongNoteHeld(void *context, int lane) {
@@ -1087,7 +1052,6 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   session->audio = &context.jukebox.audioRuntime();
   session->inputRegistry = &context.inputDeviceRegistry;
   session->audioOffsetMicros = getAudioOffsetMicros();
-  session->keyMode = chart->Meta.KeyMode;
   session->epoch = ++realtimeGameplayEpoch;
   session->notes = buildRealtimeGameplayNoteLookup(*chart);
   if (session->notes.size() != definition.noteCount()) {
@@ -1147,6 +1111,12 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   };
   session->worker = std::make_unique<gameplay::RealtimeGameplayWorker>(
       std::move(definition), std::move(workerConfig));
+  session->legacyInputBridge =
+      std::make_unique<gameplay::RealtimeGameplayInputBridge>(
+          session->epoch, chart->Meta.KeyMode,
+          gameplay::RealtimeGameplayInputBridgeSink{
+              .context = session.get(),
+              .emit = &RealtimeGameplaySession::emitLegacyInput});
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (touchLayout.has_value()) {
     session->touchRouter = std::make_unique<gameplay::RealtimeTouchInputRouter>(

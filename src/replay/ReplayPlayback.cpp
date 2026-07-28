@@ -13,11 +13,6 @@ ReplayPlaybackValidation invalid(ReplayPlaybackIssue issue) noexcept {
   return {.issue = issue};
 }
 
-bool scratchKind(LogicalControlKind kind) noexcept {
-  return kind == LogicalControlKind::ScratchClockwise ||
-         kind == LogicalControlKind::ScratchCounterClockwise;
-}
-
 bool validControl(const LogicalControl &control, int keyMode) noexcept {
   const auto layout = replayKeyModeLayout(keyMode);
   if (!layout || control.player < 1 || control.player > layout->players) {
@@ -97,7 +92,7 @@ ReplayPlaybackIssue validateInput(std::span<const InputTransition> input,
 
     const int player = transition.control.player;
     if (transition.replayOnly) {
-      if (!scratchKind(transition.control.kind)) {
+      if (!isDirectionalScratchControl(transition.control.kind)) {
         return ReplayPlaybackIssue::ScratchHandoff;
       }
       auto &active = activeScratch[static_cast<std::size_t>(player)];
@@ -121,7 +116,7 @@ ReplayPlaybackIssue validateInput(std::span<const InputTransition> input,
       continue;
     }
 
-    if (scratchKind(transition.control.kind)) {
+    if (isDirectionalScratchControl(transition.control.kind)) {
       auto &active = activeScratch[static_cast<std::size_t>(player)];
       if (pending[static_cast<std::size_t>(player)].active) {
         return ReplayPlaybackIssue::ScratchHandoff;

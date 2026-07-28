@@ -3079,6 +3079,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(realtime_gameplay_worker_tests
         tests/realtime_gameplay_worker_tests.cpp
         src/bms_parser.cpp
+        src/ScoreProvenance.cpp
+        src/input/InputBindingResolver.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputNormalizer.cpp
+        src/input/LogicalGameplayInputAdapter.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -3087,7 +3092,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
+        src/scene/play/RealtimeGameplayInputBridge.cpp
         src/scene/play/RealtimeGameplayWorker.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
     )
     target_include_directories(realtime_gameplay_worker_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -3096,6 +3104,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(realtime_gameplay_worker_tests PRIVATE
         BX_CONFIG_DEBUG=1
     )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2)
+    endif()
     if(WIN32)
         target_link_libraries(realtime_gameplay_worker_tests PRIVATE avrt)
     endif()

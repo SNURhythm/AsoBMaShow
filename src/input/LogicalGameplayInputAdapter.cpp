@@ -15,10 +15,6 @@ bool isValidGameplayLane(int lane) {
   return lane >= kMinimumGameplayLane && lane <= kMaximumGameplayLane;
 }
 
-bool isScratchControl(const replay::LogicalControl &control) {
-  return control.kind == replay::LogicalControlKind::ScratchClockwise ||
-         control.kind == replay::LogicalControlKind::ScratchCounterClockwise;
-}
 } // namespace
 
 std::vector<input::InputScope> makeGameplayInputScopes(int keyMode) {
@@ -207,7 +203,8 @@ void LogicalGameplayInputAdapter::applyLane(
   }
   const bool wasHeld = isLaneHeld(lane);
   const replay::LogicalControl logicalControl = replayLaneControl(transition);
-  const bool digitalScratch = isScratchControl(logicalControl);
+  const bool digitalScratch =
+      replay::isDirectionalScratchControl(logicalControl.kind);
   const LaneOwner owner{.scope = transition.scope, .kind = ownerKind};
   if (transition.pressed) {
     const bool inserted = heldLaneOwners_[lane].insert(owner).second;
@@ -378,8 +375,9 @@ void LogicalGameplayInputAdapter::synchronizeScratchReplayControl(
 void LogicalGameplayInputAdapter::notifyApplied(
     const input::LogicalInputTransition &source,
     replay::LogicalControl control, bool pressed) {
-  const int lane = isScratchControl(control) ? scratchLane(source.scope)
-                                             : source.action.lane;
+  const int lane = replay::isDirectionalScratchControl(control.kind)
+                       ? scratchLane(source.scope)
+                       : source.action.lane;
   const auto pending = pendingPhysicalEdges_.find(lane);
   const bool replayOnly = pending == pendingPhysicalEdges_.end();
   if (!replayOnly && --pending->second == 0) {
