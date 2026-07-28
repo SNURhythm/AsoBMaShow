@@ -392,7 +392,7 @@ void testHeaderOnlyCutover() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
 
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
@@ -440,7 +440,7 @@ void testSchema10LegacySummaryBoundaryIsHeaderOnly() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
   assert(queryInt(database.get(),
                   "SELECT final_score FROM legacy_chart_result_summaries "
                   "WHERE legacy_replay_id=11") == 1111);
@@ -460,7 +460,7 @@ void testVersion10MigrationPreservesLegacyReceiptOwnership() {
   createVersion10ReceiptFixture(path);
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
   assert(queryInt(database.get(),
                   "SELECT replay_id FROM ir_submission_receipts WHERE id=77") ==
          11);
@@ -480,7 +480,7 @@ void testFreshSchemaHasNoRawReplayTables() {
   assert(repository.EnsureSchema());
   repository.Shutdown();
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
   assert(tableExists(database.get(), "legacy_chart_result_summaries"));
   assert(tableExists(database.get(), "legacy_course_result_summaries"));
   assert(!tableExists(database.get(), "replays"));
@@ -495,7 +495,7 @@ void testDurableReceiptsAndOutboxWorkSurvive() {
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
 
-  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
   assert(queryInt(database.get(),
@@ -545,7 +545,7 @@ void testMalformedProvenanceDoesNotBlockHeaderMigration() {
            std::string(malformedProvenance) + "' WHERE id=21");
 
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
   assert(queryText(database.get(),
                    "SELECT chart_title FROM legacy_chart_result_summaries "
                    "WHERE legacy_replay_id=12") == "Ready");
@@ -623,6 +623,98 @@ snapshotDatabaseFamily(const std::filesystem::path &databasePath) {
   return snapshot;
 }
 
+void downgradeReplayOwnershipSchemaToVersion15(
+    const std::filesystem::path &path) {
+  auto database = openDatabase(path);
+  exec(database.get(), "PRAGMA foreign_keys=OFF");
+  exec(database.get(), "BEGIN IMMEDIATE");
+  exec(database.get(), "DROP INDEX idx_modern_replay_files_chart_result");
+  exec(database.get(), "DROP INDEX idx_modern_replay_files_course_result");
+  exec(database.get(),
+       "DROP INDEX idx_modern_replay_reservations_stem_index");
+  exec(database.get(),
+       "ALTER TABLE modern_replay_files RENAME TO modern_replay_files_v16");
+  exec(database.get(),
+       "ALTER TABLE modern_replay_file_reservations RENAME TO "
+       "modern_replay_file_reservations_v16");
+  exec(database.get(),
+       "CREATE TABLE modern_replay_files("
+       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+       "modern_chart_result_id INTEGER UNIQUE,"
+       "modern_course_result_id INTEGER UNIQUE,stem TEXT NOT NULL,"
+       "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+       "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+       "codec_version INTEGER NOT NULL,user_deleted INTEGER NOT NULL DEFAULT "
+       "0,CHECK(history_index>=0),CHECK(user_deleted IN (0,1)),"
+       "CHECK((modern_chart_result_id IS NOT NULL) != "
+       "(modern_course_result_id IS NOT NULL)),"
+       "CHECK(length(content_sha256)=64 AND "
+       "content_sha256=lower(content_sha256) AND "
+       "content_sha256 NOT GLOB '*[^0-9a-f]*'),CHECK(compressed_size>0),"
+       "CHECK(codec_version=3),UNIQUE(stem,history_index),"
+       "FOREIGN KEY(modern_chart_result_id) REFERENCES "
+       "modern_chart_results(id) ON DELETE CASCADE,"
+       "FOREIGN KEY(modern_course_result_id) REFERENCES "
+       "modern_course_results(id) ON DELETE CASCADE)");
+  exec(database.get(),
+       "INSERT INTO modern_replay_files SELECT * FROM "
+       "modern_replay_files_v16");
+  exec(database.get(),
+       "CREATE TABLE modern_replay_file_reservations("
+       "attempt_id TEXT PRIMARY KEY NOT NULL,stem TEXT NOT NULL,"
+       "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+       "created_at_unix_ms INTEGER NOT NULL,CHECK(history_index>=0),"
+       "CHECK(created_at_unix_ms>0),UNIQUE(stem,history_index))");
+  exec(database.get(),
+       "INSERT INTO modern_replay_file_reservations("
+       "attempt_id,stem,history_index,relative_path,created_at_unix_ms) "
+       "SELECT attempt_id,stem,history_index,relative_path,"
+       "created_at_unix_ms FROM modern_replay_file_reservations_v16");
+  exec(database.get(), "DROP TABLE modern_replay_files_v16");
+  exec(database.get(),
+       "DROP TABLE modern_replay_file_reservations_v16");
+  exec(database.get(),
+       "CREATE INDEX idx_modern_replay_files_chart_result ON "
+       "modern_replay_files(modern_chart_result_id)");
+  exec(database.get(),
+       "CREATE INDEX idx_modern_replay_files_course_result ON "
+       "modern_replay_files(modern_course_result_id)");
+  exec(database.get(),
+       "CREATE INDEX idx_modern_replay_reservations_stem_index ON "
+       "modern_replay_file_reservations(stem,history_index)");
+  const std::string stem(64, 'a');
+  exec(database.get(),
+       "INSERT INTO modern_replay_file_reservations("
+       "attempt_id,stem,history_index,relative_path,created_at_unix_ms) "
+       "VALUES('123e4567-e89b-42d3-a456-426614174000','" +
+           stem + "',0,'replay/" + stem + ".brd',1700000000000)");
+  exec(database.get(), "PRAGMA user_version=15");
+  exec(database.get(), "COMMIT");
+  exec(database.get(), "PRAGMA foreign_keys=ON");
+}
+
+void testVersion15OwnershipMigrationPreservesPathOnlyReservations() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    repository.Shutdown();
+  }
+  downgradeReplayOwnershipSchemaToVersion15(path);
+
+  ReplayRepository repository(path);
+  assert(repository.EnsureSchema());
+  const auto reservations = repository.ListModernReplayPathReservations();
+  assert(reservations.status == ModernReplayFileInventoryStatus::Loaded &&
+         reservations.reservations.size() == 1 &&
+         !reservations.reservations.front().ownedFile);
+  repository.Shutdown();
+  auto database = openDatabase(path);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
+  assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
+}
+
 void testVersion14CourseScoreOutboxMigrationRollsBackAtomically() {
   TemporaryDirectory temporary;
   const auto path = temporary.path / "replay.db";
@@ -652,7 +744,7 @@ void testVersion14CourseScoreOutboxMigrationRollsBackAtomically() {
     assert(!tableExists(database.get(),
                         "modern_pending_course_score_writes"));
     assert(replay_repository_test::RunSchemaMigration(database.get()));
-    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 16);
     assert(tableExists(database.get(),
                        "modern_pending_course_score_writes"));
   }
@@ -815,14 +907,151 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
     removeMigrationProbe(database.get());
   }
   auto database = openDatabase(successPath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 16);
   assert(!tableExists(database.get(), "replays"));
+}
+
+enum class OwnershipMigrationPhase : std::uint8_t {
+  None,
+  DropIndex,
+  Rename,
+  Create,
+  Copy,
+  DropOld,
+  Reindex,
+  Version,
+};
+
+constexpr std::size_t ownershipPhaseIndex(OwnershipMigrationPhase phase) {
+  assert(phase != OwnershipMigrationPhase::None);
+  return static_cast<std::size_t>(phase) - 1;
+}
+
+struct OwnershipMigrationProbe {
+  int callbacks = 0;
+  int interruptAt = 0;
+  bool fired = false;
+  OwnershipMigrationPhase current = OwnershipMigrationPhase::None;
+  OwnershipMigrationPhase interrupted = OwnershipMigrationPhase::None;
+  std::array<int, 7> firstCallback{};
+};
+
+int traceOwnershipMigrationSql(unsigned mask, void *raw, void *statement,
+                               void *) {
+  if (mask != SQLITE_TRACE_STMT || statement == nullptr) {
+    return 0;
+  }
+  auto &probe = *static_cast<OwnershipMigrationProbe *>(raw);
+  const char *rawSql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
+  const std::string_view sql = rawSql != nullptr ? rawSql : "";
+  probe.current = OwnershipMigrationPhase::None;
+  if (sql.starts_with("DROP INDEX idx_modern_replay")) {
+    probe.current = OwnershipMigrationPhase::DropIndex;
+  } else if (sql.starts_with("ALTER TABLE modern_replay")) {
+    probe.current = OwnershipMigrationPhase::Rename;
+  } else if (sql.starts_with("CREATE TABLE modern_replay")) {
+    probe.current = OwnershipMigrationPhase::Create;
+  } else if (sql.starts_with("INSERT INTO modern_replay")) {
+    probe.current = OwnershipMigrationPhase::Copy;
+  } else if (sql.starts_with("DROP TABLE modern_replay")) {
+    probe.current = OwnershipMigrationPhase::DropOld;
+  } else if (sql.starts_with("CREATE INDEX idx_modern_replay")) {
+    probe.current = OwnershipMigrationPhase::Reindex;
+  } else if (sql.starts_with("PRAGMA user_version")) {
+    probe.current = OwnershipMigrationPhase::Version;
+  }
+  return 0;
+}
+
+int probeOwnershipMigrationProgress(void *raw) {
+  auto &probe = *static_cast<OwnershipMigrationProbe *>(raw);
+  ++probe.callbacks;
+  if (probe.current != OwnershipMigrationPhase::None) {
+    int &first = probe.firstCallback[ownershipPhaseIndex(probe.current)];
+    if (first == 0) {
+      first = probe.callbacks;
+    }
+  }
+  if (!probe.fired && probe.interruptAt > 0 &&
+      probe.callbacks >= probe.interruptAt) {
+    probe.fired = true;
+    probe.interrupted = probe.current;
+    return 1;
+  }
+  return 0;
+}
+
+void installOwnershipMigrationProbe(sqlite3 *database,
+                                    OwnershipMigrationProbe &probe) {
+  assert(sqlite3_trace_v2(database, SQLITE_TRACE_STMT,
+                          traceOwnershipMigrationSql, &probe) == SQLITE_OK);
+  sqlite3_progress_handler(database, 1, probeOwnershipMigrationProgress,
+                           &probe);
+}
+
+void testVersion15OwnershipMigrationRollbackFaultMatrix() {
+  TemporaryDirectory temporary;
+  const auto pristinePath = temporary.path / "ownership-pristine.db";
+  {
+    ReplayRepository repository(pristinePath);
+    assert(repository.EnsureSchema());
+    repository.Shutdown();
+  }
+  downgradeReplayOwnershipSchemaToVersion15(pristinePath);
+  const DatabaseFamilySnapshot pristine = snapshotDatabaseFamily(pristinePath);
+
+  const auto dryRunPath = temporary.path / "ownership-dry-run.db";
+  assert(std::filesystem::copy_file(pristinePath, dryRunPath));
+  OwnershipMigrationProbe dryRun;
+  {
+    auto database = openDatabase(dryRunPath);
+    installOwnershipMigrationProbe(database.get(), dryRun);
+    assert(replay_repository_test::RunSchemaMigration(database.get()));
+    removeMigrationProbe(database.get());
+  }
+  assert(std::ranges::all_of(dryRun.firstCallback,
+                             [](int callback) { return callback > 0; }));
+
+  std::vector<int> interruptionThresholds(dryRun.firstCallback.begin(),
+                                          dryRun.firstCallback.end());
+  std::ranges::sort(interruptionThresholds);
+  interruptionThresholds.erase(
+      std::unique(interruptionThresholds.begin(), interruptionThresholds.end()),
+      interruptionThresholds.end());
+  std::array<bool, 7> phasesExercised{};
+  for (std::size_t trial = 0; trial < interruptionThresholds.size(); ++trial) {
+    const auto trialPath = temporary.path /
+                           ("ownership-fault-" + std::to_string(trial) +
+                            ".db");
+    assert(std::filesystem::copy_file(pristinePath, trialPath));
+    OwnershipMigrationProbe probe{
+        .interruptAt = interruptionThresholds[trial]};
+    {
+      auto database = openDatabase(trialPath);
+      installOwnershipMigrationProbe(database.get(), probe);
+      assert(!replay_repository_test::RunSchemaMigration(database.get()));
+      assert(probe.fired);
+      removeMigrationProbe(database.get());
+    }
+    assert(probe.interrupted != OwnershipMigrationPhase::None);
+    phasesExercised[ownershipPhaseIndex(probe.interrupted)] = true;
+    assert(snapshotDatabaseFamily(trialPath) == pristine);
+
+    auto database = openDatabase(trialPath);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+    assert(queryInt(database.get(),
+                    "SELECT COUNT(*) FROM pragma_table_info("
+                    "'modern_replay_file_reservations') WHERE name LIKE "
+                    "'owned_%'") == 0);
+  }
+  assert(std::ranges::all_of(phasesExercised,
+                             [](bool exercised) { return exercised; }));
 }
 
 } // namespace
 
 int main() {
-  static_assert(ReplayRepository::kCurrentSchemaVersion == 15);
+  static_assert(ReplayRepository::kCurrentSchemaVersion == 16);
   testHeaderOnlyCutover();
   testSchema10LegacySummaryBoundaryIsHeaderOnly();
   testVersion10MigrationPreservesLegacyReceiptOwnership();
@@ -831,7 +1060,9 @@ int main() {
   testMalformedProvenanceDoesNotBlockHeaderMigration();
   testCurrentSchemaRejectsSummaryShapeDrift();
   testVersion14CourseScoreOutboxMigrationRollsBackAtomically();
+  testVersion15OwnershipMigrationPreservesPathOnlyReservations();
   testRollbackFaultMatrixPreservesOriginalDatabase();
+  testVersion15OwnershipMigrationRollbackFaultMatrix();
   std::cout << "legacy replay migration tests passed\n";
   return 0;
 }

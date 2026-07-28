@@ -317,6 +317,16 @@ struct Harness {
                    }
                    return outcome;
                  },
+             .recordInstalledOwnership =
+                 [this](const ModernReplayPathReservation &reservation,
+                        const ReplayFileOwnershipReceipt &receipt) {
+                   events.emplace_back("record-ownership");
+                   auto owned = reservation;
+                   owned.ownedFile = receipt.metadata;
+                   return ModernReplayOwnershipRecordOutcome{
+                       .status = ModernReplayOwnershipRecordStatus::Recorded,
+                       .reservation = std::move(owned)};
+                 },
              .inspectFile =
                  [this](const ReplayFileMetadata &) {
                    events.emplace_back("inspect");
@@ -347,7 +357,8 @@ void testReplayBackedSummaryOnlyAndExactRetry() {
              saved.saved() && saved.replayAttached && saved.receipt &&
              harness.events == std::vector<std::string>(
                                    {"load-result", "reserve-path", "encode",
-                                    "reserve-file", "install", "stage-file"}),
+                                    "reserve-file", "install",
+                                    "record-ownership", "stage-file"}),
          "course persistence associates one BRD with its strict result");
 
   Harness replayless;

@@ -40,7 +40,14 @@ replay::ModernReplayReservationReconciliationEntry reservation(
                         .historyIndex = 0,
                         .relativePath = std::filesystem::path("replay") /
                                         (stem + ".brd")},
-           .createdAtUnixMillis = 1'700'000'000'000LL + id},
+           .createdAtUnixMillis = 1'700'000'000'000LL + id,
+           .ownedFile =
+               replay::ReplayFileMetadata{
+                   .relativePath = std::filesystem::path("replay") /
+                                   (stem + ".brd"),
+                   .sha256 = std::string(64, 'f'),
+                   .compressedSize = 10,
+                   .codecVersion = 3}},
       .commitState = state,
   };
 }
@@ -129,11 +136,11 @@ void testStaleReservationsRemoveOnlyUncommittedReplayPaths() {
             .status = ModernReplayFileInventoryStatus::Loaded,
             .entries = {unassociated, resultOnly, attached, failed}};
       },
-      .removeReservedEntry =
-          [&](const replay::ReplayPathIdentity &identity,
+      .removeOwnedReservedEntry =
+          [&](const replay::ReplayFileMetadata &metadata,
               std::string &diagnostic) {
-            removed.push_back(identity.relativePath);
-            if (identity == failed.reservation.identity) {
+            removed.push_back(metadata.relativePath);
+            if (metadata == *failed.reservation.ownedFile) {
               diagnostic = "injected orphan cleanup failure";
               return false;
             }

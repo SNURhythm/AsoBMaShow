@@ -1503,11 +1503,10 @@ int run() {
                           loadAgreedModernReplayPathReservationInventory(
                               context.replayRepository);
                     },
-                    .removeReservedEntry =
-                        [&store](const replay::ReplayPathIdentity &identity,
+                    .removeOwnedReservedEntry =
+                        [&store](const replay::ReplayFileMetadata &metadata,
                                  std::string &diagnostic) {
-                          return store.removeReservedEntry(identity,
-                                                           diagnostic);
+                          return store.removeIfMatches(metadata, diagnostic);
                         },
                     .releaseReservation =
                         [&context](const auto &reservation) {

@@ -94,24 +94,29 @@ ReplayFileReconciliationReport ReplayFileReconciler::reconcile(
       ++report.attachedReservationsFound;
     } else {
       ++report.unassociatedReservationsFound;
-      if (!dependencies_.removeReservedEntry) {
+      if (!entry.reservation.ownedFile) {
+        // A path reservation alone is never proof that this attempt created
+        // whatever currently occupies the final path.
+      } else if (!dependencies_.removeOwnedReservedEntry) {
         report.failures.emplace_back(
             "unassociated replay cleanup is unavailable");
         continue;
-      }
-      std::string diagnostic;
-      try {
-        if (!dependencies_.removeReservedEntry(entry.reservation.identity,
-                                               diagnostic)) {
+      } else {
+        std::string diagnostic;
+        try {
+          if (!dependencies_.removeOwnedReservedEntry(
+                  *entry.reservation.ownedFile, diagnostic)) {
+            report.failures.push_back(
+                diagnostic.empty() ? "unassociated replay cleanup failed"
+                                   : std::move(diagnostic));
+            continue;
+          }
+          ++report.unassociatedFilesRemoved;
+        } catch (...) {
           report.failures.push_back(
-              diagnostic.empty() ? "unassociated replay cleanup failed"
-                                 : std::move(diagnostic));
+              "unassociated replay cleanup failed");
           continue;
         }
-        ++report.unassociatedFilesRemoved;
-      } catch (...) {
-        report.failures.emplace_back("unassociated replay cleanup failed");
-        continue;
       }
     }
 

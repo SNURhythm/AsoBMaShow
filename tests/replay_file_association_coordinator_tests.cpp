@@ -35,6 +35,9 @@ struct Harness {
       .status = ModernReplayReservationReleaseStatus::Released};
   bool encodeSucceeds = true;
   bool fileReservationSucceeds = true;
+  bool reservationOwnsInstalledFile = false;
+  ModernReplayOwnershipRecordStatus ownershipStatus =
+      ModernReplayOwnershipRecordStatus::Recorded;
   ReplayInstallOutcome installed;
   ReplayFileInspection inspected{.state = ReplayFileState::Missing};
   bool cleanupSucceeds = true;
@@ -78,12 +81,21 @@ struct Harness {
               std::string diagnostic;
               const auto identity =
                   pathForStem(requestedStem, nextHistory++, diagnostic);
+              std::optional<ReplayFileMetadata> ownedFile;
+              if (reservationOwnsInstalledFile) {
+                ownedFile = ReplayFileMetadata{
+                    .relativePath = identity->relativePath,
+                    .sha256 = repeated('b', 64),
+                    .compressedSize = 1,
+                    .codecVersion = BeatorajaReplayCodec::kCodecVersion};
+              }
               return ModernReplayReservationOutcome{
                   .status = reservationStatus,
                   .reservation = ModernReplayPathReservation{
                       .attemptId = std::string(requestedAttempt),
                       .identity = *identity,
-                      .createdAtUnixMillis = requestedAt}};
+                      .createdAtUnixMillis = requestedAt,
+                      .ownedFile = std::move(ownedFile)}};
             },
         .releasePath =
             [this](const ModernReplayPathReservation &) {
@@ -123,6 +135,24 @@ struct Harness {
                 }
               }
               return outcome;
+            },
+        .recordInstalledOwnership =
+            [this](const ModernReplayPathReservation &reservation,
+                   const ReplayFileOwnershipReceipt &receipt) {
+              events.emplace_back("record-ownership");
+              if (ownershipStatus !=
+                      ModernReplayOwnershipRecordStatus::Recorded &&
+                  ownershipStatus !=
+                      ModernReplayOwnershipRecordStatus::AlreadyRecorded) {
+                return ModernReplayOwnershipRecordOutcome{
+                    .status = ownershipStatus,
+                    .diagnostic = "ownership recording failed"};
+              }
+              auto owned = reservation;
+              owned.ownedFile = receipt.metadata;
+              return ModernReplayOwnershipRecordOutcome{
+                  .status = ownershipStatus,
+                  .reservation = std::move(owned)};
             },
         .inspectFile =
             [this](const ReplayFileMetadata &) {
@@ -164,7 +194,8 @@ void testSuccessEncodeFailureAndIntegrityConflict() {
                  ReplayFileInstalledOwnership::CreatedByAttempt &&
              success.events ==
                  std::vector<std::string>({"reserve-path", "encode",
-                                           "reserve-file", "install"}),
+                                           "reserve-file", "install",
+                                           "record-ownership"}),
          "successful association installs verified bytes after reservation");
 
   Harness encodeFailure;
@@ -188,6 +219,22 @@ void testSuccessEncodeFailureAndIntegrityConflict() {
   expect(conflicted.status == ReplayFileAssociationStatus::IntegrityConflict &&
              conflict.events == std::vector<std::string>({"reserve-path"}),
          "reservation identity conflict stops before encoding or file writes");
+}
+
+void testOwnershipReceiptFailureOmitsAndCleansCreatedBytes() {
+  Harness failed;
+  failed.ownershipStatus = ModernReplayOwnershipRecordStatus::StorageFailure;
+  ReplayFileAssociationCoordinator coordinator(failed.dependencies());
+  const auto omitted = coordinator.associate(
+      failed.attemptId, failed.stem, failed.playedAt, failed.encoder());
+  expect(omitted.status == ReplayFileAssociationStatus::Omitted &&
+             !omitted.association &&
+             failed.events ==
+                 std::vector<std::string>({"reserve-path", "encode",
+                                           "reserve-file", "install",
+                                           "record-ownership", "cleanup"}),
+         "created bytes are omitted and cleaned when durable ownership cannot "
+         "be recorded");
 }
 
 void testOccupiedAndAmbiguousInstallPaths() {
@@ -267,6 +314,27 @@ void testDefinitiveCleanupUsesOwnershipAndExactMetadata() {
                  preexisting.events.end(),
          "pre-existing identical bytes are never deleted by another attempt");
 
+  Harness ownedRetry;
+  ownedRetry.reservationStatus =
+      ModernReplayReservationStatus::AlreadyReserved;
+  ownedRetry.reservationOwnsInstalledFile = true;
+  ownedRetry.installed.existingIdenticalFile = true;
+  ReplayFileAssociationCoordinator retry(ownedRetry.dependencies());
+  const auto retried = retry.associate(ownedRetry.attemptId, ownedRetry.stem,
+                                       ownedRetry.playedAt,
+                                       ownedRetry.encoder());
+  diagnostic.clear();
+  expect(retried.association &&
+             retried.association->ownership ==
+                 ReplayFileInstalledOwnership::CreatedByAttempt &&
+             retry.abandonDefinitively(*retried.association, diagnostic) &&
+             std::ranges::find(ownedRetry.events, "cleanup") !=
+                 ownedRetry.events.end() &&
+             std::ranges::find(ownedRetry.events, "release-path") !=
+                 ownedRetry.events.end(),
+         "retry preserves durable attempt ownership of identical installed "
+         "bytes");
+
   Harness ambiguous;
   ambiguous.installed = {.state = ReplayInstallState::RetryableAmbiguous};
   ambiguous.inspected = {.state = ReplayFileState::Available};
@@ -289,6 +357,7 @@ void testDefinitiveCleanupUsesOwnershipAndExactMetadata() {
 
 int main() {
   testSuccessEncodeFailureAndIntegrityConflict();
+  testOwnershipReceiptFailureOmitsAndCleansCreatedBytes();
   testOccupiedAndAmbiguousInstallPaths();
   testDefinitiveCleanupUsesOwnershipAndExactMetadata();
   if (failures != 0) {

@@ -20,8 +20,8 @@ struct ReplayFileReconcilerDependencies {
       removeStaleTemporaryFiles;
   std::function<ModernReplayReservationReconciliationOutcome()>
       listReservations;
-  std::function<bool(const ReplayPathIdentity &, std::string &)>
-      removeReservedEntry;
+  std::function<bool(const ReplayFileMetadata &, std::string &)>
+      removeOwnedReservedEntry;
   std::function<ModernReplayReservationReleaseOutcome(
       const ModernReplayPathReservation &)>
       releaseReservation;

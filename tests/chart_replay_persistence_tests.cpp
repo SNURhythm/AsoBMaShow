@@ -336,6 +336,16 @@ struct Harness {
                    }
                    return outcome;
                  },
+             .recordInstalledOwnership =
+                 [this](const ModernReplayPathReservation &reservation,
+                        const ReplayFileOwnershipReceipt &receipt) {
+                   events.emplace_back("record-ownership");
+                   auto owned = reservation;
+                   owned.ownedFile = receipt.metadata;
+                   return ModernReplayOwnershipRecordOutcome{
+                       .status = ModernReplayOwnershipRecordStatus::Recorded,
+                       .reservation = std::move(owned)};
+                 },
              .inspectFile =
                  [this](const auto &) {
                    events.emplace_back("inspect");
@@ -402,7 +412,8 @@ void testFileFirstSuccessAndExactRetry() {
          "complete file-first pipeline saves a replay-backed result");
   expect(harness.events ==
              std::vector<std::string>({"load-result", "reserve-path", "encode",
-                                       "reserve-file", "install", "stage-file",
+                                       "reserve-file", "install",
+                                       "record-ownership", "stage-file",
                                        "load-pending", "project", "ack"}),
          "file bytes install before the result transaction and projection");
 

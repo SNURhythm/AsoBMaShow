@@ -195,6 +195,13 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
   const auto completed = result(1);
   const auto reservation = reserve(repository, completed);
   const auto file = attachment(reservation);
+  const replay::ReplayFileOwnershipReceipt ownership{
+      .attemptToken = completed.attemptId, .metadata = file.metadata};
+  const auto recorded = repository.RecordModernReplayInstalledOwnership(
+      reservation, ownership);
+  assert(recorded.status == ModernReplayOwnershipRecordStatus::Recorded &&
+         recorded.reservation &&
+         recorded.reservation->ownedFile == file.metadata);
   auto futureFile = file;
   ++futureFile.metadata.codecVersion;
   assert(repository
@@ -206,6 +213,12 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
          queryInt(database.get(),
                   "SELECT COUNT(*) FROM modern_replay_file_reservations") ==
              1);
+  auto mismatchedOwnedFile = file;
+  mismatchedOwnedFile.metadata.sha256 = repeated('e', 64);
+  assert(repository
+             .StageModernCourseResult(completed, mismatchedOwnedFile,
+                                      coursePathInput(completed))
+             .status == ModernCourseStageStatus::IntegrityConflict);
   const auto staged = repository.StageModernCourseResult(
       completed, file, coursePathInput(completed));
   assert(staged.status == ModernCourseStageStatus::Staged && staged.receipt &&
@@ -400,7 +413,6 @@ void testFutureCodecReferencePreservesCourseResultHistory() {
   repository.Shutdown();
   {
     auto database = openDatabase(databasePath);
-    exec(database.get(), "PRAGMA ignore_check_constraints=ON");
     exec(database.get(),
          "UPDATE modern_replay_files SET codec_version=" +
              std::to_string(replay::BeatorajaReplayCodec::kCodecVersion + 1) +

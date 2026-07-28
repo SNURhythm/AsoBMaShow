@@ -216,6 +216,19 @@ void testSchemaReservationAtomicStageAndExactRetry() {
              .status == ModernReplayReservationStatus::IntegrityConflict);
 
   const auto file = attachment(*reserved.reservation);
+  const replay::ReplayFileOwnershipReceipt ownership{
+      .attemptToken = completed.attemptId, .metadata = file.metadata};
+  const auto recorded = repository.RecordModernReplayInstalledOwnership(
+      *reserved.reservation, ownership);
+  assert(recorded.status == ModernReplayOwnershipRecordStatus::Recorded &&
+         recorded.reservation &&
+         recorded.reservation->ownedFile == file.metadata);
+  const auto repeatedOwnership =
+      repository.RecordModernReplayInstalledOwnership(*recorded.reservation,
+                                                      ownership);
+  assert(repeatedOwnership.status ==
+             ModernReplayOwnershipRecordStatus::AlreadyRecorded &&
+         repeatedOwnership.reservation == recorded.reservation);
   auto futureFile = file;
   ++futureFile.metadata.codecVersion;
   assert(repository
@@ -227,6 +240,13 @@ void testSchemaReservationAtomicStageAndExactRetry() {
          queryInt(database.get(),
                   "SELECT COUNT(*) FROM modern_replay_file_reservations") ==
              1);
+  auto mismatchedOwnedFile = file;
+  mismatchedOwnedFile.metadata.sha256 = repeated('9', 64);
+  assert(repository
+             .StageModernChartResult(completed, savedSnapshot,
+                                     mismatchedOwnedFile,
+                                     std::vector{outboxDraft})
+             .status == ModernChartStageStatus::IntegrityConflict);
   const std::vector drafts{outboxDraft};
   const auto staged =
       repository.StageModernChartResult(completed, savedSnapshot, file, drafts);
@@ -748,7 +768,6 @@ void testFutureCodecReferencePreservesChartResultHistory() {
   repository.Shutdown();
   {
     auto database = openDatabase(databasePath);
-    exec(database.get(), "PRAGMA ignore_check_constraints=ON");
     exec(database.get(),
          "UPDATE modern_replay_files SET codec_version=" +
              std::to_string(replay::BeatorajaReplayCodec::kCodecVersion + 1) +

@@ -236,7 +236,7 @@ void testCorruptUserDeletionAndAutomaticOwnershipGuard() {
          "user deletion is idempotent after an already missing file");
 }
 
-void testReservationCleanupUsesCanonicalReservedIdentity() {
+void testReservationCleanupRequiresExactOwnedMetadata() {
   TempDirectory profile;
   replay::ReplayFileStore store(profile.path);
   const Bytes payload = bytes("unassociated replay");
@@ -245,14 +245,14 @@ void testReservationCleanupUsesCanonicalReservedIdentity() {
   expect(installed.state == replay::ReplayInstallState::InstalledVerified,
          "unassociated replay is installed for restart cleanup");
   std::string diagnostic;
-  expect(store.removeReservedEntry(identity(), diagnostic) &&
+  expect(store.removeIfMatches(installed.file->metadata, diagnostic) &&
              !std::filesystem::exists(profile.path / identity().relativePath),
-         "restart cleanup removes the exact canonical reserved entry");
+         "restart cleanup removes bytes matching the ownership receipt");
 
-  auto unsafe = identity();
+  auto unsafe = installed.file->metadata;
   unsafe.relativePath = std::filesystem::path("..") / "outside.brd";
-  expect(!store.removeReservedEntry(unsafe, diagnostic),
-         "restart cleanup rejects a reservation with unsafe identity");
+  expect(!store.removeIfMatches(unsafe, diagnostic),
+         "restart cleanup rejects unsafe ownership metadata");
 }
 
 void testStaleCleanupOnlyRecognizesPrivateTemporaryGrammar() {
@@ -292,7 +292,7 @@ int main() {
   testContainmentAndSymlinksFailClosed();
   testFaultsAreRecoverableAtExactReservation();
   testCorruptUserDeletionAndAutomaticOwnershipGuard();
-  testReservationCleanupUsesCanonicalReservedIdentity();
+  testReservationCleanupRequiresExactOwnedMetadata();
   testStaleCleanupOnlyRecognizesPrivateTemporaryGrammar();
   if (failures != 0) {
     std::cerr << failures << " replay file store test(s) failed\n";

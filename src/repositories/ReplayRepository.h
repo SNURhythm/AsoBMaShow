@@ -227,6 +227,10 @@ struct ModernReplayPathReservation {
   std::string attemptId;
   replay::ReplayPathIdentity identity;
   std::int64_t createdAtUnixMillis = 0;
+  // Present only when this attempt proved that it created the installed file.
+  // Path-only reservations and pre-existing identical files deliberately have
+  // no cleanup authority.
+  std::optional<replay::ReplayFileMetadata> ownedFile;
 
   bool operator==(const ModernReplayPathReservation &) const = default;
 };
@@ -242,6 +246,21 @@ enum class ModernReplayReservationStatus {
 struct ModernReplayReservationOutcome {
   ModernReplayReservationStatus status =
       ModernReplayReservationStatus::StorageFailure;
+  std::optional<ModernReplayPathReservation> reservation;
+  std::string diagnostic;
+};
+
+enum class ModernReplayOwnershipRecordStatus {
+  Recorded,
+  AlreadyRecorded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayOwnershipRecordOutcome {
+  ModernReplayOwnershipRecordStatus status =
+      ModernReplayOwnershipRecordStatus::StorageFailure;
   std::optional<ModernReplayPathReservation> reservation;
   std::string diagnostic;
 };
@@ -497,7 +516,7 @@ struct ModernIrSnapshotReadOutcome {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 15;
+  static constexpr int kCurrentSchemaVersion = 16;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -518,6 +537,9 @@ public:
   ModernReplayReservationOutcome
   ReserveModernReplayPath(std::string_view attemptId, std::string_view stem,
                           std::int64_t createdAtUnixMillis);
+  ModernReplayOwnershipRecordOutcome RecordModernReplayInstalledOwnership(
+      const ModernReplayPathReservation &reservation,
+      const replay::ReplayFileOwnershipReceipt &receipt);
   ModernReplayReservationReleaseOutcome ReleaseModernReplayPathReservation(
       const ModernReplayPathReservation &reservation);
   ModernReplayPathReservationInventoryOutcome

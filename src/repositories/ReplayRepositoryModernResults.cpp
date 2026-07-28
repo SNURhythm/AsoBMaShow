@@ -168,13 +168,39 @@ decodeReservation(sqlite3_stmt *statement, std::string &diagnostic) {
                        std::filesystem::path(sqliteColumnString(statement, 3))},
       .createdAtUnixMillis = sqlite3_column_int64(statement, 4),
   };
+  const bool ownershipAbsent =
+      sqlite3_column_type(statement, 5) == SQLITE_NULL &&
+      sqlite3_column_type(statement, 6) == SQLITE_NULL &&
+      sqlite3_column_type(statement, 7) == SQLITE_NULL;
+  const bool ownershipPresent =
+      sqlite3_column_type(statement, 5) == SQLITE_TEXT &&
+      sqlite3_column_type(statement, 6) == SQLITE_INTEGER &&
+      sqlite3_column_type(statement, 7) == SQLITE_INTEGER;
+  if (!ownershipAbsent && !ownershipPresent) {
+    diagnostic = "modern replay reservation ownership has invalid types";
+    return std::nullopt;
+  }
+  if (ownershipPresent) {
+    reservation.ownedFile = replay::ReplayFileMetadata{
+        .relativePath = reservation.identity.relativePath,
+        .sha256 = sqliteColumnString(statement, 5),
+        .compressedSize =
+            static_cast<std::uint64_t>(sqlite3_column_int64(statement, 6)),
+        .codecVersion = sqlite3_column_int(statement, 7),
+    };
+  }
   std::string pathDiagnostic;
   const auto rebuilt =
       replay::pathForStem(reservation.identity.stem,
                           reservation.identity.historyIndex, pathDiagnostic);
+  ModernReplayFileAttachment ownedAttachment{
+      .identity = reservation.identity,
+      .metadata = reservation.ownedFile.value_or(replay::ReplayFileMetadata{})};
   if (!uuid::isCanonicalLowerV4(reservation.attemptId) ||
       reservation.createdAtUnixMillis <= 0 || !rebuilt ||
-      *rebuilt != reservation.identity) {
+      *rebuilt != reservation.identity ||
+      (reservation.ownedFile &&
+       !validStoredAttachment(ownedAttachment, diagnostic))) {
     diagnostic = "modern replay reservation row is inconsistent";
     return std::nullopt;
   }
@@ -1451,7 +1477,8 @@ ReplayRepository::ReserveModernReplayPath(std::string_view attemptId,
 
   SqliteStatementHandle existing;
   constexpr const char *existingQuery =
-      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
+      "owned_content_sha256,owned_compressed_size,owned_codec_version "
       "FROM modern_replay_file_reservations WHERE attempt_id=?";
   if (prepareSqliteStatement(impl_->sessionDatabase, existingQuery, existing) !=
           SQLITE_OK ||
@@ -1575,6 +1602,123 @@ ReplayRepository::ReserveModernReplayPath(std::string_view attemptId,
               .createdAtUnixMillis = createdAtUnixMillis}};
 }
 
+ModernReplayOwnershipRecordOutcome
+ReplayRepository::RecordModernReplayInstalledOwnership(
+    const ModernReplayPathReservation &reservation,
+    const replay::ReplayFileOwnershipReceipt &receipt) {
+  profile_database_activity::WriteGuard writeGuard;
+  std::string diagnostic;
+  const auto rebuilt = replay::pathForStem(
+      reservation.identity.stem, reservation.identity.historyIndex,
+      diagnostic);
+  const ModernReplayFileAttachment attachment{
+      .identity = reservation.identity, .metadata = receipt.metadata};
+  if (!uuid::isCanonicalLowerV4(reservation.attemptId) ||
+      reservation.createdAtUnixMillis <= 0 || !rebuilt ||
+      *rebuilt != reservation.identity ||
+      receipt.attemptToken != reservation.attemptId ||
+      (reservation.ownedFile &&
+       *reservation.ownedFile != receipt.metadata) ||
+      !validCurrentAttachment(attachment, diagnostic)) {
+    return {.status = ModernReplayOwnershipRecordStatus::Invalid,
+            .diagnostic = diagnostic.empty()
+                              ? "modern replay ownership receipt is invalid"
+                              : std::move(diagnostic)};
+  }
+
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernReplayOwnershipRecordStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ModernReplayOwnershipRecordStatus::StorageFailure,
+            .diagnostic = "could not start replay ownership recording"};
+  }
+
+  SqliteStatementHandle query;
+  constexpr const char *querySql =
+      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
+      "owned_content_sha256,owned_compressed_size,owned_codec_version "
+      "FROM modern_replay_file_reservations WHERE attempt_id=?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, querySql, query) !=
+          SQLITE_OK ||
+      !bindText(query.get(), 1, reservation.attemptId)) {
+    return {.status = ModernReplayOwnershipRecordStatus::StorageFailure,
+            .diagnostic = "could not inspect replay ownership reservation"};
+  }
+  const int rc = sqlite3_step(query.get());
+  auto stored = rc == SQLITE_ROW ? decodeReservation(query.get(), diagnostic)
+                                 : std::nullopt;
+  if (!stored || sqlite3_step(query.get()) != SQLITE_DONE) {
+    return {.status =
+                rc == SQLITE_DONE
+                    ? ModernReplayOwnershipRecordStatus::IntegrityConflict
+                    : ModernReplayOwnershipRecordStatus::StorageFailure,
+            .diagnostic = diagnostic.empty()
+                              ? "replay ownership reservation is unavailable"
+                              : std::move(diagnostic)};
+  }
+  if (stored->attemptId != reservation.attemptId ||
+      stored->identity != reservation.identity ||
+      stored->createdAtUnixMillis != reservation.createdAtUnixMillis) {
+    return {.status = ModernReplayOwnershipRecordStatus::IntegrityConflict,
+            .diagnostic =
+                "replay ownership receipt names a different reservation"};
+  }
+  if (stored->ownedFile) {
+    if (*stored->ownedFile != receipt.metadata) {
+      return {.status = ModernReplayOwnershipRecordStatus::IntegrityConflict,
+              .diagnostic =
+                  "replay reservation already owns different installed bytes"};
+    }
+    if (!transaction.commit(transactionError)) {
+      return {.status = ModernReplayOwnershipRecordStatus::StorageFailure,
+              .diagnostic = "could not finish replay ownership retry"};
+    }
+    return {.status = ModernReplayOwnershipRecordStatus::AlreadyRecorded,
+            .reservation = std::move(stored)};
+  }
+  query.reset();
+
+  SqliteStatementHandle update;
+  constexpr const char *updateSql =
+      "UPDATE modern_replay_file_reservations SET owned_content_sha256=?,"
+      "owned_compressed_size=?,owned_codec_version=? WHERE attempt_id=? AND "
+      "stem=? AND history_index=? AND relative_path=? AND "
+      "created_at_unix_ms=? AND owned_content_sha256 IS NULL AND "
+      "owned_compressed_size IS NULL AND owned_codec_version IS NULL";
+  if (prepareSqliteStatement(impl_->sessionDatabase, updateSql, update) !=
+          SQLITE_OK ||
+      !bindText(update.get(), 1, receipt.metadata.sha256) ||
+      sqlite3_bind_int64(
+          update.get(), 2,
+          static_cast<sqlite3_int64>(receipt.metadata.compressedSize)) !=
+          SQLITE_OK ||
+      sqlite3_bind_int(update.get(), 3, receipt.metadata.codecVersion) !=
+          SQLITE_OK ||
+      !bindText(update.get(), 4, reservation.attemptId) ||
+      !bindText(update.get(), 5, reservation.identity.stem) ||
+      sqlite3_bind_int64(update.get(), 6,
+                         reservation.identity.historyIndex) != SQLITE_OK ||
+      !bindText(update.get(), 7,
+                reservation.identity.relativePath.generic_string()) ||
+      sqlite3_bind_int64(update.get(), 8,
+                         reservation.createdAtUnixMillis) != SQLITE_OK ||
+      sqlite3_step(update.get()) != SQLITE_DONE ||
+      sqlite3_changes(impl_->sessionDatabase) != 1 ||
+      !transaction.commit(transactionError)) {
+    return {.status = ModernReplayOwnershipRecordStatus::StorageFailure,
+            .diagnostic = "could not commit replay ownership receipt"};
+  }
+  stored->ownedFile = receipt.metadata;
+  return {.status = ModernReplayOwnershipRecordStatus::Recorded,
+          .reservation = std::move(stored)};
+}
+
 ModernReplayReservationReleaseOutcome
 ReplayRepository::ReleaseModernReplayPathReservation(
     const ModernReplayPathReservation &reservation) {
@@ -1606,7 +1750,8 @@ ReplayRepository::ReleaseModernReplayPathReservation(
 
   SqliteStatementHandle query;
   constexpr const char *querySql =
-      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
+      "owned_content_sha256,owned_compressed_size,owned_codec_version "
       "FROM modern_replay_file_reservations WHERE attempt_id=?";
   if (prepareSqliteStatement(impl_->sessionDatabase, querySql, query) !=
           SQLITE_OK ||
@@ -1674,7 +1819,8 @@ ReplayRepository::ListModernReplayPathReservations() {
   }
   SqliteStatementHandle statement;
   constexpr const char *query =
-      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
+      "owned_content_sha256,owned_compressed_size,owned_codec_version "
       "FROM modern_replay_file_reservations ORDER BY attempt_id";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
       SQLITE_OK) {
@@ -1819,7 +1965,8 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
   if (replayFile.has_value()) {
     SqliteStatementHandle statement;
     constexpr const char *query =
-        "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+        "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
+        "owned_content_sha256,owned_compressed_size,owned_codec_version "
         "FROM modern_replay_file_reservations WHERE attempt_id=?";
     if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
             SQLITE_OK ||
@@ -1830,7 +1977,9 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     }
     reservation = decodeReservation(statement.get(), diagnostic);
     if (!reservation || sqlite3_step(statement.get()) != SQLITE_DONE ||
-        reservation->identity != replayFile->identity) {
+        reservation->identity != replayFile->identity ||
+        (reservation->ownedFile &&
+         *reservation->ownedFile != replayFile->metadata)) {
       return {.status = ModernChartStageStatus::IntegrityConflict,
               .diagnostic = diagnostic.empty()
                                 ? "modern replay reservation disagrees with "
@@ -2169,7 +2318,8 @@ ModernCourseStageOutcome ReplayRepository::StageModernCourseResult(
   if (replayFile) {
     SqliteStatementHandle statement;
     constexpr const char *query =
-        "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+        "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
+        "owned_content_sha256,owned_compressed_size,owned_codec_version "
         "FROM modern_replay_file_reservations WHERE attempt_id=?";
     if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
             SQLITE_OK ||
@@ -2180,7 +2330,9 @@ ModernCourseStageOutcome ReplayRepository::StageModernCourseResult(
     }
     reservation = decodeReservation(statement.get(), diagnostic);
     if (!reservation || sqlite3_step(statement.get()) != SQLITE_DONE ||
-        reservation->identity != replayFile->identity) {
+        reservation->identity != replayFile->identity ||
+        (reservation->ownedFile &&
+         *reservation->ownedFile != replayFile->metadata)) {
       return {.status = ModernCourseStageStatus::IntegrityConflict,
               .diagnostic = diagnostic.empty()
                                 ? "modern course replay reservation disagrees "

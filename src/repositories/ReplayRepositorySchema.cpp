@@ -525,7 +525,7 @@ constexpr const char *kModernReplayFilesTableSqlV12 =
     "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
     "ON DELETE CASCADE)";
 
-constexpr const char *kModernReplayFilesTableSql =
+constexpr const char *kModernReplayFilesTableSqlV15 =
     "CREATE TABLE modern_replay_files("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "modern_chart_result_id INTEGER UNIQUE,"
@@ -546,12 +546,52 @@ constexpr const char *kModernReplayFilesTableSql =
     "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
     "ON DELETE CASCADE)";
 
-constexpr const char *kModernReplayFileReservationsTableSql =
+constexpr const char *kModernReplayFilesTableSql =
+    "CREATE TABLE modern_replay_files("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "modern_chart_result_id INTEGER UNIQUE,"
+    "modern_course_result_id INTEGER UNIQUE,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+    "codec_version INTEGER NOT NULL,user_deleted INTEGER NOT NULL DEFAULT 0,"
+    "CHECK(history_index>=0),CHECK(user_deleted IN (0,1)),"
+    "CHECK((modern_chart_result_id IS NOT NULL) != (modern_course_result_id IS "
+    "NOT NULL)),"
+    "CHECK(length(content_sha256)=64 AND "
+    "content_sha256=lower(content_sha256) AND "
+    "content_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(compressed_size>0),CHECK(codec_version>0),"
+    "UNIQUE(stem,history_index),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernReplayFileReservationsTableSqlV15 =
     "CREATE TABLE modern_replay_file_reservations("
     "attempt_id TEXT PRIMARY KEY NOT NULL,stem TEXT NOT NULL,"
     "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
     "created_at_unix_ms INTEGER NOT NULL,CHECK(history_index>=0),"
     "CHECK(created_at_unix_ms>0),UNIQUE(stem,history_index))";
+
+constexpr const char *kModernReplayFileReservationsTableSql =
+    "CREATE TABLE modern_replay_file_reservations("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "created_at_unix_ms INTEGER NOT NULL,owned_content_sha256 TEXT,"
+    "owned_compressed_size INTEGER,owned_codec_version INTEGER,"
+    "CHECK(history_index>=0),CHECK(created_at_unix_ms>0),"
+    "CHECK((owned_content_sha256 IS NULL AND owned_compressed_size IS NULL "
+    "AND owned_codec_version IS NULL) OR (owned_content_sha256 IS NOT NULL "
+    "AND owned_compressed_size IS NOT NULL AND owned_codec_version IS NOT "
+    "NULL)),"
+    "CHECK(owned_content_sha256 IS NULL OR "
+    "(length(owned_content_sha256)=64 AND "
+    "owned_content_sha256=lower(owned_content_sha256) AND "
+    "owned_content_sha256 NOT GLOB '*[^0-9a-f]*')),"
+    "CHECK(owned_compressed_size IS NULL OR owned_compressed_size>0),"
+    "CHECK(owned_codec_version IS NULL OR owned_codec_version>0),"
+    "UNIQUE(stem,history_index))";
 
 constexpr const char *kModernReplayStemSequencesTableSql =
     "CREATE TABLE modern_replay_stem_sequences("
@@ -1179,7 +1219,7 @@ bool inspectModernChartSchemaV11(sqlite3 *database) {
        kModernReplayFilesTableSqlV11},
       {"modern_replay_file_reservations", "table",
        "modern_replay_file_reservations",
-       kModernReplayFileReservationsTableSql},
+       kModernReplayFileReservationsTableSqlV15},
       {"modern_replay_stem_sequences", "table", "modern_replay_stem_sequences",
        kModernReplayStemSequencesTableSql},
       {"ir_submission_snapshots", "table", "ir_submission_snapshots",
@@ -1209,8 +1249,9 @@ bool inspectModernChartSchemaV11(sqlite3 *database) {
   return true;
 }
 
-bool inspectModernCourseSchemaWithReplayTable(sqlite3 *database,
-                                              const char *replayTableSql) {
+bool inspectModernCourseSchemaWithReplayTable(
+    sqlite3 *database, const char *replayTableSql,
+    const char *reservationTableSql) {
   struct ExpectedObject {
     const char *name;
     const char *type;
@@ -1228,8 +1269,7 @@ bool inspectModernCourseSchemaWithReplayTable(sqlite3 *database,
        kModernCourseEntriesTableSql},
       {"modern_replay_files", "table", "modern_replay_files", replayTableSql},
       {"modern_replay_file_reservations", "table",
-       "modern_replay_file_reservations",
-       kModernReplayFileReservationsTableSql},
+       "modern_replay_file_reservations", reservationTableSql},
       {"modern_replay_stem_sequences", "table", "modern_replay_stem_sequences",
        kModernReplayStemSequencesTableSql},
       {"ir_submission_snapshots", "table", "ir_submission_snapshots",
@@ -1265,18 +1305,17 @@ bool inspectModernCourseSchemaWithReplayTable(sqlite3 *database,
 
 bool inspectModernCourseSchemaV12(sqlite3 *database) {
   return inspectModernCourseSchemaWithReplayTable(
-      database, kModernReplayFilesTableSqlV12);
+      database, kModernReplayFilesTableSqlV12,
+      kModernReplayFileReservationsTableSqlV15);
 }
 
 bool inspectModernCourseSchemaV14(sqlite3 *database) {
-  return inspectModernCourseSchemaWithReplayTable(database,
-                                                  kModernReplayFilesTableSql);
+  return inspectModernCourseSchemaWithReplayTable(
+      database, kModernReplayFilesTableSqlV15,
+      kModernReplayFileReservationsTableSqlV15);
 }
 
-bool inspectModernCourseSchema(sqlite3 *database) {
-  if (!inspectModernCourseSchemaV14(database)) {
-    return false;
-  }
+bool inspectPendingModernCourseScoreSchema(sqlite3 *database) {
   NamedSchemaObjectInspection pendingCourseScores;
   return inspectNamedSchemaObject(
              database, "modern_pending_course_score_writes", "table",
@@ -1284,6 +1323,22 @@ bool inspectModernCourseSchema(sqlite3 *database) {
              kModernPendingCourseScoresTableSql, pendingCourseScores,
              "reading pending modern course score schema") &&
          pendingCourseScores.present && pendingCourseScores.exact;
+}
+
+bool inspectModernCourseSchemaV15(sqlite3 *database) {
+  return inspectModernCourseSchemaV14(database) &&
+         inspectPendingModernCourseScoreSchema(database);
+}
+
+bool inspectModernCourseSchemaV16Base(sqlite3 *database) {
+  return inspectModernCourseSchemaWithReplayTable(
+      database, kModernReplayFilesTableSql,
+      kModernReplayFileReservationsTableSql);
+}
+
+bool inspectModernCourseSchema(sqlite3 *database) {
+  return inspectModernCourseSchemaV16Base(database) &&
+         inspectPendingModernCourseScoreSchema(database);
 }
 
 bool createModernChartSchema(sqlite3 *database) {
@@ -1294,12 +1349,14 @@ bool createModernChartSchema(sqlite3 *database) {
   if (inspectModernChartSchemaV11(database) ||
       inspectModernCourseSchemaV12(database) ||
       inspectModernCourseSchemaV14(database) ||
+      inspectModernCourseSchemaV15(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
   const char *tables[] = {
       kModernChartResultsTableSql,           kModernReplayFilesTableSqlV11,
-      kModernReplayFileReservationsTableSql, kModernReplayStemSequencesTableSql,
+      kModernReplayFileReservationsTableSqlV15,
+      kModernReplayStemSequencesTableSql,
       kIrSubmissionSnapshotsTableSql,        kModernPendingChartScoresTableSql,
   };
   for (const char *table : tables) {
@@ -1323,6 +1380,7 @@ bool createModernChartSchema(sqlite3 *database) {
 bool migrateModernCourseSchema(sqlite3 *database) {
   if (inspectModernCourseSchemaV12(database) ||
       inspectModernCourseSchemaV14(database) ||
+      inspectModernCourseSchemaV15(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1384,7 +1442,7 @@ bool migrateModernReplayDeletionSchema(sqlite3 *database) {
                "ALTER TABLE modern_replay_files RENAME TO "
                "modern_replay_files_v12",
                "renaming version 12 replay references") ||
-      !execSql(database, kModernReplayFilesTableSql,
+      !execSql(database, kModernReplayFilesTableSqlV15,
                "creating user-deleted replay references") ||
       !execSql(database,
                "INSERT INTO modern_replay_files("
@@ -1407,10 +1465,12 @@ bool migrateModernReplayDeletionSchema(sqlite3 *database) {
 }
 
 bool migrateModernCourseScoreOutbox(sqlite3 *database) {
-  if (inspectModernCourseSchema(database)) {
+  if (inspectModernCourseSchemaV15(database) ||
+      inspectModernCourseSchema(database)) {
     return true;
   }
-  if (!inspectModernCourseSchemaV14(database)) {
+  if (!inspectModernCourseSchemaV14(database) &&
+      !inspectModernCourseSchemaV16Base(database)) {
     SDL_Log("Refusing course score outbox migration from a partial or "
             "unexpected version 14 schema");
     return false;
@@ -1422,6 +1482,67 @@ bool migrateModernCourseScoreOutbox(sqlite3 *database) {
                "attempt_id,modern_course_result_id,created_at) "
                "SELECT attempt_id,id,created_at FROM modern_course_results",
                "backfilling pending modern course scores")) {
+    return false;
+  }
+  return inspectModernCourseSchemaV15(database) ||
+         inspectModernCourseSchema(database);
+}
+
+bool migrateModernReplayOwnershipSchema(sqlite3 *database) {
+  if (inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernCourseSchemaV15(database)) {
+    SDL_Log("Refusing replay ownership migration from a partial or "
+            "unexpected version 15 schema");
+    return false;
+  }
+  if (!execSql(database, "DROP INDEX idx_modern_replay_files_chart_result",
+               "dropping version 15 chart replay owner index") ||
+      !execSql(database, "DROP INDEX idx_modern_replay_files_course_result",
+               "dropping version 15 course replay owner index") ||
+      !execSql(database,
+               "DROP INDEX idx_modern_replay_reservations_stem_index",
+               "dropping version 15 replay reservation index") ||
+      !execSql(database,
+               "ALTER TABLE modern_replay_files RENAME TO "
+               "modern_replay_files_v15",
+               "renaming version 15 replay references") ||
+      !execSql(database,
+               "ALTER TABLE modern_replay_file_reservations RENAME TO "
+               "modern_replay_file_reservations_v15",
+               "renaming version 15 replay reservations") ||
+      !execSql(database, kModernReplayFilesTableSql,
+               "creating future-compatible replay references") ||
+      !execSql(
+          database,
+          "INSERT INTO modern_replay_files("
+          "id,modern_chart_result_id,modern_course_result_id,stem,"
+          "history_index,relative_path,content_sha256,compressed_size,"
+          "codec_version,user_deleted) SELECT id,modern_chart_result_id,"
+          "modern_course_result_id,stem,history_index,relative_path,"
+          "content_sha256,compressed_size,codec_version,user_deleted FROM "
+          "modern_replay_files_v15",
+          "copying version 15 replay references") ||
+      !execSql(database, kModernReplayFileReservationsTableSql,
+               "creating owned replay reservations") ||
+      !execSql(
+          database,
+          "INSERT INTO modern_replay_file_reservations("
+          "attempt_id,stem,history_index,relative_path,created_at_unix_ms) "
+          "SELECT attempt_id,stem,history_index,relative_path,"
+          "created_at_unix_ms FROM modern_replay_file_reservations_v15",
+          "copying version 15 replay reservations") ||
+      !execSql(database, "DROP TABLE modern_replay_files_v15",
+               "dropping version 15 replay references") ||
+      !execSql(database, "DROP TABLE modern_replay_file_reservations_v15",
+               "dropping version 15 replay reservations") ||
+      !execSql(database, kModernReplayResultIndexSql,
+               "creating chart replay owner index") ||
+      !execSql(database, kModernReplayCourseResultIndexSql,
+               "creating course replay owner index") ||
+      !execSql(database, kModernReservationIndexSql,
+               "creating replay reservation index")) {
     return false;
   }
   return inspectModernCourseSchema(database);
@@ -1527,7 +1648,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
 
-  if (*version == 14) {
+  if (*version == 15 || *version == 14) {
     ReplayResultOutboxSchemaState resultOutboxState{};
     IrOutboxSchemaState irOutboxState{};
     IrSubmissionReceiptsSchemaState receiptState{};
@@ -1536,11 +1657,14 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         !inspectIrOutboxSchema(db, irOutboxState) ||
         !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
         !inspectIrRemoteScoresSchema(db, remoteScoresState)) {
-      SDL_Log("Could not inspect version 14 replay database for course score "
-              "outbox migration");
+      SDL_Log("Could not inspect version %d replay database for replay "
+              "ownership migration", *version);
       return false;
     }
-    const bool modernCourseSchemaExact = inspectModernCourseSchemaV14(db);
+    const bool modernCourseSchemaExact =
+        inspectModernCourseSchema(db) || inspectModernCourseSchemaV15(db) ||
+        inspectModernCourseSchemaV16Base(db) ||
+        (*version == 14 && inspectModernCourseSchemaV14(db));
     const bool summarySchemaExact =
         replay_repository_legacy::inspectCurrentSchema(db);
     if (resultOutboxState != ReplayResultOutboxSchemaState::Absent ||
@@ -1548,8 +1672,9 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
         remoteScoresState != IrRemoteScoresSchemaState::Exact ||
         !modernCourseSchemaExact || !summarySchemaExact) {
-      SDL_Log("Refusing course score outbox migration from a partial or "
-              "unexpected version 14 database (%d,%d,%d,%d,%d,%d)",
+      SDL_Log("Refusing replay ownership migration from a partial or "
+              "unexpected version %d database (%d,%d,%d,%d,%d,%d)",
+              *version,
               static_cast<int>(resultOutboxState),
               static_cast<int>(irOutboxState),
               static_cast<int>(receiptState),
@@ -1557,12 +1682,13 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
               summarySchemaExact);
       return false;
     }
-    if (!migrateModernCourseScoreOutbox(db) ||
+    if ((*version == 14 && !migrateModernCourseScoreOutbox(db)) ||
+        !migrateModernReplayOwnershipSchema(db) ||
         !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
       return false;
     }
     if (!transaction.commit(transactionError)) {
-      logSqlErrorText("committing course score outbox migration",
+      logSqlErrorText("committing replay ownership migration",
                       transactionError);
       return false;
     }
@@ -1807,7 +1933,10 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       legacyIrOutboxState != IrOutboxSchemaState::Exact ||
       legacyReceiptState != IrSubmissionReceiptsSchemaState::ReplayOwnedExact ||
       legacyRemoteScoresState != IrRemoteScoresSchemaState::Exact ||
-      !inspectModernCourseSchemaV14(db)) {
+      (!inspectModernCourseSchemaV14(db) &&
+       !inspectModernCourseSchemaV15(db) &&
+       !inspectModernCourseSchemaV16Base(db) &&
+       !inspectModernCourseSchema(db))) {
     SDL_Log("Refusing summary cutover from a partial or unexpected version "
             "13 schema");
     return false;
@@ -1815,7 +1944,8 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (!replay_repository_legacy::migrateToSummarySchema(db, *version)) {
     return false;
   }
-  if (!migrateModernCourseScoreOutbox(db)) {
+  if (!migrateModernCourseScoreOutbox(db) ||
+      !migrateModernReplayOwnershipSchema(db)) {
     return false;
   }
 

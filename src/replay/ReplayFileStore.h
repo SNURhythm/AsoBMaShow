@@ -120,9 +120,6 @@ public:
   bool removeReferencedEntry(const ReplayFileMetadata &metadata,
                              std::string &diagnostic) const;
 
-  bool removeReservedEntry(const ReplayPathIdentity &identity,
-                           std::string &diagnostic) const;
-
   void
   removeStaleTemporaryFiles(std::chrono::system_clock::time_point cutoff) const;
 
