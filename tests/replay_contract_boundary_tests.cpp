@@ -217,7 +217,7 @@ void testSharedMaximumScoreAuthority() {
       "src/ir/IrRankingModels.cpp",
       "src/ir/IrRankingModal.cpp",
       "src/ir/IrRemoteScoreModels.cpp",
-      "src/ir/tachi/TachiBatchManual.cpp",
+      "src/ir/tachi/TachiEligibility.cpp",
       "src/ir/tachi/TachiDriver.cpp",
       "src/ir/tachi/TachiRankingParser.cpp",
       "src/ir/tachi/TachiUserScoreParser.cpp",

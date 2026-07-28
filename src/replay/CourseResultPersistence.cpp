@@ -108,19 +108,20 @@ CourseResultPersistenceOutcome CourseResultPersistence::persist(
             .diagnostic = std::move(resultOutcome.diagnostic)};
   }
   std::string pendingDiagnostic;
-  auto pending = resultOutcome.receipt
-                     ? makePendingScoreWrite(
-                           attempt.result, resultOutcome.receipt->attemptId,
-                           resultOutcome.receipt->resultId,
-                           resultOutcome.receipt->createdAt, pendingDiagnostic)
-                     : std::nullopt;
+  std::optional<result_persistence::PendingCourseScoreWrite> pending;
   if (!resultOutcome.receipt ||
-      resultOutcome.receipt->attemptId != attempt.result.attemptId ||
-      !pending) {
+      resultOutcome.receipt->attemptId != attempt.result.attemptId) {
+    pendingDiagnostic =
+        "durable receipt disagrees with the captured attempt";
+  } else {
+    pending = makePendingScoreWrite(
+        attempt.result, resultOutcome.receipt->attemptId,
+        resultOutcome.receipt->resultId, resultOutcome.receipt->createdAt,
+        pendingDiagnostic);
+  }
+  if (!pending) {
     appendDiagnostic(resultOutcome.diagnostic, "course result",
-                     pendingDiagnostic.empty()
-                         ? "durable receipt disagrees with the captured attempt"
-                         : pendingDiagnostic);
+                     pendingDiagnostic);
     return {.state = CourseResultPersistenceState::IntegrityConflict,
             .receipt = resultOutcome.receipt,
             .replayAttached = resultOutcome.replayAttached,

@@ -180,11 +180,13 @@ require(
 require(
     ordered(
         context_recovery_body,
-        "replay::ChartReplayPersistence persistence(scoreRepository,",
+        "replay::ChartReplayPersistence chartPersistence(scoreRepository,",
         "replayRepository)",
-        "persistence.recoverAll()",
+        "chartPersistence.recoverAll()",
+        "replay::CourseResultPersistence coursePersistence(scoreRepository,",
+        "coursePersistence.recoverAll()",
     ),
-    "recovery must use the same modern chart persistence authority",
+    "recovery must use the modern chart and course persistence authorities",
 )
 
 require(
@@ -363,10 +365,22 @@ require(
         course_result_body,
         "dependencies_.persistResult(attempt)",
         "resultOutcome.receipt->attemptId != attempt.result.attemptId",
-        "PendingCourseScoreWrite pending",
-        "dependencies_.projectScore(pending)",
+        "makePendingScoreWrite(",
+        "dependencies_.projectScore(*pending)",
     ),
     "course score projection must follow a receipt-proven durable modern result",
+)
+course_recovery_body = function_body(
+    course_result_source, "CourseResultPersistence", "recoverAll"
+)
+require(
+    ordered(
+        course_recovery_body,
+        "dependencies_.listScoreSources(",
+        "makePendingScoreWrite(",
+        "dependencies_.projectScore(*pending)",
+    ),
+    "course recovery must reuse stored-result identity and score projection authorities",
 )
 
 scene_sources = "\n".join(
