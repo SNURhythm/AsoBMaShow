@@ -55,13 +55,14 @@ struct ReplayFileAssociationCoordinatorDependencies {
   std::function<ReplayReservationOutcome(
       const ReplayPathIdentity &, std::span<const std::byte>, std::string_view)>
       reserveFile;
-  std::function<ReplayInstallOutcome(const ReplayFileReservation &,
-                                     std::span<const std::byte>)>
+  std::function<ReplayInstallOutcome(
+      const ReplayFileReservation &, std::span<const std::byte>,
+      const ReplayInstallOwnershipJournal &)>
       installFile;
   std::function<ModernReplayOwnershipRecordOutcome(
       const ModernReplayPathReservation &,
       const ReplayFileOwnershipReceipt &)>
-      recordInstalledOwnership;
+      recordInstallIntent;
   std::function<ReplayFileInspection(const ReplayFileMetadata &)> inspectFile;
   std::function<bool(const ReplayFileMetadata &, std::string &)>
       removeIfMatches;

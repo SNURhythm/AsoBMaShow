@@ -124,7 +124,19 @@ struct Harness {
             },
         .installFile =
             [this](const ReplayFileReservation &reservation,
-                   std::span<const std::byte>) {
+                   std::span<const std::byte>,
+                   const ReplayInstallOwnershipJournal &journal) {
+              if (!installed.existingIdenticalFile) {
+                std::string diagnostic;
+                const ReplayFileOwnershipReceipt receipt{
+                    .attemptToken = reservation.attemptToken,
+                    .metadata = reservation.expectedMetadata};
+                if (!journal || !journal(receipt, diagnostic)) {
+                  return ReplayInstallOutcome{
+                      .state = ReplayInstallState::Failed,
+                      .diagnostic = std::move(diagnostic)};
+                }
+              }
               events.emplace_back("install");
               auto outcome = installed;
               if (outcome.file) {
@@ -136,7 +148,7 @@ struct Harness {
               }
               return outcome;
             },
-        .recordInstalledOwnership =
+        .recordInstallIntent =
             [this](const ModernReplayPathReservation &reservation,
                    const ReplayFileOwnershipReceipt &receipt) {
               events.emplace_back("record-ownership");
@@ -194,9 +206,9 @@ void testSuccessEncodeFailureAndIntegrityConflict() {
                  ReplayFileInstalledOwnership::CreatedByAttempt &&
              success.events ==
                  std::vector<std::string>({"reserve-path", "encode",
-                                           "reserve-file", "install",
-                                           "record-ownership"}),
-         "successful association installs verified bytes after reservation");
+                                           "reserve-file", "record-ownership",
+                                           "install"}),
+         "successful association journals ownership before installing bytes");
 
   Harness encodeFailure;
   encodeFailure.encodeSucceeds = false;
@@ -221,7 +233,7 @@ void testSuccessEncodeFailureAndIntegrityConflict() {
          "reservation identity conflict stops before encoding or file writes");
 }
 
-void testOwnershipReceiptFailureOmitsAndCleansCreatedBytes() {
+void testOwnershipJournalFailureStopsBeforeInstallingBytes() {
   Harness failed;
   failed.ownershipStatus = ModernReplayOwnershipRecordStatus::StorageFailure;
   ReplayFileAssociationCoordinator coordinator(failed.dependencies());
@@ -231,10 +243,9 @@ void testOwnershipReceiptFailureOmitsAndCleansCreatedBytes() {
              !omitted.association &&
              failed.events ==
                  std::vector<std::string>({"reserve-path", "encode",
-                                           "reserve-file", "install",
-                                           "record-ownership", "cleanup"}),
-         "created bytes are omitted and cleaned when durable ownership cannot "
-         "be recorded");
+                                           "reserve-file", "record-ownership",
+                                           "inspect", "release-path"}),
+         "ownership journal failure stops before final installation");
 }
 
 void testOccupiedAndAmbiguousInstallPaths() {
@@ -244,13 +255,14 @@ void testOccupiedAndAmbiguousInstallPaths() {
   const auto baseInstall = dependencies.installFile;
   dependencies.installFile =
       [&, baseInstall](const ReplayFileReservation &reservation,
-                       std::span<const std::byte> bytes) {
+                       std::span<const std::byte> bytes,
+                       const ReplayInstallOwnershipJournal &journal) {
         if (installs++ == 0) {
           occupied.events.emplace_back("install");
           return ReplayInstallOutcome{.state = ReplayInstallState::Occupied,
                                       .diagnostic = "occupied"};
         }
-        return baseInstall(reservation, bytes);
+        return baseInstall(reservation, bytes, journal);
       };
   ReplayFileAssociationCoordinator coordinator(std::move(dependencies));
   const auto associated = coordinator.associate(
@@ -308,6 +320,8 @@ void testDefinitiveCleanupUsesOwnershipAndExactMetadata() {
   diagnostic.clear();
   expect(reused.association &&
              existing.abandonDefinitively(*reused.association, diagnostic) &&
+             std::ranges::find(preexisting.events, "record-ownership") ==
+                 preexisting.events.end() &&
              std::ranges::find(preexisting.events, "cleanup") ==
                  preexisting.events.end() &&
              std::ranges::find(preexisting.events, "release-path") !=
@@ -357,7 +371,7 @@ void testDefinitiveCleanupUsesOwnershipAndExactMetadata() {
 
 int main() {
   testSuccessEncodeFailureAndIntegrityConflict();
-  testOwnershipReceiptFailureOmitsAndCleansCreatedBytes();
+  testOwnershipJournalFailureStopsBeforeInstallingBytes();
   testOccupiedAndAmbiguousInstallPaths();
   testDefinitiveCleanupUsesOwnershipAndExactMetadata();
   if (failures != 0) {

@@ -91,6 +91,12 @@ struct ReplayFileStoreFaults {
   std::function<bool(std::string_view)> failAt;
 };
 
+// The association owner journals this exact install intent before the store
+// creates the final hard link. A crash after link creation can then remove only
+// bytes that still match the durable receipt.
+using ReplayInstallOwnershipJournal =
+    std::function<bool(const ReplayFileOwnershipReceipt &, std::string &)>;
+
 class ReplayFileStore {
 public:
   explicit ReplayFileStore(std::filesystem::path profileRoot,
@@ -103,7 +109,8 @@ public:
 
   [[nodiscard]] ReplayInstallOutcome
   install(const ReplayFileReservation &reservation,
-          std::span<const std::byte> bytes) const;
+          std::span<const std::byte> bytes,
+          const ReplayInstallOwnershipJournal &ownershipJournal = {}) const;
 
   [[nodiscard]] ReplayFileInspection
   inspect(const ReplayFileMetadata &metadata) const;

@@ -337,7 +337,9 @@ ReplayFileStore::reserve(const ReplayPathIdentity &identity,
 
 ReplayInstallOutcome
 ReplayFileStore::install(const ReplayFileReservation &reservation,
-                         std::span<const std::byte> bytes) const {
+                         std::span<const std::byte> bytes,
+                         const ReplayInstallOwnershipJournal &ownershipJournal)
+    const {
   ReplayInstallOutcome outcome;
   if (!limits_.valid() || !canonicalIdentity(reservation.identity, limits_) ||
       !safeTemporaryRelativePath(reservation.temporaryRelativePath) ||
@@ -434,6 +436,26 @@ ReplayFileStore::install(const ReplayFileReservation &reservation,
     outcome.state = ReplayInstallState::Failed;
     outcome.diagnostic = "Injected replay install failure";
     return outcome;
+  }
+
+  if (ownershipJournal) {
+    const ReplayFileOwnershipReceipt receipt{
+        .attemptToken = reservation.attemptToken,
+        .metadata = reservation.expectedMetadata,
+    };
+    if (!ownershipJournal(receipt, outcome.diagnostic)) {
+      std::string cleanupDiagnostic;
+      if (!removeEntryAndSync(temporaryPath, replayDirectory,
+                              cleanupDiagnostic) &&
+          outcome.diagnostic.empty()) {
+        outcome.diagnostic = std::move(cleanupDiagnostic);
+      }
+      if (outcome.diagnostic.empty()) {
+        outcome.diagnostic = "Replay install ownership journal failed";
+      }
+      outcome.state = ReplayInstallState::Failed;
+      return outcome;
+    }
   }
 
   std::error_code linkError;

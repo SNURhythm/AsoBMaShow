@@ -45,15 +45,15 @@ ReplayFileReconciliationReport ReplayFileReconciler::reconcile(
         continue;
       }
       ++report.tombstonesFound;
-      if (!dependencies_.removeReferencedEntry) {
+      if (!dependencies_.removeTombstonedEntryIfMatches) {
         report.failures.emplace_back(
             "replay tombstone cleanup is unavailable");
         continue;
       }
       std::string diagnostic;
       try {
-        if (dependencies_.removeReferencedEntry(entry.reference.metadata,
-                                                diagnostic)) {
+        if (dependencies_.removeTombstonedEntryIfMatches(
+                entry.reference.metadata, diagnostic)) {
           ++report.filesRemoved;
           continue;
         }

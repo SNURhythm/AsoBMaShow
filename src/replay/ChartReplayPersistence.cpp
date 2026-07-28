@@ -63,12 +63,13 @@ ChartReplayPersistence::ChartReplayPersistence(
                },
            .installFile =
                [store](const ReplayFileReservation &reservation,
-                       std::span<const std::byte> bytes) {
-                 return store->install(reservation, bytes);
+                       std::span<const std::byte> bytes,
+                       const ReplayInstallOwnershipJournal &journal) {
+                 return store->install(reservation, bytes, journal);
                },
-           .recordInstalledOwnership =
+           .recordInstallIntent =
                [&repository](const auto &reservation, const auto &receipt) {
-                 return repository.RecordModernReplayInstalledOwnership(
+                 return repository.RecordModernReplayInstallIntent(
                      reservation, receipt);
                },
            .inspectFile =

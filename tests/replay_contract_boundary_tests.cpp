@@ -144,6 +144,22 @@ void testSharedModernResultAuthorities() {
   rejectTokens(root / "src/ir/IrRankingModels.cpp",
                duplicateHashNormalization);
 
+  constexpr std::array<std::string_view, 9> replaySetupConsumers{
+      "src/ModernResultRecallBuilder.cpp",
+      "src/replay/ChartReplayAgreement.cpp",
+      "src/replay/ChartReplayConsumer.cpp",
+      "src/replay/ChartReplayContext.cpp",
+      "src/replay/CourseReplayAgreement.cpp",
+      "src/replay/CourseReplayConsumer.cpp",
+      "src/replay/CourseReplayContext.cpp",
+      "src/scene/ChartViewerScene.cpp",
+      "src/scene/play/GamePlayScene.cpp",
+  };
+  for (const std::string_view consumer : replaySetupConsumers) {
+    requireToken(root / consumer, "replaySetupLongNoteMode",
+                 "result-backed replay setup long-note-mode authority");
+  }
+
   constexpr std::array<std::string_view, 24> digestConsumers{
       "src/ChartLibraryScanner.cpp",
       "src/CourseIdentity.cpp",
@@ -274,6 +290,13 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   requireToken(root / "src/main.cpp",
                "loadAgreedModernReplayTombstoneInventory",
                "startup tombstone-only replay cleanup inventory");
+  requireToken(root / "src/main.cpp", "removeTombstonedEntryIfMatches",
+               "tombstone cleanup ownership agreement");
+  requireToken(root / "src/main.cpp", "removeIfMatches",
+               "tombstone byte-identity verification");
+  requireToken(root / "src/replay/ReplayFileAssociationCoordinator.cpp",
+               "recordInstallIntent",
+               "pre-install replay ownership journal");
   requireToken(root / "src/PlayerProfileManager.cpp",
                "loadAgreedModernReplayFileInventory",
                "profile transfer complete replay ownership inventory");

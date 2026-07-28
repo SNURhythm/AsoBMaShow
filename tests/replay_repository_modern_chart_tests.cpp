@@ -218,14 +218,14 @@ void testSchemaReservationAtomicStageAndExactRetry() {
   const auto file = attachment(*reserved.reservation);
   const replay::ReplayFileOwnershipReceipt ownership{
       .attemptToken = completed.attemptId, .metadata = file.metadata};
-  const auto recorded = repository.RecordModernReplayInstalledOwnership(
+  const auto recorded = repository.RecordModernReplayInstallIntent(
       *reserved.reservation, ownership);
   assert(recorded.status == ModernReplayOwnershipRecordStatus::Recorded &&
          recorded.reservation &&
          recorded.reservation->ownedFile == file.metadata);
   const auto repeatedOwnership =
-      repository.RecordModernReplayInstalledOwnership(*recorded.reservation,
-                                                      ownership);
+      repository.RecordModernReplayInstallIntent(*recorded.reservation,
+                                                  ownership);
   assert(repeatedOwnership.status ==
              ModernReplayOwnershipRecordStatus::AlreadyRecorded &&
          repeatedOwnership.reservation == recorded.reservation);

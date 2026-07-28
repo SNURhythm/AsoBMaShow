@@ -1488,11 +1488,10 @@ int run() {
                       return replay::loadAgreedModernReplayTombstoneInventory(
                           context.replayRepository);
                     },
-                    .removeReferencedEntry =
+                    .removeTombstonedEntryIfMatches =
                         [&store](const replay::ReplayFileMetadata &metadata,
                                  std::string &diagnostic) {
-                          return store.removeReferencedEntry(metadata,
-                                                             diagnostic);
+                          return store.removeIfMatches(metadata, diagnostic);
                         },
                     .removeStaleTemporaryFiles =
                         [&store](auto cutoff) {

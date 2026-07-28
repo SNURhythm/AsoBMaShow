@@ -197,7 +197,7 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
   const auto file = attachment(reservation);
   const replay::ReplayFileOwnershipReceipt ownership{
       .attemptToken = completed.attemptId, .metadata = file.metadata};
-  const auto recorded = repository.RecordModernReplayInstalledOwnership(
+  const auto recorded = repository.RecordModernReplayInstallIntent(
       reservation, ownership);
   assert(recorded.status == ModernReplayOwnershipRecordStatus::Recorded &&
          recorded.reservation &&

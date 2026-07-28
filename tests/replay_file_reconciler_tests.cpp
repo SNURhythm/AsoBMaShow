@@ -63,7 +63,7 @@ void testOnlyTombstonedOwnershipIsRemoved() {
             .status = ModernReplayFileInventoryStatus::Loaded,
             .entries = {deleted, failed}};
       },
-      .removeReferencedEntry =
+      .removeTombstonedEntryIfMatches =
           [&](const replay::ReplayFileMetadata &metadata,
               std::string &diagnostic) {
             removed.push_back(metadata.relativePath);
@@ -97,7 +97,7 @@ void testInventoryFailureIsNonThrowingAndConservative() {
             .status = ModernReplayFileInventoryStatus::StorageFailure,
             .diagnostic = "database unavailable"};
       },
-      .removeReferencedEntry = [](const auto &, auto &) {
+      .removeTombstonedEntryIfMatches = [](const auto &, auto &) {
         assert(false && "no path is removed without inventory authority");
         return false;
       },
@@ -129,7 +129,9 @@ void testStaleReservationsRemoveOnlyUncommittedReplayPaths() {
         return ModernReplayFileInventoryOutcome{
             .status = ModernReplayFileInventoryStatus::Loaded};
       },
-      .removeReferencedEntry = [](const auto &, auto &) { return true; },
+      .removeTombstonedEntryIfMatches = [](const auto &, auto &) {
+        return true;
+      },
       .removeStaleTemporaryFiles = [](auto) {},
       .listReservations = [&] {
         return replay::ModernReplayReservationReconciliationOutcome{

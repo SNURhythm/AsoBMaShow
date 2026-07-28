@@ -227,9 +227,10 @@ struct ModernReplayPathReservation {
   std::string attemptId;
   replay::ReplayPathIdentity identity;
   std::int64_t createdAtUnixMillis = 0;
-  // Present only when this attempt proved that it created the installed file.
-  // Path-only reservations and pre-existing identical files deliberately have
-  // no cleanup authority.
+  // Present once this attempt durably journals the exact bytes it is about to
+  // install. Automatic cleanup authority remains conditional on the current
+  // file still matching this metadata. Path-only reservations and known
+  // pre-existing files deliberately have no cleanup authority.
   std::optional<replay::ReplayFileMetadata> ownedFile;
 
   bool operator==(const ModernReplayPathReservation &) const = default;
@@ -537,7 +538,7 @@ public:
   ModernReplayReservationOutcome
   ReserveModernReplayPath(std::string_view attemptId, std::string_view stem,
                           std::int64_t createdAtUnixMillis);
-  ModernReplayOwnershipRecordOutcome RecordModernReplayInstalledOwnership(
+  ModernReplayOwnershipRecordOutcome RecordModernReplayInstallIntent(
       const ModernReplayPathReservation &reservation,
       const replay::ReplayFileOwnershipReceipt &receipt);
   ModernReplayReservationReleaseOutcome ReleaseModernReplayPathReservation(

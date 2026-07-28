@@ -15,7 +15,7 @@ namespace replay {
 struct ReplayFileReconcilerDependencies {
   std::function<ModernReplayFileInventoryOutcome()> listTombstones;
   std::function<bool(const ReplayFileMetadata &, std::string &)>
-      removeReferencedEntry;
+      removeTombstonedEntryIfMatches;
   std::function<void(std::chrono::system_clock::time_point)>
       removeStaleTemporaryFiles;
   std::function<ModernReplayReservationReconciliationOutcome()>

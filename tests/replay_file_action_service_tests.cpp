@@ -1,9 +1,10 @@
 #include "replay/ReplayFileActionService.h"
 
 #include "repositories/ReplayRepository.h"
-#include "replay/ReplayFileStore.h"
 #include "replay/BeatorajaReplayPath.h"
+#include "replay/ReplayFileAssociationCoordinator.h"
 #include "replay/ReplayFileReconciler.h"
+#include "replay/ReplayFileStore.h"
 #include "replay/ReplayProfileInventory.h"
 #include "sqlite3.h"
 
@@ -12,6 +13,8 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -389,7 +392,7 @@ void testRestartReconciliationRemovesOnlyUnattachedFinalFiles() {
         store.install(*fileReservation.reservation, bytes);
     assert(installed.state == replay::ReplayInstallState::InstalledVerified &&
            installed.file && installed.file->lifecycle.receipt);
-    const auto owned = repository.RecordModernReplayInstalledOwnership(
+    const auto owned = repository.RecordModernReplayInstallIntent(
         *reserved.reservation, *installed.file->lifecycle.receipt);
     assert(owned.status == ModernReplayOwnershipRecordStatus::Recorded &&
            owned.reservation && owned.reservation->ownedFile);
@@ -417,10 +420,10 @@ void testRestartReconciliationRemovesOnlyUnattachedFinalFiles() {
       .listTombstones = [&] {
         return replay::loadAgreedModernReplayTombstoneInventory(repository);
       },
-      .removeReferencedEntry =
+      .removeTombstonedEntryIfMatches =
           [&](const replay::ReplayFileMetadata &metadata,
               std::string &diagnostic) {
-            return store.removeReferencedEntry(metadata, diagnostic);
+            return store.removeIfMatches(metadata, diagnostic);
           },
       .removeStaleTemporaryFiles =
           [&](auto cutoff) { store.removeStaleTemporaryFiles(cutoff); },
@@ -464,6 +467,105 @@ void testRestartReconciliationRemovesOnlyUnattachedFinalFiles() {
          preservedAttached.record && preservedAttached.record->replayFile);
 }
 
+void testCrashAfterFinalInstallUsesPreinstalledOwnershipJournal() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replays.db");
+  assert(repository.EnsureSchema());
+  auto completed = result(5, 'a');
+  const std::vector bytes{std::byte{0x1f}, std::byte{0x8b}, std::byte{0x08},
+                          std::byte{0x2a}};
+  bool interrupted = false;
+  auto store = std::make_shared<replay::ReplayFileStore>(
+      temporary.path,
+      replay::ReplayFileStoreFaults{
+          .failAt = [&](std::string_view point) {
+            if (point == "after-install") {
+              interrupted = true;
+              return true;
+            }
+            return false;
+          }});
+  replay::ReplayFileAssociationCoordinator coordinator({
+      .reservePath =
+          [&](std::string_view attemptId, std::string_view stem,
+              std::int64_t playedAt) {
+            return repository.ReserveModernReplayPath(attemptId, stem,
+                                                      playedAt);
+          },
+      .releasePath = [&](const auto &reservation) {
+        return repository.ReleaseModernReplayPathReservation(reservation);
+      },
+      .reserveFile =
+          [store](const auto &identity, std::span<const std::byte> payload,
+                  std::string_view attemptId) {
+            return store->reserve(identity, payload, attemptId);
+          },
+      .installFile =
+          [store](const auto &reservation,
+                  std::span<const std::byte> payload,
+                  const replay::ReplayInstallOwnershipJournal &journal) {
+            return store->install(reservation, payload, journal);
+          },
+      .recordInstallIntent = [&](const auto &reservation,
+                                 const auto &receipt) {
+        return repository.RecordModernReplayInstallIntent(reservation,
+                                                          receipt);
+      },
+      .inspectFile =
+          [store](const auto &metadata) { return store->inspect(metadata); },
+      .removeIfMatches =
+          [store](const auto &metadata, std::string &diagnostic) {
+            return store->removeIfMatches(metadata, diagnostic);
+          },
+  });
+  const auto associated = coordinator.associate(
+      completed.attemptId, completed.score.chartSha256,
+      completed.playedAtUnixMillis,
+      [&](std::string &) { return std::optional(bytes); });
+  assert(interrupted &&
+         associated.status == replay::ReplayFileAssociationStatus::Attached &&
+         associated.association &&
+         associated.association->ownership ==
+             replay::ReplayFileInstalledOwnership::Ambiguous);
+
+  const auto pending = repository.ListModernReplayPathReservations();
+  assert(pending.status == ModernReplayFileInventoryStatus::Loaded &&
+         pending.reservations.size() == 1 &&
+         pending.reservations.front().ownedFile.has_value());
+  const auto installedPath = temporary.path /
+                             pending.reservations.front().identity.relativePath;
+  assert(std::filesystem::exists(installedPath));
+
+  replay::ReplayFileStore restartStore(temporary.path);
+  replay::ReplayFileReconciler reconciler({
+      .listTombstones = [&] {
+        return replay::loadAgreedModernReplayTombstoneInventory(repository);
+      },
+      .removeTombstonedEntryIfMatches =
+          [&](const auto &metadata, std::string &diagnostic) {
+            return restartStore.removeIfMatches(metadata, diagnostic);
+          },
+      .removeStaleTemporaryFiles =
+          [&](auto cutoff) { restartStore.removeStaleTemporaryFiles(cutoff); },
+      .listReservations = [&] {
+        return replay::loadAgreedModernReplayPathReservationInventory(
+            repository);
+      },
+      .removeOwnedReservedEntry =
+          [&](const auto &metadata, std::string &diagnostic) {
+            return restartStore.removeIfMatches(metadata, diagnostic);
+          },
+      .releaseReservation = [&](const auto &reservation) {
+        return repository.ReleaseModernReplayPathReservation(reservation);
+      },
+  });
+  const auto report = reconciler.reconcile(std::chrono::system_clock::now());
+  assert(report.failures.empty() &&
+         report.unassociatedFilesRemoved == 1 &&
+         report.reservationsReleased == 1 &&
+         !std::filesystem::exists(installedPath));
+}
+
 void testRestartReconciliationReleasesPathOnlyReservationWithoutDeletingOccupant() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path / "replays.db";
@@ -488,10 +590,10 @@ void testRestartReconciliationReleasesPathOnlyReservationWithoutDeletingOccupant
       .listTombstones = [&] {
         return replay::loadAgreedModernReplayTombstoneInventory(repository);
       },
-      .removeReferencedEntry =
+      .removeTombstonedEntryIfMatches =
           [&](const replay::ReplayFileMetadata &metadata,
               std::string &diagnostic) {
-            return store.removeReferencedEntry(metadata, diagnostic);
+            return store.removeIfMatches(metadata, diagnostic);
           },
       .removeStaleTemporaryFiles =
           [&](auto cutoff) { store.removeStaleTemporaryFiles(cutoff); },
@@ -520,6 +622,49 @@ void testRestartReconciliationReleasesPathOnlyReservationWithoutDeletingOccupant
   const std::string preserved((std::istreambuf_iterator<char>(input)),
                               std::istreambuf_iterator<char>());
   assert(preserved == "pre-existing unrelated replay bytes");
+}
+
+void testRestartTombstoneCleanupPreservesReplacementBytes() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replays.db");
+  assert(repository.EnsureSchema());
+  replay::ReplayFileStore store(temporary.path);
+  const auto installed = installResult(repository, store, 4, 'f');
+  const auto tombstoned = repository.MarkModernReplayFileUserDeleted(
+      ModernReplayOwnerKind::ChartResult, installed.result.attemptId,
+      installed.reference);
+  assert(tombstoned.status == ModernReplayFileMutationStatus::Changed);
+
+  const auto path = temporary.path / installed.reference.metadata.relativePath;
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output << "replacement replay bytes";
+  }
+
+  replay::ReplayFileReconciler reconciler({
+      .listTombstones = [&] {
+        return replay::loadAgreedModernReplayTombstoneInventory(repository);
+      },
+      .removeTombstonedEntryIfMatches =
+          [&](const replay::ReplayFileMetadata &metadata,
+              std::string &diagnostic) {
+            return store.removeIfMatches(metadata, diagnostic);
+          },
+      .removeStaleTemporaryFiles =
+          [&](auto cutoff) { store.removeStaleTemporaryFiles(cutoff); },
+      .listReservations = [] {
+        return replay::ModernReplayReservationReconciliationOutcome{
+            .status = ModernReplayFileInventoryStatus::Loaded};
+      },
+  });
+  const auto report = reconciler.reconcile(std::chrono::system_clock::now());
+
+  assert(report.tombstonesFound == 1 && report.filesRemoved == 0 &&
+         report.failures.size() == 1 && std::filesystem::exists(path));
+  std::ifstream input(path, std::ios::binary);
+  const std::string preserved((std::istreambuf_iterator<char>(input)),
+                              std::istreambuf_iterator<char>());
+  assert(preserved == "replacement replay bytes");
 }
 
 void testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization() {
@@ -556,7 +701,9 @@ int main() {
   testUnsupportedCodecSkipsMaterializationAndRemainsDeletable();
   testReservationInventoryChecksWhetherChartStagingCommitted();
   testRestartReconciliationRemovesOnlyUnattachedFinalFiles();
+  testCrashAfterFinalInstallUsesPreinstalledOwnershipJournal();
   testRestartReconciliationReleasesPathOnlyReservationWithoutDeletingOccupant();
+  testRestartTombstoneCleanupPreservesReplacementBytes();
   testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization();
   return 0;
 }

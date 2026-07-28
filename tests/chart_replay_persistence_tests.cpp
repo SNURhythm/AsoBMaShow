@@ -1,5 +1,7 @@
 #include "replay/ChartReplayPersistence.h"
 #include "replay/ChartReplayCapture.h"
+#include "replay/ReplayCapabilities.h"
+#include "replay/ReplayFileActionService.h"
 
 #include <chrono>
 #include <filesystem>
@@ -196,6 +198,27 @@ void testCompletionCaptureBuildsIndependentResultSnapshotAndReplay() {
              malformed->irSnapshot && !malformed->replay &&
              !diagnostic.empty(),
          "malformed raw detail cannot discard result or postponed IR facts");
+
+  auto noLongNotes = result();
+  noLongNotes.score.longNoteMode = 0;
+  noLongNotes.resultFingerprint =
+      result_persistence::modernResultFingerprint(noLongNotes);
+  ChartReplayCapture noLongNoteCapture{
+      .result = noLongNotes,
+      .setupFacts =
+          {.chart = {.md5 = noLongNotes.score.chartMd5,
+                     .sha256 = noLongNotes.score.chartSha256,
+                     .keyMode = noLongNotes.keyMode},
+           .longNoteMode = 1,
+           .hasUndefinedLongNotes = false},
+      .acceptedInput = std::vector<InputTransition>{},
+      .timeBounds = {.completionSongTimeMicros = 5'000'000},
+  };
+  const auto noLongNoteAttempt = captureChartReplayPersistenceAttempt(
+      noLongNoteCapture, diagnostic);
+  expect(noLongNoteAttempt && noLongNoteAttempt->replay &&
+             noLongNoteAttempt->replay->playback.setup.longNoteMode == 1,
+         "a no-LN score bucket keeps its actual replay setup mode");
 }
 
 ReplayFileMetadata metadata(const ReplayPathIdentity &identity,
@@ -324,7 +347,19 @@ struct Harness {
                            .temporaryRelativePath = "replay/private.tmp"}};
                  },
              .installFile =
-                 [this](const auto &reservation, auto) {
+                 [this](const auto &reservation, auto,
+                        const ReplayInstallOwnershipJournal &journal) {
+                   if (!installed.existingIdenticalFile) {
+                     std::string diagnostic;
+                     const ReplayFileOwnershipReceipt receipt{
+                         .attemptToken = reservation.attemptToken,
+                         .metadata = reservation.expectedMetadata};
+                     if (!journal || !journal(receipt, diagnostic)) {
+                       return ReplayInstallOutcome{
+                           .state = ReplayInstallState::Failed,
+                           .diagnostic = std::move(diagnostic)};
+                     }
+                   }
                    events.emplace_back("install");
                    auto outcome = installed;
                    if (outcome.file) {
@@ -336,7 +371,7 @@ struct Harness {
                    }
                    return outcome;
                  },
-             .recordInstalledOwnership =
+             .recordInstallIntent =
                  [this](const ModernReplayPathReservation &reservation,
                         const ReplayFileOwnershipReceipt &receipt) {
                    events.emplace_back("record-ownership");
@@ -412,8 +447,8 @@ void testFileFirstSuccessAndExactRetry() {
          "complete file-first pipeline saves a replay-backed result");
   expect(harness.events ==
              std::vector<std::string>({"load-result", "reserve-path", "encode",
-                                       "reserve-file", "install",
-                                       "record-ownership", "stage-file",
+                                       "reserve-file", "record-ownership",
+                                       "install", "stage-file",
                                        "load-pending", "project", "ack"}),
          "file bytes install before the result transaction and projection");
 
@@ -506,13 +541,14 @@ void testAmbiguousInstallOccupiedSlotAndCleanupBoundaries() {
     auto dependencies = harness.dependencies();
     const auto baseInstall = dependencies.fileAssociation.installFile;
     dependencies.fileAssociation.installFile =
-        [&, baseInstall](const auto &reservation, auto bytes) {
+        [&, baseInstall](const auto &reservation, auto bytes,
+                         const ReplayInstallOwnershipJournal &journal) {
       if (installs++ == 0) {
         harness.events.emplace_back("install");
         return ReplayInstallOutcome{.state = ReplayInstallState::Occupied,
                                     .diagnostic = "occupied"};
       }
-      return baseInstall(reservation, bytes);
+      return baseInstall(reservation, bytes, journal);
     };
     ChartReplayPersistence persistence(std::move(dependencies));
     const auto saved = persistence.persist(harness.attempt);
@@ -676,6 +712,18 @@ void testRealRepositoriesPersistBrdAndAdvanceOccupiedSlot() {
              repository.LoadPendingModernChartScore(attempt.result.attemptId)
                      .status == result_persistence::PendingReadStatus::NotFound,
          "real result owns a contained BRD and no acknowledged pending row");
+  ReplayFileActionService actions(repository);
+  const auto inspected = actions.inspect(
+      {.owner = ModernReplayOwnerKind::ChartResult,
+       .attemptId = attempt.result.attemptId});
+  const auto capabilities = capabilitiesFor(
+      {.origin = RecordOrigin::ModernChartResult,
+       .replayState = replayStateForFileAction(inspected.state)});
+  expect(inspected.state == ReplayFileActionState::Verified &&
+             capabilities.viewResult && capabilities.watch &&
+             capabilities.gBattle && capabilities.videoExport &&
+             capabilities.shareOrCopy,
+         "fresh persisted BRD projects all chart replay actions in Records");
   const auto retry = persistence.persist(attempt);
   expect(retry.state == ChartReplayPersistenceState::SavedWithReplay &&
              retry.receipt == saved.receipt,

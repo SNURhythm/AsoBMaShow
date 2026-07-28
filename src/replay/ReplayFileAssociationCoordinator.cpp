@@ -74,7 +74,8 @@ ReplayFileAssociationOutcome ReplayFileAssociationCoordinator::associate(
     std::int64_t playedAtUnixMillis, const ReplayFileEncoder &encode) const {
   ReplayFileAssociationOutcome outcome;
   if (!dependencies_.reservePath || !dependencies_.reserveFile ||
-      !dependencies_.installFile || !dependencies_.inspectFile || !encode) {
+      !dependencies_.installFile || !dependencies_.recordInstallIntent ||
+      !dependencies_.inspectFile || !encode) {
     outcome.diagnostic = "replay file association dependencies are incomplete";
     return outcome;
   }
@@ -112,54 +113,69 @@ ReplayFileAssociationOutcome ReplayFileAssociationCoordinator::associate(
       return outcome;
     }
 
-    auto installed =
-        dependencies_.installFile(*fileReservation.reservation, *encoded);
+    const ReplayInstallOwnershipJournal journal =
+        [&](const ReplayFileOwnershipReceipt &receipt,
+            std::string &journalDiagnostic) {
+          if (receipt.attemptToken != pathReservation.attemptId ||
+              receipt.metadata !=
+                  fileReservation.reservation->expectedMetadata) {
+            journalDiagnostic =
+                "replay install intent differs from its reservation";
+            return false;
+          }
+          if (pathReservation.ownedFile) {
+            if (*pathReservation.ownedFile == receipt.metadata) {
+              return true;
+            }
+            journalDiagnostic =
+                "replay reservation has a different install intent";
+            return false;
+          }
+
+          auto recorded =
+              dependencies_.recordInstallIntent(pathReservation, receipt);
+          if ((recorded.status !=
+                   ModernReplayOwnershipRecordStatus::Recorded &&
+               recorded.status !=
+                   ModernReplayOwnershipRecordStatus::AlreadyRecorded) ||
+              !recorded.reservation ||
+              recorded.reservation->attemptId != pathReservation.attemptId ||
+              recorded.reservation->identity != pathReservation.identity ||
+              recorded.reservation->createdAtUnixMillis !=
+                  pathReservation.createdAtUnixMillis ||
+              recorded.reservation->ownedFile !=
+                  std::optional(receipt.metadata)) {
+            journalDiagnostic =
+                recorded.diagnostic.empty()
+                    ? "replay install intent could not be recorded"
+                    : std::move(recorded.diagnostic);
+            return false;
+          }
+          pathReservation = std::move(*recorded.reservation);
+          return true;
+        };
+    auto installed = dependencies_.installFile(
+        *fileReservation.reservation, *encoded, journal);
     if (installed.state == ReplayInstallState::InstalledVerified &&
         installed.file &&
         validInstalledFile(*installed.file, *fileReservation.reservation)) {
-      if (!installed.existingIdenticalFile) {
-        const auto &receipt = installed.file->lifecycle.receipt;
-        ModernReplayOwnershipRecordOutcome recorded;
-        if (dependencies_.recordInstalledOwnership && receipt) {
-          recorded = dependencies_.recordInstalledOwnership(pathReservation,
-                                                             *receipt);
-        } else {
-          recorded.diagnostic =
-              "installed replay ownership recording is unavailable";
-        }
-        if ((recorded.status !=
-                 ModernReplayOwnershipRecordStatus::Recorded &&
-             recorded.status !=
-                 ModernReplayOwnershipRecordStatus::AlreadyRecorded) ||
-            !recorded.reservation ||
-            recorded.reservation->attemptId != pathReservation.attemptId ||
-            recorded.reservation->identity != pathReservation.identity ||
-            recorded.reservation->createdAtUnixMillis !=
-                pathReservation.createdAtUnixMillis ||
-            recorded.reservation->ownedFile !=
-                std::optional(fileReservation.reservation->expectedMetadata)) {
-          appendDiagnostic(
-              outcome.diagnostic, "replay omitted",
-              recorded.diagnostic.empty()
-                  ? "installed replay ownership could not be recorded"
-                  : recorded.diagnostic);
-          if (dependencies_.removeIfMatches) {
-            std::string cleanupDiagnostic;
-            if (!dependencies_.removeIfMatches(
-                    fileReservation.reservation->expectedMetadata,
-                    cleanupDiagnostic)) {
-              appendDiagnostic(outcome.diagnostic, "replay cleanup",
-                               cleanupDiagnostic);
-            }
-          }
-          return outcome;
-        }
-        pathReservation = std::move(*recorded.reservation);
-      }
-      outcome.status = ReplayFileAssociationStatus::Attached;
       const bool ownedByAttempt =
           pathReservation.ownedFile ==
           std::optional(installed.file->metadata);
+      if (!installed.existingIdenticalFile && !ownedByAttempt) {
+        appendDiagnostic(outcome.diagnostic, "replay omitted",
+                         "installed replay has no durable install intent");
+        if (dependencies_.removeIfMatches) {
+          std::string cleanupDiagnostic;
+          if (!dependencies_.removeIfMatches(installed.file->metadata,
+                                              cleanupDiagnostic)) {
+            appendDiagnostic(outcome.diagnostic, "replay cleanup",
+                             cleanupDiagnostic);
+          }
+        }
+        return outcome;
+      }
+      outcome.status = ReplayFileAssociationStatus::Attached;
       outcome.association = attached(
           pathReservation, installed.file->metadata,
           installed.existingIdenticalFile && !ownedByAttempt

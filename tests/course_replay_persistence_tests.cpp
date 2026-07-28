@@ -305,7 +305,19 @@ struct Harness {
                  },
              .installFile =
                  [this](const ReplayFileReservation &reservation,
-                        std::span<const std::byte>) {
+                        std::span<const std::byte>,
+                        const ReplayInstallOwnershipJournal &journal) {
+                   if (!installed.existingIdenticalFile) {
+                     std::string diagnostic;
+                     const ReplayFileOwnershipReceipt receipt{
+                         .attemptToken = reservation.attemptToken,
+                         .metadata = reservation.expectedMetadata};
+                     if (!journal || !journal(receipt, diagnostic)) {
+                       return ReplayInstallOutcome{
+                           .state = ReplayInstallState::Failed,
+                           .diagnostic = std::move(diagnostic)};
+                     }
+                   }
                    events.emplace_back("install");
                    auto outcome = installed;
                    if (outcome.file) {
@@ -317,7 +329,7 @@ struct Harness {
                    }
                    return outcome;
                  },
-             .recordInstalledOwnership =
+             .recordInstallIntent =
                  [this](const ModernReplayPathReservation &reservation,
                         const ReplayFileOwnershipReceipt &receipt) {
                    events.emplace_back("record-ownership");
@@ -357,8 +369,8 @@ void testReplayBackedSummaryOnlyAndExactRetry() {
              saved.saved() && saved.replayAttached && saved.receipt &&
              harness.events == std::vector<std::string>(
                                    {"load-result", "reserve-path", "encode",
-                                    "reserve-file", "install",
-                                    "record-ownership", "stage-file"}),
+                                    "reserve-file", "record-ownership",
+                                    "install", "stage-file"}),
          "course persistence associates one BRD with its strict result");
 
   Harness replayless;

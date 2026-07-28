@@ -1603,7 +1603,7 @@ ReplayRepository::ReserveModernReplayPath(std::string_view attemptId,
 }
 
 ModernReplayOwnershipRecordOutcome
-ReplayRepository::RecordModernReplayInstalledOwnership(
+ReplayRepository::RecordModernReplayInstallIntent(
     const ModernReplayPathReservation &reservation,
     const replay::ReplayFileOwnershipReceipt &receipt) {
   profile_database_activity::WriteGuard writeGuard;
@@ -1622,7 +1622,7 @@ ReplayRepository::RecordModernReplayInstalledOwnership(
       !validCurrentAttachment(attachment, diagnostic)) {
     return {.status = ModernReplayOwnershipRecordStatus::Invalid,
             .diagnostic = diagnostic.empty()
-                              ? "modern replay ownership receipt is invalid"
+                              ? "modern replay install intent is invalid"
                               : std::move(diagnostic)};
   }
 
@@ -1636,7 +1636,7 @@ ReplayRepository::RecordModernReplayInstalledOwnership(
       impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
   if (!transaction.active()) {
     return {.status = ModernReplayOwnershipRecordStatus::StorageFailure,
-            .diagnostic = "could not start replay ownership recording"};
+            .diagnostic = "could not start replay install intent recording"};
   }
 
   SqliteStatementHandle query;
@@ -1667,7 +1667,7 @@ ReplayRepository::RecordModernReplayInstalledOwnership(
       stored->createdAtUnixMillis != reservation.createdAtUnixMillis) {
     return {.status = ModernReplayOwnershipRecordStatus::IntegrityConflict,
             .diagnostic =
-                "replay ownership receipt names a different reservation"};
+                "replay install intent names a different reservation"};
   }
   if (stored->ownedFile) {
     if (*stored->ownedFile != receipt.metadata) {
@@ -1712,7 +1712,7 @@ ReplayRepository::RecordModernReplayInstalledOwnership(
       sqlite3_changes(impl_->sessionDatabase) != 1 ||
       !transaction.commit(transactionError)) {
     return {.status = ModernReplayOwnershipRecordStatus::StorageFailure,
-            .diagnostic = "could not commit replay ownership receipt"};
+            .diagnostic = "could not commit replay install intent"};
   }
   stored->ownedFile = receipt.metadata;
   return {.status = ModernReplayOwnershipRecordStatus::Recorded,
