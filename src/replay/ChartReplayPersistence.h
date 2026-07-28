@@ -67,7 +67,11 @@ struct ChartReplayRecoverySummary {
   std::string diagnostic;
 };
 
-[[nodiscard]] std::string_view chartReplayRecoveryUserMessage() noexcept;
+[[nodiscard]] inline constexpr std::string_view
+chartReplayRecoveryUserMessage() noexcept {
+  return "Some previously completed results are still waiting to be saved. "
+         "They were kept safely and will be retried later.";
+}
 
 struct ChartReplayPersistenceDependencies {
   std::function<ModernChartResultReadOutcome(std::string_view)> loadResult;

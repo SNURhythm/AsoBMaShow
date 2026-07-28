@@ -13,10 +13,6 @@
 namespace replay {
 namespace {
 
-constexpr std::string_view kRecoveryMessage =
-    "Some previously completed results are still waiting to be saved. They "
-    "were kept safely and will be retried later.";
-
 void appendDiagnostic(std::string &destination, std::string_view phase,
                       std::string_view diagnostic) {
   if (diagnostic.empty()) {
@@ -36,10 +32,6 @@ ChartReplayPersistenceState savedState(bool replayAttached) noexcept {
 }
 
 } // namespace
-
-std::string_view chartReplayRecoveryUserMessage() noexcept {
-  return kRecoveryMessage;
-}
 
 ChartReplayPersistence::ChartReplayPersistence(
     ScoreRepository &score, ReplayRepository &repository) {

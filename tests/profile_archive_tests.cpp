@@ -12,6 +12,7 @@
 #include "../src/input/InputProfileStore.h"
 #include "../src/sqlite3.h"
 #include "../yoga/lib/nlohmann/json.hpp"
+#include "ReplayLegacyFixture.h"
 
 #include <archive_entry.h>
 
@@ -273,11 +274,23 @@ std::int64_t matchingRowCount(const std::filesystem::path &database,
   return sqlite3_column_int64(statement.get(), 0);
 }
 
+result_persistence::ModernChartResult portableReplayResult(int suffix,
+                                                           char hash);
+
 void seedIrOperationalState(const std::filesystem::path &path,
                             std::string_view label) {
   ReplayRepository repository(path);
   expect(repository.EnsureSchema(),
          std::string(label) + " IR outbox schema initializes");
+  const auto modern = portableReplayResult(9, 'd');
+  const auto staged = repository.StageModernChartResult(
+      modern, std::nullopt, std::nullopt, {});
+  expect((staged.status == ModernChartStageStatus::Staged ||
+          staged.status == ModernChartStageStatus::AlreadyStaged) &&
+             staged.receipt,
+         std::string(label) + " modern IR receipt owner stages");
+  const int modernResultId =
+      staged.receipt.has_value() ? staged.receipt->resultId : 0;
   repository.Shutdown();
   Database database = openDatabase(path);
   expect(database != nullptr,
@@ -306,19 +319,14 @@ void seedIrOperationalState(const std::filesystem::path &path,
              "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
              "5,1,NULL,NULL,NULL,3000,3000,3000)"),
          std::string(label) + " pending, deferred, and succeeded IR rows seed");
-  expect(
-      execute(
-          database.get(),
-          "INSERT INTO replays(chart_sha256,gauge_type,gauge_auto_shift,"
-          "final_score,max_combo,final_gauge,clear_type,assist_option) "
-          "VALUES('"
-          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
-          "0,0,1,1,0.0,0,'OFF');"
+  expect(execute(
+             database.get(),
           "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
-          "replay_id,attempt_id,chart_sha256,confirmation_source,"
-          "confirmed_at_ms) VALUES('tachi','https://boku.tachi.ac',"
-          "last_insert_rowid(),'10000000-0000-4000-8000-000000000004',"
-          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "modern_chart_result_id,attempt_id,chart_md5,chart_sha256,"
+          "confirmation_source,confirmed_at_ms) VALUES('tachi',"
+          "'https://boku.tachi.ac'," + std::to_string(modernResultId) + ", '" +
+          modern.attemptId + "','" + modern.score.chartMd5 + "','" +
+          modern.score.chartSha256 + "',"
           "1,4000);"
           "INSERT INTO ir_remote_scores(provider_id,server_origin,"
           "remote_score_id,remote_user_id,game,remote_chart_id,chart_md5,"
@@ -653,25 +661,27 @@ struct Fixture {
                "13,14,15,16,0.75,2,73,0,'" +
                    std::string(provenance) + "')"),
            "score provenance row inserts");
-    expect(
-        execute(replays.get(),
-                "INSERT INTO replays (chart_path,chart_md5,chart_sha256,"
-                "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
-                "final_score,max_combo,final_gauge,clear_type,assist_option,"
-                "ruleset_version,eligibility,provenance_json) VALUES "
-                "('portable.bms','0123456789abcdef0123456789abcdef',"
-                "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                "aaa',"
-                "'Portable Song','Portable Artist',0,0,0,123,7,0.75,2,'OFF',"
-                "73,0,'" +
-                    std::string(provenance) + "')"),
-        "replay provenance row inserts");
-    expect(execute(replays.get(),
-                   "INSERT INTO replay_events (replay_id,event_index,action,"
-                   "lane,note_time_micros,song_time_micros,judge_time_micros,"
-                   "judgement,diff_micros,gauge,gauge_type,combo,score) VALUES "
-                   "(1,0,1,2,1000,1001,1002,0,2,0.75,0,7,123)"),
-           "replay event payload inserts");
+    expect(execute(
+               replays.get(),
+               "INSERT INTO legacy_chart_result_summaries("
+               "legacy_replay_id,chart_path,chart_md5,chart_sha256,chart_title,"
+               "chart_artist,long_note_mode,final_score,max_combo,final_gauge,"
+               "clear_type,created_at,ruleset_version,eligibility,"
+               "provenance_json,partial) VALUES(1,'portable.bms',"
+               "'0123456789abcdef0123456789abcdef',"
+               "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+               "'Portable Song','Portable Artist',0,123,7,0.75,2,"
+               "'2026-07-11 01:23:45',73,0,'" +
+                   std::string(provenance) + "',0);"
+               "INSERT INTO legacy_course_result_summaries("
+               "legacy_course_replay_id,legacy_course_id,course_key,"
+               "course_name,course_group_name,constraint_json,final_score,"
+               "max_combo,final_gauge,clear_type,completed_charts,total_charts,"
+               "created_at,ruleset_version,eligibility,provenance_json,partial)"
+               " VALUES(2,7,NULL,'Portable Course','Archive Contract','[]',"
+               "321,NULL,0.5,2,1,2,'2026-07-11 01:24:45',73,0,'" +
+                   std::string(provenance) + "',1)"),
+           "legacy chart and partial course summaries insert");
   }
 };
 
@@ -1323,16 +1333,21 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
          "score provenance payload round-trips exactly");
   expect(scalarText(importedPaths.replaysDb,
                     "SELECT ruleset_version || '|' || eligibility || '|' || "
-                    "provenance_json FROM replays WHERE chart_path = "
-                    "'portable.bms'") == expectedProvenance &&
+                    "provenance_json FROM legacy_chart_result_summaries WHERE "
+                    "legacy_replay_id=1") == expectedProvenance &&
              scalarText(importedPaths.replaysDb,
-                        "SELECT action || '|' || lane || '|' || "
-                        "note_time_micros || '|' || song_time_micros || '|' || "
-                        "judge_time_micros || '|' || judgement || '|' || "
-                        "diff_micros || '|' || combo || '|' || score FROM "
-                        "replay_events WHERE event_index = 0") ==
-                 "1|2|1000|1001|1002|0|2|7|123",
-         "replay provenance and event payloads round-trip exactly");
+                        "SELECT partial || '|' || course_name || '|' || "
+                        "completed_charts || '|' || total_charts FROM "
+                        "legacy_course_result_summaries WHERE "
+                        "legacy_course_replay_id=2") ==
+                 "1|Portable Course|1|2" &&
+             matchingRowCount(
+                 importedPaths.replaysDb,
+                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
+                 "name IN('replays','replay_events','replay_touch_samples',"
+                 "'replay_lane_cover_events','course_replays',"
+                 "'course_replay_stages')") == 0,
+         "summary-only chart/course history round-trips without playback rows");
   expect(transactionArtifacts(fixture.temp.path()).empty(),
          "successful create import leaves no transaction artifacts");
   expect(!observedWorkspace.empty() &&
@@ -2118,36 +2133,58 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
            std::pair{"scores.db", 4}, std::pair{"replays.db", 2}}) {
     const auto databasePath =
         fixture.temp.path() / (std::string(name) + ".old");
-    writeFile(databasePath, findMember(members, name)->contents);
-    Database database = openDatabase(databasePath);
-    expect(database != nullptr, "older database fixture opens");
-    if (!database) {
-      return;
-    }
     if (name == "scores.db") {
+      writeFile(databasePath, findMember(members, name)->contents);
+      Database database = openDatabase(databasePath);
+      expect(database != nullptr, "older score database fixture opens");
+      if (!database) {
+        return;
+      }
       expect(execute(database.get(),
                      "DROP TRIGGER IF EXISTS "
                      "score_sha256_summary_after_insert"),
              "legacy score fixture removes the current summary trigger");
-    }
-    const std::array<std::string_view, 2> tables =
-        name == "scores.db"
-            ? std::array<std::string_view, 2>{"scores", "course_scores"}
-            : std::array<std::string_view, 2>{"replays", "course_replays"};
-    for (const std::string_view table : tables) {
-      for (const std::string_view column :
-           {"provenance_json", "eligibility", "ruleset_version"}) {
-        expect(execute(database.get(), "ALTER TABLE " + std::string(table) +
-                                           " DROP COLUMN " +
-                                           std::string(column)),
-               "authentic legacy fixture removes " + std::string(table) + "." +
-                   std::string(column));
+      for (const std::string_view table : {"scores", "course_scores"}) {
+        for (const std::string_view column :
+             {"provenance_json", "eligibility", "ruleset_version"}) {
+          expect(execute(database.get(),
+                         "ALTER TABLE " + std::string(table) +
+                             " DROP COLUMN " + std::string(column)),
+                 "authentic legacy fixture removes " + std::string(table) +
+                     "." + std::string(column));
+        }
       }
+      expect(execute(database.get(),
+                     "PRAGMA user_version = " + std::to_string(version)),
+             "older score database fixture version updates");
+      database.reset();
+    } else {
+      std::string replayFixtureError;
+      expect(replay_legacy_fixture::replaceWithVersion2Database(
+                 databasePath, version,
+                 "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
+                 "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
+                 "final_score,max_combo,final_gauge,clear_type) VALUES(1,"
+                 "'portable.bms','0123456789abcdef0123456789abcdef',"
+                 "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+                 "'Portable Song','Portable Artist',0,0,0,123,7,0.75,2);"
+                 "INSERT INTO replay_events(replay_id,event_index,action,lane,"
+                 "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+                 "diff_micros,gauge,gauge_type,combo,score) VALUES"
+                 "(1,0,1,2,1000,1001,1002,0,2,0.75,0,999,999999);"
+                 "INSERT INTO course_replays(id,course_id,course_name,"
+                 "course_group_name,constraint_json,gauge_type,gauge_profile,"
+                 "gauge_auto_shift,ln_mode,final_score,max_combo,final_gauge,"
+                 "clear_type,completed_charts,total_charts) VALUES"
+                 "(2,7,'Portable Course','Archive Contract','[]',0,0,0,0,"
+                 "321,8,0.5,2,1,2);"
+                 "INSERT INTO course_replay_stages(course_replay_id,"
+                 "stage_index,replay_id,rest_micros_after_stage) VALUES"
+                 "(2,0,1,123456)",
+                 replayFixtureError),
+             "authentic legacy replay fixture is written: " +
+                 replayFixtureError);
     }
-    expect(execute(database.get(),
-                   "PRAGMA user_version = " + std::to_string(version)),
-           "older database fixture version updates");
-    database.reset();
     findMember(members, name)->contents = readFile(databasePath);
   }
   refreshChecksums(members);
@@ -2177,9 +2214,9 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
                  ReplayRepository::kCurrentSchemaVersion,
          "older score and replay databases migrate to current schemas");
   expect(rowCount(paths.scoresDb, "scores") == 1 &&
-             rowCount(paths.replaysDb, "replays") == 1 &&
-             rowCount(paths.replaysDb, "replay_events") == 1,
-         "database migrations preserve score, replay, and event rows");
+             rowCount(paths.replaysDb, "legacy_chart_result_summaries") == 1 &&
+             rowCount(paths.replaysDb, "legacy_course_result_summaries") == 1,
+         "database migrations preserve score and legacy header summaries");
   const std::string legacyProvenance =
       R"({"schemaVersion":1,"ruleset":{"version":0},"stages":[],"eligibility":"legacy-unverified"})";
   expect(scalarText(paths.scoresDb,
@@ -2190,24 +2227,30 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
                     "'portable.bms'") ==
              "Portable Song|Portable Artist|123|456|7|0|2|" + legacyProvenance,
          "score v4 migration preserves payload and backfills provenance");
+  expect(scalarText(
+             paths.replaysDb,
+             "SELECT chart_title || '|' || chart_artist || '|' || "
+             "final_score || '|' || max_combo || '|' || "
+             "(ruleset_version IS NULL) || '|' || (eligibility IS NULL) || "
+             "'|' || (provenance_json IS NULL) || '|' || partial FROM "
+             "legacy_chart_result_summaries WHERE chart_path='portable.bms'") ==
+             "Portable Song|Portable Artist|123|7|1|1|1|1",
+         "replay v2 migration preserves chart headers and marks unavailable "
+         "provenance partial");
   expect(scalarText(paths.replaysDb,
-                    "SELECT chart_title || '|' || chart_artist || '|' || "
-                    "final_score || '|' || max_combo || '|' || "
-                    "ruleset_version || '|' || eligibility || '|' || "
-                    "provenance_json FROM replays WHERE chart_path = "
-                    "'portable.bms'") ==
-                 "Portable Song|Portable Artist|123|7|0|2|" +
-                     legacyProvenance &&
-             scalarText(paths.replaysDb,
-                        "SELECT replay_id || '|' || event_index || '|' || "
-                        "action || '|' || lane || '|' || note_time_micros || "
-                        "'|' || song_time_micros || '|' || "
-                        "judge_time_micros || '|' || judgement || '|' || "
-                        "diff_micros || '|' || combo || '|' || score FROM "
-                        "replay_events WHERE event_index = 0") ==
-                 "1|0|1|2|1000|1001|1002|0|2|7|123",
-         "replay v2 migration preserves relationships and event payloads and "
-         "backfills provenance");
+                    "SELECT course_name || '|' || final_score || '|' || "
+                    "completed_charts || '|' || total_charts FROM "
+                    "legacy_course_result_summaries WHERE "
+                    "legacy_course_replay_id=2") ==
+             "Portable Course|321|1|2",
+         "replay v2 migration preserves course headers");
+  expect(matchingRowCount(
+             paths.replaysDb,
+             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
+             "name IN('replays','replay_events','replay_touch_samples',"
+             "'replay_lane_cover_events','course_replays',"
+             "'course_replay_stages')") == 0,
+         "replay v2 migration drops all playback tables");
 }
 
 void testFutureDatabaseAndCorruptionAreRejected() {

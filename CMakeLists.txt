@@ -3413,6 +3413,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/repositories/ReplayRepositoryLegacySummaries.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp

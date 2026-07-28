@@ -12,6 +12,7 @@
 #include "../src/input/InputProfileStore.h"
 #include "../src/scene/MainMenuProfileSelections.h"
 #include "../src/sqlite3.h"
+#include "ReplayLegacyFixture.h"
 
 #include <algorithm>
 #include <atomic>
@@ -381,30 +382,39 @@ void seedChartScore(const std::filesystem::path &path,
       "chart-matrix score row inserts");
 }
 
-ReplayData sampleReplay(const std::filesystem::path &root, int score) {
-  ReplayData replay;
-  replay.chartMeta.BmsPath = root / "BMS" / "chart.bms";
-  replay.chartMeta.MD5 = kChartMd5;
-  replay.chartMeta.SHA256 = kChartSha;
-  replay.chartMeta.Title = "Chart";
-  replay.chartMeta.Artist = "Artist";
-  replay.chartMeta.TotalNotes = 1;
-  replay.finalScore = score;
-  replay.maxCombo = 1;
-  replay.finalGauge = 75.0f;
-  replay.clearType = kClearTypeNormalClearRank;
-  replay.events.push_back({.action = ReplayEventAction::Press,
-                           .lane = 1,
-                           .noteTimeMicros = 1000,
-                           .songTimeMicros = 1000,
-                           .judgeTimeMicros = 1000,
-                           .judgement = PGreat,
-                           .gauge = 75.0f,
-                           .gaugeType = GaugeType::Normal,
-                           .combo = 1,
-                           .score = score});
-  replay.provenance = ScoreProvenance::Legacy();
-  return replay;
+result_persistence::ModernChartResult sampleModernResult(int score,
+                                                         int suffix) {
+  result_persistence::ModernChartResult result;
+  result.attemptId = "123e4567-e89b-42d3-a456-42661417400" +
+                     std::to_string(suffix);
+  result.score.chartPath = "chart.bms";
+  result.score.chartMd5 = kChartMd5;
+  result.score.chartSha256 = kChartSha;
+  result.score.chartTitle = "Chart";
+  result.score.chartArtist = "Artist";
+  result.score.score = score;
+  result.score.maxScore = 2000;
+  result.score.maxCombo = 50;
+  result.score.comboBreak = 1;
+  result.score.pGreat = score / 2;
+  result.score.great = score % 2;
+  result.score.finalGauge = 75.0F;
+  result.score.clearType = kClearTypeNormalClearRank;
+  result.score.provenance = ScoreProvenance::Legacy();
+  result.keyMode = 7;
+  result.adoptedGaugeType = GaugeType::Normal;
+  result.adoptedGaugeHistory = {20.0F, 75.0F};
+  result.playedAtUnixMillis = 1'700'000'000'000LL + suffix;
+  result.resultFingerprint =
+      result_persistence::modernResultFingerprint(result);
+  return result;
+}
+
+void seedModernResult(ReplayRepository &repository, int score, int suffix) {
+  const auto staged = repository.StageModernChartResult(
+      sampleModernResult(score, suffix), std::nullopt, std::nullopt, {});
+  expect(staged.status == ModernChartStageStatus::Staged,
+         "modern result seed stages");
 }
 
 std::string firstBindingId(const InputProfile &profile) {
@@ -543,12 +553,9 @@ struct SwitchFixture {
     seedScore(secondPaths.scoresDb, kClearTypeHardClearRank, 1500);
     ReplayRepository firstReplay(firstPaths.replaysDb);
     ReplayRepository secondReplay(secondPaths.replaysDb);
-    expect(firstReplay.SaveReplay(sampleReplay(temp.path(), 500)).has_value(),
-           "first replay seed saves");
-    expect(secondReplay.SaveReplay(sampleReplay(temp.path(), 1500)).has_value(),
-           "second replay seed saves");
-    expect(secondReplay.SaveReplay(sampleReplay(temp.path(), 1600)).has_value(),
-           "second profile's additional replay seed saves");
+    seedModernResult(firstReplay, 500, 1);
+    seedModernResult(secondReplay, 1500, 2);
+    seedModernResult(secondReplay, 1600, 3);
 
     currentSettings = firstSettings;
     currentInput = firstInput;
@@ -746,8 +753,19 @@ struct SwitchFixture {
     return score.LoadBestClearRanks().bestRankForStoredKey(kChartSha, 0);
   }
 
-  [[nodiscard]] std::size_t currentReplayCount() {
-    return replay.ListReplays(sampleReplay(temp.path(), 0).chartMeta, 0).size();
+  [[nodiscard]] std::size_t currentResultCount() {
+    const auto history = replay.ListModernChartResults(kChartSha, 100);
+    return history.status == ModernChartHistoryReadStatus::Loaded
+               ? history.records.size()
+               : 0;
+  }
+
+  [[nodiscard]] std::size_t currentLegacyResultCount() {
+    bms_parser::ChartMeta chart;
+    chart.BmsPath = "chart.bms";
+    chart.MD5 = kChartMd5;
+    chart.SHA256 = kChartSha;
+    return replay.ListLegacyChartSummaries(chart, 100).size();
   }
 };
 
@@ -775,8 +793,8 @@ void expectFirstProfileState(SwitchFixture &fixture,
          std::string(label) + " leaves bootstrap-visible state unchanged");
   expect(fixture.currentClearRank() == kClearTypeEasyClearRank,
          std::string(label) + " exposes first profile score cache data");
-  expect(fixture.currentReplayCount() == 1,
-         std::string(label) + " exposes first profile replay data");
+  expect(fixture.currentResultCount() == 1,
+         std::string(label) + " exposes first profile result history");
 }
 
 void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
@@ -820,8 +838,8 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
          "successful switch applies target input profile");
   expect(fixture.currentClearRank() == kClearTypeHardClearRank,
          "score query results change to target profile");
-  expect(fixture.currentReplayCount() == 2,
-         "replay queries are served by target profile");
+  expect(fixture.currentResultCount() == 2,
+         "result-history queries are served by target profile");
   expect(fixture.refreshCount == 1 &&
              fixture.score.GetRevision() > revisionBefore,
          "successful switch refreshes caches and score revision");
@@ -1029,11 +1047,24 @@ void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
 
   seedValidationPolicyMarker(fixture.secondPaths.scoresDb, "score-marker",
                              "supported-older score");
-  seedValidationPolicyMarker(fixture.secondPaths.replaysDb, "replay-marker",
-                             "supported-older replay");
   setDatabaseVersion(fixture.secondPaths.scoresDb, 5, "supported-older score");
-  setDatabaseVersion(fixture.secondPaths.replaysDb, 3,
-                     "supported-older replay");
+  std::string replayFixtureError;
+  expect(replay_legacy_fixture::replaceWithVersion2Database(
+             fixture.secondPaths.replaysDb, 3,
+             "CREATE TABLE profile_use_marker(value TEXT);"
+             "INSERT INTO profile_use_marker VALUES('replay-marker');"
+             "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
+             "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
+             "final_score,max_combo,final_gauge,clear_type) VALUES"
+             "(11,'chart.bms','0123456789abcdef0123456789abcdef',"
+             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+             "'Chart','Artist',0,0,0,1500,50,75.0,300),"
+             "(12,'chart.bms','0123456789abcdef0123456789abcdef',"
+             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+             "'Chart','Artist',0,0,0,1600,60,80.0,300)",
+             replayFixtureError),
+         "supported-older replay fixture is authentic: " +
+             replayFixtureError);
 
   expect(fixture.manager.validateProfileForActivation(fixture.secondId).ok(),
          "activation preflight admits supported-older databases");
@@ -1064,8 +1095,9 @@ void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
              fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
          "switch commits the migrated target active after both owners bind");
   expect(fixture.currentClearRank() == kClearTypeHardClearRank &&
-             fixture.currentReplayCount() == 2,
-         "schema-owner migration preserves target scores and replays");
+             fixture.currentResultCount() == 0 &&
+             fixture.currentLegacyResultCount() == 2,
+         "schema-owner migration preserves scores and summary-only history");
   expect(queryDatabaseString(fixture.secondPaths.scoresDb,
                              "SELECT value FROM profile_use_marker",
                              "migrated score marker") == "score-marker" &&
@@ -1280,8 +1312,8 @@ void testRollbackBindFailureClosesTargetAndFailsClosed() {
       expect(fixture.currentClearRank() == kNoClearTypeRank,
              "failed score restoration cannot expose target scores");
     } else {
-      expect(fixture.currentReplayCount() == 0,
-             "failed replay restoration cannot expose target replays");
+      expect(fixture.currentResultCount() == 0,
+             "failed replay restoration cannot expose target result history");
     }
   }
 }

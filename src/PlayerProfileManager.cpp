@@ -1384,6 +1384,20 @@ ProfileResult buildProfile(
                 "unable to snapshot replay database: " + errorMessage);
   }
 
+  // Prove the SQLite backups match their sources before schema owners perform
+  // any intentional migration. In particular, replay schema v14 atomically
+  // replaces legacy playback tables with summary tables, so comparing table
+  // names after migration would incorrectly reject the required cutover.
+  if (!migrationPhase(ProfileMigrationPhase::CompareRows)) {
+    return fail(ProfileError::MigrationFailure, errorMessage);
+  }
+  if ((hasScoreSource &&
+       !compareSourceRows(*scoreSource, staging.scoresDb, errorMessage)) ||
+      (hasReplaySource &&
+       !compareSourceRows(*replaySource, staging.replaysDb, errorMessage))) {
+    return fail(ProfileError::IntegrityFailure, errorMessage);
+  }
+
   if (!migrationPhase(ProfileMigrationPhase::EnsureScoreSchema)) {
     return fail(ProfileError::MigrationFailure, errorMessage);
   }
@@ -1410,15 +1424,6 @@ ProfileResult buildProfile(
     return fail(ProfileError::IntegrityFailure, errorMessage);
   }
 
-  if (!migrationPhase(ProfileMigrationPhase::CompareRows)) {
-    return fail(ProfileError::MigrationFailure, errorMessage);
-  }
-  if ((hasScoreSource &&
-       !compareSourceRows(*scoreSource, staging.scoresDb, errorMessage)) ||
-      (hasReplaySource &&
-       !compareSourceRows(*replaySource, staging.replaysDb, errorMessage))) {
-    return fail(ProfileError::IntegrityFailure, errorMessage);
-  }
   if (mode == BuildMode::Duplicate &&
       (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,
                                                      errorMessage) ||
