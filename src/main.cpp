@@ -1498,6 +1498,22 @@ int run() {
                         [&store](auto cutoff) {
                           store.removeStaleTemporaryFiles(cutoff);
                         },
+                    .listReservations = [&context] {
+                      return replay::
+                          loadAgreedModernReplayPathReservationInventory(
+                              context.replayRepository);
+                    },
+                    .removeReservedEntry =
+                        [&store](const replay::ReplayPathIdentity &identity,
+                                 std::string &diagnostic) {
+                          return store.removeReservedEntry(identity,
+                                                           diagnostic);
+                        },
+                    .releaseReservation =
+                        [&context](const auto &reservation) {
+                          return context.replayRepository
+                              .ReleaseModernReplayPathReservation(reservation);
+                        },
                 });
                 const auto report = reconciler.reconcile(
                     std::chrono::system_clock::now() -

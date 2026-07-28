@@ -193,6 +193,12 @@ void testSchemaReservationAtomicStageAndExactRetry() {
          reserved.reservation->identity.relativePath ==
              std::filesystem::path("replay") /
                  (completed.score.chartSha256 + ".brd"));
+  const auto reservationInventory =
+      repository.ListModernReplayPathReservations();
+  assert(reservationInventory.status ==
+             ModernReplayFileInventoryStatus::Loaded &&
+         reservationInventory.reservations ==
+             std::vector{*reserved.reservation});
   const auto repeatedReservation = repository.ReserveModernReplayPath(
       completed.attemptId, completed.score.chartSha256,
       completed.playedAtUnixMillis);
@@ -240,6 +246,7 @@ void testSchemaReservationAtomicStageAndExactRetry() {
           1 &&
       queryInt(database.get(),
                "SELECT COUNT(*) FROM modern_replay_file_reservations") == 0);
+  assert(repository.ListModernReplayPathReservations().reservations.empty());
   for (const std::string_view table :
        {"replays", "replay_events", "replay_touch_samples",
         "replay_lane_cover_events", "course_replays",

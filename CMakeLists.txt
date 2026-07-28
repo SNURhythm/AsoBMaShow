@@ -878,6 +878,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/path.cpp
         src/replay/BeatorajaReplayPath.cpp
         src/replay/ReplayFileActionService.cpp
+        src/replay/ReplayFileReconciler.cpp
         src/replay/ReplayReferenceAgreement.cpp
         src/replay/ReplayProfileInventory.cpp
         src/replay/ReplayFileLifecycle.cpp
@@ -1584,6 +1585,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
         src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp

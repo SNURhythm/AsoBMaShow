@@ -12,6 +12,18 @@ ModernReplayFileInventoryOutcome conflict(std::string diagnostic) {
           .diagnostic = std::move(diagnostic)};
 }
 
+ModernReplayReservationReconciliationOutcome reservationConflict(
+    std::string diagnostic) {
+  return {.status = ModernReplayFileInventoryStatus::IntegrityConflict,
+          .diagnostic = std::move(diagnostic)};
+}
+
+ModernReplayReservationReconciliationOutcome reservationStorageFailure(
+    std::string diagnostic) {
+  return {.status = ModernReplayFileInventoryStatus::StorageFailure,
+          .diagnostic = std::move(diagnostic)};
+}
+
 } // namespace
 
 ModernReplayFileInventoryOutcome
@@ -56,6 +68,95 @@ loadAgreedModernReplayFileInventory(ReplayRepository &repository) noexcept {
   } catch (...) {
     return {.status = ModernReplayFileInventoryStatus::StorageFailure,
             .diagnostic = "Replay ownership inventory failed"};
+  }
+}
+
+ModernReplayReservationReconciliationOutcome
+loadAgreedModernReplayPathReservationInventory(
+    ReplayRepository &repository) noexcept {
+  try {
+    auto reservations = repository.ListModernReplayPathReservations();
+    if (reservations.status != ModernReplayFileInventoryStatus::Loaded) {
+      return {.status = reservations.status,
+              .diagnostic = std::move(reservations.diagnostic)};
+    }
+    ModernReplayReservationReconciliationOutcome outcome{
+        .status = ModernReplayFileInventoryStatus::Loaded};
+    outcome.entries.reserve(reservations.reservations.size());
+    for (auto &reservation : reservations.reservations) {
+      const auto chart =
+          repository.LoadModernChartResultByAttempt(reservation.attemptId);
+      const auto course =
+          repository.LoadModernCourseResultByAttempt(reservation.attemptId);
+      if (chart.status == ModernChartResultReadStatus::StorageFailure ||
+          course.status == ModernCourseResultReadStatus::StorageFailure) {
+        return reservationStorageFailure(
+            !chart.diagnostic.empty() ? chart.diagnostic : course.diagnostic);
+      }
+      if (chart.status == ModernChartResultReadStatus::Invalid ||
+          chart.status == ModernChartResultReadStatus::IntegrityConflict ||
+          course.status == ModernCourseResultReadStatus::Invalid ||
+          course.status == ModernCourseResultReadStatus::IntegrityConflict) {
+        return reservationConflict(
+            !chart.diagnostic.empty() ? chart.diagnostic : course.diagnostic);
+      }
+      const bool chartLoaded =
+          chart.status == ModernChartResultReadStatus::Loaded;
+      const bool courseLoaded =
+          course.status == ModernCourseResultReadStatus::Loaded;
+      if (chartLoaded && courseLoaded) {
+        return reservationConflict(
+            "Replay reservation attempt has both chart and course results");
+      }
+
+      ModernReplayReservationCommitState state =
+          ModernReplayReservationCommitState::Unassociated;
+      if (chartLoaded) {
+        if (!chart.record) {
+          return reservationConflict(
+              "Chart replay reservation result has no payload");
+        }
+        state = ModernReplayReservationCommitState::ResultOnly;
+        if (chart.record->replayFile) {
+          const auto agreement = compareChartReplayReferenceToResult(
+              *chart.record->replayFile, chart.record->result);
+          if (!agreement.matches ||
+              chart.record->replayFile->identity != reservation.identity) {
+            return reservationConflict(
+                agreement.diagnostic.empty()
+                    ? "Chart replay reservation differs from its committed "
+                      "attachment"
+                    : agreement.diagnostic);
+          }
+          state = ModernReplayReservationCommitState::ReplayAttached;
+        }
+      } else if (courseLoaded) {
+        if (!course.record) {
+          return reservationConflict(
+              "Course replay reservation result has no payload");
+        }
+        state = ModernReplayReservationCommitState::ResultOnly;
+        if (course.record->replayFile) {
+          const auto agreement = compareCourseReplayReferenceToResult(
+              *course.record->replayFile, course.record->result);
+          if (!agreement.matches ||
+              course.record->replayFile->identity != reservation.identity) {
+            return reservationConflict(
+                agreement.diagnostic.empty()
+                    ? "Course replay reservation differs from its committed "
+                      "attachment"
+                    : agreement.diagnostic);
+          }
+          state = ModernReplayReservationCommitState::ReplayAttached;
+        }
+      }
+      outcome.entries.push_back({.reservation = std::move(reservation),
+                                 .commitState = state});
+    }
+    return outcome;
+  } catch (...) {
+    return reservationStorageFailure(
+        "Replay reservation ownership inventory failed");
   }
 }
 

@@ -20,46 +20,118 @@ ReplayFileReconciliationReport ReplayFileReconciler::reconcile(
   }
 
   ModernReplayFileInventoryOutcome inventory;
+  bool referenceInventoryReturned = false;
   try {
     if (!dependencies_.listReferences) {
       report.failures.emplace_back("replay reference inventory is unavailable");
-      return report;
+    } else {
+      inventory = dependencies_.listReferences();
+      referenceInventoryReturned = true;
     }
-    inventory = dependencies_.listReferences();
   } catch (...) {
     report.failures.emplace_back("replay reference inventory failed");
-    return report;
   }
-  if (inventory.status != ModernReplayFileInventoryStatus::Loaded) {
+  if (referenceInventoryReturned &&
+      inventory.status != ModernReplayFileInventoryStatus::Loaded) {
     report.failures.push_back(
         inventory.diagnostic.empty() ? "replay reference inventory failed"
                                      : std::move(inventory.diagnostic));
+  } else if (referenceInventoryReturned) {
+    report.referencesScanned = inventory.entries.size();
+    for (const auto &entry : inventory.entries) {
+      if (!entry.reference.userDeleted) {
+        continue;
+      }
+      ++report.tombstonesFound;
+      if (!dependencies_.removeReferencedEntry) {
+        report.failures.emplace_back(
+            "replay tombstone cleanup is unavailable");
+        continue;
+      }
+      std::string diagnostic;
+      try {
+        if (dependencies_.removeReferencedEntry(entry.reference.metadata,
+                                                diagnostic)) {
+          ++report.filesRemoved;
+          continue;
+        }
+      } catch (...) {
+        diagnostic = "replay tombstone cleanup failed";
+      }
+      report.failures.push_back(
+          diagnostic.empty() ? "replay tombstone cleanup failed"
+                             : std::move(diagnostic));
+    }
+  }
+
+  ModernReplayReservationReconciliationOutcome reservations;
+  try {
+    if (!dependencies_.listReservations) {
+      report.failures.emplace_back(
+          "replay reservation inventory is unavailable");
+      return report;
+    }
+    reservations = dependencies_.listReservations();
+  } catch (...) {
+    report.failures.emplace_back("replay reservation inventory failed");
+    return report;
+  }
+  if (reservations.status != ModernReplayFileInventoryStatus::Loaded) {
+    report.failures.push_back(
+        reservations.diagnostic.empty()
+            ? "replay reservation inventory failed"
+            : std::move(reservations.diagnostic));
     return report;
   }
 
-  report.referencesScanned = inventory.entries.size();
-  for (const auto &entry : inventory.entries) {
-    if (!entry.reference.userDeleted) {
-      continue;
-    }
-    ++report.tombstonesFound;
-    if (!dependencies_.removeReferencedEntry) {
-      report.failures.emplace_back("replay tombstone cleanup is unavailable");
-      continue;
-    }
-    std::string diagnostic;
-    try {
-      if (dependencies_.removeReferencedEntry(entry.reference.metadata,
-                                              diagnostic)) {
-        ++report.filesRemoved;
+  report.reservationsScanned = reservations.entries.size();
+  for (const auto &entry : reservations.entries) {
+    const bool attached = entry.commitState ==
+                          ModernReplayReservationCommitState::ReplayAttached;
+    if (attached) {
+      ++report.attachedReservationsFound;
+    } else {
+      ++report.unassociatedReservationsFound;
+      if (!dependencies_.removeReservedEntry) {
+        report.failures.emplace_back(
+            "unassociated replay cleanup is unavailable");
         continue;
       }
-    } catch (...) {
-      diagnostic = "replay tombstone cleanup failed";
+      std::string diagnostic;
+      try {
+        if (!dependencies_.removeReservedEntry(entry.reservation.identity,
+                                               diagnostic)) {
+          report.failures.push_back(
+              diagnostic.empty() ? "unassociated replay cleanup failed"
+                                 : std::move(diagnostic));
+          continue;
+        }
+        ++report.unassociatedFilesRemoved;
+      } catch (...) {
+        report.failures.emplace_back("unassociated replay cleanup failed");
+        continue;
+      }
     }
-    report.failures.push_back(
-        diagnostic.empty() ? "replay tombstone cleanup failed"
-                           : std::move(diagnostic));
+
+    if (!dependencies_.releaseReservation) {
+      report.failures.emplace_back(
+          "replay reservation release is unavailable");
+      continue;
+    }
+    try {
+      const auto released =
+          dependencies_.releaseReservation(entry.reservation);
+      if (released.status == ModernReplayReservationReleaseStatus::Released ||
+          released.status == ModernReplayReservationReleaseStatus::NotFound) {
+        ++report.reservationsReleased;
+        continue;
+      }
+      report.failures.push_back(
+          released.diagnostic.empty() ? "replay reservation release failed"
+                                      : released.diagnostic);
+    } catch (...) {
+      report.failures.emplace_back("replay reservation release failed");
+    }
   }
   return report;
 }

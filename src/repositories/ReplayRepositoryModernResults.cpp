@@ -1664,6 +1664,46 @@ ReplayRepository::ReleaseModernReplayPathReservation(
   return {.status = ModernReplayReservationReleaseStatus::Released};
 }
 
+ModernReplayPathReservationInventoryOutcome
+ReplayRepository::ListModernReplayPathReservations() {
+  profile_database_activity::ReadGuard readGuard;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ModernReplayFileInventoryStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms "
+      "FROM modern_replay_file_reservations ORDER BY attempt_id";
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+      SQLITE_OK) {
+    return {.status = ModernReplayFileInventoryStatus::StorageFailure,
+            .diagnostic = "could not prepare replay reservation inventory"};
+  }
+  ModernReplayPathReservationInventoryOutcome outcome{
+      .status = ModernReplayFileInventoryStatus::Loaded};
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    std::string diagnostic;
+    auto reservation = decodeReservation(statement.get(), diagnostic);
+    if (!reservation) {
+      return {.status = ModernReplayFileInventoryStatus::IntegrityConflict,
+              .diagnostic =
+                  diagnostic.empty()
+                      ? "modern replay reservation inventory is inconsistent"
+                      : std::move(diagnostic)};
+    }
+    outcome.reservations.push_back(std::move(*reservation));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ModernReplayFileInventoryStatus::StorageFailure,
+            .diagnostic =
+                "modern replay reservation inventory did not complete"};
+  }
+  return outcome;
+}
+
 ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     const result_persistence::ModernChartResult &result,
     const std::optional<ir::IrSubmissionSnapshot> &snapshot,

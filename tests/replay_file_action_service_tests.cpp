@@ -3,14 +3,17 @@
 #include "repositories/ReplayRepository.h"
 #include "replay/ReplayFileStore.h"
 #include "replay/BeatorajaReplayPath.h"
+#include "replay/ReplayFileReconciler.h"
 #include "replay/ReplayProfileInventory.h"
 #include "sqlite3.h"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -99,6 +102,34 @@ InstalledResult installResult(ReplayRepository &repository,
          loaded.record && loaded.record->replayFile);
   return {.result = loaded.record->result,
           .reference = *loaded.record->replayFile};
+}
+
+void insertReservation(const std::filesystem::path &databasePath,
+                       const ModernReplayPathReservation &reservation) {
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  sqlite3_stmt *statement = nullptr;
+  assert(sqlite3_prepare_v2(
+             database,
+             "INSERT INTO modern_replay_file_reservations("
+             "attempt_id,stem,history_index,relative_path,created_at_unix_ms) "
+             "VALUES(?,?,?,?,?)",
+             -1, &statement, nullptr) == SQLITE_OK);
+  const std::string relativePath =
+      reservation.identity.relativePath.generic_string();
+  assert(sqlite3_bind_text(statement, 1, reservation.attemptId.c_str(), -1,
+                           SQLITE_TRANSIENT) == SQLITE_OK &&
+         sqlite3_bind_text(statement, 2, reservation.identity.stem.c_str(),
+                           -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+         sqlite3_bind_int64(statement, 3,
+                            reservation.identity.historyIndex) == SQLITE_OK &&
+         sqlite3_bind_text(statement, 4, relativePath.c_str(), -1,
+                           SQLITE_TRANSIENT) == SQLITE_OK &&
+         sqlite3_bind_int64(statement, 5,
+                            reservation.createdAtUnixMillis) == SQLITE_OK &&
+         sqlite3_step(statement) == SQLITE_DONE);
+  sqlite3_finalize(statement);
+  sqlite3_close(database);
 }
 
 void testVerifiedShareUsesStableSnapshotAndDeleteKeepsResult() {
@@ -275,6 +306,150 @@ void testUnsupportedCodecSkipsMaterializationAndRemainsDeletable() {
          removed.changed && !std::filesystem::exists(path));
 }
 
+void testReservationInventoryChecksWhetherChartStagingCommitted() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replays.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  replay::ReplayFileStore store(temporary.path);
+
+  const auto orphan = result(6, 'a');
+  const auto orphanReservation = repository.ReserveModernReplayPath(
+      orphan.attemptId, orphan.score.chartSha256, orphan.playedAtUnixMillis);
+  assert(orphanReservation.reservation);
+
+  const auto resultOnly = result(7, 'b');
+  const auto resultOnlyReservation = repository.ReserveModernReplayPath(
+      resultOnly.attemptId, resultOnly.score.chartSha256,
+      resultOnly.playedAtUnixMillis);
+  assert(resultOnlyReservation.reservation &&
+         repository
+                 .StageModernChartResult(resultOnly, std::nullopt,
+                                         std::nullopt, {})
+                 .status == ModernChartStageStatus::Staged);
+
+  const auto attached = installResult(repository, store, 8, 'c');
+  const ModernReplayPathReservation retainedAfterCommit{
+      .attemptId = attached.result.attemptId,
+      .identity = attached.reference.identity,
+      .createdAtUnixMillis = attached.result.playedAtUnixMillis};
+  repository.Shutdown();
+  insertReservation(databasePath, retainedAfterCommit);
+
+  const auto inventory =
+      replay::loadAgreedModernReplayPathReservationInventory(repository);
+  const auto stateFor = [&](std::string_view attemptId) {
+    const auto found = std::ranges::find_if(
+        inventory.entries, [&](const auto &entry) {
+          return entry.reservation.attemptId == attemptId;
+        });
+    assert(found != inventory.entries.end());
+    return found->commitState;
+  };
+  assert(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+         inventory.entries.size() == 3 &&
+         stateFor(orphan.attemptId) ==
+             replay::ModernReplayReservationCommitState::Unassociated &&
+         stateFor(resultOnly.attemptId) ==
+             replay::ModernReplayReservationCommitState::ResultOnly &&
+         stateFor(attached.result.attemptId) ==
+             replay::ModernReplayReservationCommitState::ReplayAttached);
+}
+
+void testRestartReconciliationRemovesOnlyUnattachedFinalFiles() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replays.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  replay::ReplayFileStore store(temporary.path);
+
+  const auto installUnattached = [&](int suffix, char hash) {
+    const auto completed = result(suffix, hash);
+    const auto reserved = repository.ReserveModernReplayPath(
+        completed.attemptId, completed.score.chartSha256,
+        completed.playedAtUnixMillis);
+    assert(reserved.reservation);
+    const std::vector bytes{
+        std::byte{0x1f}, std::byte{0x8b}, std::byte{0x08},
+        std::byte{static_cast<unsigned char>(suffix)}};
+    const auto fileReservation = store.reserve(
+        reserved.reservation->identity, bytes, completed.attemptId);
+    assert(fileReservation.reservation);
+    const auto installed =
+        store.install(*fileReservation.reservation, bytes);
+    assert(installed.state == replay::ReplayInstallState::InstalledVerified &&
+           installed.file);
+    return std::tuple{completed, *reserved.reservation,
+                      installed.file->metadata};
+  };
+
+  const auto [orphanResult, orphanReservation, orphanMetadata] =
+      installUnattached(1, 'a');
+  const auto [resultOnly, resultOnlyReservation, resultOnlyMetadata] =
+      installUnattached(2, 'b');
+  assert(repository
+             .StageModernChartResult(resultOnly, std::nullopt, std::nullopt,
+                                     {})
+             .status == ModernChartStageStatus::Staged);
+  const auto attached = installResult(repository, store, 3, 'c');
+  const ModernReplayPathReservation retainedAfterCommit{
+      .attemptId = attached.result.attemptId,
+      .identity = attached.reference.identity,
+      .createdAtUnixMillis = attached.result.playedAtUnixMillis};
+  repository.Shutdown();
+  insertReservation(databasePath, retainedAfterCommit);
+
+  replay::ReplayFileReconciler reconciler({
+      .listReferences = [&] {
+        return replay::loadAgreedModernReplayFileInventory(repository);
+      },
+      .removeReferencedEntry =
+          [&](const replay::ReplayFileMetadata &metadata,
+              std::string &diagnostic) {
+            return store.removeReferencedEntry(metadata, diagnostic);
+          },
+      .removeStaleTemporaryFiles =
+          [&](auto cutoff) { store.removeStaleTemporaryFiles(cutoff); },
+      .listReservations = [&] {
+        return replay::loadAgreedModernReplayPathReservationInventory(
+            repository);
+      },
+      .removeReservedEntry =
+          [&](const replay::ReplayPathIdentity &identity,
+              std::string &diagnostic) {
+            return store.removeReservedEntry(identity, diagnostic);
+          },
+      .releaseReservation = [&](const auto &reservation) {
+        return repository.ReleaseModernReplayPathReservation(reservation);
+      },
+  });
+  const auto report = reconciler.reconcile(std::chrono::system_clock::now());
+
+  assert(report.failures.empty() && report.reservationsScanned == 3 &&
+         report.unassociatedReservationsFound == 2 &&
+         report.attachedReservationsFound == 1 &&
+         report.unassociatedFilesRemoved == 2 &&
+         report.reservationsReleased == 3 &&
+         !std::filesystem::exists(temporary.path /
+                                  orphanMetadata.relativePath) &&
+         !std::filesystem::exists(temporary.path /
+                                  resultOnlyMetadata.relativePath) &&
+         std::filesystem::exists(
+             temporary.path / attached.reference.metadata.relativePath) &&
+         repository.ListModernReplayPathReservations().reservations.empty());
+  const auto preservedResultOnly =
+      repository.LoadModernChartResultByAttempt(resultOnly.attemptId);
+  const auto preservedAttached =
+      repository.LoadModernChartResultByAttempt(attached.result.attemptId);
+  assert(repository.LoadModernChartResultByAttempt(orphanResult.attemptId)
+                 .status == ModernChartResultReadStatus::NotFound &&
+         preservedResultOnly.status == ModernChartResultReadStatus::Loaded &&
+         preservedResultOnly.record &&
+         !preservedResultOnly.record->replayFile &&
+         preservedAttached.status == ModernChartResultReadStatus::Loaded &&
+         preservedAttached.record && preservedAttached.record->replayFile);
+}
+
 void testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization() {
   using replay::ReplayFileActionState;
   using replay::ReplayState;
@@ -307,6 +482,8 @@ int main() {
   testMissingFileDoesNotCreateADeletionTombstone();
   testResultMismatchedReferenceCannotBeInspectedOrDeleted();
   testUnsupportedCodecSkipsMaterializationAndRemainsDeletable();
+  testReservationInventoryChecksWhetherChartStagingCommitted();
+  testRestartReconciliationRemovesOnlyUnattachedFinalFiles();
   testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization();
   return 0;
 }

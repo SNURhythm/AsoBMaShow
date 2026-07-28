@@ -674,6 +674,17 @@ bool ReplayFileStore::removeReferencedEntry(const ReplayFileMetadata &metadata,
   return removeEntryAndSync(path, replayDirectory, diagnostic);
 }
 
+bool ReplayFileStore::removeReservedEntry(const ReplayPathIdentity &identity,
+                                          std::string &diagnostic) const {
+  diagnostic.clear();
+  if (!canonicalIdentity(identity, limits_)) {
+    diagnostic = "Replay reservation identity is unsafe";
+    return false;
+  }
+  return removeReferencedEntry(
+      ReplayFileMetadata{.relativePath = identity.relativePath}, diagnostic);
+}
+
 void ReplayFileStore::removeStaleTemporaryFiles(
     std::chrono::system_clock::time_point cutoff) const {
   std::filesystem::path replayDirectory;

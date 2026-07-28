@@ -309,6 +309,13 @@ enum class ModernReplayFileInventoryStatus {
   IntegrityConflict,
 };
 
+struct ModernReplayPathReservationInventoryOutcome {
+  ModernReplayFileInventoryStatus status =
+      ModernReplayFileInventoryStatus::StorageFailure;
+  std::vector<ModernReplayPathReservation> reservations;
+  std::string diagnostic;
+};
+
 struct ModernReplayFileInventoryOutcome {
   ModernReplayFileInventoryStatus status =
       ModernReplayFileInventoryStatus::StorageFailure;
@@ -513,6 +520,8 @@ public:
                           std::int64_t createdAtUnixMillis);
   ModernReplayReservationReleaseOutcome ReleaseModernReplayPathReservation(
       const ModernReplayPathReservation &reservation);
+  ModernReplayPathReservationInventoryOutcome
+  ListModernReplayPathReservations();
   ModernChartStageOutcome StageModernChartResult(
       const result_persistence::ModernChartResult &result,
       const std::optional<ir::IrSubmissionSnapshot> &snapshot,

@@ -1,6 +1,7 @@
 #include "repositories/ReplayRepository.h"
 
 #include "repositories/SqliteRAII.h"
+#include "replay/ReplayProfileInventory.h"
 
 #include <cassert>
 #include <chrono>
@@ -111,7 +112,7 @@ result_persistence::ModernCourseResult result(int suffix, bool partial = true) {
       .legacyCourseId = 17,
       .courseName = "Repository Course",
       .courseGroupName = "Tests",
-      .constraintJson = "[\"CLASS\"]",
+      .constraintJson = "[\"NO_SPEED\"]",
       .requestedPlayOption = "NORMAL",
       .assistOption = "OFF",
       .initialGaugeType = GaugeType::Hard,
@@ -424,6 +425,62 @@ void testFutureCodecReferencePreservesCourseResultHistory() {
              replay::BeatorajaReplayCodec::kCodecVersion + 1);
 }
 
+void testReservationInventoryChecksWhetherCourseStagingCommitted() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+
+  const auto attachedResult = result(10, false);
+  const auto attachedReservation = reserve(repository, attachedResult);
+  const auto staged = repository.StageModernCourseResult(
+      attachedResult, attachment(attachedReservation),
+      coursePathInput(attachedResult));
+  assert(staged.status == ModernCourseStageStatus::Staged);
+  repository.Shutdown();
+  {
+    auto database = openDatabase(databasePath);
+    exec(database.get(),
+         "INSERT INTO modern_replay_file_reservations("
+         "attempt_id,stem,history_index,relative_path,created_at_unix_ms) "
+         "VALUES('" +
+             attachedReservation.attemptId + "','" +
+             attachedReservation.identity.stem + "'," +
+             std::to_string(attachedReservation.identity.historyIndex) +
+             ",'" +
+             attachedReservation.identity.relativePath.generic_string() +
+             "'," +
+             std::to_string(attachedReservation.createdAtUnixMillis) + ")");
+  }
+  auto inventory =
+      replay::loadAgreedModernReplayPathReservationInventory(repository);
+  if (inventory.status != ModernReplayFileInventoryStatus::Loaded ||
+      inventory.entries.size() != 1) {
+    std::cerr << "course reservation inventory failed: "
+              << inventory.diagnostic << " entries="
+              << inventory.entries.size() << '\n';
+  }
+  assert(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+         inventory.entries.size() == 1 &&
+         inventory.entries.front().commitState ==
+             replay::ModernReplayReservationCommitState::ReplayAttached);
+  assert(repository.ReleaseModernReplayPathReservation(attachedReservation)
+             .status == ModernReplayReservationReleaseStatus::Released);
+
+  const auto resultOnly = result(11, false);
+  const auto resultOnlyReservation = reserve(repository, resultOnly);
+  assert(repository
+             .StageModernCourseResult(resultOnly, std::nullopt, std::nullopt)
+             .status == ModernCourseStageStatus::Staged);
+  inventory =
+      replay::loadAgreedModernReplayPathReservationInventory(repository);
+  assert(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+         inventory.entries.size() == 1 &&
+         inventory.entries.front().reservation == resultOnlyReservation &&
+         inventory.entries.front().commitState ==
+             replay::ModernReplayReservationCommitState::ResultOnly);
+}
+
 #endif
 
 } // namespace
@@ -435,6 +492,7 @@ int main() {
   testReplayFileOwnerCheckRejectsBothAndNeither();
   testCourseScoreSourcesPageWithoutReplayOwnership();
   testFutureCodecReferencePreservesCourseResultHistory();
+  testReservationInventoryChecksWhetherCourseStagingCommitted();
 #else
   std::cerr << "FAIL: modern course repository contract is not implemented\n";
   return 1;
