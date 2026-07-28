@@ -1002,6 +1002,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(course_continuation_tests
         tests/course_continuation_tests.cpp
+        src/bms_parser.cpp
         src/ScoreProvenance.cpp
         src/replay/CourseContinuation.cpp
         src/replay/BeatorajaReplayPath.cpp

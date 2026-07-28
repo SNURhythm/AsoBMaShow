@@ -2074,10 +2074,7 @@ void ResultScene::continueCourse() {
     return;
   }
   local->courseTransitionStarted = true;
-  if (!recordCourseStageRestTime()) {
-    showCourseResult();
-    return;
-  }
+  (void)recordCourseStageRestTime();
 
   if (local->courseOptions.savedResultBrowsing) {
     if (session->currentIndex + 1 >= session->completedResults.size()) {

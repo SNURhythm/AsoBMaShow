@@ -1,4 +1,5 @@
 #if __has_include("replay/CourseContinuation.h")
+#include "CoursePlaySession.h"
 #include "replay/CourseContinuation.h"
 #define ASOBMASHOW_HAS_COURSE_CONTINUATION 1
 #else
@@ -236,6 +237,40 @@ void testCompletedStageRestUsesTheSameValidatedStateTransition() {
          "live rest uses the same upper bound and is never clamped");
 }
 
+void testOverlongLiveRestDropsOnlyReplayAttachment() {
+  const auto initial = initialState();
+  const auto first = replay::advanceCourseContinuation(
+      initial, completion(0, 12, 20, 3, 4, 68.0F, 7, 'a', 0),
+      replay::ReplaySetupSource::LocalCapture);
+  expect(first.advanced() && first.state,
+         "a live stage advances before an overlong result-screen rest");
+  if (!first.state) {
+    return;
+  }
+
+  CoursePlaySession session;
+  session.currentIndex = 0;
+  session.modernCourseReplayStages.resize(1);
+  session.modernCourseReplayStages.front().playback.emplace();
+  session.adoptModernCourseContinuation(*first.state);
+
+  const auto carriedGauge = session.carriedGauge;
+  const int carriedCombo = session.carriedCombo;
+  const bool recorded = session.recordRestMicrosAfterCurrentStage(
+      replay::kReplayLimits.maxCourseRestMicros + 1);
+
+  expect(!recorded,
+         "rest beyond the BRD limit rejects only the replay attachment");
+  expect(!session.modernCourseReplayStages.front().playback.has_value(),
+         "the invalid BRD stage playback is discarded");
+  expect(session.modernCourseContinuation.has_value(),
+         "live course continuation survives invalid replay rest metadata");
+  expect(session.carriedGauge.has_value() && carriedGauge.has_value() &&
+             sameGauge(*session.carriedGauge, *carriedGauge) &&
+             session.carriedCombo == carriedCombo,
+         "live gauge and combo state remain available for the next stage");
+}
+
 #endif
 
 } // namespace
@@ -246,6 +281,7 @@ int main() {
   testInvalidTransitionsLeaveThePriorStateUntouched();
   testScoreOverflowAndCompletedCourseCannotAdvance();
   testCompletedStageRestUsesTheSameValidatedStateTransition();
+  testOverlongLiveRestDropsOnlyReplayAttachment();
 #else
   expect(false, "CourseContinuation contract is not implemented");
 #endif

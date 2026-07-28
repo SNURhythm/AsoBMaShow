@@ -106,6 +106,8 @@ void testLiveCourseUsesOneModernResultFirstRoute() {
   require(!resultSource.contains("saveCourseReplay") &&
               !resultSource.contains("SaveCourseReplay("),
           "final course result still has a legacy replay fallback");
+  require(!resultSource.contains("if (!recordCourseStageRestTime())"),
+          "invalid BRD rest metadata must not terminate the live course");
   const std::string repository =
       read(root / "src/repositories/ReplayRepository.h");
   require(!repository.contains("SaveCourseReplay("),

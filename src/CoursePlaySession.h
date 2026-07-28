@@ -558,7 +558,6 @@ struct CoursePlaySession {
         modernCourseAttempt.reset();
         modernCourseDiagnostic =
             "Course rest exceeded the shared replay limit.";
-        modernCourseContinuation.reset();
         return false;
       }
       adoptModernCourseContinuation(std::move(*updated.state));
