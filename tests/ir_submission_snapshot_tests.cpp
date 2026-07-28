@@ -135,6 +135,18 @@ void testCaptureAndReplayIndependence() {
          "provenance is authenticated by the snapshot");
 }
 
+void testCaptureUsesEffectiveFullComboClearRank() {
+  auto result = validResult();
+  result.score.maxCombo = 5;
+  result.score.comboBreak = 0;
+  result.resultFingerprint =
+      result_persistence::modernResultFingerprint(result);
+
+  const auto snapshot = capture(result);
+  expect(snapshot.submission.clearType == kClearTypeFullComboRank,
+         "IR snapshots persist the effective full-combo clear rank");
+}
+
 void testCanonicalRoundTripAndTamperChecks() {
   const auto snapshot = capture(validResult());
   std::string diagnostic;
@@ -282,6 +294,7 @@ void testStrictValidationAndBounds() {
 
 int main() {
   testCaptureAndReplayIndependence();
+  testCaptureUsesEffectiveFullComboClearRank();
   testCanonicalRoundTripAndTamperChecks();
   testStrictValidationAndBounds();
   if (failures != 0) {

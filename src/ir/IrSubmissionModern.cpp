@@ -1,4 +1,5 @@
 #include "IrSubmission.h"
+#include "../ReplayClearMarkUtils.h"
 
 #include <string_view>
 #include <utility>
@@ -32,7 +33,7 @@ submissionFromResult(const result_persistence::ModernChartResult &result) {
       .slow = score.slow,
       .gaugeHistory = result.adoptedGaugeHistory,
       .finalGauge = score.finalGauge,
-      .clearType = score.clearType,
+      .clearType = replay_clear_mark::effectiveClearRank(score),
       .playedAtUnixMillis = result.playedAtUnixMillis,
       .provenance = score.provenance,
   };
