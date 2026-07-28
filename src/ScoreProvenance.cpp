@@ -814,8 +814,7 @@ savedChartRandomParseSetup(const ScoreProvenance &provenance,
       return std::nullopt;
     }
     if (stage->chartRandomPrng &&
-        !bms_parser::Parser::IsSupportedRandomPrng(
-            *stage->chartRandomPrng)) {
+        *stage->chartRandomPrng != bms_parser::Parser::RandomPrngId) {
       diagnostic = "Saved chart random PRNG is unsupported.";
       return std::nullopt;
     }
