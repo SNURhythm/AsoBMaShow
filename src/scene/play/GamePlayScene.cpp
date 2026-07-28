@@ -2918,7 +2918,7 @@ void GamePlayScene::recordModernCourseStage(
          .constraints = {
              .beatorajaConstraintIds =
                  beatorajaCourseConstraintIdsFromJson(session->constraintJson),
-             .longNoteMode = longNoteMode,
+             .longNoteMode = session->longNoteMode,
          }});
     if (started.ready()) {
       currentContinuation = std::move(started.state);

@@ -95,6 +95,9 @@ void testLiveCourseUsesOneModernResultFirstRoute() {
                "course-score history is not projected from modern results");
 
   const std::string gameplaySource = read(gameplay);
+  require(gameplaySource.contains(".longNoteMode = session->longNoteMode"),
+          "course continuation must retain the session LN mode when a stage "
+          "has no long notes");
   require(!gameplaySource.contains("CompletedAttemptPersistenceRoute::\n"
                                    "                                         "
                                    "LegacyCourse"),
