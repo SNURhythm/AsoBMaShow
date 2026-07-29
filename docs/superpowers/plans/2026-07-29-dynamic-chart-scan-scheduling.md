@@ -1,507 +1,207 @@
-# Dynamic Chart Scan Scheduling Implementation Plan
+# Bounded Pipelined Chart Scan Scheduling Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Dynamically share one chart-scan worker budget between ordinary chart parsing and independent archive indexing while preserving ordered SQLite/checkpoint behavior and the existing fast archive-entry pipeline.
+**Goal:** Replace unbounded concurrent archive indexing and nested archive parser thread groups with a two-reader, shared-pool pipeline that overlaps archive I/O and chart parsing.
 
-**Architecture:** Add a small FIFO work scheduler used only for filesystem/entity preparation. `ChartLibraryScanner` remains the producer and sole state/SQLite owner; workers return sequence-keyed ordinary-chart or archive-inspection results, which are merged in discovery order before the existing archive batch parser runs. Narrow the 7-Zip global cache lock so independent uncached archives can actually open concurrently.
+**Architecture:** Extend `ChartScanWorkScheduler` with resource-aware archive-I/O admission and finish-time child-task draining. Fresh archive inspection streams chart bytes into CPU tasks on that scheduler, while one-chart archives parse inline; the scanner thread later consumes ordered prepared metadata. Checkpoint/fallback archive entries use the same pipeline in a sequential second scheduler, and all database/checkpoint writes remain on the scanner thread.
 
-**Tech Stack:** C++23, `std::thread`, mutexes/condition variables, libarchive test fixtures, 7-Zip SDK backend, SQLite, CMake/CTest.
+**Tech Stack:** C++23, `std::thread`, mutexes/condition variables, libarchive synthetic ZIP fixtures, SQLite, CMake/CTest.
 
 ## Global Constraints
 
-- Use one shared worker budget; do not reserve fixed worker counts by entity type.
-- Keep SQLite writes, checkpoint writes, progress callbacks, and scan-diff mutation on the scanner thread.
-- Preserve the current optimized inner/outer non-solid archive-entry parse pipeline.
-- Preserve cancellation, pause, resume, archive-cache, solid-archive, and deterministic discovery-order behavior.
-- Do not edit `src/bms_parser.hpp` or `src/bms_parser.cpp`; parser changes belong in `../bms-parser-cpp`.
-- Do not deploy an iOS or Android build. The final local compile check is `cmake --build cmake-build-debug --target main -j 6`.
+- The scanner uses the existing `parallel_worker_count()` budget.
+- No more than two archive-I/O tasks may run concurrently, and at least one worker is left for CPU tasks whenever the total worker count is greater than one.
+- One-chart archives and single-worker scans parse inline.
+- Larger archives stream into the shared pool with limits of 12 files and 16 MiB per reader.
+- SQLite, checkpoints, progress callbacks, and scan-diff mutation stay on the scanner thread.
+- Preserve deterministic discovery and archive-entry order, pause/stop behavior, cache semantics, and solid-archive handling.
+- Do not edit `src/bms_parser.hpp` or `src/bms_parser.cpp`.
+- Do not benchmark or deploy. Verify desktop compilation with `cmake --build cmake-build-debug --target main -j 6`.
 
 ---
 
-### Task 1: Add the shared FIFO work scheduler
+### Task 1: Make the scheduler resource-aware and continuation-safe
 
 **Files:**
-- Create: `src/ChartScanWorkScheduler.h`
-- Create: `src/ChartScanWorkScheduler.cpp`
-- Create: `tests/chart_scan_work_scheduler_tests.cpp`
-- Modify: `src/CMakeLists.txt`
-- Modify: `CMakeLists.txt`
+- Modify: `src/ChartScanWorkScheduler.h`
+- Modify: `src/ChartScanWorkScheduler.cpp`
+- Modify: `tests/chart_scan_work_scheduler_tests.cpp`
 
 **Interfaces:**
-- Produces: `chart_scan::WorkScheduler(std::size_t workerCount)`
-- Produces: `bool WorkScheduler::enqueue(std::function<void()> work)`
-- Produces: `void WorkScheduler::finish()` to close, drain, and join
-- Produces: `void WorkScheduler::cancel()` to close, discard queued work, and join
-- Produces: `std::vector<std::exception_ptr> WorkScheduler::takeExceptions()`
-- Guarantees: accepted work is FIFO, each work item occupies one scheduler worker, shutdown is idempotent, and destruction cannot leave joinable threads
+- Produces: `enum class WorkClass { Cpu, ArchiveIo }`
+- Produces: `WorkScheduler(std::size_t workerCount, std::size_t archiveIoLimit = 1)`
+- Produces: `bool enqueue(Work work, WorkClass workClass = WorkClass::Cpu)`
+- Preserves: `finish()`, `cancel()`, exception capture, non-copyability, and idempotent joining
+- Guarantees: `finish()` drains child work enqueued by active tasks; queued archive work that has reached the admission cap does not block eligible CPU work
 
-- [ ] **Step 1: Write the failing scheduler concurrency test**
+- [ ] **Step 1: Write the archive-admission test**
 
-Create `tests/chart_scan_work_scheduler_tests.cpp`. The first task represents a blocked archive index. After it starts, enqueue three ordinary-shaped tasks and prove all three start before the archive task is released:
+Add a four-worker test that enqueues four blocking `ArchiveIo` tasks with an admission limit of two. Wait until two archive tasks are active, enqueue two CPU tasks, and assert both CPU tasks start while the first archive pair remains blocked. Also assert the observed maximum number of active archive tasks is exactly two.
 
-```cpp
-#include "../src/ChartScanWorkScheduler.h"
+- [ ] **Step 2: Write the finish-time child-task test**
 
-#include <cassert>
-#include <chrono>
-#include <condition_variable>
-#include <mutex>
+Enqueue a root CPU task that waits until a separate thread has called `finish()`, then enqueues a child CPU task and returns. Assert `finish()` joins only after the child runs and that a later external enqueue is rejected.
 
-void testLaterEntitiesUseWorkersWhileArchiveIsActive() {
-  chart_scan::WorkScheduler scheduler(4);
-  std::mutex mutex;
-  std::condition_variable cv;
-  bool archiveStarted = false;
-  bool releaseArchive = false;
-  int ordinaryStarted = 0;
+- [ ] **Step 3: Verify RED**
 
-  assert(scheduler.enqueue([&] {
-    std::unique_lock lock(mutex);
-    archiveStarted = true;
-    cv.notify_all();
-    cv.wait(lock, [&] { return releaseArchive; });
-  }));
-  {
-    std::unique_lock lock(mutex);
-    assert(cv.wait_for(lock, std::chrono::seconds(2),
-                       [&] { return archiveStarted; }));
-  }
-
-  for (int i = 0; i < 3; ++i) {
-    assert(scheduler.enqueue([&] {
-      std::lock_guard lock(mutex);
-      ++ordinaryStarted;
-      cv.notify_all();
-    }));
-  }
-  {
-    std::unique_lock lock(mutex);
-    assert(cv.wait_for(lock, std::chrono::seconds(2),
-                       [&] { return ordinaryStarted == 3; }));
-    releaseArchive = true;
-  }
-  cv.notify_all();
-  scheduler.finish();
-  assert(scheduler.takeExceptions().empty());
-}
-```
-
-Add tests in the same file for FIFO dequeue order on one worker, exception capture without worker termination, idempotent `finish()`, and `cancel()` discarding queued work after active work is released.
-
-- [ ] **Step 2: Register the test target and verify RED**
-
-Add this target inside the existing test block in `CMakeLists.txt`:
-
-```cmake
-add_executable(chart_scan_work_scheduler_tests
-    tests/chart_scan_work_scheduler_tests.cpp
-    src/ChartScanWorkScheduler.cpp
-)
-target_include_directories(chart_scan_work_scheduler_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-)
-target_compile_features(chart_scan_work_scheduler_tests PRIVATE cxx_std_23)
-```
-
-Add `chart_scan_work_scheduler_tests` to the registered test target list. Reconfigure and build:
+Run:
 
 ```bash
-cmake -S . -B cmake-build-debug
 cmake --build cmake-build-debug --target chart_scan_work_scheduler_tests -j 6
 ```
 
-Expected: FAIL because `ChartScanWorkScheduler.h/.cpp` do not exist or the declared API is not implemented.
+Expected: compilation fails because `WorkClass` and the archive limit do not exist, and the current `finish()` rejects child work after closing the queue.
 
-- [ ] **Step 3: Implement the minimal scheduler**
+- [ ] **Step 4: Implement eligible-task selection and quiescent finish**
 
-Declare a non-copyable scheduler with a private worker loop and these fields:
+Store queued records as `{Work work, WorkClass workClass}`. Track `activeTasks_`, `activeArchiveIo_`, `archiveIoLimit_`, `finishing_`, `closed_`, and `cancelled_`. A worker selects the first queued CPU task or an archive task when `activeArchiveIo_ < archiveIoLimit_`; it increments both active counters before unlocking and decrements them after work/exception handling.
 
-```cpp
-namespace chart_scan {
-class WorkScheduler {
-public:
-  using Work = std::function<void()>;
-  explicit WorkScheduler(std::size_t workerCount);
-  ~WorkScheduler();
-  WorkScheduler(const WorkScheduler &) = delete;
-  WorkScheduler &operator=(const WorkScheduler &) = delete;
-  bool enqueue(Work work);
-  void finish();
-  void cancel();
-  std::vector<std::exception_ptr> takeExceptions();
+`finish()` sets `finishing_`, wakes workers, and joins. Workers exit only when `finishing_ && queue_.empty() && activeTasks_ == 0`. `enqueue()` remains valid while finishing is in progress and rejects work only after `closed_` or `cancelled_`. The worker that observes quiescence sets `closed_` and wakes all workers. `cancel()` marks the pool closed/cancelled and clears queued work.
 
-private:
-  void workerLoop();
-  void joinWorkers();
-  std::mutex mutex_;
-  std::condition_variable cv_;
-  std::deque<Work> queue_;
-  std::vector<std::thread> workers_;
-  std::vector<std::exception_ptr> exceptions_;
-  bool closed_ = false;
-  bool cancelled_ = false;
-};
-} // namespace chart_scan
-```
-
-Start `max(1, workerCount)` threads. Workers wait for cancellation, queued work, or `closed_`; pop from the front; run outside the lock; and capture exceptions under the lock. `finish()` sets `closed_`, wakes, drains, and joins. `cancel()` sets both flags, clears the queue, wakes, and joins. The destructor calls `cancel()`.
-
-Add `ChartScanWorkScheduler.cpp` to the `main` sources in `src/CMakeLists.txt`.
-
-- [ ] **Step 4: Verify GREEN**
+- [ ] **Step 5: Verify GREEN and commit**
 
 ```bash
 cmake --build cmake-build-debug --target chart_scan_work_scheduler_tests -j 6
 ctest --test-dir cmake-build-debug -R '^chart_scan_work_scheduler_tests$' --output-on-failure
-```
-
-Expected: PASS with no hangs or uncaught worker exceptions.
-
-- [ ] **Step 5: Commit the scheduler**
-
-```bash
-git add src/ChartScanWorkScheduler.h src/ChartScanWorkScheduler.cpp \
-  tests/chart_scan_work_scheduler_tests.cpp src/CMakeLists.txt CMakeLists.txt
-git commit -m "feat: add chart scan work scheduler"
+git add src/ChartScanWorkScheduler.h src/ChartScanWorkScheduler.cpp tests/chart_scan_work_scheduler_tests.cpp
+git commit -m "feat: bound archive work in chart scan scheduler"
 ```
 
 ---
 
-### Task 2: Allow independent 7-Zip cache misses to open concurrently
-
-**Files:**
-- Create: `tests/archive_file_concurrency_tests.cpp`
-- Modify: `src/ArchiveFile.cpp:2057-2131`
-- Modify: `CMakeLists.txt`
-
-**Interfaces:**
-- Consumes: `archive_file::listEntries(path, entries, error, pauseCallback)`
-- Preserves: `gSevenZipArchiveCache`, `kMaxOpenSevenZipArchives`, and per-`SevenZipArchiveState::mutex` serialization
-- Changes: `gSevenZipArchiveMutex` protects cache data only, never filesystem/SDK open work
-
-- [ ] **Step 1: Write two real 7-Zip fixtures and the failing lock-boundary test**
-
-Create `tests/archive_file_concurrency_tests.cpp`. Use `ArchiveRAII.h`, `archive_entry.h`, and `archive_write_set_format_7zip()` to write two unique temporary `.7z` archives, each with one regular file.
-
-Call `archive_file::listEntries()` on each path from a separate thread. Each thread owns a pause-callback invocation counter. Synchronize only on the third callback invocation, which occurs from the 7-Zip input stream during `IInArchive::Open`, after the existing global cache lock is acquired:
-
-```cpp
-std::mutex barrierMutex;
-std::condition_variable barrierCv;
-int arrived = 0;
-bool timedOut = false;
-
-auto listOne = [&](const std::filesystem::path &path) {
-  int pauseCalls = 0;
-  std::vector<archive_file::Entry> entries;
-  std::string error;
-  const bool listed = archive_file::listEntries(
-      path, entries, &error, [&] {
-        if (++pauseCalls != 3) {
-          return true;
-        }
-        std::unique_lock lock(barrierMutex);
-        ++arrived;
-        barrierCv.notify_all();
-        if (!barrierCv.wait_for(lock, std::chrono::seconds(2),
-                                [&] { return arrived == 2; })) {
-          timedOut = true;
-          barrierCv.notify_all();
-        }
-        return true;
-      });
-  assert(listed);
-  assert(entries.size() == 1);
-};
-```
-
-Join both threads and assert `arrived == 2` and `!timedOut`. The timeout is only a deadlock guard; the behavior under test is that both independent opens cross the same in-open barrier.
-
-- [ ] **Step 2: Register and verify RED**
-
-Register `archive_file_concurrency_tests` with `tests/archive_file_concurrency_tests.cpp`, `src/ArchiveFile.cpp`, `src/MinizBridge.c`, `src/bms_parser.cpp`, and `src/path.cpp`; link `${COMMON_LIBS}` and `iconv` on Apple. Add it to the registered-test list.
-
-```bash
-cmake -S . -B cmake-build-debug
-cmake --build cmake-build-debug --target archive_file_concurrency_tests -j 6
-ctest --test-dir cmake-build-debug -R '^archive_file_concurrency_tests$' --output-on-failure
-```
-
-Expected: FAIL because the first cache miss waits at the barrier while holding `gSevenZipArchiveMutex`, preventing the second archive from reaching its in-open callback.
-
-- [ ] **Step 3: Narrow the global cache critical section**
-
-Refactor `openCachedSevenZipArchive()` into three phases:
-
-1. Read file state, then lock only to return a fresh cached state or erase a stale entry.
-2. Release the mutex and perform `openSevenZipArchive(...)`; construct a candidate `SevenZipArchiveState` outside the lock.
-3. Re-lock and perform a second fresh-state lookup. If another caller inserted an equivalent state, update its use counter and return it. Otherwise assign the new use counter, insert the candidate, trim the cache, and return it.
-
-The slow portion must have this shape:
-
-```cpp
-const auto start = Clock::now();
-CMyComPtr<IInArchive> archive;
-CMyComPtr<IInStream> stream;
-SevenZipFormat formatUsed = SevenZipFormat::SevenZip;
-const bool opened =
-    requestedFormatId == 0
-        ? openSevenZipArchive(archivePath, archive, stream, formatUsed,
-                              errorMessage, pauseCallback)
-        : openSevenZipArchive(archivePath, requestedFormatId, archive, stream,
-                              errorMessage, pauseCallback);
-// No gSevenZipArchiveMutex is held above.
-
-auto candidate = std::make_shared<SevenZipArchiveState>();
-candidate->size = archiveSize;
-candidate->mtime = archiveMtime;
-candidate->formatId = static_cast<unsigned char>(formatUsed);
-candidate->archive = archive;
-candidate->stream = stream;
-
-{
-  std::lock_guard cacheLock(gSevenZipArchiveMutex);
-  const auto winnerIt = gSevenZipArchiveCache.find(key);
-  if (winnerIt != gSevenZipArchiveCache.end() &&
-      winnerIt->second != nullptr && winnerIt->second->size == archiveSize &&
-      winnerIt->second->mtime == archiveMtime &&
-      (requestedFormatId == 0 ||
-       winnerIt->second->formatId == requestedFormatId)) {
-    winnerIt->second->lastUse = ++gSevenZipArchiveUseCounter;
-    return winnerIt->second;
-  }
-  candidate->lastUse = ++gSevenZipArchiveUseCounter;
-  gSevenZipArchiveCache[key] = candidate;
-  trimSevenZipArchiveCacheLocked();
-}
-```
-
-Do not weaken `SevenZipArchiveState::mutex`; operations on one cached SDK handle remain serialized.
-
-- [ ] **Step 4: Verify GREEN and regressions**
-
-```bash
-cmake --build cmake-build-debug --target archive_file_concurrency_tests chart_library_scanner_tests -j 6
-ctest --test-dir cmake-build-debug -R '^(archive_file_concurrency_tests|chart_library_scanner_tests)$' --output-on-failure
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit the lock-boundary fix**
-
-```bash
-git add tests/archive_file_concurrency_tests.cpp src/ArchiveFile.cpp CMakeLists.txt
-git commit -m "perf: open independent archives concurrently"
-```
-
----
-
-### Task 3: Schedule ordinary parsing and archive inspection through one queue
+### Task 2: Characterize prepared archive metadata flow
 
 **Files:**
 - Modify: `tests/chart_library_scanner_tests.cpp`
-- Modify: `src/ChartLibraryScanner.cpp`
-- Modify: `CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `chart_scan::WorkScheduler`
-- Produces internally: sequence-keyed prepared ordinary-chart and archive-inspection results
-- Preserves: `ChartLibraryScanner::Scan(...)` public signature
-- Preserves: scanner-thread-only mutation of diffs, cache diffs, checkpoints, progress, and `ScanBatch`
+- Consumes: `ChartLibraryScanner::Scan()`
+- Verifies: one-chart and multi-chart synthetic stored ZIPs produce stable chart and archive-cache rows on first scan and no changes on the second scan
 
-- [ ] **Step 1: Add real mixed-workload scanner fixtures**
+- [ ] **Step 1: Add a multi-entry archive correctness test**
 
-Extend `tests/chart_library_scanner_tests.cpp` with a stored-ZIP writer using `ArchiveRAII.h`, `archive_entry.h`, `archive_write_set_format_zip()`, and `zip:compression=store`. Reuse one literal BMS body with distinct titles.
+Create a stored ZIP containing three BMS files in distinct inner folders and a non-chart file. Scan the explicit archive root, assert three chart rows and one archive cache row with `chartCount == 3`, assert each stored virtual path contains the expected inner path, then scan again and assert zero changes.
 
-Add `testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce()`:
-
-```cpp
-const auto archiveA = writeZip(root / "00-archive.zip",
-                               {{"inside-a.bms", chartText("Archive A")}});
-const auto ordinaryA = writeChart(root, "10-ordinary-a", "Ordinary A");
-const auto ordinaryB = writeChart(root, "20-ordinary-b", "Ordinary B");
-const auto archiveB = writeZip(root / "30-archive.zip",
-                               {{"inside-b.bms", chartText("Archive B")}});
-
-assert(scanner.Scan(*session, {archiveA, ordinaryA, ordinaryB, archiveB}) == 4);
-assert(session->CountAllChartMeta() == 4);
-const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
-assert(snapshot.archiveCache.size() == 2);
-assert(scanner.Scan(*session, {archiveA, ordinaryA, ordinaryB, archiveB}) == 0);
-```
-
-Add `testManySmallArchivesPreserveDiscoveryOrderAndCache()` using exactly six ZIP roots with one chart apiece. Assert six charts, six cache rows, stable second scan, and chart titles/paths matching each archive rather than completion order.
-
-Add the actual concurrency regression `testArchiveInspectionUsesMultipleEntityWorkers()`. Create six stored ZIPs containing only `readme.txt`, so no later archive-entry parser or existing prefetch worker can satisfy the assertion. Capture the calling test thread ID in advance. The pause callback ignores that ID; on worker threads it records distinct IDs and waits at a condition-variable rendezvous until at least two worker IDs have arrived. Skip only when `parallel_worker_count(kFixtureCount) <= 1`. Assert that at least two non-caller worker IDs inspected archives.
-
-- [ ] **Step 2: Establish the TDD boundary**
-
-The mixed and cache fixtures characterize correctness and may already pass on serial code. `testArchiveInspectionUsesMultipleEntityWorkers()` is the scanner-level behavioral RED: current code invokes archive inspection inline on the caller thread, and ZIPs without BMS entries cannot reach the existing parse-prefetch workers. Run the existing scanner test before production edits, then add the fixtures and run again:
+- [ ] **Step 2: Verify the characterization is green before refactoring**
 
 ```bash
 cmake --build cmake-build-debug --target chart_library_scanner_tests -j 6
 ctest --test-dir cmake-build-debug -R '^chart_library_scanner_tests$' --output-on-failure
 ```
 
-Expected baseline: PASS. After the fixtures compile, expected: FAIL because the set of non-caller archive-inspection thread IDs is empty. Confirm the failure is this assertion, not fixture creation or parsing.
+Expected: PASS. This protects archive ordering/cache behavior while the production threading model changes; the scheduler tests provide the failing behavioral coverage for the concurrency change.
 
-- [ ] **Step 3: Make archive inspection return data instead of mutating shared state**
-
-Remove the `knownChartPaths` mutable reference from `scanArchiveForChartsOrSolid()`. Keep its local duplicate-entry set and return all virtual chart paths in `ArchiveScanResult`.
-
-Introduce scanner-local prepared records:
-
-```cpp
-struct PreparedOrdinaryChart {
-  std::filesystem::path path;
-  bool parseAttempted = false;
-  std::optional<bms_parser::ChartMeta> meta;
-};
-struct PreparedArchive {
-  std::filesystem::path path;
-  std::int64_t archiveSize = 0;
-  std::int64_t mtimeNs = 0;
-  const ArchiveScanCacheRecord *cache = nullptr;
-  std::optional<ArchiveScanResult> scan;
-};
-using PreparedEntity =
-    std::variant<PreparedOrdinaryChart, PreparedArchive>;
-```
-
-Store `std::optional<PreparedEntity>` slots in discovery order. Each worker writes only its assigned slot under a result mutex. Only the scanner thread merges slots into existing collections.
-
-- [ ] **Step 4: Turn traversal into the shared-queue producer**
-
-Create the scheduler before roots are iterated:
-
-```cpp
-const std::size_t entityWorkerCount = static_cast<std::size_t>(
-    parallel_worker_count(kIndividualParseBatchSize));
-chart_scan::WorkScheduler entityScheduler(entityWorkerCount);
-```
-
-For each newly discovered ordinary chart, reserve a slot and enqueue `parseChartMeta(path, nullptr)` on a fresh scan. If `checkpoint.found`, record `parseAttempted = false` without eager parsing.
-
-For each unique archive, do cheap file-state/cache checks on the producer. Resolve valid cache hits immediately. Enqueue stale/missing-cache inspection as one closure calling `scanArchiveForChartsOrSolid(path, pauseCallback)`.
-
-On normal traversal completion call `finish()`; on cancellation call `cancel()`. Log captured unexpected exceptions and merge populated slots in discovery order. During merge:
-
-- add ordinary paths to `knownChartPaths` and append one `ScanDiff` with prepared metadata;
-- apply current cache-hit rules unchanged;
-- for successful archive scans, update `reindexedArchives`, solid/cache diffs, known paths, and virtual chart diffs once; and
-- ignore failed/missing slots without database mutation.
-
-Extend local `ScanDiff`:
-
-```cpp
-struct ScanDiff {
-  std::filesystem::path path;
-  bool deleted = false;
-  bool parseAttempted = false;
-  std::optional<bms_parser::ChartMeta> preparedMeta;
-};
-```
-
-- [ ] **Step 5: Reuse ordinary results and remove competing prefetch workers**
-
-Update `parseIndividualChartBatch()` so `parseAttempted` moves its prepared result into the output slot instead of parsing again; an attempted failure remains empty. Checkpoint fallback diffs keep `parseAttempted == false` and use the existing batch parser.
-
-Remove the speculative archive-prefetch queue, workers, join guard, and `prefetchedArchiveResults` branches. Keep `ArchiveParseJobResult` and `activeArchiveParseJobs`. Simplify `queuedArchiveCountFrom()` and `launchArchiveParseJobs()` to count and launch all pending archive batches.
-
-Required phase order:
-
-```text
-shared entity queue finishes
-  -> prepared ordinary metadata merges in discovery order
-  -> archive batches are constructed in discovery order
-  -> SQLite applies ordinary results
-  -> existing outer/inner archive parser uses full worker budget
-  -> SQLite applies archive results and checkpoints
-```
-
-- [ ] **Step 6: Build and verify GREEN**
-
-Add `src/ChartScanWorkScheduler.cpp` to `chart_library_scanner_tests`.
+- [ ] **Step 3: Commit the characterization**
 
 ```bash
-cmake -S . -B cmake-build-debug
-cmake --build cmake-build-debug --target \
-  chart_scan_work_scheduler_tests archive_file_concurrency_tests \
-  chart_library_scanner_tests -j 6
-ctest --test-dir cmake-build-debug \
-  -R '^(chart_scan_work_scheduler_tests|archive_file_concurrency_tests|chart_library_scanner_tests)$' \
-  --output-on-failure
-```
-
-Expected: all PASS with no duplicate chart insertion.
-
-- [ ] **Step 7: Commit the scanner integration**
-
-```bash
-git add tests/chart_library_scanner_tests.cpp src/ChartLibraryScanner.cpp CMakeLists.txt
-git commit -m "perf: schedule chart scan entities dynamically"
+git add tests/chart_library_scanner_tests.cpp
+git commit -m "test: characterize pipelined archive scan results"
 ```
 
 ---
 
-### Task 4: Regression and build verification
+### Task 3: Pipeline fresh archive parsing through the entity scheduler
 
 **Files:**
-- Modify only if verification exposes a scoped defect in files above.
+- Modify: `src/ChartLibraryScanner.cpp`
 
 **Interfaces:**
-- Verifies scheduler shutdown, archive backends, public scanner behavior, SQLite/checkpoints, and desktop integration.
+- Extends local `PreparedArchive` with ordered prepared chart results
+- Extends local `ArchiveParseBatch` with per-entry `parseAttempted` and prepared metadata
+- Adds a local archive-stream helper that consumes `ArchiveParseBatch`, a scheduler, and an ordered result sink
 
-- [ ] **Step 1: Repeat focused tests for race sensitivity**
+- [ ] **Step 1: Add ordered prepared-result fields**
+
+Represent each archive entry as an inner path plus `parseAttempted` and `optional<ChartMeta>`. When merging discovery results, move matching eager metadata into the archive batch. An attempted parse with empty metadata must remain attempted so malformed charts are not parsed twice.
+
+- [ ] **Step 2: Implement the bounded archive producer**
+
+For one entry, or when the shared worker budget is one, call `readArchiveEntriesStreaming()` and `parseChartMeta()` inline. For larger batches, stream from the `ArchiveIo` task and enqueue one `Cpu` task per file. Use a fixed result vector keyed by normalized inner path and condition-variable backpressure for 12 files/16 MiB. Each CPU task releases its byte/file charge after parsing. A shared completion record publishes only after the producer is done and all accepted CPU tasks have completed.
+
+- [ ] **Step 3: Invoke the producer immediately after archive indexing**
+
+Construct the entity scheduler with `archiveIoLimit = min(2, workerCount > 1 ? workerCount - 1 : 1)`. Archive inspection tasks use `WorkClass::ArchiveIo`. On fresh scans, a readable, non-solid archive immediately starts the producer and publishes its `PreparedArchive` after chart parsing completes. Cached, solid, unreadable, and checkpoint-bearing cases retain their existing cheap/index-only paths.
+
+- [ ] **Step 4: Consume prepared metadata without rereading**
+
+During ordered diff-to-batch conversion, carry prepared metadata into the matching archive entry. The later archive application path builds an ordered `ArchiveParseJobResult` directly when every pending entry was already attempted.
+
+- [ ] **Step 5: Verify fresh-scan tests**
 
 ```bash
-for run in 1 2 3 4 5; do
-  ctest --test-dir cmake-build-debug \
-    -R '^(chart_scan_work_scheduler_tests|archive_file_concurrency_tests|chart_library_scanner_tests)$' \
-    --output-on-failure || exit 1
-done
+cmake --build cmake-build-debug --target chart_library_scanner_tests -j 6
+ctest --test-dir cmake-build-debug -R '^chart_library_scanner_tests$' --output-on-failure
 ```
 
-Expected: five clean passes without hangs.
+Expected: all mixed, many-small-archive, multi-entry, stop/pause, cache, and storage tests pass.
 
-- [ ] **Step 2: Run relevant repository tests**
+---
+
+### Task 4: Remove nested archive parser pools from fallback/resume work
+
+**Files:**
+- Modify: `src/ChartLibraryScanner.cpp`
+
+**Interfaces:**
+- Removes: `ArchiveParsePipelineShape`, outer `std::async` archive jobs, and per-archive producer/parser thread vectors
+- Reuses: the Task 3 bounded archive producer
+- Preserves: ordered `ArchiveParseJobResult` consumption and checkpoint application
+
+- [ ] **Step 1: Submit only unprepared archive suffixes**
+
+After checkpoint validation, create a resource-aware scheduler using the scan worker budget and bounded archive admission. For each archive at or after the resume position, copy only entries whose parse was not attempted into a pending batch and submit one `ArchiveIo` producer. Store results by archive index; prepared prefixes stay in their existing ordered slots.
+
+- [ ] **Step 2: Drain once and apply in archive order**
+
+Finish the scheduler after all archive roots have been submitted. Merge newly parsed suffix results with any eager results, then run the existing single scanner-thread insert/cache/checkpoint loop in `archiveBatchOrder`. Failed reads produce an empty optional result and retain current logging behavior.
+
+- [ ] **Step 3: Delete obsolete nested-concurrency code**
+
+Remove `parseArchiveBatchConcurrently()`, `parseArchiveBatchStreaming()`'s private worker/producer threads, `ArchiveParsePipelineShape`, `ActiveArchiveParseJob`, `std::future`, `std::async`, launch/take/wait helpers, and unused `<future>` includes/constants.
+
+- [ ] **Step 4: Verify scanner and scheduler tests and commit**
 
 ```bash
-ctest --test-dir cmake-build-debug \
-  -R '(chart_library_scanner|chart_repository|profile_archive|jukebox_restore)' \
-  --output-on-failure
+cmake --build cmake-build-debug --target chart_scan_work_scheduler_tests chart_library_scanner_tests -j 6
+ctest --test-dir cmake-build-debug -R '^(chart_scan_work_scheduler_tests|chart_library_scanner_tests)$' --output-on-failure
+git add src/ChartLibraryScanner.cpp
+git commit -m "perf: pipeline archive chart parsing"
 ```
 
-Expected: PASS.
+---
 
-- [ ] **Step 3: Run the desktop compile check**
+### Task 5: Regression verification and publication
+
+**Files:**
+- Review: every file changed since `origin/develop`
+- Update: the existing GitHub pull request description if its architecture summary is stale
+
+**Interfaces:**
+- Verifies: scheduler, scanner, archive backend, desktop compile, clean worktree
+
+- [ ] **Step 1: Run focused and related tests**
+
+```bash
+cmake --build cmake-build-debug --target chart_scan_work_scheduler_tests archive_file_concurrency_tests chart_library_scanner_tests -j 6
+ctest --test-dir cmake-build-debug -R '^(chart_scan_work_scheduler_tests|archive_file_concurrency_tests|chart_library_scanner_tests)$' --output-on-failure
+```
+
+- [ ] **Step 2: Run the required desktop build**
 
 ```bash
 cmake --build cmake-build-debug --target main -j 6
 ```
 
-Expected: `main` builds successfully.
+- [ ] **Step 3: Self-review**
 
-- [ ] **Step 4: Review final diff and worktree**
+Run `git diff --check`, inspect the complete branch diff, confirm no nested archive parser thread creation remains in `ChartLibraryScanner.cpp`, confirm all worker-owned state outlives scheduler joins, and confirm no benchmark or deployment command was run.
 
-```bash
-git diff HEAD~3 --check
-git status --short
-git log --oneline -4
-```
-
-Confirm there are no environment files, build artifacts, parser-amalgamation edits, unrelated changes, or uncommitted implementation files.
-
-- [ ] **Step 5: Commit only verification corrections, if any**
+- [ ] **Step 4: Push and update the pull request**
 
 ```bash
-git add src/ChartScanWorkScheduler.cpp src/ChartScanWorkScheduler.h \
-  src/ArchiveFile.cpp src/ChartLibraryScanner.cpp \
-  tests/chart_scan_work_scheduler_tests.cpp \
-  tests/archive_file_concurrency_tests.cpp \
-  tests/chart_library_scanner_tests.cpp CMakeLists.txt src/CMakeLists.txt
-git commit -m "fix: stabilize dynamic chart scan scheduling"
+git push origin perf/dynamic-chart-scan-scheduling
+gh pr edit 84 --body-file /tmp/asobmashow-pr-84.md
 ```
 
-If no corrections were needed, do not create an empty commit.
+Report the tests/build run and the pull request URL without claiming measured speedup.
