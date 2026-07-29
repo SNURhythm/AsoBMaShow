@@ -14,6 +14,7 @@ struct DetailFacts {
   GaugeType initialGaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   float finalGauge = 0.0F;
+  std::optional<int> maxCombo;
   std::optional<int> completedCharts;
   std::optional<int> totalCharts;
   bool automated = false;
@@ -51,6 +52,9 @@ inline std::string detailLabel(const DetailFacts &facts) {
       gaugeLabel(facts.initialGaugeType, facts.gaugeAutoShift) + "  Gauge " +
       formatGauge(facts.finalGauge);
 
+  if (facts.maxCombo.has_value()) {
+    detail += "  Combo " + std::to_string(*facts.maxCombo);
+  }
   if (facts.completedCharts.has_value() && facts.totalCharts.has_value()) {
     detail += "  Course " + std::to_string(*facts.completedCharts) + "/" +
               std::to_string(*facts.totalCharts);
@@ -76,6 +80,7 @@ inline std::string detailLabel(const ReplaySummary &summary) {
       .initialGaugeType = summary.initialGaugeType,
       .gaugeAutoShift = summary.gaugeAutoShift,
       .finalGauge = summary.finalGauge,
+      .maxCombo = summary.maxCombo,
       .completedCharts = summary.courseReplay
                              ? std::optional<int>(summary.completedCharts)
                              : std::nullopt,

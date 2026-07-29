@@ -71,6 +71,7 @@ inline std::string detailLabel(const ResultRecordSummary &summary) {
         .initialGaugeType = provenance.gaugeType,
         .gaugeAutoShift = provenance.gaugeAutoShift,
         .finalGauge = result.score.finalGauge,
+        .maxCombo = result.score.maxCombo,
         .playMode = detail::playMode(
             provenance.player1.option, provenance.player1.seed,
             provenance.player2.option, provenance.player2.seed),
@@ -85,6 +86,7 @@ inline std::string detailLabel(const ResultRecordSummary &summary) {
         .initialGaugeType = result.initialGaugeType,
         .gaugeAutoShift = result.gaugeAutoShift,
         .finalGauge = result.finalGauge,
+        .maxCombo = result.maxCombo,
         .completedCharts = result.completedCharts,
         .totalCharts = result.totalCharts,
         .playMode = detail::playMode(

@@ -183,7 +183,7 @@ int main() {
                 rowText(*reusedRow, "recordRank")->getText() == "A",
             "eligible bind installs every visible label");
     require(rowText(*reusedRow, "recordDetail")->getText() ==
-                "HARD  Gauge 64.5%  MIRROR",
+                "HARD  Gauge 64.5%  Combo 700  MIRROR",
             "eligible bind installs the same local gameplay details as other "
             "records");
 
@@ -388,7 +388,7 @@ int main() {
     require(modernRow != nullptr && modernBadge != nullptr &&
                 modernBadge->isEnabled() &&
                 rowText(*modernRow, "recordDetail")->getText() ==
-                    "HARD  Gauge 64.5%",
+                    "HARD  Gauge 64.5%  Combo 800",
             "normal-option modern result keeps gameplay detail beside its IR "
             "action");
     clickThroughList(modernList, *modernBadge);
