@@ -2063,6 +2063,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(chart_library_scanner_tests
         tests/chart_library_scanner_tests.cpp
         src/ChartLibraryScanner.cpp
+        src/ChartScanWorkScheduler.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp

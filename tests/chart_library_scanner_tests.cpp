@@ -1,14 +1,25 @@
+#include "../src/ArchiveRAII.h"
 #include "../src/ChartLibraryScanner.h"
+#include "../src/Utils.h"
 #include "../src/repositories/ChartRepository.h"
 #include "../src/sqlite3.h"
+
+#include <archive_entry.h>
 
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -36,6 +47,23 @@ private:
   std::filesystem::path path_;
 };
 
+using ArchiveEntryHandle =
+    std::unique_ptr<archive_entry, decltype(&archive_entry_free)>;
+
+std::string chartText(const std::string &title) {
+  return "#PLAYER 1\n"
+         "#GENRE Test\n"
+         "#TITLE " +
+         title +
+         "\n#ARTIST AsoBMaShow Test\n"
+         "#BPM 120\n"
+         "#PLAYLEVEL 1\n"
+         "#RANK 2\n"
+         "#TOTAL 100\n"
+         "#WAV01 sample.wav\n"
+         "#00111:01\n";
+}
+
 std::filesystem::path writeChart(const std::filesystem::path &root,
                                  const std::string &name,
                                  const std::string &title) {
@@ -43,22 +71,41 @@ std::filesystem::path writeChart(const std::filesystem::path &root,
   const auto chartPath = root / (name + ".bms");
   {
     std::ofstream chart(chartPath);
-    chart << "#PLAYER 1\n"
-             "#GENRE Test\n"
-             "#TITLE "
-          << title
-          << "\n#ARTIST AsoBMaShow Test\n"
-             "#BPM 120\n"
-             "#PLAYLEVEL 1\n"
-             "#RANK 2\n"
-             "#TOTAL 100\n"
-             "#WAV01 sample.wav\n"
-             "#00111:01\n";
+    chart << chartText(title);
   }
   {
     std::ofstream audio(root / "sample.wav", std::ios::binary);
   }
   return chartPath;
+}
+
+std::filesystem::path writeZip(
+    const std::filesystem::path &path,
+    const std::vector<std::pair<std::string, std::string>> &files) {
+  std::filesystem::create_directories(path.parent_path());
+  auto writer = makeArchiveWriteHandle();
+  assert(writer);
+  assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_set_options(writer.get(), "zip:compression=store") ==
+         ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) ==
+         ARCHIVE_OK);
+
+  for (const auto &[entryPath, contents] : files) {
+    ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+    assert(entry);
+    archive_entry_set_pathname(entry.get(), entryPath.c_str());
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(),
+                           static_cast<la_int64_t>(contents.size()));
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+           static_cast<la_ssize_t>(contents.size()));
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  }
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  return path;
 }
 
 void testBasicNoOpAndDeleteScan() {
@@ -193,6 +240,176 @@ void testStorageFailureLeavesNoChart() {
   assert(session->CountAllChartMeta() == 0);
 }
 
+void testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto archiveA = writeZip(
+      root / "00-archive.zip", {{"inside-a.bms", chartText("Archive A")}});
+  const auto ordinaryA = writeChart(root, "10-ordinary-a", "Ordinary A");
+  const auto ordinaryB = writeChart(root, "20-ordinary-b", "Ordinary B");
+  const auto archiveB = writeZip(
+      root / "30-archive.zip", {{"inside-b.bms", chartText("Archive B")}});
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  const std::vector<std::filesystem::path> roots{
+      archiveA, ordinaryA, ordinaryB, archiveB};
+  assert(scanner.Scan(*session, roots) == 6);
+  assert(session->CountAllChartMeta() == 4);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.archiveCache.size() == 2);
+  assert(scanner.Scan(*session, roots) == 0);
+  assert(session->CountAllChartMeta() == 4);
+}
+
+void testManySmallArchivesPreserveDiscoveryOrderAndCache() {
+  constexpr int kArchiveCount = 6;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::vector<std::filesystem::path> roots;
+  std::map<std::string, std::string> expectedArchiveByTitle;
+  for (int index = 0; index < kArchiveCount; ++index) {
+    const std::string stem = "archive-" + std::to_string(index);
+    const std::string title = "Archive Chart " + std::to_string(index);
+    const auto archivePath = writeZip(
+        root / (stem + ".zip"),
+        {{"inside-" + std::to_string(index) + ".bms", chartText(title)}});
+    roots.push_back(archivePath);
+    expectedArchiveByTitle.emplace(title, archivePath.filename().string());
+  }
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.Scan(*session, roots) == kArchiveCount * 2);
+  assert(session->CountAllChartMeta() == kArchiveCount);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.archiveCache.size() == kArchiveCount);
+  assert(snapshot.charts.size() == kArchiveCount);
+  for (const auto &chart : snapshot.charts) {
+    const auto expected = expectedArchiveByTitle.find(chart.Title);
+    assert(expected != expectedArchiveByTitle.end());
+    assert(chart.BmsPath.generic_string().find(expected->second) !=
+           std::string::npos);
+  }
+  assert(scanner.Scan(*session, roots) == 0);
+}
+
+void testArchiveInspectionUsesMultipleEntityWorkers() {
+  constexpr int kFixtureCount = 6;
+  if (parallel_worker_count(kFixtureCount) <= 1) {
+    return;
+  }
+
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::vector<std::filesystem::path> roots;
+  for (int index = 0; index < kFixtureCount; ++index) {
+    roots.push_back(writeZip(root / ("empty-" + std::to_string(index) + ".zip"),
+                             {{"readme.txt", "not a chart"}}));
+  }
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  const std::thread::id callerThread = std::this_thread::get_id();
+  std::mutex rendezvousMutex;
+  std::condition_variable rendezvousCv;
+  std::set<std::thread::id> workerThreads;
+  bool timedOut = false;
+  const auto pauseCallback = [&]() {
+    const std::thread::id currentThread = std::this_thread::get_id();
+    if (currentThread == callerThread) {
+      return true;
+    }
+    std::unique_lock lock(rendezvousMutex);
+    workerThreads.insert(currentThread);
+    rendezvousCv.notify_all();
+    if (!rendezvousCv.wait_for(lock, std::chrono::seconds(2),
+                               [&] { return workerThreads.size() >= 2; })) {
+      timedOut = true;
+      rendezvousCv.notify_all();
+    }
+    return true;
+  };
+
+  (void)scanner.Scan(*session, roots, nullptr, nullptr, pauseCallback);
+  assert(session->CountAllChartMeta() == 0);
+  assert(workerThreads.size() >= 2);
+  assert(!timedOut);
+  assert(session->LoadScanSnapshot().archiveCache.size() == kFixtureCount);
+}
+
+void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
+  constexpr int kEntityCount = 4;
+  if (parallel_worker_count(kEntityCount) <= 1) {
+    return;
+  }
+
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto archive =
+      writeZip(root / "00-archive.zip", {{"readme.txt", "not a chart"}});
+  const auto ordinaryA = writeChart(root, "10-ordinary-a", "Ordinary A");
+  const auto ordinaryB = writeChart(root, "20-ordinary-b", "Ordinary B");
+  const auto ordinaryC = writeChart(root, "30-ordinary-c", "Ordinary C");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  const std::thread::id callerThread = std::this_thread::get_id();
+  std::atomic_bool scanningRoots{false};
+  std::mutex rendezvousMutex;
+  std::condition_variable rendezvousCv;
+  std::set<std::thread::id> entityWorkers;
+  bool timedOut = false;
+  const auto progressCallback = [&](const ChartScanProgress &progress) {
+    if (progress.stage == ChartScanProgressStage::ScanningRoots) {
+      scanningRoots.store(true, std::memory_order_release);
+    } else if (progress.stage == ChartScanProgressStage::PreparingUpdates) {
+      scanningRoots.store(false, std::memory_order_release);
+    }
+  };
+  const auto pauseCallback = [&]() {
+    const std::thread::id currentThread = std::this_thread::get_id();
+    if (currentThread == callerThread ||
+        !scanningRoots.load(std::memory_order_acquire)) {
+      return true;
+    }
+    std::unique_lock lock(rendezvousMutex);
+    entityWorkers.insert(currentThread);
+    rendezvousCv.notify_all();
+    if (!rendezvousCv.wait_for(lock, std::chrono::seconds(2),
+                               [&] { return entityWorkers.size() >= 2; })) {
+      timedOut = true;
+      rendezvousCv.notify_all();
+    }
+    return true;
+  };
+
+  const std::vector<std::filesystem::path> roots{
+      archive, ordinaryA, ordinaryB, ordinaryC};
+  (void)scanner.Scan(*session, roots, nullptr, progressCallback,
+                     pauseCallback);
+  assert(entityWorkers.size() >= 2);
+  assert(!timedOut);
+  assert(session->CountAllChartMeta() == 3);
+  assert(session->LoadScanSnapshot().archiveCache.size() == 1);
+}
+
 } // namespace
 
 int main() {
@@ -200,5 +417,9 @@ int main() {
   testStopAndPauseBeforeWork();
   testCheckpointResume();
   testStorageFailureLeavesNoChart();
+  testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
+  testManySmallArchivesPreserveDiscoveryOrderAndCache();
+  testArchiveInspectionUsesMultipleEntityWorkers();
+  testBlockedArchiveDoesNotDelayLaterOrdinaryEntities();
   return 0;
 }
