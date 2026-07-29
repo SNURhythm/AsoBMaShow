@@ -79,9 +79,9 @@ std::filesystem::path writeChart(const std::filesystem::path &root,
   return chartPath;
 }
 
-std::filesystem::path writeZip(
-    const std::filesystem::path &path,
-    const std::vector<std::pair<std::string, std::string>> &files) {
+std::filesystem::path
+writeZip(const std::filesystem::path &path,
+         const std::vector<std::pair<std::string, std::string>> &files) {
   std::filesystem::create_directories(path.parent_path());
   auto writer = makeArchiveWriteHandle();
   assert(writer);
@@ -243,12 +243,12 @@ void testStorageFailureLeavesNoChart() {
 void testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
-  const auto archiveA = writeZip(
-      root / "00-archive.zip", {{"inside-a.bms", chartText("Archive A")}});
+  const auto archiveA = writeZip(root / "00-archive.zip",
+                                 {{"inside-a.bms", chartText("Archive A")}});
   const auto ordinaryA = writeChart(root, "10-ordinary-a", "Ordinary A");
   const auto ordinaryB = writeChart(root, "20-ordinary-b", "Ordinary B");
-  const auto archiveB = writeZip(
-      root / "30-archive.zip", {{"inside-b.bms", chartText("Archive B")}});
+  const auto archiveB = writeZip(root / "30-archive.zip",
+                                 {{"inside-b.bms", chartText("Archive B")}});
 
   ChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
@@ -256,8 +256,8 @@ void testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce() {
   assert(session.has_value());
   ChartLibraryScanner scanner;
 
-  const std::vector<std::filesystem::path> roots{
-      archiveA, ordinaryA, ordinaryB, archiveB};
+  const std::vector<std::filesystem::path> roots{archiveA, ordinaryA, ordinaryB,
+                                                 archiveB};
   assert(scanner.Scan(*session, roots) == 6);
   assert(session->CountAllChartMeta() == 4);
   const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
@@ -305,12 +305,12 @@ void testManySmallArchivesPreserveDiscoveryOrderAndCache() {
 void testMultiEntryArchivePreservesPreparedResultOrderAndCache() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
-  const auto archivePath = writeZip(
-      root / "multi-chart.zip",
-      {{"alpha/first.bms", chartText("First Archive Entry")},
-       {"beta/second.bms", chartText("Second Archive Entry")},
-       {"gamma/third.bms", chartText("Third Archive Entry")},
-       {"readme.txt", "not a chart"}});
+  const auto archivePath =
+      writeZip(root / "multi-chart.zip",
+               {{"alpha/first.bms", chartText("First Archive Entry")},
+                {"beta/second.bms", chartText("Second Archive Entry")},
+                {"gamma/third.bms", chartText("Third Archive Entry")},
+                {"readme.txt", "not a chart"}});
 
   ChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
@@ -340,6 +340,41 @@ void testMultiEntryArchivePreservesPreparedResultOrderAndCache() {
   }
   assert(storedInnerPaths == expectedInnerPaths);
   assert(scanner.Scan(*session, {archivePath}) == 0);
+}
+
+void testArchiveCheckpointResumeUsesOrderedFallbackPipeline() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto archivePath =
+      writeZip(root / "resume-archive.zip",
+               {{"first.bms", chartText("Resume Archive First")},
+                {"second.bms", chartText("Resume Archive Second")},
+                {"third.bms", chartText("Resume Archive Third")}});
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  (void)scanner.Scan(
+      *session, {archivePath}, &stopToken, nullptr, nullptr,
+      []() -> std::uint64_t { return 1; },
+      [&](std::uint64_t request) {
+        assert(request == 1);
+        stop.request_stop();
+      });
+  assert(session->CountAllChartMeta() == 0);
+  assert(session->LoadScanSnapshot().checkpoint.has_value());
+
+  assert(scanner.Scan(*session, {archivePath}) == 4);
+  assert(session->CountAllChartMeta() == 3);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.archiveCache.size() == 1);
+  assert(snapshot.archiveCache.front().chartCount == 3);
+  assert(!snapshot.checkpoint.has_value());
 }
 
 void testArchiveInspectionUsesMultipleEntityWorkers() {
@@ -440,10 +475,9 @@ void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
     return true;
   };
 
-  const std::vector<std::filesystem::path> roots{
-      archive, ordinaryA, ordinaryB, ordinaryC};
-  (void)scanner.Scan(*session, roots, nullptr, progressCallback,
-                     pauseCallback);
+  const std::vector<std::filesystem::path> roots{archive, ordinaryA, ordinaryB,
+                                                 ordinaryC};
+  (void)scanner.Scan(*session, roots, nullptr, progressCallback, pauseCallback);
   assert(entityWorkers.size() >= 2);
   assert(!timedOut);
   assert(session->CountAllChartMeta() == 3);
@@ -460,6 +494,7 @@ int main() {
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
   testManySmallArchivesPreserveDiscoveryOrderAndCache();
   testMultiEntryArchivePreservesPreparedResultOrderAndCache();
+  testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testArchiveInspectionUsesMultipleEntityWorkers();
   testBlockedArchiveDoesNotDelayLaterOrdinaryEntities();
   return 0;

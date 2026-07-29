@@ -120,10 +120,10 @@ void testFinishDrainsWorkSpawnedByActiveTask() {
       cv.notify_all();
       cv.wait(lock, [&] { return releaseRoot; });
     }
-    childAccepted.store(
-        scheduler.enqueue(
-            [&] { childRan.store(true, std::memory_order_release); }),
-        std::memory_order_release);
+    childAccepted.store(scheduler.enqueue([&] {
+      childRan.store(true, std::memory_order_release);
+    }),
+                        std::memory_order_release);
   }));
   {
     std::unique_lock lock(mutex);

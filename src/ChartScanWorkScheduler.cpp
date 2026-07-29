@@ -7,10 +7,9 @@ namespace chart_scan {
 
 WorkScheduler::WorkScheduler(std::size_t workerCount,
                              std::size_t archiveIoLimit) {
-  const std::size_t actualWorkerCount =
-      std::max<std::size_t>(1, workerCount);
-  archiveIoLimit_ = std::clamp<std::size_t>(archiveIoLimit, 1,
-                                            actualWorkerCount);
+  const std::size_t actualWorkerCount = std::max<std::size_t>(1, workerCount);
+  archiveIoLimit_ =
+      std::clamp<std::size_t>(archiveIoLimit, 1, actualWorkerCount);
   workers_.reserve(actualWorkerCount);
   for (std::size_t index = 0; index < actualWorkerCount; ++index) {
     workers_.emplace_back([this] { workerLoop(); });
