@@ -46,19 +46,28 @@ ResultRecordSummary modernRecord(int id, ir::IrRecordState state,
                                  std::string displayedTime, int score,
                                  int maxCombo, int clearRank,
                                  std::optional<std::string> option) {
-  ResultRecordSummary summary;
-  summary.identity =
-      ModernChartRecordId{.attemptId = "list-attempt-" + std::to_string(id)};
-  summary.score = score;
-  summary.maxScore = 2'000;
-  summary.maxCombo = maxCombo;
-  summary.clearRank = clearRank;
-  summary.playOption = option.value_or("NORMAL");
+  result_persistence::ModernChartResult result{
+      .resultId = id,
+      .attemptId = "list-attempt-" + std::to_string(id),
+      .score =
+          {
+              .score = score,
+              .maxScore = 2'000,
+              .maxCombo = maxCombo,
+              .finalGauge = 64.5F,
+              .clearType = clearRank,
+              .provenance =
+                  {
+                      .gaugeType = GaugeType::Hard,
+                      .player1 = {.option = option.value_or("NORMAL")},
+                  },
+          },
+  };
+
+  ResultRecordSummary summary = makeModernChartResultRecord(
+      ModernChartResultRecord{.result = std::move(result)},
+      replay::ReplayState::Verified, state);
   summary.displayedTime = std::move(displayedTime);
-  summary.irState = state;
-  summary.capabilities.irUpload =
-      state == ir::IrRecordState::Eligible ||
-      state == ir::IrRecordState::Failed;
   return summary;
 }
 
@@ -173,9 +182,10 @@ int main() {
                 rowText(*reusedRow, "recordScore")->getText() == "1500" &&
                 rowText(*reusedRow, "recordRank")->getText() == "A",
             "eligible bind installs every visible label");
-    require(rowText(*reusedRow, "recordDetail")->getText().find("MIRROR") !=
-                std::string::npos,
-            "eligible bind installs local detail text");
+    require(rowText(*reusedRow, "recordDetail")->getText() ==
+                "HARD  Gauge 64.5%  MIRROR",
+            "eligible bind installs the same local gameplay details as other "
+            "records");
 
     auto *irBadge = badge(list);
     require(irBadge != nullptr && irBadge->getVisible() && irBadge->isEnabled(),
@@ -242,7 +252,8 @@ int main() {
             "remote rebind replaces local row and badge stable identities");
     require(rowText(*row, "recordTitle")->getText() == remote.displayedTime &&
                 rowText(*row, "recordScore")->getText() == "1777" &&
-                rowText(*row, "recordRank")->getText() == "AA",
+                rowText(*row, "recordRank")->getText() == "AA" &&
+                rowText(*row, "recordDetail")->getText() == "IR  RANDOM",
             "remote rebind replaces every prior local label");
     require(irBadge->getVisible() && irBadge->isEnabled() &&
                 badgeText(*irBadge, "irBadgeLabel")->getText() == "IR" &&
@@ -372,8 +383,14 @@ int main() {
     };
     modernList.setResultRecords({modern});
     auto *modernBadge = badge(modernList);
-    require(modernBadge != nullptr && modernBadge->isEnabled(),
-            "modern snapshot-backed result exposes its IR action");
+    auto *modernRow = dynamic_cast<ResultRecordListItemView *>(
+        modernList.getViewByIndex(0));
+    require(modernRow != nullptr && modernBadge != nullptr &&
+                modernBadge->isEnabled() &&
+                rowText(*modernRow, "recordDetail")->getText() ==
+                    "HARD  Gauge 64.5%",
+            "normal-option modern result keeps gameplay detail beside its IR "
+            "action");
     clickThroughList(modernList, *modernBadge);
     require(modernUpload == modern.stableKey(),
             "modern IR action binds the durable attempt identity");

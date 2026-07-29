@@ -5,6 +5,7 @@
 #include "ScoreRankUtils.h"
 #include "scene/play/GameplayGaugeTypes.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -17,6 +18,23 @@ inline void appendSegment(std::string &label, std::string segment) {
     label += "  ";
   }
   label += std::move(segment);
+}
+
+inline std::optional<long long>
+displaySeed(const std::optional<std::int64_t> &seed) {
+  return seed.has_value() ? std::optional<long long>(*seed) : std::nullopt;
+}
+
+inline play_options::PlayModeDisplayLabel playMode(
+    const std::string &player1Option,
+    const std::optional<std::int64_t> &player1Seed,
+    const std::string &player2Option,
+    const std::optional<std::int64_t> &player2Seed) {
+  return {.mode = play_options::formatPlayOptionLabel(
+              std::optional<std::string>(player1Option),
+              displaySeed(player1Seed),
+              std::optional<std::string>(player2Option),
+              displaySeed(player2Seed))};
 }
 
 } // namespace detail
@@ -46,11 +64,44 @@ inline std::string detailLabel(const ResultRecordSummary &summary) {
     return replay_summary_ui::detailLabel(*summary.autoPlayReplay);
   }
 
-  std::string label = "IR";
-  if (summary.playOption.has_value() && !summary.playOption->empty()) {
-    label += "  " + *summary.playOption;
+  if (summary.modern.has_value()) {
+    const auto &result = summary.modern->result;
+    const auto &provenance = result.score.provenance;
+    return replay_summary_ui::detailLabel({
+        .initialGaugeType = provenance.gaugeType,
+        .gaugeAutoShift = provenance.gaugeAutoShift,
+        .finalGauge = result.score.finalGauge,
+        .playMode = detail::playMode(
+            provenance.player1.option, provenance.player1.seed,
+            provenance.player2.option, provenance.player2.seed),
+        .assistOption = provenance.assistOption,
+    });
   }
-  return label;
+
+  if (summary.modernCourse.has_value()) {
+    const auto &result = summary.modernCourse->result;
+    const auto &provenance = result.provenance;
+    return replay_summary_ui::detailLabel({
+        .initialGaugeType = result.initialGaugeType,
+        .gaugeAutoShift = result.gaugeAutoShift,
+        .finalGauge = result.finalGauge,
+        .completedCharts = result.completedCharts,
+        .totalCharts = result.totalCharts,
+        .playMode = detail::playMode(
+            result.requestedPlayOption, provenance.player1.seed,
+            provenance.player2.option, provenance.player2.seed),
+        .assistOption = result.assistOption,
+    });
+  }
+
+  if (summary.isRemote()) {
+    std::string label = "IR";
+    if (summary.playOption.has_value() && !summary.playOption->empty()) {
+      label += "  " + *summary.playOption;
+    }
+    return label;
+  }
+  return "—";
 }
 
 inline std::string scoreLabel(const ResultRecordSummary &summary) {
