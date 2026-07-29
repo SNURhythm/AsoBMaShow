@@ -44,6 +44,7 @@
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kArchivedThumbnailMaxDimension = 256;
+constexpr std::size_t kBackgroundImageDecodeWorkerCount = 4;
 constexpr std::array<unsigned char, 8> kArchivedThumbnailMagic = {
     'A', 'S', 'O', 'B', 'T', 'H', 'M', '1'};
 
@@ -357,8 +358,13 @@ private:
     std::chrono::steady_clock::time_point queuedAt;
   };
 
-  ImageDecodeWorker()
-      : worker([this] { run(false); }), priorityWorker([this] { run(true); }) {}
+  ImageDecodeWorker() {
+    workers.reserve(kBackgroundImageDecodeWorkerCount);
+    for (std::size_t i = 0; i < kBackgroundImageDecodeWorkerCount; ++i) {
+      workers.emplace_back([this] { run(false); });
+    }
+    priorityWorker = std::thread([this] { run(true); });
+  }
 
   ~ImageDecodeWorker() {
     {
@@ -366,8 +372,10 @@ private:
       stop = true;
     }
     cv.notify_all();
-    if (worker.joinable()) {
-      worker.join();
+    for (auto &worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
     }
     if (priorityWorker.joinable()) {
       priorityWorker.join();
@@ -445,7 +453,7 @@ private:
   std::unordered_set<std::string> priorityInFlight;
   std::unordered_set<std::string> failed;
   std::map<std::string, DecodedImage> ready;
-  std::thread worker;
+  std::vector<std::thread> workers;
   std::thread priorityWorker;
   std::uint64_t generation = 0;
   bool stop = false;

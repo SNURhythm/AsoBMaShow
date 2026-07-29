@@ -139,6 +139,53 @@ int main() {
   {
     const std::filesystem::path fixtureRoot =
         std::filesystem::temp_directory_path() /
+        ("asobmashow-image-independent-list-artwork-" +
+         std::to_string(getpid()));
+    std::filesystem::remove_all(fixtureRoot);
+    std::filesystem::create_directories(fixtureRoot);
+    const std::filesystem::path blockedPath = fixtureRoot / "blocked.ppm";
+    const std::filesystem::path readyPath = fixtureRoot / "ready.ppm";
+    require(mkfifo(blockedPath.c_str(), 0600) == 0,
+            "blocked list artwork fixture creates a named pipe");
+    writeSinglePixelPpm(readyPath);
+
+    ImageView::dropAllCache();
+    ImageView blockedArtwork(0, 0, 8, 8);
+    blockedArtwork.setImageAsync(blockedPath.string(), false);
+
+    int writer = -1;
+    const auto readerDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (writer < 0 && std::chrono::steady_clock::now() < readerDeadline) {
+      writer = open(blockedPath.c_str(), O_WRONLY | O_NONBLOCK);
+      if (writer < 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    }
+    require(writer >= 0,
+            "one list artwork decode starts reading the blocked fixture");
+
+    ImageView readyArtwork(0, 0, 8, 8);
+    readyArtwork.setImageAsync(readyPath.string(), false);
+    const auto readyDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (readyArtwork.imageWidth() == 0 &&
+           std::chrono::steady_clock::now() < readyDeadline) {
+      readyArtwork.setImageAsync(readyPath.string(), false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    const bool loadedBeforeBlockedArtworkReleased =
+        readyArtwork.imageWidth() == 1 && readyArtwork.imageHeight() == 1;
+
+    close(writer);
+    std::filesystem::remove_all(fixtureRoot);
+    require(loadedBeforeBlockedArtworkReleased,
+            "each list jacket or banner is drawn as soon as it loads");
+  }
+
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
         ("asobmashow-image-priority-" + std::to_string(getpid()));
     std::filesystem::remove_all(fixtureRoot);
     std::filesystem::create_directories(fixtureRoot);
