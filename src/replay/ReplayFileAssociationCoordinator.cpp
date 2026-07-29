@@ -234,8 +234,7 @@ ReplayFileAssociationOutcome ReplayFileAssociationCoordinator::associate(
                      installed.diagnostic.empty() ? inspection.diagnostic
                                                   : installed.diagnostic);
     if (inspection.state == ReplayFileState::Missing) {
-      releaseUnownedReservation(dependencies_, pathReservation,
-                                outcome.diagnostic);
+      releaseReservation(dependencies_, pathReservation, outcome.diagnostic);
     }
     return outcome;
   }

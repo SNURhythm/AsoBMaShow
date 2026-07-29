@@ -265,6 +265,25 @@ void testOwnedRetryEncodeFailureRetainsItsReservation() {
          "installed BRD receipt");
 }
 
+void testConfirmedMissingInstallReleasesRecordedOwnership() {
+  Harness failed;
+  failed.installed = {.state = ReplayInstallState::Failed,
+                      .diagnostic = "write failed"};
+  failed.inspected = {.state = ReplayFileState::Missing};
+  ReplayFileAssociationCoordinator coordinator(failed.dependencies());
+
+  const auto omitted = coordinator.associate(
+      failed.attemptId, failed.stem, failed.playedAt, failed.encoder());
+  expect(omitted.status == ReplayFileAssociationStatus::Omitted &&
+             !omitted.association &&
+             std::ranges::find(failed.events, "record-ownership") !=
+                 failed.events.end() &&
+             std::ranges::find(failed.events, "release-path") !=
+                 failed.events.end(),
+         "a failed install with confirmed-absent bytes releases its stale "
+         "ownership reservation");
+}
+
 void testOccupiedAndAmbiguousInstallPaths() {
   Harness occupied;
   int installs = 0;
@@ -390,6 +409,7 @@ int main() {
   testSuccessEncodeFailureAndIntegrityConflict();
   testOwnershipJournalFailureStopsBeforeInstallingBytes();
   testOwnedRetryEncodeFailureRetainsItsReservation();
+  testConfirmedMissingInstallReleasesRecordedOwnership();
   testOccupiedAndAmbiguousInstallPaths();
   testDefinitiveCleanupUsesOwnershipAndExactMetadata();
   if (failures != 0) {
