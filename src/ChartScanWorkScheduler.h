@@ -11,29 +11,46 @@
 
 namespace chart_scan {
 
+enum class WorkClass {
+  Cpu,
+  ArchiveIo,
+};
+
 class WorkScheduler {
 public:
   using Work = std::function<void()>;
 
-  explicit WorkScheduler(std::size_t workerCount);
+  explicit WorkScheduler(std::size_t workerCount,
+                         std::size_t archiveIoLimit = 1);
   ~WorkScheduler();
   WorkScheduler(const WorkScheduler &) = delete;
   WorkScheduler &operator=(const WorkScheduler &) = delete;
 
-  bool enqueue(Work work);
+  bool enqueue(Work work, WorkClass workClass = WorkClass::Cpu);
   void finish();
   void cancel();
   std::vector<std::exception_ptr> takeExceptions();
 
 private:
+  struct WorkItem {
+    Work work;
+    WorkClass workClass = WorkClass::Cpu;
+  };
+
+  bool hasEligibleWorkLocked() const;
+  std::deque<WorkItem>::iterator firstEligibleWorkLocked();
   void workerLoop();
   void joinWorkers();
 
   std::mutex mutex_;
   std::condition_variable cv_;
-  std::deque<Work> queue_;
+  std::deque<WorkItem> queue_;
   std::vector<std::thread> workers_;
   std::vector<std::exception_ptr> exceptions_;
+  std::size_t archiveIoLimit_ = 1;
+  std::size_t activeTasks_ = 0;
+  std::size_t activeArchiveIo_ = 0;
+  bool finishing_ = false;
   bool closed_ = false;
   bool cancelled_ = false;
 };

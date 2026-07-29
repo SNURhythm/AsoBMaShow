@@ -5,17 +5,21 @@
 
 namespace chart_scan {
 
-WorkScheduler::WorkScheduler(std::size_t workerCount) {
-  workers_.reserve(std::max<std::size_t>(1, workerCount));
-  for (std::size_t index = 0;
-       index < std::max<std::size_t>(1, workerCount); ++index) {
+WorkScheduler::WorkScheduler(std::size_t workerCount,
+                             std::size_t archiveIoLimit) {
+  const std::size_t actualWorkerCount =
+      std::max<std::size_t>(1, workerCount);
+  archiveIoLimit_ = std::clamp<std::size_t>(archiveIoLimit, 1,
+                                            actualWorkerCount);
+  workers_.reserve(actualWorkerCount);
+  for (std::size_t index = 0; index < actualWorkerCount; ++index) {
     workers_.emplace_back([this] { workerLoop(); });
   }
 }
 
 WorkScheduler::~WorkScheduler() { cancel(); }
 
-bool WorkScheduler::enqueue(Work work) {
+bool WorkScheduler::enqueue(Work work, WorkClass workClass) {
   if (!work) {
     return false;
   }
@@ -24,7 +28,10 @@ bool WorkScheduler::enqueue(Work work) {
     if (closed_ || cancelled_) {
       return false;
     }
-    queue_.push_back(std::move(work));
+    queue_.push_back(WorkItem{
+        .work = std::move(work),
+        .workClass = workClass,
+    });
   }
   cv_.notify_one();
   return true;
@@ -33,7 +40,9 @@ bool WorkScheduler::enqueue(Work work) {
 void WorkScheduler::finish() {
   {
     std::lock_guard lock(mutex_);
-    closed_ = true;
+    if (!closed_ && !cancelled_) {
+      finishing_ = true;
+    }
   }
   cv_.notify_all();
   joinWorkers();
@@ -57,32 +66,73 @@ std::vector<std::exception_ptr> WorkScheduler::takeExceptions() {
   return result;
 }
 
+bool WorkScheduler::hasEligibleWorkLocked() const {
+  return std::any_of(queue_.begin(), queue_.end(), [this](const auto &item) {
+    return item.workClass != WorkClass::ArchiveIo ||
+           activeArchiveIo_ < archiveIoLimit_;
+  });
+}
+
+std::deque<WorkScheduler::WorkItem>::iterator
+WorkScheduler::firstEligibleWorkLocked() {
+  return std::find_if(queue_.begin(), queue_.end(), [this](const auto &item) {
+    return item.workClass != WorkClass::ArchiveIo ||
+           activeArchiveIo_ < archiveIoLimit_;
+  });
+}
+
 void WorkScheduler::workerLoop() {
   for (;;) {
-    Work work;
+    WorkItem item;
     {
       std::unique_lock lock(mutex_);
-      cv_.wait(lock,
-               [this] { return cancelled_ || closed_ || !queue_.empty(); });
-      if (cancelled_) {
+      cv_.wait(lock, [this] {
+        return cancelled_ || closed_ || hasEligibleWorkLocked() ||
+               (finishing_ && queue_.empty() && activeTasks_ == 0);
+      });
+      if (cancelled_ || closed_) {
         return;
       }
-      if (queue_.empty()) {
-        if (closed_) {
+      const auto workIt = firstEligibleWorkLocked();
+      if (workIt == queue_.end()) {
+        if (finishing_ && queue_.empty() && activeTasks_ == 0) {
+          closed_ = true;
+          cv_.notify_all();
           return;
         }
         continue;
       }
-      work = std::move(queue_.front());
-      queue_.pop_front();
+      item = std::move(*workIt);
+      queue_.erase(workIt);
+      ++activeTasks_;
+      if (item.workClass == WorkClass::ArchiveIo) {
+        ++activeArchiveIo_;
+      }
     }
 
+    std::exception_ptr exception;
     try {
-      work();
+      item.work();
     } catch (...) {
-      std::lock_guard lock(mutex_);
-      exceptions_.push_back(std::current_exception());
+      exception = std::current_exception();
     }
+
+    {
+      std::lock_guard lock(mutex_);
+      if (exception != nullptr) {
+        exceptions_.push_back(exception);
+      }
+      if (item.workClass == WorkClass::ArchiveIo && activeArchiveIo_ > 0) {
+        --activeArchiveIo_;
+      }
+      if (activeTasks_ > 0) {
+        --activeTasks_;
+      }
+      if (finishing_ && queue_.empty() && activeTasks_ == 0) {
+        closed_ = true;
+      }
+    }
+    cv_.notify_all();
   }
 }
 

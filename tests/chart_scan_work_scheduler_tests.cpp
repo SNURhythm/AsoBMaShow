@@ -1,5 +1,6 @@
 #include "../src/ChartScanWorkScheduler.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -48,6 +49,105 @@ void testLaterEntitiesUseWorkersWhileArchiveIsActive() {
 
   scheduler.finish();
   assert(scheduler.takeExceptions().empty());
+}
+
+void testArchiveAdmissionLeavesWorkersForCpuTasks() {
+  chart_scan::WorkScheduler scheduler(4, 2);
+  std::mutex mutex;
+  std::condition_variable cv;
+  int activeArchives = 0;
+  int maximumActiveArchives = 0;
+  int startedArchives = 0;
+  int startedCpuTasks = 0;
+  bool releaseArchives = false;
+
+  for (int index = 0; index < 4; ++index) {
+    assert(scheduler.enqueue(
+        [&] {
+          std::unique_lock lock(mutex);
+          ++activeArchives;
+          ++startedArchives;
+          maximumActiveArchives =
+              std::max(maximumActiveArchives, activeArchives);
+          cv.notify_all();
+          cv.wait(lock, [&] { return releaseArchives; });
+          --activeArchives;
+          cv.notify_all();
+        },
+        chart_scan::WorkClass::ArchiveIo));
+  }
+
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return startedArchives == 2; }));
+  }
+  for (int index = 0; index < 2; ++index) {
+    assert(scheduler.enqueue([&] {
+      std::lock_guard lock(mutex);
+      ++startedCpuTasks;
+      cv.notify_all();
+    }));
+  }
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return startedCpuTasks == 2; }));
+    assert(startedArchives == 2);
+    assert(maximumActiveArchives == 2);
+    releaseArchives = true;
+  }
+  cv.notify_all();
+
+  scheduler.finish();
+  assert(startedArchives == 4);
+  assert(maximumActiveArchives == 2);
+  assert(scheduler.takeExceptions().empty());
+}
+
+void testFinishDrainsWorkSpawnedByActiveTask() {
+  chart_scan::WorkScheduler scheduler(1);
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool rootStarted = false;
+  bool releaseRoot = false;
+  std::atomic_bool finishStarted{false};
+  std::atomic_bool childAccepted{false};
+  std::atomic_bool childRan{false};
+
+  assert(scheduler.enqueue([&] {
+    {
+      std::unique_lock lock(mutex);
+      rootStarted = true;
+      cv.notify_all();
+      cv.wait(lock, [&] { return releaseRoot; });
+    }
+    childAccepted.store(
+        scheduler.enqueue(
+            [&] { childRan.store(true, std::memory_order_release); }),
+        std::memory_order_release);
+  }));
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return rootStarted; }));
+  }
+
+  std::thread finisher([&] {
+    finishStarted.store(true, std::memory_order_release);
+    scheduler.finish();
+  });
+  while (!finishStarted.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  std::this_thread::sleep_for(20ms);
+  {
+    std::lock_guard lock(mutex);
+    releaseRoot = true;
+  }
+  cv.notify_all();
+  finisher.join();
+
+  assert(childAccepted.load(std::memory_order_acquire));
+  assert(childRan.load(std::memory_order_acquire));
+  assert(!scheduler.enqueue([] {}));
 }
 
 void testSingleWorkerPreservesFifoOrder() {
@@ -117,6 +217,8 @@ void testCancelDiscardsQueuedWorkAndJoins() {
 
 int main() {
   testLaterEntitiesUseWorkersWhileArchiveIsActive();
+  testArchiveAdmissionLeavesWorkersForCpuTasks();
+  testFinishDrainsWorkSpawnedByActiveTask();
   testSingleWorkerPreservesFifoOrder();
   testTaskExceptionDoesNotStopWorker();
   testCancelDiscardsQueuedWorkAndJoins();
