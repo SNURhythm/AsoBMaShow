@@ -81,4 +81,3 @@ only the facts required to bind the replay to the requested history record.
 4. Build desktop `main` and run the iOS build-only verification.
 5. Commit any audit corrections, push the branch, monitor PR checks, and allow
    the already-authorized deployment workflow to complete.
-

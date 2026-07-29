@@ -102,4 +102,3 @@ merely because an optional parser estimate differs.
   wrong attempt ownership remain rejected by their single authorities.
 - Focused capture, codec, context, persistence, migration, and file-state tests
   plus the full configured suite remain green.
-
