@@ -25,6 +25,7 @@
 #include "../StbImageRAII.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -54,6 +55,11 @@ struct DecodedImage {
 
 std::string imageCacheKey(const path_t &path) {
   return archive_file::cacheKeyForPath(std::filesystem::path(path));
+}
+
+std::string imageAsyncCacheKey(const path_t &path) {
+  return "async-path:" +
+         fspath_to_utf8(std::filesystem::path(path).lexically_normal());
 }
 
 bool decodedImageDimensionsAreValid(int width, int height) {
@@ -272,7 +278,10 @@ public:
       }
       return;
     }
-    Task task{.key = key, .path = path, .generation = generation};
+    Task task{.key = key,
+              .path = path,
+              .generation = generation,
+              .queuedAt = std::chrono::steady_clock::now()};
     if (prioritize) {
       queue.push_back(std::move(task));
     } else {
@@ -324,6 +333,7 @@ private:
     std::string key;
     path_t path;
     std::uint64_t generation = 0;
+    std::chrono::steady_clock::time_point queuedAt;
   };
 
   ImageDecodeWorker() : worker([this] { run(); }) {}
@@ -354,8 +364,26 @@ private:
         inFlight.insert(task.key);
       }
 
+      const auto decodeStarted = std::chrono::steady_clock::now();
       std::optional<DecodedImage> decoded =
           decodeImageFile(std::filesystem::path(task.path));
+      const auto decodeFinished = std::chrono::steady_clock::now();
+      const auto queueMillis =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              decodeStarted - task.queuedAt)
+              .count();
+      const auto decodeMillis =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              decodeFinished - decodeStarted)
+              .count();
+      if (queueMillis >= 250 || decodeMillis >= 250) {
+        const std::string diagnostic =
+            "Slow async image load: queue=" + std::to_string(queueMillis) +
+            "ms decode=" + std::to_string(decodeMillis) + "ms path=" +
+            fspath_to_utf8(std::filesystem::path(task.path));
+        SDL_Log("%s", diagnostic.c_str());
+        archive_file::appendDebugLogLine(diagnostic);
+      }
 
       {
         std::lock_guard<std::mutex> lock(mutex);
@@ -622,7 +650,10 @@ void ImageView::freeTexture() {
 
 bool ImageView::setImage(const path_t &path) { return loadTexture(path); }
 bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
-  const std::string key = imageCacheKey(path);
+  const std::string key =
+      isArchiveEntryImagePath(std::filesystem::path(path))
+          ? imageCacheKey(path)
+          : imageAsyncCacheKey(path);
   if (currentImageKey == key) {
     if (applyCachedTexture(path, key)) {
       asyncImagePending = false;
@@ -728,9 +759,12 @@ ImageView::ImageView(int x, int y, int width, int height)
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
 }
 void ImageView::dropCache(const path_t &path) {
-  const std::string key = imageCacheKey(path);
-  imageCache.erase(key);
-  ImageDecodeWorker::instance().drop(key);
+  const std::string asyncKey = imageAsyncCacheKey(path);
+  imageCache.erase(asyncKey);
+  ImageDecodeWorker::instance().drop(asyncKey);
+  const std::string metadataKey = imageCacheKey(path);
+  imageCache.erase(metadataKey);
+  ImageDecodeWorker::instance().drop(metadataKey);
 }
 void ImageView::dropAllCache() {
   imageCache.clear();

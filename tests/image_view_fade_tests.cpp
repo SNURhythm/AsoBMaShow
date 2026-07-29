@@ -111,11 +111,10 @@ int main() {
     image.render(renderContext);
 
     archive_file::setCachePathNormalizer({});
-    require(normalizationsAfterBinding == 1,
-            "one async jacket binding derives one filesystem cache identity");
-    require(cachePathNormalizations == normalizationsAfterBinding,
-            "pending jacket polling reuses its cache identity without repeated "
-            "filesystem metadata work");
+    require(normalizationsAfterBinding == 0,
+            "normal async jacket binding skips filesystem cache identity");
+    require(cachePathNormalizations == 0,
+            "normal async jacket polling remains metadata-free");
   }
 
   rendering::UniformCache::getInstance().destroyAll();
