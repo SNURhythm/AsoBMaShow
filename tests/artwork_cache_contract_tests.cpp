@@ -77,9 +77,28 @@ void testCompletedScanInvalidatesOnlyTheMemoryHotPath() {
           "ordinary artwork does not regain a disk preview cache");
 }
 
+void testFolderSelectionPrioritizesTheNewVisibleArtworkBatch() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  const std::string menu = readText(root / "src/scene/MainMenuScene.cpp");
+  const std::string item = readText(root / "src/view/ChartListItemView.cpp");
+
+  const std::string_view selectFolder =
+      functionBody(menu, "void MainMenuScene::selectFolder(");
+  require(selectFolder.contains("reloadChartList(false, true)"),
+          "folder selection marks its newly visible chart batch as priority");
+  require(menu.contains(
+              "setMeta(item, prioritizeVisibleArtworkBindings)"),
+          "the recycler binding forwards folder priority to each visible row");
+  require(item.contains("setImageAsync(meta.Folder / meta.StageFile,") &&
+              item.contains("setImageAsync(meta.Folder / meta.Banner,") &&
+              item.contains("bool prioritizeArtwork"),
+          "both jackets and banners share the visible-row priority policy");
+}
+
 } // namespace
 
 int main() {
   testCompletedScanInvalidatesOnlyTheMemoryHotPath();
+  testFolderSelectionPrioritizesTheNewVisibleArtworkBatch();
   return failures == 0 ? 0 : 1;
 }

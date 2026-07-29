@@ -457,20 +457,23 @@ private:
     }
   }
 
-  void run(bool prioritize) {
+  void run(bool priorityOnly) {
     for (;;) {
       Task task;
+      bool taskIsPriority = false;
       {
         std::unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [this, prioritize] {
-          return stop || (prioritize ? !priorityQueue.empty() : !queue.empty());
+        cv.wait(lock, [this, priorityOnly] {
+          return stop || !priorityQueue.empty() ||
+                 (!priorityOnly && !queue.empty());
         });
         if (stop) {
           return;
         }
-        auto &activeQueue = prioritize ? priorityQueue : queue;
-        auto &activeQueued = prioritize ? priorityQueued : queued;
-        auto &activeInFlight = prioritize ? priorityInFlight : inFlight;
+        taskIsPriority = !priorityQueue.empty();
+        auto &activeQueue = taskIsPriority ? priorityQueue : queue;
+        auto &activeQueued = taskIsPriority ? priorityQueued : queued;
+        auto &activeInFlight = taskIsPriority ? priorityInFlight : inFlight;
         task = std::move(activeQueue.back());
         activeQueue.pop_back();
         activeQueued.erase(task.key);
@@ -507,7 +510,7 @@ private:
 
       {
         std::lock_guard<std::mutex> lock(mutex);
-        (prioritize ? priorityInFlight : inFlight).erase(task.key);
+        (taskIsPriority ? priorityInFlight : inFlight).erase(task.key);
         if (task.generation != generation) {
           continue;
         }

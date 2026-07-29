@@ -2721,7 +2721,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView->onBind = [this](View *view, const ChartMetaRecord &item,
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
-    chartListItemView->setMeta(item);
+    chartListItemView->setMeta(item, prioritizeVisibleArtworkBindings);
     chartListItemView->setClearRank(clearRankForChart(item));
     if (!item.courseStart && !item.solidArchive && !item.unavailable &&
         !item.meta.BmsPath.empty()) {
@@ -4223,7 +4223,8 @@ void MainMenuScene::setChartSortCriterion(
   refreshChartFilterPanel();
 }
 
-void MainMenuScene::reloadChartList(bool preserveViewState) {
+void MainMenuScene::reloadChartList(bool preserveViewState,
+                                    bool prioritizeVisibleArtwork) {
   if (recyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
@@ -4282,10 +4283,12 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(*chartSession, query, databaseCount,
                        std::move(leadingRecord));
+  prioritizeVisibleArtworkBindings = prioritizeVisibleArtwork;
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
         return chartListCache.get(index);
       });
+  prioritizeVisibleArtworkBindings = false;
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
@@ -4615,7 +4618,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
     toggleExpandedFolder(item.key);
     reloadFolderItems(true);
     if (clearedSameFolderScope || activeFolder.key != previousActiveKey) {
-      reloadChartList();
+      reloadChartList(false, true);
     }
     return;
   }
@@ -4630,7 +4633,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
   if (item.expandable && chartQueryUnchanged && !clearedSameFolderScope) {
     return;
   }
-  reloadChartList();
+  reloadChartList(false, true);
 }
 
 bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,

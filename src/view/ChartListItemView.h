@@ -14,7 +14,8 @@ public:
   ChartListItemView(int x, int y, int width, int height,
                     const ChartMetaRecord &record);
 
-  void setMeta(const ChartMetaRecord &record);
+  void setMeta(const ChartMetaRecord &record,
+               bool prioritizeArtwork = false);
   void setClearRank(int clearRank);
   void setBestScoreRank(int score, int maxScore);
   void setFavoriteToggleHandler(

@@ -104,6 +104,7 @@ private:
   std::jthread unzipThread;
   std::atomic_bool folderItemsReloadRequested = false;
   std::atomic_bool chartListReloadRequested = false;
+  bool prioritizeVisibleArtworkBindings = false;
   std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
   bool replayIrUploadInProgress = false;
@@ -612,7 +613,8 @@ private:
   void setChartScoreRankRange(bool orAbove, bool orBelow);
   void setChartDifficultyDropdownOpen(bool minLevel, bool open);
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
-  void reloadChartList(bool preserveViewState = false);
+  void reloadChartList(bool preserveViewState = false,
+                       bool prioritizeVisibleArtwork = false);
   std::optional<std::string> reloadScoreClearRanks();
   std::optional<std::string> prepareScoreQueryDatabase();
   std::optional<std::string> refreshScoreClearRankViews();

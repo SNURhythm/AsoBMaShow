@@ -322,17 +322,95 @@ int main() {
       }
     }
     if (staleWriter >= 0) {
+      (void)write(staleWriter, ppm, sizeof(ppm) - 1);
       close(staleWriter);
     }
     for (int &writer : activeWriters) {
       if (writer >= 0) {
+        (void)write(writer, ppm, sizeof(ppm) - 1);
         close(writer);
         writer = -1;
       }
     }
+    const auto drainDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (ImageView::pendingAsyncDecodeCountForTesting(stalePath.string()) !=
+               0 &&
+           std::chrono::steady_clock::now() < drainDeadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
     std::filesystem::remove_all(fixtureRoot);
     require(newlyVisibleLoadedBeforeStaleQueueBlocked,
             "newly visible list artwork bypasses stale queued work");
+  }
+
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-visible-folder-priority-" +
+         std::to_string(getpid()));
+    std::filesystem::remove_all(fixtureRoot);
+    std::filesystem::create_directories(fixtureRoot);
+
+    std::array<std::filesystem::path, 5> visiblePaths;
+    std::array<std::unique_ptr<ImageView>, 5> visibleArtwork;
+    std::array<int, 5> writers = {-1, -1, -1, -1, -1};
+    ImageView::dropAllCache();
+    for (std::size_t index = 0; index < visiblePaths.size(); ++index) {
+      visiblePaths[index] =
+          fixtureRoot / ("visible-" + std::to_string(index) + ".ppm");
+      require(mkfifo(visiblePaths[index].c_str(), 0600) == 0,
+              "folder-priority fixture creates a named pipe");
+      visibleArtwork[index] = std::make_unique<ImageView>(0, 0, 8, 8);
+      visibleArtwork[index]->setImageAsync(visiblePaths[index].string(), true);
+    }
+
+    const auto readersDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    std::size_t openedCount = 0;
+    while (openedCount < writers.size() &&
+           std::chrono::steady_clock::now() < readersDeadline) {
+      openedCount = 0;
+      for (std::size_t index = 0; index < writers.size(); ++index) {
+        if (writers[index] < 0) {
+          writers[index] =
+              open(visiblePaths[index].c_str(), O_WRONLY | O_NONBLOCK);
+        }
+        if (writers[index] >= 0) {
+          ++openedCount;
+        }
+      }
+      if (openedCount < writers.size()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    }
+
+    ImageView::dropAllCache();
+    const char ppm[] = "P6\n1 1\n255\n\x33\x66\x99";
+    for (int &writer : writers) {
+      if (writer >= 0) {
+        (void)write(writer, ppm, sizeof(ppm) - 1);
+        close(writer);
+        writer = -1;
+      }
+    }
+    const auto drainDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    bool pending = true;
+    while (pending && std::chrono::steady_clock::now() < drainDeadline) {
+      pending = false;
+      for (const auto &path : visiblePaths) {
+        pending = pending ||
+                  ImageView::pendingAsyncDecodeCountForTesting(path.string()) !=
+                      0;
+      }
+      if (pending) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    }
+    std::filesystem::remove_all(fixtureRoot);
+    require(openedCount == writers.size(),
+            "all newly visible folder items can use the priority worker pool");
   }
 
   {
