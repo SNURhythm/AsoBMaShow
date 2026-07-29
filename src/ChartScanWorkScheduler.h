@@ -57,7 +57,6 @@ private:
   std::size_t activeTasks_ = 0;
   std::size_t activeArchiveIndexes_ = 0;
   std::size_t activeArchiveReads_ = 0;
-  std::size_t activeHeavyArchiveReads_ = 0;
   bool finishing_ = false;
   bool closed_ = false;
   bool cancelled_ = false;

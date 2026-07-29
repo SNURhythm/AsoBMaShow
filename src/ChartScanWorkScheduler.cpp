@@ -93,7 +93,7 @@ bool WorkScheduler::hasEligibleWorkLocked() const {
   const bool readEligible = !archiveReadQueue_.empty() &&
                             activeArchiveReads_ < archiveAdmissionLimit;
   const bool heavyReadEligible =
-      !heavyArchiveReadQueue_.empty() && activeHeavyArchiveReads_ == 0 &&
+      !heavyArchiveReadQueue_.empty() &&
       activeArchiveReads_ < archiveAdmissionLimit;
   return !cpuQueue_.empty() || indexEligible || readEligible ||
          heavyReadEligible;
@@ -107,7 +107,7 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
   const bool readEligible = !archiveReadQueue_.empty() &&
                             activeArchiveReads_ < archiveAdmissionLimit;
   const bool heavyReadEligible =
-      !heavyArchiveReadQueue_.empty() && activeHeavyArchiveReads_ == 0 &&
+      !heavyArchiveReadQueue_.empty() &&
       activeArchiveReads_ < archiveAdmissionLimit;
   if (indexEligible &&
       (activeArchiveIndexes_ == 0 || cpuQueue_.empty())) {
@@ -183,7 +183,6 @@ void WorkScheduler::workerLoop() {
         ++activeArchiveReads_;
       } else if (item.workClass == WorkClass::ArchiveReadHeavy) {
         ++activeArchiveReads_;
-        ++activeHeavyArchiveReads_;
       }
     }
 
@@ -208,9 +207,6 @@ void WorkScheduler::workerLoop() {
       } else if (item.workClass == WorkClass::ArchiveReadHeavy) {
         if (activeArchiveReads_ > 0) {
           --activeArchiveReads_;
-        }
-        if (activeHeavyArchiveReads_ > 0) {
-          --activeHeavyArchiveReads_;
         }
       }
       if (activeTasks_ > 0) {
