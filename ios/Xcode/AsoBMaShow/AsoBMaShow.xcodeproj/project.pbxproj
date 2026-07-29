@@ -1036,7 +1036,7 @@
 			buildConfigurationList = B700271C2BF7A8DA000DB8EC /* Build configuration list for PBXNativeTarget "AsoBMaShow" */;
 				buildPhases = (
 					1A3EB0595D79BE96F6E16C91 /* [CP] Check Pods Manifest.lock */,
-					B7CA78352F3030010016BA21 /* Prepare 7-Zip RAR Codecs */,
+					B7CA78352F3030010016BA21 /* Prepare 7-Zip Link Objects */,
 					B70026FD2BF7A8D8000DB8EC /* Sources */,
 					B70026FE2BF7A8D8000DB8EC /* Frameworks */,
 					B7BAA5562DA3F719008F6FCD /* ShellScript */,
@@ -1742,7 +1742,7 @@
 			shellPath = /bin/sh;
 				shellScript = "find \"${SRCROOT}/../../../shaders/$1\" -type f -print0 | xargs -0 touch\nfind \"${SRCROOT}/../../../assets/$1\" -type f -print0 | xargs -0 touch\n\n";
 			};
-			B7CA78352F3030010016BA21 /* Prepare 7-Zip RAR Codecs */ = {
+			B7CA78352F3030010016BA21 /* Prepare 7-Zip Link Objects */ = {
 				isa = PBXShellScriptBuildPhase;
 				alwaysOutOfDate = 1;
 				buildActionMask = 2147483647;
@@ -1754,15 +1754,16 @@
 					"$(PROJECT_DIR)/lib/lib7zip.xcframework/ios-arm64/lib7zip-arm64-ios.a",
 					"$(PROJECT_DIR)/lib/lib7zip.xcframework/ios-arm64-simulator/lib7zip-arm64-ios-simulator.a",
 				);
-				name = "Prepare 7-Zip RAR Codecs";
+				name = "Prepare 7-Zip Link Objects";
 				outputFileListPaths = (
 				);
 				outputPaths = (
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 				);
 				runOnlyForDeploymentPostprocessing = 0;
 				shellPath = /bin/sh;
-				shellScript = "set -eu\n\ncase \"${PLATFORM_NAME}\" in\n  iphonesimulator)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64-simulator/lib7zip-arm64-ios-simulator.a\"\n    ;;\n  *)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64/lib7zip-arm64-ios.a\"\n    ;;\nesac\n\nout_dir=\"${DERIVED_FILE_DIR}/7zip-rar-codecs\"\nout=\"${out_dir}/RarCodecsRegister.cpp.o\"\nmkdir -p \"${out_dir}\"\nrm -f \"${out}\"\n(cd \"${out_dir}\" && /usr/bin/ar -x \"${archive}\" RarCodecsRegister.cpp.o)\ntest -f \"${out}\"\n";
+				shellScript = "set -eu\n\ncase \"${PLATFORM_NAME}\" in\n  iphonesimulator)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64-simulator/lib7zip-arm64-ios-simulator.a\"\n    ;;\n  *)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64/lib7zip-arm64-ios.a\"\n    ;;\nesac\n\n# These static registration objects are side-effect-only, so link them explicitly.\nout_dir=\"${DERIVED_FILE_DIR}/7zip-rar-codecs\"\nrar_codecs=\"${out_dir}/RarCodecsRegister.cpp.o\"\nseven_zip_register=\"${out_dir}/7zRegister.cpp.o\"\nmkdir -p \"${out_dir}\"\nrm -f \"${rar_codecs}\" \"${seven_zip_register}\"\n(cd \"${out_dir}\" && /usr/bin/ar -x \"${archive}\" RarCodecsRegister.cpp.o 7zRegister.cpp.o)\ntest -f \"${rar_codecs}\"\ntest -f \"${seven_zip_register}\"\n";
 			};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1964,12 +1965,14 @@
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
 					"$(inherited)",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
 					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);
 				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
 					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);
@@ -2035,12 +2038,14 @@
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
 					"$(inherited)",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
 					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);
 				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
 					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);

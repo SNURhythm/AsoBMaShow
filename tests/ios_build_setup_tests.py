@@ -98,6 +98,35 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertFalse(os.path.isabs(os.readlink(SDL_HEADER_ALIAS)))
         self.assertEqual((ROOT / "SDL/include").resolve(), SDL_HEADER_ALIAS.resolve())
 
+    def test_ios_links_7zip_archive_registration_for_device_and_simulator(self):
+        for configuration in ("Debug", "Release"):
+            for sdk in ("iphoneos", "iphonesimulator"):
+                with self.subTest(configuration=configuration, sdk=sdk):
+                    result = subprocess.run(
+                        [
+                            "xcodebuild",
+                            "-project",
+                            str(PROJECT.parent),
+                            "-target",
+                            "AsoBMaShow",
+                            "-configuration",
+                            configuration,
+                            "-sdk",
+                            sdk,
+                            "-showBuildSettings",
+                        ],
+                        cwd=ROOT,
+                        check=True,
+                        text=True,
+                        capture_output=True,
+                    )
+                    linker_flags = next(
+                        line.partition("=")[2].strip()
+                        for line in result.stdout.splitlines()
+                        if line.strip().startswith("OTHER_LDFLAGS =")
+                    )
+                    self.assertIn("7zRegister.cpp.o", linker_flags)
+
 
 class DerivedDataPathTests(unittest.TestCase):
     def resolve(self, root: Path, **environment: str) -> str:
