@@ -1,4 +1,5 @@
 #include "../src/ArchiveRAII.h"
+#include "../src/ArchiveFile.h"
 #include "../src/ChartLibraryScanner.h"
 #include "../src/Utils.h"
 #include "../src/repositories/ChartRepository.h"
@@ -6,6 +7,7 @@
 
 #include <archive_entry.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -403,6 +405,64 @@ void testLargeSingleArchivePreservesAllChartResults() {
   assert(scanner.Scan(*session, {archivePath}) == 0);
 }
 
+void testArchiveResultApplicationOverlapsLaterArchiveStreaming() {
+  constexpr int kFirstChartCount = 16;
+  constexpr int kSecondChartCount = 128;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+
+  std::vector<std::pair<std::string, std::string>> firstFiles;
+  firstFiles.reserve(kFirstChartCount);
+  for (int index = 0; index < kFirstChartCount; ++index) {
+    firstFiles.emplace_back("first/chart-" + std::to_string(index) + ".bms",
+                            chartText("First Archive " +
+                                      std::to_string(index)));
+  }
+  const auto firstArchive =
+      writeZip(root / "ordered-drain-first.zip", firstFiles);
+
+  std::vector<std::pair<std::string, std::string>> secondFiles;
+  secondFiles.reserve(kSecondChartCount);
+  const std::string padding = "#COMMENT " + std::string(128 * 1024, 'x') + "\n";
+  for (int index = 0; index < kSecondChartCount; ++index) {
+    secondFiles.emplace_back(
+        "second/chart-" + std::to_string(index) + ".bms",
+        chartText("Second Archive " + std::to_string(index)) + padding);
+  }
+  const auto secondArchive =
+      writeZip(root / "ordered-drain-second.zip", secondFiles);
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.Scan(*session, {firstArchive, secondArchive}) ==
+         kFirstChartCount + kSecondChartCount + 2);
+  assert(session->CountAllChartMeta() ==
+         kFirstChartCount + kSecondChartCount);
+
+  const auto logLines = archive_file::debugLogLines();
+  const auto findLogIndex = [&](const std::string &event,
+                                const std::filesystem::path &archive) {
+    const std::string archiveName = archive.filename().string();
+    const auto found = std::find_if(
+        logLines.begin(), logLines.end(), [&](const std::string &line) {
+          return line.find(event) != std::string::npos &&
+                 line.find(archiveName) != std::string::npos;
+        });
+    assert(found != logLines.end());
+    return static_cast<std::size_t>(
+        std::distance(logLines.begin(), found));
+  };
+  const std::size_t firstInsert = findLogIndex(
+      "Inserting streamed DB chart batch:", firstArchive);
+  const std::size_t secondStream =
+      findLogIndex("Streamed archive batch via miniz ZIP:", secondArchive);
+  assert(firstInsert < secondStream);
+}
+
 void testArchiveInspectionUsesMultipleEntityWorkers() {
   constexpr int kFixtureCount = 6;
   if (parallel_worker_count(kFixtureCount) <= 1) {
@@ -522,6 +582,7 @@ int main() {
   testMultiEntryArchivePreservesPreparedResultOrderAndCache();
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testLargeSingleArchivePreservesAllChartResults();
+  testArchiveResultApplicationOverlapsLaterArchiveStreaming();
   testArchiveInspectionUsesMultipleEntityWorkers();
   testBlockedArchiveDoesNotDelayLaterOrdinaryEntities();
   return 0;
