@@ -2461,6 +2461,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(image_view_fade_tests PRIVATE iconv)
     endif()
 
+    add_executable(artwork_cache_contract_tests
+        tests/artwork_cache_contract_tests.cpp
+    )
+    target_compile_features(artwork_cache_contract_tests PRIVATE cxx_std_23)
+    target_compile_definitions(artwork_cache_contract_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(chart_list_item_view_tests
         tests/chart_list_item_view_tests.cpp
         src/view/ChartListItemView.cpp
@@ -3832,6 +3840,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_filter_sort_panel_view_tests
         image_fade_tests
         image_view_fade_tests
+        artwork_cache_contract_tests
         chart_list_item_view_tests
         dropdown_view_tests
         context_menu_view_tests

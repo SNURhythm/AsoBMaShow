@@ -4480,6 +4480,7 @@ void MainMenuScene::refreshLibraryIfNeeded() {
     return;
   }
 
+  ImageView::dropAllCache();
   reloadScoreClearRanks();
   reloadFolderItems(true);
   reloadChartList(true);
@@ -4537,6 +4538,7 @@ void MainMenuScene::applyPendingUiUpdates() {
     reloadFolderItems(true);
   }
   if (shouldReloadFolders || shouldReloadCharts) {
+    ImageView::dropAllCache();
     reloadChartList(true);
     libraryRevision = context.chartRepository.GetLibraryRevision();
   }
@@ -11940,7 +11942,7 @@ void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
         scene.completeLibraryScanFlush(request);
       });
   SDL_Log("Chart library refresh changed %d entries", changedCount);
-  if (changedCount > 0) {
+  if (!stop_token.stop_requested()) {
     scene.requestLibraryReload(true);
   }
 }
