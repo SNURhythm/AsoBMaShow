@@ -283,6 +283,20 @@ void testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate() {
          "context does not invent an exact completion bound in a consumer");
 }
 
+void testParsedDurationEstimateDoesNotOverrideEmbeddedBound() {
+  Harness harness;
+  auto facts = parsedFacts(harness.result);
+  facts.timeBounds = ReplayTimeBounds{.completionSongTimeMicros = 4'000'000};
+  auto context = harness.makeContext();
+  const auto loaded = context.load(kAttemptId, facts);
+  expect(loaded.state == ChartReplayContextState::Ready &&
+             loaded.replayAvailable(),
+         "optional parsed duration disagreement does not disable a valid BRD");
+  expect(harness.decodeContext.has_value() &&
+             harness.decodeContext->stageTimeBounds.empty(),
+         "decoder uses the completion bound embedded by the replay producer");
+}
+
 void testFileFailuresRetainResultAndFailReplayClosed() {
   struct Case {
     ReplayFileState file;
@@ -415,6 +429,7 @@ int main() {
   testNoLongNoteScoreBucketUsesProvenanceSetupAuthority();
   testUserDeletedReferenceNeverTouchesFilesystem();
   testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate();
+  testParsedDurationEstimateDoesNotOverrideEmbeddedBound();
   testFileFailuresRetainResultAndFailReplayClosed();
   testParsedIdentityAndLongNoteAgreementPrecedeFileAccess();
   testDecodedReplayMustAgreeWithResultAndSupportedContract();

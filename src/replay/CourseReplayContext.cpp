@@ -138,8 +138,6 @@ CourseReplayContextOutcome CourseReplayContext::load(
           "Parsed course prefix differs from the saved completed prefix.",
           preservedResult);
     }
-    bool anyTimeBounds = false;
-    bool allTimeBounds = true;
     bool hasUndefinedLongNotes = false;
     for (std::size_t index = 0; index < stored.stages.size(); ++index) {
       const auto &parsed = parsedCourse.stages[index];
@@ -169,15 +167,8 @@ CourseReplayContextOutcome CourseReplayContext::load(
                        "Parsed course stage completion time is invalid.",
                        preservedResult);
       }
-      anyTimeBounds = anyTimeBounds || parsed.timeBounds.has_value();
-      allTimeBounds = allTimeBounds && parsed.timeBounds.has_value();
       hasUndefinedLongNotes =
           hasUndefinedLongNotes || parsed.hasUndefinedLongNotes;
-    }
-    if (anyTimeBounds != allTimeBounds) {
-      return failure(CourseReplayContextState::InvalidRequest,
-                     "Parsed course time bounds must be all present or absent.",
-                     preservedResult);
     }
     if (!loaded.record->replayFile) {
       return failure(CourseReplayContextState::ReplayNotAttached,
@@ -224,9 +215,6 @@ CourseReplayContextOutcome CourseReplayContext::load(
     decodeContext.stageTimeBounds.reserve(parsedCourse.stages.size());
     for (const auto &parsed : parsedCourse.stages) {
       decodeContext.stageKeyModes.push_back(parsed.chart.keyMode);
-      if (allTimeBounds) {
-        decodeContext.stageTimeBounds.push_back(*parsed.timeBounds);
-      }
     }
     ReplayDecodeOutcome decoded;
     try {
@@ -251,13 +239,6 @@ CourseReplayContextOutcome CourseReplayContext::load(
                          : decoded.diagnostic,
                      preservedResult, std::move(reference));
     }
-    if (allTimeBounds && decoded.course->timeBounds !=
-                             decodeContext.stageTimeBounds) {
-      return failure(CourseReplayContextState::ReplayInvalid,
-                     "Decoded course completion bounds differ from parsed stages.",
-                     preservedResult, std::move(reference));
-    }
-
     std::vector<ReplaySetupSource> sources;
     sources.reserve(decoded.stageSources.size());
     for (const auto source : decoded.stageSources) {

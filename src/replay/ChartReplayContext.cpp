@@ -202,9 +202,7 @@ ChartReplayContextOutcome ChartReplayContext::load(
 
     const ReplayDecodeContext decodeContext{
         .stageKeyModes = {parsedChart.chart.keyMode},
-        .stageTimeBounds = parsedChart.timeBounds.has_value()
-                               ? std::vector{*parsedChart.timeBounds}
-                               : std::vector<ReplayTimeBounds>{}};
+        .stageTimeBounds = {}};
     ReplayDecodeOutcome decoded;
     try {
       decoded = dependencies_.decode(*bytes.bytes, decodeContext);
@@ -232,12 +230,6 @@ ChartReplayContextOutcome ChartReplayContext::load(
     const auto setupSource = source == ReplayStageDecodeSource::AsoExtension
                                  ? ReplaySetupSource::AsoExtension
                                  : ReplaySetupSource::StockBeatoraja;
-    if (parsedChart.timeBounds.has_value() &&
-        decoded.chart->timeBounds != *parsedChart.timeBounds) {
-      return failure(ChartReplayContextState::ReplayInvalid,
-                     "Decoded replay completion differs from the parsed chart.",
-                     preservedResult, std::move(reference));
-    }
     const auto playback = validateReplayPlayback(
         decoded.chart->playback, setupSource, decoded.chart->timeBounds,
         limits_);

@@ -318,10 +318,26 @@ void testCompletePartialRepeatedAndMixedSetupsUseStrictLoadOrder() {
     expect(harness.decodeContext &&
                harness.decodeContext->stageKeyModes ==
                    std::vector<int>({7, 14}) &&
-               harness.decodeContext->stageTimeBounds ==
-                   harness.replay.timeBounds,
-           "decode receives exact ordered key modes and time bounds");
+               harness.decodeContext->stageTimeBounds.empty(),
+           "decode receives ordered key modes without parser duration gates");
   }
+}
+
+void testParsedDurationEstimatesDoNotOverrideEmbeddedBounds() {
+  Harness harness;
+  auto facts = parsedFacts(harness.result);
+  facts.stages[0].timeBounds =
+      ReplayTimeBounds{.completionSongTimeMicros = 4'000'000};
+  facts.stages[1].timeBounds =
+      ReplayTimeBounds{.completionSongTimeMicros = 7'000'000};
+  auto context = harness.makeContext();
+  const auto loaded = context.load(kAttemptId, facts);
+  expect(loaded.state == CourseReplayContextState::Ready &&
+             loaded.replayAvailable(),
+         "optional course duration disagreement does not disable a valid BRD");
+  expect(harness.decodeContext &&
+             harness.decodeContext->stageTimeBounds.empty(),
+         "course decoder uses completion bounds embedded by its producer");
 }
 
 void testMissingCorruptUnsafeAndDetachedFilesPreserveResult() {
@@ -480,6 +496,7 @@ void testReferenceDecodePlaybackAndResultAgreementFailClosed() {
 int main() {
 #if ASOBMASHOW_HAS_COURSE_REPLAY_CONTEXT
   testCompletePartialRepeatedAndMixedSetupsUseStrictLoadOrder();
+  testParsedDurationEstimatesDoNotOverrideEmbeddedBounds();
   testUserDeletedCourseReferenceNeverTouchesFilesystem();
   testMissingCorruptUnsafeAndDetachedFilesPreserveResult();
   testParsedPrefixIdentityOrderAndSetupRejectBeforeFileAccess();
