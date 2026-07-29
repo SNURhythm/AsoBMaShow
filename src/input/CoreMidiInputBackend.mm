@@ -215,11 +215,13 @@ std::uint64_t nowMicros() {
   return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
 }
 
-std::uint64_t midiTimestampMicros(MIDITimeStamp timestamp) {
+std::uint64_t midiTimestampMicros(
+    MIDITimeStamp timestamp,
+    const input::apple::HostToSteadyTimestampSession &timestampSession) {
   if (timestamp == 0) {
     return nowMicros();
   }
-  return static_cast<std::uint64_t>(input::apple::steadyMicrosFromHostMicros(
+  return static_cast<std::uint64_t>(timestampSession.toSteadyMicros(
       input::apple::hostTicksToMicros(timestamp)));
 }
 
@@ -236,6 +238,7 @@ public:
       return true;
     }
 
+    timestampSession_.reanchor();
     openQueue();
     notificationLifetime_ = std::make_unique<NativeCallbackLifetime>(this);
     OSStatus result = CoreMidiClientService::instance().client(client_);
@@ -289,7 +292,7 @@ public:
       publishPacketImmediately(
           connection.stableId,
           std::span<const std::uint8_t>(packet->data, packet->length),
-          midiTimestampMicros(packet->timeStamp));
+          midiTimestampMicros(packet->timeStamp, timestampSession_));
       packet = MIDIPacketNext(packet);
     }
   }
@@ -412,6 +415,7 @@ private:
   std::mutex sourcesMutex_;
   std::map<MIDIEndpointRef, std::unique_ptr<CoreMidiConnection>> connections_;
   LiveMidiDeviceIdAllocator liveIds_;
+  input::apple::HostToSteadyTimestampSession timestampSession_;
   bool notificationSubscribed_ = false;
   std::atomic_bool started_ = false;
 };

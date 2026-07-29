@@ -48,15 +48,22 @@ void testFixedEpochMappingKeepsEqualNativeSamplesEqual() {
 }
 
 #if defined(__APPLE__)
-void testAppleHostTimestampConversionUsesOneEpochMapping() {
-  const auto sourceTimestamp = input::apple::hostNowMicros();
-  const auto expected =
-      input::apple::steadyMicrosFromHostMicros(sourceTimestamp);
+void testAppleHostTimestampConversionIsScopedToInputSession() {
+  input::apple::HostToSteadyTimestampSession first(
+      {.sourceEpochMicros = 10'000, .steadyEpochMicros = 1'000'000});
+  const auto expected = first.toSteadyMicros(7'500);
   for (int sample = 0; sample < 10'000; ++sample) {
-    require(input::apple::steadyMicrosFromHostMicros(sourceTimestamp) ==
-                expected,
-            "equal Apple host timestamps remain equal across conversions");
+    require(first.toSteadyMicros(7'500) == expected,
+            "equal Apple host timestamps remain equal within one input "
+            "session");
   }
+
+  first.reanchor(
+      {.sourceEpochMicros = 10'000, .steadyEpochMicros = 2'000'000});
+  require(first.toSteadyMicros(7'500) == 1'997'500 &&
+              first.toSteadyMicros(7'500) != expected,
+          "a resumed input session refreshes a changed native clock epoch "
+          "instead of retaining process-lifetime skew");
 }
 #endif
 
@@ -81,7 +88,7 @@ int main() {
   testRebaseSaturatesInsteadOfOverflowing();
   testFixedEpochMappingKeepsEqualNativeSamplesEqual();
 #if defined(__APPLE__)
-  testAppleHostTimestampConversionUsesOneEpochMapping();
+  testAppleHostTimestampConversionIsScopedToInputSession();
 #endif
   testRebasesWrappingSdlMillisecondTimestamps();
   return 0;

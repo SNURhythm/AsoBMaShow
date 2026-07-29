@@ -47,11 +47,29 @@ inline TimestampEpochMapping hostToSteadyEpochMapping() noexcept {
   };
 }
 
-inline std::int64_t
-steadyMicrosFromHostMicros(std::uint64_t hostTimestampMicros) noexcept {
-  static const TimestampEpochMapping mapping = hostToSteadyEpochMapping();
-  return mapping.toSteadyMicros(hostTimestampMicros);
-}
+class HostToSteadyTimestampSession {
+public:
+  HostToSteadyTimestampSession() noexcept
+      : mapping_(hostToSteadyEpochMapping()) {}
+
+  explicit constexpr HostToSteadyTimestampSession(
+      TimestampEpochMapping mapping) noexcept
+      : mapping_(mapping) {}
+
+  [[nodiscard]] constexpr std::int64_t
+  toSteadyMicros(std::uint64_t hostTimestampMicros) const noexcept {
+    return mapping_.toSteadyMicros(hostTimestampMicros);
+  }
+
+  void reanchor() noexcept { reanchor(hostToSteadyEpochMapping()); }
+
+  constexpr void reanchor(TimestampEpochMapping mapping) noexcept {
+    mapping_ = mapping;
+  }
+
+private:
+  TimestampEpochMapping mapping_;
+};
 
 } // namespace input::apple
 

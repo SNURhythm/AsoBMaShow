@@ -33,7 +33,9 @@ std::uint64_t nowMicros() {
   return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
 }
 
-std::uint64_t sampleMicros(NSTimeInterval timestamp) {
+std::uint64_t sampleMicros(
+    NSTimeInterval timestamp,
+    const input::apple::HostToSteadyTimestampSession &timestampSession) {
   if (!std::isfinite(timestamp) || timestamp <= 0.0) {
     return nowMicros();
   }
@@ -42,7 +44,7 @@ std::uint64_t sampleMicros(NSTimeInterval timestamp) {
       static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
     return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
   }
-  return static_cast<std::uint64_t>(input::apple::steadyMicrosFromHostMicros(
+  return static_cast<std::uint64_t>(timestampSession.toSteadyMicros(
       static_cast<std::uint64_t>(micros)));
 }
 
@@ -285,6 +287,7 @@ private:
         nativeGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
     {
       const std::lock_guard lock(coreMutex_);
+      timestampSession_.reanchor();
       accuracyTracker_.reset();
       awaitingFirstSample_ = true;
       nativeRetryAtMicros_ = now + kFirstSampleTimeoutMicros;
@@ -346,9 +349,9 @@ private:
       return;
     }
 
-    const std::uint64_t timestampMicros = sampleMicros(motion.timestamp);
     const CMRotationRate rate = motion.rotationRate;
     const CMAcceleration gravity = motion.gravity;
+    std::uint64_t timestampMicros = 0;
     bool firstSample = false;
     {
       const std::lock_guard lock(coreMutex_);
@@ -356,6 +359,7 @@ private:
                            nativeGeneration_.load(std::memory_order_acquire)) {
         return;
       }
+      timestampMicros = sampleMicros(motion.timestamp, timestampSession_);
       const auto accuracy = accuracyTracker_.observe(
           magneticAccuracy(motion.magneticField.accuracy));
       if (awaitingFirstSample_) {
@@ -396,6 +400,7 @@ private:
   NSOperationQueue *motionQueue_ = nil;
   std::unique_ptr<NativeCallbackLifetime> callbackLifetime_;
   std::atomic_uint64_t nativeGeneration_{0};
+  input::apple::HostToSteadyTimestampSession timestampSession_;
   std::optional<std::uint64_t> nativeRetryAtMicros_;
   bool awaitingFirstSample_ = false;
   bool started_ = false;

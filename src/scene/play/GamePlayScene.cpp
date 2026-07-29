@@ -598,6 +598,9 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::uint64_t epoch = 0;
   std::atomic_bool acceptingTouch{false};
   std::atomic_bool acceptingNativeInput{false};
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  input::apple::HostToSteadyTimestampSession touchTimestampSession;
+#endif
   InputDeviceRegistry *inputRegistry = nullptr;
   std::vector<std::optional<audio::RealtimeSoundHandle>> soundHandles;
   std::vector<bms_parser::Note *> notes;
@@ -983,7 +986,8 @@ struct GamePlayScene::RealtimeGameplaySession {
         .normalizedX = event->normalizedX,
         .normalizedY = event->normalizedY,
         .steadyTimestampMicros =
-            input::apple::steadyMicrosFromHostMicros(event->timestampMicros),
+            session.touchTimestampSession.toSteadyMicros(
+                event->timestampMicros),
     };
     sample.excludedFromGameplay = session.uiOwnsFinger(sample);
     if (!session.auxiliaryTouches.tryPush(sample)) {
@@ -1248,6 +1252,7 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (enabled) {
+    session.touchTimestampSession.reanchor();
     if (session.touchRouter != nullptr) {
       (void)session.touchRouter->setGameplayEnabled(true, timestampMicros);
     }
