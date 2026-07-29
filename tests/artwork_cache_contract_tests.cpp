@@ -84,8 +84,16 @@ void testFolderSelectionPrioritizesTheNewVisibleArtworkBatch() {
 
   const std::string_view selectFolder =
       functionBody(menu, "void MainMenuScene::selectFolder(");
-  require(selectFolder.contains("reloadChartList(false, true)"),
+  require(selectFolder.contains("reloadChartListForFolderSelection()"),
           "folder selection marks its newly visible chart batch as priority");
+  const std::string_view prioritizedReload = functionBody(
+      menu, "void MainMenuScene::reloadChartListForFolderSelection()");
+  require(prioritizedReload.contains(
+              "prioritizeVisibleArtworkBindings = true") &&
+              prioritizedReload.contains("reloadChartList()") &&
+              prioritizedReload.contains(
+                  "prioritizeVisibleArtworkBindings = false"),
+          "folder priority is scoped to the synchronous visible-row rebind");
   require(menu.contains(
               "setMeta(item, prioritizeVisibleArtworkBindings)"),
           "the recycler binding forwards folder priority to each visible row");

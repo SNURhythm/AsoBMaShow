@@ -4223,8 +4223,13 @@ void MainMenuScene::setChartSortCriterion(
   refreshChartFilterPanel();
 }
 
-void MainMenuScene::reloadChartList(bool preserveViewState,
-                                    bool prioritizeVisibleArtwork) {
+void MainMenuScene::reloadChartListForFolderSelection() {
+  prioritizeVisibleArtworkBindings = true;
+  reloadChartList();
+  prioritizeVisibleArtworkBindings = false;
+}
+
+void MainMenuScene::reloadChartList(bool preserveViewState) {
   if (recyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
@@ -4283,12 +4288,10 @@ void MainMenuScene::reloadChartList(bool preserveViewState,
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(*chartSession, query, databaseCount,
                        std::move(leadingRecord));
-  prioritizeVisibleArtworkBindings = prioritizeVisibleArtwork;
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
         return chartListCache.get(index);
       });
-  prioritizeVisibleArtworkBindings = false;
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
@@ -4618,7 +4621,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
     toggleExpandedFolder(item.key);
     reloadFolderItems(true);
     if (clearedSameFolderScope || activeFolder.key != previousActiveKey) {
-      reloadChartList(false, true);
+      reloadChartListForFolderSelection();
     }
     return;
   }
@@ -4633,7 +4636,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
   if (item.expandable && chartQueryUnchanged && !clearedSameFolderScope) {
     return;
   }
-  reloadChartList(false, true);
+  reloadChartListForFolderSelection();
 }
 
 bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,

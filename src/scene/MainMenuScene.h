@@ -613,8 +613,8 @@ private:
   void setChartScoreRankRange(bool orAbove, bool orBelow);
   void setChartDifficultyDropdownOpen(bool minLevel, bool open);
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
-  void reloadChartList(bool preserveViewState = false,
-                       bool prioritizeVisibleArtwork = false);
+  void reloadChartList(bool preserveViewState = false);
+  void reloadChartListForFolderSelection();
   std::optional<std::string> reloadScoreClearRanks();
   std::optional<std::string> prepareScoreQueryDatabase();
   std::optional<std::string> refreshScoreClearRankViews();
