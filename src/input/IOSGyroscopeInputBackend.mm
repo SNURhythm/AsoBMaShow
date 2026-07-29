@@ -8,6 +8,7 @@
 
 #include "AppleInputTimestamp.h"
 #include "GyroscopeInputBackendCore.h"
+#include "InputLifecycle.h"
 #include "IOSGyroscopeMotionAdapter.h"
 #include "NativeCallbackLifetime.h"
 
@@ -46,24 +47,6 @@ std::uint64_t sampleMicros(
   }
   return static_cast<std::uint64_t>(timestampSession.toSteadyMicros(
       static_cast<std::uint64_t>(micros)));
-}
-
-bool isBackgroundEvent(const SDL_Event &event) {
-  return event.type == SDL_APP_WILLENTERBACKGROUND ||
-         event.type == SDL_APP_DIDENTERBACKGROUND ||
-         (event.type == SDL_WINDOWEVENT &&
-          (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
-           event.window.event == SDL_WINDOWEVENT_HIDDEN ||
-           event.window.event == SDL_WINDOWEVENT_FOCUS_LOST));
-}
-
-bool isForegroundEvent(const SDL_Event &event) {
-  return event.type == SDL_APP_WILLENTERFOREGROUND ||
-         event.type == SDL_APP_DIDENTERFOREGROUND ||
-         (event.type == SDL_WINDOWEVENT &&
-          (event.window.event == SDL_WINDOWEVENT_RESTORED ||
-           event.window.event == SDL_WINDOWEVENT_SHOWN ||
-           event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED));
 }
 
 input::ios_gyroscope::MagneticAccuracy
@@ -185,10 +168,10 @@ public:
       if (!started_) {
         return;
       }
-      if (isBackgroundEvent(event)) {
+      if (input::isBackgroundLifecycleEvent(event)) {
         core_.setForeground(false, now);
         changed = true;
-      } else if (isForegroundEvent(event)) {
+      } else if (input::isForegroundLifecycleEvent(event)) {
         core_.setForeground(true, now);
         changed = true;
       }

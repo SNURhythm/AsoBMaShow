@@ -3,6 +3,7 @@
 #if defined(__APPLE__)
 
 #include "AppleInputTimestamp.h"
+#include "InputLifecycle.h"
 #include "LiveMidiDeviceIdAllocator.h"
 #include "NativeCallbackLifetime.h"
 #include "QueuedMidiInputBackend.h"
@@ -273,6 +274,14 @@ public:
 
   void pump() override { QueuedMidiInputBackend::pump(); }
 
+  void handleSdlEvent(const SDL_Event &event) override {
+    if (!input::isForegroundLifecycleEvent(event)) {
+      return;
+    }
+    const std::lock_guard lock(timestampMutex_);
+    timestampSession_.reanchor();
+  }
+
   void requestRefresh() {
     if (started_.load(std::memory_order_acquire)) {
       refreshSourcesSynchronized();
@@ -289,10 +298,16 @@ public:
       if (!connection.connected.load()) {
         return;
       }
+      std::uint64_t timestampMicros = 0;
+      {
+        const std::lock_guard lock(timestampMutex_);
+        timestampMicros =
+            midiTimestampMicros(packet->timeStamp, timestampSession_);
+      }
       publishPacketImmediately(
           connection.stableId,
           std::span<const std::uint8_t>(packet->data, packet->length),
-          midiTimestampMicros(packet->timeStamp, timestampSession_));
+          timestampMicros);
       packet = MIDIPacketNext(packet);
     }
   }
@@ -415,6 +430,7 @@ private:
   std::mutex sourcesMutex_;
   std::map<MIDIEndpointRef, std::unique_ptr<CoreMidiConnection>> connections_;
   LiveMidiDeviceIdAllocator liveIds_;
+  std::mutex timestampMutex_;
   input::apple::HostToSteadyTimestampSession timestampSession_;
   bool notificationSubscribed_ = false;
   std::atomic_bool started_ = false;

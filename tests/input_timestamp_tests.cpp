@@ -1,4 +1,5 @@
 #include "input/InputTimestamp.h"
+#include "input/InputLifecycle.h"
 #if defined(__APPLE__)
 #include "input/AppleInputTimestamp.h"
 #endif
@@ -80,6 +81,23 @@ void testRebasesWrappingSdlMillisecondTimestamps() {
           "SDL's 32-bit millisecond wrap preserves a recent event's age");
 }
 
+void testForegroundLifecycleEventsShareOneInputPolicy() {
+  SDL_Event event{};
+  event.type = SDL_APP_DIDENTERFOREGROUND;
+  require(input::isForegroundLifecycleEvent(event),
+          "app foreground reanchors native input clocks");
+
+  event.type = SDL_WINDOWEVENT;
+  event.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
+  require(input::isForegroundLifecycleEvent(event),
+          "desktop focus recovery uses the same input lifecycle policy");
+
+  event.type = SDL_APP_DIDENTERBACKGROUND;
+  require(!input::isForegroundLifecycleEvent(event) &&
+              input::isBackgroundLifecycleEvent(event),
+          "background lifecycle never masquerades as a timestamp reanchor");
+}
+
 } // namespace
 
 int main() {
@@ -91,5 +109,6 @@ int main() {
   testAppleHostTimestampConversionIsScopedToInputSession();
 #endif
   testRebasesWrappingSdlMillisecondTimestamps();
+  testForegroundLifecycleEventsShareOneInputPolicy();
   return 0;
 }
