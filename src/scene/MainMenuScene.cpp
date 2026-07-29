@@ -8886,7 +8886,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
       !replayModalChart.meta.SHA256.empty()) {
     auto records = context.replayRepository.ListIrUploadRecordsForChart(
         ir::kTachiProviderId, *irServerOrigin,
-        replayModalChart.meta.SHA256);
+        replayModalChart.meta.SHA256, kMaximumModernChartHistoryRows);
     std::string irReadDiagnostic;
     if (records.status != ir::IrUploadRecordReadStatus::Loaded) {
       irReadDiagnostic =

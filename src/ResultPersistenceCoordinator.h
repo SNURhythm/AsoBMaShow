@@ -97,9 +97,12 @@ struct PendingScoreRecoveryDependencies {
       recordRecoveryAttempt;
 };
 
+inline constexpr std::size_t kPendingChartScoreRecoveryPageRows = 256;
+
 [[nodiscard]] RecoverySummary
 recoverPendingChartScores(const PendingScoreRecoveryDependencies &dependencies,
-                          std::size_t limit = 256);
+                          std::size_t limit =
+                              kPendingChartScoreRecoveryPageRows);
 
 [[nodiscard]] std::string_view recoveryUserMessage() noexcept;
 [[nodiscard]] RecoverySummary recoveryFailureSummary(std::string diagnostic);

@@ -270,7 +270,8 @@ PendingScoreCompletionOutcome completePendingChartScore(
 RecoverySummary recoverPendingChartScores(
     const PendingScoreRecoveryDependencies &dependencies,
     std::size_t limit) {
-  const std::size_t effectiveLimit = std::min(limit, std::size_t{256});
+  const std::size_t effectiveLimit =
+      std::min(limit, kPendingChartScoreRecoveryPageRows);
   PendingBatchOutcome batch = dependencies.listPending(effectiveLimit);
   RecoverySummary summary;
   appendDiagnostic(summary.diagnostic, batch.diagnostic);

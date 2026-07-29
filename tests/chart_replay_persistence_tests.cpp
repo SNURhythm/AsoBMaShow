@@ -265,6 +265,10 @@ struct Harness {
   result_persistence::PendingBatchOutcome batch{.storageAvailable = true};
   result_persistence::RecoveryMarkOutcome marked{
       .status = result_persistence::RecoveryMarkStatus::Recorded};
+  std::vector<std::size_t> requestedRecoveryLimits;
+  std::size_t simulatedRecoveryRows = 0;
+  std::size_t simulatedRecoveryRowsServed = 0;
+  bool simulatedRecoveryRowsRemainPending = false;
   std::int64_t nextHistory = 0;
 
   Harness() {
@@ -428,8 +432,26 @@ struct Harness {
               return pending;
             },
         .listPending =
-            [this](std::size_t) {
+            [this](std::size_t limit) {
               events.emplace_back("list-pending");
+              requestedRecoveryLimits.push_back(limit);
+              if (simulatedRecoveryRows != 0) {
+                const std::size_t count = std::min(
+                    limit, simulatedRecoveryRows - simulatedRecoveryRowsServed);
+                result_persistence::PendingBatchOutcome page{
+                    .storageAvailable = true};
+                page.entries.assign(
+                    count,
+                    {.status = result_persistence::PendingReadStatus::Found,
+                     .attemptId = attempt.result.attemptId,
+                     .value = pending.value});
+                simulatedRecoveryRowsServed += count;
+                page.remaining = simulatedRecoveryRowsRemainPending
+                                     ? simulatedRecoveryRows - count
+                                     : simulatedRecoveryRows -
+                                           simulatedRecoveryRowsServed;
+                return page;
+              }
               return batch;
             },
         .project =
@@ -693,6 +715,32 @@ void testProjectionAcknowledgementAndRecoveryStates() {
     expect(recovered.attempted == 1 && recovered.saved == 0 &&
                recovered.pending == 1 && recovered.conflicts == 0,
            "modern recovery retains storage failures as pending work");
+  }
+  {
+    Harness harness;
+    harness.simulatedRecoveryRows = 300;
+    ChartReplayPersistence persistence(harness.dependencies());
+    const auto recovered = persistence.recoverAll();
+    expect(harness.requestedRecoveryLimits ==
+               std::vector<std::size_t>({256, 44}) &&
+               recovered.attempted == 300 && recovered.saved == 300 &&
+               recovered.pending == 0 && recovered.conflicts == 0,
+           "startup recovery processes every bounded pending chart score");
+  }
+  {
+    Harness harness;
+    harness.simulatedRecoveryRows = 300;
+    harness.simulatedRecoveryRowsRemainPending = true;
+    harness.projected = {
+        .status = result_persistence::ProjectionStatus::StorageFailure,
+        .diagnostic = "score database unavailable"};
+    ChartReplayPersistence persistence(harness.dependencies());
+    const auto recovered = persistence.recoverAll();
+    expect(harness.requestedRecoveryLimits ==
+               std::vector<std::size_t>({256, 44}) &&
+               recovered.attempted == 300 && recovered.saved == 0 &&
+               recovered.pending == 300 && recovered.conflicts == 0,
+           "paged recovery attempts each retained storage failure once");
   }
 }
 

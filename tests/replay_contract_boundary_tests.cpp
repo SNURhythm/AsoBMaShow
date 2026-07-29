@@ -553,6 +553,18 @@ void testHistoryPresentationUsesBoundedCompleteListsAndCheapFileProbes() {
                "complete bounded course Records history");
   requireToken(mainMenu, "replayActions.probe(modern.replayFile)",
                "non-materializing Records replay availability probe");
+  const std::string menuText = readText(mainMenu);
+  const std::size_t irRead =
+      menuText.find("ListIrUploadRecordsForChart(");
+  const std::size_t irReadEnd = menuText.find(");", irRead);
+  if (irRead == std::string::npos || irReadEnd == std::string::npos ||
+      !std::string_view(menuText)
+           .substr(irRead, irReadEnd - irRead)
+           .contains("kMaximumModernChartHistoryRows")) {
+    std::cerr << "FAIL: displayed chart attempts and their IR state must use "
+                 "the same bounded history limit\n";
+    ++failures;
+  }
 
   const auto chartViewer = root / "src/scene/ChartViewerScene.cpp";
   requireToken(chartViewer, "kMaximumModernChartHistoryRows",

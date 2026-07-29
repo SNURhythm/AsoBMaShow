@@ -330,19 +330,52 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
 }
 
 ChartReplayRecoverySummary
-ChartReplayPersistence::recoverAll(std::size_t limit) {
+ChartReplayPersistence::recoverAll(std::size_t pageLimit) {
   profile_database_activity::WriteGuard bindingLease;
-  const auto recovered = result_persistence::recoverPendingChartScores(
-      {.listPending = dependencies_.listPending,
-       .completion = {.project = dependencies_.project,
-                      .acknowledge = dependencies_.acknowledge},
-       .recordRecoveryAttempt = dependencies_.recordRecoveryAttempt},
-      limit);
-  return {.attempted = recovered.attempted,
-          .saved = recovered.saved,
-          .pending = recovered.pending,
-          .conflicts = recovered.conflicts,
-          .diagnostic = recovered.diagnostic};
+  const result_persistence::PendingScoreRecoveryDependencies recovery{
+      .listPending = dependencies_.listPending,
+      .completion = {.project = dependencies_.project,
+                     .acknowledge = dependencies_.acknowledge},
+      .recordRecoveryAttempt = dependencies_.recordRecoveryAttempt};
+  const std::size_t effectivePageLimit = std::min(
+      pageLimit, result_persistence::kPendingChartScoreRecoveryPageRows);
+  auto page =
+      result_persistence::recoverPendingChartScores(recovery, pageLimit);
+  ChartReplayRecoverySummary summary{
+      .attempted = page.attempted,
+      .saved = page.saved,
+      .pending = page.pending,
+      .conflicts = page.conflicts,
+      .diagnostic = std::move(page.diagnostic)};
+  if (effectivePageLimit == 0 || page.attempted == 0) {
+    return summary;
+  }
+
+  const std::size_t initialRows = page.saved + page.pending + page.conflicts;
+  std::size_t visitedRows = page.attempted;
+  while (visitedRows < initialRows) {
+    const std::size_t nextLimit =
+        std::min(effectivePageLimit, initialRows - visitedRows);
+    page = result_persistence::recoverPendingChartScores(recovery, nextLimit);
+    appendDiagnostic(summary.diagnostic, "score recovery page",
+                     page.diagnostic);
+    if (page.attempted == 0) {
+      summary.pending = std::max<std::size_t>(summary.pending, 1);
+      break;
+    }
+    visitedRows += page.attempted;
+    summary.attempted += page.attempted;
+    summary.saved += page.saved;
+    summary.conflicts += page.conflicts;
+    const std::size_t outstandingRows = page.pending + page.conflicts;
+    summary.pending = outstandingRows > summary.conflicts
+                          ? outstandingRows - summary.conflicts
+                          : 0;
+    if (page.attempted < nextLimit) {
+      break;
+    }
+  }
+  return summary;
 }
 
 } // namespace replay

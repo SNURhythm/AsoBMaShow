@@ -5,6 +5,7 @@
 #include "ReplayFileAssociationCoordinator.h"
 
 #include "../ModernResult.h"
+#include "../ResultPersistenceCoordinator.h"
 #include "../ir/IrOutboxModels.h"
 #include "../ir/IrSubmissionSnapshot.h"
 #include "../repositories/ReplayRepository.h"
@@ -109,7 +110,9 @@ public:
   persist(const ChartReplayPersistenceAttempt &attempt,
           std::span<const ir::IrOutboxDraft> irDrafts = {});
 
-  [[nodiscard]] ChartReplayRecoverySummary recoverAll(std::size_t limit = 256);
+  [[nodiscard]] ChartReplayRecoverySummary recoverAll(
+      std::size_t pageLimit =
+          result_persistence::kPendingChartScoreRecoveryPageRows);
 
 private:
   ChartReplayPersistenceDependencies dependencies_;
