@@ -66,6 +66,105 @@ void writeSevenZip(const std::filesystem::path &path,
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
 }
 
+void writeStoredZip(const std::filesystem::path &path,
+                    const std::vector<std::string> &entryPaths) {
+  auto writer = makeArchiveWriteHandle();
+  assert(writer);
+  assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_set_options(writer.get(), "zip:compression=store") ==
+         ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) ==
+         ARCHIVE_OK);
+
+  constexpr std::string_view contents = "entry";
+  for (const auto &entryPath : entryPaths) {
+    ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+    assert(entry);
+    archive_entry_set_pathname(entry.get(), entryPath.c_str());
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(),
+                           static_cast<la_int64_t>(contents.size()));
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+           static_cast<la_ssize_t>(contents.size()));
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  }
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+void testZipIndexAmortizesPausePolling() {
+  constexpr int kEntryCount = 513;
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "many-entries.zip";
+  std::vector<std::string> entryPaths;
+  entryPaths.reserve(kEntryCount);
+  for (int index = 0; index < kEntryCount; ++index) {
+    entryPaths.push_back("folder/entry-" + std::to_string(index) + ".txt");
+  }
+  writeStoredZip(archivePath, entryPaths);
+
+  int pauseCalls = 0;
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(
+      archivePath, entries, &error, [&] {
+        ++pauseCalls;
+        return true;
+      }));
+  assert(entries.size() == kEntryCount);
+  assert(pauseCalls < 16);
+}
+
+void testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "long-filename.zip";
+  const std::string entryPath =
+      "folder/" + std::string(600, 'x') + ".bms";
+  writeStoredZip(archivePath, {entryPath});
+
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 1);
+  assert(entries.front().path.generic_string() == entryPath);
+}
+
+void testZipIndexPausePollingStillCancelsDuringLargeDirectory() {
+  constexpr int kEntryCount = 513;
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "cancel-index.zip";
+  std::vector<std::string> entryPaths;
+  entryPaths.reserve(kEntryCount);
+  for (int index = 0; index < kEntryCount; ++index) {
+    entryPaths.push_back("entry-" + std::to_string(index) + ".txt");
+  }
+  writeStoredZip(archivePath, entryPaths);
+
+  int pauseCalls = 0;
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(!archive_file::listEntries(
+      archivePath, entries, &error, [&] { return ++pauseCalls < 4; }));
+  assert(entries.empty());
+  assert(error == "Operation cancelled");
+  assert(pauseCalls >= 4);
+  assert(pauseCalls < 8);
+}
+
+void testZipIndexUsesCommonSystemEntryFilter() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "system-entries.zip";
+  writeStoredZip(archivePath,
+                 {"__MACOSX/._chart.bms", "music/chart.bms"});
+
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 1);
+  assert(entries.front().path.generic_string() == "music/chart.bms");
+}
+
 void testIndependentSevenZipCacheMissesOpenConcurrently() {
   TempDirectory temporary;
   const auto firstPath = temporary.path() / "first.7z";
@@ -172,6 +271,10 @@ void testDebugLogRetainsNewestThousandLines() {
 } // namespace
 
 int main() {
+  testZipIndexAmortizesPausePolling();
+  testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer();
+  testZipIndexPausePollingStillCancelsDuringLargeDirectory();
+  testZipIndexUsesCommonSystemEntryFilter();
   testIndependentSevenZipCacheMissesOpenConcurrently();
   testEncodedHeaderSevenZipUsesSdk();
   testDebugLogRetainsNewestThousandLines();

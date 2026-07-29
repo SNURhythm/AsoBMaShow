@@ -335,6 +335,42 @@ void testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce() {
   assert(session->CountAllChartMeta() == 4);
 }
 
+void testArchiveIndexProgressFollowsFolderTraversal() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  writeZip(root / "progress.zip",
+           {{"inside.bms", chartText("Progress Archive")}});
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  std::vector<ChartScanProgressStage> stages;
+  assert(scanner.Scan(*session, {root}, nullptr,
+                      [&](const ChartScanProgress &progress) {
+                        if (stages.empty() || stages.back() != progress.stage) {
+                          stages.push_back(progress.stage);
+                        }
+                      }) == 2);
+
+  const auto scanning =
+      std::find(stages.begin(), stages.end(),
+                ChartScanProgressStage::ScanningRoots);
+  const auto indexing =
+      std::find(stages.begin(), stages.end(),
+                ChartScanProgressStage::IndexingArchives);
+  const auto preparing =
+      std::find(stages.begin(), stages.end(),
+                ChartScanProgressStage::PreparingUpdates);
+  assert(scanning != stages.end());
+  assert(indexing != stages.end());
+  assert(preparing != stages.end());
+  assert(scanning < indexing);
+  assert(indexing < preparing);
+}
+
 void testManySmallArchivesPreserveDiscoveryOrderAndCache() {
   constexpr int kArchiveCount = 6;
   TempDirectory temporary;
@@ -850,6 +886,7 @@ int main() {
   testCheckpointResume();
   testStorageFailureLeavesNoChart();
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
+  testArchiveIndexProgressFollowsFolderTraversal();
   testManySmallArchivesPreserveDiscoveryOrderAndCache();
   testNormalArchiveScanDoesNotRecountStoredRows();
   testMultiEntryArchivePreservesPreparedResultOrderAndCache();

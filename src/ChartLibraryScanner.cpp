@@ -51,6 +51,7 @@ constexpr std::uint64_t kArchiveParseMaxInFlightBytes =
     16ull * 1024ull * 1024ull;
 constexpr std::size_t kArchiveParseMaxOuterWorkers = 4;
 constexpr std::size_t kArchiveDirectConcurrentMinCharts = 16;
+constexpr std::size_t kArchiveClassificationPauseInterval = 256;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
 
@@ -143,11 +144,15 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
     return result;
   }
   result.readable = true;
-  for (const auto &entry : entries) {
-    if (!pauseIfNeeded()) {
+  std::unordered_set<path_t> seenArchiveChartPaths;
+  for (std::size_t entryIndex = 0; entryIndex < entries.size(); ++entryIndex) {
+    if (entryIndex > 0 &&
+        entryIndex % kArchiveClassificationPauseInterval == 0 &&
+        !pauseIfNeeded()) {
       result.readable = false;
       return result;
     }
+    const auto &entry = entries[entryIndex];
     if (entry.directory) {
       continue;
     }
@@ -158,28 +163,24 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
     if (entry.solid) {
       result.solid = true;
     }
-  }
-
-  if (!result.solid) {
-    std::unordered_set<path_t> seenArchiveChartPaths;
-    for (const auto &entry : entries) {
-      if (!pauseIfNeeded()) {
-        result.readable = false;
-        return result;
-      }
-      if (entry.directory ||
-          !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
-        continue;
-      }
-      const std::filesystem::path chartPath =
-          archive_file::makeVirtualPath(archivePath, entry.path);
-      const path_t key = fspath_to_path_t(chartPath);
-      if (seenArchiveChartPaths.find(key) != seenArchiveChartPaths.end()) {
-        continue;
-      }
-      seenArchiveChartPaths.insert(key);
-      result.chartPaths.push_back(chartPath);
+    if (result.solid ||
+        !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
+      continue;
     }
+    const std::filesystem::path chartPath =
+        archive_file::makeVirtualPath(archivePath, entry.path);
+    const path_t key = fspath_to_path_t(chartPath);
+    if (!seenArchiveChartPaths.insert(key).second) {
+      continue;
+    }
+    result.chartPaths.push_back(chartPath);
+  }
+  if (!pauseIfNeeded()) {
+    result.readable = false;
+    return result;
+  }
+  if (result.solid) {
+    result.chartPaths.clear();
   }
 
   archive_file::appendDebugLogLine(
@@ -635,6 +636,7 @@ int ChartLibraryScanner::Scan(
   };
 
   chart_scan::WorkScheduler entityScheduler(entityWorkerCount, archiveIoLimit);
+  int scheduledArchiveIndexCount = 0;
 
   struct IndexedArchivePrefetch {
     path_t archiveKey;
@@ -1161,7 +1163,7 @@ int ChartLibraryScanner::Scan(
     }
 
     const std::size_t sequence = reservePreparedEntity();
-    if (!entityScheduler.enqueue(
+    if (entityScheduler.enqueue(
             [&, sequence, archivePath, archiveSize, mtimeNs, cache] {
               if (shouldStop()) {
                 return;
@@ -1189,6 +1191,8 @@ int ChartLibraryScanner::Scan(
               }
             },
             chart_scan::WorkClass::ArchiveIndex)) {
+      ++scheduledArchiveIndexCount;
+    } else {
       storePreparedEntity(sequence, PreparedArchive{
                                         .path = archivePath,
                                         .archiveSize = archiveSize,
@@ -1292,6 +1296,10 @@ int ChartLibraryScanner::Scan(
     }
     ++scannedRootCount;
   }
+  if (scheduledArchiveIndexCount > 0) {
+    reportProgress(0, scheduledArchiveIndexCount,
+                   ChartScanProgressStage::IndexingArchives);
+  }
   if (shouldStop()) {
     entityScheduler.cancel();
   } else {
@@ -1302,6 +1310,10 @@ int ChartLibraryScanner::Scan(
       preparedEntityCv.wait_for(lock, std::chrono::milliseconds(20));
     }
     lock.unlock();
+    if (!shouldStop() && scheduledArchiveIndexCount > 0) {
+      reportProgress(scheduledArchiveIndexCount, scheduledArchiveIndexCount,
+                     ChartScanProgressStage::IndexingArchives);
+    }
     if (shouldStop()) {
       entityScheduler.cancel();
     }

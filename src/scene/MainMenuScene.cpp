@@ -1086,6 +1086,8 @@ const char *chartScanProgressStageText(ChartScanProgressStage stage) {
     return "Preparing library scan";
   case ChartScanProgressStage::ScanningRoots:
     return "Scanning folders";
+  case ChartScanProgressStage::IndexingArchives:
+    return "Indexing archives";
   case ChartScanProgressStage::PreparingUpdates:
     return "Preparing chart updates";
   case ChartScanProgressStage::RemovingDeleted:

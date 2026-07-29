@@ -3082,6 +3082,8 @@ bool extractArchiveFullyWithLibarchive(
 #endif
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+constexpr mz_uint kZipIndexPauseCheckInterval = 256;
+
 bool listZipEntries(const std::filesystem::path &archivePath,
                     std::vector<Entry> &entries, std::string *errorMessage,
                     const PauseCallback &pauseCallback);
@@ -3105,8 +3107,7 @@ void buildIndexLookups(CachedIndex &index) {
     if (entry.directory) {
       continue;
     }
-    const std::string normalized =
-        normalizeEntryName(entry.path.generic_string());
+    const std::string normalized = entry.path.generic_string();
     if (normalized.empty()) {
       continue;
     }
@@ -3679,6 +3680,18 @@ std::optional<std::string> minizFilename(mz_zip_archive *archive,
   return filename;
 }
 
+std::optional<std::string>
+minizStatFilename(mz_zip_archive *archive, mz_uint fileIndex,
+                  const mz_zip_archive_file_stat &stat) {
+  constexpr std::size_t kEmbeddedCapacity =
+      sizeof(mz_zip_archive_file_stat::m_filename);
+  const std::size_t embeddedLength = std::strlen(stat.m_filename);
+  if (embeddedLength < kEmbeddedCapacity - 1) {
+    return std::string(stat.m_filename, embeddedLength);
+  }
+  return minizFilename(archive, fileIndex);
+}
+
 enum class ZipNameMatch { Matches, Mismatches, Unknown };
 
 std::optional<std::string> normalizedZipEntryName(const std::string &filename,
@@ -3698,7 +3711,7 @@ std::optional<std::string> normalizedZipEntryName(const std::string &filename,
       }
       convertedAny = true;
       if (safeEntryPath(*converted, convertedPath)) {
-        return normalizeEntryName(convertedPath.generic_string());
+        return convertedPath.generic_string();
       }
     }
     if (knownMismatch != nullptr) {
@@ -3714,7 +3727,7 @@ std::optional<std::string> normalizedZipEntryName(const std::string &filename,
 
   std::filesystem::path minizPath;
   if (safeEntryPath(filename, minizPath)) {
-    return normalizeEntryName(minizPath.generic_string());
+    return minizPath.generic_string();
   }
 
   if (knownMismatch != nullptr) {
@@ -3983,10 +3996,16 @@ bool listZipEntries(const std::filesystem::path &archivePath,
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
   entries.reserve(fileCount);
   for (mz_uint fileIndex = 0; fileIndex < fileCount; ++fileIndex) {
-    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    if (fileIndex > 0 && fileIndex % kZipIndexPauseCheckInterval == 0 &&
+        !pauseIfNeeded(pauseCallback, errorMessage)) {
       return fail("Operation cancelled");
     }
-    const auto filename = minizFilename(&archive, fileIndex);
+    mz_zip_archive_file_stat stat{};
+    if (!mz_zip_reader_file_stat(&archive, fileIndex, &stat)) {
+      return fail("Could not read ZIP central directory entry.");
+    }
+
+    const auto filename = minizStatFilename(&archive, fileIndex, stat);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
     }
@@ -3995,14 +4014,6 @@ bool listZipEntries(const std::filesystem::path &archivePath,
     if (!normalized.has_value() || normalized->empty()) {
       continue;
     }
-    if (isSystemEntryPath(std::filesystem::path(*normalized))) {
-      continue;
-    }
-
-    mz_zip_archive_file_stat stat{};
-    if (!mz_zip_reader_file_stat(&archive, fileIndex, &stat)) {
-      return fail("Could not read ZIP central directory entry.");
-    }
 
     entries.push_back({
         .path = std::filesystem::path(*normalized),
@@ -4010,6 +4021,9 @@ bool listZipEntries(const std::filesystem::path &archivePath,
         .size = stat.m_uncomp_size,
         .order = static_cast<std::size_t>(fileIndex),
     });
+  }
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return fail("Operation cancelled");
   }
 
   mz_zip_reader_end(&archive);
