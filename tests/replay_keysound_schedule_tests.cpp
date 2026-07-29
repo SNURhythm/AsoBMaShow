@@ -58,6 +58,25 @@ void testReplayPressSchedulesKeysoundAtRawSongTime() {
           "replay Press is scheduled at raw audio time on the keysound bus");
 }
 
+void testReplayNonJudgingPressUsesManualKeysoundPolicy() {
+  const auto definition = makeDefinition();
+  const std::array events{
+      ReplayEvent{.action = ReplayEventAction::Press,
+                  .lane = 1,
+                  .noteTimeMicros = -1,
+                  .songTimeMicros = 620'000,
+                  .judgement = None}};
+
+  const auto scheduled =
+      buildReplayKeysoundSchedule(definition, events, 120'000, std::nullopt);
+  require(scheduled.size() == 1 &&
+              scheduled[0].timeMicros == 500'000 &&
+              scheduled[0].wav == 42 &&
+              scheduled[0].bus == audio::Bus::Keysound,
+          "a replay press without judgement uses the same future manual "
+          "keysound as live gameplay");
+}
+
 void testReplaySchedulePreservesExistingExclusions() {
   const auto definition = makeDefinition();
   const std::array events{
@@ -104,6 +123,7 @@ void testReplaySchedulePreservesExistingExclusions() {
 
 int main() {
   testReplayPressSchedulesKeysoundAtRawSongTime();
+  testReplayNonJudgingPressUsesManualKeysoundPolicy();
   testReplaySchedulePreservesExistingExclusions();
   return 0;
 }
