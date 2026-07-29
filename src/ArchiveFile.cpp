@@ -8301,7 +8301,8 @@ std::optional<std::filesystem::path>
 materializeFileBytes(const std::filesystem::path &path,
                      const std::vector<unsigned char> &bytes,
                      std::string *errorMessage,
-                     const std::atomic_bool *cancelled) {
+                     const std::atomic_bool *cancelled,
+                     bool replaceExisting) {
   if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed)) {
     if (errorMessage != nullptr) {
       *errorMessage = "Materialize cancelled.";
@@ -8330,7 +8331,7 @@ materializeFileBytes(const std::filesystem::path &path,
     }
     return std::nullopt;
   }
-  if (outputExists) {
+  if (outputExists && !replaceExisting) {
     const std::uintmax_t size = std::filesystem::file_size(output, error);
     if (error) {
       if (errorMessage != nullptr) {

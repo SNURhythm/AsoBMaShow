@@ -55,6 +55,16 @@ void writeSinglePixelPpm(const std::filesystem::path &path) {
                         static_cast<char>(0x99)};
   output.write(pixel, sizeof(pixel));
 }
+
+void writePpm(const std::filesystem::path &path, int width, int height) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output << "P6\n" << width << ' ' << height << "\n255\n";
+  const char pixel[] = {static_cast<char>(0x33), static_cast<char>(0x66),
+                        static_cast<char>(0x99)};
+  for (int index = 0; index < width * height; ++index) {
+    output.write(pixel, sizeof(pixel));
+  }
+}
 } // namespace
 
 int main() {
@@ -111,31 +121,114 @@ int main() {
   }
 
   {
-    int cachePathNormalizations = 0;
+    const std::filesystem::path sourcePath =
+        "/definitely-missing/asobmashow-jacket-performance.png";
+    int sourcePathNormalizations = 0;
     archive_file::setCachePathNormalizer(
-        [&cachePathNormalizations](std::filesystem::path &) {
-          ++cachePathNormalizations;
+        [&sourcePathNormalizations,
+         sourcePath](std::filesystem::path &normalized) {
+          if (normalized == sourcePath) {
+            ++sourcePathNormalizations;
+          }
         });
     ImageView::dropAllCache();
 
     ImageView image(0, 0, 100, 50);
-    image.setImageAsync(
-        path_t("/definitely-missing/asobmashow-jacket-performance.png"),
-        true);
-    const int normalizationsAfterBinding = cachePathNormalizations;
+    image.setImageAsync(fspath_to_path_t(sourcePath), true);
+    const int sourceNormalizationsAfterBinding = sourcePathNormalizations;
     RenderContext renderContext;
     image.render(renderContext);
     image.render(renderContext);
     image.render(renderContext);
 
     archive_file::setCachePathNormalizer({});
-    require(normalizationsAfterBinding == 0,
-            "normal async jacket binding skips filesystem cache identity");
-    require(cachePathNormalizations == 0,
-            "normal async jacket polling remains metadata-free");
+    require(sourceNormalizationsAfterBinding == 0,
+            "normal async jacket binding skips source filesystem identity");
+    require(sourcePathNormalizations == 0,
+            "normal async jacket polling remains source-metadata-free");
   }
 
 #ifndef _WIN32
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-persisted-file-thumbnail-" +
+         std::to_string(getpid()) + "-" +
+         std::to_string(std::chrono::steady_clock::now()
+                            .time_since_epoch()
+                            .count()));
+    std::filesystem::remove_all(fixtureRoot);
+    std::filesystem::create_directories(fixtureRoot);
+    const std::filesystem::path artworkPath = fixtureRoot / "jacket.ppm";
+    writePpm(artworkPath, 512, 256);
+
+    ImageView::dropAllCache();
+    ImageView firstLoad(0, 0, 256, 128);
+    firstLoad.setImageAsync(artworkPath.string(), false);
+    const auto firstLoadDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (firstLoad.imageWidth() == 0 &&
+           std::chrono::steady_clock::now() < firstLoadDeadline) {
+      firstLoad.setImageAsync(artworkPath.string(), false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(firstLoad.imageWidth() > 0,
+            "ordinary artwork finishes its initial decode");
+
+    ImageView::dropAllCache();
+    ImageView coldReload(0, 0, 256, 128);
+    coldReload.setImageAsync(artworkPath.string(), false);
+    const bool restoredThumbnailImmediately =
+        coldReload.imageWidth() == 256 && coldReload.imageHeight() == 128;
+
+    const auto refreshDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (coldReload.imageWidth() != 512 &&
+           std::chrono::steady_clock::now() < refreshDeadline) {
+      coldReload.setImageAsync(artworkPath.string(), false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(coldReload.imageWidth() == 512 && coldReload.imageHeight() == 256,
+            "persisted ordinary thumbnail is refreshed from its source");
+
+    writePpm(artworkPath, 256, 512);
+    ImageView::dropAllCache();
+    ImageView changedSource(0, 0, 128, 256);
+    changedSource.setImageAsync(artworkPath.string(), false);
+    const auto changedSourceDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (changedSource.imageWidth() != 256 ||
+           changedSource.imageHeight() != 512) {
+      require(std::chrono::steady_clock::now() < changedSourceDeadline,
+              "changed ordinary artwork finishes its source refresh");
+      changedSource.setImageAsync(artworkPath.string(), false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    ImageView::dropAllCache();
+    ImageView changedColdReload(0, 0, 128, 256);
+    changedColdReload.setImageAsync(artworkPath.string(), false);
+    require(changedColdReload.imageWidth() == 128 &&
+                changedColdReload.imageHeight() == 256,
+            "persisted ordinary thumbnail follows a changed source file");
+
+    const auto changedReloadDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (changedColdReload.imageWidth() != 256 ||
+           changedColdReload.imageHeight() != 512) {
+      require(std::chrono::steady_clock::now() < changedReloadDeadline,
+              "changed cold reload finishes its source refresh");
+      changedColdReload.setImageAsync(artworkPath.string(), false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    ImageView::dropAllCache();
+    std::filesystem::remove_all(fixtureRoot);
+    require(restoredThumbnailImmediately,
+            "ordinary jacket or banner restores its persisted thumbnail "
+            "without waiting for another full decode");
+  }
+
   {
     const std::filesystem::path fixtureRoot =
         std::filesystem::temp_directory_path() /

@@ -206,7 +206,8 @@ std::optional<std::filesystem::path>
 materializeFileBytes(const std::filesystem::path &path,
                      const std::vector<unsigned char> &bytes,
                      std::string *errorMessage = nullptr,
-                     const std::atomic_bool *cancelled = nullptr);
+                     const std::atomic_bool *cancelled = nullptr,
+                     bool replaceExisting = false);
 std::filesystem::path
 materializedFileCachePath(const std::filesystem::path &path);
 bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,
