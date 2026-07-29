@@ -5,9 +5,9 @@
 
 #define ASSERT_EQ(expected, actual, label)                                     \
   if ((expected) != (actual)) {                                                \
-    std::cerr << label << " expected " << (expected) << " actual "            \
-              << (actual) << std::endl;                                       \
-    return 1;                                                                 \
+    std::cerr << label << " expected " << (expected) << " actual " << (actual) \
+              << std::endl;                                                    \
+    return 1;                                                                  \
   }
 
 namespace {
@@ -24,17 +24,32 @@ ReplaySummary makeSummary(int id, int clearType, int score, int maxScore,
   return summary;
 }
 
-ResultRecordSummary makeResultRecord(
-    int id, int clearType, int score, int maxScore,
-    std::optional<int> maxCombo, std::int64_t displayedTime,
-    std::optional<std::string> option = std::nullopt,
-    bool course = false, bool autoPlay = false) {
-  ReplaySummary local = makeSummary(id, clearType, score, maxScore,
-                                    maxCombo.value_or(0), option);
-  local.maxCombo = maxCombo.value_or(0);
-  local.courseReplay = course;
-  local.autoPlay = autoPlay;
-  ResultRecordSummary result = makeLocalResultRecord(std::move(local));
+ResultRecordSummary
+makeResultRecord(int id, int clearType, int score, int maxScore,
+                 std::optional<int> maxCombo, std::int64_t displayedTime,
+                 std::optional<std::string> option = std::nullopt,
+                 bool course = false, bool autoPlay = false) {
+  if (autoPlay) {
+    ReplaySummary replay = makeSummary(
+        -1, clearType, score, maxScore, maxCombo.value_or(0), option);
+    replay.autoPlay = true;
+    auto result = makeAutoPlayResultRecord(std::move(replay));
+    result.maxCombo = maxCombo;
+    result.displayedTimeUnixMillis = displayedTime;
+    return result;
+  }
+  ResultRecordSummary result;
+  result.identity =
+      course ? ResultRecordIdentity(ModernCourseRecordId{
+                   .attemptId = "filter-course-" + std::to_string(id)})
+             : ResultRecordIdentity(ModernChartRecordId{
+                   .attemptId = "filter-chart-" + std::to_string(id)});
+  result.course = course;
+  result.score = score;
+  result.maxScore = maxScore;
+  result.maxCombo = maxCombo;
+  result.clearRank = clearType;
+  result.playOption = option.value_or("NORMAL");
   result.maxCombo = maxCombo;
   result.displayedTimeUnixMillis = displayedTime;
   return result;
@@ -62,7 +77,7 @@ ResultRecordSummary makeRemoteResultRecordForFilter(
       .displayedTime = {},
       .playOption = std::move(option),
       .irState = ir::IrRecordState::Uploaded,
-      .local = std::nullopt,
+      .autoPlayReplay = std::nullopt,
       .remote = std::nullopt,
   };
 }
@@ -87,10 +102,25 @@ int main() {
       makeSummary(4, kClearTypeNormalClearRank, 700, 1000, 500),
       makeSummary(5, kClearTypeNormalClearRank, 700, 1000, 499),
   };
-  filtered =
-      replay_record_filters::apply(effectiveFullComboSummaries, filters);
+  filtered = replay_record_filters::apply(effectiveFullComboSummaries, filters);
   ASSERT_EQ(1U, filtered.size(), "effective full combo filter size");
   ASSERT_EQ(4, filtered[0].id, "effective full combo filter id");
+
+  ResultRecordSummary splitDoublePlay =
+      makeResultRecord(7, kClearTypeHardClearRank, 700, 1000, 350, 700,
+                       "NORMAL");
+  splitDoublePlay.playOption2 = "RANDOM";
+  ReplayRecordFilters doublePlayFilter;
+  doublePlayFilter.playOption = "RANDOM";
+  auto filteredResults = replay_record_filters::apply(
+      std::vector<ResultRecordSummary>{splitDoublePlay}, doublePlayFilter);
+  ASSERT_EQ(1U, filteredResults.size(),
+            "player-two random option filter size");
+  doublePlayFilter.playOption = "NORMAL";
+  filteredResults = replay_record_filters::apply(
+      std::vector<ResultRecordSummary>{splitDoublePlay}, doublePlayFilter);
+  ASSERT_EQ(0U, filteredResults.size(),
+            "normal filter requires both players to be normal");
 
   ReplaySummary assistedFullCombo =
       makeSummary(6, kClearTypeNormalClearRank, 700, 1000, 500);
@@ -170,7 +200,8 @@ int main() {
       makeSummary(50, kClearTypeHardClearRank, 740, 1000, 220),
       makeSummary(49, kClearTypeNormalClearRank, 900, 1000, 360),
   };
-  filtered = replay_record_filters::apply(clearMarkVsMaxComboSummaries, filters);
+  filtered =
+      replay_record_filters::apply(clearMarkVsMaxComboSummaries, filters);
   ASSERT_EQ(49, filtered[0].id, "max combo sort combo precedence id");
 
   filters.sort = ReplayRecordSortCriterion::MaxCombo;
@@ -199,24 +230,28 @@ int main() {
   ResultRecordSummary remoteMissing = makeRemoteResultRecordForFilter(
       "remote-missing", kClearTypeFailedRank, 0, 0, std::nullopt, 500);
   ResultRecordSummary remoteExplicitZero = makeRemoteResultRecordForFilter(
-      "remote-zero", kClearTypeNormalClearRank, 0, 2'000, 0, 400,
-      "RANDOM");
+      "remote-zero", kClearTypeNormalClearRank, 0, 2'000, 0, 400, "RANDOM");
   ResultRecordSummary course = makeResultRecord(
       70, kClearTypeHardClearRank, 850, 0, 350, 300, std::nullopt, true);
-  course.local->playOption2 = "MIRROR";
-  ResultRecordSummary localNormal = makeResultRecord(
-      71, kClearTypeFullComboRank, 1'800, 2'000, 900, 200);
-  ResultRecordSummary tiedNewest = makeRemoteResultRecordForFilter(
-      "remote-tied", kClearTypeEasyClearRank, 1'200, 2'000, 600, 500,
-      "R-RANDOM");
+  course.playOption = "MIRROR";
+  ResultRecordSummary localNormal =
+      makeResultRecord(71, kClearTypeFullComboRank, 1'800, 2'000, 900, 200);
+  ResultRecordSummary tiedNewest =
+      makeRemoteResultRecordForFilter("remote-tied", kClearTypeEasyClearRank,
+                                      1'200, 2'000, 600, 500, "R-RANDOM");
+  LegacyChartResultSummary unknownLegacy;
+  unknownLegacy.legacyReplayId = 99;
+  unknownLegacy.partial = true;
+  ResultRecordSummary legacyUnknown =
+      makeLegacyChartResultRecord(unknownLegacy);
 
   std::vector<ResultRecordSummary> resultRecords{
-      localNormal, remoteMissing, tiedNewest, course, remoteExplicitZero,
-      autoPlay};
+      localNormal, remoteMissing,      tiedNewest,
+      course,      remoteExplicitZero, autoPlay};
   ReplayRecordFilters resultFilters;
   auto filteredRecords =
       replay_record_filters::apply(resultRecords, resultFilters);
-  ASSERT_EQ(-1, *filteredRecords[0].localReplayId(),
+  ASSERT_EQ(true, filteredRecords[0].autoPlay,
             "tagged newest keeps Auto Play first");
   ASSERT_EQ(std::string("remote-missing"),
             std::string(*filteredRecords[1].remoteScoreId()),
@@ -227,44 +262,57 @@ int main() {
 
   resultFilters = {};
   resultFilters.clearMarkRank = kClearTypeHardClearRank;
-  filteredRecords =
-      replay_record_filters::apply(resultRecords, resultFilters);
+  filteredRecords = replay_record_filters::apply(resultRecords, resultFilters);
   ASSERT_EQ(1U, filteredRecords.size(), "tagged clear filter size");
-  ASSERT_EQ(70, *filteredRecords[0].localReplayId(),
-            "tagged clear filter preserves local course");
+  ASSERT_EQ(std::string("filter-course-70"),
+            std::string(*filteredRecords[0].modernAttemptId()),
+            "tagged clear filter preserves modern course");
 
+  auto knownAndUnknown = resultRecords;
+  knownAndUnknown.push_back(legacyUnknown);
   resultFilters = {};
-  resultFilters.playOption = "NORMAL";
+  resultFilters.clearMarkRank = kClearTypeFailedRank;
   filteredRecords =
-      replay_record_filters::apply(resultRecords, resultFilters);
+      replay_record_filters::apply(knownAndUnknown, resultFilters);
   ASSERT_EQ(2U, filteredRecords.size(),
-            "tagged NORMAL excludes missing remote option");
-  ASSERT_EQ(-1, *filteredRecords[0].localReplayId(),
-            "tagged NORMAL keeps Auto Play local semantics");
-  ASSERT_EQ(71, *filteredRecords[1].localReplayId(),
-            "tagged NORMAL keeps missing local option semantics");
-
-  resultFilters.playOption = "MIRROR";
-  filteredRecords =
-      replay_record_filters::apply(resultRecords, resultFilters);
-  ASSERT_EQ(1U, filteredRecords.size(),
-            "tagged play option checks local secondary option");
-  ASSERT_EQ(70, *filteredRecords[0].localReplayId(),
-            "tagged play option retains local course option behavior");
-
+            "unknown legacy lamp is not filtered as a failed lamp");
   resultFilters = {};
   resultFilters.scoreRank = "F";
   filteredRecords =
-      replay_record_filters::apply(resultRecords, resultFilters);
+      replay_record_filters::apply(knownAndUnknown, resultFilters);
+  ASSERT_EQ(2U, filteredRecords.size(),
+            "unknown legacy score is not filtered as a zero score");
+
+  resultFilters = {};
+  resultFilters.playOption = "NORMAL";
+  filteredRecords = replay_record_filters::apply(resultRecords, resultFilters);
+  ASSERT_EQ(2U, filteredRecords.size(),
+            "tagged NORMAL excludes missing remote option");
+  ASSERT_EQ(true, filteredRecords[0].autoPlay,
+            "tagged NORMAL keeps Auto Play semantics");
+  ASSERT_EQ(std::string("filter-chart-71"),
+            std::string(*filteredRecords[1].modernAttemptId()),
+            "tagged NORMAL keeps modern normal-option semantics");
+
+  resultFilters.playOption = "MIRROR";
+  filteredRecords = replay_record_filters::apply(resultRecords, resultFilters);
+  ASSERT_EQ(1U, filteredRecords.size(),
+            "tagged play option checks modern course option");
+  ASSERT_EQ(std::string("filter-course-70"),
+            std::string(*filteredRecords[0].modernAttemptId()),
+            "tagged play option retains modern course option behavior");
+
+  resultFilters = {};
+  resultFilters.scoreRank = "F";
+  filteredRecords = replay_record_filters::apply(resultRecords, resultFilters);
   ASSERT_EQ(2U, filteredRecords.size(),
             "tagged score filter excludes unavailable max score");
-  ASSERT_EQ(-1, *filteredRecords[0].localReplayId(),
-            "tagged score filter keeps explicit local zero score");
+  ASSERT_EQ(true, filteredRecords[0].autoPlay,
+            "tagged score filter keeps explicit Auto Play zero score");
   ASSERT_EQ(std::string("remote-zero"),
             std::string(*filteredRecords[1].remoteScoreId()),
             "tagged score filter keeps explicit remote zero score");
-  ASSERT_EQ(true,
-            replay_record_filters::supportsScoreRankFilter(resultRecords),
+  ASSERT_EQ(true, replay_record_filters::supportsScoreRankFilter(resultRecords),
             "tagged score-rank availability requires positive max score");
   ASSERT_EQ(false,
             replay_record_filters::supportsScoreRankFilter(
@@ -273,12 +321,12 @@ int main() {
 
   resultFilters = {};
   resultFilters.sort = ReplayRecordSortCriterion::MaxCombo;
-  filteredRecords =
-      replay_record_filters::apply(resultRecords, resultFilters);
-  ASSERT_EQ(-1, *filteredRecords[0].localReplayId(),
+  filteredRecords = replay_record_filters::apply(resultRecords, resultFilters);
+  ASSERT_EQ(true, filteredRecords[0].autoPlay,
             "tagged combo sort keeps Auto Play first");
-  ASSERT_EQ(71, *filteredRecords[1].localReplayId(),
-            "tagged combo sort orders present combo descending");
+  ASSERT_EQ(std::string("filter-chart-71"),
+            std::string(*filteredRecords[1].modernAttemptId()),
+            "tagged combo sort orders modern combo descending");
   ASSERT_EQ(std::string("remote-zero"),
             std::string(*filteredRecords[4].remoteScoreId()),
             "tagged combo sort keeps explicit zero ahead of absence");
@@ -287,12 +335,12 @@ int main() {
             "tagged combo sort keeps missing combo absent instead of zero");
 
   resultFilters.sort = ReplayRecordSortCriterion::Score;
-  filteredRecords =
-      replay_record_filters::apply(resultRecords, resultFilters);
-  ASSERT_EQ(-1, *filteredRecords[0].localReplayId(),
+  filteredRecords = replay_record_filters::apply(resultRecords, resultFilters);
+  ASSERT_EQ(true, filteredRecords[0].autoPlay,
             "tagged score sort keeps Auto Play first");
-  ASSERT_EQ(71, *filteredRecords[1].localReplayId(),
-            "tagged score sort orders score descending");
+  ASSERT_EQ(std::string("filter-chart-71"),
+            std::string(*filteredRecords[1].modernAttemptId()),
+            "tagged score sort orders modern score descending");
 
   return 0;
 }

@@ -45,22 +45,13 @@ constexpr int kScoreSummarySemanticsSchemaVersion = 7;
 constexpr int kScoreBestEligibilitySchemaVersion = 8;
 constexpr int kScoreAttemptIdentitySchemaVersion = 9;
 constexpr int kScoreImportedIrSchemaVersion = 10;
+constexpr int kCourseScoreProjectionSchemaVersion = 11;
 constexpr int kScoreDatabaseSchemaVersion =
     ScoreRepository::kCurrentSchemaVersion;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
     "\"eligibility\":\"legacy-unverified\"}";
-
-bool isCanonicalCourseKey(std::string_view key) {
-  constexpr std::string_view prefix = "course:v1:";
-  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
-    return false;
-  }
-  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
-    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
-  });
-}
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
@@ -80,6 +71,7 @@ void logSqlError(const char *context, sqlite3 *db) {
 
 bool scoreAttemptIdentitySchemaIsExact(sqlite3 *db);
 bool scoreImportedIrSchemaIsExact(sqlite3 *db);
+bool courseScoreProjectionSchemaIsExact(sqlite3 *db);
 bool currentScoreSchemaIsValid(sqlite3 *db);
 
 bool ensureScoreDatabaseDirectory(const std::filesystem::path &path,
@@ -362,8 +354,8 @@ bool migrateScoreDatabaseToVersion6(sqlite3 *db) {
     return false;
   }
   for (const auto &row : rows) {
-    const bool noncanonical =
-        !row.courseKey.empty() && !isCanonicalCourseKey(row.courseKey);
+    const bool noncanonical = !row.courseKey.empty() &&
+        !course_identity::isCanonicalKey(row.courseKey);
     const bool copyLegacy = noncanonical && row.legacyCourseKey.empty();
     const auto parsed =
         noncanonical ? course_identity::parseLegacyScoreKey(row.courseKey)
@@ -688,6 +680,115 @@ bool scoreAttemptIdentitySchemaIsExact(sqlite3 *db) {
   return true;
 }
 
+enum class CourseScoreProjectionSchemaState { Absent, Exact, Malformed };
+
+bool inspectCourseScoreProjectionSchema(
+    sqlite3 *db, CourseScoreProjectionSchemaState &state) {
+  struct ColumnExpectation {
+    std::string_view name;
+    std::string_view type;
+  };
+  constexpr std::array expectations{
+      ColumnExpectation{"attempt_id", "TEXT"},
+      ColumnExpectation{"modern_result_id", "INTEGER"},
+      ColumnExpectation{"result_fingerprint", "TEXT"},
+  };
+  std::array<bool, expectations.size()> present{};
+  std::array<bool, expectations.size()> exact{};
+  SqliteStatementHandle columns;
+  if (!prepareSqliteStatementLogged(
+          db, "PRAGMA table_info(course_scores)", columns,
+          "reading course score projection columns", logSqlErrorText)) {
+    return false;
+  }
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(columns.get())) == SQLITE_ROW) {
+    const std::string name = sqliteColumnString(columns.get(), 1);
+    for (std::size_t index = 0; index < expectations.size(); ++index) {
+      if (name != expectations[index].name) {
+        continue;
+      }
+      present[index] = true;
+      exact[index] =
+          sqlite3_column_type(columns.get(), 2) == SQLITE_TEXT &&
+          sqliteColumnString(columns.get(), 2) == expectations[index].type &&
+          sqlite3_column_type(columns.get(), 3) == SQLITE_INTEGER &&
+          sqlite3_column_int(columns.get(), 3) == 0 &&
+          sqlite3_column_type(columns.get(), 4) == SQLITE_NULL &&
+          sqlite3_column_type(columns.get(), 5) == SQLITE_INTEGER &&
+          sqlite3_column_int(columns.get(), 5) == 0;
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading course score projection columns", db);
+    return false;
+  }
+
+  struct IndexExpectation {
+    std::string_view name;
+    std::string_view sql;
+  };
+  constexpr std::array indexes{
+      IndexExpectation{
+          "idx_course_scores_attempt_id",
+          "CREATE UNIQUE INDEX idx_course_scores_attempt_id ON "
+          "course_scores(attempt_id) WHERE attempt_id IS NOT NULL"},
+      IndexExpectation{
+          "idx_course_scores_modern_result_id",
+          "CREATE UNIQUE INDEX idx_course_scores_modern_result_id ON "
+          "course_scores(modern_result_id) WHERE modern_result_id IS NOT "
+          "NULL"},
+  };
+  std::array<bool, indexes.size()> indexPresent{};
+  std::array<bool, indexes.size()> indexExact{};
+  for (std::size_t index = 0; index < indexes.size(); ++index) {
+    SqliteStatementHandle statement;
+    if (!prepareSqliteStatementLogged(
+            db, "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+            statement, "reading course score projection index",
+            logSqlErrorText) ||
+        !bindSqliteText(statement.get(), 1, std::string(indexes[index].name))) {
+      return false;
+    }
+    rc = sqlite3_step(statement.get());
+    if (rc == SQLITE_ROW) {
+      indexPresent[index] = true;
+      indexExact[index] =
+          sqlite3_column_type(statement.get(), 0) == SQLITE_TEXT &&
+          sqliteColumnString(statement.get(), 0) == indexes[index].sql;
+      rc = sqlite3_step(statement.get());
+    }
+    if (rc != SQLITE_DONE) {
+      logSqlError("reading course score projection index", db);
+      return false;
+    }
+  }
+
+  const bool any = std::ranges::any_of(present, std::identity{}) ||
+                   std::ranges::any_of(indexPresent, std::identity{});
+  const bool all = std::ranges::all_of(present, std::identity{}) &&
+                   std::ranges::all_of(exact, std::identity{}) &&
+                   std::ranges::all_of(indexPresent, std::identity{}) &&
+                   std::ranges::all_of(indexExact, std::identity{});
+  state = !any ? CourseScoreProjectionSchemaState::Absent
+               : (all ? CourseScoreProjectionSchemaState::Exact
+                      : CourseScoreProjectionSchemaState::Malformed);
+  return true;
+}
+
+bool courseScoreProjectionSchemaIsExact(sqlite3 *db) {
+  CourseScoreProjectionSchemaState state{};
+  if (!inspectCourseScoreProjectionSchema(db, state)) {
+    return false;
+  }
+  if (state != CourseScoreProjectionSchemaState::Exact) {
+    SDL_Log("Refusing current score database with a partial or unexpected "
+            "course projection schema");
+    return false;
+  }
+  return true;
+}
+
 bool currentScoreSchemaIsValid(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -699,7 +800,8 @@ bool currentScoreSchemaIsValid(sqlite3 *db) {
     return false;
   }
   return scoreAttemptIdentitySchemaIsExact(db) &&
-         scoreImportedIrSchemaIsExact(db);
+         scoreImportedIrSchemaIsExact(db) &&
+         courseScoreProjectionSchemaIsExact(db);
 }
 
 bool migrateScoreDatabaseToVersion9(sqlite3 *db) {
@@ -778,8 +880,8 @@ bool ensureScoreImportedIrColumns(sqlite3 *db) {
              db, "scores", "score_source",
              "ALTER TABLE scores ADD COLUMN score_source INTEGER NOT NULL "
              "DEFAULT 0",
-             "reading imported IR score schema",
-             "adding score source column", logSqlErrorText) &&
+             "reading imported IR score schema", "adding score source column",
+             logSqlErrorText) &&
          ensureSqliteTableColumnLogged(
              db, "scores", "source_provider_id",
              "ALTER TABLE scores ADD COLUMN source_provider_id TEXT",
@@ -823,8 +925,7 @@ bool inspectScoreImportedIrSchema(sqlite3 *db,
       ColumnExpectation{"source_provider_id", "TEXT", 0, std::nullopt},
       ColumnExpectation{"source_server_origin", "TEXT", 0, std::nullopt},
       ColumnExpectation{"source_remote_score_id", "TEXT", 0, std::nullopt},
-      ColumnExpectation{"source_sync_generation", "INTEGER", 0,
-                        std::nullopt},
+      ColumnExpectation{"source_sync_generation", "INTEGER", 0, std::nullopt},
   };
   std::array<bool, expectations.size()> present{};
   std::array<bool, expectations.size()> exact{};
@@ -843,13 +944,12 @@ bool inspectScoreImportedIrSchema(sqlite3 *db,
         continue;
       }
       present[index] = true;
-      const bool defaultMatches = expected.defaultValue.has_value()
-                                      ? sqlite3_column_type(columns.get(), 4) ==
-                                                SQLITE_TEXT &&
+      const bool defaultMatches =
+          expected.defaultValue.has_value()
+              ? sqlite3_column_type(columns.get(), 4) == SQLITE_TEXT &&
                                             sqliteColumnString(columns.get(), 4) ==
                                                 *expected.defaultValue
-                                      : sqlite3_column_type(columns.get(), 4) ==
-                                            SQLITE_NULL;
+              : sqlite3_column_type(columns.get(), 4) == SQLITE_NULL;
       exact[index] = sqlite3_column_type(columns.get(), 2) == SQLITE_TEXT &&
                      sqliteColumnString(columns.get(), 2) == expected.type &&
                      sqlite3_column_type(columns.get(), 3) == SQLITE_INTEGER &&
@@ -939,11 +1039,11 @@ bool migrateScoreDatabaseToVersion10(sqlite3 *db) {
   }
 
   const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
-  const char *beginQuery =
-      callerOwnsTransaction ? "SAVEPOINT asobmashow_score_imported_ir_v10"
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_score_imported_ir_v10"
                             : "BEGIN IMMEDIATE TRANSACTION";
-  const char *commitQuery =
-      callerOwnsTransaction ? "RELEASE asobmashow_score_imported_ir_v10"
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_score_imported_ir_v10"
                             : "COMMIT";
   const char *rollbackQuery =
       callerOwnsTransaction
@@ -957,8 +1057,7 @@ bool migrateScoreDatabaseToVersion10(sqlite3 *db) {
     logSqlErrorText("starting imported IR score migration", transactionError);
     return false;
   }
-  if (!ensureScoreImportedIrColumns(db) ||
-      !scoreImportedIrSchemaIsExact(db)) {
+  if (!ensureScoreImportedIrColumns(db) || !scoreImportedIrSchemaIsExact(db)) {
     return false;
   }
   if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
@@ -974,6 +1073,93 @@ bool migrateScoreDatabaseToVersion10(sqlite3 *db) {
   }
   if (!transaction.commit(transactionError)) {
     logSqlErrorText("committing imported IR score migration", transactionError);
+    return false;
+  }
+  return true;
+}
+
+bool migrateScoreDatabaseToVersion11(sqlite3 *db) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading course score projection migration version",
+                    versionError);
+    return false;
+  }
+  if (*version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kCourseScoreProjectionSchemaVersion) {
+    return scoreAttemptIdentitySchemaIsExact(db) &&
+           scoreImportedIrSchemaIsExact(db) &&
+           courseScoreProjectionSchemaIsExact(db);
+  }
+  if (*version < kScoreImportedIrSchemaVersion) {
+    SDL_Log("Score database must reach version %d before course score "
+            "projection migration",
+            kScoreImportedIrSchemaVersion);
+    return false;
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_course_projection_v11"
+                               : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_course_projection_v11"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_course_projection_v11; RELEASE "
+            "asobmashow_course_projection_v11"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting course score projection migration",
+                    transactionError);
+    return false;
+  }
+
+  CourseScoreProjectionSchemaState state{};
+  if (!inspectCourseScoreProjectionSchema(db, state)) {
+    return false;
+  }
+  if (state == CourseScoreProjectionSchemaState::Malformed) {
+    SDL_Log("Refusing course score projection migration from a partial or "
+            "unexpected schema");
+    return false;
+  }
+  if (state == CourseScoreProjectionSchemaState::Absent &&
+      (!execSql(db, "ALTER TABLE course_scores ADD COLUMN attempt_id TEXT",
+                "adding course score attempt identity") ||
+       !execSql(db,
+                "ALTER TABLE course_scores ADD COLUMN modern_result_id "
+                "INTEGER",
+                "adding course score result identity") ||
+       !execSql(db,
+                "ALTER TABLE course_scores ADD COLUMN result_fingerprint "
+                "TEXT",
+                "adding course score result fingerprint") ||
+       !execSql(db,
+                "CREATE UNIQUE INDEX idx_course_scores_attempt_id ON "
+                "course_scores(attempt_id) WHERE attempt_id IS NOT NULL",
+                "creating course score attempt index") ||
+       !execSql(db,
+                "CREATE UNIQUE INDEX idx_course_scores_modern_result_id ON "
+                "course_scores(modern_result_id) WHERE modern_result_id IS "
+                "NOT NULL",
+                "creating course score result index"))) {
+    return false;
+  }
+  if (!courseScoreProjectionSchemaIsExact(db) ||
+      !setDatabaseUserVersion(db, kCourseScoreProjectionSchemaVersion)) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing course score projection migration",
+                    transactionError);
     return false;
   }
   return true;
@@ -1375,15 +1561,13 @@ bool migrateScoreDatabaseToVersion2(
   return migrateLegacyScoreLongNoteModes(db, chartDatabasePath, completed);
 }
 
-bool migrateScoreDatabaseToVersion3(sqlite3 *db,
-                                    const std::filesystem::path &,
+bool migrateScoreDatabaseToVersion3(sqlite3 *db, const std::filesystem::path &,
                                     bool &completed) {
   completed = normalizeScoreChartIdentityHashes(db);
   return completed;
 }
 
-bool migrateScoreDatabaseToVersion4(sqlite3 *db,
-                                    const std::filesystem::path &,
+bool migrateScoreDatabaseToVersion4(sqlite3 *db, const std::filesystem::path &,
                                     bool &completed) {
   completed = false;
   if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
@@ -1398,11 +1582,10 @@ bool migrateScoreDatabaseToVersion4(sqlite3 *db,
   return true;
 }
 
-bool runScoreDatabaseMigrationPasses(sqlite3 *db,
-                                     const ScoreDatabaseMigrationPass *passes,
+bool runScoreDatabaseMigrationPasses(
+    sqlite3 *db, const ScoreDatabaseMigrationPass *passes,
                                      std::size_t passCount, int latestVersion,
-                                     const std::filesystem::path
-                                         &chartDatabasePath) {
+    const std::filesystem::path &chartDatabasePath) {
   std::string versionError;
   const auto storedVersion = readSqliteUserVersion(db, versionError);
   if (!storedVersion.has_value()) {
@@ -1452,11 +1635,10 @@ bool migrateScoreDatabaseSchema(
       {3, "normalize score chart hashes", migrateScoreDatabaseToVersion3},
       {4, "score identity summaries", migrateScoreDatabaseToVersion4},
   };
-  return runScoreDatabaseMigrationPasses(db, kMigrationPasses,
-                                         sizeof(kMigrationPasses) /
-                                             sizeof(kMigrationPasses[0]),
-                                         kLegacyScoreDatabaseSchemaVersion,
-                                         chartDatabasePath);
+  return runScoreDatabaseMigrationPasses(
+      db, kMigrationPasses,
+      sizeof(kMigrationPasses) / sizeof(kMigrationPasses[0]),
+      kLegacyScoreDatabaseSchemaVersion, chartDatabasePath);
 }
 } // namespace
 bool score_repository_detail::CreateScoreTableOnConnection(
@@ -1639,7 +1821,8 @@ bool score_repository_detail::EnsureSchemaOnConnection(
       !migrateScoreDatabaseToVersion7(db) ||
       !migrateScoreDatabaseToVersion8(db) ||
       !migrateScoreDatabaseToVersion9(db) ||
-      !migrateScoreDatabaseToVersion10(db)) {
+      !migrateScoreDatabaseToVersion10(db) ||
+      !migrateScoreDatabaseToVersion11(db)) {
     return false;
   }
   if (!transaction.commit(transactionError)) {
@@ -1649,8 +1832,9 @@ bool score_repository_detail::EnsureSchemaOnConnection(
   return true;
 }
 
-sqlite3 *score_repository_detail::OpenDatabase(
-    const std::filesystem::path &path, std::string &errorMessage) {
+sqlite3 *
+score_repository_detail::OpenDatabase(const std::filesystem::path &path,
+                                      std::string &errorMessage) {
   return openScoreDatabase(path, errorMessage);
 }
 
@@ -1665,8 +1849,7 @@ std::filesystem::path score_repository_detail::ResolvedDatabasePath(
 }
 
 bool score_repository_detail::EquivalentDatabasePaths(
-    const std::filesystem::path &first,
-    const std::filesystem::path &second) {
+    const std::filesystem::path &first, const std::filesystem::path &second) {
   return equivalentScoreDatabasePaths(first, second);
 }
 

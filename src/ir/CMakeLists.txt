@@ -17,10 +17,13 @@ target_sources(main PRIVATE
     IrSavedResultBatchUpload.cpp
     IrSettingsPresentation.cpp
     IrSubmission.cpp
+    IrSubmissionModern.cpp
+    IrSubmissionSnapshot.cpp
     IrSubmissionService.cpp
     IrUploadCandidates.cpp
     tachi/BokutachiCacheStore.cpp
     tachi/TachiBatchManual.cpp
+    tachi/TachiEligibility.cpp
     tachi/TachiDriver.cpp
     tachi/TachiRankingParser.cpp
     tachi/TachiResponseParser.cpp

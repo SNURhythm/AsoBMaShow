@@ -1,5 +1,9 @@
 #include "ReplayRepository.h"
 #include "ReplayRepositoryInternal.h"
+#include "ReplayRepositoryLegacyMigration.h"
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+#include "ReplayRepositoryMigrationTestAccess.h"
+#endif
 
 #include "../BmsMetadataText.h"
 #include "ChartSqlExpressions.h"
@@ -31,7 +35,6 @@
 #include <vector>
 
 namespace {
-constexpr int kLegacyReplayDatabaseSchemaVersion = 2;
 constexpr int kReplayDatabaseSchemaVersion =
     ReplayRepository::kCurrentSchemaVersion;
 constexpr const char *kLegacyProvenanceJson =
@@ -44,104 +47,35 @@ using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::normalizedSqlHash;
 
-bool isCanonicalCourseKey(std::string_view key) {
-  constexpr std::string_view prefix = "course:v1:";
-  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
-    return false;
-  }
-  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
-    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
-  });
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+using StagedMigrationFault = replay_repository_test::PathMigrationFault;
+replay_repository_test::PathMigrationFault gPathMigrationFault =
+    replay_repository_test::PathMigrationFault::None;
+void *gPathMigrationAfterSnapshotContext = nullptr;
+replay_repository_test::PathMigrationAfterSnapshotHook
+    gPathMigrationAfterSnapshotHook = nullptr;
+
+bool pathMigrationFault(StagedMigrationFault fault) noexcept {
+  return gPathMigrationFault == fault;
 }
 
-bool isHexDigest(std::string_view value, std::size_t expectedLength) {
-  return value.size() == expectedLength &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
+void runPathMigrationAfterSnapshotHook() {
+  if (gPathMigrationAfterSnapshotHook != nullptr) {
+    gPathMigrationAfterSnapshotHook(gPathMigrationAfterSnapshotContext);
+  }
 }
+#else
+enum class StagedMigrationFault {
+  None,
+  SnapshotCopy,
+  SchemaMigration,
+  Compaction,
+  Installation,
+};
 
-std::optional<course_identity::ChartIdentity>
-strictChartIdentity(std::string sha256, std::string md5) {
-  const bool hadSha256 = !sha256.empty();
-  const bool hadMd5 = !md5.empty();
-  sha256 = normalizedHash(sha256);
-  md5 = normalizedHash(md5);
-  if ((hadSha256 && !isHexDigest(sha256, 64)) ||
-      (hadMd5 && !isHexDigest(md5, 32)) ||
-      (sha256.empty() && md5.empty())) {
-    return std::nullopt;
-  }
-  return course_identity::ChartIdentity{.sha256 = std::move(sha256),
-                                        .md5 = std::move(md5)};
-}
-
-bool hasDurableReplayChartIdentity(const ReplayData &replay) {
-  return strictChartIdentity(replay.chartMeta.SHA256, replay.chartMeta.MD5)
-      .has_value();
-}
-
-std::optional<ScoreProvenance> decodeStoredProvenance(
-    sqlite3_stmt *stmt, int rulesetVersionColumn, int eligibilityColumn,
-    int provenanceJsonColumn, std::string &error);
-
-enum class StrictStageReadResult { Valid, InvalidRow, SqlError };
-
-constexpr const char *kStrictCourseReplayStageIdentityQuery =
-    "SELECT s.stage_index, s.replay_id, r.id, r.chart_md5, r.chart_sha256,"
-    "r.ruleset_version, r.eligibility, r.provenance_json "
-    "FROM course_replay_stages s "
-    "LEFT JOIN replays r ON r.id = s.replay_id "
-    "WHERE s.course_replay_id = ? ORDER BY s.stage_index LIMIT ?";
-
-StrictStageReadResult readStrictCourseReplayStageIdentities(
-    sqlite3_stmt *stmt, sqlite3_int64 courseReplayId, int expectedCount,
-    std::vector<course_identity::ChartIdentity> &charts, std::string &error) {
-  charts.clear();
-  sqlite3_reset(stmt);
-  sqlite3_clear_bindings(stmt);
-  if (sqlite3_bind_int64(stmt, 1, courseReplayId) != SQLITE_OK ||
-      sqlite3_bind_int(stmt, 2,
-                       replay_summary_scan::kMaxCourseStagesPerCandidate + 1) !=
-          SQLITE_OK) {
-    error = sqliteDatabaseError(sqlite3_db_handle(stmt));
-    return StrictStageReadResult::SqlError;
-  }
-
-  int rc = SQLITE_OK;
-  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-    const int expectedIndex = static_cast<int>(charts.size());
-    if (sqlite3_column_int(stmt, 0) != expectedIndex ||
-        charts.size() >= static_cast<std::size_t>(
-                             replay_summary_scan::kMaxCourseStagesPerCandidate) ||
-        sqlite3_column_type(stmt, 2) == SQLITE_NULL ||
-        sqlite3_column_int64(stmt, 1) <= 0 ||
-        sqlite3_column_int64(stmt, 1) != sqlite3_column_int64(stmt, 2)) {
-      error = "course replay has invalid stage links or indexes";
-      return StrictStageReadResult::InvalidRow;
-    }
-    auto identity = strictChartIdentity(sqliteColumnString(stmt, 4),
-                                        sqliteColumnString(stmt, 3));
-    if (!identity.has_value()) {
-      error = "course replay stage has no valid durable hash identity";
-      return StrictStageReadResult::InvalidRow;
-    }
-    if (!decodeStoredProvenance(stmt, 5, 6, 7, error).has_value()) {
-      return StrictStageReadResult::InvalidRow;
-    }
-    charts.push_back(std::move(*identity));
-  }
-  if (rc != SQLITE_DONE) {
-    error = sqliteDatabaseError(sqlite3_db_handle(stmt));
-    return StrictStageReadResult::SqlError;
-  }
-  if (expectedCount <= 0 ||
-      charts.size() != static_cast<std::size_t>(expectedCount)) {
-    error = "course replay stage count does not match completed charts";
-    return StrictStageReadResult::InvalidRow;
-  }
-  return StrictStageReadResult::Valid;
-}
+bool pathMigrationFault(StagedMigrationFault) noexcept { return false; }
+void runPathMigrationAfterSnapshotHook() {}
+#endif
 
 void logSqlErrorText(const char *context, const std::string &error) {
   SDL_Log("SQL error while %s: %s", context, error.c_str());
@@ -197,26 +131,6 @@ bool normalizeReplayChartIdentityHashes(sqlite3 *db) {
              "normalizing stored replay sha256 hashes", logSqlErrorText);
 }
 
-bool backfillReplayMaxCombo(sqlite3 *db) {
-  const std::string replayQuery =
-      "UPDATE replays "
-      "SET max_combo = COALESCE(("
-      "SELECT MAX(e.combo) FROM replay_events e WHERE e.replay_id = replays.id"
-      "), 0) "
-      "WHERE max_combo = 0";
-  const std::string courseReplayQuery =
-      "UPDATE course_replays "
-      "SET max_combo = COALESCE(("
-      "SELECT MAX(e.combo) FROM replay_events e "
-      "JOIN course_replay_stages s ON s.replay_id = e.replay_id "
-      "WHERE s.course_replay_id = course_replays.id"
-      "), 0) "
-      "WHERE max_combo = 0";
-  return execSql(db, replayQuery.c_str(), "backfilling replay max combo") &&
-         execSql(db, courseReplayQuery.c_str(),
-                 "backfilling course replay max combo");
-}
-
 bool ensureReplayProvenanceColumns(sqlite3 *db, const char *tableName) {
   const std::string table(tableName);
   const std::string addRuleset =
@@ -236,110 +150,6 @@ bool ensureReplayProvenanceColumns(sqlite3 *db, const char *tableName) {
          ensureTableColumn(db, tableName, "provenance_json",
                            addProvenance.c_str(),
                            "adding replay provenance JSON column");
-}
-
-bool backfillCompleteCourseReplayKeys(sqlite3 *db) {
-  const char *query =
-      "SELECT id, COALESCE(constraint_json, ''), completed_charts,"
-      "total_charts, ruleset_version, eligibility, provenance_json "
-      "FROM course_replays ORDER BY id";
-  SqliteStatementHandle rowStmt;
-  if (!prepareSqliteStatementLogged(db, query, rowStmt,
-                                    "reading course replays for key backfill",
-                                    logSqlErrorText)) {
-    return false;
-  }
-  SqliteStatementHandle stageStmt;
-  if (!prepareSqliteStatementLogged(
-          db, kStrictCourseReplayStageIdentityQuery, stageStmt,
-          "preparing course replay key backfill stage scan",
-          logSqlErrorText)) {
-    return false;
-  }
-
-  struct Rewrite {
-    sqlite3_int64 id = 0;
-    std::string courseKey;
-  };
-  std::vector<Rewrite> rewrites;
-  std::size_t invalidRows = 0;
-  int rc = SQLITE_OK;
-  while ((rc = sqlite3_step(rowStmt.get())) == SQLITE_ROW) {
-    const int completedCharts = sqlite3_column_int(rowStmt.get(), 2);
-    const int totalCharts = sqlite3_column_int(rowStmt.get(), 3);
-    if (totalCharts <= 0 ||
-        totalCharts > replay_summary_scan::kMaxCourseStagesPerCandidate ||
-        completedCharts != totalCharts) {
-      ++invalidRows;
-      continue;
-    }
-
-    std::string provenanceError;
-    if (!decodeStoredProvenance(rowStmt.get(), 4, 5, 6, provenanceError)
-             .has_value()) {
-      ++invalidRows;
-      continue;
-    }
-    const std::string constraintJson = sqliteColumnString(rowStmt.get(), 1);
-    if (course_identity::canonicalConstraintPayload(constraintJson).empty()) {
-      ++invalidRows;
-      continue;
-    }
-
-    std::vector<course_identity::ChartIdentity> charts;
-    std::string stageError;
-    const StrictStageReadResult stageResult =
-        readStrictCourseReplayStageIdentities(
-            stageStmt.get(), sqlite3_column_int64(rowStmt.get(), 0),
-            totalCharts, charts, stageError);
-    if (stageResult == StrictStageReadResult::SqlError) {
-      logSqlErrorText("scanning course replay stages for key backfill",
-                      stageError);
-      return false;
-    }
-    if (stageResult == StrictStageReadResult::InvalidRow) {
-      ++invalidRows;
-      continue;
-    }
-    std::string courseKey =
-        course_identity::makeCourseKey(charts, constraintJson);
-    if (courseKey.empty()) {
-      ++invalidRows;
-      continue;
-    }
-    rewrites.push_back({.id = sqlite3_column_int64(rowStmt.get(), 0),
-                        .courseKey = std::move(courseKey)});
-  }
-  if (rc != SQLITE_DONE) {
-    logSqlError("reading course replays for key backfill", db);
-    return false;
-  }
-  rowStmt.reset();
-  stageStmt.reset();
-
-  SqliteStatementHandle updateStmt;
-  if (!rewrites.empty() &&
-      !prepareSqliteStatementLogged(
-          db, "UPDATE course_replays SET course_key = ? WHERE id = ?",
-          updateStmt, "preparing course replay key backfill update",
-          logSqlErrorText)) {
-    return false;
-  }
-  for (const auto &rewrite : rewrites) {
-    bindSqliteText(updateStmt.get(), 1, rewrite.courseKey);
-    sqlite3_bind_int64(updateStmt.get(), 2, rewrite.id);
-    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
-      logSqlError("backfilling course replay key", db);
-      return false;
-    }
-    sqlite3_reset(updateStmt.get());
-    sqlite3_clear_bindings(updateStmt.get());
-  }
-  if (invalidRows > 0) {
-    SDL_Log("Course replay key migration: backfilled=%zu unresolved=%zu",
-            rewrites.size(), invalidRows);
-  }
-  return true;
 }
 
 constexpr const char *kReplayAttemptIdIndexSql =
@@ -483,7 +293,7 @@ constexpr const char *kIrOutboxAttemptIndexSql =
     "CREATE INDEX idx_ir_outbox_attempt ON "
     "ir_outbox(provider_id, attempt_id)";
 
-constexpr const char *kIrSubmissionReceiptsTableSql =
+constexpr const char *kLegacyIrSubmissionReceiptsTableSql =
     "CREATE TABLE ir_submission_receipts ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "provider_id TEXT NOT NULL,"
@@ -501,6 +311,31 @@ constexpr const char *kIrSubmissionReceiptsTableSql =
     "UNIQUE(provider_id, server_origin, replay_id),"
     "CHECK(observed_in_snapshot IN (0, 1)),"
     "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+    ")";
+
+constexpr const char *kIrSubmissionReceiptsTableSql =
+    "CREATE TABLE ir_submission_receipts ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "provider_id TEXT NOT NULL,"
+    "server_origin TEXT NOT NULL,"
+    "replay_id INTEGER,"
+    "modern_chart_result_id INTEGER,"
+    "attempt_id TEXT NOT NULL,"
+    "chart_md5 TEXT,"
+    "chart_sha256 TEXT NOT NULL,"
+    "remote_user_id INTEGER,"
+    "remote_chart_id TEXT,"
+    "remote_score_id TEXT,"
+    "confirmation_source INTEGER NOT NULL,"
+    "observed_in_snapshot INTEGER NOT NULL DEFAULT 0,"
+    "confirmed_at_ms INTEGER NOT NULL,"
+    "UNIQUE(provider_id, server_origin, replay_id),"
+    "UNIQUE(provider_id, server_origin, modern_chart_result_id),"
+    "CHECK((replay_id IS NOT NULL) != (modern_chart_result_id IS NOT NULL)),"
+    "CHECK(observed_in_snapshot IN (0, 1)),"
+    "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE"
     ")";
 
 constexpr const char *kIrSubmissionReceiptsAttemptIndexSql =
@@ -585,9 +420,273 @@ constexpr const char *kIrRemoteScoresChartIdIndexSql =
     "CREATE INDEX idx_ir_remote_scores_remote_chart_id ON "
     "ir_remote_scores(provider_id,server_origin,remote_chart_id)";
 
+constexpr const char *kModernChartResultsTableSql =
+    "CREATE TABLE modern_chart_results("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL UNIQUE,"
+    "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,chart_title TEXT NOT NULL,"
+    "chart_artist TEXT NOT NULL,long_note_mode INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,max_score INTEGER NOT NULL,"
+    "max_combo INTEGER NOT NULL,combo_break INTEGER NOT NULL,"
+    "p_great INTEGER NOT NULL,great INTEGER NOT NULL,good INTEGER NOT NULL,"
+    "bad INTEGER NOT NULL,poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,"
+    "fast INTEGER NOT NULL,slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
+    "clear_type INTEGER NOT NULL,key_mode INTEGER NOT NULL,"
+    "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
+    "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
+    "result_fingerprint TEXT NOT NULL,played_at_unix_ms INTEGER NOT NULL,"
+    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
+    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
+    "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
+    "CHECK(long_note_mode BETWEEN 0 AND 3),"
+    "CHECK(key_mode IN (5,7,9,10,14,24,48)),"
+    "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
+    "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
+    "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
+    "good>=0 AND bad>=0 AND poor>=0 AND k_poor>=0 AND fast>=0 AND slow>=0),"
+    "CHECK(final_gauge>=0),CHECK(played_at_unix_ms>0),"
+    "CHECK(length(result_fingerprint)=64 AND "
+    "result_fingerprint=lower(result_fingerprint) AND "
+    "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
+
+constexpr const char *kModernReplayFilesTableSqlV11 =
+    "CREATE TABLE modern_replay_files("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "modern_chart_result_id INTEGER NOT NULL UNIQUE,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+    "codec_version INTEGER NOT NULL,"
+    "CHECK(history_index>=0),"
+    "CHECK(length(content_sha256)=64 AND "
+    "content_sha256=lower(content_sha256) AND "
+    "content_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(compressed_size>0),CHECK(codec_version=3),"
+    "UNIQUE(stem,history_index),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernCourseResultsTableSql =
+    "CREATE TABLE modern_course_results("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL UNIQUE,"
+    "course_key TEXT NOT NULL,legacy_course_id INTEGER NOT NULL,"
+    "course_name TEXT NOT NULL,course_group_name TEXT NOT NULL,"
+    "constraint_json TEXT NOT NULL,completed_charts INTEGER NOT NULL,"
+    "total_charts INTEGER NOT NULL,requested_play_option TEXT NOT NULL,"
+    "assist_option TEXT NOT NULL,initial_gauge_type INTEGER NOT NULL,"
+    "gauge_profile INTEGER NOT NULL,gauge_auto_shift INTEGER NOT NULL,"
+    "gauge_auto_shift_lower_bound INTEGER NOT NULL,"
+    "long_note_mode INTEGER NOT NULL,final_score INTEGER NOT NULL,"
+    "max_score INTEGER NOT NULL,max_combo INTEGER NOT NULL,"
+    "final_gauge REAL NOT NULL,clear_type INTEGER NOT NULL,"
+    "provenance_json TEXT NOT NULL,result_fingerprint TEXT NOT NULL,"
+    "played_at_unix_ms INTEGER NOT NULL,"
+    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "CHECK(length(course_key)=74 AND substr(course_key,1,10)='course:v1:'),"
+    "CHECK(legacy_course_id>=0),"
+    "CHECK(completed_charts>0 AND completed_charts<=total_charts AND "
+    "total_charts<=256),CHECK(initial_gauge_type BETWEEN 0 AND 5),"
+    "CHECK(gauge_auto_shift_lower_bound BETWEEN 0 AND 5),"
+    "CHECK(long_note_mode BETWEEN 0 AND 3),"
+    "CHECK(final_score>=0 AND max_score>0 AND final_score<=max_score),"
+    "CHECK(max_combo>=0 AND final_gauge>=0),CHECK(played_at_unix_ms>0),"
+    "CHECK(length(result_fingerprint)=64 AND "
+    "result_fingerprint=lower(result_fingerprint) AND "
+    "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
+
+constexpr const char *kModernCourseStagesTableSql =
+    "CREATE TABLE modern_course_stages("
+    "modern_course_result_id INTEGER NOT NULL,stage_index INTEGER NOT NULL,"
+    "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,chart_title TEXT NOT NULL,"
+    "chart_artist TEXT NOT NULL,long_note_mode INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,max_score INTEGER NOT NULL,"
+    "max_combo INTEGER NOT NULL,combo_break INTEGER NOT NULL,"
+    "p_great INTEGER NOT NULL,great INTEGER NOT NULL,good INTEGER NOT NULL,"
+    "bad INTEGER NOT NULL,poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,"
+    "fast INTEGER NOT NULL,slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
+    "clear_type INTEGER NOT NULL,key_mode INTEGER NOT NULL,"
+    "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
+    "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
+    "PRIMARY KEY(modern_course_result_id,stage_index),"
+    "CHECK(stage_index>=0 AND stage_index<256),"
+    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
+    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
+    "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
+    "CHECK(long_note_mode BETWEEN 0 AND 3),"
+    "CHECK(key_mode IN (5,7,9,10,14,24,48)),"
+    "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
+    "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
+    "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
+    "good>=0 AND bad>=0 AND poor>=0 AND k_poor>=0 AND fast>=0 AND slow>=0),"
+    "CHECK(final_gauge>=0),"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernCourseEntriesTableSql =
+    "CREATE TABLE modern_course_entries("
+    "modern_course_result_id INTEGER NOT NULL,entry_index INTEGER NOT NULL,"
+    "total_notes INTEGER NOT NULL,play_length_micros INTEGER NOT NULL,"
+    "PRIMARY KEY(modern_course_result_id,entry_index),"
+    "CHECK(entry_index>=0 AND entry_index<256),CHECK(total_notes>0),"
+    "CHECK(play_length_micros>=0),"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernReplayFilesTableSqlV12 =
+    "CREATE TABLE modern_replay_files("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "modern_chart_result_id INTEGER UNIQUE,"
+    "modern_course_result_id INTEGER UNIQUE,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+    "codec_version INTEGER NOT NULL,CHECK(history_index>=0),"
+    "CHECK((modern_chart_result_id IS NOT NULL) != (modern_course_result_id IS "
+    "NOT NULL)),"
+    "CHECK(length(content_sha256)=64 AND "
+    "content_sha256=lower(content_sha256) AND "
+    "content_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(compressed_size>0),CHECK(codec_version=3),"
+    "UNIQUE(stem,history_index),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernReplayFilesTableSqlV15 =
+    "CREATE TABLE modern_replay_files("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "modern_chart_result_id INTEGER UNIQUE,"
+    "modern_course_result_id INTEGER UNIQUE,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+    "codec_version INTEGER NOT NULL,user_deleted INTEGER NOT NULL DEFAULT 0,"
+    "CHECK(history_index>=0),CHECK(user_deleted IN (0,1)),"
+    "CHECK((modern_chart_result_id IS NOT NULL) != (modern_course_result_id IS "
+    "NOT NULL)),"
+    "CHECK(length(content_sha256)=64 AND "
+    "content_sha256=lower(content_sha256) AND "
+    "content_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(compressed_size>0),CHECK(codec_version=3),"
+    "UNIQUE(stem,history_index),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernReplayFilesTableSql =
+    "CREATE TABLE modern_replay_files("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "modern_chart_result_id INTEGER UNIQUE,"
+    "modern_course_result_id INTEGER UNIQUE,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "content_sha256 TEXT NOT NULL,compressed_size INTEGER NOT NULL,"
+    "codec_version INTEGER NOT NULL,user_deleted INTEGER NOT NULL DEFAULT 0,"
+    "CHECK(history_index>=0),CHECK(user_deleted IN (0,1)),"
+    "CHECK((modern_chart_result_id IS NOT NULL) != (modern_course_result_id IS "
+    "NOT NULL)),"
+    "CHECK(length(content_sha256)=64 AND "
+    "content_sha256=lower(content_sha256) AND "
+    "content_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(compressed_size>0),CHECK(codec_version>0),"
+    "UNIQUE(stem,history_index),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernReplayFileReservationsTableSqlV15 =
+    "CREATE TABLE modern_replay_file_reservations("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "created_at_unix_ms INTEGER NOT NULL,CHECK(history_index>=0),"
+    "CHECK(created_at_unix_ms>0),UNIQUE(stem,history_index))";
+
+constexpr const char *kModernReplayFileReservationsTableSql =
+    "CREATE TABLE modern_replay_file_reservations("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,stem TEXT NOT NULL,"
+    "history_index INTEGER NOT NULL,relative_path TEXT NOT NULL UNIQUE,"
+    "created_at_unix_ms INTEGER NOT NULL,owned_content_sha256 TEXT,"
+    "owned_compressed_size INTEGER,owned_codec_version INTEGER,"
+    "CHECK(history_index>=0),CHECK(created_at_unix_ms>0),"
+    "CHECK((owned_content_sha256 IS NULL AND owned_compressed_size IS NULL "
+    "AND owned_codec_version IS NULL) OR (owned_content_sha256 IS NOT NULL "
+    "AND owned_compressed_size IS NOT NULL AND owned_codec_version IS NOT "
+    "NULL)),"
+    "CHECK(owned_content_sha256 IS NULL OR "
+    "(length(owned_content_sha256)=64 AND "
+    "owned_content_sha256=lower(owned_content_sha256) AND "
+    "owned_content_sha256 NOT GLOB '*[^0-9a-f]*')),"
+    "CHECK(owned_compressed_size IS NULL OR owned_compressed_size>0),"
+    "CHECK(owned_codec_version IS NULL OR owned_codec_version>0),"
+    "UNIQUE(stem,history_index))";
+
+constexpr const char *kModernReplayStemSequencesTableSql =
+    "CREATE TABLE modern_replay_stem_sequences("
+    "stem TEXT PRIMARY KEY NOT NULL,last_history_index INTEGER NOT NULL,"
+    "CHECK(last_history_index>=0))";
+
+constexpr const char *kIrSubmissionSnapshotsTableSql =
+    "CREATE TABLE ir_submission_snapshots("
+    "modern_chart_result_id INTEGER PRIMARY KEY NOT NULL,"
+    "attempt_id TEXT NOT NULL UNIQUE,schema_version INTEGER NOT NULL,"
+    "payload_json TEXT NOT NULL,fingerprint TEXT NOT NULL,"
+    "CHECK(schema_version=1),"
+    "CHECK(length(fingerprint)=64 AND fingerprint=lower(fingerprint) AND "
+    "fingerprint NOT GLOB '*[^0-9a-f]*'),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernPendingChartScoresTableSql =
+    "CREATE TABLE modern_pending_chart_score_writes("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,"
+    "modern_chart_result_id INTEGER NOT NULL UNIQUE,"
+    "created_at TEXT NOT NULL,recovery_attempts INTEGER NOT NULL DEFAULT 0,"
+    "last_recovery_at TEXT,CHECK(recovery_attempts>=0),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernPendingCourseScoresTableSql =
+    "CREATE TABLE modern_pending_course_score_writes("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,"
+    "modern_course_result_id INTEGER NOT NULL UNIQUE,"
+    "created_at TEXT NOT NULL,"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernChartShaIndexSql =
+    "CREATE INDEX idx_modern_chart_results_sha256_played ON "
+    "modern_chart_results(chart_sha256,played_at_unix_ms DESC,id DESC)";
+constexpr const char *kModernReplayResultIndexSql =
+    "CREATE INDEX idx_modern_replay_files_chart_result ON "
+    "modern_replay_files(modern_chart_result_id)";
+constexpr const char *kModernReplayCourseResultIndexSql =
+    "CREATE INDEX idx_modern_replay_files_course_result ON "
+    "modern_replay_files(modern_course_result_id)";
+constexpr const char *kModernCourseKeyIndexSql =
+    "CREATE INDEX idx_modern_course_results_key_played ON "
+    "modern_course_results(course_key,played_at_unix_ms DESC,id DESC)";
+constexpr const char *kModernReservationIndexSql =
+    "CREATE INDEX idx_modern_replay_reservations_stem_index ON "
+    "modern_replay_file_reservations(stem,history_index)";
+constexpr const char *kModernSnapshotFingerprintIndexSql =
+    "CREATE INDEX idx_ir_submission_snapshots_fingerprint ON "
+    "ir_submission_snapshots(fingerprint)";
+constexpr const char *kModernPendingRecoveryIndexSql =
+    "CREATE INDEX idx_modern_pending_chart_score_created ON "
+    "modern_pending_chart_score_writes(recovery_attempts,last_recovery_at,"
+    "created_at,attempt_id)";
 enum class ReplayResultOutboxSchemaState { Absent, Exact, Malformed };
 enum class IrOutboxSchemaState { Absent, Exact, Malformed };
-enum class IrSubmissionReceiptsSchemaState { Absent, Exact, Malformed };
+enum class IrSubmissionReceiptsSchemaState {
+  Absent,
+  LegacyExact,
+  ReplayOwnedExact,
+  SummaryOwnedExact,
+  Malformed,
+};
 enum class IrRemoteScoresSchemaState { Absent, Exact, Malformed };
 
 struct NamedSchemaObjectInspection {
@@ -989,9 +1088,8 @@ bool inspectReplayResultOutboxSchema(sqlite3 *db,
   return true;
 }
 
-bool inspectIrOutboxSchema(
-    sqlite3 *db, IrOutboxSchemaState &state,
-    const char *expectedTableSql = kIrOutboxTableSql) {
+bool inspectIrOutboxSchema(sqlite3 *db, IrOutboxSchemaState &state,
+                           const char *expectedTableSql = kIrOutboxTableSql) {
   NamedSchemaObjectInspection table;
   NamedSchemaObjectInspection dueIndex;
   NamedSchemaObjectInspection attemptIndex;
@@ -1000,8 +1098,8 @@ bool inspectIrOutboxSchema(
   if (!inspectNamedSchemaObject(db, "ir_outbox", "table", "ir_outbox",
                                 expectedTableSql, table,
                                 "reading IR outbox table schema") ||
-      !inspectNamedSchemaObject(db, "idx_ir_outbox_due", "index",
-                                "ir_outbox", kIrOutboxDueIndexSql, dueIndex,
+      !inspectNamedSchemaObject(db, "idx_ir_outbox_due", "index", "ir_outbox",
+                                kIrOutboxDueIndexSql, dueIndex,
                                 "reading IR outbox due index") ||
       !inspectNamedSchemaObject(db, "idx_ir_outbox_attempt", "index",
                                 "ir_outbox", kIrOutboxAttemptIndexSql,
@@ -1011,10 +1109,10 @@ bool inspectIrOutboxSchema(
           db, "ir_outbox", "idx_ir_outbox_due", false, false,
           {"local_result_ready", "state", "next_attempt_at_ms", "id"},
           dueShapeExact, "reading IR outbox due index shape") ||
-      !inspectNamedIndexShape(
-          db, "ir_outbox", "idx_ir_outbox_attempt", false, false,
-          {"provider_id", "attempt_id"}, attemptShapeExact,
-          "reading IR outbox attempt index shape")) {
+      !inspectNamedIndexShape(db, "ir_outbox", "idx_ir_outbox_attempt", false,
+                              false, {"provider_id", "attempt_id"},
+                              attemptShapeExact,
+                              "reading IR outbox attempt index shape")) {
     return false;
   }
   if (!table.present && !dueIndex.present && !attemptIndex.present) {
@@ -1029,16 +1127,26 @@ bool inspectIrOutboxSchema(
   return true;
 }
 
-bool inspectIrSubmissionReceiptsSchema(
-    sqlite3 *db, IrSubmissionReceiptsSchemaState &state) {
-  NamedSchemaObjectInspection table;
+bool inspectIrSubmissionReceiptsSchema(sqlite3 *db,
+                                       IrSubmissionReceiptsSchemaState &state) {
+  NamedSchemaObjectInspection currentTable;
+  NamedSchemaObjectInspection summaryTable;
+  NamedSchemaObjectInspection legacyTable;
   NamedSchemaObjectInspection attemptIndex;
   NamedSchemaObjectInspection remoteScoreIndex;
   bool attemptShapeExact = false;
   bool remoteScoreShapeExact = false;
   if (!inspectNamedSchemaObject(
           db, "ir_submission_receipts", "table", "ir_submission_receipts",
-          kIrSubmissionReceiptsTableSql, table,
+          kIrSubmissionReceiptsTableSql, currentTable,
+          "reading replay-owned IR submission receipts table schema") ||
+      !inspectNamedSchemaObject(
+          db, "ir_submission_receipts", "table", "ir_submission_receipts",
+          replay_repository_legacy::kReceiptTableSql, summaryTable,
+          "reading summary-owned IR submission receipts table schema") ||
+      !inspectNamedSchemaObject(
+          db, "ir_submission_receipts", "table", "ir_submission_receipts",
+          kLegacyIrSubmissionReceiptsTableSql, legacyTable,
           "reading IR submission receipts table schema") ||
       !inspectNamedSchemaObject(
           db, "idx_ir_submission_receipts_attempt", "index",
@@ -1050,9 +1158,9 @@ bool inspectIrSubmissionReceiptsSchema(
           remoteScoreIndex,
           "reading IR submission receipts remote score index") ||
       !inspectNamedIndexShape(
-          db, "ir_submission_receipts",
-          "idx_ir_submission_receipts_attempt", false, false,
-          {"provider_id", "server_origin", "attempt_id"}, attemptShapeExact,
+          db, "ir_submission_receipts", "idx_ir_submission_receipts_attempt",
+          false, false, {"provider_id", "server_origin", "attempt_id"},
+          attemptShapeExact,
           "reading IR submission receipts attempt index shape") ||
       !inspectNamedIndexShape(
           db, "ir_submission_receipts",
@@ -1062,13 +1170,24 @@ bool inspectIrSubmissionReceiptsSchema(
           "reading IR submission receipts remote score index shape")) {
     return false;
   }
-  if (!table.present && !attemptIndex.present && !remoteScoreIndex.present) {
+  if (!currentTable.present && !attemptIndex.present &&
+      !remoteScoreIndex.present) {
     state = IrSubmissionReceiptsSchemaState::Absent;
-  } else if (table.present && table.exact && attemptIndex.present &&
+  } else if (currentTable.present && currentTable.exact &&
+             attemptIndex.present && attemptIndex.exact && attemptShapeExact &&
+             remoteScoreIndex.present && remoteScoreIndex.exact &&
+             remoteScoreShapeExact) {
+    state = IrSubmissionReceiptsSchemaState::ReplayOwnedExact;
+  } else if (summaryTable.present && summaryTable.exact &&
+             attemptIndex.present && attemptIndex.exact && attemptShapeExact &&
+             remoteScoreIndex.present && remoteScoreIndex.exact &&
+             remoteScoreShapeExact) {
+    state = IrSubmissionReceiptsSchemaState::SummaryOwnedExact;
+  } else if (legacyTable.present && legacyTable.exact && attemptIndex.present &&
              attemptIndex.exact && attemptShapeExact &&
              remoteScoreIndex.present && remoteScoreIndex.exact &&
              remoteScoreShapeExact) {
-    state = IrSubmissionReceiptsSchemaState::Exact;
+    state = IrSubmissionReceiptsSchemaState::LegacyExact;
   } else {
     state = IrSubmissionReceiptsSchemaState::Malformed;
   }
@@ -1082,28 +1201,26 @@ bool inspectIrRemoteScoresSchema(sqlite3 *db,
   NamedSchemaObjectInspection chartIdIndex;
   bool sha256ShapeExact = false;
   bool chartIdShapeExact = false;
-  if (!inspectNamedSchemaObject(
-          db, "ir_remote_scores", "table", "ir_remote_scores",
-          kIrRemoteScoresTableSql, table,
-          "reading IR remote scores table schema") ||
-      !inspectNamedSchemaObject(
-          db, "idx_ir_remote_scores_chart_sha256", "index",
-          "ir_remote_scores", kIrRemoteScoresSha256IndexSql, sha256Index,
-          "reading IR remote scores SHA-256 index") ||
-      !inspectNamedSchemaObject(
-          db, "idx_ir_remote_scores_remote_chart_id", "index",
-          "ir_remote_scores", kIrRemoteScoresChartIdIndexSql, chartIdIndex,
-          "reading IR remote scores chart ID index") ||
+  if (!inspectNamedSchemaObject(db, "ir_remote_scores", "table",
+                                "ir_remote_scores", kIrRemoteScoresTableSql,
+                                table,
+                                "reading IR remote scores table schema") ||
+      !inspectNamedSchemaObject(db, "idx_ir_remote_scores_chart_sha256",
+                                "index", "ir_remote_scores",
+                                kIrRemoteScoresSha256IndexSql, sha256Index,
+                                "reading IR remote scores SHA-256 index") ||
+      !inspectNamedSchemaObject(db, "idx_ir_remote_scores_remote_chart_id",
+                                "index", "ir_remote_scores",
+                                kIrRemoteScoresChartIdIndexSql, chartIdIndex,
+                                "reading IR remote scores chart ID index") ||
       !inspectNamedIndexShape(
           db, "ir_remote_scores", "idx_ir_remote_scores_chart_sha256", false,
           false, {"provider_id", "server_origin", "chart_sha256"},
           sha256ShapeExact, "reading IR remote scores SHA-256 index shape") ||
       !inspectNamedIndexShape(
-          db, "ir_remote_scores", "idx_ir_remote_scores_remote_chart_id",
-          false, false,
-          {"provider_id", "server_origin", "remote_chart_id"},
-          chartIdShapeExact,
-          "reading IR remote scores chart ID index shape")) {
+          db, "ir_remote_scores", "idx_ir_remote_scores_remote_chart_id", false,
+          false, {"provider_id", "server_origin", "remote_chart_id"},
+          chartIdShapeExact, "reading IR remote scores chart ID index shape")) {
     return false;
   }
   if (!table.present && !sha256Index.present && !chartIdIndex.present) {
@@ -1114,6 +1231,396 @@ bool inspectIrRemoteScoresSchema(sqlite3 *db,
     state = IrRemoteScoresSchemaState::Exact;
   } else {
     state = IrRemoteScoresSchemaState::Malformed;
+  }
+  return true;
+}
+
+bool inspectModernChartSchemaV11(sqlite3 *database) {
+  struct ExpectedObject {
+    const char *name;
+    const char *type;
+    const char *table;
+    const char *sql;
+  };
+  const ExpectedObject objects[] = {
+      {"modern_chart_results", "table", "modern_chart_results",
+       kModernChartResultsTableSql},
+      {"modern_replay_files", "table", "modern_replay_files",
+       kModernReplayFilesTableSqlV11},
+      {"modern_replay_file_reservations", "table",
+       "modern_replay_file_reservations",
+       kModernReplayFileReservationsTableSqlV15},
+      {"modern_replay_stem_sequences", "table", "modern_replay_stem_sequences",
+       kModernReplayStemSequencesTableSql},
+      {"ir_submission_snapshots", "table", "ir_submission_snapshots",
+       kIrSubmissionSnapshotsTableSql},
+      {"modern_pending_chart_score_writes", "table",
+       "modern_pending_chart_score_writes", kModernPendingChartScoresTableSql},
+      {"idx_modern_chart_results_sha256_played", "index",
+       "modern_chart_results", kModernChartShaIndexSql},
+      {"idx_modern_replay_files_chart_result", "index", "modern_replay_files",
+       kModernReplayResultIndexSql},
+      {"idx_modern_replay_reservations_stem_index", "index",
+       "modern_replay_file_reservations", kModernReservationIndexSql},
+      {"idx_ir_submission_snapshots_fingerprint", "index",
+       "ir_submission_snapshots", kModernSnapshotFingerprintIndexSql},
+      {"idx_modern_pending_chart_score_created", "index",
+       "modern_pending_chart_score_writes", kModernPendingRecoveryIndexSql},
+  };
+  for (const auto &object : objects) {
+    NamedSchemaObjectInspection inspection;
+    if (!inspectNamedSchemaObject(database, object.name, object.type,
+                                  object.table, object.sql, inspection,
+                                  "reading modern chart schema") ||
+        !inspection.present || !inspection.exact) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool inspectModernCourseSchemaWithReplayTable(
+    sqlite3 *database, const char *replayTableSql,
+    const char *reservationTableSql) {
+  struct ExpectedObject {
+    const char *name;
+    const char *type;
+    const char *table;
+    const char *sql;
+  };
+  const ExpectedObject objects[] = {
+      {"modern_chart_results", "table", "modern_chart_results",
+       kModernChartResultsTableSql},
+      {"modern_course_results", "table", "modern_course_results",
+       kModernCourseResultsTableSql},
+      {"modern_course_stages", "table", "modern_course_stages",
+       kModernCourseStagesTableSql},
+      {"modern_course_entries", "table", "modern_course_entries",
+       kModernCourseEntriesTableSql},
+      {"modern_replay_files", "table", "modern_replay_files", replayTableSql},
+      {"modern_replay_file_reservations", "table",
+       "modern_replay_file_reservations", reservationTableSql},
+      {"modern_replay_stem_sequences", "table", "modern_replay_stem_sequences",
+       kModernReplayStemSequencesTableSql},
+      {"ir_submission_snapshots", "table", "ir_submission_snapshots",
+       kIrSubmissionSnapshotsTableSql},
+      {"modern_pending_chart_score_writes", "table",
+       "modern_pending_chart_score_writes", kModernPendingChartScoresTableSql},
+      {"idx_modern_chart_results_sha256_played", "index",
+       "modern_chart_results", kModernChartShaIndexSql},
+      {"idx_modern_course_results_key_played", "index", "modern_course_results",
+       kModernCourseKeyIndexSql},
+      {"idx_modern_replay_files_chart_result", "index", "modern_replay_files",
+       kModernReplayResultIndexSql},
+      {"idx_modern_replay_files_course_result", "index", "modern_replay_files",
+       kModernReplayCourseResultIndexSql},
+      {"idx_modern_replay_reservations_stem_index", "index",
+       "modern_replay_file_reservations", kModernReservationIndexSql},
+      {"idx_ir_submission_snapshots_fingerprint", "index",
+       "ir_submission_snapshots", kModernSnapshotFingerprintIndexSql},
+      {"idx_modern_pending_chart_score_created", "index",
+       "modern_pending_chart_score_writes", kModernPendingRecoveryIndexSql},
+  };
+  for (const auto &object : objects) {
+    NamedSchemaObjectInspection inspection;
+    if (!inspectNamedSchemaObject(database, object.name, object.type,
+                                  object.table, object.sql, inspection,
+                                  "reading modern course schema") ||
+        !inspection.present || !inspection.exact) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool inspectModernCourseSchemaV12(sqlite3 *database) {
+  return inspectModernCourseSchemaWithReplayTable(
+      database, kModernReplayFilesTableSqlV12,
+      kModernReplayFileReservationsTableSqlV15);
+}
+
+bool inspectModernCourseSchemaV14(sqlite3 *database) {
+  return inspectModernCourseSchemaWithReplayTable(
+      database, kModernReplayFilesTableSqlV15,
+      kModernReplayFileReservationsTableSqlV15);
+}
+
+bool inspectPendingModernCourseScoreSchema(sqlite3 *database) {
+  NamedSchemaObjectInspection pendingCourseScores;
+  return inspectNamedSchemaObject(
+             database, "modern_pending_course_score_writes", "table",
+             "modern_pending_course_score_writes",
+             kModernPendingCourseScoresTableSql, pendingCourseScores,
+             "reading pending modern course score schema") &&
+         pendingCourseScores.present && pendingCourseScores.exact;
+}
+
+bool inspectModernCourseSchemaV15(sqlite3 *database) {
+  return inspectModernCourseSchemaV14(database) &&
+         inspectPendingModernCourseScoreSchema(database);
+}
+
+bool inspectModernCourseSchemaV16Base(sqlite3 *database) {
+  return inspectModernCourseSchemaWithReplayTable(
+      database, kModernReplayFilesTableSql,
+      kModernReplayFileReservationsTableSql);
+}
+
+bool inspectModernCourseSchema(sqlite3 *database) {
+  return inspectModernCourseSchemaV16Base(database) &&
+         inspectPendingModernCourseScoreSchema(database);
+}
+
+bool createModernChartSchema(sqlite3 *database) {
+  // Older migration tests and interrupted version writes can expose an exact
+  // v11 object set under an earlier user_version. Treat only the complete,
+  // byte-for-byte schema as already created; partial or malformed sets still
+  // fail inside the caller's migration transaction.
+  if (inspectModernChartSchemaV11(database) ||
+      inspectModernCourseSchemaV12(database) ||
+      inspectModernCourseSchemaV14(database) ||
+      inspectModernCourseSchemaV15(database) ||
+      inspectModernCourseSchema(database)) {
+    return true;
+  }
+  const char *tables[] = {
+      kModernChartResultsTableSql,           kModernReplayFilesTableSqlV11,
+      kModernReplayFileReservationsTableSqlV15,
+      kModernReplayStemSequencesTableSql,
+      kIrSubmissionSnapshotsTableSql,        kModernPendingChartScoresTableSql,
+  };
+  for (const char *table : tables) {
+    if (!execSql(database, table, "creating modern chart table")) {
+      return false;
+    }
+  }
+  const char *indexes[] = {
+      kModernChartShaIndexSql,        kModernReplayResultIndexSql,
+      kModernReservationIndexSql,     kModernSnapshotFingerprintIndexSql,
+      kModernPendingRecoveryIndexSql,
+  };
+  for (const char *index : indexes) {
+    if (!execSql(database, index, "creating modern chart index")) {
+      return false;
+    }
+  }
+  return inspectModernChartSchemaV11(database);
+}
+
+bool migrateModernCourseSchema(sqlite3 *database) {
+  if (inspectModernCourseSchemaV12(database) ||
+      inspectModernCourseSchemaV14(database) ||
+      inspectModernCourseSchemaV15(database) ||
+      inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernChartSchemaV11(database)) {
+    SDL_Log("Refusing modern course migration from a partial or unexpected "
+            "version 11 schema");
+    return false;
+  }
+  if (!execSql(database, kModernCourseResultsTableSql,
+               "creating modern course results") ||
+      !execSql(database, kModernCourseStagesTableSql,
+               "creating modern course stages") ||
+      !execSql(database, kModernCourseEntriesTableSql,
+               "creating modern course entries") ||
+      !execSql(database, "DROP INDEX idx_modern_replay_files_chart_result",
+               "dropping version 11 replay owner index") ||
+      !execSql(database,
+               "ALTER TABLE modern_replay_files RENAME TO "
+               "modern_replay_files_v11",
+               "renaming version 11 replay references") ||
+      !execSql(database, kModernReplayFilesTableSqlV12,
+               "creating shared modern replay references") ||
+      !execSql(database,
+               "INSERT INTO modern_replay_files("
+               "id,modern_chart_result_id,modern_course_result_id,stem,"
+               "history_index,relative_path,content_sha256,compressed_size,"
+               "codec_version) SELECT id,modern_chart_result_id,NULL,stem,"
+               "history_index,relative_path,content_sha256,compressed_size,"
+               "codec_version FROM modern_replay_files_v11",
+               "copying version 11 replay references") ||
+      !execSql(database, "DROP TABLE modern_replay_files_v11",
+               "dropping version 11 replay references") ||
+      !execSql(database, kModernReplayResultIndexSql,
+               "creating chart replay owner index") ||
+      !execSql(database, kModernReplayCourseResultIndexSql,
+               "creating course replay owner index") ||
+      !execSql(database, kModernCourseKeyIndexSql,
+               "creating modern course history index")) {
+    return false;
+  }
+  return inspectModernCourseSchemaV12(database);
+}
+
+bool migrateModernReplayDeletionSchema(sqlite3 *database) {
+  if (inspectModernCourseSchemaV14(database) ||
+      inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernCourseSchemaV12(database)) {
+    SDL_Log("Refusing replay deletion migration from a partial or unexpected "
+            "version 12 schema");
+    return false;
+  }
+  if (!execSql(database, "DROP INDEX idx_modern_replay_files_chart_result",
+               "dropping version 12 chart replay owner index") ||
+      !execSql(database, "DROP INDEX idx_modern_replay_files_course_result",
+               "dropping version 12 course replay owner index") ||
+      !execSql(database,
+               "ALTER TABLE modern_replay_files RENAME TO "
+               "modern_replay_files_v12",
+               "renaming version 12 replay references") ||
+      !execSql(database, kModernReplayFilesTableSqlV15,
+               "creating user-deleted replay references") ||
+      !execSql(database,
+               "INSERT INTO modern_replay_files("
+               "id,modern_chart_result_id,modern_course_result_id,stem,"
+               "history_index,relative_path,content_sha256,compressed_size,"
+               "codec_version,user_deleted) SELECT id,"
+               "modern_chart_result_id,modern_course_result_id,stem,"
+               "history_index,relative_path,content_sha256,compressed_size,"
+               "codec_version,0 FROM modern_replay_files_v12",
+               "copying version 12 replay references") ||
+      !execSql(database, "DROP TABLE modern_replay_files_v12",
+               "dropping version 12 replay references") ||
+      !execSql(database, kModernReplayResultIndexSql,
+               "creating chart replay owner index") ||
+      !execSql(database, kModernReplayCourseResultIndexSql,
+               "creating course replay owner index")) {
+    return false;
+  }
+  return inspectModernCourseSchemaV14(database);
+}
+
+bool migrateModernCourseScoreOutbox(sqlite3 *database) {
+  if (inspectModernCourseSchemaV15(database) ||
+      inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernCourseSchemaV14(database) &&
+      !inspectModernCourseSchemaV16Base(database)) {
+    SDL_Log("Refusing course score outbox migration from a partial or "
+            "unexpected version 14 schema");
+    return false;
+  }
+  if (!execSql(database, kModernPendingCourseScoresTableSql,
+               "creating pending modern course scores") ||
+      !execSql(database,
+               "INSERT INTO modern_pending_course_score_writes("
+               "attempt_id,modern_course_result_id,created_at) "
+               "SELECT attempt_id,id,created_at FROM modern_course_results",
+               "backfilling pending modern course scores")) {
+    return false;
+  }
+  return inspectModernCourseSchemaV15(database) ||
+         inspectModernCourseSchema(database);
+}
+
+bool migrateModernReplayOwnershipSchema(sqlite3 *database) {
+  if (inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernCourseSchemaV15(database)) {
+    SDL_Log("Refusing replay ownership migration from a partial or "
+            "unexpected version 15 schema");
+    return false;
+  }
+  if (!execSql(database, "DROP INDEX idx_modern_replay_files_chart_result",
+               "dropping version 15 chart replay owner index") ||
+      !execSql(database, "DROP INDEX idx_modern_replay_files_course_result",
+               "dropping version 15 course replay owner index") ||
+      !execSql(database,
+               "DROP INDEX idx_modern_replay_reservations_stem_index",
+               "dropping version 15 replay reservation index") ||
+      !execSql(database,
+               "ALTER TABLE modern_replay_files RENAME TO "
+               "modern_replay_files_v15",
+               "renaming version 15 replay references") ||
+      !execSql(database,
+               "ALTER TABLE modern_replay_file_reservations RENAME TO "
+               "modern_replay_file_reservations_v15",
+               "renaming version 15 replay reservations") ||
+      !execSql(database, kModernReplayFilesTableSql,
+               "creating future-compatible replay references") ||
+      !execSql(
+          database,
+          "INSERT INTO modern_replay_files("
+          "id,modern_chart_result_id,modern_course_result_id,stem,"
+          "history_index,relative_path,content_sha256,compressed_size,"
+          "codec_version,user_deleted) SELECT id,modern_chart_result_id,"
+          "modern_course_result_id,stem,history_index,relative_path,"
+          "content_sha256,compressed_size,codec_version,user_deleted FROM "
+          "modern_replay_files_v15",
+          "copying version 15 replay references") ||
+      !execSql(database, kModernReplayFileReservationsTableSql,
+               "creating owned replay reservations") ||
+      !execSql(
+          database,
+          "INSERT INTO modern_replay_file_reservations("
+          "attempt_id,stem,history_index,relative_path,created_at_unix_ms) "
+          "SELECT attempt_id,stem,history_index,relative_path,"
+          "created_at_unix_ms FROM modern_replay_file_reservations_v15",
+          "copying version 15 replay reservations") ||
+      !execSql(database, "DROP TABLE modern_replay_files_v15",
+               "dropping version 15 replay references") ||
+      !execSql(database, "DROP TABLE modern_replay_file_reservations_v15",
+               "dropping version 15 replay reservations") ||
+      !execSql(database, kModernReplayResultIndexSql,
+               "creating chart replay owner index") ||
+      !execSql(database, kModernReplayCourseResultIndexSql,
+               "creating course replay owner index") ||
+      !execSql(database, kModernReservationIndexSql,
+               "creating replay reservation index")) {
+    return false;
+  }
+  return inspectModernCourseSchema(database);
+}
+
+bool migrateIrSubmissionReceiptsToModernOwnership(sqlite3 *database) {
+  IrSubmissionReceiptsSchemaState state{};
+  if (!inspectIrSubmissionReceiptsSchema(database, state)) {
+    return false;
+  }
+  if (state == IrSubmissionReceiptsSchemaState::ReplayOwnedExact) {
+    return true;
+  }
+  if (state != IrSubmissionReceiptsSchemaState::LegacyExact) {
+    SDL_Log("Refusing modern receipt ownership migration from a partial or "
+            "unexpected schema");
+    return false;
+  }
+  if (!execSql(database,
+               "ALTER TABLE ir_submission_receipts RENAME TO "
+               "ir_submission_receipts_v10",
+               "renaming version 10 IR submission receipts") ||
+      !execSql(database, "DROP INDEX idx_ir_submission_receipts_attempt",
+               "dropping version 10 receipt attempt index") ||
+      !execSql(database, "DROP INDEX idx_ir_submission_receipts_remote_score",
+               "dropping version 10 receipt remote score index") ||
+      !execSql(database, kIrSubmissionReceiptsTableSql,
+               "creating shared-owner IR submission receipts") ||
+      !execSql(
+          database,
+          "INSERT INTO ir_submission_receipts("
+          "id,provider_id,server_origin,replay_id,modern_chart_result_id,"
+          "attempt_id,chart_md5,chart_sha256,remote_user_id,remote_chart_id,"
+          "remote_score_id,confirmation_source,observed_in_snapshot,"
+          "confirmed_at_ms) SELECT id,provider_id,server_origin,replay_id,NULL,"
+          "attempt_id,chart_md5,chart_sha256,remote_user_id,remote_chart_id,"
+          "remote_score_id,confirmation_source,observed_in_snapshot,"
+          "confirmed_at_ms FROM ir_submission_receipts_v10",
+          "copying version 10 IR submission receipts") ||
+      !execSql(database, "DROP TABLE ir_submission_receipts_v10",
+               "dropping version 10 IR submission receipts") ||
+      !execSql(database, kIrSubmissionReceiptsAttemptIndexSql,
+               "creating shared receipt attempt index") ||
+      !execSql(database, kIrSubmissionReceiptsRemoteScoreIndexSql,
+               "creating shared receipt remote score index") ||
+      !inspectIrSubmissionReceiptsSchema(database, state) ||
+      state != IrSubmissionReceiptsSchemaState::ReplayOwnedExact) {
+    return false;
   }
   return true;
 }
@@ -1139,10 +1646,12 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         !inspectIrRemoteScoresSchema(db, remoteScoresState)) {
       return false;
     }
-    if (resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
+    if (resultOutboxState != ReplayResultOutboxSchemaState::Absent ||
         irOutboxState != IrOutboxSchemaState::Exact ||
-        receiptState != IrSubmissionReceiptsSchemaState::Exact ||
-        remoteScoresState != IrRemoteScoresSchemaState::Exact) {
+        receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
+        remoteScoresState != IrRemoteScoresSchemaState::Exact ||
+        !inspectModernCourseSchema(db) ||
+        !replay_repository_legacy::inspectCurrentSchema(db)) {
       SDL_Log("Refusing current replay database with a partial or unexpected "
               "outbox, receipt, or remote score schema");
       return false;
@@ -1154,9 +1663,8 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   const char *beginQuery = callerOwnsTransaction
                                ? "SAVEPOINT asobmashow_replay_migration"
                                : "BEGIN IMMEDIATE TRANSACTION";
-  const char *commitQuery = callerOwnsTransaction
-                                ? "RELEASE asobmashow_replay_migration"
-                                : "COMMIT";
+  const char *commitQuery =
+      callerOwnsTransaction ? "RELEASE asobmashow_replay_migration" : "COMMIT";
   const char *rollbackQuery =
       callerOwnsTransaction
           ? "ROLLBACK TO asobmashow_replay_migration; RELEASE "
@@ -1170,11 +1678,82 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
 
-  if (*version < 1 && !normalizeReplayChartIdentityHashes(db)) {
-    return false;
+  if (*version == 16) {
+    ReplayResultOutboxSchemaState resultOutboxState{};
+    IrOutboxSchemaState irOutboxState{};
+    IrSubmissionReceiptsSchemaState receiptState{};
+    IrRemoteScoresSchemaState remoteScoresState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
+        !inspectIrOutboxSchema(db, irOutboxState) ||
+        !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
+        !inspectIrRemoteScoresSchema(db, remoteScoresState) ||
+        resultOutboxState != ReplayResultOutboxSchemaState::Absent ||
+        irOutboxState != IrOutboxSchemaState::Exact ||
+        receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
+        remoteScoresState != IrRemoteScoresSchemaState::Exact ||
+        !inspectModernCourseSchema(db) ||
+        !replay_repository_legacy::inspectCurrentSchema(db) ||
+        !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
+      SDL_Log("Refusing version 16 replay database with a partial or "
+              "unexpected current schema");
+      return false;
+    }
+    if (!transaction.commit(transactionError)) {
+      logSqlErrorText("committing replay compaction marker migration",
+                      transactionError);
+      return false;
+    }
+    return true;
   }
-  if (*version < kLegacyReplayDatabaseSchemaVersion &&
-      !backfillReplayMaxCombo(db)) {
+
+  if (*version == 15 || *version == 14) {
+    ReplayResultOutboxSchemaState resultOutboxState{};
+    IrOutboxSchemaState irOutboxState{};
+    IrSubmissionReceiptsSchemaState receiptState{};
+    IrRemoteScoresSchemaState remoteScoresState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
+        !inspectIrOutboxSchema(db, irOutboxState) ||
+        !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
+        !inspectIrRemoteScoresSchema(db, remoteScoresState)) {
+      SDL_Log("Could not inspect version %d replay database for replay "
+              "ownership migration", *version);
+      return false;
+    }
+    const bool modernCourseSchemaExact =
+        inspectModernCourseSchema(db) || inspectModernCourseSchemaV15(db) ||
+        inspectModernCourseSchemaV16Base(db) ||
+        (*version == 14 && inspectModernCourseSchemaV14(db));
+    const bool summarySchemaExact =
+        replay_repository_legacy::inspectCurrentSchema(db);
+    if (resultOutboxState != ReplayResultOutboxSchemaState::Absent ||
+        irOutboxState != IrOutboxSchemaState::Exact ||
+        receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
+        remoteScoresState != IrRemoteScoresSchemaState::Exact ||
+        !modernCourseSchemaExact || !summarySchemaExact) {
+      SDL_Log("Refusing replay ownership migration from a partial or "
+              "unexpected version %d database (%d,%d,%d,%d,%d,%d)",
+              *version,
+              static_cast<int>(resultOutboxState),
+              static_cast<int>(irOutboxState),
+              static_cast<int>(receiptState),
+              static_cast<int>(remoteScoresState), modernCourseSchemaExact,
+              summarySchemaExact);
+      return false;
+    }
+    if ((*version == 14 && !migrateModernCourseScoreOutbox(db)) ||
+        !migrateModernReplayOwnershipSchema(db) ||
+        !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
+      return false;
+    }
+    if (!transaction.commit(transactionError)) {
+      logSqlErrorText("committing replay ownership migration",
+                      transactionError);
+      return false;
+    }
+    return true;
+  }
+
+  if (*version < 1 && !normalizeReplayChartIdentityHashes(db)) {
     return false;
   }
   if (!ensureReplayProvenanceColumns(db, "replays") ||
@@ -1187,7 +1766,6 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
            "ALTER TABLE course_replays ADD COLUMN course_key TEXT NOT NULL "
            "DEFAULT ''",
            "adding course replay content key column") ||
-       !backfillCompleteCourseReplayKeys(db) ||
        !execSql(db,
                 "CREATE INDEX IF NOT EXISTS idx_course_replays_key_id ON "
                 "course_replays(course_key, id)",
@@ -1239,8 +1817,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (*version < 7) {
     if (*version == 6) {
       IrOutboxSchemaState legacyState{};
-      if (!inspectIrOutboxSchema(db, legacyState,
-                                 kLegacyIrOutboxTableSqlV6) ||
+      if (!inspectIrOutboxSchema(db, legacyState, kLegacyIrOutboxTableSqlV6) ||
           legacyState != IrOutboxSchemaState::Exact) {
         SDL_Log("Refusing IR outbox proof migration from a partial or "
                 "unexpected version 6 schema");
@@ -1252,8 +1829,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
                    "dropping legacy IR outbox due index") ||
           !execSql(db, "DROP INDEX idx_ir_outbox_attempt",
                    "dropping legacy IR outbox attempt index") ||
-          !execSql(db, kIrOutboxTableSql,
-                   "creating ruleset-proof IR outbox") ||
+          !execSql(db, kIrOutboxTableSql, "creating ruleset-proof IR outbox") ||
           !execSql(
               db,
               "INSERT INTO ir_outbox("
@@ -1274,8 +1850,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
               "migrating legacy IR outbox rows") ||
           !execSql(db, "DROP TABLE ir_outbox_v6",
                    "dropping legacy IR outbox") ||
-          !execSql(db, kIrOutboxDueIndexSql,
-                   "creating IR outbox due index") ||
+          !execSql(db, kIrOutboxDueIndexSql, "creating IR outbox due index") ||
           !execSql(db, kIrOutboxAttemptIndexSql,
                    "creating IR outbox attempt index")) {
         return false;
@@ -1292,8 +1867,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (*version < 8) {
     if (*version == 7) {
       IrOutboxSchemaState legacyState{};
-      if (!inspectIrOutboxSchema(db, legacyState,
-                                 kLegacyIrOutboxTableSqlV7) ||
+      if (!inspectIrOutboxSchema(db, legacyState, kLegacyIrOutboxTableSqlV7) ||
           legacyState != IrOutboxSchemaState::Exact) {
         SDL_Log("Refusing IR outbox poll-count migration from a partial or "
                 "unexpected version 7 schema");
@@ -1305,8 +1879,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
                    "dropping version 7 IR outbox due index") ||
           !execSql(db, "DROP INDEX idx_ir_outbox_attempt",
                    "dropping version 7 IR outbox attempt index") ||
-          !execSql(db, kIrOutboxTableSql,
-                   "creating poll-count IR outbox") ||
+          !execSql(db, kIrOutboxTableSql, "creating poll-count IR outbox") ||
           !execSql(
               db,
               "INSERT INTO ir_outbox("
@@ -1327,8 +1900,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
               "migrating IR outbox poll counts") ||
           !execSql(db, "DROP TABLE ir_outbox_v7",
                    "dropping version 7 IR outbox") ||
-          !execSql(db, kIrOutboxDueIndexSql,
-                   "creating IR outbox due index") ||
+          !execSql(db, kIrOutboxDueIndexSql, "creating IR outbox due index") ||
           !execSql(db, kIrOutboxAttemptIndexSql,
                    "creating IR outbox attempt index")) {
         return false;
@@ -1353,7 +1925,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
     if (receiptState == IrSubmissionReceiptsSchemaState::Absent &&
-        (!execSql(db, kIrSubmissionReceiptsTableSql,
+        (!execSql(db, kLegacyIrSubmissionReceiptsTableSql,
                   "creating IR submission receipts") ||
          !execSql(db, kIrSubmissionReceiptsAttemptIndexSql,
                   "creating IR submission receipts attempt index") ||
@@ -1362,7 +1934,8 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
     if (!inspectIrSubmissionReceiptsSchema(db, receiptState) ||
-        receiptState != IrSubmissionReceiptsSchemaState::Exact) {
+        (receiptState != IrSubmissionReceiptsSchemaState::LegacyExact &&
+         receiptState != IrSubmissionReceiptsSchemaState::ReplayOwnedExact)) {
       SDL_Log("Refusing migrated IR submission receipts with a partial or "
               "unexpected schema");
       return false;
@@ -1379,8 +1952,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
     if (remoteScoresState == IrRemoteScoresSchemaState::Absent &&
-        (!execSql(db, kIrRemoteScoresTableSql,
-                  "creating IR remote scores") ||
+        (!execSql(db, kIrRemoteScoresTableSql, "creating IR remote scores") ||
          !execSql(db, kIrRemoteScoresSha256IndexSql,
                   "creating IR remote scores SHA-256 index") ||
          !execSql(db, kIrRemoteScoresChartIdIndexSql,
@@ -1394,6 +1966,47 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
   }
+  if (*version < 11) {
+    if (!createModernChartSchema(db) ||
+        !migrateIrSubmissionReceiptsToModernOwnership(db)) {
+      return false;
+    }
+  }
+  if (*version < 12 && !migrateModernCourseSchema(db)) {
+    return false;
+  }
+  if (*version < 13 && !migrateModernReplayDeletionSchema(db)) {
+    return false;
+  }
+
+  ReplayResultOutboxSchemaState legacyResultOutboxState{};
+  IrOutboxSchemaState legacyIrOutboxState{};
+  IrSubmissionReceiptsSchemaState legacyReceiptState{};
+  IrRemoteScoresSchemaState legacyRemoteScoresState{};
+  if (!inspectReplayResultOutboxSchema(db, legacyResultOutboxState) ||
+      !inspectIrOutboxSchema(db, legacyIrOutboxState) ||
+      !inspectIrSubmissionReceiptsSchema(db, legacyReceiptState) ||
+      !inspectIrRemoteScoresSchema(db, legacyRemoteScoresState) ||
+      legacyResultOutboxState != ReplayResultOutboxSchemaState::Exact ||
+      legacyIrOutboxState != IrOutboxSchemaState::Exact ||
+      legacyReceiptState != IrSubmissionReceiptsSchemaState::ReplayOwnedExact ||
+      legacyRemoteScoresState != IrRemoteScoresSchemaState::Exact ||
+      (!inspectModernCourseSchemaV14(db) &&
+       !inspectModernCourseSchemaV15(db) &&
+       !inspectModernCourseSchemaV16Base(db) &&
+       !inspectModernCourseSchema(db))) {
+    SDL_Log("Refusing summary cutover from a partial or unexpected version "
+            "13 schema");
+    return false;
+  }
+  if (!replay_repository_legacy::migrateToSummarySchema(db, *version)) {
+    return false;
+  }
+  if (!migrateModernCourseScoreOutbox(db) ||
+      !migrateModernReplayOwnershipSchema(db)) {
+    return false;
+  }
+
   ReplayResultOutboxSchemaState resultOutboxState{};
   IrOutboxSchemaState irOutboxState{};
   IrSubmissionReceiptsSchemaState receiptState{};
@@ -1402,10 +2015,12 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       !inspectIrOutboxSchema(db, irOutboxState) ||
       !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
       !inspectIrRemoteScoresSchema(db, remoteScoresState) ||
-      resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
+      resultOutboxState != ReplayResultOutboxSchemaState::Absent ||
       irOutboxState != IrOutboxSchemaState::Exact ||
-      receiptState != IrSubmissionReceiptsSchemaState::Exact ||
-      remoteScoresState != IrRemoteScoresSchemaState::Exact) {
+      receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
+      remoteScoresState != IrRemoteScoresSchemaState::Exact ||
+      !inspectModernCourseSchema(db) ||
+      !replay_repository_legacy::inspectCurrentSchema(db)) {
     SDL_Log("Refusing migrated replay database with a partial or unexpected "
             "outbox, receipt, or remote score schema");
     return false;
@@ -1420,37 +2035,14 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   return true;
 }
 
-std::string readText(sqlite3_stmt *stmt, int idx) {
-  return sqliteColumnString(stmt, idx);
-}
-
-std::optional<ScoreProvenance> decodeStoredProvenance(sqlite3_stmt *stmt,
-                                                      int rulesetVersionColumn,
-                                                      int eligibilityColumn,
-                                                      int provenanceJsonColumn,
-                                                      std::string &error) {
-  const int rulesetVersion = sqlite3_column_int(stmt, rulesetVersionColumn);
-  const int eligibilityValue = sqlite3_column_int(stmt, eligibilityColumn);
-  const std::string serialized = readText(stmt, provenanceJsonColumn);
-  auto provenance = deserializeScoreProvenance(serialized, error);
-  if (!provenance.has_value()) {
-    return std::nullopt;
-  }
-  if (provenance->ruleset.version != rulesetVersion ||
-      static_cast<int>(provenance->eligibility) != eligibilityValue) {
-    error = "indexed values disagree with JSON";
-    return std::nullopt;
-  }
-  return provenance;
-}
-std::filesystem::path resolvedReplayDatabasePath(
-    const std::filesystem::path &databasePath) {
+std::filesystem::path
+resolvedReplayDatabasePath(const std::filesystem::path &databasePath) {
   return databasePath.empty() ? Utils::GetDocumentsPath("db") / "replay.db"
                               : databasePath;
 }
 
-std::filesystem::path normalizedReplayDatabasePath(
-    const std::filesystem::path &databasePath) {
+std::filesystem::path
+normalizedReplayDatabasePath(const std::filesystem::path &databasePath) {
   std::filesystem::path resolved = resolvedReplayDatabasePath(databasePath);
   std::error_code error;
   const std::filesystem::path absolute =
@@ -1466,8 +2058,7 @@ std::filesystem::path normalizedReplayDatabasePath(
 
 bool equivalentReplayDatabasePaths(const std::filesystem::path &first,
                                    const std::filesystem::path &second) {
-  const std::filesystem::path firstResolved =
-      resolvedReplayDatabasePath(first);
+  const std::filesystem::path firstResolved = resolvedReplayDatabasePath(first);
   const std::filesystem::path secondResolved =
       resolvedReplayDatabasePath(second);
   std::error_code firstExistsError;
@@ -1488,6 +2079,258 @@ bool equivalentReplayDatabasePaths(const std::filesystem::path &first,
          normalizedReplayDatabasePath(second);
 }
 
+class ReplayMigrationTemporaryFile {
+public:
+  explicit ReplayMigrationTemporaryFile(std::filesystem::path path)
+      : path_(std::move(path)) {}
+
+  ~ReplayMigrationTemporaryFile() {
+    for (const std::string_view suffix : {
+             std::string_view(""), std::string_view("-journal"),
+             std::string_view("-wal"), std::string_view("-shm")}) {
+      std::error_code ignored;
+      std::filesystem::remove(
+          std::filesystem::path(path_.string() + std::string(suffix)),
+          ignored);
+    }
+  }
+
+  [[nodiscard]] const std::filesystem::path &path() const noexcept {
+    return path_;
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+std::optional<std::filesystem::path>
+replayMigrationTemporaryPath(const std::filesystem::path &databasePath) {
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    std::filesystem::path filename = databasePath.filename();
+    filename += ".migration-" + uuid::generateV4() + ".tmp";
+    const auto candidate = databasePath.parent_path() / filename;
+    std::error_code error;
+    const bool exists = std::filesystem::exists(candidate, error);
+    if (!error && !exists) {
+      return candidate;
+    }
+  }
+  return std::nullopt;
+}
+
+bool hasReplayUserSchema(sqlite3 *database, bool &hasSchema) {
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1",
+          statement) != SQLITE_OK) {
+    return false;
+  }
+  const int rc = sqlite3_step(statement.get());
+  hasSchema = rc == SQLITE_ROW;
+  return rc == SQLITE_ROW || rc == SQLITE_DONE;
+}
+
+bool copyReplayDatabase(sqlite3 *destination, sqlite3 *source,
+                        bool interruptAfterFirstPage,
+                        std::string_view context) {
+  sqlite3_backup *backup =
+      sqlite3_backup_init(destination, "main", source, "main");
+  if (backup == nullptr) {
+    logSqlError(std::string(context).c_str(), destination);
+    return false;
+  }
+
+  if (interruptAfterFirstPage) {
+    (void)sqlite3_backup_step(backup, 1);
+    (void)sqlite3_backup_finish(backup);
+    SDL_Log("Replay database migration fault injected while %s",
+            std::string(context).c_str());
+    return false;
+  }
+
+  int rc = SQLITE_OK;
+  int retries = 0;
+  do {
+    rc = sqlite3_backup_step(backup, 128);
+    if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
+      if (++retries > 100) {
+        break;
+      }
+      sqlite3_sleep(10);
+    }
+  } while (rc == SQLITE_OK || rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
+  const int finishRc = sqlite3_backup_finish(backup);
+  if (rc != SQLITE_DONE || finishRc != SQLITE_OK) {
+    SDL_Log("Replay database migration failed while %s: %s",
+            std::string(context).c_str(), sqlite3_errmsg(destination));
+    return false;
+  }
+  return true;
+}
+
+bool replayDatabaseIntegrityIsValid(sqlite3 *database) {
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, "PRAGMA integrity_check", statement) !=
+          SQLITE_OK ||
+      sqlite3_step(statement.get()) != SQLITE_ROW ||
+      sqliteColumnTextView(statement.get(), 0) != "ok" ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("validating compact replay database", database);
+    return false;
+  }
+  return true;
+}
+
+class ReplayMigrationExclusiveOwnership {
+public:
+  explicit ReplayMigrationExclusiveOwnership(sqlite3 *database)
+      : database_(database) {}
+
+  bool acquire() {
+    if (database_ == nullptr ||
+        !execSql(database_, "PRAGMA locking_mode=EXCLUSIVE",
+                 "entering exclusive replay migration mode")) {
+      return false;
+    }
+    acquired_ = true;
+    if (!execSql(database_, "BEGIN EXCLUSIVE",
+                 "acquiring exclusive replay migration ownership")) {
+      (void)release();
+      return false;
+    }
+    if (!execSql(database_, "COMMIT",
+                 "retaining exclusive replay migration ownership")) {
+      (void)executeSqlite(database_, "ROLLBACK");
+      (void)release();
+      return false;
+    }
+    return true;
+  }
+
+  bool release() {
+    if (!acquired_) {
+      return true;
+    }
+    if (!execSql(database_, "PRAGMA locking_mode=NORMAL",
+                 "leaving exclusive replay migration mode") ||
+        !execSql(database_, "BEGIN IMMEDIATE",
+                 "starting replay migration ownership release") ||
+        !execSql(database_, "COMMIT",
+                 "releasing exclusive replay migration ownership")) {
+      (void)executeSqlite(database_, "ROLLBACK");
+      SDL_Log("Could not release exclusive replay migration ownership");
+      return false;
+    }
+    acquired_ = false;
+    return true;
+  }
+
+  ~ReplayMigrationExclusiveOwnership() { (void)release(); }
+
+  ReplayMigrationExclusiveOwnership(const ReplayMigrationExclusiveOwnership &) =
+      delete;
+  ReplayMigrationExclusiveOwnership &
+  operator=(const ReplayMigrationExclusiveOwnership &) = delete;
+
+private:
+  sqlite3 *database_ = nullptr;
+  bool acquired_ = false;
+};
+
+bool truncateReplayMigrationWal(sqlite3 *database, const char *context) {
+  int logFrames = 0;
+  int checkpointedFrames = 0;
+  const int rc =
+      sqlite3_wal_checkpoint_v2(database, "main", SQLITE_CHECKPOINT_TRUNCATE,
+                                &logFrames, &checkpointedFrames);
+  if (rc == SQLITE_OK) {
+    return true;
+  }
+  SDL_Log("Replay database migration could not %s: %s", context,
+          sqlite3_errmsg(database));
+  return false;
+}
+
+bool prepareReplayDatabaseWithCompaction(
+    sqlite3 *database, const std::filesystem::path &databasePath) {
+  const auto temporaryPath = replayMigrationTemporaryPath(databasePath);
+  if (!temporaryPath) {
+    SDL_Log("Could not reserve a replay migration staging path");
+    return false;
+  }
+  ReplayMigrationTemporaryFile temporary(*temporaryPath);
+  ReplayMigrationExclusiveOwnership ownership(database);
+  if (!ownership.acquire()) {
+    return false;
+  }
+
+  sqlite3 *rawStaged = nullptr;
+  const std::string stagedPath = fspath_to_utf8(temporary.path());
+  const int openRc = sqlite3_open_v2(
+      stagedPath.c_str(), &rawStaged,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_PRIVATECACHE,
+      nullptr);
+  SqliteConnectionHandle staged(rawStaged);
+  if (openRc != SQLITE_OK || !staged) {
+    SDL_Log("Could not open compact replay migration staging database: %s",
+            rawStaged != nullptr ? sqlite3_errmsg(rawStaged)
+                                 : "SQLite open failed");
+    return false;
+  }
+  sqlite3_busy_timeout(staged.get(), 1000);
+
+  if (pathMigrationFault(StagedMigrationFault::SnapshotCopy) ||
+      !copyReplayDatabase(staged.get(), database, false,
+                          "copying the original into migration staging")) {
+    return false;
+  }
+  runPathMigrationAfterSnapshotHook();
+  int foreignKeysEnabled = 0;
+  if (sqlite3_db_config(staged.get(), SQLITE_DBCONFIG_ENABLE_FKEY, 1,
+                        &foreignKeysEnabled) != SQLITE_OK ||
+      foreignKeysEnabled != 1 ||
+      !replay_repository_detail::CreateReplayTablesOnConnection(
+          staged.get()) ||
+      pathMigrationFault(StagedMigrationFault::SchemaMigration)) {
+    SDL_Log("Replay database staging schema migration failed");
+    return false;
+  }
+  if (!execSql(staged.get(), "VACUUM",
+               "compacting staged replay database") ||
+      pathMigrationFault(StagedMigrationFault::Compaction) ||
+      !replay_repository_detail::CreateReplayTablesOnConnection(
+          staged.get()) ||
+      !replayDatabaseIntegrityIsValid(staged.get())) {
+    return false;
+  }
+
+  // The compact image remains retryable until its pages are durably installed
+  // in the main database. A failed checkpoint therefore cannot publish v17
+  // solely from a WAL that still sits beside the old large main file.
+  if (!setDatabaseUserVersion(staged.get(), kReplayDatabaseSchemaVersion - 1)) {
+    return false;
+  }
+
+  const bool interruptInstall =
+      pathMigrationFault(StagedMigrationFault::Installation);
+  if (!copyReplayDatabase(database, staged.get(), interruptInstall,
+                          "installing the compact replay database")) {
+    return false;
+  }
+
+  if (!truncateReplayMigrationWal(database,
+                                  "checkpoint the compact retryable image")) {
+    return false;
+  }
+  if (!setDatabaseUserVersion(database, kReplayDatabaseSchemaVersion) ||
+      !truncateReplayMigrationWal(database,
+                                  "checkpoint the completed schema marker")) {
+    return false;
+  }
+  return ownership.release();
+}
+
 sqlite3 *openReplayDatabase(const std::filesystem::path &path,
                             std::string &errorMessage) {
   const std::filesystem::path directory = path.parent_path();
@@ -1495,8 +2338,7 @@ sqlite3 *openReplayDatabase(const std::filesystem::path &path,
   if (!directory.empty() &&
       !Utils::EnsureDirectoryExists(directory, directoryError)) {
     errorMessage = "can't create replay database directory " +
-                   fspath_to_utf8(directory) + ": " +
-                   directoryError.message();
+                   fspath_to_utf8(directory) + ": " + directoryError.message();
     return nullptr;
   }
 
@@ -1507,6 +2349,12 @@ sqlite3 *openReplayDatabase(const std::filesystem::path &path,
 } // namespace
 bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureReplayDatabase(db)) {
+    return false;
+  }
+  std::string versionError;
+  const auto existingVersion = readSqliteUserVersion(db, versionError);
+  if (!existingVersion.has_value()) {
+    logSqlErrorText("reading replay schema version", versionError);
     return false;
   }
   const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
@@ -1528,215 +2376,186 @@ bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
     logSqlErrorText("starting replay schema ensure", transactionError);
     return false;
   }
-  const char *replayQuery = "CREATE TABLE IF NOT EXISTS replays ("
-                            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                            "chart_path TEXT,"
-                            "chart_md5 TEXT,"
-                            "chart_sha256 TEXT,"
-                            "chart_title TEXT,"
-                            "chart_artist TEXT,"
-                            "ln_mode INTEGER NOT NULL DEFAULT 0,"
-                            "gauge_type INTEGER NOT NULL,"
-                            "gauge_auto_shift INTEGER NOT NULL,"
-                            "final_score INTEGER NOT NULL,"
-                            "max_combo INTEGER NOT NULL DEFAULT 0,"
-                            "final_gauge REAL NOT NULL,"
-                            "clear_type INTEGER NOT NULL,"
-                            "random_seed INTEGER,"
-                            "random_prng TEXT,"
-                            "random_values TEXT,"
-                            "play_option TEXT,"
-                            "play_option_seed INTEGER,"
-                            "play_option2 TEXT,"
-                            "play_option2_seed INTEGER,"
-                            "assist_option TEXT,"
-                            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-                            ")";
-  if (!execSql(db, replayQuery, "creating replay table")) {
-    return false;
-  }
-  struct ColumnMigration {
-    const char *columnName;
-    const char *alterQuery;
-    const char *context;
-  };
-  const ColumnMigration replayColumnMigrations[] = {
-      {"chart_path", "ALTER TABLE replays ADD COLUMN chart_path TEXT",
-       "adding replay chart path column"},
-      {"chart_md5", "ALTER TABLE replays ADD COLUMN chart_md5 TEXT",
-       "adding replay chart md5 column"},
-      {"chart_sha256", "ALTER TABLE replays ADD COLUMN chart_sha256 TEXT",
-       "adding replay chart sha256 column"},
-      {"random_seed", "ALTER TABLE replays ADD COLUMN random_seed INTEGER",
-       "adding replay random seed column"},
-      {"random_prng", "ALTER TABLE replays ADD COLUMN random_prng TEXT",
-       "adding replay random PRNG column"},
-      {"random_values", "ALTER TABLE replays ADD COLUMN random_values TEXT",
-       "adding replay random values column"},
-      {"play_option", "ALTER TABLE replays ADD COLUMN play_option TEXT",
-       "adding replay play option column"},
-      {"play_option_seed",
-       "ALTER TABLE replays ADD COLUMN play_option_seed INTEGER",
-       "adding replay play option seed column"},
-      {"play_option2", "ALTER TABLE replays ADD COLUMN play_option2 TEXT",
-       "adding replay 2P play option column"},
-      {"play_option2_seed",
-       "ALTER TABLE replays ADD COLUMN play_option2_seed INTEGER",
-       "adding replay 2P play option seed column"},
-      {"assist_option", "ALTER TABLE replays ADD COLUMN assist_option TEXT",
-       "adding replay assist option column"},
-      {"ln_mode",
-       "ALTER TABLE replays ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
-       "adding replay long note mode column"},
-      {"max_combo",
-       "ALTER TABLE replays ADD COLUMN max_combo INTEGER NOT NULL DEFAULT 0",
-       "adding replay max combo column"},
-  };
-  for (const ColumnMigration &migration : replayColumnMigrations) {
-    if (!ensureTableColumn(db, "replays", migration.columnName,
-                           migration.alterQuery, migration.context)) {
+  if (*existingVersion < 14) {
+    const char *replayQuery =
+        "CREATE TABLE IF NOT EXISTS replays ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "chart_path TEXT,"
+        "chart_md5 TEXT,"
+        "chart_sha256 TEXT,"
+        "chart_title TEXT,"
+        "chart_artist TEXT,"
+        "ln_mode INTEGER NOT NULL DEFAULT 0,"
+        "gauge_type INTEGER NOT NULL,"
+        "gauge_auto_shift INTEGER NOT NULL,"
+        "final_score INTEGER NOT NULL,"
+        "max_combo INTEGER NOT NULL DEFAULT 0,"
+        "final_gauge REAL NOT NULL,"
+        "clear_type INTEGER NOT NULL,"
+        "random_seed INTEGER,"
+        "random_prng TEXT,"
+        "random_values TEXT,"
+        "play_option TEXT,"
+        "play_option_seed INTEGER,"
+        "play_option2 TEXT,"
+        "play_option2_seed INTEGER,"
+        "assist_option TEXT,"
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ")";
+    if (!execSql(db, replayQuery, "creating replay table")) {
       return false;
     }
-  }
-  const char *eventQuery =
-      "CREATE TABLE IF NOT EXISTS replay_events ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "replay_id INTEGER NOT NULL,"
-      "event_index INTEGER NOT NULL,"
-      "action INTEGER NOT NULL,"
-      "lane INTEGER NOT NULL,"
-      "note_time_micros INTEGER NOT NULL,"
-      "song_time_micros INTEGER NOT NULL,"
-      "judge_time_micros INTEGER NOT NULL,"
-      "judgement INTEGER NOT NULL,"
-      "diff_micros INTEGER NOT NULL,"
-      "gauge REAL NOT NULL,"
-      "gauge_type INTEGER NOT NULL,"
-      "combo INTEGER NOT NULL,"
-      "score INTEGER NOT NULL,"
-      "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
-      ")";
-  if (!execSql(db, eventQuery, "creating replay event table")) {
-    return false;
-  }
-
-  const char *touchSampleQuery =
-      "CREATE TABLE IF NOT EXISTS replay_touch_samples ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "replay_id INTEGER NOT NULL,"
-      "sample_index INTEGER NOT NULL,"
-      "action INTEGER NOT NULL,"
-      "finger_id INTEGER NOT NULL,"
-      "song_time_micros INTEGER NOT NULL,"
-      "x REAL NOT NULL,"
-      "y REAL NOT NULL,"
-      "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
-      ")";
-  if (!execSql(db, touchSampleQuery, "creating replay touch sample table")) {
-    return false;
-  }
-
-  const char *laneCoverEventQuery =
-      "CREATE TABLE IF NOT EXISTS replay_lane_cover_events ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "replay_id INTEGER NOT NULL,"
-      "event_index INTEGER NOT NULL,"
-      "song_time_micros INTEGER NOT NULL,"
-      "note_start_position_percent INTEGER NOT NULL,"
-      "reset_visible_time_reference INTEGER NOT NULL,"
-      "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
-      ")";
-  if (!execSql(db, laneCoverEventQuery,
-               "creating replay lane cover event table")) {
-    return false;
-  }
-
-  const char *courseReplayQuery =
-      "CREATE TABLE IF NOT EXISTS course_replays ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "course_id INTEGER NOT NULL,"
-      "course_key TEXT NOT NULL DEFAULT '',"
-      "course_name TEXT,"
-      "course_group_name TEXT,"
-      "constraint_json TEXT,"
-      "gauge_type INTEGER NOT NULL,"
-      "gauge_profile INTEGER NOT NULL DEFAULT 0,"
-      "gauge_auto_shift INTEGER NOT NULL,"
-      "ln_mode INTEGER NOT NULL DEFAULT 0,"
-      "requested_play_option TEXT,"
-      "assist_option TEXT,"
-      "final_score INTEGER NOT NULL,"
-      "max_combo INTEGER NOT NULL DEFAULT 0,"
-      "final_gauge REAL NOT NULL,"
-      "clear_type INTEGER NOT NULL,"
-      "completed_charts INTEGER NOT NULL,"
-      "total_charts INTEGER NOT NULL,"
-      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-      ")";
-  if (!execSql(db, courseReplayQuery, "creating course replay table")) {
-    return false;
-  }
-  const ColumnMigration courseReplayColumnMigrations[] = {
-      {"max_combo",
-       "ALTER TABLE course_replays ADD COLUMN max_combo INTEGER NOT NULL "
-       "DEFAULT 0",
-       "adding course replay max combo column"},
-  };
-  for (const ColumnMigration &migration : courseReplayColumnMigrations) {
-    if (!ensureTableColumn(db, "course_replays", migration.columnName,
-                           migration.alterQuery, migration.context)) {
+    struct ColumnMigration {
+      const char *columnName;
+      const char *alterQuery;
+      const char *context;
+    };
+    const ColumnMigration replayColumnMigrations[] = {
+        {"chart_path", "ALTER TABLE replays ADD COLUMN chart_path TEXT",
+         "adding replay chart path column"},
+        {"chart_md5", "ALTER TABLE replays ADD COLUMN chart_md5 TEXT",
+         "adding replay chart md5 column"},
+        {"chart_sha256", "ALTER TABLE replays ADD COLUMN chart_sha256 TEXT",
+         "adding replay chart sha256 column"},
+        {"random_seed", "ALTER TABLE replays ADD COLUMN random_seed INTEGER",
+         "adding replay random seed column"},
+        {"random_prng", "ALTER TABLE replays ADD COLUMN random_prng TEXT",
+         "adding replay random PRNG column"},
+        {"random_values", "ALTER TABLE replays ADD COLUMN random_values TEXT",
+         "adding replay random values column"},
+        {"play_option", "ALTER TABLE replays ADD COLUMN play_option TEXT",
+         "adding replay play option column"},
+        {"play_option_seed",
+         "ALTER TABLE replays ADD COLUMN play_option_seed INTEGER",
+         "adding replay play option seed column"},
+        {"play_option2", "ALTER TABLE replays ADD COLUMN play_option2 TEXT",
+         "adding replay 2P play option column"},
+        {"play_option2_seed",
+         "ALTER TABLE replays ADD COLUMN play_option2_seed INTEGER",
+         "adding replay 2P play option seed column"},
+        {"assist_option", "ALTER TABLE replays ADD COLUMN assist_option TEXT",
+         "adding replay assist option column"},
+        {"ln_mode",
+         "ALTER TABLE replays ADD COLUMN ln_mode INTEGER NOT NULL DEFAULT 0",
+         "adding replay long note mode column"},
+        {"max_combo",
+         "ALTER TABLE replays ADD COLUMN max_combo INTEGER NOT NULL DEFAULT 0",
+         "adding replay max combo column"},
+    };
+    for (const ColumnMigration &migration : replayColumnMigrations) {
+      if (!ensureTableColumn(db, "replays", migration.columnName,
+                             migration.alterQuery, migration.context)) {
+        return false;
+      }
+    }
+    const char *eventQuery =
+        "CREATE TABLE IF NOT EXISTS replay_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "replay_id INTEGER NOT NULL,"
+        "event_index INTEGER NOT NULL,"
+        "action INTEGER NOT NULL,"
+        "lane INTEGER NOT NULL,"
+        "note_time_micros INTEGER NOT NULL,"
+        "song_time_micros INTEGER NOT NULL,"
+        "judge_time_micros INTEGER NOT NULL,"
+        "judgement INTEGER NOT NULL,"
+        "diff_micros INTEGER NOT NULL,"
+        "gauge REAL NOT NULL,"
+        "gauge_type INTEGER NOT NULL,"
+        "combo INTEGER NOT NULL,"
+        "score INTEGER NOT NULL,"
+        "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+        ")";
+    if (!execSql(db, eventQuery, "creating replay event table")) {
       return false;
     }
-  }
 
-  const char *courseReplayStageQuery =
-      "CREATE TABLE IF NOT EXISTS course_replay_stages ("
-      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "course_replay_id INTEGER NOT NULL,"
-      "stage_index INTEGER NOT NULL,"
-      "replay_id INTEGER NOT NULL,"
-      "rest_micros_after_stage INTEGER NOT NULL DEFAULT 0,"
-      "FOREIGN KEY(course_replay_id) REFERENCES course_replays(id) "
-      "ON DELETE CASCADE,"
-      "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
-      ")";
-  if (!execSql(db, courseReplayStageQuery,
-               "creating course replay stage table")) {
-    return false;
-  }
+    const char *touchSampleQuery =
+        "CREATE TABLE IF NOT EXISTS replay_touch_samples ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "replay_id INTEGER NOT NULL,"
+        "sample_index INTEGER NOT NULL,"
+        "action INTEGER NOT NULL,"
+        "finger_id INTEGER NOT NULL,"
+        "song_time_micros INTEGER NOT NULL,"
+        "x REAL NOT NULL,"
+        "y REAL NOT NULL,"
+        "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+        ")";
+    if (!execSql(db, touchSampleQuery, "creating replay touch sample table")) {
+      return false;
+    }
 
-  const char *indexes[] = {
-      "CREATE INDEX IF NOT EXISTS idx_replays_chart_sha256 ON "
-      "replays(chart_sha256, id)",
-      "CREATE INDEX IF NOT EXISTS idx_replays_chart_md5 ON "
-      "replays(chart_md5, id)",
-      "CREATE INDEX IF NOT EXISTS idx_replays_chart_path ON "
-      "replays(chart_path, id)",
-      "CREATE INDEX IF NOT EXISTS idx_replay_events_replay_order ON "
-      "replay_events(replay_id, event_index)",
-      "CREATE INDEX IF NOT EXISTS idx_replay_touch_samples_replay_order ON "
-      "replay_touch_samples(replay_id, sample_index)",
-      "CREATE INDEX IF NOT EXISTS idx_replay_lane_cover_events_replay_order ON "
-      "replay_lane_cover_events(replay_id, event_index)",
-      "CREATE INDEX IF NOT EXISTS idx_course_replays_course ON "
-      "course_replays(course_id, id)",
-      "CREATE INDEX IF NOT EXISTS idx_course_replay_stages_course_order ON "
-      "course_replay_stages(course_replay_id, stage_index)",
-      "CREATE INDEX IF NOT EXISTS idx_course_replay_stages_replay ON "
-      "course_replay_stages(replay_id)",
-  };
-  for (const auto *indexQuery : indexes) {
-    if (!execSql(db, indexQuery, "creating replay index")) {
+    const char *laneCoverEventQuery =
+        "CREATE TABLE IF NOT EXISTS replay_lane_cover_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "replay_id INTEGER NOT NULL,"
+        "event_index INTEGER NOT NULL,"
+        "song_time_micros INTEGER NOT NULL,"
+        "note_start_position_percent INTEGER NOT NULL,"
+        "reset_visible_time_reference INTEGER NOT NULL,"
+        "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+        ")";
+    if (!execSql(db, laneCoverEventQuery,
+                 "creating replay lane cover event table")) {
+      return false;
+    }
+
+    const char *courseReplayQuery =
+        "CREATE TABLE IF NOT EXISTS course_replays ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "course_id INTEGER NOT NULL,"
+        "course_key TEXT NOT NULL DEFAULT '',"
+        "course_name TEXT,"
+        "course_group_name TEXT,"
+        "constraint_json TEXT,"
+        "gauge_type INTEGER NOT NULL,"
+        "gauge_profile INTEGER NOT NULL DEFAULT 0,"
+        "gauge_auto_shift INTEGER NOT NULL,"
+        "ln_mode INTEGER NOT NULL DEFAULT 0,"
+        "requested_play_option TEXT,"
+        "assist_option TEXT,"
+        "final_score INTEGER NOT NULL,"
+        "max_combo INTEGER NOT NULL DEFAULT 0,"
+        "final_gauge REAL NOT NULL,"
+        "clear_type INTEGER NOT NULL,"
+        "completed_charts INTEGER NOT NULL,"
+        "total_charts INTEGER NOT NULL,"
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ")";
+    if (!execSql(db, courseReplayQuery, "creating course replay table")) {
+      return false;
+    }
+    const ColumnMigration courseReplayColumnMigrations[] = {
+        {"max_combo",
+         "ALTER TABLE course_replays ADD COLUMN max_combo INTEGER NOT NULL "
+         "DEFAULT 0",
+         "adding course replay max combo column"},
+    };
+    for (const ColumnMigration &migration : courseReplayColumnMigrations) {
+      if (!ensureTableColumn(db, "course_replays", migration.columnName,
+                             migration.alterQuery, migration.context)) {
+        return false;
+      }
+    }
+
+    const char *courseReplayStageQuery =
+        "CREATE TABLE IF NOT EXISTS course_replay_stages ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "course_replay_id INTEGER NOT NULL,"
+        "stage_index INTEGER NOT NULL,"
+        "replay_id INTEGER NOT NULL,"
+        "rest_micros_after_stage INTEGER NOT NULL DEFAULT 0,"
+        "FOREIGN KEY(course_replay_id) REFERENCES course_replays(id) "
+        "ON DELETE CASCADE,"
+        "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+        ")";
+    if (!execSql(db, courseReplayStageQuery,
+                 "creating course replay stage table")) {
       return false;
     }
   }
   if (!migrateReplayDatabaseSchema(db)) {
-    return false;
-  }
-  if (!execSql(db,
-               "CREATE INDEX IF NOT EXISTS idx_course_replays_key_id ON "
-               "course_replays(course_key, id)",
-               "ensuring course replay content key index")) {
     return false;
   }
   if (!transaction.commit(transactionError)) {
@@ -1746,8 +2565,32 @@ bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
   return true;
 }
 
-sqlite3 *replay_repository_detail::OpenDatabase(
-    const std::filesystem::path &path, std::string &errorMessage) {
+bool replay_repository_detail::PrepareReplayDatabaseOnConnection(
+    sqlite3 *database, const std::filesystem::path &path) {
+  if (database == nullptr || rejectFutureReplayDatabase(database)) {
+    return false;
+  }
+  std::string versionError;
+  const auto version = readSqliteUserVersion(database, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading replay schema preparation version", versionError);
+    return false;
+  }
+  bool hasSchema = false;
+  if (!hasReplayUserSchema(database, hasSchema)) {
+    logSqlError("inspecting replay schema before migration", database);
+    return false;
+  }
+  if (*version >= kReplayDatabaseSchemaVersion ||
+      (*version == 0 && !hasSchema)) {
+    return CreateReplayTablesOnConnection(database);
+  }
+  return prepareReplayDatabaseWithCompaction(database, path);
+}
+
+sqlite3 *
+replay_repository_detail::OpenDatabase(const std::filesystem::path &path,
+                                       std::string &errorMessage) {
   return openReplayDatabase(path, errorMessage);
 }
 
@@ -1757,11 +2600,26 @@ std::filesystem::path replay_repository_detail::ResolvedDatabasePath(
 }
 
 bool replay_repository_detail::EquivalentDatabasePaths(
-    const std::filesystem::path &first,
-    const std::filesystem::path &second) {
+    const std::filesystem::path &first, const std::filesystem::path &second) {
   return equivalentReplayDatabasePaths(first, second);
 }
 
 bool replay_repository_detail::MigrateSchema(sqlite3 *database) {
   return migrateReplayDatabaseSchema(database);
 }
+
+#ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
+bool replay_repository_test::RunSchemaMigration(sqlite3 *database) {
+  return replay_repository_detail::CreateReplayTablesOnConnection(database);
+}
+
+void replay_repository_test::SetPathMigrationFault(PathMigrationFault fault) {
+  gPathMigrationFault = fault;
+}
+
+void replay_repository_test::SetPathMigrationAfterSnapshotHook(
+    void *context, PathMigrationAfterSnapshotHook hook) {
+  gPathMigrationAfterSnapshotContext = context;
+  gPathMigrationAfterSnapshotHook = hook;
+}
+#endif

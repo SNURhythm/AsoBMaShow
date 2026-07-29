@@ -111,6 +111,12 @@ assistClearRequired(const audio::PlaybackRate &playback) noexcept {
   return !playback.neutral();
 }
 
+[[nodiscard]] inline bool
+assistClearMarkRequired(bool assistOptionEnabled,
+                        const audio::PlaybackRate &playback) noexcept {
+  return assistOptionEnabled || assistClearRequired(playback);
+}
+
 [[nodiscard]] inline int
 capRankForPlayback(int rank, const audio::PlaybackRate &playback) noexcept {
   if (!assistClearRequired(playback) ||

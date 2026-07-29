@@ -25,6 +25,7 @@
 #include "../StbImageRAII.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -43,6 +44,7 @@
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kArchivedThumbnailMaxDimension = 256;
+constexpr std::size_t kBackgroundImageDecodeWorkerCount = 4;
 constexpr std::array<unsigned char, 8> kArchivedThumbnailMagic = {
     'A', 'S', 'O', 'B', 'T', 'H', 'M', '1'};
 
@@ -52,8 +54,27 @@ struct DecodedImage {
   std::shared_ptr<std::vector<unsigned char>> rgba;
 };
 
+struct ImageDecodeTimings {
+  std::int64_t sourceAccessMillis = 0;
+  std::int64_t sourceLoadDecodeMillis = 0;
+  std::int64_t rgbaCopyMillis = 0;
+  std::int64_t archivePreviewMillis = 0;
+};
+
+std::int64_t elapsedMillis(std::chrono::steady_clock::time_point started,
+                           std::chrono::steady_clock::time_point finished) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(finished -
+                                                                started)
+      .count();
+}
+
 std::string imageCacheKey(const path_t &path) {
   return archive_file::cacheKeyForPath(std::filesystem::path(path));
+}
+
+std::string imageAsyncCacheKey(const path_t &path) {
+  return "async-path:" +
+         fspath_to_utf8(std::filesystem::path(path).lexically_normal());
 }
 
 bool decodedImageDimensionsAreValid(int width, int height) {
@@ -174,7 +195,8 @@ void writeCachedArchivedThumbnail(const std::filesystem::path &path,
   }
 
   std::vector<unsigned char> bytes;
-  bytes.reserve(kArchivedThumbnailMagic.size() + 8U + thumbnail.rgba->size());
+  bytes.reserve(kArchivedThumbnailMagic.size() + 8U +
+                thumbnail.rgba->size());
   bytes.insert(bytes.end(), kArchivedThumbnailMagic.begin(),
                kArchivedThumbnailMagic.end());
   appendLittleEndianU32(bytes, static_cast<std::uint32_t>(thumbnail.width));
@@ -190,7 +212,10 @@ void writeCachedArchivedThumbnail(const std::filesystem::path &path,
   }
 }
 
-std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
+std::optional<DecodedImage>
+decodeImageFile(const std::filesystem::path &path,
+                ImageDecodeTimings *timings = nullptr) {
+  ImageDecodeTimings measured;
   const bool archiveEntryPath = isArchiveEntryImagePath(path);
   int width = 0;
   int height = 0;
@@ -201,7 +226,10 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
   if (IsAndroidTreePath(path)) {
     androidTreePath = true;
     std::string fdError;
+    const auto sourceAccessStarted = std::chrono::steady_clock::now();
     const auto fd = OpenAndroidTreeFileDescriptor(path, fdError);
+    measured.sourceAccessMillis = elapsedMillis(
+        sourceAccessStarted, std::chrono::steady_clock::now());
     if (!fd.has_value()) {
       SDL_Log("Failed to open Android image descriptor %s: %s",
               fspath_to_utf8(path).c_str(), fdError.c_str());
@@ -214,7 +242,10 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
               fspath_to_utf8(path).c_str());
       return std::nullopt;
     }
+    const auto sourceLoadStarted = std::chrono::steady_clock::now();
     data.reset(stbi_load_from_file(file, &width, &height, &channels, 4));
+    measured.sourceLoadDecodeMillis = elapsedMillis(
+        sourceLoadStarted, std::chrono::steady_clock::now());
     fclose(file);
   }
   if (!androidTreePath && !archive_file::isVirtualPath(path)) {
@@ -222,32 +253,72 @@ std::optional<DecodedImage> decodeImageFile(const std::filesystem::path &path) {
   if (!archive_file::isVirtualPath(path)) {
 #endif
     const std::string utf8Path = fspath_to_utf8(path);
+#ifdef _WIN32
+    const auto sourceLoadStarted = std::chrono::steady_clock::now();
     data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels, 4));
+    measured.sourceLoadDecodeMillis = elapsedMillis(
+        sourceLoadStarted, std::chrono::steady_clock::now());
+#else
+    const auto sourceAccessStarted = std::chrono::steady_clock::now();
+    UniqueResource<FILE, fclose> file(fopen(utf8Path.c_str(), "rb"));
+    measured.sourceAccessMillis = elapsedMillis(
+        sourceAccessStarted, std::chrono::steady_clock::now());
+    if (file) {
+      const auto sourceLoadStarted = std::chrono::steady_clock::now();
+      data.reset(
+          stbi_load_from_file(file.get(), &width, &height, &channels, 4));
+      measured.sourceLoadDecodeMillis = elapsedMillis(
+          sourceLoadStarted, std::chrono::steady_clock::now());
+    }
+#endif
   } else {
     std::vector<unsigned char> bytes;
     std::string errorMessage;
+    const auto sourceAccessStarted = std::chrono::steady_clock::now();
     if (!archive_file::readFile(path, bytes, &errorMessage)) {
+      measured.sourceAccessMillis = elapsedMillis(
+          sourceAccessStarted, std::chrono::steady_clock::now());
+      if (timings != nullptr) {
+        *timings = measured;
+      }
       SDL_Log("Failed to read archived image %s: %s",
               fspath_to_utf8(path).c_str(), errorMessage.c_str());
       return std::nullopt;
     }
+    measured.sourceAccessMillis = elapsedMillis(
+        sourceAccessStarted, std::chrono::steady_clock::now());
+    const auto sourceLoadStarted = std::chrono::steady_clock::now();
     data.reset(stbi_load_from_memory(bytes.data(),
                                      static_cast<int>(bytes.size()), &width,
                                      &height, &channels, 4));
+    measured.sourceLoadDecodeMillis = elapsedMillis(
+        sourceLoadStarted, std::chrono::steady_clock::now());
   }
 
   if (data == nullptr || !decodedImageDimensionsAreValid(width, height)) {
+    if (timings != nullptr) {
+      *timings = measured;
+    }
     return std::nullopt;
   }
 
+  const auto copyStarted = std::chrono::steady_clock::now();
   const size_t byteCount = static_cast<size_t>(width) *
                            static_cast<size_t>(height) * 4;
   auto rgba = std::make_shared<std::vector<unsigned char>>(byteCount);
   std::copy(data.get(), data.get() + byteCount, rgba->begin());
+  measured.rgbaCopyMillis =
+      elapsedMillis(copyStarted, std::chrono::steady_clock::now());
   DecodedImage decoded{.width = width, .height = height, .rgba = rgba};
   if (archiveEntryPath) {
+    const auto archivePreviewStarted = std::chrono::steady_clock::now();
     DecodedImage thumbnail = makeArchivedThumbnail(decoded);
     writeCachedArchivedThumbnail(path, thumbnail);
+    measured.archivePreviewMillis = elapsedMillis(
+        archivePreviewStarted, std::chrono::steady_clock::now());
+  }
+  if (timings != nullptr) {
+    *timings = measured;
   }
   return decoded;
 }
@@ -259,31 +330,49 @@ public:
     return worker;
   }
 
-  void request(const path_t &path, bool prioritize = false) {
-    const std::string key = imageCacheKey(path);
+  void request(const path_t &path, const std::string &key,
+               bool prioritize = false) {
     std::lock_guard<std::mutex> lock(mutex);
-    if (ready.contains(key) || failed.contains(key) ||
-        inFlight.contains(key)) {
+    if (ready.contains(key) || failed.contains(key)) {
       return;
     }
-    if (queued.contains(key)) {
-      if (prioritize) {
-        promoteQueuedTask(key);
-      }
-      return;
-    }
-    Task task{.key = key, .path = path, .generation = generation};
+
     if (prioritize) {
-      queue.push_back(std::move(task));
-    } else {
-      queue.push_front(std::move(task));
+      if (inFlight.contains(key) || priorityQueued.contains(key) ||
+          priorityInFlight.contains(key)) {
+        return;
+      }
+      if (queued.contains(key)) {
+        queued.erase(key);
+        queue.erase(std::remove_if(
+                        queue.begin(), queue.end(),
+                        [&key](const Task &task) { return task.key == key; }),
+                    queue.end());
+      }
+      priorityQueue.push_back(
+          Task{.key = key,
+               .path = path,
+               .generation = generation,
+               .queuedAt = std::chrono::steady_clock::now()});
+      priorityQueued.insert(key);
+      cv.notify_all();
+      return;
     }
+
+    if (queued.contains(key) || inFlight.contains(key) ||
+        priorityQueued.contains(key) || priorityInFlight.contains(key)) {
+      return;
+    }
+    Task task{.key = key,
+              .path = path,
+              .generation = generation,
+              .queuedAt = std::chrono::steady_clock::now()};
+    queue.push_back(std::move(task));
     queued.insert(key);
-    cv.notify_one();
+    cv.notify_all();
   }
 
-  std::optional<DecodedImage> takeReady(const path_t &path) {
-    const std::string key = imageCacheKey(path);
+  std::optional<DecodedImage> takeReady(const std::string &key) {
     std::lock_guard<std::mutex> lock(mutex);
     const auto it = ready.find(key);
     if (it == ready.end()) {
@@ -294,30 +383,44 @@ public:
     return decoded;
   }
 
-  bool hasFailed(const path_t &path) {
-    const std::string key = imageCacheKey(path);
+  bool hasFailed(const std::string &key) {
     std::lock_guard<std::mutex> lock(mutex);
     return failed.contains(key);
   }
 
-  void drop(const path_t &path) {
-    const std::string key = imageCacheKey(path);
+#if defined(ASOBMASHOW_IMAGE_VIEW_TESTING)
+  std::size_t pendingCount(const std::string &key) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return static_cast<std::size_t>(queued.contains(key)) +
+           static_cast<std::size_t>(inFlight.contains(key)) +
+           static_cast<std::size_t>(priorityQueued.contains(key)) +
+           static_cast<std::size_t>(priorityInFlight.contains(key));
+  }
+#endif
+
+  void drop(const std::string &key) {
     std::lock_guard<std::mutex> lock(mutex);
     ready.erase(key);
     failed.erase(key);
     queued.erase(key);
-    queue.erase(std::remove_if(queue.begin(), queue.end(),
-                               [&key](const Task &task) {
-                                 return task.key == key;
-                               }),
-                queue.end());
+    priorityQueued.erase(key);
+    queue.erase(
+        std::remove_if(queue.begin(), queue.end(),
+                       [&key](const Task &task) { return task.key == key; }),
+        queue.end());
+    priorityQueue.erase(
+        std::remove_if(priorityQueue.begin(), priorityQueue.end(),
+                       [&key](const Task &task) { return task.key == key; }),
+        priorityQueue.end());
   }
 
   void dropAll() {
     std::lock_guard<std::mutex> lock(mutex);
     ++generation;
     queue.clear();
+    priorityQueue.clear();
     queued.clear();
+    priorityQueued.clear();
     ready.clear();
     failed.clear();
   }
@@ -327,76 +430,116 @@ private:
     std::string key;
     path_t path;
     std::uint64_t generation = 0;
+    std::chrono::steady_clock::time_point queuedAt;
   };
 
-  ImageDecodeWorker() : worker([this] { run(); }) {}
+  ImageDecodeWorker() {
+    workers.reserve(kBackgroundImageDecodeWorkerCount);
+    for (std::size_t i = 0; i < kBackgroundImageDecodeWorkerCount; ++i) {
+      workers.emplace_back([this] { run(false); });
+    }
+    priorityWorker = std::thread([this] { run(true); });
+  }
 
   ~ImageDecodeWorker() {
     {
       std::lock_guard<std::mutex> lock(mutex);
       stop = true;
     }
-    cv.notify_one();
-    if (worker.joinable()) {
-      worker.join();
+    cv.notify_all();
+    for (auto &worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+    if (priorityWorker.joinable()) {
+      priorityWorker.join();
     }
   }
 
-  void run() {
+  void run(bool priorityOnly) {
     for (;;) {
       Task task;
+      bool taskIsPriority = false;
       {
         std::unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [this] { return stop || !queue.empty(); });
+        cv.wait(lock, [this, priorityOnly] {
+          return stop || !priorityQueue.empty() ||
+                 (!priorityOnly && !queue.empty());
+        });
         if (stop) {
           return;
         }
-        task = std::move(queue.back());
-        queue.pop_back();
-        queued.erase(task.key);
-        inFlight.insert(task.key);
+        taskIsPriority = !priorityQueue.empty();
+        auto &activeQueue = taskIsPriority ? priorityQueue : queue;
+        auto &activeQueued = taskIsPriority ? priorityQueued : queued;
+        auto &activeInFlight = taskIsPriority ? priorityInFlight : inFlight;
+        task = std::move(activeQueue.back());
+        activeQueue.pop_back();
+        activeQueued.erase(task.key);
+        activeInFlight.insert(task.key);
       }
 
+      const auto decodeStarted = std::chrono::steady_clock::now();
+      ImageDecodeTimings timings;
       std::optional<DecodedImage> decoded =
-          decodeImageFile(std::filesystem::path(task.path));
+          decodeImageFile(std::filesystem::path(task.path), &timings);
+      const auto decodeFinished = std::chrono::steady_clock::now();
+      const auto queueMillis =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              decodeStarted - task.queuedAt)
+              .count();
+      const auto workerMillis =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              decodeFinished - decodeStarted)
+              .count();
+      if (queueMillis >= 250 || workerMillis >= 250) {
+        const std::string diagnostic =
+            "Slow async image load: queue=" + std::to_string(queueMillis) +
+            "ms source=" + std::to_string(timings.sourceAccessMillis) +
+            "ms load_decode=" +
+            std::to_string(timings.sourceLoadDecodeMillis) +
+            "ms copy=" + std::to_string(timings.rgbaCopyMillis) +
+            "ms archive_preview=" +
+            std::to_string(timings.archivePreviewMillis) +
+            "ms worker=" + std::to_string(workerMillis) + "ms path=" +
+            fspath_to_utf8(std::filesystem::path(task.path));
+        SDL_Log("%s", diagnostic.c_str());
+        archive_file::appendDebugLogLine(diagnostic);
+      }
 
       {
         std::lock_guard<std::mutex> lock(mutex);
-        inFlight.erase(task.key);
+        (taskIsPriority ? priorityInFlight : inFlight).erase(task.key);
         if (task.generation != generation) {
           continue;
         }
         if (decoded.has_value()) {
           ready[task.key] = *decoded;
-        } else {
+          failed.erase(task.key);
+        } else if (!ready.contains(task.key) &&
+                   !queued.contains(task.key) &&
+                   !inFlight.contains(task.key) &&
+                   !priorityQueued.contains(task.key) &&
+                   !priorityInFlight.contains(task.key)) {
           failed.insert(task.key);
         }
       }
     }
   }
 
-  void promoteQueuedTask(const std::string &key) {
-    const auto it = std::find_if(queue.begin(), queue.end(),
-                                 [&key](const Task &task) {
-                                   return task.key == key;
-                                 });
-    if (it == queue.end()) {
-      return;
-    }
-    Task task = std::move(*it);
-    queue.erase(it);
-    queue.push_back(std::move(task));
-    cv.notify_one();
-  }
-
   std::mutex mutex;
   std::condition_variable cv;
   std::deque<Task> queue;
+  std::deque<Task> priorityQueue;
   std::unordered_set<std::string> queued;
+  std::unordered_set<std::string> priorityQueued;
   std::unordered_set<std::string> inFlight;
+  std::unordered_set<std::string> priorityInFlight;
   std::unordered_set<std::string> failed;
   std::map<std::string, DecodedImage> ready;
-  std::thread worker;
+  std::vector<std::thread> workers;
+  std::thread priorityWorker;
   std::uint64_t generation = 0;
   bool stop = false;
 };
@@ -517,10 +660,9 @@ ImageView::ImageView(int x, int y, int width, int height, const path_t &path)
 }
 ImageView::~ImageView() { freeTexture(); }
 
-bool ImageView::applyImage(const path_t &path, const ImageCache &cache,
-                           bool storeCache) {
+bool ImageView::applyImage(const path_t &path, const std::string &key,
+                           const ImageCache &cache, bool storeCache) {
   freeTexture();
-  const std::string key = imageCacheKey(path);
   if (!cache.rgba || cache.rgba->empty() ||
       !decodedImageDimensionsAreValid(cache.width, cache.height)) {
     return false;
@@ -551,29 +693,30 @@ bool ImageView::applyImage(const path_t &path, const ImageCache &cache,
   return true;
 }
 
-bool ImageView::applyCachedTexture(const path_t &path) {
-  const std::string key = imageCacheKey(path);
+bool ImageView::applyCachedTexture(const path_t &path,
+                                   const std::string &key) {
   const auto localIt = imageCache.find(key);
   if (localIt != imageCache.end()) {
-    return applyImage(path, localIt->second);
+    return applyImage(path, key, localIt->second);
   }
-  if (const auto loaded = ImageDecodeWorker::instance().takeReady(path)) {
-    return applyImage(path, {.width = loaded->width,
-                             .height = loaded->height,
-                             .rgba = loaded->rgba});
+  if (const auto loaded = ImageDecodeWorker::instance().takeReady(key)) {
+    return applyImage(path, key, {.width = loaded->width,
+                                  .height = loaded->height,
+                                  .rgba = loaded->rgba});
   }
   return false;
 }
 
-bool ImageView::applyCachedThumbnail(const path_t &path) {
+bool ImageView::applyCachedThumbnail(const path_t &path,
+                                     const std::string &key) {
   const auto thumbnail =
       readCachedArchivedThumbnail(std::filesystem::path(path));
   if (!thumbnail.has_value()) {
     return false;
   }
-  return applyImage(path, {.width = thumbnail->width,
-                           .height = thumbnail->height,
-                           .rgba = thumbnail->rgba},
+  return applyImage(path, key, {.width = thumbnail->width,
+                                .height = thumbnail->height,
+                                .rgba = thumbnail->rgba},
                     false);
 }
 
@@ -581,11 +724,11 @@ void ImageView::applyAsyncImageIfReady() {
   if (currentImageKey.empty() || !asyncImagePending) {
     return;
   }
-  if (applyCachedTexture(currentImagePath)) {
+  if (applyCachedTexture(currentImagePath, currentImageKey)) {
     asyncImagePending = false;
     return;
   }
-  if (ImageDecodeWorker::instance().hasFailed(currentImagePath)) {
+  if (ImageDecodeWorker::instance().hasFailed(currentImageKey)) {
     asyncImagePending = false;
   }
 }
@@ -598,7 +741,7 @@ bool ImageView::loadTexture(const path_t &path) {
     return true;
   }
   asyncImagePending = false;
-  if (applyCachedTexture(path)) {
+  if (applyCachedTexture(path, key)) {
     return true;
   }
 
@@ -609,9 +752,9 @@ bool ImageView::loadTexture(const path_t &path) {
   }
   SDL_Log("Loaded image: %s; width: %d; height: %d", utf8Path.c_str(),
           decoded->width, decoded->height);
-  return applyImage(path, {.width = decoded->width,
-                           .height = decoded->height,
-                           .rgba = decoded->rgba});
+  return applyImage(path, key, {.width = decoded->width,
+                                .height = decoded->height,
+                                .rgba = decoded->rgba});
 }
 
 void ImageView::freeTexture() {
@@ -625,18 +768,21 @@ void ImageView::freeTexture() {
 
 bool ImageView::setImage(const path_t &path) { return loadTexture(path); }
 bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
-  const std::string key = imageCacheKey(path);
+  const std::string key =
+      isArchiveEntryImagePath(std::filesystem::path(path))
+          ? imageCacheKey(path)
+          : imageAsyncCacheKey(path);
   if (currentImageKey == key) {
-    if (applyCachedTexture(path)) {
+    if (applyCachedTexture(path, key)) {
       asyncImagePending = false;
       return true;
     }
     if (!bgfx::isValid(texture)) {
-      applyCachedThumbnail(path);
+      applyCachedThumbnail(path, key);
     }
-    if (!ImageDecodeWorker::instance().hasFailed(path)) {
+    if (!ImageDecodeWorker::instance().hasFailed(key)) {
       asyncImagePending = true;
-      ImageDecodeWorker::instance().request(path, prioritize);
+      ImageDecodeWorker::instance().request(path, key, prioritize);
     } else {
       asyncImagePending = false;
     }
@@ -646,13 +792,13 @@ bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
   freeTexture();
   currentImageKey = key;
   currentImagePath = path;
-  if (applyCachedTexture(path)) {
+  if (applyCachedTexture(path, key)) {
     asyncImagePending = false;
     return true;
   }
-  applyCachedThumbnail(path);
-  ImageDecodeWorker::instance().request(path, prioritize);
-  asyncImagePending = !ImageDecodeWorker::instance().hasFailed(path);
+  applyCachedThumbnail(path, key);
+  ImageDecodeWorker::instance().request(path, key, prioritize);
+  asyncImagePending = !ImageDecodeWorker::instance().hasFailed(key);
   return false;
 }
 void ImageView::freeImage() {
@@ -731,11 +877,21 @@ ImageView::ImageView(int x, int y, int width, int height)
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
 }
 void ImageView::dropCache(const path_t &path) {
-  const std::string key = imageCacheKey(path);
-  imageCache.erase(key);
-  ImageDecodeWorker::instance().drop(path);
+  const std::string asyncKey = imageAsyncCacheKey(path);
+  imageCache.erase(asyncKey);
+  ImageDecodeWorker::instance().drop(asyncKey);
+  const std::string metadataKey = imageCacheKey(path);
+  imageCache.erase(metadataKey);
+  ImageDecodeWorker::instance().drop(metadataKey);
 }
 void ImageView::dropAllCache() {
   imageCache.clear();
   ImageDecodeWorker::instance().dropAll();
 }
+
+#if defined(ASOBMASHOW_IMAGE_VIEW_TESTING)
+std::size_t
+ImageView::pendingAsyncDecodeCountForTesting(const path_t &path) {
+  return ImageDecodeWorker::instance().pendingCount(imageAsyncCacheKey(path));
+}
+#endif

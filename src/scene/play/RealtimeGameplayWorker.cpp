@@ -190,6 +190,14 @@ RealtimeGameplayWorker::copyReplayEventsAfterStop() const {
   return {events.begin(), events.end()};
 }
 
+std::optional<std::vector<replay::InputTransition>>
+RealtimeGameplayWorker::copyAcceptedReplayInputAfterStop() const {
+  if (running() || !replayCaptureValid_) {
+    return std::nullopt;
+  }
+  return acceptedReplayInput_;
+}
+
 std::vector<float>
 RealtimeGameplayWorker::copyGaugeHistoryAfterStop() const {
   if (running()) {
@@ -283,23 +291,192 @@ void RealtimeGameplayWorker::processInput(
     latchFault(RealtimeGameplayFault::ClockUnavailable);
     return;
   }
+
+  if (input.hasReplayControl &&
+      (input.replayControl.kind == replay::LogicalControlKind::Start ||
+       input.replayControl.kind == replay::LogicalControlKind::Select)) {
+    // Start and Select are stock BRD commands without a physical chart lane.
+    // They bypass lane ownership; replayOnly is reserved for scratch handoffs.
+    auto command = input;
+    command.source = RealtimeGameplayInputSource::Independent;
+    command.lane = -1;
+    command.compensateLane = -1;
+    command.replayOnly = false;
+    recordAcceptedReplayInput(command, *songTime);
+    return;
+  }
+
+  if (input.source == RealtimeGameplayInputSource::Independent) {
+    if (input.replayOnly) {
+      recordAcceptedReplayInput(input, *songTime);
+    } else if (processGameplayInput(input, *songTime)) {
+      recordAcceptedReplayInput(input, *songTime);
+    }
+    return;
+  }
+
+  const auto decision = coalesceOwnedInput(input);
+  bool accepted = true;
+  for (std::size_t index = 0; index < decision.gameplayCount; ++index) {
+    accepted = processGameplayInput(decision.gameplay[index], *songTime) &&
+               accepted;
+    if (fault() != RealtimeGameplayFault::None) {
+      break;
+    }
+  }
+  if (!accepted) {
+    return;
+  }
+  for (std::size_t index = 0; index < decision.replayCount; ++index) {
+    recordAcceptedReplayInput(decision.replay[index], *songTime);
+  }
+}
+
+RealtimeGameplayWorker::OwnedInputDecision
+RealtimeGameplayWorker::coalesceOwnedInput(
+    const RealtimeGameplayInput &input) noexcept {
+  OwnedInputDecision decision;
+  const auto sourceIndex = [&]() -> std::optional<std::size_t> {
+    switch (input.source) {
+    case RealtimeGameplayInputSource::Physical:
+      return 0;
+    case RealtimeGameplayInputSource::Touch:
+      return 1;
+    case RealtimeGameplayInputSource::LegacyAdapter:
+      return 2;
+    case RealtimeGameplayInputSource::Independent:
+      return std::nullopt;
+    }
+    return std::nullopt;
+  }();
+  if (!sourceIndex.has_value()) {
+    return decision;
+  }
+
+  int lane = input.lane;
+  if ((lane < 0 || static_cast<std::size_t>(lane) >= ownedInputLanes_.size()) &&
+      input.hasReplayControl) {
+    const auto replayLane = replay::physicalChartLaneForLogicalControl(
+        definition_.metadata().keyMode, input.replayControl);
+    lane = replayLane.value_or(-1);
+  }
+  if (lane < 0 || static_cast<std::size_t>(lane) >= ownedInputLanes_.size()) {
+    if (input.hasReplayControl) {
+      decision.replay[0] = input;
+      decision.replay[0].replayOnly = true;
+      decision.replayCount = 1;
+    }
+    return decision;
+  }
+
+  auto &laneState = ownedInputLanes_[static_cast<std::size_t>(lane)];
+  const auto anyHeld = [&]() {
+    return std::ranges::any_of(laneState.sources,
+                               [](const auto &source) { return source.held; });
+  };
+  const auto activeReplayControl = [&]()
+      -> std::optional<replay::LogicalControl> {
+    const OwnedInputSourceState *active = nullptr;
+    for (const auto &source : laneState.sources) {
+      if (!source.held || !source.hasReplayControl ||
+          (active != nullptr &&
+           source.claimSequence <= active->claimSequence)) {
+        continue;
+      }
+      active = &source;
+    }
+    return active == nullptr
+               ? std::nullopt
+               : std::optional<replay::LogicalControl>(active->replayControl);
+  };
+
+  const bool wasHeld = anyHeld();
+  const auto previousReplayControl = activeReplayControl();
+  auto &source = laneState.sources[*sourceIndex];
+  if (!input.replayOnly) {
+    source.held = input.type == RealtimeGameplayInputType::Press;
+    if (source.held) {
+      source.claimSequence = ++ownedInputClaimSequence_;
+    }
+  }
+  if (input.hasReplayControl) {
+    if (input.type == RealtimeGameplayInputType::Press) {
+      source.hasReplayControl = true;
+      source.replayControl = input.replayControl;
+      source.claimSequence = ++ownedInputClaimSequence_;
+    } else if (source.hasReplayControl &&
+               source.replayControl == input.replayControl) {
+      source.hasReplayControl = false;
+    }
+  }
+
+  const bool held = anyHeld();
+  const auto replayControl = activeReplayControl();
+  if (wasHeld != held) {
+    auto &effective = decision.gameplay[decision.gameplayCount++];
+    effective = input;
+    effective.source = RealtimeGameplayInputSource::Independent;
+    effective.type = held ? RealtimeGameplayInputType::Press
+                          : RealtimeGameplayInputType::Release;
+    effective.lane = lane;
+    effective.compensateLane =
+        input.compensateLane >= 0 ? input.compensateLane : lane;
+    effective.hasReplayControl = false;
+    effective.replayOnly = false;
+  }
+
+  if (previousReplayControl == replayControl) {
+    return decision;
+  }
+  const bool effectiveRelease =
+      decision.gameplayCount > 0 &&
+      decision.gameplay[0].type == RealtimeGameplayInputType::Release;
+  const bool effectivePress =
+      decision.gameplayCount > 0 &&
+      decision.gameplay[0].type == RealtimeGameplayInputType::Press;
+  if (previousReplayControl.has_value()) {
+    auto &released = decision.replay[decision.replayCount++];
+    released = input;
+    released.source = RealtimeGameplayInputSource::Independent;
+    released.type = RealtimeGameplayInputType::Release;
+    released.lane = lane;
+    released.hasReplayControl = true;
+    released.replayControl = *previousReplayControl;
+    released.replayOnly = !effectiveRelease;
+  }
+  if (replayControl.has_value()) {
+    auto &pressed = decision.replay[decision.replayCount++];
+    pressed = input;
+    pressed.source = RealtimeGameplayInputSource::Independent;
+    pressed.type = RealtimeGameplayInputType::Press;
+    pressed.lane = lane;
+    pressed.hasReplayControl = true;
+    pressed.replayControl = *replayControl;
+    pressed.replayOnly = !effectivePress;
+  }
+  return decision;
+}
+
+bool RealtimeGameplayWorker::processGameplayInput(
+    const RealtimeGameplayInput &input, std::int64_t songTimeMicros) {
   const bool preparationInput =
       config_.activationSongTimeMicros.has_value() &&
-      *songTime < *config_.activationSongTimeMicros;
+      songTimeMicros < *config_.activationSongTimeMicros;
   const GameplayInputContext context{
-      .songTimeMicros = *songTime,
+      .songTimeMicros = songTimeMicros,
       .laneBeamTimeMicros = input.steadyTimestampMicros,
       .inputDelayMicros = input.inputDelayMicros,
   };
 
   if (!preparationInput) {
     const auto advanced = simulation_.advanceTo(
-        *songTime - input.inputDelayMicros, input.steadyTimestampMicros);
+        songTimeMicros - input.inputDelayMicros,
+        input.steadyTimestampMicros);
     if (!commitAutomaticTransactions(advanced.transactions)) {
-      return;
+      return false;
     }
     if (simulation_.terminal()) {
-      return;
+      return false;
     }
   }
 
@@ -314,7 +491,7 @@ void RealtimeGameplayWorker::processInput(
         recordTransaction(transaction);
       }
     }
-    return;
+    return true;
   }
 
   const int compensateLane =
@@ -334,7 +511,7 @@ void RealtimeGameplayWorker::processInput(
       (config_.audio.reserve == nullptr ||
        !config_.audio.reserve(config_.audio.context, preview, reservation))) {
     latchFault(RealtimeGameplayFault::AudioCapacityUnavailable);
-    return;
+    return false;
   }
 
   std::size_t previewMatchCount = 0;
@@ -359,24 +536,52 @@ void RealtimeGameplayWorker::processInput(
     }
   }
   if (!requiresSound) {
-    return;
+    return true;
   }
   if (unexpectedSound || previewMatchCount != 1) {
     if (reservation.requiresCommit && config_.audio.cancel != nullptr) {
       config_.audio.cancel(config_.audio.context, reservation, preview);
     }
     latchFault(RealtimeGameplayFault::InternalConsistency);
-    return;
+    return true;
   }
   if (config_.audio.commit == nullptr) {
     if (reservation.requiresCommit && config_.audio.cancel != nullptr) {
       config_.audio.cancel(config_.audio.context, reservation, preview);
     }
     latchFault(RealtimeGameplayFault::AudioCommitFailed);
-    return;
+    return true;
   }
   if (!config_.audio.commit(config_.audio.context, reservation, preview)) {
     latchFault(RealtimeGameplayFault::AudioCommitFailed);
+  }
+  return true;
+}
+
+void RealtimeGameplayWorker::recordAcceptedReplayInput(
+    const RealtimeGameplayInput &input,
+    std::int64_t songTimeMicros) noexcept {
+  if (!input.hasReplayControl || !replayCaptureValid_) {
+    return;
+  }
+  const std::size_t maximum = std::min(
+      config_.maximumReplayInputTransitions,
+      replay::kReplayLimits.maxInputTransitions);
+  if (maximum == 0 || acceptedReplayInput_.size() >= maximum ||
+      songTimeMicros < replay::kReplayLimits.minimumSongTimeMicros) {
+    replayCaptureValid_ = false;
+    acceptedReplayInput_.clear();
+    return;
+  }
+  try {
+    acceptedReplayInput_.push_back(
+        {.songTimeMicros = songTimeMicros,
+         .control = input.replayControl,
+         .pressed = input.type == RealtimeGameplayInputType::Press,
+         .replayOnly = input.replayOnly});
+  } catch (...) {
+    replayCaptureValid_ = false;
+    acceptedReplayInput_.clear();
   }
 }
 

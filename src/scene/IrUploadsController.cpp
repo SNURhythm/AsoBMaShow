@@ -23,16 +23,17 @@ std::string normalizedFailureReason(std::string_view diagnostic,
 
 } // namespace
 
-std::size_t detail::eraseQueuedReplayIds(
-    std::vector<int> &failedReplayIds,
-    std::span<const int> queuedReplayIds) {
-  std::unordered_set<int> queued;
-  queued.reserve(queuedReplayIds.size());
-  queued.insert(queuedReplayIds.begin(), queuedReplayIds.end());
-  const std::size_t membershipOperations = failedReplayIds.size();
-  std::erase_if(failedReplayIds,
-                [&](int replayId) { return queued.contains(replayId); });
-  return queuedReplayIds.size() + membershipOperations;
+std::size_t detail::eraseQueuedAttemptIds(
+    std::vector<std::string> &failedAttemptIds,
+    std::span<const std::string> queuedAttemptIds) {
+  std::unordered_set<std::string> queued;
+  queued.reserve(queuedAttemptIds.size());
+  queued.insert(queuedAttemptIds.begin(), queuedAttemptIds.end());
+  const std::size_t membershipOperations = failedAttemptIds.size();
+  std::erase_if(failedAttemptIds, [&](const std::string &attemptId) {
+    return queued.contains(attemptId);
+  });
+  return queuedAttemptIds.size() + membershipOperations;
 }
 
 void DurableEnqueueGate::requestCancellation() noexcept {
@@ -62,18 +63,20 @@ PreparationOutcome prepareSelectedCandidates(
     const PreparationDependencies &dependencies,
     std::shared_ptr<DurableEnqueueGate> enqueueGate) noexcept {
   PreparationOutcome outcome;
-  outcome.failedReplayIds.reserve(candidates.size());
+  outcome.failedAttemptIds.reserve(candidates.size());
   outcome.failureReasons.reserve(candidates.size());
-  std::unordered_set<int> recordedFailures;
+  std::unordered_set<std::string> recordedFailures;
   recordedFailures.reserve(candidates.size());
   for (const auto &candidate : candidates) {
-    outcome.failedReplayIds.push_back(candidate.replayId());
+    outcome.failedAttemptIds.emplace_back(candidate.attemptId());
   }
-  const auto recordFailure = [&](int replayId, std::string_view diagnostic,
+  const auto recordFailure = [&](std::string_view attemptId,
+                                 std::string_view diagnostic,
                                  std::string_view fallback) {
-    if (replayId > 0 && recordedFailures.emplace(replayId).second) {
+    if (!attemptId.empty() &&
+        recordedFailures.emplace(attemptId).second) {
       outcome.failureReasons.push_back(
-          {.replayId = replayId,
+          {.attemptId = std::string(attemptId),
            .diagnostic = normalizedFailureReason(diagnostic, fallback)});
     }
   };
@@ -100,9 +103,9 @@ PreparationOutcome prepareSelectedCandidates(
     }
 
     std::vector<ir::IrSubmission> submissions;
-    std::vector<int> submissionReplayIds;
+    std::vector<std::string> submissionAttemptIds;
     submissions.reserve(candidates.size());
-    submissionReplayIds.reserve(candidates.size());
+    submissionAttemptIds.reserve(candidates.size());
     for (std::size_t index = 0; index < candidates.size(); ++index) {
       if (stopToken.stop_requested()) {
         cancel();
@@ -126,10 +129,10 @@ PreparationOutcome prepareSelectedCandidates(
         return outcome;
       }
       if (verified.submission.has_value()) {
-        submissionReplayIds.push_back(candidates[index].replayId());
+        submissionAttemptIds.emplace_back(candidates[index].attemptId());
         submissions.push_back(std::move(*verified.submission));
       } else {
-        recordFailure(candidates[index].replayId(), verified.diagnostic,
+        recordFailure(candidates[index].attemptId(), verified.diagnostic,
                       "This saved result could not be verified for IR.");
       }
       if (dependencies.progress) {
@@ -145,8 +148,8 @@ PreparationOutcome prepareSelectedCandidates(
       return outcome;
     }
     if (!dependencies.enqueueBatch) {
-      for (const int replayId : submissionReplayIds) {
-        recordFailure(replayId, {}, "IR batch enqueue is unavailable.");
+      for (const std::string &attemptId : submissionAttemptIds) {
+        recordFailure(attemptId, {}, "IR batch enqueue is unavailable.");
       }
       return outcome;
     }
@@ -158,15 +161,15 @@ PreparationOutcome prepareSelectedCandidates(
     }
 
     std::vector<ir::IrSubmission> uniqueSubmissions;
-    std::vector<int> uniqueSubmissionReplayIds;
+    std::vector<std::string> uniqueSubmissionAttemptIds;
     uniqueSubmissions.reserve(submissions.size());
-    uniqueSubmissionReplayIds.reserve(submissionReplayIds.size());
+    uniqueSubmissionAttemptIds.reserve(submissionAttemptIds.size());
     for (std::size_t index = 0; index < submissions.size(); ++index) {
       if (submissionCounts[submissions[index].attemptId] == 1) {
         uniqueSubmissions.push_back(std::move(submissions[index]));
-        uniqueSubmissionReplayIds.push_back(submissionReplayIds[index]);
+        uniqueSubmissionAttemptIds.push_back(submissionAttemptIds[index]);
       } else {
-        recordFailure(submissionReplayIds[index], {},
+        recordFailure(submissionAttemptIds[index], {},
                       "Saved results have duplicate IR attempt identity.");
       }
     }
@@ -179,13 +182,13 @@ PreparationOutcome prepareSelectedCandidates(
       batch = enqueueGate->enqueueUnlessCancelled(stopToken, uniqueSubmissions,
                                                   dependencies.enqueueBatch);
     } catch (const std::exception &) {
-      for (const int replayId : uniqueSubmissionReplayIds) {
-        recordFailure(replayId, {}, "IR batch enqueue failed.");
+      for (const std::string &attemptId : uniqueSubmissionAttemptIds) {
+        recordFailure(attemptId, {}, "IR batch enqueue failed.");
       }
       return outcome;
     } catch (...) {
-      for (const int replayId : uniqueSubmissionReplayIds) {
-        recordFailure(replayId, {}, "IR batch enqueue failed.");
+      for (const std::string &attemptId : uniqueSubmissionAttemptIds) {
+        recordFailure(attemptId, {}, "IR batch enqueue failed.");
       }
       return outcome;
     }
@@ -209,9 +212,10 @@ PreparationOutcome prepareSelectedCandidates(
       const auto item = resultItems.find(attemptId);
       if (count != resultCounts.end() && count->second == 1 &&
           item != resultItems.end() && accepted(item->second->status)) {
-        outcome.queuedReplayIds.push_back(uniqueSubmissionReplayIds[index]);
+        outcome.queuedAttemptIds.push_back(
+            uniqueSubmissionAttemptIds[index]);
       } else if (count != resultCounts.end() && count->second > 1) {
-        recordFailure(uniqueSubmissionReplayIds[index], {},
+        recordFailure(uniqueSubmissionAttemptIds[index], {},
                       "IR batch enqueue returned ambiguous outcomes.");
       } else if (item != resultItems.end()) {
         std::string diagnostic =
@@ -219,24 +223,24 @@ PreparationOutcome prepareSelectedCandidates(
         if (diagnostic.empty()) {
           diagnostic = ir::sanitizeDiagnostic(batch->diagnostic);
         }
-        recordFailure(uniqueSubmissionReplayIds[index], diagnostic,
+        recordFailure(uniqueSubmissionAttemptIds[index], diagnostic,
                       "IR batch enqueue rejected this score.");
       } else {
-        recordFailure(uniqueSubmissionReplayIds[index], batch->diagnostic,
+        recordFailure(uniqueSubmissionAttemptIds[index], batch->diagnostic,
                       "IR batch enqueue returned no outcome.");
       }
     }
-    (void)detail::eraseQueuedReplayIds(outcome.failedReplayIds,
-                                       outcome.queuedReplayIds);
+    (void)detail::eraseQueuedAttemptIds(outcome.failedAttemptIds,
+                                        outcome.queuedAttemptIds);
     return outcome;
   } catch (const std::exception &) {
-    for (const int replayId : outcome.failedReplayIds) {
-      recordFailure(replayId, {}, "IR upload preparation failed.");
+    for (const std::string &attemptId : outcome.failedAttemptIds) {
+      recordFailure(attemptId, {}, "IR upload preparation failed.");
     }
     return outcome;
   } catch (...) {
-    for (const int replayId : outcome.failedReplayIds) {
-      recordFailure(replayId, {}, "IR upload preparation failed.");
+    for (const std::string &attemptId : outcome.failedAttemptIds) {
+      recordFailure(attemptId, {}, "IR upload preparation failed.");
     }
     return outcome;
   }
@@ -245,23 +249,24 @@ PreparationOutcome prepareSelectedCandidates(
 void Controller::replaceCandidates(
     std::vector<ir::IrUploadCandidate> candidates) {
   candidates_ = std::move(candidates);
-  ir::detail::intersectIrUploadSelectionIndexed(selectedReplayIds_,
+  ir::detail::intersectIrUploadSelectionIndexed(selectedAttemptIds_,
                                                 candidates_);
   applySessionFailureReasons();
 }
 
 void Controller::applySessionFailureReasons() {
-  std::unordered_set<int> publishedReplayIds;
-  publishedReplayIds.reserve(candidates_.size());
+  std::unordered_set<std::string> publishedAttemptIds;
+  publishedAttemptIds.reserve(candidates_.size());
   for (auto &candidate : candidates_) {
-    publishedReplayIds.insert(candidate.replayId());
-    const auto found = sessionFailureReasons_.find(candidate.replayId());
+    publishedAttemptIds.insert(candidate.result.attemptId);
+    const auto found =
+        sessionFailureReasons_.find(candidate.result.attemptId);
     if (found != sessionFailureReasons_.end()) {
       candidate.failureReason = found->second;
     }
   }
   std::erase_if(sessionFailureReasons_, [&](const auto &entry) {
-    return !publishedReplayIds.contains(entry.first);
+    return !publishedAttemptIds.contains(entry.first);
   });
 }
 
@@ -272,19 +277,19 @@ void Controller::applyCandidateRefresh(
   }
 }
 
-void Controller::toggle(int replayId) {
+void Controller::toggle(const std::string &attemptId) {
   if (preparing_) {
     return;
   }
   const auto found = std::ranges::find_if(
-      candidates_, [replayId](const ir::IrUploadCandidate &candidate) {
-        return candidate.replayId() == replayId;
+      candidates_, [&attemptId](const ir::IrUploadCandidate &candidate) {
+        return candidate.attemptId() == attemptId;
       });
   if (found == candidates_.end()) {
     return;
   }
-  if (!selectedReplayIds_.erase(replayId)) {
-    selectedReplayIds_.insert(replayId);
+  if (!selectedAttemptIds_.erase(attemptId)) {
+    selectedAttemptIds_.insert(attemptId);
   }
 }
 
@@ -292,26 +297,26 @@ void Controller::selectAll() {
   if (preparing_) {
     return;
   }
-  selectedReplayIds_.reserve(candidates_.size());
+  selectedAttemptIds_.reserve(candidates_.size());
   for (const auto &candidate : candidates_) {
-    selectedReplayIds_.insert(candidate.replayId());
+    selectedAttemptIds_.insert(candidate.result.attemptId);
   }
 }
 
 void Controller::clearSelection() {
   if (!preparing_) {
-    selectedReplayIds_.clear();
+    selectedAttemptIds_.clear();
   }
 }
 
 std::vector<ir::IrUploadCandidate> Controller::beginPreparation() {
-  if (preparing_ || selectedReplayIds_.empty()) {
+  if (preparing_ || selectedAttemptIds_.empty()) {
     return {};
   }
   std::vector<ir::IrUploadCandidate> snapshot;
-  snapshot.reserve(selectedReplayIds_.size());
+  snapshot.reserve(selectedAttemptIds_.size());
   for (const auto &candidate : candidates_) {
-    if (selectedReplayIds_.contains(candidate.replayId())) {
+    if (selectedAttemptIds_.contains(candidate.result.attemptId)) {
       snapshot.push_back(candidate);
     }
   }
@@ -342,43 +347,45 @@ void Controller::completePreparation(const PreparationOutcome &outcome) {
   if (!preparing_) {
     return;
   }
-  selectedReplayIds_.clear();
-  selectedReplayIds_.insert(outcome.failedReplayIds.begin(),
-                            outcome.failedReplayIds.end());
+  selectedAttemptIds_.clear();
+  selectedAttemptIds_.insert(outcome.failedAttemptIds.begin(),
+                             outcome.failedAttemptIds.end());
   preparing_ = false;
   if (outcome.cancelled) {
     statusText_ = "Upload cancelled.";
     return;
   }
-  std::unordered_set<int> queuedReplayIds;
-  queuedReplayIds.reserve(outcome.queuedReplayIds.size());
-  queuedReplayIds.insert(outcome.queuedReplayIds.begin(),
-                         outcome.queuedReplayIds.end());
-  for (const int replayId : queuedReplayIds) {
-    sessionFailureReasons_.erase(replayId);
+  std::unordered_set<std::string> queuedAttemptIds;
+  queuedAttemptIds.reserve(outcome.queuedAttemptIds.size());
+  queuedAttemptIds.insert(outcome.queuedAttemptIds.begin(),
+                          outcome.queuedAttemptIds.end());
+  for (const std::string &attemptId : queuedAttemptIds) {
+    sessionFailureReasons_.erase(attemptId);
   }
-  std::unordered_set<int> failedReplayIds;
-  failedReplayIds.reserve(outcome.failedReplayIds.size());
-  failedReplayIds.insert(outcome.failedReplayIds.begin(),
-                         outcome.failedReplayIds.end());
+  std::unordered_set<std::string> failedAttemptIds;
+  failedAttemptIds.reserve(outcome.failedAttemptIds.size());
+  failedAttemptIds.insert(outcome.failedAttemptIds.begin(),
+                          outcome.failedAttemptIds.end());
   for (const auto &failure : outcome.failureReasons) {
-    if (failure.replayId > 0 && failedReplayIds.contains(failure.replayId)) {
-      sessionFailureReasons_[failure.replayId] = normalizedFailureReason(
+    if (!failure.attemptId.empty() &&
+        failedAttemptIds.contains(failure.attemptId)) {
+      sessionFailureReasons_[failure.attemptId] = normalizedFailureReason(
           failure.diagnostic, "IR upload preparation failed.");
     }
   }
   for (auto &candidate : candidates_) {
-    if (queuedReplayIds.contains(candidate.replayId())) {
+    if (queuedAttemptIds.contains(candidate.result.attemptId)) {
       candidate.failureReason.clear();
       continue;
     }
-    const auto found = sessionFailureReasons_.find(candidate.replayId());
+    const auto found =
+        sessionFailureReasons_.find(candidate.result.attemptId);
     if (found != sessionFailureReasons_.end()) {
       candidate.failureReason = found->second;
     }
   }
-  statusText_ = std::to_string(outcome.queuedReplayIds.size()) + " queued, " +
-                std::to_string(outcome.failedReplayIds.size()) + " failed";
+  statusText_ = std::to_string(outcome.queuedAttemptIds.size()) + " queued, " +
+                std::to_string(outcome.failedAttemptIds.size()) + " failed";
 }
 
 } // namespace ir_uploads

@@ -1,5 +1,8 @@
 #include "PracticeConfiguration.h"
 
+#include "../CanonicalDigest.h"
+#include "../scene/play/GameplayAttemptSetup.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -31,17 +34,16 @@ constexpr std::array<GaugeOption, 5> kGaugeAutoShiftOptions = {{
      .gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder},
 }};
 
-bool isSha256(std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
-}
-
 void normalizeSha256(std::string &value) {
   std::ranges::transform(value, value.begin(), [](unsigned char character) {
     return static_cast<char>(std::tolower(character));
   });
+}
+
+bool isSha256(std::string_view value) {
+  std::string normalized(value);
+  normalizeSha256(normalized);
+  return canonical_digest::isCanonicalLowerHex(normalized, 64);
 }
 
 int nearestStep(int value, int minimum, int maximum, int step) {
@@ -220,7 +222,9 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
                  "count-in beats were clamped to 0 through 16");
 
   if (value.startingGaugePercent) {
-    const int maximum = std::clamp(startingGaugeMaximumPercent, 0, 120);
+    const int maximum = std::clamp(
+        startingGaugeMaximumPercent, 0,
+        gameplay::kMaximumStartingGaugePercent);
     const int originalGauge = *value.startingGaugePercent;
     *value.startingGaugePercent =
         std::clamp(*value.startingGaugePercent, 0, maximum);
@@ -239,7 +243,11 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
   }
 
   const int originalJudgeScale = value.judge.scalePercent;
-  value.judge.scalePercent = nearestStep(value.judge.scalePercent, 25, 200, 5);
+  value.judge.scalePercent = nearestStep(
+      value.judge.scalePercent,
+      gameplay::kMinimumJudgeWindowScalePercent,
+      gameplay::kMaximumJudgeWindowScalePercent,
+      gameplay::kJudgeWindowScaleStepPercent);
   diagnoseChange(originalJudgeScale != value.judge.scalePercent,
                  "judge scale was clamped to a supported five-percent step");
   if (value.judge.kind != JudgeOverrideKind::Scale) {

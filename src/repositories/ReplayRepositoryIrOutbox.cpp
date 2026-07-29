@@ -1,5 +1,6 @@
 #include "ReplayRepository.h"
 #include "ReplayRepositoryInternal.h"
+#include "ReplayRepositoryIrRows.h"
 
 #include "../ir/IrProfileSettings.h"
 #include "../ProfileDatabaseActivity.h"
@@ -16,155 +17,13 @@
 
 namespace {
 
-constexpr const char *kIrOutboxColumns =
-    "id,provider_id,attempt_id,chart_md5,chart_sha256,payload_json,"
-    "ruleset_id,ruleset_revision,validation_fingerprint,state,"
-    "local_result_ready,request_attempt_count,consecutive_failure_count,"
-    "remote_poll_count,next_attempt_at_ms,next_request_user_intent,"
-    "remote_job_id,remote_origin,last_error_code,last_error_message,"
-    "created_at_ms,updated_at_ms,completed_at_ms";
-
-constexpr const char *kIrSubmissionReceiptColumns =
-    "id,provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
-    "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
-    "observed_in_snapshot,confirmed_at_ms";
-
-bool validProviderId(std::string_view value) {
-  if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
-
-bool columnIs(sqlite3_stmt *stmt, int column, int type) {
-  return sqlite3_column_type(stmt, column) == type;
-}
-
-bool nullableInteger(sqlite3_stmt *stmt, int column) {
-  const int type = sqlite3_column_type(stmt, column);
-  return type == SQLITE_NULL || type == SQLITE_INTEGER;
-}
-
-bool nullableText(sqlite3_stmt *stmt, int column) {
-  const int type = sqlite3_column_type(stmt, column);
-  return type == SQLITE_NULL || type == SQLITE_TEXT;
-}
-
-std::optional<std::int64_t> optionalInteger(sqlite3_stmt *stmt, int column) {
-  if (sqlite3_column_type(stmt, column) == SQLITE_NULL) {
-    return std::nullopt;
-  }
-  return sqlite3_column_int64(stmt, column);
-}
-
-std::string optionalText(sqlite3_stmt *stmt, int column) {
-  return sqlite3_column_type(stmt, column) == SQLITE_NULL
-             ? std::string{}
-             : sqliteColumnString(stmt, column);
-}
-
-bool decodeIrOutboxRow(sqlite3_stmt *stmt, ir::IrOutboxEntry &entry,
-                       std::string &diagnostic) {
-  if (!columnIs(stmt, 0, SQLITE_INTEGER) || !columnIs(stmt, 1, SQLITE_TEXT) ||
-      !columnIs(stmt, 2, SQLITE_TEXT) || !nullableText(stmt, 3) ||
-      !columnIs(stmt, 4, SQLITE_TEXT) || !columnIs(stmt, 5, SQLITE_TEXT) ||
-      !columnIs(stmt, 6, SQLITE_TEXT) ||
-      !columnIs(stmt, 7, SQLITE_INTEGER) ||
-      !columnIs(stmt, 8, SQLITE_TEXT) ||
-      !columnIs(stmt, 9, SQLITE_INTEGER) ||
-      !columnIs(stmt, 10, SQLITE_INTEGER) ||
-      !columnIs(stmt, 11, SQLITE_INTEGER) ||
-      !columnIs(stmt, 12, SQLITE_INTEGER) ||
-      !columnIs(stmt, 13, SQLITE_INTEGER) || !nullableInteger(stmt, 14) ||
-      !columnIs(stmt, 15, SQLITE_INTEGER) || !nullableText(stmt, 16) ||
-      !nullableText(stmt, 17) || !nullableText(stmt, 18) ||
-      !nullableText(stmt, 19) || !columnIs(stmt, 20, SQLITE_INTEGER) ||
-      !columnIs(stmt, 21, SQLITE_INTEGER) || !nullableInteger(stmt, 22)) {
-    diagnostic = "IR outbox row has unexpected SQLite value types";
-    return false;
-  }
-  const int state = sqlite3_column_int(stmt, 9);
-  const int localReady = sqlite3_column_int(stmt, 10);
-  const int userIntent = sqlite3_column_int(stmt, 15);
-  if (!ir::isKnownIrOutboxState(state) ||
-      (localReady != 0 && localReady != 1) ||
-      (userIntent != 0 && userIntent != 1)) {
-    diagnostic = "IR outbox row contains an unknown state or boolean";
-    return false;
-  }
-  entry = {
-      .id = sqlite3_column_int64(stmt, 0),
-      .providerId = sqliteColumnString(stmt, 1),
-      .attemptId = sqliteColumnString(stmt, 2),
-      .chartMd5 = optionalText(stmt, 3),
-      .chartSha256 = sqliteColumnString(stmt, 4),
-      .payloadJson = sqliteColumnString(stmt, 5),
-      .rulesetProof =
-          {
-              .rulesetId = sqliteColumnString(stmt, 6),
-              .rulesetRevision = sqlite3_column_int(stmt, 7),
-              .validationFingerprint = sqliteColumnString(stmt, 8),
-          },
-      .state = static_cast<ir::IrOutboxState>(state),
-      .localResultReady = localReady != 0,
-      .requestAttemptCount = sqlite3_column_int(stmt, 11),
-      .consecutiveFailureCount = sqlite3_column_int(stmt, 12),
-      .remotePollCount = sqlite3_column_int(stmt, 13),
-      .nextAttemptAtUnixMillis = optionalInteger(stmt, 14),
-      .nextRequestUserIntent = userIntent != 0,
-      .remoteJobId = optionalText(stmt, 16),
-      .remoteOrigin = optionalText(stmt, 17),
-      .lastErrorCode = optionalText(stmt, 18),
-      .lastErrorMessage = optionalText(stmt, 19),
-      .createdAtUnixMillis = sqlite3_column_int64(stmt, 20),
-      .updatedAtUnixMillis = sqlite3_column_int64(stmt, 21),
-      .completedAtUnixMillis = optionalInteger(stmt, 22),
-  };
-  return ir::validateIrOutboxEntry(entry, diagnostic);
-}
-
-bool decodeIrSubmissionReceiptRow(sqlite3_stmt *stmt,
-                                  ir::IrSubmissionReceipt &receipt,
-                                  std::string &diagnostic) {
-  if (!columnIs(stmt, 0, SQLITE_INTEGER) || !columnIs(stmt, 1, SQLITE_TEXT) ||
-      !columnIs(stmt, 2, SQLITE_TEXT) || !columnIs(stmt, 3, SQLITE_INTEGER) ||
-      !columnIs(stmt, 4, SQLITE_TEXT) || !nullableText(stmt, 5) ||
-      !columnIs(stmt, 6, SQLITE_TEXT) || !nullableInteger(stmt, 7) ||
-      !nullableText(stmt, 8) || !nullableText(stmt, 9) ||
-      !columnIs(stmt, 10, SQLITE_INTEGER) ||
-      !columnIs(stmt, 11, SQLITE_INTEGER) ||
-      !columnIs(stmt, 12, SQLITE_INTEGER)) {
-    diagnostic = "IR receipt row has unexpected SQLite value types";
-    return false;
-  }
-  const sqlite3_int64 replayId = sqlite3_column_int64(stmt, 3);
-  if (replayId <= 0 || replayId > std::numeric_limits<int>::max()) {
-    diagnostic = "IR receipt replay ID is out of range";
-    return false;
-  }
-  receipt = {
-      .id = sqlite3_column_int64(stmt, 0),
-      .providerId = sqliteColumnString(stmt, 1),
-      .serverOrigin = sqliteColumnString(stmt, 2),
-      .replayId = static_cast<int>(replayId),
-      .attemptId = sqliteColumnString(stmt, 4),
-      .chartMd5 = optionalText(stmt, 5),
-      .chartSha256 = sqliteColumnString(stmt, 6),
-      .remoteUserId = optionalInteger(stmt, 7),
-      .remoteChartId = optionalText(stmt, 8),
-      .remoteScoreId = optionalText(stmt, 9),
-      .source = static_cast<ir::IrReceiptConfirmationSource>(
-          sqlite3_column_int(stmt, 10)),
-      .observedInSnapshot = sqlite3_column_int(stmt, 11) != 0,
-      .confirmedAtUnixMillis = sqlite3_column_int64(stmt, 12),
-  };
-  return ir::validateIrSubmissionReceipt(receipt, diagnostic);
-}
+using replay_repository_detail::decodeIrOutboxRow;
+using replay_repository_detail::decodeIrSubmissionReceiptRow;
+using replay_repository_detail::kIrOutboxColumns;
+using replay_repository_detail::kIrSubmissionReceiptColumns;
+using replay_repository_detail::columnIs;
+using replay_repository_detail::nullableInteger;
+using replay_repository_detail::optionalInteger;
 
 enum class RowLookupStatus { Found, NotFound, StorageFailure, Invalid };
 
@@ -334,36 +193,37 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
     return {.status = ir::IrOutboxMutationStatus::Updated, .affectedRows = 1};
   }
 
-  SqliteStatementHandle replay;
-  if (prepareSqliteStatement(database,
-                             "SELECT id FROM replays WHERE attempt_id=?",
-                             replay) != SQLITE_OK ||
-      !bindSqliteText(replay.get(), 1, claimed.attemptId)) {
+  SqliteStatementHandle owner;
+  constexpr const char *ownerQuery =
+      "SELECT id FROM modern_chart_results WHERE attempt_id=?";
+  if (prepareSqliteStatement(database, ownerQuery, owner) != SQLITE_OK ||
+      !bindSqliteText(owner.get(), 1, claimed.attemptId)) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "could not prepare IR receipt replay lookup"};
+            .diagnostic = "could not prepare IR receipt result lookup"};
   }
-  const int replayStep = sqlite3_step(replay.get());
-  if (replayStep != SQLITE_ROW ||
-      sqlite3_column_type(replay.get(), 0) != SQLITE_INTEGER) {
+  const int ownerStep = sqlite3_step(owner.get());
+  if (ownerStep != SQLITE_ROW ||
+      sqlite3_column_type(owner.get(), 0) != SQLITE_INTEGER) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = replayStep == SQLITE_DONE
-                              ? "IR receipt replay attempt is missing"
-                              : "IR receipt replay lookup did not complete"};
+            .diagnostic = ownerStep == SQLITE_DONE
+                              ? "IR receipt durable result is missing"
+                              : "IR receipt result lookup did not complete"};
   }
-  const sqlite3_int64 replayId = sqlite3_column_int64(replay.get(), 0);
-  if (replayId <= 0 || replayId > std::numeric_limits<int>::max() ||
-      sqlite3_step(replay.get()) != SQLITE_DONE) {
+  const sqlite3_int64 modernResultId = sqlite3_column_int64(owner.get(), 0);
+  if (modernResultId <= 0 ||
+      modernResultId > std::numeric_limits<int>::max() ||
+      sqlite3_step(owner.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "IR receipt replay lookup is invalid"};
+            .diagnostic = "IR receipt result ownership is invalid"};
   }
 
   const ir::IrSuccessfulReceiptDraft &receipt = *update.successfulReceipt;
   constexpr const char *receiptQuery =
       "INSERT INTO ir_submission_receipts("
-      "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
-      "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
-      "observed_in_snapshot,confirmed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
-      "ON CONFLICT(provider_id,server_origin,replay_id) DO UPDATE SET "
+      "provider_id,server_origin,replay_id,modern_chart_result_id,attempt_id,"
+      "chart_md5,chart_sha256,remote_user_id,remote_chart_id,remote_score_id,"
+      "confirmation_source,observed_in_snapshot,confirmed_at_ms) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET "
       "attempt_id=excluded.attempt_id,"
       "chart_md5=excluded.chart_md5,"
       "chart_sha256=excluded.chart_sha256,"
@@ -381,23 +241,25 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
           SQLITE_OK ||
       !bindSqliteText(receiptStatement.get(), 1, claimed.providerId) ||
       !bindSqliteText(receiptStatement.get(), 2, receipt.serverOrigin) ||
-      sqlite3_bind_int64(receiptStatement.get(), 3, replayId) != SQLITE_OK ||
-      !bindSqliteText(receiptStatement.get(), 4, claimed.attemptId) ||
+      sqlite3_bind_null(receiptStatement.get(), 3) != SQLITE_OK ||
+      sqlite3_bind_int64(receiptStatement.get(), 4, modernResultId) !=
+          SQLITE_OK ||
+      !bindSqliteText(receiptStatement.get(), 5, claimed.attemptId) ||
       (claimed.chartMd5.empty()
-           ? sqlite3_bind_null(receiptStatement.get(), 5) != SQLITE_OK
-           : !bindSqliteText(receiptStatement.get(), 5, claimed.chartMd5)) ||
-      !bindSqliteText(receiptStatement.get(), 6, claimed.chartSha256) ||
+           ? sqlite3_bind_null(receiptStatement.get(), 6) != SQLITE_OK
+           : !bindSqliteText(receiptStatement.get(), 6, claimed.chartMd5)) ||
+      !bindSqliteText(receiptStatement.get(), 7, claimed.chartSha256) ||
       (receipt.remoteUserId
-           ? sqlite3_bind_int64(receiptStatement.get(), 7,
+           ? sqlite3_bind_int64(receiptStatement.get(), 8,
                                 *receipt.remoteUserId) != SQLITE_OK
-           : sqlite3_bind_null(receiptStatement.get(), 7) != SQLITE_OK) ||
-      !bindSqliteText(receiptStatement.get(), 8, receipt.remoteChartId) ||
-      !bindSqliteText(receiptStatement.get(), 9, receipt.remoteScoreId) ||
-      sqlite3_bind_int(receiptStatement.get(), 10,
-                       static_cast<int>(receipt.source)) != SQLITE_OK ||
+           : sqlite3_bind_null(receiptStatement.get(), 8) != SQLITE_OK) ||
+      !bindSqliteText(receiptStatement.get(), 9, receipt.remoteChartId) ||
+      !bindSqliteText(receiptStatement.get(), 10, receipt.remoteScoreId) ||
       sqlite3_bind_int(receiptStatement.get(), 11,
+                       static_cast<int>(receipt.source)) != SQLITE_OK ||
+      sqlite3_bind_int(receiptStatement.get(), 12,
                        receipt.observedInSnapshot ? 1 : 0) != SQLITE_OK ||
-      sqlite3_bind_int64(receiptStatement.get(), 12,
+      sqlite3_bind_int64(receiptStatement.get(), 13,
                          receipt.confirmedAtUnixMillis) != SQLITE_OK ||
       sqlite3_step(receiptStatement.get()) != SQLITE_DONE ||
       sqlite3_changes(database) != 1) {
@@ -856,7 +718,8 @@ ir::IrManualBatchEnqueueOutcome ReplayRepository::EnqueueReadyIrOutboxDrafts(
 ir::IrOutboxReadOutcome
 ReplayRepository::LoadIrOutbox(std::string_view providerId,
                                std::string_view attemptId) {
-  if (!validProviderId(providerId) || !uuid::isCanonicalLowerV4(attemptId)) {
+  if (!ir::isValidProviderId(providerId) ||
+      !uuid::isCanonicalLowerV4(attemptId)) {
     return {.status = ir::IrOutboxReadStatus::Invalid,
             .diagnostic = "IR outbox identity is invalid"};
   }
@@ -933,7 +796,7 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(std::int64_t nowMs,
 
 ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(
     std::string_view providerId, std::int64_t nowMs, std::size_t limit) {
-  if (!validProviderId(providerId) || nowMs < 0 || limit > 256) {
+  if (!ir::isValidProviderId(providerId) || nowMs < 0 || limit > 256) {
     return {.status = ir::IrOutboxBatchStatus::Invalid,
             .diagnostic = "IR provider outbox due query is invalid"};
   }
@@ -984,7 +847,7 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(
 
 std::optional<std::int64_t> ReplayRepository::NextIrOutboxAttemptAfter(
     std::string_view providerId, std::int64_t nowMs) {
-  if (!validProviderId(providerId) || nowMs < 0) {
+  if (!ir::isValidProviderId(providerId) || nowMs < 0) {
     return std::nullopt;
   }
   profile_database_activity::ReadGuard operation;
@@ -1297,7 +1160,7 @@ ir::IrReceiptReadOutcome ReplayRepository::LoadIrSubmissionReceipt(
     std::string_view providerId, std::string_view serverOrigin,
     std::string_view attemptId) {
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
-  if (!validProviderId(providerId) ||
+  if (!ir::isValidProviderId(providerId) ||
       !uuid::isCanonicalLowerV4(attemptId) || !normalizedOrigin ||
       *normalizedOrigin != serverOrigin) {
     return {.status = ir::IrReceiptReadStatus::Invalid,
@@ -1353,7 +1216,7 @@ ir::IrReceiptReadOutcome ReplayRepository::LoadIrSubmissionReceipt(
 ir::IrOutboxMutationOutcome ReplayRepository::ClearIrSubmissionReceipts(
     std::string_view providerId, std::string_view serverOrigin) {
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
-  if (!validProviderId(providerId) || !normalizedOrigin ||
+  if (!ir::isValidProviderId(providerId) || !normalizedOrigin ||
       *normalizedOrigin != serverOrigin) {
     return {.status = ir::IrOutboxMutationStatus::Invalid,
             .diagnostic = "IR receipt identity is invalid"};
@@ -1480,7 +1343,7 @@ ReplayRepository::RetryIrOutbox(std::int64_t rowId, std::int64_t nowMs) {
 ir::IrOutboxMutationOutcome
 ReplayRepository::RetryAllIrOutbox(std::string_view providerId,
                                    std::int64_t nowMs) {
-  if (!validProviderId(providerId) || nowMs < 0) {
+  if (!ir::isValidProviderId(providerId) || nowMs < 0) {
     return {.status = ir::IrOutboxMutationStatus::Invalid};
   }
   profile_database_activity::WriteGuard operation;
@@ -1518,7 +1381,7 @@ ReplayRepository::RetryAllIrOutbox(std::string_view providerId,
 ir::IrOutboxMutationOutcome
 ReplayRepository::UnblockIrOutbox(std::string_view providerId,
                                   std::int64_t nowMs) {
-  if (!validProviderId(providerId) || nowMs < 0) {
+  if (!ir::isValidProviderId(providerId) || nowMs < 0) {
     return {.status = ir::IrOutboxMutationStatus::Invalid};
   }
   profile_database_activity::WriteGuard operation;
@@ -1569,7 +1432,7 @@ ReplayRepository::DiscardIrOutbox(std::int64_t rowId) {
 
 ir::IrOutboxCounts
 ReplayRepository::CountIrOutbox(std::string_view providerId) {
-  if (!validProviderId(providerId)) {
+  if (!ir::isValidProviderId(providerId)) {
     return {.diagnostic = "IR provider ID is invalid"};
   }
   profile_database_activity::ReadGuard operation;

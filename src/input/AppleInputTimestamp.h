@@ -36,15 +36,40 @@ inline std::int64_t steadyNowMicros() noexcept {
       .count();
 }
 
-inline std::int64_t
-steadyMicrosFromHostMicros(std::uint64_t hostTimestampMicros) noexcept {
+inline TimestampEpochMapping hostToSteadyEpochMapping() noexcept {
   const std::int64_t steadyBefore = steadyNowMicros();
   const std::uint64_t hostNow = hostNowMicros();
   const std::int64_t steadyAfter = steadyNowMicros();
-  const std::int64_t steadyMidpoint =
-      steadyBefore + (steadyAfter - steadyBefore) / 2;
-  return rebaseTimestampMicros(hostTimestampMicros, hostNow, steadyMidpoint);
+  return {
+      .sourceEpochMicros = hostNow,
+      .steadyEpochMicros =
+          steadyBefore + (steadyAfter - steadyBefore) / 2,
+  };
 }
+
+class HostToSteadyTimestampSession {
+public:
+  HostToSteadyTimestampSession() noexcept
+      : mapping_(hostToSteadyEpochMapping()) {}
+
+  explicit constexpr HostToSteadyTimestampSession(
+      TimestampEpochMapping mapping) noexcept
+      : mapping_(mapping) {}
+
+  [[nodiscard]] constexpr std::int64_t
+  toSteadyMicros(std::uint64_t hostTimestampMicros) const noexcept {
+    return mapping_.toSteadyMicros(hostTimestampMicros);
+  }
+
+  void reanchor() noexcept { reanchor(hostToSteadyEpochMapping()); }
+
+  constexpr void reanchor(TimestampEpochMapping mapping) noexcept {
+    mapping_ = mapping;
+  }
+
+private:
+  TimestampEpochMapping mapping_;
+};
 
 } // namespace input::apple
 

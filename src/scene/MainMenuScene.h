@@ -9,6 +9,8 @@
 #include "../ReplayRecordFilters.h"
 #include "../ResultRecordSummary.h"
 #include "../ReplayVideoExporter.h"
+#include "../PlatformDocumentHandoff.h"
+#include "../replay/ReplayFileActionSelection.h"
 #include "../repositories/ScoreRepository.h"
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
@@ -22,6 +24,7 @@
 #include "../view/UiTheme.h"
 #include <filesystem>
 #include <deque>
+#include <functional>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -91,10 +94,17 @@ private:
   std::jthread addFolderPickerThread;
   std::jthread archiveImportPickerThread;
   std::jthread findBmsThread;
+  std::jthread replayLoadThread;
+  std::shared_ptr<std::atomic_bool> replayLoadCancelToken =
+      std::make_shared<std::atomic_bool>(false);
+  std::mutex replayLoadCompletionMutex;
+  std::function<void()> pendingReplayLoadCompletion;
+  std::atomic_bool replayLoadInProgress = false;
   std::jthread replayExportThread;
   std::jthread unzipThread;
   std::atomic_bool folderItemsReloadRequested = false;
   std::atomic_bool chartListReloadRequested = false;
+  bool prioritizeVisibleArtworkBindings = false;
   std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
   bool replayIrUploadInProgress = false;
@@ -284,6 +294,7 @@ private:
   View *replayWatchOptionsContent = nullptr;
   View *replayExportOptionsContent = nullptr;
   View *replayExportProgressContent = nullptr;
+  View *replayDeleteConfirmationContent = nullptr;
   View *replayExportProgressTrack = nullptr;
   View *replayExportProgressFill = nullptr;
   TextView *replayModalTitleText = nullptr;
@@ -379,6 +390,10 @@ private:
   Button *replayGBattleButton = nullptr;
   Button *replayModalResultButton = nullptr;
   Button *replayModalExportButton = nullptr;
+  Button *replayShareButton = nullptr;
+  Button *replayDeleteButton = nullptr;
+  Button *replayDeleteCancelButton = nullptr;
+  Button *replayDeleteConfirmButton = nullptr;
   Button *replayModalFilterButton = nullptr;
   Button *replayModalCloseButton = nullptr;
   Button *replayFps60Button = nullptr;
@@ -399,6 +414,10 @@ private:
   TextView *replayGBattleButtonText = nullptr;
   TextView *replayModalResultButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
+  TextView *replayShareButtonText = nullptr;
+  TextView *replayDeleteButtonText = nullptr;
+  TextView *replayDeleteCancelButtonText = nullptr;
+  TextView *replayDeleteConfirmButtonText = nullptr;
   TextView *replayModalFilterButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
   TextView *replayFps60ButtonText = nullptr;
@@ -488,6 +507,11 @@ private:
     int firstMissingIndex = -1;
     std::vector<ChartMetaRecord> records;
   };
+  struct CurrentCourseSelection {
+    std::vector<ChartMetaRecord> records;
+    std::vector<std::filesystem::path> completedChartPaths;
+    bool completeCourse = false;
+  };
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
@@ -503,7 +527,6 @@ private:
   bool chartDifficultyMinDropdownOpen = false;
   bool chartDifficultyMaxDropdownOpen = false;
   std::optional<int> chartDifficultyRangeTableId;
-  std::vector<ReplaySummary> replaySummaries;
   std::vector<ResultRecordSummary> resultRecordSummaries;
   std::vector<ResultRecordSummary> visibleResultRecordSummaries;
   std::optional<std::string> selectedResultRecordStableKey;
@@ -511,8 +534,10 @@ private:
   std::string publishedResultRecordDiagnostic;
   ReplayRecordFilters replayRecordFilters;
   ChartMetaRecord replayModalChart;
-  std::optional<ReplaySummary> selectedReplaySummary;
-  std::optional<ReplaySummary> replayExportSelection;
+  std::optional<ResultRecordSummary> replayExportSelection;
+  platform_document_handoff::PlatformDocumentHandoffOperation
+      replayFileDocumentHandoff;
+  replay::ReplayFileDeleteConfirmation replayDeleteConfirmation;
   ChartMetaRecord replayExportChart;
   int selectedReplayIndex = -1;
   int selectedExportFps = 120;
@@ -589,6 +614,7 @@ private:
   void setChartDifficultyDropdownOpen(bool minLevel, bool open);
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
   void reloadChartList(bool preserveViewState = false);
+  void reloadChartListForFolderSelection();
   std::optional<std::string> reloadScoreClearRanks();
   std::optional<std::string> prepareScoreQueryDatabase();
   std::optional<std::string> refreshScoreClearRankViews();
@@ -698,10 +724,17 @@ private:
   loadedSelectedChartForPath(const std::filesystem::path &path) const;
   void resetStartLoadingUi();
   void resetReplayWatchLoadingUi();
+  void publishReplayLoadDiagnostic(const char *action,
+                                   const std::string &diagnostic) const;
+  bool finishReplayLoadFailure(const char *action, std::string diagnostic,
+                               const char *fallback);
   void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
   const CourseValidationCache &courseValidationForActiveFolder();
+  [[nodiscard]] std::optional<CurrentCourseSelection>
+  currentCourseSelectionFor(
+      const result_persistence::ModernCourseResult &result);
   void refreshStartButtonForActiveFolder();
   void startSelectedCourse();
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);
@@ -781,6 +814,11 @@ private:
                                     "Preparing export");
   void hideReplayModal();
   void refreshReplayModalActions();
+  void startSelectedReplayFileShare();
+  void showReplayDeleteConfirmation();
+  void cancelReplayDeleteConfirmation();
+  void confirmSelectedReplayFileDelete();
+  void applyReplayFileDocumentHandoff();
   void refreshReplayFilterSortButtons();
   void refreshReplayExportOptionButtons();
   void updateReplayExportProgressUi(double fraction,
@@ -808,28 +846,40 @@ private:
       std::unique_ptr<bms_parser::Chart> &preparedChart,
       play_options::PlayOptionReplayInfo &playInfo,
       std::atomic_bool &parseCancelled) const;
-  void startReplayPlayback(const ChartMetaRecord &record, int replayId);
-  void startGBattlePlayback(const ChartMetaRecord &record, int replayId);
-  void startCourseReplayPlayback(const ChartMetaRecord &record, int replayId);
+  void startAutoPlayPlayback(const ChartMetaRecord &record);
+  void startModernReplayPlayback(const ChartMetaRecord &record,
+                                 ModernChartResultRecord modern);
+  void startModernCourseReplayPlayback(const ChartMetaRecord &record,
+                                       ModernCourseResultRecord modern);
+  void startModernGBattlePlayback(const ChartMetaRecord &record,
+                                  ModernChartResultRecord modern);
   void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
-  void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
-                              ReplayVideoExportOptions options);
-  void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
+  void startAutoPlayVideoExport(const ChartMetaRecord &record,
+                                ReplayVideoExportOptions options);
+  void startModernReplayVideoExport(const ChartMetaRecord &record,
+                                    ModernChartResultRecord modern,
+                                    ReplayVideoExportOptions options);
+  void startModernCourseReplayVideoExport(
+      ModernCourseResultRecord modern, ReplayVideoExportOptions options);
+  void startModernReplayResultRecall(const ChartMetaRecord &record,
+                                     ModernChartResultRecord modern);
+  void startModernCourseReplayResultRecall(ModernCourseResultRecord modern,
+                                           bool retrySameAllowed);
   void startRemoteResultRecall(IrRemoteRecordId identity,
                                std::string selectedStableKey);
-  void startReplayIrUpload(const ChartMetaRecord &record,
-                           ReplaySummary summary);
-  void finishReplayIrUpload(int replayId, std::string message);
+  void startModernReplayIrUpload(ModernChartResultRecord modern);
+  void finishReplayIrUpload(std::string attemptId, std::string message);
   void publishReplayIrStatusFeedback(ir::IrRecordState state);
   void observeReplayIrServiceRevisions();
   [[nodiscard]] std::optional<std::string>
   activeReplayIrServerOrigin() const;
-  void refreshReplayIrMarker(
-      int replayId,
-      ir::IrRecordActivity activity = ir::IrRecordActivity::None);
-  void startCourseReplayResultRecall(int replayId);
   void finishReplayResultRecallFailure(std::string diagnostic = {});
   void finishRemoteResultRecallFailure(std::string diagnostic = {});
+  void startReplayLoadWorker(
+      std::function<void(std::shared_ptr<std::atomic_bool>)> work);
+  void queueReplayLoadCompletion(std::function<void()> completion);
+  void applyReplayLoadCompletion();
+  void stopReplayLoadWorker();
   void applyReplayExportProgress();
   void applyReplayExportResult();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR

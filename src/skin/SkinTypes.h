@@ -18,6 +18,7 @@ struct ResultPreviousBestData {
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
+  std::optional<std::string> attemptId;
 };
 
 struct ResultPacemakerData {

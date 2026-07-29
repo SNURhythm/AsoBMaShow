@@ -2,6 +2,8 @@
 #include "AppDatabaseInitializer.h"
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
+#include "input/InputLifecycle.h"
+#include "replay/ReplayFileReconciler.h"
 #include "bgfx_helper.h"
 #include "rendering/BgfxInitLimits.h"
 #include "rendering/ShaderManager.h"
@@ -741,10 +743,11 @@ static void reportStartupFailure(const ApplicationContext &context,
 }
 
 static void reportResultRecoveryWarning(
-    const result_persistence::RecoverySummary &recovery) {
+    const replay::ChartReplayRecoverySummary &) {
   if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
                                "AsoBMaShow Result Recovery",
-                               recovery.userMessage.c_str(), s_window) != 0) {
+                               replay::chartReplayRecoveryUserMessage().data(),
+                               s_window) != 0) {
     SDL_Log("Unable to show the result recovery warning: %s", SDL_GetError());
   }
 }
@@ -894,20 +897,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.replayVideoExportActive.load(std::memory_order_acquire);
   constexpr int kBackgroundEventWaitTimeoutMs = 1000;
   auto isAppBackgroundEvent = [](const SDL_Event &event) {
-    return event.type == SDL_APP_WILLENTERBACKGROUND ||
-           event.type == SDL_APP_DIDENTERBACKGROUND ||
-           (event.type == SDL_WINDOWEVENT &&
-            (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
-             event.window.event == SDL_WINDOWEVENT_HIDDEN ||
-             event.window.event == SDL_WINDOWEVENT_FOCUS_LOST));
+    return input::isBackgroundLifecycleEvent(event);
   };
   auto isAppForegroundEvent = [](const SDL_Event &event) {
-    return event.type == SDL_APP_WILLENTERFOREGROUND ||
-           event.type == SDL_APP_DIDENTERFOREGROUND ||
-           (event.type == SDL_WINDOWEVENT &&
-            (event.window.event == SDL_WINDOWEVENT_RESTORED ||
-             event.window.event == SDL_WINDOWEVENT_SHOWN ||
-             event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED));
+    return input::isForegroundLifecycleEvent(event);
   };
   auto setAppBackground = [&](bool background) {
     if (background && context.displaySettingsManager) {
@@ -1474,6 +1467,16 @@ int run() {
           .reportFatal =
               [&context](const application_startup::Result &result) {
                 reportStartupFailure(context, result);
+              },
+          .reconcileReplayFiles =
+              [&context] {
+                const auto report = replay::reconcileProfileReplayFiles(
+                    context.replayRepository,
+                    std::chrono::system_clock::now() - std::chrono::hours(24));
+                for (const auto &failure : report.failures) {
+                  SDL_Log("Replay reconciliation deferred: %s",
+                          failure.c_str());
+                }
               },
           .runReadyApplication = [&context] { runReadyApplication(context); },
       });

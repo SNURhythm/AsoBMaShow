@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoursePlaySession.h"
+#include "ResultContracts.h"
 #include "repositories/ReplayRepository.h"
 
 #include <algorithm>
@@ -75,7 +76,8 @@ inline ReplaySummary BuildSummary(
   summary.autoPlay = true;
   summary.initialGaugeType = gaugeType;
   summary.gaugeAutoShift = gaugeAutoShift;
-  summary.finalScore = std::max(0, meta.TotalNotes) * 2;
+  summary.finalScore =
+      result_contract::maximumScoreForNotes(meta.TotalNotes).value_or(0);
   summary.maxScore = summary.finalScore;
   summary.maxCombo = std::max(0, meta.TotalNotes);
   summary.finalGauge =
@@ -132,7 +134,9 @@ inline ReplayData BuildReplayData(
   RhythmState state(&chart, false, ruleset);
   state.configureGauge(gaugeType, gaugeAutoShift, GaugeProfile::Standard,
                        gaugeAutoShiftLowerBound);
-  state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));
+  state.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      assist_options::isEnabled(replay.assistOption),
+      replay.provenance.playback));
   const JudgeResult perfect(PGreat, 0);
   const JudgeResult noJudge(None, 0);
 

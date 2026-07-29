@@ -1,5 +1,6 @@
 #include "BokutachiCacheStore.h"
 
+#include "../../CanonicalDigest.h"
 #include "../../VersionedJson.h"
 #include "../IrProfileSettings.h"
 
@@ -24,14 +25,6 @@ bool validNormalizedOrigin(std::string_view value) {
 
 bool validGame(std::string_view value) {
   return value == "bms-7k" || value == "bms-14k";
-}
-
-bool validSha256(std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
 }
 
 bool validChartId(std::string_view value) {
@@ -168,7 +161,8 @@ bool BokutachiCacheStore::activate(const std::filesystem::path &path,
         if (game == encodedChart.end() || !game->is_string() ||
             !validGame(game->get_ref<const std::string &>()) ||
             sha == encodedChart.end() || !sha->is_string() ||
-            !validSha256(sha->get_ref<const std::string &>()) ||
+            !canonical_digest::isCanonicalLowerHex(
+                sha->get_ref<const std::string &>(), 64) ||
             chartId == encodedChart.end() || !chartId->is_string() ||
             !validChartId(chartId->get_ref<const std::string &>())) {
           diagnostic = "Bokutachi cache chart fields are invalid";
@@ -283,7 +277,8 @@ bool BokutachiCacheStore::rememberChartId(std::string_view serverOrigin,
       return false;
     }
     if (!validNormalizedOrigin(serverOrigin) || !validGame(game) ||
-        !validSha256(chartSha256) || !validChartId(chartId)) {
+        !canonical_digest::isCanonicalLowerHex(chartSha256, 64) ||
+        !validChartId(chartId)) {
       diagnostic = "Bokutachi cache chart mapping is invalid";
       return false;
     }
@@ -356,7 +351,8 @@ bool BokutachiCacheStore::rememberSnapshot(
     std::unordered_map<std::string, std::size_t> mappingIndexes;
     mappingIndexes.reserve(chartMappings.size());
     for (const auto &mapping : chartMappings) {
-      if (!validGame(mapping.game) || !validSha256(mapping.chartSha256) ||
+      if (!validGame(mapping.game) ||
+          !canonical_digest::isCanonicalLowerHex(mapping.chartSha256, 64) ||
           !validChartId(mapping.chartId)) {
         diagnostic = "Bokutachi cache snapshot chart mapping is invalid";
         return false;
@@ -471,7 +467,7 @@ bool BokutachiCacheStore::eraseChartId(std::string_view serverOrigin,
       return false;
     }
     if (!validNormalizedOrigin(serverOrigin) || !validGame(game) ||
-        !validSha256(chartSha256)) {
+        !canonical_digest::isCanonicalLowerHex(chartSha256, 64)) {
       diagnostic = "Bokutachi cache chart mapping is invalid";
       return false;
     }

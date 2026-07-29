@@ -1,6 +1,7 @@
 #include "ResultPersistenceModel.h"
 
 #include "BmsMetadataText.h"
+#include "CanonicalDigest.h"
 #include "FileChecksum.h"
 #include "Utils.h"
 #include "Uuid.h"
@@ -8,7 +9,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -288,39 +288,6 @@ void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
   appendProvenance(encoder, score.provenance);
 }
 
-int judgementCount(const RhythmState &state, Judgement judgement) {
-  const auto found = state.judgeCount.find(judgement);
-  return found == state.judgeCount.end() ? 0 : found->second;
-}
-
-ChartJudgementTiming captureChartJudgementTiming(const RhythmState &state) {
-  ChartJudgementTiming timing;
-  for (int index = 0; index < JudgementCount; ++index) {
-    const auto judgement = static_cast<Judgement>(index);
-    const auto found = state.judgementFastSlowCount.find(judgement);
-    if (found != state.judgementFastSlowCount.end()) {
-      timing.byJudgement[static_cast<std::size_t>(index)] = found->second;
-    }
-  }
-  return timing;
-}
-
-bool isHexDigest(std::string_view value, std::size_t expectedSize) {
-  return value.size() == expectedSize &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
-}
-
-bool isCanonicalLowerHexDigest(std::string_view value,
-                               std::size_t expectedSize) noexcept {
-  return value.size() == expectedSize &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isdigit(character) != 0 ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
 struct NormalizedChartIdentity {
   std::string sha256;
   std::string md5;
@@ -330,8 +297,10 @@ std::optional<NormalizedChartIdentity>
 chartIdentity(const bms_parser::ChartMeta &meta) {
   NormalizedChartIdentity identity{.sha256 = normalizedHash(meta.SHA256),
                                    .md5 = normalizedHash(meta.MD5)};
-  if ((!meta.SHA256.empty() && !isHexDigest(identity.sha256, 64)) ||
-      (!meta.MD5.empty() && !isHexDigest(identity.md5, 32)) ||
+  if ((!meta.SHA256.empty() &&
+       !canonical_digest::isCanonicalLowerHex(identity.sha256, 64)) ||
+      (!meta.MD5.empty() &&
+       !canonical_digest::isCanonicalLowerHex(identity.md5, 32)) ||
       (identity.sha256.empty() && identity.md5.empty())) {
     return std::nullopt;
   }
@@ -364,42 +333,6 @@ std::optional<ChartResultAttempt> rejected(std::string_view invariant,
 }
 
 } // namespace
-
-bool hasProjectableChartIdentity(const ChartScoreWrite &score) noexcept {
-  return isCanonicalLowerHexDigest(score.chartSha256, 64) &&
-         (score.chartMd5.empty() ||
-          isCanonicalLowerHexDigest(score.chartMd5, 32));
-}
-
-ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
-                                       const RhythmState &state,
-                                       const ScoreProvenance &provenance,
-                                       int storageLongNoteMode) {
-  return {
-      .chartPath =
-          Utils::GetStoragePathUtf8RelativeToDocuments(meta.BmsPath, "BMS/"),
-      .chartMd5 = normalizedHash(meta.MD5),
-      .chartSha256 = normalizedHash(meta.SHA256),
-      .chartTitle = meta.Title,
-      .chartArtist = meta.Artist,
-      .longNoteMode = storageLongNoteMode,
-      .score = state.getScore(),
-      .maxScore = meta.TotalNotes * 2,
-      .maxCombo = state.maxCombo,
-      .comboBreak = state.comboBreak,
-      .pGreat = judgementCount(state, PGreat),
-      .great = judgementCount(state, Great),
-      .good = judgementCount(state, Good),
-      .bad = judgementCount(state, Bad),
-      .poor = judgementCount(state, Poor),
-      .kPoor = judgementCount(state, Kpoor),
-      .fast = state.fastCount,
-      .slow = state.slowCount,
-      .finalGauge = state.currentGauge,
-      .clearType = state.getClearTypeRank(),
-      .provenance = provenance,
-  };
-}
 
 std::optional<ChartResultAttempt> makeChartResultAttempt(
     std::string attemptId, const bms_parser::ChartMeta &meta,
@@ -443,15 +376,15 @@ std::optional<ChartResultAttempt> makeChartResultAttempt(
   const std::string fingerprint = payloadFingerprint(replay, score);
   std::vector<float> adoptedGaugeHistory =
       state.gaugeHistoryFor(state.gaugeType);
-  ChartJudgementTiming judgementTiming =
-      captureChartJudgementTiming(state);
+  ChartJudgementTiming judgementTiming = captureChartJudgementTiming(state);
   return ChartResultAttempt{.attemptId = std::move(attemptId),
                             .replay = std::move(replay),
                             .score = std::move(score),
+                            .keyMode = meta.KeyMode,
+                            .adoptedGaugeType = state.gaugeType,
                             .adoptedGaugeHistory =
                                 std::move(adoptedGaugeHistory),
-                            .judgementTiming =
-                                std::move(judgementTiming),
+                            .judgementTiming = std::move(judgementTiming),
                             .payloadFingerprint = fingerprint};
 }
 

@@ -13,7 +13,7 @@
 namespace ir {
 
 struct IrLocalReceiptCandidate {
-  int replayId = 0;
+  int modernChartResultId = 0;
   std::string attemptId;
   int keyMode = 0;
   std::string chartMd5;
@@ -48,6 +48,8 @@ struct IrReconciliationReadOutcome {
 
   Status status = Status::StorageFailure;
   std::vector<IrLocalReceiptCandidate> candidates;
+  // Exclusive keyset cursor for the next older page, when one exists.
+  std::optional<int> nextBeforeModernChartResultId;
   std::string diagnostic;
 };
 

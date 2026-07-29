@@ -61,6 +61,49 @@ struct RecoverySummary {
   std::string diagnostic;
 };
 
+enum class PendingScoreCompletionStatus {
+  Saved,
+  PendingScore,
+  PendingAcknowledgement,
+  IntegrityConflict,
+};
+
+enum class PendingScoreCompletionPhase {
+  Validation,
+  Projection,
+  Acknowledgement,
+};
+
+struct PendingScoreCompletionOutcome {
+  PendingScoreCompletionStatus status =
+      PendingScoreCompletionStatus::IntegrityConflict;
+  PendingScoreCompletionPhase phase = PendingScoreCompletionPhase::Validation;
+  std::string diagnostic;
+};
+
+struct PendingScoreCompletionDependencies {
+  std::function<ProjectionOutcome(const PendingChartScoreWrite &)> project;
+  std::function<AcknowledgeOutcome(std::string_view, int)> acknowledge;
+};
+
+[[nodiscard]] PendingScoreCompletionOutcome completePendingChartScore(
+    const PendingChartScoreWrite &pending,
+    const PendingScoreCompletionDependencies &dependencies);
+
+struct PendingScoreRecoveryDependencies {
+  std::function<PendingBatchOutcome(std::size_t)> listPending;
+  PendingScoreCompletionDependencies completion;
+  std::function<RecoveryMarkOutcome(std::string_view, RecoveryAttemptKind)>
+      recordRecoveryAttempt;
+};
+
+inline constexpr std::size_t kPendingChartScoreRecoveryPageRows = 256;
+
+[[nodiscard]] RecoverySummary
+recoverPendingChartScores(const PendingScoreRecoveryDependencies &dependencies,
+                          std::size_t limit =
+                              kPendingChartScoreRecoveryPageRows);
+
 [[nodiscard]] std::string_view recoveryUserMessage() noexcept;
 [[nodiscard]] RecoverySummary recoveryFailureSummary(std::string diagnostic);
 
@@ -69,22 +112,17 @@ struct Dependencies {
                              std::span<const ir::IrOutboxDraft>)>
       stage;
   std::function<PendingReadOutcome(std::string_view)> loadPending;
-  std::function<PendingBatchOutcome(std::size_t)> listPending;
   std::function<ProjectionOutcome(const PendingChartScoreWrite &)> project;
   std::function<AcknowledgeOutcome(std::string_view, int)>
       acknowledgeAndActivate;
-  std::function<RecoveryMarkOutcome(std::string_view, RecoveryAttemptKind)>
-      recordRecoveryAttempt;
 };
 
 class Coordinator {
 public:
-  Coordinator(ScoreRepository &score, ReplayRepository &replay);
   explicit Coordinator(Dependencies dependencies);
 
   SaveOutcome persist(const ChartResultAttempt &attempt,
                       std::span<const ir::IrOutboxDraft> irDrafts = {});
-  RecoverySummary recoverAll(std::size_t limit = 256);
 
 private:
   Dependencies dependencies_;

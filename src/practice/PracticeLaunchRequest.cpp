@@ -1,18 +1,14 @@
 #include "PracticeLaunchRequest.h"
 
+#include "../CanonicalDigest.h"
+#include "../Uuid.h"
+
 #include <algorithm>
 #include <cctype>
 #include <string_view>
 
 namespace practice {
 namespace {
-
-bool isSha256(std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
-}
 
 bool isKnownSource(LaunchSource source) {
   switch (source) {
@@ -30,6 +26,11 @@ std::string normalizedSha256(std::string value) {
     return static_cast<char>(std::tolower(character));
   });
   return value;
+}
+
+bool isSha256(std::string_view value) {
+  return canonical_digest::isCanonicalLowerHex(
+      normalizedSha256(std::string(value)), 64);
 }
 
 } // namespace
@@ -73,13 +74,23 @@ std::optional<std::string> validateLaunchRequest(const LaunchRequest &request) {
     return "Practice range unavailable";
   }
   if (request.source == LaunchSource::ReplayResult) {
-    if (!request.replayId.has_value() || *request.replayId <= 0) {
+    const bool validLegacy =
+        request.replayId.has_value() && *request.replayId > 0;
+    const bool validModern = request.modernReplayAttemptId.has_value() &&
+                             uuid::isCanonicalLowerV4(
+                                 *request.modernReplayAttemptId);
+    if (request.replayId.has_value() &&
+        request.modernReplayAttemptId.has_value()) {
+      return "Replay identity is ambiguous";
+    }
+    if (!validLegacy && !validModern) {
       return "Replay unavailable";
     }
     if (!request.replayPlayOptions.has_value()) {
       return "Replay options unavailable";
     }
   } else if (request.replayId.has_value() ||
+             request.modernReplayAttemptId.has_value() ||
              request.replayPlayOptions.has_value()) {
     return "Unexpected replay metadata";
   }

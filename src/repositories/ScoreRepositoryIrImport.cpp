@@ -2,6 +2,7 @@
 #include "ScoreRepositoryInternal.h"
 
 #include "../ProfileDatabaseActivity.h"
+#include "../ResultContracts.h"
 #include "../ResultPersistenceModel.h"
 #include "../ScoreProvenance.h"
 #include "../ir/IrProfileSettings.h"
@@ -21,18 +22,6 @@
 #include <unordered_set>
 
 namespace {
-
-bool validProviderId(std::string_view value) {
-  if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
-      value.front() < 'a' || value.front() > 'z') {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
 
 std::optional<std::string> formatUnixMillis(std::int64_t unixMillis) {
   if (unixMillis <= 0) {
@@ -108,7 +97,8 @@ importedWrite(const ir::IrRemoteScore &remote) {
       .chartArtist = remote.artist,
       .longNoteMode = -1,
       .score = remote.score,
-      .maxScore = remote.noteCount * 2,
+      .maxScore =
+          result_contract::maximumScoreForNotes(remote.noteCount).value_or(-1),
       .maxCombo = remote.maxCombo.value_or(0),
       .comboBreak = 0,
       .pGreat = remote.judgements.pGreat.value_or(0),
@@ -136,7 +126,7 @@ bool ScoreRepository::ImportedIrScoresAreCurrent(
     std::string_view providerId, std::string_view serverOrigin,
     std::int64_t syncGeneration, std::size_t scoreCount) {
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
-  if (!validProviderId(providerId) || !normalizedOrigin ||
+  if (!ir::isValidProviderId(providerId) || !normalizedOrigin ||
       *normalizedOrigin != serverOrigin ||
       scoreCount > ir::kMaximumIrRemoteScoreSnapshotEntries ||
       (scoreCount > 0 && syncGeneration <= 0)) {
@@ -155,7 +145,7 @@ ImportedIrScoreProjectionOutcome ScoreRepository::ReplaceImportedIrScores(
     std::int64_t syncGeneration,
     std::span<const ir::IrRemoteScore> remoteScores) {
   const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
-  if (!validProviderId(providerId) || !normalizedOrigin ||
+  if (!ir::isValidProviderId(providerId) || !normalizedOrigin ||
       *normalizedOrigin != serverOrigin || syncGeneration <= 0 ||
       remoteScores.size() > ir::kMaximumIrRemoteScoreSnapshotEntries) {
     return invalidOutcome("Imported IR score snapshot identity is invalid");
@@ -265,7 +255,7 @@ ImportedIrScoreProjectionOutcome ScoreRepository::ReplaceImportedIrScores(
 
 ImportedIrScoreProjectionOutcome
 ScoreRepository::ClearImportedIrScores(std::string_view providerId) {
-  if (!validProviderId(providerId)) {
+  if (!ir::isValidProviderId(providerId)) {
     return invalidOutcome("Imported IR score provider identity is invalid");
   }
 

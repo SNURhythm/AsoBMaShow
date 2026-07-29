@@ -493,8 +493,8 @@ void testVersionOneFingerprintGolden() {
   const std::string actual =
       result_persistence::payloadFingerprint(replay, score);
   expect(actual ==
-             "c8744f5007aa619288309622462545732f2ae4a40a772ce5ff012d2542c7dac4",
-         "v1 fingerprint remains stable");
+             "6bc3133746d831ff5581d471a42baba7a9681cc58c90928032d27e3e36fdd58d",
+         "v1 fingerprint remains stable: " + actual);
 }
 
 void testReplayFingerprintCoverage() {

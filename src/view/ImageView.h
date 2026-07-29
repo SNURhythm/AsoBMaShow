@@ -7,6 +7,7 @@
 #include "View.h"
 #include "../path.h"
 #include <bgfx/bgfx.h>
+#include <cstddef>
 #include <map>
 #include <memory>
 #include <optional>
@@ -21,9 +22,10 @@ private:
     std::shared_ptr<std::vector<unsigned char>> rgba;
   };
   void freeTexture();
-  bool applyCachedTexture(const path_t &path);
-  bool applyCachedThumbnail(const path_t &path);
-  bool applyImage(const path_t &path, const ImageCache &cache,
+  bool applyCachedTexture(const path_t &path, const std::string &key);
+  bool applyCachedThumbnail(const path_t &path, const std::string &key);
+  bool applyImage(const path_t &path, const std::string &key,
+                  const ImageCache &cache,
                   bool storeCache = true);
   void applyAsyncImageIfReady();
   bool loadTexture(const path_t &path);
@@ -67,4 +69,8 @@ public:
 
   static void dropCache(const path_t &path);
   static void dropAllCache();
+#if defined(ASOBMASHOW_IMAGE_VIEW_TESTING)
+  [[nodiscard]] static std::size_t
+  pendingAsyncDecodeCountForTesting(const path_t &path);
+#endif
 };

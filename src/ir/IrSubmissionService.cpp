@@ -598,15 +598,65 @@ struct IrSubmissionService::Impl {
       return;
     }
 
+    const auto reconciliationCancelled = [&] {
+      if (requestToken.stop_requested()) {
+        return true;
+      }
+      std::lock_guard lock(mutex);
+      return !reconciliationIsCurrentLocked(command);
+    };
+
     const std::int64_t synchronizedAt = safeNow(options);
-    IrReconciliationReadOutcome candidates =
-        repository.LoadIrReconciliationCandidates(command.providerId,
-                                                   command.serverOrigin);
-    if (candidates.status != IrReconciliationReadOutcome::Status::Loaded) {
-      failReconciliation(
-          command, candidates.diagnostic.empty()
-                       ? "Could not load IR reconciliation candidates"
-                       : std::move(candidates.diagnostic));
+    IrReconciliationReadOutcome candidates{
+        .status = IrReconciliationReadOutcome::Status::Loaded};
+    std::optional<int> beforeResultId;
+    do {
+      if (reconciliationCancelled()) {
+        failReconciliation(command, "IR reconciliation was cancelled");
+        return;
+      }
+      auto page = options.reconciliationCandidateLoader
+                      ? options.reconciliationCandidateLoader(
+                            command.providerId, command.serverOrigin,
+                            beforeResultId, kDefaultIrUploadSourcePageRows,
+                            requestToken)
+                      : repository.LoadIrReconciliationCandidates(
+                            command.providerId, command.serverOrigin,
+                            beforeResultId,
+                            kDefaultIrUploadSourcePageRows);
+      if (reconciliationCancelled()) {
+        failReconciliation(command, "IR reconciliation was cancelled");
+        return;
+      }
+      if (page.status != IrReconciliationReadOutcome::Status::Loaded) {
+        failReconciliation(
+            command, page.diagnostic.empty()
+                         ? "Could not load IR reconciliation candidates"
+                         : std::move(page.diagnostic));
+        return;
+      }
+      if (page.candidates.size() >
+          kMaximumIrRemoteScoreSnapshotEntries - candidates.candidates.size()) {
+        failReconciliation(command,
+                           "IR reconciliation candidate history is oversized");
+        return;
+      }
+      for (auto &candidate : page.candidates) {
+        candidates.candidates.push_back(std::move(candidate));
+      }
+      if (candidates.diagnostic.empty() && !page.diagnostic.empty()) {
+        candidates.diagnostic = std::move(page.diagnostic);
+      }
+      if (page.nextBeforeModernChartResultId && beforeResultId &&
+          *page.nextBeforeModernChartResultId >= *beforeResultId) {
+        failReconciliation(command,
+                           "IR reconciliation pagination did not advance");
+        return;
+      }
+      beforeResultId = page.nextBeforeModernChartResultId;
+    } while (beforeResultId.has_value());
+    if (reconciliationCancelled()) {
+      failReconciliation(command, "IR reconciliation was cancelled");
       return;
     }
     IrScoreReconciliationPlan plan = planScoreReconciliation(
@@ -617,6 +667,10 @@ struct IrSubmissionService::Impl {
                          plan.diagnostic.empty()
                              ? "Could not plan IR reconciliation"
                              : std::move(plan.diagnostic));
+      return;
+    }
+    if (reconciliationCancelled()) {
+      failReconciliation(command, "IR reconciliation was cancelled");
       return;
     }
 

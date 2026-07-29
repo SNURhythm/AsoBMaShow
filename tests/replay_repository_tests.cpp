@@ -4808,7 +4808,7 @@ void testCurrentVersionRejectsMalformedRulesetProofSchema(
   assert(schemaSnapshot(db.get()) == before);
 }
 
-constexpr const char *kExpectedIrSubmissionReceiptsTableSql =
+constexpr const char *kExpectedLegacyIrSubmissionReceiptsTableSql =
     "CREATE TABLE ir_submission_receipts ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "provider_id TEXT NOT NULL,"
@@ -4826,6 +4826,31 @@ constexpr const char *kExpectedIrSubmissionReceiptsTableSql =
     "UNIQUE(provider_id, server_origin, replay_id),"
     "CHECK(observed_in_snapshot IN (0, 1)),"
     "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+    ")";
+
+constexpr const char *kExpectedIrSubmissionReceiptsTableSql =
+    "CREATE TABLE ir_submission_receipts ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "provider_id TEXT NOT NULL,"
+    "server_origin TEXT NOT NULL,"
+    "replay_id INTEGER,"
+    "modern_chart_result_id INTEGER,"
+    "attempt_id TEXT NOT NULL,"
+    "chart_md5 TEXT,"
+    "chart_sha256 TEXT NOT NULL,"
+    "remote_user_id INTEGER,"
+    "remote_chart_id TEXT,"
+    "remote_score_id TEXT,"
+    "confirmation_source INTEGER NOT NULL,"
+    "observed_in_snapshot INTEGER NOT NULL DEFAULT 0,"
+    "confirmed_at_ms INTEGER NOT NULL,"
+    "UNIQUE(provider_id, server_origin, replay_id),"
+    "UNIQUE(provider_id, server_origin, modern_chart_result_id),"
+    "CHECK((replay_id IS NOT NULL) != (modern_chart_result_id IS NOT NULL)),"
+    "CHECK(observed_in_snapshot IN (0, 1)),"
+    "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE,"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE"
     ")";
 
 constexpr const char *kExpectedIrSubmissionReceiptsAttemptIndexSql =
@@ -4862,17 +4887,18 @@ void assertExactIrSubmissionReceiptSchema(sqlite3 *db) {
   assert(!columnExists(db, "ir_submission_receipts", "authorization"));
   assert(!columnExists(db, "ir_submission_receipts", "payload_json"));
 
-  SqliteStatementHandle foreignKeys;
-  assert(prepareSqliteStatement(
-             db, "PRAGMA foreign_key_list(ir_submission_receipts)",
-             foreignKeys) == SQLITE_OK);
-  assert(sqlite3_step(foreignKeys.get()) == SQLITE_ROW);
-  assert(queryText(db,
-                   "SELECT \"table\" || '|' || \"from\" || '|' || "
-                   "\"to\" || '|' || on_delete FROM "
-                   "pragma_foreign_key_list('ir_submission_receipts')") ==
-         "replays|replay_id|id|CASCADE");
-  assert(sqlite3_step(foreignKeys.get()) == SQLITE_DONE);
+  assert(queryInt(db,
+                  "SELECT COUNT(*) FROM "
+                  "pragma_foreign_key_list('ir_submission_receipts')") == 2);
+  assert(queryInt(db, "SELECT COUNT(*) FROM "
+                      "pragma_foreign_key_list('ir_submission_receipts') WHERE "
+                      "\"table\"='replays' AND \"from\"='replay_id' AND "
+                      "\"to\"='id' AND on_delete='CASCADE'") == 1);
+  assert(queryInt(db, "SELECT COUNT(*) FROM "
+                      "pragma_foreign_key_list('ir_submission_receipts') WHERE "
+                      "\"table\"='modern_chart_results' AND "
+                      "\"from\"='modern_chart_result_id' AND \"to\"='id' AND "
+                      "on_delete='CASCADE'") == 1);
 }
 
 constexpr const char *kExpectedIrRemoteScoresTableSql =
@@ -4984,7 +5010,8 @@ void testFreshDatabaseCreatesIrRemoteScores(
   helper.Shutdown();
 
   auto db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assertExactIrRemoteScoreSchema(db.get());
 }
 
@@ -5005,7 +5032,8 @@ void testVersion9MigrationAddsIrRemoteScores(
   assert(helper.EnsureSchema());
   helper.Shutdown();
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(queryText(db.get(), "SELECT value FROM sentinel") ==
          "version-9-kept");
   assertExactIrRemoteScoreSchema(db.get());
@@ -5029,7 +5057,8 @@ void testCurrentVersionRejectsMalformedIrRemoteScoreSchema(
 
   assert(!helper.EnsureSchema());
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(schemaSnapshot(db.get()) == before);
 }
 
@@ -5041,8 +5070,9 @@ void testFreshDatabaseCreatesIrSubmissionReceipts(
   helper.Shutdown();
 
   auto db = openDatabase(path);
-  assert(ReplayRepository::kCurrentSchemaVersion == 10);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(ReplayRepository::kCurrentSchemaVersion == 17);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assertExactIrSubmissionReceiptSchema(db.get());
 }
 
@@ -5063,7 +5093,8 @@ void testVersion8MigrationAddsIrSubmissionReceipts(
   assert(helper.EnsureSchema());
   helper.Shutdown();
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(queryText(db.get(), "SELECT value FROM sentinel") ==
          "version-8-kept");
   assertExactIrSubmissionReceiptSchema(db.get());

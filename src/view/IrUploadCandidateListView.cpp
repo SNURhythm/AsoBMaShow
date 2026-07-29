@@ -1,11 +1,10 @@
 #include "IrUploadCandidateListView.h"
 
-#include "../ReplaySummaryFormatting.h"
 #include "../ScoreRankUtils.h"
+#include "../scene/play/GameplayGaugeTypes.h"
 #include "ClearLampColors.h"
 #include "UiTheme.h"
 
-#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -15,16 +14,9 @@ namespace {
 
 constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
 
-std::string formatPlayLevel(double level) {
-  if (level <= 0.0) {
-    return {};
-  }
-  const double rounded = std::round(level);
-  if (std::fabs(level - rounded) < 0.001) {
-    return std::to_string(static_cast<int>(rounded));
-  }
+std::string formatGauge(float gauge) {
   std::ostringstream stream;
-  stream << std::fixed << std::setprecision(1) << level;
+  stream << std::fixed << std::setprecision(1) << gauge << '%';
   return stream.str();
 }
 
@@ -43,13 +35,22 @@ std::string keyModeDescription(int keyMode) {
   }
 }
 
-std::string attemptDetail(const ReplaySummary &replay) {
-  std::string detail = replay.createdAt;
-  if (!detail.empty()) {
-    detail += "  ";
+std::string attemptDetail(
+    const result_persistence::ModernChartResult &result) {
+  std::string detail = "Attempt " + result.attemptId.substr(0, 8);
+  detail += "  Combo " + std::to_string(result.score.maxCombo);
+  detail += "  ";
+  detail += gaugeTypeToShortLabel(result.adoptedGaugeType);
+  detail += "  Gauge " + formatGauge(result.score.finalGauge);
+  const auto &provenance = result.score.provenance;
+  if (!provenance.player1.option.empty() &&
+      provenance.player1.option != "NORMAL") {
+    detail += "  " + provenance.player1.option;
   }
-  detail += "Combo " + std::to_string(replay.maxCombo);
-  detail += "  " + replay_summary_ui::detailLabel(replay);
+  if (assist_options::isEnabled(provenance.assistOption)) {
+    detail += "  Assist " +
+              assist_options::normalize(provenance.assistOption);
+  }
   return detail;
 }
 
@@ -178,10 +179,10 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
 
 void IrUploadCandidateListItemView::setCandidate(
     const ir::IrUploadCandidate &candidate, bool selected, bool selectionLocked,
-    std::function<void(int)> selectionToggle) {
-  const ReplaySummary &replay = candidate.replay;
-  const auto &meta = candidate.chart.meta;
-  const int replayId = candidate.replayId();
+    std::function<void(std::string)> selectionToggle) {
+  const auto &result = candidate.result;
+  const auto &score = result.score;
+  const std::string attemptId = result.attemptId;
 
   selectionButton_->setOnClickListener({});
   selectionButton_->setSelected(selected);
@@ -194,30 +195,27 @@ void IrUploadCandidateListItemView::setCandidate(
   }
   if (!selectionLocked) {
     selectionButton_->setOnClickListener(
-        [replayId, selectionToggle = std::move(selectionToggle)]() {
+        [attemptId, selectionToggle = std::move(selectionToggle)]() {
           if (selectionToggle) {
-            selectionToggle(replayId);
+            selectionToggle(attemptId);
           }
         });
   }
 
-  titleText_->setText(meta.Title +
-                      (meta.SubTitle.empty() ? "" : " " + meta.SubTitle));
-  artistText_->setText(meta.Artist);
-  std::string attempt = attemptDetail(replay);
+  titleText_->setText(score.chartTitle);
+  artistText_->setText(score.chartArtist);
+  std::string attempt = attemptDetail(result);
   if (!candidate.failureReason.empty()) {
     attempt += "  Failed: " + candidate.failureReason;
   }
   attemptText_->setText(attempt);
-  difficultyText_->setText(candidate.chart.difficultyTableLabels.empty()
-                               ? formatPlayLevel(meta.PlayLevel)
-                               : candidate.chart.difficultyTableLabels);
-  keyModeText_->setText(keyModeDescription(meta.KeyMode));
+  difficultyText_->setText("");
+  keyModeText_->setText(keyModeDescription(result.keyMode));
 
-  if (replay.maxScore > 0) {
-    scoreText_->setText(std::to_string(replay.finalScore));
+  if (score.maxScore > 0) {
+    scoreText_->setText(std::to_string(score.score));
     rankText_->setText(
-        score_rank::displayLabelForScore(replay.finalScore, replay.maxScore));
+        score_rank::displayLabelForScore(score.score, score.maxScore));
   } else {
     scoreText_->setText("");
     rankText_->setText("");
@@ -225,22 +223,15 @@ void IrUploadCandidateListItemView::setCandidate(
   scoreText_->setThemedColor(ui_theme::cyan);
   rankText_->setThemedColor(ui_theme::amber);
 
-  if (hasClearLampColor(replay.clearType)) {
-    clearLamp_->setBackgroundColor(clearLampColorForRank(replay.clearType));
+  if (hasClearLampColor(score.clearType)) {
+    clearLamp_->setBackgroundColor(clearLampColorForRank(score.clearType));
     hasClearLamp_ = true;
   } else {
     clearLamp_->clearBackgroundColor();
     hasClearLamp_ = false;
   }
 
-  const path_t jacket = meta.StageFile.empty()
-                            ? path_t{}
-                            : fspath_to_path_t(meta.Folder / meta.StageFile);
-  if (jacket.empty()) {
-    jacketImage_->freeImage();
-  } else {
-    jacketImage_->setImageAsync(jacket);
-  }
+  jacketImage_->freeImage();
 
   const bool failed = candidate.state == ir::IrRecordState::Failed;
   statusText_->setText(failed ? "Retry" : "Eligible");
@@ -262,7 +253,7 @@ IrUploadCandidateListView::IrUploadCandidateListView()
     : RecyclerView<ir::IrUploadCandidate>(
           [](const ir::IrUploadCandidate &left,
              const ir::IrUploadCandidate &right) {
-            return left.replayId() == right.replayId();
+            return left.attemptId() == right.attemptId();
           }) {
   itemHeight = 108;
   onCreateView = [](const ir::IrUploadCandidate &) {
@@ -274,11 +265,12 @@ IrUploadCandidateListView::IrUploadCandidateListView()
     if (itemView == nullptr) {
       return;
     }
-    const bool selected = selectedReplayIds_.contains(candidate.replayId());
+    const bool selected =
+        selectedAttemptIds_.contains(candidate.result.attemptId);
     itemView->setCandidate(candidate, selected, selectionLocked_,
-                           [this](int replayId) {
+                           [this](std::string attemptId) {
                              if (onSelectionToggle) {
-                               onSelectionToggle(replayId);
+                               onSelectionToggle(std::move(attemptId));
                              }
                            });
   };
@@ -286,14 +278,14 @@ IrUploadCandidateListView::IrUploadCandidateListView()
 
 void IrUploadCandidateListView::setCandidates(
     const std::vector<ir::IrUploadCandidate> &candidates,
-    const std::unordered_set<int> &selectedReplayIds) {
-  selectedReplayIds_ = selectedReplayIds;
+    const std::unordered_set<std::string> &selectedAttemptIds) {
+  selectedAttemptIds_ = selectedAttemptIds;
   setItems(candidates);
 }
 
-void IrUploadCandidateListView::setSelectedReplayIds(
-    const std::unordered_set<int> &selectedReplayIds) {
-  selectedReplayIds_ = selectedReplayIds;
+void IrUploadCandidateListView::setSelectedAttemptIds(
+    const std::unordered_set<std::string> &selectedAttemptIds) {
+  selectedAttemptIds_ = selectedAttemptIds;
   rebindVisibleItems();
 }
 

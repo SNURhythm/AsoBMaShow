@@ -20,8 +20,8 @@ namespace ir_uploads {
 namespace detail {
 
 [[nodiscard]] std::size_t
-eraseQueuedReplayIds(std::vector<int> &failedReplayIds,
-                     std::span<const int> queuedReplayIds);
+eraseQueuedAttemptIds(std::vector<std::string> &failedAttemptIds,
+                      std::span<const std::string> queuedAttemptIds);
 
 } // namespace detail
 
@@ -41,14 +41,14 @@ struct PreparationDependencies {
 };
 
 struct PreparationFailureReason {
-  int replayId = 0;
+  std::string attemptId;
   std::string diagnostic;
 };
 
 struct PreparationOutcome {
   bool cancelled = false;
-  std::vector<int> queuedReplayIds;
-  std::vector<int> failedReplayIds;
+  std::vector<std::string> queuedAttemptIds;
+  std::vector<std::string> failedAttemptIds;
   std::vector<PreparationFailureReason> failureReasons;
 };
 
@@ -78,7 +78,7 @@ public:
   void replaceCandidates(std::vector<ir::IrUploadCandidate> candidates);
   void applyCandidateRefresh(
       std::optional<std::vector<ir::IrUploadCandidate>> candidates);
-  void toggle(int replayId);
+  void toggle(const std::string &attemptId);
   void selectAll();
   void clearSelection();
 
@@ -90,14 +90,15 @@ public:
   [[nodiscard]] const std::vector<ir::IrUploadCandidate> &candidates() const {
     return candidates_;
   }
-  [[nodiscard]] const std::unordered_set<int> &selectedReplayIds() const {
-    return selectedReplayIds_;
+  [[nodiscard]] const std::unordered_set<std::string> &
+  selectedAttemptIds() const {
+    return selectedAttemptIds_;
   }
   [[nodiscard]] std::size_t selectedCount() const noexcept {
-    return selectedReplayIds_.size();
+    return selectedAttemptIds_.size();
   }
-  [[nodiscard]] bool isSelected(int replayId) const noexcept {
-    return selectedReplayIds_.contains(replayId);
+  [[nodiscard]] bool isSelected(const std::string &attemptId) const noexcept {
+    return selectedAttemptIds_.contains(attemptId);
   }
   [[nodiscard]] bool selectionLocked() const noexcept { return preparing_; }
   [[nodiscard]] const std::string &statusText() const noexcept {
@@ -108,8 +109,8 @@ private:
   void applySessionFailureReasons();
 
   std::vector<ir::IrUploadCandidate> candidates_;
-  std::unordered_set<int> selectedReplayIds_;
-  std::unordered_map<int, std::string> sessionFailureReasons_;
+  std::unordered_set<std::string> selectedAttemptIds_;
+  std::unordered_map<std::string, std::string> sessionFailureReasons_;
   bool preparing_ = false;
   std::string statusText_;
 };

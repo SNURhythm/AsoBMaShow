@@ -56,6 +56,7 @@ struct IrSubmissionReceipt {
   std::string providerId;
   std::string serverOrigin;
   int replayId = 0;
+  int modernChartResultId = 0;
   std::string attemptId;
   std::string chartMd5;
   std::string chartSha256;

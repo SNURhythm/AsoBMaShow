@@ -6,8 +6,7 @@ ResultCapturePolicy
 resultCapturePolicy(const ResultCaptureContext &context) noexcept {
   const bool livePlayback = !context.replayPlayback && !context.coursePlayback;
   const bool recordReplay = !context.autoPlay && !context.replayPlayback;
-  const bool persistResult =
-      recordReplay && !context.practice && !context.coursePlayback;
+  const bool persistResult = recordReplay && !context.practice;
   return {
       .recordReplay = recordReplay,
       .captureAnalytics = livePlayback,

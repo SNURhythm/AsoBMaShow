@@ -25,6 +25,7 @@ struct RealtimeTouchLayout {
   std::array<int, kRealtimeTouchLaneCapacity> lanes{};
   std::array<bool, kRealtimeTouchLaneCapacity> scratch{};
   std::size_t laneCount = 0;
+  int keyMode = 7;
   bool dragMode = false;
 };
 
@@ -43,12 +44,15 @@ struct RealtimeTouchSample {
   float normalizedY = 0.0F;
   std::int64_t steadyTimestampMicros = 0;
   bool excludedFromGameplay = false;
+
+  bool operator==(const RealtimeTouchSample &) const = default;
 };
 
 struct RealtimeTouchInputSink {
   void *context = nullptr;
   bool (*emit)(void *, const RealtimeGameplayInput &) = nullptr;
   bool (*scratchLongNoteHeld)(void *, int lane) = nullptr;
+  bool (*cancelTouchLifecycle)(void *, const RealtimeTouchSample &) = nullptr;
 };
 
 class RealtimeTouchInputRouter {
@@ -60,7 +64,8 @@ public:
   bool cancelAll(std::int64_t steadyTimestampMicros) noexcept;
   bool updateLayout(RealtimeTouchLayout layout,
                     std::int64_t steadyTimestampMicros) noexcept;
-  void setGameplayEnabled(bool enabled) noexcept;
+  bool setGameplayEnabled(bool enabled,
+                          std::int64_t steadyTimestampMicros) noexcept;
   void reset() noexcept;
 
 private:
@@ -72,6 +77,7 @@ private:
     bool pressed = false;
     bool scratch = false;
     int scratchDirection = 0;
+    replay::LogicalControl replayControl;
     float lastX = 0.0F;
     float lastY = 0.0F;
     std::int64_t cancelDeadlineMicros = 0;
@@ -84,6 +90,7 @@ private:
   [[nodiscard]] bool laneOccupied(int lane,
                                   std::int64_t exceptFinger) const noexcept;
   bool emit(RealtimeGameplayInputType type, int lane,
+            replay::LogicalControl replayControl,
             std::int64_t timestampMicros, bool backSpin = false) noexcept;
   bool beginLane(FingerState &finger, std::size_t laneIndex,
                  const RealtimeTouchSample &sample) noexcept;

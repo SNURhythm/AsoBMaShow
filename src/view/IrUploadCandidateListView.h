@@ -17,7 +17,7 @@ public:
 
   void setCandidate(const ir::IrUploadCandidate &candidate, bool selected,
                     bool selectionLocked,
-                    std::function<void(int)> selectionToggle);
+                    std::function<void(std::string)> selectionToggle);
   [[nodiscard]] bool hasClearLamp() const noexcept { return hasClearLamp_; }
 
 private:
@@ -45,14 +45,14 @@ public:
   IrUploadCandidateListView();
 
   void setCandidates(const std::vector<ir::IrUploadCandidate> &candidates,
-                     const std::unordered_set<int> &selectedReplayIds);
-  void setSelectedReplayIds(
-      const std::unordered_set<int> &selectedReplayIds);
+                     const std::unordered_set<std::string> &selectedAttemptIds);
+  void setSelectedAttemptIds(
+      const std::unordered_set<std::string> &selectedAttemptIds);
   void setSelectionLocked(bool locked);
 
-  std::function<void(int replayId)> onSelectionToggle;
+  std::function<void(std::string attemptId)> onSelectionToggle;
 
 private:
-  std::unordered_set<int> selectedReplayIds_;
+  std::unordered_set<std::string> selectedAttemptIds_;
   bool selectionLocked_ = false;
 };

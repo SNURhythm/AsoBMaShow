@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../CourseIdentity.h"
+#include "../ModernResult.h"
 #include "../ScoreProvenance.h"
 #include "../ir/IrRemoteScoreModels.h"
 #include "ChartRepository.h"
@@ -23,6 +24,15 @@ struct CoursePlaySession;
 namespace result_persistence {
 struct PendingChartScoreWrite;
 
+struct PendingCourseScoreWrite {
+  std::string attemptId;
+  int modernResultId = 0;
+  std::string createdAt;
+  ModernCourseResult result;
+
+  bool operator==(const PendingCourseScoreWrite &) const = default;
+};
+
 enum class ProjectionStatus {
   Inserted,
   AlreadyPresent,
@@ -38,7 +48,7 @@ struct ProjectionOutcome {
 
 class ScoreRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 10;
+  static constexpr int kCurrentSchemaVersion = 11;
 
   class [[nodiscard]] PreparedScoreQueryDatabase {
   public:
@@ -85,18 +95,20 @@ public:
                  const ScoreProvenance &provenance = ScoreProvenance::Legacy());
   result_persistence::ProjectionOutcome
   SaveProjectedScore(const result_persistence::PendingChartScoreWrite &pending);
+  result_persistence::ProjectionOutcome SaveProjectedCourseScore(
+      const result_persistence::PendingCourseScoreWrite &pending);
   [[nodiscard]] ImportedIrScoreProjectionOutcome ReplaceImportedIrScores(
       std::string_view providerId, std::string_view serverOrigin,
-      std::int64_t syncGeneration,
-      std::span<const ir::IrRemoteScore> scores);
+      std::int64_t syncGeneration, std::span<const ir::IrRemoteScore> scores);
   [[nodiscard]] ImportedIrScoreProjectionOutcome
   ClearImportedIrScores(std::string_view providerId);
   static bool ClearImportedIrScoresSnapshot(
       const std::filesystem::path &snapshotDatabasePath,
       std::string &errorMessage);
-  [[nodiscard]] bool ImportedIrScoresAreCurrent(
-      std::string_view providerId, std::string_view serverOrigin,
-      std::int64_t syncGeneration, std::size_t scoreCount);
+  [[nodiscard]] bool ImportedIrScoresAreCurrent(std::string_view providerId,
+                                                std::string_view serverOrigin,
+                                                std::int64_t syncGeneration,
+                                                std::size_t scoreCount);
   bool SaveCourseScore(
       const CoursePlaySession &session, const RhythmState &state,
       int completedCharts, int totalCharts,
@@ -106,8 +118,8 @@ public:
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,
       const std::optional<std::string> &excludeAttemptId = std::nullopt,
       int selectedLongNoteMode = 0);
-  std::optional<ScoreBestSnapshot> LoadBestScoreForRuleset(
-      const bms_parser::ChartMeta &chartMeta,
+  std::optional<ScoreBestSnapshot>
+  LoadBestScoreForRuleset(const bms_parser::ChartMeta &chartMeta,
       const RulesetDescriptor &requiredRuleset,
       int selectedLongNoteMode = 0);
   std::optional<ScoreBestSnapshot>
@@ -116,8 +128,9 @@ public:
       std::span<const course_identity::Definition> definitions);
   ScoreClearRankCache LoadBestClearRanks();
   ScoreClearRankCache LoadLocalBestClearRanks();
-  ScoreClearRankCache LoadLocalBestClearRanks(
-      ChartRepository::Session &chartSession, std::string_view schema);
+  ScoreClearRankCache
+  LoadLocalBestClearRanks(ChartRepository::Session &chartSession,
+                          std::string_view schema);
   ScoreClearRankCache LoadBestClearRanks(ChartRepository::Session &chartSession,
                                          std::string_view schema);
   ScoreBestCache LoadBestScores();

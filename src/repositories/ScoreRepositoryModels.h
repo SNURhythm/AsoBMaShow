@@ -57,6 +57,7 @@ struct ScoreBestSnapshot {
   std::optional<float> finalGauge;
   int clearType = kClearTypeFailedRank;
   std::optional<std::string> createdAt;
+  std::optional<std::string> attemptId;
   std::optional<std::string> bestOrderTime;
   ScoreBestSource source = ScoreBestSource::Local;
 };

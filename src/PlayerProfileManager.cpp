@@ -10,6 +10,8 @@
 #include "VersionedJson.h"
 #include "input/InputProfileStore.h"
 #include "practice/PracticePresetStore.h"
+#include "replay/ReplayProfileTransfer.h"
+#include "replay/ReplayProfileInventory.h"
 
 #include "../yoga/lib/nlohmann/json.hpp"
 
@@ -402,6 +404,7 @@ PlayerProfilePaths makePathsAtRoot(const std::filesystem::path &root) {
   paths.scoresDb = paths.root / "scores.db";
   paths.replaysDb = paths.root / "replays.db";
   paths.practiceDirectory = paths.root / "practice";
+  paths.replayDirectory = paths.root / "replay";
   return paths;
 }
 
@@ -1261,6 +1264,14 @@ ProfileResult buildProfile(
                       filesystemError.message());
     }
   }
+  filesystemError.clear();
+  if (!std::filesystem::create_directory(staging.replayDirectory,
+                                         filesystemError) ||
+      filesystemError) {
+    return fail(ProfileError::IoFailure,
+                "unable to create profile replay directory: " +
+                    filesystemError.message());
+  }
 
   if (!migrationPhase(ProfileMigrationPhase::WriteSettings)) {
     return fail(ProfileError::MigrationFailure, errorMessage);
@@ -1373,6 +1384,20 @@ ProfileResult buildProfile(
                 "unable to snapshot replay database: " + errorMessage);
   }
 
+  // Prove the SQLite backups match their sources before schema owners perform
+  // any intentional migration. In particular, replay schema v14 atomically
+  // replaces legacy playback tables with summary tables, so comparing table
+  // names after migration would incorrectly reject the required cutover.
+  if (!migrationPhase(ProfileMigrationPhase::CompareRows)) {
+    return fail(ProfileError::MigrationFailure, errorMessage);
+  }
+  if ((hasScoreSource &&
+       !compareSourceRows(*scoreSource, staging.scoresDb, errorMessage)) ||
+      (hasReplaySource &&
+       !compareSourceRows(*replaySource, staging.replaysDb, errorMessage))) {
+    return fail(ProfileError::IntegrityFailure, errorMessage);
+  }
+
   if (!migrationPhase(ProfileMigrationPhase::EnsureScoreSchema)) {
     return fail(ProfileError::MigrationFailure, errorMessage);
   }
@@ -1399,15 +1424,6 @@ ProfileResult buildProfile(
     return fail(ProfileError::IntegrityFailure, errorMessage);
   }
 
-  if (!migrationPhase(ProfileMigrationPhase::CompareRows)) {
-    return fail(ProfileError::MigrationFailure, errorMessage);
-  }
-  if ((hasScoreSource &&
-       !compareSourceRows(*scoreSource, staging.scoresDb, errorMessage)) ||
-      (hasReplaySource &&
-       !compareSourceRows(*replaySource, staging.replaysDb, errorMessage))) {
-    return fail(ProfileError::IntegrityFailure, errorMessage);
-  }
   if (mode == BuildMode::Duplicate &&
       (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,
                                                      errorMessage) ||
@@ -1415,6 +1431,31 @@ ProfileResult buildProfile(
                                                        errorMessage))) {
     return fail(ProfileError::IntegrityFailure,
                 "unable to clear duplicated IR data: " + errorMessage);
+  }
+
+  std::vector<std::filesystem::path> transferredReplayFiles;
+  if (mode == BuildMode::Duplicate) {
+    ReplayRepository stagedRepository(staging.replaysDb);
+    const auto inventory =
+        replay::loadAgreedModernReplayFileInventory(stagedRepository);
+    if (inventory.status != ModernReplayFileInventoryStatus::Loaded) {
+      return fail(ProfileError::IntegrityFailure,
+                  "unable to load replay file ownership for duplication: " +
+                      inventory.diagnostic);
+    }
+    const replay::ReplayProfileTransfer transfer(duplicateSource->root,
+                                                  staging.root);
+    const auto transferred = transfer.copy(inventory.entries);
+    if (transferred.state !=
+        replay::ReplayProfileTransferState::Succeeded) {
+      return fail(
+          transferred.state ==
+                  replay::ReplayProfileTransferState::SourceInvalid
+              ? ProfileError::IntegrityFailure
+              : ProfileError::IoFailure,
+          "unable to duplicate replay files: " + transferred.diagnostic);
+    }
+    transferredReplayFiles = transferred.copiedRelativePaths;
   }
 
   if (!migrationPhase(ProfileMigrationPhase::WriteMetadata)) {
@@ -1454,10 +1495,24 @@ ProfileResult buildProfile(
                       errorMessage);
     }
   }
+  for (const auto &relativePath : transferredReplayFiles) {
+    const auto file = staging.root / relativePath;
+    if (!ensureContainedPath(applicationRoot, file, errorMessage) ||
+        !dependencies.filesystem.syncFile(file, errorMessage)) {
+      return fail(ProfileError::IoFailure,
+                  "unable to make staged replay data durable: " +
+                      errorMessage);
+    }
+  }
   if (!dependencies.filesystem.syncDirectory(staging.practiceDirectory,
                                              errorMessage)) {
     return fail(ProfileError::IoFailure,
                 "unable to sync staged practice directory: " + errorMessage);
+  }
+  if (!dependencies.filesystem.syncDirectory(staging.replayDirectory,
+                                             errorMessage)) {
+    return fail(ProfileError::IoFailure,
+                "unable to sync staged replay directory: " + errorMessage);
   }
   if (!dependencies.filesystem.syncDirectory(staging.root, errorMessage)) {
     return fail(mode == BuildMode::Migration ? ProfileError::MigrationFailure
@@ -2236,6 +2291,22 @@ ProfileResult PlayerProfileManager::installProfile(
               filesystemError.message());
     }
   }
+  bool replayDirectoryExists = false;
+  if (!pathExists(staging.replayDirectory, replayDirectoryExists,
+                  errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IoFailure, errorMessage);
+  }
+  if (!replayDirectoryExists) {
+    filesystemError.clear();
+    if (!std::filesystem::create_directory(staging.replayDirectory,
+                                           filesystemError) ||
+        filesystemError) {
+      return cleanStagingAndFail(
+          ProfileError::IoFailure,
+          "unable to create imported replay directory: " +
+              filesystemError.message());
+    }
+  }
   if (!writeProfileMetadata(staging.profileJson, sourceProfile, errorMessage)) {
     return cleanStagingAndFail(ProfileError::IoFailure,
                                "unable to write imported profile metadata: " +
@@ -2287,6 +2358,26 @@ ProfileResult PlayerProfileManager::installProfile(
         ProfileError::IntegrityFailure,
         "database migration changed imported row counts");
   }
+  ReplayRepository stagedReplayRepository(staging.replaysDb);
+  const auto replayInventory =
+      replay::loadAgreedModernReplayFileInventory(stagedReplayRepository);
+  if (replayInventory.status != ModernReplayFileInventoryStatus::Loaded) {
+    return cleanStagingAndFail(
+        ProfileError::IntegrityFailure,
+        "unable to inspect imported replay ownership: " +
+            replayInventory.diagnostic);
+  }
+  const replay::ReplayProfileTransfer replayValidation(staging.root,
+                                                       staging.root);
+  const auto validatedReplayFiles =
+      replayValidation.validate(replayInventory.entries, true);
+  if (validatedReplayFiles.state !=
+      replay::ReplayProfileTransferState::Succeeded) {
+    return cleanStagingAndFail(
+        ProfileError::IntegrityFailure,
+        "imported replay files do not match result ownership: " +
+            validatedReplayFiles.diagnostic);
+  }
   ProfileResult staged = validateProfileFiles(
       applicationDataRoot_, staging, sourceProfile.id,
       ProfileUse::RuntimeReady);
@@ -2316,10 +2407,25 @@ ProfileResult PlayerProfileManager::installProfile(
                                      errorMessage);
     }
   }
+  for (const auto &relativePath :
+       validatedReplayFiles.copiedRelativePaths) {
+    if (!dependencies_.filesystem.syncFile(staging.root / relativePath,
+                                           errorMessage)) {
+      return cleanStagingAndFail(
+          ProfileError::IoFailure,
+          "unable to make imported replay data durable: " + errorMessage);
+    }
+  }
   if (!dependencies_.filesystem.syncDirectory(staging.practiceDirectory,
                                               errorMessage)) {
     return cleanStagingAndFail(ProfileError::IoFailure,
                                "unable to sync imported practice directory: " +
+                                   errorMessage);
+  }
+  if (!dependencies_.filesystem.syncDirectory(staging.replayDirectory,
+                                              errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IoFailure,
+                               "unable to sync imported replay directory: " +
                                    errorMessage);
   }
   if (!dependencies_.filesystem.syncDirectory(staging.root, errorMessage)) {

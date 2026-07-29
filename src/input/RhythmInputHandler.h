@@ -36,6 +36,7 @@ private:
                                                   true, true, true};
   int totalLaneCount;
   int scratchLaneCount;
+  int keyMode = 7;
   float playAreaWidth = 8.0f;
   float playAreaLeftX = 0.0f;
   bool dragModeEnabled = false;
@@ -61,6 +62,9 @@ private:
                         Vector3 normalizedLocation);
   void onFingerCancel(SDL_FingerID fingerIndex, Vector3 normalizedLocation);
   void releaseExpiredCancelledTouches();
+  [[nodiscard]] bms_parser::Note *
+  applyTouchLane(int lane, bool pressed,
+                 std::optional<int> scratchDirection);
 
 public:
   IRhythmControl *control;
@@ -70,7 +74,9 @@ public:
       std::vector<input::InputScope> activeScopes,
       LogicalGameplayInputAdapter::CommandCallback commandCallback = {},
       float playAreaWidth = 8.0f,
-      LogicalGameplayRegistryPolicy registryPolicy = {});
+      LogicalGameplayRegistryPolicy registryPolicy = {},
+      LogicalGameplayInputAdapter::AppliedTransitionCallback
+          appliedTransitionCallback = {});
   ~RhythmInputHandler() override;
   void onKeyDown(int keyCode, KeySource keySource) override;
   void onKeyUp(int KeyCode, KeySource Source) override;

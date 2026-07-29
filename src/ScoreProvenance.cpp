@@ -1,11 +1,12 @@
 #include "ScoreProvenance.h"
 
 #include "BmsMetadataText.h"
+#include "CanonicalDigest.h"
+#include "scene/play/GameplayAttemptSetup.h"
 #include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -18,10 +19,7 @@ using Json = nlohmann::ordered_json;
 std::optional<std::string> normalizedHexHash(const std::string &value,
                                              std::size_t expectedSize) {
   std::string normalized = asobmshow::bms_metadata::normalizedHash(value);
-  if (normalized.size() != expectedSize ||
-      !std::ranges::all_of(normalized, [](unsigned char character) {
-        return std::isxdigit(character) != 0;
-      })) {
+  if (!canonical_digest::isCanonicalLowerHex(normalized, expectedSize)) {
     return std::nullopt;
   }
   return normalized;
@@ -288,14 +286,13 @@ void validatePracticePercentages(const ScoreProvenance &value) {
   if (!value.playback.valid()) {
     throw std::runtime_error("Score provenance playback is invalid.");
   }
-  if (value.judgeWindowScalePercent < 25 ||
-      value.judgeWindowScalePercent > 200 ||
-      value.judgeWindowScalePercent % 5 != 0) {
+  if (!gameplay::validJudgeWindowScalePercent(
+          value.judgeWindowScalePercent)) {
     throw std::runtime_error(
         "Score provenance judge window scale percentage is out of range.");
   }
   if (value.startingGaugePercent.has_value() &&
-      (*value.startingGaugePercent < 0 || *value.startingGaugePercent > 120)) {
+      !gameplay::validStartingGaugePercent(*value.startingGaugePercent)) {
     throw std::runtime_error(
         "Score provenance starting gauge percentage is out of range.");
   }
@@ -799,6 +796,46 @@ uniqueStageForChart(const ScoreProvenance &provenance,
   return matching;
 }
 
+std::optional<SavedChartRandomParseSetup>
+savedChartRandomParseSetup(const ScoreProvenance &provenance,
+                           const bms_parser::ChartMeta &chartMeta,
+                           std::string &diagnostic) noexcept {
+  diagnostic.clear();
+  try {
+    const auto *stage = uniqueStageForChart(provenance, chartMeta);
+    if (stage == nullptr) {
+      diagnostic = "Saved result has no unique chart random branch.";
+      return std::nullopt;
+    }
+    if (stage->chartRandomSeed &&
+        *stage->chartRandomSeed >
+            std::numeric_limits<unsigned int>::max()) {
+      diagnostic = "Saved chart random seed is unsupported.";
+      return std::nullopt;
+    }
+    if (stage->chartRandomPrng &&
+        *stage->chartRandomPrng != bms_parser::Parser::RandomPrngId) {
+      diagnostic = "Saved chart random PRNG is unsupported.";
+      return std::nullopt;
+    }
+    return SavedChartRandomParseSetup{
+        .randomSeed =
+            stage->chartRandomSeed
+                ? std::optional<unsigned int>(
+                      static_cast<unsigned int>(*stage->chartRandomSeed))
+                : std::nullopt,
+        .randomPrng = stage->chartRandomPrng,
+        .randomValues =
+            stage->chartRandomValues.empty()
+                ? std::nullopt
+                : std::optional(stage->chartRandomValues),
+    };
+  } catch (...) {
+    diagnostic = "Saved chart random branch is invalid.";
+    return std::nullopt;
+  }
+}
+
 } // namespace score_provenance
 
 ScoreProvenance ScoreProvenance::Legacy() {
@@ -829,6 +866,7 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
       gaugeTypeName(canonical.gaugeAutoShiftLowerBound);
   root["player1"] = playerOptionToJson(canonical.player1);
   root["player2"] = playerOptionToJson(canonical.player2);
+  root["doublePlayFlip"] = canonical.doublePlayFlip;
   root["assistOption"] = canonical.assistOption;
 
   Json devices = Json::array();
@@ -900,6 +938,14 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
     }
     if (const auto player = root.find("player2"); player != root.end()) {
       result.player2 = playerOptionFromJson(*player);
+    }
+    if (schemaVersion >= ScoreProvenance::kDoublePlayFlipSchemaVersion) {
+      const auto flip = root.find("doublePlayFlip");
+      if (flip == root.end() || !flip->is_boolean()) {
+        throw std::runtime_error(
+            "Score provenance double-play orientation is missing or malformed.");
+      }
+      result.doublePlayFlip = flip->get<bool>();
     }
     result.assistOption = root.value("assistOption", result.assistOption);
 
@@ -1031,6 +1077,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   result.gaugeAutoShiftLowerBound = input.gaugeAutoShiftLowerBound;
   result.player1 = input.player1;
   result.player2 = input.player2;
+  result.doublePlayFlip = input.doublePlayFlip;
   result.assistOption = assist_options::normalize(input.assistOption);
   result.inputDevices = input.inputDevices;
   canonicalizeDevices(result.inputDevices);
@@ -1084,6 +1131,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
             stages.front().gaugeAutoShiftLowerBound ||
         stage.player1.option != stages.front().player1.option ||
         stage.player2.option != stages.front().player2.option ||
+        stage.doublePlayFlip != stages.front().doublePlayFlip ||
         stage.assistOption != stages.front().assistOption ||
         stage.playback != stages.front().playback ||
         stage.judgeWindowScalePercent !=

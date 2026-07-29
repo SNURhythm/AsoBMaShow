@@ -6,6 +6,7 @@
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayData.h"
+#include "../../ThreadCompat.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
 #include "NoteTimeRange.h"
@@ -16,14 +17,18 @@
 #include "../../input/IRhythmControl.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeResultFlow.h"
+#include "../../replay/ChartReplayCapture.h"
+#include "../../replay/ReplayInputRecorder.h"
 #include "../../view/TextView.h"
 #include "../ResultScene.h"
 #include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 class Button;
 class RhythmLaneInputController;
@@ -63,6 +68,12 @@ public:
 
 private:
   struct RealtimeGameplaySession;
+  struct CompletedModernReplayCapture {
+    std::optional<std::vector<replay::InputTransition>> acceptedInput;
+    std::vector<replay::ReplayTouchSample> touchSamples;
+    std::vector<replay::ReplayLaneCoverEvent> laneCoverEvents;
+    replay::ReplayTimeBounds timeBounds;
+  };
   bool reset();
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
@@ -101,6 +112,7 @@ private:
   [[nodiscard]] int effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;
+  [[nodiscard]] bool usesModernCourseContinuation() const;
   [[nodiscard]] practice::ResultCapturePolicy resultCapturePolicy() const;
   [[nodiscard]] std::optional<NoteTimeRange> practiceNoteRange() const;
   [[nodiscard]] bool practiceInputAllowed(long long chartTimeMicros) const;
@@ -118,6 +130,10 @@ private:
   void renderCoursePauseHoldRing();
   void beginReplayRecording();
   void finishReplayRecording();
+  [[nodiscard]] CompletedModernReplayCapture completeModernReplayCapture();
+  void recordModernCourseStage(const CompletedModernReplayCapture &capture);
+  void captureModernReplayInput(replay::LogicalControl control, bool pressed,
+                                bool replayOnly);
   void publishPracticeGhost();
   void buildReplayNoteLookup();
   void processReplayEvents(long long gameplayTimeMicros);
@@ -157,11 +173,10 @@ private:
   Judge judge;
   ScoreProvenance attemptProvenance;
   void checkPassedTimeline(long long time);
-  void detonateLandmine(bms_parser::LandmineNote *note, long long songTimeMicros,
-                        long long judgeTimeMicros);
+  void detonateLandmine(bms_parser::LandmineNote *note,
+                        long long songTimeMicros, long long judgeTimeMicros);
   void expireGimmickNote(bms_parser::Note *note, long long judgeTimeMicros);
-  void onJudge(const JudgeResult &judgeResult,
-               bool recordTimingSample = true);
+  void onJudge(const JudgeResult &judgeResult, bool recordTimingSample = true);
   void appendReplayEvent(ReplayEventAction action, int lane,
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
@@ -173,13 +188,10 @@ private:
                                   bool resetVisibleTimeReference);
   bool handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
-  bool handleTouchInputAtGameplayTime(SDL_FingerID fingerIndex,
-                                      ReplayTouchAction action,
-                                      Vector3 normalizedLocation,
-                                      long long gameplayTimeMicros,
-                                      std::optional<long long>
-                                          visualGameplayTimeMicros =
-                                              std::nullopt);
+  bool handleTouchInputAtGameplayTime(
+      SDL_FingerID fingerIndex, ReplayTouchAction action,
+      Vector3 normalizedLocation, long long gameplayTimeMicros,
+      std::optional<long long> visualGameplayTimeMicros = std::nullopt);
   bool handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
                                     ReplayTouchAction action,
                                     Vector3 normalizedLocation,
@@ -199,6 +211,13 @@ private:
   std::unique_ptr<RhythmState> ownedState;
   RhythmState *state = nullptr;
   pacemaker::Target activePacemakerTarget;
+  std::optional<ScoreBestSnapshot> activePacemakerBest;
+  std::optional<ResultPreviousBestData> activeReplayPacemakerPreviousBest;
+  std::jthread bestReplayLoadThread;
+  std::shared_ptr<std::atomic_bool> bestReplayLoadCancelled =
+      std::make_shared<std::atomic_bool>(false);
+  std::mutex bestReplayLoadMutex;
+  std::shared_ptr<ReplayData> pendingBestReplay;
   std::unique_ptr<BMSRenderer> ownedRenderer;
   BMSRenderer *renderer = nullptr;
   std::unique_ptr<RhythmLaneInputController> ownedLaneInputController;
@@ -210,6 +229,11 @@ private:
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
   ReplayData analyticsReplay;
+  std::unique_ptr<replay::ReplayInputRecorder> modernReplayInputRecorder;
+  std::optional<std::vector<replay::InputTransition>>
+      completedModernReplayInput;
+  std::optional<GaugeStateSnapshot> courseStageInitialGauge;
+  std::string modernReplayCaptureDiagnostic;
   ResultPersistenceOptions resultPersistenceOptions;
   std::string resultPersistenceAttemptId;
   std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;
@@ -235,6 +259,10 @@ private:
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
   void configurePacemakerTarget();
+  void startBestReplayLoad(std::string attemptId,
+                           std::filesystem::path chartPath);
+  void applyPendingBestReplay();
+  void stopBestReplayLoad();
   void updatePacemakerStatus();
   void updateGaugeStatusText();
   bool finishIfGaugeFailed();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameplaySimulation.h"
+#include "../../replay/ReplayPlayback.h"
 
 #include <array>
 #include <atomic>
@@ -21,14 +22,26 @@ inline constexpr std::size_t kRealtimeGameplayTransactionHistorySize = 256;
 
 enum class RealtimeGameplayInputType : std::uint8_t { Press, Release };
 
+enum class RealtimeGameplayInputSource : std::uint8_t {
+  Independent,
+  Physical,
+  Touch,
+  LegacyAdapter,
+};
+
 struct RealtimeGameplayInput {
   std::uint64_t epoch = 0;
   RealtimeGameplayInputType type = RealtimeGameplayInputType::Press;
+  RealtimeGameplayInputSource source =
+      RealtimeGameplayInputSource::Independent;
   int lane = -1;
   int compensateLane = -1;
   bool backSpin = false;
   std::int64_t steadyTimestampMicros = 0;
   std::int64_t inputDelayMicros = 0;
+  bool hasReplayControl = false;
+  replay::LogicalControl replayControl;
+  bool replayOnly = false;
 };
 
 struct RealtimeGameplayAudioReservation {
@@ -66,6 +79,8 @@ struct RealtimeGameplayWorkerConfig {
   RealtimeGameplayClock clock;
   RealtimeGameplayAudioSink audio;
   bool inputTriggeredKeysounds = true;
+  std::size_t maximumReplayInputTransitions =
+      replay::kReplayLimits.maxInputTransitions;
   std::optional<std::int64_t> activationSongTimeMicros;
   std::optional<std::int64_t> practiceCompletionSongTimeMicros;
 };
@@ -205,10 +220,32 @@ public:
   [[nodiscard]] bool running() const noexcept;
   [[nodiscard]] std::vector<GameplayReplayEvent>
   copyReplayEventsAfterStop() const;
+  [[nodiscard]] std::optional<std::vector<replay::InputTransition>>
+  copyAcceptedReplayInputAfterStop() const;
   [[nodiscard]] std::vector<float> copyGaugeHistoryAfterStop() const;
   [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesAfterStop() const;
 
 private:
+  static constexpr std::size_t kOwnedInputSourceCount = 3;
+
+  struct OwnedInputSourceState {
+    bool held = false;
+    bool hasReplayControl = false;
+    replay::LogicalControl replayControl;
+    std::uint64_t claimSequence = 0;
+  };
+
+  struct OwnedLaneState {
+    std::array<OwnedInputSourceState, kOwnedInputSourceCount> sources{};
+  };
+
+  struct OwnedInputDecision {
+    std::array<RealtimeGameplayInput, 2> gameplay{};
+    std::size_t gameplayCount = 0;
+    std::array<RealtimeGameplayInput, 2> replay{};
+    std::size_t replayCount = 0;
+  };
+
   struct SnapshotBuffer {
     RealtimeGameplaySnapshot snapshot;
     mutable std::atomic<std::uint32_t> readers{0};
@@ -217,6 +254,12 @@ private:
   void run();
   void signal() noexcept;
   void processInput(const RealtimeGameplayInput &input);
+  [[nodiscard]] OwnedInputDecision
+  coalesceOwnedInput(const RealtimeGameplayInput &input) noexcept;
+  [[nodiscard]] bool processGameplayInput(
+      const RealtimeGameplayInput &input, std::int64_t songTimeMicros);
+  void recordAcceptedReplayInput(const RealtimeGameplayInput &,
+                                 std::int64_t songTimeMicros) noexcept;
   bool advanceAutomatic();
   bool commitAutomaticTransactions(
       std::span<const GameplayInputResult> transactions);
@@ -228,6 +271,8 @@ private:
   GameplayDefinition definition_;
   RealtimeGameplayWorkerConfig config_;
   GameplaySimulation simulation_;
+  std::array<OwnedLaneState, 64> ownedInputLanes_{};
+  std::uint64_t ownedInputClaimSequence_ = 0;
   BoundedMpscQueue<RealtimeGameplayInput, kRealtimeGameplayIngressSize>
       ingress_;
   std::array<SnapshotBuffer, 3> snapshots_{};
@@ -235,6 +280,8 @@ private:
   std::uint64_t snapshotGeneration_ = 0;
   std::uint64_t transactionSequence_ = 0;
   GameplayInputResult latestTransaction_;
+  std::vector<replay::InputTransition> acceptedReplayInput_;
+  bool replayCaptureValid_ = true;
   std::array<RealtimeGameplayTransaction,
              kRealtimeGameplayTransactionHistorySize>
       transactionHistory_{};

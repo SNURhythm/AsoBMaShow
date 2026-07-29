@@ -1,6 +1,7 @@
 #include "IrCredentialStore.h"
 
 #include "../VersionedJson.h"
+#include "IrProfileSettings.h"
 
 #include "nlohmann/json.hpp"
 
@@ -13,18 +14,6 @@ namespace ir {
 namespace {
 
 using nlohmann::json;
-
-bool validProviderId(std::string_view value) {
-  if (value.empty() || value.size() > 64 ||
-      !(value.front() >= 'a' && value.front() <= 'z')) {
-    return false;
-  }
-  return std::ranges::all_of(value, [](unsigned char character) {
-    return (character >= 'a' && character <= 'z') ||
-           (character >= '0' && character <= '9') || character == '_' ||
-           character == '-';
-  });
-}
 
 std::string redactKeys(std::string diagnostic,
                        const IrCredentials &credentials) {
@@ -53,7 +42,7 @@ bool validateCredentials(const IrCredentials &credentials,
     return false;
   }
   for (const auto &[providerId, apiKey] : credentials.apiKeys) {
-    if (!validProviderId(providerId)) {
+    if (!ir::isValidProviderId(providerId)) {
       diagnostic = "credential provider ID is invalid";
       return false;
     }
@@ -130,7 +119,7 @@ IrCredentialStore::load(const std::filesystem::path &path) {
   }
   IrCredentials credentials;
   for (const auto &[providerId, provider] : providers->items()) {
-    if (!validProviderId(providerId) || !provider.is_object()) {
+    if (!ir::isValidProviderId(providerId) || !provider.is_object()) {
       result.status = IrCredentialLoadStatus::Invalid;
       result.diagnostics.push_back("credential provider entry is invalid");
       return result;
@@ -183,7 +172,7 @@ IrCredentialWriteResult IrCredentialStore::save(
 IrCredentialWriteResult IrCredentialStore::replaceApiKey(
     const std::filesystem::path &path, std::string providerId,
     std::string apiKey, const atomic_file::Operations *operations) {
-  if (!validProviderId(providerId)) {
+  if (!ir::isValidProviderId(providerId)) {
     return invalidWrite("credential provider ID is invalid");
   }
   if (!IrCredentialStore::isApiKeyFormatValid(apiKey)) {
@@ -201,7 +190,7 @@ IrCredentialWriteResult IrCredentialStore::replaceApiKey(
 IrCredentialWriteResult IrCredentialStore::removeApiKey(
     const std::filesystem::path &path, std::string providerId,
     const atomic_file::Operations *operations) {
-  if (!validProviderId(providerId)) {
+  if (!ir::isValidProviderId(providerId)) {
     return invalidWrite("credential provider ID is invalid");
   }
   auto loaded = load(path);

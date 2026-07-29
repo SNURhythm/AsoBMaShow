@@ -1,5 +1,6 @@
 #include "IrRankingService.h"
 
+#include "../CanonicalDigest.h"
 #include "IrHttpClient.h"
 #include "IrOutboxModels.h"
 #include "IrProfileSettings.h"
@@ -79,10 +80,7 @@ std::optional<std::string> normalizedSha(std::string_view value) {
     }
     return static_cast<char>(character);
   });
-  if (!std::ranges::all_of(result, [](unsigned char character) {
-        return (character >= '0' && character <= '9') ||
-               (character >= 'a' && character <= 'f');
-      })) {
+  if (!canonical_digest::isCanonicalLowerHex(result, 64)) {
     return std::nullopt;
   }
   return result;

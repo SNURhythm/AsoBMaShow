@@ -45,6 +45,11 @@ void testCanonicalKeyUsesOnlyDurableSemanticIdentity() {
       makeCourseKey(charts, R"(["no_speed","gauge_7k"])");
   expect(canonical.starts_with("course:v1:") && canonical.size() == 74,
          "course key is a versioned SHA-256 digest");
+  expect(isCanonicalKey(canonical),
+         "the shared validator accepts generated course keys");
+  expect(!isCanonicalKey("course:v1:ABC") &&
+             !isCanonicalKey("course:v2:" + std::string(64, 'a')),
+         "the shared validator rejects malformed and unsupported keys");
   expect(canonical == makeCourseKey(charts, R"(["gauge-7k","NO SPEED"])"),
          "constraint formatting and order are canonical");
   expect(makeCourseKey(charts, "[]") ==

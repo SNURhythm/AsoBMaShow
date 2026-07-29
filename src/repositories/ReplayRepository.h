@@ -1,12 +1,21 @@
 #pragma once
 
+#define ASOBMASHOW_HAS_MODERN_COURSE_REPOSITORY 1
+
 #include "../CourseIdentity.h"
+#include "../ModernResult.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceModel.h"
 #include "../ir/IrOutboxModels.h"
+#include "../ir/IrSubmissionSnapshot.h"
+#include "../ir/IrUploadCandidates.h"
+#include "../replay/BeatorajaReplayCodec.h"
+#include "../replay/BeatorajaReplayPath.h"
+#include "../replay/ReplayFileStore.h"
 #include "../ir/IrRemoteScoreModels.h"
 #include "../ir/IrScoreReconciliation.h"
 #include "ScoreRepositoryModels.h"
+#include "LegacyResultSummary.h"
 #include "../bms_parser.hpp"
 
 #include <cstddef>
@@ -97,8 +106,17 @@ struct StageOutcome {
 struct PendingChartScoreWrite {
   std::string attemptId;
   int replayId = 0;
+  int modernResultId = 0;
   std::string createdAt;
   ChartScoreWrite score;
+
+  [[nodiscard]] bool hasExactlyOneOwner() const noexcept {
+    return (replayId > 0) != (modernResultId > 0);
+  }
+
+  [[nodiscard]] int ownerId() const noexcept {
+    return replayId > 0 ? replayId : modernResultId;
+  }
 };
 
 enum class PendingReadStatus {
@@ -200,37 +218,306 @@ struct ReplaySummary {
   ir::IrRecordState irRecordState = ir::IrRecordState::Hidden;
 };
 
-enum class IrUploadReplayReadStatus {
+struct CourseReplayLookup {
+  std::string courseKey;
+  int legacyCourseId = 0;
+};
+
+struct ModernReplayPathReservation {
+  std::string attemptId;
+  replay::ReplayPathIdentity identity;
+  std::int64_t createdAtUnixMillis = 0;
+  // Present once this attempt durably journals the exact bytes it is about to
+  // install. Automatic cleanup authority remains conditional on the current
+  // file still matching this metadata. Path-only reservations and known
+  // pre-existing files deliberately have no cleanup authority.
+  std::optional<replay::ReplayFileMetadata> ownedFile;
+
+  bool operator==(const ModernReplayPathReservation &) const = default;
+};
+
+enum class ModernReplayReservationStatus {
+  Reserved,
+  AlreadyReserved,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayReservationOutcome {
+  ModernReplayReservationStatus status =
+      ModernReplayReservationStatus::StorageFailure;
+  std::optional<ModernReplayPathReservation> reservation;
+  std::string diagnostic;
+};
+
+enum class ModernReplayOwnershipRecordStatus {
+  Recorded,
+  AlreadyRecorded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayOwnershipRecordOutcome {
+  ModernReplayOwnershipRecordStatus status =
+      ModernReplayOwnershipRecordStatus::StorageFailure;
+  std::optional<ModernReplayPathReservation> reservation;
+  std::string diagnostic;
+};
+
+enum class ModernReplayReservationReleaseStatus {
+  Released,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayReservationReleaseOutcome {
+  ModernReplayReservationReleaseStatus status =
+      ModernReplayReservationReleaseStatus::StorageFailure;
+  std::string diagnostic;
+};
+
+struct ModernReplayFileAttachment {
+  replay::ReplayPathIdentity identity;
+  replay::ReplayFileMetadata metadata;
+
+  bool operator==(const ModernReplayFileAttachment &) const = default;
+};
+
+struct ModernReplayFileReference {
+  std::int64_t id = 0;
+  int resultId = 0;
+  bool userDeleted = false;
+  replay::ReplayPathIdentity identity;
+  replay::ReplayFileMetadata metadata;
+
+  bool operator==(const ModernReplayFileReference &) const = default;
+};
+
+enum class ModernReplayOwnerKind { ChartResult, CourseResult };
+
+enum class ModernReplayFileMutationStatus {
+  Changed,
+  AlreadyChanged,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernReplayFileMutationOutcome {
+  ModernReplayFileMutationStatus status =
+      ModernReplayFileMutationStatus::StorageFailure;
+  std::string diagnostic;
+};
+
+struct ModernReplayFileInventoryEntry {
+  ModernReplayOwnerKind owner = ModernReplayOwnerKind::ChartResult;
+  std::string attemptId;
+  ModernReplayFileReference reference;
+
+  bool operator==(const ModernReplayFileInventoryEntry &) const = default;
+};
+
+enum class ModernReplayFileInventoryStatus {
   Loaded,
   Invalid,
   StorageFailure,
   IntegrityConflict,
 };
 
-struct IrUploadReplayReadOutcome {
-  IrUploadReplayReadStatus status = IrUploadReplayReadStatus::StorageFailure;
-  std::vector<ReplaySummary> replays;
-  std::size_t omittedRows = 0;
+struct ModernReplayPathReservationInventoryOutcome {
+  ModernReplayFileInventoryStatus status =
+      ModernReplayFileInventoryStatus::StorageFailure;
+  std::vector<ModernReplayPathReservation> reservations;
   std::string diagnostic;
 };
 
-inline constexpr std::size_t kMaximumIrUploadCandidateRows = 16384;
-
-struct ReplayResultRecord {
-  ReplayData replay;
-  std::optional<std::string> attemptId;
-  std::optional<std::string> attemptFingerprint;
-  std::int64_t playedAtUnixMillis = 0;
+struct ModernReplayFileInventoryOutcome {
+  ModernReplayFileInventoryStatus status =
+      ModernReplayFileInventoryStatus::StorageFailure;
+  std::vector<ModernReplayFileInventoryEntry> entries;
+  std::string diagnostic;
 };
 
-struct CourseReplayLookup {
-  std::string courseKey;
-  int legacyCourseId = 0;
+struct ModernChartResultRecord {
+  result_persistence::ModernChartResult result;
+  std::optional<ModernReplayFileReference> replayFile;
+
+  bool operator==(const ModernChartResultRecord &) const = default;
+};
+
+enum class ModernChartStageStatus {
+  Staged,
+  AlreadyStaged,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernChartStageReceipt {
+  std::string attemptId;
+  int resultId = 0;
+  std::string createdAt;
+
+  bool operator==(const ModernChartStageReceipt &) const = default;
+};
+
+struct ModernChartStageOutcome {
+  ModernChartStageStatus status = ModernChartStageStatus::StorageFailure;
+  std::optional<ModernChartStageReceipt> receipt;
+  std::string diagnostic;
+};
+
+enum class ModernChartResultReadStatus {
+  Loaded,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernChartResultReadOutcome {
+  ModernChartResultReadStatus status =
+      ModernChartResultReadStatus::StorageFailure;
+  std::optional<ModernChartResultRecord> record;
+  std::string diagnostic;
+};
+
+struct ModernCourseResultRecord {
+  result_persistence::ModernCourseResult result;
+  std::optional<ModernReplayFileReference> replayFile;
+
+  bool operator==(const ModernCourseResultRecord &) const = default;
+};
+
+enum class ModernCourseStageStatus {
+  Staged,
+  AlreadyStaged,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernCourseStageReceipt {
+  std::string attemptId;
+  int resultId = 0;
+  std::string createdAt;
+
+  bool operator==(const ModernCourseStageReceipt &) const = default;
+};
+
+struct ModernCourseStageOutcome {
+  ModernCourseStageStatus status = ModernCourseStageStatus::StorageFailure;
+  std::optional<ModernCourseStageReceipt> receipt;
+  std::string diagnostic;
+};
+
+enum class ModernCourseResultReadStatus {
+  Loaded,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernCourseResultReadOutcome {
+  ModernCourseResultReadStatus status =
+      ModernCourseResultReadStatus::StorageFailure;
+  std::optional<ModernCourseResultRecord> record;
+  std::string diagnostic;
+};
+
+enum class ModernCourseHistoryReadStatus {
+  Loaded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernCourseHistoryReadOutcome {
+  ModernCourseHistoryReadStatus status =
+      ModernCourseHistoryReadStatus::StorageFailure;
+  std::vector<ModernCourseResultRecord> records;
+  std::string diagnostic;
+};
+
+// A result-only source for idempotent score projection recovery. Replay file
+// ownership is intentionally absent: a missing, deleted, or corrupt BRD cannot
+// prevent durable course facts from restoring their score projection.
+struct ModernCourseScoreSource {
+  int resultId = 0;
+  std::string createdAt;
+  result_persistence::ModernCourseResult result;
+
+  bool operator==(const ModernCourseScoreSource &) const = default;
+};
+
+enum class ModernCourseScoreSourceEntryStatus { Loaded, IntegrityConflict };
+
+struct ModernCourseScoreSourceEntry {
+  ModernCourseScoreSourceEntryStatus status =
+      ModernCourseScoreSourceEntryStatus::IntegrityConflict;
+  int resultId = 0;
+  std::optional<ModernCourseScoreSource> source;
+  std::string diagnostic;
+};
+
+enum class ModernCourseScoreSourceBatchStatus {
+  Loaded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernCourseScoreSourceBatchOutcome {
+  ModernCourseScoreSourceBatchStatus status =
+      ModernCourseScoreSourceBatchStatus::StorageFailure;
+  std::vector<ModernCourseScoreSourceEntry> entries;
+  bool hasMore = false;
+  std::string diagnostic;
+};
+
+inline constexpr std::size_t kMaximumModernChartHistoryRows = 1024;
+inline constexpr std::size_t kDefaultModernChartHistoryRows = 100;
+inline constexpr std::size_t kMaximumModernCourseHistoryRows = 1024;
+inline constexpr std::size_t kMaximumModernCourseScoreSourceRows = 256;
+
+enum class ModernChartHistoryReadStatus {
+  Loaded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernChartHistoryReadOutcome {
+  ModernChartHistoryReadStatus status =
+      ModernChartHistoryReadStatus::StorageFailure;
+  std::vector<ModernChartResultRecord> records;
+  std::string diagnostic;
+};
+
+enum class ModernIrSnapshotReadStatus {
+  Loaded,
+  NotFound,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ModernIrSnapshotReadOutcome {
+  ModernIrSnapshotReadStatus status =
+      ModernIrSnapshotReadStatus::StorageFailure;
+  std::optional<ir::IrSubmissionSnapshot> snapshot;
+  std::string diagnostic;
 };
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 10;
+  static constexpr int kCurrentSchemaVersion = 17;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -241,32 +528,80 @@ public:
   void SetDatabasePath(std::filesystem::path databasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
+  [[nodiscard]] std::filesystem::path GetResolvedProfileRoot() const;
   bool BindDatabasePath(std::filesystem::path databasePath,
                         std::string &errorMessage);
   [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
   void Shutdown();
   bool EnsureSchema();
-  std::optional<int> SaveReplay(const ReplayData &replay);
-  std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
-  result_persistence::StageOutcome
-  StageChartResult(const result_persistence::ChartResultAttempt &attempt,
-                   std::span<const ir::IrOutboxDraft> irDrafts);
-  result_persistence::PendingReadOutcome
-  LoadPendingChartScore(std::string_view attemptId);
-  result_persistence::PendingBatchOutcome
-  ListPendingChartScores(std::size_t limit = 256);
+  ModernReplayReservationOutcome
+  ReserveModernReplayPath(std::string_view attemptId, std::string_view stem,
+                          std::int64_t createdAtUnixMillis);
+  ModernReplayOwnershipRecordOutcome RecordModernReplayInstallIntent(
+      const ModernReplayPathReservation &reservation,
+      const replay::ReplayFileOwnershipReceipt &receipt);
+  ModernReplayReservationReleaseOutcome ReleaseModernReplayPathReservation(
+      const ModernReplayPathReservation &reservation);
+  ModernReplayPathReservationInventoryOutcome
+  ListModernReplayPathReservations();
+  ModernChartStageOutcome StageModernChartResult(
+      const result_persistence::ModernChartResult &result,
+      const std::optional<ir::IrSubmissionSnapshot> &snapshot,
+      const std::optional<ModernReplayFileAttachment> &replayFile,
+      std::span<const ir::IrOutboxDraft> irDrafts = {});
+  ModernChartResultReadOutcome
+  LoadModernChartResultByAttempt(std::string_view attemptId);
+  ModernChartResultReadOutcome LoadModernChartResult(int resultId);
+  ModernChartHistoryReadOutcome
+  ListModernChartResults(
+      std::string_view chartSha256,
+      std::size_t limit = kDefaultModernChartHistoryRows);
+  std::vector<LegacyChartResultSummary>
+  ListLegacyChartSummaries(const bms_parser::ChartMeta &chartMeta,
+                           std::size_t limit = 100);
+  ModernCourseStageOutcome StageModernCourseResult(
+      const result_persistence::ModernCourseResult &result,
+      const std::optional<ModernReplayFileAttachment> &replayFile,
+      const std::optional<replay::CoursePathInput> &replayPath = std::nullopt);
+  ModernCourseResultReadOutcome
+  LoadModernCourseResultByAttempt(std::string_view attemptId);
+  ModernCourseResultReadOutcome LoadModernCourseResult(int resultId);
+  ModernCourseHistoryReadOutcome
+  ListModernCourseResults(std::string_view courseKey, std::size_t limit = 100);
+  ModernCourseScoreSourceBatchOutcome
+  ListModernCourseScoreSourcesAfter(int afterResultId, std::size_t limit = 256);
   result_persistence::AcknowledgeOutcome
-  AcknowledgePendingChartScoreAndActivateIr(std::string_view attemptId,
-                                            int replayId);
+  AcknowledgePendingModernCourseScore(std::string_view attemptId,
+                                      int modernResultId);
+  std::vector<LegacyCourseResultSummary>
+  ListLegacyCourseSummaries(const CourseReplayLookup &lookup,
+                            std::size_t limit = 100);
+  ModernReplayFileMutationOutcome
+  MarkModernReplayFileUserDeleted(ModernReplayOwnerKind owner,
+                                  std::string_view attemptId,
+                                  const ModernReplayFileReference &expected);
+  ModernReplayFileInventoryOutcome ListModernReplayFileReferences();
+  ModernReplayFileInventoryOutcome
+  ListUserDeletedModernReplayFileReferences();
+  ModernIrSnapshotReadOutcome
+  LoadModernIrSubmissionSnapshot(std::string_view attemptId);
+  result_persistence::PendingReadOutcome
+  LoadPendingModernChartScore(std::string_view attemptId);
+  result_persistence::PendingBatchOutcome
+  ListPendingModernChartScores(std::size_t limit = 256);
+  result_persistence::AcknowledgeOutcome
+  AcknowledgePendingModernChartScore(std::string_view attemptId,
+                                     int modernResultId);
   result_persistence::RecoveryMarkOutcome
-  RecordPendingChartScoreRecoveryAttempt(
+  RecordPendingModernChartScoreRecoveryAttempt(
       std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);
   ir::IrOutboxInsertOutcome
   EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft, bool userIntent);
-  ir::IrManualBatchEnqueueOutcome EnqueueReadyIrOutboxDrafts(
-      std::span<const ir::IrOutboxDraft> drafts,
-      std::string_view requestOrigin, bool userIntent, std::int64_t nowMs);
+  ir::IrManualBatchEnqueueOutcome
+  EnqueueReadyIrOutboxDrafts(std::span<const ir::IrOutboxDraft> drafts,
+                             std::string_view requestOrigin, bool userIntent,
+                             std::int64_t nowMs);
   ir::IrOutboxReadOutcome LoadIrOutbox(std::string_view providerId,
                                        std::string_view attemptId);
   ir::IrOutboxBatchOutcome ListDueIrOutbox(std::int64_t nowMs,
@@ -290,8 +625,8 @@ public:
                              std::string_view errorMessage, std::int64_t nowMs);
   ir::IrOutboxMutationOutcome
   ApplyIrOutboxDelivery(const ir::IrOutboxDeliveryUpdate &update);
-  ir::IrOutboxMutationOutcome ApplyIrOutboxDeliveries(
-      std::span<const ir::IrOutboxDeliveryUpdate> updates);
+  ir::IrOutboxMutationOutcome
+  ApplyIrOutboxDeliveries(std::span<const ir::IrOutboxDeliveryUpdate> updates);
   ir::IrReceiptReadOutcome
   LoadIrSubmissionReceipt(std::string_view providerId,
                           std::string_view serverOrigin,
@@ -301,30 +636,49 @@ public:
                             std::string_view serverOrigin);
   ir::IrReconciliationReadOutcome
   LoadIrReconciliationCandidates(std::string_view providerId,
-                                 std::string_view serverOrigin);
-  IrUploadReplayReadOutcome
-  ListIrUploadCandidateReplays(std::string_view providerId,
-                               std::string_view serverOrigin);
+                                 std::string_view serverOrigin,
+                                 std::optional<int> beforeModernChartResultId =
+                                     std::nullopt,
+                                 std::size_t limit =
+                                     ir::kDefaultIrUploadSourcePageRows);
+  ir::IrUploadRecordReadOutcome
+  ListIrUploadRecords(std::string_view providerId,
+                      std::string_view serverOrigin,
+                      std::optional<int> beforeModernChartResultId =
+                          std::nullopt,
+                      std::size_t limit =
+                          ir::kDefaultIrUploadSourcePageRows);
+  ir::IrUploadRecordReadOutcome ListIrUploadRecordsForChart(
+      std::string_view providerId, std::string_view serverOrigin,
+      std::string_view chartSha256,
+      std::size_t limit = kDefaultModernChartHistoryRows);
+  ir::IrUploadCandidateReadOutcome
+  ListIrUploadCandidates(std::string_view providerId,
+                         std::string_view serverOrigin,
+                         std::optional<int> beforeModernChartResultId =
+                             std::nullopt,
+                         std::size_t limit =
+                             ir::kDefaultIrUploadSourcePageRows);
   ir::IrRemoteSnapshotApplyOutcome
   ApplyIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation);
   // Record sync uses these two phases so score projection can complete after
   // the mirror is durable but before receipts and outbox work are settled.
   ir::IrRemoteSnapshotApplyOutcome
   ReplaceIrRemoteScoreMirror(const ir::IrRemoteSnapshotMutation &mutation);
-  ir::IrRemoteSnapshotApplyOutcome FinalizeIrRemoteSnapshot(
-      const ir::IrRemoteSnapshotMutation &mutation,
-      std::int64_t expectedSyncGeneration);
+  ir::IrRemoteSnapshotApplyOutcome
+  FinalizeIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation,
+                           std::int64_t expectedSyncGeneration);
   ir::IrRemoteScoreReadOutcome
   ListIrRemoteScores(std::string_view providerId,
                      std::string_view serverOrigin);
-  ir::IrRemoteScoreMirrorStateOutcome LoadIrRemoteScoreMirrorState(
-      std::string_view providerId, std::string_view serverOrigin);
+  ir::IrRemoteScoreMirrorStateOutcome
+  LoadIrRemoteScoreMirrorState(std::string_view providerId,
+                               std::string_view serverOrigin);
   ir::IrRemoteScoreReadOutcome ListIrRemoteScoresForChart(
       std::string_view providerId, std::string_view serverOrigin,
       std::string_view chartMd5, std::string_view chartSha256);
   ir::IrRemoteScoreLookupOutcome
-  LoadIrRemoteScore(std::string_view providerId,
-                    std::string_view serverOrigin,
+  LoadIrRemoteScore(std::string_view providerId, std::string_view serverOrigin,
                     std::string_view remoteScoreId);
   ir::IrOutboxMutationOutcome
   ClearIrRemoteScores(std::string_view providerId,
@@ -348,27 +702,10 @@ public:
   static bool
   ClearIrAccountDataSnapshot(const std::filesystem::path &snapshotDatabasePath,
                              std::string &errorMessage);
-  // Pass limit <= 0 to return all matching rows.
-  std::vector<ReplaySummary>
-  ListReplays(const bms_parser::ChartMeta &chartMeta, int limit = 100,
-              std::string_view irProviderId = {},
-              std::string_view irServerOrigin = {});
-  std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
-                                               int limit = 100);
-  std::optional<ReplayData> LoadReplay(int replayId,
-                                       const bms_parser::ChartMeta &chartMeta);
-  std::optional<ReplayResultRecord>
-  LoadReplayResult(int replayId, const bms_parser::ChartMeta &chartMeta);
-  std::optional<CourseReplayData> LoadCourseReplay(int replayId);
-  bool
-  RecoverCourseRecords(std::span<const course_identity::Definition> definitions,
-                       std::span<const CourseScoreEvidence> scoreEvidence,
-                       std::string &errorMessage);
-  std::optional<ReplayData>
-  LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
-
 private:
   struct Impl;
+  ModernReplayFileInventoryOutcome
+  ListModernReplayFileReferences(bool userDeletedOnly);
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;
   bool EnsureSessionDatabaseLocked();
   void ShutdownLocked();

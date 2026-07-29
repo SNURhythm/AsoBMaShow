@@ -216,6 +216,8 @@ ChartResultAttempt sampleAttempt(const std::filesystem::path &root,
   return {.attemptId = attemptId(suffix),
           .replay = replay,
           .score = score,
+          .keyMode = replay.chartMeta.KeyMode,
+          .adoptedGaugeType = replay.initialGaugeType,
           .payloadFingerprint = payloadFingerprint(replay, score)};
 }
 

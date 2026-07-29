@@ -29,6 +29,7 @@ struct LaunchRequest {
   long long endMicros = 0;
   LaunchSource source = LaunchSource::ChartViewer;
   std::optional<int> replayId;
+  std::optional<std::string> modernReplayAttemptId;
   std::optional<ReplayPlayOptions> replayPlayOptions;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
   std::optional<RulesetDescriptor> requiredRulesetDescriptor;

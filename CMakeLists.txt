@@ -502,6 +502,21 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_library(ir_submission_eligibility_test_support STATIC
+        src/ir/tachi/TachiEligibility.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_submission_eligibility_test_support PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_submission_eligibility_test_support PRIVATE
+        cxx_std_23
+    )
     add_test(NAME find_bms_archive_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_find_bms_archive_flow.py
@@ -616,6 +631,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )
 
+    add_executable(replay_contract_boundary_tests
+        tests/replay_contract_boundary_tests.cpp
+    )
+    target_include_directories(replay_contract_boundary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_contract_boundary_tests PRIVATE cxx_std_23)
+    target_compile_definitions(replay_contract_boundary_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(gyroscope_turntable_tests
         tests/gyroscope_turntable_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -714,6 +740,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(replay_record_filters_tests
         tests/replay_record_filters_tests.cpp
         src/ResultRecordSummary.cpp
+        src/replay/ReplayCapabilities.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/bms_parser.cpp
@@ -721,11 +748,331 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_record_filters_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_capabilities_tests
+        tests/replay_capabilities_tests.cpp
+        src/replay/ReplayCapabilities.cpp
+    )
+    target_include_directories(replay_capabilities_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_capabilities_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_limits_tests
+        tests/replay_limits_tests.cpp
+    )
+    target_include_directories(replay_limits_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_limits_tests PRIVATE cxx_std_23)
+
+    add_executable(durable_payload_contract_tests
+        tests/durable_payload_contract_tests.cpp
+    )
+    target_include_directories(durable_payload_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(durable_payload_contract_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_format_authority_tests
+        tests/replay_format_authority_tests.cpp
+    )
+    target_include_directories(replay_format_authority_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_format_authority_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_setup_tests
+        tests/replay_setup_tests.cpp
+        src/ScoreProvenance.cpp
+        src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(replay_setup_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_setup_tests PRIVATE cxx_std_20)
+    set_property(TARGET replay_setup_tests PROPERTY CXX_STANDARD 20)
+
+    add_executable(beatoraja_replay_path_tests
+        tests/beatoraja_replay_path_tests.cpp
+        src/replay/BeatorajaReplayPath.cpp
+    )
+    target_include_directories(beatoraja_replay_path_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(beatoraja_replay_path_tests PRIVATE cxx_std_20)
+    set_property(TARGET beatoraja_replay_path_tests PROPERTY CXX_STANDARD 20)
+
+    add_executable(replay_codec_primitive_tests
+        tests/replay_codec_primitive_tests.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/replay/Base64Url.cpp
+        src/replay/GzipCodec.cpp
+    )
+    target_include_directories(replay_codec_primitive_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(replay_codec_primitive_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(replay_codec_primitive_tests PRIVATE cxx_std_23)
+
+    add_executable(beatoraja_replay_codec_tests
+        tests/beatoraja_replay_codec_tests.cpp
+        src/MinizBridge.c
+        src/ScoreProvenance.cpp
+        src/replay/Base64Url.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(beatoraja_replay_codec_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(beatoraja_replay_codec_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(beatoraja_replay_codec_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_file_lifecycle_tests
+        tests/replay_file_lifecycle_tests.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+    )
+    target_include_directories(replay_file_lifecycle_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_lifecycle_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_file_store_tests
+        tests/replay_file_store_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+    )
+    target_include_directories(replay_file_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_store_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_file_action_service_tests
+        tests/replay_file_action_service_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ModernResult.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileAssociationCoordinator.cpp
+        src/replay/ReplayFileActionService.cpp
+        src/replay/ReplayFileReconciler.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(replay_file_action_service_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_action_service_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(replay_file_action_service_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(replay_file_reconciler_tests
+        tests/replay_file_reconciler_tests.cpp
+        src/replay/ReplayFileReconciler.cpp
+    )
+    target_include_directories(replay_file_reconciler_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_reconciler_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_profile_transfer_tests
+        tests/replay_profile_transfer_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayProfileTransfer.cpp
+    )
+    target_include_directories(replay_profile_transfer_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_profile_transfer_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_codec_store_contract_tests
+        tests/replay_codec_store_contract_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(replay_codec_store_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_codec_store_contract_tests PRIVATE
+        cxx_std_23
+    )
+
+    add_executable(replay_playback_tests
+        tests/replay_playback_tests.cpp
+        src/ScoreProvenance.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(replay_playback_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_playback_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_input_recorder_tests
+        tests/replay_input_recorder_tests.cpp
+        src/replay/ReplayInputRecorder.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+    )
+    target_include_directories(replay_input_recorder_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_input_recorder_tests PRIVATE cxx_std_23)
+
+    add_executable(modern_chart_persistence_contract_tests
+        tests/modern_chart_persistence_contract_tests.cpp
+    )
+    target_include_directories(modern_chart_persistence_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(modern_chart_persistence_contract_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(modern_chart_persistence_contract_tests PRIVATE
+        cxx_std_23
+    )
+
+    add_executable(course_continuation_tests
+        tests/course_continuation_tests.cpp
+        src/bms_parser.cpp
+        src/ScoreProvenance.cpp
+        src/replay/CourseContinuation.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplaySetup.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(course_continuation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_continuation_tests PRIVATE cxx_std_23)
+
+    add_executable(modern_course_persistence_contract_tests
+        tests/modern_course_persistence_contract_tests.cpp
+    )
+    target_include_directories(modern_course_persistence_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(modern_course_persistence_contract_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(modern_course_persistence_contract_tests PRIVATE
+        cxx_std_23
+    )
+
+    add_executable(course_replay_capture_tests
+        tests/course_replay_capture_tests.cpp
+        src/FileChecksum.cpp
+        src/ModernResult.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/CourseReplayAgreement.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/replay/CourseReplayCapture.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(course_replay_capture_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_replay_capture_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(course_replay_capture_tests PRIVATE SDL2)
+    endif()
+
     add_executable(result_record_summary_tests
         tests/result_record_summary_tests.cpp
         src/ResultRecordSummary.cpp
+        src/ScoreProvenance.cpp
+        src/replay/ReplayCapabilities.cpp
+        src/replay/ReplayFileActionSelection.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(result_record_summary_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -734,6 +1081,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(course_identity_tests
         tests/course_identity_tests.cpp
+        src/bms_parser.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ScoreProvenance.cpp
@@ -749,8 +1097,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ModernResult.cpp
+        src/FileChecksum.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(ir_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ir_driver_tests PRIVATE cxx_std_23)
@@ -773,13 +1128,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrOutboxModels.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/FileChecksum.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
         src/Uuid.cpp
+        src/Utils.cpp
         src/ArchiveFile.cpp
         src/bms_parser.cpp
         src/MinizBridge.c
@@ -823,6 +1183,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
@@ -939,7 +1300,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRankingModels.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ir/IrSubmissionService.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/tachi/BokutachiCacheStore.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/ir/tachi/TachiDriver.cpp
@@ -949,9 +1313,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/replay/BeatorajaReplayPath.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
@@ -1062,37 +1430,512 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(ir_http_client_tests PRIVATE CURL::libcurl)
     endif()
 
-    add_executable(replay_repository_tests
-        tests/replay_repository_tests.cpp
+    add_executable(replay_legacy_migration_tests
+        tests/replay_legacy_migration_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
         src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/replay/BeatorajaReplayPath.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
     )
-    target_include_directories(replay_repository_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(replay_repository_tests PRIVATE cxx_std_23)
+    target_include_directories(replay_legacy_migration_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_legacy_migration_tests PRIVATE cxx_std_23)
+    target_compile_definitions(replay_legacy_migration_tests PRIVATE
+        ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS=1
+    )
     if(TARGET SDL2::SDL2)
-        target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2)
+        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2-static)
+        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
-        target_link_libraries(replay_repository_tests PRIVATE SDL2)
+        target_link_libraries(replay_legacy_migration_tests PRIVATE SDL2)
     endif()
+
+    add_executable(legacy_result_summary_tests
+        tests/legacy_result_summary_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/repositories/ReplayRepositoryLegacySummaries.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(legacy_result_summary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(legacy_result_summary_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(legacy_result_summary_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(replay_repository_modern_chart_tests
+        tests/replay_repository_modern_chart_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(replay_repository_modern_chart_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_repository_modern_chart_tests PRIVATE
+        cxx_std_23
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(replay_repository_modern_chart_tests PRIVATE
+            SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(replay_repository_modern_chart_tests PRIVATE
+            SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(replay_repository_modern_chart_tests PRIVATE
+            SDL2)
+    endif()
+
+    add_executable(replay_repository_modern_course_tests
+        tests/replay_repository_modern_course_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(replay_repository_modern_course_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_repository_modern_course_tests PRIVATE
+        cxx_std_23
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(replay_repository_modern_course_tests PRIVATE
+            SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(replay_repository_modern_course_tests PRIVATE
+            SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(replay_repository_modern_course_tests PRIVATE
+            SDL2)
+    endif()
+
+    add_executable(chart_replay_persistence_tests
+        tests/chart_replay_persistence_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/ModernResult.cpp
+        src/ResultPersistenceCoordinator.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ChartReplayCapture.cpp
+        src/replay/ChartReplayAgreement.cpp
+        src/replay/ReplaySetupProvenance.cpp
+        src/replay/ChartReplayPersistence.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayFileAssociationCoordinator.cpp
+        src/replay/ReplayFileActionService.cpp
+        src/replay/ReplayCapabilities.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(chart_replay_persistence_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_replay_persistence_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(chart_replay_persistence_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(replay_file_association_coordinator_tests
+        tests/replay_file_association_coordinator_tests.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileAssociationCoordinator.cpp
+    )
+    target_include_directories(replay_file_association_coordinator_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_file_association_coordinator_tests PRIVATE
+        cxx_std_23
+    )
+
+    add_executable(course_replay_persistence_tests
+        tests/course_replay_persistence_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/ModernResult.cpp
+        src/ResultPersistenceCoordinator.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/CourseReplayAgreement.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/replay/CourseReplayCapture.cpp
+        src/replay/CourseReplayPersistence.cpp
+        src/replay/CourseResultPersistence.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayFileAssociationCoordinator.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupProvenance.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(course_replay_persistence_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_replay_persistence_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(course_replay_persistence_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(course_replay_persistence_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(course_replay_persistence_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(chart_replay_context_tests
+        tests/chart_replay_context_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/ModernResult.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ChartReplayAgreement.cpp
+        src/replay/ReplaySetupProvenance.cpp
+        src/replay/ChartReplayContext.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(chart_replay_context_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_replay_context_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(chart_replay_context_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(chart_replay_context_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(chart_replay_context_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(course_replay_context_tests
+        tests/course_replay_context_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/ModernResult.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/CourseReplayAgreement.cpp
+        src/replay/CourseReplayContext.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupProvenance.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(course_replay_context_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_replay_context_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(course_replay_context_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(course_replay_consumer_tests
+        tests/course_replay_consumer_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ModernResult.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/CourseContinuation.cpp
+        src/replay/CourseReplayConsumer.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplayPlaybackDriver.cpp
+        src/replay/ReplayPlaybackMaterializer.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupAdapter.cpp
+        src/bms_parser.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(course_replay_consumer_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(course_replay_consumer_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_playback_driver_tests
+        tests/replay_playback_driver_tests.cpp
+        src/FileChecksum.cpp
+        src/ModernResult.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/ChartReplayConsumer.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplayPlaybackDriver.cpp
+        src/replay/ReplayPlaybackMaterializer.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupAdapter.cpp
+        src/bms_parser.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(replay_playback_driver_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_playback_driver_tests PRIVATE cxx_std_23)
 
     add_executable(music_playlist_repository_tests
         tests/music_playlist_repository_tests.cpp
@@ -1138,6 +1981,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1181,6 +2025,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1224,6 +2069,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1252,6 +2098,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(result_persistence_model_tests
         tests/result_persistence_model_tests.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/Uuid.cpp
         src/FileChecksum.cpp
         src/ScoreProvenance.cpp
@@ -1275,15 +2122,69 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(result_persistence_model_tests PRIVATE shell32 ole32)
     endif()
 
-    add_executable(result_recall_builder_tests
-        tests/result_recall_builder_tests.cpp
+    add_executable(modern_result_tests
+        tests/modern_result_tests.cpp
+        src/ModernResult.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(modern_result_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(modern_result_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(modern_result_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(modern_result_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(modern_result_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(result_contract_tests
+        tests/result_contract_tests.cpp
+    )
+    target_include_directories(result_contract_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_contract_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_submission_snapshot_tests
+        tests/ir_submission_snapshot_tests.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ModernResult.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(ir_submission_snapshot_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_submission_snapshot_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(ir_submission_snapshot_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(modern_result_recall_tests
+        tests/modern_result_recall_tests.cpp
+        src/ModernResultRecallBuilder.cpp
         src/ArchiveFile.cpp
         src/MinizBridge.c
-        src/ResultRecallBuilder.cpp
-        src/ReplayResultStateBuilder.cpp
-        src/ResultPersistenceModel.cpp
-        src/ir/IrSubmission.cpp
-        src/ir/IrOutboxModels.cpp
+        src/ModernResult.cpp
         src/FileChecksum.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -1293,89 +2194,23 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/scene/play/GameplayGaugeRules.cpp
     )
-    target_include_directories(result_recall_builder_tests PRIVATE
+    target_include_directories(modern_result_recall_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
-    target_compile_features(result_recall_builder_tests PRIVATE cxx_std_23)
+    target_compile_features(modern_result_recall_tests PRIVATE cxx_std_23)
     if(TARGET SDL2::SDL2)
-        target_link_libraries(result_recall_builder_tests PRIVATE SDL2::SDL2)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(result_recall_builder_tests PRIVATE SDL2::SDL2-static)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
-        target_link_libraries(result_recall_builder_tests PRIVATE SDL2)
+        target_link_libraries(modern_result_recall_tests PRIVATE SDL2)
     endif()
-    target_link_libraries(result_recall_builder_tests PRIVATE ${COMMON_LIBS})
+    target_link_libraries(modern_result_recall_tests PRIVATE ${COMMON_LIBS})
     if(APPLE)
-        target_link_libraries(result_recall_builder_tests PRIVATE iconv)
+        target_link_libraries(modern_result_recall_tests PRIVATE iconv)
     endif()
     if(WIN32)
-        target_link_libraries(result_recall_builder_tests PRIVATE shell32 ole32)
-    endif()
-
-    add_executable(result_persistence_coordinator_tests
-        tests/result_persistence_coordinator_tests.cpp
-        src/ResultPersistenceCoordinator.cpp
-        src/ScoreProvenance.cpp
-    )
-    target_include_directories(result_persistence_coordinator_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(result_persistence_coordinator_tests PRIVATE
-        cxx_std_23
-    )
-
-    add_executable(result_persistence_integration_tests
-        tests/result_persistence_integration_tests.cpp
-        src/AtomicFile.cpp
-        src/CourseIdentity.cpp
-        src/FileChecksum.cpp
-        src/VersionedJson.cpp
-        src/ir/IrDriver.cpp
-        src/ir/IrOutboxModels.cpp
-        src/ir/IrProfileSettings.cpp
-        src/ir/IrReceiptModels.cpp
-        src/ir/IrRemoteScoreModels.cpp
-        src/ir/IrRankingModels.cpp
-        src/ir/IrSubmission.cpp
-        src/ir/tachi/BokutachiCacheStore.cpp
-        src/ir/tachi/TachiBatchManual.cpp
-        src/ir/tachi/TachiDriver.cpp
-        src/ir/tachi/TachiRankingParser.cpp
-        src/ir/tachi/TachiResponseParser.cpp
-        src/ir/tachi/TachiUserScoreParser.cpp
-        src/repositories/ReplayRepository.cpp
-        src/repositories/ReplayRepositoryIrOutbox.cpp
-        src/repositories/ReplayRepositoryRecords.cpp
-        src/repositories/ReplayRepositorySchema.cpp
-        src/ResultPersistenceCoordinator.cpp
-        src/ResultPersistenceModel.cpp
-        src/repositories/ScoreRepository.cpp
-        src/repositories/ScoreRepositoryQueries.cpp
-        src/repositories/ScoreRepositorySchema.cpp
-        src/ScoreProvenance.cpp
-        src/scene/play/GameplayGaugeRules.cpp
-        src/scene/play/GameplayJudgeRules.cpp
-        src/scene/play/Judge.cpp
-        src/Uuid.cpp
-        src/Utils.cpp
-        src/path.cpp
-        src/sqlite3.c
-    )
-    target_include_directories(result_persistence_integration_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(result_persistence_integration_tests PRIVATE
-        cxx_std_23
-    )
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2)
-    endif()
-    if(WIN32)
-        target_link_libraries(result_persistence_integration_tests PRIVATE shell32 ole32)
+        target_link_libraries(modern_result_recall_tests PRIVATE shell32 ole32)
     endif()
 
     add_executable(score_provenance_db_tests
@@ -1383,6 +2218,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
@@ -1390,6 +2226,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
+        src/bms_parser.cpp
         src/sqlite3.c
         src/scene/play/GameplayGaugeRules.cpp
     )
@@ -1402,6 +2239,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(score_provenance_db_tests PRIVATE SDL2)
     endif()
+
+    add_executable(best_replay_resolver_tests
+        tests/best_replay_resolver_tests.cpp
+        src/ScoreProvenance.cpp
+        src/replay/BestReplayResolver.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(best_replay_resolver_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(best_replay_resolver_tests PRIVATE cxx_std_23)
 
     add_executable(chart_record_filters_tests
         tests/chart_record_filters_tests.cpp
@@ -1603,12 +2451,23 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(image_view_fade_tests PRIVATE cxx_std_23)
+    target_compile_definitions(image_view_fade_tests PRIVATE
+        ASOBMASHOW_IMAGE_VIEW_TESTING=1
+    )
     target_link_libraries(image_view_fade_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
     if(APPLE)
         target_link_libraries(image_view_fade_tests PRIVATE iconv)
     endif()
+
+    add_executable(artwork_cache_contract_tests
+        tests/artwork_cache_contract_tests.cpp
+    )
+    target_compile_features(artwork_cache_contract_tests PRIVATE cxx_std_23)
+    target_compile_definitions(artwork_cache_contract_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
 
     add_executable(chart_list_item_view_tests
         tests/chart_list_item_view_tests.cpp
@@ -1782,6 +2641,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(result_record_list_view_tests
         tests/result_record_list_view_tests.cpp
         src/ResultRecordSummary.cpp
+        src/replay/ReplayCapabilities.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/bms_parser.cpp
@@ -1818,13 +2678,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrOutboxModels.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/FileChecksum.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
         src/Uuid.cpp
+        src/Utils.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/ArchiveFile.cpp
         src/MinizBridge.c
@@ -1861,6 +2726,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
+        src/bms_parser.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
@@ -2160,6 +3026,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_playback_startup_tests.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
     )
@@ -2243,6 +3111,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(realtime_gameplay_worker_tests
         tests/realtime_gameplay_worker_tests.cpp
         src/bms_parser.cpp
+        src/ScoreProvenance.cpp
+        src/input/InputBindingResolver.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputNormalizer.cpp
+        src/input/LogicalGameplayInputAdapter.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -2251,7 +3124,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
+        src/scene/play/RealtimeGameplayInputBridge.cpp
         src/scene/play/RealtimeGameplayWorker.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
     )
     target_include_directories(realtime_gameplay_worker_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -2260,6 +3136,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(realtime_gameplay_worker_tests PRIVATE
         BX_CONFIG_DEBUG=1
     )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL2)
+    endif()
     if(WIN32)
         target_link_libraries(realtime_gameplay_worker_tests PRIVATE avrt)
     endif()
@@ -2341,6 +3224,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(practice_launch_tests
         tests/practice_launch_tests.cpp
         src/ScoreProvenance.cpp
+        src/Uuid.cpp
         src/practice/PracticeConfiguration.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticeLaunchRequest.cpp
@@ -2412,6 +3296,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRemoteScoreModels.cpp
         src/rendering/Color.cpp
         src/ResultRecordSummary.cpp
+        src/replay/ReplayCapabilities.cpp
         src/ScoreProvenance.cpp
         src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp
@@ -2505,6 +3390,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrUploadCandidates.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -2515,11 +3404,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayProfileTransfer.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -2545,6 +3443,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ProfileSessionCoordinator.cpp
+        src/replay/ReplayFileReconciler.cpp
+        src/replay/ReplayProfileReconciliation.cpp
         src/PlayerProfileManager.cpp
         src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
@@ -2557,6 +3457,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrUploadCandidates.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -2576,12 +3480,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/repositories/ReplayRepositoryLegacySummaries.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayProfileTransfer.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -2622,6 +3536,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrUploadCandidates.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -2632,11 +3550,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
         src/ScoreProvenance.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayProfileTransfer.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -2770,7 +3697,32 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endfunction()
 
+    foreach(eligibility_target IN ITEMS
+        chart_replay_context_tests
+        chart_replay_persistence_tests
+        course_replay_context_tests
+        course_replay_persistence_tests
+        ir_submission_service_tests
+        ir_upload_candidate_list_view_tests
+        ir_upload_candidates_tests
+        legacy_result_summary_tests
+        player_profile_manager_tests
+        profile_archive_tests
+        profile_switch_tests
+        replay_file_action_service_tests
+        replay_legacy_migration_tests
+        replay_repository_modern_chart_tests
+        replay_repository_modern_course_tests
+        tachi_batch_manual_tests
+        tachi_driver_tests
+    )
+        target_link_libraries(${eligibility_target} PRIVATE
+            ir_submission_eligibility_test_support
+        )
+    endforeach()
+
     asobmashow_register_test(repository_boundary_tests)
+    asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
 
     add_test(NAME foundation_av_settings
@@ -2817,6 +3769,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         gbattle_tests
         replay_summary_list_tests
         replay_record_filters_tests
+        replay_capabilities_tests
+        replay_limits_tests
+        durable_payload_contract_tests
+        replay_format_authority_tests
+        replay_setup_tests
+        beatoraja_replay_path_tests
+        replay_codec_primitive_tests
+        beatoraja_replay_codec_tests
+        replay_file_lifecycle_tests
+        replay_file_store_tests
+        replay_file_action_service_tests
+        replay_file_reconciler_tests
+        replay_profile_transfer_tests
+        replay_codec_store_contract_tests
+        replay_playback_tests
+        replay_input_recorder_tests
+        modern_chart_persistence_contract_tests
+        course_continuation_tests
+        modern_course_persistence_contract_tests
+        course_replay_capture_tests
+        modern_result_tests
+        result_contract_tests
+        ir_submission_snapshot_tests
+        modern_result_recall_tests
         result_record_summary_tests
         course_identity_tests
         ir_driver_tests
@@ -2837,15 +3813,23 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_saved_result_upload_tests
         ir_saved_result_batch_upload_tests
         ir_ranking_modal_tests
-        replay_repository_tests
+        replay_legacy_migration_tests
+        legacy_result_summary_tests
+        replay_repository_modern_chart_tests
+        replay_repository_modern_course_tests
+        chart_replay_persistence_tests
+        replay_file_association_coordinator_tests
+        course_replay_persistence_tests
+        chart_replay_context_tests
+        course_replay_context_tests
+        course_replay_consumer_tests
+        replay_playback_driver_tests
+        best_replay_resolver_tests
         music_playlist_repository_tests
         chart_repository_tests
         chart_library_scanner_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
-        result_recall_builder_tests
-        result_persistence_coordinator_tests
-        result_persistence_integration_tests
         chart_record_filters_tests
         main_menu_library_tests
         chart_meta_index_order_tests
@@ -2856,6 +3840,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_filter_sort_panel_view_tests
         image_fade_tests
         image_view_fade_tests
+        artwork_cache_contract_tests
         chart_list_item_view_tests
         dropdown_view_tests
         context_menu_view_tests
@@ -2876,9 +3861,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10
-    )
-    set_tests_properties(result_persistence_integration_tests PROPERTIES
-        TIMEOUT 15
     )
     add_test(NAME foundation_provenance_contract
         COMMAND $<TARGET_FILE:score_provenance_tests>)

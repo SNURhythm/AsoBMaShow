@@ -62,6 +62,7 @@ void testTouchPresentationUsesUiNormalizedCoordinates() {
 
 struct InputCapture {
   std::vector<gameplay::RealtimeGameplayInput> events;
+  std::vector<gameplay::RealtimeTouchSample> cancelledTouches;
   bool scratchLongNoteHeld = false;
 
   static bool emit(void *context,
@@ -72,6 +73,12 @@ struct InputCapture {
 
   static bool longScratchNoteHeld(void *context, int) {
     return static_cast<InputCapture *>(context)->scratchLongNoteHeld;
+  }
+
+  static bool cancelTouchLifecycle(
+      void *context, const gameplay::RealtimeTouchSample &sample) {
+    static_cast<InputCapture *>(context)->cancelledTouches.push_back(sample);
+    return true;
   }
 };
 
@@ -91,6 +98,41 @@ gameplay::RealtimeTouchLayout makeLayout(bool dragMode = false) {
   return layout;
 }
 
+void testChartLaneMappingCoversEveryReplayKeyMode() {
+  for (const auto &layout : replay::kReplayKeyModeLayouts) {
+    const auto first = replay::logicalControlForChartLane(
+        layout.keyMode, 0, false);
+    require(first == replay::LogicalControl{
+                         .kind = replay::LogicalControlKind::Lane,
+                         .player = 1,
+                         .lane = 0},
+            "the first chart lane maps to player one's first logical lane");
+
+    if (layout.players == 2) {
+      const int offset = layout.keyMode == 48 ? 26 : 8;
+      const auto second = replay::logicalControlForChartLane(
+          layout.keyMode, offset, false);
+      require(second == replay::LogicalControl{
+                            .kind = replay::LogicalControlKind::Lane,
+                            .player = 2,
+                            .lane = 0},
+              "double-play chart lanes use the shared player offset");
+    }
+
+    if (layout.hasDirectionalScratch) {
+      const auto scratch = replay::logicalControlForChartLane(
+          layout.keyMode, 7, true,
+          replay::LogicalControlKind::ScratchCounterClockwise);
+      require(scratch == replay::LogicalControl{
+                             .kind = replay::LogicalControlKind::
+                                 ScratchCounterClockwise,
+                             .player = 1,
+                             .lane = -1},
+              "directional scratch maps through the shared lane authority");
+    }
+  }
+}
+
 void testDirectTouchEmitsTimestampedLaneEdges() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -108,15 +150,24 @@ void testDirectTouchEmitsTimestampedLaneEdges() {
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 124'000}),
           "touch up is accepted");
-  require(capture.events.size() == 2 && capture.events[0].epoch == 42 &&
-              capture.events[0].type ==
-                  gameplay::RealtimeGameplayInputType::Press &&
-              capture.events[0].lane == 0 &&
-              capture.events[0].steadyTimestampMicros == 123'456 &&
-              capture.events[1].type ==
-                  gameplay::RealtimeGameplayInputType::Release &&
-              capture.events[1].lane == 0,
-          "native samples preserve their timestamp and lane edge order");
+  require(
+      capture.events.size() == 2 && capture.events[0].epoch == 42 &&
+          capture.events[0].type ==
+              gameplay::RealtimeGameplayInputType::Press &&
+          capture.events[0].source ==
+              gameplay::RealtimeGameplayInputSource::Touch &&
+          capture.events[0].lane == 0 && capture.events[0].hasReplayControl &&
+          capture.events[0].replayControl ==
+              replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
+                                     .player = 1,
+                                     .lane = 0} &&
+          capture.events[0].steadyTimestampMicros == 123'456 &&
+          capture.events[1].type ==
+              gameplay::RealtimeGameplayInputType::Release &&
+          capture.events[1].source ==
+              gameplay::RealtimeGameplayInputSource::Touch &&
+          capture.events[1].lane == 0,
+      "native samples preserve their timestamp and lane edge order");
 }
 
 void testDragModeChangesLaneWithoutWaitingForAFrame() {
@@ -175,8 +226,14 @@ void testScratchFlickEmitsAtomicBackspinAndPressPair() {
               capture.events[1].type ==
                   gameplay::RealtimeGameplayInputType::Release &&
               capture.events[1].backSpin &&
+              capture.events[1].hasReplayControl &&
+              capture.events[1].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
               capture.events[2].type ==
-                  gameplay::RealtimeGameplayInputType::Press,
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events[2].hasReplayControl &&
+              capture.events[2].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise,
           "scratch reversal remains ordered on the realtime ingress");
 }
 
@@ -278,31 +335,51 @@ void testLayoutReplacementCancelsOldLaneBeforeNewMapping() {
           "layout replacement releases the old projected lane first");
 }
 
-void testPausePreservesHeldFingerWithoutSyntheticRelease() {
+void testPauseReleasesHeldFingerBeforeDisablingGameplay() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
-      10, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+      10, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
   require(router.consume({.fingerId = 23,
                           .phase = gameplay::RealtimeTouchPhase::Down,
                           .normalizedX = 0.31F,
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 110}),
           "pause fixture presses a lane");
-  router.setGameplayEnabled(false);
-  require(capture.events.size() == 1,
-          "closing the touch gate emits no synthetic release");
-  router.setGameplayEnabled(true);
+  require(router.consume({.fingerId = 23,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.35F,
+                          .normalizedY = 0.45F,
+                          .steadyTimestampMicros = 112}),
+          "pause fixture tracks the finger's latest presentation point");
+  require(router.setGameplayEnabled(false, 115),
+          "closing the touch gate releases every active finger");
+  require(capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().steadyTimestampMicros == 115,
+          "pause publishes the release before touch gameplay is disabled");
+  require(capture.cancelledTouches ==
+              std::vector<gameplay::RealtimeTouchSample>{{
+                  .fingerId = 23,
+                  .phase = gameplay::RealtimeTouchPhase::Cancel,
+                  .normalizedX = 0.35F,
+                  .normalizedY = 0.45F,
+                  .steadyTimestampMicros = 115,
+              }},
+          "pause closes the recorded touch lifecycle before detaching input");
+  require(router.setGameplayEnabled(true, 116),
+          "resuming reopens touch gameplay");
   require(router.consume({.fingerId = 23,
                           .phase = gameplay::RealtimeTouchPhase::Up,
                           .normalizedX = 0.31F,
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 120}),
-          "held finger remains routable after resume");
-  require(capture.events.size() == 2 &&
-              capture.events.back().type ==
-                  gameplay::RealtimeGameplayInputType::Release &&
-              capture.events.back().steadyTimestampMicros == 120,
-          "the real post-resume lift releases the held lane");
+          "the stale post-resume lift is harmless");
+  require(capture.events.size() == 2,
+          "a finger released at pause cannot strand or duplicate a lane edge");
 }
 
 void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
@@ -376,6 +453,7 @@ void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
 
 int main() {
   testTouchPresentationUsesUiNormalizedCoordinates();
+  testChartLaneMappingCoversEveryReplayKeyMode();
   testDirectTouchEmitsTimestampedLaneEdges();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();
@@ -383,7 +461,7 @@ int main() {
   testNormalModeMapsTouchesBelowProjectedPlayfield();
   testUiExcludedFingerNeverEmitsGameplayEdges();
   testLayoutReplacementCancelsOldLaneBeforeNewMapping();
-  testPausePreservesHeldFingerWithoutSyntheticRelease();
+  testPauseReleasesHeldFingerBeforeDisablingGameplay();
   testCancelledTouchUsesGraceAndContinuationCancelsExpiry();
   return 0;
 }

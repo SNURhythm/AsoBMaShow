@@ -14,6 +14,7 @@ constexpr int kMaximumGameplayLane = 15;
 bool isValidGameplayLane(int lane) {
   return lane >= kMinimumGameplayLane && lane <= kMaximumGameplayLane;
 }
+
 } // namespace
 
 std::vector<input::InputScope> makeGameplayInputScopes(int keyMode) {
@@ -64,16 +65,31 @@ InputProfile makeGameplayInputProfileWithEscapeFallback(
 }
 
 LogicalGameplayInputAdapter::LogicalGameplayInputAdapter(
-    IRhythmControl &control, CommandCallback commandCallback)
-    : control_(control), commandCallback_(std::move(commandCallback)) {}
+    IRhythmControl &control, CommandCallback commandCallback,
+    AppliedTransitionCallback appliedTransitionCallback)
+    : control_(control), commandCallback_(std::move(commandCallback)),
+      appliedTransitionCallback_(std::move(appliedTransitionCallback)) {}
 
 void LogicalGameplayInputAdapter::apply(
     std::span<const input::LogicalInputTransition> transitions) {
+  applyOwned(transitions, OwnerKind::Logical);
+}
+
+bms_parser::Note *LogicalGameplayInputAdapter::applyTouch(
+    const input::LogicalInputTransition &transition) {
+  applyOwned(std::span(&transition, 1), OwnerKind::Touch);
+  return latestPressedNote_;
+}
+
+void LogicalGameplayInputAdapter::applyOwned(
+    std::span<const input::LogicalInputTransition> transitions,
+    OwnerKind ownerKind) {
+  latestPressedNote_ = nullptr;
   for (std::size_t index = 0; index < transitions.size(); ++index) {
     const auto &transition = transitions[index];
     switch (transition.action.kind) {
     case input::LogicalActionKind::Lane:
-      applyLane(transition);
+      applyLane(transition, ownerKind);
       break;
     case input::LogicalActionKind::ScratchClockwise:
     case input::LogicalActionKind::ScratchCounterClockwise: {
@@ -113,7 +129,8 @@ void LogicalGameplayInputAdapter::apply(
           }
         }
       }
-      applyScratch(transition, direction, reversing, oppositeReleasedInBatch);
+      applyScratch(transition, direction, ownerKind, reversing,
+                   oppositeReleasedInBatch);
       break;
     }
     case input::LogicalActionKind::Start:
@@ -125,6 +142,10 @@ void LogicalGameplayInputAdapter::apply(
       if (commandCallback_) {
         commandCallback_(transition);
       }
+      if (transition.action.kind == input::LogicalActionKind::Start ||
+          transition.action.kind == input::LogicalActionKind::Select) {
+        notifyCommandApplied(transition);
+      }
       break;
     }
   }
@@ -132,8 +153,8 @@ void LogicalGameplayInputAdapter::apply(
 
 void LogicalGameplayInputAdapter::reset() {
   std::set<int> effectiveHeldLanes;
-  for (const auto &[lane, scopes] : heldLaneScopes_) {
-    (void)scopes;
+  for (const auto &[lane, owners] : heldLaneOwners_) {
+    (void)owners;
     effectiveHeldLanes.insert(lane);
   }
   for (const auto &[lane, state] : scratchLaneStates_) {
@@ -144,8 +165,11 @@ void LogicalGameplayInputAdapter::reset() {
   for (const int lane : effectiveHeldLanes) {
     control_.releaseLane(lane, 0.0, false);
   }
-  heldLaneScopes_.clear();
+  heldLaneOwners_.clear();
   scratchLaneStates_.clear();
+  recordedScratchControls_.clear();
+  pendingPhysicalEdges_.clear();
+  latestPressedNote_ = nullptr;
 }
 
 int LogicalGameplayInputAdapter::scratchLane(input::InputScope scope) {
@@ -154,102 +178,244 @@ int LogicalGameplayInputAdapter::scratchLane(input::InputScope scope) {
 
 bool LogicalGameplayInputAdapter::isLaneHeld(int lane) const {
   const auto scratch = scratchLaneStates_.find(lane);
-  return heldLaneScopes_.contains(lane) ||
+  return heldLaneOwners_.contains(lane) ||
          (scratch != scratchLaneStates_.end() &&
           scratch->second.activeDirection.has_value());
 }
 
+bms_parser::Note *LogicalGameplayInputAdapter::pressPhysicalLane(int lane) {
+  ++pendingPhysicalEdges_[lane];
+  latestPressedNote_ = control_.pressLane(lane);
+  return latestPressedNote_;
+}
+
+void LogicalGameplayInputAdapter::releasePhysicalLane(int lane,
+                                                      bool backSpin) {
+  ++pendingPhysicalEdges_[lane];
+  control_.releaseLane(lane, 0.0, backSpin);
+}
+
 void LogicalGameplayInputAdapter::applyLane(
-    const input::LogicalInputTransition &transition) {
+    const input::LogicalInputTransition &transition, OwnerKind ownerKind) {
   const int lane = transition.action.lane;
   if (!isValidGameplayLane(lane)) {
     return;
   }
   const bool wasHeld = isLaneHeld(lane);
+  const replay::LogicalControl logicalControl = replayLaneControl(transition);
+  const bool digitalScratch =
+      replay::isDirectionalScratchControl(logicalControl.kind);
+  const LaneOwner owner{.scope = transition.scope, .kind = ownerKind};
   if (transition.pressed) {
-    const bool inserted = heldLaneScopes_[lane].insert(transition.scope).second;
-    if (inserted && !wasHeld) {
-      control_.pressLane(lane);
+    const bool inserted = heldLaneOwners_[lane].insert(owner).second;
+    if (inserted) {
+      if (!wasHeld) {
+        pressPhysicalLane(lane);
+      }
+      if (digitalScratch) {
+        synchronizeScratchReplayControl(transition, lane);
+      } else if (!wasHeld) {
+        notifyApplied(transition, logicalControl, true);
+      }
     }
     return;
   }
-  const auto held = heldLaneScopes_.find(lane);
-  if (held == heldLaneScopes_.end() ||
-      held->second.erase(transition.scope) == 0) {
+  const auto held = heldLaneOwners_.find(lane);
+  if (held == heldLaneOwners_.end() || held->second.erase(owner) == 0) {
     return;
   }
   if (held->second.empty()) {
-    heldLaneScopes_.erase(held);
+    heldLaneOwners_.erase(held);
   }
-  if (!isLaneHeld(lane)) {
-    control_.releaseLane(lane, 0.0, false);
+  const bool releasedPhysicalLane = !isLaneHeld(lane);
+  if (releasedPhysicalLane) {
+    releasePhysicalLane(lane, false);
+    if (!digitalScratch) {
+      notifyApplied(transition, logicalControl, false);
+    }
+  }
+  if (digitalScratch) {
+    synchronizeScratchReplayControl(transition, lane);
   }
 }
 
 void LogicalGameplayInputAdapter::applyScratch(
     const input::LogicalInputTransition &transition, ScratchDirection direction,
-    bool reversing, bool oppositeReleasedInBatch) {
+    OwnerKind ownerKind, bool reversing, bool oppositeReleasedInBatch) {
   const int lane = scratchLane(transition.scope);
+  const ScratchOwner owner{.direction = direction,
+                           .scope = transition.scope,
+                           .kind = ownerKind};
   if (!transition.pressed) {
     const auto found = scratchLaneStates_.find(lane);
     if (found == scratchLaneStates_.end() ||
-        found->second.heldDirections.erase(direction) == 0) {
+        found->second.heldOwners.erase(owner) == 0) {
       return;
     }
     auto &state = found->second;
     if (state.activeDirection != direction) {
-      if (state.heldDirections.empty()) {
+      if (state.heldOwners.empty()) {
         scratchLaneStates_.erase(found);
       }
       return;
     }
 
-    if (!state.heldDirections.empty()) {
-      state.activeDirection = *state.heldDirections.begin();
+    const bool activeDirectionStillHeld = std::ranges::any_of(
+        state.heldOwners, [direction](const ScratchOwner &held) {
+          return held.direction == direction;
+        });
+    if (activeDirectionStillHeld) {
+      return;
+    }
+
+    if (!state.heldOwners.empty()) {
+      state.activeDirection = state.heldOwners.begin()->direction;
       if (oppositeReleasedInBatch) {
         return;
       }
-      control_.releaseLane(lane, 0.0, true);
-      control_.pressLane(lane);
+      releasePhysicalLane(lane, true);
+      pressPhysicalLane(lane);
+      synchronizeScratchReplayControl(transition, lane);
       return;
     }
 
     state.activeDirection.reset();
-    const bool digitalLaneHeld = heldLaneScopes_.contains(lane);
+    const bool digitalLaneHeld = heldLaneOwners_.contains(lane);
     if (reversing || !digitalLaneHeld) {
-      control_.releaseLane(lane, 0.0, reversing);
+      releasePhysicalLane(lane, reversing);
       if (reversing && digitalLaneHeld) {
-        control_.pressLane(lane);
+        pressPhysicalLane(lane);
       }
     }
     scratchLaneStates_.erase(found);
+    synchronizeScratchReplayControl(transition, lane);
     return;
   }
 
   const bool wasHeld = isLaneHeld(lane);
   auto &state = scratchLaneStates_[lane];
-  state.heldDirections.insert(direction);
+  if (!state.heldOwners.insert(owner).second) {
+    return;
+  }
   if (state.activeDirection == direction) {
     return;
   }
   if (state.activeDirection.has_value()) {
-    control_.releaseLane(lane, 0.0, true);
-    control_.pressLane(lane);
+    releasePhysicalLane(lane, true);
+    pressPhysicalLane(lane);
     state.activeDirection = direction;
+    synchronizeScratchReplayControl(transition, lane);
     return;
   }
   state.activeDirection = direction;
   if (!wasHeld) {
-    control_.pressLane(lane);
+    pressPhysicalLane(lane);
   }
+  synchronizeScratchReplayControl(transition, lane);
+}
+
+replay::LogicalControl LogicalGameplayInputAdapter::replayLaneControl(
+    const input::LogicalInputTransition &transition) {
+  const bool digitalScratch =
+      (transition.scope.keyMode == 5 || transition.scope.keyMode == 7 ||
+       transition.scope.keyMode == 10 || transition.scope.keyMode == 14) &&
+      transition.action.lane == scratchLane(transition.scope);
+  const auto control = replay::logicalControlForChartLane(
+      transition.scope.keyMode, transition.action.lane, digitalScratch);
+  return control.value_or(replay::LogicalControl{
+      .kind = replay::LogicalControlKind::Lane,
+      .player = transition.scope.player,
+      .lane = -1});
+}
+
+std::optional<replay::LogicalControl>
+LogicalGameplayInputAdapter::effectiveScratchReplayControl(int lane) const {
+  const int player = lane == kSecondPlayerScratchLane ? 2 : 1;
+  const auto scratch = scratchLaneStates_.find(lane);
+  if (scratch != scratchLaneStates_.end() &&
+      scratch->second.activeDirection.has_value()) {
+    return replay::LogicalControl{
+        .kind = *scratch->second.activeDirection == ScratchDirection::Clockwise
+                    ? replay::LogicalControlKind::ScratchClockwise
+                    : replay::LogicalControlKind::ScratchCounterClockwise,
+        .player = player,
+        .lane = -1};
+  }
+  if (heldLaneOwners_.contains(lane)) {
+    return replay::LogicalControl{
+        .kind = replay::LogicalControlKind::ScratchClockwise,
+        .player = player,
+        .lane = -1};
+  }
+  return std::nullopt;
+}
+
+void LogicalGameplayInputAdapter::synchronizeScratchReplayControl(
+    const input::LogicalInputTransition &transition, int lane) {
+  const auto recorded = recordedScratchControls_.find(lane);
+  const std::optional<replay::LogicalControl> previous =
+      recorded == recordedScratchControls_.end()
+          ? std::nullopt
+          : std::optional<replay::LogicalControl>(recorded->second);
+  const auto next = effectiveScratchReplayControl(lane);
+  if (previous == next) {
+    return;
+  }
+  if (previous.has_value()) {
+    notifyApplied(transition, *previous, false);
+  }
+  if (next.has_value()) {
+    notifyApplied(transition, *next, true);
+    recordedScratchControls_[lane] = *next;
+  } else {
+    recordedScratchControls_.erase(lane);
+  }
+}
+
+void LogicalGameplayInputAdapter::notifyApplied(
+    const input::LogicalInputTransition &source,
+    replay::LogicalControl control, bool pressed) {
+  const int lane = replay::isDirectionalScratchControl(control.kind)
+                       ? scratchLane(source.scope)
+                       : source.action.lane;
+  const auto pending = pendingPhysicalEdges_.find(lane);
+  const bool replayOnly = pending == pendingPhysicalEdges_.end();
+  if (!replayOnly && --pending->second == 0) {
+    pendingPhysicalEdges_.erase(pending);
+  }
+  if (appliedTransitionCallback_) {
+    appliedTransitionCallback_({.source = source,
+                                .control = control,
+                                .pressed = pressed,
+                                .replayOnly = replayOnly});
+  }
+}
+
+void LogicalGameplayInputAdapter::notifyCommandApplied(
+    const input::LogicalInputTransition &transition) {
+  if (!appliedTransitionCallback_) {
+    return;
+  }
+  const auto kind = transition.action.kind == input::LogicalActionKind::Start
+                        ? replay::LogicalControlKind::Start
+                        : replay::LogicalControlKind::Select;
+  appliedTransitionCallback_({.source = transition,
+                              .control = {.kind = kind,
+                                          .player = transition.scope.player,
+                                          .lane = -1},
+                              .pressed = transition.pressed,
+                              .replayOnly = false});
 }
 
 LogicalGameplayInputPipeline::LogicalGameplayInputPipeline(
     IRhythmControl &control, const InputProfile &profile,
     std::vector<input::InputScope> activeScopes,
     LogicalGameplayInputAdapter::CommandCallback commandCallback,
-    LogicalGameplayRegistryPolicy registryPolicy)
-    : adapter_(control, std::move(commandCallback)),
+    LogicalGameplayRegistryPolicy registryPolicy,
+    LogicalGameplayInputAdapter::AppliedTransitionCallback
+        appliedTransitionCallback)
+    : adapter_(control, std::move(commandCallback),
+               std::move(appliedTransitionCallback)),
       resolver_(
           profile, std::move(activeScopes),
           {.onTransitions =
@@ -282,6 +448,11 @@ bool LogicalGameplayInputPipeline::consumeDirectKeyboard(int scancode,
                      .rawValue = pressed ? 1.0 : 0.0,
                      .normalizedValue = pressed ? 1.0F : 0.0F});
   return true;
+}
+
+bms_parser::Note *LogicalGameplayInputPipeline::consumeTouchTransition(
+    const input::LogicalInputTransition &transition) {
+  return adapter_.applyTouch(transition);
 }
 
 void LogicalGameplayInputPipeline::disconnectDevice(std::string_view stableId) {

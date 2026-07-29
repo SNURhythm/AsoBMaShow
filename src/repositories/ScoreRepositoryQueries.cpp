@@ -8,6 +8,7 @@
 #include "../LongNoteModeUtils.h"
 #include "../ProfileDatabaseActivity.h"
 #include "ReplayRepository.h"
+#include "../ResultContracts.h"
 #include "../ResultPersistenceModel.h"
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
@@ -38,16 +39,6 @@
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
-bool isCanonicalCourseKey(std::string_view key) {
-  constexpr std::string_view prefix = "course:v1:";
-  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
-    return false;
-  }
-  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
-    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
-  });
-}
-
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
@@ -192,8 +183,7 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
   bindOptionalText(storage.serverOrigin);
   bindOptionalText(storage.remoteScoreId);
   if (storage.syncGeneration.has_value()) {
-    bound = bound &&
-            sqlite3_bind_int64(stmt.get(), bindIndex++,
+    bound = bound && sqlite3_bind_int64(stmt.get(), bindIndex++,
                                *storage.syncGeneration) == SQLITE_OK;
   } else {
     bound = bound && sqlite3_bind_null(stmt.get(), bindIndex++) == SQLITE_OK;
@@ -370,8 +360,7 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
 
   if (storedAttemptId != pending.attemptId) {
     return {.status = ProjectionStatus::IntegrityConflict,
-            .diagnostic =
-                "stored projected score attempt identity differs"};
+            .diagnostic = "stored projected score attempt identity differs"};
   }
   if (storedCreatedAt != pending.createdAt) {
     return {.status = ProjectionStatus::IntegrityConflict,
@@ -526,8 +515,7 @@ void loadLocalBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache,
                              std::string_view schema = {}) {
   const std::string query =
       "SELECT c.chart_sha256, c.ln_mode, " + bestClearMarkRankExpr("c") +
-      " FROM " + qualifiedScoreTable(schema, "scores") +
-      " c WHERE " +
+      " FROM " + qualifiedScoreTable(schema, "scores") + " c WHERE " +
       score_cache_queries::detail::scoreParticipatesInBestExpr("c") +
       " AND c.score_source=" +
       std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
@@ -539,8 +527,7 @@ void loadLocalBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache,
     return;
   }
   while (sqlite3_step(statement.get()) == SQLITE_ROW) {
-    storeBestRank(cache.rankBySha256,
-                  sqliteColumnString(statement.get(), 0),
+    storeBestRank(cache.rankBySha256, sqliteColumnString(statement.get(), 0),
                   sqlite3_column_int(statement.get(), 1),
                   sqlite3_column_int(statement.get(), 2));
   }
@@ -612,8 +599,8 @@ score_repository_detail::InsertScoreWriteOnConnection(
     std::optional<std::string_view> attemptId,
     std::optional<std::string_view> createdAt,
     const std::string &provenanceJson, const ScoreStorageMetadata &storage) {
-  return insertScoreWriteOnConnectionImpl(database, score, attemptId,
-                                          createdAt, provenanceJson, storage);
+  return insertScoreWriteOnConnectionImpl(database, score, attemptId, createdAt,
+                                          provenanceJson, storage);
 }
 
 std::size_t
@@ -722,8 +709,7 @@ std::optional<ScoreBestSnapshot>
 ScoreBestCache::bestForStoredKey(std::string_view sha256,
                                  int longNoteMode) const {
   const auto shaIt = scoreBySha256.find(sha256);
-  return shaIt == scoreBySha256.end()
-             ? std::nullopt
+  return shaIt == scoreBySha256.end() ? std::nullopt
              : shaIt->second.bestForMode(longNoteMode);
 }
 bool score_repository_detail::InsertCourseScoreOnConnection(
@@ -761,8 +747,20 @@ bool score_repository_detail::InsertCourseScoreOnConnection(
   }
 
   int courseTotalNotes = 0;
+  int courseMaximumScore = 0;
   for (const auto &entry : session.entries) {
-    courseTotalNotes += std::max(0, entry.meta.TotalNotes);
+    const int stageNotes = std::max(0, entry.meta.TotalNotes);
+    const auto stageMaximum =
+        result_contract::maximumScoreForNotes(stageNotes);
+    if (!stageMaximum ||
+        courseTotalNotes > std::numeric_limits<int>::max() - stageNotes ||
+        courseMaximumScore >
+            std::numeric_limits<int>::max() - *stageMaximum) {
+      SDL_Log("Refusing to save course score with an invalid note count");
+      return false;
+    }
+    courseTotalNotes += stageNotes;
+    courseMaximumScore += *stageMaximum;
   }
 
   int bindIndex = 1;
@@ -784,7 +782,7 @@ bool score_repository_detail::InsertCourseScoreOnConnection(
   sqlite3_bind_int(stmt.get(), bindIndex++, completedCharts);
   sqlite3_bind_int(stmt.get(), bindIndex++, totalCharts);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.getScore());
-  sqlite3_bind_int(stmt.get(), bindIndex++, courseTotalNotes * 2);
+  sqlite3_bind_int(stmt.get(), bindIndex++, courseMaximumScore);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.maxCombo);
   sqlite3_bind_int(stmt.get(), bindIndex++, state.comboBreak);
   sqlite3_bind_int(stmt.get(), bindIndex++, judgeCount(state, PGreat));
@@ -851,10 +849,11 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   using result_persistence::ProjectionStatus;
 
   profile_database_activity::WriteGuard writeGuard;
-  if (!uuid::isCanonicalLowerV4(pending.attemptId)) {
+  if (!uuid::isCanonicalLowerV4(pending.attemptId) ||
+      !pending.hasExactlyOneOwner()) {
     return {.status = ProjectionStatus::IntegrityConflict,
             .diagnostic =
-                "score projection attempt ID is not a canonical v4 UUID"};
+                "score projection attempt or owner identity is invalid"};
   }
   if (pending.createdAt.empty()) {
     return {.status = ProjectionStatus::IntegrityConflict,
@@ -862,8 +861,7 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   }
   if (!result_persistence::hasProjectableChartIdentity(pending.score)) {
     return {.status = ProjectionStatus::IntegrityConflict,
-            .diagnostic =
-                "score projection chart identity is not projectable"};
+            .diagnostic = "score projection chart identity is not projectable"};
   }
 
   std::string provenanceError;
@@ -896,6 +894,304 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   }
   return {.status = ProjectionStatus::StorageFailure,
           .diagnostic = inserted.diagnostic};
+}
+
+namespace {
+
+struct CourseScoreProjection {
+  int comboBreak = 0;
+  int pGreat = 0;
+  int great = 0;
+  int good = 0;
+  int bad = 0;
+  int poor = 0;
+  int kPoor = 0;
+  int fast = 0;
+  int slow = 0;
+  std::string provenanceJson;
+};
+
+bool checkedAddCourseFact(int &aggregate, int value) noexcept {
+  if (value < 0 || aggregate > std::numeric_limits<int>::max() - value) {
+    return false;
+  }
+  aggregate += value;
+  return true;
+}
+
+std::optional<CourseScoreProjection> makeCourseScoreProjection(
+    const result_persistence::PendingCourseScoreWrite &pending,
+    std::string &diagnostic) {
+  if (!uuid::isCanonicalLowerV4(pending.attemptId) ||
+      pending.attemptId != pending.result.attemptId ||
+      pending.modernResultId <= 0 || pending.createdAt.empty() ||
+      pending.result.resultId != 0 ||
+      !result_persistence::validateModernCourseResult(pending.result,
+                                                      diagnostic)) {
+    if (diagnostic.empty()) {
+      diagnostic = "course score projection identity or result is invalid";
+    }
+    return std::nullopt;
+  }
+
+  CourseScoreProjection projection;
+  for (const auto &stage : pending.result.stages) {
+    const auto &score = stage.score;
+    if (!checkedAddCourseFact(projection.comboBreak, score.comboBreak) ||
+        !checkedAddCourseFact(projection.pGreat, score.pGreat) ||
+        !checkedAddCourseFact(projection.great, score.great) ||
+        !checkedAddCourseFact(projection.good, score.good) ||
+        !checkedAddCourseFact(projection.bad, score.bad) ||
+        !checkedAddCourseFact(projection.poor, score.poor) ||
+        !checkedAddCourseFact(projection.kPoor, score.kPoor) ||
+        !checkedAddCourseFact(projection.fast, score.fast) ||
+        !checkedAddCourseFact(projection.slow, score.slow)) {
+      diagnostic = "course score projection aggregate overflows";
+      return std::nullopt;
+    }
+  }
+  const auto provenanceJson =
+      serializeValidatedScoreProvenance(pending.result.provenance, diagnostic);
+  if (!provenanceJson) {
+    diagnostic = "course score projection provenance is invalid: " + diagnostic;
+    return std::nullopt;
+  }
+  projection.provenanceJson = *provenanceJson;
+  return projection;
+}
+
+bool bindProjectedCourseScore(
+    sqlite3_stmt *statement,
+    const result_persistence::PendingCourseScoreWrite &pending,
+    const CourseScoreProjection &projection) {
+  bool bound = true;
+  int index = 1;
+  const auto text = [&](std::string_view value) {
+    bound = bindSqliteTextView(statement, index++, value) && bound;
+  };
+  const auto integer = [&](int value) {
+    bound = sqlite3_bind_int(statement, index++, value) == SQLITE_OK && bound;
+  };
+
+  const auto &result = pending.result;
+  integer(result.legacyCourseId);
+  text(result.courseKey);
+  integer(result.longNoteMode);
+  text(result.courseName);
+  text(result.courseGroupName);
+  text(result.constraintJson);
+  integer(gaugeTypeIndex(result.initialGaugeType));
+  integer(static_cast<int>(result.gaugeProfile));
+  integer(gaugeAutoShiftModeValue(result.gaugeAutoShift));
+  text(result.requestedPlayOption);
+  text(result.assistOption);
+  integer(result.completedCharts);
+  integer(result.totalCharts);
+  integer(result.finalScore);
+  integer(result.maxScore);
+  integer(result.maxCombo);
+  integer(projection.comboBreak);
+  integer(projection.pGreat);
+  integer(projection.great);
+  integer(projection.good);
+  integer(projection.bad);
+  integer(projection.poor);
+  integer(projection.kPoor);
+  integer(projection.fast);
+  integer(projection.slow);
+  bound =
+      sqlite3_bind_double(statement, index++, result.finalGauge) == SQLITE_OK &&
+      bound;
+  integer(result.clearType);
+  integer(result.provenance.ruleset.version);
+  integer(static_cast<int>(result.provenance.eligibility));
+  text(projection.provenanceJson);
+  text(pending.attemptId);
+  integer(pending.modernResultId);
+  text(result.resultFingerprint);
+  text(pending.createdAt);
+  return bound && index == 35;
+}
+
+bool projectedCourseColumnMatchesText(sqlite3_stmt *statement, int column,
+                                      std::string_view expected) {
+  return sqlite3_column_type(statement, column) == SQLITE_TEXT &&
+         sqliteColumnString(statement, column) == expected;
+}
+
+bool projectedCourseColumnMatchesInt(sqlite3_stmt *statement, int column,
+                                     int expected) {
+  return sqlite3_column_type(statement, column) == SQLITE_INTEGER &&
+         sqlite3_column_int64(statement, column) == expected;
+}
+
+result_persistence::ProjectionOutcome classifyProjectedCourseScoreCollision(
+    sqlite3 *db, const result_persistence::PendingCourseScoreWrite &pending,
+    const CourseScoreProjection &projection) {
+  using result_persistence::ProjectionOutcome;
+  using result_persistence::ProjectionStatus;
+
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "SELECT course_id, course_key, ln_mode, course_name, "
+          "course_group_name, constraint_json, gauge_type, gauge_profile, "
+          "gauge_auto_shift, play_option, assist_option, completed_charts, "
+          "total_charts, score, max_score, max_combo, combo_break, pgreat, "
+          "great, good, bad, poor, kpoor, fast, slow, final_gauge, clear_type, "
+          "ruleset_version, eligibility, provenance_json, attempt_id, "
+          "modern_result_id, result_fingerprint, created_at FROM "
+          "course_scores WHERE attempt_id = ?",
+          statement, "preparing projected course score collision lookup",
+          logSqlErrorText) ||
+      !bindSqliteText(statement.get(), 1, pending.attemptId)) {
+    return {.status = ProjectionStatus::StorageFailure,
+            .diagnostic =
+                "could not query the projected course score collision"};
+  }
+  int rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_DONE) {
+    return {.status = ProjectionStatus::IntegrityConflict,
+            .diagnostic =
+                "course score owner identity is already used by another "
+                "attempt"};
+  }
+  if (rc != SQLITE_ROW) {
+    logSqlError("reading projected course score collision", db);
+    return {.status = ProjectionStatus::StorageFailure,
+            .diagnostic =
+                "could not read the projected course score collision"};
+  }
+
+  const auto &result = pending.result;
+  const bool matches =
+      projectedCourseColumnMatchesInt(statement.get(), 0,
+                                      result.legacyCourseId) &&
+      projectedCourseColumnMatchesText(statement.get(), 1, result.courseKey) &&
+      projectedCourseColumnMatchesInt(statement.get(), 2,
+                                      result.longNoteMode) &&
+      projectedCourseColumnMatchesText(statement.get(), 3, result.courseName) &&
+      projectedCourseColumnMatchesText(statement.get(), 4,
+                                       result.courseGroupName) &&
+      projectedCourseColumnMatchesText(statement.get(), 5,
+                                       result.constraintJson) &&
+      projectedCourseColumnMatchesInt(
+          statement.get(), 6, gaugeTypeIndex(result.initialGaugeType)) &&
+      projectedCourseColumnMatchesInt(statement.get(), 7,
+                                      static_cast<int>(result.gaugeProfile)) &&
+      projectedCourseColumnMatchesInt(
+          statement.get(), 8, gaugeAutoShiftModeValue(result.gaugeAutoShift)) &&
+      projectedCourseColumnMatchesText(statement.get(), 9,
+                                       result.requestedPlayOption) &&
+      projectedCourseColumnMatchesText(statement.get(), 10,
+                                       result.assistOption) &&
+      projectedCourseColumnMatchesInt(statement.get(), 11,
+                                      result.completedCharts) &&
+      projectedCourseColumnMatchesInt(statement.get(), 12,
+                                      result.totalCharts) &&
+      projectedCourseColumnMatchesInt(statement.get(), 13, result.finalScore) &&
+      projectedCourseColumnMatchesInt(statement.get(), 14, result.maxScore) &&
+      projectedCourseColumnMatchesInt(statement.get(), 15, result.maxCombo) &&
+      projectedCourseColumnMatchesInt(statement.get(), 16,
+                                      projection.comboBreak) &&
+      projectedCourseColumnMatchesInt(statement.get(), 17, projection.pGreat) &&
+      projectedCourseColumnMatchesInt(statement.get(), 18, projection.great) &&
+      projectedCourseColumnMatchesInt(statement.get(), 19, projection.good) &&
+      projectedCourseColumnMatchesInt(statement.get(), 20, projection.bad) &&
+      projectedCourseColumnMatchesInt(statement.get(), 21, projection.poor) &&
+      projectedCourseColumnMatchesInt(statement.get(), 22, projection.kPoor) &&
+      projectedCourseColumnMatchesInt(statement.get(), 23, projection.fast) &&
+      projectedCourseColumnMatchesInt(statement.get(), 24, projection.slow) &&
+      sqlite3_column_type(statement.get(), 25) == SQLITE_FLOAT &&
+      sqlite3_column_double(statement.get(), 25) ==
+          static_cast<double>(result.finalGauge) &&
+      projectedCourseColumnMatchesInt(statement.get(), 26, result.clearType) &&
+      projectedCourseColumnMatchesInt(statement.get(), 27,
+                                      result.provenance.ruleset.version) &&
+      projectedCourseColumnMatchesInt(
+          statement.get(), 28,
+          static_cast<int>(result.provenance.eligibility)) &&
+      projectedCourseColumnMatchesText(statement.get(), 29,
+                                       projection.provenanceJson) &&
+      projectedCourseColumnMatchesText(statement.get(), 30,
+                                       pending.attemptId) &&
+      projectedCourseColumnMatchesInt(statement.get(), 31,
+                                      pending.modernResultId) &&
+      projectedCourseColumnMatchesText(statement.get(), 32,
+                                       result.resultFingerprint) &&
+      projectedCourseColumnMatchesText(statement.get(), 33, pending.createdAt);
+  rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_ROW) {
+    return {.status = ProjectionStatus::IntegrityConflict,
+            .diagnostic =
+                "course score attempt identity matched multiple rows"};
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ProjectionStatus::StorageFailure,
+            .diagnostic = "could not finish the projected course score lookup"};
+  }
+  return matches
+             ? ProjectionOutcome{.status = ProjectionStatus::AlreadyPresent}
+             : ProjectionOutcome{
+                   .status = ProjectionStatus::IntegrityConflict,
+                   .diagnostic =
+                       "stored course score differs from its modern result"};
+}
+
+} // namespace
+
+result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedCourseScore(
+    const result_persistence::PendingCourseScoreWrite &pending) {
+  using result_persistence::ProjectionOutcome;
+  using result_persistence::ProjectionStatus;
+
+  profile_database_activity::WriteGuard writeGuard;
+  std::string diagnostic;
+  const auto projection = makeCourseScoreProjection(pending, diagnostic);
+  if (!projection) {
+    return {.status = ProjectionStatus::IntegrityConflict,
+            .diagnostic = std::move(diagnostic)};
+  }
+
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ProjectionStatus::StorageFailure,
+            .diagnostic = "course score storage is unavailable"};
+  }
+  sqlite3 *db = impl_->sessionDatabase;
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "INSERT INTO course_scores (course_id, course_key, ln_mode, "
+          "course_name, course_group_name, constraint_json, gauge_type, "
+          "gauge_profile, gauge_auto_shift, play_option, assist_option, "
+          "completed_charts, total_charts, score, max_score, max_combo, "
+          "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow, "
+          "final_gauge, clear_type, ruleset_version, eligibility, "
+          "provenance_json, attempt_id, modern_result_id, result_fingerprint, "
+          "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+          "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          statement, "preparing projected course score insert",
+          logSqlErrorText) ||
+      !bindProjectedCourseScore(statement.get(), pending, *projection)) {
+    return {.status = ProjectionStatus::StorageFailure,
+            .diagnostic = "could not prepare the course score projection"};
+  }
+  const int rc = sqlite3_step(statement.get());
+  const int extendedError = sqlite3_extended_errcode(db);
+  const std::string error = sqliteDatabaseError(db);
+  statement.reset();
+  if (rc == SQLITE_DONE) {
+    gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+    return {.status = ProjectionStatus::Inserted};
+  }
+  if (extendedError == SQLITE_CONSTRAINT_UNIQUE ||
+      extendedError == SQLITE_CONSTRAINT_PRIMARYKEY) {
+    return classifyProjectedCourseScoreCollision(db, pending, *projection);
+  }
+  logSqlErrorText("saving projected course score", error);
+  return {.status = ProjectionStatus::StorageFailure,
+          .diagnostic = "could not save the projected course score: " + error};
 }
 
 bool ScoreRepository::SaveCourseScore(const CoursePlaySession &session,
@@ -972,12 +1268,12 @@ score_repository_detail::LoadBestScoreOnConnection(
   const auto bestOrder = score_cache_queries::detail::bestScoreOrderKey(
       "s", effectiveClearRank, "id");
 
-  std::string query =
-      "SELECT score, max_score, max_combo, combo_break, "
+  std::string query = "SELECT score, max_score, max_combo, combo_break, "
       "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
       "CAST(kpoor AS INTEGER), final_gauge, ";
   query += effectiveClearRank +
-           ", created_at, provenance_json, score_source FROM scores s WHERE ";
+           ", created_at, provenance_json, score_source, attempt_id "
+           "FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
   query += " AND " +
            score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
@@ -989,7 +1285,8 @@ score_repository_detail::LoadBestScoreOnConnection(
   if (requiredRuleset != nullptr) {
     query += "AND ruleset_version = ? ";
   }
-  query += "ORDER BY CASE WHEN ln_mode = ? OR ln_mode = -1 THEN 0 ELSE 1 END, " +
+  query +=
+      "ORDER BY CASE WHEN ln_mode = ? OR ln_mode = -1 THEN 0 ELSE 1 END, " +
            score_cache_queries::detail::bestScoreOrderBySql(bestOrder);
 
   SqliteStatementHandle stmt;
@@ -1017,8 +1314,7 @@ score_repository_detail::LoadBestScoreOnConnection(
       std::string provenanceError;
       const auto provenance = deserializeScoreProvenance(
           sqliteColumnString(stmt.get(), 8), provenanceError);
-      if (!provenance.has_value() ||
-          provenance->ruleset != *requiredRuleset) {
+      if (!provenance.has_value() || provenance->ruleset != *requiredRuleset) {
         continue;
       }
     }
@@ -1042,8 +1338,11 @@ score_repository_detail::LoadBestScoreOnConnection(
     }
     snapshot.clearType = sqlite3_column_int(stmt.get(), 6);
     snapshot.createdAt = sqliteColumnString(stmt.get(), 7);
-    snapshot.source = imported ? ScoreBestSource::ImportedIr
-                               : ScoreBestSource::Local;
+    if (sqlite3_column_type(stmt.get(), 10) == SQLITE_TEXT) {
+      snapshot.attemptId = sqliteColumnString(stmt.get(), 10);
+    }
+    snapshot.source =
+        imported ? ScoreBestSource::ImportedIr : ScoreBestSource::Local;
     return snapshot;
   }
   return std::nullopt;
@@ -1145,7 +1444,7 @@ score_repository_detail::RecoverCourseRecordsOnConnection(
   for (const auto &definition : definitions) {
     const std::string canonicalConstraints =
         course_identity::canonicalConstraintPayload(definition.constraintJson);
-    if (!isCanonicalCourseKey(definition.courseKey) ||
+    if (!course_identity::isCanonicalKey(definition.courseKey) ||
         definition.charts.empty() || canonicalConstraints.empty() ||
         course_identity::makeCourseKey(definition.charts,
                                        definition.constraintJson)
@@ -1291,7 +1590,7 @@ score_repository_detail::RecoverCourseRecordsOnConnection(
     std::string resultingKey = row.courseKey;
     std::string rawEvidence = row.legacyCourseKey;
     if (rawEvidence.empty() && !row.courseKey.empty() &&
-        !isCanonicalCourseKey(row.courseKey)) {
+        !course_identity::isCanonicalKey(row.courseKey)) {
       rawEvidence = row.courseKey;
     }
 
@@ -1428,8 +1727,9 @@ ScoreBestCache ScoreRepository::LoadBestScores() {
       impl_->sessionDatabase);
 }
 
-ScoreBestCache score_repository_detail::LoadBestScoresOnConnection(
-    sqlite3 *db, std::string_view schema) {
+ScoreBestCache
+score_repository_detail::LoadBestScoresOnConnection(sqlite3 *db,
+                                                    std::string_view schema) {
   profile_database_activity::ReadGuard operation;
   ScoreBestCache cache;
   if (db != nullptr) {

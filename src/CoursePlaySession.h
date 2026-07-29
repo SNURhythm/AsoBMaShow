@@ -3,9 +3,13 @@
 #include "LongNoteModeUtils.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
+#include "replay/CourseContinuation.h"
+#include "replay/CourseReplayCapture.h"
+#include "replay/CourseResultPersistence.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -56,15 +60,16 @@ longNoteHeadOrSelf(const bms_parser::LongNote *longNote) {
                                                          : longNote;
 }
 
-inline bms_parser::LongNoteType resolveEffectiveLongNoteType(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
+inline bms_parser::LongNoteType
+resolveEffectiveLongNoteType(const bms_parser::LongNote *longNote,
+                             const bms_parser::Chart *chart,
     int longNoteModeOverride = 0) {
   if (longNote == nullptr) {
     return bms_parser::LongNoteType::LongNote;
   }
   const bms_parser::LongNote *head = longNoteHeadOrSelf(longNote);
-  int lnMode = chart != nullptr ? normalizeChartLongNoteModeValue(
-                                      chart->Meta.LnMode)
+  int lnMode = chart != nullptr
+                   ? normalizeChartLongNoteModeValue(chart->Meta.LnMode)
                                 : 0;
   if (lnMode == 0) {
     lnMode = normalizeChartLongNoteModeValue(longNoteModeOverride);
@@ -89,51 +94,50 @@ inline bool longNoteTypeIsHellCharge(bms_parser::LongNoteType type) {
   return type == bms_parser::LongNoteType::HellChargeNote;
 }
 
-inline bool effectiveLongNoteIsClassic(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
+inline bool effectiveLongNoteIsClassic(const bms_parser::LongNote *longNote,
+                                       const bms_parser::Chart *chart,
     int longNoteModeOverride = 0) {
   return longNoteTypeIsClassic(
       resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
 }
 
-inline bool effectiveLongNoteIsClassic(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
+inline bool effectiveLongNoteIsClassic(const bms_parser::LongNote *longNote,
+                                       const bms_parser::Chart &chart,
     int longNoteModeOverride = 0) {
   return effectiveLongNoteIsClassic(longNote, &chart, longNoteModeOverride);
 }
 
-inline bool effectiveLongNoteIsCharge(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
+inline bool effectiveLongNoteIsCharge(const bms_parser::LongNote *longNote,
+                                      const bms_parser::Chart *chart,
     int longNoteModeOverride = 0) {
   return longNoteTypeIsCharge(
       resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
 }
 
-inline bool effectiveLongNoteIsCharge(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
+inline bool effectiveLongNoteIsCharge(const bms_parser::LongNote *longNote,
+                                      const bms_parser::Chart &chart,
     int longNoteModeOverride = 0) {
   return effectiveLongNoteIsCharge(longNote, &chart, longNoteModeOverride);
 }
 
-inline bool effectiveLongNoteIsHellCharge(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
+inline bool effectiveLongNoteIsHellCharge(const bms_parser::LongNote *longNote,
+                                          const bms_parser::Chart *chart,
     int longNoteModeOverride = 0) {
   return longNoteTypeIsHellCharge(
       resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
 }
 
-inline bool effectiveLongNoteIsHellCharge(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
+inline bool effectiveLongNoteIsHellCharge(const bms_parser::LongNote *longNote,
+                                          const bms_parser::Chart &chart,
     int longNoteModeOverride = 0) {
   return effectiveLongNoteIsHellCharge(longNote, &chart, longNoteModeOverride);
 }
 
-inline bool effectiveLongNoteIsCounted(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
+inline bool effectiveLongNoteIsCounted(const bms_parser::LongNote *longNote,
+                                       const bms_parser::Chart &chart,
     int longNoteModeOverride = 0) {
-  return longNote != nullptr &&
-         (resolveEffectiveLongNoteType(longNote, &chart,
-                                       longNoteModeOverride) !=
+  return longNote != nullptr && (resolveEffectiveLongNoteType(
+                                     longNote, &chart, longNoteModeOverride) !=
               bms_parser::LongNoteType::LongNote ||
           !longNote->IsTail());
 }
@@ -190,8 +194,8 @@ inline bool chartContainsLongNote(const bms_parser::Chart &chart) {
   return false;
 }
 
-inline void recalculateEffectiveLongNoteCounts(
-    bms_parser::Chart &chart, int longNoteModeOverride = 0) {
+inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
+                                               int longNoteModeOverride = 0) {
   int totalNotes = 0;
   int totalLongNotes = 0;
   int totalScratchNotes = 0;
@@ -245,8 +249,8 @@ inline void recalculateEffectiveLongNoteCounts(
   chart.Meta.TotalLandmineNotes = totalLandmineNotes;
 }
 
-inline void applyEffectiveLongNoteModeToChart(
-    bms_parser::Chart &chart, int longNoteModeOverride = 0) {
+inline void applyEffectiveLongNoteModeToChart(bms_parser::Chart &chart,
+                                              int longNoteModeOverride = 0) {
   const int lnMode = normalizeChartLongNoteModeValue(longNoteModeOverride);
   if (chart.Meta.LnMode == 0 && lnMode > 0 && chartContainsLongNote(chart)) {
     chart.Meta.LnMode = lnMode;
@@ -254,9 +258,11 @@ inline void applyEffectiveLongNoteModeToChart(
   recalculateEffectiveLongNoteCounts(chart, lnMode);
 }
 
-inline void applyCourseConstraintsToChart(
-    bms_parser::Chart &chart, const CourseConstraintRules &constraints) {
-  const int lnMode = courseLongNoteModeToChartMetaValue(constraints.longNoteMode);
+inline void
+applyCourseConstraintsToChart(bms_parser::Chart &chart,
+                              const CourseConstraintRules &constraints) {
+  const int lnMode =
+      courseLongNoteModeToChartMetaValue(constraints.longNoteMode);
   if (lnMode > 0 && chart.Meta.LnMode == 0) {
     chart.Meta.LnMode = lnMode;
   }
@@ -284,10 +290,24 @@ struct CoursePlaySession {
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
   std::vector<std::shared_ptr<bms_parser::Chart>> ownedResultBrowseCharts;
+  std::vector<std::unique_ptr<bms_parser::Chart>> preparedCourseCharts;
   std::vector<CourseReplayStageData> replayStages;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
   RulesetDescriptor rulesetDescriptor = RulesetDescriptor::Current();
   std::vector<std::optional<ScoreProvenance>> stageProvenance;
+  std::string modernCourseAttemptId;
+  std::int64_t modernCoursePlayedAtUnixMillis = 0;
+  std::vector<result_persistence::ModernCourseStageResult>
+      modernCourseStageResults;
+  std::vector<replay::CourseReplayStageCapture> modernCourseReplayStages;
+  std::optional<replay::CourseContinuationState> modernCourseContinuation;
+  std::optional<replay::CapturedCourseReplayAttempt> modernCourseAttempt;
+  std::optional<replay::CourseResultPersistenceOutcome>
+      modernCoursePersistenceOutcome;
+  std::string modernCourseDiagnostic;
+  std::vector<std::filesystem::path> modernCourseChartPaths;
+  bool modernCourseResultBrowsing = false;
+  bool modernCourseRetrySameAllowed = false;
   std::size_t currentIndex = 0;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
@@ -310,6 +330,7 @@ struct CoursePlaySession {
   bool courseReplaySaved = false;
   int savedCourseReplayId = 0;
   std::shared_ptr<CourseReplayData> courseReplayData = nullptr;
+  std::shared_ptr<CourseReplayData> courseRetrySameData = nullptr;
   std::optional<bool> replayTouchVisualizationEnabled;
   std::optional<bool> replayGhostRenderingEnabled;
 
@@ -320,8 +341,7 @@ struct CoursePlaySession {
   void snapshotRulesetFromReplay(const ReplayData &replay) {
     if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
       ruleset = GameplayRuleset::Beatoraja;
-      rulesetDescriptor =
-          RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+      rulesetDescriptor = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
       return;
     }
     rulesetDescriptor = replay.provenance.ruleset;
@@ -348,6 +368,26 @@ struct CoursePlaySession {
            index < courseReplayData->stages.size();
   }
 
+  [[nodiscard]] bool hasPreparedCourseChart(std::size_t index) const {
+    return index < preparedCourseCharts.size() &&
+           preparedCourseCharts[index] != nullptr;
+  }
+
+  [[nodiscard]] std::unique_ptr<bms_parser::Chart>
+  takePreparedCourseChart(std::size_t index) {
+    return hasPreparedCourseChart(index)
+               ? std::move(preparedCourseCharts[index])
+               : nullptr;
+  }
+
+  [[nodiscard]] const ReplayData *courseRetrySameStageSetup(
+      std::size_t index) const {
+    return courseRetrySameData != nullptr &&
+                   index < courseRetrySameData->stages.size()
+               ? &courseRetrySameData->stages[index].replay
+               : nullptr;
+  }
+
   [[nodiscard]] const CourseReplayStageData *
   courseReplayStage(std::size_t index) const {
     return hasCourseReplayStage(index) ? &courseReplayData->stages[index]
@@ -366,6 +406,33 @@ struct CoursePlaySession {
     playOptionSeed = replay.playOptionSeed;
     playOption2 = replay.playOption2;
     playOption2Seed = replay.playOption2Seed;
+  }
+
+  [[nodiscard]] const GaugeStateSnapshot *courseCarriedGauge() const {
+    if (modernCourseContinuation.has_value()) {
+      return &modernCourseContinuation->gauge;
+    }
+    return carriedGauge.has_value() ? &*carriedGauge : nullptr;
+  }
+
+  [[nodiscard]] int courseCarriedCombo() const {
+    return modernCourseContinuation.has_value()
+               ? modernCourseContinuation->combo
+               : carriedCombo;
+  }
+
+  [[nodiscard]] int courseMaximumCombo() const {
+    return modernCourseContinuation.has_value()
+               ? modernCourseContinuation->maximumCombo
+               : maxCombo;
+  }
+
+  void adoptModernCourseContinuation(
+      replay::CourseContinuationState continuation) {
+    carriedGauge = continuation.gauge;
+    carriedCombo = continuation.combo;
+    maxCombo = continuation.maximumCombo;
+    modernCourseContinuation = std::move(continuation);
   }
 
   CourseReplayStageData &ensureReplayStage(std::size_t index) {
@@ -415,6 +482,43 @@ struct CoursePlaySession {
     stageProvenance[index] = provenance;
   }
 
+  bool
+  recordModernCourseStage(result_persistence::ModernCourseStageResult result,
+                          replay::CourseReplayStageCapture replayCapture) {
+    if (result.stageIndex < 0 ||
+        static_cast<std::size_t>(result.stageIndex) != currentIndex ||
+        currentIndex >= entries.size()) {
+      return false;
+    }
+    if (modernCourseStageResults.size() > currentIndex) {
+      modernCourseStageResults[currentIndex] = std::move(result);
+      modernCourseReplayStages[currentIndex] = std::move(replayCapture);
+      modernCourseStageResults.resize(currentIndex + 1);
+      modernCourseReplayStages.resize(currentIndex + 1);
+    } else if (modernCourseStageResults.size() == currentIndex &&
+               modernCourseReplayStages.size() == currentIndex) {
+      modernCourseStageResults.push_back(std::move(result));
+      modernCourseReplayStages.push_back(std::move(replayCapture));
+    } else {
+      return false;
+    }
+    modernCourseAttempt.reset();
+    modernCoursePersistenceOutcome.reset();
+    modernCoursePlayedAtUnixMillis = 0;
+    return true;
+  }
+
+  void resetModernCourseAttempt() {
+    modernCourseAttemptId.clear();
+    modernCoursePlayedAtUnixMillis = 0;
+    modernCourseStageResults.clear();
+    modernCourseReplayStages.clear();
+    modernCourseContinuation.reset();
+    modernCourseAttempt.reset();
+    modernCoursePersistenceOutcome.reset();
+    modernCourseDiagnostic.clear();
+  }
+
   [[nodiscard]] ScoreProvenance aggregateProvenance() const {
     std::vector<ScoreProvenance> recordedStages;
     recordedStages.reserve(stageProvenance.size());
@@ -436,8 +540,37 @@ struct CoursePlaySession {
     return aggregate;
   }
 
-  void recordRestMicrosAfterCurrentStage(long long restMicros) {
+  bool recordRestMicrosAfterCurrentStage(long long restMicros) {
+    if (currentIndex < modernCourseReplayStages.size()) {
+      if (!modernCourseContinuation.has_value()) {
+        modernCourseReplayStages[currentIndex].playback.reset();
+        modernCourseAttempt.reset();
+        if (modernCourseDiagnostic.empty()) {
+          modernCourseDiagnostic =
+              "Course continuation is unavailable for the completed stage.";
+        }
+        return false;
+      }
+      auto updated = replay::recordCourseContinuationRest(
+          *modernCourseContinuation, currentIndex, restMicros);
+      if (!updated.advanced() || !updated.state.has_value()) {
+        modernCourseReplayStages[currentIndex].playback.reset();
+        modernCourseAttempt.reset();
+        modernCourseDiagnostic =
+            "Course rest exceeded the shared replay limit.";
+        return false;
+      }
+      adoptModernCourseContinuation(std::move(*updated.state));
+      modernCourseReplayStages[currentIndex].restMicrosAfterStage =
+          restMicros;
+      modernCourseAttempt.reset();
+      return true;
+    }
+
+    // Temporary legacy course adapters retain their historical non-negative
+    // presentation behavior until the Slice 7 cutover.
     ensureReplayStage(currentIndex).restMicrosAfterStage =
         std::max(0LL, restMicros);
+    return true;
   }
 };

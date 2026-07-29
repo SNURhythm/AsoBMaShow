@@ -3,6 +3,7 @@
 #if defined(__ANDROID__)
 
 #include "GyroscopeInputBackendCore.h"
+#include "InputLifecycle.h"
 
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_system.h>
@@ -238,17 +239,10 @@ public:
   }
 
   void handleSdlEvent(const SDL_Event &event) override {
-    switch (event.type) {
-    case SDL_APP_WILLENTERBACKGROUND:
-    case SDL_APP_DIDENTERBACKGROUND:
+    if (input::isBackgroundLifecycleEvent(event)) {
       setForeground(false);
-      break;
-    case SDL_APP_WILLENTERFOREGROUND:
-    case SDL_APP_DIDENTERFOREGROUND:
+    } else if (input::isForegroundLifecycleEvent(event)) {
       setForeground(true);
-      break;
-    default:
-      break;
     }
   }
 

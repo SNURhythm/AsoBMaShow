@@ -2,6 +2,7 @@
 
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
+#include "../../ResultContracts.h"
 #include "../../repositories/ScoreRepository.h"
 #include "RhythmState.h"
 
@@ -252,7 +253,8 @@ inline Target targetFromBestSnapshot(const bms_parser::ChartMeta &meta,
                                      const ReplayData *replay = nullptr) {
   (void)replay;
   const int totalNotes = std::max(0, meta.TotalNotes);
-  const int fallbackMaxScore = totalNotes * 2;
+  const int fallbackMaxScore =
+      result_contract::maximumScoreForNotes(totalNotes).value_or(0);
   Target target;
   target.enabled = totalNotes > 0 && best.score > 0;
   target.label = "BEST";
@@ -307,7 +309,8 @@ gradeTargetFraction(const std::string &targetId) {
 inline Target targetFromGrade(const bms_parser::ChartMeta &meta,
                               const std::string &targetId) {
   const int totalNotes = std::max(0, meta.TotalNotes);
-  const int maxScore = totalNotes * 2;
+  const auto maximumScore = result_contract::maximumScoreForNotes(totalNotes);
+  const int maxScore = maximumScore.value_or(0);
   Target target;
   const std::string normalized = normalizeTargetId(targetId);
   target.label = displayTargetLabel(normalized);
@@ -315,7 +318,7 @@ inline Target targetFromGrade(const bms_parser::ChartMeta &meta,
   target.totalNotes = totalNotes;
   const std::optional<RateTargetFraction> fraction =
       gradeTargetFraction(normalized);
-  target.enabled = totalNotes > 0 && fraction.has_value();
+  target.enabled = totalNotes > 0 && maximumScore && fraction.has_value();
   if (target.enabled) {
     target.finalScore = static_cast<int>(
         std::ceil(static_cast<double>(maxScore) *

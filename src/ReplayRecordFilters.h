@@ -53,8 +53,8 @@ inline int clearMarkBucket(int clearTypeRank) {
   return kClearTypeFailedRank;
 }
 
-inline std::string normalizedPlayOptionForFilter(
-    const std::optional<std::string> &option) {
+inline std::string
+normalizedPlayOptionForFilter(const std::optional<std::string> &option) {
   return option.has_value() ? play_options::normalizePlayOption(*option)
                             : "NORMAL";
 }
@@ -64,7 +64,8 @@ inline bool matchesPlayOption(const ReplaySummary &summary,
   const std::string normalizedFilter =
       play_options::normalizePlayOption(filterOption);
   const std::string option = normalizedPlayOptionForFilter(summary.playOption);
-  const std::string option2 = normalizedPlayOptionForFilter(summary.playOption2);
+  const std::string option2 =
+      normalizedPlayOptionForFilter(summary.playOption2);
   if (normalizedFilter == "NORMAL") {
     return play_options::isNormalPlayOption(option) &&
            play_options::isNormalPlayOption(option2);
@@ -172,20 +173,30 @@ inline bool hasActiveCriteria(const ReplayRecordFilters &filters) {
 
 inline bool matchesPlayOption(const ResultRecordSummary &summary,
                               const std::string &filterOption) {
-  if (summary.local.has_value()) {
-    return matchesPlayOption(*summary.local, filterOption);
+  if (summary.autoPlayReplay.has_value()) {
+    return matchesPlayOption(*summary.autoPlayReplay, filterOption);
   }
   if (!summary.playOption.has_value()) {
     return false;
   }
-  return play_options::normalizePlayOption(*summary.playOption) ==
-         play_options::normalizePlayOption(filterOption);
+  const std::string normalizedFilter =
+      play_options::normalizePlayOption(filterOption);
+  const std::string option =
+      normalizedPlayOptionForFilter(summary.playOption);
+  const std::string option2 =
+      normalizedPlayOptionForFilter(summary.playOption2);
+  if (normalizedFilter == "NORMAL") {
+    return play_options::isNormalPlayOption(option) &&
+           play_options::isNormalPlayOption(option2);
+  }
+  return option == normalizedFilter || option2 == normalizedFilter;
 }
 
 inline bool matches(const ResultRecordSummary &summary,
                     const ReplayRecordFilters &filters) {
   if (filters.clearMarkRank.has_value() &&
-      clearMarkBucket(summary.clearRank) != *filters.clearMarkRank) {
+      (!summary.clearRankAvailable ||
+       clearMarkBucket(summary.clearRank) != *filters.clearMarkRank)) {
     return false;
   }
   if (filters.playOption.has_value() &&
@@ -193,7 +204,8 @@ inline bool matches(const ResultRecordSummary &summary,
     return false;
   }
   if (filters.scoreRank.has_value() &&
-      (summary.maxScore <= 0 ||
+      (!summary.scoreAvailable || !summary.maxScoreAvailable ||
+       summary.maxScore <= 0 ||
        score_rank::labelForScore(summary.score, summary.maxScore) !=
            *filters.scoreRank)) {
     return false;
@@ -201,11 +213,12 @@ inline bool matches(const ResultRecordSummary &summary,
   return true;
 }
 
-inline bool supportsScoreRankFilter(
-    const std::vector<ResultRecordSummary> &summaries) {
+inline bool
+supportsScoreRankFilter(const std::vector<ResultRecordSummary> &summaries) {
   return std::any_of(summaries.begin(), summaries.end(),
                      [](const ResultRecordSummary &summary) {
-                       return summary.maxScore > 0;
+                       return summary.scoreAvailable &&
+                              summary.maxScoreAvailable && summary.maxScore > 0;
                      });
 }
 
@@ -234,10 +247,16 @@ apply(const std::vector<ResultRecordSummary> &summaries,
         }
         switch (effectiveFilters.sort) {
         case ReplayRecordSortCriterion::ClearMark:
-          if (a.clearRank != b.clearRank) {
+          if (a.clearRankAvailable != b.clearRankAvailable) {
+            return a.clearRankAvailable;
+          }
+          if (a.clearRankAvailable && a.clearRank != b.clearRank) {
             return a.clearRank > b.clearRank;
           }
-          if (a.score != b.score) {
+          if (a.scoreAvailable != b.scoreAvailable) {
+            return a.scoreAvailable;
+          }
+          if (a.scoreAvailable && a.score != b.score) {
             return a.score > b.score;
           }
           if (a.maxCombo != b.maxCombo) {
@@ -245,10 +264,16 @@ apply(const std::vector<ResultRecordSummary> &summaries,
           }
           break;
         case ReplayRecordSortCriterion::Score:
-          if (a.score != b.score) {
+          if (a.scoreAvailable != b.scoreAvailable) {
+            return a.scoreAvailable;
+          }
+          if (a.scoreAvailable && a.score != b.score) {
             return a.score > b.score;
           }
-          if (a.clearRank != b.clearRank) {
+          if (a.clearRankAvailable != b.clearRankAvailable) {
+            return a.clearRankAvailable;
+          }
+          if (a.clearRankAvailable && a.clearRank != b.clearRank) {
             return a.clearRank > b.clearRank;
           }
           if (a.maxCombo != b.maxCombo) {
@@ -259,10 +284,16 @@ apply(const std::vector<ResultRecordSummary> &summaries,
           if (a.maxCombo != b.maxCombo) {
             return a.maxCombo > b.maxCombo;
           }
-          if (a.score != b.score) {
+          if (a.scoreAvailable != b.scoreAvailable) {
+            return a.scoreAvailable;
+          }
+          if (a.scoreAvailable && a.score != b.score) {
             return a.score > b.score;
           }
-          if (a.clearRank != b.clearRank) {
+          if (a.clearRankAvailable != b.clearRankAvailable) {
+            return a.clearRankAvailable;
+          }
+          if (a.clearRankAvailable && a.clearRank != b.clearRank) {
             return a.clearRank > b.clearRank;
           }
           break;
@@ -274,11 +305,6 @@ apply(const std::vector<ResultRecordSummary> &summaries,
         }
         if (a.displayedTimeUnixMillis != b.displayedTimeUnixMillis) {
           return a.displayedTimeUnixMillis > b.displayedTimeUnixMillis;
-        }
-        const auto aReplayId = a.localReplayId();
-        const auto bReplayId = b.localReplayId();
-        if (aReplayId.has_value() && bReplayId.has_value()) {
-          return *aReplayId > *bReplayId;
         }
         return a.stableKey() < b.stableKey();
       });

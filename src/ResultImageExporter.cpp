@@ -831,13 +831,17 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   std::optional<ResultPreviousBestData> previousBest =
       result_presentation::previousBestForReplayChart(
           context.scoreRepository, chart.Meta, replay);
+  const std::string target =
+      pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
+                              : pacemakerTarget;
+  std::atomic_bool bestReplayCancelled = false;
+  std::shared_ptr<ReplayData> bestReplay;
   std::optional<ResultPacemakerData> pacemaker;
   if (!replay.autoPlay) {
-    const std::string target =
-        pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
-                                : pacemakerTarget;
+    bestReplay = result_presentation::replayForPreviousBestChart(
+        context, chart.Meta, previousBest, target, bestReplayCancelled);
     pacemaker = result_presentation::pacemakerDataForReplayResult(
-        context.replayRepository, chart, state, replay, target, previousBest);
+        chart, state, replay, target, previousBest, bestReplay.get());
   }
   std::string difficultyLabel =
       result_presentation::difficultyLabelForChart(context.chartRepository,

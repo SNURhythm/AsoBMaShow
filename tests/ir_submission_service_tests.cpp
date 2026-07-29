@@ -536,72 +536,54 @@ profile(bool enabled = true, bool autoSubmit = true,
   return result;
 }
 
-result_persistence::ChartResultAttempt
-canonicalAttempt(const ir::IrOutboxDraft &outboxDraft,
-                 const std::filesystem::path &root) {
-  ReplayData replay;
-  replay.chartMeta.BmsPath =
+result_persistence::ModernChartResult
+canonicalModernResult(const ir::IrOutboxDraft &outboxDraft,
+                      const std::filesystem::path &root) {
+  bms_parser::ChartMeta chartMeta;
+  chartMeta.BmsPath =
       root / "BMS" / (outboxDraft.attemptId + ".bms");
-  replay.chartMeta.MD5 = outboxDraft.chartMd5;
-  replay.chartMeta.SHA256 = outboxDraft.chartSha256;
-  replay.chartMeta.Title = "IR service fixture";
-  replay.chartMeta.Artist = "Test";
-  replay.chartMeta.Rank = 2;
-  replay.chartMeta.TotalNotes = 50;
-  replay.chartMeta.TotalLongNotes = 1;
-  replay.chartMeta.LnMode = 2;
-  replay.initialGaugeType = GaugeType::Hard;
-  replay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
-  replay.finalScore = 91;
-  replay.maxCombo = 45;
-  replay.finalGauge = 82.5f;
-  replay.clearType = kClearTypeHardClearRank;
-  replay.playOption = "RANDOM";
-  replay.playOptionSeed = 1234;
-  replay.events.push_back({.action = ReplayEventAction::Press,
-                           .lane = 3,
-                           .noteTimeMicros = 100'000,
-                           .songTimeMicros = 100'100,
-                           .judgeTimeMicros = 100'050,
-                           .judgement = PGreat,
-                           .diffMicros = -50,
-                           .gauge = 82.5f,
-                           .gaugeType = GaugeType::Hard,
-                           .combo = 1,
-                           .score = 2});
+  chartMeta.MD5 = outboxDraft.chartMd5;
+  chartMeta.SHA256 = outboxDraft.chartSha256;
+  chartMeta.Title = "IR service fixture";
+  chartMeta.Artist = "Test";
+  chartMeta.Rank = 2;
+  chartMeta.TotalNotes = 50;
+  chartMeta.TotalLongNotes = 1;
+  chartMeta.LnMode = 2;
+  chartMeta.KeyMode = 7;
 
   ScoreProvenanceBuildInput provenanceInput;
-  provenanceInput.chartMeta = replay.chartMeta;
-  provenanceInput.longNoteMode = replay.chartMeta.LnMode;
+  provenanceInput.chartMeta = chartMeta;
+  provenanceInput.longNoteMode = chartMeta.LnMode;
   provenanceInput.judgeRankSource = JudgeRankSource::Chart;
-  provenanceInput.sourceJudgeRank = replay.chartMeta.Rank;
+  provenanceInput.sourceJudgeRank = chartMeta.Rank;
   provenanceInput.effectiveJudgeWindows = {
       {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
       {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
       {Kpoor, {-1'000'000, 0}},
   };
-  provenanceInput.totalNotes = replay.chartMeta.TotalNotes;
+  provenanceInput.totalNotes = chartMeta.TotalNotes;
   provenanceInput.effectiveGaugeTotal = 176.0;
   provenanceInput.candidateSelection = gameplay::CandidateSelectionMode::LR2;
-  provenanceInput.gaugeType = replay.initialGaugeType;
-  provenanceInput.gaugeAutoShift = replay.gaugeAutoShift;
+  provenanceInput.gaugeType = GaugeType::Hard;
+  provenanceInput.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   provenanceInput.player1 = {.option = "RANDOM", .seed = 1234};
   provenanceInput.inputDevices = {InputDeviceCategory::Keyboard};
   provenanceInput.ruleset = RulesetDescriptor::Current();
-  replay.provenance = makeScoreProvenance(provenanceInput);
-  replay.provenance.eligibility = ScoreEligibility::Verified;
+  auto provenance = makeScoreProvenance(provenanceInput);
+  provenance.eligibility = ScoreEligibility::Verified;
 
   result_persistence::ChartScoreWrite score{
       .chartPath = Utils::GetStoragePathUtf8RelativeToDocuments(
-          replay.chartMeta.BmsPath, "BMS/"),
+          chartMeta.BmsPath, "BMS/"),
       .chartMd5 = outboxDraft.chartMd5,
       .chartSha256 = outboxDraft.chartSha256,
-      .chartTitle = replay.chartMeta.Title,
-      .chartArtist = replay.chartMeta.Artist,
-      .longNoteMode = replay.chartMeta.LnMode,
-      .score = replay.finalScore,
-      .maxScore = replay.chartMeta.TotalNotes * 2,
-      .maxCombo = replay.maxCombo,
+      .chartTitle = chartMeta.Title,
+      .chartArtist = chartMeta.Artist,
+      .longNoteMode = chartMeta.LnMode,
+      .score = 91,
+      .maxScore = chartMeta.TotalNotes * 2,
+      .maxCombo = 45,
       .comboBreak = 5,
       .pGreat = 40,
       .great = 11,
@@ -611,17 +593,20 @@ canonicalAttempt(const ir::IrOutboxDraft &outboxDraft,
       .kPoor = 4,
       .fast = 7,
       .slow = 8,
-      .finalGauge = replay.finalGauge,
-      .clearType = replay.clearType,
-      .provenance = replay.provenance,
+      .finalGauge = 82.5F,
+      .clearType = kClearTypeHardClearRank,
+      .provenance = std::move(provenance),
   };
-  return {
+  result_persistence::ModernChartResult result{
       .attemptId = outboxDraft.attemptId,
-      .replay = replay,
-      .score = score,
-      .payloadFingerprint =
-          result_persistence::payloadFingerprint(replay, score),
+      .score = std::move(score),
+      .keyMode = chartMeta.KeyMode,
+      .adoptedGaugeType = GaugeType::Hard,
+      .adoptedGaugeHistory = {82.5F},
+      .playedAtUnixMillis = outboxDraft.createdAtUnixMillis,
   };
+  result.resultFingerprint = result_persistence::modernResultFingerprint(result);
+  return result;
 }
 
 class Harness {
@@ -722,6 +707,18 @@ public:
           }
           return true;
         };
+    options.reconciliationCandidateLoader =
+        [this](std::string_view providerId, std::string_view serverOrigin,
+               std::optional<int> beforeModernChartResultId,
+               std::size_t limit, std::stop_token requestToken) {
+          if (reconciliationCandidateLoader) {
+            return reconciliationCandidateLoader(
+                providerId, serverOrigin, beforeModernChartResultId, limit,
+                requestToken);
+          }
+          return repository.LoadIrReconciliationCandidates(
+              providerId, serverOrigin, beforeModernChartResultId, limit);
+        };
     service = std::make_unique<ir::IrSubmissionService>(
         repository, registry, http, std::move(options));
   }
@@ -744,17 +741,22 @@ public:
 
   ir::IrOutboxInsertOutcome enqueueReady(const ir::IrOutboxDraft &value,
                                          bool userIntent) {
-    const auto attempt = canonicalAttempt(value, temp.path());
-    const auto staged = repository.StageChartResult(attempt, {});
-    if (staged.status != result_persistence::StageStatus::Staged &&
-        staged.status != result_persistence::StageStatus::AlreadyStaged) {
-      std::cerr << "FAIL: canonical replay staging: " << staged.diagnostic
+    const auto result = canonicalModernResult(value, temp.path());
+    std::string snapshotDiagnostic;
+    const auto snapshot =
+        ir::captureIrSubmissionSnapshot(result, snapshotDiagnostic);
+    expect(snapshot.has_value(), "service fixture captures a modern IR snapshot");
+    const auto staged = repository.StageModernChartResult(
+        result, snapshot, std::nullopt);
+    if (staged.status != ModernChartStageStatus::Staged &&
+        staged.status != ModernChartStageStatus::AlreadyStaged) {
+      std::cerr << "FAIL: canonical modern result staging: "
+                << staged.diagnostic
                 << '\n';
     }
-    expect(staged.status == result_persistence::StageStatus::Staged ||
-               staged.status ==
-                   result_persistence::StageStatus::AlreadyStaged,
-           "service fixture stores a canonical replay attempt");
+    expect(staged.status == ModernChartStageStatus::Staged ||
+               staged.status == ModernChartStageStatus::AlreadyStaged,
+           "service fixture stores a canonical modern result");
     return repository.EnqueueReadyIrOutboxDraft(value, userIntent);
   }
 
@@ -851,6 +853,10 @@ public:
   std::int64_t projectedGeneration = 0;
   std::vector<std::string> projectedScoreIds;
   bool projectionSawCommittedMirror = false;
+  std::function<ir::IrReconciliationReadOutcome(
+      std::string_view, std::string_view, std::optional<int>, std::size_t,
+      std::stop_token)>
+      reconciliationCandidateLoader;
   std::unique_ptr<ir::IrSubmissionService> service;
 };
 
@@ -1324,10 +1330,16 @@ void testTachiMalformedLaterRowDoesNotDiscardOrStarveValidWork() {
       tachiDraft(229, now), tachiDraft(230, now), tachiDraft(231, now)};
   drafts[1].rulesetProof.validationFingerprint = std::string(64, 'e');
   for (const auto &value : drafts) {
-    const auto staged = repository.StageChartResult(
-        canonicalAttempt(value, temp.path()), {});
-    expect(staged.status == result_persistence::StageStatus::Staged,
-           "Tachi service integration stages a canonical attempt");
+    const auto result = canonicalModernResult(value, temp.path());
+    std::string snapshotDiagnostic;
+    const auto snapshot =
+        ir::captureIrSubmissionSnapshot(result, snapshotDiagnostic);
+    expect(snapshot.has_value(),
+           "Tachi service integration captures a modern IR snapshot");
+    const auto staged = repository.StageModernChartResult(
+        result, snapshot, std::nullopt);
+    expect(staged.status == ModernChartStageStatus::Staged,
+           "Tachi service integration stages a canonical modern result");
     expect(repository.EnqueueReadyIrOutboxDraft(value, false).entry.has_value(),
            "Tachi service integration enqueues its outbox row");
   }
@@ -2591,6 +2603,72 @@ void testPauseCancelsAQueuedReconciliationBeforeAnyApply() {
          "paused queued reconciliation performs no fetch or repository apply");
 }
 
+void testPauseCancelsReconciliationBetweenLocalCandidatePages() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+
+  std::mutex pageMutex;
+  std::condition_variable_any pageChanged;
+  bool firstPageEntered = false;
+  int pageCalls = 0;
+  std::size_t observedLimit = 0;
+  harness.reconciliationCandidateLoader =
+      [&](std::string_view, std::string_view,
+          std::optional<int> beforeModernChartResultId, std::size_t limit,
+          std::stop_token token) {
+        std::unique_lock lock(pageMutex);
+        ++pageCalls;
+        observedLimit = limit;
+        if (!beforeModernChartResultId) {
+          firstPageEntered = true;
+          pageChanged.notify_all();
+          pageChanged.wait(lock, token,
+                           [&] { return token.stop_requested(); });
+          return ir::IrReconciliationReadOutcome{
+              .status = ir::IrReconciliationReadOutcome::Status::Loaded,
+              .nextBeforeModernChartResultId = 500};
+        }
+        return ir::IrReconciliationReadOutcome{
+            .status = ir::IrReconciliationReadOutcome::Status::Loaded};
+      };
+
+  harness.driver->releaseReconciliationStage(2);
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted,
+         "multi-page cancellation fixture starts reconciliation");
+  bool reachedFirstPage = false;
+  {
+    std::unique_lock lock(pageMutex);
+    reachedFirstPage = pageChanged.wait_for(
+        lock, 3s, [&] { return firstPageEntered; });
+  }
+  harness.service->pauseAndCancel();
+
+  int completedPageCalls = 0;
+  std::size_t completedObservedLimit = 0;
+  {
+    std::lock_guard lock(pageMutex);
+    completedPageCalls = pageCalls;
+    completedObservedLimit = observedLimit;
+  }
+  const auto status = harness.service->reconciliationStatus("fake");
+  const auto mirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://boku.tachi.ac");
+  expect(reachedFirstPage && completedPageCalls == 1 &&
+             completedObservedLimit == ir::kDefaultIrUploadSourcePageRows &&
+             status.phase == ir::IrReconciliationPhase::Failed &&
+             mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             mirror.scores.empty(),
+         "pause stops paged local reconciliation before a second read or "
+         "snapshot apply");
+}
+
 void testReconciliationCoalescesAndSerializesNewOutboxDelivery() {
   Harness harness({.readOnly = false,
                    .chartRankings = false,
@@ -2877,12 +2955,18 @@ void testProjectionFailureKeepsReceiptsAndOutboxRetryable() {
                    .deferredSubmission = true,
                    .scoreReconciliation = true});
   harness.setCredential("record-sync-key");
-  const auto local = harness.enqueueReady(draft(38, harness.now.load()), false);
+  const auto local =
+      harness.enqueueReady(draft(38, harness.now.load() + 60'000), false);
   expect(local.entry.has_value(),
          "projection-failure fixture stores pending upload work");
   if (!local.entry) {
     return;
   }
+  expect(harness.repository
+                 .RetryIrOutbox(local.entry->id,
+                                harness.now.load() + 60'000)
+                 .status == ir::IrOutboxMutationStatus::Updated,
+         "projection-failure fixture defers competing delivery work");
   harness.projectionShouldSucceed = false;
   harness.driver->pushReconciliation({
       .status = ir::IrUserScoreSnapshotStatus::Succeeded,
@@ -2910,10 +2994,12 @@ void testProjectionFailureKeepsReceiptsAndOutboxRetryable() {
              mirror.scores.front().remoteScoreId ==
                  "projection-failure-score",
          "projection failure leaves the durable mirror available for retry");
-  expect(receipt.status == ir::IrReceiptReadStatus::NotFound &&
-             outbox.status == ir::IrOutboxReadStatus::Found &&
-             outbox.entry && outbox.entry->id == local.entry->id,
-         "projection failure leaves receipts absent and upload work retryable");
+  expect(receipt.status == ir::IrReceiptReadStatus::NotFound,
+         "projection failure leaves receipts absent");
+  expect(outbox.status == ir::IrOutboxReadStatus::Found && outbox.entry,
+         "projection failure leaves upload work retryable");
+  expect(outbox.entry && outbox.entry->id == local.entry->id,
+         "projection failure preserves the original upload-work identity");
   std::lock_guard lock(harness.projectionMutex);
   expect(harness.projectionCalls == 1 &&
              harness.projectionSawCommittedMirror,
@@ -3238,6 +3324,7 @@ int main() {
   testReconciliationPublishesEverySuccessfulWorkerPhase();
   testQueuedReconciliationRejectsAChangedCredentialGeneration();
   testPauseCancelsAQueuedReconciliationBeforeAnyApply();
+  testPauseCancelsReconciliationBetweenLocalCandidatePages();
   testReconciliationCoalescesAndSerializesNewOutboxDelivery();
   testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure();
   testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();

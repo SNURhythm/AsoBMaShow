@@ -6,6 +6,7 @@
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeSession.h"
 #include "Pacemaker.h"
+#include "GameplayCandidateSelection.h"
 #include "GameplayRulesetPolicy.h"
 
 #include <algorithm>
@@ -78,6 +79,7 @@ struct StartOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  bool doublePlayFlip = false;
   int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
   std::string pacemakerTarget = pacemaker::kTargetBest;
@@ -269,6 +271,7 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
   options.gaugeProfile = replay.provenance.gaugeProfile;
   options.gaugeAutoShift = replay.provenance.gaugeAutoShift;
   options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
+  options.doublePlayFlip = replay.provenance.doublePlayFlip;
   if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
     options.ruleset = GameplayRuleset::Beatoraja;
     options.requiredRulesetDescriptor =
@@ -283,21 +286,6 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
     options.replayRulesetOverride =
         play_start_detail::replayJudgeOverrideForChart(replay.provenance,
                                                        replay.chartMeta);
-  }
-}
-
-[[nodiscard]] inline gameplay::CandidateSelectionMode
-candidateSelectionForNotePriority(AppSettings::NotePriorityMode mode) {
-  switch (mode) {
-  case AppSettings::NotePriorityMode::Combo:
-    return gameplay::CandidateSelectionMode::Combo;
-  case AppSettings::NotePriorityMode::Duration:
-    return gameplay::CandidateSelectionMode::Duration;
-  case AppSettings::NotePriorityMode::Score:
-    return gameplay::CandidateSelectionMode::Score;
-  case AppSettings::NotePriorityMode::Lowest:
-  default:
-    return gameplay::CandidateSelectionMode::Lowest;
   }
 }
 
@@ -398,6 +386,7 @@ enforceCoursePlaybackRules(StartOptions options) {
                    .seed = options.playOptionSeed};
   input.player2 = {.option = options.playOption2.value_or("NORMAL"),
                    .seed = options.playOption2Seed};
+  input.doublePlayFlip = options.doublePlayFlip;
   input.assistOption = options.assistOption;
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;
@@ -445,6 +434,7 @@ enforceCoursePlaybackRules(StartOptions options) {
                    .seed = options.playOptionSeed};
   input.player2 = {.option = options.playOption2.value_or("NORMAL"),
                    .seed = options.playOption2Seed};
+  input.doublePlayFlip = options.doublePlayFlip;
   input.assistOption = options.assistOption;
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;
@@ -489,5 +479,17 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.assistOption = stageReplay->assistOption;
     applyReplayProvenanceToStartOptions(options, *stageReplay);
   }
+  return enforceCoursePlaybackRules(std::move(options));
+}
+
+inline StartOptions makeCourseRetrySameStageStartOptions(
+    const std::shared_ptr<CoursePlaySession> &session,
+    const ReplayData &validatedSetup) {
+  auto options = makeCourseReplayStageStartOptions(
+      session, std::make_shared<ReplayData>(validatedSetup));
+  options.replayData.reset();
+  options.autoKeySound = session != nullptr && session->autoKeySound;
+  options.touchVisualizationEnabled.reset();
+  options.replayGhostRenderingEnabled.reset();
   return enforceCoursePlaybackRules(std::move(options));
 }

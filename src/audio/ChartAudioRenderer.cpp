@@ -4,6 +4,7 @@
 #include "../ChartPlaybackDuration.h"
 #include "../Utils.h"
 #include "../path.h"
+#include "../scene/play/ReplayKeysoundSchedule.h"
 #include "ChartAssetExtensions.h"
 #include "ClubBeat.h"
 #include "PrepMetronomeSound.h"
@@ -92,10 +93,6 @@ void logMessage(const RenderOptions &options, const std::string &message) {
     return;
   }
   SDL_Log("%s", message.c_str());
-}
-
-std::string replayNoteKey(int lane, long long noteTimeMicros) {
-  return std::to_string(lane) + ":" + std::to_string(noteTimeMicros);
 }
 
 std::optional<std::filesystem::path>
@@ -220,34 +217,6 @@ bool readArchiveAudioBatch(const ArchiveAudioBatch &batch,
   }
   return archive_file::readArchiveEntries(batch.archivePath, batch.innerPaths,
                                           files, errorMessage, pauseCallback);
-}
-
-std::unordered_map<std::string, const bms_parser::Note *>
-buildReplayNoteLookup(const bms_parser::Chart &chart) {
-  std::unordered_map<std::string, const bms_parser::Note *> lookup;
-  for (const auto *measure : chart.Measures) {
-    if (measure == nullptr) {
-      continue;
-    }
-    for (const auto *timeline : measure->TimeLines) {
-      if (timeline == nullptr) {
-        continue;
-      }
-      for (const auto *note : timeline->Notes) {
-        if (note == nullptr) {
-          continue;
-        }
-        lookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
-      }
-      for (const auto *note : timeline->LandmineNotes) {
-        if (note == nullptr) {
-          continue;
-        }
-        lookup[replayNoteKey(note->Lane, timeline->Timing)] = note;
-      }
-    }
-  }
-  return lookup;
 }
 
 bool decodedSoundIsValid(const DecodedSound &decoded) {
@@ -632,20 +601,13 @@ CollectReplayTimedAudioEvents(const bms_parser::Chart &chart,
                               long long keySoundOffsetMicros) {
   std::vector<AudioEvent> events = CollectBackgroundAudioEvents(chart);
 
-  const auto replayNotes = buildReplayNoteLookup(chart);
-  for (const auto &event : replay.events) {
-    if (event.action != ReplayEventAction::Press || event.noteTimeMicros < 0) {
-      continue;
-    }
-    const auto noteIt =
-        replayNotes.find(replayNoteKey(event.lane, event.noteTimeMicros));
-    if (noteIt == replayNotes.end() ||
-        noteIt->second->Wav == bms_parser::Parser::NoWav) {
-      continue;
-    }
-    events.push_back({replayEventRawTimeMicros(event.songTimeMicros,
+  const auto definition = gameplay::buildGameplayDefinition(
+      chart, replay.chartMeta.LnMode);
+  for (const auto &keysound :
+       resolveReplayKeysounds(definition, replay.events, std::nullopt)) {
+    events.push_back({replayEventRawTimeMicros(keysound.songTimeMicros,
                                               keySoundOffsetMicros),
-                      noteIt->second->Wav});
+                      keysound.wav});
   }
 
   std::sort(events.begin(), events.end(), [](const auto &a, const auto &b) {

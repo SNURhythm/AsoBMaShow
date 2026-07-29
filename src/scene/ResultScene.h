@@ -1,6 +1,8 @@
 #pragma once
+#include "../CanonicalDigest.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
+#include "../replay/ChartReplayPersistence.h"
 #include "../ir/IrSubmission.h"
 #include "../ir/IrResultPresentation.h"
 #include "../ir/IrRankingModal.h"
@@ -67,10 +69,44 @@ struct ResultCourseOptions {
 };
 
 struct ResultPersistenceOptions {
-  std::shared_ptr<const result_persistence::ChartResultAttempt> attempt;
+  std::shared_ptr<const replay::ChartReplayPersistenceAttempt> chartAttempt;
+  std::optional<replay::ChartReplayPersistenceOutcome> chartOutcome;
   std::shared_ptr<const ir::IrSubmission> irSubmission;
   result_persistence::SaveOutcome outcome;
 };
+
+[[nodiscard]] inline result_persistence::SaveOutcome
+chartResultPersistencePresentation(
+    const replay::ChartReplayPersistenceOutcome &outcome) {
+  result_persistence::SaveState state = result_persistence::SaveState::Unstaged;
+  switch (outcome.state) {
+  case replay::ChartReplayPersistenceState::SavedWithReplay:
+  case replay::ChartReplayPersistenceState::SavedWithoutReplay:
+    state = result_persistence::SaveState::Saved;
+    break;
+  case replay::ChartReplayPersistenceState::PendingScore:
+    state = result_persistence::SaveState::PendingScore;
+    break;
+  case replay::ChartReplayPersistenceState::PendingAcknowledgement:
+    state = result_persistence::SaveState::PendingAcknowledgement;
+    break;
+  case replay::ChartReplayPersistenceState::Retryable:
+    state = result_persistence::SaveState::Unstaged;
+    break;
+  case replay::ChartReplayPersistenceState::InvalidAttempt:
+    state = result_persistence::SaveState::InvalidAttempt;
+    break;
+  case replay::ChartReplayPersistenceState::IntegrityConflict:
+    state = outcome.durable() ? result_persistence::SaveState::PendingConflict
+                              : result_persistence::SaveState::UnstagedConflict;
+    break;
+  }
+  return {
+      .state = state,
+      .userMessage = std::string(result_persistence::saveStateUserMessage(state)),
+      .diagnostic = outcome.diagnostic,
+  };
+}
 
 struct ResultRemoteOptions {
   ir::IrRemoteScore score;
@@ -102,17 +138,6 @@ remoteResultSceneActions(bool rankingsAvailable) noexcept {
           .readOnlyIrUploaded = true};
 }
 
-namespace result_scene_detail {
-[[nodiscard]] inline bool isLowerHexDigest(std::string_view value,
-                                           std::size_t size) noexcept {
-  return value.size() == size &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-} // namespace result_scene_detail
-
 [[nodiscard]] inline std::optional<ir::IrChartQuery>
 makeRemoteResultRankingQuery(const ir::IrRemoteScore &score) noexcept {
   try {
@@ -120,9 +145,9 @@ makeRemoteResultRankingQuery(const ir::IrRemoteScore &score) noexcept {
     if (!ir::validateIrRemoteScore(score, diagnostic) ||
         (score.game != "bms-7k" && score.game != "bms-14k") ||
         score.noteCount <= 0 ||
-        !result_scene_detail::isLowerHexDigest(score.chartSha256, 64) ||
+        !canonical_digest::isCanonicalLowerHex(score.chartSha256, 64) ||
         (!score.chartMd5.empty() &&
-         !result_scene_detail::isLowerHexDigest(score.chartMd5, 32))) {
+         !canonical_digest::isCanonicalLowerHex(score.chartMd5, 32))) {
       return std::nullopt;
     }
     return ir::IrChartQuery{
@@ -151,6 +176,7 @@ struct LocalResultSource {
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
   std::optional<ResultPacemakerData> pacemakerOverride;
+  std::optional<std::string> modernReplayAttemptId;
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;
@@ -159,6 +185,7 @@ struct LocalResultSource {
   std::optional<int> currentClearRankOverride;
   ResultPresentationModel presentation;
   bool replayResult = false;
+  bool retrySameAllowed = true;
   bool autoPlayResult = false;
   bool previousBestLoaded = false;
   bool persistenceContinueChosen = false;
@@ -222,7 +249,9 @@ public:
       std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart = nullptr,
       bms_parser::Chart *reusableRetryChart = nullptr,
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
-      const ReplayData *analyticsSource = nullptr);
+      const ReplayData *analyticsSource = nullptr,
+      std::optional<std::string> modernReplayAttemptId = std::nullopt,
+      bool retrySameAllowed = true);
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override = default;
 
@@ -234,12 +263,10 @@ public:
 private:
   void loadDifficultyLabel();
   void loadPreviousBest();
-  void saveCourseScore();
-  void saveCourseReplay();
+  bool persistModernCourseResult();
   void addResultPersistenceStatus();
   void retryResultPersistence();
   void continueWithoutSaving();
-  void applyResultPersistenceReceipt();
   void updateResultPersistencePresentation();
   void addIrResultStatus();
   void updateIrResultPresentation(bool force = false);
@@ -258,13 +285,16 @@ private:
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();
-  void recordCourseStageRestTime();
+  [[nodiscard]] bool recordCourseStageRestTime();
   void startRetry(bool samePattern);
   void startReplay();
   void practiceThisSection();
   void updatePracticeSectionAction();
   void startCourseReplay();
   void startCourseReplayStage(std::shared_ptr<CoursePlaySession> session);
+  void startModernCourseRetrySame();
+  void startModernCourseRetrySameStage(
+      std::shared_ptr<CoursePlaySession> session);
   void continueCourse();
   void showSavedCourseStage();
   void showCourseResult();

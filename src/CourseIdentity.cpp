@@ -1,6 +1,7 @@
 #include "CourseIdentity.h"
 
 #include "BmsMetadataText.h"
+#include "CanonicalDigest.h"
 #include "CourseConstraintUtils.h"
 #include "FileChecksum.h"
 
@@ -21,21 +22,16 @@ struct NormalizedChartIdentity {
   std::string md5;
 };
 
-bool isHexDigest(std::string_view value, std::size_t expectedLength) {
-  return value.size() == expectedLength &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
-}
-
 std::optional<NormalizedChartIdentity>
 normalizeChartIdentity(const ChartIdentity &chart) {
   NormalizedChartIdentity normalized{
       .sha256 = normalizedHash(chart.sha256),
       .md5 = normalizedHash(chart.md5),
   };
-  if ((!chart.sha256.empty() && !isHexDigest(normalized.sha256, 64)) ||
-      (!chart.md5.empty() && !isHexDigest(normalized.md5, 32)) ||
+  if ((!chart.sha256.empty() &&
+       !canonical_digest::isCanonicalLowerHex(normalized.sha256, 64)) ||
+      (!chart.md5.empty() &&
+       !canonical_digest::isCanonicalLowerHex(normalized.md5, 32)) ||
       (normalized.sha256.empty() && normalized.md5.empty())) {
     return std::nullopt;
   }

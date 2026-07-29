@@ -1,11 +1,12 @@
 #include "IrRemoteScoreModels.h"
 
+#include "../CanonicalDigest.h"
+#include "../ResultContracts.h"
 #include "../scene/play/GameplayGaugeTypes.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
 #include <string_view>
 #include <unordered_set>
 
@@ -42,20 +43,13 @@ bool validOptionalText(const std::optional<std::string> &value) noexcept {
   return !value || hasSafeBytes(*value, kMaximumIrRemoteScoreTextBytes);
 }
 
-bool isLowerHexDigest(std::string_view value,
-                      std::size_t expectedBytes) noexcept {
-  return value.size() == expectedBytes &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
 bool hasValidHashIdentity(const IrRemoteScore &score) noexcept {
   const bool validMd5 =
-      score.chartMd5.empty() || isLowerHexDigest(score.chartMd5, 32);
+      score.chartMd5.empty() ||
+      canonical_digest::isCanonicalLowerHex(score.chartMd5, 32);
   const bool validSha256 =
-      score.chartSha256.empty() || isLowerHexDigest(score.chartSha256, 64);
+      score.chartSha256.empty() ||
+      canonical_digest::isCanonicalLowerHex(score.chartSha256, 64);
   return validMd5 && validSha256 &&
          (!score.chartMd5.empty() || !score.chartSha256.empty());
 }
@@ -125,9 +119,9 @@ bool validateScore(const IrRemoteScore &score,
       (!std::isfinite(*score.levelNumber) || *score.levelNumber < 0.0)) {
     return fail(diagnostic, "IR remote score level number is invalid");
   }
-  if (score.noteCount < 0 ||
-      score.noteCount > std::numeric_limits<int>::max() / 2 ||
-      score.score < 0 || score.score > score.noteCount * 2) {
+  const auto maximumScore =
+      result_contract::maximumScoreForNotes(score.noteCount);
+  if (!maximumScore || score.score < 0 || score.score > *maximumScore) {
     return fail(diagnostic, "IR remote score range is invalid");
   }
   if (!isKnownLampRank(score.lampRank)) {

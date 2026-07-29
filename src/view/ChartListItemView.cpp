@@ -241,7 +241,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   this->applyYogaLayout();
 }
 
-void ChartListItemView::setMeta(const ChartMetaRecord &record) {
+void ChartListItemView::setMeta(const ChartMetaRecord &record,
+                                bool prioritizeArtwork) {
   currentRecord = record;
   const auto &meta = record.meta;
   unavailable = record.unavailable;
@@ -277,13 +278,15 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
                                      : keyModeDescription(meta.KeyMode));
   }
   if (!unavailable && !solidArchive && !meta.StageFile.empty()) {
-    jacketImage->setImageAsync(meta.Folder / meta.StageFile);
+    jacketImage->setImageAsync(meta.Folder / meta.StageFile,
+                               prioritizeArtwork);
   } else {
     jacketImage->freeImage();
   }
   if (!record.courseStart && !unavailable && !solidArchive &&
       !meta.Banner.empty()) {
-    bannerImage->setImageAsync(meta.Folder / meta.Banner);
+    bannerImage->setImageAsync(meta.Folder / meta.Banner,
+                               prioritizeArtwork);
   } else {
     bannerImage->freeImage();
   }

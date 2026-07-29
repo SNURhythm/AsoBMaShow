@@ -64,6 +64,15 @@ int execute(bool profileReady, const Dependencies &dependencies) {
     return EXIT_FAILURE;
   }
 
+  if (dependencies.reconcileReplayFiles) {
+    try {
+      dependencies.reconcileReplayFiles();
+    } catch (...) {
+      // Replay files are optional playback data. Reconciliation failure must
+      // not make independently stored results or IR work unavailable.
+    }
+  }
+
   dependencies.runReadyApplication();
   return EXIT_SUCCESS;
 }

@@ -8,6 +8,7 @@
 
 #include "AppleInputTimestamp.h"
 #include "GyroscopeInputBackendCore.h"
+#include "InputLifecycle.h"
 #include "IOSGyroscopeMotionAdapter.h"
 #include "NativeCallbackLifetime.h"
 
@@ -33,7 +34,9 @@ std::uint64_t nowMicros() {
   return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
 }
 
-std::uint64_t sampleMicros(NSTimeInterval timestamp) {
+std::uint64_t sampleMicros(
+    NSTimeInterval timestamp,
+    const input::apple::HostToSteadyTimestampSession &timestampSession) {
   if (!std::isfinite(timestamp) || timestamp <= 0.0) {
     return nowMicros();
   }
@@ -42,26 +45,8 @@ std::uint64_t sampleMicros(NSTimeInterval timestamp) {
       static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
     return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
   }
-  return static_cast<std::uint64_t>(input::apple::steadyMicrosFromHostMicros(
+  return static_cast<std::uint64_t>(timestampSession.toSteadyMicros(
       static_cast<std::uint64_t>(micros)));
-}
-
-bool isBackgroundEvent(const SDL_Event &event) {
-  return event.type == SDL_APP_WILLENTERBACKGROUND ||
-         event.type == SDL_APP_DIDENTERBACKGROUND ||
-         (event.type == SDL_WINDOWEVENT &&
-          (event.window.event == SDL_WINDOWEVENT_MINIMIZED ||
-           event.window.event == SDL_WINDOWEVENT_HIDDEN ||
-           event.window.event == SDL_WINDOWEVENT_FOCUS_LOST));
-}
-
-bool isForegroundEvent(const SDL_Event &event) {
-  return event.type == SDL_APP_WILLENTERFOREGROUND ||
-         event.type == SDL_APP_DIDENTERFOREGROUND ||
-         (event.type == SDL_WINDOWEVENT &&
-          (event.window.event == SDL_WINDOWEVENT_RESTORED ||
-           event.window.event == SDL_WINDOWEVENT_SHOWN ||
-           event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED));
 }
 
 input::ios_gyroscope::MagneticAccuracy
@@ -183,10 +168,10 @@ public:
       if (!started_) {
         return;
       }
-      if (isBackgroundEvent(event)) {
+      if (input::isBackgroundLifecycleEvent(event)) {
         core_.setForeground(false, now);
         changed = true;
-      } else if (isForegroundEvent(event)) {
+      } else if (input::isForegroundLifecycleEvent(event)) {
         core_.setForeground(true, now);
         changed = true;
       }
@@ -285,6 +270,7 @@ private:
         nativeGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
     {
       const std::lock_guard lock(coreMutex_);
+      timestampSession_.reanchor();
       accuracyTracker_.reset();
       awaitingFirstSample_ = true;
       nativeRetryAtMicros_ = now + kFirstSampleTimeoutMicros;
@@ -346,9 +332,9 @@ private:
       return;
     }
 
-    const std::uint64_t timestampMicros = sampleMicros(motion.timestamp);
     const CMRotationRate rate = motion.rotationRate;
     const CMAcceleration gravity = motion.gravity;
+    std::uint64_t timestampMicros = 0;
     bool firstSample = false;
     {
       const std::lock_guard lock(coreMutex_);
@@ -356,6 +342,7 @@ private:
                            nativeGeneration_.load(std::memory_order_acquire)) {
         return;
       }
+      timestampMicros = sampleMicros(motion.timestamp, timestampSession_);
       const auto accuracy = accuracyTracker_.observe(
           magneticAccuracy(motion.magneticField.accuracy));
       if (awaitingFirstSample_) {
@@ -396,6 +383,7 @@ private:
   NSOperationQueue *motionQueue_ = nil;
   std::unique_ptr<NativeCallbackLifetime> callbackLifetime_;
   std::atomic_uint64_t nativeGeneration_{0};
+  input::apple::HostToSteadyTimestampSession timestampSession_;
   std::optional<std::uint64_t> nativeRetryAtMicros_;
   bool awaitingFirstSample_ = false;
   bool started_ = false;

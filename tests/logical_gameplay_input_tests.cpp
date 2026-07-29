@@ -237,6 +237,60 @@ void testCommandsNeverReachRhythmControl() {
   }
 }
 
+void testAppliedObserverSeesOneCanonicalReplayStream() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &value) { applied.push_back(value); });
+
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 2),
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 2),
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 2, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::ScratchClockwise, true),
+      transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+                 true),
+      transition({1, 7}, input::LogicalActionKind::ScratchClockwise, false, 0,
+                 0.0F),
+      transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+                 false, 0, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::Start, true),
+      transition({1, 7}, input::LogicalActionKind::Start, false, 0, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::Select, true),
+      transition({1, 7}, input::LogicalActionKind::Select, false, 0, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::Pause, true),
+  });
+
+  require(applied.size() == 10,
+          "observer sees effective lane, scratch, Start, and Select only");
+  require(applied[0].control ==
+                  replay::LogicalControl{.kind =
+                                             replay::LogicalControlKind::Lane,
+                                         .player = 1,
+                                         .lane = 2} &&
+              applied[0].pressed && !applied[0].replayOnly,
+          "lane observer uses the canonical replay control");
+  require(applied[2].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              applied[2].pressed &&
+              applied[3].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              !applied[3].pressed &&
+              applied[4].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              applied[4].pressed,
+          "scratch reversal is an ordered release and press in replay space");
+  require(applied[6].control.kind == replay::LogicalControlKind::Start &&
+              applied[6].pressed &&
+              applied[7].control.kind == replay::LogicalControlKind::Start &&
+              !applied[7].pressed &&
+              applied[8].control.kind == replay::LogicalControlKind::Select &&
+              applied[8].pressed &&
+              applied[9].control.kind == replay::LogicalControlKind::Select &&
+              !applied[9].pressed,
+          "Start and Select share the replay observer boundary");
+}
+
 void testResetReleasesOnlyHeldLogicalLanes() {
   RecordingControl control;
   LogicalGameplayInputAdapter adapter(control, {});
@@ -667,6 +721,86 @@ void testSameLaneAcrossScopesUsesReferenceSemantics() {
           "logical scopes sharing a lane release only after the final hold");
 }
 
+void testTouchAndHardwareShareOneLaneOwnershipBoundary() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputPipeline pipeline(
+      control, makeDefaultInputProfile(), makeGameplayInputScopes(7), {}, {},
+      [&](const auto &value) { applied.push_back(value); });
+  const auto touchDown =
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 0);
+  const auto touchUp =
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 0, 0.0F);
+
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, true);
+  (void)pipeline.consumeTouchTransition(touchDown);
+  (void)pipeline.consumeTouchTransition(touchUp);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, false);
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 0},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 0,
+                   .backSpin = false}},
+          "touch release cannot end an overlapping hardware lane hold");
+  require(applied.size() == 2 && applied.front().pressed &&
+              !applied.back().pressed,
+          "overlapping touch and hardware owners emit one replay edge pair");
+
+  control.calls.clear();
+  applied.clear();
+  (void)pipeline.consumeTouchTransition(touchDown);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, true);
+  pipeline.consumeDirectKeyboard(SDL_SCANCODE_S, false);
+  (void)pipeline.consumeTouchTransition(touchUp);
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 0},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 0,
+                   .backSpin = false}},
+          "hardware release cannot end an overlapping touch lane hold");
+  require(applied.size() == 2 && applied.front().pressed &&
+              !applied.back().pressed,
+          "touch-first overlap still emits one replay edge pair");
+}
+
+void testTouchScratchAndDigitalScratchShareOneOwnershipBoundary() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &value) { applied.push_back(value); });
+  const auto digitalDown =
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 7);
+  const auto digitalUp =
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 7, 0.0F);
+  const auto touchDown = transition(
+      {1, 7}, input::LogicalActionKind::ScratchClockwise, true);
+  const auto touchUp = transition(
+      {1, 7}, input::LogicalActionKind::ScratchClockwise, false, 0, 0.0F);
+
+  adapter.apply(std::span(&digitalDown, 1));
+  (void)adapter.applyTouch(touchDown);
+  (void)adapter.applyTouch(touchUp);
+  adapter.apply(std::span(&digitalUp, 1));
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 7},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 7,
+                   .backSpin = false}},
+          "touch scratch release preserves an overlapping digital hold");
+  require(applied.size() == 2 && applied.front().pressed &&
+              !applied.back().pressed &&
+              applied.front().control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              applied.back().control == applied.front().control,
+          "overlapping scratch owners emit one canonical replay edge pair");
+}
+
 void testScratchReversalKeepsAnOverlappingDigitalHoldCoherent() {
   RecordingControl control;
   LogicalGameplayInputAdapter adapter(control, {});
@@ -791,13 +925,117 @@ void testRealtimePhysicalInputPreservesNativeTimestamp() {
               output[0].type ==
                   input::RealtimePhysicalInputTransitionType::Press &&
               output[0].lane == 3 &&
+              output[0].hasReplayControl &&
+              output[0].replayControl ==
+                  replay::LogicalControl{.kind =
+                                             replay::LogicalControlKind::Lane,
+                                         .player = 1,
+                                         .lane = 3} &&
               output[0].steadyTimestampMicros == 1234567 &&
               output[1].type ==
                   input::RealtimePhysicalInputTransitionType::Release &&
               output[1].lane == 3 &&
+              output[1].hasReplayControl &&
+              output[1].replayControl == output[0].replayControl &&
               output[1].steadyTimestampMicros == 1234999,
           "native physical edges reach realtime lanes with their source "
           "timestamps");
+}
+
+void testRealtimeScratchReversalCarriesCanonicalDirections() {
+  InputProfile profile;
+  const input::PhysicalControl clockwise{
+      .deviceId = "pad:scratch",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 1};
+  const input::PhysicalControl counterClockwise{
+      .deviceId = "pad:scratch",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 2};
+  profile.bindings.push_back({.id = "scratch-cw",
+                              .scope = {1, 7},
+                              .action = {input::LogicalActionKind::
+                                             ScratchClockwise},
+                              .control = clockwise});
+  profile.bindings.push_back({.id = "scratch-ccw",
+                              .scope = {1, 7},
+                              .action = {input::LogicalActionKind::
+                                             ScratchCounterClockwise},
+                              .control = counterClockwise});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &value) {
+        output.push_back(value);
+        return true;
+      });
+  router.setGameplayEnabled(true, 50);
+  router.consume(controlEvent(clockwise, true), 100);
+  router.consume(controlEvent(counterClockwise, true), 200);
+  router.consume(controlEvent(clockwise, false), 250);
+  router.consume(controlEvent(counterClockwise, false), 300);
+
+  require(output.size() == 4 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[0].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].backSpin &&
+              output[1].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              output[2].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[2].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              output[3].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[3].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise,
+          "realtime scratch reversal keeps the exact ordered logical sides");
+}
+
+void testRealtimeStartProducesCommandAndReplayEdge() {
+  InputProfile profile;
+  const input::PhysicalControl start{
+      .deviceId = "pad:start",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Button,
+      .index = 7};
+  profile.bindings.push_back({.id = "start",
+                              .scope = {1, 7},
+                              .action = {input::LogicalActionKind::Start},
+                              .control = start});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &value) {
+        output.push_back(value);
+        return true;
+      });
+  router.setGameplayEnabled(true, 50);
+  router.consume(controlEvent(start, true), 100);
+  router.consume(controlEvent(start, false), 200);
+
+  require(output.size() == 4 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Command &&
+              output[1].replayOnly && output[1].hasReplayControl &&
+              output[1].replayControl.kind ==
+                  replay::LogicalControlKind::Start &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[2].type ==
+                  input::RealtimePhysicalInputTransitionType::Command &&
+              output[3].replayOnly &&
+              output[3].replayControl.kind ==
+                  replay::LogicalControlKind::Start &&
+              output[3].type ==
+                  input::RealtimePhysicalInputTransitionType::Release,
+          "Start remains a UI command and also enters the raw replay stream");
 }
 
 void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
@@ -977,6 +1215,7 @@ int main() {
   testSecondPlayerScratchUsesLaneFifteen();
   testResolverOrderedScratchReversalUsesBackspinRelease();
   testCommandsNeverReachRhythmControl();
+  testAppliedObserverSeesOneCanonicalReplayStream();
   testResetReleasesOnlyHeldLogicalLanes();
   testDefaultProfileRoutesThroughResolverAndAdapter();
   testDirectKeyboardPolicyDoesNotReplayQueuedRegistryTap();
@@ -990,10 +1229,14 @@ int main() {
   testLegacyKeyboardCallbacksPreservePhysicalScancodes();
   testLaneAndDirectionalScratchShareOneEffectiveLaneHold();
   testSameLaneAcrossScopesUsesReferenceSemantics();
+  testTouchAndHardwareShareOneLaneOwnershipBoundary();
+  testTouchScratchAndDigitalScratchShareOneOwnershipBoundary();
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
+  testRealtimeScratchReversalCarriesCanonicalDirections();
+  testRealtimeStartProducesCommandAndReplayEdge();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
   testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();

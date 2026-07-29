@@ -192,6 +192,16 @@ bool traced(std::string_view expected) {
   return false;
 }
 
+std::string tracedStatementContaining(std::string_view expected) {
+  std::lock_guard lock(traceMutex);
+  for (const auto &statement : tracedStatements) {
+    if (statement.find(expected) != std::string::npos) {
+      return statement;
+    }
+  }
+  return {};
+}
+
 bms_parser::ChartMeta chartMeta(const std::filesystem::path &root) {
   bms_parser::ChartMeta meta;
   meta.BmsPath = root / "chart.bms";
@@ -632,6 +642,8 @@ void testChartQueryBehaviorMatrix() {
 
 void testExactFolderQuery() {
   TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
   const auto chartPath = temporary.path() / "chart.db";
   ChartRepository charts(chartPath);
   assert(charts.EnsureReady());
@@ -666,15 +678,23 @@ void testExactFolderQuery() {
         "('C:\\library\\A\\windows.bms','md5-windows','sha-windows',"
         "'Windows','','','','','',11,0,0),"
         "('C:\\library\\A\\nested\\deep.bms','md5-windows-nested',"
-        "'sha-windows-nested','Windows Nested','','','','','',12,0,0),"
-        "('library/C/aliased.bms','md5-aliased','sha-aliased','Aliased','','',"
-        "'','','library/C/../C',13,0,0),"
-        "('library/C/trailing.bms','md5-trailing','sha-trailing','Trailing',"
-        "'','','','','library/C/',14,0,0)"));
+        "'sha-windows-nested','Windows Nested','','','','','',12,0,0)"));
   }
 
   auto session = charts.OpenSession();
   assert(session.has_value());
+  auto aliased = chartMeta("library/C/../C");
+  aliased.BmsPath = "library/C/aliased.bms";
+  aliased.MD5 = "md5-aliased";
+  aliased.SHA256 = "sha-aliased";
+  aliased.Title = "Aliased";
+  assert(session->InsertChartMeta(aliased));
+  auto trailing = chartMeta("library/C/");
+  trailing.BmsPath = "library/C/trailing.bms";
+  trailing.MD5 = "md5-trailing";
+  trailing.SHA256 = "sha-trailing";
+  trailing.Title = "Trailing";
+  assert(session->InsertChartMeta(trailing));
   const auto queryPaths = [&](const ChartMetaQuery &query) {
     std::vector<ChartMetaRecord> records;
     session->QueryChartMeta(query, records);
@@ -753,6 +773,20 @@ void testExactFolderQuery() {
          std::vector<std::string>({"library/C/aliased.bms",
                                    "library/C/trailing.bms"}));
   assert(session->CountChartMeta(query) == 2);
+
+  assert(!traced("chart_normalize_stored_folder(cm.folder)"));
+  assert(traced("cm.folder = @exact_folder"));
+
+  Database database = openDatabase(chartPath);
+  assert(database);
+  const std::string countSql = tracedStatementContaining(
+      "SELECT COUNT(*) FROM chart_meta cm WHERE 1 = 1 AND (cm.folder = "
+      "@exact_folder");
+  assert(!countSql.empty());
+  const auto plan = repository_test::explainPlan(database.get(), countSql);
+  assert(repository_test::planContains(plan, "MULTI-INDEX OR"));
+  assert(repository_test::planContains(plan, "idx_chart_meta_folder"));
+  assert(!repository_test::planContains(plan, "SCAN cm"));
 }
 
 void testChartMigrationCompatibilityMatrix() {

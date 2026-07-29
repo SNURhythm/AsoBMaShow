@@ -63,6 +63,11 @@ std::filesystem::path ReplayRepository::GetResolvedDatabasePath() const {
   return GetResolvedDatabasePathLocked();
 }
 
+std::filesystem::path ReplayRepository::GetResolvedProfileRoot() const {
+  std::lock_guard lock(impl_->sessionMutex);
+  return GetResolvedDatabasePathLocked().parent_path();
+}
+
 std::filesystem::path ReplayRepository::GetResolvedDatabasePathLocked() const {
   return replay_repository_detail::ResolvedDatabasePath(impl_->databasePath);
 }
@@ -104,8 +109,8 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
     errorMessage = "replay database validation failed";
     return false;
   }
-  if (!replay_repository_detail::CreateReplayTablesOnConnection(
-          candidate.get())) {
+  if (!replay_repository_detail::PrepareReplayDatabaseOnConnection(
+          candidate.get(), resolvedPath)) {
     errorMessage = "replay database validation failed";
     return false;
   }
@@ -156,8 +161,8 @@ bool ReplayRepository::EnsureSessionDatabaseLocked() {
             fspath_to_utf8(path).c_str(), openError.c_str());
     return false;
   }
-  if (!replay_repository_detail::CreateReplayTablesOnConnection(
-          candidate.get())) {
+  if (!replay_repository_detail::PrepareReplayDatabaseOnConnection(
+          candidate.get(), path)) {
     return false;
   }
   impl_->sessionDatabase = candidate.release();

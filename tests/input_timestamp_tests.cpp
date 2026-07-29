@@ -1,4 +1,8 @@
 #include "input/InputTimestamp.h"
+#include "input/InputLifecycle.h"
+#if defined(__APPLE__)
+#include "input/AppleInputTimestamp.h"
+#endif
 
 #include <cstdlib>
 #include <iostream>
@@ -33,6 +37,37 @@ void testRebaseSaturatesInsteadOfOverflowing() {
           "timestamp rebasing saturates at the signed clock limit");
 }
 
+void testFixedEpochMappingKeepsEqualNativeSamplesEqual() {
+  constexpr input::TimestampEpochMapping mapping{
+      .sourceEpochMicros = 10'000,
+      .steadyEpochMicros = 1'000'000,
+  };
+
+  require(mapping.toSteadyMicros(7'500) == 997'500 &&
+              mapping.toSteadyMicros(7'501) == 997'501,
+          "one native timestamp has one stable steady-clock value");
+}
+
+#if defined(__APPLE__)
+void testAppleHostTimestampConversionIsScopedToInputSession() {
+  input::apple::HostToSteadyTimestampSession first(
+      {.sourceEpochMicros = 10'000, .steadyEpochMicros = 1'000'000});
+  const auto expected = first.toSteadyMicros(7'500);
+  for (int sample = 0; sample < 10'000; ++sample) {
+    require(first.toSteadyMicros(7'500) == expected,
+            "equal Apple host timestamps remain equal within one input "
+            "session");
+  }
+
+  first.reanchor(
+      {.sourceEpochMicros = 10'000, .steadyEpochMicros = 2'000'000});
+  require(first.toSteadyMicros(7'500) == 1'997'500 &&
+              first.toSteadyMicros(7'500) != expected,
+          "a resumed input session refreshes a changed native clock epoch "
+          "instead of retaining process-lifetime skew");
+}
+#endif
+
 void testRebasesWrappingSdlMillisecondTimestamps() {
   require(input::rebaseWrappingTimestampMillis(9'997, 10'000, 1'000'000) ==
               997'000,
@@ -46,12 +81,34 @@ void testRebasesWrappingSdlMillisecondTimestamps() {
           "SDL's 32-bit millisecond wrap preserves a recent event's age");
 }
 
+void testForegroundLifecycleEventsShareOneInputPolicy() {
+  SDL_Event event{};
+  event.type = SDL_APP_DIDENTERFOREGROUND;
+  require(input::isForegroundLifecycleEvent(event),
+          "app foreground reanchors native input clocks");
+
+  event.type = SDL_WINDOWEVENT;
+  event.window.event = SDL_WINDOWEVENT_FOCUS_GAINED;
+  require(input::isForegroundLifecycleEvent(event),
+          "desktop focus recovery uses the same input lifecycle policy");
+
+  event.type = SDL_APP_DIDENTERBACKGROUND;
+  require(!input::isForegroundLifecycleEvent(event) &&
+              input::isBackgroundLifecycleEvent(event),
+          "background lifecycle never masquerades as a timestamp reanchor");
+}
+
 } // namespace
 
 int main() {
   testRebasesPastNativeTimestampIntoSteadyClockDomain();
   testRebasesFutureNativeTimestampIntoSteadyClockDomain();
   testRebaseSaturatesInsteadOfOverflowing();
+  testFixedEpochMappingKeepsEqualNativeSamplesEqual();
+#if defined(__APPLE__)
+  testAppleHostTimestampConversionIsScopedToInputSession();
+#endif
   testRebasesWrappingSdlMillisecondTimestamps();
+  testForegroundLifecycleEventsShareOneInputPolicy();
   return 0;
 }

@@ -9,6 +9,7 @@ target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             CompiledGameplayJudge.cpp GameplayDefinition.cpp
                             GameplaySimulation.cpp
                             RealtimeGameplayAuthorityPolicy.cpp
+                            RealtimeGameplayInputBridge.cpp
                             RealtimeGameplayWorker.cpp
                             RealtimeTouchInputRouter.cpp
                             ReplayKeysoundSchedule.cpp)

@@ -45,6 +45,13 @@ void testAllResultSourcesValidateWithDurableMetadata() {
   replayRequest.replayPlayOptions = practice::ReplayPlayOptions{};
   require(!practice::validateLaunchRequest(replayRequest).has_value(),
           "replay launch accepts a durable replay id");
+
+  auto modernReplayRequest = makeRequest(practice::LaunchSource::ReplayResult);
+  modernReplayRequest.modernReplayAttemptId =
+      "123e4567-e89b-42d3-a456-426614174000";
+  modernReplayRequest.replayPlayOptions = practice::ReplayPlayOptions{};
+  require(!practice::validateLaunchRequest(modernReplayRequest).has_value(),
+          "replay launch accepts a verified modern attempt identity");
 }
 
 void testValidationRejectsUnavailableOrInconsistentMetadata() {
@@ -70,6 +77,22 @@ void testValidationRejectsUnavailableOrInconsistentMetadata() {
   require(practice::validateLaunchRequest(request) ==
               std::optional<std::string>("Unexpected replay metadata"),
           "non-replay launches reject replay-only provenance");
+
+  request = makeRequest(practice::LaunchSource::ReplayResult);
+  request.replayId = 42;
+  request.modernReplayAttemptId =
+      "123e4567-e89b-42d3-a456-426614174000";
+  request.replayPlayOptions = practice::ReplayPlayOptions{};
+  require(practice::validateLaunchRequest(request) ==
+              std::optional<std::string>("Replay identity is ambiguous"),
+          "replay launches require exactly one durable replay identity");
+
+  request = makeRequest(practice::LaunchSource::ReplayResult);
+  request.modernReplayAttemptId = "not-an-attempt-id";
+  request.replayPlayOptions = practice::ReplayPlayOptions{};
+  require(practice::validateLaunchRequest(request) ==
+              std::optional<std::string>("Replay unavailable"),
+          "modern replay launches reject noncanonical attempt identities");
 
   request = makeRequest(static_cast<practice::LaunchSource>(99));
   require(practice::validateLaunchRequest(request) ==

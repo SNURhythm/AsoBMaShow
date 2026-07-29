@@ -1,5 +1,6 @@
 #include "TachiRankingParser.h"
 
+#include "../../ResultContracts.h"
 #include "../IrOutboxModels.h"
 
 #include "nlohmann/json.hpp"
@@ -233,8 +234,9 @@ parsePb(const Json &pb, const IrChartQuery &query,
 
   const auto score = requiredInteger(*scoreData, "score");
   const auto lamp = scoreData->find("lamp");
-  const auto maximumScore = static_cast<std::int64_t>(query.totalNotes) * 2;
-  if (!score || *score < 0 || *score > maximumScore ||
+  const auto maximumScore =
+      result_contract::maximumScoreForNotes(query.totalNotes);
+  if (!maximumScore || !score || *score < 0 || *score > *maximumScore ||
       *score > std::numeric_limits<int>::max() || lamp == scoreData->end() ||
       !lamp->is_string()) {
     return std::nullopt;
@@ -362,7 +364,7 @@ parsePb(const Json &pb, const IrChartQuery &query,
       .providerEntryId = std::to_string(*userId),
       .playerName = user->second,
       .score = static_cast<int>(*score),
-      .maxScore = static_cast<int>(maximumScore),
+      .maxScore = *maximumScore,
       .pGreat = pGreat,
       .great = great,
       .good = good,
@@ -474,7 +476,7 @@ parseRankingPageResponse(std::string_view body, const IrChartQuery &query,
                   "Tachi ranking response exceeded the size limit")};
     }
     if (query.totalNotes <= 0 ||
-        query.totalNotes > std::numeric_limits<int>::max() / 2 ||
+        !result_contract::maximumScoreForNotes(query.totalNotes) ||
         !gameFor(query) || !validChartId(expectedChartId) ||
         (authenticatedUserId && *authenticatedUserId <= 0)) {
       return {.diagnostic =

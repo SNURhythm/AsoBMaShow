@@ -1,7 +1,11 @@
 #include "scene/play/GamePlayStartup.h"
 #include "scene/play/GamePlayStartOptions.h"
+#include "replay/ReplayKeyMode.h"
+#include "replay/ReplaySetupProvenance.h"
+#include "replay/ReplaySetup.h"
 
 #include <iostream>
+#include <numeric>
 #include <string>
 
 namespace {
@@ -14,6 +18,165 @@ bool expect(bool condition, const char *message) {
 }
 
 } // namespace
+
+bool testLocalReplaySetupCapture() {
+  for (const auto &layout : replay::kReplayKeyModeLayouts) {
+    ScoreProvenance provenance;
+    provenance.ruleset = RulesetDescriptor::Current();
+    provenance.stages = {
+        {.chartMd5 = std::string(32, 'b'),
+         .chartSha256 = std::string(64, 'a'),
+         .longNoteMode = 2,
+         .chartRandomSeed = 42,
+         .chartRandomPrng = bms_parser::Parser::RandomPrngId,
+         .chartRandomValues = {3, 1, 4},
+         .candidateSelection = gameplay::CandidateSelectionMode::Combo}};
+    provenance.gaugeType = GaugeType::Hard;
+    provenance.gaugeProfile = GaugeProfile::Standard;
+    provenance.gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
+    provenance.gaugeAutoShiftLowerBound = GaugeType::Easy;
+    provenance.player1 = {.option = "RANDOM", .seed = 123};
+    provenance.player2 = {.option = layout.players == 2 ? "MIRROR" : "NORMAL"};
+    provenance.assistOption = assist_options::kOff;
+    provenance.clubMode = true;
+    provenance.playback = {.percent = 75,
+                           .mode = audio::PlaybackMode::PitchShift};
+    provenance.judgeWindowScalePercent = 80;
+    provenance.doublePlayFlip = layout.supportsDoublePlayFlip;
+
+    std::vector<int> identity(
+        static_cast<std::size_t>(layout.stockShuffleWidth));
+    std::iota(identity.begin(), identity.end(), 0);
+    replay::LocalReplaySetupFacts facts{
+        .chart = {.md5 = std::string(32, 'b'),
+                  .sha256 = std::string(64, 'a'),
+                  .keyMode = layout.keyMode},
+        .longNoteMode = 2,
+        .hasUndefinedLongNotes = true,
+        .player1LaneShufflePattern = identity,
+        .player2LaneShufflePattern =
+            layout.players == 2 ? std::optional<std::vector<int>>(identity)
+                                : std::nullopt,
+        .initialLaneCoverPercent = 37,
+        .laneCoverEnabled = true,
+    };
+    std::string diagnostic;
+    const auto setup =
+        replay::captureLocalReplaySetup(facts, provenance, diagnostic);
+    if (!expect(setup.has_value() && diagnostic.empty(),
+                "supported key mode captures a canonical replay setup") ||
+        !expect(setup->chart == facts.chart && setup->longNoteMode == 2 &&
+                    setup->hasUndefinedLongNotes &&
+                    setup->chartRandomValues == std::vector<int>({3, 1, 4}) &&
+                    setup->player1.option == "RANDOM" &&
+                    setup->player1.laneShufflePattern == identity &&
+                    setup->doublePlayOption ==
+                        (layout.supportsDoublePlayFlip
+                             ? replay::DoublePlayOption::Flip
+                             : replay::DoublePlayOption::Normal) &&
+                    setup->initialGaugeType == GaugeType::Hard &&
+                    setup->startingGaugePercent == 100.0F &&
+                    setup->initialLaneCoverPercent == 37 &&
+                    setup->laneCoverEnabled && setup->clubMode,
+                "setup projection preserves every shared live-attempt fact")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool testSavedChartRandomBranchAuthority() {
+  bms_parser::ChartMeta identity;
+  identity.MD5 = std::string(32, 'b');
+  identity.SHA256 = std::string(64, 'a');
+  ScoreProvenance provenance;
+  provenance.stages = {{.chartMd5 = identity.MD5,
+                        .chartSha256 = identity.SHA256,
+                        .chartRandomSeed = 42,
+                        .chartRandomPrng =
+                            bms_parser::Parser::RandomPrngId,
+                        .chartRandomValues = {3, 1, 4}}};
+
+  std::string diagnostic;
+  const auto setup = score_provenance::savedChartRandomParseSetup(
+      provenance, identity, diagnostic);
+  if (!expect(setup.has_value() && diagnostic.empty() &&
+                  setup->randomSeed == 42 &&
+                  setup->randomPrng == bms_parser::Parser::RandomPrngId &&
+                  setup->randomValues ==
+                      std::optional<std::vector<int>>({3, 1, 4}),
+              "saved result provenance restores the authored random branch")) {
+    return false;
+  }
+
+  provenance.stages.push_back(provenance.stages.front());
+  return expect(!score_provenance::savedChartRandomParseSetup(
+                     provenance, identity, diagnostic)
+                     .has_value() &&
+                    !diagnostic.empty(),
+                "ambiguous random-branch provenance fails closed");
+}
+
+bool testCompletionPersistenceRoutes() {
+  return expect(
+             gameplay_startup::completedAttemptPersistenceRoute(true, false) ==
+                 gameplay_startup::CompletedAttemptPersistenceRoute::
+                     ModernChartFile,
+             "eligible chart completion uses modern file persistence") &&
+         expect(
+             gameplay_startup::completedAttemptPersistenceRoute(true, true) ==
+                 gameplay_startup::CompletedAttemptPersistenceRoute::
+                     ModernCourseFile,
+             "eligible live course completion uses modern file persistence") &&
+         expect(
+             gameplay_startup::completedAttemptPersistenceRoute(false, false) ==
+                 gameplay_startup::CompletedAttemptPersistenceRoute::None,
+             "ineligible attempts do not acquire a persistence route");
+}
+
+bool testCourseRetrySameUsesValidatedSetupWithoutReplayInput() {
+  auto session = std::make_shared<CoursePlaySession>();
+  session->autoKeySound = true;
+  session->gaugeType = GaugeType::Hard;
+  session->gaugeProfile = GaugeProfile::Standard;
+  session->gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  session->gaugeAutoShiftLowerBound = GaugeType::Easy;
+  session->ruleset = GameplayRuleset::Beatoraja;
+  session->rulesetDescriptor =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+
+  ReplayData setup;
+  setup.chartMeta.LnMode = 2;
+  setup.playOption = "RANDOM";
+  setup.playOptionSeed = 123;
+  setup.playOption2 = "MIRROR";
+  setup.playOption2Seed = 456;
+  setup.assistOption = assist_options::kOff;
+  setup.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  setup.provenance = ScoreProvenance::Legacy();
+  setup.provenance.gaugeType = GaugeType::Hard;
+  setup.provenance.gaugeProfile = GaugeProfile::Standard;
+  setup.provenance.gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  setup.provenance.playback = {.percent = 75,
+                               .mode = audio::PlaybackMode::PitchShift};
+  setup.events.push_back({});
+
+  const StartOptions options =
+      makeCourseRetrySameStageStartOptions(session, setup);
+  return expect(options.courseSession == session &&
+                    options.replayData == nullptr && !options.autoPlay &&
+                    options.autoKeySound &&
+                    options.playOption == setup.playOption &&
+                    options.playOptionSeed == setup.playOptionSeed &&
+                    options.playOption2 == setup.playOption2 &&
+                    options.playOption2Seed == setup.playOption2Seed,
+                "course Retry Same applies validated setup without replay input") &&
+         expect(options.playback == course_rules::kRequiredPlaybackRate &&
+                    options.gaugeType == GaugeType::Hard &&
+                    options.gaugeAutoShift == GaugeAutoShiftMode::Continue &&
+                    options.gaugeAutoShiftLowerBound == GaugeType::Easy,
+                "course Retry Same uses the shared course setup authority");
+}
 
 int main() {
   ReplayData replay;
@@ -55,6 +218,13 @@ int main() {
   const auto success = gameplay_startup::playbackInitializationResult(true, {});
   if (!expect(success.mayStartAttempt && success.visibleStatus.empty(),
               "successful PitchShift or normal playback may start")) {
+    return 1;
+  }
+
+  if (!testLocalReplaySetupCapture() ||
+      !testSavedChartRandomBranchAuthority() ||
+      !testCompletionPersistenceRoutes() ||
+      !testCourseRetrySameUsesValidatedSetupWithoutReplayInput()) {
     return 1;
   }
 

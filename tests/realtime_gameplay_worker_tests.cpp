@@ -1,6 +1,8 @@
 #include "scene/play/RealtimeGameplayWorker.h"
 
 #include "bms_parser.hpp"
+#include "input/LogicalGameplayInputAdapter.h"
+#include "scene/play/RealtimeGameplayInputBridge.h"
 #include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/Judge.h"
 
@@ -212,6 +214,520 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
   require(worker.fault() == gameplay::RealtimeGameplayFault::None,
           "normal rapid input remains valid");
   worker.stop();
+}
+
+void testWorkerTransfersAcceptedRawReplayInputInOrder() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "raw replay worker starts");
+  const replay::LogicalControl laneControl{
+      .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 1};
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 1,
+               .compensateLane = 1,
+               .steadyTimestampMicros = 1'000'000,
+               .hasReplayControl = true,
+               .replayControl = laneControl}),
+          "raw replay press enters fixed ingress");
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Release,
+               .lane = 1,
+               .steadyTimestampMicros = 1'010'000,
+               .hasReplayControl = true,
+               .replayControl = laneControl}),
+          "raw replay release enters fixed ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 2;
+          }),
+          "raw replay input is accepted by gameplay");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() &&
+              *replayInput ==
+                  std::vector<replay::InputTransition>{
+                      {.songTimeMicros = 1'000'000,
+                       .control = laneControl,
+                       .pressed = true},
+                      {.songTimeMicros = 1'010'000,
+                       .control = laneControl,
+                       .pressed = false}},
+          "worker transfers the exact accepted logical stream after stop");
+}
+
+void testWorkerRetainsAcceptedReplayInputWithInterleavedTimestamps() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "interleaved replay worker starts");
+  const auto start = replay::LogicalControl{
+      .kind = replay::LogicalControlKind::Start, .player = 1, .lane = -1};
+  const auto select = replay::LogicalControl{
+      .kind = replay::LogicalControlKind::Select, .player = 1, .lane = -1};
+  const auto beforeGeneration = worker.acquireLatestSnapshot()->generation;
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .steadyTimestampMicros = 1'010'000,
+               .hasReplayControl = true,
+               .replayControl = start}) &&
+              worker.enqueueInput(
+                  {.epoch = 7,
+                   .type = gameplay::RealtimeGameplayInputType::Press,
+                   .steadyTimestampMicros = 1'000'000,
+                   .hasReplayControl = true,
+                   .replayControl = select}),
+          "inputs from interleaved timestamp domains enter fixed ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->generation > beforeGeneration;
+          }),
+          "interleaved replay inputs are processed");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() && replayInput->size() == 2,
+          "the worker leaves timestamp ordering to capture normalization");
+}
+
+void requireOwnedRealtimeOverlapCoalesced(
+    gameplay::GameplayDefinition definition, int lane,
+    replay::LogicalControl control,
+    gameplay::RealtimeGameplayInputSource persistentSource,
+    gameplay::RealtimeGameplayInputSource overlappingSource,
+    const char *heldMessage, const char *replayMessage) {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(std::move(definition),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "owned-overlap worker starts");
+
+  const auto emit = [&](gameplay::RealtimeGameplayInputType type,
+                        gameplay::RealtimeGameplayInputSource source,
+                        std::int64_t timestamp) {
+    return worker.enqueueInput({.epoch = 7,
+                                .type = type,
+                                .source = source,
+                                .lane = lane,
+                                .compensateLane = lane,
+                                .steadyTimestampMicros = timestamp,
+                                .hasReplayControl = true,
+                                .replayControl = control});
+  };
+  require(emit(gameplay::RealtimeGameplayInputType::Press, persistentSource,
+               1'000'000) &&
+              emit(gameplay::RealtimeGameplayInputType::Press,
+                   overlappingSource, 1'010'000) &&
+              emit(gameplay::RealtimeGameplayInputType::Release,
+                   overlappingSource, 1'020'000),
+          "overlapping realtime owners enter the actual worker ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 1;
+          }),
+          "the first owned press reaches gameplay");
+  {
+    auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot && snapshot->lanePressed[static_cast<std::size_t>(lane)] &&
+                snapshot->transactionSequence == 1,
+            heldMessage);
+  }
+
+  require(emit(gameplay::RealtimeGameplayInputType::Release, persistentSource,
+               1'030'000),
+          "the final realtime owner releases through the worker ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot &&
+                   !snapshot->lanePressed[static_cast<std::size_t>(lane)] &&
+                   snapshot->transactionSequence >= 2;
+          }),
+          "the effective lane releases only with the final owner");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() &&
+              *replayInput ==
+                  std::vector<replay::InputTransition>{
+                      {.songTimeMicros = 1'000'000,
+                       .control = control,
+                       .pressed = true},
+                      {.songTimeMicros = 1'030'000,
+                       .control = control,
+                       .pressed = false}},
+          replayMessage);
+}
+
+void testRealtimeIngressCoalescesTouchAndHardwareLaneOwnership() {
+  const replay::LogicalControl laneControl{
+      .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 1};
+  requireOwnedRealtimeOverlapCoalesced(
+      makeRapidDefinition(), 1, laneControl,
+      gameplay::RealtimeGameplayInputSource::Physical,
+      gameplay::RealtimeGameplayInputSource::Touch,
+      "touch release cannot release a hardware-held realtime lane",
+      "hardware-first overlap records one balanced logical lane pair");
+  requireOwnedRealtimeOverlapCoalesced(
+      makeRapidDefinition(), 1, laneControl,
+      gameplay::RealtimeGameplayInputSource::Touch,
+      gameplay::RealtimeGameplayInputSource::Physical,
+      "hardware release cannot release a touch-held realtime lane",
+      "touch-first overlap records one balanced logical lane pair");
+}
+
+void testRealtimeIngressCoalescesTouchAndHardwareScratchOwnership() {
+  const replay::LogicalControl scratchControl{
+      .kind = replay::LogicalControlKind::ScratchClockwise,
+      .player = 1,
+      .lane = -1};
+  requireOwnedRealtimeOverlapCoalesced(
+      makeScratchLongDefinition(), 7, scratchControl,
+      gameplay::RealtimeGameplayInputSource::Physical,
+      gameplay::RealtimeGameplayInputSource::Touch,
+      "touch release cannot release a hardware-held realtime scratch",
+      "hardware-first scratch overlap records one balanced direction pair");
+  requireOwnedRealtimeOverlapCoalesced(
+      makeScratchLongDefinition(), 7, scratchControl,
+      gameplay::RealtimeGameplayInputSource::Touch,
+      gameplay::RealtimeGameplayInputSource::Physical,
+      "hardware release cannot release a touch-held realtime scratch",
+      "touch-first scratch overlap records one balanced direction pair");
+}
+
+void testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "directional scratch ownership worker starts");
+  const replay::LogicalControl clockwise{
+      .kind = replay::LogicalControlKind::ScratchClockwise,
+      .player = 1,
+      .lane = -1};
+  const replay::LogicalControl counterClockwise{
+      .kind = replay::LogicalControlKind::ScratchCounterClockwise,
+      .player = 1,
+      .lane = -1};
+  const auto emit = [&](gameplay::RealtimeGameplayInputType type,
+                        gameplay::RealtimeGameplayInputSource source,
+                        replay::LogicalControl control,
+                        std::int64_t timestamp) {
+    return worker.enqueueInput({.epoch = 7,
+                                .type = type,
+                                .source = source,
+                                .lane = 7,
+                                .compensateLane = 7,
+                                .steadyTimestampMicros = timestamp,
+                                .hasReplayControl = true,
+                                .replayControl = control});
+  };
+  require(emit(gameplay::RealtimeGameplayInputType::Press,
+               gameplay::RealtimeGameplayInputSource::Physical, clockwise,
+               1'000'000) &&
+              emit(gameplay::RealtimeGameplayInputType::Press,
+                   gameplay::RealtimeGameplayInputSource::Touch,
+                   counterClockwise, 1'010'000) &&
+              emit(gameplay::RealtimeGameplayInputType::Release,
+                   gameplay::RealtimeGameplayInputSource::Touch,
+                   counterClockwise, 1'020'000),
+          "opposite scratch owners enter the actual worker ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 1;
+          }),
+          "the first directional scratch press reaches gameplay");
+  {
+    auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot && snapshot->lanePressed[7] &&
+                snapshot->transactionSequence == 1,
+            "direction handoffs change replay identity without duplicating "
+            "the held gameplay lane");
+  }
+  require(emit(gameplay::RealtimeGameplayInputType::Release,
+               gameplay::RealtimeGameplayInputSource::Physical, clockwise,
+               1'030'000),
+          "final scratch owner releases");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && !snapshot->lanePressed[7];
+          }),
+          "scratch lane releases after its final owner");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() && replayInput->size() == 6 &&
+              (*replayInput)[0] == replay::InputTransition{
+                                       .songTimeMicros = 1'000'000,
+                                       .control = clockwise,
+                                       .pressed = true} &&
+              (*replayInput)[1] == replay::InputTransition{
+                                       .songTimeMicros = 1'010'000,
+                                       .control = clockwise,
+                                       .pressed = false,
+                                       .replayOnly = true} &&
+              (*replayInput)[2] == replay::InputTransition{
+                                       .songTimeMicros = 1'010'000,
+                                       .control = counterClockwise,
+                                       .pressed = true,
+                                       .replayOnly = true} &&
+              (*replayInput)[3] == replay::InputTransition{
+                                       .songTimeMicros = 1'020'000,
+                                       .control = counterClockwise,
+                                       .pressed = false,
+                                       .replayOnly = true} &&
+              (*replayInput)[4] == replay::InputTransition{
+                                       .songTimeMicros = 1'020'000,
+                                       .control = clockwise,
+                                       .pressed = true,
+                                       .replayOnly = true} &&
+              (*replayInput)[5] == replay::InputTransition{
+                                       .songTimeMicros = 1'030'000,
+                                       .control = clockwise,
+                                       .pressed = false},
+          "opposite scratch owners produce canonical same-time replay-only "
+          "handoffs");
+}
+
+class LegacyBridgeControl final : public IRhythmControl {
+public:
+  explicit LegacyBridgeControl(
+      gameplay::RealtimeGameplayInputBridge &bridge) noexcept
+      : bridge_(bridge) {}
+
+  bms_parser::Note *pressLane(int mainLane, int compensateLane,
+                              double inputDelay) override {
+    prepared_ = bridge_.prepare(
+                    gameplay::RealtimeGameplayInputType::Press, mainLane,
+                    compensateLane, false, nextTimestamp(),
+                    static_cast<std::int64_t>(inputDelay * 1'000'000.0)) &&
+                prepared_;
+    return nullptr;
+  }
+
+  bms_parser::Note *pressLane(int lane, double inputDelay) override {
+    return pressLane(lane, lane, inputDelay);
+  }
+
+  bms_parser::Note *releaseLane(int lane, double inputDelay,
+                                bool backSpin) override {
+    prepared_ = bridge_.prepare(
+                    gameplay::RealtimeGameplayInputType::Release, lane, lane,
+                    backSpin, nextTimestamp(),
+                    static_cast<std::int64_t>(inputDelay * 1'000'000.0)) &&
+                prepared_;
+    return nullptr;
+  }
+
+  [[nodiscard]] std::int64_t nextTimestamp() noexcept {
+    const auto result = timestamp_;
+    timestamp_ += 1'000;
+    return result;
+  }
+
+  [[nodiscard]] bool prepared() const noexcept { return prepared_; }
+
+private:
+  gameplay::RealtimeGameplayInputBridge &bridge_;
+  std::int64_t timestamp_ = 1'000'000;
+  bool prepared_ = true;
+};
+
+void testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
+                                           makeConfig(clock, audio));
+  gameplay::RealtimeGameplayInputBridge bridge(
+      7, 7,
+      {.context = &worker,
+       .emit = [](void *context,
+                  const gameplay::RealtimeGameplayInput &input) {
+         return static_cast<gameplay::RealtimeGameplayWorker *>(context)
+             ->enqueueInput(input);
+       }});
+  LegacyBridgeControl control(bridge);
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &applied) {
+        require(bridge.emitApplied(applied.control, applied.pressed,
+                                   applied.replayOnly,
+                                   control.nextTimestamp()),
+                "legacy adapter callback reaches the realtime bridge");
+      });
+  require(worker.start(), "legacy adapter replay worker starts");
+
+  const auto digitalDown = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Lane, .lane = 7},
+      .pressed = true,
+      .value = 1.0F};
+  const auto digitalUp = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Lane, .lane = 7},
+      .pressed = false,
+      .value = 0.0F};
+  const auto counterClockwiseDown = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind =
+                     input::LogicalActionKind::ScratchCounterClockwise},
+      .pressed = true,
+      .value = 1.0F};
+  const auto counterClockwiseUp = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind =
+                     input::LogicalActionKind::ScratchCounterClockwise},
+      .pressed = false,
+      .value = 0.0F};
+
+  adapter.apply(std::span(&digitalDown, 1));
+  adapter.apply(std::span(&counterClockwiseDown, 1));
+  adapter.apply(std::span(&counterClockwiseUp, 1));
+  adapter.apply(std::span(&digitalUp, 1));
+  require(control.prepared(),
+          "every legacy physical edge is staged for its applied callback");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && !snapshot->lanePressed[7] &&
+                   snapshot->transactionSequence >= 2;
+          }),
+          "legacy adapter input drains through the realtime worker");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() && replayInput->size() == 6,
+          "legacy adapter produces a balanced directional scratch stream");
+  replay::ReplayPlaybackData playback;
+  playback.setup.chart.md5 = std::string(32, 'b');
+  playback.setup.chart.sha256 = std::string(64, 'a');
+  playback.setup.chart.keyMode = 7;
+  playback.setup.longNoteMode = 1;
+  playback.input = *replayInput;
+  const auto validation = replay::validateReplayPlayback(
+      playback, replay::ReplaySetupSource::LocalCapture,
+      {.completionSongTimeMicros = 5'000'000});
+  require(validation.valid(),
+          "adapter scratch ownership handoffs satisfy replay validation");
+  require((*replayInput)[1].songTimeMicros ==
+              (*replayInput)[2].songTimeMicros &&
+              (*replayInput)[3].songTimeMicros ==
+                  (*replayInput)[4].songTimeMicros,
+          "each replay-only release and opposite press shares one timestamp");
+}
+
+void testLegacyStartSelectCommandsRemainStockReplayInput() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  gameplay::RealtimeGameplayInputBridge bridge(
+      7, 7,
+      {.context = &worker,
+       .emit = [](void *context,
+                  const gameplay::RealtimeGameplayInput &input) {
+         return static_cast<gameplay::RealtimeGameplayWorker *>(context)
+             ->enqueueInput(input);
+       }});
+  LegacyBridgeControl control(bridge);
+  LogicalGameplayInputAdapter adapter(
+      control, [](const auto &) {}, [&](const auto &applied) {
+        require(bridge.emitApplied(applied.control, applied.pressed,
+                                   applied.replayOnly,
+                                   control.nextTimestamp()),
+                "legacy command callback reaches the realtime bridge");
+      });
+  require(worker.start(), "legacy command replay worker starts");
+  const auto before = worker.acquireLatestSnapshot();
+  const auto beforeGeneration = before ? before->generation : 0;
+
+  const auto startDown = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Start},
+      .pressed = true,
+      .value = 1.0F};
+  const auto startUp = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Start},
+      .pressed = false,
+      .value = 0.0F};
+  const auto selectDown = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Select},
+      .pressed = true,
+      .value = 1.0F};
+  const auto selectUp = input::LogicalInputTransition{
+      .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Select},
+      .pressed = false,
+      .value = 0.0F};
+  adapter.apply(std::span(&startDown, 1));
+  adapter.apply(std::span(&startUp, 1));
+  adapter.apply(std::span(&selectDown, 1));
+  adapter.apply(std::span(&selectUp, 1));
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->generation > beforeGeneration;
+          }),
+          "legacy commands drain through the realtime worker");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() && replayInput->size() == 4,
+          "Start and Select press and release survive live replay capture");
+  replay::ReplayPlaybackData playback;
+  playback.setup.chart.md5 = std::string(32, 'b');
+  playback.setup.chart.sha256 = std::string(64, 'a');
+  playback.setup.chart.keyMode = 7;
+  playback.setup.longNoteMode = 1;
+  playback.input = *replayInput;
+  const auto validation = replay::validateReplayPlayback(
+      playback, replay::ReplaySetupSource::LocalCapture,
+      {.completionSongTimeMicros = 5'000'000});
+  require(validation.valid(),
+          "Start and Select remain stock BRD commands, not replay-only "
+          "scratch handoffs");
+}
+
+void testReplayCaptureOverflowDoesNotInvalidateGameplay() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.maximumReplayInputTransitions = 1;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           std::move(config));
+  require(worker.start(), "bounded replay worker starts");
+  const replay::LogicalControl laneControl{
+      .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 1};
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 1,
+               .compensateLane = 1,
+               .steadyTimestampMicros = 1'000'000,
+               .hasReplayControl = true,
+               .replayControl = laneControl}) &&
+              worker.enqueueInput(
+                  {.epoch = 7,
+                   .type = gameplay::RealtimeGameplayInputType::Release,
+                   .lane = 1,
+                   .steadyTimestampMicros = 1'010'000,
+                   .hasReplayControl = true,
+                   .replayControl = laneControl}),
+          "overflow fixture enqueues both gameplay edges");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 2;
+          }),
+          "gameplay still accepts edges after replay capture overflow");
+  worker.stop();
+  require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+              !worker.copyAcceptedReplayInputAfterStop().has_value(),
+          "replay overflow drops only the attachment, not the result");
 }
 
 void testInputDelayCompensationPrecedesWorkerAutomaticDeadline() {
@@ -752,6 +1268,14 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
 
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
+  testWorkerTransfersAcceptedRawReplayInputInOrder();
+  testWorkerRetainsAcceptedReplayInputWithInterleavedTimestamps();
+  testRealtimeIngressCoalescesTouchAndHardwareLaneOwnership();
+  testRealtimeIngressCoalescesTouchAndHardwareScratchOwnership();
+  testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges();
+  testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction();
+  testLegacyStartSelectCommandsRemainStockReplayInput();
+  testReplayCaptureOverflowDoesNotInvalidateGameplay();
   testInputDelayCompensationPrecedesWorkerAutomaticDeadline();
   testInputPreadvancePublishesAutomaticTransactions();
   testSnapshotPublishesHeldLongNoteByLane();

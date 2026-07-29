@@ -94,7 +94,7 @@ void RhythmInputHandler::beginFingerLane(SDL_FingerID fingerIndex, int lane,
   }
 
   flickStates.erase(fingerIndex);
-  control->pressLane(lane);
+  (void)applyTouchLane(lane, true, std::nullopt);
   fingerLanePressed[fingerIndex] = true;
 }
 
@@ -107,15 +107,19 @@ void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
   }
 
   const int lane = laneIt->second;
+  const auto flick = flickStates.find(fingerIndex);
+  const std::optional<int> scratchDirection =
+      flick != flickStates.end() && flick->second.lastFlickDirection != 0
+          ? std::optional<int>(flick->second.lastFlickDirection)
+          : std::nullopt;
   const auto pressedIt = fingerLanePressed.find(fingerIndex);
   const bool shouldRelease =
-      isScratchLane(lane) ||
-      (pressedIt != fingerLanePressed.end() && pressedIt->second);
+      pressedIt != fingerLanePressed.end() && pressedIt->second;
   fingerToLane.erase(laneIt);
   fingerLanePressed.erase(fingerIndex);
   flickStates.erase(fingerIndex);
   if (shouldRelease) {
-    control->releaseLane(lane, 0.0, false);
+    (void)applyTouchLane(lane, false, scratchDirection);
   }
 }
 
@@ -151,12 +155,13 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
     int direction = dy < 0 ? 1 : -1;
     if (direction != flickState.lastFlickDirection) {
       SDL_Log("Distance: %f, Direction: %d", distance, direction);
+      const int previousDirection = flickState.lastFlickDirection;
       flickState.lastFlickDirection = direction;
       if (hasActiveScratchPress) {
-        control->releaseLane(lane, 0.0, true);
+        (void)applyTouchLane(lane, false, previousDirection);
         fingerLanePressed[fingerIndex] = false;
       }
-      auto *note = control->pressLane(lane);
+      auto *note = applyTouchLane(lane, true, direction);
       flickState.activeLongNote =
           note != nullptr && note->IsLongNote()
               ? static_cast<bms_parser::LongNote *>(note)
@@ -194,13 +199,11 @@ void RhythmInputHandler::onFingerUp(SDL_FingerID fingerIndex,
   }
   SDL_Log("FingerUp: %lld, (%f, %f, %f)", static_cast<long long>(fingerIndex),
           normalizedLocation.x, normalizedLocation.y, normalizedLocation.z);
-  if (flickStates.contains(fingerIndex)) {
-    flickStates.erase(fingerIndex);
-  }
   if (fingerToLane.contains(fingerIndex)) {
     releaseFingerLane(fingerIndex);
   } else {
     fingerLanePressed.erase(fingerIndex);
+    flickStates.erase(fingerIndex);
   }
 }
 void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,
@@ -342,6 +345,15 @@ void RhythmInputHandler::stopListen() {
   cancelGraceExpiry.clear();
 }
 void RhythmInputHandler::discardPendingTouchEvents() {
+  std::vector<SDL_FingerID> activeFingers;
+  activeFingers.reserve(fingerToLane.size());
+  for (const auto &[fingerId, lane] : fingerToLane) {
+    (void)lane;
+    activeFingers.push_back(fingerId);
+  }
+  for (const SDL_FingerID fingerId : activeFingers) {
+    releaseFingerLane(fingerId);
+  }
   fingerToLane.clear();
   fingerLanePressed.clear();
   flickStates.clear();
@@ -472,11 +484,13 @@ RhythmInputHandler::RhythmInputHandler(
     InputDeviceRegistry &registry, const InputProfile &profile,
     std::vector<input::InputScope> activeScopes,
     LogicalGameplayInputAdapter::CommandCallback commandCallback,
-    float configuredPlayAreaWidth, LogicalGameplayRegistryPolicy registryPolicy)
-    : inputDeviceRegistry(&registry), control(control) {
+    float configuredPlayAreaWidth, LogicalGameplayRegistryPolicy registryPolicy,
+    LogicalGameplayInputAdapter::AppliedTransitionCallback
+        configuredAppliedTransitionCallback)
+    : inputDeviceRegistry(&registry), keyMode(meta.KeyMode), control(control) {
   logicalInputPipeline = std::make_unique<LogicalGameplayInputPipeline>(
       *control, profile, std::move(activeScopes), std::move(commandCallback),
-      registryPolicy);
+      registryPolicy, std::move(configuredAppliedTransitionCallback));
   laneOrder = meta.GetTotalLaneIndices();
   totalLaneCount = static_cast<int>(laneOrder.size());
   scratchLaneCount = meta.GetScratchLaneCount();
@@ -489,3 +503,27 @@ RhythmInputHandler::RhythmInputHandler(
 }
 
 RhythmInputHandler::~RhythmInputHandler() { stopListen(); }
+
+bms_parser::Note *RhythmInputHandler::applyTouchLane(
+    int lane, bool pressed, std::optional<int> scratchDirection) {
+  const bool scratch = scratchDirection.has_value();
+  const auto replayControl = replay::logicalControlForChartLane(
+      keyMode, lane, scratch,
+      scratch && *scratchDirection < 0
+          ? replay::LogicalControlKind::ScratchCounterClockwise
+          : replay::LogicalControlKind::ScratchClockwise);
+  if (!replayControl || logicalInputPipeline == nullptr) {
+    return nullptr;
+  }
+  const input::LogicalActionKind action =
+      !scratch ? input::LogicalActionKind::Lane
+      : *scratchDirection > 0
+          ? input::LogicalActionKind::ScratchClockwise
+          : input::LogicalActionKind::ScratchCounterClockwise;
+  return logicalInputPipeline->consumeTouchTransition({
+      .scope = {.player = replayControl->player, .keyMode = keyMode},
+      .action = {.kind = action, .lane = lane},
+      .pressed = pressed,
+      .value = pressed ? 1.0F : 0.0F,
+  });
+}

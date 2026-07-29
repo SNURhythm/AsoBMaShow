@@ -27,12 +27,13 @@ bms_parser::TimeLine *addTimeline(bms_parser::Measure &measure,
 
 gameplay::GameplayDefinition makeDefinition() {
   bms_parser::Chart chart;
-  chart.Meta.TotalNotes = 2;
+  chart.Meta.TotalNotes = 3;
   chart.Meta.KeyMode = 7;
   auto *measure = new bms_parser::Measure();
   addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(42));
-  addTimeline(*measure, 2'000'000)
-      ->SetNote(2, new bms_parser::Note(bms_parser::Parser::NoWav));
+  auto *second = addTimeline(*measure, 2'000'000);
+  second->SetNote(1, new bms_parser::Note(84));
+  second->SetNote(2, new bms_parser::Note(bms_parser::Parser::NoWav));
   chart.Measures.push_back(measure);
   return gameplay::buildGameplayDefinition(chart, 0);
 }
@@ -56,6 +57,25 @@ void testReplayPressSchedulesKeysoundAtRawSongTime() {
               scheduled[0].wav == 42 &&
               scheduled[0].bus == audio::Bus::Keysound,
           "replay Press is scheduled at raw audio time on the keysound bus");
+}
+
+void testReplayNonJudgingPressUsesManualKeysoundPolicy() {
+  const auto definition = makeDefinition();
+  const std::array events{
+      ReplayEvent{.action = ReplayEventAction::Press,
+                  .lane = 1,
+                  .noteTimeMicros = -1,
+                  .songTimeMicros = 620'000,
+                  .judgement = None}};
+
+  const auto scheduled =
+      buildReplayKeysoundSchedule(definition, events, 120'000, std::nullopt);
+  require(scheduled.size() == 1 &&
+              scheduled[0].timeMicros == 500'000 &&
+              scheduled[0].wav == 42 &&
+              scheduled[0].bus == audio::Bus::Keysound,
+          "a replay press without judgement uses the same future manual "
+          "keysound as live gameplay");
 }
 
 void testReplaySchedulePreservesExistingExclusions() {
@@ -100,10 +120,36 @@ void testReplaySchedulePreservesExistingExclusions() {
           "replay keysounds outside the allowed practice range stay silent");
 }
 
+void testPracticePreparationPressKeepsItsKeysound() {
+  const auto definition = makeDefinition();
+  const std::array events{
+      ReplayEvent{.action = ReplayEventAction::Press,
+                  .lane = 1,
+                  .noteTimeMicros = -1,
+                  .songTimeMicros = 1'200'000,
+                  .judgement = None}};
+  const gameplay::GameplayTimeRange practiceRange{.startMicros = 1'500'000,
+                                                   .endMicros = 3'000'000};
+  const gameplay::GameplayTimeRange preparationRange{
+      .startMicros = 1'000'000, .endMicros = 1'500'000};
+
+  const auto scheduled = buildReplayKeysoundSchedule(
+      definition, events, 0, practiceRange, preparationRange);
+  require(scheduled.size() == 1 && scheduled.front().wav == 84 &&
+              scheduled.front().timeMicros == 1'200'000,
+          "practice replay preparation uses the same admitted press and "
+          "future-range keysound as live input");
+  require(replayEventAllowedForPlayback(events.front(), practiceRange,
+                                        preparationRange),
+          "visual and audio replay paths share preparation admission");
+}
+
 } // namespace
 
 int main() {
   testReplayPressSchedulesKeysoundAtRawSongTime();
+  testReplayNonJudgingPressUsesManualKeysoundPolicy();
   testReplaySchedulePreservesExistingExclusions();
+  testPracticePreparationPressKeepsItsKeysound();
   return 0;
 }

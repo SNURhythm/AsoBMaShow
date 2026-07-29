@@ -1,6 +1,5 @@
 #include "IrUploadsScene.h"
 
-#include "../ResultRecallBuilder.h"
 #include "../ir/IrCredentialStore.h"
 #include "../ir/IrProfileSettings.h"
 #include "../ir/IrSubmissionService.h"
@@ -21,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
+#include <iterator>
 #include <span>
 #include <stop_token>
 #include <utility>
@@ -290,13 +290,13 @@ void IrUploadsScene::buildView() {
   candidateList->setFlex(1);
   candidateList->clearBackgroundColor();
   candidateList->setBorderWidth(0);
-  candidateList->onSelectionToggle = [this](int replayId) {
-    controller.toggle(replayId);
+  candidateList->onSelectionToggle = [this](std::string attemptId) {
+    controller.toggle(attemptId);
     refreshUi();
   };
   candidateList->onSelected = [this](const ir::IrUploadCandidate &candidate,
                                      int) {
-    controller.toggle(candidate.replayId());
+    controller.toggle(candidate.result.attemptId);
     refreshUi();
   };
   listPanel->addView(candidateList);
@@ -352,52 +352,52 @@ void IrUploadsScene::reloadCandidates() {
   refreshProviderState();
 
   const std::string origin = serverOrigin();
-  const auto replayRead = context.replayRepository.ListIrUploadCandidateReplays(
-      ir::kTachiProviderId, origin);
-  if (replayRead.status != IrUploadReplayReadStatus::Loaded) {
-    loadError = replayRead.diagnostic.empty()
-                    ? "Saved results could not be loaded."
-                    : ir::sanitizeDiagnostic(replayRead.diagnostic);
-    controller.applyCandidateRefresh(std::nullopt);
-    refreshUi();
-    return;
-  }
-
-  std::vector<std::filesystem::path> paths;
-  paths.reserve(replayRead.replays.size());
-  for (const ReplaySummary &replay : replayRead.replays) {
-    if (replay.chartMeta.has_value()) {
-      paths.push_back(replay.chartMeta->BmsPath);
+  std::vector<ir::IrUploadCandidate> candidates;
+  std::optional<int> beforeResultId;
+  do {
+    auto page = context.replayRepository.ListIrUploadCandidates(
+        ir::kTachiProviderId, origin, beforeResultId);
+    if (page.status != ir::IrUploadCandidateReadStatus::Loaded) {
+      loadError = page.diagnostic.empty()
+                      ? "Saved results could not be loaded."
+                      : ir::sanitizeDiagnostic(page.diagnostic);
+      controller.applyCandidateRefresh(std::nullopt);
+      refreshUi();
+      return;
     }
-  }
+    if (loadDiagnostic.empty() && !page.diagnostic.empty()) {
+      loadDiagnostic = page.diagnostic;
+    }
+    const std::size_t available =
+        ir::kMaximumIrUploadCandidateRows - candidates.size();
+    const std::size_t accepted = std::min(available, page.candidates.size());
+    candidates.insert(candidates.end(),
+                      std::make_move_iterator(page.candidates.begin()),
+                      std::make_move_iterator(page.candidates.begin() +
+                                              static_cast<std::ptrdiff_t>(
+                                                  accepted)));
+    if (accepted != page.candidates.size() ||
+        (candidates.size() == ir::kMaximumIrUploadCandidateRows &&
+         page.nextBeforeModernChartResultId)) {
+      if (loadDiagnostic.empty()) {
+        loadDiagnostic = "Only the newest saved IR candidates are shown.";
+      }
+      break;
+    }
+    if (page.nextBeforeModernChartResultId && beforeResultId &&
+        *page.nextBeforeModernChartResultId >= *beforeResultId) {
+      loadError = "Saved result pagination did not advance.";
+      controller.applyCandidateRefresh(std::nullopt);
+      refreshUi();
+      return;
+    }
+    beforeResultId = page.nextBeforeModernChartResultId;
+  } while (beforeResultId.has_value());
 
-  auto chartSession = context.chartRepository.OpenSession();
-  if (!chartSession.has_value()) {
-    loadError = "The chart library could not be opened.";
-    controller.applyCandidateRefresh(std::nullopt);
-    refreshUi();
-    return;
-  }
-  const auto chartRead = chartSession->SelectChartMetaByPaths(paths);
-  if (chartRead.status != ChartMetaPathBatchReadStatus::Loaded) {
-    loadError = chartRead.diagnostic.empty()
-                    ? "Chart details could not be loaded."
-                    : ir::sanitizeDiagnostic(chartRead.diagnostic);
-    controller.applyCandidateRefresh(std::nullopt);
-    refreshUi();
-    return;
-  }
-
-  auto projection =
-      ir::projectIrUploadCandidates(replayRead.replays, chartRead.records);
-  loadDiagnostic = projection.diagnostic;
-  if (loadDiagnostic.empty()) {
-    loadDiagnostic = replayRead.diagnostic;
-  }
-  controller.applyCandidateRefresh(std::move(projection.candidates));
+  controller.applyCandidateRefresh(std::move(candidates));
   if (candidateList != nullptr) {
     candidateList->setCandidates(controller.candidates(),
-                                 controller.selectedReplayIds());
+                                 controller.selectedAttemptIds());
     candidateList->scrollOffset = scrollOffset;
   }
   refreshUi();
@@ -472,7 +472,7 @@ void IrUploadsScene::refreshUi() {
     uploadButton->setEnabled(!locked && providerCanSubmit && selectedCount > 0);
   }
   if (candidateList != nullptr) {
-    candidateList->setSelectedReplayIds(controller.selectedReplayIds());
+    candidateList->setSelectedAttemptIds(controller.selectedAttemptIds());
     candidateList->setSelectionLocked(locked);
     candidateList->setVisible(loadError.empty() && candidateCount > 0);
   }
@@ -568,40 +568,14 @@ void IrUploadsScene::startUpload() {
                                     candidates = std::move(candidates)](
                                        const std::stop_token &stopToken) {
     ir_uploads::PreparationDependencies dependencies;
-    dependencies.verify = [this](const ir::IrUploadCandidate &candidate,
-                                 const std::stop_token &stopToken) {
-      auto stored = context.replayRepository.LoadReplayResult(
-          candidate.replayId(), candidate.chart.meta);
-      std::atomic_bool cancelled{stopToken.stop_requested()};
-#if !defined(__ANDROID__) || defined(__cpp_lib_jthread)
-      std::stop_callback stopCallback(stopToken,
-                                      [&cancelled] { cancelled = true; });
-#endif
-      if (!stored) {
-        return ir_uploads::VerificationOutcome{
-            .diagnostic = "Saved replay data could not be loaded."};
-      }
-      auto recalled =
-          result_recall::BuildChartResult(std::move(*stored), cancelled);
-      if (!recalled.value) {
-        return ir_uploads::VerificationOutcome{
-            .diagnostic = recalled.diagnostic.empty()
-                              ? "This saved result could not be reconstructed."
-                              : ir::sanitizeDiagnostic(recalled.diagnostic)};
-      }
-      if (!recalled.value->historicalIr ||
-          !recalled.value->historicalIr->submission) {
-        return ir_uploads::VerificationOutcome{
-            .diagnostic =
-                recalled.value->historicalIrDiagnostic.empty()
-                    ? "IR verification failed because historical proof "
-                      "reconstruction returned no analysis. This score cannot "
-                      "be uploaded safely."
-                    : ir::sanitizeDiagnostic(
-                          recalled.value->historicalIrDiagnostic)};
-      }
+    dependencies.verify = [](const ir::IrUploadCandidate &candidate,
+                             const std::stop_token &) {
+      std::string diagnostic;
+      auto submission =
+          ir::submissionForIrUploadCandidate(candidate, diagnostic);
       return ir_uploads::VerificationOutcome{
-          .submission = *recalled.value->historicalIr->submission};
+          .submission = std::move(submission),
+          .diagnostic = std::move(diagnostic)};
     };
     dependencies.enqueueBatch =
         [this](std::span<const ir::IrSubmission> submissions) {

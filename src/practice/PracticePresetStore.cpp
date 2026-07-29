@@ -1,5 +1,7 @@
 #include "PracticePresetStore.h"
 
+#include "../CanonicalDigest.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -15,16 +17,13 @@ namespace {
 using Json = nlohmann::json;
 
 std::optional<std::string> normalizedSha256(std::string_view value) {
-  if (value.size() != 64 ||
-      !std::ranges::all_of(value, [](unsigned char character) {
-        return std::isxdigit(character) != 0;
-      })) {
-    return std::nullopt;
-  }
   std::string normalized(value);
   std::ranges::transform(
       normalized, normalized.begin(),
       [](unsigned char character) { return std::tolower(character); });
+  if (!canonical_digest::isCanonicalLowerHex(normalized, 64)) {
+    return std::nullopt;
+  }
   return normalized;
 }
 
@@ -442,10 +441,8 @@ PresetFileKind classifyPresetFilename(std::string_view filename) noexcept {
       !primary.ends_with(primarySuffix)) {
     return PresetFileKind::Invalid;
   }
-  for (const unsigned char character : primary.substr(0, 64)) {
-    if (!std::isdigit(character) && !(character >= 'a' && character <= 'f')) {
-      return PresetFileKind::Invalid;
-    }
+  if (!canonical_digest::isCanonicalLowerHex(primary.substr(0, 64), 64)) {
+    return PresetFileKind::Invalid;
   }
   return sidecar ? PresetFileKind::AtomicSidecar : PresetFileKind::Primary;
 }

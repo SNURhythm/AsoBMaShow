@@ -101,7 +101,7 @@ PlayOptionSectionView::PlayOptionSectionView(
       addView(row);
     }
     TextView *text = nullptr;
-    const std::string option = play_options::kPlayOptions[i];
+    const std::string option(play_options::kPlayOptions[i]);
     auto *button = makeButton(option, layout.buttonFontSize, &text);
     button->setOnClickListener([this, option]() {
       if (this->callbacks.onOptionSelected) {

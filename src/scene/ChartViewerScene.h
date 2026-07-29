@@ -2,6 +2,7 @@
 
 #include "../repositories/ChartRepository.h"
 #include "../repositories/ReplayRepository.h"
+#include "../ResultRecordSummary.h"
 #include "../bms_parser.hpp"
 #include "../practice/PracticeConfiguration.h"
 #include "../practice/PracticeLaunchRequest.h"
@@ -17,7 +18,7 @@
 class Button;
 class ChartCanvasView;
 class ReplaySummaryListItemView;
-class ReplaySummaryListView;
+class ResultRecordListView;
 class ScrollView;
 class OverlayPortal;
 class PracticePanelView;
@@ -112,7 +113,7 @@ private:
   TextView *ghostModalEmptyText = nullptr;
   Button *practiceGhostReplayButton = nullptr;
   ReplaySummaryListItemView *practiceGhostReplayItem = nullptr;
-  ReplaySummaryListView *ghostReplayListView = nullptr;
+  ResultRecordListView *ghostReplayListView = nullptr;
   View *optionsDrawerRoot = nullptr;
   TextView *viewerOptionText = nullptr;
   PlayOptionsPanelView *viewerPlayOptionsPanel = nullptr;
@@ -142,7 +143,7 @@ private:
   bool retainedListenResourcesForReload = false;
   long long listenEndMicros = 0;
   std::optional<ReplayData> practiceGhostReplay;
-  std::vector<ReplaySummary> ghostReplaySummaries;
+  std::vector<ResultRecordSummary> ghostReplaySummaries;
   int selectedGhostReplayIndex = -1;
   int loadedGhostReplayId = -1;
   std::optional<std::string> viewerPlayOption;
@@ -172,6 +173,10 @@ private:
   void loadSelectedGhostReplay();
   bool applyGhostReplayData(const ReplayData &replayData, int loadedReplayId,
                             const std::string &successText);
+  bool applyPreparedGhostReplayData(
+      const ReplayData &replayData,
+      std::unique_ptr<bms_parser::Chart> preparedChart, int loadedReplayId,
+      const std::string &successText);
   void clearGhostReplay();
   void rebuildOptionsDrawer();
   void showOptionsDrawer();

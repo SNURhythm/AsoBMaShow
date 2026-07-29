@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ResultPersistenceModel.h"
+#include "../ModernResult.h"
 
 #include <cstdint>
 #include <optional>
@@ -53,8 +53,10 @@ struct IrSubmissionBuildOutcome {
   std::string diagnostic;
 };
 
-[[nodiscard]] IrSubmissionBuildOutcome makeIrSubmission(
-    const result_persistence::ChartResultAttempt &attempt,
-    std::int64_t playedAtUnixMillis) noexcept;
+[[nodiscard]] bool validateIrSubmission(const IrSubmission &submission,
+                                        std::string &diagnostic) noexcept;
+
+[[nodiscard]] IrSubmissionBuildOutcome
+makeIrSubmission(const result_persistence::ModernChartResult &result) noexcept;
 
 } // namespace ir

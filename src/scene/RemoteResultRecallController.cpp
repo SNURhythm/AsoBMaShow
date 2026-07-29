@@ -36,9 +36,10 @@ ResultRecordRecallActionState resultRecordRecallActionState(
     const std::optional<ResultRecordSummary> &selection,
     bool resultActionAllowedInCurrentMode,
     bool modalOperationInProgress) noexcept {
-  const bool visible = selection.has_value() &&
-                       selection->capabilities.resultRecall &&
-                       resultActionAllowedInCurrentMode;
+  const bool visible =
+      selection.has_value() && resultActionAllowedInCurrentMode &&
+      resultRecordActionTarget(*selection, ResultRecordAction::ResultRecall) !=
+          ResultRecordActionTarget::None;
   return {.visible = visible, .enabled = visible && !modalOperationInProgress};
 }
 

@@ -78,7 +78,8 @@ struct ScoreStageProvenance {
 };
 
 struct ScoreProvenance {
-  static constexpr int kSchemaVersion = 4;
+  static constexpr int kDoublePlayFlipSchemaVersion = 5;
+  static constexpr int kSchemaVersion = kDoublePlayFlipSchemaVersion;
 
   int schemaVersion = kSchemaVersion;
   RulesetDescriptor ruleset;
@@ -89,6 +90,7 @@ struct ScoreProvenance {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
+  bool doublePlayFlip = false;
   std::string assistOption = assist_options::kOff;
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;
@@ -106,12 +108,23 @@ struct ScoreProvenance {
 
 namespace score_provenance {
 
+struct SavedChartRandomParseSetup {
+  std::optional<unsigned int> randomSeed;
+  std::optional<std::string> randomPrng;
+  std::optional<std::vector<int>> randomValues;
+};
+
 [[nodiscard]] bool stageMatchesChart(const ScoreStageProvenance &stage,
                                      const bms_parser::ChartMeta &chartMeta);
 
 [[nodiscard]] const ScoreStageProvenance *
 uniqueStageForChart(const ScoreProvenance &provenance,
                     const bms_parser::ChartMeta &chartMeta);
+
+[[nodiscard]] std::optional<SavedChartRandomParseSetup>
+savedChartRandomParseSetup(const ScoreProvenance &provenance,
+                           const bms_parser::ChartMeta &chartMeta,
+                           std::string &diagnostic) noexcept;
 
 } // namespace score_provenance
 
@@ -134,6 +147,7 @@ struct ScoreProvenanceBuildInput {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
+  bool doublePlayFlip = false;
   std::string assistOption = assist_options::kOff;
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;

@@ -4,9 +4,11 @@
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreRepository.h"
+#include "../src/replay/ReplayFileStore.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/sqlite3.h"
 #include "../yoga/lib/nlohmann/json.hpp"
+#include "ReplayLegacyFixture.h"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -71,6 +74,78 @@ std::string readFile(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(input),
           std::istreambuf_iterator<char>()};
+}
+
+std::string repeated(char value, std::size_t count) {
+  return std::string(count, value);
+}
+
+result_persistence::ModernChartResult modernReplayResult(int suffix,
+                                                         char hash) {
+  result_persistence::ModernChartResult value;
+  value.attemptId = "123e4567-e89b-42d3-a456-42661417400" +
+                    std::to_string(suffix);
+  value.score.chartPath = "library/chart.bms";
+  value.score.chartMd5 = repeated(hash, 32);
+  value.score.chartSha256 = repeated(hash, 64);
+  value.score.chartTitle = "Transfer Title";
+  value.score.chartArtist = "Transfer Artist";
+  value.score.longNoteMode = 1;
+  value.score.score = 7;
+  value.score.maxScore = 10;
+  value.score.maxCombo = 4;
+  value.score.comboBreak = 1;
+  value.score.pGreat = 3;
+  value.score.great = 1;
+  value.score.good = 1;
+  value.score.finalGauge = 82.5F;
+  value.score.clearType = kClearTypeNormalClearRank;
+  value.score.provenance = ScoreProvenance::Legacy();
+  value.keyMode = 7;
+  value.adoptedGaugeType = GaugeType::Normal;
+  value.adoptedGaugeHistory = {20.0F, 82.5F};
+  value.playedAtUnixMillis = 1'700'000'000'000LL + suffix;
+  value.resultFingerprint = result_persistence::modernResultFingerprint(value);
+  return value;
+}
+
+ModernReplayFileReference installModernReplay(
+    const PlayerProfilePaths &paths, ReplayRepository &repository, int suffix,
+    char hash, bool userDeleted = false) {
+  const auto result = modernReplayResult(suffix, hash);
+  const auto reserved = repository.ReserveModernReplayPath(
+      result.attemptId, result.score.chartSha256, result.playedAtUnixMillis);
+  expect(reserved.status == ModernReplayReservationStatus::Reserved &&
+             reserved.reservation,
+         "profile transfer replay path reserves");
+  const std::string payload = "profile replay " + std::to_string(suffix);
+  const auto raw = std::as_bytes(std::span(payload.data(), payload.size()));
+  const std::vector<std::byte> bytes(raw.begin(), raw.end());
+  replay::ReplayFileStore store(paths.root);
+  const auto fileReservation = store.reserve(
+      reserved.reservation->identity, bytes, result.attemptId);
+  const auto installed = store.install(*fileReservation.reservation, bytes);
+  expect(installed.file.has_value(), "profile transfer replay installs");
+  const ModernReplayFileAttachment attachment{
+      .identity = reserved.reservation->identity,
+      .metadata = installed.file->metadata};
+  expect(repository.StageModernChartResult(result, std::nullopt, attachment, {})
+             .status == ModernChartStageStatus::Staged,
+         "profile transfer modern result stages");
+  auto loaded = repository.LoadModernChartResultByAttempt(result.attemptId);
+  expect(loaded.record && loaded.record->replayFile,
+         "profile transfer replay reference reloads");
+  ModernReplayFileReference reference = *loaded.record->replayFile;
+  if (userDeleted) {
+    expect(repository
+               .MarkModernReplayFileUserDeleted(
+                   ModernReplayOwnerKind::ChartResult, result.attemptId,
+                   reference)
+               .status == ModernReplayFileMutationStatus::Changed,
+           "profile transfer deletion state persists");
+    reference.userDeleted = true;
+  }
+  return reference;
 }
 
 std::string validPracticePresetJson(std::string_view hash) {
@@ -128,6 +203,19 @@ Database openDatabase(const std::filesystem::path &path) {
   return Database(raw);
 }
 
+void setReplayCodecVersion(const std::filesystem::path &path,
+                           std::int64_t referenceId, int codecVersion) {
+  auto database = openDatabase(path);
+  expect(database != nullptr, "future-codec replay database opens");
+  const std::string sql =
+      "UPDATE modern_replay_files SET codec_version=" +
+      std::to_string(codecVersion) + " WHERE id=" +
+      std::to_string(referenceId);
+  expect(database && execute(database.get(), sql.c_str()) &&
+             sqlite3_changes(database.get()) == 1,
+         "future-codec replay metadata updates within the schema contract");
+}
+
 PlayerProfileManagerDependencies
 dependenciesFor(std::string uuid = "11111111-1111-4111-8111-111111111111",
                 std::string timestamp = "2026-07-10T12:34:56Z") {
@@ -179,9 +267,7 @@ LegacyData seedLegacyData(const std::filesystem::path &root) {
   const auto scorePath = root / "db" / "score.db";
   const auto replayPath = root / "db" / "replay.db";
   ScoreRepository scoreHelper(scorePath);
-  ReplayRepository replayHelper(replayPath);
   expect(scoreHelper.EnsureSchema(), "legacy score schema initializes");
-  expect(replayHelper.EnsureSchema(), "legacy replay schema initializes");
 
   LegacyData result{openDatabase(scorePath), openDatabase(replayPath)};
   expect(result.scoreConnection != nullptr, "legacy score database opens");
@@ -189,6 +275,10 @@ LegacyData seedLegacyData(const std::filesystem::path &root) {
   if (!result.scoreConnection || !result.replayConnection) {
     return result;
   }
+  std::string replayFixtureError;
+  expect(replay_legacy_fixture::createVersion2Schema(
+             result.replayConnection.get(), 2, replayFixtureError),
+         "legacy replay schema initializes: " + replayFixtureError);
 
   expect(execute(result.scoreConnection.get(), "PRAGMA journal_mode=WAL"),
          "score database enters WAL mode");
@@ -237,6 +327,17 @@ LegacyData seedLegacyData(const std::filesystem::path &root) {
               "diff_micros,gauge,gauge_type,combo,score) VALUES "
               "(1,0,1,2,1000,1000,1000,0,0,0.75,0,1,2)"),
       "WAL-backed replay event row inserts");
+  expect(
+      execute(result.replayConnection.get(),
+              "INSERT INTO course_replays(id,course_id,course_name,"
+              "course_group_name,constraint_json,gauge_type,gauge_profile,"
+              "gauge_auto_shift,ln_mode,requested_play_option,assist_option,"
+              "final_score,max_combo,final_gauge,clear_type,completed_charts,"
+              "total_charts) VALUES(7,7,'Legacy Course','Group','[]',0,0,0,0,"
+              "'OFF','OFF',100,3,0.5,2,1,2);"
+              "INSERT INTO course_replay_stages(course_replay_id,stage_index,"
+              "replay_id,rest_micros_after_stage) VALUES(7,0,1,123456)"),
+      "WAL-backed course replay header and stage insert");
   return result;
 }
 
@@ -277,6 +378,13 @@ void seedIrOperationalState(const std::filesystem::path &path,
   ReplayRepository repository(path);
   expect(repository.EnsureSchema(),
          std::string(label) + " IR outbox schema initializes");
+  const auto modern = modernReplayResult(9, 'd');
+  const auto staged = repository.StageModernChartResult(
+      modern, std::nullopt, std::nullopt, {});
+  expect(staged.status == ModernChartStageStatus::Staged && staged.receipt,
+         std::string(label) + " modern IR receipt owner stages");
+  const int modernResultId =
+      staged.receipt.has_value() ? staged.receipt->resultId : 0;
   repository.Shutdown();
   Database database = openDatabase(path);
   expect(database != nullptr,
@@ -305,19 +413,13 @@ void seedIrOperationalState(const std::filesystem::path &path,
              "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
              "5,1,NULL,NULL,NULL,3000,3000,3000)"),
          std::string(label) + " pending, deferred, and succeeded IR rows seed");
-  expect(
-      execute(
-          database.get(),
-          "INSERT INTO replays(chart_sha256,gauge_type,gauge_auto_shift,"
-          "final_score,max_combo,final_gauge,clear_type,assist_option) "
-          "VALUES('"
-          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
-          "0,0,1,1,0.0,0,'OFF');"
+  const std::string receiptAndRemoteSql =
           "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
-          "replay_id,attempt_id,chart_sha256,confirmation_source,"
-          "confirmed_at_ms) VALUES('tachi','https://boku.tachi.ac',"
-          "last_insert_rowid(),'10000000-0000-4000-8000-000000000004',"
-          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "modern_chart_result_id,attempt_id,chart_md5,chart_sha256,"
+          "confirmation_source,confirmed_at_ms) VALUES('tachi',"
+          "'https://boku.tachi.ac'," + std::to_string(modernResultId) + ", '" +
+          modern.attemptId + "','" + modern.score.chartMd5 + "','" +
+          modern.score.chartSha256 + "',"
           "1,4000);"
           "INSERT INTO ir_remote_scores(provider_id,server_origin,"
           "remote_score_id,remote_user_id,game,remote_chart_id,chart_md5,"
@@ -326,7 +428,9 @@ void seedIrOperationalState(const std::filesystem::path &path,
           "'https://boku.tachi.ac','remote-score',42,'bms-7k','remote-chart',"
           "'dddddddddddddddddddddddddddddddd',"
           "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
-          "'Remote Song','Remote Artist',1,1,0,'Bokutachi',4000,1)"),
+          "'Remote Song','Remote Artist',1,1,0,'Bokutachi',4000,1)";
+  expect(
+      execute(database.get(), receiptAndRemoteSql.c_str()),
       std::string(label) + " account-scoped IR evidence and mirror seed");
 }
 
@@ -350,6 +454,33 @@ void seedImportedIrScore(const std::filesystem::path &path,
           "1,2,1,0,0,1,0,0,0,0,0,0,0.0,0,1,'tachi',"
           "'https://boku.tachi.ac','remote-score',1)"),
       std::string(label) + " imported IR score projection seeds");
+}
+
+void seedLegacySummaryHistory(const std::filesystem::path &path,
+                              std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr,
+         std::string(label) + " legacy summary database opens");
+  if (!database) {
+    return;
+  }
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO legacy_chart_result_summaries(legacy_replay_id,"
+          "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,"
+          "long_note_mode,final_score,max_combo,final_gauge,clear_type,"
+          "created_at,partial) VALUES(91,'summary-chart.bms',"
+          "'0123456789abcdef0123456789abcdef',"
+          "'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',"
+          "'Summary Chart','Artist',0,123,45,70.0,200,'2026-07-01',0);"
+          "INSERT INTO legacy_course_result_summaries(legacy_course_replay_id,"
+          "legacy_course_id,course_key,course_name,course_group_name,"
+          "constraint_json,final_score,max_combo,final_gauge,clear_type,"
+          "completed_charts,total_charts,created_at,partial) VALUES"
+          "(92,7,NULL,'Partial Summary Course','Group','[]',NULL,45,70.0,200,"
+          "1,2,'2026-07-02',1)"),
+      std::string(label) + " chart and partial course summaries seed");
 }
 
 bool directoryContains(const std::filesystem::path &root,
@@ -380,24 +511,34 @@ void setDatabaseVersion(const std::filesystem::path &path, int version,
 void seedSupportedOlderProfile(const PlayerProfilePaths &paths,
                                std::string_view label) {
   Database scores = openDatabase(paths.scoresDb);
-  Database replays = openDatabase(paths.replaysDb);
-  expect(scores != nullptr && replays != nullptr,
-         std::string(label) + " marker databases open");
-  if (!scores || !replays) {
+  expect(scores != nullptr, std::string(label) + " score marker database opens");
+  if (!scores) {
     return;
   }
   expect(execute(scores.get(),
                  "CREATE TABLE validation_policy_marker(value TEXT);"
                  "INSERT INTO validation_policy_marker VALUES('score')"),
          std::string(label) + " score marker is written");
-  expect(execute(replays.get(),
-                 "CREATE TABLE validation_policy_marker(value TEXT);"
-                 "INSERT INTO validation_policy_marker VALUES('replay')"),
-         std::string(label) + " replay marker is written");
   scores.reset();
-  replays.reset();
   setDatabaseVersion(paths.scoresDb, 5, std::string(label) + " score");
-  setDatabaseVersion(paths.replaysDb, 3, std::string(label) + " replay");
+  std::string replayError;
+  expect(replay_legacy_fixture::replaceWithVersion2Database(
+             paths.replaysDb, 3,
+             "CREATE TABLE validation_policy_marker(value TEXT);"
+             "INSERT INTO validation_policy_marker VALUES('replay');"
+             "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
+             "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
+             "final_score,max_combo,final_gauge,clear_type) VALUES(11,"
+             "'legacy.bms','0123456789abcdef0123456789abcdef',"
+             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+             "'Legacy','Artist',0,0,0,123,7,50.0,200);"
+             "INSERT INTO course_replays(id,course_id,course_name,"
+             "course_group_name,constraint_json,gauge_type,gauge_profile,"
+             "gauge_auto_shift,ln_mode,final_score,max_combo,final_gauge,"
+             "clear_type,completed_charts,total_charts) VALUES(21,7,'Course',"
+             "'Group','[]',0,0,0,0,456,8,60.0,200,1,2)",
+             replayError),
+         std::string(label) + " replay v3 fixture is written: " + replayError);
 }
 
 void expectSupportedOlderPayload(const PlayerProfilePaths &paths,
@@ -528,10 +669,17 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
          "score rows survive migration");
   expect(rowCount(paths.scoresDb, "course_scores") == 1,
          "course score rows survive migration");
-  expect(rowCount(paths.replaysDb, "replays") == 1,
-         "replay rows survive migration");
-  expect(rowCount(paths.replaysDb, "replay_events") == 1,
-         "replay event rows survive migration");
+  expect(rowCount(paths.replaysDb, "legacy_chart_result_summaries") == 1,
+         "legacy chart header survives as summary history");
+  expect(rowCount(paths.replaysDb, "legacy_course_result_summaries") == 1,
+         "legacy course header survives as summary history");
+  expect(matchingRowCount(
+             paths.replaysDb,
+             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name "
+             "IN('replays','replay_events','replay_touch_samples',"
+             "'replay_lane_cover_events','course_replays',"
+             "'course_replay_stages')") == 0,
+         "legacy replay playback tables are absent after profile migration");
 
   std::string integrityError;
   expect(sqliteIntegrityCheck(paths.scoresDb, integrityError),
@@ -2248,10 +2396,8 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
 
   {
     Database scores = openDatabase(paths.scoresDb);
-    Database replays = openDatabase(paths.replaysDb);
-    expect(scores != nullptr && replays != nullptr,
-           "supported-older marker databases open");
-    if (!scores || !replays) {
+    expect(scores != nullptr, "supported-older score marker database opens");
+    if (!scores) {
       return;
     }
     expect(execute(scores.get(),
@@ -2259,12 +2405,19 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
                    "INSERT INTO migration_marker VALUES('score');"
                    "PRAGMA user_version=5"),
            "score v5 fixture and marker are written");
-    expect(execute(replays.get(),
-                   "CREATE TABLE migration_marker(value TEXT);"
-                   "INSERT INTO migration_marker VALUES('replay');"
-                   "PRAGMA user_version=3"),
-           "replay v3 fixture and marker are written");
   }
+  std::string replayFixtureError;
+  expect(replay_legacy_fixture::replaceWithVersion2Database(
+             paths.replaysDb, 3,
+             "CREATE TABLE migration_marker(value TEXT);"
+             "INSERT INTO migration_marker VALUES('replay');"
+             "INSERT INTO replays(id,chart_path,chart_sha256,chart_title,"
+             "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,"
+             "max_combo,final_gauge,clear_type) VALUES(1,'legacy.bms',"
+             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+             "'Legacy','Artist',0,0,0,10,3,50.0,200)",
+             replayFixtureError),
+         "replay v3 fixture and marker are written: " + replayFixtureError);
 
   std::string versionError;
   expect(!creator.validateProfile(profileId).ok(),
@@ -2299,6 +2452,14 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
   expect(rowCount(paths.scoresDb, "migration_marker") == 1 &&
              rowCount(paths.replaysDb, "migration_marker") == 1,
          "database migrations preserve profile rows");
+  expect(rowCount(paths.replaysDb, "legacy_chart_result_summaries") == 1 &&
+             matchingRowCount(
+                 paths.replaysDb,
+                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND "
+                 "name IN('replays','replay_events','replay_touch_samples',"
+                 "'replay_lane_cover_events','course_replays',"
+                 "'course_replay_stages')") == 0,
+         "owned migration preserves only legacy summary history");
   expect(reopened.validateProfile(profileId).ok(),
          "strict validation succeeds after owned migration");
 }
@@ -2351,6 +2512,8 @@ void testProfileCrudConstraintsAndDataIsolation() {
             R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
   seedIrOperationalState(manager.pathsFor(firstId).replaysDb,
                          "duplicate source");
+  seedLegacySummaryHistory(manager.pathsFor(firstId).replaysDb,
+                           "duplicate source");
   seedImportedIrScore(manager.pathsFor(firstId).scoresDb, "duplicate source");
   expect(rowCount(manager.pathsFor(firstId).replaysDb, "ir_outbox") == 3,
          "duplicate source starts with three IR operational rows");
@@ -2402,6 +2565,31 @@ void testProfileCrudConstraintsAndDataIsolation() {
                               "SELECT COUNT(*) FROM scores WHERE "
                               "score_source=1") == 0,
          "duplicate starts with no account-scoped IR data");
+  expect(rowCount(manager.pathsFor(firstId).replaysDb,
+                  "legacy_chart_result_summaries") == 1 &&
+             rowCount(manager.pathsFor(firstId).replaysDb,
+                      "legacy_course_result_summaries") == 1 &&
+             rowCount(manager.pathsFor(copyId).replaysDb,
+                      "legacy_chart_result_summaries") == 1 &&
+             rowCount(manager.pathsFor(copyId).replaysDb,
+                      "legacy_course_result_summaries") == 1 &&
+             matchingRowCount(
+                 manager.pathsFor(copyId).replaysDb,
+                 "SELECT COUNT(*) FROM legacy_chart_result_summaries WHERE "
+                 "legacy_replay_id=91 AND partial=0") == 1 &&
+             matchingRowCount(
+                 manager.pathsFor(copyId).replaysDb,
+                 "SELECT COUNT(*) FROM legacy_course_result_summaries WHERE "
+                 "legacy_course_replay_id=92 AND partial=1 AND final_score IS "
+                 "NULL") == 1,
+         "duplication preserves complete and partial summary-only history");
+  expect(matchingRowCount(
+             manager.pathsFor(copyId).replaysDb,
+             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name "
+             "IN('replays','replay_events','replay_touch_samples',"
+             "'replay_lane_cover_events','course_replays',"
+             "'course_replay_stages')") == 0,
+         "duplicated summary history has no legacy playback tables");
   expect(!directoryContains(manager.pathsFor(copyId).root,
                             "sentinel-api-key"),
          "duplicate contains no credential bytes in any profile file");
@@ -2584,6 +2772,74 @@ void testPracticeDirectoryLifecycleAndValidation() {
   }
 }
 
+void testReplayDirectoryDuplicationUsesOwnedVerifiedInventory() {
+  TempDirectory temp("profile-replay-transfer");
+  std::vector<std::string> uuids = {
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333",
+  };
+  std::size_t uuidIndex = 0;
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "replay transfer fixture initializes");
+  const auto source = manager.activePaths();
+  expect(source.replayDirectory == source.root / "replay" &&
+             std::filesystem::is_directory(source.replayDirectory),
+         "new profile owns an empty replay directory");
+  ReplayRepository repository(source.replaysDb);
+  expect(repository.EnsureSchema(), "replay transfer repository opens");
+  const auto active = installModernReplay(source, repository, 1, 'a');
+  const auto missing = installModernReplay(source, repository, 2, 'b');
+  std::filesystem::remove(source.root / missing.metadata.relativePath);
+  const auto deleted = installModernReplay(source, repository, 3, 'c', true);
+  auto future = installModernReplay(source, repository, 4, 'd');
+  repository.Shutdown();
+  future.metadata.codecVersion =
+      replay::BeatorajaReplayCodec::kCodecVersion + 1;
+  setReplayCodecVersion(source.replaysDb, future.id,
+                        future.metadata.codecVersion);
+  writeFile(source.replayDirectory / "unreferenced.brd", "unreferenced");
+
+  const auto duplicate = manager.duplicateProfile(
+      manager.activeProfile().id, "Replay Transfer Copy");
+  expect(duplicate.ok() && duplicate.profile,
+         "profile with replay inventory duplicates: " + duplicate.message);
+  if (duplicate.profile) {
+    const auto copied = manager.pathsFor(duplicate.profile->id);
+    replay::ReplayFileStore copiedStore(copied.root);
+    expect(copiedStore.inspect(active.metadata).state ==
+               replay::ReplayFileState::Available &&
+               !std::filesystem::exists(copied.root /
+                                        missing.metadata.relativePath) &&
+               !std::filesystem::exists(copied.root /
+                                        deleted.metadata.relativePath) &&
+               !std::filesystem::exists(copied.root /
+                                        future.metadata.relativePath) &&
+               !std::filesystem::exists(copied.replayDirectory /
+                                        "unreferenced.brd"),
+           "duplicate contains only current-codec verified replay bytes");
+    ReplayRepository copiedRepository(copied.replaysDb);
+    expect(copiedRepository.EnsureSchema(),
+           "duplicated replay repository opens");
+    const auto inventory = copiedRepository.ListModernReplayFileReferences();
+    expect(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
+               inventory.entries.size() == 4,
+           "duplicate preserves result references when optional or "
+           "unsupported bytes are omitted");
+  }
+  expect(std::filesystem::exists(source.replayDirectory / "unreferenced.brd"),
+         "duplication never mutates unreferenced source bytes");
+
+  writeFile(source.root / active.metadata.relativePath, "corrupt");
+  const auto failed = manager.duplicateProfile(
+      manager.activeProfile().id, "Corrupt Replay Copy");
+  expect(failed.error == ProfileError::IntegrityFailure &&
+             !std::filesystem::exists(manager.pathsFor(uuids.back()).root),
+         "corrupt owned replay aborts duplicate without visible target");
+}
+
 void testFutureVersionsFailClosed() {
   TempDirectory temp("profile-future");
   PlayerProfileManager manager(temp.path(), dependenciesFor());
@@ -2656,6 +2912,7 @@ int main() {
   testProfileCrudConstraintsAndDataIsolation();
   testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();
   testPracticeDirectoryLifecycleAndValidation();
+  testReplayDirectoryDuplicationUsesOwnedVerifiedInventory();
   testFutureVersionsFailClosed();
 
   if (failures != 0) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "IrProfileSettings.h"
 #include "IrReceiptModels.h"
 
 #include <cstdint>
@@ -11,7 +12,6 @@
 namespace ir {
 
 inline constexpr std::size_t kMaximumDiagnosticBytes = 512;
-inline constexpr std::size_t kMaximumIrProviderIdBytes = 64;
 inline constexpr std::size_t kMaximumIrPayloadBytes = 64 * 1024;
 inline constexpr std::size_t kMaximumIrRemoteValueBytes = 2 * 1024;
 inline constexpr std::size_t kMaximumIrErrorCodeBytes = 128;
