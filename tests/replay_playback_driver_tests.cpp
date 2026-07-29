@@ -334,7 +334,9 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
                    provenance == listed.result.score.provenance &&
                    parsedMeta.SHA256 == listed.result.score.chartSha256,
                "consumer passes one verified setup to chart preparation");
-        return oneNoteChartPointer();
+        auto prepared = oneNoteChartPointer();
+        prepared->Meta.LnMode = 0;
+        return prepared;
       },
       .materialize = [&](const ReplayChartDocument &document,
                          const result_persistence::ModernChartResult &result,
@@ -358,7 +360,8 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
              calls == std::vector<std::string>{"parse", "context", "prepare",
                                                "materialize"},
          "every chart replay action receives one structurally playable "
-         "preparation while result drift remains diagnostic");
+         "preparation, including a chart without long notes, while result "
+         "drift remains diagnostic");
 
   calls.clear();
   ChartReplayConsumer missing({
@@ -384,7 +387,7 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
         calls.emplace_back("unexpected-prepare");
         return std::unique_ptr<bms_parser::Chart>{};
       },
-      .materialize = [&](const ReplayChartDocument &, ReplaySetupSource,
+      .materialize = [&](const ReplayChartDocument &,
                          const result_persistence::ModernChartResult &,
                          const bms_parser::Chart &) {
         calls.emplace_back("unexpected-materialize");

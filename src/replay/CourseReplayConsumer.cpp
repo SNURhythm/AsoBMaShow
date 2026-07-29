@@ -2,7 +2,6 @@
 
 #include "../CourseConstraintUtils.h"
 #include "../CoursePlaySession.h"
-#include "../LongNoteModeUtils.h"
 
 #include <numeric>
 #include <utility>
@@ -312,20 +311,17 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
                        std::move(context));
       }
 
-      const ReplayChartIdentity preparedIdentity{
-          .md5 = prepared->Meta.MD5,
-          .sha256 = prepared->Meta.SHA256,
-          .keyMode = prepared->Meta.KeyMode,
-      };
+      const auto preparedFacts = makeParsedCourseReplayStageFacts(
+          prepared->Meta, *expectedLongNoteMode,
+          stagePlayback.setup.hasUndefinedLongNotes);
       const ReplayChartIdentity savedIdentity{
           .md5 = savedStage.score.chartMd5,
           .sha256 = savedStage.score.chartSha256,
           .keyMode = savedStage.keyMode,
       };
-      if (compareReplayChartIdentity(preparedIdentity, savedIdentity) !=
+      if (compareReplayChartIdentity(preparedFacts.chart, savedIdentity) !=
               ReplayChartMatch::Match ||
-          long_note_mode::normalizeValue(prepared->Meta.LnMode) !=
-              *expectedLongNoteMode) {
+          preparedFacts.longNoteMode != *expectedLongNoteMode) {
         return failure(CourseReplayConsumerState::PreparedStageMismatch,
                        "A prepared course stage differs from its saved result.",
                        std::move(context));

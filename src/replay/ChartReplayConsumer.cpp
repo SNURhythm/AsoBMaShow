@@ -1,7 +1,5 @@
 #include "ChartReplayConsumer.h"
 
-#include "../LongNoteModeUtils.h"
-
 #include <utility>
 
 namespace replay {
@@ -89,16 +87,11 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
                      std::move(context));
     }
 
-    const ReplayChartIdentity preparedIdentity{
-        .md5 = preparedChart->Meta.MD5,
-        .sha256 = preparedChart->Meta.SHA256,
-        .keyMode = preparedChart->Meta.KeyMode,
-    };
-    const int preparedLongNoteMode =
-        long_note_mode::normalizeValue(preparedChart->Meta.LnMode);
-    if (compareReplayChartIdentity(preparedIdentity, savedIdentity) !=
+    const auto preparedFacts = makeParsedChartReplayFacts(
+        preparedChart->Meta, *expectedLongNoteMode);
+    if (compareReplayChartIdentity(preparedFacts.chart, savedIdentity) !=
             ReplayChartMatch::Match ||
-        preparedLongNoteMode != *expectedLongNoteMode) {
+        preparedFacts.longNoteMode != *expectedLongNoteMode) {
       return failure(ChartReplayConsumerState::PreparedChartMismatch,
                      "Prepared replay chart differs from the saved result.",
                      std::move(context));

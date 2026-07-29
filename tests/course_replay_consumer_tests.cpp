@@ -164,8 +164,9 @@ std::unique_ptr<bms_parser::Chart> chartFor(
   chart->Meta.MD5 = stage.score.chartMd5;
   chart->Meta.SHA256 = stage.score.chartSha256;
   chart->Meta.KeyMode = stage.keyMode;
-  chart->Meta.LnMode =
-      result_persistence::replaySetupLongNoteMode(stage.score).value_or(-1);
+  // A chart without any long-note objects legitimately keeps the parser's
+  // undefined mode even when gameplay used the saved fallback mode.
+  chart->Meta.LnMode = 0;
   chart->Meta.TotalNotes = 5;
   return chart;
 }
