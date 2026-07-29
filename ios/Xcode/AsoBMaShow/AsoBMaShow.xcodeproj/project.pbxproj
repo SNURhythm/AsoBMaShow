@@ -1760,10 +1760,12 @@
 				outputPaths = (
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/Lzma2Register.cpp.o",
 				);
 				runOnlyForDeploymentPostprocessing = 0;
 				shellPath = /bin/sh;
-				shellScript = "set -eu\n\ncase \"${PLATFORM_NAME}\" in\n  iphonesimulator)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64-simulator/lib7zip-arm64-ios-simulator.a\"\n    ;;\n  *)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64/lib7zip-arm64-ios.a\"\n    ;;\nesac\n\n# These static registration objects are side-effect-only, so link them explicitly.\nout_dir=\"${DERIVED_FILE_DIR}/7zip-rar-codecs\"\nrar_codecs=\"${out_dir}/RarCodecsRegister.cpp.o\"\nseven_zip_register=\"${out_dir}/7zRegister.cpp.o\"\nmkdir -p \"${out_dir}\"\nrm -f \"${rar_codecs}\" \"${seven_zip_register}\"\n(cd \"${out_dir}\" && /usr/bin/ar -x \"${archive}\" RarCodecsRegister.cpp.o 7zRegister.cpp.o)\ntest -f \"${rar_codecs}\"\ntest -f \"${seven_zip_register}\"\n";
+				shellScript = "set -eu\n\ncase \"${PLATFORM_NAME}\" in\n  iphonesimulator)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64-simulator/lib7zip-arm64-ios-simulator.a\"\n    ;;\n  *)\n    archive=\"${PROJECT_DIR}/lib/lib7zip.xcframework/ios-arm64/lib7zip-arm64-ios.a\"\n    ;;\nesac\n\n# These static registration objects are side-effect-only, so link them explicitly.\nout_dir=\"${DERIVED_FILE_DIR}/7zip-rar-codecs\"\nrar_codecs=\"${out_dir}/RarCodecsRegister.cpp.o\"\nseven_zip_register=\"${out_dir}/7zRegister.cpp.o\"\nlzma_register=\"${out_dir}/LzmaRegister.cpp.o\"\nlzma2_register=\"${out_dir}/Lzma2Register.cpp.o\"\nmkdir -p \"${out_dir}\"\nrm -f \"${rar_codecs}\" \"${seven_zip_register}\" \"${lzma_register}\" \"${lzma2_register}\"\n(cd \"${out_dir}\" && /usr/bin/ar -x \"${archive}\" RarCodecsRegister.cpp.o 7zRegister.cpp.o LzmaRegister.cpp.o Lzma2Register.cpp.o)\ntest -f \"${rar_codecs}\"\ntest -f \"${seven_zip_register}\"\ntest -f \"${lzma_register}\"\ntest -f \"${lzma2_register}\"\n";
 			};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1966,6 +1968,8 @@
 					"$(inherited)",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/Lzma2Register.cpp.o",
 					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
 					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);
@@ -1973,6 +1977,8 @@
 					"$(inherited)",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/Lzma2Register.cpp.o",
 					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
 					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);
@@ -2039,6 +2045,8 @@
 					"$(inherited)",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/Lzma2Register.cpp.o",
 					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
 					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);
@@ -2046,6 +2054,8 @@
 					"$(inherited)",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",
+					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/Lzma2Register.cpp.o",
 					"-Wl,-u,__ZTVN8NArchive4NRar8CHandlerE",
 					"-Wl,-u,__ZTVN8NArchive5NRar58CHandlerE",
 				);

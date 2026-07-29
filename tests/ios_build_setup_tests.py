@@ -126,6 +126,8 @@ class IOSBuildSetupTests(unittest.TestCase):
                         if line.strip().startswith("OTHER_LDFLAGS =")
                     )
                     self.assertIn("7zRegister.cpp.o", linker_flags)
+                    self.assertIn("LzmaRegister.cpp.o", linker_flags)
+                    self.assertIn("Lzma2Register.cpp.o", linker_flags)
 
 
 class DerivedDataPathTests(unittest.TestCase):

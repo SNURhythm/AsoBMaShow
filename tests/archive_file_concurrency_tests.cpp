@@ -122,9 +122,45 @@ void testIndependentSevenZipCacheMissesOpenConcurrently() {
   assert(sevenZipIndexes == 2);
 }
 
+void testEncodedHeaderSevenZipUsesSdk() {
+  const std::filesystem::path payloadPath = "encoded-header-payload.txt";
+  for (std::string_view fixtureName : {"encoded-header-lzma.7z",
+                                       "encoded-header-lzma2.7z"}) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() /
+                         "fixtures/archive" / fixtureName;
+
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    assert(archive_file::listEntries(fixture, entries, &error));
+    assert(entries.size() == 1);
+    assert(entries.front().path == payloadPath);
+
+    std::vector<archive_file::FileData> files;
+    assert(archive_file::readArchiveEntries(fixture, {payloadPath}, files,
+                                            &error));
+    assert(files.size() == 1);
+    assert(files.front().path == payloadPath);
+    const std::string payload(files.front().bytes.begin(),
+                              files.front().bytes.end());
+    assert(payload == "compressed-header-payload\n");
+
+    const auto logLines = archive_file::debugLogLines();
+    const auto hasFixtureLog = [&](std::string_view prefix) {
+      return std::any_of(logLines.begin(), logLines.end(),
+                         [&](const auto &line) {
+                           return line.find(prefix) != std::string::npos &&
+                                  line.find(fixtureName) != std::string::npos;
+                         });
+    };
+    assert(hasFixtureLog("Indexed archive with 7-Zip SDK:"));
+    assert(hasFixtureLog("Read archive batch via 7-Zip SDK:"));
+  }
+}
+
 } // namespace
 
 int main() {
   testIndependentSevenZipCacheMissesOpenConcurrently();
+  testEncodedHeaderSevenZipUsesSdk();
   return 0;
 }
