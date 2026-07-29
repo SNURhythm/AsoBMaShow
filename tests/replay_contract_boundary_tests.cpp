@@ -569,6 +569,8 @@ void testReplayModalOwnsBackgroundLoadLifetime() {
   const auto menu = root / "src/scene/MainMenuScene.cpp";
   requireToken(menu, "replayLoadInProgress.load()",
                "replay modal operation guard");
+  requireToken(menu, "button->setEnabled(enabled)",
+               "themed action state blocks input as well as restyling it");
 }
 
 } // namespace

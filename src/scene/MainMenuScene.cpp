@@ -975,6 +975,7 @@ void styleThemedActionButton(Button *button, TextView *text, bool enabled,
     return;
   }
 
+  button->setEnabled(enabled);
   button->setCornerRadius(ui_theme::controlRadius());
   if (enabled) {
     button->setThemedBackgroundColors(normal, hover, pressed);
