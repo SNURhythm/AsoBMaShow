@@ -26,7 +26,8 @@ thread pools. It must also leave enough workers available for ordinary files.
 - Fuse indexing, reading, and parsing for one-chart archives to avoid task and
   synchronization overhead.
 - Use shared-pool chart tasks for larger archives, with bounded in-flight file
-  data.
+  data, while preserving the optimized concurrent reader for one large
+  random-access archive.
 - Preserve discovery order, SQLite/checkpoint ordering, pause/stop behavior,
   archive caches, and solid-archive handling.
 
@@ -75,6 +76,15 @@ For a non-solid archive on a fresh scan:
   16 MiB. The two-reader limit therefore bounds active archive data to roughly
   32 MiB, excluding a single oversized entry that must be admitted to make
   progress.
+
+After discovery, if exactly one unprepared archive remains with at least 16
+chart entries, the entity pool is already stopped and the scanner gives the
+existing random-access archive backend the full worker budget. Its extractor
+workers also parse the callbacks, so it is the only active pool rather than a
+nested pool. If the format cannot support confident parallel reads, processing
+falls back to the bounded two-reader/shared-CPU pipeline. This retains the
+established fast path for one large ZIP or non-solid RAR without reintroducing
+oversubscription when several archives are present.
 
 Each archive owns a fixed result vector in entry order. CPU tasks write only
 their assigned slots. The final task publishes one immutable prepared-archive
@@ -139,5 +149,6 @@ timings.
 Many small archives use two bounded fused readers rather than six competing
 indexers followed by nested thread groups. Mixed scans keep remaining workers
 available for ordinary charts. Large non-solid archives stream entries into
-the same parsing pool, so parsing overlaps archive I/O without exceeding the
-scanner's worker budget.
+the same parsing pool, while one large random-access archive receives the full
+budget as the sole active pool. Both paths avoid exceeding the scanner's worker
+budget.

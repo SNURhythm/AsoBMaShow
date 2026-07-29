@@ -377,6 +377,32 @@ void testArchiveCheckpointResumeUsesOrderedFallbackPipeline() {
   assert(!snapshot.checkpoint.has_value());
 }
 
+void testLargeSingleArchivePreservesAllChartResults() {
+  constexpr int kChartCount = 24;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::vector<std::pair<std::string, std::string>> files;
+  files.reserve(kChartCount);
+  for (int index = 0; index < kChartCount; ++index) {
+    files.emplace_back("charts/chart-" + std::to_string(index) + ".bms",
+                       chartText("Large Archive " + std::to_string(index)));
+  }
+  const auto archivePath = writeZip(root / "large-single-archive.zip", files);
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.Scan(*session, {archivePath}) == kChartCount + 1);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == kChartCount);
+  assert(snapshot.archiveCache.size() == 1);
+  assert(snapshot.archiveCache.front().chartCount == kChartCount);
+  assert(scanner.Scan(*session, {archivePath}) == 0);
+}
+
 void testArchiveInspectionUsesMultipleEntityWorkers() {
   constexpr int kFixtureCount = 6;
   if (parallel_worker_count(kFixtureCount) <= 1) {
@@ -495,6 +521,7 @@ int main() {
   testManySmallArchivesPreserveDiscoveryOrderAndCache();
   testMultiEntryArchivePreservesPreparedResultOrderAndCache();
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
+  testLargeSingleArchivePreservesAllChartResults();
   testArchiveInspectionUsesMultipleEntityWorkers();
   testBlockedArchiveDoesNotDelayLaterOrdinaryEntities();
   return 0;

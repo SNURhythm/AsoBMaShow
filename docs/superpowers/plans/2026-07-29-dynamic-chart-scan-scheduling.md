@@ -14,6 +14,7 @@
 - No more than two archive-I/O tasks may run concurrently, and at least one worker is left for CPU tasks whenever the total worker count is greater than one.
 - One-chart archives and single-worker scans parse inline.
 - Larger archives stream into the shared pool with limits of 12 files and 16 MiB per reader.
+- One remaining random-access archive with at least 16 charts uses the archive backend's concurrent reader as the sole active pool and falls back to the shared pipeline when unsupported.
 - SQLite, checkpoints, progress callbacks, and scan-diff mutation stay on the scanner thread.
 - Preserve deterministic discovery and archive-entry order, pause/stop behavior, cache semantics, and solid-archive handling.
 - Do not edit `src/bms_parser.hpp` or `src/bms_parser.cpp`.
@@ -151,6 +152,8 @@ Expected: all mixed, many-small-archive, multi-entry, stop/pause, cache, and sto
 - [ ] **Step 1: Submit only unprepared archive suffixes**
 
 After checkpoint validation, create a resource-aware scheduler using the scan worker budget and bounded archive admission. For each archive at or after the resume position, copy only entries whose parse was not attempted into a pending batch and submit one `ArchiveIo` producer. Store results by archive index; prepared prefixes stay in their existing ordered slots.
+
+Before creating that scheduler, give one remaining batch of at least 16 charts to `readArchiveEntriesConcurrently()` with the full worker budget. This call runs only after the entity pool has joined, and its callbacks parse metadata on the backend workers. If the backend rejects parallel reading, submit the batch to the shared bounded pipeline instead.
 
 - [ ] **Step 2: Drain once and apply in archive order**
 
