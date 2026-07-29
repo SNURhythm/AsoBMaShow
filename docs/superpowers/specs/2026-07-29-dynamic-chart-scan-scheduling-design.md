@@ -1,4 +1,4 @@
-# Bounded Pipelined Chart Scan Scheduling Design
+# Dynamic Pipelined Chart Scan Scheduling Design
 
 ## Context
 
@@ -13,14 +13,26 @@ it introduced two new costs on an eight-core machine:
   threads than the scanner's worker budget while still paying a global stage
   barrier.
 
-The next model must pipeline archive I/O and chart parsing without nesting
-thread pools. It must also leave enough workers available for ordinary files.
+The first bounded pipeline then capped the entire archive operation at two
+workers. Follow-up testing found it significantly slower than `develop` for
+many small archives. Source review identified two causes: `develop` admits up
+to four outer archive jobs, and the bounded scheduler linearly scanned one
+mixed queue past every ineligible archive on every worker wake-up. With many
+queued archives, those scans could approach quadratic work under the scheduler
+mutex.
+
+The corrected model must pipeline archive I/O and chart parsing without nested
+thread pools, leave workers available for ordinary files, and remain
+work-conserving when only archives remain.
 
 ## Goals
 
 - Use one fixed worker budget for archive preparation and chart parsing.
-- Admit at most two archive-I/O tasks at once while allowing ordinary and
-  archive-entry parsing tasks to bypass archive tasks waiting for admission.
+- Admit one archive-I/O task while CPU work is queued, then expand archive
+  admission up to the proven `develop` ceiling of four when the queue contains
+  only archives.
+- Keep separate FIFO queues for CPU and archive work so eligibility checks and
+  dispatch remain constant-time regardless of backlog size.
 - Begin reading and parsing a non-solid archive immediately after its index is
   available instead of waiting for every archive index to finish.
 - Fuse indexing, reading, and parsing for one-chart archives to avoid task and
@@ -37,18 +49,20 @@ thread pools. It must also leave enough workers available for ordinary files.
 - Parallel SQLite writes or a checkpoint schema change.
 - Parsing charts inside solid archives.
 - Changing archive formats, backend selection, or amalgamated BMS parser code.
-- Adding a lock-free queue. Scan tasks are coarse enough that queue-lock cost
-  is not the observed bottleneck.
+- Adding a lock-free queue. The mutex remains appropriate once CPU and archive
+  queues remove linear eligibility scans from the critical section.
 
 ## Scheduling Model
 
 ### Resource-aware shared pool
 
-`ChartScanWorkScheduler` will support ordinary CPU tasks and archive-I/O tasks.
-All tasks share the existing `parallel_worker_count()` budget. At most two
-archive-I/O tasks may be active; workers skip archive tasks that cannot acquire
-an I/O slot and take the earliest eligible CPU task instead. FIFO order is
-preserved among tasks of the same eligibility.
+`ChartScanWorkScheduler` supports ordinary CPU tasks and archive-I/O tasks in
+separate FIFO queues. All tasks share the existing `parallel_worker_count()`
+budget. If CPU work is queued, archive admission contracts to one active task
+and the other workers take CPU tasks. If no CPU work is queued, admission
+expands up to four archive tasks, capped at one fewer than the total worker
+count so a pipeline parse task can always make progress. Queue eligibility and
+selection are constant-time.
 
 Finishing the scheduler means that the external producer is done, not that
 active tasks may no longer create work. An active archive reader may enqueue
@@ -56,10 +70,11 @@ chart parsing tasks. Workers exit only when finishing has been requested, the
 queue is empty, and no task remains active. Calls to `enqueue()` after the pool
 has fully joined are rejected.
 
-For four workers and input `archive, ordinary, ordinary, ordinary`, at most one
-worker initially performs that archive's I/O and the other three can parse the
-ordinary files. For a run containing only archives, two readers operate at
-once and the remaining workers parse entries produced by those readers.
+For four workers and input `archive, ordinary, ordinary, ordinary`, one worker
+performs archive I/O and the other three parse ordinary files. For a run
+containing only archives, up to three readers operate at once. On the current
+eight-core machine the scanner budget is six workers, so archive-only admission
+expands to the `develop` ceiling of four.
 
 ### Archive pipeline
 
@@ -73,16 +88,16 @@ For a non-solid archive on a fresh scan:
 - A larger archive streams requested chart entries. Each file becomes a CPU
   task on the same scheduler; the archive task remains the sole reader.
 - Per-archive backpressure limits queued/running file data to 12 files and
-  16 MiB. The two-reader limit therefore bounds active archive data to roughly
-  32 MiB, excluding a single oversized entry that must be admitted to make
-  progress.
+  16 MiB. Four active readers therefore bound active archive data to roughly
+  64 MiB, excluding one oversized entry per reader that must be admitted to
+  make progress.
 
 After discovery, if exactly one unprepared archive remains with at least 16
 chart entries, the entity pool is already stopped and the scanner gives the
 existing random-access archive backend the full worker budget. Its extractor
 workers also parse the callbacks, so it is the only active pool rather than a
 nested pool. If the format cannot support confident parallel reads, processing
-falls back to the bounded two-reader/shared-CPU pipeline. This retains the
+falls back to the dynamic shared-CPU pipeline. This retains the
 established fast path for one large ZIP or non-solid RAR without reintroducing
 oversubscription when several archives are present.
 
@@ -131,24 +146,26 @@ Tests use synchronization and synthetic stored ZIP fixtures, not performance
 timings.
 
 1. A four-worker scheduler test queues several blocking archive-I/O tasks and
-   proves that only two become active while CPU tasks still occupy the other
-   workers.
-2. A scheduler test proves work enqueued by an active task is drained after
+   proves archive-only work expands to three active tasks while reserving one
+   worker.
+2. A scheduler test proves queued CPU work contracts archive admission to one
+   even when older archive tasks are waiting.
+3. A scheduler test proves work enqueued by an active task is drained after
    `finish()` has begun.
-3. Existing scheduler cancellation, exception, FIFO, and idempotent shutdown
+4. Existing scheduler cancellation, exception, FIFO, and idempotent shutdown
    tests remain green.
-4. Scanner tests create one-chart and multi-chart ZIP fixtures and verify every
+5. Scanner tests create one-chart and multi-chart ZIP fixtures and verify every
    chart and archive-cache row is applied exactly once in deterministic order.
-5. Checkpoint-resume, mixed ordinary/archive, stop/pause, cache, and storage
+6. Checkpoint-resume, mixed ordinary/archive, stop/pause, cache, and storage
    failure tests remain green.
-6. The focused scheduler/scanner/archive tests and desktop `main` build are run
+7. The focused scheduler/scanner/archive tests and desktop `main` build are run
    before pushing. No benchmark result or speed claim is produced locally.
 
 ## Expected Outcome
 
-Many small archives use two bounded fused readers rather than six competing
-indexers followed by nested thread groups. Mixed scans keep remaining workers
-available for ordinary charts. Large non-solid archives stream entries into
-the same parsing pool, while one large random-access archive receives the full
-budget as the sole active pool. Both paths avoid exceeding the scanner's worker
-budget.
+Many small archives regain up to four-way archive throughput without the
+mixed-queue scanning cost. Mixed scans contract to one archive worker and keep
+the remaining workers available for ordinary charts. Large non-solid archives
+stream entries into the same parsing pool, while one large random-access
+archive receives the full budget as the sole active pool. Both paths avoid
+exceeding the scanner's worker budget.

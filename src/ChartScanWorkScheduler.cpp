@@ -8,8 +8,10 @@ namespace chart_scan {
 WorkScheduler::WorkScheduler(std::size_t workerCount,
                              std::size_t archiveIoLimit) {
   const std::size_t actualWorkerCount = std::max<std::size_t>(1, workerCount);
+  const std::size_t archiveIoCeiling =
+      actualWorkerCount > 1 ? actualWorkerCount - 1 : std::size_t{1};
   archiveIoLimit_ =
-      std::clamp<std::size_t>(archiveIoLimit, 1, actualWorkerCount);
+      std::clamp<std::size_t>(archiveIoLimit, 1, archiveIoCeiling);
   workers_.reserve(actualWorkerCount);
   for (std::size_t index = 0; index < actualWorkerCount; ++index) {
     workers_.emplace_back([this] { workerLoop(); });
@@ -27,10 +29,9 @@ bool WorkScheduler::enqueue(Work work, WorkClass workClass) {
     if (closed_ || cancelled_) {
       return false;
     }
-    queue_.push_back(WorkItem{
-        .work = std::move(work),
-        .workClass = workClass,
-    });
+    auto &queue =
+        workClass == WorkClass::ArchiveIo ? archiveIoQueue_ : cpuQueue_;
+    queue.push_back(std::move(work));
   }
   cv_.notify_one();
   return true;
@@ -52,7 +53,8 @@ void WorkScheduler::cancel() {
     std::lock_guard lock(mutex_);
     closed_ = true;
     cancelled_ = true;
-    queue_.clear();
+    cpuQueue_.clear();
+    archiveIoQueue_.clear();
   }
   cv_.notify_all();
   joinWorkers();
@@ -65,19 +67,41 @@ std::vector<std::exception_ptr> WorkScheduler::takeExceptions() {
   return result;
 }
 
-bool WorkScheduler::hasEligibleWorkLocked() const {
-  return std::any_of(queue_.begin(), queue_.end(), [this](const auto &item) {
-    return item.workClass != WorkClass::ArchiveIo ||
-           activeArchiveIo_ < archiveIoLimit_;
-  });
+bool WorkScheduler::hasPendingWorkLocked() const {
+  return !cpuQueue_.empty() || !archiveIoQueue_.empty();
 }
 
-std::deque<WorkScheduler::WorkItem>::iterator
-WorkScheduler::firstEligibleWorkLocked() {
-  return std::find_if(queue_.begin(), queue_.end(), [this](const auto &item) {
-    return item.workClass != WorkClass::ArchiveIo ||
-           activeArchiveIo_ < archiveIoLimit_;
-  });
+bool WorkScheduler::hasEligibleWorkLocked() const {
+  const std::size_t archiveIoAdmissionLimit =
+      cpuQueue_.empty() ? archiveIoLimit_ : std::size_t{1};
+  return !cpuQueue_.empty() || (!archiveIoQueue_.empty() &&
+                                activeArchiveIo_ < archiveIoAdmissionLimit);
+}
+
+bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
+  const std::size_t archiveIoAdmissionLimit =
+      cpuQueue_.empty() ? archiveIoLimit_ : std::size_t{1};
+  const bool archiveEligible =
+      !archiveIoQueue_.empty() && activeArchiveIo_ < archiveIoAdmissionLimit;
+  if (archiveEligible && (activeArchiveIo_ == 0 || cpuQueue_.empty())) {
+    item.work = std::move(archiveIoQueue_.front());
+    item.workClass = WorkClass::ArchiveIo;
+    archiveIoQueue_.pop_front();
+    return true;
+  }
+  if (!cpuQueue_.empty()) {
+    item.work = std::move(cpuQueue_.front());
+    item.workClass = WorkClass::Cpu;
+    cpuQueue_.pop_front();
+    return true;
+  }
+  if (!archiveEligible) {
+    return false;
+  }
+  item.work = std::move(archiveIoQueue_.front());
+  item.workClass = WorkClass::ArchiveIo;
+  archiveIoQueue_.pop_front();
+  return true;
 }
 
 void WorkScheduler::workerLoop() {
@@ -87,22 +111,19 @@ void WorkScheduler::workerLoop() {
       std::unique_lock lock(mutex_);
       cv_.wait(lock, [this] {
         return cancelled_ || closed_ || hasEligibleWorkLocked() ||
-               (finishing_ && queue_.empty() && activeTasks_ == 0);
+               (finishing_ && !hasPendingWorkLocked() && activeTasks_ == 0);
       });
       if (cancelled_ || closed_) {
         return;
       }
-      const auto workIt = firstEligibleWorkLocked();
-      if (workIt == queue_.end()) {
-        if (finishing_ && queue_.empty() && activeTasks_ == 0) {
+      if (!popNextWorkLocked(item)) {
+        if (finishing_ && !hasPendingWorkLocked() && activeTasks_ == 0) {
           closed_ = true;
           cv_.notify_all();
           return;
         }
         continue;
       }
-      item = std::move(*workIt);
-      queue_.erase(workIt);
       ++activeTasks_;
       if (item.workClass == WorkClass::ArchiveIo) {
         ++activeArchiveIo_;
@@ -127,7 +148,7 @@ void WorkScheduler::workerLoop() {
       if (activeTasks_ > 0) {
         --activeTasks_;
       }
-      if (finishing_ && queue_.empty() && activeTasks_ == 0) {
+      if (finishing_ && !hasPendingWorkLocked() && activeTasks_ == 0) {
         closed_ = true;
       }
     }

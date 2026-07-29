@@ -21,7 +21,7 @@ public:
   using Work = std::function<void()>;
 
   explicit WorkScheduler(std::size_t workerCount,
-                         std::size_t archiveIoLimit = 1);
+                         std::size_t archiveIoLimit = 4);
   ~WorkScheduler();
   WorkScheduler(const WorkScheduler &) = delete;
   WorkScheduler &operator=(const WorkScheduler &) = delete;
@@ -37,14 +37,16 @@ private:
     WorkClass workClass = WorkClass::Cpu;
   };
 
+  bool hasPendingWorkLocked() const;
   bool hasEligibleWorkLocked() const;
-  std::deque<WorkItem>::iterator firstEligibleWorkLocked();
+  bool popNextWorkLocked(WorkItem &item);
   void workerLoop();
   void joinWorkers();
 
   std::mutex mutex_;
   std::condition_variable cv_;
-  std::deque<WorkItem> queue_;
+  std::deque<Work> cpuQueue_;
+  std::deque<Work> archiveIoQueue_;
   std::vector<std::thread> workers_;
   std::vector<std::exception_ptr> exceptions_;
   std::size_t archiveIoLimit_ = 1;

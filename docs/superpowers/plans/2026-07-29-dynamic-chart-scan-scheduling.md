@@ -1,17 +1,18 @@
-# Bounded Pipelined Chart Scan Scheduling Implementation Plan
+# Dynamic Pipelined Chart Scan Scheduling Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace unbounded concurrent archive indexing and nested archive parser thread groups with a two-reader, shared-pool pipeline that overlaps archive I/O and chart parsing.
+**Goal:** Replace unbounded concurrent archive indexing and nested archive parser thread groups with a dynamic shared-pool pipeline that overlaps archive I/O and chart parsing without regressing archive-only throughput.
 
-**Architecture:** Extend `ChartScanWorkScheduler` with resource-aware archive-I/O admission and finish-time child-task draining. Fresh archive inspection streams chart bytes into CPU tasks on that scheduler, while one-chart archives parse inline; the scanner thread later consumes ordered prepared metadata. Checkpoint/fallback archive entries use the same pipeline in a sequential second scheduler, and all database/checkpoint writes remain on the scanner thread.
+**Architecture:** Extend `ChartScanWorkScheduler` with separate constant-time CPU/archive queues, dynamic archive-I/O admission, and finish-time child-task draining. Admission contracts to one archive operation while CPU work is queued and expands to at most four for archive-only work, capped at one fewer than the worker count. Fresh archive inspection streams chart bytes into CPU tasks on that scheduler, while one-chart archives parse inline; the scanner thread later consumes ordered prepared metadata. Checkpoint/fallback archive entries use the same pipeline in a sequential second scheduler, and all database/checkpoint writes remain on the scanner thread.
 
 **Tech Stack:** C++23, `std::thread`, mutexes/condition variables, libarchive synthetic ZIP fixtures, SQLite, CMake/CTest.
 
 ## Global Constraints
 
 - The scanner uses the existing `parallel_worker_count()` budget.
-- No more than two archive-I/O tasks may run concurrently, and at least one worker is left for CPU tasks whenever the total worker count is greater than one.
+- Archive-I/O admission contracts to one while CPU work is queued and expands to at most four for archive-only work; at least one worker is reserved whenever the total worker count is greater than one.
+- CPU and archive work use separate FIFO queues so admission checks and dispatch do not scan a large mixed backlog under the scheduler mutex.
 - One-chart archives and single-worker scans parse inline.
 - Larger archives stream into the shared pool with limits of 12 files and 16 MiB per reader.
 - One remaining random-access archive with at least 16 charts uses the archive backend's concurrent reader as the sole active pool and falls back to the shared pipeline when unsupported.
@@ -31,7 +32,7 @@
 
 **Interfaces:**
 - Produces: `enum class WorkClass { Cpu, ArchiveIo }`
-- Produces: `WorkScheduler(std::size_t workerCount, std::size_t archiveIoLimit = 1)`
+- Produces: `WorkScheduler(std::size_t workerCount, std::size_t archiveIoLimit = 4)`
 - Produces: `bool enqueue(Work work, WorkClass workClass = WorkClass::Cpu)`
 - Preserves: `finish()`, `cancel()`, exception capture, non-copyability, and idempotent joining
 - Guarantees: `finish()` drains child work enqueued by active tasks; queued archive work that has reached the admission cap does not block eligible CPU work
@@ -56,7 +57,7 @@ Expected: compilation fails because `WorkClass` and the archive limit do not exi
 
 - [ ] **Step 4: Implement eligible-task selection and quiescent finish**
 
-Store queued records as `{Work work, WorkClass workClass}`. Track `activeTasks_`, `activeArchiveIo_`, `archiveIoLimit_`, `finishing_`, `closed_`, and `cancelled_`. A worker selects the first queued CPU task or an archive task when `activeArchiveIo_ < archiveIoLimit_`; it increments both active counters before unlocking and decrements them after work/exception handling.
+Store CPU and archive work in separate FIFO queues. Track `activeTasks_`, `activeArchiveIo_`, `archiveIoLimit_`, `finishing_`, `closed_`, and `cancelled_`. When CPU work is queued, admit one archive task and dispatch CPU work to the remaining workers. When the CPU queue is empty, expand archive admission to `archiveIoLimit_`. Increment active counters before unlocking and decrement them after work/exception handling.
 
 `finish()` sets `finishing_`, wakes workers, and joins. Workers exit only when `finishing_ && queue_.empty() && activeTasks_ == 0`. `enqueue()` remains valid while finishing is in progress and rejects work only after `closed_` or `cancelled_`. The worker that observes quiescence sets `closed_` and wakes all workers. `cancel()` marks the pool closed/cancelled and clears queued work.
 
@@ -122,7 +123,7 @@ For one entry, or when the shared worker budget is one, call `readArchiveEntries
 
 - [ ] **Step 3: Invoke the producer immediately after archive indexing**
 
-Construct the entity scheduler with `archiveIoLimit = min(2, workerCount > 1 ? workerCount - 1 : 1)`. Archive inspection tasks use `WorkClass::ArchiveIo`. On fresh scans, a readable, non-solid archive immediately starts the producer and publishes its `PreparedArchive` after chart parsing completes. Cached, solid, unreadable, and checkpoint-bearing cases retain their existing cheap/index-only paths.
+Construct the entity scheduler with `archiveIoLimit = min(4, workerCount > 1 ? workerCount - 1 : 1)`. Archive inspection tasks use `WorkClass::ArchiveIo`. On fresh scans, a readable, non-solid archive immediately starts the producer and publishes its `PreparedArchive` after chart parsing completes. Cached, solid, unreadable, and checkpoint-bearing cases retain their existing cheap/index-only paths.
 
 - [ ] **Step 4: Consume prepared metadata without rereading**
 

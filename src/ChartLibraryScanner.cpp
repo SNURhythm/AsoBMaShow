@@ -46,6 +46,7 @@ constexpr std::size_t kIndividualParseBatchSize = 512;
 constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;
 constexpr std::uint64_t kArchiveParseMaxInFlightBytes =
     16ull * 1024ull * 1024ull;
+constexpr std::size_t kArchiveParseMaxOuterWorkers = 4;
 constexpr std::size_t kArchiveDirectConcurrentMinCharts = 16;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
@@ -555,8 +556,9 @@ int ChartLibraryScanner::Scan(
   const std::size_t entityWorkerCount = static_cast<std::size_t>(
       parallel_worker_count(kIndividualParseBatchSize));
   const std::size_t archiveIoLimit =
-      entityWorkerCount > 1 ? std::min<std::size_t>(2, entityWorkerCount - 1)
-                            : std::size_t{1};
+      entityWorkerCount > 1
+          ? std::min(kArchiveParseMaxOuterWorkers, entityWorkerCount - 1)
+          : std::size_t{1};
 
   auto reservePreparedEntity = [&]() {
     std::lock_guard lock(preparedEntityMutex);
