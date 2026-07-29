@@ -84,28 +84,6 @@ void logSqlError(const char *context, sqlite3 *db) {
   logSqlErrorText(context, sqliteDatabaseError(db));
 }
 
-void sqliteNormalizeStoredFolder(sqlite3_context *context, int argc,
-                                 sqlite3_value **argv) {
-  const std::string value = argc > 0 ? sqliteValueString(argv[0]) : "";
-  const std::string normalized =
-      chart_storage_identity::StoredFolderPathText(
-          std::filesystem::path(utf8_to_path_t(value)));
-  sqlite3_result_text(context, normalized.c_str(),
-                      static_cast<int>(normalized.size()), SQLITE_TRANSIENT);
-}
-
-bool registerChartSqliteFunctions(sqlite3 *db) {
-  const int rc = sqlite3_create_function_v2(
-      db, "chart_normalize_stored_folder", 1,
-      SQLITE_UTF8 | SQLITE_DETERMINISTIC, nullptr, sqliteNormalizeStoredFolder,
-      nullptr, nullptr, nullptr);
-  if (rc != SQLITE_OK) {
-    logSqlError("registering chart database functions", db);
-    return false;
-  }
-  return true;
-}
-
 void logSdlSqlErrorText(const char *context, const std::string &error) {
   SDL_Log("SQL error while %s: %s", context, error.c_str());
 }
@@ -988,10 +966,6 @@ ChartRepository::OpenSession(ScoreRepository *scores) {
     return std::nullopt;
   }
   sqlite3_busy_timeout(connection.get(), 1000);
-  if (!registerChartSqliteFunctions(connection.get())) {
-    return std::nullopt;
-  }
-
   std::string versionError;
   const auto version = readSqliteUserVersion(connection.get(), versionError);
   if (!version.has_value() || *version != kChartDatabaseSchemaVersion) {

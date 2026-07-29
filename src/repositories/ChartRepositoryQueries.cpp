@@ -505,15 +505,15 @@ void appendExactFolderFilter(std::string &query, const std::string &chartAlias,
   if (chartQuery.exactFolder.has_value()) {
     const std::string normalizedPath =
         "replace(" + chartAlias + ".path, '\\', '/')";
-    const std::string normalizedFolder =
-        "chart_normalize_stored_folder(" + chartAlias + ".folder)";
     const auto folderPrefix =
         "(rtrim(replace(@exact_folder, '\\', '/'), '/') || '/')";
-    query += " AND (" + normalizedFolder + " = @exact_folder OR (coalesce(" +
-             chartAlias + ".folder, '') = '' AND substr(" + normalizedPath +
-             ", 1, length(" + folderPrefix + ")) = " + folderPrefix +
-             " AND instr(substr(" + normalizedPath + ", length(" +
-             folderPrefix + ") + 1), '/') = 0))";
+    const std::string pathParentMatches =
+        "substr(" + normalizedPath + ", 1, length(" + folderPrefix + ")) = " +
+        folderPrefix + " AND instr(substr(" + normalizedPath + ", length(" +
+        folderPrefix + ") + 1), '/') = 0";
+    query += " AND (" + chartAlias + ".folder = @exact_folder OR (" +
+             chartAlias + ".folder = '' AND " + pathParentMatches + ") OR (" +
+             chartAlias + ".folder IS NULL AND " + pathParentMatches + "))";
   }
 }
 

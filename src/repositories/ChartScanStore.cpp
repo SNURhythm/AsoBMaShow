@@ -194,9 +194,8 @@ bool bindAndInsertChartMeta(
     };
   }
 
-  std::filesystem::path path = chartMeta.BmsPath;
-  chart_storage_identity::ToRelativePath(path);
-  bindSqliteText(statement, 1, fspath_to_utf8(path));
+  bindSqliteText(statement, 1,
+                 chart_storage_identity::StoredPathText(chartMeta.BmsPath));
   bindSqliteText(statement, 2, normalizedHash(chartMeta.MD5));
   bindSqliteText(statement, 3, normalizedHash(chartMeta.SHA256));
   bindSqliteText(statement, 4, chartMeta.Title);
@@ -205,9 +204,9 @@ bool bindAndInsertChartMeta(
   bindSqliteText(statement, 7, chartMeta.Artist);
   bindSqliteText(statement, 8, chartMeta.SubArtist);
 
-  std::filesystem::path folder = chartMeta.Folder;
-  chart_storage_identity::ToRelativePath(folder);
-  bindSqliteText(statement, 9, fspath_to_utf8(folder));
+  bindSqliteText(
+      statement, 9,
+      chart_storage_identity::StoredFolderPathText(chartMeta.Folder));
   bindSqliteText(statement, 10, fspath_to_utf8(chartMeta.StageFile));
   bindSqliteText(statement, 11, fspath_to_utf8(chartMeta.Banner));
   bindSqliteText(statement, 12, fspath_to_utf8(chartMeta.BackBmp));
