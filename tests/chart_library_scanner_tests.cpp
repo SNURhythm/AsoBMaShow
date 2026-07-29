@@ -110,6 +110,16 @@ writeZip(const std::filesystem::path &path,
   return path;
 }
 
+bool hasArchiveLog(const std::vector<std::string> &logLines,
+                   const std::filesystem::path &archive,
+                   std::string_view event) {
+  const std::string archiveName = archive.filename().string();
+  return std::any_of(logLines.begin(), logLines.end(), [&](const auto &line) {
+    return line.find(event) != std::string::npos &&
+           line.find(archiveName) != std::string::npos;
+  });
+}
+
 void testBasicNoOpAndDeleteScan() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -540,7 +550,58 @@ void testLargeSingleArchivePreservesAllChartResults() {
   assert(snapshot.charts.size() == kChartCount);
   assert(snapshot.archiveCache.size() == 1);
   assert(snapshot.archiveCache.front().chartCount == kChartCount);
+  const auto logLines = archive_file::debugLogLines();
+  assert(hasArchiveLog(logLines, archivePath,
+                       "Finished single archive concurrent chart parse:"));
+  assert(!hasArchiveLog(logLines, archivePath,
+                        "Prefetching indexed archive chart batch:"));
   assert(scanner.Scan(*session, {archivePath}) == 0);
+}
+
+void testMultipleLargeArchivesPrefetchDuringPreparation() {
+  constexpr int kChartCount = 24;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+
+  const auto makeFiles = [](std::string_view directory,
+                            std::string_view titlePrefix) {
+    std::vector<std::pair<std::string, std::string>> files;
+    files.reserve(kChartCount);
+    for (int index = 0; index < kChartCount; ++index) {
+      files.emplace_back(
+          std::string(directory) + "/chart-" + std::to_string(index) + ".bms",
+          chartText(std::string(titlePrefix) + " " + std::to_string(index)));
+    }
+    return files;
+  };
+
+  const auto firstArchive =
+      writeZip(root / "continuous-first.zip", makeFiles("first", "First"));
+  const auto secondArchive =
+      writeZip(root / "continuous-second.zip", makeFiles("second", "Second"));
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.Scan(*session, {firstArchive, secondArchive}) ==
+         kChartCount * 2 + 2);
+  assert(session->CountAllChartMeta() == kChartCount * 2);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.archiveCache.size() == 2);
+  assert(std::all_of(
+      snapshot.archiveCache.begin(), snapshot.archiveCache.end(),
+      [](const auto &cache) { return cache.chartCount == kChartCount; }));
+
+  const auto logLines = archive_file::debugLogLines();
+  for (const auto &archive : {firstArchive, secondArchive}) {
+    assert(hasArchiveLog(logLines, archive,
+                         "Prefetching indexed archive chart batch:"));
+    assert(!hasArchiveLog(logLines, archive,
+                          "Queued bounded DB archive chart batch parse:"));
+  }
 }
 
 void testArchiveResultApplicationOverlapsLaterArchiveStreaming() {
@@ -788,6 +849,7 @@ int main() {
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testMidArchiveCheckpointResumePreservesValidCacheCount();
   testLargeSingleArchivePreservesAllChartResults();
+  testMultipleLargeArchivesPrefetchDuringPreparation();
   testArchiveResultApplicationOverlapsLaterArchiveStreaming();
   testArchiveResultApplicationOverlapsItsOwnStreaming();
   testArchiveInspectionUsesMultipleEntityWorkers();
