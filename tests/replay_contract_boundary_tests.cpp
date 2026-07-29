@@ -499,6 +499,9 @@ void testBestPacemakerUsesTheRetainedReplayConsumer() {
   requireToken(root / "src/ResultPresentationUtils.h",
                "makeRuntimeBestReplayResolver",
                "BEST replay resolution authority");
+  requireToken(root / "src/ResultPresentationUtils.h",
+               "replayForBestSnapshotChart",
+               "live BEST replay resolution authority");
   constexpr std::array<std::string_view, 3> consumers{
       "src/scene/play/GamePlayScene.cpp",
       "src/ReplayVideoExporter.cpp",
@@ -510,6 +513,18 @@ void testBestPacemakerUsesTheRetainedReplayConsumer() {
                  "retained BEST replay resolution");
     requireToken(path, "bestReplay.get()",
                  "retained BEST replay progression");
+  }
+
+  const std::string gameplay =
+      readText(root / "src/scene/play/GamePlayScene.cpp");
+  const auto liveBestBranch =
+      gameplay.find("std::optional<ScoreBestSnapshot> best;");
+  if (liveBestBranch == std::string::npos ||
+      !gameplay.substr(liveBestBranch).contains(
+          "replayForBestSnapshotChart")) {
+    std::cerr << "FAIL: live BEST pacemaker does not resolve its retained "
+                 "replay through the shared authority\n";
+    ++failures;
   }
 }
 

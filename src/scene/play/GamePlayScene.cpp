@@ -2568,12 +2568,15 @@ void GamePlayScene::configurePacemakerTarget() {
   }
 
   std::optional<ScoreBestSnapshot> best;
+  std::shared_ptr<ReplayData> bestReplay;
   if (selected == pacemaker::kTargetBest) {
     best = context.scoreRepository.LoadBestScore(chart->Meta);
+    bestReplay = result_presentation::replayForBestSnapshotChart(
+        context, chart->Meta, best, selected, isCancelled);
   }
 
-  activePacemakerTarget =
-      pacemaker::targetFromSelection(*chart, selected, best, nullptr);
+  activePacemakerTarget = pacemaker::targetFromSelection(
+      *chart, selected, best, bestReplay.get());
   renderer->setPacemakerTarget(activePacemakerTarget);
 }
 

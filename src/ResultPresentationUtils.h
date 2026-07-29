@@ -47,18 +47,29 @@ scoreBestSnapshotFromPreviousBest(const ResultPreviousBestData &previousBest) {
           .attemptId = previousBest.attemptId};
 }
 
+inline std::shared_ptr<ReplayData> replayForBestSnapshotChart(
+    ApplicationContext &context, const bms_parser::ChartMeta &meta,
+    const std::optional<ScoreBestSnapshot> &best, const std::string &targetId,
+    std::atomic_bool &cancelled) {
+  if (pacemaker::normalizeTargetId(targetId) != pacemaker::kTargetBest ||
+      !best.has_value() || !best->attemptId.has_value()) {
+    return {};
+  }
+  auto resolver =
+      replay::makeRuntimeBestReplayResolver(context.replayRepository);
+  return resolver.load(*best->attemptId, meta.BmsPath, cancelled);
+}
+
 inline std::shared_ptr<ReplayData> replayForPreviousBestChart(
     ApplicationContext &context, const bms_parser::ChartMeta &meta,
     const std::optional<ResultPreviousBestData> &previousBest,
     const std::string &targetId,
     std::atomic_bool &cancelled) {
-  if (pacemaker::normalizeTargetId(targetId) != pacemaker::kTargetBest ||
-      !previousBest.has_value() || !previousBest->attemptId.has_value()) {
-    return {};
+  std::optional<ScoreBestSnapshot> best;
+  if (previousBest.has_value()) {
+    best = scoreBestSnapshotFromPreviousBest(*previousBest);
   }
-  auto resolver =
-      replay::makeRuntimeBestReplayResolver(context.replayRepository);
-  return resolver.load(*previousBest->attemptId, meta.BmsPath, cancelled);
+  return replayForBestSnapshotChart(context, meta, best, targetId, cancelled);
 }
 
 inline std::optional<ResultPacemakerData> pacemakerDataForResult(
