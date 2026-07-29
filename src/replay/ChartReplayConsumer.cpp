@@ -113,14 +113,10 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
     auto materialized = dependencies_.materialize(
         verified.document, setupSource(verified.source), verified.result,
         *preparedChart);
-    if (!materialized.matched() || !materialized.replayData) {
-      const auto state = materialized.state ==
-                                 ReplayPlaybackMaterializationState::ResultMismatch
-                             ? ChartReplayConsumerState::ResultMismatch
-                             : ChartReplayConsumerState::MaterializationFailed;
-      return failure(state,
+    if (!materialized.playable()) {
+      return failure(ChartReplayConsumerState::MaterializationFailed,
                      materialized.diagnostic.empty()
-                         ? "Replay judging did not match the saved result."
+                         ? "Replay judging could not produce playback data."
                          : std::move(materialized.diagnostic),
                      std::move(context));
     }
@@ -128,7 +124,8 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
     return {.state = ChartReplayConsumerState::Ready,
             .context = std::move(context),
             .chart = std::move(preparedChart),
-            .replayData = std::move(materialized.replayData)};
+            .replayData = std::move(materialized.replayData),
+            .diagnostic = std::move(materialized.diagnostic)};
   } catch (...) {
     return failure(ChartReplayConsumerState::MaterializationFailed,
                    "Chart replay preparation failed.");

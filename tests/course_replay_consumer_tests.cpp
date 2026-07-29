@@ -348,7 +348,7 @@ void testReplayFailureStopsBeforeSetupAndProducesNoAdapter() {
          "missing course BRD stops before setup, judging, and adapters");
 }
 
-void testMaterializedCarriedStateMustAgreeWithSavedFacts() {
+void testMaterializedCarriedStateDriftRemainsDiagnostic() {
   ConsumerHarness harness;
   harness.disagreeingCarriedGauge = true;
   auto consumer = harness.makeConsumer();
@@ -356,10 +356,11 @@ void testMaterializedCarriedStateMustAgreeWithSavedFacts() {
   const std::vector<std::filesystem::path> paths{
       "selected/stage-0.bms", "selected/stage-1.bms"};
   const auto loaded = consumer.load(harness.listed, paths, cancelled);
-  expect(loaded.state == CourseReplayConsumerState::ResultMismatch &&
-             !loaded.ready() && !loaded.replayData &&
-             loaded.replayState() == ReplayState::Mismatched,
-         "materialized carried gauge disagreement fails closed");
+  expect(loaded.ready() && loaded.replayData &&
+             loaded.replayState() == ReplayState::Verified &&
+             !loaded.diagnostic.empty(),
+         "materialized carried gauge disagreement remains diagnostic while "
+         "the course stays playable");
 }
 
 void testVerifiedLaunchAdaptersSeparateWatchFromRetrySame() {
@@ -404,7 +405,7 @@ int main() {
 #if ASOBMASHOW_HAS_COURSE_REPLAY_CONSUMER
   testConsumerOwnsOneVerifiedCoursePipelineAndContinuation();
   testReplayFailureStopsBeforeSetupAndProducesNoAdapter();
-  testMaterializedCarriedStateMustAgreeWithSavedFacts();
+  testMaterializedCarriedStateDriftRemainsDiagnostic();
   testVerifiedLaunchAdaptersSeparateWatchFromRetrySame();
 #else
   expect(false, "CourseReplayConsumer contract is not implemented");

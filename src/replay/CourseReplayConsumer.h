@@ -87,8 +87,8 @@ struct CourseReplayConsumerDependencies {
 };
 
 // The sole modern course replay preparation pipeline. The compatibility
-// CourseReplayData is memory-only and is emitted only after every stage,
-// carried state transition, and saved result fact agrees.
+// CourseReplayData is memory-only and is emitted after every stage and carried
+// state transition is playable. Saved-result disagreement remains diagnostic.
 class CourseReplayConsumer {
 public:
   explicit CourseReplayConsumer(CourseReplayConsumerDependencies dependencies);

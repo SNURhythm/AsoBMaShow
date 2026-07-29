@@ -299,7 +299,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   outcome.initialGaugeState = initialGaugeState;
   outcome.finalGaugeState = simulation.scoreState().gaugeSnapshot();
   outcome.endingCombo = simulation.scoreState().combo;
-  if (!outcome.matched() || !outcome.judgedResult.has_value()) {
+  if (!outcome.judgedResult.has_value()) {
     return outcome;
   }
 

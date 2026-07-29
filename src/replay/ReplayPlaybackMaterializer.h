@@ -49,6 +49,11 @@ struct ReplayPlaybackMaterializationOutcome {
   [[nodiscard]] bool matched() const noexcept {
     return state == ReplayPlaybackMaterializationState::Matched;
   }
+  [[nodiscard]] bool playable() const noexcept {
+    return (state == ReplayPlaybackMaterializationState::Matched ||
+            state == ReplayPlaybackMaterializationState::ResultMismatch) &&
+           replayData != nullptr;
+  }
 };
 
 struct ReplayPlaybackCarryState {
@@ -66,8 +71,9 @@ public:
       std::size_t eventBudget = kDefaultReplayPlaybackEventBudget);
 
   // Builds the single judged, in-memory compatibility track used by Watch,
-  // Retry Same, G-Battle, practice ghost, and video export. It is returned
-  // only when independently materialized facts agree with the saved result.
+  // Retry Same, G-Battle, practice ghost, and video export. Saved-result
+  // disagreement is reported on the outcome but does not discard a
+  // structurally playable track.
   [[nodiscard]] static ReplayPlaybackMaterializationOutcome
   materializeForConsumers(
       const ReplayChartDocument &document, ReplaySetupSource source,

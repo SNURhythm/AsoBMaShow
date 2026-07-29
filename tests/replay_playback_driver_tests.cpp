@@ -125,7 +125,7 @@ std::unique_ptr<bms_parser::Chart> oneNoteChartPointer() {
   return chart;
 }
 
-void testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement() {
+void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   auto chart = oneNoteChart();
   auto replay = document();
   replay.timeBounds = {.completionSongTimeMicros = 2'000'000};
@@ -171,8 +171,10 @@ void testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement() {
   const auto first = ReplayPlaybackMaterializer::materializeForConsumers(
       replay, ReplaySetupSource::LocalCapture, saved, chart);
   expect(first.state == ReplayPlaybackMaterializationState::ResultMismatch &&
-             first.judgedResult.has_value() && !first.replayData,
-         "consumer track stays unavailable when replay judging disagrees");
+             first.judgedResult.has_value() && first.playable() &&
+             first.replayData && !first.diagnostic.empty(),
+         "result disagreement remains diagnostic while the consumer track "
+         "stays playable");
   if (!first.judgedResult.has_value()) {
     return;
   }
@@ -338,8 +340,9 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
                    result == listed.result,
                "consumer materializes only the verified document and result");
         ReplayPlaybackMaterializationOutcome outcome;
-        outcome.state = ReplayPlaybackMaterializationState::Matched;
+        outcome.state = ReplayPlaybackMaterializationState::ResultMismatch;
         outcome.replayData = std::make_shared<ReplayData>();
+        outcome.diagnostic = "Saved result differs from replay judging.";
         return outcome;
       },
   });
@@ -347,10 +350,12 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
   std::atomic_bool cancelled = false;
   auto loaded = consumer.load(listed, "selected/chart.bms", cancelled);
   expect(loaded.ready() && loaded.chart && loaded.replayData &&
+             loaded.diagnostic ==
+                 "Saved result differs from replay judging." &&
              calls == std::vector<std::string>{"parse", "context", "prepare",
                                                "materialize"},
-         "every chart replay action receives one fully verified preparation, "
-         "including a no-LN score bucket");
+         "every chart replay action receives one structurally playable "
+         "preparation while result drift remains diagnostic");
 
   calls.clear();
   ChartReplayConsumer missing({
@@ -590,7 +595,7 @@ int main() {
   testDriverRejectsReverseTimeAndBoundsEachAdvance();
   testLogicalGameplayAdapterOwnsLaneAndScratchMapping();
   testMaterializerUsesDriverAndOnlyComparesSavedFacts();
-  testConcreteMaterializerBuildsConsumerTrackOnlyAfterAgreement();
+  testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement();
   testConsumerSetupAdapterOwnsEveryReplaySetupTranslation();
   testChartConsumerOwnsTheEntireVerifiedPreparationPipeline();
   testMaterializationBudgetStopsBeforeResultConstruction();
