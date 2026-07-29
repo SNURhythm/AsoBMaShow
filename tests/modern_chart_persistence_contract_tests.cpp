@@ -83,11 +83,48 @@ void testLegacyChartPersistenceSurfaceIsGone() {
           "ResultScene still retries through legacy chart persistence");
 }
 
+void testRecordsReplayDeletionRequiresBoundConfirmation() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  const std::string menu = read(root / "src/scene/MainMenuScene.cpp");
+
+  const auto handlerBegin =
+      menu.find("replayDeleteButton->setOnClickListener");
+  const auto handlerEnd =
+      menu.find("replayModalFilterButton->setOnClickListener", handlerBegin);
+  require(handlerBegin != std::string::npos &&
+              handlerEnd != std::string::npos,
+          "Records replay delete callback is missing");
+  const std::string_view handler(menu.data() + handlerBegin,
+                                 handlerEnd - handlerBegin);
+  require(handler.contains("showReplayDeleteConfirmation") &&
+              !handler.contains("confirmSelectedReplayFileDelete"),
+          "the trash button must open confirmation without deleting");
+
+  const auto confirmBegin =
+      menu.find("void MainMenuScene::confirmSelectedReplayFileDelete");
+  const auto confirmEnd =
+      menu.find("void MainMenuScene::applyReplayFileDocumentHandoff",
+                confirmBegin);
+  require(confirmBegin != std::string::npos &&
+              confirmEnd != std::string::npos,
+          "confirmed replay delete boundary is missing");
+  const std::string_view confirm(menu.data() + confirmBegin,
+                                 confirmEnd - confirmBegin);
+  const auto authorization =
+      confirm.find("replayDeleteConfirmation.confirm()");
+  const auto mutation = confirm.find("actions.remove(*request)");
+  require(authorization != std::string_view::npos &&
+              mutation != std::string_view::npos && authorization < mutation,
+          "deletion must consume its exact pending confirmation before the "
+          "file action service mutates anything");
+}
+
 } // namespace
 
 int main() {
   testAdditiveModernChartSchemaBoundary();
   testChartRuntimeUsesModernPersistenceBoundary();
   testLegacyChartPersistenceSurfaceIsGone();
+  testRecordsReplayDeletionRequiresBoundConfirmation();
   return 0;
 }

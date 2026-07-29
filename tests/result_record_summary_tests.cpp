@@ -76,6 +76,42 @@ void testReplayFileActionsUseModernIdentityAndCapabilitiesOnly() {
          "busy UI preserves action visibility while disabling interaction");
 }
 
+void testReplayDeleteConfirmationOwnsTheExactRequestedAttempt() {
+  ModernChartResultRecord chartRecord{.result = validModernResult()};
+  const auto chart = makeModernChartResultRecord(
+      chartRecord, replay::ReplayState::Verified, ir::IrRecordState::Hidden);
+  const auto chartActions = replay::replayFileActionSelection(chart, true);
+
+  replay::ReplayFileDeleteConfirmation confirmation;
+  expect(confirmation.begin(chartActions) && confirmation.active(),
+         "a visible enabled delete action opens confirmation");
+
+  ModernCourseResultRecord courseRecord{.result = validModernCourseResult()};
+  const auto course =
+      makeModernCourseResultRecord(courseRecord, replay::ReplayState::Corrupt);
+  const auto courseActions = replay::replayFileActionSelection(course, true);
+  expect(courseActions.request &&
+             confirmation.request()->attemptId == chartRecord.result.attemptId,
+         "confirmation remains bound to the attempt that opened it");
+
+  const auto confirmed = confirmation.confirm();
+  expect(confirmed &&
+             confirmed->owner == ModernReplayOwnerKind::ChartResult &&
+             confirmed->attemptId == chartRecord.result.attemptId &&
+             !confirmation.active() && !confirmation.confirm().has_value(),
+         "confirm returns the exact request once and clears pending state");
+
+  expect(confirmation.begin(courseActions),
+         "a later selection can open its own confirmation");
+  confirmation.cancel();
+  expect(!confirmation.active() && !confirmation.confirm().has_value(),
+         "cancel clears confirmation without authorizing deletion");
+
+  const auto busy = replay::replayFileActionSelection(chart, false);
+  expect(!confirmation.begin(busy) && !confirmation.active(),
+         "a disabled delete action cannot create pending authority");
+}
+
 void testRecordActionsRequireTypedIdentityAndPayloadAgreement() {
   ModernChartResultRecord chartRecord{.result = validModernResult()};
   auto modernChart = makeModernChartResultRecord(
@@ -781,6 +817,7 @@ void testMergeSuppressesOnlyReceiptLinkedRemoteRow() {
 int main() {
   testRecordActionsRequireTypedIdentityAndPayloadAgreement();
   testReplayFileActionsUseModernIdentityAndCapabilitiesOnly();
+  testReplayDeleteConfirmationOwnsTheExactRequestedAttempt();
   testAutoPlayIsTheOnlyReplaySummaryBackedRecord();
   testModernConversionUsesSharedReplayCapabilities();
   testModernChartProjectionUsesEffectiveLampAndBothPlayerOptions();

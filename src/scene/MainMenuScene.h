@@ -10,6 +10,7 @@
 #include "../ResultRecordSummary.h"
 #include "../ReplayVideoExporter.h"
 #include "../PlatformDocumentHandoff.h"
+#include "../replay/ReplayFileActionSelection.h"
 #include "../repositories/ScoreRepository.h"
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
@@ -285,6 +286,7 @@ private:
   View *replayWatchOptionsContent = nullptr;
   View *replayExportOptionsContent = nullptr;
   View *replayExportProgressContent = nullptr;
+  View *replayDeleteConfirmationContent = nullptr;
   View *replayExportProgressTrack = nullptr;
   View *replayExportProgressFill = nullptr;
   TextView *replayModalTitleText = nullptr;
@@ -382,6 +384,8 @@ private:
   Button *replayModalExportButton = nullptr;
   Button *replayShareButton = nullptr;
   Button *replayDeleteButton = nullptr;
+  Button *replayDeleteCancelButton = nullptr;
+  Button *replayDeleteConfirmButton = nullptr;
   Button *replayModalFilterButton = nullptr;
   Button *replayModalCloseButton = nullptr;
   Button *replayFps60Button = nullptr;
@@ -404,6 +408,8 @@ private:
   TextView *replayModalExportButtonText = nullptr;
   TextView *replayShareButtonText = nullptr;
   TextView *replayDeleteButtonText = nullptr;
+  TextView *replayDeleteCancelButtonText = nullptr;
+  TextView *replayDeleteConfirmButtonText = nullptr;
   TextView *replayModalFilterButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
   TextView *replayFps60ButtonText = nullptr;
@@ -523,6 +529,7 @@ private:
   std::optional<ResultRecordSummary> replayExportSelection;
   platform_document_handoff::PlatformDocumentHandoffOperation
       replayFileDocumentHandoff;
+  replay::ReplayFileDeleteConfirmation replayDeleteConfirmation;
   ChartMetaRecord replayExportChart;
   int selectedReplayIndex = -1;
   int selectedExportFps = 120;
@@ -799,7 +806,9 @@ private:
   void hideReplayModal();
   void refreshReplayModalActions();
   void startSelectedReplayFileShare();
-  void deleteSelectedReplayFile();
+  void showReplayDeleteConfirmation();
+  void cancelReplayDeleteConfirmation();
+  void confirmSelectedReplayFileDelete();
   void applyReplayFileDocumentHandoff();
   void refreshReplayFilterSortButtons();
   void refreshReplayExportOptionButtons();

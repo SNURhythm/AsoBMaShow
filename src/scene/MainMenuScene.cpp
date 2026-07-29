@@ -2432,6 +2432,7 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
 
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
+  replayDeleteConfirmation.cancel();
   revealContextMenu.reset();
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
@@ -2475,6 +2476,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayWatchOptionsContent = nullptr;
   replayExportOptionsContent = nullptr;
   replayExportProgressContent = nullptr;
+  replayDeleteConfirmationContent = nullptr;
   replayExportProgressTrack = nullptr;
   replayExportProgressFill = nullptr;
   replayModalTitleText = nullptr;
@@ -2571,6 +2573,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayModalExportButton = nullptr;
   replayShareButton = nullptr;
   replayDeleteButton = nullptr;
+  replayDeleteCancelButton = nullptr;
+  replayDeleteConfirmButton = nullptr;
   replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
@@ -2593,6 +2597,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayModalExportButtonText = nullptr;
   replayShareButtonText = nullptr;
   replayDeleteButtonText = nullptr;
+  replayDeleteCancelButtonText = nullptr;
+  replayDeleteConfirmButtonText = nullptr;
   replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;
@@ -8580,6 +8586,61 @@ void MainMenuScene::buildReplayModal() {
   replayExportProgressContent->addView(replayExportProgressPercentText);
   replayModalContentFrame->addView(replayExportProgressContent);
 
+  replayDeleteConfirmationContent = new View();
+  replayDeleteConfirmationContent->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)
+      ->setPosition(Edge::Top, 0)
+      ->setWidth(kModalContentWidth)
+      ->setHeight(kModalContentHeight)
+      ->setGap(20);
+  replayDeleteConfirmationContent->setVisible(false);
+
+  auto *deleteQuestion =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  deleteQuestion->setText("Delete this BRD replay file?");
+  deleteQuestion->setThemedColor(ui_theme::textPrimary);
+  deleteQuestion->setAlign(TextView::CENTER);
+  deleteQuestion->setHeight(44);
+  replayDeleteConfirmationContent->addView(deleteQuestion);
+
+  auto *deleteDetail = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  deleteDetail->setText(
+      "Result history will be kept. The BRD file and replay actions cannot "
+      "be restored.");
+  deleteDetail->setThemedColor(ui_theme::textSecondary);
+  deleteDetail->setAlign(TextView::CENTER);
+  deleteDetail->setWrap(true);
+  deleteDetail->setHeight(72);
+  replayDeleteConfirmationContent->addView(deleteDetail);
+
+  auto *deleteConfirmationActions = makeModalOptionRow();
+  deleteConfirmationActions->setJustifyContent(YGJustifyCenter);
+  replayDeleteCancelButton =
+      makeModalButton("Cancel", 20, &replayDeleteCancelButtonText);
+  replayDeleteConfirmButton =
+      makeModalButton("Delete Replay", 18, &replayDeleteConfirmButtonText);
+  replayDeleteCancelButton->setWidth(190);
+  replayDeleteConfirmButton->setWidth(210);
+  replayDeleteCancelButton->setOnClickListener(
+      [this]() { cancelReplayDeleteConfirmation(); });
+  replayDeleteConfirmButton->setOnClickListener(
+      [this]() { confirmSelectedReplayFileDelete(); });
+  styleThemedActionButton(
+      replayDeleteCancelButton, replayDeleteCancelButtonText, true,
+      ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
+      ui_theme::hairlineStrong);
+  styleThemedActionButton(
+      replayDeleteConfirmButton, replayDeleteConfirmButtonText, true,
+      ui_theme::warningAction, ui_theme::warningActionHover,
+      ui_theme::warningActionPressed, ui_theme::amber);
+  deleteConfirmationActions->addView(replayDeleteCancelButton);
+  deleteConfirmationActions->addView(replayDeleteConfirmButton);
+  replayDeleteConfirmationContent->addView(deleteConfirmationActions);
+  replayModalContentFrame->addView(replayDeleteConfirmationContent);
+
   auto *footer = new View();
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
@@ -8604,7 +8665,7 @@ void MainMenuScene::buildReplayModal() {
   replayShareButton->setOnClickListener(
       [this]() { startSelectedReplayFileShare(); });
   replayDeleteButton->setOnClickListener(
-      [this]() { deleteSelectedReplayFile(); });
+      [this]() { showReplayDeleteConfirmation(); });
   replayModalFilterButton->setOnClickListener([this]() {
     if (replayExportInProgress.load() || replayResultRecallInProgress ||
         replayIrUploadInProgress) {
@@ -9013,6 +9074,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
   ++replayIrUploadFeedbackRevision;
+  replayDeleteConfirmation.cancel();
 
   clearReplayModalSelection();
   selectedReplayRenderTouchPoints = context.settings.touchVisualizationEnabled;
@@ -9026,6 +9088,7 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   replayWatchOptionsContent->setVisible(false);
   replayExportOptionsContent->setVisible(false);
   replayExportProgressContent->setVisible(false);
+  replayDeleteConfirmationContent->setVisible(false);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
   refreshReplayFilterSortButtons();
@@ -9044,6 +9107,7 @@ void MainMenuScene::showReplayFilterSortOptions() {
   replayWatchOptionsContent->setVisible(false);
   replayExportOptionsContent->setVisible(false);
   replayExportProgressContent->setVisible(false);
+  replayDeleteConfirmationContent->setVisible(false);
   replayExportSelection.reset();
   refreshReplayFilterSortButtons();
   refreshReplayModalActions();
@@ -9067,6 +9131,7 @@ void MainMenuScene::showReplayExportOptions() {
   replayWatchOptionsContent->setVisible(false);
   replayExportOptionsContent->setVisible(true);
   replayExportProgressContent->setVisible(false);
+  replayDeleteConfirmationContent->setVisible(false);
   selectedExportFps = 120;
   selectedExportFullResolution = true;
   selectedExportIncludeResultScreen = true;
@@ -9091,6 +9156,7 @@ void MainMenuScene::showReplayExportProgress(const std::string &title,
   replayWatchOptionsContent->setVisible(false);
   replayExportOptionsContent->setVisible(false);
   replayExportProgressContent->setVisible(true);
+  replayDeleteConfirmationContent->setVisible(false);
   updateReplayExportProgressUi(0.0, message);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
@@ -9107,6 +9173,10 @@ void MainMenuScene::hideReplayModal() {
     return;
   }
   replayModalRoot->setVisible(false);
+  replayDeleteConfirmation.cancel();
+  if (replayDeleteConfirmationContent != nullptr) {
+    replayDeleteConfirmationContent->setVisible(false);
+  }
   replayIrObservedRevisions.clear();
   ++replayIrUploadFeedbackRevision;
   clearReplayModalSelection();
@@ -9128,7 +9198,7 @@ void MainMenuScene::hideReplayModal() {
 void MainMenuScene::startSelectedReplayFileShare() {
   if (!selectedResultRecordSummary || replayFileDocumentHandoff ||
       replayExportInProgress.load() || replayResultRecallInProgress ||
-      replayIrUploadInProgress) {
+      replayIrUploadInProgress || replayDeleteConfirmation.active()) {
     return;
   }
   const auto selection = replay::replayFileActionSelection(
@@ -9171,7 +9241,7 @@ void MainMenuScene::startSelectedReplayFileShare() {
   refreshReplayModalActions();
 }
 
-void MainMenuScene::deleteSelectedReplayFile() {
+void MainMenuScene::showReplayDeleteConfirmation() {
   if (!selectedResultRecordSummary || replayFileDocumentHandoff ||
       replayExportInProgress.load() || replayResultRecallInProgress ||
       replayIrUploadInProgress) {
@@ -9179,12 +9249,64 @@ void MainMenuScene::deleteSelectedReplayFile() {
   }
   const auto selection = replay::replayFileActionSelection(
       *selectedResultRecordSummary, true);
-  if (!selection.request || !selection.deleteVisible) {
+  if (replayDeleteConfirmationContent == nullptr ||
+      !replayDeleteConfirmation.begin(selection)) {
     return;
   }
 
+  replayModalTitleText->setText("Confirm Replay Deletion");
+  replayListContent->setVisible(false);
+  replayFilterSortContent->setVisible(false);
+  replayWatchOptionsContent->setVisible(false);
+  replayExportOptionsContent->setVisible(false);
+  replayExportProgressContent->setVisible(false);
+  replayDeleteConfirmationContent->setVisible(true);
+  refreshReplayModalActions();
+  replayModalRoot->applyYogaLayoutFromRoot();
+}
+
+void MainMenuScene::cancelReplayDeleteConfirmation() {
+  replayDeleteConfirmation.cancel();
+  if (replayDeleteConfirmationContent != nullptr) {
+    replayDeleteConfirmationContent->setVisible(false);
+  }
+  if (replayListContent != nullptr) {
+    replayListContent->setVisible(true);
+  }
+  if (replayModalTitleText != nullptr) {
+    replayModalTitleText->setText("Records");
+  }
+  if (replayListView != nullptr) {
+    replayListView->restoreSelection(selectedReplayIndex);
+  }
+  refreshReplayModalActions();
+  if (replayModalRoot != nullptr) {
+    replayModalRoot->applyYogaLayoutFromRoot();
+  }
+}
+
+void MainMenuScene::confirmSelectedReplayFileDelete() {
+  if (replayFileDocumentHandoff || replayExportInProgress.load() ||
+      replayResultRecallInProgress || replayIrUploadInProgress) {
+    return;
+  }
+  auto request = replayDeleteConfirmation.confirm();
+  if (!request) {
+    return;
+  }
+
+  if (replayDeleteConfirmationContent != nullptr) {
+    replayDeleteConfirmationContent->setVisible(false);
+  }
+  if (replayListContent != nullptr) {
+    replayListContent->setVisible(true);
+  }
+  if (replayModalTitleText != nullptr) {
+    replayModalTitleText->setText("Records");
+  }
+
   replay::ReplayFileActionService actions(context.replayRepository);
-  const auto removed = actions.remove(*selection.request);
+  const auto removed = actions.remove(*request);
   if (removed.state == replay::ReplayFileActionState::UserDeleted) {
     if (replayStatusText != nullptr) {
       replayStatusText->setText(
@@ -9203,6 +9325,9 @@ void MainMenuScene::deleteSelectedReplayFile() {
     }
   }
   refreshReplayModalActions();
+  if (replayModalRoot != nullptr) {
+    replayModalRoot->applyYogaLayoutFromRoot();
+  }
 }
 
 void MainMenuScene::applyReplayFileDocumentHandoff() {
@@ -9234,6 +9359,9 @@ void MainMenuScene::refreshReplayModalActions() {
                            replayExportOptionsContent->getVisible();
   const bool progressMode = replayExportProgressContent != nullptr &&
                             replayExportProgressContent->getVisible();
+  const bool deleteConfirmationMode =
+      replayDeleteConfirmationContent != nullptr &&
+      replayDeleteConfirmationContent->getVisible();
   const bool exportInProgress = replayExportInProgress.load();
   const bool resultRecallInProgress = replayResultRecallInProgress;
   const bool irUploadInProgress = replayIrUploadInProgress;
@@ -9247,6 +9375,7 @@ void MainMenuScene::refreshReplayModalActions() {
                                : replay::ReplayFileActionSelection{};
   const bool watchVisible =
       selectedResultRecordSummary.has_value() && !filterSortMode &&
+      !deleteConfirmationMode &&
       !optionsMode && !progressMode &&
       resultRecordActionTarget(*selectedResultRecordSummary,
                                ResultRecordAction::Watch) !=
@@ -9254,6 +9383,7 @@ void MainMenuScene::refreshReplayModalActions() {
   const bool gbattleVisible =
       selectedResultRecordSummary.has_value() && !filterSortMode &&
       !watchOptionsMode && !optionsMode && !progressMode &&
+      !deleteConfirmationMode &&
       resultRecordActionTarget(*selectedResultRecordSummary,
                                ResultRecordAction::GBattle) ==
           ResultRecordActionTarget::ModernChart;
@@ -9261,12 +9391,12 @@ void MainMenuScene::refreshReplayModalActions() {
       resultRecordRecallActionState(
           selectedResultRecordSummary,
           !filterSortMode && !watchOptionsMode && !optionsMode &&
-              !progressMode,
+              !progressMode && !deleteConfirmationMode,
           modalOperationInProgress);
   const bool resultVisible = resultAction.visible;
   const bool exportVisible =
       selectedResultRecordSummary.has_value() && !filterSortMode &&
-      !watchOptionsMode && !progressMode &&
+      !watchOptionsMode && !progressMode && !deleteConfirmationMode &&
       resultRecordActionTarget(*selectedResultRecordSummary,
                                ResultRecordAction::VideoExport) !=
           ResultRecordActionTarget::None;
@@ -9301,17 +9431,20 @@ void MainMenuScene::refreshReplayModalActions() {
 
   if (replayModalFilterButton != nullptr) {
     const bool filterVisible =
-        !watchOptionsMode && !optionsMode && !progressMode;
+        !watchOptionsMode && !optionsMode && !progressMode &&
+        !deleteConfirmationMode;
     replayModalFilterButton->setVisible(filterVisible);
     replayModalFilterButton->setWidth(filterVisible ? 54.0f : 0.0f);
   }
   if (replayShareButton != nullptr) {
-    replayShareButton->setVisible(fileActions.shareVisible);
-    replayShareButton->setWidth(fileActions.shareVisible ? 54.0F : 0.0F);
+    const bool visible = fileActions.shareVisible && !deleteConfirmationMode;
+    replayShareButton->setVisible(visible);
+    replayShareButton->setWidth(visible ? 54.0F : 0.0F);
   }
   if (replayDeleteButton != nullptr) {
-    replayDeleteButton->setVisible(fileActions.deleteVisible);
-    replayDeleteButton->setWidth(fileActions.deleteVisible ? 54.0F : 0.0F);
+    const bool visible = fileActions.deleteVisible && !deleteConfirmationMode;
+    replayDeleteButton->setVisible(visible);
+    replayDeleteButton->setWidth(visible ? 54.0F : 0.0F);
   }
   if (replayWatchButton != nullptr) {
     replayWatchButton->setVisible(watchVisible);
@@ -9338,12 +9471,14 @@ void MainMenuScene::refreshReplayModalActions() {
                           ui_theme::hairlineStrong);
   styleThemedActionButton(
       replayShareButton, replayShareButtonText,
-      fileActions.shareVisible && fileActions.enabled,
+      fileActions.shareVisible && fileActions.enabled &&
+          !deleteConfirmationMode,
       ui_theme::infoAction, ui_theme::infoActionHover,
       ui_theme::infoActionPressed, ui_theme::accentBorder);
   styleThemedActionButton(
       replayDeleteButton, replayDeleteButtonText,
-      fileActions.deleteVisible && fileActions.enabled,
+      fileActions.deleteVisible && fileActions.enabled &&
+          !deleteConfirmationMode,
       ui_theme::warningAction, ui_theme::warningActionHover,
       ui_theme::warningActionPressed, ui_theme::amber);
   if (replay_record_filters::hasActiveCriteria(replayRecordFilters) ||
@@ -11315,6 +11450,7 @@ void MainMenuScene::cleanupScene() {
   revealContextMenu.reset();
   rankingsModal.reset();
   replayFileDocumentHandoff.close();
+  replayDeleteConfirmation.cancel();
   cancelActivePreviewLoading();
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
@@ -11404,6 +11540,7 @@ void MainMenuScene::cleanupScene() {
   replayWatchOptionsContent = nullptr;
   replayExportOptionsContent = nullptr;
   replayExportProgressContent = nullptr;
+  replayDeleteConfirmationContent = nullptr;
   replayExportProgressTrack = nullptr;
   replayExportProgressFill = nullptr;
   replayModalTitleText = nullptr;
@@ -11495,6 +11632,8 @@ void MainMenuScene::cleanupScene() {
   replayModalExportButton = nullptr;
   replayShareButton = nullptr;
   replayDeleteButton = nullptr;
+  replayDeleteCancelButton = nullptr;
+  replayDeleteConfirmButton = nullptr;
   replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
@@ -11517,6 +11656,8 @@ void MainMenuScene::cleanupScene() {
   replayModalExportButtonText = nullptr;
   replayShareButtonText = nullptr;
   replayDeleteButtonText = nullptr;
+  replayDeleteCancelButtonText = nullptr;
+  replayDeleteConfirmButtonText = nullptr;
   replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;
