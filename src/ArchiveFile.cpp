@@ -2075,21 +2075,23 @@ std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
   }
 
   const std::string key = archiveKey(archivePath);
-  std::lock_guard<std::mutex> cacheLock(gSevenZipArchiveMutex);
-  const auto cachedIt = gSevenZipArchiveCache.find(key);
-  if (cachedIt != gSevenZipArchiveCache.end()) {
-    const auto &cached = cachedIt->second;
-    if (cached != nullptr && cached->size == archiveSize &&
-        cached->mtime == archiveMtime &&
-        (requestedFormatId == 0 || cached->formatId == requestedFormatId)) {
-      cached->lastUse = ++gSevenZipArchiveUseCounter;
-      if (cacheHit != nullptr) {
-        *cacheHit = true;
+  {
+    std::lock_guard<std::mutex> cacheLock(gSevenZipArchiveMutex);
+    const auto cachedIt = gSevenZipArchiveCache.find(key);
+    if (cachedIt != gSevenZipArchiveCache.end()) {
+      const auto &cached = cachedIt->second;
+      if (cached != nullptr && cached->size == archiveSize &&
+          cached->mtime == archiveMtime &&
+          (requestedFormatId == 0 || cached->formatId == requestedFormatId)) {
+        cached->lastUse = ++gSevenZipArchiveUseCounter;
+        if (cacheHit != nullptr) {
+          *cacheHit = true;
+        }
+        return cached;
       }
-      return cached;
+      gSevenZipArchiveCache.erase(cachedIt);
+      appendDebugLogLineImpl("Invalidated cached 7-Zip archive: " + key);
     }
-    gSevenZipArchiveCache.erase(cachedIt);
-    appendDebugLogLineImpl("Invalidated cached 7-Zip archive: " + key);
   }
 
   using Clock = std::chrono::steady_clock;
@@ -2123,11 +2125,30 @@ std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
   state->formatId = static_cast<unsigned char>(formatUsed);
   state->archive = archive;
   state->stream = stream;
-  state->lastUse = ++gSevenZipArchiveUseCounter;
-  gSevenZipArchiveCache[key] = state;
-  appendDebugLogLineImpl("Opened cached 7-Zip archive: " + key +
-                         " openMs=" + std::to_string(elapsed));
-  trimSevenZipArchiveCacheLocked();
+  {
+    std::lock_guard<std::mutex> cacheLock(gSevenZipArchiveMutex);
+    const auto cachedIt = gSevenZipArchiveCache.find(key);
+    if (cachedIt != gSevenZipArchiveCache.end()) {
+      const auto &cached = cachedIt->second;
+      if (cached != nullptr && cached->size == archiveSize &&
+          cached->mtime == archiveMtime &&
+          (requestedFormatId == 0 || cached->formatId == requestedFormatId)) {
+        cached->lastUse = ++gSevenZipArchiveUseCounter;
+        if (cacheHit != nullptr) {
+          *cacheHit = true;
+        }
+        return cached;
+      }
+      gSevenZipArchiveCache.erase(cachedIt);
+      appendDebugLogLineImpl("Invalidated cached 7-Zip archive: " + key);
+    }
+
+    state->lastUse = ++gSevenZipArchiveUseCounter;
+    gSevenZipArchiveCache[key] = state;
+    appendDebugLogLineImpl("Opened cached 7-Zip archive: " + key +
+                           " openMs=" + std::to_string(elapsed));
+    trimSevenZipArchiveCacheLocked();
+  }
   return state;
 }
 

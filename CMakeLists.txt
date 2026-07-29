@@ -2016,6 +2016,50 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(chart_scan_work_scheduler_tests PRIVATE cxx_std_23)
 
+    add_executable(archive_file_concurrency_tests
+        tests/archive_file_concurrency_tests.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(archive_file_concurrency_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(archive_file_concurrency_tests PRIVATE cxx_std_23)
+    target_link_libraries(archive_file_concurrency_tests PRIVATE ${COMMON_LIBS})
+    if(NOT WIN32)
+        set(SEVENZIP_TEST_SUPPORT_DIR
+            "${CMAKE_CURRENT_BINARY_DIR}/7zip-test-support")
+        set(SEVENZIP_TEST_7Z_REGISTER_OBJECT
+            "${SEVENZIP_TEST_SUPPORT_DIR}/7zRegister.cpp.o")
+        add_custom_command(
+            OUTPUT "${SEVENZIP_TEST_7Z_REGISTER_OBJECT}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${SEVENZIP_TEST_SUPPORT_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                "${SEVENZIP_TEST_7Z_REGISTER_OBJECT}"
+            COMMAND ${CMAKE_AR} -x "$<TARGET_FILE:7zip::7zip>"
+                7zRegister.cpp.o
+            WORKING_DIRECTORY "${SEVENZIP_TEST_SUPPORT_DIR}"
+            COMMENT "Extracting 7-Zip handler registration for concurrency test"
+            VERBATIM
+        )
+        set_source_files_properties("${SEVENZIP_TEST_7Z_REGISTER_OBJECT}"
+            PROPERTIES
+            EXTERNAL_OBJECT TRUE
+            GENERATED TRUE
+        )
+        target_sources(archive_file_concurrency_tests PRIVATE
+            "${SEVENZIP_TEST_7Z_REGISTER_OBJECT}")
+    endif()
+    if(APPLE)
+        target_link_libraries(archive_file_concurrency_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(archive_file_concurrency_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(chart_library_scanner_tests
         tests/chart_library_scanner_tests.cpp
         src/ChartLibraryScanner.cpp
@@ -3837,6 +3881,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         music_playlist_repository_tests
         chart_repository_tests
         chart_scan_work_scheduler_tests
+        archive_file_concurrency_tests
         chart_library_scanner_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
