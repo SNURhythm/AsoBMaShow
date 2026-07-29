@@ -1,5 +1,7 @@
 #include "ChartReplayConsumer.h"
 
+#include "../LongNoteModeUtils.h"
+
 #include <utility>
 
 namespace replay {
@@ -26,28 +28,13 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
   try {
     std::string diagnostic;
     if (selectedChartPath.empty() || cancelled.load() ||
-        !dependencies_.parseBaseChart || !dependencies_.loadContext ||
-        !dependencies_.prepareChart || !dependencies_.materialize ||
+        !dependencies_.loadContext || !dependencies_.prepareChart ||
+        !dependencies_.materialize ||
         !result_persistence::validateModernChartResult(listedRecord.result,
                                                        diagnostic)) {
       return failure(ChartReplayConsumerState::InvalidRequest,
                      diagnostic.empty()
                          ? "Chart replay consumer request is incomplete."
-                         : std::move(diagnostic));
-    }
-
-    const ReplayChartIdentity savedIdentity{
-        .md5 = listedRecord.result.score.chartMd5,
-        .sha256 = listedRecord.result.score.chartSha256,
-        .keyMode = listedRecord.result.keyMode,
-    };
-    auto baseChart = dependencies_.parseBaseChart(
-        selectedChartPath, savedIdentity,
-        listedRecord.result.score.provenance, cancelled, diagnostic);
-    if (baseChart == nullptr || cancelled.load()) {
-      return failure(ChartReplayConsumerState::ChartUnavailable,
-                     diagnostic.empty()
-                         ? "The selected chart could not be parsed."
                          : std::move(diagnostic));
     }
 
@@ -57,10 +44,7 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
       return failure(ChartReplayConsumerState::InvalidRequest,
                      "Saved result has no unique replay setup.");
     }
-    const ParsedChartReplayFacts facts = makeParsedChartReplayFacts(
-        baseChart->Meta, *expectedLongNoteMode);
-    auto context = dependencies_.loadContext(listedRecord.result.attemptId,
-                                             facts);
+    auto context = dependencies_.loadContext(listedRecord.result.attemptId);
     if (!context.replayAvailable() || !context.verified.has_value()) {
       const std::string contextDiagnostic = context.diagnostic.empty()
                                                 ? "Replay is unavailable."
@@ -77,8 +61,7 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
     const VerifiedChartReplay &verified = *context.verified;
     auto preparedChart = dependencies_.prepareChart(
         selectedChartPath, verified.document.playback.setup,
-        verified.result.score.provenance, baseChart->Meta, cancelled,
-        diagnostic);
+        verified.result.score.provenance, cancelled, diagnostic);
     if (preparedChart == nullptr || cancelled.load()) {
       return failure(ChartReplayConsumerState::SetupUnavailable,
                      diagnostic.empty()
@@ -87,11 +70,25 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
                      std::move(context));
     }
 
-    const auto preparedFacts = makeParsedChartReplayFacts(
-        preparedChart->Meta, *expectedLongNoteMode);
-    if (compareReplayChartIdentity(preparedFacts.chart, savedIdentity) !=
+    const ReplayChartIdentity savedIdentity{
+        .md5 = verified.result.score.chartMd5,
+        .sha256 = verified.result.score.chartSha256,
+        .keyMode = verified.result.keyMode,
+    };
+    const ReplayChartIdentity preparedIdentity{
+        .md5 = preparedChart->Meta.MD5,
+        .sha256 = preparedChart->Meta.SHA256,
+        .keyMode = preparedChart->Meta.KeyMode,
+    };
+    const int authoredLongNoteMode =
+        long_note_mode::normalizeValue(preparedChart->Meta.LnMode);
+    const int preparedLongNoteMode =
+        authoredLongNoteMode > long_note_mode::kUnknownValue
+            ? authoredLongNoteMode
+            : *expectedLongNoteMode;
+    if (compareReplayChartIdentity(preparedIdentity, savedIdentity) !=
             ReplayChartMatch::Match ||
-        preparedFacts.longNoteMode != *expectedLongNoteMode) {
+        preparedLongNoteMode != *expectedLongNoteMode) {
       return failure(ChartReplayConsumerState::PreparedChartMismatch,
                      "Prepared replay chart differs from the saved result.",
                      std::move(context));

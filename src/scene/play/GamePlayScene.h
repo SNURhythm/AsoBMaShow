@@ -6,6 +6,7 @@
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayData.h"
+#include "../../ThreadCompat.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
 #include "NoteTimeRange.h"
@@ -24,8 +25,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 class Button;
 class RhythmLaneInputController;
@@ -208,6 +211,13 @@ private:
   std::unique_ptr<RhythmState> ownedState;
   RhythmState *state = nullptr;
   pacemaker::Target activePacemakerTarget;
+  std::optional<ScoreBestSnapshot> activePacemakerBest;
+  std::optional<ResultPreviousBestData> activeReplayPacemakerPreviousBest;
+  std::jthread bestReplayLoadThread;
+  std::shared_ptr<std::atomic_bool> bestReplayLoadCancelled =
+      std::make_shared<std::atomic_bool>(false);
+  std::mutex bestReplayLoadMutex;
+  std::shared_ptr<ReplayData> pendingBestReplay;
   std::unique_ptr<BMSRenderer> ownedRenderer;
   BMSRenderer *renderer = nullptr;
   std::unique_ptr<RhythmLaneInputController> ownedLaneInputController;
@@ -249,6 +259,10 @@ private:
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
   void configurePacemakerTarget();
+  void startBestReplayLoad(std::string attemptId,
+                           std::filesystem::path chartPath);
+  void applyPendingBestReplay();
+  void stopBestReplayLoad();
   void updatePacemakerStatus();
   void updateGaugeStatusText();
   bool finishIfGaugeFailed();

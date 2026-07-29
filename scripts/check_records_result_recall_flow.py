@@ -38,8 +38,9 @@ chart_recall_end = source.index(
     chart_recall_start)
 chart_recall = source[chart_recall_start:chart_recall_end]
 missing += ["chart-recall:" + token for token in [
-    "cancelActivePreviewLoading();",
-    "loadThread.join()",
+    "retirePreviewLoadThread(true);",
+    "startReplayLoadWorker(",
+    "queueReplayLoadCompletion(",
     "joinRetiredPreviewLoadThreads()",
     "LoadModernChartResultByAttempt(",
     "result_recall::BuildChartResult(",

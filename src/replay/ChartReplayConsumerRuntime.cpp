@@ -14,36 +14,23 @@ ChartReplayConsumer makeRuntimeChartReplayConsumer(
   auto context = std::make_shared<ChartReplayContext>(
       repository, limits);
   return ChartReplayConsumer({
-      .parseBaseChart = [](const std::filesystem::path &path,
-                           const ReplayChartIdentity &identity,
-                           const ScoreProvenance &provenance,
-                           std::atomic_bool &cancelled,
-                           std::string &diagnostic) {
-        bms_parser::ChartMeta savedChart;
-        savedChart.MD5 = identity.md5;
-        savedChart.SHA256 = identity.sha256;
-        const auto setup = score_provenance::savedChartRandomParseSetup(
-            provenance, savedChart, diagnostic);
-        if (!setup) {
-          return std::unique_ptr<bms_parser::Chart>{};
-        }
-        return play_options::parseChart(
-            path, setup->randomSeed, setup->randomPrng, setup->randomValues,
-            cancelled, "modern replay identity");
-      },
       .loadContext =
-          [context](std::string_view attemptId,
-                    const ParsedChartReplayFacts &facts) {
-            return context->load(attemptId, facts);
+          [context](std::string_view attemptId) {
+            return context->load(attemptId);
           },
       .prepareChart = [](const std::filesystem::path &path,
                          const ReplaySetup &setup,
                          const ScoreProvenance &provenance,
-                         const bms_parser::ChartMeta &parsedMeta,
                          std::atomic_bool &cancelled,
                          std::string &diagnostic) {
+        bms_parser::ChartMeta savedMeta;
+        savedMeta.BmsPath = path;
+        savedMeta.MD5 = setup.chart.md5;
+        savedMeta.SHA256 = setup.chart.sha256;
+        savedMeta.KeyMode = setup.chart.keyMode;
+        savedMeta.LnMode = setup.longNoteMode;
         auto runtimeSetup =
-            makeReplayDataFromSetup(setup, provenance, parsedMeta, diagnostic);
+            makeReplayDataFromSetup(setup, provenance, savedMeta, diagnostic);
         if (!runtimeSetup.has_value()) {
           return std::unique_ptr<bms_parser::Chart>{};
         }

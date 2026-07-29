@@ -144,11 +144,10 @@ void testSharedModernResultAuthorities() {
   rejectTokens(root / "src/ir/IrRankingModels.cpp",
                duplicateHashNormalization);
 
-  constexpr std::array<std::string_view, 9> replaySetupConsumers{
+  constexpr std::array<std::string_view, 8> replaySetupConsumers{
       "src/ModernResultRecallBuilder.cpp",
       "src/replay/ChartReplayAgreement.cpp",
       "src/replay/ChartReplayConsumer.cpp",
-      "src/replay/ChartReplayContext.cpp",
       "src/replay/CourseReplayAgreement.cpp",
       "src/replay/CourseReplayConsumer.cpp",
       "src/replay/CourseReplayContext.cpp",
@@ -266,6 +265,11 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   requireToken(root / "src/scene/MainMenuScene.cpp",
                "makeRuntimeChartReplayConsumer",
                "modern Watch, G-Battle, recall, and video consumer");
+  requireToken(root / "src/scene/MainMenuScene.cpp", "replayLoadThread",
+               "non-blocking modern replay action preparation");
+  requireToken(root / "src/scene/MainMenuScene.cpp",
+               "queueReplayLoadCompletion",
+               "main-thread replay action completion boundary");
   requireToken(root / "src/scene/MainMenuScene.cpp",
                "ReplayFileActionService",
                "modern Records deferred replay availability inspection");
@@ -284,11 +288,17 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
       "ChartReplayContext replayContext"};
   rejectTokens(root / "src/scene/ChartViewerScene.cpp", eagerGhostDecode);
   requireToken(root / "src/replay/ChartReplayConsumer.cpp",
-               "makeParsedChartReplayFacts",
-               "modern replay consumer selected-chart projection");
+               "compareReplayChartIdentity",
+               "single prepared-chart identity agreement boundary");
+  constexpr std::array<std::string_view, 1> duplicateChartParse{
+      "parseBaseChart"};
+  rejectTokens(root / "src/replay/ChartReplayConsumer.cpp",
+               duplicateChartParse);
   requireToken(root / "src/scene/MainMenuScene.cpp",
                "result_recall::BuildChartResult",
                "replay-independent modern result recall");
+  requireToken(root / "src/scene/MainMenuScene.cpp", "ModernChartLoader",
+               "single-parse modern result recall when BRD is available");
   requireToken(root / "src/scene/MainMenuScene.cpp", "currentChartPath",
                "modern result recall does not resolve the current chart "
                "location");
@@ -476,19 +486,20 @@ void testSharedAssistClearMarkAuthority() {
 
 void testReplayIdentityParsingUsesSavedRandomBranch() {
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
-  constexpr std::array<std::string_view, 2> consumers{
-      "src/replay/ChartReplayConsumerRuntime.cpp",
-      "src/replay/CourseReplayConsumerRuntime.cpp",
-  };
   constexpr std::array<std::string_view, 1> unseededIdentityParse{
       "parseChart(path, cancelled",
   };
-  for (std::string_view consumer : consumers) {
-    const auto path = root / consumer;
-    requireToken(path, "savedChartRandomParseSetup",
-                 "saved random-branch identity parse authority");
-    rejectTokens(path, unseededIdentityParse);
-  }
+  const auto chartConsumer =
+      root / "src/replay/ChartReplayConsumerRuntime.cpp";
+  requireToken(chartConsumer, "prepareReplayChart",
+               "single BRD-setup chart preparation authority");
+  rejectTokens(chartConsumer, unseededIdentityParse);
+
+  const auto courseConsumer =
+      root / "src/replay/CourseReplayConsumerRuntime.cpp";
+  requireToken(courseConsumer, "savedChartRandomParseSetup",
+               "saved random-branch identity parse authority");
+  rejectTokens(courseConsumer, unseededIdentityParse);
   requireToken(root / "src/ModernResultRecallBuilder.cpp",
                "savedChartRandomParseSetup",
                "saved random-branch result recall authority");
@@ -496,14 +507,19 @@ void testReplayIdentityParsingUsesSavedRandomBranch() {
 
 void testBestPacemakerUsesTheRetainedReplayConsumer() {
   const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  requireToken(root / "src/scene/play/GamePlayScene.cpp",
+               "bestReplayLoadThread",
+               "non-blocking live BEST replay progression consumer");
+  requireToken(root / "src/scene/play/GamePlayScene.cpp",
+               "startBestReplayLoad",
+               "shared asynchronous BEST replay loading boundary");
   requireToken(root / "src/ResultPresentationUtils.h",
                "makeRuntimeBestReplayResolver",
                "BEST replay resolution authority");
   requireToken(root / "src/ResultPresentationUtils.h",
                "replayForBestSnapshotChart",
                "live BEST replay resolution authority");
-  constexpr std::array<std::string_view, 3> consumers{
-      "src/scene/play/GamePlayScene.cpp",
+  constexpr std::array<std::string_view, 2> consumers{
       "src/ReplayVideoExporter.cpp",
       "src/ResultImageExporter.cpp",
   };
@@ -515,17 +531,14 @@ void testBestPacemakerUsesTheRetainedReplayConsumer() {
                  "retained BEST replay progression");
   }
 
-  const std::string gameplay =
-      readText(root / "src/scene/play/GamePlayScene.cpp");
-  const auto liveBestBranch =
-      gameplay.find("std::optional<ScoreBestSnapshot> best;");
-  if (liveBestBranch == std::string::npos ||
-      !gameplay.substr(liveBestBranch).contains(
-          "replayForBestSnapshotChart")) {
-    std::cerr << "FAIL: live BEST pacemaker does not resolve its retained "
-                 "replay through the shared authority\n";
-    ++failures;
-  }
+  const auto gameplay = root / "src/scene/play/GamePlayScene.cpp";
+  requireToken(gameplay, "makeRuntimeBestReplayResolver",
+               "background BEST replay resolution authority");
+  requireToken(gameplay, "pendingBestReplay",
+               "main-thread BEST replay application boundary");
+  constexpr std::array<std::string_view, 2> synchronousBestLoad{
+      "replayForBestSnapshotChart(", "replayForPreviousBestChart("};
+  rejectTokens(gameplay, synchronousBestLoad);
 }
 
 } // namespace

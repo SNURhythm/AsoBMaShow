@@ -131,46 +131,6 @@ ModernReplayFileReference replayReference(
                        .codecVersion = BeatorajaReplayCodec::kCodecVersion}};
 }
 
-ParsedChartReplayFacts parsedFacts(
-    const result_persistence::ModernChartResult &saved) {
-  return {.chart = {.md5 = saved.score.chartMd5,
-                    .sha256 = saved.score.chartSha256,
-                    .keyMode = saved.keyMode},
-          .longNoteMode =
-              result_persistence::replaySetupLongNoteMode(saved.score)
-                  .value_or(-1),
-          .timeBounds = ReplayTimeBounds{
-              .completionSongTimeMicros = 5'000'000}};
-}
-
-ParsedChartReplayFacts identityOnlyFacts(
-    const result_persistence::ModernChartResult &saved) {
-  auto facts = parsedFacts(saved);
-  facts.timeBounds.reset();
-  return facts;
-}
-
-void testParsedFactsUseOneLongNoteAndIdentityAuthority() {
-  bms_parser::ChartMeta meta;
-  meta.MD5 = repeated('b', 32);
-  meta.SHA256 = repeated('a', 64);
-  meta.KeyMode = 14;
-  meta.LnMode = 2;
-  const ReplayTimeBounds bounds{.completionSongTimeMicros = 9'000'000};
-
-  const auto authored = makeParsedChartReplayFacts(meta, 3, bounds);
-  expect(authored.chart == ReplayChartIdentity{.md5 = meta.MD5,
-                                                .sha256 = meta.SHA256,
-                                                .keyMode = meta.KeyMode} &&
-             authored.longNoteMode == 2 && authored.timeBounds == bounds,
-         "parsed facts preserve chart identity/time and prefer authored LN");
-
-  meta.LnMode = 0;
-  const auto undefined = makeParsedChartReplayFacts(meta, 3);
-  expect(undefined.longNoteMode == 3 && !undefined.timeBounds.has_value(),
-         "undefined-LN charts use the strict result's LN fallback");
-}
-
 struct Harness {
   result_persistence::ModernChartResult result = savedResult();
   ReplayChartDocument replay = replayDocument(result);
@@ -234,7 +194,7 @@ void testUserDeletedReferenceNeverTouchesFilesystem() {
   Harness harness;
   harness.userDeleted = true;
   auto context = harness.makeContext();
-  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  const auto loaded = context.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::FileUserDeleted &&
              loaded.resultAvailable() && !loaded.replayAvailable() &&
              loaded.replayState() == ReplayState::UserDeleted &&
@@ -245,7 +205,7 @@ void testUserDeletedReferenceNeverTouchesFilesystem() {
 void testVerifiedContextUsesStrictLoadOrder() {
   Harness harness;
   auto context = harness.makeContext();
-  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  const auto loaded = context.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::Ready &&
              loaded.resultAvailable() && loaded.replayAvailable() &&
              loaded.verified && loaded.verified->document == harness.replay,
@@ -263,16 +223,16 @@ void testNoLongNoteScoreBucketUsesProvenanceSetupAuthority() {
       result_persistence::modernResultFingerprint(harness.result);
   harness.replay = replayDocument(harness.result);
   auto context = harness.makeContext();
-  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  const auto loaded = context.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::Ready && loaded.verified &&
              loaded.verified->document.playback.setup.longNoteMode == 1,
          "a no-LN score bucket verifies with the provenance setup mode");
 }
 
-void testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate() {
+void testDecodeUsesStoredKeyModeAndEmbeddedCompletionBound() {
   Harness harness;
   auto context = harness.makeContext();
-  const auto loaded = context.load(kAttemptId, identityOnlyFacts(harness.result));
+  const auto loaded = context.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::Ready &&
              loaded.replayAvailable(),
          "verified local replay can use its embedded completion bound");
@@ -280,21 +240,8 @@ void testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate() {
              harness.decodeContext->stageKeyModes ==
                  std::vector<int>{harness.result.keyMode} &&
              harness.decodeContext->stageTimeBounds.empty(),
-         "context does not invent an exact completion bound in a consumer");
-}
-
-void testParsedDurationEstimateDoesNotOverrideEmbeddedBound() {
-  Harness harness;
-  auto facts = parsedFacts(harness.result);
-  facts.timeBounds = ReplayTimeBounds{.completionSongTimeMicros = 4'000'000};
-  auto context = harness.makeContext();
-  const auto loaded = context.load(kAttemptId, facts);
-  expect(loaded.state == ChartReplayContextState::Ready &&
-             loaded.replayAvailable(),
-         "optional parsed duration disagreement does not disable a valid BRD");
-  expect(harness.decodeContext.has_value() &&
-             harness.decodeContext->stageTimeBounds.empty(),
-         "decoder uses the completion bound embedded by the replay producer");
+         "context decodes from stored facts without parsing the selected "
+         "chart or inventing an exact completion bound");
 }
 
 void testFileFailuresRetainResultAndFailReplayClosed() {
@@ -317,7 +264,7 @@ void testFileFailuresRetainResultAndFailReplayClosed() {
     Harness harness;
     harness.fileState = test.file;
     auto context = harness.makeContext();
-    const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+    const auto loaded = context.load(kAttemptId);
     expect(loaded.state == test.state && loaded.resultAvailable() &&
                !loaded.replayAvailable() &&
                loaded.replayState() == test.capabilityState,
@@ -329,7 +276,7 @@ void testFileFailuresRetainResultAndFailReplayClosed() {
   Harness absent;
   absent.attachReplay = false;
   auto context = absent.makeContext();
-  const auto loaded = context.load(kAttemptId, parsedFacts(absent.result));
+  const auto loaded = context.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::ReplayNotAttached &&
              loaded.resultAvailable() && !loaded.replayAvailable(),
          "result without file reference remains recallable");
@@ -337,48 +284,18 @@ void testFileFailuresRetainResultAndFailReplayClosed() {
   Harness exceptional;
   exceptional.throwDuringFileRead = true;
   auto exceptionalContext = exceptional.makeContext();
-  const auto exceptionalLoad =
-      exceptionalContext.load(kAttemptId, parsedFacts(exceptional.result));
+  const auto exceptionalLoad = exceptionalContext.load(kAttemptId);
   expect(exceptionalLoad.state == ChartReplayContextState::FileIoFailure &&
              exceptionalLoad.resultAvailable() &&
              !exceptionalLoad.replayAvailable(),
          "unexpected replay I/O failure still preserves result recall");
 }
 
-void testParsedIdentityAndLongNoteAgreementPrecedeFileAccess() {
-  Harness harness;
-  auto context = harness.makeContext();
-  auto selected = parsedFacts(harness.result);
-  selected.chart.sha256 = repeated('d', 64);
-  auto loaded = context.load(kAttemptId, selected);
-  expect(loaded.state == ChartReplayContextState::ChartMismatch &&
-             loaded.resultAvailable() && !loaded.replayAvailable() &&
-             harness.calls == std::vector<std::string>{"result"},
-         "wrong parsed chart hash rejects before file access");
-
-  harness.calls.clear();
-  selected = parsedFacts(harness.result);
-  selected.chart.keyMode = 14;
-  loaded = context.load(kAttemptId, selected);
-  expect(loaded.state == ChartReplayContextState::ChartMismatch &&
-             harness.calls == std::vector<std::string>{"result"},
-         "wrong parsed key mode rejects before file access");
-
-  harness.calls.clear();
-  selected = parsedFacts(harness.result);
-  ++selected.longNoteMode;
-  loaded = context.load(kAttemptId, selected);
-  expect(loaded.state == ChartReplayContextState::LongNoteModeMismatch &&
-             harness.calls == std::vector<std::string>{"result"},
-         "wrong effective long-note mode rejects before file access");
-}
-
 void testDecodedReplayMustAgreeWithResultAndSupportedContract() {
   Harness futureCodec;
   ++futureCodec.codecVersion;
   auto futureCodecContext = futureCodec.makeContext();
-  auto loaded = futureCodecContext.load(kAttemptId,
-                                        parsedFacts(futureCodec.result));
+  auto loaded = futureCodecContext.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::UnsupportedCodecVersion &&
              loaded.resultAvailable() && !loaded.replayAvailable() &&
              futureCodec.calls == std::vector<std::string>{"result"},
@@ -387,7 +304,7 @@ void testDecodedReplayMustAgreeWithResultAndSupportedContract() {
   Harness harness;
   harness.replay.playback.setup.judgeWindowScalePercent = 75;
   auto context = harness.makeContext();
-  loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  loaded = context.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::SharedFactsMismatch &&
              loaded.resultAvailable() && !loaded.replayAvailable(),
          "decoded setup disagreement cannot enable replay actions");
@@ -395,7 +312,7 @@ void testDecodedReplayMustAgreeWithResultAndSupportedContract() {
   Harness future;
   future.unsupportedExtension = true;
   auto futureContext = future.makeContext();
-  loaded = futureContext.load(kAttemptId, parsedFacts(future.result));
+  loaded = futureContext.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::UnsupportedExtension &&
              loaded.resultAvailable() && !loaded.replayAvailable() &&
              loaded.replayState() == ReplayState::UnsupportedExtension,
@@ -404,7 +321,7 @@ void testDecodedReplayMustAgreeWithResultAndSupportedContract() {
   Harness malformed;
   malformed.decodeChart = false;
   auto malformedContext = malformed.makeContext();
-  loaded = malformedContext.load(kAttemptId, parsedFacts(malformed.result));
+  loaded = malformedContext.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::DecodeFailed &&
              loaded.resultAvailable() && !loaded.replayAvailable(),
          "non-chart BRD cannot become a chart replay context");
@@ -414,7 +331,7 @@ void testContextTrustsStructurallyValidatedDecode() {
   Harness harness;
   harness.replay.playback.input.back().songTimeMicros = -2'000;
   auto context = harness.makeContext();
-  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  const auto loaded = context.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::Ready &&
              loaded.replayAvailable(),
          "context does not repeat structural validation owned by the codec");
@@ -424,7 +341,7 @@ void testInvalidResultNeverTouchesReplayFile() {
   Harness harness;
   harness.result.resultFingerprint = "invalid";
   auto context = harness.makeContext();
-  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  const auto loaded = context.load(kAttemptId);
   expect(loaded.state == ChartReplayContextState::ResultInvalid &&
              !loaded.resultAvailable() && !loaded.replayAvailable() &&
              harness.calls == std::vector<std::string>{"result"},
@@ -434,14 +351,11 @@ void testInvalidResultNeverTouchesReplayFile() {
 } // namespace
 
 int main() {
-  testParsedFactsUseOneLongNoteAndIdentityAuthority();
   testVerifiedContextUsesStrictLoadOrder();
   testNoLongNoteScoreBucketUsesProvenanceSetupAuthority();
   testUserDeletedReferenceNeverTouchesFilesystem();
-  testEmbeddedAsoCompletionBoundNeedsNoConsumerEstimate();
-  testParsedDurationEstimateDoesNotOverrideEmbeddedBound();
+  testDecodeUsesStoredKeyModeAndEmbeddedCompletionBound();
   testFileFailuresRetainResultAndFailReplayClosed();
-  testParsedIdentityAndLongNoteAgreementPrecedeFileAccess();
   testDecodedReplayMustAgreeWithResultAndSupportedContract();
   testContextTrustsStructurallyValidatedDecode();
   testInvalidResultNeverTouchesReplayFile();

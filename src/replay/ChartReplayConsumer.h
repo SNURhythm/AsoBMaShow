@@ -44,17 +44,10 @@ struct ChartReplayConsumerOutcome {
 };
 
 struct ChartReplayConsumerDependencies {
-  std::function<std::unique_ptr<bms_parser::Chart>(
-      const std::filesystem::path &, const ReplayChartIdentity &,
-      const ScoreProvenance &, std::atomic_bool &, std::string &)>
-      parseBaseChart;
-  std::function<ChartReplayContextOutcome(
-      std::string_view, const ParsedChartReplayFacts &)>
-      loadContext;
+  std::function<ChartReplayContextOutcome(std::string_view)> loadContext;
   std::function<std::unique_ptr<bms_parser::Chart>(
       const std::filesystem::path &, const ReplaySetup &,
-      const ScoreProvenance &, const bms_parser::ChartMeta &,
-      std::atomic_bool &, std::string &)>
+      const ScoreProvenance &, std::atomic_bool &, std::string &)>
       prepareChart;
   std::function<ReplayPlaybackMaterializationOutcome(
       const ReplayChartDocument &, const result_persistence::ModernChartResult &,

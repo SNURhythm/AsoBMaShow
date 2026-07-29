@@ -24,6 +24,7 @@
 #include "../view/UiTheme.h"
 #include <filesystem>
 #include <deque>
+#include <functional>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -93,6 +94,11 @@ private:
   std::jthread addFolderPickerThread;
   std::jthread archiveImportPickerThread;
   std::jthread findBmsThread;
+  std::jthread replayLoadThread;
+  std::shared_ptr<std::atomic_bool> replayLoadCancelToken =
+      std::make_shared<std::atomic_bool>(false);
+  std::mutex replayLoadCompletionMutex;
+  std::function<void()> pendingReplayLoadCompletion;
   std::jthread replayExportThread;
   std::jthread unzipThread;
   std::atomic_bool folderItemsReloadRequested = false;
@@ -866,6 +872,11 @@ private:
   activeReplayIrServerOrigin() const;
   void finishReplayResultRecallFailure(std::string diagnostic = {});
   void finishRemoteResultRecallFailure(std::string diagnostic = {});
+  void startReplayLoadWorker(
+      std::function<void(std::shared_ptr<std::atomic_bool>)> work);
+  void queueReplayLoadCompletion(std::function<void()> completion);
+  void applyReplayLoadCompletion();
+  void stopReplayLoadWorker();
   void applyReplayExportProgress();
   void applyReplayExportResult();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR

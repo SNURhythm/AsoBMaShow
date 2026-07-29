@@ -95,8 +95,7 @@ ChartReplayContext::ChartReplayContext(
     : dependencies_(std::move(dependencies)), limits_(limits) {}
 
 ChartReplayContextOutcome ChartReplayContext::load(
-    std::string_view attemptId,
-    const ParsedChartReplayFacts &parsedChart) const noexcept {
+    std::string_view attemptId) const noexcept {
   std::optional<result_persistence::ModernChartResult> preservedResult;
   try {
     if (!limits_.valid() || !dependencies_.loadResult ||
@@ -135,30 +134,6 @@ ChartReplayContextOutcome ChartReplayContext::load(
     }
     preservedResult = stored;
 
-    const ReplayChartIdentity expected{.md5 = stored.score.chartMd5,
-                                       .sha256 = stored.score.chartSha256,
-                                       .keyMode = stored.keyMode};
-    if (compareReplayChartIdentity(parsedChart.chart, expected) !=
-        ReplayChartMatch::Match) {
-      return failure(ChartReplayContextState::ChartMismatch,
-                     "Parsed chart identity differs from the saved result.",
-                     preservedResult);
-    }
-    const auto expectedLongNoteMode =
-        result_persistence::replaySetupLongNoteMode(stored.score);
-    if (!expectedLongNoteMode ||
-        parsedChart.longNoteMode != *expectedLongNoteMode) {
-      return failure(
-          ChartReplayContextState::LongNoteModeMismatch,
-          "Parsed chart long-note mode differs from the saved result.",
-          preservedResult);
-    }
-    if (parsedChart.timeBounds.has_value() &&
-        !parsedChart.timeBounds->valid()) {
-      return failure(ChartReplayContextState::InvalidRequest,
-                     "Parsed chart completion time is invalid.",
-                     preservedResult);
-    }
     if (!loaded.record->replayFile) {
       return failure(ChartReplayContextState::ReplayNotAttached,
                      "The saved result has no replay file reference.",
@@ -201,7 +176,7 @@ ChartReplayContextOutcome ChartReplayContext::load(
     }
 
     const ReplayDecodeContext decodeContext{
-        .stageKeyModes = {parsedChart.chart.keyMode},
+        .stageKeyModes = {stored.keyMode},
         .stageTimeBounds = {}};
     ReplayDecodeOutcome decoded;
     try {

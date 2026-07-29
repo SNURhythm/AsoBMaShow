@@ -4,7 +4,6 @@
 #include "ReplayCapabilities.h"
 #include "ReplayFileStore.h"
 
-#include "../LongNoteModeUtils.h"
 #include "../ModernResult.h"
 #include "../repositories/ReplayRepository.h"
 
@@ -17,34 +16,6 @@
 #include <utility>
 
 namespace replay {
-
-struct ParsedChartReplayFacts {
-  ReplayChartIdentity chart;
-  int longNoteMode = 0;
-  std::optional<ReplayTimeBounds> timeBounds;
-
-  bool operator==(const ParsedChartReplayFacts &) const = default;
-};
-
-// Projects the selected parsed chart into the one identity/LN/time input used
-// by replay availability checks and activated consumers. An authored LN mode
-// wins; records provide the fallback only for undefined-LN charts.
-[[nodiscard]] inline ParsedChartReplayFacts makeParsedChartReplayFacts(
-    const bms_parser::ChartMeta &parsedChart, int recordLongNoteMode,
-    std::optional<ReplayTimeBounds> timeBounds = std::nullopt) noexcept {
-  const int authoredLongNoteMode =
-      long_note_mode::normalizeValue(parsedChart.LnMode);
-  return {
-      .chart = {.md5 = parsedChart.MD5,
-                .sha256 = parsedChart.SHA256,
-                .keyMode = parsedChart.KeyMode},
-      .longNoteMode =
-          authoredLongNoteMode > long_note_mode::kUnknownValue
-              ? authoredLongNoteMode
-              : long_note_mode::normalizeValue(recordLongNoteMode),
-      .timeBounds = std::move(timeBounds),
-  };
-}
 
 enum class ChartReplayContextState {
   Ready,
@@ -110,8 +81,7 @@ public:
                               ReplayLimits limits = kReplayLimits);
 
   [[nodiscard]] ChartReplayContextOutcome
-  load(std::string_view attemptId,
-       const ParsedChartReplayFacts &parsedChart) const noexcept;
+  load(std::string_view attemptId) const noexcept;
 
 private:
   ChartReplayContextDependencies dependencies_;

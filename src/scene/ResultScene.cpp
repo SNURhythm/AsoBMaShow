@@ -2482,7 +2482,7 @@ void ResultScene::exitResult() {
 }
 
 void ResultScene::startReplay() {
-  const auto *local = localSource();
+  auto *local = localSource();
   if (local == nullptr || !local->retryData.has_value()) {
     return;
   }
@@ -2492,9 +2492,19 @@ void ResultScene::startReplay() {
   context.jukebox.stop();
   defer(
       [this, replaySource, chartPath]() {
+        auto *local = localSource();
+        if (local == nullptr) {
+          return true;
+        }
         std::atomic_bool parseCancelled = false;
-        auto replayChart = play_options::prepareReplayChart(
-            chartPath, replaySource, parseCancelled);
+        std::unique_ptr<bms_parser::Chart> replayChart;
+        if (local->ownedReusableRetryChart != nullptr) {
+          replayChart = std::move(local->ownedReusableRetryChart);
+          local->reusableRetryChart = nullptr;
+        } else {
+          replayChart = play_options::prepareReplayChart(
+              chartPath, replaySource, parseCancelled);
+        }
         if (replayChart == nullptr || parseCancelled) {
           return true;
         }

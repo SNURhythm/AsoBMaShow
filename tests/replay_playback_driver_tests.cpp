@@ -293,25 +293,10 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
 
   std::vector<std::string> calls;
   ChartReplayConsumer consumer({
-      .parseBaseChart = [&](const std::filesystem::path &path,
-                            const ReplayChartIdentity &identity,
-                            const ScoreProvenance &savedProvenance,
-                            std::atomic_bool &, std::string &) {
-        calls.emplace_back("parse");
-        expect(path == "selected/chart.bms" &&
-                   identity.sha256 == listed.result.score.chartSha256 &&
-                   savedProvenance == listed.result.score.provenance,
-               "consumer parses the selected chart on its saved random branch");
-        return oneNoteChartPointer();
-      },
-      .loadContext = [&](std::string_view attemptId,
-                         const ParsedChartReplayFacts &facts) {
+      .loadContext = [&](std::string_view attemptId) {
         calls.emplace_back("context");
-        expect(attemptId == listed.result.attemptId &&
-                   facts.chart.sha256 == listed.result.score.chartSha256 &&
-                   facts.longNoteMode == 1 &&
-                   !facts.timeBounds.has_value(),
-               "consumer supplies parsed identity without inventing time");
+        expect(attemptId == listed.result.attemptId,
+               "consumer loads the authoritative result and replay first");
         VerifiedChartReplay verified{
             .result = listed.result,
             .document = replay,
@@ -326,14 +311,12 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
       .prepareChart = [&](const std::filesystem::path &path,
                           const ReplaySetup &setup,
                           const ScoreProvenance &provenance,
-                          const bms_parser::ChartMeta &parsedMeta,
                           std::atomic_bool &, std::string &) {
         calls.emplace_back("prepare");
         expect(path == "selected/chart.bms" &&
                    setup == replay.playback.setup &&
-                   provenance == listed.result.score.provenance &&
-                   parsedMeta.SHA256 == listed.result.score.chartSha256,
-               "consumer passes one verified setup to chart preparation");
+                   provenance == listed.result.score.provenance,
+               "consumer passes one verified setup to the sole chart parse");
         auto prepared = oneNoteChartPointer();
         prepared->Meta.LnMode = 0;
         return prepared;
@@ -357,23 +340,15 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
   expect(loaded.ready() && loaded.chart && loaded.replayData &&
              loaded.diagnostic ==
                  "Saved result differs from replay judging." &&
-             calls == std::vector<std::string>{"parse", "context", "prepare",
+             calls == std::vector<std::string>{"context", "prepare",
                                                "materialize"},
          "every chart replay action receives one structurally playable "
-         "preparation, including a chart without long notes, while result "
-         "drift remains diagnostic");
+         "preparation from exactly one chart parse, including a chart without "
+         "long notes, while result drift remains diagnostic");
 
   calls.clear();
   ChartReplayConsumer missing({
-      .parseBaseChart = [&](const std::filesystem::path &,
-                            const ReplayChartIdentity &,
-                            const ScoreProvenance &, std::atomic_bool &,
-                            std::string &) {
-        calls.emplace_back("parse");
-        return oneNoteChartPointer();
-      },
-      .loadContext = [&](std::string_view,
-                         const ParsedChartReplayFacts &) {
+      .loadContext = [&](std::string_view) {
         calls.emplace_back("context");
         return ChartReplayContextOutcome{
             .state = ChartReplayContextState::FileMissing,
@@ -381,8 +356,7 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
         };
       },
       .prepareChart = [&](const std::filesystem::path &, const ReplaySetup &,
-                          const ScoreProvenance &,
-                          const bms_parser::ChartMeta &, std::atomic_bool &,
+                          const ScoreProvenance &, std::atomic_bool &,
                           std::string &) {
         calls.emplace_back("unexpected-prepare");
         return std::unique_ptr<bms_parser::Chart>{};
@@ -397,8 +371,9 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
   loaded = missing.load(listed, "selected/chart.bms", cancelled);
   expect(!loaded.ready() && !loaded.chart && !loaded.replayData &&
              loaded.context.state == ChartReplayContextState::FileMissing &&
-             calls == std::vector<std::string>{"parse", "context"},
-         "missing replay stops before setup, judging, or consumer output");
+             calls == std::vector<std::string>{"context"},
+         "missing replay stops before parsing, setup, judging, or consumer "
+         "output");
 }
 
 void testDriverMergesStreamsWithoutChangingTheirTiming() {

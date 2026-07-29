@@ -1647,6 +1647,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
 }
 
 GamePlayScene::~GamePlayScene() {
+  stopBestReplayLoad();
   stopRealtimeGameplayAuthority(false);
   if (profileGameplayBlockerActive) {
     context.profileGameplayActive.store(false, std::memory_order_release);
@@ -2530,7 +2531,10 @@ practice::ResultCapturePolicy GamePlayScene::resultCapturePolicy() const {
 }
 
 void GamePlayScene::configurePacemakerTarget() {
+  stopBestReplayLoad();
   activePacemakerTarget = {};
+  activePacemakerBest.reset();
+  activeReplayPacemakerPreviousBest.reset();
   if (renderer == nullptr) {
     return;
   }
@@ -2564,25 +2568,85 @@ void GamePlayScene::configurePacemakerTarget() {
     const auto previousBest =
         result_presentation::previousBestForReplayChart(
             context.scoreRepository, chart->Meta, *options.replayData);
-    const auto bestReplay = result_presentation::replayForPreviousBestChart(
-        context, chart->Meta, previousBest, selected, isCancelled);
+    activeReplayPacemakerPreviousBest = previousBest;
     activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
-        *chart, *options.replayData, selected, previousBest, bestReplay.get());
+        *chart, *options.replayData, selected, previousBest, nullptr);
     renderer->setPacemakerTarget(activePacemakerTarget);
+    if (selected == pacemaker::kTargetBest && previousBest.has_value() &&
+        previousBest->attemptId.has_value()) {
+      startBestReplayLoad(*previousBest->attemptId, chart->Meta.BmsPath);
+    }
     return;
   }
 
-  std::optional<ScoreBestSnapshot> best;
-  std::shared_ptr<ReplayData> bestReplay;
   if (selected == pacemaker::kTargetBest) {
-    best = context.scoreRepository.LoadBestScore(chart->Meta);
-    bestReplay = result_presentation::replayForBestSnapshotChart(
-        context, chart->Meta, best, selected, isCancelled);
+    activePacemakerBest = context.scoreRepository.LoadBestScore(chart->Meta);
   }
 
   activePacemakerTarget = pacemaker::targetFromSelection(
-      *chart, selected, best, bestReplay.get());
+      *chart, selected, activePacemakerBest, nullptr);
   renderer->setPacemakerTarget(activePacemakerTarget);
+  if (activePacemakerBest.has_value() &&
+      activePacemakerBest->attemptId.has_value()) {
+    startBestReplayLoad(*activePacemakerBest->attemptId,
+                        chart->Meta.BmsPath);
+  }
+}
+
+void GamePlayScene::startBestReplayLoad(
+    std::string attemptId, std::filesystem::path chartPath) {
+  auto cancelled = std::make_shared<std::atomic_bool>(false);
+  bestReplayLoadCancelled = cancelled;
+  bestReplayLoadThread = std::jthread(
+      [this, cancelled, attemptId = std::move(attemptId),
+       chartPath = std::move(chartPath)](std::stop_token stopToken) {
+        auto resolver = replay::makeRuntimeBestReplayResolver(
+            context.replayRepository);
+        auto loaded = resolver.load(attemptId, chartPath, *cancelled);
+        if (stopToken.stop_requested() || cancelled->load() ||
+            loaded == nullptr) {
+          return;
+        }
+        std::lock_guard<std::mutex> lock(bestReplayLoadMutex);
+        if (!cancelled->load()) {
+          pendingBestReplay = std::move(loaded);
+        }
+      });
+}
+
+void GamePlayScene::applyPendingBestReplay() {
+  std::shared_ptr<ReplayData> loaded;
+  {
+    std::lock_guard<std::mutex> lock(bestReplayLoadMutex);
+    loaded = std::move(pendingBestReplay);
+  }
+  if (loaded == nullptr || renderer == nullptr || chart == nullptr) {
+    return;
+  }
+
+  if (isReplayPlayback() && options.replayData != nullptr) {
+    activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
+        *chart, *options.replayData, options.pacemakerTarget,
+        activeReplayPacemakerPreviousBest, loaded.get());
+  } else {
+    activePacemakerTarget = pacemaker::targetFromSelection(
+        *chart, options.pacemakerTarget, activePacemakerBest, loaded.get());
+  }
+  renderer->setPacemakerTarget(activePacemakerTarget);
+}
+
+void GamePlayScene::stopBestReplayLoad() {
+  if (bestReplayLoadCancelled != nullptr) {
+    bestReplayLoadCancelled->store(true, std::memory_order_release);
+  }
+  if (bestReplayLoadThread.joinable()) {
+    bestReplayLoadThread.request_stop();
+    bestReplayLoadThread.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(bestReplayLoadMutex);
+    pendingBestReplay.reset();
+  }
 }
 
 void GamePlayScene::updatePacemakerStatus() {
@@ -3496,6 +3560,7 @@ bool GamePlayScene::finishIfGaugeFailed() {
 
 void GamePlayScene::update(float dt) {
   (void)dt;
+  applyPendingBestReplay();
   const bool realtimeAtFrameStart = realtimeGameplayAuthorityActive();
   if (inputHandler != nullptr && !realtimeAtFrameStart) {
     inputHandler->pumpPendingTouchEvents();
@@ -3868,6 +3933,7 @@ void GamePlayScene::renderCoursePauseHoldRing() {
 
 void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");
+  stopBestReplayLoad();
   stopRealtimeGameplayAuthority(false);
   context.profileGameplayActive.store(false, std::memory_order_release);
   profileGameplayBlockerActive = false;

@@ -9899,63 +9899,85 @@ void MainMenuScene::startModernReplayPlayback(
   }
   const std::string pacemakerTarget =
       pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
-  defer(
-      [this, record, modern = std::move(modern), pacemakerTarget]() mutable {
-        if (loadThread.joinable()) {
-          loadThread.join();
-        }
-        joinRetiredPreviewLoadThreads();
+  const bool renderTouchPoints = selectedReplayRenderTouchPoints;
+  const bool renderGhosts = selectedReplayRenderGhosts;
+  retirePreviewLoadThread(true);
+  startReplayLoadWorker(
+      [this, record, modern = std::move(modern), pacemakerTarget,
+       renderTouchPoints,
+       renderGhosts](std::shared_ptr<std::atomic_bool> cancelled) mutable {
+        try {
+          joinRetiredPreviewLoadThreads();
+          auto consumer = replay::makeRuntimeChartReplayConsumer(
+              context.replayRepository);
+          auto loaded = consumer.load(modern, record.meta.BmsPath, *cancelled);
+          if (!loaded.ready()) {
+            const std::string diagnostic = std::move(loaded.diagnostic);
+            queueReplayLoadCompletion([this, diagnostic]() {
+              (void)finishReplayLoadFailure(
+                  "Watch failed", diagnostic,
+                  "Replay playback could not be prepared.");
+            });
+            return;
+          }
+          if (cancelled->load()) {
+            return;
+          }
+          {
+            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            context.jukebox.stop();
+            context.jukebox.loadChart(*loaded.chart, true, *cancelled);
+          }
+          if (cancelled->load()) {
+            return;
+          }
 
-        std::atomic_bool parseCancelled = false;
-        auto consumer = replay::makeRuntimeChartReplayConsumer(
-            context.replayRepository);
-        auto loaded = consumer.load(modern, record.meta.BmsPath,
-                                    parseCancelled);
-        if (!loaded.ready()) {
-          return finishReplayLoadFailure(
-              "Watch failed", std::move(loaded.diagnostic),
-              "Replay playback could not be prepared.");
+          struct Completion {
+            replay::ChartReplayConsumerOutcome loaded;
+          };
+          auto completion = std::make_shared<Completion>(
+              Completion{.loaded = std::move(loaded)});
+          queueReplayLoadCompletion(
+              [this, completion, pacemakerTarget, renderTouchPoints,
+               renderGhosts]() mutable {
+                auto &loaded = completion->loaded;
+                if (!loaded.diagnostic.empty()) {
+                  publishReplayLoadDiagnostic("Watch warning",
+                                              loaded.diagnostic);
+                }
+                auto *chart =
+                    setSelectedChart(std::move(loaded.chart), true, false);
+                if (chart == nullptr) {
+                  (void)finishReplayLoadFailure(
+                      "Watch failed", {},
+                      "Prepared replay chart is unavailable.");
+                  return;
+                }
+                StartOptions replayOptions{
+                    .startPosition = 0,
+                    .autoKeySound = false,
+                    .autoPlay = false,
+                    .gaugeType = loaded.replayData->initialGaugeType,
+                    .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
+                    .replayData = loaded.replayData,
+                    .pacemakerTarget = pacemakerTarget,
+                    .touchVisualizationEnabled = renderTouchPoints,
+                    .replayGhostRenderingEnabled = renderGhosts,
+                };
+                applyReplayProvenanceToStartOptions(replayOptions,
+                                                    *loaded.replayData);
+                context.jukebox.stop();
+                hideReplayModal();
+                changeToGameplayScene(chart, std::move(replayOptions));
+                willStart.store(false);
+              });
+        } catch (...) {
+          queueReplayLoadCompletion([this]() {
+            (void)finishReplayLoadFailure(
+                "Watch failed", {}, "Replay playback could not be prepared.");
+          });
         }
-        if (parseCancelled) {
-          return finishReplayLoadFailure("Watch cancelled", {},
-                                         "Replay loading was cancelled.");
-        }
-        if (!loaded.diagnostic.empty()) {
-          publishReplayLoadDiagnostic("Watch warning", loaded.diagnostic);
-        }
-
-        context.jukebox.stop();
-        context.jukebox.loadChart(*loaded.chart, true, parseCancelled);
-        if (parseCancelled) {
-          return finishReplayLoadFailure("Watch cancelled", {},
-                                         "Replay media loading was cancelled.");
-        }
-        auto *chart = setSelectedChart(std::move(loaded.chart), true, false);
-        if (chart == nullptr) {
-          return finishReplayLoadFailure(
-              "Watch failed", {}, "Prepared replay chart is unavailable.");
-        }
-
-        StartOptions replayOptions{
-            .startPosition = 0,
-            .autoKeySound = false,
-            .autoPlay = false,
-            .gaugeType = loaded.replayData->initialGaugeType,
-            .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
-            .replayData = loaded.replayData,
-            .pacemakerTarget = pacemakerTarget,
-            .touchVisualizationEnabled = selectedReplayRenderTouchPoints,
-            .replayGhostRenderingEnabled = selectedReplayRenderGhosts,
-        };
-        applyReplayProvenanceToStartOptions(replayOptions,
-                                            *loaded.replayData);
-        context.jukebox.stop();
-        hideReplayModal();
-        changeToGameplayScene(chart, std::move(replayOptions));
-        willStart.store(false);
-        return true;
-      },
-      0, true);
+      });
 }
 
 void MainMenuScene::startModernGBattlePlayback(
@@ -9980,73 +10002,94 @@ void MainMenuScene::startModernGBattlePlayback(
       .mode = context.settings.selectedPlaybackMode,
   };
 
-  defer(
+  retirePreviewLoadThread(true);
+  startReplayLoadWorker(
       [this, record, modern = std::move(modern), gaugeType, gaugeAutoShift,
-       gaugeAutoShiftLowerBound, autoKeySound, ruleset, playback]() mutable {
-        if (loadThread.joinable()) {
-          loadThread.join();
-        }
-        joinRetiredPreviewLoadThreads();
+       gaugeAutoShiftLowerBound, autoKeySound, ruleset,
+       playback](std::shared_ptr<std::atomic_bool> cancelled) mutable {
+        try {
+          joinRetiredPreviewLoadThreads();
+          auto consumer = replay::makeRuntimeChartReplayConsumer(
+              context.replayRepository);
+          auto loaded = consumer.load(modern, record.meta.BmsPath, *cancelled);
+          if (!loaded.ready()) {
+            const std::string diagnostic = std::move(loaded.diagnostic);
+            queueReplayLoadCompletion([this, diagnostic]() {
+              (void)finishReplayLoadFailure(
+                  "G-Battle failed", diagnostic,
+                  "G-Battle replay could not be prepared.");
+            });
+            return;
+          }
+          if (cancelled->load()) {
+            return;
+          }
+          {
+            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            context.jukebox.stop();
+            context.jukebox.loadChart(*loaded.chart, true, *cancelled);
+          }
+          if (cancelled->load()) {
+            return;
+          }
 
-        std::atomic_bool parseCancelled = false;
-        auto consumer = replay::makeRuntimeChartReplayConsumer(
-            context.replayRepository);
-        auto loaded = consumer.load(modern, record.meta.BmsPath,
-                                    parseCancelled);
-        if (!loaded.ready()) {
-          return finishReplayLoadFailure(
-              "G-Battle failed", std::move(loaded.diagnostic),
-              "G-Battle replay could not be prepared.");
+          struct Completion {
+            replay::ChartReplayConsumerOutcome loaded;
+          };
+          auto completion = std::make_shared<Completion>(
+              Completion{.loaded = std::move(loaded)});
+          queueReplayLoadCompletion(
+              [this, completion, gaugeType, gaugeAutoShift,
+               gaugeAutoShiftLowerBound, autoKeySound, ruleset,
+               playback]() mutable {
+                auto &loaded = completion->loaded;
+                if (!loaded.diagnostic.empty()) {
+                  publishReplayLoadDiagnostic("G-Battle warning",
+                                              loaded.diagnostic);
+                }
+                auto *chart =
+                    setSelectedChart(std::move(loaded.chart), true, false);
+                if (chart == nullptr) {
+                  (void)finishReplayLoadFailure(
+                      "G-Battle failed", {},
+                      "Prepared replay chart is unavailable.");
+                  return;
+                }
+                auto recordData = loaded.replayData;
+                context.jukebox.stop();
+                hideReplayModal();
+                changeToGameplayScene(
+                    chart, {
+                               .startPosition = 0,
+                               .autoKeySound = autoKeySound,
+                               .autoPlay = false,
+                               .gaugeType = gaugeType,
+                               .gaugeAutoShift = gaugeAutoShift,
+                               .gaugeAutoShiftLowerBound =
+                                   gaugeAutoShiftLowerBound,
+                               .gbattleRecordData = recordData,
+                               .playOption = recordData->playOption,
+                               .playOptionSeed = recordData->playOptionSeed,
+                               .playOption2 = recordData->playOption2,
+                               .playOption2Seed = recordData->playOption2Seed,
+                               .longNoteMode = normalizeChartLongNoteModeValue(
+                                   recordData->chartMeta.LnMode),
+                               .assistOption = recordData->assistOption,
+                               .pacemakerTarget = pacemaker::kTargetOff,
+                               .playback = playback,
+                               .replayGhostRenderingEnabled = false,
+                               .ruleset = ruleset,
+                           });
+                willStart.store(false);
+              });
+        } catch (...) {
+          queueReplayLoadCompletion([this]() {
+            (void)finishReplayLoadFailure(
+                "G-Battle failed", {},
+                "G-Battle replay could not be prepared.");
+          });
         }
-        if (parseCancelled) {
-          return finishReplayLoadFailure("G-Battle cancelled", {},
-                                         "Replay loading was cancelled.");
-        }
-        if (!loaded.diagnostic.empty()) {
-          publishReplayLoadDiagnostic("G-Battle warning", loaded.diagnostic);
-        }
-
-        context.jukebox.stop();
-        context.jukebox.loadChart(*loaded.chart, true, parseCancelled);
-        if (parseCancelled) {
-          return finishReplayLoadFailure(
-              "G-Battle cancelled", {},
-              "Replay media loading was cancelled.");
-        }
-        auto *chart = setSelectedChart(std::move(loaded.chart), true, false);
-        if (chart == nullptr) {
-          return finishReplayLoadFailure(
-              "G-Battle failed", {}, "Prepared replay chart is unavailable.");
-        }
-
-        auto recordData = loaded.replayData;
-        context.jukebox.stop();
-        hideReplayModal();
-        changeToGameplayScene(
-            chart, {
-                       .startPosition = 0,
-                       .autoKeySound = autoKeySound,
-                       .autoPlay = false,
-                       .gaugeType = gaugeType,
-                       .gaugeAutoShift = gaugeAutoShift,
-                       .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
-                       .gbattleRecordData = recordData,
-                       .playOption = recordData->playOption,
-                       .playOptionSeed = recordData->playOptionSeed,
-                       .playOption2 = recordData->playOption2,
-                       .playOption2Seed = recordData->playOption2Seed,
-                       .longNoteMode = normalizeChartLongNoteModeValue(
-                           recordData->chartMeta.LnMode),
-                       .assistOption = recordData->assistOption,
-                       .pacemakerTarget = pacemaker::kTargetOff,
-                       .playback = playback,
-                       .replayGhostRenderingEnabled = false,
-                       .ruleset = ruleset,
-                   });
-        willStart.store(false);
-        return true;
-      },
-      0, true);
+      });
 }
 
 void MainMenuScene::startModernCourseReplayPlayback(
@@ -10434,6 +10477,63 @@ bool MainMenuScene::finishReplayLoadFailure(const char *action,
   }
   reloadReplayRecordModels(true);
   return true;
+}
+
+void MainMenuScene::startReplayLoadWorker(
+    std::function<void(std::shared_ptr<std::atomic_bool>)> work) {
+  if (replayLoadThread.joinable()) {
+    replayLoadThread.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
+    pendingReplayLoadCompletion = {};
+  }
+  auto cancelled = std::make_shared<std::atomic_bool>(false);
+  replayLoadCancelToken = cancelled;
+  replayLoadThread = std::jthread(
+      [work = std::move(work), cancelled](std::stop_token stopToken) mutable {
+        if (stopToken.stop_requested() || cancelled->load()) {
+          return;
+        }
+        work(std::move(cancelled));
+      });
+}
+
+void MainMenuScene::queueReplayLoadCompletion(
+    std::function<void()> completion) {
+  std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
+  if (replayLoadCancelToken == nullptr || replayLoadCancelToken->load()) {
+    return;
+  }
+  pendingReplayLoadCompletion = std::move(completion);
+}
+
+void MainMenuScene::applyReplayLoadCompletion() {
+  std::function<void()> completion;
+  {
+    std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
+    completion = std::move(pendingReplayLoadCompletion);
+    pendingReplayLoadCompletion = {};
+  }
+  if (!completion) {
+    return;
+  }
+  if (replayLoadThread.joinable()) {
+    replayLoadThread.join();
+  }
+  completion();
+}
+
+void MainMenuScene::stopReplayLoadWorker() {
+  if (replayLoadCancelToken != nullptr) {
+    replayLoadCancelToken->store(true, std::memory_order_release);
+  }
+  if (replayLoadThread.joinable()) {
+    replayLoadThread.request_stop();
+    replayLoadThread.join();
+  }
+  std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
+  pendingReplayLoadCompletion = {};
 }
 
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
@@ -10982,64 +11082,97 @@ void MainMenuScene::startModernReplayResultRecall(
 
   replayResultRecallInProgress = true;
   refreshReplayModalActions();
-  cancelActivePreviewLoading();
-  defer(
-      [this, record, modern = std::move(modern)]() mutable {
-        if (loadThread.joinable()) {
-          loadThread.join();
-        }
-        joinRetiredPreviewLoadThreads();
-        context.jukebox.stop();
+  retirePreviewLoadThread(true);
+  startReplayLoadWorker(
+      [this, record, modern = std::move(modern)](
+          std::shared_ptr<std::atomic_bool> cancelled) mutable {
+        try {
+          joinRetiredPreviewLoadThreads();
+          const auto exact = context.replayRepository
+                                 .LoadModernChartResultByAttempt(
+                                     modern.result.attemptId);
+          if (exact.status != ModernChartResultReadStatus::Loaded ||
+              !exact.record.has_value()) {
+            const std::string diagnostic =
+                exact.diagnostic.empty() ? "saved result was not found"
+                                         : exact.diagnostic;
+            queueReplayLoadCompletion([this, diagnostic]() {
+              finishReplayResultRecallFailure(diagnostic);
+            });
+            return;
+          }
 
-        const auto exact = context.replayRepository
-                               .LoadModernChartResultByAttempt(
-                                   modern.result.attemptId);
-        if (exact.status != ModernChartResultReadStatus::Loaded ||
-            !exact.record.has_value()) {
-          finishReplayResultRecallFailure(
-              exact.diagnostic.empty() ? "saved result was not found"
-                                       : exact.diagnostic);
-          return true;
-        }
+          auto consumer = replay::makeRuntimeChartReplayConsumer(
+              context.replayRepository);
+          auto replayLoad = consumer.load(*exact.record, record.meta.BmsPath,
+                                          *cancelled);
+          if (cancelled->load()) {
+            return;
+          }
 
-        std::atomic_bool cancelled = false;
-        const std::filesystem::path currentChartPath = record.meta.BmsPath;
-        auto recalled = result_recall::BuildChartResult(
-            exact.record->result, cancelled, currentChartPath);
-        if (!recalled.value.has_value()) {
-          finishReplayResultRecallFailure(
-              recalled.diagnostic.empty() ? "saved result was not found"
-                                           : recalled.diagnostic);
-          return true;
-        }
+          std::shared_ptr<ReplayData> retryData;
+          result_recall::ModernChartLoader preparedChartLoader;
+          if (replayLoad.ready()) {
+            retryData = std::move(replayLoad.replayData);
+            auto preparedChart =
+                std::make_shared<std::unique_ptr<bms_parser::Chart>>(
+                    std::move(replayLoad.chart));
+            preparedChartLoader =
+                [preparedChart](const std::filesystem::path &,
+                                std::atomic_bool &) mutable {
+                  return std::move(*preparedChart);
+                };
+          }
 
-        std::shared_ptr<ReplayData> retryData;
-        auto consumer = replay::makeRuntimeChartReplayConsumer(
-            context.replayRepository);
-        auto replayLoad = consumer.load(*exact.record, record.meta.BmsPath,
-                                        cancelled);
-        if (replayLoad.ready() && !cancelled) {
-          retryData = std::move(replayLoad.replayData);
-        }
+          const std::filesystem::path currentChartPath = record.meta.BmsPath;
+          auto recalled = result_recall::BuildChartResult(
+              exact.record->result, *cancelled, currentChartPath,
+              std::move(preparedChartLoader));
+          if (!recalled.value.has_value()) {
+            const std::string diagnostic =
+                recalled.diagnostic.empty() ? "saved result was not found"
+                                             : recalled.diagnostic;
+            queueReplayLoadCompletion([this, diagnostic]() {
+              finishReplayResultRecallFailure(diagnostic);
+            });
+            return;
+          }
+          if (cancelled->load()) {
+            return;
+          }
 
-        auto result = std::move(*recalled.value);
-        auto chart = std::move(result.chart);
-        const bms_parser::ChartMeta meta = chart->Meta;
-        const std::string attemptId = result.result.attemptId;
-        const ScoreProvenance provenance = result.result.score.provenance;
-        replayResultRecallInProgress = false;
-        context.sceneManager->changeScene(
-            std::make_unique<ResultScene>(
-                context, meta, result.state, provenance, nullptr,
-                ResultPersistenceOptions{}, retryData.get(),
-                ResultPracticeOptions{}, false, ResultCourseOptions{},
-                profileSelections.pacemakerTarget, std::move(chart), nullptr,
-                std::nullopt, retryData.get(), attemptId,
-                retryData != nullptr),
-            true);
-        return true;
-      },
-      1, true);
+          struct Completion {
+            result_recall::ModernChartResultView view;
+            std::shared_ptr<ReplayData> retryData;
+          };
+          auto completion = std::make_shared<Completion>(Completion{
+              .view = std::move(*recalled.value),
+              .retryData = std::move(retryData),
+          });
+          queueReplayLoadCompletion([this, completion]() mutable {
+            auto &result = completion->view;
+            auto chart = std::move(result.chart);
+            const bms_parser::ChartMeta meta = chart->Meta;
+            const std::string attemptId = result.result.attemptId;
+            const ScoreProvenance provenance = result.result.score.provenance;
+            replayResultRecallInProgress = false;
+            context.sceneManager->changeScene(
+                std::make_unique<ResultScene>(
+                    context, meta, result.state, provenance, nullptr,
+                    ResultPersistenceOptions{}, completion->retryData.get(),
+                    ResultPracticeOptions{}, false, ResultCourseOptions{},
+                    profileSelections.pacemakerTarget, std::move(chart),
+                    nullptr, std::nullopt, completion->retryData.get(),
+                    attemptId, completion->retryData != nullptr),
+                true);
+          });
+        } catch (...) {
+          queueReplayLoadCompletion([this]() {
+            finishReplayResultRecallFailure(
+                "saved chart result could not be recalled");
+          });
+        }
+      });
 }
 
 void MainMenuScene::startModernCourseReplayResultRecall(
@@ -11352,6 +11485,7 @@ void MainMenuScene::update(float dt) {
   applyFindBmsUpdates();
   applyUnzipProgress();
   applyUnzipResult();
+  applyReplayLoadCompletion();
   applyReplayExportProgress();
   applyReplayExportResult();
   applyReplayFileDocumentHandoff();
@@ -11452,6 +11586,7 @@ void MainMenuScene::cleanupScene() {
   replayFileDocumentHandoff.close();
   replayDeleteConfirmation.cancel();
   cancelActivePreviewLoading();
+  stopReplayLoadWorker();
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
   context.refreshProfileCaches = nullptr;
