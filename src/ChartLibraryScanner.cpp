@@ -1786,14 +1786,14 @@ int ChartLibraryScanner::Scan(
   const std::size_t archiveSubStartIndex =
       resumePlan.valid && resumePlan.archivePhase ? resumePlan.archiveSubStart
                                                   : 0;
-  auto writePendingArchiveCache = [&](const ArchiveParseBatch &batch) {
+  auto writePendingArchiveCache = [&](const ArchiveParseBatch &batch,
+                                      int parsedChartCount) {
     const auto cacheIt =
         pendingArchiveCacheDiffs.find(archiveScanKey(batch.archivePath));
     if (cacheIt == pendingArchiveCacheDiffs.end()) {
       return;
     }
     const ArchiveCacheDiff &diff = cacheIt->second;
-    const int parsedChartCount = scanBatch->CountChartsInArchive(diff.path);
     if (parsedChartCount != diff.chartCount) {
       archive_file::appendDebugLogLine(
           "Writing archive scan cache with parsed chart count: " +
@@ -2145,7 +2145,10 @@ int ChartLibraryScanner::Scan(
     const ArchiveParseBatch &batch = *batchPtr;
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (innerStart >= batch.innerPaths.size()) {
-      writePendingArchiveCache(batch);
+      const int storedChartCount =
+          innerStart > 0 ? scanBatch->CountChartsInArchive(batch.archivePath)
+                         : 0;
+      writePendingArchiveCache(batch, storedChartCount);
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
               ? std::filesystem::path()
@@ -2210,6 +2213,8 @@ int ChartLibraryScanner::Scan(
     }
     const auto insertStart = std::chrono::steady_clock::now();
     std::size_t insertedCharts = 0;
+    int storedChartCount =
+        innerStart > 0 ? scanBatch->CountChartsInArchive(batch.archivePath) : 0;
     bool parsedFullBatch = parsedCharts.size() == pendingInnerPaths.size();
     bool checkpointOrderReliable = true;
     std::size_t parsedInBatch = innerStart;
@@ -2224,6 +2229,7 @@ int ChartLibraryScanner::Scan(
         if (scanBatch->UpsertChart(*parsed.meta,
                                    storedArchiveSourcePreference)) {
           ++insertedCharts;
+          ++storedChartCount;
         }
       }
       ++parseCurrent;
@@ -2264,7 +2270,7 @@ int ChartLibraryScanner::Scan(
              ? std::string(*archiveSolidHint ? "true" : "false")
              : std::string("unknown")));
     if (parsedFullBatch && !stopRequested(stopToken)) {
-      writePendingArchiveCache(batch);
+      writePendingArchiveCache(batch, storedChartCount);
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
               ? std::filesystem::path()

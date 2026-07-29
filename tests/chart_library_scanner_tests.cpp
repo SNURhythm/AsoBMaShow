@@ -225,6 +225,63 @@ public:
   }
 };
 
+std::atomic_bool countPostInsertChartPathReads{false};
+std::atomic_bool observedChartInsert{false};
+std::atomic_int postInsertChartPathReads{0};
+
+int countPostInsertChartPathReadAuthorizer(void *, int action,
+                                           const char *first,
+                                           const char *second, const char *,
+                                           const char *) {
+  if (!countPostInsertChartPathReads.load(std::memory_order_relaxed)) {
+    return SQLITE_OK;
+  }
+  if (action == SQLITE_INSERT && first != nullptr &&
+      std::string_view(first) == "chart_meta") {
+    observedChartInsert.store(true, std::memory_order_relaxed);
+  } else if (action == SQLITE_READ && first != nullptr && second != nullptr &&
+             std::string_view(first) == "chart_meta" &&
+             std::string_view(second) == "path" &&
+             observedChartInsert.load(std::memory_order_relaxed)) {
+    postInsertChartPathReads.fetch_add(1, std::memory_order_relaxed);
+  }
+  return SQLITE_OK;
+}
+
+int installPostInsertChartPathReadCounter(sqlite3 *database, char **,
+                                          const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(database, countPostInsertChartPathReadAuthorizer,
+                                nullptr);
+}
+
+class ScopedPostInsertChartPathReadCounter {
+public:
+  ScopedPostInsertChartPathReadCounter() {
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+               installPostInsertChartPathReadCounter)) == SQLITE_OK);
+  }
+
+  ~ScopedPostInsertChartPathReadCounter() {
+    countPostInsertChartPathReads.store(false, std::memory_order_relaxed);
+    observedChartInsert.store(false, std::memory_order_relaxed);
+    postInsertChartPathReads.store(0, std::memory_order_relaxed);
+    sqlite3_reset_auto_extension();
+  }
+
+  void start() {
+    observedChartInsert.store(false, std::memory_order_relaxed);
+    postInsertChartPathReads.store(0, std::memory_order_relaxed);
+    countPostInsertChartPathReads.store(true, std::memory_order_relaxed);
+  }
+
+  int stop() {
+    countPostInsertChartPathReads.store(false, std::memory_order_relaxed);
+    assert(observedChartInsert.load(std::memory_order_relaxed));
+    return postInsertChartPathReads.load(std::memory_order_relaxed);
+  }
+};
+
 void testStorageFailureLeavesNoChart() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -304,6 +361,36 @@ void testManySmallArchivesPreserveDiscoveryOrderAndCache() {
   assert(scanner.Scan(*session, roots) == 0);
 }
 
+void testNormalArchiveScanDoesNotRecountStoredRows() {
+  constexpr int kArchiveCount = 6;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::vector<std::filesystem::path> roots;
+  for (int index = 0; index < kArchiveCount; ++index) {
+    roots.push_back(writeZip(
+        root / ("count-reuse-" + std::to_string(index) + ".zip"),
+        {{"chart.bms", chartText("Count Reuse " + std::to_string(index))}}));
+  }
+
+  ScopedPostInsertChartPathReadCounter readCounter;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  readCounter.start();
+  assert(scanner.Scan(*session, roots) == kArchiveCount * 2);
+  assert(readCounter.stop() == 0);
+
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == kArchiveCount);
+  assert(snapshot.archiveCache.size() == kArchiveCount);
+  for (const auto &cache : snapshot.archiveCache) {
+    assert(cache.chartCount == 1);
+  }
+}
+
 void testMultiEntryArchivePreservesPreparedResultOrderAndCache() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -377,6 +464,57 @@ void testArchiveCheckpointResumeUsesOrderedFallbackPipeline() {
   assert(snapshot.archiveCache.size() == 1);
   assert(snapshot.archiveCache.front().chartCount == 3);
   assert(!snapshot.checkpoint.has_value());
+}
+
+void testMidArchiveCheckpointResumePreservesValidCacheCount() {
+  constexpr int kCandidateCount = 105;
+  constexpr int kValidCount = 104;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::vector<std::pair<std::string, std::string>> files;
+  files.reserve(kCandidateCount);
+  files.emplace_back("chart-0.bms",
+                     "#PLAYER 1\n#TITLE Invalid Candidate\n#BPM 120\n");
+  for (int index = 1; index < kCandidateCount; ++index) {
+    files.emplace_back("chart-" + std::to_string(index) + ".bms",
+                       chartText("Resume Valid " + std::to_string(index)));
+  }
+  const auto archivePath =
+      writeZip(root / "mid-archive-resume.zip", files);
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  int parsingCurrent = 0;
+  (void)scanner.Scan(
+      *session, {archivePath}, &stopToken,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+          parsingCurrent = progress.current;
+        }
+      },
+      nullptr,
+      [&]() -> std::uint64_t { return parsingCurrent >= 99 ? 1 : 0; },
+      [&](std::uint64_t request) {
+        assert(request == 1);
+        stop.request_stop();
+      });
+  assert(session->CountAllChartMeta() == 99);
+  const ChartScanSnapshot interrupted = session->LoadScanSnapshot();
+  assert(interrupted.checkpoint.has_value());
+  assert(interrupted.checkpoint->subIndex == 100);
+
+  (void)scanner.Scan(*session, {archivePath});
+  assert(session->CountAllChartMeta() == kValidCount);
+  const ChartScanSnapshot resumed = session->LoadScanSnapshot();
+  assert(resumed.archiveCache.size() == 1);
+  assert(resumed.archiveCache.front().chartCount == kValidCount);
+  assert(!resumed.checkpoint.has_value());
 }
 
 void testLargeSingleArchivePreservesAllChartResults() {
@@ -579,8 +717,10 @@ int main() {
   testStorageFailureLeavesNoChart();
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
   testManySmallArchivesPreserveDiscoveryOrderAndCache();
+  testNormalArchiveScanDoesNotRecountStoredRows();
   testMultiEntryArchivePreservesPreparedResultOrderAndCache();
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
+  testMidArchiveCheckpointResumePreservesValidCacheCount();
   testLargeSingleArchivePreservesAllChartResults();
   testArchiveResultApplicationOverlapsLaterArchiveStreaming();
   testArchiveInspectionUsesMultipleEntityWorkers();
