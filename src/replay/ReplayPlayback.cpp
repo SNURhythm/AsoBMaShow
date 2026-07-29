@@ -228,6 +228,34 @@ ReplayTimeBounds replayCaptureTimeBounds(
   return observed;
 }
 
+bool normalizeLocalReplayAuxiliaryStreams(
+    std::vector<ReplayTouchSample> &touchSamples,
+    std::vector<ReplayLaneCoverEvent> &laneCoverEvents,
+    std::string &diagnostic, const ReplayLimits &limits) noexcept {
+  diagnostic.clear();
+  if (!limits.valid() ||
+      !withinReplayCountLimit(touchSamples.size(), limits.maxTouchSamples) ||
+      !withinReplayCountLimit(laneCoverEvents.size(),
+                              limits.maxLaneCoverEvents)) {
+    diagnostic = "Replay auxiliary capture limits are invalid";
+    return false;
+  }
+  try {
+    std::stable_sort(touchSamples.begin(), touchSamples.end(),
+                     [](const auto &left, const auto &right) {
+                       return left.songTimeMicros < right.songTimeMicros;
+                     });
+    std::stable_sort(laneCoverEvents.begin(), laneCoverEvents.end(),
+                     [](const auto &left, const auto &right) {
+                       return left.songTimeMicros < right.songTimeMicros;
+                     });
+    return true;
+  } catch (...) {
+    diagnostic = "Could not normalize replay auxiliary capture";
+    return false;
+  }
+}
+
 ReplayPlaybackValidation validateReplayPlayback(const ReplayPlaybackData &data,
                                                 ReplaySetupSource source,
                                                 ReplayTimeBounds timeBounds,

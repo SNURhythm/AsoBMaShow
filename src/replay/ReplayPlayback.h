@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace replay {
@@ -177,6 +178,15 @@ struct ReplayPlaybackValidation {
     ReplayTimeBounds observed, std::span<const InputTransition> input,
     std::span<const ReplayTouchSample> touchSamples,
     std::span<const ReplayLaneCoverEvent> laneCoverEvents) noexcept;
+
+// Realtime touch and lane-cover producers can be observed on different
+// threads. Arrival order is not a playback validity fact, so normalize it at
+// the local capture boundary while the decoder remains strict for BRD files.
+[[nodiscard]] bool normalizeLocalReplayAuxiliaryStreams(
+    std::vector<ReplayTouchSample> &touchSamples,
+    std::vector<ReplayLaneCoverEvent> &laneCoverEvents,
+    std::string &diagnostic,
+    const ReplayLimits &limits = kReplayLimits) noexcept;
 
 [[nodiscard]] ReplayPlaybackValidation validateReplayPlayback(
     const ReplayPlaybackData &data, ReplaySetupSource source,

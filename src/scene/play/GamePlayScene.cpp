@@ -2845,6 +2845,17 @@ GamePlayScene::completeModernReplayCapture() {
         .resetVisibleTimeReference = event.resetVisibleTimeReference,
     });
   }
+  std::string auxiliaryDiagnostic;
+  const bool auxiliaryCaptureAvailable =
+      replay::normalizeLocalReplayAuxiliaryStreams(
+          capture.touchSamples, capture.laneCoverEvents,
+          auxiliaryDiagnostic);
+  if (!auxiliaryCaptureAvailable) {
+    modernReplayCaptureDiagnostic =
+        auxiliaryDiagnostic.empty()
+            ? "Raw replay auxiliary capture normalization failed."
+            : std::move(auxiliaryDiagnostic);
+  }
   capture.timeBounds = replay::replayCaptureTimeBounds(
       {.completionSongTimeMicros = completionSongTimeMicros}, {},
       capture.touchSamples, capture.laneCoverEvents);
@@ -2870,6 +2881,9 @@ GamePlayScene::completeModernReplayCapture() {
                              : std::move(diagnostic);
     }
     completedModernReplayInput = std::move(normalized);
+  }
+  if (!auxiliaryCaptureAvailable) {
+    completedModernReplayInput.reset();
   }
   capture.acceptedInput = completedModernReplayInput;
   if (capture.acceptedInput.has_value()) {

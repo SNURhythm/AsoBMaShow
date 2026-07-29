@@ -113,6 +113,27 @@ void testOrderingIsRejectedInsteadOfSorted() {
          "decreasing lane-cover order is rejected");
 }
 
+void testLocalAuxiliaryObserverOrderIsNormalized() {
+  auto data = validPlayback();
+  std::swap(data.touchSamples.front(), data.touchSamples.back());
+  data.laneCoverEvents.push_back(
+      {.songTimeMicros = -2'500'000,
+       .noteStartPositionPercent = 40,
+       .resetVisibleTimeReference = true});
+
+  std::string diagnostic;
+  expect(replay::normalizeLocalReplayAuxiliaryStreams(
+             data.touchSamples, data.laneCoverEvents, diagnostic),
+         "local observer streams are recoverable regardless of arrival order");
+  expect(data.touchSamples.front().songTimeMicros == -1'800'000 &&
+             data.touchSamples.back().songTimeMicros == 1'100'000 &&
+             data.laneCoverEvents.front().songTimeMicros == -2'500'000 &&
+             data.laneCoverEvents.back().songTimeMicros == -2'000'000,
+         "local auxiliary streams are stable-sorted by song time");
+  expect(validate(data).valid(),
+         "normalized local auxiliary streams satisfy the playback contract");
+}
+
 void testControlAndScratchDirectionMatrix() {
   struct LaneCase {
     int keyMode;
@@ -304,6 +325,7 @@ void testCourseEnvelopeSupportsMixedStageSources() {
 int main() {
   testPreRollIsSharedByEveryTimedCollection();
   testOrderingIsRejectedInsteadOfSorted();
+  testLocalAuxiliaryObserverOrderIsNormalized();
   testControlAndScratchDirectionMatrix();
   testRedundancyAndScratchOwnershipHandoff();
   testCollectionCountsAndSupplementalValues();
