@@ -940,6 +940,70 @@ void testPreferredProfileExportNameUsesProfileExtension() {
          "extensions");
 }
 
+void testTextDocumentExportStagesExactOwnedFile() {
+  const auto root = std::filesystem::temp_directory_path() /
+                    "asobmashow-text-document-export-test";
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+  std::filesystem::create_directories(root, error);
+
+  PlatformTextDocumentExportRequest request;
+  request.text =
+      "parse started\narchive: \xed\x8c\x8c\xec\x9d\xbc.zip\nparse finished\n";
+  request.suggestedName = "AsoBMaShow-performance-log.txt";
+  request.maxBytes = 4096;
+  auto prepared =
+      platform_document_handoff::detail::PrepareTextDocumentExportUnder(request,
+                                                                        root);
+
+  expect(prepared.ok(), "text export staging succeeds for a bounded log");
+  const auto stagedPath = prepared.request.localPath;
+  const auto stagedDirectory = stagedPath.parent_path();
+  std::ifstream input(stagedPath, std::ios::binary);
+  std::ostringstream contents;
+  contents << input.rdbuf();
+  expect(contents.str() == request.text,
+         "text export staging preserves the exact UTF-8 log bytes");
+  expect(prepared.request.mimeType == "text/plain" &&
+             prepared.request.suggestedName == request.suggestedName &&
+             prepared.request.maxBytes == request.maxBytes &&
+             prepared.request.sourceLifetime != nullptr,
+         "text export staging prepares a bounded owned handoff request");
+
+  input.close();
+  prepared.request.sourceLifetime.reset();
+  expect(!std::filesystem::exists(stagedPath) &&
+             !std::filesystem::exists(stagedDirectory),
+         "text export staging removes its private source when ownership ends");
+  std::filesystem::remove_all(root, error);
+}
+
+void testTextDocumentExportRejectsUnsafeOrOversizedRequests() {
+  const auto root = std::filesystem::temp_directory_path() /
+                    "asobmashow-invalid-text-document-export-test";
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+  std::filesystem::create_directories(root, error);
+
+  PlatformTextDocumentExportRequest request;
+  request.text = "too large";
+  request.suggestedName = "performance-log.txt";
+  request.maxBytes = 3;
+  auto prepared =
+      platform_document_handoff::detail::PrepareTextDocumentExportUnder(request,
+                                                                        root);
+  expect(!prepared.ok() && !prepared.errorMessage.empty(),
+         "text export staging rejects content above its explicit limit");
+
+  request.maxBytes = 4096;
+  request.suggestedName = "../performance-log.txt";
+  prepared = platform_document_handoff::detail::PrepareTextDocumentExportUnder(
+      request, root);
+  expect(!prepared.ok() && !prepared.errorMessage.empty(),
+         "text export staging rejects a non-leaf suggested name");
+  std::filesystem::remove_all(root, error);
+}
+
 void testUnicodeDesktopPathsRoundTripAsUtf8() {
   const std::string unicodeUtf8 =
       "\xed\x94\x84\xeb\xa1\x9c\xed\x95\x84-\xf0\x9f\x8e\xb5.asobprofile";
@@ -995,6 +1059,8 @@ int main() {
   testTemporaryOwnershipRequiresExactPrivateShapeAndModes();
   testPrivateImportRootRejectsPreplantedLinks();
   testPreferredProfileExportNameUsesProfileExtension();
+  testTextDocumentExportStagesExactOwnedFile();
+  testTextDocumentExportRejectsUnsafeOrOversizedRequests();
   testUnicodeDesktopPathsRoundTripAsUtf8();
 
   if (failures != 0) {

@@ -318,6 +318,9 @@ private:
   TextView *unzipDeleteArchiveButtonText = nullptr;
   TextView *unzipCancelButtonText = nullptr;
   RecyclerView<MainMenuParseLogRow> *parseLogRecyclerView = nullptr;
+  TextView *parseLogExportStatusText = nullptr;
+  Button *parseLogExportButton = nullptr;
+  TextView *parseLogExportButtonText = nullptr;
   Button *parseLogCloseButton = nullptr;
   TextView *parseLogCloseButtonText = nullptr;
   TextView *musicTrackText = nullptr;
@@ -537,6 +540,8 @@ private:
   std::optional<ResultRecordSummary> replayExportSelection;
   platform_document_handoff::PlatformDocumentHandoffOperation
       replayFileDocumentHandoff;
+  platform_document_handoff::PlatformDocumentHandoffOperation
+      parseLogDocumentHandoff;
   replay::ReplayFileDeleteConfirmation replayDeleteConfirmation;
   ChartMetaRecord replayExportChart;
   int selectedReplayIndex = -1;
@@ -766,6 +771,9 @@ private:
   void showParseLogModal();
   void hideParseLogModal();
   void refreshParseLogModal(bool forceScrollToBottom = false);
+  void startParseLogExport();
+  void applyParseLogDocumentHandoff();
+  void refreshParseLogExportControls();
   [[nodiscard]] bool isParseLogScrolledNearBottom() const;
   void scrollParseLogModalToBottom();
   void buildMusicModal();

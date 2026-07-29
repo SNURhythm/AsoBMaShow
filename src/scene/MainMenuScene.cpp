@@ -2501,6 +2501,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
   parseLogRecyclerView = nullptr;
+  parseLogExportStatusText = nullptr;
+  parseLogExportButton = nullptr;
+  parseLogExportButtonText = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
   musicTrackText = nullptr;
@@ -6481,6 +6484,21 @@ void MainMenuScene::buildParseLogModal() {
   footer->setGap(12);
   footer->setHeight(58);
 
+  parseLogExportStatusText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  parseLogExportStatusText->setFlex(1);
+  parseLogExportStatusText->setVAlign(TextView::MIDDLE);
+  parseLogExportStatusText->setOverflow(TextView::TextOverflow::Hidden);
+  parseLogExportStatusText->setThemedColor(ui_theme::textSecondary);
+  footer->addView(parseLogExportStatusText);
+
+  parseLogExportButton =
+      makeModalButton("Export Log", 20, &parseLogExportButtonText);
+  parseLogExportButton->setWidth(160);
+  parseLogExportButton->setOnClickListener(
+      [this]() { startParseLogExport(); });
+  footer->addView(parseLogExportButton);
+
   parseLogCloseButton = makeModalButton("Close", 20, &parseLogCloseButtonText);
   parseLogCloseButton->setWidth(130);
   parseLogCloseButton->setOnClickListener([this]() { hideParseLogModal(); });
@@ -6494,6 +6512,7 @@ void MainMenuScene::buildParseLogModal() {
   parseLogModalRoot->addView(panel);
   rootLayout->addView(parseLogModalRoot);
   parseLogDisplayedRevision = 0;
+  refreshParseLogExportControls();
   refreshParseLogModal(true);
 }
 
@@ -6504,6 +6523,7 @@ void MainMenuScene::showParseLogModal() {
   parseLogModalRoot->setSize(rendering::window_width, rendering::window_height);
   parseLogModalRoot->setVisible(true);
   parseLogDisplayedRevision = 0;
+  refreshParseLogExportControls();
   refreshParseLogModal(true);
 }
 
@@ -6511,6 +6531,55 @@ void MainMenuScene::hideParseLogModal() {
   if (parseLogModalRoot != nullptr) {
     parseLogModalRoot->setVisible(false);
   }
+}
+
+void MainMenuScene::startParseLogExport() {
+  if (parseLogDocumentHandoff) {
+    return;
+  }
+  if (parseLogExportStatusText != nullptr) {
+    parseLogExportStatusText->setText("Preparing performance log...");
+  }
+  parseLogDocumentHandoff =
+      platform_document_handoff::ExportTextDocumentAsync({
+          .text = archive_file::debugLogText(),
+          .suggestedName = "AsoBMaShow-performance-log.txt",
+          .maxBytes = 4ULL * 1024ULL * 1024ULL,
+      });
+  refreshParseLogExportControls();
+}
+
+void MainMenuScene::applyParseLogDocumentHandoff() {
+  if (!parseLogDocumentHandoff || !parseLogDocumentHandoff.ready()) {
+    return;
+  }
+  auto result = parseLogDocumentHandoff.takeResult();
+  parseLogDocumentHandoff.close();
+  if (parseLogExportStatusText != nullptr && result) {
+    if (result->ok()) {
+      parseLogExportStatusText->setText("Performance log exported.");
+    } else if (result->cancelled()) {
+      parseLogExportStatusText->setText("Log export cancelled.");
+    } else {
+      const std::string message =
+          result->message.empty() ? "Log export failed." : result->message;
+      parseLogExportStatusText->setText(message);
+      SDL_Log("Performance log export failed: %s", message.c_str());
+    }
+  }
+  refreshParseLogExportControls();
+}
+
+void MainMenuScene::refreshParseLogExportControls() {
+  if (parseLogExportButton == nullptr || parseLogExportButtonText == nullptr) {
+    return;
+  }
+  const bool enabled = !static_cast<bool>(parseLogDocumentHandoff);
+  parseLogExportButtonText->setText(enabled ? "Export Log" : "Exporting...");
+  styleThemedActionButton(
+      parseLogExportButton, parseLogExportButtonText, enabled,
+      ui_theme::primaryAction, ui_theme::primaryActionHover,
+      ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
 }
 
 void MainMenuScene::refreshParseLogModal(bool forceScrollToBottom) {
@@ -11522,6 +11591,7 @@ void MainMenuScene::update(float dt) {
   applyReplayExportProgress();
   applyReplayExportResult();
   applyReplayFileDocumentHandoff();
+  applyParseLogDocumentHandoff();
   observeReplayIrServiceRevisions();
 #if TARGET_OS_ANDROID
   pollPendingAndroidArchiveImport();
@@ -11617,6 +11687,7 @@ void MainMenuScene::cleanupScene() {
   revealContextMenu.reset();
   rankingsModal.reset();
   replayFileDocumentHandoff.close();
+  parseLogDocumentHandoff.close();
   replayDeleteConfirmation.cancel();
   cancelActivePreviewLoading();
   stopReplayLoadWorker();
@@ -11731,6 +11802,9 @@ void MainMenuScene::cleanupScene() {
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
   parseLogRecyclerView = nullptr;
+  parseLogExportStatusText = nullptr;
+  parseLogExportButton = nullptr;
+  parseLogExportButtonText = nullptr;
   parseLogCloseButton = nullptr;
   parseLogCloseButtonText = nullptr;
   musicTrackText = nullptr;

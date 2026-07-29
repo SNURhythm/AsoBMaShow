@@ -62,6 +62,12 @@ struct PlatformDocumentExportRequest {
   std::shared_ptr<void> sourceLifetime;
 };
 
+struct PlatformTextDocumentExportRequest {
+  std::string text;
+  std::string suggestedName;
+  std::uint64_t maxBytes = 0;
+};
+
 namespace platform_document_handoff {
 
 class PlatformDocumentHandoffOperation;
@@ -92,6 +98,19 @@ std::filesystem::path PathFromUtf8(std::string_view value);
 std::string PathToUtf8(const std::filesystem::path &path);
 bool LockInterruptibly(std::timed_mutex &mutex,
                        const std::atomic_bool &cancellationRequested);
+
+struct PreparedTextDocumentExport {
+  PlatformDocumentExportRequest request;
+  std::string errorMessage;
+
+  [[nodiscard]] bool ok() const noexcept {
+    return errorMessage.empty() && !request.localPath.empty();
+  }
+};
+
+PreparedTextDocumentExport
+PrepareTextDocumentExportUnder(const PlatformTextDocumentExportRequest &request,
+                               const std::filesystem::path &temporaryRoot);
 
 // Closes the cancel-before-native-registration race without allowing an
 // operation waiting behind another picker to cancel that other picker.
@@ -156,6 +175,8 @@ PlatformDocumentHandoffOperation
 ImportDocumentAsync(PlatformDocumentImportRequest request);
 PlatformDocumentHandoffOperation
 ExportDocumentAsync(PlatformDocumentExportRequest request);
+PlatformDocumentHandoffOperation
+ExportTextDocumentAsync(PlatformTextDocumentExportRequest request);
 
 // Removes a successful imported private copy after the caller has consumed it.
 // Ownership is cleared even if the file was already absent.
