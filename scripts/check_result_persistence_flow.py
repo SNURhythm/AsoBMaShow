@@ -279,11 +279,11 @@ require(
         "validateModernChartResult(",
         "captureIrSubmissionSnapshot(",
         "captureLocalReplaySetup(",
-        "validateReplayPlayback(",
-        "compareChartReplayToResult(",
         "attempt.replay = std::move(document)",
-    ),
-    "chart capture must derive snapshot and replay from one validated result",
+    )
+    and "validateReplayPlayback(" not in chart_capture_body
+    and "compareChartReplayToResult(" not in chart_capture_body,
+    "chart capture must assemble replay while codec and persistence own validation",
 )
 require(
     "return attempt;" in chart_capture_body,
@@ -297,12 +297,12 @@ require(
         course_capture_body,
         "validateModernCourseResult(",
         "pathInput.stageSha256.push_back",
-        "validateReplayPlayback(",
-        "compareCourseReplayToResult(",
-        "compareCourseReplayPathToResult(",
         "attempt.replay = std::move(document)",
-    ),
-    "course capture must share result, setup, limits, and path agreement",
+    )
+    and "validateReplayPlayback(" not in course_capture_body
+    and "compareCourseReplayToResult(" not in course_capture_body
+    and "compareCourseReplayPathToResult(" not in course_capture_body,
+    "course capture must assemble stages while codec and persistence own validation",
 )
 
 chart_persist_body = function_body(
