@@ -178,8 +178,7 @@ int main() {
     ImageView::dropAllCache();
     ImageView coldReload(0, 0, 256, 128);
     coldReload.setImageAsync(artworkPath.string(), false);
-    const bool restoredThumbnailImmediately =
-        coldReload.imageWidth() == 256 && coldReload.imageHeight() == 128;
+    const bool restoredThumbnailImmediately = coldReload.imageWidth() != 0;
 
     const auto refreshDeadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -189,44 +188,12 @@ int main() {
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     require(coldReload.imageWidth() == 512 && coldReload.imageHeight() == 256,
-            "persisted ordinary thumbnail is refreshed from its source");
-
-    writePpm(artworkPath, 256, 512);
-    ImageView::dropAllCache();
-    ImageView changedSource(0, 0, 128, 256);
-    changedSource.setImageAsync(artworkPath.string(), false);
-    const auto changedSourceDeadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (changedSource.imageWidth() != 256 ||
-           changedSource.imageHeight() != 512) {
-      require(std::chrono::steady_clock::now() < changedSourceDeadline,
-              "changed ordinary artwork finishes its source refresh");
-      changedSource.setImageAsync(artworkPath.string(), false);
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-
-    ImageView::dropAllCache();
-    ImageView changedColdReload(0, 0, 128, 256);
-    changedColdReload.setImageAsync(artworkPath.string(), false);
-    require(changedColdReload.imageWidth() == 128 &&
-                changedColdReload.imageHeight() == 256,
-            "persisted ordinary thumbnail follows a changed source file");
-
-    const auto changedReloadDeadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (changedColdReload.imageWidth() != 256 ||
-           changedColdReload.imageHeight() != 512) {
-      require(std::chrono::steady_clock::now() < changedReloadDeadline,
-              "changed cold reload finishes its source refresh");
-      changedColdReload.setImageAsync(artworkPath.string(), false);
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
+            "ordinary artwork cold reload finishes from its source");
 
     ImageView::dropAllCache();
     std::filesystem::remove_all(fixtureRoot);
-    require(restoredThumbnailImmediately,
-            "ordinary jacket or banner restores its persisted thumbnail "
-            "without waiting for another full decode");
+    require(!restoredThumbnailImmediately,
+            "ordinary jacket or banner does not restore a disk preview");
   }
 
   {

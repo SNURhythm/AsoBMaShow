@@ -43,9 +43,9 @@
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
-constexpr int kArtworkThumbnailMaxDimension = 256;
+constexpr int kArchivedThumbnailMaxDimension = 256;
 constexpr std::size_t kBackgroundImageDecodeWorkerCount = 4;
-constexpr std::array<unsigned char, 8> kArtworkThumbnailMagic = {
+constexpr std::array<unsigned char, 8> kArchivedThumbnailMagic = {
     'A', 'S', 'O', 'B', 'T', 'H', 'M', '1'};
 
 struct DecodedImage {
@@ -53,6 +53,20 @@ struct DecodedImage {
   int height = 0;
   std::shared_ptr<std::vector<unsigned char>> rgba;
 };
+
+struct ImageDecodeTimings {
+  std::int64_t sourceAccessMillis = 0;
+  std::int64_t sourceLoadDecodeMillis = 0;
+  std::int64_t rgbaCopyMillis = 0;
+  std::int64_t archivePreviewMillis = 0;
+};
+
+std::int64_t elapsedMillis(std::chrono::steady_clock::time_point started,
+                           std::chrono::steady_clock::time_point finished) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(finished -
+                                                                started)
+      .count();
+}
 
 std::string imageCacheKey(const path_t &path) {
   return archive_file::cacheKeyForPath(std::filesystem::path(path));
@@ -79,14 +93,7 @@ bool isArchiveEntryImagePath(const std::filesystem::path &path) {
 }
 
 std::filesystem::path
-artworkThumbnailCacheKeyPath(const std::filesystem::path &path) {
-  if (!isArchiveEntryImagePath(path)) {
-    std::filesystem::path keyPath(
-        utf8_to_path_t("asobmashow-file-thumb256-v1_"));
-    keyPath += path.lexically_normal().native();
-    keyPath += utf8_to_path_t(".rgba");
-    return keyPath;
-  }
+archivedThumbnailCacheKeyPath(const std::filesystem::path &path) {
   std::filesystem::path keyPath = path;
   keyPath += ".asobmashow-thumb256-v1.rgba";
   return keyPath;
@@ -108,10 +115,14 @@ void appendLittleEndianU32(std::vector<unsigned char> &bytes,
 }
 
 std::optional<DecodedImage>
-readCachedArtworkThumbnail(const std::filesystem::path &path) {
+readCachedArchivedThumbnail(const std::filesystem::path &path) {
+  if (!isArchiveEntryImagePath(path)) {
+    return std::nullopt;
+  }
+
   const std::filesystem::path cachePath =
       archive_file::materializedFileCachePath(
-          artworkThumbnailCacheKeyPath(path));
+          archivedThumbnailCacheKeyPath(path));
   std::ifstream file(cachePath, std::ios::binary);
   if (!file) {
     return std::nullopt;
@@ -120,8 +131,8 @@ readCachedArtworkThumbnail(const std::filesystem::path &path) {
   std::array<unsigned char, 16> header{};
   file.read(reinterpret_cast<char *>(header.data()),
             static_cast<std::streamsize>(header.size()));
-  if (!file || !std::equal(kArtworkThumbnailMagic.begin(),
-                           kArtworkThumbnailMagic.end(), header.begin())) {
+  if (!file || !std::equal(kArchivedThumbnailMagic.begin(),
+                           kArchivedThumbnailMagic.end(), header.begin())) {
     return std::nullopt;
   }
 
@@ -130,8 +141,8 @@ readCachedArtworkThumbnail(const std::filesystem::path &path) {
   const int height =
       static_cast<int>(readLittleEndianU32(header.data() + 12));
   if (!decodedImageDimensionsAreValid(width, height) ||
-      width > kArtworkThumbnailMaxDimension ||
-      height > kArtworkThumbnailMaxDimension) {
+      width > kArchivedThumbnailMaxDimension ||
+      height > kArchivedThumbnailMaxDimension) {
     return std::nullopt;
   }
 
@@ -148,13 +159,13 @@ readCachedArtworkThumbnail(const std::filesystem::path &path) {
   return DecodedImage{.width = width, .height = height, .rgba = rgba};
 }
 
-DecodedImage makeArtworkThumbnail(const DecodedImage &decoded) {
+DecodedImage makeArchivedThumbnail(const DecodedImage &decoded) {
   const int maxDimension = std::max(decoded.width, decoded.height);
-  if (maxDimension <= kArtworkThumbnailMaxDimension) {
+  if (maxDimension <= kArchivedThumbnailMaxDimension) {
     return decoded;
   }
 
-  const float scale = static_cast<float>(kArtworkThumbnailMaxDimension) /
+  const float scale = static_cast<float>(kArchivedThumbnailMaxDimension) /
                       static_cast<float>(maxDimension);
   const int thumbnailWidth =
       std::max(1, static_cast<int>(std::round(decoded.width * scale)));
@@ -174,36 +185,37 @@ DecodedImage makeArtworkThumbnail(const DecodedImage &decoded) {
                       .rgba = rgba};
 }
 
-void writeCachedArtworkThumbnail(const std::filesystem::path &path,
-                                 const DecodedImage &thumbnail) {
+void writeCachedArchivedThumbnail(const std::filesystem::path &path,
+                                  const DecodedImage &thumbnail) {
   if (!thumbnail.rgba ||
       !decodedImageDimensionsAreValid(thumbnail.width, thumbnail.height) ||
-      thumbnail.width > kArtworkThumbnailMaxDimension ||
-      thumbnail.height > kArtworkThumbnailMaxDimension) {
+      thumbnail.width > kArchivedThumbnailMaxDimension ||
+      thumbnail.height > kArchivedThumbnailMaxDimension) {
     return;
   }
 
   std::vector<unsigned char> bytes;
-  bytes.reserve(kArtworkThumbnailMagic.size() + 8U + thumbnail.rgba->size());
-  bytes.insert(bytes.end(), kArtworkThumbnailMagic.begin(),
-               kArtworkThumbnailMagic.end());
+  bytes.reserve(kArchivedThumbnailMagic.size() + 8U +
+                thumbnail.rgba->size());
+  bytes.insert(bytes.end(), kArchivedThumbnailMagic.begin(),
+               kArchivedThumbnailMagic.end());
   appendLittleEndianU32(bytes, static_cast<std::uint32_t>(thumbnail.width));
   appendLittleEndianU32(bytes, static_cast<std::uint32_t>(thumbnail.height));
   bytes.insert(bytes.end(), thumbnail.rgba->begin(), thumbnail.rgba->end());
 
   std::string errorMessage;
-  if (!archive_file::materializeFileBytes(artworkThumbnailCacheKeyPath(path),
-                                          bytes, &errorMessage, nullptr,
-                                          !isArchiveEntryImagePath(path)) &&
+  if (!archive_file::materializeFileBytes(archivedThumbnailCacheKeyPath(path),
+                                          bytes, &errorMessage) &&
       !errorMessage.empty()) {
-    SDL_Log("Failed to cache image thumbnail %s: %s",
+    SDL_Log("Failed to cache archived image thumbnail %s: %s",
             fspath_to_utf8(path).c_str(), errorMessage.c_str());
   }
 }
 
 std::optional<DecodedImage>
 decodeImageFile(const std::filesystem::path &path,
-                bool persistOrdinaryThumbnail = false) {
+                ImageDecodeTimings *timings = nullptr) {
+  ImageDecodeTimings measured;
   const bool archiveEntryPath = isArchiveEntryImagePath(path);
   int width = 0;
   int height = 0;
@@ -214,7 +226,10 @@ decodeImageFile(const std::filesystem::path &path,
   if (IsAndroidTreePath(path)) {
     androidTreePath = true;
     std::string fdError;
+    const auto sourceAccessStarted = std::chrono::steady_clock::now();
     const auto fd = OpenAndroidTreeFileDescriptor(path, fdError);
+    measured.sourceAccessMillis = elapsedMillis(
+        sourceAccessStarted, std::chrono::steady_clock::now());
     if (!fd.has_value()) {
       SDL_Log("Failed to open Android image descriptor %s: %s",
               fspath_to_utf8(path).c_str(), fdError.c_str());
@@ -227,7 +242,10 @@ decodeImageFile(const std::filesystem::path &path,
               fspath_to_utf8(path).c_str());
       return std::nullopt;
     }
+    const auto sourceLoadStarted = std::chrono::steady_clock::now();
     data.reset(stbi_load_from_file(file, &width, &height, &channels, 4));
+    measured.sourceLoadDecodeMillis = elapsedMillis(
+        sourceLoadStarted, std::chrono::steady_clock::now());
     fclose(file);
   }
   if (!androidTreePath && !archive_file::isVirtualPath(path)) {
@@ -235,32 +253,72 @@ decodeImageFile(const std::filesystem::path &path,
   if (!archive_file::isVirtualPath(path)) {
 #endif
     const std::string utf8Path = fspath_to_utf8(path);
+#ifdef _WIN32
+    const auto sourceLoadStarted = std::chrono::steady_clock::now();
     data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels, 4));
+    measured.sourceLoadDecodeMillis = elapsedMillis(
+        sourceLoadStarted, std::chrono::steady_clock::now());
+#else
+    const auto sourceAccessStarted = std::chrono::steady_clock::now();
+    UniqueResource<FILE, fclose> file(fopen(utf8Path.c_str(), "rb"));
+    measured.sourceAccessMillis = elapsedMillis(
+        sourceAccessStarted, std::chrono::steady_clock::now());
+    if (file) {
+      const auto sourceLoadStarted = std::chrono::steady_clock::now();
+      data.reset(
+          stbi_load_from_file(file.get(), &width, &height, &channels, 4));
+      measured.sourceLoadDecodeMillis = elapsedMillis(
+          sourceLoadStarted, std::chrono::steady_clock::now());
+    }
+#endif
   } else {
     std::vector<unsigned char> bytes;
     std::string errorMessage;
+    const auto sourceAccessStarted = std::chrono::steady_clock::now();
     if (!archive_file::readFile(path, bytes, &errorMessage)) {
+      measured.sourceAccessMillis = elapsedMillis(
+          sourceAccessStarted, std::chrono::steady_clock::now());
+      if (timings != nullptr) {
+        *timings = measured;
+      }
       SDL_Log("Failed to read archived image %s: %s",
               fspath_to_utf8(path).c_str(), errorMessage.c_str());
       return std::nullopt;
     }
+    measured.sourceAccessMillis = elapsedMillis(
+        sourceAccessStarted, std::chrono::steady_clock::now());
+    const auto sourceLoadStarted = std::chrono::steady_clock::now();
     data.reset(stbi_load_from_memory(bytes.data(),
                                      static_cast<int>(bytes.size()), &width,
                                      &height, &channels, 4));
+    measured.sourceLoadDecodeMillis = elapsedMillis(
+        sourceLoadStarted, std::chrono::steady_clock::now());
   }
 
   if (data == nullptr || !decodedImageDimensionsAreValid(width, height)) {
+    if (timings != nullptr) {
+      *timings = measured;
+    }
     return std::nullopt;
   }
 
+  const auto copyStarted = std::chrono::steady_clock::now();
   const size_t byteCount = static_cast<size_t>(width) *
                            static_cast<size_t>(height) * 4;
   auto rgba = std::make_shared<std::vector<unsigned char>>(byteCount);
   std::copy(data.get(), data.get() + byteCount, rgba->begin());
+  measured.rgbaCopyMillis =
+      elapsedMillis(copyStarted, std::chrono::steady_clock::now());
   DecodedImage decoded{.width = width, .height = height, .rgba = rgba};
-  if (archiveEntryPath || persistOrdinaryThumbnail) {
-    DecodedImage thumbnail = makeArtworkThumbnail(decoded);
-    writeCachedArtworkThumbnail(path, thumbnail);
+  if (archiveEntryPath) {
+    const auto archivePreviewStarted = std::chrono::steady_clock::now();
+    DecodedImage thumbnail = makeArchivedThumbnail(decoded);
+    writeCachedArchivedThumbnail(path, thumbnail);
+    measured.archivePreviewMillis = elapsedMillis(
+        archivePreviewStarted, std::chrono::steady_clock::now());
+  }
+  if (timings != nullptr) {
+    *timings = measured;
   }
   return decoded;
 }
@@ -420,21 +478,28 @@ private:
       }
 
       const auto decodeStarted = std::chrono::steady_clock::now();
+      ImageDecodeTimings timings;
       std::optional<DecodedImage> decoded =
-          decodeImageFile(std::filesystem::path(task.path), true);
+          decodeImageFile(std::filesystem::path(task.path), &timings);
       const auto decodeFinished = std::chrono::steady_clock::now();
       const auto queueMillis =
           std::chrono::duration_cast<std::chrono::milliseconds>(
               decodeStarted - task.queuedAt)
               .count();
-      const auto decodeMillis =
+      const auto workerMillis =
           std::chrono::duration_cast<std::chrono::milliseconds>(
               decodeFinished - decodeStarted)
               .count();
-      if (queueMillis >= 250 || decodeMillis >= 250) {
+      if (queueMillis >= 250 || workerMillis >= 250) {
         const std::string diagnostic =
             "Slow async image load: queue=" + std::to_string(queueMillis) +
-            "ms decode=" + std::to_string(decodeMillis) + "ms path=" +
+            "ms source=" + std::to_string(timings.sourceAccessMillis) +
+            "ms load_decode=" +
+            std::to_string(timings.sourceLoadDecodeMillis) +
+            "ms copy=" + std::to_string(timings.rgbaCopyMillis) +
+            "ms archive_preview=" +
+            std::to_string(timings.archivePreviewMillis) +
+            "ms worker=" + std::to_string(workerMillis) + "ms path=" +
             fspath_to_utf8(std::filesystem::path(task.path));
         SDL_Log("%s", diagnostic.c_str());
         archive_file::appendDebugLogLine(diagnostic);
@@ -642,7 +707,7 @@ bool ImageView::applyCachedTexture(const path_t &path,
 bool ImageView::applyCachedThumbnail(const path_t &path,
                                      const std::string &key) {
   const auto thumbnail =
-      readCachedArtworkThumbnail(std::filesystem::path(path));
+      readCachedArchivedThumbnail(std::filesystem::path(path));
   if (!thumbnail.has_value()) {
     return false;
   }
