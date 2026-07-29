@@ -302,6 +302,46 @@ void testManySmallArchivesPreserveDiscoveryOrderAndCache() {
   assert(scanner.Scan(*session, roots) == 0);
 }
 
+void testMultiEntryArchivePreservesPreparedResultOrderAndCache() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto archivePath = writeZip(
+      root / "multi-chart.zip",
+      {{"alpha/first.bms", chartText("First Archive Entry")},
+       {"beta/second.bms", chartText("Second Archive Entry")},
+       {"gamma/third.bms", chartText("Third Archive Entry")},
+       {"readme.txt", "not a chart"}});
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.Scan(*session, {archivePath}) == 4);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 3);
+  assert(snapshot.archiveCache.size() == 1);
+  assert(snapshot.archiveCache.front().chartCount == 3);
+
+  const std::set<std::string> expectedInnerPaths{
+      "alpha/first.bms",
+      "beta/second.bms",
+      "gamma/third.bms",
+  };
+  std::set<std::string> storedInnerPaths;
+  for (const auto &chart : snapshot.charts) {
+    const std::string storedPath = chart.BmsPath.generic_string();
+    for (const auto &expected : expectedInnerPaths) {
+      if (storedPath.find(expected) != std::string::npos) {
+        storedInnerPaths.insert(expected);
+      }
+    }
+  }
+  assert(storedInnerPaths == expectedInnerPaths);
+  assert(scanner.Scan(*session, {archivePath}) == 0);
+}
+
 void testArchiveInspectionUsesMultipleEntityWorkers() {
   constexpr int kFixtureCount = 6;
   if (parallel_worker_count(kFixtureCount) <= 1) {
@@ -419,6 +459,7 @@ int main() {
   testStorageFailureLeavesNoChart();
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
   testManySmallArchivesPreserveDiscoveryOrderAndCache();
+  testMultiEntryArchivePreservesPreparedResultOrderAndCache();
   testArchiveInspectionUsesMultipleEntityWorkers();
   testBlockedArchiveDoesNotDelayLaterOrdinaryEntities();
   return 0;
