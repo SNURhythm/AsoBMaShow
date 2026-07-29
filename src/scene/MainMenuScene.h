@@ -99,6 +99,7 @@ private:
       std::make_shared<std::atomic_bool>(false);
   std::mutex replayLoadCompletionMutex;
   std::function<void()> pendingReplayLoadCompletion;
+  std::atomic_bool replayLoadInProgress = false;
   std::jthread replayExportThread;
   std::jthread unzipThread;
   std::atomic_bool folderItemsReloadRequested = false;

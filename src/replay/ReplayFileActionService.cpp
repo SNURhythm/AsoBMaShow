@@ -161,6 +161,26 @@ ReplayFileActionService::inspect(const ReplayFileActionRequest &request) {
   return resolved ? inspectResolved(*resolved) : outcome;
 }
 
+ReplayFileActionOutcome ReplayFileActionService::probe(
+    const std::optional<ModernReplayFileReference> &reference) const {
+  if (!reference.has_value()) {
+    return {.state = ReplayFileActionState::Missing,
+            .diagnostic = "The result has no replay file reference."};
+  }
+  if (reference->userDeleted) {
+    return {.state = ReplayFileActionState::UserDeleted};
+  }
+  if (reference->metadata.codecVersion !=
+      BeatorajaReplayCodec::kCodecVersion) {
+    return {.state = ReplayFileActionState::UnsupportedCodecVersion,
+            .diagnostic =
+                "The replay uses an unsupported codec version."};
+  }
+  const auto probed = store_.probe(reference->metadata);
+  return {.state = actionState(probed.state),
+          .diagnostic = probed.diagnostic};
+}
+
 ReplayFileActionOutcome ReplayFileActionService::prepareShare(
     const ReplayFileActionRequest &request) {
   ReplayFileActionOutcome outcome;

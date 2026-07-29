@@ -18,6 +18,13 @@ ReplayFileReconciliationReport ReplayFileReconciler::reconcile(
   } catch (...) {
     report.failures.emplace_back("stale replay temporary cleanup failed");
   }
+  try {
+    if (dependencies_.removeStaleShareSnapshots) {
+      dependencies_.removeStaleShareSnapshots(staleTemporaryCutoff);
+    }
+  } catch (...) {
+    report.failures.emplace_back("stale replay share cleanup failed");
+  }
 
   ModernReplayFileInventoryOutcome inventory;
   bool tombstoneInventoryReturned = false;

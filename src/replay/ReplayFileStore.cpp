@@ -40,6 +40,9 @@ constexpr std::string_view kRemovalDirectoryPrefix =
     ".asobmashow-replay-removal-";
 constexpr std::string_view kCleanupLeaseFilename =
     ".asobmashow-replay-cleanup.lock";
+constexpr std::string_view kShareDirectoryPrefix =
+    "asobmashow-replay-share-";
+constexpr std::size_t kShareDirectoryTokenBytes = 24;
 
 std::mutex &cleanupThreadMutex() {
   static std::mutex mutex;
@@ -293,6 +296,8 @@ bool fault(const ReplayFileStoreFaults &faults, std::string_view point) {
 ReplayFileInspection inspectFileAtPath(const std::filesystem::path &path,
                                        const ReplayFileMetadata &metadata,
                                        const ReplayLimits &limits);
+ReplayFileInspection probeFileAtPath(const std::filesystem::path &path,
+                                     const ReplayFileMetadata &metadata);
 bool removeEntryAndSync(const std::filesystem::path &path,
                         const std::filesystem::path &directory,
                         std::string &diagnostic);
@@ -314,6 +319,57 @@ ReplayFileInspection inspectAt(const std::filesystem::path &profileRoot,
   }
   const auto path = profileRoot / metadata.relativePath;
   return inspectFileAtPath(path, metadata, limits);
+}
+
+ReplayFileInspection probeAt(const std::filesystem::path &profileRoot,
+                             const ReplayFileMetadata &metadata,
+                             const ReplayLimits &limits) {
+  ReplayFileInspection outcome;
+  if (!canonicalMetadata(metadata, limits, outcome.diagnostic)) {
+    outcome.state = ReplayFileState::Unsafe;
+    return outcome;
+  }
+  std::filesystem::path replayDirectory;
+  ReplayFileState absentState = ReplayFileState::IoFailure;
+  if (!existingReplayDirectory(profileRoot, replayDirectory, absentState,
+                               outcome.diagnostic)) {
+    outcome.state = absentState;
+    return outcome;
+  }
+  return probeFileAtPath(profileRoot / metadata.relativePath, metadata);
+}
+
+ReplayFileInspection probeFileAtPath(const std::filesystem::path &path,
+                                     const ReplayFileMetadata &metadata) {
+  ReplayFileInspection outcome;
+  const auto kind = entryKind(path, outcome.diagnostic);
+  if (kind == EntryKind::Missing) {
+    outcome.state = ReplayFileState::Missing;
+    return outcome;
+  }
+  if (kind == EntryKind::Error) {
+    outcome.state = ReplayFileState::IoFailure;
+    return outcome;
+  }
+  if (kind != EntryKind::Regular) {
+    outcome.state = ReplayFileState::Unsafe;
+    outcome.diagnostic = "Replay file is not a regular file";
+    return outcome;
+  }
+  std::error_code error;
+  const auto size = std::filesystem::file_size(path, error);
+  if (error) {
+    outcome.state = ReplayFileState::IoFailure;
+    outcome.diagnostic = "Unable to read replay size: " + error.message();
+    return outcome;
+  }
+  if (size != metadata.compressedSize) {
+    outcome.state = ReplayFileState::Corrupt;
+    outcome.diagnostic = "Replay file size does not match metadata";
+    return outcome;
+  }
+  outcome.state = ReplayFileState::Available;
+  return outcome;
 }
 
 ReplayFileInspection inspectFileAtPath(const std::filesystem::path &path,
@@ -516,6 +572,16 @@ bool isPrivateReplayTemporaryFilename(std::string_view filename) noexcept {
   return isCanonicalLowerHex(attempt, kAttemptDigestBytes) &&
          isCanonicalLowerHex(content, kContentDigestPrefixBytes) &&
          filename == kTemporarySuffix;
+}
+
+bool isPrivateReplayShareDirectoryName(std::string_view filename) noexcept {
+  if (filename.size() !=
+          kShareDirectoryPrefix.size() + kShareDirectoryTokenBytes ||
+      !filename.starts_with(kShareDirectoryPrefix)) {
+    return false;
+  }
+  filename.remove_prefix(kShareDirectoryPrefix.size());
+  return isCanonicalLowerHex(filename, kShareDirectoryTokenBytes);
 }
 
 ReplayFileStore::ReplayFileStore(std::filesystem::path profileRoot,
@@ -757,6 +823,11 @@ ReplayFileStore::inspect(const ReplayFileMetadata &metadata) const {
   return inspectAt(profileRoot_, metadata, limits_);
 }
 
+ReplayFileInspection
+ReplayFileStore::probe(const ReplayFileMetadata &metadata) const {
+  return probeAt(profileRoot_, metadata, limits_);
+}
+
 ReplayFileReadOutcome
 ReplayFileStore::readVerified(const ReplayFileMetadata &metadata) const {
   ReplayFileReadOutcome outcome;
@@ -826,7 +897,8 @@ ReplayFileSnapshotOutcome ReplayFileStore::stageVerifiedSnapshot(
                            .count()) +
         ":" + std::to_string(attempt));
     directory = temporaryRoot /
-                ("asobmashow-replay-share-" + token.substr(0, 24));
+                (std::string(kShareDirectoryPrefix) +
+                 token.substr(0, kShareDirectoryTokenBytes));
     std::error_code error;
     created = std::filesystem::create_directory(directory, error);
     if (created) {
@@ -1059,6 +1131,64 @@ void ReplayFileStore::removeStaleTemporaryFiles(
   }
   if (removed) {
     atomic_file::syncDirectory(replayDirectory, diagnostic);
+  }
+}
+
+void ReplayFileStore::removeStaleShareSnapshots(
+    std::chrono::system_clock::time_point cutoff) const {
+  const auto temporaryRoot = std::filesystem::temp_directory_path();
+  const auto fileCutoff = std::filesystem::file_time_type::clock::now() +
+                          (cutoff - std::chrono::system_clock::now());
+  std::error_code iteratorError;
+  for (std::filesystem::directory_iterator iterator(temporaryRoot,
+                                                     iteratorError),
+       end;
+       !iteratorError && iterator != end; iterator.increment(iteratorError)) {
+    const auto directory = iterator->path();
+    if (!isPrivateReplayShareDirectoryName(
+            directory.filename().string()) ||
+        fault(faults_, "cleanup")) {
+      continue;
+    }
+    std::string kindDiagnostic;
+    if (entryKind(directory, kindDiagnostic) != EntryKind::Directory) {
+      continue;
+    }
+    std::error_code timeError;
+    const auto modified = std::filesystem::last_write_time(directory, timeError);
+    if (timeError || modified > fileCutoff) {
+      continue;
+    }
+
+    std::filesystem::path snapshot;
+    std::size_t entries = 0;
+    std::error_code childError;
+    for (std::filesystem::directory_iterator child(directory, childError),
+         childEnd;
+         !childError && child != childEnd; child.increment(childError)) {
+      snapshot = child->path();
+      ++entries;
+      if (entries > 1) {
+        break;
+      }
+    }
+    if (childError || entries != 1 ||
+        entryKind(snapshot, kindDiagnostic) != EntryKind::Regular) {
+      continue;
+    }
+    std::string pathDiagnostic;
+    if (!isCanonicalReplayRelativePath(
+            std::filesystem::path("replay") / snapshot.filename(),
+            pathDiagnostic, limits_)) {
+      continue;
+    }
+
+    std::error_code removeError;
+    if (!std::filesystem::remove(snapshot, removeError) || removeError) {
+      continue;
+    }
+    removeError.clear();
+    (void)std::filesystem::remove(directory, removeError);
   }
 }
 

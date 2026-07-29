@@ -56,6 +56,7 @@ void testOnlyTombstonedOwnershipIsRemoved() {
   const auto deleted = entry(2, true);
   const auto failed = entry(3, true);
   bool staleCleanupCalled = false;
+  bool staleShareCleanupCalled = false;
   std::vector<std::filesystem::path> removed;
   replay::ReplayFileReconciler reconciler({
       .listTombstones = [&] {
@@ -74,6 +75,8 @@ void testOnlyTombstonedOwnershipIsRemoved() {
             return true;
           },
       .removeStaleTemporaryFiles = [&](auto) { staleCleanupCalled = true; },
+      .removeStaleShareSnapshots =
+          [&](auto) { staleShareCleanupCalled = true; },
       .listReservations = [] {
         return replay::ModernReplayReservationReconciliationOutcome{
             .status = ModernReplayFileInventoryStatus::Loaded};
@@ -84,7 +87,8 @@ void testOnlyTombstonedOwnershipIsRemoved() {
   const std::vector<std::filesystem::path> expectedRemoved{
       deleted.reference.metadata.relativePath,
       failed.reference.metadata.relativePath};
-  assert(staleCleanupCalled && report.referencesScanned == 2 &&
+  assert(staleCleanupCalled && staleShareCleanupCalled &&
+         report.referencesScanned == 2 &&
          report.tombstonesFound == 2 && report.filesRemoved == 1 &&
          report.failures.size() == 1 &&
          removed == expectedRemoved);

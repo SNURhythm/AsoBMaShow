@@ -193,6 +193,28 @@ void testCorruptOwnedEntryRemainsDeletable() {
          removed.changed && !std::filesystem::exists(path));
 }
 
+void testListProbeDefersFullHashVerificationUntilAction() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replays.db");
+  assert(repository.EnsureSchema());
+  replay::ReplayFileStore store(temporary.path);
+  const auto installed = installResult(repository, store, 9, 'f');
+  const auto path = temporary.path / installed.reference.metadata.relativePath;
+  {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    const char replacement[4] = {0, 0, 0, 0};
+    output.write(replacement, sizeof(replacement));
+  }
+
+  replay::ReplayFileActionService actions(repository, store);
+  assert(actions.probe(installed.reference).state ==
+             replay::ReplayFileActionState::Verified &&
+         actions
+                 .inspect({.owner = ModernReplayOwnerKind::ChartResult,
+                           .attemptId = installed.result.attemptId})
+                 .state == replay::ReplayFileActionState::Corrupt);
+}
+
 void testMissingFileDoesNotCreateADeletionTombstone() {
   TemporaryDirectory temporary;
   ReplayRepository repository(temporary.path / "replays.db");
@@ -731,6 +753,7 @@ void testActionInspectionProjectsRecordCapabilitiesWithoutMaterialization() {
 int main() {
   testVerifiedShareUsesStableSnapshotAndDeleteKeepsResult();
   testCorruptOwnedEntryRemainsDeletable();
+  testListProbeDefersFullHashVerificationUntilAction();
   testMissingFileDoesNotCreateADeletionTombstone();
   testResultMismatchedReferenceCannotBeInspectedOrDeleted();
   testUnsupportedCodecSkipsMaterializationAndRemainsDeletable();

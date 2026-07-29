@@ -21,6 +21,8 @@ ReplayFileReconciliationReport reconcileProfileReplayFiles(
             },
         .removeStaleTemporaryFiles =
             [&store](auto cutoff) { store.removeStaleTemporaryFiles(cutoff); },
+        .removeStaleShareSnapshots =
+            [&store](auto cutoff) { store.removeStaleShareSnapshots(cutoff); },
         .listReservations =
             [&repository] {
               return loadAgreedModernReplayPathReservationInventory(repository);

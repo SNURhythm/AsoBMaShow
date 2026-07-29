@@ -59,6 +59,8 @@ public:
   [[nodiscard]] ReplayFileActionOutcome
   inspect(const ReplayFileActionRequest &request);
   [[nodiscard]] ReplayFileActionOutcome
+  probe(const std::optional<ModernReplayFileReference> &reference) const;
+  [[nodiscard]] ReplayFileActionOutcome
   prepareShare(const ReplayFileActionRequest &request);
   [[nodiscard]] ReplayFileActionOutcome
   remove(const ReplayFileActionRequest &request);

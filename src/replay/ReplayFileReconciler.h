@@ -18,6 +18,8 @@ struct ReplayFileReconcilerDependencies {
       removeTombstonedEntryIfMatches;
   std::function<void(std::chrono::system_clock::time_point)>
       removeStaleTemporaryFiles;
+  std::function<void(std::chrono::system_clock::time_point)>
+      removeStaleShareSnapshots;
   std::function<ModernReplayReservationReconciliationOutcome()>
       listReservations;
   std::function<bool(const ReplayFileMetadata &, std::string &)>

@@ -541,6 +541,35 @@ void testBestPacemakerUsesTheRetainedReplayConsumer() {
   rejectTokens(gameplay, synchronousBestLoad);
 }
 
+void testHistoryPresentationUsesBoundedCompleteListsAndCheapFileProbes() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  const auto mainMenu = root / "src/scene/MainMenuScene.cpp";
+  requireToken(mainMenu, "kMaximumLegacyResultSummaryRows",
+               "complete bounded legacy Records history");
+  requireToken(mainMenu, "kMaximumModernChartHistoryRows",
+               "complete bounded chart Records history");
+  requireToken(mainMenu, "kMaximumModernCourseHistoryRows",
+               "complete bounded course Records history");
+  requireToken(mainMenu, "replayActions.probe(modern.replayFile)",
+               "non-materializing Records replay availability probe");
+
+  const auto chartViewer = root / "src/scene/ChartViewerScene.cpp";
+  requireToken(chartViewer, "kMaximumModernChartHistoryRows",
+               "complete bounded practice ghost history");
+  requireToken(chartViewer, "replayActions.probe(record.replayFile)",
+               "non-materializing practice replay availability probe");
+}
+
+void testReplayModalOwnsBackgroundLoadLifetime() {
+  const std::filesystem::path root = ASOBMASHOW_SOURCE_DIR;
+  const auto header = root / "src/scene/MainMenuScene.h";
+  requireToken(header, "replayLoadInProgress",
+               "replay modal background-load lifetime");
+  const auto menu = root / "src/scene/MainMenuScene.cpp";
+  requireToken(menu, "replayLoadInProgress.load()",
+               "replay modal operation guard");
+}
+
 } // namespace
 
 int main() {
@@ -551,6 +580,8 @@ int main() {
   testSharedAssistClearMarkAuthority();
   testReplayIdentityParsingUsesSavedRandomBranch();
   testBestPacemakerUsesTheRetainedReplayConsumer();
+  testHistoryPresentationUsesBoundedCompleteListsAndCheapFileProbes();
+  testReplayModalOwnsBackgroundLoadLifetime();
   testModernResultAndSnapshotBoundary();
   testSharedModernResultAuthorities();
   testSharedIrProviderIdentityAuthority();

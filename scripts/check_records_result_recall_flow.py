@@ -52,7 +52,9 @@ course_recall_end = source.index(
 course_recall = source[course_recall_start:course_recall_end]
 missing += ["course-recall:" + token for token in [
     "cancelActivePreviewLoading();",
-    "loadThread.join()",
+    "retirePreviewLoadThread(true);",
+    "startReplayLoadWorker(",
+    "queueReplayLoadCompletion(",
     "joinRetiredPreviewLoadThreads()",
     "LoadModernCourseResultByAttempt(",
     "result_recall::BuildCourseResult(",

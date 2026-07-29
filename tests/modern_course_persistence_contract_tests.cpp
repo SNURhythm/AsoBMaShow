@@ -151,6 +151,8 @@ void testModernCourseRecordsUseResultAndVerifiedReplayAuthorities() {
   const std::string_view recallBody(modernRecall.data() + begin, end - begin);
   require(recallBody.contains("currentSelection") &&
               recallBody.contains("BuildCourseResult") &&
+              recallBody.contains("startReplayLoadWorker") &&
+              recallBody.contains("queueReplayLoadCompletion") &&
               !recallBody.contains("CourseReplayConsumer") &&
               !recallBody.contains("LoadCourseReplay"),
           "modern course View Result must resolve current chart locations and "
@@ -173,6 +175,8 @@ void testModernCourseRecordsUseResultAndVerifiedReplayAuthorities() {
   const std::string_view videoBody(modernRecall.data() + videoBegin,
                                    videoEnd - videoBegin);
   require(playbackBody.contains("currentCourseSelectionFor") &&
+              playbackBody.contains("startReplayLoadWorker") &&
+              playbackBody.contains("queueReplayLoadCompletion") &&
               videoBody.contains("currentCourseSelectionFor") &&
               !playbackBody.contains("stage.score.chartPath") &&
               !videoBody.contains("stage.score.chartPath"),

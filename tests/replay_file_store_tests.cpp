@@ -1,6 +1,7 @@
 #include "replay/BeatorajaReplayPath.h"
 #include "replay/ReplayFileStore.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -471,6 +472,57 @@ void testStaleCleanupOnlyRecognizesPrivateTemporaryGrammar() {
       "temporary filename grammar is narrow and testable");
 }
 
+void testStaleShareCleanupOnlyRemovesProvenPrivateSnapshots() {
+  TempDirectory profile;
+  replay::ReplayFileStore store(profile.path);
+  const auto temporaryRoot = std::filesystem::temp_directory_path();
+  std::string token(24, 'a');
+  const std::string stamp = std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  token.replace(
+      token.size() - std::min(token.size(), stamp.size()),
+      std::min(token.size(), stamp.size()),
+      stamp.substr(stamp.size() - std::min(token.size(), stamp.size())));
+  const auto stale = temporaryRoot / ("asobmashow-replay-share-" + token);
+  token.front() = token.front() == 'a' ? 'b' : 'a';
+  const auto recent = temporaryRoot / ("asobmashow-replay-share-" + token);
+  token[1] = token[1] == 'a' ? 'b' : 'a';
+  const auto unsafe = temporaryRoot / ("asobmashow-replay-share-" + token);
+  const auto neighbor =
+      temporaryRoot / ("asobmashow-replay-share-" + token + "-user");
+  std::filesystem::create_directory(stale);
+  std::filesystem::create_directory(recent);
+  std::filesystem::create_directory(unsafe);
+  std::filesystem::create_directory(neighbor);
+  const auto replayName = identity().relativePath.filename();
+  write(stale / replayName, "snapshot");
+  write(recent / replayName, "snapshot");
+  write(unsafe / replayName, "snapshot");
+  write(unsafe / "unexpected.txt", "keep");
+  write(neighbor / replayName, "keep");
+  const auto old =
+      std::filesystem::file_time_type::clock::now() - std::chrono::hours(2);
+  std::filesystem::last_write_time(stale, old);
+  std::filesystem::last_write_time(unsafe, old);
+  std::filesystem::last_write_time(neighbor, old);
+
+  store.removeStaleShareSnapshots(std::chrono::system_clock::now() -
+                                  std::chrono::hours(1));
+  expect(!std::filesystem::exists(stale) && std::filesystem::exists(recent) &&
+             std::filesystem::exists(unsafe) &&
+             std::filesystem::exists(neighbor),
+         "stale share cleanup removes only old proven private snapshots");
+  expect(replay::isPrivateReplayShareDirectoryName(stale.filename().string()) &&
+             !replay::isPrivateReplayShareDirectoryName(
+                 neighbor.filename().string()),
+         "share snapshot directory grammar is narrow and testable");
+
+  std::error_code ignored;
+  std::filesystem::remove_all(recent, ignored);
+  std::filesystem::remove_all(unsafe, ignored);
+  std::filesystem::remove_all(neighbor, ignored);
+}
+
 } // namespace
 
 int main() {
@@ -484,6 +536,7 @@ int main() {
   testAutomaticCleanupHonorsInterprocessLease();
 #endif
   testStaleCleanupOnlyRecognizesPrivateTemporaryGrammar();
+  testStaleShareCleanupOnlyRemovesProvenPrivateSnapshots();
   if (failures != 0) {
     std::cerr << failures << " replay file store test(s) failed\n";
     return 1;

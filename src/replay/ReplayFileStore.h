@@ -19,6 +19,9 @@ namespace replay {
 [[nodiscard]] bool
 isPrivateReplayTemporaryFilename(std::string_view filename) noexcept;
 
+[[nodiscard]] bool
+isPrivateReplayShareDirectoryName(std::string_view filename) noexcept;
+
 enum class ReplayFileState {
   Available,
   Missing,
@@ -116,6 +119,11 @@ public:
   [[nodiscard]] ReplayFileInspection
   inspect(const ReplayFileMetadata &metadata) const;
 
+  // List presentation uses only path kind and size. Replay-dependent actions
+  // must still call inspect/readVerified before consuming bytes.
+  [[nodiscard]] ReplayFileInspection
+  probe(const ReplayFileMetadata &metadata) const;
+
   [[nodiscard]] ReplayFileReadOutcome
   readVerified(const ReplayFileMetadata &metadata) const;
 
@@ -130,6 +138,9 @@ public:
 
   void
   removeStaleTemporaryFiles(std::chrono::system_clock::time_point cutoff) const;
+
+  void
+  removeStaleShareSnapshots(std::chrono::system_clock::time_point cutoff) const;
 
 private:
   std::filesystem::path profileRoot_;

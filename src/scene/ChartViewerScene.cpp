@@ -3368,7 +3368,8 @@ void ChartViewerScene::showGhostModal() {
 
   std::vector<ResultRecordSummary> modern;
   const auto history =
-      context.replayRepository.ListModernChartResults(chart->Meta.SHA256);
+      context.replayRepository.ListModernChartResults(
+          chart->Meta.SHA256, kMaximumModernChartHistoryRows);
   if (history.status == ModernChartHistoryReadStatus::Loaded) {
     replay::ReplayFileActionService replayActions(context.replayRepository);
     modern.reserve(history.records.size());
@@ -3378,10 +3379,7 @@ void ChartViewerScene::showGhostModal() {
       if (!replayLongNoteMode) {
         continue;
       }
-      const auto inspected = replayActions.inspect({
-          .owner = ModernReplayOwnerKind::ChartResult,
-          .attemptId = record.result.attemptId,
-      });
+      const auto inspected = replayActions.probe(record.replayFile);
       auto summary = makeModernChartResultRecord(
           record, replay::replayStateForFileAction(inspected.state),
           ir::IrRecordState::Hidden);
