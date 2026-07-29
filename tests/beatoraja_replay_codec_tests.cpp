@@ -443,7 +443,7 @@ void testDoublePlayAndKeyMapping() {
   }
 }
 
-void testStockAndExtensionMustAgree() {
+void testSupportedAsoExtensionIsAuthoritative() {
   replay::BeatorajaReplayCodec codec;
   const auto source = chartDocument();
   std::string diagnostic;
@@ -455,18 +455,22 @@ void testStockAndExtensionMustAgree() {
 
   Json mismatch = outerJson(*encoded);
   mismatch["sha256"] = std::string(64, 'd');
-  expect(!codec.decode(encodeJson(mismatch), context(source)).chart,
-         "stock/extension chart identity mismatch is rejected");
+  auto decoded = codec.decode(encodeJson(mismatch), context(source));
+  expect(decoded.chart == std::optional(source) && !decoded.stockOnly,
+         "supported extension owns chart identity when stock differs");
 
   mismatch = outerJson(*encoded);
-  mismatch["doubleoption"] = 1;
-  expect(!codec.decode(encodeJson(mismatch), context(source)).chart,
-         "stock/extension DP option mismatch is rejected");
+  mismatch["randomoption"] = 1;
+  decoded = codec.decode(encodeJson(mismatch), context(source));
+  expect(decoded.chart == std::optional(source) && !decoded.stockOnly,
+         "supported extension owns replay options when stock differs");
 
   mismatch = outerJson(*encoded);
-  mismatch["laneShufflePattern"][0][0] = 7;
-  expect(!codec.decode(encodeJson(mismatch), context(source)).chart,
-         "stock/extension lane pattern mismatch is rejected");
+  mismatch["laneShufflePattern"][0] =
+      std::vector<int>{0, 1, 2, 3, 4, 5, 6, 7};
+  decoded = codec.decode(encodeJson(mismatch), context(source));
+  expect(decoded.chart == std::optional(source) && !decoded.stockOnly,
+         "supported extension owns lane patterns when stock differs");
 
   Json future = outerJson(*encoded);
   future["asobmashow"]["schemaVersion"] = 999;
@@ -526,7 +530,7 @@ int main() {
   testEmptyCompletedReplayAndInclusivePreRoll();
   testCourseRoundTripAndAggregateLimits();
   testDoublePlayAndKeyMapping();
-  testStockAndExtensionMustAgree();
+  testSupportedAsoExtensionIsAuthoritative();
   testContextAndUntrustedStructureFailClosed();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay codec test(s) failed\n";

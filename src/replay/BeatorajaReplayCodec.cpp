@@ -937,53 +937,6 @@ encodeStage(const ReplayPlaybackData &playback, ReplayTimeBounds timeBounds,
   };
 }
 
-bool stockProjectionAgrees(const ReplaySetup &stock,
-                           std::span<const InputTransition> stockInput,
-                           const ReplayPlaybackData &extension,
-                           const ReplayLimits &limits,
-                           std::string &diagnostic) {
-  const auto option1 =
-      projectedBeatorajaReplayOptionIndex(extension.setup.player1.option);
-  const auto option2 =
-      projectedBeatorajaReplayOptionIndex(extension.setup.player2.option);
-  const auto expected1 =
-      option1 ? beatorajaReplayOptionName(*option1) : std::nullopt;
-  const auto expected2 =
-      option2 ? beatorajaReplayOptionName(*option2) : std::nullopt;
-  const auto stockMode = stockLongNoteMode(stock.longNoteMode);
-  const auto extensionMode = stockLongNoteMode(extension.setup.longNoteMode);
-  if (!expected1 || !expected2 || !stockMode || !extensionMode ||
-      stock.chart.sha256 != extension.setup.chart.sha256 ||
-      stock.chart.keyMode != extension.setup.chart.keyMode ||
-      *stockMode != *extensionMode || stock.player1.option != *expected1 ||
-      stock.player2.option != *expected2 ||
-      stock.player1.seed != extension.setup.player1.seed ||
-      stock.player2.seed != extension.setup.player2.seed ||
-      stock.player1.laneShufflePattern !=
-          extension.setup.player1.laneShufflePattern ||
-      stock.player2.laneShufflePattern !=
-          extension.setup.player2.laneShufflePattern ||
-      stock.doublePlayOption != extension.setup.doublePlayOption ||
-      stock.chartRandomValues != extension.setup.chartRandomValues ||
-      stock.initialGaugeType != extension.setup.initialGaugeType ||
-      stock.initialLaneCoverPercent !=
-          extension.setup.initialLaneCoverPercent ||
-      stock.laneCoverEnabled != extension.setup.laneCoverEnabled) {
-    return fail(diagnostic,
-                "Replay stock and extension setup projections differ");
-  }
-  const auto projected = projectStockInput(extension, limits, diagnostic);
-  if (!projected) {
-    return false;
-  }
-  if (projected->size() != stockInput.size() ||
-      !std::ranges::equal(*projected, stockInput)) {
-    return fail(diagnostic,
-                "Replay stock and extension input projections differ");
-  }
-  return true;
-}
-
 struct StageDecode {
   ReplayPlaybackData playback;
   ReplayTimeBounds timeBounds;
@@ -1097,10 +1050,6 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
   if (!validation.valid()) {
     return fail(diagnostic,
                 "Replay extension playback fails canonical validation");
-  }
-  if (!stockProjectionAgrees(stockSetup, *stockInput, output.playback, limits,
-                             diagnostic)) {
-    return false;
   }
   output.source = ReplayStageDecodeSource::AsoExtension;
   return true;
