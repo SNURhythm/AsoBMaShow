@@ -30,7 +30,7 @@ void testLaterEntitiesUseWorkersWhileArchiveIsActive() {
         cv.notify_all();
         cv.wait(lock, [&] { return releaseArchive; });
       },
-      chart_scan::WorkClass::ArchiveIo));
+      chart_scan::WorkClass::ArchiveRead));
   {
     std::unique_lock lock(mutex);
     assert(cv.wait_for(lock, 2s, [&] { return archiveStarted; }));
@@ -75,7 +75,7 @@ void testArchiveOnlyQueueUsesAvailableWorkers() {
           cv.wait(lock, [&] { return releaseArchives; });
           --activeArchives;
         },
-        chart_scan::WorkClass::ArchiveIo));
+        chart_scan::WorkClass::ArchiveRead));
   }
 
   {
@@ -110,7 +110,7 @@ void testCpuQueueContractsArchiveAdmission() {
         cv.wait(lock, [&] { return releaseArchives; });
         --activeArchives;
       },
-      chart_scan::WorkClass::ArchiveIo));
+      chart_scan::WorkClass::ArchiveRead));
   {
     std::unique_lock lock(mutex);
     assert(cv.wait_for(lock, 2s, [&] { return activeArchives == 1; }));
@@ -139,7 +139,7 @@ void testCpuQueueContractsArchiveAdmission() {
           cv.wait(lock, [&] { return releaseArchives; });
           --activeArchives;
         },
-        chart_scan::WorkClass::ArchiveIo));
+        chart_scan::WorkClass::ArchiveRead));
   }
   for (int index = 0; index < 2; ++index) {
     assert(scheduler.enqueue([&] {
@@ -194,7 +194,7 @@ void testArchiveAdmissionLeavesWorkersForCpuTasks() {
           --activeArchives;
           cv.notify_all();
         },
-        chart_scan::WorkClass::ArchiveIo));
+        chart_scan::WorkClass::ArchiveRead));
   }
 
   {
@@ -220,6 +220,128 @@ void testArchiveAdmissionLeavesWorkersForCpuTasks() {
   scheduler.finish();
   assert(startedArchives == 4);
   assert(maximumActiveArchives == 2);
+  assert(scheduler.takeExceptions().empty());
+}
+
+void testArchiveIndexProgressesWhileArchiveReadHasQueuedCpuWork() {
+  chart_scan::WorkScheduler scheduler(4, 3);
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool archiveReadStarted = false;
+  bool releaseArchiveRead = false;
+  std::array<bool, 3> releaseInitialCpu{};
+  int initialCpuStarted = 0;
+  bool archiveIndexStarted = false;
+  bool releaseArchiveIndex = false;
+  bool queuedCpuStarted = false;
+  bool releaseQueuedCpu = false;
+
+  assert(scheduler.enqueue(
+      [&] {
+        std::unique_lock lock(mutex);
+        archiveReadStarted = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return releaseArchiveRead; });
+      },
+      chart_scan::WorkClass::ArchiveRead));
+  for (std::size_t index = 0; index < releaseInitialCpu.size(); ++index) {
+    assert(scheduler.enqueue([&, index] {
+      std::unique_lock lock(mutex);
+      ++initialCpuStarted;
+      cv.notify_all();
+      cv.wait(lock, [&] { return releaseInitialCpu[index]; });
+    }));
+  }
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] {
+      return archiveReadStarted && initialCpuStarted == 3;
+    }));
+  }
+
+  assert(scheduler.enqueue(
+      [&] {
+        std::unique_lock lock(mutex);
+        archiveIndexStarted = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return releaseArchiveIndex; });
+      },
+      chart_scan::WorkClass::ArchiveIndex));
+  assert(scheduler.enqueue([&] {
+    std::unique_lock lock(mutex);
+    queuedCpuStarted = true;
+    cv.notify_all();
+    cv.wait(lock, [&] { return releaseQueuedCpu; });
+  }));
+
+  {
+    std::lock_guard lock(mutex);
+    releaseInitialCpu[0] = true;
+  }
+  cv.notify_all();
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return archiveIndexStarted; }));
+    assert(!queuedCpuStarted);
+    releaseArchiveRead = true;
+    releaseArchiveIndex = true;
+    releaseQueuedCpu = true;
+    std::fill(releaseInitialCpu.begin(), releaseInitialCpu.end(), true);
+  }
+  cv.notify_all();
+
+  scheduler.finish();
+  assert(queuedCpuStarted);
+  assert(scheduler.takeExceptions().empty());
+}
+
+void testHeavyArchiveReadsAreSerializedAlongsideSmallArchiveReads() {
+  chart_scan::WorkScheduler scheduler(4, 3);
+  std::mutex mutex;
+  std::condition_variable cv;
+  int heavyReadsStarted = 0;
+  bool smallReadStarted = false;
+  bool releaseFirstHeavyRead = false;
+  bool releaseAllReads = false;
+
+  for (int index = 0; index < 2; ++index) {
+    assert(scheduler.enqueue(
+        [&, index] {
+          std::unique_lock lock(mutex);
+          ++heavyReadsStarted;
+          cv.notify_all();
+          cv.wait(lock, [&] {
+            return releaseAllReads ||
+                   (index == 0 && releaseFirstHeavyRead);
+          });
+        },
+        chart_scan::WorkClass::ArchiveReadHeavy));
+  }
+  assert(scheduler.enqueue(
+      [&] {
+        std::unique_lock lock(mutex);
+        smallReadStarted = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return releaseAllReads; });
+      },
+      chart_scan::WorkClass::ArchiveRead));
+
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] {
+      return heavyReadsStarted == 1 && smallReadStarted;
+    }));
+    releaseFirstHeavyRead = true;
+  }
+  cv.notify_all();
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return heavyReadsStarted == 2; }));
+    releaseAllReads = true;
+  }
+  cv.notify_all();
+
+  scheduler.finish();
   assert(scheduler.takeExceptions().empty());
 }
 
@@ -340,6 +462,8 @@ int main() {
   testArchiveOnlyQueueUsesAvailableWorkers();
   testCpuQueueContractsArchiveAdmission();
   testArchiveAdmissionLeavesWorkersForCpuTasks();
+  testArchiveIndexProgressesWhileArchiveReadHasQueuedCpuWork();
+  testHeavyArchiveReadsAreSerializedAlongsideSmallArchiveReads();
   testFinishDrainsWorkSpawnedByActiveTask();
   testSingleWorkerPreservesFifoOrder();
   testTaskExceptionDoesNotStopWorker();

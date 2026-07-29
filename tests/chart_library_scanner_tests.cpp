@@ -368,6 +368,13 @@ void testManySmallArchivesPreserveDiscoveryOrderAndCache() {
     assert(chart.BmsPath.generic_string().find(expected->second) !=
            std::string::npos);
   }
+  const auto logLines = archive_file::debugLogLines();
+  for (const auto &archive : roots) {
+    assert(hasArchiveLog(logLines, archive,
+                         "Prefetching indexed archive chart batch:"));
+    assert(!hasArchiveLog(logLines, archive,
+                          "Queued bounded DB archive chart batch parse:"));
+  }
   assert(scanner.Scan(*session, roots) == 0);
 }
 

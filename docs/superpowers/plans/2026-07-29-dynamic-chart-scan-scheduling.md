@@ -31,7 +31,7 @@
 - Modify: `tests/chart_scan_work_scheduler_tests.cpp`
 
 **Interfaces:**
-- Produces: `enum class WorkClass { Cpu, ArchiveIo }`
+- Produces: `enum class WorkClass { Cpu, ArchiveIndex, ArchiveRead, ArchiveReadHeavy }`
 - Produces: `WorkScheduler(std::size_t workerCount, std::size_t archiveIoLimit = 4)`
 - Produces: `bool enqueue(Work work, WorkClass workClass = WorkClass::Cpu)`
 - Preserves: `finish()`, `cancel()`, exception capture, non-copyability, and idempotent joining
@@ -39,7 +39,7 @@
 
 - [ ] **Step 1: Write the archive-admission test**
 
-Add a four-worker test that enqueues four blocking `ArchiveIo` tasks with an admission limit of two. Wait until two archive tasks are active, enqueue two CPU tasks, and assert both CPU tasks start while the first archive pair remains blocked. Also assert the observed maximum number of active archive tasks is exactly two.
+Add a four-worker test that enqueues four blocking `ArchiveRead` tasks with an admission limit of two. Wait until two archive tasks are active, enqueue two CPU tasks, and assert both CPU tasks start while the first archive pair remains blocked. Also assert the observed maximum number of active archive tasks is exactly two.
 
 - [ ] **Step 2: Write the finish-time child-task test**
 
@@ -57,7 +57,7 @@ Expected: compilation fails because `WorkClass` and the archive limit do not exi
 
 - [ ] **Step 4: Implement eligible-task selection and quiescent finish**
 
-Store CPU and archive work in separate FIFO queues. Track `activeTasks_`, `activeArchiveIo_`, `archiveIoLimit_`, `finishing_`, `closed_`, and `cancelled_`. When CPU work is queued, admit one archive task and dispatch CPU work to the remaining workers. When the CPU queue is empty, expand archive admission to `archiveIoLimit_`. Increment active counters before unlocking and decrement them after work/exception handling.
+Store CPU, archive-index, ordinary archive-read, and heavy archive-read work in separate FIFO queues. Track independent index/read counters plus `activeTasks_`, `archiveIoLimit_`, `finishing_`, `closed_`, and `cancelled_`. When CPU work is queued, admit one short index task and one total archive reader so metadata continues progressing while remaining workers parse. Serialize heavy multi-chart reads; when the CPU queue is empty, expand ordinary archive reads and indexes to `archiveIoLimit_`. Increment active counters before unlocking and decrement them after work/exception handling.
 
 `finish()` sets `finishing_`, wakes workers, and joins. Workers exit only when `finishing_ && queue_.empty() && activeTasks_ == 0`. `enqueue()` remains valid while finishing is in progress and rejects work only after `closed_` or `cancelled_`. The worker that observes quiescence sets `closed_` and wakes all workers. `cancel()` marks the pool closed/cancelled and clears queued work.
 
@@ -119,11 +119,11 @@ Represent each archive entry as an inner path plus `parseAttempted` and `optiona
 
 - [ ] **Step 2: Implement the bounded archive producer**
 
-For one entry, or when the shared worker budget is one, call `readArchiveEntriesStreaming()` and `parseChartMeta()` inline. For larger batches, stream from the `ArchiveIo` task and enqueue one `Cpu` task per file. Use a fixed result vector keyed by normalized inner path and condition-variable backpressure for 12 files/16 MiB. Each CPU task releases its byte/file charge after parsing. A shared completion record publishes only after the producer is done and all accepted CPU tasks have completed.
+For one entry, or when the shared worker budget is one, call `readArchiveEntriesStreaming()` and `parseChartMeta()` inline from an `ArchiveRead` task. For larger batches, stream from the `ArchiveRead` task and enqueue one `Cpu` task per file. Use a fixed result vector keyed by normalized inner path and condition-variable backpressure for 12 files/16 MiB. Each CPU task releases its byte/file charge after parsing. A shared completion record publishes only after the producer is done and all accepted CPU tasks have completed.
 
 - [ ] **Step 3: Invoke the producer immediately after archive indexing**
 
-Construct the entity scheduler with `archiveIoLimit = min(4, workerCount > 1 ? workerCount - 1 : 1)`. Archive inspection tasks use `WorkClass::ArchiveIo`. On fresh scans, a readable, non-solid archive immediately starts the producer and publishes its `PreparedArchive` after chart parsing completes. Cached, solid, unreadable, and checkpoint-bearing cases retain their existing cheap/index-only paths.
+Construct the entity scheduler with `archiveIoLimit = min(4, workerCount > 1 ? workerCount - 1 : 1)`. Archive inspection tasks use `WorkClass::ArchiveIndex`; streaming producers use `WorkClass::ArchiveRead`. On fresh scans, a readable, non-solid archive publishes its `PreparedArchive` after indexing and independently queues the producer. Cached, solid, unreadable, and checkpoint-bearing cases retain their existing cheap/index-only paths.
 
 - [ ] **Step 4: Consume prepared metadata without rereading**
 
@@ -152,7 +152,7 @@ Expected: all mixed, many-small-archive, multi-entry, stop/pause, cache, and sto
 
 - [ ] **Step 1: Submit only unprepared archive suffixes**
 
-After checkpoint validation, create a resource-aware scheduler using the scan worker budget and bounded archive admission. For each archive at or after the resume position, copy only entries whose parse was not attempted into a pending batch and submit one `ArchiveIo` producer. Store results by archive index; prepared prefixes stay in their existing ordered slots.
+After checkpoint validation, keep using the resource-aware scheduler and its bounded archive admission. For each archive at or after the resume position, copy only entries whose parse was not attempted into a pending batch and submit one `ArchiveRead` producer. Store results by archive index; prepared prefixes stay in their existing ordered slots.
 
 Before creating that scheduler, give one remaining batch of at least 16 charts to `readArchiveEntriesConcurrently()` with the full worker budget. This call runs only after the entity pool has joined, and its callbacks parse metadata on the backend workers. If the backend rejects parallel reading, submit the batch to the shared bounded pipeline instead.
 

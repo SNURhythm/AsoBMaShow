@@ -107,7 +107,9 @@ Wrap ordinary and archive preparation tasks so exceptions still publish their fa
 
 - [x] **Step 3: Add speculative large-archive activation**
 
-Represent the first archive with at least `kArchiveDirectConcurrentMinCharts` as a held candidate containing its key, path, and inner paths. When a second large archive arrives, create shared states for both and submit the held candidate as `ArchiveIo`; run the current archive pipeline from its existing archive worker. Every later large archive starts immediately. A sole candidate is left without a prefetched state so the existing direct concurrent path remains eligible.
+Represent the first archive with at least `kArchiveDirectConcurrentMinCharts` as a held candidate containing its key, path, and inner paths. When a second large archive arrives, create shared states for both and submit both as `ArchiveRead`. Every later large archive starts immediately. A sole candidate is left without a prefetched state so the existing direct concurrent path remains eligible. Attach every smaller fresh non-solid archive to a shared state and queue it as `ArchiveRead` immediately after indexing.
+
+Split the scheduler's archive work into `ArchiveIndex`, `ArchiveRead`, and `ArchiveReadHeavy` queues with independent index/read counters. Guarantee one index lane and one total read lane while CPU continuations are queued; serialize heavy multi-chart reads while allowing smaller reads to expand to the configured archive limit when the CPU queue is empty.
 
 Each started archive logs:
 

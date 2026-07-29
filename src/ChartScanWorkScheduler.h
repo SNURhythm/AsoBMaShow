@@ -13,7 +13,9 @@ namespace chart_scan {
 
 enum class WorkClass {
   Cpu,
-  ArchiveIo,
+  ArchiveIndex,
+  ArchiveRead,
+  ArchiveReadHeavy,
 };
 
 class WorkScheduler {
@@ -46,12 +48,16 @@ private:
   std::mutex mutex_;
   std::condition_variable cv_;
   std::deque<Work> cpuQueue_;
-  std::deque<Work> archiveIoQueue_;
+  std::deque<Work> archiveIndexQueue_;
+  std::deque<Work> archiveReadQueue_;
+  std::deque<Work> heavyArchiveReadQueue_;
   std::vector<std::thread> workers_;
   std::vector<std::exception_ptr> exceptions_;
   std::size_t archiveIoLimit_ = 1;
   std::size_t activeTasks_ = 0;
-  std::size_t activeArchiveIo_ = 0;
+  std::size_t activeArchiveIndexes_ = 0;
+  std::size_t activeArchiveReads_ = 0;
+  std::size_t activeHeavyArchiveReads_ = 0;
   bool finishing_ = false;
   bool closed_ = false;
   bool cancelled_ = false;
