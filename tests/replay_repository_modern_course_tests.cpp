@@ -532,6 +532,71 @@ void testCourseTombstoneInventoryFiltersActiveHistory() {
          tombstones.entries.front().reference.userDeleted);
 }
 
+void testExactRetryAttachesOnlyMissingCourseReplayAtomically() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  auto database = openDatabase(databasePath);
+
+  const auto completed = result(20, false);
+  const auto summary = repository.StageModernCourseResult(
+      completed, std::nullopt, std::nullopt);
+  assert(summary.status == ModernCourseStageStatus::Staged && summary.receipt);
+  const auto reservation = reserve(repository, completed);
+  const auto file = attachment(reservation, '7');
+  assert(repository
+             .RecordModernReplayInstallIntent(
+                 reservation,
+                 {.attemptToken = completed.attemptId,
+                  .metadata = file.metadata})
+             .status == ModernReplayOwnershipRecordStatus::Recorded);
+
+  exec(database.get(),
+       "CREATE TRIGGER fail_late_course_replay BEFORE INSERT ON "
+       "modern_replay_files BEGIN SELECT RAISE(ABORT,'injected'); END");
+  const auto failed = repository.StageModernCourseResult(
+      completed, file, coursePathInput(completed));
+  assert(failed.status == ModernCourseStageStatus::StorageFailure &&
+         queryInt(database.get(), "SELECT COUNT(*) FROM modern_replay_files") ==
+             0 &&
+         queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_replay_file_reservations") ==
+             1);
+  const auto unchanged =
+      repository.LoadModernCourseResultByAttempt(completed.attemptId);
+  assert(unchanged.status == ModernCourseResultReadStatus::Loaded &&
+         unchanged.record && !unchanged.record->replayFile &&
+         unchanged.record->result.resultId == summary.receipt->resultId);
+
+  exec(database.get(), "DROP TRIGGER fail_late_course_replay");
+  const auto attached = repository.StageModernCourseResult(
+      completed, file, coursePathInput(completed));
+  assert(attached.status == ModernCourseStageStatus::AlreadyStaged &&
+         attached.receipt == summary.receipt &&
+         queryInt(database.get(), "SELECT COUNT(*) FROM modern_replay_files") ==
+             1 &&
+         queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_replay_file_reservations") ==
+             0);
+  const auto loaded =
+      repository.LoadModernCourseResultByAttempt(completed.attemptId);
+  assert(loaded.status == ModernCourseResultReadStatus::Loaded &&
+         loaded.record && loaded.record->replayFile &&
+         loaded.record->replayFile->identity == file.identity &&
+         loaded.record->replayFile->metadata == file.metadata);
+  assert(repository
+             .StageModernCourseResult(completed, std::nullopt, std::nullopt)
+             .status == ModernCourseStageStatus::IntegrityConflict);
+
+  auto replacement = file;
+  replacement.metadata.sha256 = repeated('8', 64);
+  assert(repository
+             .StageModernCourseResult(completed, replacement,
+                                      coursePathInput(completed))
+             .status == ModernCourseStageStatus::IntegrityConflict);
+}
+
 #endif
 
 } // namespace
@@ -545,6 +610,7 @@ int main() {
   testFutureCodecReferencePreservesCourseResultHistory();
   testReservationInventoryChecksWhetherCourseStagingCommitted();
   testCourseTombstoneInventoryFiltersActiveHistory();
+  testExactRetryAttachesOnlyMissingCourseReplayAtomically();
 #else
   std::cerr << "FAIL: modern course repository contract is not implemented\n";
   return 1;

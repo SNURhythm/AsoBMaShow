@@ -409,6 +409,24 @@ void testReplayBackedSummaryOnlyAndExactRetry() {
              retry.events ==
                  std::vector<std::string>({"load-result", "stage-file"}),
          "exact course retry reuses durable ownership without rewriting bytes");
+
+  Harness recovery;
+  stored = recovery.value.result;
+  stored.resultId = 9;
+  recovery.existing = {
+      .status = ModernCourseResultReadStatus::Loaded,
+      .record = ModernCourseResultRecord{.result = stored}};
+  recovery.staged.status = ModernCourseStageStatus::AlreadyStaged;
+  CourseReplayPersistence recoveryPersistence(recovery.dependencies());
+  const auto repaired = recoveryPersistence.persist(recovery.value);
+  expect(repaired.state == CourseReplayPersistenceState::SavedWithReplay &&
+             repaired.replayAttached &&
+             recovery.events ==
+                 std::vector<std::string>({
+                     "load-result", "reserve-path", "encode", "reserve-file",
+                     "record-ownership", "install", "stage-file"}),
+         "exact course retry attaches a newly captured replay to a "
+         "replayless result");
 }
 
 void testReplayFailuresAndDatabaseAmbiguity() {

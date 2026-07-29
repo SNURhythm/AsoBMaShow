@@ -111,7 +111,6 @@ CourseReplayPersistenceOutcome CourseReplayPersistence::persist(
   }
 
   std::optional<ModernReplayFileAttachment> attachment;
-  bool suppressNewReplay = false;
   const auto existing = dependencies_.loadResult(attempt.result.attemptId);
   switch (existing.status) {
   case ModernCourseResultReadStatus::Loaded: {
@@ -126,7 +125,6 @@ CourseReplayPersistenceOutcome CourseReplayPersistence::persist(
               .diagnostic =
                   "attempt ID already names a different modern course result"};
     }
-    suppressNewReplay = !existing.record->replayFile.has_value();
     if (existing.record->replayFile) {
       attachment = ModernReplayFileAttachment{
           .identity = existing.record->replayFile->identity,
@@ -171,7 +169,7 @@ CourseReplayPersistenceOutcome CourseReplayPersistence::persist(
   ReplayFileAssociationCoordinator fileCoordinator(
       dependencies_.fileAssociation);
   std::optional<ReplayFileAssociation> fileAssociation;
-  if (!attachment && !suppressNewReplay && attempt.replay) {
+  if (!attachment && attempt.replay) {
     std::string replayDiagnostic;
     std::vector<ReplaySetupSource> sources(
         attempt.replay->playback.stages.size(),

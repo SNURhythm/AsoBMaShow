@@ -146,7 +146,6 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
   }
 
   std::optional<ModernReplayFileAttachment> attachment;
-  bool suppressNewReplay = false;
   const auto existing = dependencies_.loadResult(attempt.result.attemptId);
   switch (existing.status) {
   case ModernChartResultReadStatus::Loaded: {
@@ -160,7 +159,6 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
       return {.state = ChartReplayPersistenceState::IntegrityConflict,
               .diagnostic = "attempt ID already names a different result"};
     }
-    suppressNewReplay = !existing.record->replayFile.has_value();
     if (existing.record->replayFile) {
       attachment = ModernReplayFileAttachment{
           .identity = existing.record->replayFile->identity,
@@ -186,7 +184,7 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
   ReplayFileAssociationCoordinator fileCoordinator(
       dependencies_.fileAssociation);
   std::optional<ReplayFileAssociation> fileAssociation;
-  if (!attachment && !suppressNewReplay && attempt.replay.has_value()) {
+  if (!attachment && attempt.replay.has_value()) {
     const auto agreement =
         compareChartReplayToResult(*attempt.replay, attempt.result);
     if (!agreement.agrees()) {

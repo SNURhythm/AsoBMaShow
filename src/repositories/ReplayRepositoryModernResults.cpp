@@ -208,6 +208,105 @@ decodeReservation(sqlite3_stmt *statement, std::string &diagnostic) {
   return reservation;
 }
 
+enum class ReservedReplayAttachmentWriteStatus {
+  Written,
+  IntegrityConflict,
+  StorageFailure,
+};
+
+ReservedReplayAttachmentWriteStatus writeReservedReplayAttachment(
+    sqlite3 *database, std::string_view attemptId, int resultId,
+    bool courseOwner, const ModernReplayFileAttachment &attachment,
+    std::string &diagnostic) {
+  SqliteStatementHandle query;
+  constexpr const char *reservationQuery =
+      "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
+      "owned_content_sha256,owned_compressed_size,owned_codec_version "
+      "FROM modern_replay_file_reservations WHERE attempt_id=?";
+  if (prepareSqliteStatement(database, reservationQuery, query) != SQLITE_OK ||
+      !bindText(query.get(), 1, attemptId)) {
+    diagnostic = "could not inspect modern replay reservation";
+    return ReservedReplayAttachmentWriteStatus::StorageFailure;
+  }
+  const int queryStatus = sqlite3_step(query.get());
+  if (queryStatus == SQLITE_DONE) {
+    diagnostic = "modern replay file has no reservation";
+    return ReservedReplayAttachmentWriteStatus::IntegrityConflict;
+  }
+  if (queryStatus != SQLITE_ROW) {
+    diagnostic = "could not read modern replay reservation";
+    return ReservedReplayAttachmentWriteStatus::StorageFailure;
+  }
+  auto reservation = decodeReservation(query.get(), diagnostic);
+  const int trailingStatus = sqlite3_step(query.get());
+  if (!reservation || trailingStatus == SQLITE_ROW ||
+      reservation->attemptId != attemptId ||
+      reservation->identity != attachment.identity ||
+      (reservation->ownedFile &&
+       *reservation->ownedFile != attachment.metadata)) {
+    if (diagnostic.empty()) {
+      diagnostic =
+          "modern replay reservation disagrees with the installed file";
+    }
+    return ReservedReplayAttachmentWriteStatus::IntegrityConflict;
+  }
+  if (trailingStatus != SQLITE_DONE) {
+    diagnostic = "could not finish modern replay reservation read";
+    return ReservedReplayAttachmentWriteStatus::StorageFailure;
+  }
+
+  SqliteStatementHandle insert;
+  constexpr const char *insertSql =
+      "INSERT INTO modern_replay_files(modern_chart_result_id,"
+      "modern_course_result_id,stem,history_index,relative_path,"
+      "content_sha256,compressed_size,codec_version) VALUES(?,?,?,?,?,?,?,?)";
+  if (prepareSqliteStatement(database, insertSql, insert) != SQLITE_OK ||
+      (courseOwner ? sqlite3_bind_null(insert.get(), 1)
+                   : sqlite3_bind_int(insert.get(), 1, resultId)) !=
+          SQLITE_OK ||
+      (courseOwner ? sqlite3_bind_int(insert.get(), 2, resultId)
+                   : sqlite3_bind_null(insert.get(), 2)) != SQLITE_OK ||
+      !bindText(insert.get(), 3, attachment.identity.stem) ||
+      sqlite3_bind_int64(insert.get(), 4,
+                         attachment.identity.historyIndex) != SQLITE_OK ||
+      !bindText(insert.get(), 5,
+                attachment.identity.relativePath.generic_string()) ||
+      !bindText(insert.get(), 6, attachment.metadata.sha256) ||
+      sqlite3_bind_int64(
+          insert.get(), 7,
+          static_cast<sqlite3_int64>(attachment.metadata.compressedSize)) !=
+          SQLITE_OK ||
+      sqlite3_bind_int(insert.get(), 8, attachment.metadata.codecVersion) !=
+          SQLITE_OK ||
+      sqlite3_step(insert.get()) != SQLITE_DONE ||
+      sqlite3_changes(database) != 1) {
+    diagnostic = "could not insert modern replay reference";
+    return ReservedReplayAttachmentWriteStatus::StorageFailure;
+  }
+
+  SqliteStatementHandle remove;
+  constexpr const char *removeSql =
+      "DELETE FROM modern_replay_file_reservations WHERE attempt_id=? "
+      "AND stem=? AND history_index=? AND relative_path=? AND "
+      "created_at_unix_ms=?";
+  if (prepareSqliteStatement(database, removeSql, remove) != SQLITE_OK ||
+      !bindText(remove.get(), 1, reservation->attemptId) ||
+      !bindText(remove.get(), 2, reservation->identity.stem) ||
+      sqlite3_bind_int64(remove.get(), 3,
+                         reservation->identity.historyIndex) != SQLITE_OK ||
+      !bindText(remove.get(), 4,
+                reservation->identity.relativePath.generic_string()) ||
+      sqlite3_bind_int64(remove.get(), 5,
+                         reservation->createdAtUnixMillis) != SQLITE_OK ||
+      sqlite3_step(remove.get()) != SQLITE_DONE ||
+      sqlite3_changes(database) != 1) {
+    diagnostic = "could not finalize modern replay reservation";
+    return ReservedReplayAttachmentWriteStatus::StorageFailure;
+  }
+  diagnostic.clear();
+  return ReservedReplayAttachmentWriteStatus::Written;
+}
+
 std::optional<result_persistence::ModernChartResult>
 decodeModernChartResult(sqlite3_stmt *statement, std::string &diagnostic) {
   const int textColumns[] = {1, 2, 3, 4, 5, 6, 24, 26, 27, 29};
@@ -1936,12 +2035,7 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     const bool snapshotAgrees =
         snapshotFound == snapshot.has_value() &&
         (!snapshotFound || (storedSnapshot && *storedSnapshot == *snapshot));
-    const bool fileAgrees =
-        existing.record->replayFile.has_value() == replayFile.has_value() &&
-        (!replayFile.has_value() ||
-         (existing.record->replayFile->identity == replayFile->identity &&
-          existing.record->replayFile->metadata == replayFile->metadata));
-    if (existing.record->result != expected || !snapshotAgrees || !fileAgrees ||
+    if (existing.record->result != expected || !snapshotAgrees ||
         !verifyDrafts(impl_->sessionDatabase, result.attemptId, irDrafts,
                       diagnostic)) {
       return {.status = ModernChartStageStatus::IntegrityConflict,
@@ -1949,6 +2043,39 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
                                 ? "attempt ID already names different modern "
                                   "payloads"
                                 : std::move(diagnostic)};
+    }
+    if (existing.record->replayFile) {
+      if (!replayFile ||
+          existing.record->replayFile->identity != replayFile->identity ||
+          existing.record->replayFile->metadata != replayFile->metadata) {
+        return {.status = ModernChartStageStatus::IntegrityConflict,
+                .diagnostic =
+                    "attempt ID already owns a different modern replay"};
+      }
+    } else if (replayFile) {
+      const auto attached = writeReservedReplayAttachment(
+          impl_->sessionDatabase, result.attemptId,
+          existing.record->result.resultId, false, *replayFile, diagnostic);
+      if (attached ==
+          ReservedReplayAttachmentWriteStatus::IntegrityConflict) {
+        return {.status = ModernChartStageStatus::IntegrityConflict,
+                .diagnostic = std::move(diagnostic)};
+      }
+      if (attached == ReservedReplayAttachmentWriteStatus::StorageFailure) {
+        return {.status = ModernChartStageStatus::StorageFailure,
+                .diagnostic = std::move(diagnostic)};
+      }
+      const auto stored = readRecord(impl_->sessionDatabase, "id=?", {},
+                                     existing.record->result.resultId);
+      if (stored.status != ReadRecordStatus::Loaded || !stored.record ||
+          !stored.record->replayFile ||
+          stored.record->replayFile->identity != replayFile->identity ||
+          stored.record->replayFile->metadata != replayFile->metadata) {
+        return {.status = ModernChartStageStatus::StorageFailure,
+                .diagnostic = stored.diagnostic.empty()
+                                  ? "could not verify modern replay attachment"
+                                  : std::move(stored.diagnostic)};
+      }
     }
     if (!transaction.commit(transactionError)) {
       return {.status = ModernChartStageStatus::StorageFailure,
@@ -1959,33 +2086,6 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
                 .attemptId = result.attemptId,
                 .resultId = existing.record->result.resultId,
                 .createdAt = existing.createdAt}};
-  }
-
-  std::optional<ModernReplayPathReservation> reservation;
-  if (replayFile.has_value()) {
-    SqliteStatementHandle statement;
-    constexpr const char *query =
-        "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
-        "owned_content_sha256,owned_compressed_size,owned_codec_version "
-        "FROM modern_replay_file_reservations WHERE attempt_id=?";
-    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
-            SQLITE_OK ||
-        !bindText(statement.get(), 1, result.attemptId) ||
-        sqlite3_step(statement.get()) != SQLITE_ROW) {
-      return {.status = ModernChartStageStatus::IntegrityConflict,
-              .diagnostic = "modern replay file has no reservation"};
-    }
-    reservation = decodeReservation(statement.get(), diagnostic);
-    if (!reservation || sqlite3_step(statement.get()) != SQLITE_DONE ||
-        reservation->identity != replayFile->identity ||
-        (reservation->ownedFile &&
-         *reservation->ownedFile != replayFile->metadata)) {
-      return {.status = ModernChartStageStatus::IntegrityConflict,
-              .diagnostic = diagnostic.empty()
-                                ? "modern replay reservation disagrees with "
-                                  "the installed file"
-                                : std::move(diagnostic)};
-    }
   }
 
   int resultId = 0;
@@ -2014,30 +2114,16 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     }
   }
   if (replayFile.has_value()) {
-    SqliteStatementHandle statement;
-    constexpr const char *query =
-        "INSERT INTO modern_replay_files(modern_chart_result_id,stem,"
-        "history_index,relative_path,content_sha256,compressed_size,"
-        "codec_version) VALUES(?,?,?,?,?,?,?)";
-    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
-            SQLITE_OK ||
-        sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK ||
-        !bindText(statement.get(), 2, replayFile->identity.stem) ||
-        sqlite3_bind_int64(statement.get(), 3,
-                           replayFile->identity.historyIndex) != SQLITE_OK ||
-        !bindText(statement.get(), 4,
-                  replayFile->identity.relativePath.generic_string()) ||
-        !bindText(statement.get(), 5, replayFile->metadata.sha256) ||
-        sqlite3_bind_int64(
-            statement.get(), 6,
-            static_cast<sqlite3_int64>(replayFile->metadata.compressedSize)) !=
-            SQLITE_OK ||
-        sqlite3_bind_int(statement.get(), 7,
-                         replayFile->metadata.codecVersion) != SQLITE_OK ||
-        sqlite3_step(statement.get()) != SQLITE_DONE ||
-        sqlite3_changes(impl_->sessionDatabase) != 1) {
+    const auto attached = writeReservedReplayAttachment(
+        impl_->sessionDatabase, result.attemptId, resultId, false, *replayFile,
+        diagnostic);
+    if (attached == ReservedReplayAttachmentWriteStatus::IntegrityConflict) {
+      return {.status = ModernChartStageStatus::IntegrityConflict,
+              .diagnostic = std::move(diagnostic)};
+    }
+    if (attached == ReservedReplayAttachmentWriteStatus::StorageFailure) {
       return {.status = ModernChartStageStatus::StorageFailure,
-              .diagnostic = "could not insert modern replay reference"};
+              .diagnostic = std::move(diagnostic)};
     }
   }
 
@@ -2056,20 +2142,6 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     return {.status = ModernChartStageStatus::StorageFailure,
             .diagnostic = "could not stage modern score or IR work"};
   }
-  if (replayFile.has_value()) {
-    SqliteStatementHandle removeReservation;
-    if (prepareSqliteStatement(
-            impl_->sessionDatabase,
-            "DELETE FROM modern_replay_file_reservations WHERE attempt_id=?",
-            removeReservation) != SQLITE_OK ||
-        !bindText(removeReservation.get(), 1, result.attemptId) ||
-        sqlite3_step(removeReservation.get()) != SQLITE_DONE ||
-        sqlite3_changes(impl_->sessionDatabase) != 1) {
-      return {.status = ModernChartStageStatus::StorageFailure,
-              .diagnostic = "could not finalize modern replay reservation"};
-    }
-  }
-
   auto stored = readRecord(impl_->sessionDatabase, "id=?", {}, resultId);
   if (stored.status != ReadRecordStatus::Loaded ||
       !transaction.commit(transactionError)) {
@@ -2293,15 +2365,45 @@ ModernCourseStageOutcome ReplayRepository::StageModernCourseResult(
   if (existing.status == ReadRecordStatus::Loaded) {
     auto expected = result;
     expected.resultId = existing.record->result.resultId;
-    const bool fileAgrees =
-        existing.record->replayFile.has_value() == replayFile.has_value() &&
-        (!replayFile ||
-         (existing.record->replayFile->identity == replayFile->identity &&
-          existing.record->replayFile->metadata == replayFile->metadata));
-    if (existing.record->result != expected || !fileAgrees) {
+    if (existing.record->result != expected) {
       return {.status = ModernCourseStageStatus::IntegrityConflict,
               .diagnostic =
                   "attempt ID already names different modern course payloads"};
+    }
+    if (existing.record->replayFile) {
+      if (!replayFile ||
+          existing.record->replayFile->identity != replayFile->identity ||
+          existing.record->replayFile->metadata != replayFile->metadata) {
+        return {.status = ModernCourseStageStatus::IntegrityConflict,
+                .diagnostic =
+                    "attempt ID already owns a different modern course replay"};
+      }
+    } else if (replayFile) {
+      const auto attached = writeReservedReplayAttachment(
+          impl_->sessionDatabase, result.attemptId,
+          existing.record->result.resultId, true, *replayFile, diagnostic);
+      if (attached ==
+          ReservedReplayAttachmentWriteStatus::IntegrityConflict) {
+        return {.status = ModernCourseStageStatus::IntegrityConflict,
+                .diagnostic = std::move(diagnostic)};
+      }
+      if (attached == ReservedReplayAttachmentWriteStatus::StorageFailure) {
+        return {.status = ModernCourseStageStatus::StorageFailure,
+                .diagnostic = std::move(diagnostic)};
+      }
+      const auto stored = readCourseRecord(
+          impl_->sessionDatabase, "id=?", {},
+          existing.record->result.resultId);
+      if (stored.status != ReadRecordStatus::Loaded || !stored.record ||
+          !stored.record->replayFile ||
+          stored.record->replayFile->identity != replayFile->identity ||
+          stored.record->replayFile->metadata != replayFile->metadata) {
+        return {.status = ModernCourseStageStatus::StorageFailure,
+                .diagnostic = stored.diagnostic.empty()
+                                  ? "could not verify modern course replay "
+                                    "attachment"
+                                  : std::move(stored.diagnostic)};
+      }
     }
     if (!transaction.commit(transactionError)) {
       return {.status = ModernCourseStageStatus::StorageFailure,
@@ -2312,33 +2414,6 @@ ModernCourseStageOutcome ReplayRepository::StageModernCourseResult(
                 .attemptId = result.attemptId,
                 .resultId = existing.record->result.resultId,
                 .createdAt = existing.createdAt}};
-  }
-
-  std::optional<ModernReplayPathReservation> reservation;
-  if (replayFile) {
-    SqliteStatementHandle statement;
-    constexpr const char *query =
-        "SELECT attempt_id,stem,history_index,relative_path,created_at_unix_ms,"
-        "owned_content_sha256,owned_compressed_size,owned_codec_version "
-        "FROM modern_replay_file_reservations WHERE attempt_id=?";
-    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
-            SQLITE_OK ||
-        !bindText(statement.get(), 1, result.attemptId) ||
-        sqlite3_step(statement.get()) != SQLITE_ROW) {
-      return {.status = ModernCourseStageStatus::IntegrityConflict,
-              .diagnostic = "modern course replay file has no reservation"};
-    }
-    reservation = decodeReservation(statement.get(), diagnostic);
-    if (!reservation || sqlite3_step(statement.get()) != SQLITE_DONE ||
-        reservation->identity != replayFile->identity ||
-        (reservation->ownedFile &&
-         *reservation->ownedFile != replayFile->metadata)) {
-      return {.status = ModernCourseStageStatus::IntegrityConflict,
-              .diagnostic = diagnostic.empty()
-                                ? "modern course replay reservation disagrees "
-                                  "with the installed file"
-                                : std::move(diagnostic)};
-    }
   }
 
   int resultId = 0;
@@ -2363,53 +2438,16 @@ ModernCourseStageOutcome ReplayRepository::StageModernCourseResult(
             .diagnostic = "could not stage modern course score work"};
   }
   if (replayFile) {
-    SqliteStatementHandle statement;
-    constexpr const char *query =
-        "INSERT INTO modern_replay_files(modern_chart_result_id,"
-        "modern_course_result_id,stem,history_index,relative_path,"
-        "content_sha256,compressed_size,codec_version) "
-        "VALUES(NULL,?,?,?,?,?,?,?)";
-    if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
-            SQLITE_OK ||
-        sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK ||
-        !bindText(statement.get(), 2, replayFile->identity.stem) ||
-        sqlite3_bind_int64(statement.get(), 3,
-                           replayFile->identity.historyIndex) != SQLITE_OK ||
-        !bindText(statement.get(), 4,
-                  replayFile->identity.relativePath.generic_string()) ||
-        !bindText(statement.get(), 5, replayFile->metadata.sha256) ||
-        sqlite3_bind_int64(
-            statement.get(), 6,
-            static_cast<sqlite3_int64>(replayFile->metadata.compressedSize)) !=
-            SQLITE_OK ||
-        sqlite3_bind_int(statement.get(), 7,
-                         replayFile->metadata.codecVersion) != SQLITE_OK ||
-        sqlite3_step(statement.get()) != SQLITE_DONE ||
-        sqlite3_changes(impl_->sessionDatabase) != 1) {
-      return {.status = ModernCourseStageStatus::StorageFailure,
-              .diagnostic = "could not insert modern course replay reference"};
+    const auto attached = writeReservedReplayAttachment(
+        impl_->sessionDatabase, result.attemptId, resultId, true, *replayFile,
+        diagnostic);
+    if (attached == ReservedReplayAttachmentWriteStatus::IntegrityConflict) {
+      return {.status = ModernCourseStageStatus::IntegrityConflict,
+              .diagnostic = std::move(diagnostic)};
     }
-
-    SqliteStatementHandle remove;
-    if (prepareSqliteStatement(
-            impl_->sessionDatabase,
-            "DELETE FROM modern_replay_file_reservations WHERE attempt_id=? "
-            "AND stem=? AND history_index=? AND relative_path=? AND "
-            "created_at_unix_ms=?",
-            remove) != SQLITE_OK ||
-        !bindText(remove.get(), 1, reservation->attemptId) ||
-        !bindText(remove.get(), 2, reservation->identity.stem) ||
-        sqlite3_bind_int64(remove.get(), 3,
-                           reservation->identity.historyIndex) != SQLITE_OK ||
-        !bindText(remove.get(), 4,
-                  reservation->identity.relativePath.generic_string()) ||
-        sqlite3_bind_int64(remove.get(), 5, reservation->createdAtUnixMillis) !=
-            SQLITE_OK ||
-        sqlite3_step(remove.get()) != SQLITE_DONE ||
-        sqlite3_changes(impl_->sessionDatabase) != 1) {
+    if (attached == ReservedReplayAttachmentWriteStatus::StorageFailure) {
       return {.status = ModernCourseStageStatus::StorageFailure,
-              .diagnostic =
-                  "could not finalize modern course replay reservation"};
+              .diagnostic = std::move(diagnostic)};
     }
   }
 

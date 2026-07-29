@@ -487,6 +487,24 @@ void testFileFirstSuccessAndExactRetry() {
                  std::vector<std::string>({"load-result", "stage-file",
                                            "load-pending", "project", "ack"}),
          "exact retry trusts the durable reference and performs no file write");
+
+  Harness recovery;
+  stored = recovery.attempt.result;
+  stored.resultId = 17;
+  recovery.existing = {
+      .status = ModernChartResultReadStatus::Loaded,
+      .record = ModernChartResultRecord{.result = stored}};
+  recovery.staged.status = ModernChartStageStatus::AlreadyStaged;
+  ChartReplayPersistence recoveryPersistence(recovery.dependencies());
+  const auto repaired = recoveryPersistence.persist(recovery.attempt);
+  expect(repaired.state == ChartReplayPersistenceState::SavedWithReplay &&
+             repaired.replayAttached &&
+             recovery.events ==
+                 std::vector<std::string>({
+                     "load-result", "reserve-path", "encode", "reserve-file",
+                     "record-ownership", "install", "stage-file",
+                     "load-pending", "project", "ack"}),
+         "exact retry attaches a newly captured replay to a replayless result");
 }
 
 void testReplayFailuresPreserveIndependentResult() {

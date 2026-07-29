@@ -793,6 +793,73 @@ void testFutureCodecReferencePreservesChartResultHistory() {
              replay::BeatorajaReplayCodec::kCodecVersion + 1);
 }
 
+void testExactRetryAttachesOnlyMissingReplayAtomically() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  ReplayRepository repository(databasePath);
+  assert(repository.EnsureSchema());
+  auto database = openDatabase(databasePath);
+
+  const auto completed = result(20, '6');
+  const auto summary = repository.StageModernChartResult(
+      completed, std::nullopt, std::nullopt, {});
+  assert(summary.status == ModernChartStageStatus::Staged && summary.receipt);
+  const auto reserved = repository.ReserveModernReplayPath(
+      completed.attemptId, completed.score.chartSha256,
+      completed.playedAtUnixMillis);
+  assert(reserved.reservation);
+  const auto file = attachment(*reserved.reservation, '7');
+  assert(repository
+             .RecordModernReplayInstallIntent(
+                 *reserved.reservation,
+                 {.attemptToken = completed.attemptId,
+                  .metadata = file.metadata})
+             .status == ModernReplayOwnershipRecordStatus::Recorded);
+
+  exec(database.get(),
+       "CREATE TRIGGER fail_late_chart_replay BEFORE INSERT ON "
+       "modern_replay_files BEGIN SELECT RAISE(ABORT,'injected'); END");
+  const auto failed = repository.StageModernChartResult(
+      completed, std::nullopt, file, {});
+  assert(failed.status == ModernChartStageStatus::StorageFailure &&
+         queryInt(database.get(), "SELECT COUNT(*) FROM modern_replay_files") ==
+             0 &&
+         queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_replay_file_reservations") ==
+             1);
+  const auto unchanged =
+      repository.LoadModernChartResultByAttempt(completed.attemptId);
+  assert(unchanged.status == ModernChartResultReadStatus::Loaded &&
+         unchanged.record && !unchanged.record->replayFile &&
+         unchanged.record->result.resultId == summary.receipt->resultId);
+
+  exec(database.get(), "DROP TRIGGER fail_late_chart_replay");
+  const auto attached = repository.StageModernChartResult(
+      completed, std::nullopt, file, {});
+  assert(attached.status == ModernChartStageStatus::AlreadyStaged &&
+         attached.receipt == summary.receipt &&
+         queryInt(database.get(), "SELECT COUNT(*) FROM modern_replay_files") ==
+             1 &&
+         queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_replay_file_reservations") ==
+             0);
+  const auto loaded =
+      repository.LoadModernChartResultByAttempt(completed.attemptId);
+  assert(loaded.status == ModernChartResultReadStatus::Loaded && loaded.record &&
+         loaded.record->replayFile &&
+         loaded.record->replayFile->identity == file.identity &&
+         loaded.record->replayFile->metadata == file.metadata);
+  assert(repository
+             .StageModernChartResult(completed, std::nullopt, std::nullopt, {})
+             .status == ModernChartStageStatus::IntegrityConflict);
+
+  auto replacement = file;
+  replacement.metadata.sha256 = repeated('8', 64);
+  assert(repository
+             .StageModernChartResult(completed, std::nullopt, replacement, {})
+             .status == ModernChartStageStatus::IntegrityConflict);
+}
+
 } // namespace
 
 int main() {
@@ -804,5 +871,6 @@ int main() {
   testPendingOwnerCorruptionFailsClosed();
   testPendingTimestampComesFromResultOwner();
   testFutureCodecReferencePreservesChartResultHistory();
+  testExactRetryAttachesOnlyMissingReplayAtomically();
   return 0;
 }
