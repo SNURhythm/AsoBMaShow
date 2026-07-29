@@ -133,6 +133,11 @@ public:
   bool removeIfMatches(const ReplayFileMetadata &metadata,
                        std::string &diagnostic) const;
 
+  // Action-time inspection can prove a zero-byte corrupt regular file even
+  // though zero is never valid persisted replay metadata.
+  bool removeObservedIfMatches(const ReplayFileMetadata &metadata,
+                               std::string &diagnostic) const;
+
   bool removeReferencedEntry(const ReplayFileMetadata &metadata,
                              std::string &diagnostic) const;
 

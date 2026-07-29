@@ -174,17 +174,27 @@ bool canonicalIdentity(const ReplayPathIdentity &identity,
   return rebuilt && *rebuilt == identity;
 }
 
-bool canonicalMetadata(const ReplayFileMetadata &metadata,
-                       const ReplayLimits &limits, std::string &diagnostic) {
+bool canonicalObservedMetadata(const ReplayFileMetadata &metadata,
+                               const ReplayLimits &limits,
+                               std::string &diagnostic) {
   if (isCanonicalReplayRelativePath(metadata.relativePath, diagnostic,
                                     limits) &&
-      isCanonicalLowerHex(metadata.sha256, 64) && metadata.compressedSize > 0 &&
+      isCanonicalLowerHex(metadata.sha256, 64) &&
       metadata.compressedSize <= limits.maxCompressedBytes &&
       metadata.codecVersion > 0) {
     return true;
   }
   diagnostic = "Replay metadata is unsafe";
   return false;
+}
+
+bool canonicalMetadata(const ReplayFileMetadata &metadata,
+                       const ReplayLimits &limits, std::string &diagnostic) {
+  if (metadata.compressedSize == 0) {
+    diagnostic = "Replay metadata is unsafe";
+    return false;
+  }
+  return canonicalObservedMetadata(metadata, limits, diagnostic);
 }
 
 bool safeTemporaryRelativePath(const std::filesystem::path &path) {
@@ -409,14 +419,12 @@ ReplayFileInspection inspectFileAtPath(const std::filesystem::path &path,
                              : "Replay file size does not match metadata";
     return outcome;
   }
-  if (size > 0) {
-    outcome.observedMetadata = ReplayFileMetadata{
-        .relativePath = metadata.relativePath,
-        .compressedSize = size,
-        .sha256 = *checksum,
-        .codecVersion = metadata.codecVersion,
-    };
-  }
+  outcome.observedMetadata = ReplayFileMetadata{
+      .relativePath = metadata.relativePath,
+      .compressedSize = size,
+      .sha256 = *checksum,
+      .codecVersion = metadata.codecVersion,
+  };
   if (!sizeMatches) {
     outcome.state = ReplayFileState::Corrupt;
     outcome.diagnostic = "Replay file size does not match metadata";
@@ -957,6 +965,15 @@ bool ReplayFileStore::removeIfMatches(const ReplayFileMetadata &metadata,
                                       std::string &diagnostic) const {
   diagnostic.clear();
   if (!canonicalMetadata(metadata, limits_, diagnostic)) {
+    return false;
+  }
+  return removeObservedIfMatches(metadata, diagnostic);
+}
+
+bool ReplayFileStore::removeObservedIfMatches(
+    const ReplayFileMetadata &metadata, std::string &diagnostic) const {
+  diagnostic.clear();
+  if (!canonicalObservedMetadata(metadata, limits_, diagnostic)) {
     return false;
   }
 

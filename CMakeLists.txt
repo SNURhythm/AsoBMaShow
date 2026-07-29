@@ -2451,6 +2451,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(image_view_fade_tests PRIVATE cxx_std_23)
+    target_compile_definitions(image_view_fade_tests PRIVATE
+        ASOBMASHOW_IMAGE_VIEW_TESTING=1
+    )
     target_link_libraries(image_view_fade_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )

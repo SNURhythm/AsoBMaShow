@@ -274,7 +274,8 @@ public:
     }
 
     if (prioritize) {
-      if (priorityQueued.contains(key) || priorityInFlight.contains(key)) {
+      if (inFlight.contains(key) || priorityQueued.contains(key) ||
+          priorityInFlight.contains(key)) {
         return;
       }
       if (queued.contains(key)) {
@@ -322,6 +323,16 @@ public:
     std::lock_guard<std::mutex> lock(mutex);
     return failed.contains(key);
   }
+
+#if defined(ASOBMASHOW_IMAGE_VIEW_TESTING)
+  std::size_t pendingCount(const std::string &key) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return static_cast<std::size_t>(queued.contains(key)) +
+           static_cast<std::size_t>(inFlight.contains(key)) +
+           static_cast<std::size_t>(priorityQueued.contains(key)) +
+           static_cast<std::size_t>(priorityInFlight.contains(key));
+  }
+#endif
 
   void drop(const std::string &key) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -803,3 +814,10 @@ void ImageView::dropAllCache() {
   imageCache.clear();
   ImageDecodeWorker::instance().dropAll();
 }
+
+#if defined(ASOBMASHOW_IMAGE_VIEW_TESTING)
+std::size_t
+ImageView::pendingAsyncDecodeCountForTesting(const path_t &path) {
+  return ImageDecodeWorker::instance().pendingCount(imageAsyncCacheKey(path));
+}
+#endif

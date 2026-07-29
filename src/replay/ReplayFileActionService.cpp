@@ -247,7 +247,7 @@ ReplayFileActionService::remove(const ReplayFileActionRequest &request) {
   std::string cleanupDiagnostic;
   const bool removed =
       observedMetadata.has_value() &&
-      store_.removeIfMatches(*observedMetadata, cleanupDiagnostic);
+      store_.removeObservedIfMatches(*observedMetadata, cleanupDiagnostic);
   if (!observedMetadata && cleanupDiagnostic.empty()) {
     cleanupDiagnostic =
         "Replay cleanup is pending because the selected occupant could not "

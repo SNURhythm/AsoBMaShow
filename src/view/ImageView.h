@@ -7,6 +7,7 @@
 #include "View.h"
 #include "../path.h"
 #include <bgfx/bgfx.h>
+#include <cstddef>
 #include <map>
 #include <memory>
 #include <optional>
@@ -68,4 +69,8 @@ public:
 
   static void dropCache(const path_t &path);
   static void dropAllCache();
+#if defined(ASOBMASHOW_IMAGE_VIEW_TESTING)
+  [[nodiscard]] static std::size_t
+  pendingAsyncDecodeCountForTesting(const path_t &path);
+#endif
 };
