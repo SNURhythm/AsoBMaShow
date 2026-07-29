@@ -2857,6 +2857,17 @@ GamePlayScene::completeModernReplayCapture() {
     }
     modernReplayInputRecorder.reset();
   }
+  if (completedModernReplayInput.has_value()) {
+    std::string diagnostic;
+    auto normalized = replay::normalizeReplayInput(
+        *completedModernReplayInput, capture.timeBounds, diagnostic);
+    if (!normalized.has_value()) {
+      modernReplayCaptureDiagnostic =
+          diagnostic.empty() ? "Raw replay input normalization failed."
+                             : std::move(diagnostic);
+    }
+    completedModernReplayInput = std::move(normalized);
+  }
   capture.acceptedInput = completedModernReplayInput;
   if (capture.acceptedInput.has_value()) {
     capture.timeBounds = replay::replayCaptureTimeBounds(

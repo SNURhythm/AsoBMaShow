@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,11 @@ struct ReplayClock {
   std::optional<std::int64_t> (*mapSteadyToSong)(void *, std::int64_t) =
       nullptr;
 };
+
+[[nodiscard]] std::optional<std::vector<InputTransition>>
+normalizeReplayInput(std::span<const InputTransition> input,
+                     ReplayTimeBounds bounds, std::string &diagnostic,
+                     const ReplayLimits &limits = kReplayLimits) noexcept;
 
 class ReplayInputRecorder {
 public:
@@ -31,18 +37,11 @@ public:
   finish(ReplayTimeBounds bounds, std::string &diagnostic) noexcept;
 
 private:
-  struct ControlState {
-    LogicalControl control;
-    bool pressed = false;
-  };
-
   bool rejectCapture(std::string &diagnostic, std::string message) noexcept;
 
   ReplayClock clock_;
   ReplayLimits limits_;
   std::vector<InputTransition> transitions_;
-  std::vector<ControlState> states_;
-  std::optional<std::int64_t> lastSongTimeMicros_;
   std::string failureDiagnostic_;
   bool finished_ = false;
 };

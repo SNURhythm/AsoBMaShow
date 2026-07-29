@@ -76,20 +76,38 @@ void testRecordsSignedMonotonicSongTimeWithoutSorting() {
           "finished capture cannot be read twice");
 }
 
-void testTimeReversalAndOverflowInvalidateTheWholeAttachment() {
+void testOutOfOrderAndRedundantObserverEdgesAreNormalized() {
+  replay::ReplayInputRecorder recorder;
+  std::string diagnostic;
+
+  require(recorder.recordSongTime(10, lane(), true, diagnostic),
+          "initial press is observed");
+  require(recorder.recordSongTime(9, lane(), true, diagnostic),
+          "out-of-order duplicate press remains recoverable");
+  require(recorder.recordSongTime(8, lane(1), false, diagnostic),
+          "unmatched release remains recoverable");
+  require(recorder.recordSongTime(11, lane(), false, diagnostic),
+          "matching release is observed");
+
+  const auto result = recorder.finish(
+      {.completionSongTimeMicros = 20}, diagnostic);
+  require(result.has_value() && diagnostic.empty(),
+          "observer noise does not discard the attachment");
+  require(*result ==
+              std::vector<replay::InputTransition>{
+                  {.songTimeMicros = 9,
+                   .control = lane(),
+                   .pressed = true},
+                  {.songTimeMicros = 11,
+                   .control = lane(),
+                   .pressed = false}},
+          "input is stable-ordered and redundant states are removed");
+}
+
+void testOverflowInvalidatesTheWholeAttachment() {
   replay::ReplayLimits bounded = replay::kReplayLimits;
   bounded.maxInputTransitions = 2;
   std::string diagnostic;
-
-  replay::ReplayInputRecorder reversed({}, bounded);
-  require(reversed.recordSongTime(-10, lane(), true, diagnostic),
-          "reversal fixture accepts first edge");
-  require(!reversed.recordSongTime(-11, lane(), false, diagnostic),
-          "decreasing time is rejected instead of sorted");
-  require(!reversed.finish({.completionSongTimeMicros = 10}, diagnostic)
-               .has_value() &&
-              diagnostic.find("decreased") != std::string::npos,
-          "time reversal discards the accepted prefix");
 
   replay::ReplayInputRecorder overflow({}, bounded);
   require(overflow.recordSongTime(0, lane(), true, diagnostic) &&
@@ -122,17 +140,8 @@ void testClockAndCompletionBoundsFailClosed() {
           "capture beyond completion is rejected as a whole");
 }
 
-void testRedundantStateAndUnsupportedControlsFailClosed() {
+void testUnsupportedControlsFailClosed() {
   std::string diagnostic;
-  replay::ReplayInputRecorder redundant;
-  require(redundant.recordSongTime(0, lane(), true, diagnostic),
-          "state fixture accepts initial press");
-  require(!redundant.recordSongTime(1, lane(), true, diagnostic),
-          "duplicate state is rejected");
-  require(!redundant.finish({.completionSongTimeMicros = 10}, diagnostic)
-               .has_value(),
-          "observer contract violations cannot leave a partial attachment");
-
   replay::ReplayInputRecorder unsupported;
   require(!unsupported.recordSongTime(
               0,
@@ -150,8 +159,9 @@ void testRedundantStateAndUnsupportedControlsFailClosed() {
 
 int main() {
   testRecordsSignedMonotonicSongTimeWithoutSorting();
-  testTimeReversalAndOverflowInvalidateTheWholeAttachment();
+  testOutOfOrderAndRedundantObserverEdgesAreNormalized();
+  testOverflowInvalidatesTheWholeAttachment();
   testClockAndCompletionBoundsFailClosed();
-  testRedundantStateAndUnsupportedControlsFailClosed();
+  testUnsupportedControlsFailClosed();
   return 0;
 }

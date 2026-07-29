@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <exception>
 #include <ranges>
+#include <span>
 #include <utility>
 
 namespace replay {
@@ -32,6 +33,66 @@ bool structurallyValidControl(const LogicalControl &control) noexcept {
 }
 
 } // namespace
+
+std::optional<std::vector<InputTransition>>
+normalizeReplayInput(std::span<const InputTransition> input,
+                     ReplayTimeBounds bounds, std::string &diagnostic,
+                     const ReplayLimits &limits) noexcept {
+  diagnostic.clear();
+  try {
+    if (!limits.valid() || !bounds.valid() ||
+        input.size() > limits.maxInputTransitions) {
+      diagnostic = "Replay input limits or completion bounds are invalid";
+      return std::nullopt;
+    }
+
+    std::vector<InputTransition> ordered(input.begin(), input.end());
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto &left,
+                                                        const auto &right) {
+      return left.songTimeMicros < right.songTimeMicros;
+    });
+
+    struct ControlState {
+      LogicalControl control;
+      bool pressed = false;
+    };
+    std::vector<ControlState> states;
+    std::vector<InputTransition> normalized;
+    states.reserve(64);
+    normalized.reserve(ordered.size());
+    for (const auto &transition : ordered) {
+      if (!structurallyValidControl(transition.control)) {
+        diagnostic = "Replay input control is unsupported";
+        return std::nullopt;
+      }
+      if (!bounds.contains(transition.songTimeMicros, limits)) {
+        diagnostic = "Replay input is outside the completion bounds";
+        return std::nullopt;
+      }
+      const auto state =
+          std::ranges::find(states, transition.control, &ControlState::control);
+      const bool current = state != states.end() && state->pressed;
+      if (current == transition.pressed) {
+        continue;
+      }
+      normalized.push_back(transition);
+      if (state == states.end()) {
+        states.push_back(
+            {.control = transition.control, .pressed = transition.pressed});
+      } else {
+        state->pressed = transition.pressed;
+      }
+    }
+    return normalized;
+  } catch (const std::exception &error) {
+    diagnostic = std::string("Could not normalize replay input: ") +
+                 error.what();
+    return std::nullopt;
+  } catch (...) {
+    diagnostic = "Could not normalize replay input";
+    return std::nullopt;
+  }
+}
 
 ReplayInputRecorder::ReplayInputRecorder(ReplayClock clock,
                                          ReplayLimits limits)
@@ -109,19 +170,6 @@ bool ReplayInputRecorder::recordSongTime(std::int64_t songTimeMicros,
       return rejectCapture(diagnostic,
                            "Replay input is before the supported pre-roll");
     }
-    if (lastSongTimeMicros_.has_value() &&
-        songTimeMicros < *lastSongTimeMicros_) {
-      return rejectCapture(diagnostic,
-                           "Replay input song time decreased");
-    }
-    const auto state =
-        std::ranges::find(states_, control, &ControlState::control);
-    const bool current = state != states_.end() && state->pressed;
-    if (current == pressed) {
-      return rejectCapture(diagnostic,
-                           pressed ? "Duplicate replay input press"
-                                   : "Unmatched replay input release");
-    }
     if (transitions_.size() >= limits_.maxInputTransitions) {
       return rejectCapture(diagnostic,
                            "Replay input transition limit exceeded");
@@ -131,12 +179,6 @@ bool ReplayInputRecorder::recordSongTime(std::int64_t songTimeMicros,
                             .control = control,
                             .pressed = pressed,
                             .replayOnly = replayOnly});
-    if (state == states_.end()) {
-      states_.push_back({.control = control, .pressed = pressed});
-    } else {
-      state->pressed = pressed;
-    }
-    lastSongTimeMicros_ = songTimeMicros;
     diagnostic.clear();
     return true;
   } catch (const std::exception &error) {
@@ -161,16 +203,10 @@ ReplayInputRecorder::finish(ReplayTimeBounds bounds,
     transitions_.clear();
     return std::nullopt;
   }
-  if (!bounds.valid() ||
-      std::ranges::any_of(transitions_, [&](const auto &transition) {
-        return !bounds.contains(transition.songTimeMicros, limits_);
-      })) {
-    diagnostic = "Replay input is outside the completion bounds";
-    transitions_.clear();
-    return std::nullopt;
-  }
-  diagnostic.clear();
-  return std::move(transitions_);
+  auto normalized = normalizeReplayInput(transitions_, bounds, diagnostic,
+                                         limits_);
+  transitions_.clear();
+  return normalized;
 }
 
 } // namespace replay
