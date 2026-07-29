@@ -1,204 +1,143 @@
-# Dynamic Chart Scan Scheduling Design
+# Bounded Pipelined Chart Scan Scheduling Design
 
 ## Context
 
-`ChartLibraryScanner` already parses ordinary chart batches concurrently and
-uses inner and outer parallelism when reading chart entries from non-solid
-archives. Archive discovery is still serialized: recursive directory traversal
-calls `scanArchivePath()`, which opens and indexes each uncached archive before
-the traversal can continue. Repeated archive-open and index-building overhead
-therefore dominates libraries containing many small archives.
+The first dynamic scheduler removed the serial archive-discovery bottleneck, but
+it introduced two new costs on an eight-core machine:
 
-The scheduler must share one worker budget across the mixed top-level workload.
-For an input order such as one archive followed by three ordinary charts on a
-four-worker machine, one worker should index the archive while the other three
-workers parse the ordinary charts. It must also retain the existing behavior in
-which a single large non-solid archive can use the available worker budget to
-parse many chart entries quickly.
+- all six scan workers may open and index separate archives at once, creating
+  filesystem and decompressor contention; and
+- archive entries are parsed only after every archive has been indexed, using
+  outer `std::async` jobs that each create their own producer and parser
+  threads. Several one-chart archives can therefore create more runnable
+  threads than the scanner's worker budget while still paying a global stage
+  barrier.
+
+The next model must pipeline archive I/O and chart parsing without nesting
+thread pools. It must also leave enough workers available for ordinary files.
 
 ## Goals
 
-- Stop one archive index operation from blocking discovery and preparation of
-  later filesystem entities.
-- Dynamically share the scanner's worker budget between archive indexing and
-  ordinary chart parsing.
-- Preserve the optimized inner and outer archive-entry parsing paths.
-- Keep SQLite writes, scan checkpoint updates, progress reporting, and result
-  ordering on the scanner thread.
-- Preserve cancellation, pause, resume, archive-cache, and solid-archive
-  behavior.
-- Avoid timing-based production behavior and fixed worker reservations by file
-  type.
+- Use one fixed worker budget for archive preparation and chart parsing.
+- Admit at most two archive-I/O tasks at once while allowing ordinary and
+  archive-entry parsing tasks to bypass archive tasks waiting for admission.
+- Begin reading and parsing a non-solid archive immediately after its index is
+  available instead of waiting for every archive index to finish.
+- Fuse indexing, reading, and parsing for one-chart archives to avoid task and
+  synchronization overhead.
+- Use shared-pool chart tasks for larger archives, with bounded in-flight file
+  data.
+- Preserve discovery order, SQLite/checkpoint ordering, pause/stop behavior,
+  archive caches, and solid-archive handling.
 
 ## Non-goals
 
-- Parallel SQLite writes.
-- Direct browsing of archives reached through Android Storage Access Framework
-  tree paths; those remain unsupported by the current scanner.
-- Parsing solid archive chart entries in place.
-- Changing archive formats, archive backend selection, or BMS parser behavior.
-- Removing the existing checkpoint model or changing its persistent schema.
+- Measuring speed on this machine; it has no representative archive library.
+- Parallel SQLite writes or a checkpoint schema change.
+- Parsing charts inside solid archives.
+- Changing archive formats, backend selection, or amalgamated BMS parser code.
+- Adding a lock-free queue. Scan tasks are coarse enough that queue-lock cost
+  is not the observed bottleneck.
 
 ## Scheduling Model
 
-The scan will have two worker-backed preparation stages and one scanner-thread
-application stage.
+### Resource-aware shared pool
 
-### 1. Dynamic entity preparation
+`ChartScanWorkScheduler` will support ordinary CPU tasks and archive-I/O tasks.
+All tasks share the existing `parallel_worker_count()` budget. At most two
+archive-I/O tasks may be active; workers skip archive tasks that cannot acquire
+an I/O slot and take the earliest eligible CPU task instead. FIFO order is
+preserved among tasks of the same eligibility.
 
-Recursive traversal remains on the scanner thread and becomes a producer. It
-assigns a monotonically increasing discovery sequence to each new ordinary
-chart or archive, then immediately enqueues eligible work without waiting for
-the preceding entity.
+Finishing the scheduler means that the external producer is done, not that
+active tasks may no longer create work. An active archive reader may enqueue
+chart parsing tasks. Workers exit only when finishing has been requested, the
+queue is empty, and no task remains active. Calls to `enqueue()` after the pool
+has fully joined are rejected.
 
-All workers consume one FIFO queue:
+For four workers and input `archive, ordinary, ordinary, ordinary`, at most one
+worker initially performs that archive's I/O and the other three can parse the
+ordinary files. For a run containing only archives, two readers operate at
+once and the remaining workers parse entries produced by those readers.
 
-- An ordinary-chart task parses metadata for one new chart path.
-- An archive-index task validates file state and, when its persistent cache is
-  absent or stale, lists and classifies one archive. This task discovers chart
-  entry paths but does not start nested archive-entry parser threads.
-- Persistent archive-cache hits are inexpensive and may be resolved by the
-  producer without occupying a worker.
+### Archive pipeline
 
-Each top-level task consumes one worker. No worker slots are permanently
-reserved for either task kind. With four workers and the discovery order
-`archive, ordinary, ordinary, ordinary`, the archive task occupies one worker
-and the ordinary tasks can occupy the remaining three.
+An uncached archive task lists and classifies the archive while holding one
+archive-I/O admission. Solid archives stop after classification.
 
-The existing `parallel_worker_count()` policy supplies the total budget, so the
-scanner continues to reserve capacity for render, audio, and main threads. A
-single-worker environment executes the same queue serially.
+For a non-solid archive on a fresh scan:
 
-Workers return immutable result records keyed by discovery sequence. They do
-not mutate scan-diff collections, known-path collections, database state,
-progress state, or checkpoint state. The scanner thread merges result records
-in discovery order after the producer closes the queue and all workers finish.
-This keeps archive batch ordering and scan signatures deterministic even when
-work completes out of order.
+- A one-chart archive reads and parses its chart inline in the archive task.
+  This is the common many-small-archive case and avoids two extra queue hops.
+- A larger archive streams requested chart entries. Each file becomes a CPU
+  task on the same scheduler; the archive task remains the sole reader.
+- Per-archive backpressure limits queued/running file data to 12 files and
+  16 MiB. The two-reader limit therefore bounds active archive data to roughly
+  32 MiB, excluding a single oversized entry that must be admitted to make
+  progress.
 
-For a fresh scan, parsed ordinary metadata may be retained until the database
-application stage. If a checkpoint is already present, eager ordinary parsing
-is disabled until the checkpoint is validated, so resuming a scan does not
-redo the entire ordinary-file prefix. Archive inspection can still use the
-shared queue because the scanner must reconstruct archive batches to validate
-the checkpoint signature.
+Each archive owns a fixed result vector in entry order. CPU tasks write only
+their assigned slots. The final task publishes one immutable prepared-archive
+record after the read has completed and every accepted chart task has
+completed. Read failures leave the archive entries unprepared so the ordered
+fallback stage can retry them through the same bounded model.
 
-### 2. Archive-entry preparation
+If a scan checkpoint exists, eager ordinary and archive-entry parsing remains
+disabled until the checkpoint signature has been reconstructed and validated.
+Only the uncompleted suffix is then submitted to a new resource-aware pool.
+This preserves resume efficiency without returning to nested per-archive
+thread groups.
 
-After entity results have been merged, non-solid archive chart entries use the
-existing archive batch pipeline. The current pipeline already:
+### Ordered application
 
-- runs multiple archives concurrently when there are many archive batches;
-- gives multiple entry workers to a large non-solid archive when capacity is
-  available;
-- bounds in-flight file count and byte usage; and
-- falls back to streaming reads when a random-access backend is unavailable.
+Workers never mutate scan diffs, database state, checkpoints, progress state,
+or cache collections. Prepared entities are stored in discovery-sequence
+slots. The scanner thread merges those slots in order, computes and validates
+the scan signature, then applies chart results and cache updates in the
+existing deterministic order.
 
-Ordinary charts prepared during the first stage are not parsed again. Because
-the first stage has finished, the archive-entry pipeline can use the full
-scanner worker budget without competing with nested ordinary-chart threads.
-The current speculative archive prefetch pool will be removed or folded out of
-the first stage so there is only one worker budget active at a time.
-
-### 3. Ordered database application
-
-The scanner thread performs all deletions, source-preference updates, chart
-upserts, archive-cache writes, checkpoint commits, and final transaction
-commit. Ordinary metadata is applied in discovery order. Archive batches keep
-their discovery order, and chart entries keep archive entry order.
-
-Progress callbacks also remain on the scanner thread. Worker completion wakes
-the coordinator but does not invoke UI-facing progress callbacks directly.
-
-## Components
-
-### Shared work scheduler
-
-A small scanner-specific scheduler will own:
-
-- the fixed total worker count chosen at scan start;
-- a mutex-protected FIFO work queue;
-- condition variables for available work and completion;
-- task exception capture;
-- queue closure and worker joining; and
-- cancellation-aware rejection of new work.
-
-The scheduler accepts callable tasks rather than knowledge of charts or
-archives. This makes its dynamic occupancy and shutdown behavior testable
-without filesystem timing hooks. It will live in focused source files rather
-than adding more queue mechanics to the already large scanner implementation.
-
-### Entity result records
-
-`ChartLibraryScanner` will define result records for ordinary charts and
-archives. An archive result contains readability, solid status, file count,
-uncompressed size, discovered virtual chart paths, and any diagnostic text.
-The result contains all data needed for scanner-thread integration, so worker
-code never writes shared scanner collections.
-
-The existing archive scan helper will stop accepting `knownChartPaths` by
-mutable reference. It will deduplicate entries locally and return its paths in
-the result.
-
-### Archive backend concurrency
-
-The 7-Zip open-cache mutex currently covers both cache-map access and the
-potentially slow archive open on a cache miss. That would serialize independent
-RAR5 and 7-Zip index tasks even after the scanner begins scheduling them on
-different workers.
-
-The cache mutex will be narrowed to cache lookup, insertion, use-counter
-updates, and eviction. Opening an uncached archive will happen outside the
-global cache mutex, followed by a locked second lookup before insertion. The
-existing per-archive state mutex will continue to serialize access to one
-cached archive handle. Consequently, independent archive paths can open in
-parallel without permitting concurrent operations on the same handle.
+Prepared archive metadata flows with its archive batch. The later archive
+application stage consumes it directly and submits only unprepared entries to
+the bounded fallback pool. All SQLite and checkpoint calls remain on the
+scanner thread.
 
 ## Error Handling and Shutdown
 
-- A malformed or unreadable archive produces an unsuccessful archive result,
-  is logged once by the scanner thread, and does not prevent unrelated work
-  from completing.
-- A chart parser exception produces an empty ordinary-chart result using the
-  existing parse diagnostic behavior.
-- An unexpected task exception is captured by the scheduler and converted into
-  a failed entity result; it does not terminate a worker thread or the process.
-- A stop request closes the producer side, prevents new work, wakes every
-  worker, joins all workers, and leaves database/checkpoint handling to the
-  existing scanner-thread cancellation path.
-- Pause callbacks may block worker work as they do in the current concurrent
-  parse paths. Resuming wakes work without changing queue order.
-- Destruction joins workers; no task may outlive the scanner stack data it
-  references.
+- Scheduler task exceptions are captured and reported after joining.
+- An unreadable archive produces no eager chart results and does not block
+  unrelated work.
+- A failed chart parse records an attempted result with empty metadata so it is
+  not parsed twice in the same scan.
+- A failed streaming read discards eager results for that archive and allows
+  the ordered fallback stage to retry safely.
+- Stop or failed pause callbacks prevent new tasks, wake backpressure waits,
+  drain or cancel the scheduler as appropriate, and preserve the existing
+  checkpoint transaction behavior.
+- No worker or future may outlive stack state owned by `Scan()`.
 
 ## Testing
 
-Tests will avoid elapsed-time thresholds.
+Tests use synchronization and synthetic stored ZIP fixtures, not performance
+timings.
 
-1. A scheduler test enqueues blocking tasks and proves that up to the configured
-   worker budget can be occupied concurrently. With one archive-shaped task
-   followed by ordinary-shaped tasks, it verifies that later work begins while
-   the first task remains active.
-2. A scheduler shutdown test verifies that queue closure and cancellation wake
-   workers and join cleanly.
-3. A scanner integration test creates real stored ZIP fixtures and ordinary BMS
-   files in mixed discovery order. It verifies that ordinary charts and archive
-   charts are all indexed and that archive cache records are written.
-4. A scanner integration test uses several small archives to verify every
-   archive is inspected and applied exactly once despite out-of-order worker
-   completion.
-5. An archive backend test opens two uncached 7-Zip-backed fixtures from
-   separate threads and uses a synchronization barrier, not a duration
-   threshold, to prove that independent cache misses are not covered by the
-   global cache lock.
-6. Existing checkpoint-resume, pause/stop, archive cache, and storage-failure
+1. A four-worker scheduler test queues several blocking archive-I/O tasks and
+   proves that only two become active while CPU tasks still occupy the other
+   workers.
+2. A scheduler test proves work enqueued by an active task is drained after
+   `finish()` has begun.
+3. Existing scheduler cancellation, exception, FIFO, and idempotent shutdown
    tests remain green.
-7. The focused scanner tests, relevant archive tests, and the repository's
-   desktop compile check are run before completion.
+4. Scanner tests create one-chart and multi-chart ZIP fixtures and verify every
+   chart and archive-cache row is applied exactly once in deterministic order.
+5. Checkpoint-resume, mixed ordinary/archive, stop/pause, cache, and storage
+   failure tests remain green.
+6. The focused scheduler/scanner/archive tests and desktop `main` build are run
+   before pushing. No benchmark result or speed claim is produced locally.
 
 ## Expected Outcome
 
-Many small archives can be opened and indexed concurrently, and mixed ordinary
-files no longer wait behind an archive encountered earlier in traversal. A
-single large non-solid archive continues to use the established parallel entry
-pipeline, while database and checkpoint behavior remains deterministic.
+Many small archives use two bounded fused readers rather than six competing
+indexers followed by nested thread groups. Mixed scans keep remaining workers
+available for ordinary charts. Large non-solid archives stream entries into
+the same parsing pool, so parsing overlaps archive I/O without exceeding the
+scanner's worker budget.
