@@ -157,10 +157,23 @@ void testEncodedHeaderSevenZipUsesSdk() {
   }
 }
 
+void testDebugLogRetainsNewestThousandLines() {
+  for (int index = 0; index <= 1000; ++index) {
+    archive_file::appendDebugLogLine("retention-marker-" +
+                                     std::to_string(index));
+  }
+
+  const auto logLines = archive_file::debugLogLines();
+  assert(logLines.size() == 1000);
+  assert(logLines.front().find("retention-marker-1") != std::string::npos);
+  assert(logLines.back().find("retention-marker-1000") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
   testIndependentSevenZipCacheMissesOpenConcurrently();
   testEncodedHeaderSevenZipUsesSdk();
+  testDebugLogRetainsNewestThousandLines();
   return 0;
 }

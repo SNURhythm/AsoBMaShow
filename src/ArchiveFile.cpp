@@ -499,7 +499,7 @@ struct CachedIndex {
 std::mutex gIndexMutex;
 std::unordered_map<std::string, std::shared_ptr<const CachedIndex>> gIndexCache;
 
-constexpr std::size_t kDebugLogMaxLines = 500;
+constexpr std::size_t kDebugLogMaxLines = 1000;
 std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
