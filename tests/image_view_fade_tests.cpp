@@ -1,3 +1,4 @@
+#include "ArchiveFile.h"
 #include "rendering/UniformCache.h"
 #include "view/ImageView.h"
 
@@ -89,6 +90,32 @@ int main() {
     image.clearScrimColor();
     require(!image.scrimColor().has_value(),
             "clearing scrim restores untreated image color");
+  }
+
+  {
+    int cachePathNormalizations = 0;
+    archive_file::setCachePathNormalizer(
+        [&cachePathNormalizations](std::filesystem::path &) {
+          ++cachePathNormalizations;
+        });
+    ImageView::dropAllCache();
+
+    ImageView image(0, 0, 100, 50);
+    image.setImageAsync(
+        path_t("/definitely-missing/asobmashow-jacket-performance.png"),
+        true);
+    const int normalizationsAfterBinding = cachePathNormalizations;
+    RenderContext renderContext;
+    image.render(renderContext);
+    image.render(renderContext);
+    image.render(renderContext);
+
+    archive_file::setCachePathNormalizer({});
+    require(normalizationsAfterBinding == 1,
+            "one async jacket binding derives one filesystem cache identity");
+    require(cachePathNormalizations == normalizationsAfterBinding,
+            "pending jacket polling reuses its cache identity without repeated "
+            "filesystem metadata work");
   }
 
   rendering::UniformCache::getInstance().destroyAll();

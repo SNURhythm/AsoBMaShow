@@ -259,8 +259,8 @@ public:
     return worker;
   }
 
-  void request(const path_t &path, bool prioritize = false) {
-    const std::string key = imageCacheKey(path);
+  void request(const path_t &path, const std::string &key,
+               bool prioritize = false) {
     std::lock_guard<std::mutex> lock(mutex);
     if (ready.contains(key) || failed.contains(key) ||
         inFlight.contains(key)) {
@@ -282,8 +282,7 @@ public:
     cv.notify_one();
   }
 
-  std::optional<DecodedImage> takeReady(const path_t &path) {
-    const std::string key = imageCacheKey(path);
+  std::optional<DecodedImage> takeReady(const std::string &key) {
     std::lock_guard<std::mutex> lock(mutex);
     const auto it = ready.find(key);
     if (it == ready.end()) {
@@ -294,14 +293,12 @@ public:
     return decoded;
   }
 
-  bool hasFailed(const path_t &path) {
-    const std::string key = imageCacheKey(path);
+  bool hasFailed(const std::string &key) {
     std::lock_guard<std::mutex> lock(mutex);
     return failed.contains(key);
   }
 
-  void drop(const path_t &path) {
-    const std::string key = imageCacheKey(path);
+  void drop(const std::string &key) {
     std::lock_guard<std::mutex> lock(mutex);
     ready.erase(key);
     failed.erase(key);
@@ -517,10 +514,9 @@ ImageView::ImageView(int x, int y, int width, int height, const path_t &path)
 }
 ImageView::~ImageView() { freeTexture(); }
 
-bool ImageView::applyImage(const path_t &path, const ImageCache &cache,
-                           bool storeCache) {
+bool ImageView::applyImage(const path_t &path, const std::string &key,
+                           const ImageCache &cache, bool storeCache) {
   freeTexture();
-  const std::string key = imageCacheKey(path);
   if (!cache.rgba || cache.rgba->empty() ||
       !decodedImageDimensionsAreValid(cache.width, cache.height)) {
     return false;
@@ -551,29 +547,30 @@ bool ImageView::applyImage(const path_t &path, const ImageCache &cache,
   return true;
 }
 
-bool ImageView::applyCachedTexture(const path_t &path) {
-  const std::string key = imageCacheKey(path);
+bool ImageView::applyCachedTexture(const path_t &path,
+                                   const std::string &key) {
   const auto localIt = imageCache.find(key);
   if (localIt != imageCache.end()) {
-    return applyImage(path, localIt->second);
+    return applyImage(path, key, localIt->second);
   }
-  if (const auto loaded = ImageDecodeWorker::instance().takeReady(path)) {
-    return applyImage(path, {.width = loaded->width,
-                             .height = loaded->height,
-                             .rgba = loaded->rgba});
+  if (const auto loaded = ImageDecodeWorker::instance().takeReady(key)) {
+    return applyImage(path, key, {.width = loaded->width,
+                                  .height = loaded->height,
+                                  .rgba = loaded->rgba});
   }
   return false;
 }
 
-bool ImageView::applyCachedThumbnail(const path_t &path) {
+bool ImageView::applyCachedThumbnail(const path_t &path,
+                                     const std::string &key) {
   const auto thumbnail =
       readCachedArchivedThumbnail(std::filesystem::path(path));
   if (!thumbnail.has_value()) {
     return false;
   }
-  return applyImage(path, {.width = thumbnail->width,
-                           .height = thumbnail->height,
-                           .rgba = thumbnail->rgba},
+  return applyImage(path, key, {.width = thumbnail->width,
+                                .height = thumbnail->height,
+                                .rgba = thumbnail->rgba},
                     false);
 }
 
@@ -581,11 +578,11 @@ void ImageView::applyAsyncImageIfReady() {
   if (currentImageKey.empty() || !asyncImagePending) {
     return;
   }
-  if (applyCachedTexture(currentImagePath)) {
+  if (applyCachedTexture(currentImagePath, currentImageKey)) {
     asyncImagePending = false;
     return;
   }
-  if (ImageDecodeWorker::instance().hasFailed(currentImagePath)) {
+  if (ImageDecodeWorker::instance().hasFailed(currentImageKey)) {
     asyncImagePending = false;
   }
 }
@@ -598,7 +595,7 @@ bool ImageView::loadTexture(const path_t &path) {
     return true;
   }
   asyncImagePending = false;
-  if (applyCachedTexture(path)) {
+  if (applyCachedTexture(path, key)) {
     return true;
   }
 
@@ -609,9 +606,9 @@ bool ImageView::loadTexture(const path_t &path) {
   }
   SDL_Log("Loaded image: %s; width: %d; height: %d", utf8Path.c_str(),
           decoded->width, decoded->height);
-  return applyImage(path, {.width = decoded->width,
-                           .height = decoded->height,
-                           .rgba = decoded->rgba});
+  return applyImage(path, key, {.width = decoded->width,
+                                .height = decoded->height,
+                                .rgba = decoded->rgba});
 }
 
 void ImageView::freeTexture() {
@@ -627,16 +624,16 @@ bool ImageView::setImage(const path_t &path) { return loadTexture(path); }
 bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
   const std::string key = imageCacheKey(path);
   if (currentImageKey == key) {
-    if (applyCachedTexture(path)) {
+    if (applyCachedTexture(path, key)) {
       asyncImagePending = false;
       return true;
     }
     if (!bgfx::isValid(texture)) {
-      applyCachedThumbnail(path);
+      applyCachedThumbnail(path, key);
     }
-    if (!ImageDecodeWorker::instance().hasFailed(path)) {
+    if (!ImageDecodeWorker::instance().hasFailed(key)) {
       asyncImagePending = true;
-      ImageDecodeWorker::instance().request(path, prioritize);
+      ImageDecodeWorker::instance().request(path, key, prioritize);
     } else {
       asyncImagePending = false;
     }
@@ -646,13 +643,13 @@ bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
   freeTexture();
   currentImageKey = key;
   currentImagePath = path;
-  if (applyCachedTexture(path)) {
+  if (applyCachedTexture(path, key)) {
     asyncImagePending = false;
     return true;
   }
-  applyCachedThumbnail(path);
-  ImageDecodeWorker::instance().request(path, prioritize);
-  asyncImagePending = !ImageDecodeWorker::instance().hasFailed(path);
+  applyCachedThumbnail(path, key);
+  ImageDecodeWorker::instance().request(path, key, prioritize);
+  asyncImagePending = !ImageDecodeWorker::instance().hasFailed(key);
   return false;
 }
 void ImageView::freeImage() {
@@ -733,7 +730,7 @@ ImageView::ImageView(int x, int y, int width, int height)
 void ImageView::dropCache(const path_t &path) {
   const std::string key = imageCacheKey(path);
   imageCache.erase(key);
-  ImageDecodeWorker::instance().drop(path);
+  ImageDecodeWorker::instance().drop(key);
 }
 void ImageView::dropAllCache() {
   imageCache.clear();

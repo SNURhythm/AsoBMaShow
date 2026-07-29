@@ -21,9 +21,10 @@ private:
     std::shared_ptr<std::vector<unsigned char>> rgba;
   };
   void freeTexture();
-  bool applyCachedTexture(const path_t &path);
-  bool applyCachedThumbnail(const path_t &path);
-  bool applyImage(const path_t &path, const ImageCache &cache,
+  bool applyCachedTexture(const path_t &path, const std::string &key);
+  bool applyCachedThumbnail(const path_t &path, const std::string &key);
+  bool applyImage(const path_t &path, const std::string &key,
+                  const ImageCache &cache,
                   bool storeCache = true);
   void applyAsyncImageIfReady();
   bool loadTexture(const path_t &path);
