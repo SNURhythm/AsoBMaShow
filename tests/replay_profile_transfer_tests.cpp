@@ -180,6 +180,19 @@ void testFutureCodecReplayIsOmittedWithoutFailingResultTransfer() {
                  destination / future.reference.metadata.relativePath),
          "unsupported replay bytes are omitted without aborting result "
          "transfer");
+
+  replay::ReplayProfileTransfer sourceValidation(source, source);
+  expect(sourceValidation.validate({future}, true).state ==
+             replay::ReplayProfileTransferState::DestinationInvalid,
+         "an unsupported-codec archive member is rejected instead of being "
+         "installed as an unusable replay");
+  std::filesystem::remove(source / future.reference.metadata.relativePath);
+  const auto resultOnly = sourceValidation.validate({future}, true);
+  expect(resultOnly.state == replay::ReplayProfileTransferState::Succeeded &&
+             resultOnly.omittedUnsupportedCodec == 1 &&
+             resultOnly.copiedRelativePaths.empty(),
+         "an unsupported-codec reference remains valid when its optional "
+         "replay member is absent");
 }
 
 } // namespace

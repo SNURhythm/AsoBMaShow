@@ -2027,15 +2027,23 @@ bool GamePlayScene::reset() {
       options.clubMode);
   if (options.replayData != nullptr && !options.autoKeySound) {
     std::optional<gameplay::GameplayTimeRange> allowedRange;
+    std::optional<gameplay::GameplayTimeRange> preparationRange;
     if (const auto range = practiceNoteRange(); range.has_value()) {
       allowedRange = {.startMicros = range->startMicros,
                       .endMicros = range->endMicros};
+      preparationRange = {
+          .startMicros = getGameplayTimeMicros(
+              preparationPlan.laneIndicator.startTimeMicros),
+          .endMicros = getGameplayTimeMicros(
+              preparationPlan.laneIndicator.endTimeMicros),
+      };
     }
     const auto definition =
         gameplay::buildGameplayDefinition(*chart, options.longNoteMode);
     const auto replayKeysounds =
         buildReplayKeysoundSchedule(definition, options.replayData->events,
-                                    getAudioOffsetMicros(), allowedRange);
+                                    getAudioOffsetMicros(), allowedRange,
+                                    preparationRange);
     context.jukebox.appendScheduledAudioEvents(replayKeysounds);
   }
   context.jukebox.play(preparationPlan.playbackStartTimeMicros);
@@ -2463,19 +2471,16 @@ bool GamePlayScene::practiceReplayEventAllowed(const ReplayEvent &event) const {
   if (!range.has_value()) {
     return true;
   }
-  const long long preparationStartMicros =
-      getGameplayTimeMicros(preparationPlan.laneIndicator.startTimeMicros);
-  const long long preparationEndMicros =
-      getGameplayTimeMicros(preparationPlan.laneIndicator.endTimeMicros);
-  const bool preparationInput =
-      event.noteTimeMicros < 0 && event.judgement == None &&
-      event.songTimeMicros >= preparationStartMicros &&
-      event.songTimeMicros < preparationEndMicros;
-  if (preparationInput) {
-    return true;
-  }
-  return range->contains(event.songTimeMicros) &&
-         (event.noteTimeMicros < 0 || range->contains(event.noteTimeMicros));
+  return replayEventAllowedForPlayback(
+      event,
+      gameplay::GameplayTimeRange{.startMicros = range->startMicros,
+                                  .endMicros = range->endMicros},
+      gameplay::GameplayTimeRange{
+          .startMicros = getGameplayTimeMicros(
+              preparationPlan.laneIndicator.startTimeMicros),
+          .endMicros = getGameplayTimeMicros(
+              preparationPlan.laneIndicator.endTimeMicros),
+      });
 }
 
 bool GamePlayScene::preparationIndicatorActive(

@@ -248,6 +248,23 @@ void testOwnershipJournalFailureStopsBeforeInstallingBytes() {
          "ownership journal failure stops before final installation");
 }
 
+void testOwnedRetryEncodeFailureRetainsItsReservation() {
+  Harness retry;
+  retry.reservationStatus = ModernReplayReservationStatus::AlreadyReserved;
+  retry.reservationOwnsInstalledFile = true;
+  retry.encodeSucceeds = false;
+  ReplayFileAssociationCoordinator coordinator(retry.dependencies());
+
+  const auto omitted = coordinator.associate(
+      retry.attemptId, retry.stem, retry.playedAt, retry.encoder());
+  expect(omitted.status == ReplayFileAssociationStatus::Omitted &&
+             !omitted.association &&
+             retry.events ==
+                 std::vector<std::string>({"reserve-path", "encode"}),
+         "failed retry encoding retains the reservation that owns the only "
+         "installed BRD receipt");
+}
+
 void testOccupiedAndAmbiguousInstallPaths() {
   Harness occupied;
   int installs = 0;
@@ -372,6 +389,7 @@ void testDefinitiveCleanupUsesOwnershipAndExactMetadata() {
 int main() {
   testSuccessEncodeFailureAndIntegrityConflict();
   testOwnershipJournalFailureStopsBeforeInstallingBytes();
+  testOwnedRetryEncodeFailureRetainsItsReservation();
   testOccupiedAndAmbiguousInstallPaths();
   testDefinitiveCleanupUsesOwnershipAndExactMetadata();
   if (failures != 0) {

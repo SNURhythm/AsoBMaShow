@@ -37,6 +37,18 @@ bool releaseReservation(
   return false;
 }
 
+bool releaseUnownedReservation(
+    const ReplayFileAssociationCoordinatorDependencies &dependencies,
+    const ModernReplayPathReservation &reservation, std::string &diagnostic) {
+  if (reservation.ownedFile.has_value()) {
+    appendDiagnostic(diagnostic, "reservation retained",
+                     "installed replay ownership still requires association "
+                     "or exact cleanup");
+    return false;
+  }
+  return releaseReservation(dependencies, reservation, diagnostic);
+}
+
 bool validInstalledFile(const ReplayInstalledFile &file,
                         const ReplayFileReservation &reservation) {
   const ReplayFileOwnershipReceipt expectedReceipt{
@@ -99,7 +111,8 @@ ReplayFileAssociationOutcome ReplayFileAssociationCoordinator::associate(
   auto encoded = encode(encodeDiagnostic);
   if (!encoded) {
     appendDiagnostic(outcome.diagnostic, "replay omitted", encodeDiagnostic);
-    releaseReservation(dependencies_, pathReservation, outcome.diagnostic);
+    releaseUnownedReservation(dependencies_, pathReservation,
+                              outcome.diagnostic);
     return outcome;
   }
 
@@ -109,7 +122,8 @@ ReplayFileAssociationOutcome ReplayFileAssociationCoordinator::associate(
     if (!fileReservation.reservation) {
       appendDiagnostic(outcome.diagnostic, "replay omitted",
                        fileReservation.diagnostic);
-      releaseReservation(dependencies_, pathReservation, outcome.diagnostic);
+      releaseUnownedReservation(dependencies_, pathReservation,
+                                outcome.diagnostic);
       return outcome;
     }
 
@@ -186,8 +200,8 @@ ReplayFileAssociationOutcome ReplayFileAssociationCoordinator::associate(
 
     if (installed.state == ReplayInstallState::Occupied &&
         occupied < kMaximumOccupiedSlotRetries) {
-      if (!releaseReservation(dependencies_, pathReservation,
-                              outcome.diagnostic)) {
+      if (!releaseUnownedReservation(dependencies_, pathReservation,
+                                     outcome.diagnostic)) {
         return outcome;
       }
       auto next =
@@ -220,7 +234,8 @@ ReplayFileAssociationOutcome ReplayFileAssociationCoordinator::associate(
                      installed.diagnostic.empty() ? inspection.diagnostic
                                                   : installed.diagnostic);
     if (inspection.state == ReplayFileState::Missing) {
-      releaseReservation(dependencies_, pathReservation, outcome.diagnostic);
+      releaseUnownedReservation(dependencies_, pathReservation,
+                                outcome.diagnostic);
     }
     return outcome;
   }

@@ -171,6 +171,15 @@ ReplayProfileTransferOutcome ReplayProfileTransfer::validate(
       }
       continue;
     }
+    if (entry.reference.metadata.codecVersion !=
+        BeatorajaReplayCodec::kCodecVersion) {
+      ++outcome.omittedUnsupportedCodec;
+      if (inspected.state != ReplayFileState::Missing) {
+        return invalidDestination(
+            "Unsupported-codec replay bytes are present in destination");
+      }
+      continue;
+    }
     activePaths.insert(entry.reference.metadata.relativePath.generic_string());
     if (inspected.state == ReplayFileState::Missing) {
       ++outcome.omittedMissing;
