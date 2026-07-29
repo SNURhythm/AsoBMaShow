@@ -281,7 +281,6 @@ private:
   std::uint64_t transactionSequence_ = 0;
   GameplayInputResult latestTransaction_;
   std::vector<replay::InputTransition> acceptedReplayInput_;
-  std::optional<std::int64_t> lastReplaySongTimeMicros_;
   bool replayCaptureValid_ = true;
   std::array<RealtimeGameplayTransaction,
              kRealtimeGameplayTransactionHistorySize>

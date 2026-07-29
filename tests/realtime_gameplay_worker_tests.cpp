@@ -261,6 +261,42 @@ void testWorkerTransfersAcceptedRawReplayInputInOrder() {
           "worker transfers the exact accepted logical stream after stop");
 }
 
+void testWorkerRetainsAcceptedReplayInputWithInterleavedTimestamps() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "interleaved replay worker starts");
+  const auto start = replay::LogicalControl{
+      .kind = replay::LogicalControlKind::Start, .player = 1, .lane = -1};
+  const auto select = replay::LogicalControl{
+      .kind = replay::LogicalControlKind::Select, .player = 1, .lane = -1};
+  const auto beforeGeneration = worker.acquireLatestSnapshot()->generation;
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .steadyTimestampMicros = 1'010'000,
+               .hasReplayControl = true,
+               .replayControl = start}) &&
+              worker.enqueueInput(
+                  {.epoch = 7,
+                   .type = gameplay::RealtimeGameplayInputType::Press,
+                   .steadyTimestampMicros = 1'000'000,
+                   .hasReplayControl = true,
+                   .replayControl = select}),
+          "inputs from interleaved timestamp domains enter fixed ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->generation > beforeGeneration;
+          }),
+          "interleaved replay inputs are processed");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.has_value() && replayInput->size() == 2,
+          "the worker leaves timestamp ordering to capture normalization");
+}
+
 void requireOwnedRealtimeOverlapCoalesced(
     gameplay::GameplayDefinition definition, int lane,
     replay::LogicalControl control,
@@ -1233,6 +1269,7 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
   testWorkerTransfersAcceptedRawReplayInputInOrder();
+  testWorkerRetainsAcceptedReplayInputWithInterleavedTimestamps();
   testRealtimeIngressCoalescesTouchAndHardwareLaneOwnership();
   testRealtimeIngressCoalescesTouchAndHardwareScratchOwnership();
   testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges();

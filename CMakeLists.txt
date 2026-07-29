@@ -981,6 +981,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(replay_input_recorder_tests
         tests/replay_input_recorder_tests.cpp
         src/replay/ReplayInputRecorder.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplaySetup.cpp
     )
     target_include_directories(replay_input_recorder_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

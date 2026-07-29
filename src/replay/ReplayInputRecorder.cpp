@@ -45,6 +45,8 @@ normalizeReplayInput(std::span<const InputTransition> input,
       diagnostic = "Replay input limits or completion bounds are invalid";
       return std::nullopt;
     }
+    const ReplayTimeBounds captureBounds =
+        replayCaptureTimeBounds(bounds, input, {}, {});
 
     std::vector<InputTransition> ordered(input.begin(), input.end());
     std::stable_sort(ordered.begin(), ordered.end(), [](const auto &left,
@@ -65,7 +67,7 @@ normalizeReplayInput(std::span<const InputTransition> input,
         diagnostic = "Replay input control is unsupported";
         return std::nullopt;
       }
-      if (!bounds.contains(transition.songTimeMicros, limits)) {
+      if (!captureBounds.contains(transition.songTimeMicros, limits)) {
         diagnostic = "Replay input is outside the completion bounds";
         return std::nullopt;
       }

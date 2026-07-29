@@ -568,9 +568,7 @@ void RealtimeGameplayWorker::recordAcceptedReplayInput(
       config_.maximumReplayInputTransitions,
       replay::kReplayLimits.maxInputTransitions);
   if (maximum == 0 || acceptedReplayInput_.size() >= maximum ||
-      songTimeMicros < replay::kReplayLimits.minimumSongTimeMicros ||
-      (lastReplaySongTimeMicros_.has_value() &&
-       songTimeMicros < *lastReplaySongTimeMicros_)) {
+      songTimeMicros < replay::kReplayLimits.minimumSongTimeMicros) {
     replayCaptureValid_ = false;
     acceptedReplayInput_.clear();
     return;
@@ -581,7 +579,6 @@ void RealtimeGameplayWorker::recordAcceptedReplayInput(
          .control = input.replayControl,
          .pressed = input.type == RealtimeGameplayInputType::Press,
          .replayOnly = input.replayOnly});
-    lastReplaySongTimeMicros_ = songTimeMicros;
   } catch (...) {
     replayCaptureValid_ = false;
     acceptedReplayInput_.clear();

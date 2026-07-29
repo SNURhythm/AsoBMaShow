@@ -121,7 +121,7 @@ void testOverflowInvalidatesTheWholeAttachment() {
           "capacity failure never saves a truncated replay");
 }
 
-void testClockAndCompletionBoundsFailClosed() {
+void testClockFailureAndCompletionObservation() {
   std::string diagnostic;
   replay::ReplayInputRecorder noClock;
   require(!noClock.record(1, lane(), true, diagnostic) &&
@@ -133,11 +133,19 @@ void testClockAndCompletionBoundsFailClosed() {
 
   replay::ReplayInputRecorder tooLate;
   require(tooLate.recordSongTime(11, lane(), true, diagnostic),
-          "completion is validated when its final bound is known");
-  require(!tooLate.finish({.completionSongTimeMicros = 10}, diagnostic)
-               .has_value() &&
+          "input after the observed cursor is accepted");
+  const auto afterCursor =
+      tooLate.finish({.completionSongTimeMicros = 10}, diagnostic);
+  require(afterCursor.has_value() && afterCursor->size() == 1 &&
+              afterCursor->front().songTimeMicros == 11 && diagnostic.empty(),
+          "accepted input extends the capture completion observation");
+
+  replay::ReplayInputRecorder missingCompletion;
+  require(missingCompletion.recordSongTime(11, lane(), true, diagnostic),
+          "missing-completion fixture records input");
+  require(!missingCompletion.finish({}, diagnostic).has_value() &&
               diagnostic.find("bounds") != std::string::npos,
-          "capture beyond completion is rejected as a whole");
+          "input cannot invent a missing completion observation");
 }
 
 void testUnsupportedControlsFailClosed() {
@@ -161,7 +169,7 @@ int main() {
   testRecordsSignedMonotonicSongTimeWithoutSorting();
   testOutOfOrderAndRedundantObserverEdgesAreNormalized();
   testOverflowInvalidatesTheWholeAttachment();
-  testClockAndCompletionBoundsFailClosed();
+  testClockFailureAndCompletionObservation();
   testUnsupportedControlsFailClosed();
   return 0;
 }
