@@ -522,6 +522,141 @@ void testLogicalGameplayAdapterOwnsLaneAndScratchMapping() {
          "adapter reset releases every remaining physical lane");
 }
 
+void testLogicalGameplayAdapterAllowsOverlappingStockScratchDirections() {
+  struct Edge {
+    bool pressed = false;
+    bool backSpin = false;
+    auto operator<=>(const Edge &) const = default;
+  };
+  std::vector<Edge> edges;
+  ReplayLogicalGameplayAdapter adapter(
+      7,
+      {.pressLane = [&](int lane, double) {
+         expect(lane == 7, "overlapping stock scratch stays on its chart lane");
+         edges.push_back({.pressed = true});
+       },
+       .releaseLane = [&](int lane, double, bool backSpin) {
+         expect(lane == 7, "overlapping stock scratch stays on its chart lane");
+         edges.push_back({.pressed = false, .backSpin = backSpin});
+       }});
+  const std::vector<InputTransition> input{
+      {.songTimeMicros = 100,
+       .control = {.kind = LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 200,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 300,
+       .control = {.kind = LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = false},
+      {.songTimeMicros = 400,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = false},
+      {.songTimeMicros = 500,
+       .control = {.kind = LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 600,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = true},
+      {.songTimeMicros = 700,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = false},
+      {.songTimeMicros = 800,
+       .control = {.kind = LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = false},
+  };
+  std::string diagnostic;
+  bool accepted = true;
+  for (const auto &transition : input) {
+    accepted = adapter.applyBatch(std::span(&transition, 1),
+                                  transition.songTimeMicros, diagnostic) &&
+               accepted;
+  }
+  expect(accepted && diagnostic.empty(),
+         "independently held stock scratch directions release in either order");
+  expect(edges == std::vector<Edge>{{.pressed = true},
+                                    {.pressed = false, .backSpin = true},
+                                    {.pressed = true},
+                                    {.pressed = false},
+                                    {.pressed = true},
+                                    {.pressed = false, .backSpin = true},
+                                    {.pressed = true},
+                                    {.pressed = false, .backSpin = true},
+                                    {.pressed = true},
+                                    {.pressed = false}},
+         "stock scratch releases ignore inactive keys and reactivate the "
+         "remaining held direction");
+}
+
+void testLogicalGameplayAdapterPreservesReplayOnlyScratchHandoffs() {
+  struct Edge {
+    bool pressed = false;
+    bool backSpin = false;
+    auto operator<=>(const Edge &) const = default;
+  };
+  std::vector<Edge> edges;
+  ReplayLogicalGameplayAdapter adapter(
+      7,
+      {.pressLane = [&](int, double) {
+         edges.push_back({.pressed = true});
+       },
+       .releaseLane = [&](int, double, bool backSpin) {
+         edges.push_back({.pressed = false, .backSpin = backSpin});
+       }});
+  const std::vector<InputTransition> initial{
+      {.songTimeMicros = 100,
+       .control = {.kind = LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = true},
+  };
+  const std::vector<InputTransition> handoff{
+      {.songTimeMicros = 200,
+       .control = {.kind = LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = false,
+       .replayOnly = true},
+      {.songTimeMicros = 200,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = true,
+       .replayOnly = true},
+  };
+  const std::vector<InputTransition> final{
+      {.songTimeMicros = 300,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1,
+                   .lane = -1},
+       .pressed = false},
+  };
+  std::string diagnostic;
+  expect(adapter.applyBatch(initial, 300, diagnostic) &&
+             adapter.applyBatch(handoff, 300, diagnostic) &&
+             adapter.applyBatch(final, 300, diagnostic) &&
+             diagnostic.empty(),
+         "canonical replay-only scratch handoff remains playable");
+  expect(edges == std::vector<Edge>{{.pressed = true}, {.pressed = false}},
+         "replay-only ownership handoff adds no physical scratch edge");
+}
+
 void testMaterializerUsesDriverAndOnlyComparesSavedFacts() {
   const auto replay = document();
   const auto saved = savedResult();
@@ -584,6 +719,8 @@ int main() {
   testDriverTrustsStructurallyValidatedDocument();
   testDriverRejectsReverseTimeAndBoundsEachAdvance();
   testLogicalGameplayAdapterOwnsLaneAndScratchMapping();
+  testLogicalGameplayAdapterAllowsOverlappingStockScratchDirections();
+  testLogicalGameplayAdapterPreservesReplayOnlyScratchHandoffs();
   testMaterializerUsesDriverAndOnlyComparesSavedFacts();
   testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement();
   testConsumerSetupAdapterOwnsEveryReplaySetupTranslation();

@@ -116,6 +116,7 @@ bool ReplayLogicalGameplayAdapter::apply(
         diagnostic = "Replay-only scratch press has no ownership handoff.";
         return false;
       }
+      heldScratchDirections_[*lane].insert(kind);
       activeScratchDirections_[*lane] = kind;
       return true;
     }
@@ -125,16 +126,23 @@ bool ReplayLogicalGameplayAdapter::apply(
       diagnostic = "Replay-only scratch release has no active owner.";
       return false;
     }
+    if (const auto held = heldScratchDirections_.find(*lane);
+        held != heldScratchDirections_.end()) {
+      held->second.erase(kind);
+      if (held->second.empty()) {
+        heldScratchDirections_.erase(held);
+      }
+    }
     activeScratchDirections_.erase(active);
     return true;
   }
 
   if (transition.pressed) {
+    if (!heldScratchDirections_[*lane].insert(kind).second) {
+      diagnostic = "Replay scratch direction is already pressed.";
+      return false;
+    }
     if (active != activeScratchDirections_.end()) {
-      if (active->second == kind) {
-        diagnostic = "Replay scratch direction is already pressed.";
-        return false;
-      }
       if (callbacks_.releaseLane) {
         callbacks_.releaseLane(*lane, delay, true);
       }
@@ -153,9 +161,28 @@ bool ReplayLogicalGameplayAdapter::apply(
     activeScratchDirections_[*lane] = kind;
     return true;
   }
-  if (active == activeScratchDirections_.end() || active->second != kind ||
-      heldLanes_.erase(*lane) == 0) {
+  const auto held = heldScratchDirections_.find(*lane);
+  if (held == heldScratchDirections_.end() || held->second.erase(kind) == 0) {
     diagnostic = "Replay scratch release has no matching direction.";
+    return false;
+  }
+  if (active != activeScratchDirections_.end() && active->second != kind) {
+    return true;
+  }
+  if (!held->second.empty()) {
+    activeScratchDirections_[*lane] = *held->second.begin();
+    if (callbacks_.releaseLane) {
+      callbacks_.releaseLane(*lane, delay, true);
+    }
+    if (callbacks_.pressLane) {
+      callbacks_.pressLane(*lane, delay);
+    }
+    return true;
+  }
+  heldScratchDirections_.erase(held);
+  if (active == activeScratchDirections_.end() ||
+      heldLanes_.erase(*lane) == 0) {
+    diagnostic = "Replay scratch release has no active physical lane.";
     return false;
   }
   activeScratchDirections_.erase(active);
@@ -199,6 +226,7 @@ void ReplayLogicalGameplayAdapter::reset() {
     }
   }
   heldLanes_.clear();
+  heldScratchDirections_.clear();
   activeScratchDirections_.clear();
 }
 

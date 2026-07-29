@@ -55,6 +55,7 @@ private:
   int keyMode_ = 0;
   ReplayLogicalGameplayCallbacks callbacks_;
   std::set<int> heldLanes_;
+  std::map<int, std::set<LogicalControlKind>> heldScratchDirections_;
   std::map<int, LogicalControlKind> activeScratchDirections_;
 };
 
