@@ -82,7 +82,6 @@ struct ReplayPlaybackAdvanceOutcome {
 class ReplayPlaybackDriver {
 public:
   ReplayPlaybackDriver(const ReplayChartDocument &document,
-                       ReplaySetupSource source,
                        ReplayLimits limits = kReplayLimits);
 
   [[nodiscard]] ReplayPlaybackAdvanceOutcome advanceTo(

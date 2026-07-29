@@ -466,9 +466,9 @@ void testReferenceDecodePlaybackAndResultAgreementFailClosed() {
       kReplayLimits.maxCourseRestMicros + 1;
   auto restContext = excessiveRest.makeContext();
   loaded = restContext.load(kAttemptId, parsedFacts(excessiveRest.result));
-  expect(loaded.state == CourseReplayContextState::ReplayInvalid &&
-             loaded.resultAvailable() && !loaded.replayAvailable(),
-         "excessive decoded course rest is rejected without clamping");
+  expect(loaded.state == CourseReplayContextState::Ready &&
+             loaded.resultAvailable() && loaded.replayAvailable(),
+         "context does not repeat course envelope validation owned by codec");
 
   Harness malformed;
   malformed.decodeCourse = false;

@@ -10,15 +10,6 @@ std::optional<ReplayData> makeReplayDataFromSetup(
     std::string &diagnostic) noexcept {
   try {
     diagnostic.clear();
-    if (!validateReplaySetup(setup, ReplaySetupSource::AsoExtension).valid() ||
-        compareReplayChartIdentity(
-            setup.chart,
-            {.md5 = parsedChartMeta.MD5,
-             .sha256 = parsedChartMeta.SHA256,
-             .keyMode = parsedChartMeta.KeyMode}) != ReplayChartMatch::Match) {
-      diagnostic = "Replay setup does not match the parsed chart.";
-      return std::nullopt;
-    }
     if (setup.chartRandomSeed.has_value() &&
         *setup.chartRandomSeed > std::numeric_limits<unsigned int>::max()) {
       diagnostic = "Replay random seed cannot be represented by the parser.";

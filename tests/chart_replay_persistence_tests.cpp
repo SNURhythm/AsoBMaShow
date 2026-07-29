@@ -194,8 +194,8 @@ void testCompletionCaptureBuildsIndependentResultSnapshotAndReplay() {
   capture.timeBounds = {};
   const auto capturedWithoutCompletion =
       captureChartReplayPersistenceAttempt(capture, diagnostic);
-  expect(capturedWithoutCompletion && !capturedWithoutCompletion->replay,
-         "accepted input cannot invent a missing completion observation");
+  expect(capturedWithoutCompletion && capturedWithoutCompletion->replay,
+         "capture leaves missing completion rejection to the BRD codec");
   capture.timeBounds = {.completionSongTimeMicros = 5'000'000};
 
   capture.acceptedInput.reset();
@@ -210,9 +210,8 @@ void testCompletionCaptureBuildsIndependentResultSnapshotAndReplay() {
   const auto malformed =
       captureChartReplayPersistenceAttempt(capture, diagnostic);
   expect(malformed && malformed->result == completed &&
-             malformed->irSnapshot && !malformed->replay &&
-             !diagnostic.empty(),
-         "malformed raw detail cannot discard result or postponed IR facts");
+             malformed->irSnapshot && malformed->replay,
+         "capture does not duplicate the codec's structural validation");
 
   auto noLongNotes = result();
   noLongNotes.score.longNoteMode = 0;

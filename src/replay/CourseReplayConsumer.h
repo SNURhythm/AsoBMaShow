@@ -80,8 +80,7 @@ struct CourseReplayConsumerDependencies {
       std::atomic_bool &, std::string &)>
       prepareChart;
   std::function<ReplayPlaybackMaterializationOutcome(
-      const ReplayChartDocument &, ReplaySetupSource,
-      const result_persistence::ModernChartResult &,
+      const ReplayChartDocument &, const result_persistence::ModernChartResult &,
       const bms_parser::Chart &, const ReplayPlaybackCarryState &)>
       materializeStage;
 };

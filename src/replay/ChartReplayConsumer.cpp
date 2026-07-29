@@ -15,12 +15,6 @@ ChartReplayConsumerOutcome failure(
           .diagnostic = std::move(diagnostic)};
 }
 
-ReplaySetupSource setupSource(ReplayStageDecodeSource source) noexcept {
-  return source == ReplayStageDecodeSource::AsoExtension
-             ? ReplaySetupSource::AsoExtension
-             : ReplaySetupSource::StockBeatoraja;
-}
-
 } // namespace
 
 ChartReplayConsumer::ChartReplayConsumer(
@@ -111,8 +105,7 @@ ChartReplayConsumerOutcome ChartReplayConsumer::load(
     }
 
     auto materialized = dependencies_.materialize(
-        verified.document, setupSource(verified.source), verified.result,
-        *preparedChart);
+        verified.document, verified.result, *preparedChart);
     if (!materialized.playable()) {
       return failure(ChartReplayConsumerState::MaterializationFailed,
                      materialized.diagnostic.empty()

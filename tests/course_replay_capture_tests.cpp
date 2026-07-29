@@ -231,17 +231,16 @@ void testRawCaptureDropsOnlyReplayAttachment() {
   capture.stages[0].restMicrosAfterStage =
       replay::kReplayLimits.maxCourseRestMicros + 1;
   const auto invalid = replay::captureCourseReplayAttempt(capture, diagnostic);
-  expect(invalid && invalid->result == *result && !invalid->replay &&
-             !diagnostic.empty(),
-         "invalid rest drops only the BRD attachment with a diagnostic");
+  expect(invalid && invalid->result == *result && invalid->replay,
+         "capture leaves course envelope validation to the BRD codec");
 
   capture.stages[0].restMicrosAfterStage = 0;
   capture.constraints.beatorajaConstraintIds = {9};
   const auto wrongConstraints =
       replay::captureCourseReplayAttempt(capture, diagnostic);
   expect(wrongConstraints && wrongConstraints->result == *result &&
-             !wrongConstraints->replay && !diagnostic.empty(),
-         "constraint/path disagreement drops only the BRD attachment");
+             wrongConstraints->replay,
+         "capture leaves result and path binding to persistence");
 }
 
 void testBeatorajaConstraintIdentityIsCanonical() {

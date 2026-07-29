@@ -87,7 +87,7 @@ struct CourseContinuationOutcome {
 
 [[nodiscard]] CourseContinuationOutcome advanceCourseContinuation(
     const CourseContinuationState &current,
-    const CourseStageCompletion &completion, ReplaySetupSource setupSource,
+    const CourseStageCompletion &completion,
     const ReplayLimits &limits = kReplayLimits) noexcept;
 
 // Live play learns the result-screen rest duration after the stage transition

@@ -75,7 +75,7 @@ std::optional<GameplayRuleset> rulesetFor(const ReplaySetup &setup) {
 } // namespace
 
 ReplayPlaybackMaterializationOutcome ReplayPlaybackMaterializer::materialize(
-    const ReplayChartDocument &document, ReplaySetupSource source,
+    const ReplayChartDocument &document,
     const result_persistence::ModernChartResult &savedResult,
     const ReplayJudgingSink &judge, std::size_t eventBudget) {
   if (!judge.advanceTo || (!judge.applyInput && !judge.applyInputBatch) ||
@@ -84,7 +84,7 @@ ReplayPlaybackMaterializationOutcome ReplayPlaybackMaterializer::materialize(
             .diagnostic = "Replay judging sink is incomplete."};
   }
 
-  ReplayPlaybackDriver driver(document, source);
+  ReplayPlaybackDriver driver(document);
   if (!driver.valid()) {
     return {.state = ReplayPlaybackMaterializationState::InvalidReplay,
             .diagnostic = driver.diagnostic()};
@@ -146,16 +146,16 @@ ReplayPlaybackMaterializationOutcome ReplayPlaybackMaterializer::materialize(
 
 ReplayPlaybackMaterializationOutcome
 ReplayPlaybackMaterializer::materializeForConsumers(
-    const ReplayChartDocument &document, ReplaySetupSource source,
+    const ReplayChartDocument &document,
     const result_persistence::ModernChartResult &savedResult,
     const bms_parser::Chart &chart, std::size_t eventBudget) {
-  return materializeForConsumers(document, source, savedResult, chart,
+  return materializeForConsumers(document, savedResult, chart,
                                  ReplayPlaybackCarryState{}, eventBudget);
 }
 
 ReplayPlaybackMaterializationOutcome
 ReplayPlaybackMaterializer::materializeForConsumers(
-    const ReplayChartDocument &document, ReplaySetupSource source,
+    const ReplayChartDocument &document,
     const result_persistence::ModernChartResult &savedResult,
     const bms_parser::Chart &chart, const ReplayPlaybackCarryState &carry,
     std::size_t eventBudget) {
@@ -295,7 +295,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     return judged;
   };
 
-  auto outcome = materialize(document, source, savedResult, judge, eventBudget);
+  auto outcome = materialize(document, savedResult, judge, eventBudget);
   outcome.initialGaugeState = initialGaugeState;
   outcome.finalGaugeState = simulation.scoreState().gaugeSnapshot();
   outcome.endingCombo = simulation.scoreState().combo;

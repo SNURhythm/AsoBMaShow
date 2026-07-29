@@ -171,11 +171,8 @@ CourseReplayPersistenceOutcome CourseReplayPersistence::persist(
   std::optional<ReplayFileAssociation> fileAssociation;
   if (!attachment && attempt.replay) {
     std::string replayDiagnostic;
-    std::vector<ReplaySetupSource> sources(
-        attempt.replay->playback.stages.size(),
-        ReplaySetupSource::LocalCapture);
     const auto replayAgreement = compareCourseReplayToResult(
-        *attempt.replay, attempt.result, sources);
+        *attempt.replay, attempt.result);
     const bool undefinedLongNotes = std::ranges::any_of(
         attempt.replay->playback.stages, [](const auto &stage) {
           return stage.setup.hasUndefinedLongNotes;

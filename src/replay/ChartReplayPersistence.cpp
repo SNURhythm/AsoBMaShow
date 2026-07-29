@@ -185,8 +185,8 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
       dependencies_.fileAssociation);
   std::optional<ReplayFileAssociation> fileAssociation;
   if (!attachment && attempt.replay.has_value()) {
-    const auto agreement =
-        compareChartReplayToResult(*attempt.replay, attempt.result);
+    const auto agreement = compareChartReplayToResult(*attempt.replay,
+                                                      attempt.result);
     if (!agreement.agrees()) {
       appendDiagnostic(diagnostic, "replay omitted", agreement.diagnostic);
     } else {

@@ -67,17 +67,6 @@ captureLocalReplaySetup(const LocalReplaySetupFacts &facts,
     setup.laneCoverEnabled = facts.laneCoverEnabled;
     setup.clubMode = provenance.clubMode;
 
-    const auto validation =
-        validateReplaySetup(setup, ReplaySetupSource::LocalCapture);
-    if (!validation.valid()) {
-      diagnostic = "Captured replay setup is invalid (issue " +
-                   std::to_string(static_cast<int>(validation.issue)) + ").";
-      return std::nullopt;
-    }
-    if (!replaySetupAgreesWithProvenance(setup, provenance)) {
-      diagnostic = "Captured replay setup differs from result provenance.";
-      return std::nullopt;
-    }
     return setup;
   } catch (...) {
     diagnostic = "Captured replay setup construction failed.";

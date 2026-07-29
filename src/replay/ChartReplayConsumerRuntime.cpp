@@ -55,11 +55,10 @@ ChartReplayConsumer makeRuntimeChartReplayConsumer(
         return prepared;
       },
       .materialize = [](const ReplayChartDocument &document,
-                        ReplaySetupSource source,
                         const result_persistence::ModernChartResult &result,
                         const bms_parser::Chart &chart) {
         return ReplayPlaybackMaterializer::materializeForConsumers(
-            document, source, result, chart);
+            document, result, chart);
       },
   });
 }

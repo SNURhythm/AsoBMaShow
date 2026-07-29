@@ -410,6 +410,16 @@ void testDecodedReplayMustAgreeWithResultAndSupportedContract() {
          "non-chart BRD cannot become a chart replay context");
 }
 
+void testContextTrustsStructurallyValidatedDecode() {
+  Harness harness;
+  harness.replay.playback.input.back().songTimeMicros = -2'000;
+  auto context = harness.makeContext();
+  const auto loaded = context.load(kAttemptId, parsedFacts(harness.result));
+  expect(loaded.state == ChartReplayContextState::Ready &&
+             loaded.replayAvailable(),
+         "context does not repeat structural validation owned by the codec");
+}
+
 void testInvalidResultNeverTouchesReplayFile() {
   Harness harness;
   harness.result.resultFingerprint = "invalid";
@@ -433,6 +443,7 @@ int main() {
   testFileFailuresRetainResultAndFailReplayClosed();
   testParsedIdentityAndLongNoteAgreementPrecedeFileAccess();
   testDecodedReplayMustAgreeWithResultAndSupportedContract();
+  testContextTrustsStructurallyValidatedDecode();
   testInvalidResultNeverTouchesReplayFile();
   if (failures != 0) {
     std::cerr << failures << " chart replay context test(s) failed\n";

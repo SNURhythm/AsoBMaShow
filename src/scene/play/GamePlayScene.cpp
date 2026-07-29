@@ -2981,8 +2981,7 @@ void GamePlayScene::recordModernCourseStage(
          .gauge = state->gaugeSnapshot(),
          .adoptedGauge = result->adoptedGaugeType,
          .restMicrosAfterStage = 0,
-         .setup = *setup},
-        replay::ReplaySetupSource::LocalCapture);
+         .setup = *setup});
     if (advanced.advanced()) {
       advancedContinuation = std::move(advanced.state);
     }

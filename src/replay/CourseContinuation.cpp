@@ -121,7 +121,7 @@ CourseContinuationOutcome startCourseContinuation(
 
 CourseContinuationOutcome advanceCourseContinuation(
     const CourseContinuationState &current,
-    const CourseStageCompletion &completion, ReplaySetupSource setupSource,
+    const CourseStageCompletion &completion,
     const ReplayLimits &limits) noexcept {
   try {
     if (!limits.valid()) {
@@ -149,8 +149,7 @@ CourseContinuationOutcome advanceCourseContinuation(
     if (!validCourseRestMicros(completion.restMicrosAfterStage, limits)) {
       return invalid(CourseContinuationIssue::Rest);
     }
-    if (!validateReplaySetup(completion.setup, setupSource, limits).valid() ||
-        !setupAgreesWithCourse(completion.setup, current)) {
+    if (!setupAgreesWithCourse(completion.setup, current)) {
       return invalid(CourseContinuationIssue::Setup);
     }
     if (addOverflows(current.score, completion.score) ||

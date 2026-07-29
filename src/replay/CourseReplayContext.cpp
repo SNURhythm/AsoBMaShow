@@ -38,12 +38,6 @@ CourseReplayContextState fileFailureState(ReplayFileState state) noexcept {
   return CourseReplayContextState::FileIoFailure;
 }
 
-ReplaySetupSource setupSource(ReplayStageDecodeSource source) noexcept {
-  return source == ReplayStageDecodeSource::AsoExtension
-             ? ReplaySetupSource::AsoExtension
-             : ReplaySetupSource::StockBeatoraja;
-}
-
 CourseReplayContextState agreementFailureState(
     CourseReplayAgreementIssue issue) noexcept {
   switch (issue) {
@@ -58,8 +52,6 @@ CourseReplayContextState agreementFailureState(
   case CourseReplayAgreementIssue::Path:
     return CourseReplayContextState::ReferenceMismatch;
   case CourseReplayAgreementIssue::None:
-  case CourseReplayAgreementIssue::Result:
-  case CourseReplayAgreementIssue::Playback:
     return CourseReplayContextState::ReplayInvalid;
   }
   return CourseReplayContextState::ReplayInvalid;
@@ -239,13 +231,7 @@ CourseReplayContextOutcome CourseReplayContext::load(
                          : decoded.diagnostic,
                      preservedResult, std::move(reference));
     }
-    std::vector<ReplaySetupSource> sources;
-    sources.reserve(decoded.stageSources.size());
-    for (const auto source : decoded.stageSources) {
-      sources.push_back(setupSource(source));
-    }
-    const auto agreement = compareCourseReplayToResult(
-        *decoded.course, stored, sources, limits_);
+    const auto agreement = compareCourseReplayToResult(*decoded.course, stored);
     if (!agreement.agrees()) {
       return failure(agreementFailureState(agreement.issue),
                      agreement.diagnostic, preservedResult,

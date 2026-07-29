@@ -6,16 +6,13 @@
 
 #include "../ModernResult.h"
 
-#include <span>
 #include <string>
 
 namespace replay {
 
 enum class CourseReplayAgreementIssue {
   None,
-  Result,
   Path,
-  Playback,
   CourseShape,
   StageIdentity,
   LongNoteMode,
@@ -39,8 +36,6 @@ struct CourseReplayAgreement {
 
 [[nodiscard]] CourseReplayAgreement compareCourseReplayToResult(
     const ReplayCourseDocument &replay,
-    const result_persistence::ModernCourseResult &result,
-    std::span<const ReplaySetupSource> sources,
-    const ReplayLimits &limits = kReplayLimits) noexcept;
+    const result_persistence::ModernCourseResult &result) noexcept;
 
 } // namespace replay

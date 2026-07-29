@@ -227,17 +227,6 @@ ChartReplayContextOutcome ChartReplayContext::load(
     }
 
     const auto source = decoded.stageSources.front();
-    const auto setupSource = source == ReplayStageDecodeSource::AsoExtension
-                                 ? ReplaySetupSource::AsoExtension
-                                 : ReplaySetupSource::StockBeatoraja;
-    const auto playback = validateReplayPlayback(
-        decoded.chart->playback, setupSource, decoded.chart->timeBounds,
-        limits_);
-    if (!playback.valid()) {
-      return failure(ChartReplayContextState::ReplayInvalid,
-                     "Decoded chart replay violates the playback contract.",
-                     preservedResult, std::move(reference));
-    }
     const auto decodedReferenceAgreement = compareChartReplayReferenceToResult(
         *reference, stored,
         decoded.chart->playback.setup.hasUndefinedLongNotes, limits_);
@@ -247,8 +236,7 @@ ChartReplayContextOutcome ChartReplayContext::load(
                      preservedResult, std::move(reference));
     }
 
-    const auto agreement =
-        compareChartReplayToResult(*decoded.chart, stored, setupSource);
+    const auto agreement = compareChartReplayToResult(*decoded.chart, stored);
     if (!agreement.agrees()) {
       const auto state = agreement.issue == ChartReplayAgreementIssue::SharedSetup
                              ? ChartReplayContextState::SharedFactsMismatch

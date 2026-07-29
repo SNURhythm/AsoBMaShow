@@ -65,7 +65,7 @@ struct ReplayPlaybackCarryState {
 class ReplayPlaybackMaterializer {
 public:
   [[nodiscard]] static ReplayPlaybackMaterializationOutcome materialize(
-      const ReplayChartDocument &document, ReplaySetupSource source,
+      const ReplayChartDocument &document,
       const result_persistence::ModernChartResult &savedResult,
       const ReplayJudgingSink &judge,
       std::size_t eventBudget = kDefaultReplayPlaybackEventBudget);
@@ -76,14 +76,14 @@ public:
   // structurally playable track.
   [[nodiscard]] static ReplayPlaybackMaterializationOutcome
   materializeForConsumers(
-      const ReplayChartDocument &document, ReplaySetupSource source,
+      const ReplayChartDocument &document,
       const result_persistence::ModernChartResult &savedResult,
       const bms_parser::Chart &chart,
       std::size_t eventBudget = kDefaultReplayPlaybackEventBudget);
 
   [[nodiscard]] static ReplayPlaybackMaterializationOutcome
   materializeForConsumers(
-      const ReplayChartDocument &document, ReplaySetupSource source,
+      const ReplayChartDocument &document,
       const result_persistence::ModernChartResult &savedResult,
       const bms_parser::Chart &chart, const ReplayPlaybackCarryState &carry,
       std::size_t eventBudget = kDefaultReplayPlaybackEventBudget);

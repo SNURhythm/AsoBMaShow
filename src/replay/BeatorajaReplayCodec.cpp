@@ -847,11 +847,6 @@ bool decodeStockSetup(const Json &stage, int keyMode, bool course,
     return fail(diagnostic,
                 "Replay double-play option is invalid for its key mode");
   }
-  const auto validation =
-      validateReplaySetup(setup, ReplaySetupSource::StockBeatoraja);
-  if (!validation.valid()) {
-    return fail(diagnostic, "Replay stock setup fails canonical validation");
-  }
   return true;
 }
 
@@ -1157,12 +1152,13 @@ BeatorajaReplayCodec::encodeCourse(const ReplayCourseDocument &replay,
     diagnostic = "Replay limits are invalid";
     return std::nullopt;
   }
-  std::vector<ReplaySetupSource> sources(replay.playback.stages.size(),
-                                         ReplaySetupSource::LocalCapture);
-  const auto validation = validateCourseReplayPlayback(
-      replay.playback, sources, replay.timeBounds, limits_);
-  if (!validation.valid()) {
-    diagnostic = "Replay course fails canonical playback validation";
+  if (replay.playback.stages.empty() ||
+      !withinReplayCountLimit(replay.playback.stages.size(),
+                              limits_.maxCourseStages) ||
+      replay.timeBounds.size() != replay.playback.stages.size() ||
+      replay.playback.restMicrosAfterStage.size() !=
+          replay.playback.stages.size()) {
+    diagnostic = "Replay course envelope is invalid";
     return std::nullopt;
   }
   AggregateCounts aggregate;

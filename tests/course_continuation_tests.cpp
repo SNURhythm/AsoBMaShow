@@ -105,8 +105,7 @@ void testContiguousMixedSetupCourseCarriesEveryStateFact() {
   auto state = initialState();
   const auto first = replay::advanceCourseContinuation(
       state, completion(0, 120, 200, 4, 7, 68.0F, 7, 'a',
-                        replay::kReplayLimits.maxCourseRestMicros),
-      replay::ReplaySetupSource::LocalCapture);
+                        replay::kReplayLimits.maxCourseRestMicros));
   expect(first.advanced(), "first contiguous course stage advances");
   if (!first.state) {
     return;
@@ -132,8 +131,7 @@ void testContiguousMixedSetupCourseCarriesEveryStateFact() {
          "constraints and first-stage setup remain explicit");
 
   const auto second = replay::advanceCourseContinuation(
-      *first.state, completion(1, 330, 400, 0, 9, 55.0F, 14, 'b', 0),
-      replay::ReplaySetupSource::LocalCapture);
+      *first.state, completion(1, 330, 400, 0, 9, 55.0F, 14, 'b', 0));
   expect(second.advanced() && second.state && second.state->complete(),
          "second contiguous stage completes the course");
   if (second.state) {
@@ -152,8 +150,7 @@ void testInvalidTransitionsLeaveThePriorStateUntouched() {
   const auto state = initialState();
 
   auto outOfOrder = completion(1, 1, 2, 0, 0, 70.0F, 7, 'a', 0);
-  const auto order = replay::advanceCourseContinuation(
-      state, outOfOrder, replay::ReplaySetupSource::LocalCapture);
+  const auto order = replay::advanceCourseContinuation(state, outOfOrder);
   expect(order.issue == replay::CourseContinuationIssue::StageOrder &&
              !order.state,
          "an out-of-order stage is rejected instead of inserted");
@@ -161,19 +158,26 @@ void testInvalidTransitionsLeaveThePriorStateUntouched() {
   auto excessiveRest = completion(
       0, 1, 2, 0, 0, 70.0F, 7, 'a',
       replay::kReplayLimits.maxCourseRestMicros + 1);
-  const auto rest = replay::advanceCourseContinuation(
-      state, excessiveRest, replay::ReplaySetupSource::LocalCapture);
+  const auto rest = replay::advanceCourseContinuation(state, excessiveRest);
   expect(rest.issue == replay::CourseContinuationIssue::Rest && !rest.state,
          "rest above the shared limit is rejected instead of clamped");
 
   auto invalidGauge = completion(0, 1, 2, 0, 0, 70.0F, 7, 'a', 0);
   invalidGauge.gauge.gaugeValues[0] =
       std::numeric_limits<float>::quiet_NaN();
-  const auto gauges = replay::advanceCourseContinuation(
-      state, invalidGauge, replay::ReplaySetupSource::LocalCapture);
+  const auto gauges = replay::advanceCourseContinuation(state, invalidGauge);
   expect(gauges.issue == replay::CourseContinuationIssue::Gauge &&
              !gauges.state,
          "a malformed per-gauge value rejects the transition");
+}
+
+void testContinuationTrustsStructurallyValidatedStageSetup() {
+  const auto state = initialState(1);
+  auto stage = completion(0, 1, 2, 0, 0, 70.0F, 7, 'a', 0);
+  stage.setup.chart = {};
+  const auto advanced = replay::advanceCourseContinuation(state, stage);
+  expect(advanced.advanced() && advanced.state,
+         "continuation compares carried setup without repeating codec checks");
 }
 
 void testScoreOverflowAndCompletedCourseCannotAdvance() {
@@ -181,22 +185,19 @@ void testScoreOverflowAndCompletedCourseCannotAdvance() {
   state.score = std::numeric_limits<std::int64_t>::max() - 2;
   state.maximumScore = std::numeric_limits<std::int64_t>::max() - 2;
   const auto overflow = replay::advanceCourseContinuation(
-      state, completion(0, 3, 3, 0, 0, 70.0F, 7, 'a', 0),
-      replay::ReplaySetupSource::LocalCapture);
+      state, completion(0, 3, 3, 0, 0, 70.0F, 7, 'a', 0));
   expect(overflow.issue == replay::CourseContinuationIssue::Overflow &&
              !overflow.state,
          "aggregate score arithmetic fails closed on overflow");
 
   state = initialState(1);
   const auto completed = replay::advanceCourseContinuation(
-      state, completion(0, 1, 2, 0, 0, 70.0F, 7, 'a', 0),
-      replay::ReplaySetupSource::LocalCapture);
+      state, completion(0, 1, 2, 0, 0, 70.0F, 7, 'a', 0));
   expect(completed.advanced() && completed.state && completed.state->complete(),
          "one-stage course reaches complete state");
   if (completed.state) {
     const auto extra = replay::advanceCourseContinuation(
-        *completed.state, completion(1, 1, 2, 0, 0, 70.0F, 7, 'b', 0),
-        replay::ReplaySetupSource::LocalCapture);
+        *completed.state, completion(1, 1, 2, 0, 0, 70.0F, 7, 'b', 0));
     expect(extra.issue == replay::CourseContinuationIssue::Complete &&
                !extra.state,
            "a completed course cannot accept another stage");
@@ -206,8 +207,7 @@ void testScoreOverflowAndCompletedCourseCannotAdvance() {
 void testCompletedStageRestUsesTheSameValidatedStateTransition() {
   const auto initial = initialState();
   const auto first = replay::advanceCourseContinuation(
-      initial, completion(0, 12, 20, 3, 4, 68.0F, 7, 'a', 0),
-      replay::ReplaySetupSource::LocalCapture);
+      initial, completion(0, 12, 20, 3, 4, 68.0F, 7, 'a', 0));
   expect(first.advanced() && first.state,
          "a live stage may advance before its result-screen rest is known");
   if (!first.state) {
@@ -240,8 +240,7 @@ void testCompletedStageRestUsesTheSameValidatedStateTransition() {
 void testOverlongLiveRestDropsOnlyReplayAttachment() {
   const auto initial = initialState();
   const auto first = replay::advanceCourseContinuation(
-      initial, completion(0, 12, 20, 3, 4, 68.0F, 7, 'a', 0),
-      replay::ReplaySetupSource::LocalCapture);
+      initial, completion(0, 12, 20, 3, 4, 68.0F, 7, 'a', 0));
   expect(first.advanced() && first.state,
          "a live stage advances before an overlong result-screen rest");
   if (!first.state) {
@@ -279,6 +278,7 @@ int main() {
 #if ASOBMASHOW_HAS_COURSE_CONTINUATION
   testContiguousMixedSetupCourseCarriesEveryStateFact();
   testInvalidTransitionsLeaveThePriorStateUntouched();
+  testContinuationTrustsStructurallyValidatedStageSetup();
   testScoreOverflowAndCompletedCourseCannotAdvance();
   testCompletedStageRestUsesTheSameValidatedStateTransition();
   testOverlongLiveRestDropsOnlyReplayAttachment();

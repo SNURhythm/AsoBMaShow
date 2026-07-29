@@ -1,7 +1,5 @@
 #include "CourseReplayCapture.h"
 
-#include "CourseReplayAgreement.h"
-
 #include <utility>
 
 namespace replay {
@@ -41,19 +39,10 @@ captureCourseReplayAttempt(const CourseReplayCapture &capture,
       attempt.pathInput.stageSha256.push_back(stage.score.chartSha256);
     }
 
-    if (capture.constraints.longNoteMode != capture.result.longNoteMode ||
-        capture.stages.size() != capture.result.stages.size()) {
-      appendDiagnostic(diagnostic,
-                       "raw course replay shape differs from its result");
-      return attempt;
-    }
-
     ReplayCourseDocument document;
     document.playback.stages.reserve(capture.stages.size());
     document.playback.restMicrosAfterStage.reserve(capture.stages.size());
     document.timeBounds.reserve(capture.stages.size());
-    std::vector<ReplaySetupSource> sources;
-    sources.reserve(capture.stages.size());
     for (std::size_t index = 0; index < capture.stages.size(); ++index) {
       const auto &raw = capture.stages[index];
       if (!raw.playback.has_value()) {
@@ -65,15 +54,6 @@ captureCourseReplayAttempt(const CourseReplayCapture &capture,
       const ReplayTimeBounds timeBounds = replayCaptureTimeBounds(
           raw.timeBounds, raw.playback->input, raw.playback->touchSamples,
           raw.playback->laneCoverEvents);
-      const auto validation = validateReplayPlayback(
-          *raw.playback, ReplaySetupSource::LocalCapture, timeBounds);
-      if (!validation.valid() ||
-          !validCourseRestMicros(raw.restMicrosAfterStage)) {
-        appendDiagnostic(diagnostic,
-                         "raw course replay is invalid at stage " +
-                             std::to_string(index + 1));
-        return attempt;
-      }
       attempt.pathInput.hasUndefinedLongNotes =
           attempt.pathInput.hasUndefinedLongNotes ||
           raw.playback->setup.hasUndefinedLongNotes;
@@ -81,20 +61,8 @@ captureCourseReplayAttempt(const CourseReplayCapture &capture,
       document.playback.restMicrosAfterStage.push_back(
           raw.restMicrosAfterStage);
       document.timeBounds.push_back(timeBounds);
-      sources.push_back(ReplaySetupSource::LocalCapture);
     }
 
-    const auto replayAgreement =
-        compareCourseReplayToResult(document, capture.result, sources);
-    const auto pathAgreement =
-        compareCourseReplayPathToResult(attempt.pathInput, capture.result);
-    if (!replayAgreement.agrees() || !pathAgreement.agrees()) {
-      appendDiagnostic(diagnostic,
-                       !replayAgreement.agrees()
-                           ? replayAgreement.diagnostic
-                           : pathAgreement.diagnostic);
-      return attempt;
-    }
     attempt.replay = std::move(document);
     return attempt;
   } catch (...) {

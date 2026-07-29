@@ -16,21 +16,8 @@ ChartReplayAgreement disagreement(ChartReplayAgreementIssue issue,
 
 ChartReplayAgreement compareChartReplayToResult(
     const ReplayChartDocument &replay,
-    const result_persistence::ModernChartResult &result,
-    ReplaySetupSource source) noexcept {
+    const result_persistence::ModernChartResult &result) noexcept {
   try {
-    std::string diagnostic;
-    if (!result_persistence::validateModernChartResult(result, diagnostic)) {
-      return disagreement(ChartReplayAgreementIssue::Result,
-                          diagnostic.empty() ? "modern result is invalid"
-                                             : std::move(diagnostic));
-    }
-    const auto playback =
-        validateReplayPlayback(replay.playback, source, replay.timeBounds);
-    if (!playback.valid()) {
-      return disagreement(ChartReplayAgreementIssue::Replay,
-                          "captured replay playback is invalid");
-    }
     const ReplayChartIdentity expected{.md5 = result.score.chartMd5,
                                        .sha256 = result.score.chartSha256,
                                        .keyMode = result.keyMode};
@@ -53,8 +40,8 @@ ChartReplayAgreement compareChartReplayToResult(
     }
     return {};
   } catch (...) {
-    return disagreement(ChartReplayAgreementIssue::Replay,
-                        "chart replay agreement validation failed");
+    return disagreement(ChartReplayAgreementIssue::SharedSetup,
+                        "chart replay binding comparison failed");
   }
 }
 

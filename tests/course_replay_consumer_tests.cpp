@@ -266,14 +266,12 @@ struct ConsumerHarness {
         },
         .materializeStage = [this](
                                 const ReplayChartDocument &stageDocument,
-                                ReplaySetupSource source,
                                 const result_persistence::ModernChartResult &saved,
                                 const bms_parser::Chart &,
                                 const ReplayPlaybackCarryState &carry) {
           const std::size_t index = saved.score.chartSha256.front() == 'a' ? 0 : 1;
           calls.push_back("materialize-" + std::to_string(index));
-          expect(stageDocument.playback == replay.playback.stages[index] &&
-                     source == ReplaySetupSource::AsoExtension,
+          expect(stageDocument.playback == replay.playback.stages[index],
                  "consumer materializes only verified raw stage input");
           if (index == 0) {
             expect(!carry.gauge.has_value() && carry.combo == 0 &&

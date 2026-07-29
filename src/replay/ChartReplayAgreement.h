@@ -10,8 +10,6 @@ namespace replay {
 
 enum class ChartReplayAgreementIssue {
   None,
-  Result,
-  Replay,
   ChartIdentity,
   LongNoteMode,
   SharedSetup,
@@ -28,7 +26,6 @@ struct ChartReplayAgreement {
 
 [[nodiscard]] ChartReplayAgreement compareChartReplayToResult(
     const ReplayChartDocument &replay,
-    const result_persistence::ModernChartResult &result,
-    ReplaySetupSource source = ReplaySetupSource::LocalCapture) noexcept;
+    const result_persistence::ModernChartResult &result) noexcept;
 
 } // namespace replay

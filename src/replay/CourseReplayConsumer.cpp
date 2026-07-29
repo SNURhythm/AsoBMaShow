@@ -18,12 +18,6 @@ CourseReplayConsumerOutcome failure(
           .diagnostic = std::move(diagnostic)};
 }
 
-ReplaySetupSource setupSource(ReplayStageDecodeSource source) noexcept {
-  return source == ReplayStageDecodeSource::AsoExtension
-             ? ReplaySetupSource::AsoExtension
-             : ReplaySetupSource::StockBeatoraja;
-}
-
 void appendDiagnostic(std::string &destination, std::string_view value) {
   if (value.empty()) {
     return;
@@ -344,8 +338,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
       const auto savedChartResult =
           chartResultForStage(verified.result, index);
       auto materialized = dependencies_.materializeStage(
-          stageDocument, setupSource(verified.stageSources[index]),
-          savedChartResult, *prepared, carry);
+          stageDocument, savedChartResult, *prepared, carry);
       if (!materialized.playable() || !materialized.judgedResult ||
           !materialized.initialGaugeState || !materialized.finalGaugeState) {
         return failure(CourseReplayConsumerState::MaterializationFailed,
@@ -397,8 +390,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
            .adoptedGauge = materialized.judgedResult->adoptedGaugeType,
            .restMicrosAfterStage =
                verified.document.playback.restMicrosAfterStage[index],
-           .setup = stagePlayback.setup},
-          setupSource(verified.stageSources[index]));
+           .setup = stagePlayback.setup});
       if (!advanced.advanced()) {
         return failure(CourseReplayConsumerState::ContinuationFailed,
                        "Course replay carried state is inconsistent.",

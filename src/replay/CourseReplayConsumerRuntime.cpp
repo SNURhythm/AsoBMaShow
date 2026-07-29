@@ -53,12 +53,11 @@ CourseReplayConsumer makeRuntimeCourseReplayConsumer(
         return prepared;
       },
       .materializeStage = [](const ReplayChartDocument &document,
-                             ReplaySetupSource source,
                              const result_persistence::ModernChartResult &result,
                              const bms_parser::Chart &chart,
                              const ReplayPlaybackCarryState &carry) {
         return ReplayPlaybackMaterializer::materializeForConsumers(
-            document, source, result, chart, carry);
+            document, result, chart, carry);
       },
   });
 }

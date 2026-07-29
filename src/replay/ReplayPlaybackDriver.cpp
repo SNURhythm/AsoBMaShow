@@ -203,16 +203,12 @@ void ReplayLogicalGameplayAdapter::reset() {
 }
 
 ReplayPlaybackDriver::ReplayPlaybackDriver(const ReplayChartDocument &document,
-                                           ReplaySetupSource source,
                                            ReplayLimits limits)
     : document_(document), limits_(limits),
       currentTimeMicros_(limits.minimumSongTimeMicros) {
-  const auto validation = validateReplayPlayback(
-      document.playback, source, document.timeBounds, limits);
-  valid_ = validation.valid();
+  valid_ = limits.valid() && document.timeBounds.valid();
   if (!valid_) {
-    diagnostic_ = "Replay playback is invalid (issue " +
-                  std::to_string(static_cast<int>(validation.issue)) + ").";
+    diagnostic_ = "Replay playback limits or completion bounds are invalid.";
   }
 }
 

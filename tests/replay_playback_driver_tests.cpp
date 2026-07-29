@@ -169,7 +169,7 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   replay.playback.setup.playback = saved.score.provenance.playback;
 
   const auto first = ReplayPlaybackMaterializer::materializeForConsumers(
-      replay, ReplaySetupSource::LocalCapture, saved, chart);
+      replay, saved, chart);
   expect(first.state == ReplayPlaybackMaterializationState::ResultMismatch &&
              first.judgedResult.has_value() && first.playable() &&
              first.replayData && !first.diagnostic.empty(),
@@ -181,7 +181,7 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
 
   saved = *first.judgedResult;
   const auto matched = ReplayPlaybackMaterializer::materializeForConsumers(
-      replay, ReplaySetupSource::LocalCapture, saved, chart);
+      replay, saved, chart);
   expect(matched.matched() && matched.replayData &&
              !matched.replayData->events.empty() &&
              matched.replayData->finalScore == saved.score.score &&
@@ -201,8 +201,7 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
       result_persistence::modernResultFingerprint(alteredRateSaved);
   const auto alteredRate =
       ReplayPlaybackMaterializer::materializeForConsumers(
-          alteredRateReplay, ReplaySetupSource::LocalCapture,
-          alteredRateSaved, chart);
+          alteredRateReplay, alteredRateSaved, chart);
   expect(alteredRate.matched() && alteredRate.replayData,
          std::string("altered-rate replay preserves the live assisted clear: ") +
              alteredRate.diagnostic);
@@ -248,6 +247,13 @@ void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
              translated->initialGaugeType == GaugeType::Hard &&
              translated->provenance == provenance,
          "one adapter projects complete setup for every chart consumer");
+
+  auto alreadyBoundSetup = replay.playback.setup;
+  alreadyBoundSetup.chart.sha256 = std::string(64, 'f');
+  expect(makeReplayDataFromSetup(alreadyBoundSetup, provenance, meta,
+                                 diagnostic)
+             .has_value(),
+         "setup translation does not repeat consumer identity validation");
 
   replay.playback.setup.chartRandomSeed =
       static_cast<std::uint64_t>(std::numeric_limits<unsigned int>::max()) + 1;
@@ -331,13 +337,10 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
         return oneNoteChartPointer();
       },
       .materialize = [&](const ReplayChartDocument &document,
-                         ReplaySetupSource source,
                          const result_persistence::ModernChartResult &result,
                          const bms_parser::Chart &) {
         calls.emplace_back("materialize");
-        expect(document == replay &&
-                   source == ReplaySetupSource::AsoExtension &&
-                   result == listed.result,
+        expect(document == replay && result == listed.result,
                "consumer materializes only the verified document and result");
         ReplayPlaybackMaterializationOutcome outcome;
         outcome.state = ReplayPlaybackMaterializationState::ResultMismatch;
@@ -397,7 +400,7 @@ void testChartConsumerOwnsTheEntireVerifiedPreparationPipeline() {
 
 void testDriverMergesStreamsWithoutChangingTheirTiming() {
   const auto replay = document();
-  ReplayPlaybackDriver driver(replay, ReplaySetupSource::LocalCapture);
+  ReplayPlaybackDriver driver(replay);
   std::vector<std::string> delivered;
   ReplayPlaybackSink sink{
       .input = [&](const InputTransition &event, std::string &) {
@@ -431,9 +434,17 @@ void testDriverMergesStreamsWithoutChangingTheirTiming() {
          "driver completes only at the parsed completion boundary");
 }
 
+void testDriverTrustsStructurallyValidatedDocument() {
+  auto replay = document();
+  std::swap(replay.playback.input.front(), replay.playback.input.back());
+  ReplayPlaybackDriver driver(replay);
+  expect(driver.valid(),
+         "driver does not repeat structural validation owned by the codec");
+}
+
 void testDriverRejectsReverseTimeAndBoundsEachAdvance() {
   const auto replay = document();
-  ReplayPlaybackDriver driver(replay, ReplaySetupSource::LocalCapture);
+  ReplayPlaybackDriver driver(replay);
   ReplayPlaybackSink sink;
   expect(driver.advanceTo(200, sink).state ==
              ReplayPlaybackDriverState::Advanced,
@@ -442,7 +453,7 @@ void testDriverRejectsReverseTimeAndBoundsEachAdvance() {
              ReplayPlaybackDriverState::NonMonotonicAdvance,
          "reverse playback time fails closed");
 
-  ReplayPlaybackDriver bounded(replay, ReplaySetupSource::LocalCapture);
+  ReplayPlaybackDriver bounded(replay);
   const auto exhausted = bounded.advanceTo(1'000, sink, 2);
   expect(exhausted.state == ReplayPlaybackDriverState::WorkLimitExceeded &&
              !bounded.complete(),
@@ -550,7 +561,7 @@ void testMaterializerUsesDriverAndOnlyComparesSavedFacts() {
       }};
 
   const auto matched = ReplayPlaybackMaterializer::materialize(
-      replay, ReplaySetupSource::LocalCapture, saved, judge);
+      replay, saved, judge);
   expect(matched.state == ReplayPlaybackMaterializationState::Matched &&
              judgedInputs == std::vector<std::int64_t>{100, 200} && finished,
          "judged materialization consumes raw input through the shared driver");
@@ -562,7 +573,7 @@ void testMaterializerUsesDriverAndOnlyComparesSavedFacts() {
   judge.finish = [&](std::string &) { return std::optional(different); };
   judgedInputs.clear();
   const auto mismatch = ReplayPlaybackMaterializer::materialize(
-      replay, ReplaySetupSource::LocalCapture, saved, judge);
+      replay, saved, judge);
   expect(mismatch.state == ReplayPlaybackMaterializationState::ResultMismatch &&
              mismatch.agreement && !mismatch.agreement->agrees() &&
              saved.score.good != different.score.good,
@@ -581,7 +592,7 @@ void testMaterializationBudgetStopsBeforeResultConstruction() {
         return std::optional(saved);
       }};
   const auto bounded = ReplayPlaybackMaterializer::materialize(
-      replay, ReplaySetupSource::LocalCapture, saved, judge, 1);
+      replay, saved, judge, 1);
   expect(bounded.state ==
              ReplayPlaybackMaterializationState::WorkLimitExceeded &&
              !finished,
@@ -592,6 +603,7 @@ void testMaterializationBudgetStopsBeforeResultConstruction() {
 
 int main() {
   testDriverMergesStreamsWithoutChangingTheirTiming();
+  testDriverTrustsStructurallyValidatedDocument();
   testDriverRejectsReverseTimeAndBoundsEachAdvance();
   testLogicalGameplayAdapterOwnsLaneAndScratchMapping();
   testMaterializerUsesDriverAndOnlyComparesSavedFacts();

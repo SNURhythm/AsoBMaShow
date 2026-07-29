@@ -70,24 +70,6 @@ captureChartReplayPersistenceAttempt(const ChartReplayCapture &capture,
     document.timeBounds = replayCaptureTimeBounds(
         document.timeBounds, document.playback.input,
         document.playback.touchSamples, document.playback.laneCoverEvents);
-    const auto validation = validateReplayPlayback(
-        document.playback, ReplaySetupSource::LocalCapture,
-        document.timeBounds);
-    if (!validation.valid()) {
-      appendDiagnostic(
-          diagnostic,
-          "captured replay playback is invalid (issue " +
-              std::to_string(static_cast<int>(validation.issue)) + ")");
-      return attempt;
-    }
-    const auto agreement = compareChartReplayToResult(document, attempt.result);
-    if (!agreement.agrees()) {
-      appendDiagnostic(diagnostic,
-                       agreement.diagnostic.empty()
-                           ? "captured replay differs from its result"
-                           : agreement.diagnostic);
-      return attempt;
-    }
     attempt.replay = std::move(document);
     return attempt;
   } catch (...) {

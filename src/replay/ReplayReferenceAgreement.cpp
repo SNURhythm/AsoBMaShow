@@ -58,10 +58,6 @@ ReplayReferenceAgreement compareChartReplayReferenceToResult(
     const ReplayLimits &limits) noexcept {
   try {
     std::string diagnostic;
-    if (!result_persistence::validateModernChartResult(result, diagnostic)) {
-      return mismatch(diagnostic.empty() ? "Saved chart result is invalid."
-                                         : std::move(diagnostic));
-    }
     if (!baseReferenceAgrees(reference, result.resultId, limits, diagnostic) ||
         !chartStemMatches(reference.identity.stem, result.score.chartSha256,
                           result.score.longNoteMode, hasUndefinedLongNotes,
@@ -83,10 +79,6 @@ ReplayReferenceAgreement compareCourseReplayReferenceToResult(
     const ReplayLimits &limits) noexcept {
   try {
     std::string diagnostic;
-    if (!result_persistence::validateModernCourseResult(result, diagnostic)) {
-      return mismatch(diagnostic.empty() ? "Saved course result is invalid."
-                                         : std::move(diagnostic));
-    }
     if (!baseReferenceAgrees(reference, result.resultId, limits, diagnostic)) {
       return mismatch(std::move(diagnostic));
     }

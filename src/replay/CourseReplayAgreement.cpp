@@ -23,11 +23,6 @@ CourseReplayAgreement compareCourseReplayPathToResult(
     const ReplayLimits &limits) noexcept {
   try {
     std::string diagnostic;
-    if (!result_persistence::validateModernCourseResult(result, diagnostic)) {
-      return disagreement(CourseReplayAgreementIssue::Result,
-                          diagnostic.empty() ? "modern course result is invalid"
-                                             : std::move(diagnostic));
-    }
     const auto expected =
         courseReplayPathInputForResult(result, path.hasUndefinedLongNotes);
     if (path.stageSha256 != expected.stageSha256 ||
@@ -52,29 +47,12 @@ CourseReplayAgreement compareCourseReplayPathToResult(
 
 CourseReplayAgreement compareCourseReplayToResult(
     const ReplayCourseDocument &replay,
-    const result_persistence::ModernCourseResult &result,
-    std::span<const ReplaySetupSource> sources,
-    const ReplayLimits &limits) noexcept {
+    const result_persistence::ModernCourseResult &result) noexcept {
   try {
-    std::string diagnostic;
-    if (!result_persistence::validateModernCourseResult(result, diagnostic)) {
-      return disagreement(CourseReplayAgreementIssue::Result,
-                          diagnostic.empty() ? "modern course result is invalid"
-                                             : std::move(diagnostic));
-    }
-    if (replay.playback.stages.size() != result.stages.size() ||
-        replay.timeBounds.size() != result.stages.size() ||
-        sources.size() != result.stages.size()) {
+    if (replay.playback.stages.size() != result.stages.size()) {
       return disagreement(
           CourseReplayAgreementIssue::CourseShape,
           "course replay completed prefix differs from the saved result");
-    }
-    const auto playback = validateCourseReplayPlayback(
-        replay.playback, sources, replay.timeBounds, limits);
-    if (!playback.valid()) {
-      return disagreement(CourseReplayAgreementIssue::Playback,
-                          "course replay playback envelope is invalid",
-                          playback.stageIndex);
     }
 
     for (std::size_t index = 0; index < result.stages.size(); ++index) {
@@ -116,8 +94,8 @@ CourseReplayAgreement compareCourseReplayToResult(
     }
     return {};
   } catch (...) {
-    return disagreement(CourseReplayAgreementIssue::Playback,
-                        "course replay agreement validation failed");
+    return disagreement(CourseReplayAgreementIssue::SharedSetup,
+                        "course replay binding comparison failed");
   }
 }
 
