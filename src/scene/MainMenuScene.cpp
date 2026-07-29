@@ -130,6 +130,15 @@ constexpr uint32_t kIconCalculator = 0xf1ec;
 constexpr uint32_t kIconShare = 0xf1e0;
 constexpr uint32_t kIconTrash = 0xf1f8;
 
+std::string replayDiagnosticOr(std::string_view diagnostic,
+                               std::string_view fallback) {
+  std::string result = ir::sanitizeDiagnostic(diagnostic);
+  if (result.empty()) {
+    result = ir::sanitizeDiagnostic(fallback);
+  }
+  return result;
+}
+
 ir::IrRecordActivity
 recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
   switch (activeRequest) {
@@ -9757,11 +9766,6 @@ void MainMenuScene::startModernReplayPlayback(
       pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
   defer(
       [this, record, modern = std::move(modern), pacemakerTarget]() mutable {
-        auto failReplayLoad = [this]() {
-          resetReplayWatchLoadingUi();
-          reloadReplayRecordModels(true);
-          return true;
-        };
         if (loadThread.joinable()) {
           loadThread.join();
         }
@@ -9772,18 +9776,29 @@ void MainMenuScene::startModernReplayPlayback(
             context.replayRepository);
         auto loaded = consumer.load(modern, record.meta.BmsPath,
                                     parseCancelled);
-        if (!loaded.ready() || parseCancelled) {
-          return failReplayLoad();
+        if (!loaded.ready()) {
+          return finishReplayLoadFailure(
+              "Watch failed", std::move(loaded.diagnostic),
+              "Replay playback could not be prepared.");
+        }
+        if (parseCancelled) {
+          return finishReplayLoadFailure("Watch cancelled", {},
+                                         "Replay loading was cancelled.");
+        }
+        if (!loaded.diagnostic.empty()) {
+          publishReplayLoadDiagnostic("Watch warning", loaded.diagnostic);
         }
 
         context.jukebox.stop();
         context.jukebox.loadChart(*loaded.chart, true, parseCancelled);
         if (parseCancelled) {
-          return failReplayLoad();
+          return finishReplayLoadFailure("Watch cancelled", {},
+                                         "Replay media loading was cancelled.");
         }
         auto *chart = setSelectedChart(std::move(loaded.chart), true, false);
         if (chart == nullptr) {
-          return failReplayLoad();
+          return finishReplayLoadFailure(
+              "Watch failed", {}, "Prepared replay chart is unavailable.");
         }
 
         StartOptions replayOptions{
@@ -9833,11 +9848,6 @@ void MainMenuScene::startModernGBattlePlayback(
   defer(
       [this, record, modern = std::move(modern), gaugeType, gaugeAutoShift,
        gaugeAutoShiftLowerBound, autoKeySound, ruleset, playback]() mutable {
-        auto failReplayLoad = [this]() {
-          resetReplayWatchLoadingUi();
-          reloadReplayRecordModels(true);
-          return true;
-        };
         if (loadThread.joinable()) {
           loadThread.join();
         }
@@ -9848,18 +9858,30 @@ void MainMenuScene::startModernGBattlePlayback(
             context.replayRepository);
         auto loaded = consumer.load(modern, record.meta.BmsPath,
                                     parseCancelled);
-        if (!loaded.ready() || parseCancelled) {
-          return failReplayLoad();
+        if (!loaded.ready()) {
+          return finishReplayLoadFailure(
+              "G-Battle failed", std::move(loaded.diagnostic),
+              "G-Battle replay could not be prepared.");
+        }
+        if (parseCancelled) {
+          return finishReplayLoadFailure("G-Battle cancelled", {},
+                                         "Replay loading was cancelled.");
+        }
+        if (!loaded.diagnostic.empty()) {
+          publishReplayLoadDiagnostic("G-Battle warning", loaded.diagnostic);
         }
 
         context.jukebox.stop();
         context.jukebox.loadChart(*loaded.chart, true, parseCancelled);
         if (parseCancelled) {
-          return failReplayLoad();
+          return finishReplayLoadFailure(
+              "G-Battle cancelled", {},
+              "Replay media loading was cancelled.");
         }
         auto *chart = setSelectedChart(std::move(loaded.chart), true, false);
         if (chart == nullptr) {
-          return failReplayLoad();
+          return finishReplayLoadFailure(
+              "G-Battle failed", {}, "Prepared replay chart is unavailable.");
         }
 
         auto recordData = loaded.replayData;
@@ -9911,11 +9933,6 @@ void MainMenuScene::startModernCourseReplayPlayback(
   defer(
       [this, modern = std::move(modern),
        chartPaths = std::move(chartPaths)]() mutable {
-        auto failReplayLoad = [this]() {
-          resetReplayWatchLoadingUi();
-          reloadReplayRecordModels(true);
-          return true;
-        };
         if (loadThread.joinable()) {
           loadThread.join();
         }
@@ -9925,11 +9942,27 @@ void MainMenuScene::startModernCourseReplayPlayback(
         auto consumer = replay::makeRuntimeCourseReplayConsumer(
             context.replayRepository);
         auto loaded = consumer.load(modern, chartPaths, cancelled);
+        if (!loaded.ready()) {
+          return finishReplayLoadFailure(
+              "course Watch failed", std::move(loaded.diagnostic),
+              "Course replay playback could not be prepared.");
+        }
+        if (cancelled) {
+          return finishReplayLoadFailure(
+              "course Watch cancelled", {},
+              "Course replay loading was cancelled.");
+        }
+        if (!loaded.diagnostic.empty()) {
+          publishReplayLoadDiagnostic("course Watch warning",
+                                      loaded.diagnostic);
+        }
         auto session = replay::makeCourseReplayLaunchSession(
             std::move(loaded), replay::CourseReplayLaunchMode::Watch,
             selectedReplayRenderTouchPoints, selectedReplayRenderGhosts);
-        if (session == nullptr || cancelled) {
-          return failReplayLoad();
+        if (session == nullptr) {
+          return finishReplayLoadFailure(
+              "course Watch failed", {},
+              "Prepared course replay session is unavailable.");
         }
 
         hideReplayModal();
@@ -10244,6 +10277,30 @@ void MainMenuScene::resetReplayWatchLoadingUi() {
   }
 }
 
+void MainMenuScene::publishReplayLoadDiagnostic(
+    const char *action, const std::string &diagnostic) const {
+  const std::string safeDiagnostic = ir::sanitizeDiagnostic(diagnostic);
+  if (safeDiagnostic.empty()) {
+    return;
+  }
+  SDL_Log("Replay %s: %s", action, safeDiagnostic.c_str());
+  archive_file::appendDebugLogLine("Replay " + std::string(action) + ": " +
+                                   safeDiagnostic);
+}
+
+bool MainMenuScene::finishReplayLoadFailure(const char *action,
+                                            std::string diagnostic,
+                                            const char *fallback) {
+  const std::string safeDiagnostic = replayDiagnosticOr(diagnostic, fallback);
+  publishReplayLoadDiagnostic(action, safeDiagnostic);
+  resetReplayWatchLoadingUi();
+  if (replayStatusText != nullptr) {
+    replayStatusText->setText(safeDiagnostic);
+  }
+  reloadReplayRecordModels(true);
+  return true;
+}
+
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
                                           StartOptions options) {
   if (options.replayData == nullptr) {
@@ -10446,9 +10503,21 @@ void MainMenuScene::startModernReplayVideoExport(
           context.replayRepository);
       auto loaded = consumer.load(modern, record.meta.BmsPath,
                                   parseCancelled);
-      if (!loaded.ready() || parseCancelled) {
-        complete({.success = false, .message = "No Replay"});
+      if (parseCancelled) {
+        complete({.success = false,
+                  .message = "Replay export preparation was cancelled."});
         return;
+      }
+      if (!loaded.ready()) {
+        complete({.success = false,
+                  .message = replayDiagnosticOr(
+                      loaded.diagnostic,
+                      "Replay export playback could not be prepared.")});
+        return;
+      }
+      if (!loaded.diagnostic.empty()) {
+        publishReplayLoadDiagnostic("video export warning",
+                                    loaded.diagnostic);
       }
       if (stopToken != nullptr && stopToken->stop_requested()) {
         complete({.success = false, .message = "Replay export cancelled"});
@@ -10523,9 +10592,22 @@ void MainMenuScene::startModernCourseReplayVideoExport(
       auto consumer = replay::makeRuntimeCourseReplayConsumer(
           context.replayRepository);
       auto loaded = consumer.load(modern, chartPaths, cancelled);
-      if (!loaded.ready() || cancelled) {
-        complete({.success = false, .message = "No verified course replay"});
+      if (cancelled) {
+        complete({.success = false,
+                  .message =
+                      "Course replay export preparation was cancelled."});
         return;
+      }
+      if (!loaded.ready()) {
+        complete({.success = false,
+                  .message = replayDiagnosticOr(
+                      loaded.diagnostic,
+                      "Course replay export playback could not be prepared.")});
+        return;
+      }
+      if (!loaded.diagnostic.empty()) {
+        publishReplayLoadDiagnostic("course video export warning",
+                                    loaded.diagnostic);
       }
       if (stopToken != nullptr && stopToken->stop_requested()) {
         complete({.success = false, .message = "Replay export cancelled"});
@@ -11084,12 +11166,11 @@ void MainMenuScene::applyReplayExportResult() {
     if (result->success) {
       replayStatusText->setText(
           result->message == "Saved to Photos" ? "Saved" : "Exported");
-    } else if (result->message == "No Replay") {
-      replayStatusText->setText("No Replay");
     } else if (result->message == "No Chart") {
       replayStatusText->setText("No Chart");
     } else {
-      replayStatusText->setText("Export Failed");
+      replayStatusText->setText(replayDiagnosticOr(
+          result->message, "Replay export failed."));
     }
   }
   if (replayExportProgressContent != nullptr &&

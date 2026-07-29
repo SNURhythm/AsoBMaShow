@@ -269,6 +269,11 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   requireToken(root / "src/scene/MainMenuScene.cpp",
                "ReplayFileActionService",
                "modern Records deferred replay availability inspection");
+  requireToken(root / "src/scene/MainMenuScene.cpp",
+               "finishReplayLoadFailure",
+               "precise replay consumer failure presentation");
+  requireToken(root / "src/scene/MainMenuScene.cpp", "loaded.diagnostic",
+               "replay consumer diagnostic propagation");
   requireToken(root / "src/scene/ChartViewerScene.cpp",
                "makeRuntimeChartReplayConsumer",
                "modern practice ghost consumer");
@@ -318,6 +323,12 @@ void testActivatedChartConsumersUseTheSharedPipeline() {
   rejectTokens(root / "src/scene/ChartViewerScene.cpp", forbidden);
   rejectTokens(root / "src/scene/ResultScene.cpp", forbidden);
   rejectTokens(root / "src/ReplayVideoExporter.cpp", forbidden);
+
+  constexpr std::array<std::string_view, 2> genericReplayFailures{
+      ".message = \"No Replay\"",
+      ".message = \"No verified course replay\"",
+  };
+  rejectTokens(root / "src/scene/MainMenuScene.cpp", genericReplayFailures);
 
   constexpr std::array<std::string_view, 1> startupFullScanForbidden{
       "loadAgreedModernReplayFileInventory"};

@@ -708,6 +708,10 @@ private:
   loadedSelectedChartForPath(const std::filesystem::path &path) const;
   void resetStartLoadingUi();
   void resetReplayWatchLoadingUi();
+  void publishReplayLoadDiagnostic(const char *action,
+                                   const std::string &diagnostic) const;
+  bool finishReplayLoadFailure(const char *action, std::string diagnostic,
+                               const char *fallback);
   void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
   void startChartDirect(const ChartMetaRecord &record);
