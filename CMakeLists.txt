@@ -2007,6 +2007,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(chart_repository_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(chart_scan_work_scheduler_tests
+        tests/chart_scan_work_scheduler_tests.cpp
+        src/ChartScanWorkScheduler.cpp
+    )
+    target_include_directories(chart_scan_work_scheduler_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_scan_work_scheduler_tests PRIVATE cxx_std_23)
+
     add_executable(chart_library_scanner_tests
         tests/chart_library_scanner_tests.cpp
         src/ChartLibraryScanner.cpp
@@ -3827,6 +3836,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         best_replay_resolver_tests
         music_playlist_repository_tests
         chart_repository_tests
+        chart_scan_work_scheduler_tests
         chart_library_scanner_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
