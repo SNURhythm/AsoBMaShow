@@ -4,8 +4,18 @@
 
 #include <bgfx/bgfx.h>
 
+#include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <thread>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -36,6 +46,14 @@ void require(bool condition, const char *message) {
 bool sameColor(const Color &actual, const Color &expected) {
   return actual.r == expected.r && actual.g == expected.g &&
          actual.b == expected.b && actual.a == expected.a;
+}
+
+void writeSinglePixelPpm(const std::filesystem::path &path) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output << "P6\n1 1\n255\n";
+  const char pixel[] = {static_cast<char>(0x33), static_cast<char>(0x66),
+                        static_cast<char>(0x99)};
+  output.write(pixel, sizeof(pixel));
 }
 } // namespace
 
@@ -116,6 +134,53 @@ int main() {
     require(cachePathNormalizations == 0,
             "normal async jacket polling remains metadata-free");
   }
+
+#ifndef _WIN32
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-priority-" + std::to_string(getpid()));
+    std::filesystem::remove_all(fixtureRoot);
+    std::filesystem::create_directories(fixtureRoot);
+    const std::filesystem::path blockedPath = fixtureRoot / "blocked.ppm";
+    const std::filesystem::path priorityPath = fixtureRoot / "priority.ppm";
+    require(mkfifo(blockedPath.c_str(), 0600) == 0,
+            "blocked image fixture creates a named pipe");
+    writeSinglePixelPpm(priorityPath);
+
+    ImageView::dropAllCache();
+    ImageView backgroundImage(0, 0, 8, 8);
+    backgroundImage.setImageAsync(blockedPath.string(), false);
+
+    int writer = -1;
+    const auto readerDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (writer < 0 && std::chrono::steady_clock::now() < readerDeadline) {
+      writer = open(blockedPath.c_str(), O_WRONLY | O_NONBLOCK);
+      if (writer < 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    }
+    require(writer >= 0, "background image decode starts reading the fixture");
+
+    ImageView priorityImage(0, 0, 8, 8);
+    priorityImage.setImageAsync(priorityPath.string(), true);
+    const auto priorityDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (priorityImage.imageWidth() == 0 &&
+           std::chrono::steady_clock::now() < priorityDeadline) {
+      priorityImage.setImageAsync(priorityPath.string(), true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    const bool priorityLoadedBeforeBackgroundReleased =
+        priorityImage.imageWidth() == 1 && priorityImage.imageHeight() == 1;
+
+    close(writer);
+    std::filesystem::remove_all(fixtureRoot);
+    require(priorityLoadedBeforeBackgroundReleased,
+            "priority jacket decode bypasses a blocked background image");
+  }
+#endif
 
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();

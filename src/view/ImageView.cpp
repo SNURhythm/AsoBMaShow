@@ -268,27 +268,42 @@ public:
   void request(const path_t &path, const std::string &key,
                bool prioritize = false) {
     std::lock_guard<std::mutex> lock(mutex);
-    if (ready.contains(key) || failed.contains(key) ||
-        inFlight.contains(key)) {
+    if (ready.contains(key) || failed.contains(key)) {
       return;
     }
-    if (queued.contains(key)) {
-      if (prioritize) {
-        promoteQueuedTask(key);
+
+    if (prioritize) {
+      if (priorityQueued.contains(key) || priorityInFlight.contains(key)) {
+        return;
       }
+      if (queued.contains(key)) {
+        queued.erase(key);
+        queue.erase(std::remove_if(
+                        queue.begin(), queue.end(),
+                        [&key](const Task &task) { return task.key == key; }),
+                    queue.end());
+      }
+      priorityQueue.push_back(
+          Task{.key = key,
+               .path = path,
+               .generation = generation,
+               .queuedAt = std::chrono::steady_clock::now()});
+      priorityQueued.insert(key);
+      cv.notify_all();
+      return;
+    }
+
+    if (queued.contains(key) || inFlight.contains(key) ||
+        priorityQueued.contains(key) || priorityInFlight.contains(key)) {
       return;
     }
     Task task{.key = key,
               .path = path,
               .generation = generation,
               .queuedAt = std::chrono::steady_clock::now()};
-    if (prioritize) {
-      queue.push_back(std::move(task));
-    } else {
-      queue.push_front(std::move(task));
-    }
+    queue.push_front(std::move(task));
     queued.insert(key);
-    cv.notify_one();
+    cv.notify_all();
   }
 
   std::optional<DecodedImage> takeReady(const std::string &key) {
@@ -312,18 +327,24 @@ public:
     ready.erase(key);
     failed.erase(key);
     queued.erase(key);
-    queue.erase(std::remove_if(queue.begin(), queue.end(),
-                               [&key](const Task &task) {
-                                 return task.key == key;
-                               }),
-                queue.end());
+    priorityQueued.erase(key);
+    queue.erase(
+        std::remove_if(queue.begin(), queue.end(),
+                       [&key](const Task &task) { return task.key == key; }),
+        queue.end());
+    priorityQueue.erase(
+        std::remove_if(priorityQueue.begin(), priorityQueue.end(),
+                       [&key](const Task &task) { return task.key == key; }),
+        priorityQueue.end());
   }
 
   void dropAll() {
     std::lock_guard<std::mutex> lock(mutex);
     ++generation;
     queue.clear();
+    priorityQueue.clear();
     queued.clear();
+    priorityQueued.clear();
     ready.clear();
     failed.clear();
   }
@@ -336,32 +357,41 @@ private:
     std::chrono::steady_clock::time_point queuedAt;
   };
 
-  ImageDecodeWorker() : worker([this] { run(); }) {}
+  ImageDecodeWorker()
+      : worker([this] { run(false); }), priorityWorker([this] { run(true); }) {}
 
   ~ImageDecodeWorker() {
     {
       std::lock_guard<std::mutex> lock(mutex);
       stop = true;
     }
-    cv.notify_one();
+    cv.notify_all();
     if (worker.joinable()) {
       worker.join();
     }
+    if (priorityWorker.joinable()) {
+      priorityWorker.join();
+    }
   }
 
-  void run() {
+  void run(bool prioritize) {
     for (;;) {
       Task task;
       {
         std::unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [this] { return stop || !queue.empty(); });
+        cv.wait(lock, [this, prioritize] {
+          return stop || (prioritize ? !priorityQueue.empty() : !queue.empty());
+        });
         if (stop) {
           return;
         }
-        task = std::move(queue.back());
-        queue.pop_back();
-        queued.erase(task.key);
-        inFlight.insert(task.key);
+        auto &activeQueue = prioritize ? priorityQueue : queue;
+        auto &activeQueued = prioritize ? priorityQueued : queued;
+        auto &activeInFlight = prioritize ? priorityInFlight : inFlight;
+        task = std::move(activeQueue.back());
+        activeQueue.pop_back();
+        activeQueued.erase(task.key);
+        activeInFlight.insert(task.key);
       }
 
       const auto decodeStarted = std::chrono::steady_clock::now();
@@ -387,41 +417,36 @@ private:
 
       {
         std::lock_guard<std::mutex> lock(mutex);
-        inFlight.erase(task.key);
+        (prioritize ? priorityInFlight : inFlight).erase(task.key);
         if (task.generation != generation) {
           continue;
         }
         if (decoded.has_value()) {
           ready[task.key] = *decoded;
-        } else {
+          failed.erase(task.key);
+        } else if (!ready.contains(task.key) &&
+                   !queued.contains(task.key) &&
+                   !inFlight.contains(task.key) &&
+                   !priorityQueued.contains(task.key) &&
+                   !priorityInFlight.contains(task.key)) {
           failed.insert(task.key);
         }
       }
     }
   }
 
-  void promoteQueuedTask(const std::string &key) {
-    const auto it = std::find_if(queue.begin(), queue.end(),
-                                 [&key](const Task &task) {
-                                   return task.key == key;
-                                 });
-    if (it == queue.end()) {
-      return;
-    }
-    Task task = std::move(*it);
-    queue.erase(it);
-    queue.push_back(std::move(task));
-    cv.notify_one();
-  }
-
   std::mutex mutex;
   std::condition_variable cv;
   std::deque<Task> queue;
+  std::deque<Task> priorityQueue;
   std::unordered_set<std::string> queued;
+  std::unordered_set<std::string> priorityQueued;
   std::unordered_set<std::string> inFlight;
+  std::unordered_set<std::string> priorityInFlight;
   std::unordered_set<std::string> failed;
   std::map<std::string, DecodedImage> ready;
   std::thread worker;
+  std::thread priorityWorker;
   std::uint64_t generation = 0;
   bool stop = false;
 };
