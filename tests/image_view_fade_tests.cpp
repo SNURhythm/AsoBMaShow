@@ -4,6 +4,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -241,6 +242,97 @@ int main() {
     std::filesystem::remove_all(fixtureRoot);
     require(loadedBeforeBlockedArtworkReleased,
             "each list jacket or banner is drawn as soon as it loads");
+  }
+
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-newly-visible-first-" +
+         std::to_string(getpid()));
+    std::filesystem::remove_all(fixtureRoot);
+    std::filesystem::create_directories(fixtureRoot);
+
+    std::array<std::filesystem::path, 4> activePaths;
+    std::array<std::unique_ptr<ImageView>, 4> activeArtwork;
+    std::array<int, 4> activeWriters = {-1, -1, -1, -1};
+    ImageView::dropAllCache();
+    for (std::size_t index = 0; index < activePaths.size(); ++index) {
+      activePaths[index] =
+          fixtureRoot / ("active-" + std::to_string(index) + ".ppm");
+      require(mkfifo(activePaths[index].c_str(), 0600) == 0,
+              "active background artwork fixture creates a named pipe");
+      activeArtwork[index] = std::make_unique<ImageView>(0, 0, 8, 8);
+      activeArtwork[index]->setImageAsync(activePaths[index].string(), false);
+    }
+
+    for (std::size_t index = 0; index < activePaths.size(); ++index) {
+      const auto readerDeadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (activeWriters[index] < 0 &&
+             std::chrono::steady_clock::now() < readerDeadline) {
+        activeWriters[index] =
+            open(activePaths[index].c_str(), O_WRONLY | O_NONBLOCK);
+        if (activeWriters[index] < 0) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+      }
+      require(activeWriters[index] >= 0,
+              "all background artwork workers start their active reads");
+    }
+
+    const std::filesystem::path stalePath = fixtureRoot / "stale.ppm";
+    const std::filesystem::path newlyVisiblePath =
+        fixtureRoot / "newly-visible.ppm";
+    require(mkfifo(stalePath.c_str(), 0600) == 0,
+            "stale queued artwork fixture creates a named pipe");
+    writeSinglePixelPpm(newlyVisiblePath);
+
+    ImageView staleArtwork(0, 0, 8, 8);
+    ImageView newlyVisibleArtwork(0, 0, 8, 8);
+    staleArtwork.setImageAsync(stalePath.string(), false);
+    newlyVisibleArtwork.setImageAsync(newlyVisiblePath.string(), false);
+
+    const char ppm[] = "P6\n1 1\n255\n\x33\x66\x99";
+    require(write(activeWriters[0], ppm, sizeof(ppm) - 1) ==
+                static_cast<ssize_t>(sizeof(ppm) - 1),
+            "one active worker receives a complete image");
+    close(activeWriters[0]);
+    activeWriters[0] = -1;
+
+    const auto newlyVisibleDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (newlyVisibleArtwork.imageWidth() == 0 &&
+           std::chrono::steady_clock::now() < newlyVisibleDeadline) {
+      newlyVisibleArtwork.setImageAsync(newlyVisiblePath.string(), false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    const bool newlyVisibleLoadedBeforeStaleQueueBlocked =
+        newlyVisibleArtwork.imageWidth() == 1 &&
+        newlyVisibleArtwork.imageHeight() == 1;
+
+    ImageView::dropAllCache();
+    int staleWriter = -1;
+    const auto staleReaderDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    while (staleWriter < 0 &&
+           std::chrono::steady_clock::now() < staleReaderDeadline) {
+      staleWriter = open(stalePath.c_str(), O_WRONLY | O_NONBLOCK);
+      if (staleWriter < 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    }
+    if (staleWriter >= 0) {
+      close(staleWriter);
+    }
+    for (int &writer : activeWriters) {
+      if (writer >= 0) {
+        close(writer);
+        writer = -1;
+      }
+    }
+    std::filesystem::remove_all(fixtureRoot);
+    require(newlyVisibleLoadedBeforeStaleQueueBlocked,
+            "newly visible list artwork bypasses stale queued work");
   }
 
   {

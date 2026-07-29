@@ -367,7 +367,7 @@ public:
               .path = path,
               .generation = generation,
               .queuedAt = std::chrono::steady_clock::now()};
-    queue.push_front(std::move(task));
+    queue.push_back(std::move(task));
     queued.insert(key);
     cv.notify_all();
   }
