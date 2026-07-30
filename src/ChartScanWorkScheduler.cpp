@@ -20,7 +20,8 @@ WorkScheduler::WorkScheduler(std::size_t workerCount,
 
 WorkScheduler::~WorkScheduler() { cancel(); }
 
-bool WorkScheduler::enqueue(Work work, WorkClass workClass) {
+bool WorkScheduler::enqueue(Work work, WorkClass workClass,
+                            std::size_t archiveOrder) {
   if (!work) {
     return false;
   }
@@ -38,7 +39,9 @@ bool WorkScheduler::enqueue(Work work, WorkClass workClass) {
       break;
     case WorkClass::ArchiveRead:
     case WorkClass::ArchiveReadHeavy:
-      archiveReadQueue_.push_back(std::move(work));
+      archiveReadQueue_.emplace(
+          ArchiveReadKey{archiveOrder, nextArchiveReadEnqueueSequence_++},
+          std::move(work));
       break;
     }
   }
@@ -107,9 +110,10 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
     return true;
   }
   if (readEligible && (activeArchiveReads_ == 0 || cpuQueue_.empty())) {
-    item.work = std::move(archiveReadQueue_.front());
+    const auto read = archiveReadQueue_.begin();
+    item.work = std::move(read->second);
     item.workClass = WorkClass::ArchiveRead;
-    archiveReadQueue_.pop_front();
+    archiveReadQueue_.erase(read);
     return true;
   }
   if (!cpuQueue_.empty()) {
@@ -125,9 +129,10 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
     return true;
   }
   if (readEligible) {
-    item.work = std::move(archiveReadQueue_.front());
+    const auto read = archiveReadQueue_.begin();
+    item.work = std::move(read->second);
     item.workClass = WorkClass::ArchiveRead;
-    archiveReadQueue_.pop_front();
+    archiveReadQueue_.erase(read);
     return true;
   }
   return false;

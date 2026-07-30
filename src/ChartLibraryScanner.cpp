@@ -599,6 +599,7 @@ int ChartLibraryScanner::Scan(
   std::condition_variable preparedEntityCv;
   std::vector<std::optional<PreparedEntity>> preparedEntities;
   std::unordered_set<path_t> discoveredOrdinaryChartPaths;
+  std::unordered_map<path_t, std::size_t> archiveReadOrderByPath;
   const std::size_t entityWorkerCount = static_cast<std::size_t>(
       parallel_worker_count(kIndividualParseBatchSize));
   const std::size_t archiveIoLimit =
@@ -610,6 +611,11 @@ int ChartLibraryScanner::Scan(
     std::lock_guard lock(preparedEntityMutex);
     const std::size_t sequence = preparedEntities.size();
     preparedEntities.emplace_back(std::nullopt);
+    return sequence;
+  };
+  auto reserveArchivePreparedEntity = [&](const path_t &archiveKey) {
+    const std::size_t sequence = reservePreparedEntity();
+    archiveReadOrderByPath.emplace(archiveKey, sequence);
     return sequence;
   };
 
@@ -643,6 +649,7 @@ int ChartLibraryScanner::Scan(
     std::filesystem::path archivePath;
     std::vector<std::filesystem::path> innerPaths;
     std::shared_ptr<ArchiveParseJobState> state;
+    std::size_t archiveOrder = std::numeric_limits<std::size_t>::max();
   };
   std::mutex indexedArchivePrefetchMutex;
   std::optional<IndexedArchivePrefetch> heldLargeArchivePrefetch;
@@ -996,7 +1003,7 @@ int ChartLibraryScanner::Scan(
             [&, queuedPrefetch] {
               runIndexedArchivePrefetch(std::move(*queuedPrefetch));
             },
-            workClass)) {
+            workClass, queuedPrefetch->archiveOrder)) {
       return;
     }
     storeArchiveParseStateResult(
@@ -1037,6 +1044,7 @@ int ChartLibraryScanner::Scan(
             .archiveKey = archiveScanKey(preparedArchive->path),
             .archivePath = preparedArchive->path,
             .innerPaths = std::move(innerPaths),
+            .archiveOrder = sequence,
         };
         if (entityWorkerCount > 1 && preparedArchive->scan->chartPaths.size() >=
                                          kArchiveDirectConcurrentMinCharts) {
@@ -1146,7 +1154,7 @@ int ChartLibraryScanner::Scan(
             " cachedCharts=" + std::to_string(cache->chartCount) +
             " dbCharts=" + std::to_string(knownChartCount));
       } else {
-        const std::size_t sequence = reservePreparedEntity();
+        const std::size_t sequence = reserveArchivePreparedEntity(archiveKey);
         storePreparedEntity(sequence, PreparedArchive{
                                           .path = archivePath,
                                           .archiveSize = archiveSize,
@@ -1162,7 +1170,7 @@ int ChartLibraryScanner::Scan(
                                        archiveText);
     }
 
-    const std::size_t sequence = reservePreparedEntity();
+    const std::size_t sequence = reserveArchivePreparedEntity(archiveKey);
     if (entityScheduler.enqueue(
             [&, sequence, archivePath, archiveSize, mtimeNs, cache] {
               if (shouldStop()) {
@@ -2351,6 +2359,12 @@ int ChartLibraryScanner::Scan(
         pendingInnerPaths.size() >= kArchiveDirectConcurrentMinCharts
             ? chart_scan::WorkClass::ArchiveReadHeavy
             : chart_scan::WorkClass::ArchiveRead;
+    const auto archiveOrderIt =
+        archiveReadOrderByPath.find(archiveBatchOrder[archiveIndex]);
+    const std::size_t archiveOrder =
+        archiveOrderIt != archiveReadOrderByPath.end()
+            ? archiveOrderIt->second
+            : std::numeric_limits<std::size_t>::max();
     if (!archiveParseScheduler->enqueue(
             [&, archiveIndex, innerStart, archivePath = batch->archivePath,
              pendingInnerPaths = std::move(pendingInnerPaths)]() mutable {
@@ -2405,7 +2419,7 @@ int ChartLibraryScanner::Scan(
                 throw;
               }
             },
-            archiveReadWorkClass)) {
+            archiveReadWorkClass, archiveOrder)) {
       ArchiveParseJobResult rejected{
           .archiveIndex = archiveIndex,
           .innerStart = innerStart,
