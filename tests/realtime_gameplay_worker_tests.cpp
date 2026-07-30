@@ -61,6 +61,20 @@ gameplay::GameplayDefinition makeScratchlessDefinition(int keyMode) {
   return gameplay::buildGameplayDefinition(chart, 0);
 }
 
+gameplay::GameplayDefinition makeArbitraryLaneDefinition(int keyMode,
+                                                         int lane) {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.KeyMode = keyMode;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(lane + 1, false);
+  timeline->Timing = 1'000'000;
+  timeline->SetNote(lane, new bms_parser::Note(12));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  return gameplay::buildGameplayDefinition(chart, 0);
+}
+
 gameplay::GameplayDefinition makePracticeDefinition() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 2;
@@ -223,6 +237,36 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
           "a slow renderer can replay every rapid lane transition in order");
   require(worker.fault() == gameplay::RealtimeGameplayFault::None,
           "normal rapid input remains valid");
+  worker.stop();
+}
+
+void testRealtimeWorkerJudgesPhysicalLanesBeyondLegacyCapacity() {
+  constexpr int keyMode = 130;
+  constexpr int lane = 129;
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(
+      makeArbitraryLaneDefinition(keyMode, lane), makeConfig(clock, audio));
+  require(worker.start(), "arbitrary-lane worker starts");
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .source = gameplay::RealtimeGameplayInputSource::Physical,
+               .lane = lane,
+               .compensateLane = lane,
+               .steadyTimestampMicros = 1'000'000}),
+          "physical lane beyond the legacy capacity enters worker ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 1;
+          }),
+          "physical lane beyond the legacy capacity reaches judgement");
+  const auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot &&
+              snapshot->lanePressed[static_cast<std::size_t>(lane)] &&
+              snapshot->latestTransaction.hasJudge &&
+              snapshot->latestTransaction.judge.judgement == PGreat,
+          "arbitrary physical lane publishes held and judged state");
   worker.stop();
 }
 
@@ -1331,6 +1375,7 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
 
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
+  testRealtimeWorkerJudgesPhysicalLanesBeyondLegacyCapacity();
   testWorkerTransfersAcceptedRawReplayInputInOrder();
   testWorkerRetainsAcceptedReplayInputWithInterleavedTimestamps();
   testRealtimeIngressCoalescesTouchAndHardwareLaneOwnership();

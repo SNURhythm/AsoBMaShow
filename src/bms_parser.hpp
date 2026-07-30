@@ -244,10 +244,16 @@ public:
     return KeyMode == 4 || KeyMode == 6 || KeyMode == 8;
   }
   [[nodiscard]] int GetScratchLaneCount() const {
-    if (IsScratchlessKeyMode()) {
-      return 0;
+    // Only legacy beat modes synthesize scratch lanes. Other positive key
+    // counts describe dense key lanes unless a format-specific map above says
+    // otherwise.
+    if (KeyMode == 10 || KeyMode == 14) {
+      return 2;
     }
-    return IsDP ? 2 : 1;
+    if (KeyMode == 5 || KeyMode == 7) {
+      return IsDP ? 2 : 1;
+    }
+    return 0;
   }
   [[nodiscard]] int GetTotalLaneCount() const {
     return KeyMode + GetScratchLaneCount();
@@ -270,15 +276,24 @@ public:
     case 14:
       return {0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14};
     default:
-      return {};
+      if (KeyMode <= 0) {
+        return {};
+      }
+      std::vector<int> lanes;
+      lanes.reserve(static_cast<std::size_t>(KeyMode));
+      for (int lane = 0; lane < KeyMode; ++lane) {
+        lanes.push_back(lane);
+      }
+      return lanes;
     }
   }
 
   [[nodiscard]] std::vector<int> GetScratchLaneIndices() const {
-    if (IsScratchlessKeyMode()) {
+    const int scratchLaneCount = GetScratchLaneCount();
+    if (scratchLaneCount == 0) {
       return {};
     }
-    if (IsDP) {
+    if (scratchLaneCount == 2) {
       return {7, 15};
     }
     return {7};

@@ -76,8 +76,18 @@ RealtimeGameplayWorker::RealtimeGameplayWorker(
     GameplayDefinition definition, RealtimeGameplayWorkerConfig config)
     : definition_(std::move(definition)), config_(std::move(config)),
       simulation_(definition_, config_.simulation) {
+  std::size_t laneStorageSize = 0;
+  for (const auto &lane : definition_.lanes()) {
+    if (lane.lane >= 0) {
+      laneStorageSize =
+          std::max(laneStorageSize, static_cast<std::size_t>(lane.lane) + 1);
+    }
+  }
+  ownedInputLanes_.resize(laneStorageSize);
   for (auto &buffer : snapshots_) {
     buffer.snapshot.noteStates.resize(definition_.noteCount());
+    buffer.snapshot.lanePressed.resize(laneStorageSize);
+    buffer.snapshot.longNoteHoldingByLane.resize(laneStorageSize);
   }
   publishSnapshot();
 }
@@ -686,7 +696,7 @@ void RealtimeGameplayWorker::publishSnapshot() {
     auto &snapshot = snapshots_[index].snapshot;
     snapshot.generation = ++snapshotGeneration_;
     snapshot.transactionSequence = transactionSequence_;
-    snapshot.longNoteHoldingByLane.fill(false);
+    std::ranges::fill(snapshot.longNoteHoldingByLane, false);
     for (NoteId id = 0; id < definition_.noteCount(); ++id) {
       const auto &state = simulation_.noteState(id);
       snapshot.noteStates[id] = state;

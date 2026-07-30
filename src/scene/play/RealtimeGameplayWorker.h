@@ -94,8 +94,8 @@ struct RealtimeGameplaySnapshot {
   std::uint64_t generation = 0;
   std::uint64_t transactionSequence = 0;
   std::vector<NoteRuntimeState> noteStates;
-  std::array<bool, 64> lanePressed{};
-  std::array<bool, 64> longNoteHoldingByLane{};
+  std::vector<bool> lanePressed;
+  std::vector<bool> longNoteHoldingByLane;
   GameplayAttemptSnapshot attempt;
   GaugeStateSnapshot gaugeState;
   std::array<JudgementFastSlowCount, JudgementCount> fastSlowCounts{};
@@ -271,7 +271,7 @@ private:
   GameplayDefinition definition_;
   RealtimeGameplayWorkerConfig config_;
   GameplaySimulation simulation_;
-  std::array<OwnedLaneState, 64> ownedInputLanes_{};
+  std::vector<OwnedLaneState> ownedInputLanes_;
   std::uint64_t ownedInputClaimSequence_ = 0;
   BoundedMpscQueue<RealtimeGameplayInput, kRealtimeGameplayIngressSize>
       ingress_;

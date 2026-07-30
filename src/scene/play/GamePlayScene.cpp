@@ -538,7 +538,6 @@ buildRealtimeTouchLayout(const bms_parser::Chart &chart, BMSRenderer &renderer,
   const auto touchBounds = renderer.gameplayTouchBoundsUi();
   const auto lanes = chart.Meta.GetTotalLaneIndices();
   if (!touchBounds.has_value() || lanes.empty() ||
-      lanes.size() > gameplay::kRealtimeTouchLaneCapacity ||
       rendering::render_width <= 0 || rendering::render_height <= 0) {
     return std::nullopt;
   }
@@ -561,9 +560,10 @@ buildRealtimeTouchLayout(const bms_parser::Chart &chart, BMSRenderer &renderer,
   layout.laneCount = lanes.size();
   layout.keyMode = chart.Meta.KeyMode;
   layout.dragMode = dragMode;
+  layout.lanes = lanes;
+  layout.scratch.reserve(lanes.size());
   for (std::size_t index = 0; index < lanes.size(); ++index) {
-    layout.lanes[index] = lanes[index];
-    layout.scratch[index] = chartLaneIsScratch(chart.Meta, lanes[index]);
+    layout.scratch.push_back(chartLaneIsScratch(chart.Meta, lanes[index]));
   }
   return layout;
 }
@@ -784,11 +784,12 @@ struct GamePlayScene::RealtimeGameplaySession {
 
   static bool scratchLongNoteHeld(void *context, int lane) {
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (session.worker == nullptr || lane < 0 || lane >= 64) {
+    if (session.worker == nullptr || lane < 0) {
       return false;
     }
     auto snapshot = session.worker->acquireLatestSnapshot();
-    return snapshot &&
+    return snapshot && static_cast<std::size_t>(lane) <
+                           snapshot->longNoteHoldingByLane.size() &&
            snapshot->longNoteHoldingByLane[static_cast<std::size_t>(lane)];
   }
 
@@ -1467,7 +1468,9 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     state->judgementFastSlowCount[value] = snapshot->fastSlowCounts[judgement];
   }
 
-  std::array<bool, 64> lanesWithNewVisual{};
+  std::array<int, gameplay::kRealtimeGameplayTransactionHistorySize>
+      lanesWithNewVisual{};
+  std::size_t lanesWithNewVisualCount = 0;
   const long long visualCatchUpMicros = nowMicros();
   const long long judgementDisplayMicros = getVisualTimeMicros(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
@@ -1480,8 +1483,8 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     if (result.hasLaneVisual) {
       const auto &visual = result.laneVisual;
       if (visual.lane >= 0 &&
-          static_cast<std::size_t>(visual.lane) < lanesWithNewVisual.size()) {
-        lanesWithNewVisual[static_cast<std::size_t>(visual.lane)] = true;
+          lanesWithNewVisualCount < lanesWithNewVisual.size()) {
+        lanesWithNewVisual[lanesWithNewVisualCount++] = visual.lane;
       }
       if (visual.action == gameplay::LaneVisualAction::Press) {
         renderer->onLanePressed(visual.lane, visual.judge, visualCatchUpMicros);
@@ -1506,9 +1509,10 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     const bool previous = lanePressed[lane];
     lanePressed[lane] = pressed;
     if (pressed == previous ||
-        (lane >= 0 &&
-         static_cast<std::size_t>(lane) < lanesWithNewVisual.size() &&
-         lanesWithNewVisual[static_cast<std::size_t>(lane)])) {
+        std::find(lanesWithNewVisual.begin(),
+                  lanesWithNewVisual.begin() + lanesWithNewVisualCount,
+                  lane) != lanesWithNewVisual.begin() +
+                               lanesWithNewVisualCount) {
       continue;
     }
     if (pressed) {

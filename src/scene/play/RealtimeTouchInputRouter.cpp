@@ -14,7 +14,8 @@ RealtimeTouchInputRouter::RealtimeTouchInputRouter(
     RealtimeTouchInputSink sink) noexcept
     : epoch_(epoch), layout_(std::move(layout)), sink_(sink) {
   layout_.laneCount =
-      std::min(layout_.laneCount, kRealtimeTouchLaneCapacity);
+      std::min({layout_.laneCount, layout_.lanes.size(),
+                layout_.scratch.size()});
 }
 
 std::optional<std::size_t>
@@ -376,7 +377,8 @@ bool RealtimeTouchInputRouter::updateLayout(
     std::int64_t steadyTimestampMicros) noexcept {
   const bool released = cancelAll(steadyTimestampMicros);
   layout.laneCount =
-      std::min(layout.laneCount, kRealtimeTouchLaneCapacity);
+      std::min({layout.laneCount, layout.lanes.size(),
+                layout.scratch.size()});
   layout_ = std::move(layout);
   return released;
 }

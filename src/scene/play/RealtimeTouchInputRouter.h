@@ -6,10 +6,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace gameplay {
 
-inline constexpr std::size_t kRealtimeTouchLaneCapacity = 64;
 inline constexpr std::size_t kRealtimeTouchFingerCapacity = 32;
 
 struct RealtimeTouchPoint {
@@ -22,8 +22,8 @@ struct RealtimeTouchLayout {
   RealtimeTouchPoint bottomRight;
   RealtimeTouchPoint topLeft;
   RealtimeTouchPoint topRight;
-  std::array<int, kRealtimeTouchLaneCapacity> lanes{};
-  std::array<bool, kRealtimeTouchLaneCapacity> scratch{};
+  std::vector<int> lanes;
+  std::vector<bool> scratch;
   std::size_t laneCount = 0;
   int keyMode = 7;
   bool dragMode = false;
