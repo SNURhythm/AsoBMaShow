@@ -420,7 +420,7 @@ constexpr const char *kIrRemoteScoresChartIdIndexSql =
     "CREATE INDEX idx_ir_remote_scores_remote_chart_id ON "
     "ir_remote_scores(provider_id,server_origin,remote_chart_id)";
 
-constexpr const char *kModernChartResultsTableSql =
+constexpr const char *kModernChartResultsTableSqlV17 =
     "CREATE TABLE modern_chart_results("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL UNIQUE,"
     "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
@@ -442,6 +442,36 @@ constexpr const char *kModernChartResultsTableSql =
     "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
     "CHECK(long_note_mode BETWEEN 0 AND 3),"
     "CHECK(key_mode IN (5,7,9,10,14,24,48)),"
+    "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
+    "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
+    "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
+    "good>=0 AND bad>=0 AND poor>=0 AND k_poor>=0 AND fast>=0 AND slow>=0),"
+    "CHECK(final_gauge>=0),CHECK(played_at_unix_ms>0),"
+    "CHECK(length(result_fingerprint)=64 AND "
+    "result_fingerprint=lower(result_fingerprint) AND "
+    "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
+
+constexpr const char *kModernChartResultsTableSql =
+    "CREATE TABLE modern_chart_results("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL UNIQUE,"
+    "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,chart_title TEXT NOT NULL,"
+    "chart_artist TEXT NOT NULL,long_note_mode INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,max_score INTEGER NOT NULL,"
+    "max_combo INTEGER NOT NULL,combo_break INTEGER NOT NULL,"
+    "p_great INTEGER NOT NULL,great INTEGER NOT NULL,good INTEGER NOT NULL,"
+    "bad INTEGER NOT NULL,poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,"
+    "fast INTEGER NOT NULL,slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
+    "clear_type INTEGER NOT NULL,key_mode INTEGER NOT NULL,"
+    "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
+    "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
+    "result_fingerprint TEXT NOT NULL,played_at_unix_ms INTEGER NOT NULL,"
+    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
+    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
+    "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
+    "CHECK(long_note_mode BETWEEN 0 AND 3),CHECK(key_mode>0),"
     "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
     "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
     "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
@@ -495,7 +525,7 @@ constexpr const char *kModernCourseResultsTableSql =
     "result_fingerprint=lower(result_fingerprint) AND "
     "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
 
-constexpr const char *kModernCourseStagesTableSql =
+constexpr const char *kModernCourseStagesTableSqlV17 =
     "CREATE TABLE modern_course_stages("
     "modern_course_result_id INTEGER NOT NULL,stage_index INTEGER NOT NULL,"
     "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
@@ -517,6 +547,35 @@ constexpr const char *kModernCourseStagesTableSql =
     "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
     "CHECK(long_note_mode BETWEEN 0 AND 3),"
     "CHECK(key_mode IN (5,7,9,10,14,24,48)),"
+    "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
+    "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
+    "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
+    "good>=0 AND bad>=0 AND poor>=0 AND k_poor>=0 AND fast>=0 AND slow>=0),"
+    "CHECK(final_gauge>=0),"
+    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
+    "ON DELETE CASCADE)";
+
+constexpr const char *kModernCourseStagesTableSql =
+    "CREATE TABLE modern_course_stages("
+    "modern_course_result_id INTEGER NOT NULL,stage_index INTEGER NOT NULL,"
+    "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,chart_title TEXT NOT NULL,"
+    "chart_artist TEXT NOT NULL,long_note_mode INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,max_score INTEGER NOT NULL,"
+    "max_combo INTEGER NOT NULL,combo_break INTEGER NOT NULL,"
+    "p_great INTEGER NOT NULL,great INTEGER NOT NULL,good INTEGER NOT NULL,"
+    "bad INTEGER NOT NULL,poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,"
+    "fast INTEGER NOT NULL,slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
+    "clear_type INTEGER NOT NULL,key_mode INTEGER NOT NULL,"
+    "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
+    "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
+    "PRIMARY KEY(modern_course_result_id,stage_index),"
+    "CHECK(stage_index>=0 AND stage_index<256),"
+    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
+    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
+    "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
+    "CHECK(long_note_mode BETWEEN 0 AND 3),CHECK(key_mode>0),"
     "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
     "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
     "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
@@ -1244,7 +1303,7 @@ bool inspectModernChartSchemaV11(sqlite3 *database) {
   };
   const ExpectedObject objects[] = {
       {"modern_chart_results", "table", "modern_chart_results",
-       kModernChartResultsTableSql},
+       kModernChartResultsTableSqlV17},
       {"modern_replay_files", "table", "modern_replay_files",
        kModernReplayFilesTableSqlV11},
       {"modern_replay_file_reservations", "table",
@@ -1280,7 +1339,8 @@ bool inspectModernChartSchemaV11(sqlite3 *database) {
 }
 
 bool inspectModernCourseSchemaWithReplayTable(
-    sqlite3 *database, const char *replayTableSql,
+    sqlite3 *database, const char *chartResultsTableSql,
+    const char *courseStagesTableSql, const char *replayTableSql,
     const char *reservationTableSql) {
   struct ExpectedObject {
     const char *name;
@@ -1290,11 +1350,11 @@ bool inspectModernCourseSchemaWithReplayTable(
   };
   const ExpectedObject objects[] = {
       {"modern_chart_results", "table", "modern_chart_results",
-       kModernChartResultsTableSql},
+       chartResultsTableSql},
       {"modern_course_results", "table", "modern_course_results",
        kModernCourseResultsTableSql},
       {"modern_course_stages", "table", "modern_course_stages",
-       kModernCourseStagesTableSql},
+       courseStagesTableSql},
       {"modern_course_entries", "table", "modern_course_entries",
        kModernCourseEntriesTableSql},
       {"modern_replay_files", "table", "modern_replay_files", replayTableSql},
@@ -1335,14 +1395,14 @@ bool inspectModernCourseSchemaWithReplayTable(
 
 bool inspectModernCourseSchemaV12(sqlite3 *database) {
   return inspectModernCourseSchemaWithReplayTable(
-      database, kModernReplayFilesTableSqlV12,
-      kModernReplayFileReservationsTableSqlV15);
+      database, kModernChartResultsTableSqlV17, kModernCourseStagesTableSqlV17,
+      kModernReplayFilesTableSqlV12, kModernReplayFileReservationsTableSqlV15);
 }
 
 bool inspectModernCourseSchemaV14(sqlite3 *database) {
   return inspectModernCourseSchemaWithReplayTable(
-      database, kModernReplayFilesTableSqlV15,
-      kModernReplayFileReservationsTableSqlV15);
+      database, kModernChartResultsTableSqlV17, kModernCourseStagesTableSqlV17,
+      kModernReplayFilesTableSqlV15, kModernReplayFileReservationsTableSqlV15);
 }
 
 bool inspectPendingModernCourseScoreSchema(sqlite3 *database) {
@@ -1362,12 +1422,20 @@ bool inspectModernCourseSchemaV15(sqlite3 *database) {
 
 bool inspectModernCourseSchemaV16Base(sqlite3 *database) {
   return inspectModernCourseSchemaWithReplayTable(
-      database, kModernReplayFilesTableSql,
-      kModernReplayFileReservationsTableSql);
+      database, kModernChartResultsTableSqlV17, kModernCourseStagesTableSqlV17,
+      kModernReplayFilesTableSql, kModernReplayFileReservationsTableSql);
+}
+
+bool inspectModernCourseSchemaV17(sqlite3 *database) {
+  return inspectModernCourseSchemaV16Base(database) &&
+         inspectPendingModernCourseScoreSchema(database);
 }
 
 bool inspectModernCourseSchema(sqlite3 *database) {
-  return inspectModernCourseSchemaV16Base(database) &&
+  return inspectModernCourseSchemaWithReplayTable(
+             database, kModernChartResultsTableSql, kModernCourseStagesTableSql,
+             kModernReplayFilesTableSql,
+             kModernReplayFileReservationsTableSql) &&
          inspectPendingModernCourseScoreSchema(database);
 }
 
@@ -1380,11 +1448,12 @@ bool createModernChartSchema(sqlite3 *database) {
       inspectModernCourseSchemaV12(database) ||
       inspectModernCourseSchemaV14(database) ||
       inspectModernCourseSchemaV15(database) ||
+      inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
   const char *tables[] = {
-      kModernChartResultsTableSql,           kModernReplayFilesTableSqlV11,
+      kModernChartResultsTableSqlV17,        kModernReplayFilesTableSqlV11,
       kModernReplayFileReservationsTableSqlV15,
       kModernReplayStemSequencesTableSql,
       kIrSubmissionSnapshotsTableSql,        kModernPendingChartScoresTableSql,
@@ -1411,6 +1480,7 @@ bool migrateModernCourseSchema(sqlite3 *database) {
   if (inspectModernCourseSchemaV12(database) ||
       inspectModernCourseSchemaV14(database) ||
       inspectModernCourseSchemaV15(database) ||
+      inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1421,7 +1491,7 @@ bool migrateModernCourseSchema(sqlite3 *database) {
   }
   if (!execSql(database, kModernCourseResultsTableSql,
                "creating modern course results") ||
-      !execSql(database, kModernCourseStagesTableSql,
+      !execSql(database, kModernCourseStagesTableSqlV17,
                "creating modern course stages") ||
       !execSql(database, kModernCourseEntriesTableSql,
                "creating modern course entries") ||
@@ -1456,6 +1526,7 @@ bool migrateModernCourseSchema(sqlite3 *database) {
 
 bool migrateModernReplayDeletionSchema(sqlite3 *database) {
   if (inspectModernCourseSchemaV14(database) ||
+      inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1496,6 +1567,7 @@ bool migrateModernReplayDeletionSchema(sqlite3 *database) {
 
 bool migrateModernCourseScoreOutbox(sqlite3 *database) {
   if (inspectModernCourseSchemaV15(database) ||
+      inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1515,11 +1587,13 @@ bool migrateModernCourseScoreOutbox(sqlite3 *database) {
     return false;
   }
   return inspectModernCourseSchemaV15(database) ||
+         inspectModernCourseSchemaV17(database) ||
          inspectModernCourseSchema(database);
 }
 
 bool migrateModernReplayOwnershipSchema(sqlite3 *database) {
-  if (inspectModernCourseSchema(database)) {
+  if (inspectModernCourseSchemaV17(database) ||
+      inspectModernCourseSchema(database)) {
     return true;
   }
   if (!inspectModernCourseSchemaV15(database)) {
@@ -1575,7 +1649,99 @@ bool migrateModernReplayOwnershipSchema(sqlite3 *database) {
                "creating replay reservation index")) {
     return false;
   }
-  return inspectModernCourseSchema(database);
+  return inspectModernCourseSchemaV17(database);
+}
+
+bool replaceTableSchemaSql(sqlite3 *database, std::string_view table,
+                           std::string_view replacement) {
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          database,
+          "UPDATE sqlite_schema SET sql=? WHERE type='table' AND name=?",
+          statement, "preparing replay key-mode schema update",
+          logSqlErrorText) ||
+      replacement.size() >
+          static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+      table.size() >
+          static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+      sqlite3_bind_text(statement.get(), 1, replacement.data(),
+                        static_cast<int>(replacement.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 2, table.data(),
+                        static_cast<int>(table.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_step(statement.get()) != SQLITE_DONE ||
+      sqlite3_changes(database) != 1) {
+    logSqlError("updating replay key-mode table schema", database);
+    return false;
+  }
+  return true;
+}
+
+bool replaySchemaIntegrityHolds(sqlite3 *database) {
+  SqliteStatementHandle integrity;
+  if (!prepareSqliteStatementLogged(
+          database, "PRAGMA integrity_check", integrity,
+          "checking replay schema integrity", logSqlErrorText) ||
+      sqlite3_step(integrity.get()) != SQLITE_ROW ||
+      sqlite3_column_type(integrity.get(), 0) != SQLITE_TEXT ||
+      sqliteColumnTextView(integrity.get(), 0) != "ok" ||
+      sqlite3_step(integrity.get()) != SQLITE_DONE) {
+    return false;
+  }
+  SqliteStatementHandle foreignKeys;
+  return prepareSqliteStatementLogged(
+             database, "PRAGMA foreign_key_check", foreignKeys,
+             "checking replay schema foreign keys", logSqlErrorText) &&
+         sqlite3_step(foreignKeys.get()) == SQLITE_DONE;
+}
+
+bool migrateOpenKeyModeSchema(sqlite3 *database) {
+  if (inspectModernCourseSchema(database)) {
+    return true;
+  }
+  if (!inspectModernCourseSchemaV17(database)) {
+    SDL_Log("Refusing key-mode migration from a partial or unexpected "
+            "version 17 schema");
+    return false;
+  }
+
+  if (!execSql(database, "PRAGMA writable_schema=ON",
+               "enabling replay key-mode schema update")) {
+    return false;
+  }
+  bool updated = replaceTableSchemaSql(database, "modern_chart_results",
+                                       kModernChartResultsTableSql) &&
+                 replaceTableSchemaSql(database, "modern_course_stages",
+                                       kModernCourseStagesTableSql);
+
+  SqliteStatementHandle schemaVersionStatement;
+  int schemaVersion = -1;
+  if (updated &&
+      prepareSqliteStatementLogged(
+          database, "PRAGMA schema_version", schemaVersionStatement,
+          "reading replay SQLite schema version", logSqlErrorText) &&
+      sqlite3_step(schemaVersionStatement.get()) == SQLITE_ROW &&
+      sqlite3_column_type(schemaVersionStatement.get(), 0) == SQLITE_INTEGER) {
+    schemaVersion = sqlite3_column_int(schemaVersionStatement.get(), 0);
+    updated = sqlite3_step(schemaVersionStatement.get()) == SQLITE_DONE &&
+              schemaVersion >= 0 &&
+              schemaVersion < std::numeric_limits<int>::max();
+  } else {
+    updated = false;
+  }
+  schemaVersionStatement.reset();
+  if (updated) {
+    const std::string bump =
+        "PRAGMA schema_version=" + std::to_string(schemaVersion + 1);
+    updated = execSql(database, bump.c_str(),
+                      "refreshing replay SQLite schema cache");
+  }
+
+  const bool disabled = execSql(database, "PRAGMA writable_schema=OFF",
+                                "disabling replay key-mode schema update");
+  return updated && disabled && inspectModernCourseSchema(database) &&
+         replaySchemaIntegrityHolds(database);
 }
 
 bool migrateIrSubmissionReceiptsToModernOwnership(sqlite3 *database) {
@@ -1678,7 +1844,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
 
-  if (*version == 16) {
+  if (*version == 17 || *version == 16) {
     ReplayResultOutboxSchemaState resultOutboxState{};
     IrOutboxSchemaState irOutboxState{};
     IrSubmissionReceiptsSchemaState receiptState{};
@@ -1691,11 +1857,12 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         irOutboxState != IrOutboxSchemaState::Exact ||
         receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
         remoteScoresState != IrRemoteScoresSchemaState::Exact ||
-        !inspectModernCourseSchema(db) ||
+        !inspectModernCourseSchemaV17(db) ||
         !replay_repository_legacy::inspectCurrentSchema(db) ||
+        !migrateOpenKeyModeSchema(db) ||
         !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
-      SDL_Log("Refusing version 16 replay database with a partial or "
-              "unexpected current schema");
+      SDL_Log("Refusing version %d replay database with a partial or "
+              "unexpected current schema", *version);
       return false;
     }
     if (!transaction.commit(transactionError)) {
@@ -1720,7 +1887,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
     const bool modernCourseSchemaExact =
-        inspectModernCourseSchema(db) || inspectModernCourseSchemaV15(db) ||
+        inspectModernCourseSchemaV17(db) || inspectModernCourseSchemaV15(db) ||
         inspectModernCourseSchemaV16Base(db) ||
         (*version == 14 && inspectModernCourseSchemaV14(db));
     const bool summarySchemaExact =
@@ -1742,6 +1909,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     }
     if ((*version == 14 && !migrateModernCourseScoreOutbox(db)) ||
         !migrateModernReplayOwnershipSchema(db) ||
+        !migrateOpenKeyModeSchema(db) ||
         !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
       return false;
     }
@@ -1994,7 +2162,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       (!inspectModernCourseSchemaV14(db) &&
        !inspectModernCourseSchemaV15(db) &&
        !inspectModernCourseSchemaV16Base(db) &&
-       !inspectModernCourseSchema(db))) {
+       !inspectModernCourseSchemaV17(db))) {
     SDL_Log("Refusing summary cutover from a partial or unexpected version "
             "13 schema");
     return false;
@@ -2003,7 +2171,8 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
   if (!migrateModernCourseScoreOutbox(db) ||
-      !migrateModernReplayOwnershipSchema(db)) {
+      !migrateModernReplayOwnershipSchema(db) ||
+      !migrateOpenKeyModeSchema(db)) {
     return false;
   }
 

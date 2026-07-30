@@ -187,6 +187,16 @@ void createVersion2Fixture(const std::filesystem::path &path) {
   exec(database.get(), "PRAGMA user_version=2");
 }
 
+void restoreClosedKeyModeChecks(sqlite3 *database) {
+  exec(database, "PRAGMA writable_schema=ON");
+  exec(database, "UPDATE sqlite_schema SET sql=replace(sql,'CHECK(key_mode>0)',"
+                 "'CHECK(key_mode IN (5,7,9,10,14,24,48))') WHERE name IN "
+                 "('modern_chart_results','modern_course_stages')");
+  const int schemaVersion = queryInt(database, "PRAGMA schema_version");
+  exec(database, "PRAGMA schema_version=" + std::to_string(schemaVersion + 1));
+  exec(database, "PRAGMA writable_schema=OFF");
+}
+
 void createVersion13Fixture(const std::filesystem::path &path) {
   {
     ReplayRepository repository(path);
@@ -196,6 +206,7 @@ void createVersion13Fixture(const std::filesystem::path &path) {
 
   auto database = openDatabase(path);
   exec(database.get(), "PRAGMA foreign_keys=OFF");
+  restoreClosedKeyModeChecks(database.get());
   exec(database.get(), "DROP TABLE ir_submission_receipts");
   exec(database.get(), "DROP TABLE legacy_course_result_summaries");
   exec(database.get(), "DROP TABLE legacy_chart_result_summaries");
@@ -395,7 +406,7 @@ void testHeaderOnlyCutover() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
 
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
@@ -443,7 +454,7 @@ void testSchema10LegacySummaryBoundaryIsHeaderOnly() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
   assert(queryInt(database.get(),
                   "SELECT final_score FROM legacy_chart_result_summaries "
                   "WHERE legacy_replay_id=11") == 1111);
@@ -463,7 +474,7 @@ void testVersion10MigrationPreservesLegacyReceiptOwnership() {
   createVersion10ReceiptFixture(path);
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
   assert(queryInt(database.get(),
                   "SELECT replay_id FROM ir_submission_receipts WHERE id=77") ==
          11);
@@ -483,7 +494,7 @@ void testFreshSchemaHasNoRawReplayTables() {
   assert(repository.EnsureSchema());
   repository.Shutdown();
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
   assert(tableExists(database.get(), "legacy_chart_result_summaries"));
   assert(tableExists(database.get(), "legacy_course_result_summaries"));
   assert(!tableExists(database.get(), "replays"));
@@ -498,7 +509,7 @@ void testDurableReceiptsAndOutboxWorkSurvive() {
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
 
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
   assert(queryInt(database.get(),
@@ -548,7 +559,7 @@ void testMalformedProvenanceDoesNotBlockHeaderMigration() {
            std::string(malformedProvenance) + "' WHERE id=21");
 
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
   assert(queryText(database.get(),
                    "SELECT chart_title FROM legacy_chart_result_summaries "
                    "WHERE legacy_replay_id=12") == "Ready");
@@ -734,6 +745,7 @@ void downgradeReplayOwnershipSchemaToVersion15(
        "attempt_id,stem,history_index,relative_path,created_at_unix_ms) "
        "VALUES('123e4567-e89b-42d3-a456-426614174000','" +
            stem + "',0,'replay/" + stem + ".brd',1700000000000)");
+  restoreClosedKeyModeChecks(database.get());
   exec(database.get(), "PRAGMA user_version=15");
   exec(database.get(), "COMMIT");
   exec(database.get(), "PRAGMA foreign_keys=ON");
@@ -757,8 +769,269 @@ void testVersion15OwnershipMigrationPreservesPathOnlyReservations() {
          !reservations.reservations.front().ownedFile);
   repository.Shutdown();
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
   assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
+}
+
+void insertModernChartResult(sqlite3 *database, std::string_view attemptId,
+                             int keyMode, char hashDigit) {
+  const std::string hash32(32, hashDigit);
+  const std::string hash64(64, hashDigit);
+  exec(database,
+       "INSERT INTO modern_chart_results("
+       "attempt_id,chart_path,chart_md5,chart_sha256,chart_title,"
+       "chart_artist,long_note_mode,score,max_score,max_combo,combo_break,"
+       "p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
+       "key_mode,adopted_gauge_type,gauge_history_json,"
+       "judgement_timing_json,provenance_json,result_fingerprint,"
+       "played_at_unix_ms) VALUES('" +
+           std::string(attemptId) + "','/chart.bms','" + hash32 + "','" +
+           hash64 + "','Chart','Artist',1,1,2,1,0,1,0,0,0,0,0,0,0,50,1," +
+           std::to_string(keyMode) + ",1,'[]',NULL,'{}','" + hash64 +
+           "',1700000000000)");
+}
+
+void testVersion17KeyModeMigrationPreservesRowsAndOpensPositiveCounts() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "open-key-modes.db";
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    repository.Shutdown();
+  }
+
+  auto database = openDatabase(path);
+  restoreClosedKeyModeChecks(database.get());
+  exec(database.get(), "PRAGMA user_version=17");
+  insertModernChartResult(database.get(), "existing-chart", 7, 'a');
+  const std::string courseKey = "course:v1:" + std::string(64, 'b');
+  exec(database.get(),
+       "INSERT INTO modern_course_results("
+       "attempt_id,course_key,legacy_course_id,course_name,course_group_name,"
+       "constraint_json,completed_charts,total_charts,requested_play_option,"
+       "assist_option,initial_gauge_type,gauge_profile,gauge_auto_shift,"
+       "gauge_auto_shift_lower_bound,long_note_mode,final_score,max_score,"
+       "max_combo,final_gauge,clear_type,provenance_json,result_fingerprint,"
+       "played_at_unix_ms) VALUES('existing-course','" +
+           courseKey +
+           "',0,'Course','Group','[]',1,1,'NORMAL','',1,0,0,0,1,1,2,1,"
+           "50,1,'{}','" +
+           std::string(64, 'c') + "',1700000000000)");
+  exec(database.get(),
+       "INSERT INTO modern_course_stages("
+       "modern_course_result_id,stage_index,chart_path,chart_md5,"
+       "chart_sha256,chart_title,chart_artist,long_note_mode,score,max_score,"
+       "max_combo,combo_break,p_great,great,good,bad,poor,k_poor,fast,slow,"
+       "final_gauge,clear_type,key_mode,adopted_gauge_type,gauge_history_json,"
+       "judgement_timing_json,provenance_json) VALUES(1,0,'/course.bms','" +
+           std::string(32, 'd') + "','" + std::string(64, 'd') +
+           "','Stage','Artist',1,1,2,1,0,1,0,0,0,0,0,0,0,50,1,7,1,'[]',"
+           "NULL,'{}')");
+
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
+  assert(queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_chart_results WHERE "
+                  "attempt_id='existing-chart'") == 1);
+  assert(queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_course_stages WHERE "
+                  "modern_course_result_id=1") == 1);
+
+  insertModernChartResult(database.get(), "four-key-chart", 4, 'e');
+  exec(database.get(), "UPDATE modern_course_stages SET key_mode=6 WHERE "
+                       "modern_course_result_id=1 AND stage_index=0");
+  assert(queryInt(database.get(),
+                  "SELECT key_mode FROM modern_chart_results WHERE "
+                  "attempt_id='four-key-chart'") == 4);
+  assert(queryInt(database.get(),
+                  "SELECT key_mode FROM modern_course_stages WHERE "
+                  "modern_course_result_id=1") == 6);
+  assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
+  assert(queryInt(database.get(),
+                  "SELECT COUNT(*) FROM pragma_foreign_key_check") == 0);
+}
+
+enum class KeyModeMigrationPhase : std::uint8_t {
+  None,
+  ChartSchema,
+  CourseStageSchema,
+  SchemaVersion,
+  Integrity,
+};
+
+constexpr std::size_t keyModeMigrationPhaseIndex(KeyModeMigrationPhase phase) {
+  assert(phase != KeyModeMigrationPhase::None);
+  return static_cast<std::size_t>(phase) - 1;
+}
+
+struct KeyModeMigrationProbe {
+  int callbacks = 0;
+  int interruptAt = 0;
+  bool fired = false;
+  KeyModeMigrationPhase current = KeyModeMigrationPhase::None;
+  KeyModeMigrationPhase interrupted = KeyModeMigrationPhase::None;
+  std::array<int, 4> firstCallback{};
+};
+
+int traceKeyModeMigrationSql(unsigned mask, void *raw, void *statement,
+                             void *) {
+  if (mask != SQLITE_TRACE_STMT || statement == nullptr) {
+    return 0;
+  }
+  auto &probe = *static_cast<KeyModeMigrationProbe *>(raw);
+  char *expanded = sqlite3_expanded_sql(static_cast<sqlite3_stmt *>(statement));
+  const std::string sql = expanded != nullptr ? expanded : "";
+  sqlite3_free(expanded);
+  probe.current = KeyModeMigrationPhase::None;
+  if (sql.starts_with("UPDATE sqlite_schema") &&
+      sql.find("'modern_chart_results'") != std::string::npos) {
+    probe.current = KeyModeMigrationPhase::ChartSchema;
+  } else if (sql.starts_with("UPDATE sqlite_schema") &&
+             sql.find("'modern_course_stages'") != std::string::npos) {
+    probe.current = KeyModeMigrationPhase::CourseStageSchema;
+  } else if (sql.starts_with("PRAGMA schema_version=")) {
+    probe.current = KeyModeMigrationPhase::SchemaVersion;
+  } else if (sql.starts_with("PRAGMA integrity_check")) {
+    probe.current = KeyModeMigrationPhase::Integrity;
+  }
+  return 0;
+}
+
+int probeKeyModeMigrationProgress(void *raw) {
+  auto &probe = *static_cast<KeyModeMigrationProbe *>(raw);
+  ++probe.callbacks;
+  if (probe.current != KeyModeMigrationPhase::None) {
+    int &first = probe.firstCallback[keyModeMigrationPhaseIndex(probe.current)];
+    if (first == 0) {
+      first = probe.callbacks;
+    }
+  }
+  if (!probe.fired && probe.interruptAt > 0 &&
+      probe.callbacks >= probe.interruptAt) {
+    probe.fired = true;
+    probe.interrupted = probe.current;
+    return 1;
+  }
+  return 0;
+}
+
+void installKeyModeMigrationProbe(sqlite3 *database,
+                                  KeyModeMigrationProbe &probe) {
+  assert(sqlite3_trace_v2(database, SQLITE_TRACE_STMT, traceKeyModeMigrationSql,
+                          &probe) == SQLITE_OK);
+  sqlite3_progress_handler(database, 1, probeKeyModeMigrationProgress, &probe);
+}
+
+void removeMigrationProbe(sqlite3 *database);
+
+int denyKeyModeUserVersionWrite(void *raw, int action, const char *argument1,
+                                const char *argument2, const char *,
+                                const char *) {
+  if (action == SQLITE_PRAGMA && argument1 != nullptr &&
+      std::string_view(argument1) == "user_version" && argument2 != nullptr) {
+    *static_cast<bool *>(raw) = true;
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+void testVersion17KeyModeMigrationRollbackFaultMatrix() {
+  TemporaryDirectory temporary;
+  const auto pristinePath = temporary.path / "key-mode-pristine.db";
+  {
+    ReplayRepository repository(pristinePath);
+    assert(repository.EnsureSchema());
+    repository.Shutdown();
+  }
+  {
+    auto database = openDatabase(pristinePath);
+    restoreClosedKeyModeChecks(database.get());
+    exec(database.get(), "PRAGMA user_version=17");
+    insertModernChartResult(database.get(), "existing-chart", 7, 'a');
+  }
+  const DatabaseFamilySnapshot pristine = snapshotDatabaseFamily(pristinePath);
+
+  const auto dryRunPath = temporary.path / "key-mode-dry-run.db";
+  assert(std::filesystem::copy_file(pristinePath, dryRunPath));
+  KeyModeMigrationProbe dryRun;
+  {
+    auto database = openDatabase(dryRunPath);
+    installKeyModeMigrationProbe(database.get(), dryRun);
+    assert(replay_repository_test::RunSchemaMigration(database.get()));
+    removeMigrationProbe(database.get());
+  }
+  for (std::size_t phase = 0; phase < dryRun.firstCallback.size(); ++phase) {
+    if (dryRun.firstCallback[phase] == 0) {
+      std::cerr << "missing key-mode migration phase " << phase << '\n';
+      std::abort();
+    }
+  }
+
+  std::vector<int> interruptionThresholds(dryRun.firstCallback.begin(),
+                                          dryRun.firstCallback.end());
+  std::ranges::sort(interruptionThresholds);
+  interruptionThresholds.erase(
+      std::unique(interruptionThresholds.begin(), interruptionThresholds.end()),
+      interruptionThresholds.end());
+  std::array<bool, 4> phasesExercised{};
+  for (std::size_t trial = 0; trial < interruptionThresholds.size(); ++trial) {
+    const auto trialPath =
+        temporary.path / ("key-mode-fault-" + std::to_string(trial) + ".db");
+    assert(std::filesystem::copy_file(pristinePath, trialPath));
+    KeyModeMigrationProbe probe{.interruptAt = interruptionThresholds[trial]};
+    {
+      auto database = openDatabase(trialPath);
+      installKeyModeMigrationProbe(database.get(), probe);
+      assert(!replay_repository_test::RunSchemaMigration(database.get()));
+      assert(probe.fired);
+      removeMigrationProbe(database.get());
+      assert(queryInt(database.get(), "PRAGMA writable_schema") == 0);
+    }
+    assert(probe.interrupted != KeyModeMigrationPhase::None);
+    phasesExercised[keyModeMigrationPhaseIndex(probe.interrupted)] = true;
+    assert(snapshotDatabaseFamily(trialPath) == pristine);
+
+    auto database = openDatabase(trialPath);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+    assert(queryInt(database.get(),
+                    "SELECT COUNT(*) FROM modern_chart_results WHERE "
+                    "attempt_id='existing-chart'") == 1);
+    for (const std::string_view table :
+         {std::string_view("modern_chart_results"),
+          std::string_view("modern_course_stages")}) {
+      const std::string sql = queryText(
+          database.get(), "SELECT sql FROM sqlite_schema WHERE name='" +
+                              std::string(table) + "'");
+      assert(sql.find("CHECK(key_mode IN (5,7,9,10,14,24,48))") !=
+             std::string::npos);
+    }
+  }
+  assert(std::ranges::all_of(phasesExercised,
+                             [](bool exercised) { return exercised; }));
+
+  const auto versionFaultPath = temporary.path / "key-mode-version-fault.db";
+  assert(std::filesystem::copy_file(pristinePath, versionFaultPath));
+  bool deniedUserVersionWrite = false;
+  {
+    auto database = openDatabase(versionFaultPath);
+    assert(sqlite3_set_authorizer(database.get(), denyKeyModeUserVersionWrite,
+                                  &deniedUserVersionWrite) == SQLITE_OK);
+    assert(!replay_repository_test::RunSchemaMigration(database.get()));
+    assert(deniedUserVersionWrite);
+    assert(sqlite3_set_authorizer(database.get(), nullptr, nullptr) ==
+           SQLITE_OK);
+    assert(queryInt(database.get(), "PRAGMA writable_schema") == 0);
+  }
+  assert(snapshotDatabaseFamily(versionFaultPath) == pristine);
+  auto database = openDatabase(versionFaultPath);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_chart_results WHERE "
+                  "attempt_id='existing-chart'") == 1);
+  assert(queryText(database.get(), "SELECT sql FROM sqlite_schema WHERE "
+                                   "name='modern_chart_results'")
+             .find("CHECK(key_mode IN (5,7,9,10,14,24,48))") !=
+         std::string::npos);
 }
 
 void testVersion14CourseScoreOutboxMigrationRollsBackAtomically() {
@@ -771,6 +1044,7 @@ void testVersion14CourseScoreOutboxMigrationRollsBackAtomically() {
   }
   {
     auto database = openDatabase(path);
+    restoreClosedKeyModeChecks(database.get());
     exec(database.get(), "DROP TABLE modern_pending_course_score_writes");
     exec(database.get(), "PRAGMA user_version=14");
   }
@@ -790,7 +1064,7 @@ void testVersion14CourseScoreOutboxMigrationRollsBackAtomically() {
     assert(!tableExists(database.get(),
                         "modern_pending_course_score_writes"));
     assert(replay_repository_test::RunSchemaMigration(database.get()));
-    assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 18);
     assert(tableExists(database.get(),
                        "modern_pending_course_score_writes"));
   }
@@ -953,7 +1227,7 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
     removeMigrationProbe(database.get());
   }
   auto database = openDatabase(successPath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
   assert(!tableExists(database.get(), "replays"));
 }
 
@@ -1014,6 +1288,7 @@ void testVersion16CompactionMarkerReclaimsAlreadyDroppedPages() {
          "FROM rows WHERE value<1536) INSERT INTO replay_events(id,replay_id) "
          "SELECT value+100,zeroblob(4096) FROM rows");
     assert(replay_repository_test::RunSchemaMigration(database.get()));
+    restoreClosedKeyModeChecks(database.get());
     exec(database.get(), "PRAGMA user_version=16");
     exec(database.get(), "PRAGMA wal_checkpoint(TRUNCATE)");
     assert(queryInt(database.get(), "PRAGMA freelist_count") > 1000);
@@ -1026,7 +1301,7 @@ void testVersion16CompactionMarkerReclaimsAlreadyDroppedPages() {
 
   const auto after = databaseFamilySize(path);
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
   assert(queryInt(database.get(), "PRAGMA freelist_count") == 0);
   assert(after < before / 2U);
   assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
@@ -1070,7 +1345,7 @@ void testPathMigrationRetainsWriteOwnershipAcrossInstall() {
     ReplayRepository repository(path);
     assert(repository.EnsureSchema());
     auto released = openDatabase(path);
-    assert(queryInt(released.get(), "PRAGMA user_version") == 17);
+    assert(queryInt(released.get(), "PRAGMA user_version") == 18);
     repository.Shutdown();
   }
   replay_repository_test::SetPathMigrationAfterSnapshotHook(nullptr, nullptr);
@@ -1082,7 +1357,7 @@ void testPathMigrationRetainsWriteOwnershipAcrossInstall() {
   assert(queryText(database.get(),
                    "SELECT chart_title FROM legacy_chart_result_summaries "
                    "WHERE legacy_replay_id=11") == "Inactive");
-  assert(queryInt(database.get(), "PRAGMA user_version") == 17);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
 }
 
 void testPathMigrationFaultsPreserveOriginalDatabase() {
@@ -1276,7 +1551,7 @@ void testVersion15OwnershipMigrationRollbackFaultMatrix() {
 } // namespace
 
 int main() {
-  static_assert(ReplayRepository::kCurrentSchemaVersion == 17);
+  static_assert(ReplayRepository::kCurrentSchemaVersion == 18);
   testHeaderOnlyCutover();
   testSchema10LegacySummaryBoundaryIsHeaderOnly();
   testVersion10MigrationPreservesLegacyReceiptOwnership();
@@ -1287,6 +1562,8 @@ int main() {
   testCurrentSchemaRejectsSummaryShapeDrift();
   testVersion14CourseScoreOutboxMigrationRollsBackAtomically();
   testVersion15OwnershipMigrationPreservesPathOnlyReservations();
+  testVersion17KeyModeMigrationPreservesRowsAndOpensPositiveCounts();
+  testVersion17KeyModeMigrationRollbackFaultMatrix();
   testRollbackFaultMatrixPreservesOriginalDatabase();
   testPathMigrationReclaimsDroppedReplayDetailPages();
   testVersion16CompactionMarkerReclaimsAlreadyDroppedPages();
