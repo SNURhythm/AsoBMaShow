@@ -146,12 +146,13 @@ the scanner thread. Missing costs safely fall back to ordered behavior.
 
 ## Test Strategy
 
-Add a deterministic scheduler regression with enough blocked workers to queue
-two expensive far-future reads and two cheap near-frontier reads before any
-capacity is released. With a cheap active frontier, releasing three workers
-must start the most expensive speculative read plus both near-frontier reads;
-the second expensive read must remain queued. The unrestricted implementation
-instead starts both expensive reads and leaves one near-frontier read queued.
+Add a deterministic scheduler regression with enough blocked workers and
+archive admission capacity to queue two expensive far-future reads and two
+cheap near-frontier reads before any capacity is released. With a cheap active
+frontier, opening three archive slots must start the most expensive speculative
+read plus both near-frontier reads; the second expensive read must remain
+queued. The unrestricted implementation instead starts both expensive reads
+and leaves one near-frontier read queued.
 
 Add a complementary test with an expensive active ordered read and several
 cheap speculative reads. Their combined pressure remains below the ordered

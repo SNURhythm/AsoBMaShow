@@ -39,11 +39,11 @@ Add this test beside the existing speculative scheduling tests:
 
 ```cpp
 void testSpeculativePressureCannotConsumeEveryReader() {
-  chart_scan::WorkScheduler scheduler(4, 3);
+  chart_scan::WorkScheduler scheduler(5, 4);
   std::mutex mutex;
   std::condition_variable cv;
   bool releaseArchives = false;
-  std::array<bool, 3> releaseCpu{};
+  std::array<bool, 4> releaseCpu{};
   int cpuBlockersStarted = 0;
   bool frontierStarted = false;
   bool near20Started = false;
@@ -77,7 +77,7 @@ void testSpeculativePressureCannotConsumeEveryReader() {
   }
   {
     std::unique_lock lock(mutex);
-    assert(cv.wait_for(lock, 2s, [&] { return cpuBlockersStarted == 3; }));
+    assert(cv.wait_for(lock, 2s, [&] { return cpuBlockersStarted == 4; }));
   }
 
   assert(scheduler.enqueue(blockingArchive(&far100Started),
@@ -120,11 +120,11 @@ Add:
 
 ```cpp
 void testCheapSpeculationCanFillMultipleReaders() {
-  chart_scan::WorkScheduler scheduler(4, 3);
+  chart_scan::WorkScheduler scheduler(5, 4);
   std::mutex mutex;
   std::condition_variable cv;
   bool releaseArchives = false;
-  std::array<bool, 3> releaseCpu{};
+  std::array<bool, 4> releaseCpu{};
   int cpuBlockersStarted = 0;
   bool frontierStarted = false;
   bool nearStarted = false;
@@ -158,7 +158,7 @@ void testCheapSpeculationCanFillMultipleReaders() {
   }
   {
     std::unique_lock lock(mutex);
-    assert(cv.wait_for(lock, 2s, [&] { return cpuBlockersStarted == 3; }));
+    assert(cv.wait_for(lock, 2s, [&] { return cpuBlockersStarted == 4; }));
   }
 
   assert(scheduler.enqueue(blockingArchive(&nearStarted),
