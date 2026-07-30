@@ -44,7 +44,7 @@ bool RealtimeGameplayInputBridge::emitApplied(
       .steadyTimestampMicros = steadyTimestampMicros,
       .hasReplayControl = hasReplayControl,
       .replayControl = control,
-      .replayOnly = replayOnly,
+      .replayOnly = true,
   };
   {
     const std::lock_guard lock(mutex_);

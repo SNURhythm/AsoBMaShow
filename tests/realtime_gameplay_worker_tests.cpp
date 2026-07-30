@@ -593,6 +593,29 @@ private:
   bool prepared_ = true;
 };
 
+void testLegacyBridgeKeepsUnmatchedCallbacksReplayOnly() {
+  std::vector<gameplay::RealtimeGameplayInput> captured;
+  gameplay::RealtimeGameplayInputBridge bridge(
+      7,
+      {.context = &captured,
+       .emit = [](void *context,
+                  const gameplay::RealtimeGameplayInput &input) {
+         static_cast<std::vector<gameplay::RealtimeGameplayInput> *>(context)
+             ->push_back(input);
+         return true;
+       }});
+  const replay::LogicalControl laneControl{
+      .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 4};
+
+  require(bridge.emitApplied(4, laneControl, true, true, false, 1'000'000),
+          "unmatched legacy callback reaches the realtime bridge");
+  require(captured.size() == 1 && captured.front().lane == 4 &&
+              captured.front().hasReplayControl &&
+              captured.front().replayControl == laneControl &&
+              captured.front().replayOnly,
+          "unmatched legacy callback cannot become delayed gameplay input");
+}
+
 void testLegacyBridgeCapturesScratchlessModesAsBrdControls() {
   for (const int keyMode : {4, 6, 8}) {
     FakeClock clock;
@@ -1391,6 +1414,7 @@ int main() {
   testRealtimeIngressCoalescesTouchAndHardwareLaneOwnership();
   testRealtimeIngressCoalescesTouchAndHardwareScratchOwnership();
   testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges();
+  testLegacyBridgeKeepsUnmatchedCallbacksReplayOnly();
   testLegacyBridgeCapturesScratchlessModesAsBrdControls();
   testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction();
   testLegacyStartSelectCommandsRemainStockReplayInput();
