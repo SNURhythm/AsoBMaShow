@@ -1,9 +1,22 @@
 #include "ChartScanWorkScheduler.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace chart_scan {
+namespace {
+
+void addPressure(std::size_t &pressure, std::size_t cost) {
+  const auto maximum = std::numeric_limits<std::size_t>::max();
+  pressure = cost > maximum - pressure ? maximum : pressure + cost;
+}
+
+void removePressure(std::size_t &pressure, std::size_t cost) {
+  pressure = cost > pressure ? 0 : pressure - cost;
+}
+
+} // namespace
 
 bool WorkScheduler::ArchiveReadCostKeyLess::operator()(
     const ArchiveReadCostKey &left,
@@ -156,15 +169,23 @@ bool WorkScheduler::popArchiveReadLocked(WorkItem &item) {
   }
 
   const auto earliest = archiveReadsByOrder_.begin();
+  const auto highestCost = archiveReadsByCost_.begin();
   const bool needsFrontier =
       activeArchiveReadOrders_.empty() ||
       earliest->second->archiveOrder < *activeArchiveReadOrders_.begin();
+  const bool canSpeculate =
+      !needsFrontier && highestCost->second != earliest->second &&
+      highestCost->second->archiveReadCost != 0 &&
+      activeSpeculativeArchiveReadPressure_ <
+          activeOrderedArchiveReadPressure_;
   const ArchiveReadWorkPtr selected =
-      needsFrontier ? earliest->second : archiveReadsByCost_.begin()->second;
+      canSpeculate ? highestCost->second : earliest->second;
 
   item.work = std::move(selected->work);
   item.workClass = WorkClass::ArchiveRead;
   item.archiveOrder = selected->archiveOrder;
+  item.archiveReadCost = std::max<std::size_t>(1, selected->archiveReadCost);
+  item.archiveReadSpeculative = canSpeculate;
   eraseArchiveReadLocked(selected);
   return true;
 }
@@ -202,6 +223,10 @@ void WorkScheduler::workerLoop() {
       } else if (item.workClass == WorkClass::ArchiveRead) {
         ++activeArchiveReads_;
         activeArchiveReadOrders_.insert(item.archiveOrder);
+        auto &pressure = item.archiveReadSpeculative
+                             ? activeSpeculativeArchiveReadPressure_
+                             : activeOrderedArchiveReadPressure_;
+        addPressure(pressure, item.archiveReadCost);
       }
     }
 
@@ -228,6 +253,10 @@ void WorkScheduler::workerLoop() {
         if (activeOrder != activeArchiveReadOrders_.end()) {
           activeArchiveReadOrders_.erase(activeOrder);
         }
+        auto &pressure = item.archiveReadSpeculative
+                             ? activeSpeculativeArchiveReadPressure_
+                             : activeOrderedArchiveReadPressure_;
+        removePressure(pressure, item.archiveReadCost);
       }
       if (activeTasks_ > 0) {
         --activeTasks_;

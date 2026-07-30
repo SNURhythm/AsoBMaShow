@@ -48,6 +48,8 @@ private:
     Work work;
     WorkClass workClass = WorkClass::Cpu;
     std::size_t archiveOrder = std::numeric_limits<std::size_t>::max();
+    std::size_t archiveReadCost = 1;
+    bool archiveReadSpeculative = false;
   };
 
   struct ArchiveReadWork {
@@ -83,6 +85,8 @@ private:
   std::map<ArchiveReadCostKey, ArchiveReadWorkPtr, ArchiveReadCostKeyLess>
       archiveReadsByCost_;
   std::multiset<std::size_t> activeArchiveReadOrders_;
+  std::size_t activeOrderedArchiveReadPressure_ = 0;
+  std::size_t activeSpeculativeArchiveReadPressure_ = 0;
   std::vector<std::thread> workers_;
   std::vector<std::exception_ptr> exceptions_;
   std::uint64_t nextArchiveReadEnqueueSequence_ = 0;

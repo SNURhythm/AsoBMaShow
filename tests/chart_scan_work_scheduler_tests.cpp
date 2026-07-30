@@ -478,6 +478,153 @@ void testSpeculativeArchiveReadPrefersHigherCost() {
   assert(scheduler.takeExceptions().empty());
 }
 
+void testSpeculativePressureCannotConsumeEveryReader() {
+  chart_scan::WorkScheduler scheduler(5, 4);
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool releaseArchives = false;
+  std::array<bool, 4> releaseCpu{};
+  int cpuBlockersStarted = 0;
+  bool frontierStarted = false;
+  bool near20Started = false;
+  bool near30Started = false;
+  bool far100Started = false;
+  bool far110Started = false;
+
+  auto blockingArchive = [&](bool *started) {
+    return [&, started] {
+      std::unique_lock lock(mutex);
+      *started = true;
+      cv.notify_all();
+      cv.wait(lock, [&] { return releaseArchives; });
+    };
+  };
+
+  assert(scheduler.enqueue(blockingArchive(&frontierStarted),
+                           chart_scan::WorkClass::ArchiveRead, 10, 10));
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return frontierStarted; }));
+  }
+
+  for (std::size_t index = 0; index < releaseCpu.size(); ++index) {
+    assert(scheduler.enqueue([&, index] {
+      std::unique_lock lock(mutex);
+      ++cpuBlockersStarted;
+      cv.notify_all();
+      cv.wait(lock, [&] { return releaseCpu[index]; });
+    }));
+  }
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return cpuBlockersStarted == 4; }));
+  }
+
+  assert(scheduler.enqueue(blockingArchive(&far100Started),
+                           chart_scan::WorkClass::ArchiveReadHeavy, 100,
+                           1000));
+  assert(scheduler.enqueue(blockingArchive(&far110Started),
+                           chart_scan::WorkClass::ArchiveReadHeavy, 110,
+                           900));
+  assert(scheduler.enqueue(blockingArchive(&near20Started),
+                           chart_scan::WorkClass::ArchiveRead, 20, 10));
+  assert(scheduler.enqueue(blockingArchive(&near30Started),
+                           chart_scan::WorkClass::ArchiveRead, 30, 10));
+
+  {
+    std::lock_guard lock(mutex);
+    std::fill(releaseCpu.begin(), releaseCpu.end(), true);
+  }
+  cv.notify_all();
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] {
+      return far100Started && near20Started && near30Started;
+    }));
+    assert(!far110Started);
+    releaseArchives = true;
+  }
+  cv.notify_all();
+
+  scheduler.finish();
+  assert(far110Started);
+  assert(scheduler.takeExceptions().empty());
+}
+
+void testCheapSpeculationCanFillMultipleReaders() {
+  chart_scan::WorkScheduler scheduler(5, 4);
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool releaseArchives = false;
+  std::array<bool, 4> releaseCpu{};
+  int cpuBlockersStarted = 0;
+  bool frontierStarted = false;
+  bool nearStarted = false;
+  bool far100Started = false;
+  bool far110Started = false;
+  bool far120Started = false;
+
+  auto blockingArchive = [&](bool *started) {
+    return [&, started] {
+      std::unique_lock lock(mutex);
+      *started = true;
+      cv.notify_all();
+      cv.wait(lock, [&] { return releaseArchives; });
+    };
+  };
+
+  assert(scheduler.enqueue(blockingArchive(&frontierStarted),
+                           chart_scan::WorkClass::ArchiveRead, 10, 1000));
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return frontierStarted; }));
+  }
+
+  for (std::size_t index = 0; index < releaseCpu.size(); ++index) {
+    assert(scheduler.enqueue([&, index] {
+      std::unique_lock lock(mutex);
+      ++cpuBlockersStarted;
+      cv.notify_all();
+      cv.wait(lock, [&] { return releaseCpu[index]; });
+    }));
+  }
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return cpuBlockersStarted == 4; }));
+  }
+
+  assert(scheduler.enqueue(blockingArchive(&nearStarted),
+                           chart_scan::WorkClass::ArchiveRead, 20, 1));
+  assert(scheduler.enqueue(blockingArchive(&far100Started),
+                           chart_scan::WorkClass::ArchiveReadHeavy, 100,
+                           300));
+  assert(scheduler.enqueue(blockingArchive(&far110Started),
+                           chart_scan::WorkClass::ArchiveReadHeavy, 110,
+                           200));
+  assert(scheduler.enqueue(blockingArchive(&far120Started),
+                           chart_scan::WorkClass::ArchiveReadHeavy, 120,
+                           100));
+
+  {
+    std::lock_guard lock(mutex);
+    std::fill(releaseCpu.begin(), releaseCpu.end(), true);
+  }
+  cv.notify_all();
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] {
+      return far100Started && far110Started && far120Started;
+    }));
+    assert(!nearStarted);
+    releaseArchives = true;
+  }
+  cv.notify_all();
+
+  scheduler.finish();
+  assert(nearStarted);
+  assert(scheduler.takeExceptions().empty());
+}
+
 void testNewlyReadyEarlierArchiveBecomesFrontier() {
   chart_scan::WorkScheduler scheduler(3, 2);
   std::mutex mutex;
@@ -673,6 +820,8 @@ int main() {
   testArchiveReadClassesPreserveEnqueueOrder();
   testArchiveReadsPreferLowerDiscoveryOrder();
   testSpeculativeArchiveReadPrefersHigherCost();
+  testSpeculativePressureCannotConsumeEveryReader();
+  testCheapSpeculationCanFillMultipleReaders();
   testNewlyReadyEarlierArchiveBecomesFrontier();
   testFinishDrainsWorkSpawnedByActiveTask();
   testSingleWorkerPreservesFifoOrder();
