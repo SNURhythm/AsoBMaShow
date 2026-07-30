@@ -216,13 +216,13 @@ void testCanonicalRoundTripAndTamperChecks() {
 
 void testStrictValidationAndBounds() {
   std::string diagnostic;
-  auto scratchlessSubmission = capture(validResult()).submission;
-  scratchlessSubmission.keyMode = 6;
-  expect(ir::validateIrSubmission(scratchlessSubmission, diagnostic),
-         "provider-neutral IR snapshots retain valid scratchless result facts");
+  auto customSubmission = capture(validResult()).submission;
+  customSubmission.keyMode = 127;
+  expect(ir::validateIrSubmission(customSubmission, diagnostic),
+         "provider-neutral IR snapshots retain every positive key count");
 
-  auto invalidSubmission = scratchlessSubmission;
-  invalidSubmission.keyMode = 11;
+  auto invalidSubmission = customSubmission;
+  invalidSubmission.keyMode = 0;
   expect(!ir::validateIrSubmission(invalidSubmission, diagnostic),
          "IR validation rejects modes outside the shared result contract");
 

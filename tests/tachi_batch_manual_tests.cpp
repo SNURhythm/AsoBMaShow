@@ -382,6 +382,14 @@ void testCanonicalLr2EligibilityMatrix() {
     expect(built.status == ir::BuildDraftStatus::Built,
            "canonical LR2 7K and 14K submissions build");
   }
+  for (const int keyMode : {1, 4, 5, 6, 8, 9, 10, 11, 24, 48, 127}) {
+    auto submission = validSubmission();
+    submission.keyMode = keyMode;
+    expect(ir::tachi::buildBatchManualDraft(submission).status ==
+               ir::BuildDraftStatus::Unsupported,
+           "Tachi alone narrows the open gameplay key-count domain to 7K "
+           "and 14K");
+  }
   for (const auto gauge :
        {GaugeType::AssistedEasy, GaugeType::Easy, GaugeType::Normal,
         GaugeType::Hard, GaugeType::ExHard, GaugeType::Hazard}) {

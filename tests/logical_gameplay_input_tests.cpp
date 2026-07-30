@@ -942,13 +942,14 @@ void testRealtimePhysicalInputPreservesNativeTimestamp() {
           "timestamps");
 }
 
-void testScratchlessPhysicalInputDoesNotInventBrdControls() {
-  for (const int keyMode : {4, 6, 8}) {
+void testArbitraryLaneInputDoesNotDependOnBrdControls() {
+  for (const int keyMode : {1, 4, 6, 8, 17, 65, 128}) {
+    const int lane = keyMode - 1;
     InputProfile profile;
     profile.bindings.push_back(
-        {.id = "scratchless-key-lane",
+        {.id = "custom-key-lane",
          .scope = {.player = 1, .keyMode = keyMode},
-         .action = {.kind = input::LogicalActionKind::Lane, .lane = 0},
+         .action = {.kind = input::LogicalActionKind::Lane, .lane = lane},
          .control = {.deviceId = "keyboard",
                      .deviceClass = input::DeviceClass::Keyboard,
                      .kind = input::ControlKind::Key,
@@ -967,10 +968,10 @@ void testScratchlessPhysicalInputDoesNotInventBrdControls() {
     router.consume(down, 1234567);
     router.consume(up, 1234999);
 
-    require(output.size() == 2 && output[0].lane == 0 &&
-                output[1].lane == 0 && !output[0].hasReplayControl &&
+    require(output.size() == 2 && output[0].lane == lane &&
+                output[1].lane == lane && !output[0].hasReplayControl &&
                 !output[1].hasReplayControl,
-            "scratchless physical edges reach gameplay without invalid BRD "
+            "arbitrary physical lanes reach gameplay without requiring BRD "
             "control metadata");
   }
 }
@@ -1268,7 +1269,7 @@ int main() {
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
-  testScratchlessPhysicalInputDoesNotInventBrdControls();
+  testArbitraryLaneInputDoesNotDependOnBrdControls();
   testRealtimeScratchReversalCarriesCanonicalDirections();
   testRealtimeStartProducesCommandAndReplayEdge();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();

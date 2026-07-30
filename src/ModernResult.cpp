@@ -169,7 +169,7 @@ bool validateResultFacts(const ChartScoreWrite &score, int keyMode,
                          const std::optional<ChartJudgementTiming> &timing,
                          std::int64_t maximumAllowedCombo,
                          std::string &diagnostic) {
-  if (!result_contract::isSupportedKeyMode(keyMode) ||
+  if (!result_contract::isValidKeyMode(keyMode) ||
       !result_contract::isKnownGaugeType(adoptedGaugeType)) {
     diagnostic = "chart result key mode or adopted gauge is invalid";
     return false;

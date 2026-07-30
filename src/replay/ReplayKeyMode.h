@@ -33,7 +33,7 @@ inline constexpr std::array<ReplayKeyModeLayout, 7> kReplayKeyModeLayouts{{
 static_assert([] {
   for (std::size_t index = 0; index < kReplayKeyModeLayouts.size(); ++index) {
     const auto &layout = kReplayKeyModeLayouts[index];
-    if (!result_contract::isSupportedKeyMode(layout.keyMode)) {
+    if (!result_contract::isValidKeyMode(layout.keyMode)) {
       return false;
     }
     for (std::size_t candidate = index + 1;

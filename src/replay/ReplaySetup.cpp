@@ -89,7 +89,7 @@ ReplaySetupValidation validateReplaySetup(const ReplaySetup &setup,
                                              setup.chart.sha256, md5Required)) {
     return invalid(ReplaySetupIssue::ChartMd5);
   }
-  if (!result_contract::isSupportedKeyMode(setup.chart.keyMode) ||
+  if (!result_contract::isValidKeyMode(setup.chart.keyMode) ||
       !replayKeyModeLayout(setup.chart.keyMode)) {
     return invalid(ReplaySetupIssue::KeyMode);
   }

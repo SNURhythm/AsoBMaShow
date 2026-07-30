@@ -106,14 +106,15 @@ void testSupportedKeyModesAndDoublePlayOption() {
            "demonstrated Beatoraja key mode is accepted");
   }
 
-  for (const int keyMode : {4, 6, 8}) {
-    auto scratchless = validSetup();
-    scratchless.chart.keyMode = keyMode;
-    scratchless.doublePlayOption = replay::DoublePlayOption::Normal;
+  for (const int keyMode : {1, 3, 4, 6, 8, 11, 49, 127}) {
+    auto custom = validSetup();
+    custom.chart.keyMode = keyMode;
+    custom.doublePlayOption = replay::DoublePlayOption::Normal;
     expect(replay::validateReplaySetup(
-               scratchless, replay::ReplaySetupSource::LocalCapture)
+               custom, replay::ReplaySetupSource::LocalCapture)
                    .issue == replay::ReplaySetupIssue::KeyMode,
-           "playable modes without a stock BRD layout keep replay optional");
+           "positive key counts without a stock BRD layout keep replay "
+           "optional");
   }
 
   auto single = validSetup();

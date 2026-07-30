@@ -22,13 +22,14 @@ std::string repeated(char value, std::size_t count) {
 }
 
 void testSharedSetupDomains() {
-  for (const int keyMode : {4, 5, 6, 7, 8, 9, 10, 14, 24, 48}) {
-    expect(result_contract::isSupportedKeyMode(keyMode),
-           "every supported play key mode is accepted");
+  for (const int keyMode : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 24,
+                            48, 127, std::numeric_limits<int>::max()}) {
+    expect(result_contract::isValidKeyMode(keyMode),
+           "every positive play key count is accepted");
   }
-  for (const int keyMode : {-1, 0, 1, 3, 11, 13, 49}) {
-    expect(!result_contract::isSupportedKeyMode(keyMode),
-           "unknown key modes are rejected by the shared authority");
+  for (const int keyMode : {std::numeric_limits<int>::min(), -1, 0}) {
+    expect(!result_contract::isValidKeyMode(keyMode),
+           "non-positive key counts are rejected by the shared authority");
   }
   expect(
       result_contract::isKnownGaugeType(GaugeType::Hazard) &&

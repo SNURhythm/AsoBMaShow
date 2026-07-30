@@ -8,11 +8,9 @@
 namespace {
 constexpr int kFirstPlayerScratchLane = 7;
 constexpr int kSecondPlayerScratchLane = 15;
-constexpr int kMinimumGameplayLane = 0;
-constexpr int kMaximumGameplayLane = 15;
 
 bool isValidGameplayLane(int lane) {
-  return lane >= kMinimumGameplayLane && lane <= kMaximumGameplayLane;
+  return lane >= 0;
 }
 
 } // namespace
