@@ -1148,6 +1148,39 @@ void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
           "a release received while paused is deferred until resume");
 }
 
+void testArbitraryPhysicalLaneReleaseWhilePausedReconcilesOnResume() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "custom-lane-above-legacy-capacity",
+       .scope = {.player = 1, .keyMode = 130},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 129},
+       .control = {.deviceId = "keyboard",
+                   .deviceClass = input::DeviceClass::Keyboard,
+                   .kind = input::ControlKind::Key,
+                   .index = SDL_SCANCODE_D}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(130),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(keyEvent(SDL_SCANCODE_D, true), 200);
+  router.setGameplayEnabled(false, 300);
+  router.consume(keyEvent(SDL_SCANCODE_D, false), 400);
+  router.setGameplayEnabled(true, 500);
+
+  require(output.size() == 2 &&
+              output.front().type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output.back().type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output.back().lane == 129 &&
+              output.back().steadyTimestampMicros == 500,
+          "arbitrary physical lane state reconciles across pause and resume");
+}
+
 void testRealtimePhysicalInputHeldThroughPauseStaysPressed() {
   InputProfile profile;
   profile.bindings.push_back(
@@ -1303,6 +1336,7 @@ int main() {
   testRealtimeScratchReversalCarriesCanonicalDirections();
   testRealtimeStartProducesCommandAndReplayEdge();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
+  testArbitraryPhysicalLaneReleaseWhilePausedReconcilesOnResume();
   testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();

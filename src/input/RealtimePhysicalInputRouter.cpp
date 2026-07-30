@@ -1,14 +1,41 @@
 #include "RealtimePhysicalInputRouter.h"
 
 #include <algorithm>
+#include <span>
 #include <utility>
 
 namespace input {
+namespace {
+
+std::size_t trackedLaneExtent(const InputProfile &profile,
+                              std::span<const InputScope> activeScopes) {
+  std::size_t extent = 0;
+  for (const auto &binding : profile.bindings) {
+    if (std::ranges::find(activeScopes, binding.scope) == activeScopes.end()) {
+      continue;
+    }
+    int lane = -1;
+    if (binding.action.kind == LogicalActionKind::Lane) {
+      lane = binding.action.lane;
+    } else if (binding.action.kind == LogicalActionKind::ScratchClockwise ||
+               binding.action.kind ==
+                   LogicalActionKind::ScratchCounterClockwise) {
+      lane = LogicalGameplayInputAdapter::physicalScratchLane(binding.scope);
+    }
+    if (lane >= 0) {
+      extent = std::max(extent, static_cast<std::size_t>(lane) + 1);
+    }
+  }
+  return extent;
+}
+
+} // namespace
 
 RealtimePhysicalInputRouter::RealtimePhysicalInputRouter(
     const InputProfile &profile, std::vector<InputScope> activeScopes,
     Sink sink)
     : sink_(std::move(sink)),
+      trackedLanes_(trackedLaneExtent(profile, activeScopes)),
       pipeline_(*this, profile, std::move(activeScopes),
                 [this](const LogicalInputTransition &transition) {
                   emitCommand(transition);
@@ -40,28 +67,29 @@ void RealtimePhysicalInputRouter::setGameplayEnabled(
   if (!enabled) {
     return;
   }
-  for (std::size_t lane = 0; lane < desiredLanePressed_.size(); ++lane) {
-    if (desiredLanePressed_[lane] != publishedLanePressed_[lane]) {
-      const auto &replayControl = desiredLanePressed_[lane]
-                                      ? desiredReplayControls_[lane]
-                                      : publishedReplayControls_[lane];
-      (void)emit(desiredLanePressed_[lane]
+  for (std::size_t lane = 0; lane < trackedLanes_.size(); ++lane) {
+    const auto &state = trackedLanes_[lane];
+    if (state.desiredPressed != state.publishedPressed) {
+      const auto &replayControl = state.desiredPressed
+                                      ? state.desiredReplayControl
+                                      : state.publishedReplayControl;
+      (void)emit(state.desiredPressed
                      ? RealtimePhysicalInputTransitionType::Press
                      : RealtimePhysicalInputTransitionType::Release,
                  static_cast<int>(lane), false, replayControl);
       continue;
     }
-    if (!desiredLanePressed_[lane] ||
-        desiredReplayControls_[lane] == publishedReplayControls_[lane]) {
+    if (!state.desiredPressed ||
+        state.desiredReplayControl == state.publishedReplayControl) {
       continue;
     }
-    if (publishedReplayControls_[lane].has_value()) {
+    if (state.publishedReplayControl.has_value()) {
       (void)emitReplayOnly(RealtimePhysicalInputTransitionType::Release,
-                           *publishedReplayControls_[lane]);
+                           *state.publishedReplayControl);
     }
-    if (desiredReplayControls_[lane].has_value()) {
+    if (state.desiredReplayControl.has_value()) {
       (void)emitReplayOnly(RealtimePhysicalInputTransitionType::Press,
-                           *desiredReplayControls_[lane]);
+                           *state.desiredReplayControl);
     }
   }
 }
@@ -108,8 +136,9 @@ void RealtimePhysicalInputRouter::emitApplied(
     }
     if (applied.pressed && applied.physicalLane >= 0 &&
         static_cast<std::size_t>(applied.physicalLane) <
-            desiredReplayControls_.size()) {
-      desiredReplayControls_[static_cast<std::size_t>(applied.physicalLane)] =
+            trackedLanes_.size()) {
+      trackedLanes_[static_cast<std::size_t>(applied.physicalLane)]
+          .desiredReplayControl =
           applied.hasReplayControl
               ? std::optional<replay::LogicalControl>(applied.control)
               : std::nullopt;
@@ -127,20 +156,20 @@ void RealtimePhysicalInputRouter::emitApplied(
 bool RealtimePhysicalInputRouter::emit(
     RealtimePhysicalInputTransitionType type, int lane, bool backSpin,
     std::optional<replay::LogicalControl> replayControl) {
-  const bool tracked = lane >= 0 &&
-                       static_cast<std::size_t>(lane) <
-                           desiredLanePressed_.size();
-  if (tracked) {
-    desiredLanePressed_[static_cast<std::size_t>(lane)] =
+  TrackedLaneState *tracked =
+      lane >= 0 && static_cast<std::size_t>(lane) < trackedLanes_.size()
+          ? &trackedLanes_[static_cast<std::size_t>(lane)]
+          : nullptr;
+  if (tracked != nullptr) {
+    tracked->desiredPressed =
         type == RealtimePhysicalInputTransitionType::Press;
-    desiredReplayControls_[static_cast<std::size_t>(lane)] = replayControl;
+    tracked->desiredReplayControl = replayControl;
   }
   if (!gameplayEnabled_ || !sink_) {
     return true;
   }
-  if (tracked &&
-      desiredLanePressed_[static_cast<std::size_t>(lane)] ==
-          publishedLanePressed_[static_cast<std::size_t>(lane)]) {
+  if (tracked != nullptr &&
+      tracked->desiredPressed == tracked->publishedPressed) {
     return true;
   }
   const bool published = sink_({.type = type,
@@ -151,11 +180,9 @@ bool RealtimePhysicalInputRouter::emit(
                                     replay::LogicalControl{}),
                                 .steadyTimestampMicros =
                                     currentTimestampMicros_});
-  if (published && tracked) {
-    publishedLanePressed_[static_cast<std::size_t>(lane)] =
-        desiredLanePressed_[static_cast<std::size_t>(lane)];
-    publishedReplayControls_[static_cast<std::size_t>(lane)] =
-        replayControl;
+  if (published && tracked != nullptr) {
+    tracked->publishedPressed = tracked->desiredPressed;
+    tracked->publishedReplayControl = replayControl;
   }
   return published;
 }

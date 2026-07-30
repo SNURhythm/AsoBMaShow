@@ -44,6 +44,7 @@ public:
   void apply(std::span<const input::LogicalInputTransition> transitions);
   [[nodiscard]] bms_parser::Note *
   applyTouch(const input::LogicalInputTransition &transition);
+  [[nodiscard]] static int physicalScratchLane(input::InputScope scope);
   void reset();
 
 private:
@@ -65,7 +66,6 @@ private:
     std::optional<ScratchDirection> activeDirection;
   };
 
-  static int scratchLane(input::InputScope scope);
   [[nodiscard]] bool isLaneHeld(int lane) const;
   bms_parser::Note *pressPhysicalLane(int lane);
   void releasePhysicalLane(int lane, bool backSpin);

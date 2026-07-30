@@ -2,7 +2,6 @@
 
 #include "LogicalGameplayInputAdapter.h"
 
-#include <array>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -29,7 +28,6 @@ struct RealtimePhysicalInputTransition {
 
 class RealtimePhysicalInputRouter final : private IRhythmControl {
 public:
-  static constexpr std::size_t kTrackedLaneCapacity = 64;
   using Sink = std::function<bool(const RealtimePhysicalInputTransition &)>;
 
   RealtimePhysicalInputRouter(const InputProfile &,
@@ -45,6 +43,13 @@ public:
                           std::int64_t steadyTimestampMicros);
 
 private:
+  struct TrackedLaneState {
+    bool desiredPressed = false;
+    bool publishedPressed = false;
+    std::optional<replay::LogicalControl> desiredReplayControl;
+    std::optional<replay::LogicalControl> publishedReplayControl;
+  };
+
   bms_parser::Note *pressLane(int mainLane, int compensateLane,
                               double inputDelay) override;
   bms_parser::Note *pressLane(int lane, double inputDelay) override;
@@ -63,12 +68,7 @@ private:
   Sink sink_;
   std::int64_t currentTimestampMicros_ = 0;
   bool gameplayEnabled_ = false;
-  std::array<bool, kTrackedLaneCapacity> desiredLanePressed_{};
-  std::array<bool, kTrackedLaneCapacity> publishedLanePressed_{};
-  std::array<std::optional<replay::LogicalControl>, kTrackedLaneCapacity>
-      desiredReplayControls_{};
-  std::array<std::optional<replay::LogicalControl>, kTrackedLaneCapacity>
-      publishedReplayControls_{};
+  std::vector<TrackedLaneState> trackedLanes_;
   std::deque<RealtimePhysicalInputTransition> pendingTransitions_;
   LogicalGameplayInputPipeline pipeline_;
 };

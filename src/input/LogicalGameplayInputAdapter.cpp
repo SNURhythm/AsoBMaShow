@@ -98,7 +98,7 @@ void LogicalGameplayInputAdapter::applyOwned(
       bool reversing = false;
       bool oppositeReleasedInBatch = false;
       if (!transition.pressed) {
-        const int lane = scratchLane(transition.scope);
+        const int lane = physicalScratchLane(transition.scope);
         for (std::size_t candidateIndex = 0;
              candidateIndex < transitions.size(); ++candidateIndex) {
           const auto &candidate = transitions[candidateIndex];
@@ -107,7 +107,8 @@ void LogicalGameplayInputAdapter::applyOwned(
                   input::LogicalActionKind::ScratchClockwise ||
               candidate.action.kind ==
                   input::LogicalActionKind::ScratchCounterClockwise;
-          if (!candidateIsScratch || scratchLane(candidate.scope) != lane) {
+          if (!candidateIsScratch ||
+              physicalScratchLane(candidate.scope) != lane) {
             continue;
           }
           const bool opposite =
@@ -170,7 +171,8 @@ void LogicalGameplayInputAdapter::reset() {
   latestPressedNote_ = nullptr;
 }
 
-int LogicalGameplayInputAdapter::scratchLane(input::InputScope scope) {
+int LogicalGameplayInputAdapter::physicalScratchLane(
+    input::InputScope scope) {
   return scope.player == 2 ? kSecondPlayerScratchLane : kFirstPlayerScratchLane;
 }
 
@@ -240,7 +242,7 @@ void LogicalGameplayInputAdapter::applyLane(
 void LogicalGameplayInputAdapter::applyScratch(
     const input::LogicalInputTransition &transition, ScratchDirection direction,
     OwnerKind ownerKind, bool reversing, bool oppositeReleasedInBatch) {
-  const int lane = scratchLane(transition.scope);
+  const int lane = physicalScratchLane(transition.scope);
   const ScratchOwner owner{.direction = direction,
                            .scope = transition.scope,
                            .kind = ownerKind};
@@ -317,7 +319,7 @@ replay::LogicalControl LogicalGameplayInputAdapter::replayLaneControl(
   const bool digitalScratch =
       (transition.scope.keyMode == 5 || transition.scope.keyMode == 7 ||
        transition.scope.keyMode == 10 || transition.scope.keyMode == 14) &&
-      transition.action.lane == scratchLane(transition.scope);
+      transition.action.lane == physicalScratchLane(transition.scope);
   const auto control = replay::logicalControlForChartLane(
       transition.scope.keyMode, transition.action.lane, digitalScratch);
   return control.value_or(replay::LogicalControl{
