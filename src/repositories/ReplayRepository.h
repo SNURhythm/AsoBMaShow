@@ -517,7 +517,7 @@ struct ModernIrSnapshotReadOutcome {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 17;
+  static constexpr int kCurrentSchemaVersion = 18;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);

@@ -89,11 +89,8 @@ gameplay::RealtimeTouchLayout makeLayout(bool dragMode = false) {
   layout.topLeft = {0.3F, 0.1F};
   layout.topRight = {0.7F, 0.1F};
   layout.laneCount = 4;
-  layout.lanes[0] = 0;
-  layout.lanes[1] = 1;
-  layout.lanes[2] = 2;
-  layout.lanes[3] = 7;
-  layout.scratch[3] = true;
+  layout.lanes = {0, 1, 2, 7};
+  layout.scratch = {false, false, false, true};
   layout.dragMode = dragMode;
   return layout;
 }
@@ -168,6 +165,75 @@ void testDirectTouchEmitsTimestampedLaneEdges() {
               gameplay::RealtimeGameplayInputSource::Touch &&
           capture.events[1].lane == 0,
       "native samples preserve their timestamp and lane edge order");
+}
+
+void testScratchlessTouchPreservesBmsChannelReplayMapping() {
+  struct Case {
+    int keyMode;
+    std::vector<int> visualLanes;
+  };
+  for (const auto &[keyMode, visualLanes] :
+       {Case{4, {0, 1, 3, 4}}, Case{6, {0, 1, 2, 4, 5, 6}},
+        Case{8, {7, 0, 1, 2, 3, 4, 5, 6}}}) {
+    InputCapture capture;
+    auto layout = makeLayout();
+    layout.keyMode = keyMode;
+    layout.laneCount = visualLanes.size();
+    layout.lanes = visualLanes;
+    layout.scratch.assign(visualLanes.size(), false);
+    gameplay::RealtimeTouchInputRouter router(
+        42, layout, {.context = &capture, .emit = &InputCapture::emit});
+
+    require(router.consume({.fingerId = keyMode,
+                            .phase = gameplay::RealtimeTouchPhase::Down,
+                            .normalizedX = 0.21F,
+                            .normalizedY = 0.5F,
+                            .steadyTimestampMicros = 123'456}),
+            "scratchless touch down reaches gameplay");
+    require(router.consume({.fingerId = keyMode,
+                            .phase = gameplay::RealtimeTouchPhase::Up,
+                            .normalizedX = 0.21F,
+                            .normalizedY = 0.5F,
+                            .steadyTimestampMicros = 124'000}),
+            "scratchless touch up reaches gameplay");
+    require(capture.events.size() == 2 &&
+                capture.events[0].lane == visualLanes.front() &&
+                capture.events[1].lane == visualLanes.front() &&
+                capture.events[0].hasReplayControl &&
+                capture.events[1].hasReplayControl &&
+                capture.events[0].replayControl == replay::LogicalControl{
+                    .kind = replay::LogicalControlKind::Lane,
+                    .player = 1,
+                    .lane = visualLanes.front()} &&
+                capture.events[1].replayControl ==
+                    capture.events[0].replayControl,
+            "non-stock BRD modes preserve their physical BMS channel lane");
+  }
+}
+
+void testTouchLayoutDoesNotClampChartsAboveSixtyFourLanes() {
+  InputCapture capture;
+  auto layout = makeLayout();
+  layout.keyMode = 65;
+  layout.laneCount = 65;
+  layout.lanes.clear();
+  layout.scratch.assign(layout.laneCount, false);
+  for (int lane = 0; lane < static_cast<int>(layout.laneCount); ++lane) {
+    layout.lanes.push_back(lane);
+  }
+  gameplay::RealtimeTouchInputRouter router(
+      42, std::move(layout),
+      {.context = &capture, .emit = &InputCapture::emit});
+
+  require(router.consume({.fingerId = 65,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.899F,
+                          .normalizedY = 0.9F,
+                          .steadyTimestampMicros = 123'456}),
+          "touch on a chart above sixty-four lanes reaches gameplay");
+  require(capture.events.size() == 1 && capture.events.front().lane == 64 &&
+              !capture.events.front().hasReplayControl,
+          "touch routing preserves the final dynamic chart lane");
 }
 
 void testDragModeChangesLaneWithoutWaitingForAFrame() {
@@ -455,6 +521,8 @@ int main() {
   testTouchPresentationUsesUiNormalizedCoordinates();
   testChartLaneMappingCoversEveryReplayKeyMode();
   testDirectTouchEmitsTimestampedLaneEdges();
+  testScratchlessTouchPreservesBmsChannelReplayMapping();
+  testTouchLayoutDoesNotClampChartsAboveSixtyFourLanes();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();
   testScratchLongNoteIgnoresSmallDirectionJitter();

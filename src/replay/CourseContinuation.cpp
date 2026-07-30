@@ -149,7 +149,8 @@ CourseContinuationOutcome advanceCourseContinuation(
     if (!validCourseRestMicros(completion.restMicrosAfterStage, limits)) {
       return invalid(CourseContinuationIssue::Rest);
     }
-    if (!setupAgreesWithCourse(completion.setup, current)) {
+    if (completion.setup.has_value() &&
+        !setupAgreesWithCourse(*completion.setup, current)) {
       return invalid(CourseContinuationIssue::Setup);
     }
     if (addOverflows(current.score, completion.score) ||

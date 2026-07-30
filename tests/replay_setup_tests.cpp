@@ -95,7 +95,7 @@ void testUnknownSetupSourceFailsClosed() {
 }
 
 void testSupportedKeyModesAndDoublePlayOption() {
-  constexpr std::array keyModes{5, 7, 9, 10, 14, 24, 48};
+  constexpr std::array keyModes{4, 5, 6, 7, 8, 9, 10, 14, 24, 48};
   for (int keyMode : keyModes) {
     auto setup = validSetup();
     setup.chart.keyMode = keyMode;
@@ -106,13 +106,16 @@ void testSupportedKeyModesAndDoublePlayOption() {
            "demonstrated Beatoraja key mode is accepted");
   }
 
-  auto invalid = validSetup();
-  invalid.chart.keyMode = 8;
-  invalid.doublePlayOption = replay::DoublePlayOption::Normal;
-  expect(replay::validateReplaySetup(invalid,
-                                     replay::ReplaySetupSource::LocalCapture)
-                 .issue == replay::ReplaySetupIssue::KeyMode,
-         "unsupported key mode fails closed");
+  for (const int keyMode : {1, 3, 11, 49, 127}) {
+    auto custom = validSetup();
+    custom.chart.keyMode = keyMode;
+    custom.doublePlayOption = replay::DoublePlayOption::Normal;
+    expect(replay::validateReplaySetup(
+               custom, replay::ReplaySetupSource::LocalCapture)
+                   .issue == replay::ReplaySetupIssue::KeyMode,
+           "positive key counts without a stock BRD layout keep replay "
+           "optional");
+  }
 
   auto single = validSetup();
   single.chart.keyMode = 7;

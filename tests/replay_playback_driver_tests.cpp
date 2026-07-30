@@ -441,13 +441,13 @@ void testDriverRejectsReverseTimeAndBoundsEachAdvance() {
 void testLogicalGameplayAdapterOwnsLaneAndScratchMapping() {
   for (const auto &layout : kReplayKeyModeLayouts) {
     for (int player = 1; player <= layout.players; ++player) {
-      for (int lane = 0; lane < layout.logicalLanesPerPlayer; ++lane) {
+      for (int lane = 0; lane < layout.laneCodeWidthPerPlayer; ++lane) {
         const LogicalControl logical{.kind = LogicalControlKind::Lane,
                                      .player = player,
                                      .lane = lane};
         const auto physical = physicalChartLaneForLogicalControl(
             layout.keyMode, logical);
-        expect(physical &&
+        expect(!physical ||
                    logicalControlForChartLane(layout.keyMode, *physical,
                                               false) == logical,
                "logical lane mapping round-trips through one authority");

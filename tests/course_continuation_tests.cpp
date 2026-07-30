@@ -125,7 +125,8 @@ void testContiguousMixedSetupCourseCarriesEveryStateFact() {
                  replay::kReplayLimits.maxCourseRestMicros,
          "inclusive maximum course rest is retained");
   expect(first.state->stageSetups.size() == 1 &&
-             first.state->stageSetups.front().chart.keyMode == 7 &&
+             first.state->stageSetups.front().has_value() &&
+             first.state->stageSetups.front()->chart.keyMode == 7 &&
              first.state->constraints.beatorajaConstraintIds ==
                  std::vector<int>({4, 9}),
          "constraints and first-stage setup remain explicit");
@@ -141,9 +142,33 @@ void testContiguousMixedSetupCourseCarriesEveryStateFact() {
                second.state->maximumCombo == 9,
            "second stage updates aggregate score and carried combo");
     expect(second.state->stageSetups.size() == 2 &&
-               second.state->stageSetups[1].chart.keyMode == 14,
+               second.state->stageSetups[1].has_value() &&
+               second.state->stageSetups[1]->chart.keyMode == 14,
            "mixed per-stage replay setup is preserved in order");
   }
+}
+
+void testResultContinuationAdvancesWithoutReplaySetup() {
+  const auto initial = initialState();
+  auto stage = completion(0, 120, 200, 4, 7, 68.0F, 7, 'a', 0);
+  stage.setup.reset();
+
+  const auto advanced = replay::advanceCourseContinuation(initial, stage);
+  expect(advanced.advanced() && advanced.state,
+         "result state advances when a key mode has no BRD setup");
+  if (!advanced.state) {
+    return;
+  }
+  expect(advanced.state->score == 120 &&
+             advanced.state->maximumScore == 200 &&
+             advanced.state->combo == 4 &&
+             advanced.state->maximumCombo == 7 &&
+             sameGauge(advanced.state->gauge,
+                       gauge(68.0F, GaugeType::Hard)),
+         "score, combo, and gauge facts remain independent from replay setup");
+  expect(advanced.state->stageSetups.size() == 1 &&
+             !advanced.state->stageSetups.front().has_value(),
+         "the absent replay setup remains explicit in stage order");
 }
 
 void testInvalidTransitionsLeaveThePriorStateUntouched() {
@@ -174,7 +199,7 @@ void testInvalidTransitionsLeaveThePriorStateUntouched() {
 void testContinuationTrustsStructurallyValidatedStageSetup() {
   const auto state = initialState(1);
   auto stage = completion(0, 1, 2, 0, 0, 70.0F, 7, 'a', 0);
-  stage.setup.chart = {};
+  stage.setup->chart = {};
   const auto advanced = replay::advanceCourseContinuation(state, stage);
   expect(advanced.advanced() && advanced.state,
          "continuation compares carried setup without repeating codec checks");
@@ -277,6 +302,7 @@ void testOverlongLiveRestDropsOnlyReplayAttachment() {
 int main() {
 #if ASOBMASHOW_HAS_COURSE_CONTINUATION
   testContiguousMixedSetupCourseCarriesEveryStateFact();
+  testResultContinuationAdvancesWithoutReplaySetup();
   testInvalidTransitionsLeaveThePriorStateUntouched();
   testContinuationTrustsStructurallyValidatedStageSetup();
   testScoreOverflowAndCompletedCourseCannotAdvance();

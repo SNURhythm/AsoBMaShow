@@ -538,7 +538,6 @@ buildRealtimeTouchLayout(const bms_parser::Chart &chart, BMSRenderer &renderer,
   const auto touchBounds = renderer.gameplayTouchBoundsUi();
   const auto lanes = chart.Meta.GetTotalLaneIndices();
   if (!touchBounds.has_value() || lanes.empty() ||
-      lanes.size() > gameplay::kRealtimeTouchLaneCapacity ||
       rendering::render_width <= 0 || rendering::render_height <= 0) {
     return std::nullopt;
   }
@@ -561,9 +560,10 @@ buildRealtimeTouchLayout(const bms_parser::Chart &chart, BMSRenderer &renderer,
   layout.laneCount = lanes.size();
   layout.keyMode = chart.Meta.KeyMode;
   layout.dragMode = dragMode;
+  layout.lanes = lanes;
+  layout.scratch.reserve(lanes.size());
   for (std::size_t index = 0; index < lanes.size(); ++index) {
-    layout.lanes[index] = lanes[index];
-    layout.scratch[index] = chartLaneIsScratch(chart.Meta, lanes[index]);
+    layout.scratch.push_back(chartLaneIsScratch(chart.Meta, lanes[index]));
   }
   return layout;
 }
@@ -773,20 +773,23 @@ struct GamePlayScene::RealtimeGameplaySession {
                                       nowMicros(), inputDelayMicros);
   }
 
-  bool emitLegacyApplied(replay::LogicalControl control, bool pressed,
+  bool emitLegacyApplied(int physicalLane, replay::LogicalControl control,
+                         bool hasReplayControl, bool pressed,
                          bool replayOnly) {
     return legacyInputBridge != nullptr &&
-           legacyInputBridge->emitApplied(control, pressed, replayOnly,
-                                          nowMicros());
+           legacyInputBridge->emitApplied(physicalLane, control,
+                                          hasReplayControl, pressed,
+                                          replayOnly, nowMicros());
   }
 
   static bool scratchLongNoteHeld(void *context, int lane) {
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (session.worker == nullptr || lane < 0 || lane >= 64) {
+    if (session.worker == nullptr || lane < 0) {
       return false;
     }
     auto snapshot = session.worker->acquireLatestSnapshot();
-    return snapshot &&
+    return snapshot && static_cast<std::size_t>(lane) <
+                           snapshot->longNoteHoldingByLane.size() &&
            snapshot->longNoteHoldingByLane[static_cast<std::size_t>(lane)];
   }
 
@@ -1127,7 +1130,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       std::move(definition), std::move(workerConfig));
   session->legacyInputBridge =
       std::make_unique<gameplay::RealtimeGameplayInputBridge>(
-          session->epoch, chart->Meta.KeyMode,
+          session->epoch,
           gameplay::RealtimeGameplayInputBridgeSink{
               .context = session.get(),
               .emit = &RealtimeGameplaySession::emitLegacyInput});
@@ -1465,7 +1468,9 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     state->judgementFastSlowCount[value] = snapshot->fastSlowCounts[judgement];
   }
 
-  std::array<bool, 64> lanesWithNewVisual{};
+  std::array<int, gameplay::kRealtimeGameplayTransactionHistorySize>
+      lanesWithNewVisual{};
+  std::size_t lanesWithNewVisualCount = 0;
   const long long visualCatchUpMicros = nowMicros();
   const long long judgementDisplayMicros = getVisualTimeMicros(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
@@ -1478,8 +1483,8 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     if (result.hasLaneVisual) {
       const auto &visual = result.laneVisual;
       if (visual.lane >= 0 &&
-          static_cast<std::size_t>(visual.lane) < lanesWithNewVisual.size()) {
-        lanesWithNewVisual[static_cast<std::size_t>(visual.lane)] = true;
+          lanesWithNewVisualCount < lanesWithNewVisual.size()) {
+        lanesWithNewVisual[lanesWithNewVisualCount++] = visual.lane;
       }
       if (visual.action == gameplay::LaneVisualAction::Press) {
         renderer->onLanePressed(visual.lane, visual.judge, visualCatchUpMicros);
@@ -1504,9 +1509,10 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     const bool previous = lanePressed[lane];
     lanePressed[lane] = pressed;
     if (pressed == previous ||
-        (lane >= 0 &&
-         static_cast<std::size_t>(lane) < lanesWithNewVisual.size() &&
-         lanesWithNewVisual[static_cast<std::size_t>(lane)])) {
+        std::find(lanesWithNewVisual.begin(),
+                  lanesWithNewVisual.begin() + lanesWithNewVisualCount,
+                  lane) != lanesWithNewVisual.begin() +
+                               lanesWithNewVisualCount) {
       continue;
     }
     if (pressed) {
@@ -1736,8 +1742,10 @@ void GamePlayScene::init() {
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
         LogicalGameplayRegistryPolicy{},
         [this](const auto &transition) {
-          captureModernReplayInput(transition.control, transition.pressed,
-                                   transition.replayOnly);
+          captureModernReplayInput(
+              transition.physicalLane, transition.control,
+              transition.hasReplayControl, transition.pressed,
+              transition.replayOnly);
         });
     inputHandler = ownedInputHandler.get();
     inputHandler->setDragModeEnabled(
@@ -2861,14 +2869,15 @@ void GamePlayScene::beginReplayRecording() {
       getGameplayTimeMicros(preparationPlan.playbackStartTimeMicros), false);
 }
 
-void GamePlayScene::captureModernReplayInput(replay::LogicalControl control,
-                                             bool pressed, bool replayOnly) {
+void GamePlayScene::captureModernReplayInput(
+    int physicalLane, replay::LogicalControl control, bool hasReplayControl,
+    bool pressed, bool replayOnly) {
   if (realtimeGameplayAuthorityActive()) {
-    (void)realtimeGameplaySession->emitLegacyApplied(control, pressed,
-                                                     replayOnly);
+    (void)realtimeGameplaySession->emitLegacyApplied(
+        physicalLane, control, hasReplayControl, pressed, replayOnly);
     return;
   }
-  if (modernReplayInputRecorder == nullptr) {
+  if (modernReplayInputRecorder == nullptr || !hasReplayControl) {
     return;
   }
   std::string diagnostic;
@@ -3044,7 +3053,7 @@ void GamePlayScene::recordModernCourseStage(
   }
 
   std::optional<replay::CourseContinuationState> advancedContinuation;
-  if (currentContinuation.has_value() && setup.has_value()) {
+  if (currentContinuation.has_value()) {
     const auto advanced = replay::advanceCourseContinuation(
         *currentContinuation,
         {.stageIndex = session->currentIndex,
@@ -3055,7 +3064,7 @@ void GamePlayScene::recordModernCourseStage(
          .gauge = state->gaugeSnapshot(),
          .adoptedGauge = result->adoptedGaugeType,
          .restMicrosAfterStage = 0,
-         .setup = *setup});
+         .setup = setup});
     if (advanced.advanced()) {
       advancedContinuation = std::move(advanced.state);
     }

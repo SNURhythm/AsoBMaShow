@@ -7,6 +7,7 @@
 
 #include <SDL2/SDL_scancode.h>
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -942,6 +943,113 @@ void testRealtimePhysicalInputPreservesNativeTimestamp() {
           "timestamps");
 }
 
+void testNonStockKeyModesCaptureBmsChannelReplayControls() {
+  struct Case {
+    int keyMode;
+    int physicalLane;
+  };
+  for (const auto [keyMode, lane] :
+       {Case{4, 4}, Case{6, 6}, Case{8, 7}}) {
+    InputProfile profile;
+    profile.bindings.push_back(
+        {.id = "custom-key-lane",
+         .scope = {.player = 1, .keyMode = keyMode},
+         .action = {.kind = input::LogicalActionKind::Lane, .lane = lane},
+         .control = {.deviceId = "keyboard",
+                     .deviceClass = input::DeviceClass::Keyboard,
+                     .kind = input::ControlKind::Key,
+                     .index = SDL_SCANCODE_D}});
+    std::vector<input::RealtimePhysicalInputTransition> output;
+    input::RealtimePhysicalInputRouter router(
+        profile, makeGameplayInputScopes(keyMode),
+        [&](const auto &transition) {
+          output.push_back(transition);
+          return true;
+        });
+    router.setGameplayEnabled(true, 9000);
+
+    const auto down = keyEvent(SDL_SCANCODE_D, true);
+    const auto up = keyEvent(SDL_SCANCODE_D, false);
+    router.consume(down, 1234567);
+    router.consume(up, 1234999);
+
+    require(output.size() == 2 && output[0].lane == lane &&
+                output[1].lane == lane && output[0].hasReplayControl &&
+                output[1].hasReplayControl &&
+                output[0].replayControl == replay::LogicalControl{
+                    .kind = replay::LogicalControlKind::Lane,
+                    .player = 1,
+                    .lane = lane} &&
+                output[1].replayControl == output[0].replayControl,
+            "non-stock key modes capture their exact BMS channel lane in "
+            "BRD metadata");
+  }
+}
+
+void testArbitraryLaneInputDoesNotDependOnBrdControls() {
+  struct Case {
+    int keyMode;
+    int physicalLane;
+  };
+  for (const auto [keyMode, lane] :
+       {Case{1, 0}, Case{17, 31}, Case{65, 129}, Case{128, 1024}}) {
+    InputProfile profile;
+    profile.bindings.push_back(
+        {.id = "custom-key-lane",
+         .scope = {.player = 1, .keyMode = keyMode},
+         .action = {.kind = input::LogicalActionKind::Lane, .lane = lane},
+         .control = {.deviceId = "keyboard",
+                     .deviceClass = input::DeviceClass::Keyboard,
+                     .kind = input::ControlKind::Key,
+                     .index = SDL_SCANCODE_D}});
+    std::vector<input::RealtimePhysicalInputTransition> output;
+    input::RealtimePhysicalInputRouter router(
+        profile, makeGameplayInputScopes(keyMode),
+        [&](const auto &transition) {
+          output.push_back(transition);
+          return true;
+        });
+    router.setGameplayEnabled(true, 9000);
+
+    router.consume(keyEvent(SDL_SCANCODE_D, true), 1234567);
+    router.consume(keyEvent(SDL_SCANCODE_D, false), 1234999);
+
+    require(output.size() == 2 && output[0].lane == lane &&
+                output[1].lane == lane && !output[0].hasReplayControl &&
+                !output[1].hasReplayControl,
+            "arbitrary physical lanes reach gameplay without requiring BRD "
+            "control metadata");
+  }
+}
+
+void testPhysicalTouchLaneDoesNotDependOnBrdControls() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputPipeline pipeline(
+      control, makeDefaultInputProfile(), makeGameplayInputScopes(4), {}, {},
+      [&](const auto &transition) { applied.push_back(transition); });
+
+  (void)pipeline.consumePhysicalTouchLane(
+      {.player = 1, .keyMode = 4}, 4, true, std::nullopt);
+  (void)pipeline.consumePhysicalTouchLane(
+      {.player = 1, .keyMode = 4}, 4, false, std::nullopt);
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 4},
+                  {.kind = ControlCall::Kind::Release, .lane = 4}},
+          "physical touch lanes reach gameplay without a BRD layout");
+  require(applied.size() == 2 && applied[0].physicalLane == 4 &&
+              applied[1].physicalLane == 4 &&
+              applied[0].hasReplayControl && applied[1].hasReplayControl &&
+              applied[0].control == replay::LogicalControl{
+                  .kind = replay::LogicalControlKind::Lane,
+                  .player = 1,
+                  .lane = 4} &&
+              applied[1].control == applied[0].control,
+          "physical touch lanes preserve non-stock BRD channel metadata");
+}
+
 void testRealtimeScratchReversalCarriesCanonicalDirections() {
   InputProfile profile;
   const input::PhysicalControl clockwise{
@@ -1083,6 +1191,72 @@ void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
               output[1].lane == 5 &&
               output[1].steadyTimestampMicros == 500,
           "a release received while paused is deferred until resume");
+}
+
+void testArbitraryPhysicalLaneReleaseWhilePausedReconcilesOnResume() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "custom-lane-above-legacy-capacity",
+       .scope = {.player = 1, .keyMode = 130},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 129},
+       .control = {.deviceId = "keyboard",
+                   .deviceClass = input::DeviceClass::Keyboard,
+                   .kind = input::ControlKind::Key,
+                   .index = SDL_SCANCODE_D}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(130),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(keyEvent(SDL_SCANCODE_D, true), 200);
+  router.setGameplayEnabled(false, 300);
+  router.consume(keyEvent(SDL_SCANCODE_D, false), 400);
+  router.setGameplayEnabled(true, 500);
+
+  require(output.size() == 2 &&
+              output.front().type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output.back().type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output.back().lane == 129 &&
+              output.back().steadyTimestampMicros == 500,
+          "arbitrary physical lane state reconciles across pause and resume");
+}
+
+void testExtremeImportedLaneUsesSparsePauseState() {
+  constexpr int kExtremeLane = std::numeric_limits<int>::max();
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "extreme-imported-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane,
+                  .lane = kExtremeLane},
+       .control = {.deviceId = "keyboard",
+                   .deviceClass = input::DeviceClass::Keyboard,
+                   .kind = input::ControlKind::Key,
+                   .index = SDL_SCANCODE_D}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(keyEvent(SDL_SCANCODE_D, true), 200);
+  router.setGameplayEnabled(false, 300);
+  router.consume(keyEvent(SDL_SCANCODE_D, false), 400);
+  router.setGameplayEnabled(true, 500);
+
+  require(output.size() == 2 && output.front().lane == kExtremeLane &&
+              output.back().lane == kExtremeLane &&
+              output.back().type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output.back().steadyTimestampMicros == 500,
+          "extreme imported lanes reconcile without allocating by lane value");
 }
 
 void testRealtimePhysicalInputHeldThroughPauseStaysPressed() {
@@ -1235,9 +1409,14 @@ int main() {
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
+  testNonStockKeyModesCaptureBmsChannelReplayControls();
+  testArbitraryLaneInputDoesNotDependOnBrdControls();
+  testPhysicalTouchLaneDoesNotDependOnBrdControls();
   testRealtimeScratchReversalCarriesCanonicalDirections();
   testRealtimeStartProducesCommandAndReplayEdge();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
+  testArbitraryPhysicalLaneReleaseWhilePausedReconcilesOnResume();
+  testExtremeImportedLaneUsesSparsePauseState();
   testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();

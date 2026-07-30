@@ -29,7 +29,9 @@ public:
       std::function<void(const input::LogicalInputTransition &)>;
   struct AppliedTransition {
     input::LogicalInputTransition source;
+    int physicalLane = -1;
     replay::LogicalControl control;
+    bool hasReplayControl = false;
     bool pressed = false;
     bool replayOnly = false;
   };
@@ -42,6 +44,7 @@ public:
   void apply(std::span<const input::LogicalInputTransition> transitions);
   [[nodiscard]] bms_parser::Note *
   applyTouch(const input::LogicalInputTransition &transition);
+  [[nodiscard]] static int physicalScratchLane(input::InputScope scope);
   void reset();
 
 private:
@@ -63,7 +66,6 @@ private:
     std::optional<ScratchDirection> activeDirection;
   };
 
-  static int scratchLane(input::InputScope scope);
   [[nodiscard]] bool isLaneHeld(int lane) const;
   bms_parser::Note *pressPhysicalLane(int lane);
   void releasePhysicalLane(int lane, bool backSpin);
@@ -82,7 +84,7 @@ private:
   void synchronizeScratchReplayControl(
       const input::LogicalInputTransition &transition, int lane);
   void notifyApplied(const input::LogicalInputTransition &,
-                     replay::LogicalControl, bool pressed);
+                     int physicalLane, replay::LogicalControl, bool pressed);
   void notifyCommandApplied(const input::LogicalInputTransition &);
 
   IRhythmControl &control_;
@@ -119,6 +121,9 @@ public:
   bool consumeDirectKeyboard(int scancode, bool pressed);
   [[nodiscard]] bms_parser::Note *consumeTouchTransition(
       const input::LogicalInputTransition &transition);
+  [[nodiscard]] bms_parser::Note *consumePhysicalTouchLane(
+      input::InputScope scope, int lane, bool pressed,
+      std::optional<int> scratchDirection);
   void disconnectDevice(std::string_view stableId);
   void reset();
 

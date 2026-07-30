@@ -16,14 +16,15 @@ struct RealtimeGameplayInputBridgeSink {
 
 class RealtimeGameplayInputBridge {
 public:
-  RealtimeGameplayInputBridge(std::uint64_t epoch, int keyMode,
+  RealtimeGameplayInputBridge(std::uint64_t epoch,
                               RealtimeGameplayInputBridgeSink sink) noexcept;
 
   bool prepare(RealtimeGameplayInputType type, int lane, int compensateLane,
                bool backSpin, std::int64_t steadyTimestampMicros,
                std::int64_t inputDelayMicros);
-  bool emitApplied(replay::LogicalControl control, bool pressed,
-                   bool replayOnly, std::int64_t steadyTimestampMicros);
+  bool emitApplied(int physicalLane, replay::LogicalControl control,
+                   bool hasReplayControl, bool pressed, bool replayOnly,
+                   std::int64_t steadyTimestampMicros);
 
 private:
   struct PendingScratchHandoff {
@@ -33,7 +34,6 @@ private:
   };
 
   std::uint64_t epoch_ = 0;
-  int keyMode_ = 7;
   RealtimeGameplayInputBridgeSink sink_;
   std::mutex mutex_;
   std::deque<RealtimeGameplayInput> pendingInputs_;

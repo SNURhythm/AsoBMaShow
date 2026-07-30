@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -67,6 +68,16 @@ Bytes encodeJson(const Json &document) {
   const auto encoded = replay::gzipCompress(bytes(source), diagnostic);
   expect(encoded.has_value(), "test JSON gzip compression succeeds");
   return encoded.value_or(Bytes{});
+}
+
+Bytes stockKeyRecord(int signedKeyCode, std::int64_t songTimeMicros) {
+  Bytes output{static_cast<std::byte>(static_cast<std::uint8_t>(
+      static_cast<std::int8_t>(signedKeyCode)))};
+  const auto rawTime = static_cast<std::uint64_t>(songTimeMicros);
+  for (int shift = 0; shift < 64; shift += 8) {
+    output.push_back(static_cast<std::byte>((rawTime >> shift) & 0xffU));
+  }
+  return output;
 }
 
 replay::ReplaySetup setup(std::string sha = std::string(64, 'a'),
@@ -406,6 +417,18 @@ void testDoublePlayAndKeyMapping() {
           5,
           {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 4},
           4},
+      Mapping{
+          4,
+          {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 4},
+          4},
+      Mapping{
+          6,
+          {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 6},
+          6},
+      Mapping{
+          8,
+          {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 7},
+          7},
       Mapping{7,
               {.kind = replay::LogicalControlKind::ScratchClockwise,
                .player = 1,
@@ -440,6 +463,57 @@ void testDoublePlayAndKeyMapping() {
                replay::BeatorajaReplayCodec::logicalControl(
                    mapping.stock, mapping.mode) == mapping.control,
            "stock key map is reversible for every supported mode");
+  }
+}
+
+void testNonStockChartProjectsBeatorajaKeyInput() {
+  replay::BeatorajaReplayCodec codec;
+  for (const auto [keyMode, lane] :
+       {std::pair{4, 4}, std::pair{6, 6}, std::pair{8, 7}}) {
+    auto source = chartDocument();
+    source.playback.setup = setup(std::string(64, 'a'), keyMode);
+    source.playback.setup.player1.laneShufflePattern.reset();
+    source.playback.input = {
+        {.songTimeMicros = 0,
+         .control = {.kind = replay::LogicalControlKind::Lane,
+                     .player = 1,
+                     .lane = lane},
+         .pressed = true},
+        {.songTimeMicros = 1,
+         .control = {.kind = replay::LogicalControlKind::Lane,
+                     .player = 1,
+                     .lane = lane},
+         .pressed = false},
+    };
+    std::string diagnostic;
+    const auto encoded = codec.encodeChart(source, 1, diagnostic);
+    expect(encoded.has_value(),
+           "non-stock accepted input produces a BRD document");
+    if (!encoded) {
+      continue;
+    }
+    Json stock = outerJson(*encoded);
+    const auto compressed = replay::base64UrlDecodeBounded(
+        stock.at("keyinput").get<std::string>(), 1024, diagnostic);
+    const auto records =
+        compressed
+            ? replay::gzipDecompressBounded(*compressed, 1024, diagnostic)
+            : std::nullopt;
+    auto expectedRecords = stockKeyRecord(lane + 1, 0);
+    auto releaseRecord = stockKeyRecord(-(lane + 1), 1);
+    expectedRecords.insert(expectedRecords.end(), releaseRecord.begin(),
+                           releaseRecord.end());
+    expect(records == std::optional(expectedRecords),
+           "non-stock BRD keyinput uses exact Beatoraja signed records");
+
+    stock.erase("asobmashow");
+    const auto stockDecoded = codec.decode(encodeJson(stock), context(source));
+    expect(stockDecoded.chart && stockDecoded.stockOnly &&
+               stockDecoded.stageSources ==
+                   std::vector{replay::ReplayStageDecodeSource::Stock} &&
+               stockDecoded.chart->playback.input == source.playback.input,
+           "stock-only Beatoraja fallback preserves non-stock BMS channel "
+           "lane controls");
   }
 }
 
@@ -530,6 +604,7 @@ int main() {
   testEmptyCompletedReplayAndInclusivePreRoll();
   testCourseRoundTripAndAggregateLimits();
   testDoublePlayAndKeyMapping();
+  testNonStockChartProjectsBeatorajaKeyInput();
   testSupportedAsoExtensionIsAuthoritative();
   testContextAndUntrustedStructureFailClosed();
   if (failures != 0) {

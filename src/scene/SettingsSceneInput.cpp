@@ -1,6 +1,7 @@
 #include "SettingsSceneShared.h"
 
 #include "SettingsSceneInputLayout.h"
+#include "../input/ChartLaneBinding.h"
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
@@ -49,8 +50,14 @@ std::vector<ActionDefinition> actionsForScope(input::InputScope scope) {
     firstLane = scope.player == 1 ? 0 : 8;
   }
   for (int localLane = 0; localLane < noteLanes; ++localLane) {
+    int physicalLane = firstLane + localLane;
+    if (scope.player == 1) {
+      physicalLane = input_profile::chartLaneForKeyPosition(
+                         scope.keyMode, localLane)
+                         .value_or(physicalLane);
+    }
     result.push_back(
-        {.action = {input::LogicalActionKind::Lane, firstLane + localLane},
+        {.action = {input::LogicalActionKind::Lane, physicalLane},
          .label = "Lane " + std::to_string(localLane + 1)});
   }
 

@@ -1,7 +1,7 @@
 #include "InputProfile.h"
+#include "ChartLaneBinding.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <set>
 #include <string>
@@ -9,8 +9,6 @@
 #include <utility>
 
 namespace {
-
-constexpr std::array<int, 7> kKnownKeyModes = {4, 5, 6, 7, 8, 10, 14};
 
 bool isExactDuplicate(const input::InputBinding &left,
                       const input::InputBinding &right) {
@@ -52,10 +50,9 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
       diagnostics.emplace_back("Clamped input binding player to 1 or 2.");
     }
 
-    if (std::ranges::find(kKnownKeyModes, binding.scope.keyMode) ==
-        kKnownKeyModes.end()) {
+    if (binding.scope.keyMode <= 0) {
       binding.scope.keyMode = 7;
-      diagnostics.emplace_back("Reset unknown input key mode to 7.");
+      diagnostics.emplace_back("Reset non-positive input key mode to 7.");
     }
 
     if (!std::isfinite(binding.deadZone) ||
@@ -128,6 +125,25 @@ void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
     binding.id = std::move(repairedId);
     usedIds.insert(binding.id);
   }
+}
+
+bool input_profile::migrateCompactScratchlessLaneBindings(
+    InputProfile &profile) {
+  bool changed = false;
+  for (auto &binding : profile.bindings) {
+    if (binding.action.kind != input::LogicalActionKind::Lane ||
+        (binding.scope.keyMode != 4 && binding.scope.keyMode != 6 &&
+         binding.scope.keyMode != 8)) {
+      continue;
+    }
+    const auto lane = chartLaneForKeyPosition(binding.scope.keyMode,
+                                              binding.action.lane);
+    if (lane.has_value() && *lane != binding.action.lane) {
+      binding.action.lane = *lane;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 std::vector<std::reference_wrapper<const input::InputBinding>>

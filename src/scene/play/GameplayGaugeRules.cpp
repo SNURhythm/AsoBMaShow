@@ -147,10 +147,14 @@ GameplayGaugeRules compileGameplayGaugeRules(
     GaugeProfile requestedProfile) {
   GameplayGaugeRules result;
   result.ruleset = ruleset;
-  result.resolvedProfile =
-      ruleset == GameplayRuleset::LR2 && gaugeProfileIsCourse(requestedProfile)
-          ? GaugeProfile::CourseLR2
-          : resolveGaugeProfile(requestedProfile, meta.KeyMode);
+  if (ruleset == GameplayRuleset::LR2) {
+    result.resolvedProfile = gaugeProfileIsCourse(requestedProfile)
+                                 ? GaugeProfile::CourseLR2
+                                 : GaugeProfile::Standard;
+  } else {
+    result.resolvedProfile =
+        resolveGaugeProfile(requestedProfile, meta.KeyMode);
+  }
   result.totalNotes = std::max(0, meta.TotalNotes);
   result.effectiveTotal = resolveEffectiveGaugeTotal(ruleset, meta);
   result.compiled = true;

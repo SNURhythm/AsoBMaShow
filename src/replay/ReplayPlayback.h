@@ -55,7 +55,7 @@ logicalControlForChartLane(
                           .player = player,
                           .lane = -1};
   }
-  if (playerLane < 0 || playerLane >= layout->logicalLanesPerPlayer) {
+  if (playerLane < 0 || playerLane >= layout->laneCodeWidthPerPlayer) {
     return std::nullopt;
   }
   return LogicalControl{.kind = LogicalControlKind::Lane,
@@ -77,7 +77,7 @@ physicalChartLaneForLogicalControl(int keyMode,
     return control.player == 2 ? 15 : 7;
   }
   if (control.kind != LogicalControlKind::Lane || control.lane < 0 ||
-      control.lane >= layout->logicalLanesPerPlayer) {
+      control.lane >= layout->laneCodeWidthPerPlayer) {
     return std::nullopt;
   }
   if (control.player == 1) {

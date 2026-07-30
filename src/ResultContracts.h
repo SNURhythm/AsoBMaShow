@@ -14,15 +14,11 @@
 
 namespace result_contract {
 
-inline constexpr std::array<int, 7> kSupportedKeyModes{5, 7, 9, 10, 14, 24, 48};
-
-[[nodiscard]] inline constexpr bool isSupportedKeyMode(int keyMode) noexcept {
-  for (const int supported : kSupportedKeyModes) {
-    if (keyMode == supported) {
-      return true;
-    }
-  }
-  return false;
+// Key count is an open gameplay/result domain. Replay codecs and IR providers
+// impose their narrower supported layouts separately, so neither can discard
+// an otherwise valid play result.
+[[nodiscard]] inline constexpr bool isValidKeyMode(int keyMode) noexcept {
+  return keyMode > 0;
 }
 
 [[nodiscard]] inline constexpr bool isKnownGaugeType(GaugeType value) noexcept {
@@ -101,7 +97,7 @@ enum class ChartIdentityMatch : std::uint8_t {
 [[nodiscard]] inline bool canonicalChartIdentity(const ChartIdentity &identity,
                                                  bool requireMd5) noexcept {
   return canonicalChartHashes(identity.md5, identity.sha256, requireMd5) &&
-         isSupportedKeyMode(identity.keyMode);
+         isValidKeyMode(identity.keyMode);
 }
 
 [[nodiscard]] inline ChartIdentityMatch

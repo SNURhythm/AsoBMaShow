@@ -21,7 +21,7 @@ bool validControl(const LogicalControl &control, int keyMode) noexcept {
   }
   switch (control.kind) {
   case LogicalControlKind::Lane:
-    return control.lane >= 0 && control.lane < layout->logicalLanesPerPlayer;
+    return control.lane >= 0 && control.lane < layout->laneCodeWidthPerPlayer;
   case LogicalControlKind::ScratchClockwise:
   case LogicalControlKind::ScratchCounterClockwise:
     return layout->hasDirectionalScratch && control.lane == -1;

@@ -22,7 +22,7 @@ bool validateIrSubmission(const IrSubmission &submission,
   try {
     diagnostic.clear();
     if (!uuid::isCanonicalLowerV4(submission.attemptId) ||
-        !result_contract::isSupportedKeyMode(submission.keyMode) ||
+        !result_contract::isValidKeyMode(submission.keyMode) ||
         !result_contract::canonicalChartHashes(submission.chartMd5,
                                                submission.chartSha256, false) ||
         submission.playedAtUnixMillis <= 0) {

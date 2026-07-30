@@ -2672,11 +2672,11 @@ enum Channel {
 
 namespace KeyAssign {
 const int Beat7[] = {0, 1, 2, 3, 4, 7, -1, 5, 6, 8, 9, 10, 11, 12, 15, -1, 13, 14};
-const int Beat4[] = {0, 1, -1, 2, 3, -1, -1, -1, -1,
+const int Beat4[] = {0, 1, -1, 3, 4, -1, -1, -1, -1,
                      -1, -1, -1, -1, -1, -1, -1, -1, -1};
-const int Beat6[] = {0, 1, 2, -1, 3, -1, -1, 4, 5,
+const int Beat6[] = {0, 1, 2, -1, 4, -1, -1, 5, 6,
                      -1, -1, -1, -1, -1, -1, -1, -1, -1};
-const int Beat8[] = {1, 2, 3, 4, 5, 0, -1, 6, 7,
+const int Beat8[] = {0, 1, 2, 3, 4, 7, -1, 5, 6,
                      -1, -1, -1, -1, -1, -1, -1, -1, -1};
 int PopN[] = {0, 1, 2, 3, 4, -1, -1, -1, -1, -1, 5, 6, 7, 8, -1, -1, -1, -1};
 
@@ -3219,8 +3219,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         channel = P1MineKeyBase;
       }
 
-      if (laneNumber == -1 ||
-          (scratchlessKeyMode && laneNumber >= new_chart->Meta.KeyMode)) {
+      if (laneNumber == -1) {
         continue;
       }
       const bool isScratch =

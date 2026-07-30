@@ -216,10 +216,15 @@ void testCanonicalRoundTripAndTamperChecks() {
 
 void testStrictValidationAndBounds() {
   std::string diagnostic;
-  auto invalidSubmission = capture(validResult()).submission;
-  invalidSubmission.keyMode = 6;
+  auto customSubmission = capture(validResult()).submission;
+  customSubmission.keyMode = 127;
+  expect(ir::validateIrSubmission(customSubmission, diagnostic),
+         "provider-neutral IR snapshots retain every positive key count");
+
+  auto invalidSubmission = customSubmission;
+  invalidSubmission.keyMode = 0;
   expect(!ir::validateIrSubmission(invalidSubmission, diagnostic),
-         "IR validation consumes the shared supported-key-mode contract");
+         "IR validation rejects modes outside the shared result contract");
 
   auto invalid = validResult();
   invalid.adoptedGaugeHistory.push_back(std::numeric_limits<float>::infinity());

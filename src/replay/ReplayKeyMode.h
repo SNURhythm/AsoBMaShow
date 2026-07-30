@@ -11,7 +11,9 @@ namespace replay {
 struct ReplayKeyModeLayout {
   int keyMode = 0;
   int players = 0;
-  int logicalLanesPerPlayer = 0;
+  // Width of the BRD lane-code namespace. Sparse BMS modes preserve their
+  // parser-selected channel lanes, so this can be larger than keyMode.
+  int laneCodeWidthPerPlayer = 0;
   int stockShuffleWidth = 0;
   bool hasDirectionalScratch = false;
   bool supportsDoublePlayFlip = false;
@@ -20,9 +22,12 @@ struct ReplayKeyModeLayout {
   bool operator==(const ReplayKeyModeLayout &) const = default;
 };
 
-inline constexpr std::array<ReplayKeyModeLayout, 7> kReplayKeyModeLayouts{{
+inline constexpr std::array<ReplayKeyModeLayout, 10> kReplayKeyModeLayouts{{
+    {4, 1, 5, 0, false, false, ""},
     {5, 1, 5, 6, true, false, "S12345"},
+    {6, 1, 7, 0, false, false, ""},
     {7, 1, 7, 8, true, false, "S1234567"},
+    {8, 1, 8, 0, false, false, ""},
     {9, 1, 9, 9, false, false, ""},
     {10, 2, 5, 6, true, true, "L123456789AR"},
     {14, 2, 7, 8, true, true, "L123456789ABCDER"},
@@ -30,21 +35,17 @@ inline constexpr std::array<ReplayKeyModeLayout, 7> kReplayKeyModeLayouts{{
     {48, 2, 26, 26, false, false, ""},
 }};
 
-static_assert(kReplayKeyModeLayouts.size() ==
-              result_contract::kSupportedKeyModes.size());
 static_assert([] {
-  for (const int supported : result_contract::kSupportedKeyModes) {
-    int matches = 0;
-    for (const auto &layout : kReplayKeyModeLayouts) {
-      matches += layout.keyMode == supported ? 1 : 0;
-    }
-    if (matches != 1) {
+  for (std::size_t index = 0; index < kReplayKeyModeLayouts.size(); ++index) {
+    const auto &layout = kReplayKeyModeLayouts[index];
+    if (!result_contract::isValidKeyMode(layout.keyMode)) {
       return false;
     }
-  }
-  for (const auto &layout : kReplayKeyModeLayouts) {
-    if (!result_contract::isSupportedKeyMode(layout.keyMode)) {
-      return false;
+    for (std::size_t candidate = index + 1;
+         candidate < kReplayKeyModeLayouts.size(); ++candidate) {
+      if (layout.keyMode == kReplayKeyModeLayouts[candidate].keyMode) {
+        return false;
+      }
     }
   }
   return true;

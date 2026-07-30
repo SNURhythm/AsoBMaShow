@@ -79,7 +79,7 @@ struct ExpectedKeyBinding {
 void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
   const std::vector<ExpectedKeyBinding> expected = {
       {{1, 4}, 0, SDL_SCANCODE_D},        {{1, 4}, 1, SDL_SCANCODE_F},
-      {{1, 4}, 2, SDL_SCANCODE_J},        {{1, 4}, 3, SDL_SCANCODE_K},
+      {{1, 4}, 3, SDL_SCANCODE_J},        {{1, 4}, 4, SDL_SCANCODE_K},
 
       {{1, 5}, 0, SDL_SCANCODE_D},        {{1, 5}, 1, SDL_SCANCODE_F},
       {{1, 5}, 2, SDL_SCANCODE_SPACE},    {{1, 5}, 3, SDL_SCANCODE_J},
@@ -87,8 +87,8 @@ void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
       {{1, 5}, 7, SDL_SCANCODE_RSHIFT},
 
       {{1, 6}, 0, SDL_SCANCODE_S},        {{1, 6}, 1, SDL_SCANCODE_D},
-      {{1, 6}, 2, SDL_SCANCODE_F},        {{1, 6}, 3, SDL_SCANCODE_J},
-      {{1, 6}, 4, SDL_SCANCODE_K},        {{1, 6}, 5, SDL_SCANCODE_L},
+      {{1, 6}, 2, SDL_SCANCODE_F},        {{1, 6}, 4, SDL_SCANCODE_J},
+      {{1, 6}, 5, SDL_SCANCODE_K},        {{1, 6}, 6, SDL_SCANCODE_L},
 
       {{1, 7}, 0, SDL_SCANCODE_S},        {{1, 7}, 1, SDL_SCANCODE_D},
       {{1, 7}, 2, SDL_SCANCODE_F},        {{1, 7}, 3, SDL_SCANCODE_SPACE},
@@ -96,10 +96,10 @@ void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
       {{1, 7}, 6, SDL_SCANCODE_L},        {{1, 7}, 7, SDL_SCANCODE_LSHIFT},
       {{1, 7}, 7, SDL_SCANCODE_RSHIFT},
 
-      {{1, 8}, 0, SDL_SCANCODE_A},        {{1, 8}, 1, SDL_SCANCODE_S},
-      {{1, 8}, 2, SDL_SCANCODE_D},        {{1, 8}, 3, SDL_SCANCODE_F},
-      {{1, 8}, 4, SDL_SCANCODE_J},        {{1, 8}, 5, SDL_SCANCODE_K},
-      {{1, 8}, 6, SDL_SCANCODE_L},        {{1, 8}, 7, SDL_SCANCODE_SEMICOLON},
+      {{1, 8}, 7, SDL_SCANCODE_A},        {{1, 8}, 0, SDL_SCANCODE_S},
+      {{1, 8}, 1, SDL_SCANCODE_D},        {{1, 8}, 2, SDL_SCANCODE_F},
+      {{1, 8}, 3, SDL_SCANCODE_J},        {{1, 8}, 4, SDL_SCANCODE_K},
+      {{1, 8}, 5, SDL_SCANCODE_L},        {{1, 8}, 6, SDL_SCANCODE_SEMICOLON},
 
       {{1, 10}, 0, SDL_SCANCODE_Z},       {{1, 10}, 1, SDL_SCANCODE_S},
       {{1, 10}, 2, SDL_SCANCODE_X},       {{1, 10}, 3, SDL_SCANCODE_D},
@@ -161,7 +161,7 @@ int main() {
     verifyCurrentKeyboardDefaults(defaults);
 
     input::InputBinding invalid = defaults.bindings.front();
-    invalid.scope = {0, 9};
+    invalid.scope = {0, 0};
     invalid.deadZone = std::numeric_limits<float>::quiet_NaN();
     invalid.releaseThreshold = 0.9f;
     invalid.activationThreshold = 0.2f;
@@ -184,6 +184,13 @@ int main() {
             "non-finite thresholds recover to the canonical defaults");
     require(!diagnostics.empty(), "sanitization describes repairs");
 
+    InputProfile customKeyModeProfile = defaults;
+    customKeyModeProfile.bindings.front().scope.keyMode = 17;
+    diagnostics.clear();
+    customKeyModeProfile.sanitize(diagnostics);
+    require(customKeyModeProfile.bindings.front().scope.keyMode == 17,
+            "positive custom key counts survive input sanitization");
+
     InputProfile oldSchemaProfile = defaults;
     oldSchemaProfile.schemaVersion = 1;
     diagnostics.clear();
@@ -191,7 +198,7 @@ int main() {
     require(oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
                 std::ranges::find(
                     diagnostics,
-                    "Reset unsupported input schema version to 2.") !=
+                    "Reset unsupported input schema version to 3.") !=
                     diagnostics.end(),
             "schema repair diagnostics report the real current version");
 
@@ -336,6 +343,42 @@ int main() {
     require(!std::filesystem::exists(missingPath),
             "loading a missing file does not create it");
 
+    const auto compactScratchlessV2Path =
+        testRoot / "compact-scratchless-v2.json";
+    writeFile(compactScratchlessV2Path, R"json({
+  "schemaVersion": 2,
+  "gyroscopeTurntable": {"stepAngleDegrees": 4, "releaseDelayMs": 250},
+  "bindings": [
+    {"id":"4k-third","scope":{"player":1,"keyMode":4},"action":{"kind":"lane","lane":2},"control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":13,"direction":"any"}},
+    {"id":"4k-fourth","scope":{"player":1,"keyMode":4},"action":{"kind":"lane","lane":3},"control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":14,"direction":"any"}},
+    {"id":"6k-fourth","scope":{"player":1,"keyMode":6},"action":{"kind":"lane","lane":3},"control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":15,"direction":"any"}},
+    {"id":"6k-sixth","scope":{"player":1,"keyMode":6},"action":{"kind":"lane","lane":5},"control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":16,"direction":"any"}},
+    {"id":"8k-first","scope":{"player":1,"keyMode":8},"action":{"kind":"lane","lane":0},"control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":17,"direction":"any"}},
+    {"id":"8k-last","scope":{"player":1,"keyMode":8},"action":{"kind":"lane","lane":7},"control":{"deviceId":"keyboard","deviceClass":"keyboard","kind":"key","index":18,"direction":"any"}}
+  ]
+})json");
+    const auto compactScratchlessV2 =
+        InputProfileStore::load(compactScratchlessV2Path);
+    require(compactScratchlessV2.status == InputProfileLoadStatus::Loaded &&
+                compactScratchlessV2.profile.schemaVersion == 3,
+            "version-two scratchless bindings migrate to the current schema");
+    const std::vector<int> migratedScratchlessLanes = [&] {
+      std::vector<int> lanes;
+      for (const auto &binding : compactScratchlessV2.profile.bindings) {
+        lanes.push_back(binding.action.lane);
+      }
+      return lanes;
+    }();
+    require(migratedScratchlessLanes ==
+                std::vector<int>{3, 4, 4, 6, 7, 6},
+            "4K, 6K, and 8K compact bindings migrate to their BMS channel "
+            "lanes");
+    require(compactScratchlessV2.profile.gyroscopeTurntable.stepAngleDegrees ==
+                    4 &&
+                compactScratchlessV2.profile.gyroscopeTurntable
+                        .releaseDelayMs == 250,
+            "lane migration preserves version-two gyroscope settings");
+
     const auto gyroscopeV2Path = testRoot / "gyroscope-v2.json";
     writeFile(gyroscopeV2Path, R"json({
   "schemaVersion": 2,
@@ -361,7 +404,7 @@ int main() {
     const auto gyroscopeV2Result = InputProfileStore::load(gyroscopeV2Path);
     require(gyroscopeV2Result.status == InputProfileLoadStatus::Loaded,
             "version-two gyroscope profile loads");
-    require(gyroscopeV2Result.profile.schemaVersion == 2 &&
+    require(gyroscopeV2Result.profile.schemaVersion == 3 &&
                 gyroscopeV2Result.profile.gyroscopeTurntable.stepAngleDegrees ==
                     7 &&
                 gyroscopeV2Result.profile.gyroscopeTurntable.releaseDelayMs ==
@@ -501,7 +544,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 2") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 3") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -531,7 +574,7 @@ int main() {
                 errorMessage),
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
-    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 2") !=
+    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 3") !=
                     std::string::npos &&
                 gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                     std::string::npos &&

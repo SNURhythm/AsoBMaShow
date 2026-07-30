@@ -119,6 +119,25 @@ void testEligibleLocalProofCreatesSnapshotReceipt() {
   assert(receipt.confirmedAtUnixMillis == kConfirmedAt);
 }
 
+void testIneligibleCustomModeDoesNotInvalidateEligibleHistory() {
+  auto eligible = localCandidate(2);
+  auto custom = localCandidate(3);
+  custom.keyMode = 6;
+  custom.eligible = false;
+  custom.chartMd5 = std::string(32, 'd');
+  custom.chartSha256 = std::string(64, 'c');
+  const std::vector local{custom, eligible};
+  const std::vector remote{remoteScore("remote-proof")};
+
+  const auto plan = ir::planScoreReconciliation(
+      kProvider, kOrigin, local, remote, kConfirmedAt);
+
+  assert(plan.status == ir::IrScoreReconciliationPlan::Status::Planned);
+  assert(plan.upsertedReceipts.size() == 1);
+  assert(plan.upsertedReceipts.front().modernChartResultId ==
+         eligible.modernChartResultId);
+}
+
 void testForeignReceiptBoundaryIsNeverMutatedOrReused() {
   auto local = localCandidate(3);
   local.currentReceipt = receiptFor(local, "remote-foreign");
@@ -410,6 +429,7 @@ void testOutboxRowsRequireReceiptResolutionBeforeRemoval() {
 int main() {
   testExactRemoteIdIsObserved();
   testEligibleLocalProofCreatesSnapshotReceipt();
+  testIneligibleCustomModeDoesNotInvalidateEligibleHistory();
   testForeignReceiptBoundaryIsNeverMutatedOrReused();
   testDisappearedSnapshotReceiptIsDeleted();
   testUnobservedSubmissionReceiptIsPreservedWhenProofIsAbsent();
