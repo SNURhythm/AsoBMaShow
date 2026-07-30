@@ -1,6 +1,7 @@
 #include "IrScoreReconciliation.h"
 
 #include "../CanonicalDigest.h"
+#include "../ResultContracts.h"
 #include "IrProfileSettings.h"
 #include "../Uuid.h"
 #include "../scene/play/GameplayGaugeTypes.h"
@@ -65,8 +66,8 @@ bool validLocalCandidate(const IrLocalReceiptCandidate &candidate,
     diagnostic = "IR reconciliation local identity is invalid";
     return false;
   }
-  if (candidate.keyMode != 0 && candidate.keyMode != 7 &&
-      candidate.keyMode != 14) {
+  if (candidate.keyMode != 0 &&
+      !result_contract::isValidKeyMode(candidate.keyMode)) {
     diagnostic = "IR reconciliation local key mode is invalid";
     return false;
   }
@@ -115,7 +116,10 @@ std::array<std::string_view, 2> candidateGames(int keyMode) {
   if (keyMode == 14) {
     return {"bms-14k", {}};
   }
-  return {"bms-7k", "bms-14k"};
+  if (keyMode == 0) {
+    return {"bms-7k", "bms-14k"};
+  }
+  return {};
 }
 
 const IrRemoteScore *findUniqueProofMatch(const IrLocalReceiptCandidate &local,
