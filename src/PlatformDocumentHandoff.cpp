@@ -483,6 +483,23 @@ private:
 #endif
 };
 
+class StagedTextDocumentOwnership {
+public:
+  StagedTextDocumentOwnership(std::filesystem::path path,
+                              std::filesystem::path directory)
+      : path_(std::move(path)), directory_(std::move(directory)) {}
+  ~StagedTextDocumentOwnership() {
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+    ignored.clear();
+    std::filesystem::remove(directory_, ignored);
+  }
+
+private:
+  std::filesystem::path path_;
+  std::filesystem::path directory_;
+};
+
 bool copyStreamToExclusiveFile(
     std::istream &input, ExclusiveOutputFile &output, std::uint64_t maxBytes,
     std::uint64_t &bytesCopied, std::string &errorMessage,
@@ -1085,12 +1102,16 @@ exportDocument(std::uint64_t operationToken,
       request.suggestedName, request.maxBytes, &cancellationRequested,
       [commitGate] { return commitGate && commitGate([] { return true; }); });
 #else
-  const char *filters[] = {"*.asobprofile", "*.zip"};
+  const bool textDocument = request.mimeType == "text/plain";
+  const char *profileFilters[] = {"*.asobprofile", "*.zip"};
+  const char *textFilters[] = {"*.txt", "*.log"};
   const std::string suggestedName =
-      detail::PreferredProfileExportName(request.suggestedName);
-  const char *selected =
-      tinyfd_saveFileDialog("Export player profile", suggestedName.c_str(), 2,
-                            filters, "Player profile archive");
+      textDocument ? request.suggestedName
+                   : detail::PreferredProfileExportName(request.suggestedName);
+  const char *selected = tinyfd_saveFileDialog(
+      textDocument ? "Export performance log" : "Export player profile",
+      suggestedName.c_str(), 2, textDocument ? textFilters : profileFilters,
+      textDocument ? "Text document" : "Player profile archive");
   if (selected == nullptr) {
     bridgeResult = std::string(kCancelled);
   } else if (cancellationRequested.load(std::memory_order_acquire)) {
@@ -1130,6 +1151,58 @@ CreatePrivateImportDirectoryUnder(const std::filesystem::path &temporaryRoot,
 bool SecurePrivateDocumentPath(const std::filesystem::path &path,
                                bool directory, std::string &errorMessage) {
   return secureOwnerPrivatePath(path, directory, errorMessage);
+}
+
+PreparedTextDocumentExport
+PrepareTextDocumentExportUnder(const PlatformTextDocumentExportRequest &request,
+                               const std::filesystem::path &temporaryRoot) {
+  PreparedTextDocumentExport prepared;
+  if (auto validation = Validate(PlatformDocumentImportRequest{
+          .mimeType = "text/plain", .maxBytes = request.maxBytes});
+      !validation.ok()) {
+    prepared.errorMessage = std::move(validation.message);
+    return prepared;
+  }
+  if (!validSuggestedName(request.suggestedName)) {
+    prepared.errorMessage =
+        "The suggested export file name must be a single file name.";
+    return prepared;
+  }
+  if (request.text.size() > request.maxBytes) {
+    prepared.errorMessage =
+        "The text document exceeds the maximum document size.";
+    return prepared;
+  }
+
+  std::string errorMessage;
+  const auto directory =
+      CreatePrivateImportDirectoryUnder(temporaryRoot, errorMessage);
+  if (directory.empty()) {
+    prepared.errorMessage = std::move(errorMessage);
+    return prepared;
+  }
+  const auto path = directory / "export-document.txt";
+  auto ownership =
+      std::make_shared<StagedTextDocumentOwnership>(path, directory);
+  ExclusiveOutputFile output;
+  if (output.open(path, errorMessage) != ExclusiveCreateResult::Opened ||
+      !output.write(request.text.data(), request.text.size(), errorMessage) ||
+      !output.finish(errorMessage) ||
+      !secureOwnerPrivatePath(path, false, errorMessage)) {
+    prepared.errorMessage = errorMessage.empty()
+                                ? "Unable to stage the text document."
+                                : std::move(errorMessage);
+    return prepared;
+  }
+
+  prepared.request = {
+      .localPath = path,
+      .mimeType = "text/plain",
+      .suggestedName = request.suggestedName,
+      .maxBytes = request.maxBytes,
+      .sourceLifetime = std::move(ownership),
+  };
+  return prepared;
 }
 
 std::string PreferredProfileExportName(const std::string &suggestedName) {
@@ -1642,5 +1715,38 @@ ExportDocumentAsync(PlatformDocumentExportRequest request) {
       },
       [nativeCancellation] { nativeCancellation->cancel(); },
       std::move(sourceLifetime));
+}
+
+PlatformDocumentHandoffOperation
+ExportTextDocumentAsync(PlatformTextDocumentExportRequest request) {
+  std::filesystem::path temporaryRoot;
+  std::string errorMessage;
+#if TARGET_OS_ANDROID
+  const auto cacheDirectory = GetAndroidCacheDir();
+  if (cacheDirectory.empty()) {
+    errorMessage = "Unable to locate application temporary storage.";
+  } else {
+    temporaryRoot = detail::PathFromUtf8(cacheDirectory);
+  }
+#else
+  std::error_code error;
+  temporaryRoot = std::filesystem::temp_directory_path(error);
+  if (error) {
+    errorMessage = "Unable to locate temporary storage: " + error.message();
+  }
+#endif
+  detail::PreparedTextDocumentExport prepared;
+  if (errorMessage.empty()) {
+    prepared = detail::PrepareTextDocumentExportUnder(request, temporaryRoot);
+    errorMessage = std::move(prepared.errorMessage);
+  }
+  if (!errorMessage.empty()) {
+    return detail::StartOperation(
+        [message = std::move(errorMessage)](const std::atomic_bool &) {
+          return failure(message);
+        },
+        [] {});
+  }
+  return ExportDocumentAsync(std::move(prepared.request));
 }
 } // namespace platform_document_handoff

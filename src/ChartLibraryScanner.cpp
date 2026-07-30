@@ -4,6 +4,7 @@
 #include "BmsChartFile.h"
 #include "BmsMetadataText.h"
 #include "CanonicalDigest.h"
+#include "ChartScanWorkScheduler.h"
 #include "ThreadCompat.h"
 #include "Utils.h"
 #include "path.h"
@@ -21,11 +22,10 @@
 #include <cctype>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <functional>
-#include <future>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -35,6 +35,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -44,11 +45,12 @@ constexpr int kArchiveParseCheckpointInterval = 100;
 constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr std::size_t kIndividualParseBatchSize = 512;
 constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;
+constexpr std::size_t kArchiveParseResultChunkSize =
+    kArchiveParseMaxInFlightFiles;
 constexpr std::uint64_t kArchiveParseMaxInFlightBytes =
     16ull * 1024ull * 1024ull;
-constexpr std::size_t kArchiveParseMaxOuterWorkers = 4;
-constexpr std::uint64_t kArchiveParseMinOuterInFlightBytes =
-    4ull * 1024ull * 1024ull;
+constexpr std::size_t kArchiveDirectConcurrentMinCharts = 16;
+constexpr std::size_t kArchiveClassificationPauseInterval = 256;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
 
@@ -117,7 +119,6 @@ struct ArchiveScanResult {
 
 ArchiveScanResult
 scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
-                            std::unordered_set<path_t> &knownChartPaths,
                             const ChartScanPauseCallback &pauseCallback) {
   auto pauseIfNeeded = [&]() {
     return pauseCallback == nullptr || pauseCallback();
@@ -142,11 +143,15 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
     return result;
   }
   result.readable = true;
-  for (const auto &entry : entries) {
-    if (!pauseIfNeeded()) {
+  std::unordered_set<path_t> seenArchiveChartPaths;
+  for (std::size_t entryIndex = 0; entryIndex < entries.size(); ++entryIndex) {
+    if (entryIndex > 0 &&
+        entryIndex % kArchiveClassificationPauseInterval == 0 &&
+        !pauseIfNeeded()) {
       result.readable = false;
       return result;
     }
+    const auto &entry = entries[entryIndex];
     if (entry.directory) {
       continue;
     }
@@ -157,29 +162,24 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
     if (entry.solid) {
       result.solid = true;
     }
-  }
-
-  if (!result.solid) {
-    std::unordered_set<path_t> seenArchiveChartPaths;
-    for (const auto &entry : entries) {
-      if (!pauseIfNeeded()) {
-        result.readable = false;
-        return result;
-      }
-      if (entry.directory ||
-          !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
-        continue;
-      }
-      const std::filesystem::path chartPath =
-          archive_file::makeVirtualPath(archivePath, entry.path);
-      const path_t key = fspath_to_path_t(chartPath);
-      if (seenArchiveChartPaths.find(key) != seenArchiveChartPaths.end()) {
-        continue;
-      }
-      seenArchiveChartPaths.insert(key);
-      result.chartPaths.push_back(chartPath);
-      knownChartPaths.insert(key);
+    if (result.solid ||
+        !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
+      continue;
     }
+    const std::filesystem::path chartPath =
+        archive_file::makeVirtualPath(archivePath, entry.path);
+    const path_t key = fspath_to_path_t(chartPath);
+    if (!seenArchiveChartPaths.insert(key).second) {
+      continue;
+    }
+    result.chartPaths.push_back(chartPath);
+  }
+  if (!pauseIfNeeded()) {
+    result.readable = false;
+    return result;
+  }
+  if (result.solid) {
+    result.chartPaths.clear();
   }
 
   archive_file::appendDebugLogLine(
@@ -325,6 +325,8 @@ int ChartLibraryScanner::Scan(
   struct ScanDiff {
     std::filesystem::path path;
     bool deleted = false;
+    bool parseAttempted = false;
+    std::optional<bms_parser::ChartMeta> preparedMeta;
   };
   std::vector<ScanDiff> diffs;
   std::vector<std::filesystem::path> sourcePreferenceRefreshPaths;
@@ -523,6 +525,8 @@ int ChartLibraryScanner::Scan(
   struct ArchiveParseBatch {
     std::filesystem::path archivePath;
     std::vector<std::filesystem::path> innerPaths;
+    std::vector<bool> parseAttempted;
+    std::vector<std::optional<bms_parser::ChartMeta>> preparedMetas;
   };
 
   struct ArchiveParsedChart {
@@ -531,290 +535,572 @@ int ChartLibraryScanner::Scan(
     std::optional<bms_parser::ChartMeta> meta;
   };
 
-  auto archiveParseWorkerCount = [](std::size_t fileCount) {
-    return static_cast<std::size_t>(parallel_worker_count(fileCount));
+  struct ArchiveParseJobResult {
+    std::size_t archiveIndex = 0;
+    std::size_t innerStart = 0;
+    std::vector<std::filesystem::path> pendingInnerPaths;
+    std::optional<std::vector<ArchiveParsedChart>> parsedCharts;
+    bool complete = false;
+    bool incremental = false;
+    std::string errorMessage;
   };
 
-  struct ArchiveParsePipelineShape {
-    std::size_t outerWorkers = 1;
-    std::size_t innerWorkers = 1;
-    std::uint64_t maxInFlightBytes = kArchiveParseMaxInFlightBytes;
+  struct ArchiveParseJobState {
+    std::map<std::size_t, std::vector<ArchiveParsedChart>> chunks;
+    std::optional<ArchiveParseJobResult> terminalResult;
   };
 
-  auto archiveParsePipelineShape =
-      [](std::size_t queuedArchiveCount,
-         std::size_t currentArchiveChartCount) -> ArchiveParsePipelineShape {
-    ArchiveParsePipelineShape shape;
-    if (queuedArchiveCount == 0 || currentArchiveChartCount == 0) {
-      return shape;
-    }
-
-    const std::size_t workerBudget =
-        static_cast<std::size_t>(parallel_worker_count(
-            std::max(queuedArchiveCount, currentArchiveChartCount)));
-    if (queuedArchiveCount <= 1 || workerBudget <= 1) {
-      shape.outerWorkers = 1;
-      shape.innerWorkers = std::max<std::size_t>(1, workerBudget);
-      return shape;
-    }
-
-    const std::size_t minInnerWorkers =
-        currentArchiveChartCount > 1 ? std::size_t{2} : std::size_t{1};
-    const std::size_t maxOuterByBudget =
-        std::max<std::size_t>(1, workerBudget / minInnerWorkers);
-    shape.outerWorkers = std::min(
-        {queuedArchiveCount, maxOuterByBudget, kArchiveParseMaxOuterWorkers});
-    shape.outerWorkers = std::max<std::size_t>(1, shape.outerWorkers);
-    shape.innerWorkers = std::max<std::size_t>(
-        minInnerWorkers, workerBudget / shape.outerWorkers);
-    if (shape.outerWorkers > 1) {
-      shape.maxInFlightBytes = std::max<std::uint64_t>(
-          kArchiveParseMinOuterInFlightBytes,
-          kArchiveParseMaxInFlightBytes / shape.outerWorkers);
-    }
-    return shape;
+  struct ArchiveParseJobEvent {
+    std::vector<ArchiveParsedChart> parsedCharts;
+    std::optional<ArchiveParseJobResult> terminalResult;
   };
 
-  auto parseArchiveBatchConcurrently =
-      [&](const ArchiveParseBatch &batch,
-          const std::vector<std::filesystem::path> &pendingInnerPaths,
-          std::size_t workerLimit, std::uint64_t maxInFlightBytes,
-          std::string &concurrentError)
-      -> std::optional<std::vector<ArchiveParsedChart>> {
-    const std::size_t workerCount =
-        std::min(archiveParseWorkerCount(pendingInnerPaths.size()),
-                 std::max<std::size_t>(1, workerLimit));
-    if (workerCount <= 1) {
-      return std::nullopt;
+  std::mutex archiveParseResultMutex;
+  std::condition_variable archiveParseResultCv;
+
+  auto storeArchiveParseStateResult =
+      [&](const std::shared_ptr<ArchiveParseJobState> &state,
+          ArchiveParseJobResult result) {
+        {
+          std::lock_guard lock(archiveParseResultMutex);
+          state->terminalResult = std::move(result);
+        }
+        archiveParseResultCv.notify_all();
+      };
+  auto storeArchiveParseStateChunk =
+      [&](const std::shared_ptr<ArchiveParseJobState> &state,
+          std::size_t firstInnerIndex,
+          std::vector<ArchiveParsedChart> parsedCharts) {
+        {
+          std::lock_guard lock(archiveParseResultMutex);
+          state->chunks.emplace(firstInnerIndex, std::move(parsedCharts));
+        }
+        archiveParseResultCv.notify_all();
+      };
+
+  struct PreparedOrdinaryChart {
+    std::filesystem::path path;
+    bool parseAttempted = false;
+    std::optional<bms_parser::ChartMeta> meta;
+  };
+  struct PreparedArchive {
+    std::filesystem::path path;
+    std::int64_t archiveSize = 0;
+    std::int64_t mtimeNs = 0;
+    const ArchiveScanCacheRecord *cache = nullptr;
+    bool cacheAccepted = false;
+    std::optional<ArchiveScanResult> scan;
+    std::string chartParseError;
+  };
+  using PreparedEntity = std::variant<PreparedOrdinaryChart, PreparedArchive>;
+
+  std::mutex preparedEntityMutex;
+  std::condition_variable preparedEntityCv;
+  std::vector<std::optional<PreparedEntity>> preparedEntities;
+  std::unordered_set<path_t> discoveredOrdinaryChartPaths;
+  const std::size_t entityWorkerCount =
+      chart_scan::recommendedWorkerCount(kIndividualParseBatchSize);
+  const std::size_t archiveIoLimit =
+      entityWorkerCount > 1 ? entityWorkerCount - 1 : std::size_t{1};
+
+  auto reservePreparedEntity = [&]() {
+    std::lock_guard lock(preparedEntityMutex);
+    const std::size_t sequence = preparedEntities.size();
+    preparedEntities.emplace_back(std::nullopt);
+    return sequence;
+  };
+
+  auto storePreparedEntity = [&](std::size_t sequence,
+                                 PreparedEntity prepared) {
+    {
+      std::lock_guard lock(preparedEntityMutex);
+      if (sequence < preparedEntities.size()) {
+        preparedEntities[sequence] = std::move(prepared);
+      }
+    }
+    preparedEntityCv.notify_all();
+  };
+  auto storePreparedEntityIfMissing = [&](std::size_t sequence,
+                                          PreparedEntity prepared) {
+    {
+      std::lock_guard lock(preparedEntityMutex);
+      if (sequence < preparedEntities.size() &&
+          !preparedEntities[sequence].has_value()) {
+        preparedEntities[sequence] = std::move(prepared);
+      }
+    }
+    preparedEntityCv.notify_all();
+  };
+
+  chart_scan::WorkScheduler entityScheduler(entityWorkerCount, archiveIoLimit);
+  int scheduledArchiveIndexCount = 0;
+
+  struct IndexedArchivePrefetch {
+    path_t archiveKey;
+    std::filesystem::path archivePath;
+    std::vector<std::filesystem::path> innerPaths;
+    std::shared_ptr<ArchiveParseJobState> state;
+  };
+  std::mutex indexedArchivePrefetchMutex;
+  std::optional<IndexedArchivePrefetch> heldLargeArchivePrefetch;
+  bool multiArchivePrefetchActive = false;
+  std::unordered_map<path_t, std::shared_ptr<ArchiveParseJobState>>
+      prefetchedArchiveStates;
+
+  struct ArchiveChartPipelineResult {
+    std::vector<std::filesystem::path> innerPaths;
+    std::optional<std::vector<ArchiveParsedChart>> parsedCharts;
+    bool complete = false;
+    std::string errorMessage;
+  };
+
+  using ArchiveChartPipelineCompletion =
+      std::function<void(ArchiveChartPipelineResult)>;
+  using ArchiveChartPipelineChunkCompletion =
+      std::function<void(std::size_t, std::vector<ArchiveParsedChart>)>;
+
+  struct ArchiveChartPipelineState {
+    std::mutex mutex;
+    std::condition_variable spaceCv;
+    std::filesystem::path archivePath;
+    std::vector<std::filesystem::path> innerPaths;
+    std::vector<std::optional<ArchiveParsedChart>> parsedSlots;
+    ArchiveChartPipelineCompletion completion;
+    ArchiveChartPipelineChunkCompletion chunkCompletion;
+    std::size_t nextPublished = 0;
+    std::size_t pendingTasks = 0;
+    std::size_t inFlightFiles = 0;
+    std::uint64_t inFlightBytes = 0;
+    bool readDone = false;
+    bool readOk = false;
+    bool published = false;
+    std::string errorMessage;
+  };
+
+  auto runArchiveChartPipeline = [&](chart_scan::WorkScheduler &scheduler,
+                                     std::filesystem::path archivePath,
+                                     std::vector<std::filesystem::path>
+                                         innerPaths,
+                                     ArchiveChartPipelineCompletion completion,
+                                     ArchiveChartPipelineChunkCompletion
+                                         chunkCompletion) {
+    if (innerPaths.empty()) {
+      completion({
+          .innerPaths = {},
+          .parsedCharts = std::vector<ArchiveParsedChart>{},
+          .complete = true,
+      });
+      return;
     }
 
     std::unordered_map<std::string, std::size_t> sequenceByInnerPath;
-    sequenceByInnerPath.reserve(pendingInnerPaths.size());
-    for (std::size_t i = 0; i < pendingInnerPaths.size(); ++i) {
-      sequenceByInnerPath.emplace(checkpointInnerPathText(pendingInnerPaths[i]),
-                                  i);
+    sequenceByInnerPath.reserve(innerPaths.size());
+    for (std::size_t index = 0; index < innerPaths.size(); ++index) {
+      sequenceByInnerPath.emplace(checkpointInnerPathText(innerPaths[index]),
+                                  index);
     }
 
-    std::mutex resultMutex;
-    std::vector<std::optional<ArchiveParsedChart>> results(
-        pendingInnerPaths.size());
-    std::string callbackError;
-
-    auto onFile = [&](archive_file::FileData &&file) {
-      const auto sequenceIt =
-          sequenceByInnerPath.find(checkpointInnerPathText(file.path));
-      if (sequenceIt == sequenceByInnerPath.end()) {
-        std::lock_guard lock(resultMutex);
-        callbackError =
-            "Parallel archive entry was not in the requested batch.";
-        return false;
+    if (innerPaths.size() == 1 || entityWorkerCount <= 1) {
+      ArchiveChartPipelineResult immediateResult;
+      std::vector<std::optional<ArchiveParsedChart>> parsedSlots(
+          innerPaths.size());
+      const bool readOk = archive_file::readArchiveEntriesStreaming(
+          archivePath, innerPaths,
+          [&](archive_file::FileData &&file) {
+            const auto sequenceIt =
+                sequenceByInnerPath.find(checkpointInnerPathText(file.path));
+            if (sequenceIt == sequenceByInnerPath.end()) {
+              immediateResult.errorMessage =
+                  "Archive entry was not in the requested chart batch.";
+              return false;
+            }
+            ArchiveParsedChart parsed{
+                .innerPath = file.path,
+                .chartPath =
+                    archive_file::makeVirtualPath(archivePath, file.path),
+            };
+            try {
+              parsed.meta = parseChartMeta(parsed.chartPath, &file.bytes);
+            } catch (const std::exception &e) {
+              immediateResult.errorMessage = e.what();
+            } catch (...) {
+              immediateResult.errorMessage =
+                  "Unknown archive chart parse error.";
+            }
+            parsedSlots[sequenceIt->second] = std::move(parsed);
+            return !shouldStop();
+          },
+          &immediateResult.errorMessage, pauseCallback);
+      const bool complete =
+          readOk && !shouldStop() &&
+          std::all_of(parsedSlots.begin(), parsedSlots.end(),
+                      [](const auto &slot) { return slot.has_value(); });
+      if (complete) {
+        std::vector<ArchiveParsedChart> parsedCharts;
+        parsedCharts.reserve(parsedSlots.size());
+        for (auto &slot : parsedSlots) {
+          parsedCharts.push_back(std::move(*slot));
+        }
+        if (chunkCompletion) {
+          chunkCompletion(0, std::move(parsedCharts));
+        } else {
+          immediateResult.parsedCharts = std::move(parsedCharts);
+        }
       }
+      immediateResult.complete = complete;
+      immediateResult.innerPaths = std::move(innerPaths);
+      completion(std::move(immediateResult));
+      return;
+    }
 
-      ArchiveParsedChart parsed{
-          .innerPath = file.path,
-          .chartPath =
-              archive_file::makeVirtualPath(batch.archivePath, file.path),
-          .meta = std::nullopt,
-      };
-      parsed.meta = parseChartMeta(parsed.chartPath, &file.bytes);
+    auto state = std::make_shared<ArchiveChartPipelineState>();
+    state->archivePath = std::move(archivePath);
+    state->innerPaths = std::move(innerPaths);
+    state->parsedSlots.resize(state->innerPaths.size());
+    state->completion = std::move(completion);
+    state->chunkCompletion = std::move(chunkCompletion);
 
+    auto publishReady = [&, state]() {
+      std::optional<std::pair<std::size_t, std::vector<ArchiveParsedChart>>>
+          readyChunk;
+      ArchiveChartPipelineChunkCompletion publishChunk;
+      std::optional<ArchiveChartPipelineResult> completed;
+      ArchiveChartPipelineCompletion publish;
       {
-        std::lock_guard lock(resultMutex);
-        results[sequenceIt->second] = std::move(parsed);
+        std::lock_guard lock(state->mutex);
+        const bool terminal = state->readDone && state->pendingTasks == 0;
+        if (state->chunkCompletion) {
+          std::size_t readyEnd = state->nextPublished;
+          while (readyEnd < state->parsedSlots.size() &&
+                 state->parsedSlots[readyEnd].has_value()) {
+            ++readyEnd;
+          }
+          const std::size_t readyCount = readyEnd - state->nextPublished;
+          if (readyCount >= kArchiveParseResultChunkSize ||
+              (terminal && readyCount > 0)) {
+            std::vector<ArchiveParsedChart> parsedCharts;
+            parsedCharts.reserve(readyCount);
+            const std::size_t firstIndex = state->nextPublished;
+            for (std::size_t index = firstIndex; index < readyEnd; ++index) {
+              parsedCharts.push_back(std::move(*state->parsedSlots[index]));
+              state->parsedSlots[index].reset();
+            }
+            state->nextPublished = readyEnd;
+            readyChunk.emplace(firstIndex, std::move(parsedCharts));
+            publishChunk = state->chunkCompletion;
+          }
+        }
+
+        if (!state->published && terminal) {
+          state->published = true;
+          const bool complete =
+              state->readOk && !shouldStop() &&
+              (state->chunkCompletion
+                   ? state->nextPublished == state->parsedSlots.size()
+                   : std::all_of(
+                         state->parsedSlots.begin(), state->parsedSlots.end(),
+                         [](const auto &slot) { return slot.has_value(); }));
+          ArchiveChartPipelineResult result{
+              .innerPaths = std::move(state->innerPaths),
+              .complete = complete,
+              .errorMessage = std::move(state->errorMessage),
+          };
+          if (complete && !state->chunkCompletion) {
+            std::vector<ArchiveParsedChart> parsedCharts;
+            parsedCharts.reserve(state->parsedSlots.size());
+            for (auto &slot : state->parsedSlots) {
+              parsedCharts.push_back(std::move(*slot));
+            }
+            result.parsedCharts = std::move(parsedCharts);
+          }
+          completed = std::move(result);
+          publish = std::move(state->completion);
+        }
       }
-      return true;
+      if (readyChunk.has_value()) {
+        publishChunk(readyChunk->first, std::move(readyChunk->second));
+      }
+      if (completed.has_value()) {
+        publish(std::move(*completed));
+      }
     };
 
-    const bool readOk = archive_file::readArchiveEntriesConcurrently(
-        batch.archivePath, pendingInnerPaths, std::move(onFile), workerCount,
-        maxInFlightBytes, &concurrentError, pauseCallback);
-    if (!readOk) {
-      std::lock_guard lock(resultMutex);
-      if (!callbackError.empty()) {
-        concurrentError = callbackError;
+    std::string readError;
+    const bool readOk = archive_file::readArchiveEntriesStreaming(
+        state->archivePath, state->innerPaths,
+        [&, state, publishReady](archive_file::FileData &&file) mutable {
+          const auto sequenceIt =
+              sequenceByInnerPath.find(checkpointInnerPathText(file.path));
+          if (sequenceIt == sequenceByInnerPath.end()) {
+            std::lock_guard lock(state->mutex);
+            state->errorMessage =
+                "Archive entry was not in the requested chart batch.";
+            return false;
+          }
+
+          const std::size_t chartIndex = sequenceIt->second;
+          const std::uint64_t fileBytes =
+              static_cast<std::uint64_t>(file.bytes.size());
+          {
+            std::unique_lock lock(state->mutex);
+            while (!shouldStop()) {
+              const bool fileSlotAvailable =
+                  state->inFlightFiles < kArchiveParseMaxInFlightFiles;
+              const bool byteSlotAvailable = state->inFlightFiles == 0 ||
+                                             state->inFlightBytes + fileBytes <=
+                                                 kArchiveParseMaxInFlightBytes;
+              if (fileSlotAvailable && byteSlotAvailable) {
+                break;
+              }
+              state->spaceCv.wait_for(lock, std::chrono::milliseconds(20));
+            }
+            if (shouldStop()) {
+              return false;
+            }
+            ++state->pendingTasks;
+            ++state->inFlightFiles;
+            state->inFlightBytes += fileBytes;
+          }
+
+          const bool accepted =
+              scheduler.enqueue([&, state, publishReady, chartIndex, fileBytes,
+                                 file = std::move(file)]() mutable {
+                ArchiveParsedChart parsed{
+                    .innerPath = file.path,
+                    .chartPath = archive_file::makeVirtualPath(
+                        state->archivePath, file.path),
+                };
+                try {
+                  if (!shouldStop()) {
+                    parsed.meta = parseChartMeta(parsed.chartPath, &file.bytes);
+                  }
+                } catch (const std::exception &e) {
+                  std::lock_guard lock(state->mutex);
+                  state->errorMessage = e.what();
+                } catch (...) {
+                  std::lock_guard lock(state->mutex);
+                  state->errorMessage = "Unknown chart parse error.";
+                }
+
+                {
+                  std::lock_guard lock(state->mutex);
+                  state->parsedSlots[chartIndex] = std::move(parsed);
+                  if (state->pendingTasks > 0) {
+                    --state->pendingTasks;
+                  }
+                  if (state->inFlightFiles > 0) {
+                    --state->inFlightFiles;
+                  }
+                  state->inFlightBytes = fileBytes > state->inFlightBytes
+                                             ? 0
+                                             : state->inFlightBytes - fileBytes;
+                }
+                state->spaceCv.notify_all();
+                publishReady();
+              });
+          if (!accepted) {
+            std::lock_guard lock(state->mutex);
+            if (state->pendingTasks > 0) {
+              --state->pendingTasks;
+            }
+            if (state->inFlightFiles > 0) {
+              --state->inFlightFiles;
+            }
+            state->inFlightBytes = fileBytes > state->inFlightBytes
+                                       ? 0
+                                       : state->inFlightBytes - fileBytes;
+            state->errorMessage =
+                "Chart scan scheduler rejected an archive entry.";
+            state->spaceCv.notify_all();
+            return false;
+          }
+          return true;
+        },
+        &readError, pauseCallback);
+    {
+      std::lock_guard lock(state->mutex);
+      state->readOk = readOk;
+      state->readDone = true;
+      if (!readError.empty()) {
+        state->errorMessage = std::move(readError);
       }
-      return std::nullopt;
     }
+    publishReady();
+  };
 
-    std::vector<ArchiveParsedChart> parsedCharts;
-    parsedCharts.reserve(results.size());
-    for (auto &result : results) {
-      if (result.has_value()) {
-        parsedCharts.push_back(std::move(*result));
-      }
-    }
+  auto activateIndexedArchivePrefetch = [&](IndexedArchivePrefetch prefetch) {
+    prefetch.state = std::make_shared<ArchiveParseJobState>();
+    prefetchedArchiveStates[prefetch.archiveKey] = prefetch.state;
+    return prefetch;
+  };
 
+  auto runIndexedArchivePrefetch = [&](IndexedArchivePrefetch prefetch) {
     archive_file::appendDebugLogLine(
-        "Finished concurrent DB chart batch parse: " +
-        fspath_to_utf8(batch.archivePath) +
-        " requested=" + std::to_string(pendingInnerPaths.size()) +
-        " files=" + std::to_string(parsedCharts.size()) +
-        " workers=" + std::to_string(workerCount) +
-        " maxInFlightBytes=" + std::to_string(maxInFlightBytes));
-    return parsedCharts;
-  };
-
-  struct PrefetchedArchiveParseResult {
-    std::vector<std::filesystem::path> pendingInnerPaths;
-    std::optional<std::vector<ArchiveParsedChart>> parsedCharts;
-    std::string errorMessage;
-  };
-  struct PrefetchArchiveParseTask {
-    path_t archiveKey;
-    ArchiveParseBatch batch;
-  };
-  std::mutex prefetchArchiveMutex;
-  std::condition_variable prefetchArchiveCv;
-  std::deque<PrefetchArchiveParseTask> prefetchArchiveTasks;
-  std::unordered_map<path_t, PrefetchedArchiveParseResult>
-      prefetchedArchiveResults;
-  std::size_t prefetchArchiveRunning = 0;
-  bool prefetchArchiveProducerDone = false;
-  const bool prefetchArchiveParsingEnabled = !checkpoint.found;
-
-  auto queuedPrefetchArchiveCountLocked = [&]() {
-    return prefetchArchiveTasks.size() + prefetchArchiveRunning;
-  };
-
-  auto storePrefetchedArchiveResult = [&](path_t archiveKey,
-                                          PrefetchedArchiveParseResult result) {
-    std::lock_guard lock(prefetchArchiveMutex);
-    prefetchedArchiveResults[std::move(archiveKey)] = std::move(result);
-    if (prefetchArchiveRunning > 0) {
-      --prefetchArchiveRunning;
-    }
-    prefetchArchiveCv.notify_all();
-  };
-
-  auto parsePrefetchArchiveTask = [&](PrefetchArchiveParseTask task) {
-    PrefetchedArchiveParseResult result;
-    result.pendingInnerPaths = std::move(task.batch.innerPaths);
-    const std::size_t queuedArchives = [&]() {
-      std::lock_guard lock(prefetchArchiveMutex);
-      return std::max<std::size_t>(1, queuedPrefetchArchiveCountLocked());
-    }();
-    const ArchiveParsePipelineShape shape = archiveParsePipelineShape(
-        queuedArchives, result.pendingInnerPaths.size());
-    archive_file::appendDebugLogLine(
-        "Prefetching DB archive chart batch parse: " +
-        fspath_to_utf8(task.batch.archivePath) +
-        " requested=" + std::to_string(result.pendingInnerPaths.size()) +
-        " queuedArchives=" + std::to_string(queuedArchives) +
-        " innerWorkers=" + std::to_string(shape.innerWorkers) +
-        " maxInFlightBytes=" + std::to_string(shape.maxInFlightBytes));
+        "Prefetching indexed archive chart batch: " +
+        fspath_to_utf8(prefetch.archivePath) +
+        " requested=" + std::to_string(prefetch.innerPaths.size()));
+    auto state = prefetch.state;
+    std::vector<std::filesystem::path> errorPaths = prefetch.innerPaths;
     try {
-      result.parsedCharts = parseArchiveBatchConcurrently(
-          task.batch, result.pendingInnerPaths, shape.innerWorkers,
-          shape.maxInFlightBytes, result.errorMessage);
-    } catch (const std::exception &e) {
-      result.parsedCharts.reset();
-      result.errorMessage = e.what();
+      runArchiveChartPipeline(
+          entityScheduler, std::move(prefetch.archivePath),
+          std::move(prefetch.innerPaths),
+          [&, state](ArchiveChartPipelineResult result) {
+            storeArchiveParseStateResult(
+                state, ArchiveParseJobResult{
+                           .innerStart = 0,
+                           .pendingInnerPaths = std::move(result.innerPaths),
+                           .parsedCharts = std::move(result.parsedCharts),
+                           .complete = result.complete,
+                           .incremental = true,
+                           .errorMessage = std::move(result.errorMessage),
+                       });
+          },
+          [&, state](std::size_t firstIndex,
+                     std::vector<ArchiveParsedChart> parsedCharts) {
+            storeArchiveParseStateChunk(state, firstIndex,
+                                        std::move(parsedCharts));
+          });
+    } catch (const std::exception &error) {
+      storeArchiveParseStateResult(
+          state, ArchiveParseJobResult{
+                     .innerStart = 0,
+                     .pendingInnerPaths = std::move(errorPaths),
+                     .incremental = true,
+                     .errorMessage = error.what(),
+                 });
+      throw;
     } catch (...) {
-      result.parsedCharts.reset();
-      result.errorMessage = "Unknown archive prefetch parse error.";
+      storeArchiveParseStateResult(
+          state, ArchiveParseJobResult{
+                     .innerStart = 0,
+                     .pendingInnerPaths = std::move(errorPaths),
+                     .incremental = true,
+                     .errorMessage = "Unknown indexed archive parse error.",
+                 });
+      throw;
     }
-    storePrefetchedArchiveResult(std::move(task.archiveKey), std::move(result));
   };
 
-  auto popPrefetchArchiveTask = [&](bool back, PrefetchArchiveParseTask &task) {
-    std::lock_guard lock(prefetchArchiveMutex);
-    if (prefetchArchiveTasks.empty()) {
-      return false;
+  auto queueIndexedArchivePrefetch = [&](IndexedArchivePrefetch prefetch) {
+    auto queuedPrefetch =
+        std::make_shared<IndexedArchivePrefetch>(std::move(prefetch));
+    const auto workClass =
+        queuedPrefetch->innerPaths.size() >= kArchiveDirectConcurrentMinCharts
+            ? chart_scan::WorkClass::ArchiveReadHeavy
+            : chart_scan::WorkClass::ArchiveRead;
+    if (entityScheduler.enqueue(
+            [&, queuedPrefetch] {
+              runIndexedArchivePrefetch(std::move(*queuedPrefetch));
+            },
+            workClass)) {
+      return;
     }
-    if (back) {
-      task = std::move(prefetchArchiveTasks.back());
-      prefetchArchiveTasks.pop_back();
-    } else {
-      task = std::move(prefetchArchiveTasks.front());
-      prefetchArchiveTasks.pop_front();
-    }
-    ++prefetchArchiveRunning;
-    return true;
-  };
-
-  auto prefetchArchiveWorker = [&]() {
-    for (;;) {
-      PrefetchArchiveParseTask task;
-      {
-        std::unique_lock lock(prefetchArchiveMutex);
-        prefetchArchiveCv.wait(lock, [&]() {
-          return stopRequested(stopToken) || prefetchArchiveProducerDone ||
-                 !prefetchArchiveTasks.empty();
+    storeArchiveParseStateResult(
+        queuedPrefetch->state,
+        ArchiveParseJobResult{
+            .innerStart = 0,
+            .pendingInnerPaths = std::move(queuedPrefetch->innerPaths),
+            .incremental = true,
+            .errorMessage = "Indexed archive prefetch was not queued.",
         });
-        if (stopRequested(stopToken) ||
-            (prefetchArchiveTasks.empty() && prefetchArchiveProducerDone)) {
+  };
+
+  auto prepareArchiveCharts =
+      [&](std::size_t sequence,
+          std::shared_ptr<PreparedArchive> preparedArchive) {
+        if (!preparedArchive->scan.has_value() ||
+            preparedArchive->scan->solid ||
+            preparedArchive->scan->chartPaths.empty() || checkpoint.found) {
+          storePreparedEntity(sequence, std::move(*preparedArchive));
           return;
         }
-        task = std::move(prefetchArchiveTasks.front());
-        prefetchArchiveTasks.pop_front();
-        ++prefetchArchiveRunning;
-      }
-      parsePrefetchArchiveTask(std::move(task));
-    }
-  };
+        std::vector<std::filesystem::path> innerPaths;
+        innerPaths.reserve(preparedArchive->scan->chartPaths.size());
+        for (const auto &chartPath : preparedArchive->scan->chartPaths) {
+          std::filesystem::path parsedArchivePath;
+          std::filesystem::path innerPath;
+          if (!archive_file::splitVirtualPath(chartPath, parsedArchivePath,
+                                              innerPath)) {
+            preparedArchive->chartParseError =
+                "Indexed archive chart path was not virtual.";
+            storePreparedEntity(sequence, std::move(*preparedArchive));
+            return;
+          }
+          innerPaths.push_back(std::move(innerPath));
+        }
 
-  const std::size_t prefetchWorkerBudget = static_cast<std::size_t>(
-      parallel_worker_count(kArchiveParseMaxOuterWorkers + 1));
-  const std::size_t prefetchWorkerCount =
-      prefetchArchiveParsingEnabled && prefetchWorkerBudget > 1
-          ? std::min<std::size_t>(kArchiveParseMaxOuterWorkers - 1,
-                                  prefetchWorkerBudget - 1)
-          : std::size_t{0};
-  std::vector<std::thread> prefetchArchiveWorkers;
-  prefetchArchiveWorkers.reserve(prefetchWorkerCount);
-  for (std::size_t i = 0; i < prefetchWorkerCount; ++i) {
-    prefetchArchiveWorkers.emplace_back(prefetchArchiveWorker);
-  }
+        IndexedArchivePrefetch current{
+            .archiveKey = archiveScanKey(preparedArchive->path),
+            .archivePath = preparedArchive->path,
+            .innerPaths = std::move(innerPaths),
+        };
+        if (entityWorkerCount > 1 && preparedArchive->scan->chartPaths.size() >=
+                                         kArchiveDirectConcurrentMinCharts) {
+          {
+            std::lock_guard lock(indexedArchivePrefetchMutex);
+            if (!multiArchivePrefetchActive &&
+                !heldLargeArchivePrefetch.has_value()) {
+              heldLargeArchivePrefetch = std::move(current);
+            } else {
+              if (!multiArchivePrefetchActive) {
+                multiArchivePrefetchActive = true;
+                queueIndexedArchivePrefetch(activateIndexedArchivePrefetch(
+                    std::move(*heldLargeArchivePrefetch)));
+                heldLargeArchivePrefetch.reset();
+              }
+              queueIndexedArchivePrefetch(
+                  activateIndexedArchivePrefetch(std::move(current)));
+            }
+          }
 
-  auto queuePrefetchArchiveBatch = [&](const path_t &archiveKey,
-                                       const ArchiveParseBatch &batch) {
-    if (!prefetchArchiveParsingEnabled || prefetchWorkerCount == 0 ||
-        batch.innerPaths.empty()) {
+          storePreparedEntity(sequence, std::move(*preparedArchive));
+          return;
+        }
+
+        {
+          std::lock_guard lock(indexedArchivePrefetchMutex);
+          queueIndexedArchivePrefetch(
+              activateIndexedArchivePrefetch(std::move(current)));
+        }
+        storePreparedEntity(sequence, std::move(*preparedArchive));
+      };
+
+  auto scheduleOrdinaryChart = [&](const std::filesystem::path &path) {
+    const path_t key = fspath_to_path_t(path);
+    if (knownChartPaths.contains(key) ||
+        !discoveredOrdinaryChartPaths.insert(key).second) {
       return;
     }
-    {
-      std::lock_guard lock(prefetchArchiveMutex);
-      prefetchArchiveTasks.push_back(PrefetchArchiveParseTask{
-          .archiveKey = archiveKey,
-          .batch = batch,
-      });
-    }
-    prefetchArchiveCv.notify_one();
-  };
 
-  auto finishPrefetchArchiveParsing = [&]() {
-    if (!prefetchArchiveParsingEnabled) {
+    const std::size_t sequence = reservePreparedEntity();
+    if (checkpoint.found) {
+      storePreparedEntity(sequence, PreparedOrdinaryChart{.path = path});
       return;
     }
-    PrefetchArchiveParseTask producerTask;
-    while (!shouldStop() && popPrefetchArchiveTask(true, producerTask)) {
-      archive_file::appendDebugLogLine(
-          "Batch creation worker joining archive parse prefetch: " +
-          fspath_to_utf8(producerTask.batch.archivePath));
-      parsePrefetchArchiveTask(std::move(producerTask));
-    }
-    {
-      std::lock_guard lock(prefetchArchiveMutex);
-      prefetchArchiveProducerDone = true;
-    }
-    prefetchArchiveCv.notify_all();
-    for (auto &worker : prefetchArchiveWorkers) {
-      if (worker.joinable()) {
-        worker.join();
-      }
+
+    if (!entityScheduler.enqueue([&, sequence, path] {
+          if (shouldStop()) {
+            return;
+          }
+          try {
+            PreparedOrdinaryChart prepared{
+                .path = path,
+                .parseAttempted = true,
+                .meta = parseChartMeta(path, nullptr),
+            };
+            storePreparedEntity(sequence, std::move(prepared));
+          } catch (...) {
+            storePreparedEntityIfMissing(sequence,
+                                         PreparedOrdinaryChart{.path = path});
+            throw;
+          }
+        })) {
+      storePreparedEntity(sequence, PreparedOrdinaryChart{.path = path});
     }
   };
 
-  struct PrefetchArchiveJoinGuard {
-    std::function<void()> finish;
-    ~PrefetchArchiveJoinGuard() {
-      if (finish) {
-        finish();
-      }
-    }
-  } prefetchArchiveJoinGuard{finishPrefetchArchiveParsing};
-
-  auto scanArchivePath = [&](const std::filesystem::path &archivePath) {
+  auto scheduleArchivePath = [&](const std::filesystem::path &archivePath) {
     if (shouldStop()) {
       return;
     }
@@ -857,18 +1143,14 @@ int ChartLibraryScanner::Scan(
             " cachedCharts=" + std::to_string(cache->chartCount) +
             " dbCharts=" + std::to_string(knownChartCount));
       } else {
-        archive_file::appendDebugLogLine(
-            "Using cached archive scan: " + archiveText +
-            " files=" + std::to_string(cache->fileCount) +
-            " charts=" + std::to_string(cache->chartCount) +
-            " solid=" + std::string(cache->solid ? "yes" : "no") +
-            " estimatedUnpacked=" + std::to_string(cache->uncompressedSize));
-        solidArchiveDiffs.push_back({
-            .path = archivePath,
-            .solid = cache->solid,
-            .uncompressedSize = cache->uncompressedSize,
-            .fileCount = cache->fileCount,
-        });
+        const std::size_t sequence = reservePreparedEntity();
+        storePreparedEntity(sequence, PreparedArchive{
+                                          .path = archivePath,
+                                          .archiveSize = archiveSize,
+                                          .mtimeNs = mtimeNs,
+                                          .cache = cache,
+                                          .cacheAccepted = true,
+                                      });
         return;
       }
     }
@@ -877,57 +1159,44 @@ int ChartLibraryScanner::Scan(
                                        archiveText);
     }
 
-    const ArchiveScanResult archiveScan = scanArchiveForChartsOrSolid(
-        archivePath, knownChartPaths, pauseCallback);
-    if (shouldStop()) {
-      return;
-    }
-    if (!archiveScan.readable) {
-      return;
-    }
-    reindexedArchives.push_back(archivePath);
-    ArchiveCacheDiff cacheDiff{
-        .path = archivePath,
-        .solid = archiveScan.solid,
-        .uncompressedSize = archiveScan.uncompressedSize,
-        .fileCount = archiveScan.fileCount,
-        .chartCount = static_cast<int>(archiveScan.chartPaths.size()),
-    };
-    if (archiveScan.solid) {
-      archiveCacheDiffs.push_back(cacheDiff);
-      solidArchiveDiffs.push_back({
-          .path = archivePath,
-          .solid = true,
-          .uncompressedSize = archiveScan.uncompressedSize,
-          .fileCount = archiveScan.fileCount,
-      });
-      return;
-    }
-
-    solidArchiveDiffs.push_back({
-        .path = archivePath,
-        .solid = false,
-    });
-    if (archiveScan.chartPaths.empty()) {
-      archiveCacheDiffs.push_back(cacheDiff);
+    const std::size_t sequence = reservePreparedEntity();
+    if (entityScheduler.enqueue(
+            [&, sequence, archivePath, archiveSize, mtimeNs, cache] {
+              if (shouldStop()) {
+                return;
+              }
+              try {
+                auto prepared =
+                    std::make_shared<PreparedArchive>(PreparedArchive{
+                        .path = archivePath,
+                        .archiveSize = archiveSize,
+                        .mtimeNs = mtimeNs,
+                        .cache = cache,
+                        .scan = scanArchiveForChartsOrSolid(archivePath,
+                                                            pauseCallback),
+                    });
+                prepareArchiveCharts(sequence, std::move(prepared));
+              } catch (...) {
+                storePreparedEntityIfMissing(sequence,
+                                             PreparedArchive{
+                                                 .path = archivePath,
+                                                 .archiveSize = archiveSize,
+                                                 .mtimeNs = mtimeNs,
+                                                 .cache = cache,
+                                             });
+                throw;
+              }
+            },
+            chart_scan::WorkClass::ArchiveIndex)) {
+      ++scheduledArchiveIndexCount;
     } else {
-      pendingArchiveCacheDiffs[archiveKey] = cacheDiff;
+      storePreparedEntity(sequence, PreparedArchive{
+                                        .path = archivePath,
+                                        .archiveSize = archiveSize,
+                                        .mtimeNs = mtimeNs,
+                                        .cache = cache,
+                                    });
     }
-    ArchiveParseBatch prefetchBatch{
-        .archivePath = archivePath,
-        .innerPaths = {},
-    };
-    prefetchBatch.innerPaths.reserve(archiveScan.chartPaths.size());
-    for (const auto &chartPath : archiveScan.chartPaths) {
-      std::filesystem::path chartArchivePath;
-      std::filesystem::path innerPath;
-      if (archive_file::splitVirtualPath(chartPath, chartArchivePath,
-                                         innerPath)) {
-        prefetchBatch.innerPaths.push_back(innerPath);
-      }
-      diffs.push_back({.path = chartPath, .deleted = false});
-    }
-    queuePrefetchArchiveBatch(archiveKey, prefetchBatch);
   };
 
   int scannedRootCount = 0;
@@ -954,14 +1223,11 @@ int ChartLibraryScanner::Scan(
       }
       for (const auto &path : androidChartPaths) {
         if (shouldStop()) {
+          entityScheduler.cancel();
           return 0;
         }
         if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
-          const path_t key = fspath_to_path_t(path);
-          if (knownChartPaths.find(key) == knownChartPaths.end()) {
-            diffs.push_back({.path = path, .deleted = false});
-            knownChartPaths.insert(key);
-          }
+          scheduleOrdinaryChart(path);
           continue;
         }
         if (archive_file::hasSupportedArchiveExtension(path)) {
@@ -991,13 +1257,9 @@ int ChartLibraryScanner::Scan(
     if (std::filesystem::is_regular_file(root, rootTypeError) &&
         !rootTypeError) {
       if (asobmshow::bms_chart_file::isBmsChartPath(root)) {
-        const path_t key = fspath_to_path_t(root);
-        if (knownChartPaths.find(key) == knownChartPaths.end()) {
-          diffs.push_back({.path = root, .deleted = false});
-          knownChartPaths.insert(key);
-        }
+        scheduleOrdinaryChart(root);
       } else if (archive_file::hasSupportedArchiveExtension(root)) {
-        scanArchivePath(root);
+        scheduleArchivePath(root);
       }
       ++scannedRootCount;
       continue;
@@ -1009,6 +1271,7 @@ int ChartLibraryScanner::Scan(
     for (const auto end = std::filesystem::recursive_directory_iterator();
          !error && iterator != end; iterator.increment(error)) {
       if (shouldStop()) {
+        entityScheduler.cancel();
         return 0;
       }
       std::error_code typeError;
@@ -1017,15 +1280,11 @@ int ChartLibraryScanner::Scan(
       }
       const std::filesystem::path path = iterator->path();
       if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
-        const path_t key = fspath_to_path_t(path);
-        if (knownChartPaths.find(key) == knownChartPaths.end()) {
-          diffs.push_back({.path = path, .deleted = false});
-          knownChartPaths.insert(key);
-        }
+        scheduleOrdinaryChart(path);
         continue;
       }
       if (archive_file::hasSupportedArchiveExtension(path)) {
-        scanArchivePath(path);
+        scheduleArchivePath(path);
       }
     }
     if (error) {
@@ -1034,10 +1293,119 @@ int ChartLibraryScanner::Scan(
     }
     ++scannedRootCount;
   }
+  if (scheduledArchiveIndexCount > 0) {
+    reportProgress(0, scheduledArchiveIndexCount,
+                   ChartScanProgressStage::IndexingArchives);
+  }
+  if (shouldStop()) {
+    entityScheduler.cancel();
+  } else {
+    std::unique_lock lock(preparedEntityMutex);
+    while (!shouldStop() &&
+           !std::all_of(preparedEntities.begin(), preparedEntities.end(),
+                        [](const auto &slot) { return slot.has_value(); })) {
+      preparedEntityCv.wait_for(lock, std::chrono::milliseconds(20));
+    }
+    lock.unlock();
+    if (!shouldStop() && scheduledArchiveIndexCount > 0) {
+      reportProgress(scheduledArchiveIndexCount, scheduledArchiveIndexCount,
+                     ChartScanProgressStage::IndexingArchives);
+    }
+    if (shouldStop()) {
+      entityScheduler.cancel();
+    }
+  }
+
+  for (auto &preparedSlot : preparedEntities) {
+    if (!preparedSlot.has_value()) {
+      continue;
+    }
+    if (auto *ordinary = std::get_if<PreparedOrdinaryChart>(&*preparedSlot)) {
+      knownChartPaths.insert(fspath_to_path_t(ordinary->path));
+      diffs.push_back({
+          .path = std::move(ordinary->path),
+          .deleted = false,
+          .parseAttempted = ordinary->parseAttempted,
+          .preparedMeta = std::move(ordinary->meta),
+      });
+      continue;
+    }
+
+    auto &prepared = std::get<PreparedArchive>(*preparedSlot);
+    const path_t archiveKey = archiveScanKey(prepared.path);
+    if (!prepared.scan.has_value()) {
+      if (prepared.cacheAccepted && prepared.cache != nullptr &&
+          prepared.cache->archiveSize == prepared.archiveSize &&
+          prepared.cache->mtimeNs == prepared.mtimeNs &&
+          prepared.cache->chartCount >= 0) {
+        archive_file::appendDebugLogLine(
+            "Using cached archive scan: " + fspath_to_utf8(prepared.path) +
+            " files=" + std::to_string(prepared.cache->fileCount) +
+            " charts=" + std::to_string(prepared.cache->chartCount) +
+            " solid=" + std::string(prepared.cache->solid ? "yes" : "no") +
+            " estimatedUnpacked=" +
+            std::to_string(prepared.cache->uncompressedSize));
+        solidArchiveDiffs.push_back({
+            .path = prepared.path,
+            .solid = prepared.cache->solid,
+            .uncompressedSize = prepared.cache->uncompressedSize,
+            .fileCount = prepared.cache->fileCount,
+        });
+      }
+      continue;
+    }
+
+    ArchiveScanResult &archiveScan = *prepared.scan;
+    if (!archiveScan.readable) {
+      continue;
+    }
+    if (!prepared.chartParseError.empty()) {
+      archive_file::appendDebugLogLine(
+          "Deferred archive chart parse after pipeline error: " +
+          fspath_to_utf8(prepared.path) + ": " + prepared.chartParseError);
+    }
+    reindexedArchives.push_back(prepared.path);
+    ArchiveCacheDiff cacheDiff{
+        .path = prepared.path,
+        .solid = archiveScan.solid,
+        .uncompressedSize = archiveScan.uncompressedSize,
+        .fileCount = archiveScan.fileCount,
+        .chartCount = static_cast<int>(archiveScan.chartPaths.size()),
+    };
+    if (archiveScan.solid) {
+      archiveCacheDiffs.push_back(cacheDiff);
+      solidArchiveDiffs.push_back({
+          .path = prepared.path,
+          .solid = true,
+          .uncompressedSize = archiveScan.uncompressedSize,
+          .fileCount = archiveScan.fileCount,
+      });
+      continue;
+    }
+
+    solidArchiveDiffs.push_back({
+        .path = prepared.path,
+        .solid = false,
+    });
+    if (archiveScan.chartPaths.empty()) {
+      archiveCacheDiffs.push_back(cacheDiff);
+    } else {
+      pendingArchiveCacheDiffs[archiveKey] = cacheDiff;
+    }
+    for (std::size_t chartIndex = 0; chartIndex < archiveScan.chartPaths.size();
+         ++chartIndex) {
+      auto &chartPath = archiveScan.chartPaths[chartIndex];
+      knownChartPaths.insert(fspath_to_path_t(chartPath));
+      ScanDiff diff{
+          .path = std::move(chartPath),
+          .deleted = false,
+      };
+      diffs.push_back(std::move(diff));
+    }
+  }
+
   reportProgress(rootCount, rootCount,
                  ChartScanProgressStage::PreparingUpdates);
-  finishPrefetchArchiveParsing();
-  prefetchArchiveJoinGuard.finish = nullptr;
 
   const bool noScanWork =
       diffs.empty() && sourcePreferenceRefreshPaths.empty() &&
@@ -1045,6 +1413,7 @@ int ChartLibraryScanner::Scan(
       archiveCacheDiffs.empty() && pendingArchiveCacheDiffs.empty() &&
       staleSolidArchives.empty() && reindexedArchives.empty();
   if (noScanWork) {
+    entityScheduler.finish();
     session.ClearScanCheckpoint();
     session.ClearChartMetadataRebuildRequired();
     return 0;
@@ -1057,15 +1426,15 @@ int ChartLibraryScanner::Scan(
   std::vector<path_t> archiveBatchOrder;
   std::unordered_map<path_t, ArchiveParseBatch> archiveBatches;
   individualDiffs.reserve(diffs.size());
-  for (const auto &diff : diffs) {
+  for (auto &diff : diffs) {
     if (diff.deleted) {
-      individualDiffs.push_back(diff);
+      individualDiffs.push_back(std::move(diff));
       continue;
     }
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
     if (!archive_file::splitVirtualPath(diff.path, archivePath, innerPath)) {
-      individualDiffs.push_back(diff);
+      individualDiffs.push_back(std::move(diff));
       continue;
     }
 
@@ -1082,6 +1451,8 @@ int ChartLibraryScanner::Scan(
                     .first;
     }
     batchIt->second.innerPaths.push_back(innerPath);
+    batchIt->second.parseAttempted.push_back(diff.parseAttempted);
+    batchIt->second.preparedMetas.push_back(std::move(diff.preparedMeta));
   }
 
   int parseTotal = static_cast<int>(individualDiffs.size());
@@ -1317,6 +1688,7 @@ int ChartLibraryScanner::Scan(
 
   auto scanBatch = session.BeginScanBatch();
   if (!scanBatch.has_value()) {
+    entityScheduler.cancel();
     return 0;
   }
   std::uint64_t completedFlushRequest = 0;
@@ -1486,7 +1858,15 @@ int ChartLibraryScanner::Scan(
       return parsedMetas;
     }
 
-    const std::size_t workerCount = individualParseWorkerCount(count);
+    const std::size_t requiredParseCount =
+        static_cast<std::size_t>(std::count_if(
+            individualDiffs.begin() +
+                static_cast<std::vector<ScanDiff>::difference_type>(begin),
+            individualDiffs.begin() +
+                static_cast<std::vector<ScanDiff>::difference_type>(end),
+            [](const ScanDiff &diff) { return !diff.parseAttempted; }));
+    const std::size_t workerCount = std::max<std::size_t>(
+        1, individualParseWorkerCount(requiredParseCount));
     const auto parseStart = Clock::now();
     if (workerCount > 1) {
       archive_file::appendDebugLogLine(
@@ -1498,8 +1878,12 @@ int ChartLibraryScanner::Scan(
       if (shouldStop()) {
         return;
       }
-      const ScanDiff &diff = individualDiffs[begin + offset];
-      parsedMetas[offset] = parseChartMeta(diff.path, nullptr);
+      ScanDiff &diff = individualDiffs[begin + offset];
+      if (diff.parseAttempted) {
+        parsedMetas[offset] = std::move(diff.preparedMeta);
+      } else {
+        parsedMetas[offset] = parseChartMeta(diff.path, nullptr);
+      }
     };
 
     if (workerCount <= 1) {
@@ -1629,14 +2013,14 @@ int ChartLibraryScanner::Scan(
   const std::size_t archiveSubStartIndex =
       resumePlan.valid && resumePlan.archivePhase ? resumePlan.archiveSubStart
                                                   : 0;
-  auto writePendingArchiveCache = [&](const ArchiveParseBatch &batch) {
+  auto writePendingArchiveCache = [&](const ArchiveParseBatch &batch,
+                                      int parsedChartCount) {
     const auto cacheIt =
         pendingArchiveCacheDiffs.find(archiveScanKey(batch.archivePath));
     if (cacheIt == pendingArchiveCacheDiffs.end()) {
       return;
     }
     const ArchiveCacheDiff &diff = cacheIt->second;
-    const int parsedChartCount = scanBatch->CountChartsInArchive(diff.path);
     if (parsedChartCount != diff.chartCount) {
       archive_file::appendDebugLogLine(
           "Writing archive scan cache with parsed chart count: " +
@@ -1651,209 +2035,6 @@ int ChartLibraryScanner::Scan(
         .fileCount = diff.fileCount,
         .chartCount = parsedChartCount,
     });
-  };
-
-  auto parseArchiveBatchStreaming =
-      [&](const ArchiveParseBatch &batch,
-          const std::vector<std::filesystem::path> &pendingInnerPaths,
-          std::size_t workerLimit, std::uint64_t maxInFlightBytes,
-          std::string &errorMessage)
-      -> std::optional<std::vector<ArchiveParsedChart>> {
-    std::string concurrentError;
-    if (auto parsedCharts =
-            parseArchiveBatchConcurrently(batch, pendingInnerPaths, workerLimit,
-                                          maxInFlightBytes, concurrentError)) {
-      return parsedCharts;
-    }
-    if (shouldStop()) {
-      errorMessage =
-          concurrentError.empty() ? "Operation cancelled" : concurrentError;
-      return std::nullopt;
-    }
-    if (!concurrentError.empty()) {
-      archive_file::appendDebugLogLine(
-          "Falling back to serial archive streaming for DB chart batch: " +
-          fspath_to_utf8(batch.archivePath) + ": " + concurrentError);
-    }
-
-    struct ArchiveParseTask {
-      std::size_t sequence = 0;
-      archive_file::FileData file;
-    };
-
-    std::mutex queueMutex;
-    std::condition_variable workCv;
-    std::condition_variable spaceCv;
-    std::deque<ArchiveParseTask> tasks;
-    std::vector<std::optional<ArchiveParsedChart>> results;
-    bool producerDone = false;
-    bool abortWorkers = false;
-    bool readOk = false;
-    std::size_t producedFiles = 0;
-    std::size_t inFlightFiles = 0;
-    std::uint64_t inFlightBytes = 0;
-
-    auto subtractInFlightBytes = [&](std::uint64_t bytes) {
-      inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
-    };
-
-    auto clearQueuedTasksLocked = [&]() {
-      for (const auto &task : tasks) {
-        subtractInFlightBytes(
-            static_cast<std::uint64_t>(task.file.bytes.size()));
-        if (inFlightFiles > 0) {
-          --inFlightFiles;
-        }
-      }
-      tasks.clear();
-    };
-
-    auto worker = [&]() {
-      for (;;) {
-        ArchiveParseTask task;
-        {
-          std::unique_lock lock(queueMutex);
-          workCv.wait(lock, [&]() {
-            return abortWorkers || producerDone || !tasks.empty();
-          });
-          if (abortWorkers || (tasks.empty() && producerDone)) {
-            return;
-          }
-          if (tasks.empty()) {
-            continue;
-          }
-          task = std::move(tasks.front());
-          tasks.pop_front();
-        }
-
-        const std::uint64_t taskBytes =
-            static_cast<std::uint64_t>(task.file.bytes.size());
-        ArchiveParsedChart parsed{
-            .innerPath = task.file.path,
-            .chartPath = archive_file::makeVirtualPath(batch.archivePath,
-                                                       task.file.path),
-            .meta = std::nullopt,
-        };
-        parsed.meta = parseChartMeta(parsed.chartPath, &task.file.bytes);
-
-        {
-          std::lock_guard lock(queueMutex);
-          if (results.size() <= task.sequence) {
-            results.resize(task.sequence + 1);
-          }
-          results[task.sequence] = std::move(parsed);
-          subtractInFlightBytes(taskBytes);
-          if (inFlightFiles > 0) {
-            --inFlightFiles;
-          }
-        }
-        spaceCv.notify_all();
-      }
-    };
-
-    const std::size_t workerCount =
-        std::min(archiveParseWorkerCount(pendingInnerPaths.size()),
-                 std::max<std::size_t>(1, workerLimit));
-    std::vector<std::thread> workers;
-    workers.reserve(workerCount);
-    for (std::size_t i = 0; i < workerCount; ++i) {
-      workers.emplace_back(worker);
-    }
-
-    auto onFile = [&](archive_file::FileData &&file) {
-      const std::uint64_t fileBytes =
-          static_cast<std::uint64_t>(file.bytes.size());
-      std::unique_lock lock(queueMutex);
-      for (;;) {
-        if (abortWorkers) {
-          return false;
-        }
-        const bool fileSlotAvailable =
-            inFlightFiles < kArchiveParseMaxInFlightFiles;
-        const bool byteSlotAvailable =
-            inFlightFiles == 0 || inFlightBytes + fileBytes <= maxInFlightBytes;
-        if (fileSlotAvailable && byteSlotAvailable) {
-          break;
-        }
-        lock.unlock();
-        if (shouldStop()) {
-          lock.lock();
-          abortWorkers = true;
-          workCv.notify_all();
-          spaceCv.notify_all();
-          return false;
-        }
-        lock.lock();
-        spaceCv.wait_for(lock, std::chrono::milliseconds(20));
-      }
-
-      const std::size_t sequence = producedFiles++;
-      if (results.size() <= sequence) {
-        results.resize(sequence + 1);
-      }
-      ++inFlightFiles;
-      inFlightBytes += fileBytes;
-      tasks.push_back(
-          ArchiveParseTask{.sequence = sequence, .file = std::move(file)});
-      workCv.notify_one();
-      return true;
-    };
-
-    std::thread producer([&]() {
-      readOk = archive_file::readArchiveEntriesStreaming(
-          batch.archivePath, pendingInnerPaths, std::move(onFile),
-          &errorMessage, pauseCallback);
-      {
-        std::lock_guard lock(queueMutex);
-        producerDone = true;
-        if (!readOk) {
-          abortWorkers = true;
-          clearQueuedTasksLocked();
-        }
-      }
-      workCv.notify_all();
-      spaceCv.notify_all();
-    });
-
-    producer.join();
-    for (auto &thread : workers) {
-      if (thread.joinable()) {
-        thread.join();
-      }
-    }
-
-    if (!readOk || shouldStop()) {
-      return std::nullopt;
-    }
-
-    std::vector<ArchiveParsedChart> parsedCharts;
-    parsedCharts.reserve(results.size());
-    for (auto &result : results) {
-      if (result.has_value()) {
-        parsedCharts.push_back(std::move(*result));
-      }
-    }
-
-    archive_file::appendDebugLogLine(
-        "Finished streaming DB chart batch parse: " +
-        fspath_to_utf8(batch.archivePath) +
-        " requested=" + std::to_string(pendingInnerPaths.size()) +
-        " files=" + std::to_string(parsedCharts.size()) +
-        " workers=" + std::to_string(workerCount) +
-        " maxInFlightBytes=" + std::to_string(maxInFlightBytes));
-    return parsedCharts;
-  };
-
-  struct ArchiveParseJobResult {
-    std::size_t archiveIndex = 0;
-    std::size_t innerStart = 0;
-    std::vector<std::filesystem::path> pendingInnerPaths;
-    std::optional<std::vector<ArchiveParsedChart>> parsedCharts;
-    std::string errorMessage;
-  };
-
-  struct ActiveArchiveParseJob {
-    std::future<ArchiveParseJobResult> future;
   };
 
   auto archiveBatchForIndex =
@@ -1873,184 +2054,368 @@ int ChartLibraryScanner::Scan(
                                              : std::size_t{0};
   };
 
-  auto archivePendingChartCountForIndex = [&](std::size_t archiveIndex) {
+  auto archiveBatchIsPrepared = [&](std::size_t archiveIndex) {
     const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
-    if (batch == nullptr) {
-      return std::size_t{0};
+    if (batch == nullptr ||
+        batch->parseAttempted.size() != batch->innerPaths.size() ||
+        batch->preparedMetas.size() != batch->innerPaths.size()) {
+      return false;
     }
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
-    return innerStart < batch->innerPaths.size()
-               ? batch->innerPaths.size() - innerStart
-               : std::size_t{0};
+    if (innerStart > batch->innerPaths.size()) {
+      return false;
+    }
+    return std::all_of(
+        batch->parseAttempted.begin() +
+            static_cast<std::vector<bool>::difference_type>(innerStart),
+        batch->parseAttempted.end(), [](bool attempted) { return attempted; });
   };
 
-  auto prefetchedArchiveResultItForBatch = [&](const path_t &archiveKey,
-                                               const ArchiveParseBatch &batch,
-                                               std::size_t innerStart) {
-    auto resultIt = prefetchedArchiveResults.find(archiveKey);
-    if (innerStart != 0 || resultIt == prefetchedArchiveResults.end() ||
-        !resultIt->second.parsedCharts.has_value() ||
-        resultIt->second.pendingInnerPaths.size() != batch.innerPaths.size()) {
-      return prefetchedArchiveResults.end();
+  auto preparedArchiveParseResult = [&](std::size_t archiveIndex) {
+    ArchiveParseJobResult result;
+    result.archiveIndex = archiveIndex;
+    const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
+    if (batch == nullptr || !archiveBatchIsPrepared(archiveIndex)) {
+      result.errorMessage = "Archive parse result was not prepared.";
+      return result;
     }
-    for (std::size_t i = 0; i < batch.innerPaths.size(); ++i) {
-      if (checkpointInnerPathText(resultIt->second.pendingInnerPaths[i]) !=
-          checkpointInnerPathText(batch.innerPaths[i])) {
-        return prefetchedArchiveResults.end();
-      }
+    result.innerStart = archiveInnerStartForIndex(archiveIndex);
+    result.pendingInnerPaths.assign(
+        batch->innerPaths.begin() +
+            static_cast<std::vector<std::filesystem::path>::difference_type>(
+                result.innerStart),
+        batch->innerPaths.end());
+    std::vector<ArchiveParsedChart> parsedCharts;
+    parsedCharts.reserve(result.pendingInnerPaths.size());
+    for (std::size_t index = result.innerStart;
+         index < batch->innerPaths.size(); ++index) {
+      parsedCharts.push_back({
+          .innerPath = batch->innerPaths[index],
+          .chartPath = archive_file::makeVirtualPath(batch->archivePath,
+                                                     batch->innerPaths[index]),
+          .meta = batch->preparedMetas[index],
+      });
     }
-    return resultIt;
+    result.parsedCharts = std::move(parsedCharts);
+    result.complete = true;
+    return result;
   };
 
-  auto queuedArchiveCountFrom = [&](std::size_t archiveIndex) {
-    std::size_t count = 0;
-    for (std::size_t i = archiveIndex; i < archiveBatchOrder.size(); ++i) {
-      const ArchiveParseBatch *batch = archiveBatchForIndex(i);
-      if (batch == nullptr) {
-        continue;
-      }
-      const std::size_t innerStart = archiveInnerStartForIndex(i);
-      if (archivePendingChartCountForIndex(i) > 0 &&
-          prefetchedArchiveResultItForBatch(archiveBatchOrder[i], *batch,
-                                            innerStart) ==
-              prefetchedArchiveResults.end()) {
-        ++count;
+  std::vector<std::shared_ptr<ArchiveParseJobState>> archiveParseResults;
+  archiveParseResults.reserve(archiveBatchOrder.size());
+  std::unordered_set<std::size_t> prefetchedArchiveIndexes;
+  {
+    std::lock_guard lock(indexedArchivePrefetchMutex);
+    if (!multiArchivePrefetchActive) {
+      heldLargeArchivePrefetch.reset();
+    }
+    for (std::size_t archiveIndex = 0; archiveIndex < archiveBatchOrder.size();
+         ++archiveIndex) {
+      if (const auto prefetchIt =
+              prefetchedArchiveStates.find(archiveBatchOrder[archiveIndex]);
+          prefetchIt != prefetchedArchiveStates.end()) {
+        archiveParseResults.push_back(prefetchIt->second);
+        prefetchedArchiveIndexes.insert(archiveIndex);
+      } else {
+        archiveParseResults.push_back(std::make_shared<ArchiveParseJobState>());
       }
     }
-    return count;
-  };
-
-  std::unordered_map<std::size_t, ActiveArchiveParseJob> activeArchiveParseJobs;
-  std::size_t nextArchiveToLaunch = archiveStartIndex;
-
-  auto waitForActiveArchiveParseJobs = [&]() {
-    for (auto &entry : activeArchiveParseJobs) {
-      if (!entry.second.future.valid()) {
-        continue;
-      }
-      try {
-        (void)entry.second.future.get();
-      } catch (const std::exception &e) {
-        archive_file::appendDebugLogLine(
-            "Discarded archive parse job after error: " +
-            std::string(e.what()));
-      } catch (...) {
-        archive_file::appendDebugLogLine(
-            "Discarded archive parse job after unknown error.");
-      }
+  }
+  auto storeArchiveParseResult = [&](ArchiveParseJobResult result) {
+    if (result.archiveIndex < archiveParseResults.size()) {
+      storeArchiveParseStateResult(archiveParseResults[result.archiveIndex],
+                                   std::move(result));
     }
-    activeArchiveParseJobs.clear();
   };
-
-  auto launchArchiveParseJobs = [&]() {
+  auto storeArchiveParseChunk =
+      [&](std::size_t archiveIndex, std::size_t firstInnerIndex,
+          std::vector<ArchiveParsedChart> parsedCharts) {
+        if (archiveIndex < archiveParseResults.size()) {
+          storeArchiveParseStateChunk(archiveParseResults[archiveIndex],
+                                      firstInnerIndex, std::move(parsedCharts));
+        }
+      };
+  auto waitTakeArchiveParseEvent = [&](std::size_t archiveIndex,
+                                       std::size_t nextInnerIndex) {
+    ArchiveParseJobEvent event;
     for (;;) {
-      if (shouldStop() || nextArchiveToLaunch >= archiveBatchOrder.size()) {
-        return;
+      {
+        std::unique_lock lock(archiveParseResultMutex);
+        archiveParseResultCv.wait_for(lock, std::chrono::milliseconds(20), [&] {
+          if (archiveIndex >= archiveParseResults.size()) {
+            return false;
+          }
+          const auto &state = *archiveParseResults[archiveIndex];
+          if (state.chunks.contains(nextInnerIndex)) {
+            return true;
+          }
+          if (!state.terminalResult.has_value()) {
+            return false;
+          }
+          const auto &terminal = *state.terminalResult;
+          return !terminal.incremental || !terminal.complete ||
+                 nextInnerIndex >=
+                     terminal.innerStart + terminal.pendingInnerPaths.size();
+        });
+        if (archiveIndex < archiveParseResults.size()) {
+          auto &state = *archiveParseResults[archiveIndex];
+          if (state.terminalResult.has_value() &&
+              (!state.terminalResult->incremental ||
+               !state.terminalResult->complete ||
+               nextInnerIndex >=
+                   state.terminalResult->innerStart +
+                       state.terminalResult->pendingInnerPaths.size())) {
+            event.terminalResult = std::move(state.terminalResult);
+            state.terminalResult.reset();
+            return event;
+          }
+          if (auto chunkIt = state.chunks.find(nextInnerIndex);
+              chunkIt != state.chunks.end()) {
+            event.parsedCharts = std::move(chunkIt->second);
+            state.chunks.erase(chunkIt);
+            return event;
+          }
+        }
       }
-
-      const ArchiveParseBatch *batch =
-          archiveBatchForIndex(nextArchiveToLaunch);
-      const std::size_t innerStart =
-          archiveInnerStartForIndex(nextArchiveToLaunch);
-      if (batch == nullptr || innerStart >= batch->innerPaths.size()) {
-        ++nextArchiveToLaunch;
-        continue;
+      if (shouldStop()) {
+        event.terminalResult = ArchiveParseJobResult{
+            .archiveIndex = archiveIndex,
+            .innerStart = archiveInnerStartForIndex(archiveIndex),
+            .errorMessage = "Archive parse cancelled.",
+        };
+        return event;
       }
+    }
+  };
 
-      const auto &archiveKey = archiveBatchOrder[nextArchiveToLaunch];
-      if (prefetchedArchiveResultItForBatch(archiveKey, *batch, innerStart) !=
-          prefetchedArchiveResults.end()) {
-        ++nextArchiveToLaunch;
-        continue;
+  auto tryReadSingleArchiveConcurrently = [&](std::size_t archiveIndex,
+                                              const ArchiveParseBatch &batch,
+                                              std::size_t innerStart) {
+    std::vector<std::filesystem::path> pendingInnerPaths(
+        batch.innerPaths.begin() +
+            static_cast<std::vector<std::filesystem::path>::difference_type>(
+                innerStart),
+        batch.innerPaths.end());
+    if (entityWorkerCount <= 1 ||
+        pendingInnerPaths.size() < kArchiveDirectConcurrentMinCharts) {
+      return false;
+    }
+
+    std::unordered_map<std::string, std::size_t> sequenceByInnerPath;
+    sequenceByInnerPath.reserve(pendingInnerPaths.size());
+    for (std::size_t index = 0; index < pendingInnerPaths.size(); ++index) {
+      sequenceByInnerPath.emplace(
+          checkpointInnerPathText(pendingInnerPaths[index]), index);
+    }
+
+    std::mutex resultMutex;
+    std::vector<std::optional<ArchiveParsedChart>> parsedSlots(
+        pendingInnerPaths.size());
+    std::string callbackError;
+    std::string readError;
+    const std::size_t workerCount =
+        std::min(entityWorkerCount, pendingInnerPaths.size());
+    const bool readOk = archive_file::readArchiveEntriesConcurrently(
+        batch.archivePath, pendingInnerPaths,
+        [&](archive_file::FileData &&file) {
+          const auto sequenceIt =
+              sequenceByInnerPath.find(checkpointInnerPathText(file.path));
+          if (sequenceIt == sequenceByInnerPath.end()) {
+            std::lock_guard lock(resultMutex);
+            callbackError =
+                "Archive entry was not in the requested chart batch.";
+            return false;
+          }
+
+          ArchiveParsedChart parsed{
+              .innerPath = file.path,
+              .chartPath =
+                  archive_file::makeVirtualPath(batch.archivePath, file.path),
+          };
+          try {
+            if (!shouldStop()) {
+              parsed.meta = parseChartMeta(parsed.chartPath, &file.bytes);
+            }
+          } catch (const std::exception &e) {
+            std::lock_guard lock(resultMutex);
+            callbackError = e.what();
+          } catch (...) {
+            std::lock_guard lock(resultMutex);
+            callbackError = "Unknown archive chart parse error.";
+          }
+          {
+            std::lock_guard lock(resultMutex);
+            parsedSlots[sequenceIt->second] = std::move(parsed);
+          }
+          return !shouldStop();
+        },
+        workerCount, kArchiveParseMaxInFlightBytes, &readError, pauseCallback);
+
+    std::vector<ArchiveParsedChart> parsedCharts;
+    {
+      std::lock_guard lock(resultMutex);
+      if (!readOk || shouldStop() ||
+          !std::all_of(parsedSlots.begin(), parsedSlots.end(),
+                       [](const auto &slot) { return slot.has_value(); })) {
+        if (!callbackError.empty()) {
+          readError = callbackError;
+        }
+        archive_file::appendDebugLogLine(
+            "Single archive concurrent read unavailable; using bounded "
+            "pipeline: " +
+            fspath_to_utf8(batch.archivePath) +
+            (readError.empty() ? std::string() : ": " + readError));
+        return false;
       }
-
-      const std::size_t queuedArchives =
-          activeArchiveParseJobs.size() +
-          queuedArchiveCountFrom(nextArchiveToLaunch);
-      const std::size_t pendingChartCount =
-          batch->innerPaths.size() - innerStart;
-      const ArchiveParsePipelineShape shape =
-          archiveParsePipelineShape(queuedArchives, pendingChartCount);
-      if (activeArchiveParseJobs.size() >= shape.outerWorkers) {
-        return;
+      parsedCharts.reserve(parsedSlots.size());
+      for (auto &slot : parsedSlots) {
+        parsedCharts.push_back(std::move(*slot));
       }
+    }
 
-      const std::size_t archiveIndex = nextArchiveToLaunch;
-      std::vector<std::filesystem::path> pendingInnerPaths(
+    storeArchiveParseResult({
+        .archiveIndex = archiveIndex,
+        .innerStart = innerStart,
+        .pendingInnerPaths = std::move(pendingInnerPaths),
+        .parsedCharts = std::move(parsedCharts),
+        .complete = true,
+        .errorMessage = std::move(callbackError),
+    });
+    archive_file::appendDebugLogLine(
+        "Finished single archive concurrent chart parse: " +
+        fspath_to_utf8(batch.archivePath) +
+        " files=" + std::to_string(parsedSlots.size()) +
+        " workers=" + std::to_string(workerCount));
+    return true;
+  };
+
+  std::vector<std::size_t> unpreparedArchiveIndexes;
+  for (std::size_t archiveIndex = archiveStartIndex;
+       archiveIndex < archiveBatchOrder.size(); ++archiveIndex) {
+    const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
+    const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
+    if (batch != nullptr && innerStart < batch->innerPaths.size() &&
+        !archiveBatchIsPrepared(archiveIndex) &&
+        !prefetchedArchiveIndexes.contains(archiveIndex)) {
+      unpreparedArchiveIndexes.push_back(archiveIndex);
+    }
+  }
+
+  std::optional<std::size_t> directConcurrentArchiveIndex;
+  if (unpreparedArchiveIndexes.size() == 1 && !shouldStop()) {
+    const std::size_t archiveIndex = unpreparedArchiveIndexes.front();
+    const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
+    const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
+    if (batch != nullptr && batch->innerPaths.size() - innerStart >=
+                                kArchiveDirectConcurrentMinCharts) {
+      reportProgress(parseCurrent, parseTotal,
+                     ChartScanProgressStage::ReadingArchive);
+      if (tryReadSingleArchiveConcurrently(archiveIndex, *batch, innerStart)) {
+        directConcurrentArchiveIndex = archiveIndex;
+      }
+    }
+  }
+
+  chart_scan::WorkScheduler *archiveParseScheduler = &entityScheduler;
+
+  for (const std::size_t archiveIndex : unpreparedArchiveIndexes) {
+    if (shouldStop()) {
+      break;
+    }
+    if (directConcurrentArchiveIndex == archiveIndex) {
+      continue;
+    }
+    const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
+    const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
+    if (batch == nullptr || innerStart >= batch->innerPaths.size() ||
+        archiveBatchIsPrepared(archiveIndex)) {
+      continue;
+    }
+    std::vector<std::filesystem::path> pendingInnerPaths(
+        batch->innerPaths.begin() +
+            static_cast<std::vector<std::filesystem::path>::difference_type>(
+                innerStart),
+        batch->innerPaths.end());
+    reportProgress(parseCurrent, parseTotal,
+                   ChartScanProgressStage::ReadingArchive);
+    archive_file::appendDebugLogLine(
+        "Queued bounded DB archive chart batch parse: " +
+        fspath_to_utf8(batch->archivePath) +
+        " requested=" + std::to_string(pendingInnerPaths.size()) +
+        " archiveReaders=" + std::to_string(archiveIoLimit) +
+        " workers=" + std::to_string(entityWorkerCount));
+    const auto archiveReadWorkClass =
+        pendingInnerPaths.size() >= kArchiveDirectConcurrentMinCharts
+            ? chart_scan::WorkClass::ArchiveReadHeavy
+            : chart_scan::WorkClass::ArchiveRead;
+    if (!archiveParseScheduler->enqueue(
+            [&, archiveIndex, innerStart, archivePath = batch->archivePath,
+             pendingInnerPaths = std::move(pendingInnerPaths)]() mutable {
+              const auto publishErrorResult = [&](std::string message) {
+                std::vector<std::filesystem::path> errorPaths;
+                if (const auto *errorBatch = archiveBatchForIndex(archiveIndex);
+                    errorBatch != nullptr &&
+                    innerStart <= errorBatch->innerPaths.size()) {
+                  errorPaths.assign(
+                      errorBatch->innerPaths.begin() +
+                          static_cast<std::vector<
+                              std::filesystem::path>::difference_type>(
+                              innerStart),
+                      errorBatch->innerPaths.end());
+                }
+                storeArchiveParseResult({
+                    .archiveIndex = archiveIndex,
+                    .innerStart = innerStart,
+                    .pendingInnerPaths = std::move(errorPaths),
+                    .incremental = true,
+                    .errorMessage = std::move(message),
+                });
+              };
+              try {
+                runArchiveChartPipeline(
+                    *archiveParseScheduler, std::move(archivePath),
+                    std::move(pendingInnerPaths),
+                    [&, archiveIndex,
+                     innerStart](ArchiveChartPipelineResult result) {
+                      storeArchiveParseResult({
+                          .archiveIndex = archiveIndex,
+                          .innerStart = innerStart,
+                          .pendingInnerPaths = std::move(result.innerPaths),
+                          .parsedCharts = std::move(result.parsedCharts),
+                          .complete = result.complete,
+                          .incremental = true,
+                          .errorMessage = std::move(result.errorMessage),
+                      });
+                    },
+                    [&, archiveIndex,
+                     innerStart](std::size_t firstIndex,
+                                 std::vector<ArchiveParsedChart> parsedCharts) {
+                      storeArchiveParseChunk(archiveIndex,
+                                             innerStart + firstIndex,
+                                             std::move(parsedCharts));
+                    });
+              } catch (const std::exception &error) {
+                publishErrorResult(error.what());
+                throw;
+              } catch (...) {
+                publishErrorResult("Unknown archive parse error.");
+                throw;
+              }
+            },
+            archiveReadWorkClass)) {
+      ArchiveParseJobResult rejected{
+          .archiveIndex = archiveIndex,
+          .innerStart = innerStart,
+          .errorMessage = "Archive parse job was not queued.",
+      };
+      rejected.pendingInnerPaths.assign(
           batch->innerPaths.begin() +
               static_cast<std::vector<std::filesystem::path>::difference_type>(
                   innerStart),
           batch->innerPaths.end());
-      ArchiveParseBatch jobBatch{
-          .archivePath = batch->archivePath,
-          .innerPaths = {},
-      };
-      const std::string archiveText = fspath_to_utf8(batch->archivePath);
-      reportProgress(parseCurrent, parseTotal,
-                     ChartScanProgressStage::ReadingArchive);
-      archive_file::appendDebugLogLine(
-          "Queued concurrent DB archive chart batch parse: " + archiveText +
-          " requested=" + std::to_string(pendingInnerPaths.size()) +
-          " queuedArchives=" + std::to_string(queuedArchives) +
-          " activeArchives=" +
-          std::to_string(activeArchiveParseJobs.size() + 1) +
-          " outerWorkers=" + std::to_string(shape.outerWorkers) +
-          " innerWorkers=" + std::to_string(shape.innerWorkers) +
-          " maxInFlightBytes=" + std::to_string(shape.maxInFlightBytes));
-
-      auto future = std::async(
-          std::launch::async,
-          [&, archiveIndex, innerStart, jobBatch = std::move(jobBatch),
-           pendingInnerPaths = std::move(pendingInnerPaths),
-           innerWorkers = shape.innerWorkers,
-           maxInFlightBytes = shape.maxInFlightBytes]() mutable {
-            ArchiveParseJobResult result;
-            result.archiveIndex = archiveIndex;
-            result.innerStart = innerStart;
-            result.pendingInnerPaths = std::move(pendingInnerPaths);
-            try {
-              result.parsedCharts = parseArchiveBatchStreaming(
-                  jobBatch, result.pendingInnerPaths, innerWorkers,
-                  maxInFlightBytes, result.errorMessage);
-            } catch (const std::exception &e) {
-              result.parsedCharts.reset();
-              result.errorMessage = e.what();
-            } catch (...) {
-              result.parsedCharts.reset();
-              result.errorMessage = "Unknown archive parse error.";
-            }
-            return result;
-          });
-
-      ActiveArchiveParseJob activeJob;
-      activeJob.future = std::move(future);
-      activeArchiveParseJobs.emplace(archiveIndex, std::move(activeJob));
-      ++nextArchiveToLaunch;
+      storeArchiveParseResult(std::move(rejected));
     }
-  };
-
-  auto takeArchiveParseJobResult = [&](std::size_t archiveIndex) {
-    ArchiveParseJobResult result;
-    result.archiveIndex = archiveIndex;
-    const auto jobIt = activeArchiveParseJobs.find(archiveIndex);
-    if (jobIt == activeArchiveParseJobs.end()) {
-      result.errorMessage = "Archive parse job was not queued.";
-      return result;
-    }
-
-    auto future = std::move(jobIt->second.future);
-    activeArchiveParseJobs.erase(jobIt);
-    try {
-      return future.get();
-    } catch (const std::exception &e) {
-      result.errorMessage = e.what();
-    } catch (...) {
-      result.errorMessage = "Unknown archive parse job error.";
-    }
-    return result;
-  };
-
-  launchArchiveParseJobs();
+  }
   for (std::size_t archiveIndex = archiveStartIndex;
        archiveIndex < archiveBatchOrder.size(); ++archiveIndex) {
     if (shouldStop()) {
@@ -2059,13 +2424,15 @@ int ChartLibraryScanner::Scan(
     const auto &archiveKey = archiveBatchOrder[archiveIndex];
     const ArchiveParseBatch *batchPtr = archiveBatchForIndex(archiveIndex);
     if (batchPtr == nullptr) {
-      launchArchiveParseJobs();
       continue;
     }
     const ArchiveParseBatch &batch = *batchPtr;
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (innerStart >= batch.innerPaths.size()) {
-      writePendingArchiveCache(batch);
+      const int storedChartCount =
+          innerStart > 0 ? scanBatch->CountChartsInArchive(batch.archivePath)
+                         : 0;
+      writePendingArchiveCache(batch, storedChartCount);
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
               ? std::filesystem::path()
@@ -2084,61 +2451,11 @@ int ChartLibraryScanner::Scan(
                 lastInnerPath),
             *checkpointRequest);
       }
-      launchArchiveParseJobs();
       continue;
     }
 
     const std::string archiveText = fspath_to_utf8(batch.archivePath);
-    ArchiveParseJobResult parseResult;
-    if (auto prefetchedIt =
-            prefetchedArchiveResultItForBatch(archiveKey, batch, innerStart);
-        prefetchedIt != prefetchedArchiveResults.end()) {
-      parseResult.archiveIndex = archiveIndex;
-      parseResult.innerStart = innerStart;
-      parseResult.pendingInnerPaths =
-          std::move(prefetchedIt->second.pendingInnerPaths);
-      parseResult.parsedCharts = std::move(prefetchedIt->second.parsedCharts);
-      parseResult.errorMessage = std::move(prefetchedIt->second.errorMessage);
-      prefetchedArchiveResults.erase(prefetchedIt);
-      archive_file::appendDebugLogLine(
-          "Using prefetched DB archive chart batch parse: " + archiveText +
-          " requested=" + std::to_string(parseResult.pendingInnerPaths.size()));
-      launchArchiveParseJobs();
-    } else {
-      while (activeArchiveParseJobs.find(archiveIndex) ==
-                 activeArchiveParseJobs.end() &&
-             !shouldStop()) {
-        launchArchiveParseJobs();
-        if (nextArchiveToLaunch >= archiveBatchOrder.size()) {
-          break;
-        }
-      }
-      if (shouldStop()) {
-        break;
-      }
-
-      parseResult = takeArchiveParseJobResult(archiveIndex);
-      launchArchiveParseJobs();
-    }
-
-    if (!parseResult.parsedCharts.has_value()) {
-      if (!parseResult.errorMessage.empty()) {
-        SDL_Log("Failed to read charts from archive %s: %s",
-                archiveText.c_str(), parseResult.errorMessage.c_str());
-        archive_file::appendDebugLogLine(
-            "Failed to stream DB chart batch: " + archiveText + ": " +
-            parseResult.errorMessage);
-      }
-      parseCurrent += static_cast<int>(parseResult.pendingInnerPaths.size());
-      continue;
-    }
-
-    auto &pendingInnerPaths = parseResult.pendingInnerPaths;
-    auto &parsedCharts = *parseResult.parsedCharts;
-    archive_file::appendDebugLogLine(
-        "Inserting streamed DB chart batch: " + archiveText +
-        " requested=" + std::to_string(pendingInnerPaths.size()) +
-        " files=" + std::to_string(parsedCharts.size()));
+    const std::size_t requestedCharts = batch.innerPaths.size() - innerStart;
     const bool archiveInsertStmtReady = true;
     std::optional<bool> archiveSolidHint;
     if (const auto cacheIt = pendingArchiveCacheDiffs.find(archiveKey);
@@ -2154,63 +2471,127 @@ int ChartLibraryScanner::Scan(
           .archiveSize = archiveSourcePreference->archiveSize,
       };
     }
-    const auto insertStart = std::chrono::steady_clock::now();
+
     std::size_t insertedCharts = 0;
-    bool parsedFullBatch = parsedCharts.size() == pendingInnerPaths.size();
+    std::size_t deliveredCharts = 0;
+    int storedChartCount =
+        innerStart > 0 ? scanBatch->CountChartsInArchive(batch.archivePath) : 0;
+    std::chrono::steady_clock::duration insertDuration{};
+    bool insertionStarted = false;
     bool checkpointOrderReliable = true;
     std::size_t parsedInBatch = innerStart;
-    for (auto &parsed : parsedCharts) {
-      if (shouldStop()) {
-        parsedFullBatch = false;
-        break;
+    auto applyParsedCharts = [&](std::vector<ArchiveParsedChart> parsedCharts) {
+      if (parsedCharts.empty() || shouldStop()) {
+        return;
       }
-      reportProgress(parseCurrent, parseTotal,
-                     ChartScanProgressStage::ParsingCharts);
-      if (parsed.meta.has_value()) {
-        if (scanBatch->UpsertChart(*parsed.meta,
-                                   storedArchiveSourcePreference)) {
-          ++insertedCharts;
+      if (!insertionStarted) {
+        insertionStarted = true;
+        archive_file::appendDebugLogLine(
+            "Inserting streamed DB chart batch: " + archiveText +
+            " requested=" + std::to_string(requestedCharts) +
+            " files=" + std::to_string(parsedCharts.size()));
+      }
+      const auto chunkInsertStart = std::chrono::steady_clock::now();
+      for (auto &parsed : parsedCharts) {
+        if (shouldStop()) {
+          break;
+        }
+        reportProgress(parseCurrent, parseTotal,
+                       ChartScanProgressStage::ParsingCharts);
+        if (parsed.meta.has_value()) {
+          if (scanBatch->UpsertChart(*parsed.meta,
+                                     storedArchiveSourcePreference)) {
+            ++insertedCharts;
+            ++storedChartCount;
+          }
+        }
+        ++deliveredCharts;
+        ++parseCurrent;
+        if (parsedInBatch >= batch.innerPaths.size() ||
+            checkpointInnerPathText(batch.innerPaths[parsedInBatch]) !=
+                checkpointInnerPathText(parsed.innerPath)) {
+          checkpointOrderReliable = false;
+        }
+        ++parsedInBatch;
+        if (checkpointOrderReliable) {
+          const auto checkpointRequest = checkpointSaveRequest(
+              parsedInBatch % kArchiveParseCheckpointInterval == 0);
+          if (checkpointRequest.has_value()) {
+            saveCheckpointForFlush(
+                makeCheckpoint(
+                    computeScanSignature(individualDiffs.size(), archiveIndex),
+                    kScanCheckpointPhaseArchive, 0, parsedInBatch,
+                    parsed.chartPath, batch.archivePath,
+                    checkpointInnerPathText(parsed.innerPath)),
+                *checkpointRequest);
+          }
         }
       }
-      ++parseCurrent;
-      if (parsedInBatch >= batch.innerPaths.size() ||
-          checkpointInnerPathText(batch.innerPaths[parsedInBatch]) !=
-              checkpointInnerPathText(parsed.innerPath)) {
-        checkpointOrderReliable = false;
-      }
-      ++parsedInBatch;
-      if (checkpointOrderReliable) {
-        const auto checkpointRequest = checkpointSaveRequest(
-            parsedInBatch % kArchiveParseCheckpointInterval == 0);
-        if (checkpointRequest.has_value()) {
-          saveCheckpointForFlush(
-              makeCheckpoint(
-                  computeScanSignature(individualDiffs.size(), archiveIndex),
-                  kScanCheckpointPhaseArchive, 0, parsedInBatch,
-                  parsed.chartPath, batch.archivePath,
-                  checkpointInnerPathText(parsed.innerPath)),
-              *checkpointRequest);
+      insertDuration += std::chrono::steady_clock::now() - chunkInsertStart;
+    };
+
+    std::optional<ArchiveParseJobResult> terminalResult;
+    if (archiveBatchIsPrepared(archiveIndex)) {
+      terminalResult = preparedArchiveParseResult(archiveIndex);
+    } else {
+      while (!terminalResult.has_value() && !shouldStop()) {
+        ArchiveParseJobEvent event =
+            waitTakeArchiveParseEvent(archiveIndex, parsedInBatch);
+        if (event.terminalResult.has_value()) {
+          terminalResult = std::move(event.terminalResult);
+        } else {
+          applyParsedCharts(std::move(event.parsedCharts));
         }
       }
     }
-    const auto insertMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now() - insertStart)
-                              .count();
-    archive_file::appendDebugLogLine(
-        "Finished streamed DB chart batch insert: " + archiveText +
-        " requested=" + std::to_string(pendingInnerPaths.size()) +
-        " files=" + std::to_string(parsedCharts.size()) +
-        " inserted=" + std::to_string(insertedCharts) +
-        " insertMs=" + std::to_string(insertMs) + " reusedStatement=" +
-        std::string(archiveInsertStmtReady ? "true" : "false") +
-        " sourcePreferenceHint=" +
-        std::string(archiveSourcePreference.has_value() ? "true" : "false") +
-        " solidHint=" +
-        (archiveSolidHint.has_value()
-             ? std::string(*archiveSolidHint ? "true" : "false")
-             : std::string("unknown")));
+    if (terminalResult.has_value() &&
+        terminalResult->parsedCharts.has_value()) {
+      applyParsedCharts(std::move(*terminalResult->parsedCharts));
+    }
+
+    const bool parsedFullBatch =
+        terminalResult.has_value() && terminalResult->complete &&
+        parsedInBatch == batch.innerPaths.size() && !shouldStop();
+    if (terminalResult.has_value() && !terminalResult->complete) {
+      if (!terminalResult->errorMessage.empty()) {
+        SDL_Log("Failed to read charts from archive %s: %s",
+                archiveText.c_str(), terminalResult->errorMessage.c_str());
+        archive_file::appendDebugLogLine(
+            "Failed to stream DB chart batch: " + archiveText + ": " +
+            terminalResult->errorMessage);
+      }
+      if (!shouldStop()) {
+        parseCurrent +=
+            static_cast<int>(batch.innerPaths.size() - parsedInBatch);
+        if (insertedCharts > 0 &&
+            !scanBatch->DeleteChartsInArchive(batch.archivePath)) {
+          archive_file::appendDebugLogLine(
+              "Failed to remove partially streamed DB chart batch: " +
+              archiveText);
+        }
+      }
+    }
+
+    if (insertionStarted) {
+      const auto insertMs =
+          std::chrono::duration_cast<std::chrono::milliseconds>(insertDuration)
+              .count();
+      archive_file::appendDebugLogLine(
+          "Finished streamed DB chart batch insert: " + archiveText +
+          " requested=" + std::to_string(requestedCharts) +
+          " files=" + std::to_string(deliveredCharts) +
+          " inserted=" + std::to_string(insertedCharts) +
+          " insertMs=" + std::to_string(insertMs) + " reusedStatement=" +
+          std::string(archiveInsertStmtReady ? "true" : "false") +
+          " sourcePreferenceHint=" +
+          std::string(archiveSourcePreference.has_value() ? "true" : "false") +
+          " solidHint=" +
+          (archiveSolidHint.has_value()
+               ? std::string(*archiveSolidHint ? "true" : "false")
+               : std::string("unknown")));
+    }
     if (parsedFullBatch && !stopRequested(stopToken)) {
-      writePendingArchiveCache(batch);
+      writePendingArchiveCache(batch, storedChartCount);
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
               ? std::filesystem::path()
@@ -2233,12 +2614,28 @@ int ChartLibraryScanner::Scan(
       archive_file::appendDebugLogLine(
           "Skipped archive scan cache write because chart batch did not "
           "complete: " +
-          archiveText +
-          " requested=" + std::to_string(pendingInnerPaths.size()) +
-          " files=" + std::to_string(parsedCharts.size()));
+          archiveText + " requested=" + std::to_string(requestedCharts) +
+          " files=" + std::to_string(deliveredCharts));
     }
   }
-  waitForActiveArchiveParseJobs();
+  if (shouldStop()) {
+    archiveParseScheduler->cancel();
+  } else {
+    archiveParseScheduler->finish();
+  }
+  for (const auto &exception : archiveParseScheduler->takeExceptions()) {
+    try {
+      if (exception != nullptr) {
+        std::rethrow_exception(exception);
+      }
+    } catch (const std::exception &e) {
+      archive_file::appendDebugLogLine("Chart scan worker failed: " +
+                                       std::string(e.what()));
+    } catch (...) {
+      archive_file::appendDebugLogLine(
+          "Chart scan worker failed with an unknown error.");
+    }
+  }
   const int changedCount = scanBatch->ChangedCount();
   if (!scanBatch->Commit()) {
     archive_file::appendDebugLogLine(

@@ -11,6 +11,7 @@
 enum class ChartScanProgressStage {
   Preparing,
   ScanningRoots,
+  IndexingArchives,
   PreparingUpdates,
   RemovingDeleted,
   ParsingCharts,
