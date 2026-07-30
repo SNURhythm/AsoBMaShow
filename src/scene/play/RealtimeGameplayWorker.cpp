@@ -696,7 +696,8 @@ void RealtimeGameplayWorker::publishSnapshot() {
     auto &snapshot = snapshots_[index].snapshot;
     snapshot.generation = ++snapshotGeneration_;
     snapshot.transactionSequence = transactionSequence_;
-    std::ranges::fill(snapshot.longNoteHoldingByLane, false);
+    std::fill(snapshot.longNoteHoldingByLane.begin(),
+              snapshot.longNoteHoldingByLane.end(), false);
     for (NoteId id = 0; id < definition_.noteCount(); ++id) {
       const auto &state = simulation_.noteState(id);
       snapshot.noteStates[id] = state;
