@@ -5,6 +5,18 @@
 
 namespace chart_scan {
 
+bool WorkScheduler::ArchiveReadCostKeyLess::operator()(
+    const ArchiveReadCostKey &left,
+    const ArchiveReadCostKey &right) const {
+  if (std::get<0>(left) != std::get<0>(right)) {
+    return std::get<0>(left) > std::get<0>(right);
+  }
+  if (std::get<1>(left) != std::get<1>(right)) {
+    return std::get<1>(left) < std::get<1>(right);
+  }
+  return std::get<2>(left) < std::get<2>(right);
+}
+
 WorkScheduler::WorkScheduler(std::size_t workerCount,
                              std::size_t archiveIoLimit) {
   const std::size_t actualWorkerCount = std::max<std::size_t>(1, workerCount);
@@ -21,7 +33,8 @@ WorkScheduler::WorkScheduler(std::size_t workerCount,
 WorkScheduler::~WorkScheduler() { cancel(); }
 
 bool WorkScheduler::enqueue(Work work, WorkClass workClass,
-                            std::size_t archiveOrder) {
+                            std::size_t archiveOrder,
+                            std::size_t archiveReadCost) {
   if (!work) {
     return false;
   }
@@ -38,11 +51,17 @@ bool WorkScheduler::enqueue(Work work, WorkClass workClass,
       archiveIndexQueue_.push_back(std::move(work));
       break;
     case WorkClass::ArchiveRead:
-    case WorkClass::ArchiveReadHeavy:
-      archiveReadQueue_.emplace(
-          ArchiveReadKey{archiveOrder, nextArchiveReadEnqueueSequence_++},
-          std::move(work));
+    case WorkClass::ArchiveReadHeavy: {
+      const std::uint64_t sequence = nextArchiveReadEnqueueSequence_++;
+      auto read = std::make_shared<ArchiveReadWork>(ArchiveReadWork{
+          std::move(work), archiveOrder, archiveReadCost, sequence});
+      archiveReadsByOrder_.emplace(
+          ArchiveReadOrderKey{archiveOrder, sequence}, read);
+      archiveReadsByCost_.emplace(
+          ArchiveReadCostKey{archiveReadCost, archiveOrder, sequence},
+          std::move(read));
       break;
+    }
     }
   }
   cv_.notify_one();
@@ -67,7 +86,8 @@ void WorkScheduler::cancel() {
     cancelled_ = true;
     cpuQueue_.clear();
     archiveIndexQueue_.clear();
-    archiveReadQueue_.clear();
+    archiveReadsByOrder_.clear();
+    archiveReadsByCost_.clear();
   }
   cv_.notify_all();
   joinWorkers();
@@ -82,7 +102,7 @@ std::vector<std::exception_ptr> WorkScheduler::takeExceptions() {
 
 bool WorkScheduler::hasPendingWorkLocked() const {
   return !cpuQueue_.empty() || !archiveIndexQueue_.empty() ||
-         !archiveReadQueue_.empty();
+         !archiveReadsByOrder_.empty();
 }
 
 bool WorkScheduler::hasEligibleWorkLocked() const {
@@ -90,7 +110,7 @@ bool WorkScheduler::hasEligibleWorkLocked() const {
       cpuQueue_.empty() ? archiveIoLimit_ : std::size_t{1};
   const bool indexEligible = !archiveIndexQueue_.empty() &&
                              activeArchiveIndexes_ < archiveAdmissionLimit;
-  const bool readEligible = !archiveReadQueue_.empty() &&
+  const bool readEligible = !archiveReadsByOrder_.empty() &&
                             activeArchiveReads_ < archiveAdmissionLimit;
   return !cpuQueue_.empty() || indexEligible || readEligible;
 }
@@ -100,7 +120,7 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
       cpuQueue_.empty() ? archiveIoLimit_ : std::size_t{1};
   const bool indexEligible = !archiveIndexQueue_.empty() &&
                              activeArchiveIndexes_ < archiveAdmissionLimit;
-  const bool readEligible = !archiveReadQueue_.empty() &&
+  const bool readEligible = !archiveReadsByOrder_.empty() &&
                             activeArchiveReads_ < archiveAdmissionLimit;
   if (indexEligible &&
       (activeArchiveIndexes_ == 0 || cpuQueue_.empty())) {
@@ -110,11 +130,7 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
     return true;
   }
   if (readEligible && (activeArchiveReads_ == 0 || cpuQueue_.empty())) {
-    const auto read = archiveReadQueue_.begin();
-    item.work = std::move(read->second);
-    item.workClass = WorkClass::ArchiveRead;
-    archiveReadQueue_.erase(read);
-    return true;
+    return popArchiveReadLocked(item);
   }
   if (!cpuQueue_.empty()) {
     item.work = std::move(cpuQueue_.front());
@@ -129,13 +145,35 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
     return true;
   }
   if (readEligible) {
-    const auto read = archiveReadQueue_.begin();
-    item.work = std::move(read->second);
-    item.workClass = WorkClass::ArchiveRead;
-    archiveReadQueue_.erase(read);
-    return true;
+    return popArchiveReadLocked(item);
   }
   return false;
+}
+
+bool WorkScheduler::popArchiveReadLocked(WorkItem &item) {
+  if (archiveReadsByOrder_.empty()) {
+    return false;
+  }
+
+  const auto earliest = archiveReadsByOrder_.begin();
+  const bool needsFrontier =
+      activeArchiveReadOrders_.empty() ||
+      earliest->second->archiveOrder < *activeArchiveReadOrders_.begin();
+  const ArchiveReadWorkPtr selected =
+      needsFrontier ? earliest->second : archiveReadsByCost_.begin()->second;
+
+  item.work = std::move(selected->work);
+  item.workClass = WorkClass::ArchiveRead;
+  item.archiveOrder = selected->archiveOrder;
+  eraseArchiveReadLocked(selected);
+  return true;
+}
+
+void WorkScheduler::eraseArchiveReadLocked(const ArchiveReadWorkPtr &read) {
+  archiveReadsByOrder_.erase(
+      ArchiveReadOrderKey{read->archiveOrder, read->enqueueSequence});
+  archiveReadsByCost_.erase(ArchiveReadCostKey{
+      read->archiveReadCost, read->archiveOrder, read->enqueueSequence});
 }
 
 void WorkScheduler::workerLoop() {
@@ -163,6 +201,7 @@ void WorkScheduler::workerLoop() {
         ++activeArchiveIndexes_;
       } else if (item.workClass == WorkClass::ArchiveRead) {
         ++activeArchiveReads_;
+        activeArchiveReadOrders_.insert(item.archiveOrder);
       }
     }
 
@@ -184,6 +223,11 @@ void WorkScheduler::workerLoop() {
       } else if (item.workClass == WorkClass::ArchiveRead &&
                  activeArchiveReads_ > 0) {
         --activeArchiveReads_;
+        const auto activeOrder =
+            activeArchiveReadOrders_.find(item.archiveOrder);
+        if (activeOrder != activeArchiveReadOrders_.end()) {
+          activeArchiveReadOrders_.erase(activeOrder);
+        }
       }
       if (activeTasks_ > 0) {
         --activeTasks_;

@@ -8,8 +8,11 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -34,7 +37,8 @@ public:
 
   bool enqueue(
       Work work, WorkClass workClass = WorkClass::Cpu,
-      std::size_t archiveOrder = std::numeric_limits<std::size_t>::max());
+      std::size_t archiveOrder = std::numeric_limits<std::size_t>::max(),
+      std::size_t archiveReadCost = 0);
   void finish();
   void cancel();
   std::vector<std::exception_ptr> takeExceptions();
@@ -43,11 +47,31 @@ private:
   struct WorkItem {
     Work work;
     WorkClass workClass = WorkClass::Cpu;
+    std::size_t archiveOrder = std::numeric_limits<std::size_t>::max();
+  };
+
+  struct ArchiveReadWork {
+    Work work;
+    std::size_t archiveOrder = std::numeric_limits<std::size_t>::max();
+    std::size_t archiveReadCost = 0;
+    std::uint64_t enqueueSequence = 0;
+  };
+
+  using ArchiveReadWorkPtr = std::shared_ptr<ArchiveReadWork>;
+  using ArchiveReadOrderKey = std::pair<std::size_t, std::uint64_t>;
+  using ArchiveReadCostKey =
+      std::tuple<std::size_t, std::size_t, std::uint64_t>;
+
+  struct ArchiveReadCostKeyLess {
+    bool operator()(const ArchiveReadCostKey &left,
+                    const ArchiveReadCostKey &right) const;
   };
 
   bool hasPendingWorkLocked() const;
   bool hasEligibleWorkLocked() const;
   bool popNextWorkLocked(WorkItem &item);
+  bool popArchiveReadLocked(WorkItem &item);
+  void eraseArchiveReadLocked(const ArchiveReadWorkPtr &read);
   void workerLoop();
   void joinWorkers();
 
@@ -55,8 +79,10 @@ private:
   std::condition_variable cv_;
   std::deque<Work> cpuQueue_;
   std::deque<Work> archiveIndexQueue_;
-  using ArchiveReadKey = std::pair<std::size_t, std::uint64_t>;
-  std::map<ArchiveReadKey, Work> archiveReadQueue_;
+  std::map<ArchiveReadOrderKey, ArchiveReadWorkPtr> archiveReadsByOrder_;
+  std::map<ArchiveReadCostKey, ArchiveReadWorkPtr, ArchiveReadCostKeyLess>
+      archiveReadsByCost_;
+  std::multiset<std::size_t> activeArchiveReadOrders_;
   std::vector<std::thread> workers_;
   std::vector<std::exception_ptr> exceptions_;
   std::uint64_t nextArchiveReadEnqueueSequence_ = 0;
