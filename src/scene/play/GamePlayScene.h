@@ -132,7 +132,9 @@ private:
   void finishReplayRecording();
   [[nodiscard]] CompletedModernReplayCapture completeModernReplayCapture();
   void recordModernCourseStage(const CompletedModernReplayCapture &capture);
-  void captureModernReplayInput(replay::LogicalControl control, bool pressed,
+  void captureModernReplayInput(int physicalLane,
+                                replay::LogicalControl control,
+                                bool hasReplayControl, bool pressed,
                                 bool replayOnly);
   void publishPracticeGhost();
   void buildReplayNoteLookup();

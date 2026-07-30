@@ -942,6 +942,39 @@ void testRealtimePhysicalInputPreservesNativeTimestamp() {
           "timestamps");
 }
 
+void testScratchlessPhysicalInputDoesNotInventBrdControls() {
+  for (const int keyMode : {4, 6, 8}) {
+    InputProfile profile;
+    profile.bindings.push_back(
+        {.id = "scratchless-key-lane",
+         .scope = {.player = 1, .keyMode = keyMode},
+         .action = {.kind = input::LogicalActionKind::Lane, .lane = 0},
+         .control = {.deviceId = "keyboard",
+                     .deviceClass = input::DeviceClass::Keyboard,
+                     .kind = input::ControlKind::Key,
+                     .index = SDL_SCANCODE_D}});
+    std::vector<input::RealtimePhysicalInputTransition> output;
+    input::RealtimePhysicalInputRouter router(
+        profile, makeGameplayInputScopes(keyMode),
+        [&](const auto &transition) {
+          output.push_back(transition);
+          return true;
+        });
+    router.setGameplayEnabled(true, 9000);
+
+    const auto down = keyEvent(SDL_SCANCODE_D, true);
+    const auto up = keyEvent(SDL_SCANCODE_D, false);
+    router.consume(down, 1234567);
+    router.consume(up, 1234999);
+
+    require(output.size() == 2 && output[0].lane == 0 &&
+                output[1].lane == 0 && !output[0].hasReplayControl &&
+                !output[1].hasReplayControl,
+            "scratchless physical edges reach gameplay without invalid BRD "
+            "control metadata");
+  }
+}
+
 void testRealtimeScratchReversalCarriesCanonicalDirections() {
   InputProfile profile;
   const input::PhysicalControl clockwise{
@@ -1235,6 +1268,7 @@ int main() {
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
+  testScratchlessPhysicalInputDoesNotInventBrdControls();
   testRealtimeScratchReversalCarriesCanonicalDirections();
   testRealtimeStartProducesCommandAndReplayEdge();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();

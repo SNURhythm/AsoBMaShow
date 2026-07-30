@@ -5,9 +5,8 @@
 namespace gameplay {
 
 RealtimeGameplayInputBridge::RealtimeGameplayInputBridge(
-    std::uint64_t epoch, int keyMode,
-    RealtimeGameplayInputBridgeSink sink) noexcept
-    : epoch_(epoch), keyMode_(keyMode), sink_(sink) {}
+    std::uint64_t epoch, RealtimeGameplayInputBridgeSink sink) noexcept
+    : epoch_(epoch), sink_(sink) {}
 
 bool RealtimeGameplayInputBridge::prepare(
     RealtimeGameplayInputType type, int lane, int compensateLane,
@@ -30,41 +29,39 @@ bool RealtimeGameplayInputBridge::prepare(
 }
 
 bool RealtimeGameplayInputBridge::emitApplied(
-    replay::LogicalControl control, bool pressed, bool replayOnly,
-    std::int64_t steadyTimestampMicros) {
+    int physicalLane, replay::LogicalControl control, bool hasReplayControl,
+    bool pressed, bool replayOnly, std::int64_t steadyTimestampMicros) {
   if (sink_.emit == nullptr) {
     return false;
   }
-  const auto controlLane =
-      replay::physicalChartLaneForLogicalControl(keyMode_, control);
   RealtimeGameplayInput input{
       .epoch = epoch_,
       .type = pressed ? RealtimeGameplayInputType::Press
                       : RealtimeGameplayInputType::Release,
       .source = RealtimeGameplayInputSource::LegacyAdapter,
-      .lane = controlLane.value_or(-1),
-      .compensateLane = controlLane.value_or(-1),
+      .lane = physicalLane,
+      .compensateLane = physicalLane,
       .steadyTimestampMicros = steadyTimestampMicros,
-      .hasReplayControl = true,
+      .hasReplayControl = hasReplayControl,
       .replayControl = control,
-      .replayOnly = true,
+      .replayOnly = replayOnly,
   };
   {
     const std::lock_guard lock(mutex_);
-    if (!replayOnly && controlLane.has_value()) {
+    if (!replayOnly && physicalLane >= 0) {
       const auto pending = std::ranges::find_if(
           pendingInputs_, [&](const auto &candidate) {
-            return candidate.lane == *controlLane &&
+            return candidate.lane == physicalLane &&
                    candidate.type == input.type;
           });
       if (pending != pendingInputs_.end()) {
         input = *pending;
         pendingInputs_.erase(pending);
-        input.hasReplayControl = true;
+        input.hasReplayControl = hasReplayControl;
         input.replayControl = control;
         input.replayOnly = false;
       }
-    } else if (replayOnly &&
+    } else if (replayOnly && hasReplayControl &&
                replay::isDirectionalScratchControl(control.kind) &&
                control.player >= 1 &&
                static_cast<std::size_t>(control.player) <

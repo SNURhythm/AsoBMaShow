@@ -230,8 +230,18 @@ void testChartValidationAndFactAgreement() {
   expect(!result_persistence::validateModernChartResult(invalid, diagnostic),
          "modern chart identity is canonical lowercase");
 
+  for (const int keyMode : {4, 6, 8}) {
+    auto scratchless = validChartResult();
+    scratchless.keyMode = keyMode;
+    scratchless.resultFingerprint =
+        result_persistence::modernResultFingerprint(scratchless);
+    expect(result_persistence::validateModernChartResult(scratchless,
+                                                          diagnostic),
+           "scratchless plays retain replay-independent result history");
+  }
+
   invalid = validChartResult();
-  invalid.keyMode = 6;
+  invalid.keyMode = 11;
   invalid.resultFingerprint =
       result_persistence::modernResultFingerprint(invalid);
   expect(!result_persistence::validateModernChartResult(invalid, diagnostic),

@@ -14,7 +14,11 @@
 
 namespace result_contract {
 
-inline constexpr std::array<int, 7> kSupportedKeyModes{5, 7, 9, 10, 14, 24, 48};
+// Result history covers every playable chart mode. Replay codecs impose their
+// narrower format-specific mode set separately, so a missing BRD mapping can
+// never discard an otherwise valid play result.
+inline constexpr std::array<int, 10> kSupportedKeyModes{
+    4, 5, 6, 7, 8, 9, 10, 14, 24, 48};
 
 [[nodiscard]] inline constexpr bool isSupportedKeyMode(int keyMode) noexcept {
   for (const int supported : kSupportedKeyModes) {

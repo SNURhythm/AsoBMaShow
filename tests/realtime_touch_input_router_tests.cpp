@@ -170,6 +170,40 @@ void testDirectTouchEmitsTimestampedLaneEdges() {
       "native samples preserve their timestamp and lane edge order");
 }
 
+void testScratchlessTouchKeepsGameplayIndependentFromBrdMapping() {
+  for (const int keyMode : {4, 6, 8}) {
+    InputCapture capture;
+    auto layout = makeLayout();
+    layout.keyMode = keyMode;
+    layout.laneCount = static_cast<std::size_t>(keyMode);
+    for (int lane = 0; lane < keyMode; ++lane) {
+      layout.lanes[static_cast<std::size_t>(lane)] = lane;
+      layout.scratch[static_cast<std::size_t>(lane)] = false;
+    }
+    gameplay::RealtimeTouchInputRouter router(
+        42, layout, {.context = &capture, .emit = &InputCapture::emit});
+
+    require(router.consume({.fingerId = keyMode,
+                            .phase = gameplay::RealtimeTouchPhase::Down,
+                            .normalizedX = 0.21F,
+                            .normalizedY = 0.5F,
+                            .steadyTimestampMicros = 123'456}),
+            "scratchless touch down reaches gameplay");
+    require(router.consume({.fingerId = keyMode,
+                            .phase = gameplay::RealtimeTouchPhase::Up,
+                            .normalizedX = 0.21F,
+                            .normalizedY = 0.5F,
+                            .steadyTimestampMicros = 124'000}),
+            "scratchless touch up reaches gameplay");
+    require(capture.events.size() == 2 && capture.events[0].lane == 0 &&
+                capture.events[1].lane == 0 &&
+                !capture.events[0].hasReplayControl &&
+                !capture.events[1].hasReplayControl,
+            "non-stock BRD modes keep physical lane edges without inventing "
+            "replay controls");
+  }
+}
+
 void testDragModeChangesLaneWithoutWaitingForAFrame() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -455,6 +489,7 @@ int main() {
   testTouchPresentationUsesUiNormalizedCoordinates();
   testChartLaneMappingCoversEveryReplayKeyMode();
   testDirectTouchEmitsTimestampedLaneEdges();
+  testScratchlessTouchKeepsGameplayIndependentFromBrdMapping();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();
   testScratchLongNoteIgnoresSmallDirectionJitter();

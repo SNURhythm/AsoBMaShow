@@ -29,7 +29,9 @@ public:
       std::function<void(const input::LogicalInputTransition &)>;
   struct AppliedTransition {
     input::LogicalInputTransition source;
+    int physicalLane = -1;
     replay::LogicalControl control;
+    bool hasReplayControl = false;
     bool pressed = false;
     bool replayOnly = false;
   };
@@ -82,7 +84,7 @@ private:
   void synchronizeScratchReplayControl(
       const input::LogicalInputTransition &transition, int lane);
   void notifyApplied(const input::LogicalInputTransition &,
-                     replay::LogicalControl, bool pressed);
+                     int physicalLane, replay::LogicalControl, bool pressed);
   void notifyCommandApplied(const input::LogicalInputTransition &);
 
   IRhythmControl &control_;

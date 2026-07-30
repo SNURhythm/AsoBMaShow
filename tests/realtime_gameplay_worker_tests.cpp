@@ -51,6 +51,16 @@ gameplay::GameplayDefinition makeRapidDefinition() {
   return gameplay::buildGameplayDefinition(chart, 0);
 }
 
+gameplay::GameplayDefinition makeScratchlessDefinition(int keyMode) {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.KeyMode = keyMode;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(0, new bms_parser::Note(12));
+  chart.Measures.push_back(measure);
+  return gameplay::buildGameplayDefinition(chart, 0);
+}
+
 gameplay::GameplayDefinition makePracticeDefinition() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 2;
@@ -539,13 +549,64 @@ private:
   bool prepared_ = true;
 };
 
+void testLegacyBridgeJudgesScratchlessModesWithoutBrdControls() {
+  for (const int keyMode : {4, 6, 8}) {
+    FakeClock clock;
+    FakeAudio audio;
+    gameplay::RealtimeGameplayWorker worker(makeScratchlessDefinition(keyMode),
+                                             makeConfig(clock, audio));
+    gameplay::RealtimeGameplayInputBridge bridge(
+        7,
+        {.context = &worker,
+         .emit = [](void *context,
+                    const gameplay::RealtimeGameplayInput &input) {
+           return static_cast<gameplay::RealtimeGameplayWorker *>(context)
+               ->enqueueInput(input);
+         }});
+    LegacyBridgeControl control(bridge);
+    LogicalGameplayInputAdapter adapter(
+        control, {}, [&](const auto &applied) {
+          require(bridge.emitApplied(
+                      applied.physicalLane, applied.control,
+                      applied.hasReplayControl, applied.pressed,
+                      applied.replayOnly, control.nextTimestamp()),
+                  "scratchless legacy callback reaches the realtime bridge");
+        });
+    require(worker.start(), "scratchless legacy worker starts");
+
+    const auto down = input::LogicalInputTransition{
+        .scope = {.player = 1, .keyMode = keyMode},
+        .action = {.kind = input::LogicalActionKind::Lane, .lane = 0},
+        .pressed = true,
+        .value = 1.0F};
+    const auto up = input::LogicalInputTransition{
+        .scope = {.player = 1, .keyMode = keyMode},
+        .action = {.kind = input::LogicalActionKind::Lane, .lane = 0},
+        .pressed = false,
+        .value = 0.0F};
+    adapter.apply(std::span(&down, 1));
+    adapter.apply(std::span(&up, 1));
+
+    require(waitUntil([&] {
+              auto snapshot = worker.acquireLatestSnapshot();
+              return snapshot && snapshot->attempt.score == 2 &&
+                     !snapshot->lanePressed[0];
+            }),
+            "scratchless legacy input judges through the realtime worker");
+    worker.stop();
+    const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+    require(replayInput.has_value() && replayInput->empty(),
+            "scratchless gameplay does not invent stock BRD input");
+  }
+}
+
 void testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction() {
   FakeClock clock;
   FakeAudio audio;
   gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
                                            makeConfig(clock, audio));
   gameplay::RealtimeGameplayInputBridge bridge(
-      7, 7,
+      7,
       {.context = &worker,
        .emit = [](void *context,
                   const gameplay::RealtimeGameplayInput &input) {
@@ -555,9 +616,10 @@ void testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction() {
   LegacyBridgeControl control(bridge);
   LogicalGameplayInputAdapter adapter(
       control, {}, [&](const auto &applied) {
-        require(bridge.emitApplied(applied.control, applied.pressed,
-                                   applied.replayOnly,
-                                   control.nextTimestamp()),
+        require(bridge.emitApplied(
+                    applied.physicalLane, applied.control,
+                    applied.hasReplayControl, applied.pressed,
+                    applied.replayOnly, control.nextTimestamp()),
                 "legacy adapter callback reaches the realtime bridge");
       });
   require(worker.start(), "legacy adapter replay worker starts");
@@ -626,7 +688,7 @@ void testLegacyStartSelectCommandsRemainStockReplayInput() {
   gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
                                            makeConfig(clock, audio));
   gameplay::RealtimeGameplayInputBridge bridge(
-      7, 7,
+      7,
       {.context = &worker,
        .emit = [](void *context,
                   const gameplay::RealtimeGameplayInput &input) {
@@ -636,9 +698,10 @@ void testLegacyStartSelectCommandsRemainStockReplayInput() {
   LegacyBridgeControl control(bridge);
   LogicalGameplayInputAdapter adapter(
       control, [](const auto &) {}, [&](const auto &applied) {
-        require(bridge.emitApplied(applied.control, applied.pressed,
-                                   applied.replayOnly,
-                                   control.nextTimestamp()),
+        require(bridge.emitApplied(
+                    applied.physicalLane, applied.control,
+                    applied.hasReplayControl, applied.pressed,
+                    applied.replayOnly, control.nextTimestamp()),
                 "legacy command callback reaches the realtime bridge");
       });
   require(worker.start(), "legacy command replay worker starts");
@@ -1273,6 +1336,7 @@ int main() {
   testRealtimeIngressCoalescesTouchAndHardwareLaneOwnership();
   testRealtimeIngressCoalescesTouchAndHardwareScratchOwnership();
   testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges();
+  testLegacyBridgeJudgesScratchlessModesWithoutBrdControls();
   testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction();
   testLegacyStartSelectCommandsRemainStockReplayInput();
   testReplayCaptureOverflowDoesNotInvalidateGameplay();

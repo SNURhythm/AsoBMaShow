@@ -215,7 +215,7 @@ void LogicalGameplayInputAdapter::applyLane(
       if (digitalScratch) {
         synchronizeScratchReplayControl(transition, lane);
       } else if (!wasHeld) {
-        notifyApplied(transition, logicalControl, true);
+        notifyApplied(transition, lane, logicalControl, true);
       }
     }
     return;
@@ -231,7 +231,7 @@ void LogicalGameplayInputAdapter::applyLane(
   if (releasedPhysicalLane) {
     releasePhysicalLane(lane, false);
     if (!digitalScratch) {
-      notifyApplied(transition, logicalControl, false);
+      notifyApplied(transition, lane, logicalControl, false);
     }
   }
   if (digitalScratch) {
@@ -362,10 +362,10 @@ void LogicalGameplayInputAdapter::synchronizeScratchReplayControl(
     return;
   }
   if (previous.has_value()) {
-    notifyApplied(transition, *previous, false);
+    notifyApplied(transition, lane, *previous, false);
   }
   if (next.has_value()) {
-    notifyApplied(transition, *next, true);
+    notifyApplied(transition, lane, *next, true);
     recordedScratchControls_[lane] = *next;
   } else {
     recordedScratchControls_.erase(lane);
@@ -374,18 +374,21 @@ void LogicalGameplayInputAdapter::synchronizeScratchReplayControl(
 
 void LogicalGameplayInputAdapter::notifyApplied(
     const input::LogicalInputTransition &source,
-    replay::LogicalControl control, bool pressed) {
-  const int lane = replay::isDirectionalScratchControl(control.kind)
-                       ? scratchLane(source.scope)
-                       : source.action.lane;
-  const auto pending = pendingPhysicalEdges_.find(lane);
+    int physicalLane, replay::LogicalControl control, bool pressed) {
+  const auto pending = pendingPhysicalEdges_.find(physicalLane);
   const bool replayOnly = pending == pendingPhysicalEdges_.end();
   if (!replayOnly && --pending->second == 0) {
     pendingPhysicalEdges_.erase(pending);
   }
+  const auto mappedLane = replay::physicalChartLaneForLogicalControl(
+      source.scope.keyMode, control);
+  const bool hasReplayControl =
+      mappedLane.has_value() && *mappedLane == physicalLane;
   if (appliedTransitionCallback_) {
     appliedTransitionCallback_({.source = source,
+                                .physicalLane = physicalLane,
                                 .control = control,
+                                .hasReplayControl = hasReplayControl,
                                 .pressed = pressed,
                                 .replayOnly = replayOnly});
   }
@@ -400,9 +403,11 @@ void LogicalGameplayInputAdapter::notifyCommandApplied(
                         ? replay::LogicalControlKind::Start
                         : replay::LogicalControlKind::Select;
   appliedTransitionCallback_({.source = transition,
+                              .physicalLane = -1,
                               .control = {.kind = kind,
                                           .player = transition.scope.player,
                                           .lane = -1},
+                              .hasReplayControl = true,
                               .pressed = transition.pressed,
                               .replayOnly = false});
 }

@@ -145,6 +145,22 @@ void testLr2StandardGaugeDefinitionsAndDeltas() {
   }
 }
 
+void testLr2ProfileIdentityDoesNotLeakBeatorajaModeProfiles() {
+  for (const int keyMode : {4, 5, 6, 7, 8, 9, 10, 14, 24, 48}) {
+    const auto standard = compileGameplayGaugeRules(
+        GameplayRuleset::LR2, meta(200, 200.0, true, keyMode),
+        GaugeProfile::Standard);
+    require(standard.resolvedProfile == GaugeProfile::Standard,
+            "LR2 ordinary play uses one profile identity across key modes");
+
+    const auto course = compileGameplayGaugeRules(
+        GameplayRuleset::LR2, meta(200, 200.0, true, keyMode),
+        GaugeProfile::CourseDefault);
+    require(course.resolvedProfile == GaugeProfile::CourseLR2,
+            "LR2 course play uses the LR2 course profile across key modes");
+  }
+}
+
 void testLr2DamageFactorBoundariesAndHardGuts() {
   for (const int notes : {20, 21, 29, 30, 59, 60, 124, 125,
                           249, 250, 499, 500, 999, 1000}) {
@@ -283,6 +299,7 @@ void testBeatorajaCompiledRulesMatchLegacyHelpers() {
 int main() {
   testLr2EffectiveTotalRules();
   testLr2StandardGaugeDefinitionsAndDeltas();
+  testLr2ProfileIdentityDoesNotLeakBeatorajaModeProfiles();
   testLr2DamageFactorBoundariesAndHardGuts();
   testLr2CourseTables();
   testLr2StateDeathAndAutoShift();

@@ -22,11 +22,11 @@ std::string repeated(char value, std::size_t count) {
 }
 
 void testSharedSetupDomains() {
-  for (const int keyMode : {5, 7, 9, 10, 14, 24, 48}) {
+  for (const int keyMode : {4, 5, 6, 7, 8, 9, 10, 14, 24, 48}) {
     expect(result_contract::isSupportedKeyMode(keyMode),
            "every supported play key mode is accepted");
   }
-  for (const int keyMode : {-1, 0, 1, 6, 8, 13, 49}) {
+  for (const int keyMode : {-1, 0, 1, 3, 11, 13, 49}) {
     expect(!result_contract::isSupportedKeyMode(keyMode),
            "unknown key modes are rejected by the shared authority");
   }

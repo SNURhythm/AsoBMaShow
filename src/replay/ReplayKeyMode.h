@@ -30,21 +30,17 @@ inline constexpr std::array<ReplayKeyModeLayout, 7> kReplayKeyModeLayouts{{
     {48, 2, 26, 26, false, false, ""},
 }};
 
-static_assert(kReplayKeyModeLayouts.size() ==
-              result_contract::kSupportedKeyModes.size());
 static_assert([] {
-  for (const int supported : result_contract::kSupportedKeyModes) {
-    int matches = 0;
-    for (const auto &layout : kReplayKeyModeLayouts) {
-      matches += layout.keyMode == supported ? 1 : 0;
-    }
-    if (matches != 1) {
-      return false;
-    }
-  }
-  for (const auto &layout : kReplayKeyModeLayouts) {
+  for (std::size_t index = 0; index < kReplayKeyModeLayouts.size(); ++index) {
+    const auto &layout = kReplayKeyModeLayouts[index];
     if (!result_contract::isSupportedKeyMode(layout.keyMode)) {
       return false;
+    }
+    for (std::size_t candidate = index + 1;
+         candidate < kReplayKeyModeLayouts.size(); ++candidate) {
+      if (layout.keyMode == kReplayKeyModeLayouts[candidate].keyMode) {
+        return false;
+      }
     }
   }
   return true;

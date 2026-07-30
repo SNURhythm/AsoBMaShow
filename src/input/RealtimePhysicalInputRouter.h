@@ -7,6 +7,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -53,7 +54,7 @@ private:
                bool backSpin = false);
   void emitApplied(const LogicalGameplayInputAdapter::AppliedTransition &);
   bool emit(RealtimePhysicalInputTransitionType, int lane, bool backSpin,
-            replay::LogicalControl);
+            std::optional<replay::LogicalControl>);
   bool emitReplayOnly(RealtimePhysicalInputTransitionType,
                       replay::LogicalControl);
   void emitCommand(const LogicalInputTransition &);
@@ -64,9 +65,9 @@ private:
   bool gameplayEnabled_ = false;
   std::array<bool, kTrackedLaneCapacity> desiredLanePressed_{};
   std::array<bool, kTrackedLaneCapacity> publishedLanePressed_{};
-  std::array<replay::LogicalControl, kTrackedLaneCapacity>
+  std::array<std::optional<replay::LogicalControl>, kTrackedLaneCapacity>
       desiredReplayControls_{};
-  std::array<replay::LogicalControl, kTrackedLaneCapacity>
+  std::array<std::optional<replay::LogicalControl>, kTrackedLaneCapacity>
       publishedReplayControls_{};
   std::deque<RealtimePhysicalInputTransition> pendingTransitions_;
   LogicalGameplayInputPipeline pipeline_;

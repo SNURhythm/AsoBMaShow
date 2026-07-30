@@ -773,11 +773,13 @@ struct GamePlayScene::RealtimeGameplaySession {
                                       nowMicros(), inputDelayMicros);
   }
 
-  bool emitLegacyApplied(replay::LogicalControl control, bool pressed,
+  bool emitLegacyApplied(int physicalLane, replay::LogicalControl control,
+                         bool hasReplayControl, bool pressed,
                          bool replayOnly) {
     return legacyInputBridge != nullptr &&
-           legacyInputBridge->emitApplied(control, pressed, replayOnly,
-                                          nowMicros());
+           legacyInputBridge->emitApplied(physicalLane, control,
+                                          hasReplayControl, pressed,
+                                          replayOnly, nowMicros());
   }
 
   static bool scratchLongNoteHeld(void *context, int lane) {
@@ -1127,7 +1129,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       std::move(definition), std::move(workerConfig));
   session->legacyInputBridge =
       std::make_unique<gameplay::RealtimeGameplayInputBridge>(
-          session->epoch, chart->Meta.KeyMode,
+          session->epoch,
           gameplay::RealtimeGameplayInputBridgeSink{
               .context = session.get(),
               .emit = &RealtimeGameplaySession::emitLegacyInput});
@@ -1736,8 +1738,10 @@ void GamePlayScene::init() {
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
         LogicalGameplayRegistryPolicy{},
         [this](const auto &transition) {
-          captureModernReplayInput(transition.control, transition.pressed,
-                                   transition.replayOnly);
+          captureModernReplayInput(
+              transition.physicalLane, transition.control,
+              transition.hasReplayControl, transition.pressed,
+              transition.replayOnly);
         });
     inputHandler = ownedInputHandler.get();
     inputHandler->setDragModeEnabled(
@@ -2861,14 +2865,15 @@ void GamePlayScene::beginReplayRecording() {
       getGameplayTimeMicros(preparationPlan.playbackStartTimeMicros), false);
 }
 
-void GamePlayScene::captureModernReplayInput(replay::LogicalControl control,
-                                             bool pressed, bool replayOnly) {
+void GamePlayScene::captureModernReplayInput(
+    int physicalLane, replay::LogicalControl control, bool hasReplayControl,
+    bool pressed, bool replayOnly) {
   if (realtimeGameplayAuthorityActive()) {
-    (void)realtimeGameplaySession->emitLegacyApplied(control, pressed,
-                                                     replayOnly);
+    (void)realtimeGameplaySession->emitLegacyApplied(
+        physicalLane, control, hasReplayControl, pressed, replayOnly);
     return;
   }
-  if (modernReplayInputRecorder == nullptr) {
+  if (modernReplayInputRecorder == nullptr || !hasReplayControl) {
     return;
   }
   std::string diagnostic;
