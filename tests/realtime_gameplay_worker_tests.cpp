@@ -593,7 +593,7 @@ private:
   bool prepared_ = true;
 };
 
-void testLegacyBridgeJudgesScratchlessModesWithoutBrdControls() {
+void testLegacyBridgeCapturesScratchlessModesAsBrdControls() {
   for (const int keyMode : {4, 6, 8}) {
     FakeClock clock;
     FakeAudio audio;
@@ -639,8 +639,18 @@ void testLegacyBridgeJudgesScratchlessModesWithoutBrdControls() {
             "scratchless legacy input judges through the realtime worker");
     worker.stop();
     const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
-    require(replayInput.has_value() && replayInput->empty(),
-            "scratchless gameplay does not invent stock BRD input");
+    const replay::LogicalControl laneControl{
+        .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 0};
+    require(replayInput.has_value() &&
+                *replayInput ==
+                    std::vector<replay::InputTransition>{
+                        {.songTimeMicros = 1'000'000,
+                         .control = laneControl,
+                         .pressed = true},
+                        {.songTimeMicros = 1'002'000,
+                         .control = laneControl,
+                         .pressed = false}},
+            "scratchless gameplay preserves its BMS channel lane in BRD");
   }
 }
 
@@ -1381,7 +1391,7 @@ int main() {
   testRealtimeIngressCoalescesTouchAndHardwareLaneOwnership();
   testRealtimeIngressCoalescesTouchAndHardwareScratchOwnership();
   testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges();
-  testLegacyBridgeJudgesScratchlessModesWithoutBrdControls();
+  testLegacyBridgeCapturesScratchlessModesAsBrdControls();
   testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction();
   testLegacyStartSelectCommandsRemainStockReplayInput();
   testReplayCaptureOverflowDoesNotInvalidateGameplay();

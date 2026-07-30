@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -67,6 +68,16 @@ Bytes encodeJson(const Json &document) {
   const auto encoded = replay::gzipCompress(bytes(source), diagnostic);
   expect(encoded.has_value(), "test JSON gzip compression succeeds");
   return encoded.value_or(Bytes{});
+}
+
+Bytes stockKeyRecord(int signedKeyCode, std::int64_t songTimeMicros) {
+  Bytes output{static_cast<std::byte>(static_cast<std::uint8_t>(
+      static_cast<std::int8_t>(signedKeyCode)))};
+  const auto rawTime = static_cast<std::uint64_t>(songTimeMicros);
+  for (int shift = 0; shift < 64; shift += 8) {
+    output.push_back(static_cast<std::byte>((rawTime >> shift) & 0xffU));
+  }
+  return output;
 }
 
 replay::ReplaySetup setup(std::string sha = std::string(64, 'a'),
@@ -455,7 +466,7 @@ void testDoublePlayAndKeyMapping() {
   }
 }
 
-void testNonStockChartRoundTripsThroughBrd() {
+void testNonStockChartProjectsBeatorajaKeyInput() {
   replay::BeatorajaReplayCodec codec;
   for (const auto [keyMode, lane] :
        {std::pair{4, 4}, std::pair{6, 6}, std::pair{8, 7}}) {
@@ -481,9 +492,28 @@ void testNonStockChartRoundTripsThroughBrd() {
     if (!encoded) {
       continue;
     }
-    const auto decoded = codec.decode(*encoded, context(source));
-    expect(decoded.chart == source,
-           "non-stock BRD preserves its BMS channel lane controls");
+    Json stock = outerJson(*encoded);
+    const auto compressed = replay::base64UrlDecodeBounded(
+        stock.at("keyinput").get<std::string>(), 1024, diagnostic);
+    const auto records =
+        compressed
+            ? replay::gzipDecompressBounded(*compressed, 1024, diagnostic)
+            : std::nullopt;
+    auto expectedRecords = stockKeyRecord(lane + 1, 0);
+    auto releaseRecord = stockKeyRecord(-(lane + 1), 1);
+    expectedRecords.insert(expectedRecords.end(), releaseRecord.begin(),
+                           releaseRecord.end());
+    expect(records == std::optional(expectedRecords),
+           "non-stock BRD keyinput uses exact Beatoraja signed records");
+
+    stock.erase("asobmashow");
+    const auto stockDecoded = codec.decode(encodeJson(stock), context(source));
+    expect(stockDecoded.chart && stockDecoded.stockOnly &&
+               stockDecoded.stageSources ==
+                   std::vector{replay::ReplayStageDecodeSource::Stock} &&
+               stockDecoded.chart->playback.input == source.playback.input,
+           "stock-only Beatoraja fallback preserves non-stock BMS channel "
+           "lane controls");
   }
 }
 
@@ -574,7 +604,7 @@ int main() {
   testEmptyCompletedReplayAndInclusivePreRoll();
   testCourseRoundTripAndAggregateLimits();
   testDoublePlayAndKeyMapping();
-  testNonStockChartRoundTripsThroughBrd();
+  testNonStockChartProjectsBeatorajaKeyInput();
   testSupportedAsoExtensionIsAuthoritative();
   testContextAndUntrustedStructureFailClosed();
   if (failures != 0) {
