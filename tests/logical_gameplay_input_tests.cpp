@@ -7,6 +7,7 @@
 
 #include <SDL2/SDL_scancode.h>
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1225,6 +1226,39 @@ void testArbitraryPhysicalLaneReleaseWhilePausedReconcilesOnResume() {
           "arbitrary physical lane state reconciles across pause and resume");
 }
 
+void testExtremeImportedLaneUsesSparsePauseState() {
+  constexpr int kExtremeLane = std::numeric_limits<int>::max();
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "extreme-imported-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane,
+                  .lane = kExtremeLane},
+       .control = {.deviceId = "keyboard",
+                   .deviceClass = input::DeviceClass::Keyboard,
+                   .kind = input::ControlKind::Key,
+                   .index = SDL_SCANCODE_D}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(keyEvent(SDL_SCANCODE_D, true), 200);
+  router.setGameplayEnabled(false, 300);
+  router.consume(keyEvent(SDL_SCANCODE_D, false), 400);
+  router.setGameplayEnabled(true, 500);
+
+  require(output.size() == 2 && output.front().lane == kExtremeLane &&
+              output.back().lane == kExtremeLane &&
+              output.back().type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output.back().steadyTimestampMicros == 500,
+          "extreme imported lanes reconcile without allocating by lane value");
+}
+
 void testRealtimePhysicalInputHeldThroughPauseStaysPressed() {
   InputProfile profile;
   profile.bindings.push_back(
@@ -1382,6 +1416,7 @@ int main() {
   testRealtimeStartProducesCommandAndReplayEdge();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
   testArbitraryPhysicalLaneReleaseWhilePausedReconcilesOnResume();
+  testExtremeImportedLaneUsesSparsePauseState();
   testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();

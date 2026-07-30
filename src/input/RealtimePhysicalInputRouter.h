@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -63,12 +64,15 @@ private:
   bool emitReplayOnly(RealtimePhysicalInputTransitionType,
                       replay::LogicalControl);
   void emitCommand(const LogicalInputTransition &);
+  static std::map<int, TrackedLaneState>
+  makeTrackedLanes(const InputProfile &,
+                   const std::vector<InputScope> &activeScopes);
 
   std::mutex mutex_;
   Sink sink_;
   std::int64_t currentTimestampMicros_ = 0;
   bool gameplayEnabled_ = false;
-  std::vector<TrackedLaneState> trackedLanes_;
+  std::map<int, TrackedLaneState> trackedLanes_;
   std::deque<RealtimePhysicalInputTransition> pendingTransitions_;
   LogicalGameplayInputPipeline pipeline_;
 };
