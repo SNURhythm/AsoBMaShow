@@ -64,10 +64,12 @@ ResultImageExportResult ResultImageExporter::Export(
     if (!result.success) {
       return result;
     }
-    error.clear();
-    if (!std::filesystem::is_regular_file(outputPath, error) || error) {
-      return exportFailure("Result renderer did not produce an image artifact",
-                           outputPath);
+    if (result.artifactRetained) {
+      error.clear();
+      if (!std::filesystem::is_regular_file(outputPath, error) || error) {
+        return exportFailure(
+            "Result renderer did not produce an image artifact", outputPath);
+      }
     }
     return result;
   } catch (...) {

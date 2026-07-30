@@ -712,7 +712,10 @@ ResultImageExportResult renderResultImageWithSkinData(
   if (!SaveImageToIOSPhotos(fspath_to_utf8(path), errorMessage)) {
     return {.success = false, .outputPath = path, .message = errorMessage};
   }
-  return {.success = true, .outputPath = path, .message = "Saved to Photos"};
+  return {.success = true,
+          .outputPath = path,
+          .message = "Saved to Photos",
+          .artifactRetained = false};
 #else
   return {.success = true, .outputPath = path, .message = "Exported"};
 #endif
@@ -958,7 +961,8 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   return {.success = true,
           .outputPath = outputDir,
-          .message = "Saved to Photos"};
+          .message = "Saved to Photos",
+          .artifactRetained = false};
 #else
   return {.success = true,
           .outputPath = outputDir,

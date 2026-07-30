@@ -1,4 +1,5 @@
 #include "ResultImageExporter.h"
+#include "platform/PhotoAuthorizationPolicy.h"
 
 #include "rendering/UniformCache.h"
 #include "scene/ResultPresentationModel.h"
@@ -522,6 +523,56 @@ void testProductionPresentationExportPropagatesFailures() {
          "production presentation export fails before rendering when its "
          "destination cannot be created");
 }
+
+void testPresentationExportAcceptsPlatformConsumedArtifact() {
+  TemporaryDirectory temporary;
+  ResultPresentationModel presentation;
+  presentation.title = "Photos Result";
+  const auto consumedBackend = [](ResultSkinData,
+                                  std::optional<result_gauge_history::
+                                      ResultGaugeGraph>,
+                                  const std::filesystem::path &path) {
+    std::ofstream artifact(path, std::ios::binary);
+    artifact << "platform-consumed-result-image";
+    artifact.close();
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    return ResultImageExportResult{.success = true,
+                                   .outputPath = path,
+                                   .message = "Saved to Photos",
+                                   .artifactRetained = false};
+  };
+
+  const auto result = ResultImageExporter::Export(
+      presentation,
+      {.outputDirectory = temporary.path, .timestamp = "20260730_123456"},
+      consumedBackend);
+  expect(result.success && !result.artifactRetained &&
+             !std::filesystem::exists(result.outputPath),
+         "presentation export accepts an artifact consumed by its platform "
+         "library");
+}
+
+void testPhotoAuthorizationRecoveryPolicy() {
+  using platform::PhotoAuthorizationAction;
+  using platform::PhotoAuthorizationStatus;
+  using platform::photoAuthorizationAction;
+
+  expect(photoAuthorizationAction(PhotoAuthorizationStatus::NotDetermined) ==
+             PhotoAuthorizationAction::Request,
+         "undecided Photos access requests permission");
+  expect(photoAuthorizationAction(PhotoAuthorizationStatus::Denied) ==
+             PhotoAuthorizationAction::OpenSettings,
+         "denied Photos access directs the user to app settings");
+  expect(photoAuthorizationAction(PhotoAuthorizationStatus::Restricted) ==
+             PhotoAuthorizationAction::ExplainRestriction,
+         "restricted Photos access explains that permission cannot be asked");
+  expect(photoAuthorizationAction(PhotoAuthorizationStatus::Authorized) ==
+                 PhotoAuthorizationAction::Proceed &&
+             photoAuthorizationAction(PhotoAuthorizationStatus::Limited) ==
+                 PhotoAuthorizationAction::Proceed,
+         "authorized Photos access proceeds without another prompt");
+}
 } // namespace
 
 int main() {
@@ -547,6 +598,8 @@ int main() {
   testFilenameFallbackAndRemoteSceneExportContract();
   testProductionPresentationExportWritesCompleteAndSparseArtifacts();
   testProductionPresentationExportPropagatesFailures();
+  testPresentationExportAcceptsPlatformConsumedArtifact();
+  testPhotoAuthorizationRecoveryPolicy();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

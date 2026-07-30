@@ -3,6 +3,7 @@
 #include "RAII.h"
 #include "audio/NativeMusicPlayer.h"
 #include "ir/IrHttpClientIOS.h"
+#include "platform/PhotoAuthorizationPolicy.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -254,33 +255,43 @@ UIViewController *TopViewController(UIViewController *viewController) {
   return top;
 }
 
-bool IsPhotoAuthorizationAllowed(PHAuthorizationStatus status) {
-  if (status == PHAuthorizationStatusAuthorized) {
-    return true;
-  }
-  if (@available(iOS 14.0, *)) {
-    return status == PHAuthorizationStatusLimited;
-  }
-  return false;
-}
-
-std::string PhotoAuthorizationStatusMessage(PHAuthorizationStatus status) {
+platform::PhotoAuthorizationStatus
+ToPhotoAuthorizationStatus(PHAuthorizationStatus status) {
   switch (status) {
-  case PHAuthorizationStatusDenied:
-    return "Photos permission was denied";
-  case PHAuthorizationStatusRestricted:
-    return "Photos access is restricted";
   case PHAuthorizationStatusNotDetermined:
-    return "Photos permission was not granted";
+    return platform::PhotoAuthorizationStatus::NotDetermined;
+  case PHAuthorizationStatusRestricted:
+    return platform::PhotoAuthorizationStatus::Restricted;
+  case PHAuthorizationStatusDenied:
+    return platform::PhotoAuthorizationStatus::Denied;
   case PHAuthorizationStatusAuthorized:
-    return "";
+    return platform::PhotoAuthorizationStatus::Authorized;
   default:
     if (@available(iOS 14.0, *)) {
       if (status == PHAuthorizationStatusLimited) {
-        return "";
+        return platform::PhotoAuthorizationStatus::Limited;
       }
     }
-    return "Photos permission was not granted";
+    return platform::PhotoAuthorizationStatus::Restricted;
+  }
+}
+
+void OpenApplicationSettings() {
+  void (^openBlock)(void) = ^{
+    NSURL *settingsURL =
+        [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+    if (settingsURL != nil &&
+        [[UIApplication sharedApplication] canOpenURL:settingsURL]) {
+      [[UIApplication sharedApplication] openURL:settingsURL
+                                         options:@{}
+                               completionHandler:nil];
+    }
+  };
+
+  if ([NSThread isMainThread]) {
+    openBlock();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), openBlock);
   }
 }
 
@@ -409,11 +420,24 @@ bool RequestPhotoAddAuthorization(std::string &errorMessage) {
     return false;
   }
 
-  if (!IsPhotoAuthorizationAllowed(status)) {
-    errorMessage = PhotoAuthorizationStatusMessage(status);
+  switch (platform::photoAuthorizationAction(
+      ToPhotoAuthorizationStatus(status))) {
+  case platform::PhotoAuthorizationAction::Proceed:
+    return true;
+  case platform::PhotoAuthorizationAction::OpenSettings:
+    errorMessage =
+        "Photos access is off. Enable Photos access in Settings to export";
+    OpenApplicationSettings();
+    return false;
+  case platform::PhotoAuthorizationAction::ExplainRestriction:
+    errorMessage = "Photos access is restricted and cannot be changed here";
+    return false;
+  case platform::PhotoAuthorizationAction::Request:
+    errorMessage = "Photos permission was not granted";
     return false;
   }
-  return true;
+  errorMessage = "Photos permission was not granted";
+  return false;
 }
 
 long long ElapsedMicros(std::chrono::steady_clock::time_point start) {

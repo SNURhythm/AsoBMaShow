@@ -22,6 +22,7 @@ struct ResultImageExportResult {
   bool success = false;
   std::filesystem::path outputPath;
   std::string message;
+  bool artifactRetained = true;
 };
 
 namespace result_image_export {
