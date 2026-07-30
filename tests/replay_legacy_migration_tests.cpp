@@ -851,6 +851,29 @@ void testVersion17KeyModeMigrationPreservesRowsAndOpensPositiveCounts() {
                   "SELECT COUNT(*) FROM pragma_foreign_key_check") == 0);
 }
 
+void testVersion17OpenKeyModeRetryImageAdvancesMarker() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "open-key-mode-retry.db";
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    repository.Shutdown();
+  }
+
+  auto database = openDatabase(path);
+  insertModernChartResult(database.get(), "installed-four-key-chart", 4,
+                          'f');
+  exec(database.get(), "PRAGMA user_version=17");
+
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
+  assert(queryInt(database.get(), "PRAGMA user_version") == 18);
+  assert(queryInt(database.get(),
+                  "SELECT COUNT(*) FROM modern_chart_results WHERE "
+                  "attempt_id='installed-four-key-chart' AND key_mode=4") ==
+         1);
+  assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
+}
+
 enum class KeyModeMigrationPhase : std::uint8_t {
   None,
   ChartSchema,
@@ -1563,6 +1586,7 @@ int main() {
   testVersion14CourseScoreOutboxMigrationRollsBackAtomically();
   testVersion15OwnershipMigrationPreservesPathOnlyReservations();
   testVersion17KeyModeMigrationPreservesRowsAndOpensPositiveCounts();
+  testVersion17OpenKeyModeRetryImageAdvancesMarker();
   testVersion17KeyModeMigrationRollbackFaultMatrix();
   testRollbackFaultMatrixPreservesOriginalDatabase();
   testPathMigrationReclaimsDroppedReplayDetailPages();

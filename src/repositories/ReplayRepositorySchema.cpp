@@ -1849,6 +1849,8 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     IrOutboxSchemaState irOutboxState{};
     IrSubmissionReceiptsSchemaState receiptState{};
     IrRemoteScoresSchemaState remoteScoresState{};
+    const bool modernCourseSchemaExact =
+        inspectModernCourseSchemaV17(db) || inspectModernCourseSchema(db);
     if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
         !inspectIrOutboxSchema(db, irOutboxState) ||
         !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
@@ -1857,7 +1859,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         irOutboxState != IrOutboxSchemaState::Exact ||
         receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
         remoteScoresState != IrRemoteScoresSchemaState::Exact ||
-        !inspectModernCourseSchemaV17(db) ||
+        !modernCourseSchemaExact ||
         !replay_repository_legacy::inspectCurrentSchema(db) ||
         !migrateOpenKeyModeSchema(db) ||
         !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
