@@ -27,10 +27,11 @@ work-conserving when only archives remain.
 
 ## Goals
 
-- Use one fixed worker budget for archive preparation and chart parsing.
-- Admit one archive-I/O task while CPU work is queued, then expand archive
-  admission up to the proven `develop` ceiling of four when the queue contains
-  only archives.
+- Use one fixed worker budget for archive preparation and chart parsing, sized
+  to all hardware threads reported for the device.
+- Admit at most one archive index and one archive reader while CPU work is
+  queued, then expand each archive class up to one fewer than the worker count
+  when the queue contains only archives.
 - Keep separate FIFO queues for CPU and archive work so eligibility checks and
   dispatch remain constant-time regardless of backlog size.
 - Begin reading and parsing a non-solid archive immediately after its index is
@@ -57,12 +58,14 @@ work-conserving when only archives remain.
 ### Resource-aware shared pool
 
 `ChartScanWorkScheduler` supports ordinary CPU tasks and archive-I/O tasks in
-separate FIFO queues. All tasks share the existing `parallel_worker_count()`
-budget. If CPU work is queued, archive admission contracts to one active task
-and the other workers take CPU tasks. If no CPU work is queued, admission
-expands up to four archive tasks, capped at one fewer than the total worker
-count so a pipeline parse task can always make progress. Queue eligibility and
-selection are constant-time.
+separate FIFO queues. All tasks share a scan-specific budget using every
+hardware thread reported by `std::thread::hardware_concurrency()`, bounded by
+the scanner's 512-item batch capacity. If the platform does not report a
+hardware count, the existing four-worker fallback is used. If CPU work is
+queued, index and reader admission each contract to one and the other workers
+take CPU tasks. If no CPU work is queued, each archive class expands up to one
+fewer than the total worker count. Queue eligibility and selection are
+constant-time.
 
 Finishing the scheduler means that the external producer is done, not that
 active tasks may no longer create work. An active archive reader may enqueue
@@ -72,9 +75,9 @@ has fully joined are rejected.
 
 For four workers and input `archive, ordinary, ordinary, ordinary`, one worker
 performs archive I/O and the other three parse ordinary files. For a run
-containing only archives, up to three readers operate at once. On the current
-eight-core machine the scanner budget is six workers, so archive-only admission
-expands to the `develop` ceiling of four.
+containing only archives, up to three readers operate at once. On the traced
+eight-thread device the scanner budget is eight workers, so archive-only
+admission expands to seven.
 
 ### Archive pipeline
 
@@ -88,9 +91,9 @@ For a non-solid archive on a fresh scan:
 - A larger archive streams requested chart entries. Each file becomes a CPU
   task on the same scheduler; the archive task remains the sole reader.
 - Per-archive backpressure limits queued/running file data to 12 files and
-  16 MiB. Four active readers therefore bound active archive data to roughly
-  64 MiB, excluding one oversized entry per reader that must be admitted to
-  make progress.
+  16 MiB. With `W` scan workers, active archive data is therefore bounded to
+  roughly `(W - 1) * 16 MiB`, excluding one oversized entry per reader that
+  must be admitted to make progress.
 
 After discovery, if exactly one unprepared archive remains with at least 16
 chart entries, the entity pool is already stopped and the scanner gives the
@@ -145,10 +148,9 @@ scanner thread.
 Tests use synchronization and synthetic stored ZIP fixtures, not performance
 timings.
 
-1. A four-worker scheduler test queues several blocking archive-I/O tasks and
-   proves archive-only work expands to three active tasks while reserving one
-   worker.
-2. A scheduler test proves queued CPU work contracts archive admission to one
+1. Scheduler tests prove single-class archive admission expands from four
+   workers to three archive tasks and from seven workers to six.
+2. Scheduler tests prove queued CPU work contracts each archive class to one
    even when older archive tasks are waiting.
 3. A scheduler test proves work enqueued by an active task is drained after
    `finish()` has begun.
@@ -163,9 +165,9 @@ timings.
 
 ## Expected Outcome
 
-Many small archives regain up to four-way archive throughput without the
-mixed-queue scanning cost. Mixed scans contract to one archive worker and keep
-the remaining workers available for ordinary charts. Large non-solid archives
+Many small archives can use up to `W - 1` archive workers without the
+mixed-queue scanning cost. Mixed scans contract archive admission and keep the
+remaining workers available for ordinary charts. Large non-solid archives
 stream entries into the same parsing pool, while one large random-access
 archive receives the full budget as the sole active pool. Both paths avoid
 exceeding the scanner's worker budget.

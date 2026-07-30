@@ -15,6 +15,13 @@ namespace {
 
 using namespace std::chrono_literals;
 
+void testRecommendedWorkerCountUsesAllHardwareThreads() {
+  assert(chart_scan::recommendedWorkerCount(512, 8) == 8);
+  assert(chart_scan::recommendedWorkerCount(3, 8) == 3);
+  assert(chart_scan::recommendedWorkerCount(0, 8) == 0);
+  assert(chart_scan::recommendedWorkerCount(512, 0) == 4);
+}
+
 void testLaterEntitiesUseWorkersWhileArchiveIsActive() {
   chart_scan::WorkScheduler scheduler(4);
   std::mutex mutex;
@@ -87,6 +94,35 @@ void testArchiveOnlyQueueUsesAvailableWorkers() {
 
   scheduler.finish();
   assert(maximumActiveArchives == 3);
+  assert(scheduler.takeExceptions().empty());
+}
+
+void testDefaultArchiveLimitScalesWithWorkerCount() {
+  chart_scan::WorkScheduler scheduler(7);
+  std::mutex mutex;
+  std::condition_variable cv;
+  int startedArchives = 0;
+  bool releaseArchives = false;
+
+  for (int index = 0; index < 6; ++index) {
+    assert(scheduler.enqueue(
+        [&] {
+          std::unique_lock lock(mutex);
+          ++startedArchives;
+          cv.notify_all();
+          cv.wait(lock, [&] { return releaseArchives; });
+        },
+        chart_scan::WorkClass::ArchiveRead));
+  }
+
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return startedArchives == 6; }));
+    releaseArchives = true;
+  }
+  cv.notify_all();
+
+  scheduler.finish();
   assert(scheduler.takeExceptions().empty());
 }
 
@@ -483,8 +519,10 @@ void testCancelDiscardsQueuedWorkAndJoins() {
 } // namespace
 
 int main() {
+  testRecommendedWorkerCountUsesAllHardwareThreads();
   testLaterEntitiesUseWorkersWhileArchiveIsActive();
   testArchiveOnlyQueueUsesAvailableWorkers();
+  testDefaultArchiveLimitScalesWithWorkerCount();
   testCpuQueueContractsArchiveAdmission();
   testArchiveAdmissionLeavesWorkersForCpuTasks();
   testArchiveIndexProgressesWhileArchiveReadHasQueuedCpuWork();

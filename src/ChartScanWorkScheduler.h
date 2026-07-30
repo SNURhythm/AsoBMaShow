@@ -5,11 +5,16 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <vector>
 
 namespace chart_scan {
+
+std::size_t recommendedWorkerCount(
+    std::size_t workItemCount,
+    unsigned int hardwareThreadCount = std::thread::hardware_concurrency());
 
 enum class WorkClass {
   Cpu,
@@ -23,7 +28,8 @@ public:
   using Work = std::function<void()>;
 
   explicit WorkScheduler(std::size_t workerCount,
-                         std::size_t archiveIoLimit = 4);
+                         std::size_t archiveIoLimit =
+                             std::numeric_limits<std::size_t>::max());
   ~WorkScheduler();
   WorkScheduler(const WorkScheduler &) = delete;
   WorkScheduler &operator=(const WorkScheduler &) = delete;

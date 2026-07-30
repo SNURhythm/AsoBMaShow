@@ -5,6 +5,18 @@
 
 namespace chart_scan {
 
+std::size_t recommendedWorkerCount(std::size_t workItemCount,
+                                   unsigned int hardwareThreadCount) {
+  if (workItemCount == 0) {
+    return 0;
+  }
+
+  constexpr std::size_t fallbackWorkerCount = 4;
+  const std::size_t availableThreads =
+      hardwareThreadCount == 0 ? fallbackWorkerCount : hardwareThreadCount;
+  return std::min(workItemCount, availableThreads);
+}
+
 WorkScheduler::WorkScheduler(std::size_t workerCount,
                              std::size_t archiveIoLimit) {
   const std::size_t actualWorkerCount = std::max<std::size_t>(1, workerCount);

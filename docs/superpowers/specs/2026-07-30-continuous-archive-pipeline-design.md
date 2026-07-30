@@ -7,7 +7,8 @@ The codec-registration trace proves that `.7z` archives now use the 7-Zip SDK, b
 ## Goals
 
 - Start multi-chart archive reading as soon as enough discovered work proves that the scan is not the single-large-archive case.
-- Keep the dynamic reader contract: one admitted archive reader while CPU work is queued, expanding to at most four readers when CPU work is absent.
+- Keep the dynamic reader contract: one admitted archive reader while CPU work is queued, expanding to one fewer than the worker count when CPU work is absent.
+- Size the scanner pool to all hardware threads reported by the device instead of reserving threads through the generic parallel-work policy.
 - Give short archive-index jobs independent admission so an active reader cannot delay discovery metadata.
 - Publish small-archive preparation after indexing and parse those entries through the same independent reader queue.
 - Preserve the full-budget concurrent backend for a scan containing one large random-access archive.
