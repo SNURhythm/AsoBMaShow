@@ -711,6 +711,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AndroidNatives.cpp,
+				ChartScanWorkScheduler.md,
 				CMakeLists.txt,
 				audio/CMakeLists.txt,
 				bms_search/CMakeLists.txt,
