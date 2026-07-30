@@ -33,7 +33,7 @@ struct CourseStageCompletion {
   GaugeStateSnapshot gauge;
   GaugeType adoptedGauge = GaugeType::Normal;
   std::int64_t restMicrosAfterStage = 0;
-  ReplaySetup setup;
+  std::optional<ReplaySetup> setup;
 };
 
 struct CourseContinuationState {
@@ -47,7 +47,7 @@ struct CourseContinuationState {
   GaugeType adoptedGauge = GaugeType::Normal;
   CourseContinuationConstraints constraints;
   std::vector<std::int64_t> restMicrosAfterStage;
-  std::vector<ReplaySetup> stageSetups;
+  std::vector<std::optional<ReplaySetup>> stageSetups;
 
   [[nodiscard]] bool complete() const noexcept {
     return totalStages > 0 && nextStageIndex == totalStages;

@@ -3049,7 +3049,7 @@ void GamePlayScene::recordModernCourseStage(
   }
 
   std::optional<replay::CourseContinuationState> advancedContinuation;
-  if (currentContinuation.has_value() && setup.has_value()) {
+  if (currentContinuation.has_value()) {
     const auto advanced = replay::advanceCourseContinuation(
         *currentContinuation,
         {.stageIndex = session->currentIndex,
@@ -3060,7 +3060,7 @@ void GamePlayScene::recordModernCourseStage(
          .gauge = state->gaugeSnapshot(),
          .adoptedGauge = result->adoptedGaugeType,
          .restMicrosAfterStage = 0,
-         .setup = *setup});
+         .setup = setup});
     if (advanced.advanced()) {
       advancedContinuation = std::move(advanced.state);
     }
