@@ -1,34 +1,9 @@
 #include "ChartScanWorkScheduler.h"
 
 #include <algorithm>
-#include <limits>
 #include <utility>
 
 namespace chart_scan {
-namespace {
-
-void addPressure(std::size_t &pressure, std::size_t cost) {
-  const auto maximum = std::numeric_limits<std::size_t>::max();
-  pressure = cost > maximum - pressure ? maximum : pressure + cost;
-}
-
-void removePressure(std::size_t &pressure, std::size_t cost) {
-  pressure = cost > pressure ? 0 : pressure - cost;
-}
-
-} // namespace
-
-bool WorkScheduler::ArchiveReadCostKeyLess::operator()(
-    const ArchiveReadCostKey &left,
-    const ArchiveReadCostKey &right) const {
-  if (std::get<0>(left) != std::get<0>(right)) {
-    return std::get<0>(left) > std::get<0>(right);
-  }
-  if (std::get<1>(left) != std::get<1>(right)) {
-    return std::get<1>(left) < std::get<1>(right);
-  }
-  return std::get<2>(left) < std::get<2>(right);
-}
 
 WorkScheduler::WorkScheduler(std::size_t workerCount,
                              std::size_t archiveIoLimit) {
@@ -45,9 +20,7 @@ WorkScheduler::WorkScheduler(std::size_t workerCount,
 
 WorkScheduler::~WorkScheduler() { cancel(); }
 
-bool WorkScheduler::enqueue(Work work, WorkClass workClass,
-                            std::size_t archiveOrder,
-                            std::size_t archiveReadCost) {
+bool WorkScheduler::enqueue(Work work, WorkClass workClass) {
   if (!work) {
     return false;
   }
@@ -64,17 +37,11 @@ bool WorkScheduler::enqueue(Work work, WorkClass workClass,
       archiveIndexQueue_.push_back(std::move(work));
       break;
     case WorkClass::ArchiveRead:
-    case WorkClass::ArchiveReadHeavy: {
-      const std::uint64_t sequence = nextArchiveReadEnqueueSequence_++;
-      auto read = std::make_shared<ArchiveReadWork>(ArchiveReadWork{
-          std::move(work), archiveOrder, archiveReadCost, sequence});
-      archiveReadsByOrder_.emplace(
-          ArchiveReadOrderKey{archiveOrder, sequence}, read);
-      archiveReadsByCost_.emplace(
-          ArchiveReadCostKey{archiveReadCost, archiveOrder, sequence},
-          std::move(read));
+      archiveReadQueue_.push_back(std::move(work));
       break;
-    }
+    case WorkClass::ArchiveReadHeavy:
+      heavyArchiveReadQueue_.push_back(std::move(work));
+      break;
     }
   }
   cv_.notify_one();
@@ -99,8 +66,8 @@ void WorkScheduler::cancel() {
     cancelled_ = true;
     cpuQueue_.clear();
     archiveIndexQueue_.clear();
-    archiveReadsByOrder_.clear();
-    archiveReadsByCost_.clear();
+    archiveReadQueue_.clear();
+    heavyArchiveReadQueue_.clear();
   }
   cv_.notify_all();
   joinWorkers();
@@ -115,7 +82,7 @@ std::vector<std::exception_ptr> WorkScheduler::takeExceptions() {
 
 bool WorkScheduler::hasPendingWorkLocked() const {
   return !cpuQueue_.empty() || !archiveIndexQueue_.empty() ||
-         !archiveReadsByOrder_.empty();
+         !archiveReadQueue_.empty() || !heavyArchiveReadQueue_.empty();
 }
 
 bool WorkScheduler::hasEligibleWorkLocked() const {
@@ -123,9 +90,13 @@ bool WorkScheduler::hasEligibleWorkLocked() const {
       cpuQueue_.empty() ? archiveIoLimit_ : std::size_t{1};
   const bool indexEligible = !archiveIndexQueue_.empty() &&
                              activeArchiveIndexes_ < archiveAdmissionLimit;
-  const bool readEligible = !archiveReadsByOrder_.empty() &&
+  const bool readEligible = !archiveReadQueue_.empty() &&
                             activeArchiveReads_ < archiveAdmissionLimit;
-  return !cpuQueue_.empty() || indexEligible || readEligible;
+  const bool heavyReadEligible =
+      !heavyArchiveReadQueue_.empty() &&
+      activeArchiveReads_ < archiveAdmissionLimit;
+  return !cpuQueue_.empty() || indexEligible || readEligible ||
+         heavyReadEligible;
 }
 
 bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
@@ -133,8 +104,11 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
       cpuQueue_.empty() ? archiveIoLimit_ : std::size_t{1};
   const bool indexEligible = !archiveIndexQueue_.empty() &&
                              activeArchiveIndexes_ < archiveAdmissionLimit;
-  const bool readEligible = !archiveReadsByOrder_.empty() &&
+  const bool readEligible = !archiveReadQueue_.empty() &&
                             activeArchiveReads_ < archiveAdmissionLimit;
+  const bool heavyReadEligible =
+      !heavyArchiveReadQueue_.empty() &&
+      activeArchiveReads_ < archiveAdmissionLimit;
   if (indexEligible &&
       (activeArchiveIndexes_ == 0 || cpuQueue_.empty())) {
     item.work = std::move(archiveIndexQueue_.front());
@@ -143,7 +117,17 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
     return true;
   }
   if (readEligible && (activeArchiveReads_ == 0 || cpuQueue_.empty())) {
-    return popArchiveReadLocked(item);
+    item.work = std::move(archiveReadQueue_.front());
+    item.workClass = WorkClass::ArchiveRead;
+    archiveReadQueue_.pop_front();
+    return true;
+  }
+  if (heavyReadEligible &&
+      (activeArchiveReads_ == 0 || cpuQueue_.empty())) {
+    item.work = std::move(heavyArchiveReadQueue_.front());
+    item.workClass = WorkClass::ArchiveReadHeavy;
+    heavyArchiveReadQueue_.pop_front();
+    return true;
   }
   if (!cpuQueue_.empty()) {
     item.work = std::move(cpuQueue_.front());
@@ -158,43 +142,18 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
     return true;
   }
   if (readEligible) {
-    return popArchiveReadLocked(item);
+    item.work = std::move(archiveReadQueue_.front());
+    item.workClass = WorkClass::ArchiveRead;
+    archiveReadQueue_.pop_front();
+    return true;
+  }
+  if (heavyReadEligible) {
+    item.work = std::move(heavyArchiveReadQueue_.front());
+    item.workClass = WorkClass::ArchiveReadHeavy;
+    heavyArchiveReadQueue_.pop_front();
+    return true;
   }
   return false;
-}
-
-bool WorkScheduler::popArchiveReadLocked(WorkItem &item) {
-  if (archiveReadsByOrder_.empty()) {
-    return false;
-  }
-
-  const auto earliest = archiveReadsByOrder_.begin();
-  const auto highestCost = archiveReadsByCost_.begin();
-  const bool needsFrontier =
-      activeArchiveReadOrders_.empty() ||
-      earliest->second->archiveOrder < *activeArchiveReadOrders_.begin();
-  const bool canSpeculate =
-      !needsFrontier && highestCost->second != earliest->second &&
-      highestCost->second->archiveReadCost != 0 &&
-      activeSpeculativeArchiveReadPressure_ <
-          activeOrderedArchiveReadPressure_;
-  const ArchiveReadWorkPtr selected =
-      canSpeculate ? highestCost->second : earliest->second;
-
-  item.work = std::move(selected->work);
-  item.workClass = WorkClass::ArchiveRead;
-  item.archiveOrder = selected->archiveOrder;
-  item.archiveReadCost = std::max<std::size_t>(1, selected->archiveReadCost);
-  item.archiveReadSpeculative = canSpeculate;
-  eraseArchiveReadLocked(selected);
-  return true;
-}
-
-void WorkScheduler::eraseArchiveReadLocked(const ArchiveReadWorkPtr &read) {
-  archiveReadsByOrder_.erase(
-      ArchiveReadOrderKey{read->archiveOrder, read->enqueueSequence});
-  archiveReadsByCost_.erase(ArchiveReadCostKey{
-      read->archiveReadCost, read->archiveOrder, read->enqueueSequence});
 }
 
 void WorkScheduler::workerLoop() {
@@ -222,11 +181,8 @@ void WorkScheduler::workerLoop() {
         ++activeArchiveIndexes_;
       } else if (item.workClass == WorkClass::ArchiveRead) {
         ++activeArchiveReads_;
-        activeArchiveReadOrders_.insert(item.archiveOrder);
-        auto &pressure = item.archiveReadSpeculative
-                             ? activeSpeculativeArchiveReadPressure_
-                             : activeOrderedArchiveReadPressure_;
-        addPressure(pressure, item.archiveReadCost);
+      } else if (item.workClass == WorkClass::ArchiveReadHeavy) {
+        ++activeArchiveReads_;
       }
     }
 
@@ -248,15 +204,10 @@ void WorkScheduler::workerLoop() {
       } else if (item.workClass == WorkClass::ArchiveRead &&
                  activeArchiveReads_ > 0) {
         --activeArchiveReads_;
-        const auto activeOrder =
-            activeArchiveReadOrders_.find(item.archiveOrder);
-        if (activeOrder != activeArchiveReadOrders_.end()) {
-          activeArchiveReadOrders_.erase(activeOrder);
+      } else if (item.workClass == WorkClass::ArchiveReadHeavy) {
+        if (activeArchiveReads_ > 0) {
+          --activeArchiveReads_;
         }
-        auto &pressure = item.archiveReadSpeculative
-                             ? activeSpeculativeArchiveReadPressure_
-                             : activeOrderedArchiveReadPressure_;
-        removePressure(pressure, item.archiveReadCost);
       }
       if (activeTasks_ > 0) {
         --activeTasks_;

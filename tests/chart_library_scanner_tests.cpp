@@ -484,30 +484,6 @@ void testMultiEntryArchivePreservesPreparedResultOrderAndCache() {
   assert(scanner.Scan(*session, {archivePath}) == 0);
 }
 
-void testArchiveReadCostUsesLastChartEntryOrdinal() {
-  TempDirectory temporary;
-  const auto root = temporary.path() / "library";
-  const auto archivePath = writeZip(
-      root / "archive-read-cost-ordinal.zip",
-      {{"readme.txt", "not a chart"},
-       {"first.bms", chartText("Read Cost First")},
-       {"padding.bin", "padding"},
-       {"second.bms", chartText("Read Cost Second")},
-       {"trailing.bin", "trailing"}});
-
-  ChartRepository repository(temporary.path() / "chart.db");
-  assert(repository.EnsureReady());
-  auto session = repository.OpenSession();
-  assert(session.has_value());
-  ChartLibraryScanner scanner;
-
-  assert(scanner.Scan(*session, {archivePath}) == 3);
-  assert(session->CountAllChartMeta() == 2);
-  const auto logLines = archive_file::debugLogLines();
-  assert(hasArchiveLog(logLines, archivePath,
-                       "requested=2 discoveryOrder=0 readCost=4"));
-}
-
 void testArchiveCheckpointResumeUsesOrderedFallbackPipeline() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -541,17 +517,6 @@ void testArchiveCheckpointResumeUsesOrderedFallbackPipeline() {
   assert(snapshot.archiveCache.size() == 1);
   assert(snapshot.archiveCache.front().chartCount == 3);
   assert(!snapshot.checkpoint.has_value());
-  const auto logLines = archive_file::debugLogLines();
-  const std::string archiveName = archivePath.filename().string();
-  assert(std::any_of(logLines.begin(), logLines.end(),
-                     [&](const std::string &line) {
-                       return line.find(
-                                  "Queued bounded DB archive chart batch "
-                                  "parse:") != std::string::npos &&
-                              line.find(archiveName) != std::string::npos &&
-                              line.find("requested=3 discoveryOrder=0 "
-                                        "readCost=3") != std::string::npos;
-                     }));
 }
 
 void testMidArchiveCheckpointResumePreservesValidCacheCount() {
@@ -925,7 +890,6 @@ int main() {
   testManySmallArchivesPreserveDiscoveryOrderAndCache();
   testNormalArchiveScanDoesNotRecountStoredRows();
   testMultiEntryArchivePreservesPreparedResultOrderAndCache();
-  testArchiveReadCostUsesLastChartEntryOrdinal();
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testMidArchiveCheckpointResumePreservesValidCacheCount();
   testLargeSingleArchivePreservesAllChartResults();
