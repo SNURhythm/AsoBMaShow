@@ -41,7 +41,7 @@ Run:
 
 ```bash
 cmake --build cmake-build-debug --target chart_scan_work_scheduler_tests -j 6
-./cmake-build-debug/tests/chart_scan_work_scheduler_tests
+./cmake-build-debug/chart_scan_work_scheduler_tests
 ```
 
 Expected: the new assertion fails with the observed order `{2, 1}` because
@@ -61,9 +61,9 @@ Run:
 
 ```bash
 cmake --build cmake-build-debug --target chart_scan_work_scheduler_tests archive_file_concurrency_tests chart_library_scanner_tests -j 6
-./cmake-build-debug/tests/chart_scan_work_scheduler_tests
-./cmake-build-debug/tests/archive_file_concurrency_tests
-./cmake-build-debug/tests/chart_library_scanner_tests
+./cmake-build-debug/chart_scan_work_scheduler_tests
+./cmake-build-debug/archive_file_concurrency_tests
+./cmake-build-debug/chart_library_scanner_tests
 ```
 
 Expected: all focused tests pass.

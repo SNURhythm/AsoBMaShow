@@ -50,7 +50,6 @@ private:
   std::deque<Work> cpuQueue_;
   std::deque<Work> archiveIndexQueue_;
   std::deque<Work> archiveReadQueue_;
-  std::deque<Work> heavyArchiveReadQueue_;
   std::vector<std::thread> workers_;
   std::vector<std::exception_ptr> exceptions_;
   std::size_t archiveIoLimit_ = 1;

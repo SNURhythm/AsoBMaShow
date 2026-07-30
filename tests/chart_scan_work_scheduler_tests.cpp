@@ -335,6 +335,41 @@ void testHeavyArchiveReadsUseAvailableReadCapacity() {
   assert(scheduler.takeExceptions().empty());
 }
 
+void testArchiveReadClassesPreserveEnqueueOrder() {
+  chart_scan::WorkScheduler scheduler(1);
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool blockerStarted = false;
+  bool releaseBlocker = false;
+  std::vector<int> order;
+
+  assert(scheduler.enqueue([&] {
+    std::unique_lock lock(mutex);
+    blockerStarted = true;
+    cv.notify_all();
+    cv.wait(lock, [&] { return releaseBlocker; });
+  }));
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return blockerStarted; }));
+  }
+
+  assert(scheduler.enqueue(
+      [&] { order.push_back(1); },
+      chart_scan::WorkClass::ArchiveReadHeavy));
+  assert(scheduler.enqueue(
+      [&] { order.push_back(2); }, chart_scan::WorkClass::ArchiveRead));
+  {
+    std::lock_guard lock(mutex);
+    releaseBlocker = true;
+  }
+  cv.notify_all();
+
+  scheduler.finish();
+  assert((order == std::vector<int>{1, 2}));
+  assert(scheduler.takeExceptions().empty());
+}
+
 void testFinishDrainsWorkSpawnedByActiveTask() {
   chart_scan::WorkScheduler scheduler(1);
   std::mutex mutex;
@@ -454,6 +489,7 @@ int main() {
   testArchiveAdmissionLeavesWorkersForCpuTasks();
   testArchiveIndexProgressesWhileArchiveReadHasQueuedCpuWork();
   testHeavyArchiveReadsUseAvailableReadCapacity();
+  testArchiveReadClassesPreserveEnqueueOrder();
   testFinishDrainsWorkSpawnedByActiveTask();
   testSingleWorkerPreservesFifoOrder();
   testTaskExceptionDoesNotStopWorker();

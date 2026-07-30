@@ -37,10 +37,8 @@ bool WorkScheduler::enqueue(Work work, WorkClass workClass) {
       archiveIndexQueue_.push_back(std::move(work));
       break;
     case WorkClass::ArchiveRead:
-      archiveReadQueue_.push_back(std::move(work));
-      break;
     case WorkClass::ArchiveReadHeavy:
-      heavyArchiveReadQueue_.push_back(std::move(work));
+      archiveReadQueue_.push_back(std::move(work));
       break;
     }
   }
@@ -67,7 +65,6 @@ void WorkScheduler::cancel() {
     cpuQueue_.clear();
     archiveIndexQueue_.clear();
     archiveReadQueue_.clear();
-    heavyArchiveReadQueue_.clear();
   }
   cv_.notify_all();
   joinWorkers();
@@ -82,7 +79,7 @@ std::vector<std::exception_ptr> WorkScheduler::takeExceptions() {
 
 bool WorkScheduler::hasPendingWorkLocked() const {
   return !cpuQueue_.empty() || !archiveIndexQueue_.empty() ||
-         !archiveReadQueue_.empty() || !heavyArchiveReadQueue_.empty();
+         !archiveReadQueue_.empty();
 }
 
 bool WorkScheduler::hasEligibleWorkLocked() const {
@@ -92,11 +89,7 @@ bool WorkScheduler::hasEligibleWorkLocked() const {
                              activeArchiveIndexes_ < archiveAdmissionLimit;
   const bool readEligible = !archiveReadQueue_.empty() &&
                             activeArchiveReads_ < archiveAdmissionLimit;
-  const bool heavyReadEligible =
-      !heavyArchiveReadQueue_.empty() &&
-      activeArchiveReads_ < archiveAdmissionLimit;
-  return !cpuQueue_.empty() || indexEligible || readEligible ||
-         heavyReadEligible;
+  return !cpuQueue_.empty() || indexEligible || readEligible;
 }
 
 bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
@@ -106,9 +99,6 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
                              activeArchiveIndexes_ < archiveAdmissionLimit;
   const bool readEligible = !archiveReadQueue_.empty() &&
                             activeArchiveReads_ < archiveAdmissionLimit;
-  const bool heavyReadEligible =
-      !heavyArchiveReadQueue_.empty() &&
-      activeArchiveReads_ < archiveAdmissionLimit;
   if (indexEligible &&
       (activeArchiveIndexes_ == 0 || cpuQueue_.empty())) {
     item.work = std::move(archiveIndexQueue_.front());
@@ -120,13 +110,6 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
     item.work = std::move(archiveReadQueue_.front());
     item.workClass = WorkClass::ArchiveRead;
     archiveReadQueue_.pop_front();
-    return true;
-  }
-  if (heavyReadEligible &&
-      (activeArchiveReads_ == 0 || cpuQueue_.empty())) {
-    item.work = std::move(heavyArchiveReadQueue_.front());
-    item.workClass = WorkClass::ArchiveReadHeavy;
-    heavyArchiveReadQueue_.pop_front();
     return true;
   }
   if (!cpuQueue_.empty()) {
@@ -145,12 +128,6 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
     item.work = std::move(archiveReadQueue_.front());
     item.workClass = WorkClass::ArchiveRead;
     archiveReadQueue_.pop_front();
-    return true;
-  }
-  if (heavyReadEligible) {
-    item.work = std::move(heavyArchiveReadQueue_.front());
-    item.workClass = WorkClass::ArchiveReadHeavy;
-    heavyArchiveReadQueue_.pop_front();
     return true;
   }
   return false;
@@ -181,8 +158,6 @@ void WorkScheduler::workerLoop() {
         ++activeArchiveIndexes_;
       } else if (item.workClass == WorkClass::ArchiveRead) {
         ++activeArchiveReads_;
-      } else if (item.workClass == WorkClass::ArchiveReadHeavy) {
-        ++activeArchiveReads_;
       }
     }
 
@@ -204,10 +179,6 @@ void WorkScheduler::workerLoop() {
       } else if (item.workClass == WorkClass::ArchiveRead &&
                  activeArchiveReads_ > 0) {
         --activeArchiveReads_;
-      } else if (item.workClass == WorkClass::ArchiveReadHeavy) {
-        if (activeArchiveReads_ > 0) {
-          --activeArchiveReads_;
-        }
       }
       if (activeTasks_ > 0) {
         --activeTasks_;
