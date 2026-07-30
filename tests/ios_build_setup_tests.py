@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -57,7 +58,12 @@ class IOSBuildSetupTests(unittest.TestCase):
             str(path.relative_to(ROOT / "src"))
             for path in (ROOT / "src").rglob("CMakeLists.txt")
         )
-        self.assertEqual(["AndroidNatives.cpp", *cmake_files], paths)
+        self.assertEqual(
+            sorted(
+                ["AndroidNatives.cpp", "ChartScanWorkScheduler.md", *cmake_files]
+            ),
+            paths,
+        )
         self.assertIn(f"target = {TARGET_ID}", exceptions)
 
     def test_audio_wrapper_keeps_objective_cpp_override(self):
@@ -99,12 +105,15 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertEqual((ROOT / "SDL/include").resolve(), SDL_HEADER_ALIAS.resolve())
 
     def test_ios_links_7zip_archive_registration_for_device_and_simulator(self):
+        xcodebuild = shutil.which("xcodebuild")
+        if xcodebuild is None:
+            self.skipTest("xcodebuild is only available with Xcode")
         for configuration in ("Debug", "Release"):
             for sdk in ("iphoneos", "iphonesimulator"):
                 with self.subTest(configuration=configuration, sdk=sdk):
                     result = subprocess.run(
                         [
-                            "xcodebuild",
+                            xcodebuild,
                             "-project",
                             str(PROJECT.parent),
                             "-target",

@@ -516,6 +516,68 @@ void testCancelDiscardsQueuedWorkAndJoins() {
   scheduler.cancel();
 }
 
+void testCancelRunsQueuedCleanupBeforeJoiningActiveWork() {
+  chart_scan::WorkScheduler scheduler(1);
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool activeStarted = false;
+  bool cleanupRan = false;
+  std::atomic_bool queuedTaskRan{false};
+
+  assert(scheduler.enqueue([&] {
+    std::unique_lock lock(mutex);
+    activeStarted = true;
+    cv.notify_all();
+    cv.wait(lock, [&] { return cleanupRan; });
+  }));
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return activeStarted; }));
+  }
+
+  assert(scheduler.enqueue(
+      [&] { queuedTaskRan.store(true, std::memory_order_release); },
+      chart_scan::WorkClass::Cpu,
+      [&] {
+        std::lock_guard lock(mutex);
+        cleanupRan = true;
+        cv.notify_all();
+      }));
+
+  scheduler.cancel();
+  assert(cleanupRan);
+  assert(!queuedTaskRan.load(std::memory_order_acquire));
+}
+
+void testIdleReflectsQueuedAndActiveWork() {
+  chart_scan::WorkScheduler scheduler(1);
+  assert(scheduler.isIdle());
+
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool started = false;
+  bool release = false;
+  assert(scheduler.enqueue([&] {
+    std::unique_lock lock(mutex);
+    started = true;
+    cv.notify_all();
+    cv.wait(lock, [&] { return release; });
+  }));
+  {
+    std::unique_lock lock(mutex);
+    assert(cv.wait_for(lock, 2s, [&] { return started; }));
+  }
+  assert(!scheduler.isIdle());
+
+  {
+    std::lock_guard lock(mutex);
+    release = true;
+  }
+  cv.notify_all();
+  scheduler.finish();
+  assert(scheduler.isIdle());
+}
+
 } // namespace
 
 int main() {
@@ -532,5 +594,7 @@ int main() {
   testSingleWorkerPreservesFifoOrder();
   testTaskExceptionDoesNotStopWorker();
   testCancelDiscardsQueuedWorkAndJoins();
+  testCancelRunsQueuedCleanupBeforeJoiningActiveWork();
+  testIdleReflectsQueuedAndActiveWork();
   return 0;
 }

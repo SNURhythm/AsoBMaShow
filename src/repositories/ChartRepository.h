@@ -173,6 +173,7 @@ public:
           const bms_parser::ChartMeta &meta,
           std::optional<ChartSourcePreference> sourcePreference);
       bool DeleteChart(const std::filesystem::path &path);
+      bool DeleteCharts(std::span<const std::filesystem::path> paths);
       bool DeleteChartsInArchive(const std::filesystem::path &path);
       bool DeleteSolidArchive(const std::filesystem::path &path);
       bool DeleteArchiveCache(const std::filesystem::path &path);

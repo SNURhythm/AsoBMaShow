@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -108,6 +109,32 @@ writeZip(const std::filesystem::path &path,
   }
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
   return path;
+}
+
+bool corruptStoredZipPayload(const std::filesystem::path &path,
+                             const std::string &payloadText) {
+  const auto originalMtime = std::filesystem::last_write_time(path);
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    return false;
+  }
+  std::string bytes((std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+  input.close();
+  const std::size_t offset = bytes.find(payloadText);
+  if (offset == std::string::npos) {
+    return false;
+  }
+  bytes[offset] = bytes[offset] == 'X' ? 'Y' : 'X';
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output) {
+    return false;
+  }
+  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  output.close();
+  std::error_code error;
+  std::filesystem::last_write_time(path, originalMtime, error);
+  return !error;
 }
 
 bool hasArchiveLog(const std::vector<std::string> &logLines,
@@ -307,6 +334,26 @@ void testStorageFailureLeavesNoChart() {
   ChartLibraryScanner scanner;
   assert(scanner.Scan(*session, {root}) == 0);
   assert(session->CountAllChartMeta() == 0);
+}
+
+void testArchiveStorageFailureDoesNotWriteCache() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto archivePath = writeZip(
+      root / "denied.zip", {{"inside.bms", chartText("Denied Archive")}});
+  ScopedInsertDenial denial;
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  denyChartInsert.store(true, std::memory_order_relaxed);
+
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {archivePath}) >= 0);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.empty());
+  assert(snapshot.archiveCache.empty());
 }
 
 void testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce() {
@@ -562,12 +609,119 @@ void testMidArchiveCheckpointResumePreservesValidCacheCount() {
   assert(interrupted.checkpoint.has_value());
   assert(interrupted.checkpoint->subIndex == 100);
 
+  bms_parser::ChartMeta postCheckpointRow = interrupted.charts.front();
+  postCheckpointRow.BmsPath = archive_file::makeVirtualPath(
+      archivePath, std::filesystem::path("chart-100.bms"));
+  auto postCheckpointBatch = session->BeginScanBatch();
+  assert(postCheckpointBatch.has_value());
+  assert(postCheckpointBatch->UpsertChart(postCheckpointRow, std::nullopt));
+  assert(postCheckpointBatch->Commit());
+  assert(session->CountAllChartMeta() == 100);
+
   (void)scanner.Scan(*session, {archivePath});
   assert(session->CountAllChartMeta() == kValidCount);
   const ChartScanSnapshot resumed = session->LoadScanSnapshot();
   assert(resumed.archiveCache.size() == 1);
   assert(resumed.archiveCache.front().chartCount == kValidCount);
   assert(!resumed.checkpoint.has_value());
+}
+
+void testArchiveStreamFailurePreservesCheckpointPrefix() {
+  constexpr int kChartCount = 105;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::vector<std::pair<std::string, std::string>> files;
+  files.reserve(kChartCount);
+  for (int index = 0; index < kChartCount; ++index) {
+    files.emplace_back("chart-" + std::to_string(index) + ".bms",
+                       chartText("Failure Resume " + std::to_string(index)));
+  }
+  const auto archivePath =
+      writeZip(root / "failed-resume.zip", files);
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  int parsingCurrent = 0;
+  (void)scanner.Scan(
+      *session, {archivePath}, &stopToken,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+          parsingCurrent = progress.current;
+        }
+      },
+      nullptr,
+      [&]() -> std::uint64_t { return parsingCurrent >= 99 ? 1 : 0; },
+      [&](std::uint64_t request) {
+        assert(request == 1);
+        stop.request_stop();
+      });
+  assert(session->CountAllChartMeta() == 100);
+  const ChartScanSnapshot interrupted = session->LoadScanSnapshot();
+  assert(interrupted.checkpoint.has_value());
+  assert(interrupted.checkpoint->subIndex == 100);
+
+  bool corrupted = false;
+  (void)scanner.Scan(
+      *session, {archivePath}, nullptr,
+      [&](const ChartScanProgress &progress) {
+        if (!corrupted &&
+            progress.stage == ChartScanProgressStage::ReadingArchive) {
+          corrupted = corruptStoredZipPayload(archivePath, "Failure Resume 102");
+        }
+      });
+  assert(corrupted);
+  assert(session->CountAllChartMeta() == 100);
+  assert(session->LoadScanSnapshot().archiveCache.empty());
+}
+
+void testStopAtPreparingUpdatesCancelsArchivePrefetch() {
+  constexpr int kChartCount = 32;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const std::string padding = "#COMMENT " + std::string(64 * 1024, 'x') + "\n";
+  auto makeFiles = [&](std::string_view prefix) {
+    std::vector<std::pair<std::string, std::string>> files;
+    files.reserve(kChartCount);
+    for (int index = 0; index < kChartCount; ++index) {
+      files.emplace_back(std::string(prefix) + "/chart-" +
+                             std::to_string(index) + ".bms",
+                         chartText(std::string(prefix) + " " +
+                                   std::to_string(index)) +
+                             padding);
+    }
+    return files;
+  };
+  const auto firstArchive =
+      writeZip(root / "cancel-first.zip", makeFiles("first"));
+  const auto secondArchive =
+      writeZip(root / "cancel-second.zip", makeFiles("second"));
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  bool reachedPreparingUpdates = false;
+
+  assert(scanner.Scan(
+             *session, {firstArchive, secondArchive}, &stopToken,
+             [&](const ChartScanProgress &progress) {
+               if (progress.stage ==
+                   ChartScanProgressStage::PreparingUpdates) {
+                 reachedPreparingUpdates = true;
+                 stop.request_stop();
+               }
+             }) == 0);
+  assert(reachedPreparingUpdates);
+  assert(session->CountAllChartMeta() == 0);
 }
 
 void testLargeSingleArchivePreservesAllChartResults() {
@@ -773,7 +927,7 @@ void testArchiveResultApplicationOverlapsItsOwnStreaming() {
 
 void testArchiveInspectionUsesMultipleEntityWorkers() {
   constexpr int kFixtureCount = 6;
-  if (parallel_worker_count(kFixtureCount) <= 1) {
+  if (parallel_worker_count(kFixtureCount) <= 2) {
     return;
   }
 
@@ -885,6 +1039,7 @@ int main() {
   testStopAndPauseBeforeWork();
   testCheckpointResume();
   testStorageFailureLeavesNoChart();
+  testArchiveStorageFailureDoesNotWriteCache();
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
   testArchiveIndexProgressFollowsFolderTraversal();
   testManySmallArchivesPreserveDiscoveryOrderAndCache();
@@ -892,6 +1047,8 @@ int main() {
   testMultiEntryArchivePreservesPreparedResultOrderAndCache();
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testMidArchiveCheckpointResumePreservesValidCacheCount();
+  testArchiveStreamFailurePreservesCheckpointPrefix();
+  testStopAtPreparingUpdatesCancelsArchivePrefetch();
   testLargeSingleArchivePreservesAllChartResults();
   testMultipleLargeArchivesPrefetchDuringPreparation();
   testArchiveResultApplicationOverlapsLaterArchiveStreaming();

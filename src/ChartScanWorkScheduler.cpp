@@ -32,7 +32,7 @@ WorkScheduler::WorkScheduler(std::size_t workerCount,
 
 WorkScheduler::~WorkScheduler() { cancel(); }
 
-bool WorkScheduler::enqueue(Work work, WorkClass workClass) {
+bool WorkScheduler::enqueue(Work work, WorkClass workClass, Work onCancel) {
   if (!work) {
     return false;
   }
@@ -41,18 +41,23 @@ bool WorkScheduler::enqueue(Work work, WorkClass workClass) {
     if (closed_ || cancelled_) {
       return false;
     }
+    WorkItem item{
+        .work = std::move(work),
+        .onCancel = std::move(onCancel),
+        .workClass = workClass,
+    };
     switch (workClass) {
     case WorkClass::Cpu:
-      cpuQueue_.push_back(std::move(work));
+      cpuQueue_.push_back(std::move(item));
       break;
     case WorkClass::ArchiveIndex:
-      archiveIndexQueue_.push_back(std::move(work));
+      archiveIndexQueue_.push_back(std::move(item));
       break;
     case WorkClass::ArchiveRead:
-      archiveReadQueue_.push_back(std::move(work));
+      archiveReadQueue_.push_back(std::move(item));
       break;
     case WorkClass::ArchiveReadHeavy:
-      heavyArchiveReadQueue_.push_back(std::move(work));
+      heavyArchiveReadQueue_.push_back(std::move(item));
       break;
     }
   }
@@ -72,17 +77,40 @@ void WorkScheduler::finish() {
 }
 
 void WorkScheduler::cancel() {
+  std::vector<Work> cancellationCallbacks;
   {
     std::lock_guard lock(mutex_);
     closed_ = true;
     cancelled_ = true;
-    cpuQueue_.clear();
-    archiveIndexQueue_.clear();
-    archiveReadQueue_.clear();
-    heavyArchiveReadQueue_.clear();
+    auto collectCallbacks = [&](std::deque<WorkItem> &queue) {
+      while (!queue.empty()) {
+        if (queue.front().onCancel) {
+          cancellationCallbacks.push_back(
+              std::move(queue.front().onCancel));
+        }
+        queue.pop_front();
+      }
+    };
+    collectCallbacks(cpuQueue_);
+    collectCallbacks(archiveIndexQueue_);
+    collectCallbacks(archiveReadQueue_);
+    collectCallbacks(heavyArchiveReadQueue_);
+  }
+  for (auto &callback : cancellationCallbacks) {
+    try {
+      callback();
+    } catch (...) {
+      std::lock_guard lock(mutex_);
+      exceptions_.push_back(std::current_exception());
+    }
   }
   cv_.notify_all();
   joinWorkers();
+}
+
+bool WorkScheduler::isIdle() {
+  std::lock_guard lock(mutex_);
+  return !hasPendingWorkLocked() && activeTasks_ == 0;
 }
 
 std::vector<std::exception_ptr> WorkScheduler::takeExceptions() {
@@ -123,45 +151,38 @@ bool WorkScheduler::popNextWorkLocked(WorkItem &item) {
       activeArchiveReads_ < archiveAdmissionLimit;
   if (indexEligible &&
       (activeArchiveIndexes_ == 0 || cpuQueue_.empty())) {
-    item.work = std::move(archiveIndexQueue_.front());
-    item.workClass = WorkClass::ArchiveIndex;
+    item = std::move(archiveIndexQueue_.front());
     archiveIndexQueue_.pop_front();
     return true;
   }
   if (readEligible && (activeArchiveReads_ == 0 || cpuQueue_.empty())) {
-    item.work = std::move(archiveReadQueue_.front());
-    item.workClass = WorkClass::ArchiveRead;
+    item = std::move(archiveReadQueue_.front());
     archiveReadQueue_.pop_front();
     return true;
   }
   if (heavyReadEligible &&
       (activeArchiveReads_ == 0 || cpuQueue_.empty())) {
-    item.work = std::move(heavyArchiveReadQueue_.front());
-    item.workClass = WorkClass::ArchiveReadHeavy;
+    item = std::move(heavyArchiveReadQueue_.front());
     heavyArchiveReadQueue_.pop_front();
     return true;
   }
   if (!cpuQueue_.empty()) {
-    item.work = std::move(cpuQueue_.front());
-    item.workClass = WorkClass::Cpu;
+    item = std::move(cpuQueue_.front());
     cpuQueue_.pop_front();
     return true;
   }
   if (indexEligible) {
-    item.work = std::move(archiveIndexQueue_.front());
-    item.workClass = WorkClass::ArchiveIndex;
+    item = std::move(archiveIndexQueue_.front());
     archiveIndexQueue_.pop_front();
     return true;
   }
   if (readEligible) {
-    item.work = std::move(archiveReadQueue_.front());
-    item.workClass = WorkClass::ArchiveRead;
+    item = std::move(archiveReadQueue_.front());
     archiveReadQueue_.pop_front();
     return true;
   }
   if (heavyReadEligible) {
-    item.work = std::move(heavyArchiveReadQueue_.front());
-    item.workClass = WorkClass::ArchiveReadHeavy;
+    item = std::move(heavyArchiveReadQueue_.front());
     heavyArchiveReadQueue_.pop_front();
     return true;
   }
