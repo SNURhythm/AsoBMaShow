@@ -942,14 +942,13 @@ void testRealtimePhysicalInputPreservesNativeTimestamp() {
           "timestamps");
 }
 
-void testArbitraryLaneInputDoesNotDependOnBrdControls() {
+void testNonStockKeyModesCaptureBmsChannelReplayControls() {
   struct Case {
     int keyMode;
     int physicalLane;
   };
   for (const auto [keyMode, lane] :
-       {Case{1, 0}, Case{4, 4}, Case{6, 6}, Case{8, 7}, Case{17, 31},
-        Case{65, 129}, Case{128, 1024}}) {
+       {Case{4, 4}, Case{6, 6}, Case{8, 7}}) {
     InputProfile profile;
     profile.bindings.push_back(
         {.id = "custom-key-lane",
@@ -972,6 +971,47 @@ void testArbitraryLaneInputDoesNotDependOnBrdControls() {
     const auto up = keyEvent(SDL_SCANCODE_D, false);
     router.consume(down, 1234567);
     router.consume(up, 1234999);
+
+    require(output.size() == 2 && output[0].lane == lane &&
+                output[1].lane == lane && output[0].hasReplayControl &&
+                output[1].hasReplayControl &&
+                output[0].replayControl == replay::LogicalControl{
+                    .kind = replay::LogicalControlKind::Lane,
+                    .player = 1,
+                    .lane = lane} &&
+                output[1].replayControl == output[0].replayControl,
+            "non-stock key modes capture their exact BMS channel lane in "
+            "BRD metadata");
+  }
+}
+
+void testArbitraryLaneInputDoesNotDependOnBrdControls() {
+  struct Case {
+    int keyMode;
+    int physicalLane;
+  };
+  for (const auto [keyMode, lane] :
+       {Case{1, 0}, Case{17, 31}, Case{65, 129}, Case{128, 1024}}) {
+    InputProfile profile;
+    profile.bindings.push_back(
+        {.id = "custom-key-lane",
+         .scope = {.player = 1, .keyMode = keyMode},
+         .action = {.kind = input::LogicalActionKind::Lane, .lane = lane},
+         .control = {.deviceId = "keyboard",
+                     .deviceClass = input::DeviceClass::Keyboard,
+                     .kind = input::ControlKind::Key,
+                     .index = SDL_SCANCODE_D}});
+    std::vector<input::RealtimePhysicalInputTransition> output;
+    input::RealtimePhysicalInputRouter router(
+        profile, makeGameplayInputScopes(keyMode),
+        [&](const auto &transition) {
+          output.push_back(transition);
+          return true;
+        });
+    router.setGameplayEnabled(true, 9000);
+
+    router.consume(keyEvent(SDL_SCANCODE_D, true), 1234567);
+    router.consume(keyEvent(SDL_SCANCODE_D, false), 1234999);
 
     require(output.size() == 2 && output[0].lane == lane &&
                 output[1].lane == lane && !output[0].hasReplayControl &&
@@ -1000,9 +1040,13 @@ void testPhysicalTouchLaneDoesNotDependOnBrdControls() {
           "physical touch lanes reach gameplay without a BRD layout");
   require(applied.size() == 2 && applied[0].physicalLane == 4 &&
               applied[1].physicalLane == 4 &&
-              !applied[0].hasReplayControl &&
-              !applied[1].hasReplayControl,
-          "physical touch lanes omit only unavailable replay metadata");
+              applied[0].hasReplayControl && applied[1].hasReplayControl &&
+              applied[0].control == replay::LogicalControl{
+                  .kind = replay::LogicalControlKind::Lane,
+                  .player = 1,
+                  .lane = 4} &&
+              applied[1].control == applied[0].control,
+          "physical touch lanes preserve non-stock BRD channel metadata");
 }
 
 void testRealtimeScratchReversalCarriesCanonicalDirections() {
@@ -1331,6 +1375,7 @@ int main() {
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
+  testNonStockKeyModesCaptureBmsChannelReplayControls();
   testArbitraryLaneInputDoesNotDependOnBrdControls();
   testPhysicalTouchLaneDoesNotDependOnBrdControls();
   testRealtimeScratchReversalCarriesCanonicalDirections();

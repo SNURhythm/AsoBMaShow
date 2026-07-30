@@ -406,6 +406,18 @@ void testDoublePlayAndKeyMapping() {
           5,
           {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 4},
           4},
+      Mapping{
+          4,
+          {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 4},
+          4},
+      Mapping{
+          6,
+          {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 6},
+          6},
+      Mapping{
+          8,
+          {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 7},
+          7},
       Mapping{7,
               {.kind = replay::LogicalControlKind::ScratchClockwise,
                .player = 1,
@@ -440,6 +452,38 @@ void testDoublePlayAndKeyMapping() {
                replay::BeatorajaReplayCodec::logicalControl(
                    mapping.stock, mapping.mode) == mapping.control,
            "stock key map is reversible for every supported mode");
+  }
+}
+
+void testNonStockChartRoundTripsThroughBrd() {
+  replay::BeatorajaReplayCodec codec;
+  for (const auto [keyMode, lane] :
+       {std::pair{4, 4}, std::pair{6, 6}, std::pair{8, 7}}) {
+    auto source = chartDocument();
+    source.playback.setup = setup(std::string(64, 'a'), keyMode);
+    source.playback.setup.player1.laneShufflePattern.reset();
+    source.playback.input = {
+        {.songTimeMicros = 0,
+         .control = {.kind = replay::LogicalControlKind::Lane,
+                     .player = 1,
+                     .lane = lane},
+         .pressed = true},
+        {.songTimeMicros = 1,
+         .control = {.kind = replay::LogicalControlKind::Lane,
+                     .player = 1,
+                     .lane = lane},
+         .pressed = false},
+    };
+    std::string diagnostic;
+    const auto encoded = codec.encodeChart(source, 1, diagnostic);
+    expect(encoded.has_value(),
+           "non-stock accepted input produces a BRD document");
+    if (!encoded) {
+      continue;
+    }
+    const auto decoded = codec.decode(*encoded, context(source));
+    expect(decoded.chart == source,
+           "non-stock BRD preserves its BMS channel lane controls");
   }
 }
 
@@ -530,6 +574,7 @@ int main() {
   testEmptyCompletedReplayAndInclusivePreRoll();
   testCourseRoundTripAndAggregateLimits();
   testDoublePlayAndKeyMapping();
+  testNonStockChartRoundTripsThroughBrd();
   testSupportedAsoExtensionIsAuthoritative();
   testContextAndUntrustedStructureFailClosed();
   if (failures != 0) {

@@ -141,7 +141,8 @@ void testControlAndScratchDirectionMatrix() {
     int lane;
   };
   constexpr std::array laneCases{
-      LaneCase{5, 1, 4},  LaneCase{7, 1, 6},  LaneCase{9, 1, 8},
+      LaneCase{4, 1, 4},  LaneCase{5, 1, 4},  LaneCase{6, 1, 6},
+      LaneCase{7, 1, 6},  LaneCase{8, 1, 7},  LaneCase{9, 1, 8},
       LaneCase{10, 2, 4}, LaneCase{14, 2, 6}, LaneCase{24, 1, 25},
       LaneCase{48, 2, 25},
   };

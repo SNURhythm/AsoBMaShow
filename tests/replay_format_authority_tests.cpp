@@ -29,8 +29,11 @@ void testOneKeyModeLayoutTable() {
     std::string_view assignment;
   };
   constexpr std::array cases{
+      Case{4, 1, 5, 0, false, false, ""},
       Case{5, 1, 5, 6, true, false, "S12345"},
+      Case{6, 1, 7, 0, false, false, ""},
       Case{7, 1, 7, 8, true, false, "S1234567"},
+      Case{8, 1, 8, 0, false, false, ""},
       Case{9, 1, 9, 9, false, false, ""},
       Case{10, 2, 5, 6, true, true, "L123456789AR"},
       Case{14, 2, 7, 8, true, true, "L123456789ABCDER"},
@@ -40,15 +43,15 @@ void testOneKeyModeLayoutTable() {
   for (const auto &test : cases) {
     const auto layout = replay::replayKeyModeLayout(test.keyMode);
     expect(layout && layout->players == test.players &&
-               layout->logicalLanesPerPlayer == test.lanes &&
+               layout->laneCodeWidthPerPlayer == test.lanes &&
                layout->stockShuffleWidth == test.shuffleWidth &&
                layout->hasDirectionalScratch == test.scratch &&
                layout->supportsDoublePlayFlip == test.flip &&
                replay::manualAssignmentSymbols(test.keyMode) == test.assignment,
            "all replay branches consume one key-mode layout row");
   }
-  expect(!replay::replayKeyModeLayout(8) &&
-             replay::manualAssignmentSymbols(8).empty(),
+  expect(!replay::replayKeyModeLayout(3) &&
+             replay::manualAssignmentSymbols(3).empty(),
          "unsupported key mode fails closed in the shared table");
 }
 

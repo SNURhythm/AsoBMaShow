@@ -11,7 +11,9 @@ namespace replay {
 struct ReplayKeyModeLayout {
   int keyMode = 0;
   int players = 0;
-  int logicalLanesPerPlayer = 0;
+  // Width of the BRD lane-code namespace. Sparse BMS modes preserve their
+  // parser-selected channel lanes, so this can be larger than keyMode.
+  int laneCodeWidthPerPlayer = 0;
   int stockShuffleWidth = 0;
   bool hasDirectionalScratch = false;
   bool supportsDoublePlayFlip = false;
@@ -20,9 +22,12 @@ struct ReplayKeyModeLayout {
   bool operator==(const ReplayKeyModeLayout &) const = default;
 };
 
-inline constexpr std::array<ReplayKeyModeLayout, 7> kReplayKeyModeLayouts{{
+inline constexpr std::array<ReplayKeyModeLayout, 10> kReplayKeyModeLayouts{{
+    {4, 1, 5, 0, false, false, ""},
     {5, 1, 5, 6, true, false, "S12345"},
+    {6, 1, 7, 0, false, false, ""},
     {7, 1, 7, 8, true, false, "S1234567"},
+    {8, 1, 8, 0, false, false, ""},
     {9, 1, 9, 9, false, false, ""},
     {10, 2, 5, 6, true, true, "L123456789AR"},
     {14, 2, 7, 8, true, true, "L123456789ABCDER"},

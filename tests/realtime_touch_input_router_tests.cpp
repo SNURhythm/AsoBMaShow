@@ -167,7 +167,7 @@ void testDirectTouchEmitsTimestampedLaneEdges() {
       "native samples preserve their timestamp and lane edge order");
 }
 
-void testScratchlessTouchKeepsGameplayIndependentFromBrdMapping() {
+void testScratchlessTouchPreservesBmsChannelReplayMapping() {
   struct Case {
     int keyMode;
     std::vector<int> visualLanes;
@@ -199,10 +199,15 @@ void testScratchlessTouchKeepsGameplayIndependentFromBrdMapping() {
     require(capture.events.size() == 2 &&
                 capture.events[0].lane == visualLanes.front() &&
                 capture.events[1].lane == visualLanes.front() &&
-                !capture.events[0].hasReplayControl &&
-                !capture.events[1].hasReplayControl,
-            "non-stock BRD modes keep physical lane edges without inventing "
-            "replay controls");
+                capture.events[0].hasReplayControl &&
+                capture.events[1].hasReplayControl &&
+                capture.events[0].replayControl == replay::LogicalControl{
+                    .kind = replay::LogicalControlKind::Lane,
+                    .player = 1,
+                    .lane = visualLanes.front()} &&
+                capture.events[1].replayControl ==
+                    capture.events[0].replayControl,
+            "non-stock BRD modes preserve their physical BMS channel lane");
   }
 }
 
@@ -516,7 +521,7 @@ int main() {
   testTouchPresentationUsesUiNormalizedCoordinates();
   testChartLaneMappingCoversEveryReplayKeyMode();
   testDirectTouchEmitsTimestampedLaneEdges();
-  testScratchlessTouchKeepsGameplayIndependentFromBrdMapping();
+  testScratchlessTouchPreservesBmsChannelReplayMapping();
   testTouchLayoutDoesNotClampChartsAboveSixtyFourLanes();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();

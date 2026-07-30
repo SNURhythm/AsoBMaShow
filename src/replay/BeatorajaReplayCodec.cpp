@@ -112,9 +112,9 @@ std::optional<AssignmentLayout> assignmentLayout(int keyMode) {
     }
   };
   result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 1));
-  addKeys(1, keyLayout->logicalLanesPerPlayer);
+  addKeys(1, keyLayout->laneCodeWidthPerPlayer);
   if (keyLayout->players == 2) {
-    addKeys(2, keyLayout->logicalLanesPerPlayer);
+    addKeys(2, keyLayout->laneCodeWidthPerPlayer);
     result.controls.push_back(scratch(LogicalControlKind::ScratchClockwise, 2));
   }
   return result;
@@ -1301,10 +1301,11 @@ BeatorajaReplayCodec::beatorajaKeyCode(const LogicalControl &control,
     return std::nullopt;
   }
   const int playerWidth =
-      layout->logicalLanesPerPlayer + (layout->hasDirectionalScratch ? 2 : 0);
+      layout->laneCodeWidthPerPlayer +
+      (layout->hasDirectionalScratch ? 2 : 0);
   const int playerOffset = (control.player - 1) * playerWidth;
   if (control.kind == LogicalControlKind::Lane) {
-    return control.lane >= 0 && control.lane < layout->logicalLanesPerPlayer
+    return control.lane >= 0 && control.lane < layout->laneCodeWidthPerPlayer
                ? std::optional<int>(playerOffset + control.lane)
                : std::nullopt;
   }
@@ -1312,10 +1313,10 @@ BeatorajaReplayCodec::beatorajaKeyCode(const LogicalControl &control,
     return std::nullopt;
   }
   if (control.kind == LogicalControlKind::ScratchClockwise) {
-    return playerOffset + layout->logicalLanesPerPlayer;
+    return playerOffset + layout->laneCodeWidthPerPlayer;
   }
   if (control.kind == LogicalControlKind::ScratchCounterClockwise) {
-    return playerOffset + layout->logicalLanesPerPlayer + 1;
+    return playerOffset + layout->laneCodeWidthPerPlayer + 1;
   }
   return std::nullopt;
 }
@@ -1327,19 +1328,20 @@ BeatorajaReplayCodec::logicalControl(int keyCode, int keyMode) noexcept {
     return std::nullopt;
   }
   const int playerWidth =
-      layout->logicalLanesPerPlayer + (layout->hasDirectionalScratch ? 2 : 0);
+      layout->laneCodeWidthPerPlayer +
+      (layout->hasDirectionalScratch ? 2 : 0);
   const int player = keyCode / playerWidth + 1;
   const int offset = keyCode % playerWidth;
   if (player > layout->players) {
     return std::nullopt;
   }
-  if (offset < layout->logicalLanesPerPlayer) {
+  if (offset < layout->laneCodeWidthPerPlayer) {
     return lane(player, offset);
   }
   if (!layout->hasDirectionalScratch) {
     return std::nullopt;
   }
-  return scratch(offset == layout->logicalLanesPerPlayer
+  return scratch(offset == layout->laneCodeWidthPerPlayer
                      ? LogicalControlKind::ScratchClockwise
                      : LogicalControlKind::ScratchCounterClockwise,
                  player);

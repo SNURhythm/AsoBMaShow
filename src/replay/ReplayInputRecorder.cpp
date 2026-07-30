@@ -19,7 +19,7 @@ bool structurallyValidControl(const LogicalControl &control) noexcept {
   case LogicalControlKind::Lane: {
     int maximumLanes = 0;
     for (const auto &layout : kReplayKeyModeLayouts) {
-      maximumLanes = std::max(maximumLanes, layout.logicalLanesPerPlayer);
+      maximumLanes = std::max(maximumLanes, layout.laneCodeWidthPerPlayer);
     }
     return control.lane >= 0 && control.lane < maximumLanes;
   }
