@@ -33,9 +33,9 @@
 The test must make dispatch deterministic:
 
 1. Start archive rank 10 and block it. This is the active frontier read.
-2. Start a CPU blocker and block it, occupying the third worker.
+2. Start two CPU blockers and block them, occupying both remaining workers.
 3. Queue archive rank 20/cost 2 and rank 30/cost 100.
-4. Release only the CPU blocker.
+4. Release only one CPU blocker.
 5. Assert rank 30 starts while rank 20 remains queued.
 6. Release all archive work, finish, and assert no scheduler exceptions.
 
@@ -54,9 +54,9 @@ that both archive read classes share the new policy.
 The test must:
 
 1. Start rank 30/cost 10 and block it.
-2. Start a CPU blocker and block it.
+2. Start two CPU blockers and block them.
 3. Queue rank 40/cost 1000, then rank 10/cost 1.
-4. Release the CPU blocker.
+4. Release one CPU blocker.
 5. Assert rank 10 starts before rank 40 because it is earlier than every active rank.
 6. Release all work, finish, and assert no scheduler exceptions.
 
