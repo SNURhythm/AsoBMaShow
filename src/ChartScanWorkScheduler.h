@@ -34,14 +34,17 @@ public:
   WorkScheduler(const WorkScheduler &) = delete;
   WorkScheduler &operator=(const WorkScheduler &) = delete;
 
-  bool enqueue(Work work, WorkClass workClass = WorkClass::Cpu);
+  bool enqueue(Work work, WorkClass workClass = WorkClass::Cpu,
+               Work onCancel = {});
   void finish();
   void cancel();
+  bool isIdle();
   std::vector<std::exception_ptr> takeExceptions();
 
 private:
   struct WorkItem {
     Work work;
+    Work onCancel;
     WorkClass workClass = WorkClass::Cpu;
   };
 
@@ -53,10 +56,10 @@ private:
 
   std::mutex mutex_;
   std::condition_variable cv_;
-  std::deque<Work> cpuQueue_;
-  std::deque<Work> archiveIndexQueue_;
-  std::deque<Work> archiveReadQueue_;
-  std::deque<Work> heavyArchiveReadQueue_;
+  std::deque<WorkItem> cpuQueue_;
+  std::deque<WorkItem> archiveIndexQueue_;
+  std::deque<WorkItem> archiveReadQueue_;
+  std::deque<WorkItem> heavyArchiveReadQueue_;
   std::vector<std::thread> workers_;
   std::vector<std::exception_ptr> exceptions_;
   std::size_t archiveIoLimit_ = 1;

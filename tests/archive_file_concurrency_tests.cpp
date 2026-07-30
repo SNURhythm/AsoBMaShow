@@ -9,6 +9,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -128,6 +130,35 @@ void testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer() {
   assert(archive_file::listEntries(archivePath, entries, &error));
   assert(entries.size() == 1);
   assert(entries.front().path.generic_string() == entryPath);
+}
+
+void testZipIndexRejectsEmbeddedNulInShortFilename() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "nul-filename.zip";
+  const std::string entryPath = "safe-name.bms";
+  writeStoredZip(archivePath, {entryPath});
+
+  std::ifstream input(archivePath, std::ios::binary);
+  assert(input);
+  std::string bytes((std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+  input.close();
+  std::size_t patchedNames = 0;
+  for (std::size_t offset = bytes.find(entryPath); offset != std::string::npos;
+       offset = bytes.find(entryPath, offset + entryPath.size())) {
+    bytes[offset + 4] = '\0';
+    ++patchedNames;
+  }
+  assert(patchedNames == 2);
+  std::ofstream output(archivePath, std::ios::binary | std::ios::trunc);
+  assert(output);
+  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  output.close();
+
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.empty());
 }
 
 void testZipIndexPausePollingStillCancelsDuringLargeDirectory() {
@@ -273,6 +304,7 @@ void testDebugLogRetainsNewestThousandLines() {
 int main() {
   testZipIndexAmortizesPausePolling();
   testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer();
+  testZipIndexRejectsEmbeddedNulInShortFilename();
   testZipIndexPausePollingStillCancelsDuringLargeDirectory();
   testZipIndexUsesCommonSystemEntryFilter();
   testIndependentSevenZipCacheMissesOpenConcurrently();

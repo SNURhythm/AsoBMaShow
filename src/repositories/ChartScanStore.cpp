@@ -524,6 +524,40 @@ bool ChartRepository::Session::ScanBatch::DeleteChart(
   return true;
 }
 
+bool ChartRepository::Session::ScanBatch::DeleteCharts(
+    std::span<const std::filesystem::path> paths) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  if (paths.empty()) {
+    return true;
+  }
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(), "DELETE FROM chart_meta WHERE path = @path",
+          statement, "preparing statement to delete chart paths",
+          logSqlErrorText)) {
+    return false;
+  }
+  bool changed = false;
+  for (const auto &path : paths) {
+    std::filesystem::path relative = path;
+    chart_storage_identity::ToRelativePath(relative);
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+    bindSqliteText(statement.get(), 1, fspath_to_utf8(relative));
+    if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+      logSqlError("deleting chart paths", impl_->database());
+      return false;
+    }
+    changed = changed || sqlite3_changes(impl_->database()) > 0;
+  }
+  if (changed) {
+    impl_->noteChanged();
+  }
+  return true;
+}
+
 bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
     const std::filesystem::path &archivePath) {
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {

@@ -3680,18 +3680,6 @@ std::optional<std::string> minizFilename(mz_zip_archive *archive,
   return filename;
 }
 
-std::optional<std::string>
-minizStatFilename(mz_zip_archive *archive, mz_uint fileIndex,
-                  const mz_zip_archive_file_stat &stat) {
-  constexpr std::size_t kEmbeddedCapacity =
-      sizeof(mz_zip_archive_file_stat::m_filename);
-  const std::size_t embeddedLength = std::strlen(stat.m_filename);
-  if (embeddedLength < kEmbeddedCapacity - 1) {
-    return std::string(stat.m_filename, embeddedLength);
-  }
-  return minizFilename(archive, fileIndex);
-}
-
 enum class ZipNameMatch { Matches, Mismatches, Unknown };
 
 std::optional<std::string> normalizedZipEntryName(const std::string &filename,
@@ -4005,7 +3993,7 @@ bool listZipEntries(const std::filesystem::path &archivePath,
       return fail("Could not read ZIP central directory entry.");
     }
 
-    const auto filename = minizStatFilename(&archive, fileIndex, stat);
+    const auto filename = minizFilename(&archive, fileIndex);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
     }

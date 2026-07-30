@@ -897,6 +897,27 @@ int ChartLibraryScanner::Scan(
                 }
                 state->spaceCv.notify_all();
                 publishReady();
+              },
+              chart_scan::WorkClass::Cpu,
+              [state, publishReady, fileBytes] {
+                {
+                  std::lock_guard lock(state->mutex);
+                  if (state->pendingTasks > 0) {
+                    --state->pendingTasks;
+                  }
+                  if (state->inFlightFiles > 0) {
+                    --state->inFlightFiles;
+                  }
+                  state->inFlightBytes =
+                      fileBytes > state->inFlightBytes
+                          ? 0
+                          : state->inFlightBytes - fileBytes;
+                  if (state->errorMessage.empty()) {
+                    state->errorMessage = "Archive chart parse cancelled.";
+                  }
+                }
+                state->spaceCv.notify_all();
+                publishReady();
               });
           if (!accepted) {
             std::lock_guard lock(state->mutex);
@@ -1419,6 +1440,7 @@ int ChartLibraryScanner::Scan(
     return 0;
   }
   if (shouldStop()) {
+    entityScheduler.cancel();
     return 0;
   }
 
@@ -2302,7 +2324,8 @@ int ChartLibraryScanner::Scan(
   }
 
   std::optional<std::size_t> directConcurrentArchiveIndex;
-  if (unpreparedArchiveIndexes.size() == 1 && !shouldStop()) {
+  if (unpreparedArchiveIndexes.size() == 1 && !shouldStop() &&
+      entityScheduler.isIdle()) {
     const std::size_t archiveIndex = unpreparedArchiveIndexes.front();
     const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
@@ -2474,6 +2497,20 @@ int ChartLibraryScanner::Scan(
 
     std::size_t insertedCharts = 0;
     std::size_t deliveredCharts = 0;
+    std::vector<std::filesystem::path> pendingChartPaths;
+    pendingChartPaths.reserve(requestedCharts);
+    for (std::size_t innerIndex = innerStart;
+         innerIndex < batch.innerPaths.size(); ++innerIndex) {
+      pendingChartPaths.push_back(archive_file::makeVirtualPath(
+          batch.archivePath, batch.innerPaths[innerIndex]));
+    }
+    bool archiveStorageHealthy = true;
+    if (innerStart > 0 && !scanBatch->DeleteCharts(pendingChartPaths)) {
+      archiveStorageHealthy = false;
+      archive_file::appendDebugLogLine(
+          "Failed to clear uncheckpointed archive chart rows: " +
+          archiveText);
+    }
     int storedChartCount =
         innerStart > 0 ? scanBatch->CountChartsInArchive(batch.archivePath) : 0;
     std::chrono::steady_clock::duration insertDuration{};
@@ -2503,6 +2540,8 @@ int ChartLibraryScanner::Scan(
                                      storedArchiveSourcePreference)) {
             ++insertedCharts;
             ++storedChartCount;
+          } else {
+            archiveStorageHealthy = false;
           }
         }
         ++deliveredCharts;
@@ -2564,7 +2603,8 @@ int ChartLibraryScanner::Scan(
         parseCurrent +=
             static_cast<int>(batch.innerPaths.size() - parsedInBatch);
         if (insertedCharts > 0 &&
-            !scanBatch->DeleteChartsInArchive(batch.archivePath)) {
+            !scanBatch->DeleteCharts(pendingChartPaths)) {
+          archiveStorageHealthy = false;
           archive_file::appendDebugLogLine(
               "Failed to remove partially streamed DB chart batch: " +
               archiveText);
@@ -2590,7 +2630,8 @@ int ChartLibraryScanner::Scan(
                ? std::string(*archiveSolidHint ? "true" : "false")
                : std::string("unknown")));
     }
-    if (parsedFullBatch && !stopRequested(stopToken)) {
+    if (parsedFullBatch && archiveStorageHealthy &&
+        !stopRequested(stopToken)) {
       writePendingArchiveCache(batch, storedChartCount);
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
@@ -2613,7 +2654,7 @@ int ChartLibraryScanner::Scan(
     } else {
       archive_file::appendDebugLogLine(
           "Skipped archive scan cache write because chart batch did not "
-          "complete: " +
+          "complete cleanly: " +
           archiveText + " requested=" + std::to_string(requestedCharts) +
           " files=" + std::to_string(deliveredCharts));
     }

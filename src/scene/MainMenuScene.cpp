@@ -6542,11 +6542,14 @@ void MainMenuScene::startParseLogExport() {
   if (parseLogExportStatusText != nullptr) {
     parseLogExportStatusText->setText("Preparing performance log...");
   }
+  std::string logText = archive_file::debugLogText();
+  const std::uint64_t exportLimit = std::max<std::uint64_t>(
+      1, static_cast<std::uint64_t>(logText.size()));
   parseLogDocumentHandoff =
       platform_document_handoff::ExportTextDocumentAsync({
-          .text = archive_file::debugLogText(),
+          .text = std::move(logText),
           .suggestedName = "AsoBMaShow-performance-log.txt",
-          .maxBytes = 4ULL * 1024ULL * 1024ULL,
+          .maxBytes = exportLimit,
       });
   refreshParseLogExportControls();
 }

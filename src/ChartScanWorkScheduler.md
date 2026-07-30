@@ -86,7 +86,7 @@ flowchart TD
 
 The diagram shows logical roles. `INDEX`, `READ`, and `PARSE` all execute on the
 same `W` threads except for the isolated single-large-archive fast path, which
-runs only after that shared path no longer owns the archive.
+runs only when the shared scheduler has no queued or active work.
 
 ## Dispatch policy
 
@@ -143,9 +143,10 @@ slots. It does not wait for an archive to finish before discovering later files.
 
 The first archive with at least 16 charts is temporarily held as a possible
 single-large-archive candidate. A second large archive releases both into the
-shared pipeline. If it remains the only unprepared large archive, the optimized
-random-access backend may use up to `W` workers without nesting that pool inside
-the shared scheduler.
+shared pipeline. If it remains the only unprepared large archive and the shared
+scheduler is idle, the optimized random-access backend may use up to `W` workers
+without nesting that pool inside the shared scheduler. If smaller prefetched
+archives are still active, the large archive stays on the shared pipeline.
 
 ## Ordering and lifecycle invariants
 
@@ -153,8 +154,10 @@ the shared scheduler.
 - Workers never mutate the scan database directly.
 - A reader may enqueue CPU work after `finish()` is requested. Workers exit only
   when finishing was requested, every queue is empty, and no task is active.
-- `cancel()` closes the scheduler, clears queued work, wakes waiters, and joins
-  all workers. Active callbacks observe the scanner stop condition.
+- `cancel()` closes the scheduler, invokes cleanup callbacks for queued work,
+  wakes waiters, and then joins all workers. Archive-entry cleanup releases
+  pipeline byte/file slots before an active producer is joined, so cancellation
+  cannot strand a producer behind discarded parse tasks.
 - Task exceptions are captured, the worker remains usable, and exceptions are
   reported after the pool joins.
 - A failed or incomplete archive read does not write a completed archive-cache
