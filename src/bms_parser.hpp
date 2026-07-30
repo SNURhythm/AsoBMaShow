@@ -256,15 +256,15 @@ public:
   [[nodiscard]] std::vector<int> GetKeyLaneIndices() const {
     switch (KeyMode) {
     case 4:
-      return {0, 1, 2, 3};
+      return {0, 1, 3, 4};
     case 5:
       return {0, 1, 2, 3, 4};
     case 6:
-      return {0, 1, 2, 3, 4, 5};
+      return {0, 1, 2, 4, 5, 6};
     case 7:
       return {0, 1, 2, 3, 4, 5, 6};
     case 8:
-      return {0, 1, 2, 3, 4, 5, 6, 7};
+      return {7, 0, 1, 2, 3, 4, 5, 6};
     case 10:
       return {0, 1, 2, 3, 4, 8, 9, 10, 11, 12};
     case 14:

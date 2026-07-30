@@ -1,4 +1,5 @@
 #include "InputProfile.h"
+#include "ChartLaneBinding.h"
 
 #include <SDL2/SDL_scancode.h>
 
@@ -22,15 +23,25 @@ void addKeyboardBinding(InputProfile &profile, input::InputScope scope,
   });
 }
 
+void addKeyboardPositionBinding(InputProfile &profile,
+                                input::InputScope scope, int position,
+                                SDL_Scancode scancode) {
+  const auto lane =
+      input_profile::chartLaneForKeyPosition(scope.keyMode, position);
+  if (lane.has_value()) {
+    addKeyboardBinding(profile, scope, *lane, scancode);
+  }
+}
+
 } // namespace
 
 InputProfile makeDefaultInputProfile() {
   InputProfile profile;
 
-  addKeyboardBinding(profile, {1, 4}, 0, SDL_SCANCODE_D);
-  addKeyboardBinding(profile, {1, 4}, 1, SDL_SCANCODE_F);
-  addKeyboardBinding(profile, {1, 4}, 2, SDL_SCANCODE_J);
-  addKeyboardBinding(profile, {1, 4}, 3, SDL_SCANCODE_K);
+  addKeyboardPositionBinding(profile, {1, 4}, 0, SDL_SCANCODE_D);
+  addKeyboardPositionBinding(profile, {1, 4}, 1, SDL_SCANCODE_F);
+  addKeyboardPositionBinding(profile, {1, 4}, 2, SDL_SCANCODE_J);
+  addKeyboardPositionBinding(profile, {1, 4}, 3, SDL_SCANCODE_K);
 
   addKeyboardBinding(profile, {1, 5}, 0, SDL_SCANCODE_D);
   addKeyboardBinding(profile, {1, 5}, 1, SDL_SCANCODE_F);
@@ -40,12 +51,12 @@ InputProfile makeDefaultInputProfile() {
   addKeyboardBinding(profile, {1, 5}, 7, SDL_SCANCODE_LSHIFT);
   addKeyboardBinding(profile, {1, 5}, 7, SDL_SCANCODE_RSHIFT);
 
-  addKeyboardBinding(profile, {1, 6}, 0, SDL_SCANCODE_S);
-  addKeyboardBinding(profile, {1, 6}, 1, SDL_SCANCODE_D);
-  addKeyboardBinding(profile, {1, 6}, 2, SDL_SCANCODE_F);
-  addKeyboardBinding(profile, {1, 6}, 3, SDL_SCANCODE_J);
-  addKeyboardBinding(profile, {1, 6}, 4, SDL_SCANCODE_K);
-  addKeyboardBinding(profile, {1, 6}, 5, SDL_SCANCODE_L);
+  addKeyboardPositionBinding(profile, {1, 6}, 0, SDL_SCANCODE_S);
+  addKeyboardPositionBinding(profile, {1, 6}, 1, SDL_SCANCODE_D);
+  addKeyboardPositionBinding(profile, {1, 6}, 2, SDL_SCANCODE_F);
+  addKeyboardPositionBinding(profile, {1, 6}, 3, SDL_SCANCODE_J);
+  addKeyboardPositionBinding(profile, {1, 6}, 4, SDL_SCANCODE_K);
+  addKeyboardPositionBinding(profile, {1, 6}, 5, SDL_SCANCODE_L);
 
   addKeyboardBinding(profile, {1, 7}, 0, SDL_SCANCODE_S);
   addKeyboardBinding(profile, {1, 7}, 1, SDL_SCANCODE_D);
@@ -57,14 +68,14 @@ InputProfile makeDefaultInputProfile() {
   addKeyboardBinding(profile, {1, 7}, 7, SDL_SCANCODE_LSHIFT);
   addKeyboardBinding(profile, {1, 7}, 7, SDL_SCANCODE_RSHIFT);
 
-  addKeyboardBinding(profile, {1, 8}, 0, SDL_SCANCODE_A);
-  addKeyboardBinding(profile, {1, 8}, 1, SDL_SCANCODE_S);
-  addKeyboardBinding(profile, {1, 8}, 2, SDL_SCANCODE_D);
-  addKeyboardBinding(profile, {1, 8}, 3, SDL_SCANCODE_F);
-  addKeyboardBinding(profile, {1, 8}, 4, SDL_SCANCODE_J);
-  addKeyboardBinding(profile, {1, 8}, 5, SDL_SCANCODE_K);
-  addKeyboardBinding(profile, {1, 8}, 6, SDL_SCANCODE_L);
-  addKeyboardBinding(profile, {1, 8}, 7, SDL_SCANCODE_SEMICOLON);
+  addKeyboardPositionBinding(profile, {1, 8}, 0, SDL_SCANCODE_A);
+  addKeyboardPositionBinding(profile, {1, 8}, 1, SDL_SCANCODE_S);
+  addKeyboardPositionBinding(profile, {1, 8}, 2, SDL_SCANCODE_D);
+  addKeyboardPositionBinding(profile, {1, 8}, 3, SDL_SCANCODE_F);
+  addKeyboardPositionBinding(profile, {1, 8}, 4, SDL_SCANCODE_J);
+  addKeyboardPositionBinding(profile, {1, 8}, 5, SDL_SCANCODE_K);
+  addKeyboardPositionBinding(profile, {1, 8}, 6, SDL_SCANCODE_L);
+  addKeyboardPositionBinding(profile, {1, 8}, 7, SDL_SCANCODE_SEMICOLON);
 
   addKeyboardBinding(profile, {1, 10}, 0, SDL_SCANCODE_Z);
   addKeyboardBinding(profile, {1, 10}, 1, SDL_SCANCODE_S);

@@ -121,6 +121,9 @@ public:
   bool consumeDirectKeyboard(int scancode, bool pressed);
   [[nodiscard]] bms_parser::Note *consumeTouchTransition(
       const input::LogicalInputTransition &transition);
+  [[nodiscard]] bms_parser::Note *consumePhysicalTouchLane(
+      input::InputScope scope, int lane, bool pressed,
+      std::optional<int> scratchDirection);
   void disconnectDevice(std::string_view stableId);
   void reset();
 

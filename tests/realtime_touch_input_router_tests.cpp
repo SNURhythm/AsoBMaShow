@@ -171,14 +171,20 @@ void testDirectTouchEmitsTimestampedLaneEdges() {
 }
 
 void testScratchlessTouchKeepsGameplayIndependentFromBrdMapping() {
-  for (const int keyMode : {4, 6, 8}) {
+  struct Case {
+    int keyMode;
+    std::vector<int> visualLanes;
+  };
+  for (const auto &[keyMode, visualLanes] :
+       {Case{4, {0, 1, 3, 4}}, Case{6, {0, 1, 2, 4, 5, 6}},
+        Case{8, {7, 0, 1, 2, 3, 4, 5, 6}}}) {
     InputCapture capture;
     auto layout = makeLayout();
     layout.keyMode = keyMode;
-    layout.laneCount = static_cast<std::size_t>(keyMode);
-    for (int lane = 0; lane < keyMode; ++lane) {
-      layout.lanes[static_cast<std::size_t>(lane)] = lane;
-      layout.scratch[static_cast<std::size_t>(lane)] = false;
+    layout.laneCount = visualLanes.size();
+    for (std::size_t position = 0; position < visualLanes.size(); ++position) {
+      layout.lanes[position] = visualLanes[position];
+      layout.scratch[position] = false;
     }
     gameplay::RealtimeTouchInputRouter router(
         42, layout, {.context = &capture, .emit = &InputCapture::emit});
@@ -195,8 +201,9 @@ void testScratchlessTouchKeepsGameplayIndependentFromBrdMapping() {
                             .normalizedY = 0.5F,
                             .steadyTimestampMicros = 124'000}),
             "scratchless touch up reaches gameplay");
-    require(capture.events.size() == 2 && capture.events[0].lane == 0 &&
-                capture.events[1].lane == 0 &&
+    require(capture.events.size() == 2 &&
+                capture.events[0].lane == visualLanes.front() &&
+                capture.events[1].lane == visualLanes.front() &&
                 !capture.events[0].hasReplayControl &&
                 !capture.events[1].hasReplayControl,
             "non-stock BRD modes keep physical lane edges without inventing "

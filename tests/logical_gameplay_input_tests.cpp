@@ -943,8 +943,13 @@ void testRealtimePhysicalInputPreservesNativeTimestamp() {
 }
 
 void testArbitraryLaneInputDoesNotDependOnBrdControls() {
-  for (const int keyMode : {1, 4, 6, 8, 17, 65, 128}) {
-    const int lane = keyMode - 1;
+  struct Case {
+    int keyMode;
+    int physicalLane;
+  };
+  for (const auto [keyMode, lane] :
+       {Case{1, 0}, Case{4, 4}, Case{6, 6}, Case{8, 7}, Case{17, 31},
+        Case{65, 129}, Case{128, 1024}}) {
     InputProfile profile;
     profile.bindings.push_back(
         {.id = "custom-key-lane",
@@ -974,6 +979,30 @@ void testArbitraryLaneInputDoesNotDependOnBrdControls() {
             "arbitrary physical lanes reach gameplay without requiring BRD "
             "control metadata");
   }
+}
+
+void testPhysicalTouchLaneDoesNotDependOnBrdControls() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputPipeline pipeline(
+      control, makeDefaultInputProfile(), makeGameplayInputScopes(4), {}, {},
+      [&](const auto &transition) { applied.push_back(transition); });
+
+  (void)pipeline.consumePhysicalTouchLane(
+      {.player = 1, .keyMode = 4}, 4, true, std::nullopt);
+  (void)pipeline.consumePhysicalTouchLane(
+      {.player = 1, .keyMode = 4}, 4, false, std::nullopt);
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 4},
+                  {.kind = ControlCall::Kind::Release, .lane = 4}},
+          "physical touch lanes reach gameplay without a BRD layout");
+  require(applied.size() == 2 && applied[0].physicalLane == 4 &&
+              applied[1].physicalLane == 4 &&
+              !applied[0].hasReplayControl &&
+              !applied[1].hasReplayControl,
+          "physical touch lanes omit only unavailable replay metadata");
 }
 
 void testRealtimeScratchReversalCarriesCanonicalDirections() {
@@ -1270,6 +1299,7 @@ int main() {
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
   testArbitraryLaneInputDoesNotDependOnBrdControls();
+  testPhysicalTouchLaneDoesNotDependOnBrdControls();
   testRealtimeScratchReversalCarriesCanonicalDirections();
   testRealtimeStartProducesCommandAndReplayEdge();
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();

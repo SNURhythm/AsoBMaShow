@@ -342,12 +342,17 @@ InputProfileStore::load(const std::filesystem::path &path) {
     InputProfileLoadResult result;
     result.status = InputProfileLoadStatus::Loaded;
     result.profile.schemaVersion = InputProfile::kSchemaVersion;
-    if (schemaVersion == InputProfile::kSchemaVersion) {
+    if (schemaVersion >= 2) {
       parseGyroscopeConfig(document, result.profile, result.diagnostics);
     }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
       result.profile.bindings.push_back(parseBinding(binding));
+    }
+    if (schemaVersion < 3 &&
+        input_profile::migrateCompactScratchlessLaneBindings(result.profile)) {
+      result.diagnostics.emplace_back(
+          "Migrated scratchless bindings to BMS channel lanes.");
     }
     result.profile.sanitize(result.diagnostics);
     return result;

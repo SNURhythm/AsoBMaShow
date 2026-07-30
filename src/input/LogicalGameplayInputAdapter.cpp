@@ -458,6 +458,23 @@ bms_parser::Note *LogicalGameplayInputPipeline::consumeTouchTransition(
   return adapter_.applyTouch(transition);
 }
 
+bms_parser::Note *LogicalGameplayInputPipeline::consumePhysicalTouchLane(
+    input::InputScope scope, int lane, bool pressed,
+    std::optional<int> scratchDirection) {
+  const input::LogicalActionKind action =
+      !scratchDirection.has_value()
+          ? input::LogicalActionKind::Lane
+          : *scratchDirection > 0
+                ? input::LogicalActionKind::ScratchClockwise
+                : input::LogicalActionKind::ScratchCounterClockwise;
+  return consumeTouchTransition({
+      .scope = scope,
+      .action = {.kind = action, .lane = lane},
+      .pressed = pressed,
+      .value = pressed ? 1.0F : 0.0F,
+  });
+}
+
 void LogicalGameplayInputPipeline::disconnectDevice(std::string_view stableId) {
   resolver_.disconnectDevice(stableId);
 }

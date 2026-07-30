@@ -506,24 +506,11 @@ RhythmInputHandler::~RhythmInputHandler() { stopListen(); }
 
 bms_parser::Note *RhythmInputHandler::applyTouchLane(
     int lane, bool pressed, std::optional<int> scratchDirection) {
-  const bool scratch = scratchDirection.has_value();
-  const auto replayControl = replay::logicalControlForChartLane(
-      keyMode, lane, scratch,
-      scratch && *scratchDirection < 0
-          ? replay::LogicalControlKind::ScratchCounterClockwise
-          : replay::LogicalControlKind::ScratchClockwise);
-  if (!replayControl || logicalInputPipeline == nullptr) {
+  if (logicalInputPipeline == nullptr) {
     return nullptr;
   }
-  const input::LogicalActionKind action =
-      !scratch ? input::LogicalActionKind::Lane
-      : *scratchDirection > 0
-          ? input::LogicalActionKind::ScratchClockwise
-          : input::LogicalActionKind::ScratchCounterClockwise;
-  return logicalInputPipeline->consumeTouchTransition({
-      .scope = {.player = replayControl->player, .keyMode = keyMode},
-      .action = {.kind = action, .lane = lane},
-      .pressed = pressed,
-      .value = pressed ? 1.0F : 0.0F,
-  });
+  const int player = (keyMode == 10 || keyMode == 14) && lane >= 8 ? 2 : 1;
+  return logicalInputPipeline->consumePhysicalTouchLane(
+      {.player = player, .keyMode = keyMode}, lane, pressed,
+      scratchDirection);
 }

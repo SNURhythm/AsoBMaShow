@@ -10,7 +10,7 @@
 #include <vector>
 
 struct InputProfile {
-  static constexpr int kSchemaVersion = 2;
+  static constexpr int kSchemaVersion = 3;
 
   int schemaVersion = kSchemaVersion;
   input::GyroscopeTurntableConfig gyroscopeTurntable;
@@ -27,6 +27,12 @@ struct InputProfile {
   bool hasDigitalBinding(input::InputScope scope, input::LogicalAction action,
                          std::string_view deviceId, int scancode) const;
 };
+
+namespace input_profile {
+
+bool migrateCompactScratchlessLaneBindings(InputProfile &profile);
+
+} // namespace input_profile
 
 InputProfile makeDefaultInputProfile();
 
