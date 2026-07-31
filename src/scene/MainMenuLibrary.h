@@ -66,6 +66,10 @@ bool findBmsSelectionHandoffAllowed(
     const FindBmsChartIdentity &target,
     const ChartMetaRecord &currentSelection);
 
+bool findBmsIndexTaskSucceeded(
+    const FindBmsChartIdentity &target, bool scanCommitted,
+    const std::optional<std::filesystem::path> &indexedTargetPath);
+
 std::optional<std::filesystem::path> downloadedChartPath(
     const std::vector<bms_parser::ChartMeta> &matchingCharts,
     const std::filesystem::path &downloadedPath);

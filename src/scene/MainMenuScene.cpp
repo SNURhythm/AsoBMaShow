@@ -2136,20 +2136,27 @@ void MainMenuScene::runDownloadedPathIndexTask(
     throw std::runtime_error("Failed to index downloaded BMS charts");
   }
 
+  std::optional<std::filesystem::path> chartPath;
   if (scanResult.committed && task.downloadedTargetIdentity.valid()) {
     const auto matches = taskSession->SelectChartMetaByHash(
         task.downloadedTargetIdentity.sha256,
         task.downloadedTargetIdentity.md5);
-    const auto chartPath = main_menu_library::downloadedChartPath(
+    chartPath = main_menu_library::downloadedChartPath(
         matches, task.downloadedPath, scanResult.upsertedChartPaths);
-    if (chartPath.has_value()) {
-      std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
-      pendingFindBmsSelectionHandoff = PendingFindBmsSelectionHandoff{
-          .chartPath = *chartPath,
-          .targetIdentity = task.downloadedTargetIdentity,
-          .selectionGeneration = task.downloadedSelectionGeneration,
-      };
-    }
+  }
+  if (!main_menu_library::findBmsIndexTaskSucceeded(
+          task.downloadedTargetIdentity, scanResult.committed, chartPath)) {
+    requestLibraryReload(true);
+    throw std::runtime_error(
+        "Downloaded BMS target was not parsed and indexed");
+  }
+  if (chartPath.has_value()) {
+    std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
+    pendingFindBmsSelectionHandoff = PendingFindBmsSelectionHandoff{
+        .chartPath = *chartPath,
+        .targetIdentity = task.downloadedTargetIdentity,
+        .selectionGeneration = task.downloadedSelectionGeneration,
+    };
   }
   requestLibraryReload(true);
 }
@@ -4628,6 +4635,10 @@ void MainMenuScene::applyPendingUiUpdates() {
     findBmsHandoff = std::move(pendingFindBmsSelectionHandoff);
     pendingFindBmsSelectionHandoff.reset();
   }
+  std::optional<ChartMetaRecord> findBmsSelectionBeforeReload;
+  if (findBmsHandoff.has_value()) {
+    findBmsSelectionBeforeReload = selectedRecordSnapshot();
+  }
   if (shouldOpenTasksModal) {
     showTasksModal();
   }
@@ -4647,11 +4658,11 @@ void MainMenuScene::applyPendingUiUpdates() {
     selectChartByPathAfterReload(path, AutoSelectionPreview::Suppress);
   }
   if (findBmsHandoff.has_value()) {
-    const auto currentSelection = selectedRecordSnapshot();
-    if (currentSelection.has_value() &&
+    if (findBmsSelectionBeforeReload.has_value() &&
         main_menu_library::findBmsSelectionHandoffAllowed(
             findBmsHandoff->selectionGeneration, chartSelectionGeneration,
-            findBmsHandoff->targetIdentity, *currentSelection)) {
+            findBmsHandoff->targetIdentity,
+            *findBmsSelectionBeforeReload)) {
       selectChartByPathAfterReload(findBmsHandoff->chartPath,
                                    AutoSelectionPreview::Load);
     } else {

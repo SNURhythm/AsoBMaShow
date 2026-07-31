@@ -1164,6 +1164,55 @@ void testArchiveInspectionUsesMultipleEntityWorkers() {
   assert(session->LoadScanSnapshot().archiveCache.size() == kFixtureCount);
 }
 
+void testConcurrentPauseInterruptionStopsScanCleanly() {
+  constexpr int kFixtureCount = 8;
+  if (parallel_worker_count(kFixtureCount) <= 2) {
+    return;
+  }
+
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  for (int index = 0; index < kFixtureCount; ++index) {
+    writeChart(root, "chart-" + std::to_string(index),
+               "Interrupted " + std::to_string(index));
+  }
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  const std::thread::id callerThread = std::this_thread::get_id();
+  std::mutex rendezvousMutex;
+  std::condition_variable rendezvousCv;
+  std::set<std::thread::id> workerThreads;
+  bool timedOut = false;
+  const auto pauseCallback = [&]() {
+    const std::thread::id currentThread = std::this_thread::get_id();
+    if (currentThread == callerThread) {
+      return true;
+    }
+    std::unique_lock lock(rendezvousMutex);
+    workerThreads.insert(currentThread);
+    rendezvousCv.notify_all();
+    if (!rendezvousCv.wait_for(lock, std::chrono::seconds(2),
+                               [&] { return workerThreads.size() >= 2; })) {
+      timedOut = true;
+      rendezvousCv.notify_all();
+    }
+    return false;
+  };
+
+  const ChartScanResult result =
+      scanner.ScanWithResult(*session, {root}, nullptr, nullptr,
+                             pauseCallback);
+  assert(!result.completed);
+  assert(!result.committed);
+  assert(workerThreads.size() >= 2);
+  assert(!timedOut);
+}
+
 void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
   constexpr int kEntityCount = 4;
   if (parallel_worker_count(kEntityCount) <= 1) {
@@ -1251,6 +1300,7 @@ int main() {
   testArchiveResultApplicationOverlapsLaterArchiveStreaming();
   testArchiveResultApplicationOverlapsItsOwnStreaming();
   testArchiveInspectionUsesMultipleEntityWorkers();
+  testConcurrentPauseInterruptionStopsScanCleanly();
   testBlockedArchiveDoesNotDelayLaterOrdinaryEntities();
   return 0;
 }

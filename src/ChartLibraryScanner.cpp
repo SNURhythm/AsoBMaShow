@@ -358,15 +358,19 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   if (stopRequested(stopToken)) {
     return {};
   }
-  bool interrupted = false;
+  std::atomic_bool interrupted{false};
   auto pauseIfNeeded = [&]() {
     return pauseCallback == nullptr || pauseCallback();
   };
   auto shouldStop = [&]() {
-    if (stopRequested(stopToken) || !pauseIfNeeded()) {
-      interrupted = true;
+    if (interrupted.load(std::memory_order_relaxed)) {
+      return true;
     }
-    return interrupted;
+    if (stopRequested(stopToken) || !pauseIfNeeded()) {
+      interrupted.store(true, std::memory_order_relaxed);
+      return true;
+    }
+    return false;
   };
 
   auto reportProgress = [&](int current, int total,
@@ -1507,6 +1511,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   reportProgress(rootCount, rootCount,
                  ChartScanProgressStage::PreparingUpdates);
 
+  if (shouldStop()) {
+    entityScheduler.cancel();
+    return {};
+  }
   const bool noScanWork =
       diffs.empty() && sourcePreferenceRefreshPaths.empty() &&
       cachedSourcePreferenceUpdates.empty() && solidArchiveDiffs.empty() &&
@@ -1519,10 +1527,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       session.ClearChartMetadataRebuildRequired();
     }
     return ChartScanResult{.completed = true};
-  }
-  if (shouldStop()) {
-    entityScheduler.cancel();
-    return {};
   }
 
   std::vector<ScanDiff> individualDiffs;
@@ -2796,7 +2800,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         "Failed to commit final chart scan batch.");
   }
   if (stopRequested(stopToken)) {
-    interrupted = true;
+    interrupted.store(true, std::memory_order_relaxed);
   }
   acknowledgeFlushRequest(pendingFlushRequest());
   if (!stopRequested(stopToken)) {
@@ -2811,7 +2815,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   }
   return ChartScanResult{
       .changedCount = changedCount,
-      .completed = !interrupted && committed,
+      .completed = !interrupted.load(std::memory_order_relaxed) && committed,
       .committed = committed,
       .upsertedChartPaths = std::move(upsertedChartPaths),
   };

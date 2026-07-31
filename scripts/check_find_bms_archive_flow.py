@@ -135,6 +135,11 @@ require(
     "downloaded-path tasks must require a completed, committed additions-only scan",
 )
 require(
+    "findBmsIndexTaskSucceeded(" in main_menu_source
+    and "Downloaded BMS target was not parsed and indexed" in main_menu_source,
+    "validated Find BMS tasks must fail without their committed target upsert",
+)
+require(
     "enqueueDownloadedPathIndexTask(" in main_menu_source
     and "findBmsResult.outputPath" in main_menu_source,
     "successful Find BMS downloads must index their exact committed output",
@@ -159,6 +164,25 @@ require(
     and "AutoSelectionPreview::Load" in main_menu_source
     and "schedulePreviewLoad(meta)" in main_menu_source,
     "unchanged Find BMS selection must re-enter normal preview loading",
+)
+apply_updates_start = main_menu_source.find(
+    "void MainMenuScene::applyPendingUiUpdates()"
+)
+apply_updates_end = main_menu_source.find(
+    "void MainMenuScene::selectChartByPathAfterReload(", apply_updates_start
+)
+apply_updates = main_menu_source[apply_updates_start:apply_updates_end]
+handoff_snapshot_index = apply_updates.find("findBmsSelectionBeforeReload")
+reload_index = apply_updates.find("reloadChartList(true)")
+handoff_validation_index = apply_updates.find(
+    "*findBmsSelectionBeforeReload", reload_index
+)
+require(
+    handoff_snapshot_index >= 0
+    and reload_index >= 0
+    and handoff_snapshot_index < reload_index
+    and handoff_validation_index > reload_index,
+    "Find BMS handoff must retain the unavailable selection before reload",
 )
 require(
     "AutoSelectionPreview::Suppress" in main_menu_source

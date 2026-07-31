@@ -223,6 +223,24 @@ int main() {
             main_menu_library::findBmsSelectionHandoffAllowed(
                 3, 3, titleOnlyIdentity, titleOnlyTarget),
             "title-only downloads never guess a preview chart");
+  ASSERT_EQ(true,
+            main_menu_library::findBmsIndexTaskSucceeded(
+                titleOnlyIdentity, false, std::nullopt),
+            "identity-less kept mismatches do not promise a target chart");
+  ASSERT_EQ(false,
+            main_menu_library::findBmsIndexTaskSucceeded(
+                durableTarget, false,
+                std::filesystem::path("/library/downloaded/chart.bms")),
+            "validated downloads require a committed scan");
+  ASSERT_EQ(false,
+            main_menu_library::findBmsIndexTaskSucceeded(
+                durableTarget, true, std::nullopt),
+            "validated downloads require a matching upserted target");
+  ASSERT_EQ(true,
+            main_menu_library::findBmsIndexTaskSucceeded(
+                durableTarget, true,
+                std::filesystem::path("/library/downloaded/chart.bms")),
+            "validated downloads complete after their target is committed");
 
   ASSERT_EQ(true,
             main_menu_library::sameChartSelection(missingTarget,

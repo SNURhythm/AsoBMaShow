@@ -157,6 +157,12 @@ bool findBmsSelectionHandoffAllowed(
          identityMatches(target, currentSelection.meta);
 }
 
+bool findBmsIndexTaskSucceeded(
+    const FindBmsChartIdentity &target, bool scanCommitted,
+    const std::optional<std::filesystem::path> &indexedTargetPath) {
+  return !target.valid() || (scanCommitted && indexedTargetPath.has_value());
+}
+
 std::optional<std::filesystem::path> downloadedChartPath(
     const std::vector<bms_parser::ChartMeta> &matchingCharts,
     const std::filesystem::path &downloadedPath) {

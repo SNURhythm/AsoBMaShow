@@ -340,6 +340,7 @@ bool commitFindBmsPendingArtifact(
   } else {
     if (std::filesystem::exists(destination, error) && !error &&
         !std::filesystem::is_directory(destination, error)) {
+      cleanupTransaction();
       errorMessage = "Existing Find BMS destination is not a folder.";
       return false;
     }

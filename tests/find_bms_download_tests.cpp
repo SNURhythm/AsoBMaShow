@@ -176,6 +176,27 @@ void testExtractedCommitMergesTransactionally() {
   assert(!std::filesystem::exists(attempt->root));
 }
 
+void testExtractedCommitConflictCleansPrivateTransaction() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  const auto artifact = extractedArtifact(*attempt, downloadRoot);
+  writeText(attempt->extractedPath / "chart.bms", "new chart");
+  writeText(artifact.destinationPath, "not a directory");
+
+  assert(!asobmshow::bms_search::commitFindBmsPendingArtifact(artifact,
+                                                              error));
+  assert(error == "Existing Find BMS destination is not a folder.");
+  assert(readText(artifact.destinationPath) == "not a directory");
+  assert(!std::filesystem::exists(downloadRoot /
+                                  ".asobmashow-transactions"));
+}
+
 void testDeleteRemovesOnlyAttempt() {
   CleanupPaths cleanup;
   std::string error;
@@ -1101,6 +1122,7 @@ int main() {
   testStorageNamesPreserveLongAndCompoundExtensions();
   testPackageCandidateRespectsBuildArchiveSupport();
   testExtractedCommitMergesTransactionally();
+  testExtractedCommitConflictCleansPrivateTransaction();
   testDeleteRemovesOnlyAttempt();
   testUnsafeStagingRootIsRefused();
   testCommitRestoresDestinationWhenSwapFails();
