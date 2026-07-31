@@ -190,6 +190,29 @@ void testLr2DamageFactorBoundariesAndHardGuts() {
           "LR2 hard guts is strictly below 32 percent");
 }
 
+void testReducedDamagePresentationUsesTheCompiledRuleset() {
+  require(gaugeReducedDamageZoneUpperBound(
+              GameplayRuleset::LR2, GaugeType::Hard,
+              GaugeProfile::Standard) == 32.0F,
+          "LR2 hard gauge presents its reduced-damage boundary at 32 percent");
+  require(gaugeReducedDamageZoneUpperBound(
+              GameplayRuleset::Beatoraja, GaugeType::Hard,
+              GaugeProfile::Standard) == 50.0F,
+          "Beatoraja hard gauge keeps its staged reduced-damage boundary at "
+          "50 percent");
+  require(gaugeReducedDamageZoneUpperBound(
+              GameplayRuleset::LR2, GaugeType::Normal,
+              GaugeProfile::CourseLR2) == 32.0F &&
+              gaugeReducedDamageZoneUpperBound(
+                  GameplayRuleset::LR2, GaugeType::Hard,
+                  GaugeProfile::CourseLR2) == 32.0F &&
+              gaugeReducedDamageZoneUpperBound(
+                  GameplayRuleset::LR2, GaugeType::ExHard,
+                  GaugeProfile::CourseLR2) == 0.0F,
+          "LR2 Class and Ex-Class present the same 32-percent boundary as "
+          "their damage rule");
+}
+
 void testLr2CourseTables() {
   const auto rules = compileGameplayGaugeRules(
       GameplayRuleset::LR2, meta(1000, 240.0),
@@ -301,6 +324,7 @@ int main() {
   testLr2StandardGaugeDefinitionsAndDeltas();
   testLr2ProfileIdentityDoesNotLeakBeatorajaModeProfiles();
   testLr2DamageFactorBoundariesAndHardGuts();
+  testReducedDamagePresentationUsesTheCompiledRuleset();
   testLr2CourseTables();
   testLr2StateDeathAndAutoShift();
   testBeatorajaCompiledRulesMatchLegacyHelpers();

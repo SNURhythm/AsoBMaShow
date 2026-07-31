@@ -1525,7 +1525,7 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
       session.appliedTransactionSequence, snapshot->transactionSequence);
   renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
   renderer->setGaugeStatus(state->gaugeType, state->gaugeAutoShift,
-                           state->currentGauge, state->gaugeProfile);
+                           state->currentGauge, state->gaugeRules());
   updatePacemakerStatus();
   updateLaneStateText();
 }
@@ -4984,5 +4984,5 @@ void GamePlayScene::updateGaugeStatusText() {
   }
 
   renderer->setGaugeStatus(state->gaugeType, state->gaugeAutoShift,
-                           state->currentGauge, state->gaugeProfile);
+                           state->currentGauge, state->gaugeRules());
 }

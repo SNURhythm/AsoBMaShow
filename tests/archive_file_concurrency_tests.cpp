@@ -4,10 +4,12 @@
 #include <archive_entry.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -22,6 +24,38 @@ namespace {
 using namespace std::chrono_literals;
 using ArchiveEntryHandle =
     std::unique_ptr<archive_entry, decltype(&archive_entry_free)>;
+
+// Generated with 7zz using `-m0=Delta:4 -m1=LZMA2 -mb0:1`. Embedding the
+// tiny fixture keeps the regression independent of a system 7zz executable.
+constexpr std::array<unsigned char, 226> kDeltaLzma2SevenZip = {
+    0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04, 0x72, 0xa2, 0x57, 0xbc,
+    0x58, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x73, 0xcb, 0x4c, 0xd4, 0xe0, 0x00, 0xa8, 0x00,
+    0x50, 0x5d, 0x00, 0x29, 0x12, 0x44, 0xeb, 0x89, 0x95, 0xd3, 0x41, 0x39,
+    0x7f, 0x7e, 0xf0, 0x0a, 0x59, 0xf7, 0x56, 0x24, 0xc9, 0x9d, 0x5a, 0x1c,
+    0x85, 0xb0, 0x38, 0x2f, 0xba, 0xd9, 0xcf, 0xf2, 0x74, 0xe8, 0x51, 0x65,
+    0xe6, 0x62, 0x17, 0x4b, 0x8c, 0x7c, 0xc8, 0xd5, 0x6e, 0x77, 0x32, 0x73,
+    0x65, 0x28, 0x64, 0x53, 0xd8, 0x39, 0x2d, 0x84, 0x45, 0xd4, 0x06, 0x7b,
+    0xbd, 0x17, 0x30, 0x95, 0xdf, 0x9b, 0xc5, 0x50, 0xf7, 0x30, 0xb4, 0xf2,
+    0x53, 0xf5, 0xc7, 0xed, 0x0e, 0x91, 0xad, 0xa6, 0xf4, 0xc0, 0x00, 0x00,
+    0x01, 0x04, 0x06, 0x00, 0x01, 0x09, 0x58, 0x00, 0x07, 0x0b, 0x01, 0x00,
+    0x02, 0x21, 0x21, 0x01, 0x00, 0x21, 0x03, 0x01, 0x03, 0x01, 0x00, 0x0c,
+    0x80, 0xa9, 0x80, 0xa9, 0x00, 0x08, 0x0a, 0x01, 0x5c, 0xea, 0xe2, 0xe7,
+    0x00, 0x00, 0x05, 0x01, 0x19, 0x03, 0x00, 0x00, 0x00, 0x11, 0x21, 0x00,
+    0x64, 0x00, 0x65, 0x00, 0x6c, 0x00, 0x74, 0x00, 0x61, 0x00, 0x2d, 0x00,
+    0x73, 0x00, 0x6f, 0x00, 0x75, 0x00, 0x6e, 0x00, 0x64, 0x00, 0x2e, 0x00,
+    0x77, 0x00, 0x61, 0x00, 0x76, 0x00, 0x00, 0x00, 0x19, 0x02, 0x00, 0x00,
+    0x14, 0x0a, 0x01, 0x00, 0x85, 0xb9, 0x6b, 0x50, 0xc7, 0x20, 0xdd, 0x01,
+    0x15, 0x06, 0x01, 0x00, 0x20, 0x80, 0xa4, 0x81, 0x00, 0x00,
+};
+
+constexpr std::string_view kDeltaSoundPayload =
+    "RIFF delta-filter regression payload\n"
+    "0123456789abcdef0123456789abcdef\n"
+    "fedcba9876543210fedcba9876543210\n"
+    "0123456789abcdef0123456789abcdef\n"
+    "fedcba9876543210fedcba9876543210\n";
+static_assert(kDeltaSoundPayload.size() == 169);
 
 class TempDirectory {
 public:
@@ -252,6 +286,47 @@ void testIndependentSevenZipCacheMissesOpenConcurrently() {
   assert(sevenZipIndexes == 2);
 }
 
+void testSevenZipReadUsesCurrentOperationPauseCallback() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "sound.7z";
+  std::string soundData(3 * 1024 * 1024, '\0');
+  std::uint32_t randomState = 0x9e3779b9u;
+  for (char &byte : soundData) {
+    randomState ^= randomState << 13;
+    randomState ^= randomState >> 17;
+    randomState ^= randomState << 5;
+    byte = static_cast<char>(randomState & 0xffu);
+  }
+  writeSevenZip(archivePath, soundData);
+
+  std::atomic_bool indexingActive{true};
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error, [&] {
+    return indexingActive.load(std::memory_order_acquire);
+  }));
+  assert(entries.size() == 1);
+
+  indexingActive.store(false, std::memory_order_release);
+  std::vector<archive_file::FileData> files;
+  const archive_file::EntryRange range{.start = entries.front().order,
+                                       .end = entries.front().order};
+  assert(archive_file::readArchiveEntriesInRange(
+      archivePath, {"readme.txt"}, range, files, &error,
+      [] { return true; }));
+  assert(files.size() == 1);
+  const std::string contents(files.front().bytes.begin(),
+                             files.front().bytes.end());
+  assert(contents == soundData);
+
+  const auto logLines = archive_file::debugLogLines();
+  assert(std::any_of(logLines.begin(), logLines.end(), [&](const auto &line) {
+    return line.find("Read archive range via 7-Zip SDK:") !=
+               std::string::npos &&
+           line.find(archivePath.filename().string()) != std::string::npos;
+  }));
+}
+
 void testEncodedHeaderSevenZipUsesSdk() {
   const std::filesystem::path payloadPath = "encoded-header-payload.txt";
   for (std::string_view fixtureName : {"encoded-header-lzma.7z",
@@ -287,6 +362,41 @@ void testEncodedHeaderSevenZipUsesSdk() {
   }
 }
 
+void testDeltaFilteredSevenZipUsesSdk() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "delta-lzma2.7z";
+  std::ofstream output(archivePath, std::ios::binary | std::ios::trunc);
+  assert(output);
+  output.write(reinterpret_cast<const char *>(kDeltaLzma2SevenZip.data()),
+               static_cast<std::streamsize>(kDeltaLzma2SevenZip.size()));
+  output.close();
+
+  const std::filesystem::path payloadPath = "delta-sound.wav";
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 1);
+  assert(entries.front().path == payloadPath);
+
+  const archive_file::EntryRange range{.start = entries.front().order,
+                                       .end = entries.front().order};
+  std::vector<archive_file::FileData> files;
+  assert(archive_file::readArchiveEntriesInRange(
+      archivePath, {payloadPath}, range, files, &error));
+  assert(files.size() == 1);
+  const std::string_view payload(
+      reinterpret_cast<const char *>(files.front().bytes.data()),
+      files.front().bytes.size());
+  assert(payload == kDeltaSoundPayload);
+
+  const auto logLines = archive_file::debugLogLines();
+  assert(std::any_of(logLines.begin(), logLines.end(), [&](const auto &line) {
+    return line.find("Read archive range via 7-Zip SDK:") !=
+               std::string::npos &&
+           line.find(archivePath.filename().string()) != std::string::npos;
+  }));
+}
+
 void testDebugLogRetainsNewestThousandLines() {
   for (int index = 0; index <= 1000; ++index) {
     archive_file::appendDebugLogLine("retention-marker-" +
@@ -308,7 +418,9 @@ int main() {
   testZipIndexPausePollingStillCancelsDuringLargeDirectory();
   testZipIndexUsesCommonSystemEntryFilter();
   testIndependentSevenZipCacheMissesOpenConcurrently();
+  testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();
+  testDeltaFilteredSevenZipUsesSdk();
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }

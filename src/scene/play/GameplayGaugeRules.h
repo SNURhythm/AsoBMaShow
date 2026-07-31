@@ -19,7 +19,6 @@ struct CompiledGaugeDefinition {
   std::array<float, 6> baseDelta{};
   bool scalePositiveByTotal = false;
   bool scaleNegativeByLr2Damage = false;
-  bool hardGutsBelow32 = false;
   bool survival = false;
 
   bool operator==(const CompiledGaugeDefinition &) const = default;
@@ -42,6 +41,10 @@ struct GameplayGaugeRules {
 
 [[nodiscard]] double resolveEffectiveGaugeTotal(
     GameplayRuleset ruleset, const bms_parser::ChartMeta &meta) noexcept;
+
+[[nodiscard]] float gaugeReducedDamageZoneUpperBound(
+    GameplayRuleset ruleset, GaugeType gaugeType,
+    GaugeProfile profile = GaugeProfile::Standard) noexcept;
 
 [[nodiscard]] GameplayGaugeRules compileGameplayGaugeRules(
     GameplayRuleset ruleset, const bms_parser::ChartMeta &meta,

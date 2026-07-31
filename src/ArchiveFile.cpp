@@ -1178,6 +1178,10 @@ public:
 
   bool isOpen() const { return file_.is_open(); }
 
+  void setPauseCallback(PauseCallback pauseCallback) {
+    pauseCallback_ = std::move(pauseCallback);
+  }
+
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
       return E_FAIL;
@@ -1282,6 +1286,30 @@ private:
   UInt64 size_ = 0;
   PauseCallback pauseCallback_;
   ULONG refCount_ = 0;
+};
+
+class SevenZipPauseCallbackScope {
+public:
+  SevenZipPauseCallbackScope(SevenZipInFileStream *stream,
+                             PauseCallback pauseCallback)
+      : stream_(stream) {
+    if (stream_ != nullptr) {
+      stream_->setPauseCallback(std::move(pauseCallback));
+    }
+  }
+
+  ~SevenZipPauseCallbackScope() {
+    if (stream_ != nullptr) {
+      stream_->setPauseCallback(nullptr);
+    }
+  }
+
+  SevenZipPauseCallbackScope(const SevenZipPauseCallbackScope &) = delete;
+  SevenZipPauseCallbackScope &
+  operator=(const SevenZipPauseCallbackScope &) = delete;
+
+private:
+  SevenZipInFileStream *stream_ = nullptr;
 };
 
 class SevenZipMemoryOutStream final : public ISequentialOutStream {
@@ -1949,6 +1977,7 @@ struct SevenZipArchiveState {
   unsigned char formatId = 0;
   CMyComPtr<IInArchive> archive;
   CMyComPtr<IInStream> stream;
+  SevenZipInFileStream *inputStream = nullptr;
   std::mutex mutex;
   std::uint64_t lastUse = 0;
 };
@@ -2125,6 +2154,8 @@ std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
   state->formatId = static_cast<unsigned char>(formatUsed);
   state->archive = archive;
   state->stream = stream;
+  state->inputStream =
+      static_cast<SevenZipInFileStream *>(state->stream.Interface());
   {
     std::lock_guard<std::mutex> cacheLock(gSevenZipArchiveMutex);
     const auto cachedIt = gSevenZipArchiveCache.find(key);
@@ -2211,6 +2242,8 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
   formatUsed = archiveState->formatId;
 
   std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
+                                        pauseCallback);
   IInArchive *archive = archiveState->archive.Interface();
   UInt32 itemCount = 0;
   HRESULT result = archive->GetNumberOfItems(&itemCount);
@@ -5627,6 +5660,8 @@ bool readSevenZipEntriesByIndex(
   }
 
   std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
+                                        pauseCallback);
   IInArchive *archive = archiveState->archive.Interface();
   if (archive == nullptr) {
     if (errorMessage != nullptr) {
@@ -5841,6 +5876,8 @@ bool readSevenZipEntriesByIndexStreaming(
   }
 
   std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
+                                        pauseCallback);
   IInArchive *archive = archiveState->archive.Interface();
   if (archive == nullptr) {
     if (errorMessage != nullptr) {
@@ -6518,7 +6555,13 @@ bool extractSevenZipArchiveFully(
     return false;
   }
 
+  PauseCallback inputPauseCallback;
+  if (stopToken != nullptr) {
+    inputPauseCallback = [stopToken] { return !stopRequested(stopToken); };
+  }
   std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
+                                        std::move(inputPauseCallback));
   IInArchive *archive = archiveState->archive.Interface();
   if (archive == nullptr) {
     if (errorMessage != nullptr) {
