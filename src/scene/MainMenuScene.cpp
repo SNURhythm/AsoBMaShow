@@ -1563,7 +1563,9 @@ void MainMenuScene::enqueueLibraryRefreshTask(
 }
 
 void MainMenuScene::enqueueDownloadedPathIndexTask(
-    const std::filesystem::path &path) {
+    const std::filesystem::path &path,
+    const main_menu_library::FindBmsChartIdentity &targetIdentity,
+    std::uint64_t selectionGeneration) {
   if (path.empty()) {
     return;
   }
@@ -1571,6 +1573,8 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
       .kind = LibraryTaskKind::IndexDownloadedPath,
       .title = "Index Downloaded BMS",
       .downloadedPath = path,
+      .downloadedTargetIdentity = targetIdentity,
+      .downloadedSelectionGeneration = selectionGeneration,
   });
 }
 
@@ -2123,7 +2127,27 @@ void MainMenuScene::runDownloadedPathIndexTask(
       [this, taskId = task.id, &stopToken]() {
         return waitForLibraryTaskResume(taskId, stopToken);
       },
-      true);
+      true, false);
+  if (stopToken.stop_requested()) {
+    return;
+  }
+
+  if (task.downloadedTargetIdentity.valid()) {
+    const auto matches = taskSession->SelectChartMetaByHash(
+        task.downloadedTargetIdentity.sha256,
+        task.downloadedTargetIdentity.md5);
+    const auto chartPath = main_menu_library::downloadedChartPath(
+        matches, task.downloadedPath);
+    if (chartPath.has_value()) {
+      std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
+      pendingFindBmsSelectionHandoff = PendingFindBmsSelectionHandoff{
+          .chartPath = *chartPath,
+          .targetIdentity = task.downloadedTargetIdentity,
+          .selectionGeneration = task.downloadedSelectionGeneration,
+      };
+    }
+  }
+  requestLibraryReload(true);
 }
 
 bool MainMenuScene::insertChartFolderEntryImmediately(
@@ -2671,6 +2695,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   pendingUnzipResult.reset();
   pendingUnzipProgress.reset();
   pendingSelectChartPath.reset();
+  {
+    std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
+    pendingFindBmsSelectionHandoff.reset();
+  }
   suppressPreviewForChartPath.reset();
   unzipDeleteCandidatePath.reset();
   unzipEstimatedUncompressedSize = 0;
@@ -2684,6 +2712,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
+  chartSelectionGeneration = 0;
+  findBmsSelectionGenerationAtDownloadStart = 0;
   replayExportInProgress = false;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
@@ -2806,6 +2836,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                               int idx) {
     if (willStart.load())
       return;
+    chartSelectionGeneration =
+        main_menu_library::chartSelectionGenerationAfter(
+            chartSelectionGeneration, selectedChartRecord, item);
     selectedChartRecord = item;
     refreshRankingsButton();
     const auto &meta = item.meta;
@@ -4585,6 +4618,12 @@ void MainMenuScene::applyPendingUiUpdates() {
   const bool shouldOpenTasksModal = tasksModalOpenRequested.exchange(false);
   const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
   const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
+  std::optional<PendingFindBmsSelectionHandoff> findBmsHandoff;
+  if (shouldReloadFolders || shouldReloadCharts) {
+    std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
+    findBmsHandoff = std::move(pendingFindBmsSelectionHandoff);
+    pendingFindBmsSelectionHandoff.reset();
+  }
   if (shouldOpenTasksModal) {
     showTasksModal();
   }
@@ -4601,12 +4640,25 @@ void MainMenuScene::applyPendingUiUpdates() {
       pendingSelectChartPath.has_value()) {
     const std::filesystem::path path = *pendingSelectChartPath;
     pendingSelectChartPath.reset();
-    selectChartByPathAfterReload(path);
+    selectChartByPathAfterReload(path, AutoSelectionPreview::Suppress);
+  }
+  if (findBmsHandoff.has_value()) {
+    const auto currentSelection = selectedRecordSnapshot();
+    if (currentSelection.has_value() &&
+        main_menu_library::findBmsSelectionHandoffAllowed(
+            findBmsHandoff->selectionGeneration, chartSelectionGeneration,
+            findBmsHandoff->targetIdentity, *currentSelection)) {
+      selectChartByPathAfterReload(findBmsHandoff->chartPath,
+                                   AutoSelectionPreview::Load);
+    } else {
+      archive_file::appendDebugLogLine(
+          "Skipped Find BMS preview handoff because chart selection changed.");
+    }
   }
 }
 
 void MainMenuScene::selectChartByPathAfterReload(
-    const std::filesystem::path &path) {
+    const std::filesystem::path &path, AutoSelectionPreview preview) {
   if (recyclerView == nullptr || path.empty() || !chartSession.has_value()) {
     return;
   }
@@ -4632,12 +4684,21 @@ void MainMenuScene::selectChartByPathAfterReload(
               index, recyclerView->size(), recyclerView->itemHeight,
               recyclerView->getHeight());
       recyclerView->rebindVisibleItems();
-      suppressPreviewForChartPath = record.meta.BmsPath;
+      if (preview == AutoSelectionPreview::Suppress) {
+        suppressPreviewForChartPath = record.meta.BmsPath;
+      } else if (suppressPreviewForChartPath.has_value() &&
+                 fspath_to_path_t(*suppressPreviewForChartPath) ==
+                     fspath_to_path_t(record.meta.BmsPath)) {
+        suppressPreviewForChartPath.reset();
+      }
       if (recyclerView->onSelected) {
         recyclerView->onSelected(record, index);
       }
       archive_file::appendDebugLogLine(
-          "Selected unzipped chart: " + fspath_to_utf8(record.meta.BmsPath));
+          std::string(preview == AutoSelectionPreview::Suppress
+                          ? "Selected unzipped chart: "
+                          : "Selected indexed Find BMS chart: ") +
+          fspath_to_utf8(record.meta.BmsPath));
       return;
     }
   }
@@ -4650,7 +4711,7 @@ void MainMenuScene::selectChartByPathAfterReload(
     };
     reloadFolderItems();
     reloadChartList();
-    selectChartByPathAfterReload(path);
+    selectChartByPathAfterReload(path, preview);
   }
 }
 
@@ -7592,6 +7653,7 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   const BmsSearchDownloadOptions downloadOptions{
       .skipUnarchivingForNonSolidArchives =
           context.settings.findBmsSkipUnarchivingForNonSolidArchives};
+  findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
   findBmsJobRunning = true;
   findBmsModalRoot->setSize(rendering::window_width, rendering::window_height);
   findBmsModalRoot->setVisible(true);
@@ -7650,6 +7712,7 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsCancelled = false;
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
+  findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
   findBmsJobRunning = true;
   refreshFindBmsModal();
 
@@ -7802,7 +7865,7 @@ void MainMenuScene::refreshFindBmsModal() {
                   : findBmsResult.message;
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::Downloaded) {
-    detail += "Refresh the library to use it.";
+    detail += "Adding downloaded charts to the library.";
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NoDownloadLink) {
     detail += "Download from the source, then refresh.";
@@ -7993,8 +8056,12 @@ void MainMenuScene::applyFindBmsUpdates() {
          findBmsProgressLog.back() != findBmsResult.message)) {
       appendLogLine(findBmsResult.message);
     }
-    if (findBmsResult.status == BmsSearchResult::Status::Downloaded ||
-        keptMismatchedFiles) {
+    if (findBmsResult.status == BmsSearchResult::Status::Downloaded) {
+      enqueueDownloadedPathIndexTask(
+          findBmsResult.outputPath,
+          main_menu_library::findBmsChartIdentity(findBmsModalChart.meta),
+          findBmsSelectionGenerationAtDownloadStart);
+    } else if (keptMismatchedFiles) {
       enqueueDownloadedPathIndexTask(findBmsResult.outputPath);
     }
     shouldRefresh = true;
@@ -11966,11 +12033,17 @@ void MainMenuScene::cleanupScene() {
   pendingUnzipResult.reset();
   pendingUnzipProgress.reset();
   pendingSelectChartPath.reset();
+  {
+    std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
+    pendingFindBmsSelectionHandoff.reset();
+  }
   suppressPreviewForChartPath.reset();
   unzipDeleteCandidatePath.reset();
   unzipEstimatedUncompressedSize = 0;
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
+  chartSelectionGeneration = 0;
+  findBmsSelectionGenerationAtDownloadStart = 0;
   replayExportInProgress = false;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
@@ -12037,7 +12110,7 @@ void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
                                const std::stop_token &stop_token,
                                ChartScanProgressCallback progressCallback,
                                ChartScanPauseCallback pauseCallback,
-                               bool addedPathsOnly) {
+                               bool addedPathsOnly, bool requestReload) {
   std::vector<std::filesystem::path> roots;
   roots.reserve(entries.size());
   for (auto &entry : entries) {
@@ -12073,7 +12146,7 @@ void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
                   scene.completeLibraryScanFlush(request);
                 });
   SDL_Log("Chart library refresh changed %d entries", changedCount);
-  if (!stop_token.stop_requested()) {
+  if (requestReload && !stop_token.stop_requested()) {
     scene.requestLibraryReload(true);
   }
 }

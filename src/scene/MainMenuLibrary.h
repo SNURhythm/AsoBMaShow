@@ -5,12 +5,22 @@
 #include "../repositories/ChartRepository.h"
 #include "../targets.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace main_menu_library {
+
+struct FindBmsChartIdentity {
+  std::string sha256;
+  std::string md5;
+
+  [[nodiscard]] bool valid() const noexcept {
+    return !sha256.empty() || !md5.empty();
+  }
+};
 
 enum class EmptyLibraryBootstrapMode {
   DefaultFolder,
@@ -39,6 +49,26 @@ std::string folderKeyForCourse(int courseId);
 
 std::vector<ChartEntry>
 downloadedPathScanEntries(const std::filesystem::path &path);
+
+FindBmsChartIdentity
+findBmsChartIdentity(const bms_parser::ChartMeta &meta);
+
+bool sameChartSelection(const ChartMetaRecord &left,
+                        const ChartMetaRecord &right);
+
+std::uint64_t chartSelectionGenerationAfter(
+    std::uint64_t currentGeneration,
+    const std::optional<ChartMetaRecord> &currentSelection,
+    const ChartMetaRecord &nextSelection);
+
+bool findBmsSelectionHandoffAllowed(
+    std::uint64_t capturedGeneration, std::uint64_t currentGeneration,
+    const FindBmsChartIdentity &target,
+    const ChartMetaRecord &currentSelection);
+
+std::optional<std::filesystem::path> downloadedChartPath(
+    const std::vector<bms_parser::ChartMeta> &matchingCharts,
+    const std::filesystem::path &downloadedPath);
 
 std::optional<std::filesystem::path>
 sameFolderForChart(const ChartMetaRecord &record);

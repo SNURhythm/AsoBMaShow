@@ -133,9 +133,34 @@ require(
     "downloaded-path tasks must use additions-only chart scanning",
 )
 require(
-    "enqueueDownloadedPathIndexTask(findBmsResult.outputPath)"
-    in main_menu_source,
+    "enqueueDownloadedPathIndexTask(" in main_menu_source
+    and "findBmsResult.outputPath" in main_menu_source,
     "successful Find BMS downloads must index their exact committed output",
+)
+require(
+    main_menu_source.count(
+        "findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration"
+    )
+    >= 2,
+    "automatic and candidate downloads must capture chart selection generation",
+)
+require(
+    "downloadedTargetIdentity" in main_menu_source
+    and "downloadedSelectionGeneration" in main_menu_source
+    and "SelectChartMetaByHash" in main_menu_source
+    and "pendingFindBmsSelectionHandoff" in main_menu_source,
+    "downloaded-path parsing must resolve and publish the selected indexed chart",
+)
+require(
+    "findBmsSelectionHandoffAllowed(" in main_menu_source
+    and "AutoSelectionPreview::Load" in main_menu_source
+    and "schedulePreviewLoad(meta)" in main_menu_source,
+    "unchanged Find BMS selection must re-enter normal preview loading",
+)
+require(
+    "AutoSelectionPreview::Suppress" in main_menu_source
+    and "suppressPreviewForChartPath = record.meta.BmsPath" in main_menu_source,
+    "unzip auto-selection must keep suppressing preview",
 )
 require(
     "startLibraryRefresh(findBmsDownloadRoot)" not in main_menu_source

@@ -166,6 +166,113 @@ int main() {
   ASSERT_EQ(true, main_menu_library::downloadedPathScanEntries({}).empty(),
             "empty result path produces no scan root");
 
+  const std::string shaA(64, 'a');
+  const std::string shaB(64, 'b');
+  const std::string md5A(32, '1');
+  ChartMetaRecord missingTarget;
+  missingTarget.unavailable = true;
+  missingTarget.meta.SHA256 = "  " + std::string(64, 'A') + "\n";
+  missingTarget.meta.MD5 = md5A;
+  const auto durableTarget =
+      main_menu_library::findBmsChartIdentity(missingTarget.meta);
+  ASSERT_EQ(shaA, durableTarget.sha256,
+            "Find BMS target normalizes SHA-256");
+  ASSERT_EQ(md5A, durableTarget.md5, "Find BMS target preserves valid MD5");
+  ASSERT_EQ(true,
+            main_menu_library::findBmsSelectionHandoffAllowed(
+                7, 7, durableTarget, missingTarget),
+            "unchanged missing selection allows preview handoff");
+  ASSERT_EQ(false,
+            main_menu_library::findBmsSelectionHandoffAllowed(
+                7, 8, durableTarget, missingTarget),
+            "an intervening selection change rejects preview handoff");
+  ASSERT_EQ(false,
+            main_menu_library::findBmsSelectionHandoffAllowed(
+                7, 9, durableTarget, missingTarget),
+            "away-and-back selection still rejects preview handoff");
+
+  ChartMetaRecord sameMd5WrongSha = missingTarget;
+  sameMd5WrongSha.meta.SHA256 = shaB;
+  ASSERT_EQ(false,
+            main_menu_library::findBmsSelectionHandoffAllowed(
+                7, 7, durableTarget, sameMd5WrongSha),
+            "conflicting SHA-256 cannot be rescued by matching MD5");
+
+  ChartMetaRecord md5OnlyTarget = missingTarget;
+  md5OnlyTarget.meta.SHA256.clear();
+  const auto md5Identity =
+      main_menu_library::findBmsChartIdentity(md5OnlyTarget.meta);
+  ASSERT_EQ(true,
+            main_menu_library::findBmsSelectionHandoffAllowed(
+                11, 11, md5Identity, md5OnlyTarget),
+            "MD5 is the fallback durable Find BMS identity");
+  md5OnlyTarget.unavailable = false;
+  ASSERT_EQ(false,
+            main_menu_library::findBmsSelectionHandoffAllowed(
+                11, 11, md5Identity, md5OnlyTarget),
+            "an already available selection does not need a handoff");
+
+  ChartMetaRecord titleOnlyTarget;
+  titleOnlyTarget.unavailable = true;
+  titleOnlyTarget.meta.Title = "Title-only result";
+  const auto titleOnlyIdentity =
+      main_menu_library::findBmsChartIdentity(titleOnlyTarget.meta);
+  ASSERT_EQ(false, titleOnlyIdentity.valid(),
+            "title-only targets have no durable handoff identity");
+  ASSERT_EQ(false,
+            main_menu_library::findBmsSelectionHandoffAllowed(
+                3, 3, titleOnlyIdentity, titleOnlyTarget),
+            "title-only downloads never guess a preview chart");
+
+  ASSERT_EQ(true,
+            main_menu_library::sameChartSelection(missingTarget,
+                                                  missingTarget),
+            "reselecting the same row does not change selection generation");
+  ChartMetaRecord differentSelection = missingTarget;
+  differentSelection.meta.SHA256 = shaB;
+  differentSelection.meta.MD5 = std::string(32, '2');
+  ASSERT_EQ(false,
+            main_menu_library::sameChartSelection(missingTarget,
+                                                  differentSelection),
+            "selecting another chart changes selection generation");
+  std::uint64_t changedGeneration =
+      main_menu_library::chartSelectionGenerationAfter(
+          7, missingTarget, differentSelection);
+  ASSERT_EQ(std::uint64_t{8}, changedGeneration,
+            "switching away advances selection generation");
+  changedGeneration = main_menu_library::chartSelectionGenerationAfter(
+      changedGeneration, differentSelection, missingTarget);
+  ASSERT_EQ(std::uint64_t{9}, changedGeneration,
+            "switching back advances selection generation again");
+  ASSERT_EQ(changedGeneration,
+            main_menu_library::chartSelectionGenerationAfter(
+                changedGeneration, missingTarget, missingTarget),
+            "reselecting the same row preserves selection generation");
+
+  std::vector<bms_parser::ChartMeta> downloadedMatches(3);
+  downloadedMatches[0].BmsPath = "/library/other/outside.bms";
+  downloadedMatches[1].BmsPath = "/library/downloaded/z-chart.bms";
+  downloadedMatches[2].BmsPath = "/library/downloaded/a-chart.bms";
+  ASSERT_EQ(std::filesystem::path("/library/downloaded/a-chart.bms"),
+            *main_menu_library::downloadedChartPath(
+                downloadedMatches, "/library/downloaded"),
+            "downloaded directory selects the stable first in-scope match");
+
+  downloadedMatches.resize(1);
+  downloadedMatches[0].BmsPath =
+      "/library/_archives/downloaded.zip/folder/chart.bms";
+  ASSERT_EQ(
+      std::filesystem::path(
+          "/library/_archives/downloaded.zip/folder/chart.bms"),
+      *main_menu_library::downloadedChartPath(
+          downloadedMatches, "/library/_archives/downloaded.zip"),
+      "downloaded archive accepts its virtual chart path");
+  ASSERT_EQ(false,
+            main_menu_library::downloadedChartPath(
+                downloadedMatches, "/library/_archives/other.zip")
+                .has_value(),
+            "downloaded chart lookup rejects matches outside exact output");
+
   ChartMetaRecord explicitFolderRecord;
   explicitFolderRecord.meta.Folder = "/library/A/../A";
   const auto explicitFolder =

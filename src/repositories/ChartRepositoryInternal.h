@@ -47,6 +47,9 @@ void SelectAllChartMeta(sqlite3 *database,
                         std::vector<bms_parser::ChartMeta> &chartMetas);
 ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(
     sqlite3 *database, std::span<const std::filesystem::path> paths);
+std::vector<bms_parser::ChartMeta>
+SelectChartMetaByHash(sqlite3 *database, const std::string &sha256,
+                      const std::string &md5);
 
 chart_library::FolderClearDataByLongNoteMode
 LoadFolderClearDataByLongNoteMode(

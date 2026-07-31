@@ -6,6 +6,7 @@
 #include "ChartMetaSql.h"
 #include "ChartSqlExpressions.h"
 #include "ChartStorageIdentity.h"
+#include "../CanonicalDigest.h"
 #include "../LongNoteModeUtils.h"
 #include "../view/ClearLampColors.h"
 #include "ScoreRepository.h"
@@ -1246,7 +1247,14 @@ void ChartRepository::Session::QueryChartMeta(
 ChartMetaPathBatchReadOutcome ChartRepository::Session::SelectChartMetaByPaths(
     std::span<const std::filesystem::path> paths) {
   return chart_repository_detail::SelectChartMetaByPaths(impl_->database(),
-                                                          paths);
+                                                         paths);
+}
+
+std::vector<bms_parser::ChartMeta>
+ChartRepository::Session::SelectChartMetaByHash(const std::string &sha256,
+                                                 const std::string &md5) {
+  return chart_repository_detail::SelectChartMetaByHash(impl_->database(),
+                                                         sha256, md5);
 }
 
 int ChartRepository::Session::CountChartMeta(const ChartMetaQuery &query) {
@@ -2102,6 +2110,51 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
     outcome.diagnostic = "chart metadata lookup failed";
   }
   return outcome;
+}
+
+std::vector<bms_parser::ChartMeta>
+chart_repository_detail::SelectChartMetaByHash(sqlite3 *database,
+                                                const std::string &sha256,
+                                                const std::string &md5) {
+  using asobmshow::bms_metadata::normalizedHash;
+  const std::string normalizedSha256 = normalizedHash(sha256);
+  const std::string normalizedMd5 = normalizedHash(md5);
+  const bool useSha256 =
+      canonical_digest::isCanonicalLowerHex(normalizedSha256, 64);
+  const bool useMd5 = !useSha256 &&
+                      canonical_digest::isCanonicalLowerHex(normalizedMd5, 32);
+  if (database == nullptr || (!useSha256 && !useMd5)) {
+    return {};
+  }
+
+  std::string query = "SELECT ";
+  query += kChartMetaSelectColumns;
+  query += useSha256 ? " FROM chart_meta cm WHERE cm.sha256 = ?"
+                     : " FROM chart_meta cm WHERE cm.md5 = ?";
+  query += " ORDER BY cm.path";
+
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "selecting chart metadata by hash",
+                                    logSqlErrorText) ||
+      !bindSqliteText(statement.get(), 1,
+                     useSha256 ? normalizedSha256 : normalizedMd5)) {
+    return {};
+  }
+
+  std::vector<bms_parser::ChartMeta> matches;
+  while (true) {
+    const int stepResult = sqlite3_step(statement.get());
+    if (stepResult == SQLITE_DONE) {
+      break;
+    }
+    if (stepResult != SQLITE_ROW) {
+      logSqlError("selecting chart metadata by hash", database);
+      return {};
+    }
+    matches.push_back(readChartMeta(statement.get()));
+  }
+  return matches;
 }
 
 void chart_repository_detail::SelectAllChartMeta(
