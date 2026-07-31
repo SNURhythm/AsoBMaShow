@@ -1515,22 +1515,13 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
   return true;
 }
 
-void MainMenuScene::enqueueLibraryRefreshTask(
-    const std::string &title, const std::filesystem::path &folderToAdd,
-    const std::string &iosBookmark, bool rebuildLibraryMetadata,
-    const std::filesystem::path &additionalFolderToScan) {
-  const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
+void MainMenuScene::enqueueLibraryTask(LibraryTaskRequest task) {
+  task.id = nextLibraryTaskId.fetch_add(1);
+  const std::uint64_t id = task.id;
+  const std::string title = task.title;
   {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTaskQueue.push_back(LibraryTaskRequest{
-        .id = id,
-        .kind = LibraryTaskKind::RefreshLibrary,
-        .title = title,
-        .folderToAdd = folderToAdd,
-        .iosBookmark = iosBookmark,
-        .additionalFolderToScan = additionalFolderToScan,
-        .rebuildLibraryMetadata = rebuildLibraryMetadata,
-    });
+    libraryTaskQueue.push_back(std::move(task));
     libraryTasks.push_back(LibraryTaskInfo{
         .id = id,
         .title = title,
@@ -1557,6 +1548,30 @@ void MainMenuScene::enqueueLibraryRefreshTask(
   }
   startLibraryTaskWorker();
   libraryTaskCv.notify_one();
+}
+
+void MainMenuScene::enqueueLibraryRefreshTask(
+    const std::string &title, const std::filesystem::path &folderToAdd,
+    const std::string &iosBookmark, bool rebuildLibraryMetadata) {
+  enqueueLibraryTask(LibraryTaskRequest{
+      .kind = LibraryTaskKind::RefreshLibrary,
+      .title = title,
+      .folderToAdd = folderToAdd,
+      .iosBookmark = iosBookmark,
+      .rebuildLibraryMetadata = rebuildLibraryMetadata,
+  });
+}
+
+void MainMenuScene::enqueueDownloadedPathIndexTask(
+    const std::filesystem::path &path) {
+  if (path.empty()) {
+    return;
+  }
+  enqueueLibraryTask(LibraryTaskRequest{
+      .kind = LibraryTaskKind::IndexDownloadedPath,
+      .title = "Index Downloaded BMS",
+      .downloadedPath = path,
+  });
 }
 
 #if TARGET_OS_ANDROID
@@ -1819,6 +1834,9 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
       case LibraryTaskKind::RefreshLibrary:
         runLibraryRefreshTask(task, stopToken);
         break;
+      case LibraryTaskKind::IndexDownloadedPath:
+        runDownloadedPathIndexTask(task, stopToken);
+        break;
       case LibraryTaskKind::AndroidImport:
 #if TARGET_OS_ANDROID
         runAndroidImportTask(task, stopToken);
@@ -1972,8 +1990,6 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (entries.empty()) {
     entries = taskSession->SelectEffectiveEntries();
   }
-  main_menu_library::appendUniqueScanFolder(entries, task.additionalFolderToScan);
-
   if (stopToken.stop_requested()) {
     return;
   }
@@ -2079,6 +2095,35 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
       [this, taskId = task.id, &stopToken]() {
         return waitForLibraryTaskResume(taskId, stopToken);
       });
+}
+
+void MainMenuScene::runDownloadedPathIndexTask(
+    const LibraryTaskRequest &task, const std::stop_token &stopToken) {
+  auto taskSession = context.chartRepository.OpenSession();
+  if (!taskSession.has_value()) {
+    throw std::runtime_error("Failed to open chart database");
+  }
+  if (!taskSession->EnsureSchema()) {
+    throw std::runtime_error("Failed to prepare chart database");
+  }
+  if (!waitForLibraryTaskResume(task.id, stopToken)) {
+    return;
+  }
+
+  auto entries =
+      main_menu_library::downloadedPathScanEntries(task.downloadedPath);
+  if (entries.empty()) {
+    throw std::runtime_error("Downloaded chart path is empty");
+  }
+  LoadCharts(
+      *taskSession, entries, *this, stopToken,
+      [this, taskId = task.id](const ChartScanProgress &progress) {
+        updateLibraryTaskProgress(taskId, progress);
+      },
+      [this, taskId = task.id, &stopToken]() {
+        return waitForLibraryTaskResume(taskId, stopToken);
+      },
+      true);
 }
 
 bool MainMenuScene::insertChartFolderEntryImmediately(
@@ -2650,7 +2695,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsCancelled = false;
   findBmsResult = {};
   findBmsPendingDecision.reset();
-  findBmsDownloadRoot.clear();
   findBmsProgressMessage.clear();
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
@@ -6343,13 +6387,11 @@ void MainMenuScene::applyUnzipResult() {
       result->success ? 900 : 1800, true);
 }
 
-void MainMenuScene::startLibraryRefresh(
-    const std::filesystem::path &additionalFolderToScan) {
+void MainMenuScene::startLibraryRefresh() {
   if (willStart.load() || replayExportInProgress.load()) {
     return;
   }
-  enqueueLibraryRefreshTask("Refresh Library", {}, "", false,
-                            additionalFolderToScan);
+  enqueueLibraryRefreshTask("Refresh Library");
 }
 
 void MainMenuScene::startLibraryRebuild() {
@@ -7547,7 +7589,6 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   pendingFindBmsResult.reset();
 
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
-  findBmsDownloadRoot = downloadRoot;
   const BmsSearchDownloadOptions downloadOptions{
       .skipUnarchivingForNonSolidArchives =
           context.settings.findBmsSkipUnarchivingForNonSolidArchives};
@@ -7594,7 +7635,6 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   const BmsSearchCandidate candidate = findBmsResult.candidates[candidateIndex];
   const ChartMetaRecord record = findBmsModalChart;
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
-  findBmsDownloadRoot = downloadRoot;
   const BmsSearchDownloadOptions downloadOptions{
       .skipUnarchivingForNonSolidArchives =
           context.settings.findBmsSkipUnarchivingForNonSolidArchives};
@@ -7955,7 +7995,7 @@ void MainMenuScene::applyFindBmsUpdates() {
     }
     if (findBmsResult.status == BmsSearchResult::Status::Downloaded ||
         keptMismatchedFiles) {
-      startLibraryRefresh(findBmsDownloadRoot);
+      enqueueDownloadedPathIndexTask(findBmsResult.outputPath);
     }
     shouldRefresh = true;
   }
@@ -11996,7 +12036,8 @@ void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
                                MainMenuScene &scene,
                                const std::stop_token &stop_token,
                                ChartScanProgressCallback progressCallback,
-                               ChartScanPauseCallback pauseCallback) {
+                               ChartScanPauseCallback pauseCallback,
+                               bool addedPathsOnly) {
   std::vector<std::filesystem::path> roots;
   roots.reserve(entries.size());
   for (auto &entry : entries) {
@@ -12020,12 +12061,17 @@ void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
 
   SDL_Log("Refreshing chart library");
   ChartLibraryScanner scanner;
-  const int changedCount = scanner.Scan(
-      chartSession, roots, &stop_token, progressCallback, pauseCallback,
-      [&scene]() { return scene.pendingLibraryScanFlushRequest(); },
-      [&scene](std::uint64_t request) {
-        scene.completeLibraryScanFlush(request);
-      });
+  const int changedCount =
+      addedPathsOnly
+          ? scanner.ScanAdded(chartSession, roots, &stop_token,
+                              progressCallback, pauseCallback)
+          : scanner.Scan(
+                chartSession, roots, &stop_token, progressCallback,
+                pauseCallback,
+                [&scene]() { return scene.pendingLibraryScanFlushRequest(); },
+                [&scene](std::uint64_t request) {
+                  scene.completeLibraryScanFlush(request);
+                });
   SDL_Log("Chart library refresh changed %d entries", changedCount);
   if (!stop_token.stop_requested()) {
     scene.requestLibraryReload(true);

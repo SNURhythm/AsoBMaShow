@@ -123,20 +123,24 @@ require(
     "automatic and candidate downloads must share destination resolution",
 )
 require(
-    "additionalFolderToScan" in main_menu_source
-    and "additionalFolderToScan" in (
-        root / "src/scene/MainMenuScene.h"
-    ).read_text(encoding="utf-8"),
-    "Find BMS refresh tasks must carry a transient download root",
+    "IndexDownloadedPath" in main_menu_source
+    and "IndexDownloadedPath"
+    in (root / "src/scene/MainMenuScene.h").read_text(encoding="utf-8"),
+    "Find BMS downloads must use a dedicated incremental library task",
 )
 require(
-    "appendUniqueScanFolder(entries, task.additionalFolderToScan)"
+    "scanner.ScanAdded" in main_menu_source,
+    "downloaded-path tasks must use additions-only chart scanning",
+)
+require(
+    "enqueueDownloadedPathIndexTask(findBmsResult.outputPath)"
     in main_menu_source,
-    "library refresh must include the transient Find BMS download root",
+    "successful Find BMS downloads must index their exact committed output",
 )
 require(
-    "startLibraryRefresh(findBmsDownloadRoot)" in main_menu_source,
-    "successful Find BMS downloads must refresh their actual library root",
+    "startLibraryRefresh(findBmsDownloadRoot)" not in main_menu_source
+    and "additionalFolderToScan" not in main_menu_source,
+    "Find BMS indexing must not route through a full-library refresh",
 )
 require(
     "candidate.name, candidate.id" in horie_source,

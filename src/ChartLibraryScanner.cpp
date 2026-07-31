@@ -289,6 +289,32 @@ int ChartLibraryScanner::Scan(
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
+  return ScanImpl(session, roots, true, stopToken, std::move(progressCallback),
+                  std::move(pauseCallback), std::move(flushRequestCallback),
+                  std::move(flushCompleteCallback));
+}
+
+int ChartLibraryScanner::ScanAdded(
+    ChartRepository::Session &session,
+    const std::vector<std::filesystem::path> &roots,
+    const std::stop_token *stopToken,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback,
+    ChartScanFlushRequestCallback flushRequestCallback,
+    ChartScanFlushCompleteCallback flushCompleteCallback) {
+  return ScanImpl(session, roots, false, stopToken, std::move(progressCallback),
+                  std::move(pauseCallback), std::move(flushRequestCallback),
+                  std::move(flushCompleteCallback));
+}
+
+int ChartLibraryScanner::ScanImpl(
+    ChartRepository::Session &session,
+    const std::vector<std::filesystem::path> &roots, bool reconcileExisting,
+    const std::stop_token *stopToken,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback,
+    ChartScanFlushRequestCallback flushRequestCallback,
+    ChartScanFlushCompleteCallback flushCompleteCallback) {
   if (stopRequested(stopToken)) {
     return 0;
   }
@@ -316,7 +342,9 @@ int ChartLibraryScanner::Scan(
     return 0;
   }
 
-  ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot();
+  ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot(
+      reconcileExisting ? ChartScanSnapshotLoad::Full
+                        : ChartScanSnapshotLoad::CheckpointOnly);
   const ChartScanCheckpoint checkpoint =
       scanSnapshot.checkpoint.value_or(ChartScanCheckpoint{});
   std::vector<bms_parser::ChartMeta> chartMetas =
@@ -1436,7 +1464,9 @@ int ChartLibraryScanner::Scan(
   if (noScanWork) {
     entityScheduler.finish();
     session.ClearScanCheckpoint();
-    session.ClearChartMetadataRebuildRequired();
+    if (reconcileExisting) {
+      session.ClearChartMetadataRebuildRequired();
+    }
     return 0;
   }
   if (shouldStop()) {
@@ -2685,7 +2715,9 @@ int ChartLibraryScanner::Scan(
   acknowledgeFlushRequest(pendingFlushRequest());
   if (!stopRequested(stopToken)) {
     session.ClearScanCheckpoint();
-    session.ClearChartMetadataRebuildRequired();
+    if (reconcileExisting) {
+      session.ClearChartMetadataRebuildRequired();
+    }
   }
   return changedCount;
 }

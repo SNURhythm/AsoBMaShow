@@ -228,7 +228,8 @@ public:
     bool DeleteEntryAndChartMetaInDirectory(
         const std::filesystem::path &path, int &removedChartCount);
     bool ClearEntries();
-    ChartScanSnapshot LoadScanSnapshot();
+    ChartScanSnapshot LoadScanSnapshot(
+        ChartScanSnapshotLoad load = ChartScanSnapshotLoad::Full);
     std::optional<ScanBatch> BeginScanBatch();
     bool ClearScanCheckpoint();
     bool ClearChartMetadataRebuildRequired();

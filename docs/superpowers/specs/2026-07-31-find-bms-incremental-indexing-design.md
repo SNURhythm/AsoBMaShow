@@ -1,6 +1,6 @@
 # Find BMS Incremental Indexing Design
 
-**Date:** July 31, 2026  
+**Date:** July 31, 2026
 **Status:** Self-reviewed and approved for implementation
 
 ## Objective

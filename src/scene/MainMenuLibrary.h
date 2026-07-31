@@ -37,8 +37,8 @@ std::string folderKeyForCourseTable(int tableId);
 std::string folderKeyForCourseGroup(int tableId, const std::string &groupName);
 std::string folderKeyForCourse(int courseId);
 
-void appendUniqueScanFolder(std::vector<ChartEntry> &entries,
-                            const std::filesystem::path &folder);
+std::vector<ChartEntry>
+downloadedPathScanEntries(const std::filesystem::path &path);
 
 std::optional<std::filesystem::path>
 sameFolderForChart(const ChartMetaRecord &record);

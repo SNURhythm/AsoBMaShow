@@ -39,4 +39,24 @@ public:
            ChartScanPauseCallback pauseCallback = nullptr,
            ChartScanFlushRequestCallback flushRequestCallback = nullptr,
            ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
+
+  int ScanAdded(
+      ChartRepository::Session &session,
+      const std::vector<std::filesystem::path> &roots,
+      const std::stop_token *stopToken = nullptr,
+      ChartScanProgressCallback progressCallback = nullptr,
+      ChartScanPauseCallback pauseCallback = nullptr,
+      ChartScanFlushRequestCallback flushRequestCallback = nullptr,
+      ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
+
+private:
+  int ScanImpl(
+      ChartRepository::Session &session,
+      const std::vector<std::filesystem::path> &roots,
+      bool reconcileExisting,
+      const std::stop_token *stopToken,
+      ChartScanProgressCallback progressCallback,
+      ChartScanPauseCallback pauseCallback,
+      ChartScanFlushRequestCallback flushRequestCallback,
+      ChartScanFlushCompleteCallback flushCompleteCallback);
 };

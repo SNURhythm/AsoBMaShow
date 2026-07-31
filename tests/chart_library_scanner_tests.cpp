@@ -179,6 +179,58 @@ void testBasicNoOpAndDeleteScan() {
   assert(repository.GetLibraryRevision() > stableRevision);
 }
 
+void testAddedDirectoryScanPreservesUnrelatedMissingChart() {
+  TempDirectory temporary;
+  const auto existingRoot = temporary.path() / "existing";
+  const auto addedRoot = temporary.path() / "downloaded";
+  const auto existing = writeChart(existingRoot, "existing", "Existing");
+  writeChart(addedRoot, "added", "Added");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {existingRoot}) == 1);
+  std::filesystem::remove(existing);
+
+  assert(scanner.ScanAdded(*session, {addedRoot}) == 1);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 2);
+  assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
+                     [](const auto &meta) { return meta.Title == "Existing"; }));
+  assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
+                     [](const auto &meta) { return meta.Title == "Added"; }));
+}
+
+void testAddedArchivePathIsIndexed() {
+  TempDirectory temporary;
+  const auto archive = writeZip(
+      temporary.path() / "downloaded.zip",
+      {{"inside.bms", chartText("Downloaded Archive")}});
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.ScanAdded(*session, {archive}) == 2);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 1);
+  assert(snapshot.charts.front().Title == "Downloaded Archive");
+  assert(snapshot.archiveCache.size() == 1);
+  assert(snapshot.archiveCache.front().chartCount == 1);
+
+  writeZip(archive, {{"replacement.bms", chartText("Updated Archive")}});
+  assert(scanner.ScanAdded(*session, {archive}) > 0);
+  const ChartScanSnapshot updatedSnapshot = session->LoadScanSnapshot();
+  assert(updatedSnapshot.charts.size() == 1);
+  assert(updatedSnapshot.charts.front().Title == "Updated Archive");
+  assert(updatedSnapshot.archiveCache.size() == 1);
+  assert(updatedSnapshot.archiveCache.front().chartCount == 1);
+}
+
 void testStopAndPauseBeforeWork() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -1036,6 +1088,8 @@ void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
 
 int main() {
   testBasicNoOpAndDeleteScan();
+  testAddedDirectoryScanPreservesUnrelatedMissingChart();
+  testAddedArchivePathIsIndexed();
   testStopAndPauseBeforeWork();
   testCheckpointResume();
   testStorageFailureLeavesNoChart();

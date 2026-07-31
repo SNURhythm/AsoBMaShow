@@ -148,17 +148,23 @@ int main() {
           TargetPlatform::MacOS)),
       "desktop empty library uses the folder picker");
 
-  std::vector<ChartEntry> scanEntries{
-      {.path = fspath_to_path_t(std::filesystem::path("/library/manual"))}};
-  main_menu_library::appendUniqueScanFolder(
-      scanEntries, std::filesystem::path("/library/fallback"));
-  ASSERT_EQ(static_cast<std::size_t>(2), scanEntries.size(),
-            "transient fallback is included in the scan");
-  main_menu_library::appendUniqueScanFolder(
-      scanEntries,
-      std::filesystem::path("/library/alias/../fallback"));
-  ASSERT_EQ(static_cast<std::size_t>(2), scanEntries.size(),
-            "equivalent transient fallback is not duplicated");
+  const auto directoryEntries = main_menu_library::downloadedPathScanEntries(
+      std::filesystem::path("/library/downloaded-folder"));
+  ASSERT_EQ(static_cast<std::size_t>(1), directoryEntries.size(),
+            "downloaded folder produces one scan root");
+  ASSERT_EQ(std::filesystem::path("/library/downloaded-folder"),
+            std::filesystem::path(directoryEntries.front().path),
+            "downloaded folder is the exact scan root");
+
+  const auto archiveEntries = main_menu_library::downloadedPathScanEntries(
+      std::filesystem::path("/library/_archives/downloaded.zip"));
+  ASSERT_EQ(static_cast<std::size_t>(1), archiveEntries.size(),
+            "downloaded archive produces one scan root");
+  ASSERT_EQ(std::filesystem::path("/library/_archives/downloaded.zip"),
+            std::filesystem::path(archiveEntries.front().path),
+            "downloaded archive is the exact scan root");
+  ASSERT_EQ(true, main_menu_library::downloadedPathScanEntries({}).empty(),
+            "empty result path produces no scan root");
 
   ChartMetaRecord explicitFolderRecord;
   explicitFolderRecord.meta.Folder = "/library/A/../A";
