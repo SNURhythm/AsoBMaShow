@@ -75,6 +75,30 @@ bool identityMatches(const FindBmsChartIdentity &target,
   return !target.md5.empty() && current.md5 == target.md5;
 }
 
+std::optional<std::filesystem::path> downloadedChartPathImpl(
+    const std::vector<bms_parser::ChartMeta> &matchingCharts,
+    const std::filesystem::path &downloadedPath,
+    const std::vector<std::filesystem::path> *upsertedChartPaths) {
+  std::optional<std::filesystem::path> selected;
+  for (const auto &chart : matchingCharts) {
+    const std::filesystem::path candidate = chart.BmsPath.lexically_normal();
+    if (!pathWithin(candidate, downloadedPath)) {
+      continue;
+    }
+    if (upsertedChartPaths != nullptr &&
+        std::none_of(upsertedChartPaths->begin(), upsertedChartPaths->end(),
+                     [&](const auto &path) {
+                       return path.lexically_normal() == candidate;
+                     })) {
+      continue;
+    }
+    if (!selected.has_value() || candidate < *selected) {
+      selected = candidate;
+    }
+  }
+  return selected;
+}
+
 } // namespace
 
 FindBmsChartIdentity findBmsChartIdentity(const bms_parser::ChartMeta &meta) {
@@ -136,17 +160,15 @@ bool findBmsSelectionHandoffAllowed(
 std::optional<std::filesystem::path> downloadedChartPath(
     const std::vector<bms_parser::ChartMeta> &matchingCharts,
     const std::filesystem::path &downloadedPath) {
-  std::optional<std::filesystem::path> selected;
-  for (const auto &chart : matchingCharts) {
-    const std::filesystem::path candidate = chart.BmsPath.lexically_normal();
-    if (!pathWithin(candidate, downloadedPath)) {
-      continue;
-    }
-    if (!selected.has_value() || candidate < *selected) {
-      selected = candidate;
-    }
-  }
-  return selected;
+  return downloadedChartPathImpl(matchingCharts, downloadedPath, nullptr);
+}
+
+std::optional<std::filesystem::path> downloadedChartPath(
+    const std::vector<bms_parser::ChartMeta> &matchingCharts,
+    const std::filesystem::path &downloadedPath,
+    const std::vector<std::filesystem::path> &upsertedChartPaths) {
+  return downloadedChartPathImpl(matchingCharts, downloadedPath,
+                                 &upsertedChartPaths);
 }
 
 std::optional<std::filesystem::path>

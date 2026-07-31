@@ -24,6 +24,16 @@ struct ChartScanProgress {
   ChartScanProgressStage stage = ChartScanProgressStage::Preparing;
 };
 
+struct ChartScanResult {
+  int changedCount = 0;
+  // The requested traversal finished without cancellation or a storage error.
+  bool completed = false;
+  // Every observed batch write and the final transaction commit succeeded.
+  bool committed = false;
+  // Chart paths successfully upserted by this invocation and committed.
+  std::vector<std::filesystem::path> upsertedChartPaths;
+};
+
 using ChartScanProgressCallback =
     std::function<void(const ChartScanProgress &)>;
 using ChartScanPauseCallback = std::function<bool()>;
@@ -49,8 +59,26 @@ public:
       ChartScanFlushRequestCallback flushRequestCallback = nullptr,
       ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
 
+  ChartScanResult ScanWithResult(
+      ChartRepository::Session &session,
+      const std::vector<std::filesystem::path> &roots,
+      const std::stop_token *stopToken = nullptr,
+      ChartScanProgressCallback progressCallback = nullptr,
+      ChartScanPauseCallback pauseCallback = nullptr,
+      ChartScanFlushRequestCallback flushRequestCallback = nullptr,
+      ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
+
+  ChartScanResult ScanAddedWithResult(
+      ChartRepository::Session &session,
+      const std::vector<std::filesystem::path> &roots,
+      const std::stop_token *stopToken = nullptr,
+      ChartScanProgressCallback progressCallback = nullptr,
+      ChartScanPauseCallback pauseCallback = nullptr,
+      ChartScanFlushRequestCallback flushRequestCallback = nullptr,
+      ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
+
 private:
-  int ScanImpl(
+  ChartScanResult ScanImpl(
       ChartRepository::Session &session,
       const std::vector<std::filesystem::path> &roots,
       bool reconcileExisting,

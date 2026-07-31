@@ -80,6 +80,10 @@ selection pipeline
    indexed target, scope it to `downloadedPath`, and publish a protected pending
    UI handoff before requesting reload. Refactor the incremental runner so the
    reload signal is ordered after handoff publication.
+   Require an explicit completed/committed scanner result so a failed database
+   write cannot qualify an older matching row at the same stable destination.
+   Also require the resolved target path to appear in the result's successful
+   upsert set so a parse failure cannot qualify the stale row either.
 5. After chart reload, consume the handoff and validate generation plus current
    target identity. Generalize `selectChartByPathAfterReload()` with an explicit
    preview policy; use preview loading for Find BMS and suppression for unzip.

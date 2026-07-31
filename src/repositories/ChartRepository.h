@@ -181,7 +181,8 @@ public:
       bool UpsertArchiveCache(const ArchiveScanCacheUpdate &update);
       bool UpdateSourcePreference(
           const ChartSourcePreferenceUpdate &update);
-      int CountChartsInArchive(const std::filesystem::path &path);
+      std::optional<int>
+      CountChartsInArchive(const std::filesystem::path &path);
       bool CheckpointAndContinue(const ChartScanCheckpoint &checkpoint);
       bool Commit();
       int ChangedCount() const;

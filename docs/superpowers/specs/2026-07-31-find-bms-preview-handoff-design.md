@@ -84,12 +84,22 @@ SHA-256, or MD5 only when SHA-256 is unavailable. Existing indexes on
 `chart_meta.sha256` and `chart_meta.md5` make this proportional to matching
 duplicates rather than the full library.
 
-After `ScanAdded()` completes, filter those matches to paths lexically inside
-the exact `downloadedPath`. This works for both extracted directories and the
-repository's archive virtual paths (`archive.zip/inner/chart.bms`). If several
-matching copies exist inside the same output, choose the stable lexical first
-path. If no exact hashed match is found, request the normal library reload but
-publish no selection handoff.
+After `ScanAdded()` reports a completed, committed result, filter those matches
+to paths lexically inside the exact `downloadedPath`. The scanner result is
+fail-closed: a rejected database write or final commit prevents both task
+success and handoff publication, even if an older matching row already exists
+at the stable destination. A successful no-work scan may still reload the
+library, but cannot publish a handoff because it committed no indexing batch.
+The result also lists the chart paths successfully upserted by that invocation;
+the resolved hash match must be in this list, so a parse failure cannot
+re-qualify a stale row left at the stable destination. Archive resume-count
+reads carry an explicit failure result into the same storage-health gate.
+
+Exact-output scoping works for both extracted directories and the repository's
+archive virtual paths (`archive.zip/inner/chart.bms`). If several matching
+copies exist inside the same output, choose the stable lexical first path. If
+no exact hashed match is found, request the normal library reload but publish
+no selection handoff.
 
 ## Threading and Full-Scan Race
 
@@ -118,8 +128,10 @@ BMS path invokes the existing selection callback without setting
 Focused policy tests cover unchanged, changed, and away-and-back generations;
 SHA-256 authority and MD5 fallback; missing hashes; exact directory and archive
 path scoping; and deterministic duplicate selection. Repository tests cover
-the indexed normalized-hash query. The Find BMS flow audit verifies capture,
-task propagation, post-scan publication, and preview-enabled selection.
+the indexed normalized-hash query. Scanner tests cover the stale-row database
+write-failure and parse-failure cases plus archive count-read failure. The Find
+BMS flow audit verifies capture, task propagation, completed/committed and
+per-target upsert gating, post-scan publication, and preview-enabled selection.
 
 Verification also includes the existing scanner and Find BMS download tests,
 the desktop `main` build, and the full CTest suite. No mobile build is deployed.

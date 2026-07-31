@@ -129,8 +129,10 @@ require(
     "Find BMS downloads must use a dedicated incremental library task",
 )
 require(
-    "scanner.ScanAdded" in main_menu_source,
-    "downloaded-path tasks must use additions-only chart scanning",
+    "scanner.ScanAddedWithResult" in main_menu_source
+    and "scanResult.completed" in main_menu_source
+    and "scanResult.committed" in main_menu_source,
+    "downloaded-path tasks must require a completed, committed additions-only scan",
 )
 require(
     "enqueueDownloadedPathIndexTask(" in main_menu_source
@@ -148,8 +150,9 @@ require(
     "downloadedTargetIdentity" in main_menu_source
     and "downloadedSelectionGeneration" in main_menu_source
     and "SelectChartMetaByHash" in main_menu_source
+    and "scanResult.upsertedChartPaths" in main_menu_source
     and "pendingFindBmsSelectionHandoff" in main_menu_source,
-    "downloaded-path parsing must resolve and publish the selected indexed chart",
+    "downloaded-path parsing must publish only a chart upserted by that scan",
 )
 require(
     "findBmsSelectionHandoffAllowed(" in main_menu_source

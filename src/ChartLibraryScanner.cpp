@@ -298,12 +298,43 @@ int ChartLibraryScanner::Scan(
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
+  return ScanWithResult(session, roots, stopToken, std::move(progressCallback),
+                        std::move(pauseCallback),
+                        std::move(flushRequestCallback),
+                        std::move(flushCompleteCallback))
+      .changedCount;
+}
+
+int ChartLibraryScanner::ScanAdded(
+    ChartRepository::Session &session,
+    const std::vector<std::filesystem::path> &roots,
+    const std::stop_token *stopToken,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback,
+    ChartScanFlushRequestCallback flushRequestCallback,
+    ChartScanFlushCompleteCallback flushCompleteCallback) {
+  return ScanAddedWithResult(session, roots, stopToken,
+                             std::move(progressCallback),
+                             std::move(pauseCallback),
+                             std::move(flushRequestCallback),
+                             std::move(flushCompleteCallback))
+      .changedCount;
+}
+
+ChartScanResult ChartLibraryScanner::ScanWithResult(
+    ChartRepository::Session &session,
+    const std::vector<std::filesystem::path> &roots,
+    const std::stop_token *stopToken,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback,
+    ChartScanFlushRequestCallback flushRequestCallback,
+    ChartScanFlushCompleteCallback flushCompleteCallback) {
   return ScanImpl(session, roots, true, stopToken, std::move(progressCallback),
                   std::move(pauseCallback), std::move(flushRequestCallback),
                   std::move(flushCompleteCallback));
 }
 
-int ChartLibraryScanner::ScanAdded(
+ChartScanResult ChartLibraryScanner::ScanAddedWithResult(
     ChartRepository::Session &session,
     const std::vector<std::filesystem::path> &roots,
     const std::stop_token *stopToken,
@@ -316,7 +347,7 @@ int ChartLibraryScanner::ScanAdded(
                   std::move(flushCompleteCallback));
 }
 
-int ChartLibraryScanner::ScanImpl(
+ChartScanResult ChartLibraryScanner::ScanImpl(
     ChartRepository::Session &session,
     const std::vector<std::filesystem::path> &roots, bool reconcileExisting,
     const std::stop_token *stopToken,
@@ -325,13 +356,17 @@ int ChartLibraryScanner::ScanImpl(
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
   if (stopRequested(stopToken)) {
-    return 0;
+    return {};
   }
+  bool interrupted = false;
   auto pauseIfNeeded = [&]() {
     return pauseCallback == nullptr || pauseCallback();
   };
   auto shouldStop = [&]() {
-    return stopRequested(stopToken) || !pauseIfNeeded();
+    if (stopRequested(stopToken) || !pauseIfNeeded()) {
+      interrupted = true;
+    }
+    return interrupted;
   };
 
   auto reportProgress = [&](int current, int total,
@@ -348,7 +383,7 @@ int ChartLibraryScanner::ScanImpl(
   reportProgress(0, static_cast<int>(std::max<std::size_t>(roots.size(), 1)),
                  ChartScanProgressStage::Preparing);
   if (shouldStop()) {
-    return 0;
+    return {};
   }
 
   ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot(
@@ -441,7 +476,7 @@ int ChartLibraryScanner::ScanImpl(
 
   for (const auto &chartMeta : chartMetas) {
     if (shouldStop()) {
-      return 0;
+      return {};
     }
     if (!parsedChartMetaHasStableIdentity(chartMeta)) {
       diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
@@ -494,7 +529,7 @@ int ChartLibraryScanner::ScanImpl(
 
   for (const auto &solidArchive : scanSnapshot.solidArchives) {
     if (shouldStop()) {
-      return 0;
+      return {};
     }
     std::int64_t archiveSize = 0;
     std::int64_t mtimeNs = 0;
@@ -1282,7 +1317,7 @@ int ChartLibraryScanner::ScanImpl(
       for (const auto &path : androidChartPaths) {
         if (shouldStop()) {
           entityScheduler.cancel();
-          return 0;
+          return {};
         }
         if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
           scheduleOrdinaryChart(path);
@@ -1330,7 +1365,7 @@ int ChartLibraryScanner::ScanImpl(
          !error && iterator != end; iterator.increment(error)) {
       if (shouldStop()) {
         entityScheduler.cancel();
-        return 0;
+        return {};
       }
       std::error_code directoryTypeError;
       if (iterator->is_directory(directoryTypeError) && !directoryTypeError) {
@@ -1483,11 +1518,11 @@ int ChartLibraryScanner::ScanImpl(
     if (reconcileExisting) {
       session.ClearChartMetadataRebuildRequired();
     }
-    return 0;
+    return ChartScanResult{.completed = true};
   }
   if (shouldStop()) {
     entityScheduler.cancel();
-    return 0;
+    return {};
   }
 
   std::vector<ScanDiff> individualDiffs;
@@ -1757,8 +1792,14 @@ int ChartLibraryScanner::ScanImpl(
   auto scanBatch = session.BeginScanBatch();
   if (!scanBatch.has_value()) {
     entityScheduler.cancel();
-    return 0;
+    return {};
   }
+  bool storageHealthy = true;
+  auto recordStorageResult = [&](bool success) {
+    storageHealthy = success && storageHealthy;
+    return success;
+  };
+  std::vector<std::filesystem::path> upsertedChartPaths;
   std::uint64_t completedFlushRequest = 0;
 
   auto makeCheckpoint = [&](const std::string &signature,
@@ -1786,7 +1827,8 @@ int ChartLibraryScanner::ScanImpl(
   };
 
   auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) {
-    if (!scanBatch->CheckpointAndContinue(nextCheckpoint)) {
+    if (!recordStorageResult(
+            scanBatch->CheckpointAndContinue(nextCheckpoint))) {
       archive_file::appendDebugLogLine(
           "Failed to save chart scan checkpoint: phase=" +
           nextCheckpoint.phase +
@@ -1841,30 +1883,30 @@ int ChartLibraryScanner::ScanImpl(
       break;
     }
     const auto preference = archive_file::sourcePreferenceForPath(path);
-    scanBatch->UpdateSourcePreference({
+    recordStorageResult(scanBatch->UpdateSourcePreference({
         .path = path,
         .priority = preference.priority,
         .archiveSize = preference.archiveSize,
-    });
+    }));
   }
 
   for (const auto &update : cachedSourcePreferenceUpdates) {
     if (shouldStop()) {
       break;
     }
-    scanBatch->UpdateSourcePreference({
+    recordStorageResult(scanBatch->UpdateSourcePreference({
         .path = update.path,
         .priority = update.priority,
         .archiveSize = update.archiveSize,
-    });
+    }));
   }
 
   for (const auto &path : staleSolidArchives) {
     if (shouldStop()) {
       break;
     }
-    scanBatch->DeleteSolidArchive(path);
-    scanBatch->DeleteArchiveCache(path);
+    recordStorageResult(scanBatch->DeleteSolidArchive(path));
+    recordStorageResult(scanBatch->DeleteArchiveCache(path));
   }
 
   for (const auto &path : reindexedArchives) {
@@ -1877,20 +1919,20 @@ int ChartLibraryScanner::ScanImpl(
           checkpointPathTextForDb(path));
       continue;
     }
-    scanBatch->DeleteChartsInArchive(path);
+    recordStorageResult(scanBatch->DeleteChartsInArchive(path));
   }
 
   for (const auto &diff : archiveCacheDiffs) {
     if (shouldStop()) {
       break;
     }
-    scanBatch->UpsertArchiveCache({
+    recordStorageResult(scanBatch->UpsertArchiveCache({
         .path = diff.path,
         .solid = diff.solid,
         .uncompressedSize = diff.uncompressedSize,
         .fileCount = diff.fileCount,
         .chartCount = diff.chartCount,
-    });
+    }));
   }
 
   for (const auto &diff : solidArchiveDiffs) {
@@ -1898,19 +1940,25 @@ int ChartLibraryScanner::ScanImpl(
       break;
     }
     if (diff.solid) {
-      scanBatch->UpsertSolidArchive({
+      recordStorageResult(scanBatch->UpsertSolidArchive({
           .path = diff.path,
           .uncompressedSize = diff.uncompressedSize,
           .fileCount = diff.fileCount,
-      });
-      scanBatch->DeleteChartsInArchive(diff.path);
+      }));
+      recordStorageResult(scanBatch->DeleteChartsInArchive(diff.path));
     } else {
-      scanBatch->DeleteSolidArchive(diff.path);
+      recordStorageResult(scanBatch->DeleteSolidArchive(diff.path));
     }
   }
 
   auto insertIndividualChartMeta = [&](bms_parser::ChartMeta &meta) -> bool {
-    return scanBatch->UpsertChart(meta, std::nullopt);
+    if (!recordStorageResult(scanBatch->UpsertChart(meta, std::nullopt))) {
+      return false;
+    }
+    if (!reconcileExisting) {
+      upsertedChartPaths.push_back(meta.BmsPath);
+    }
+    return true;
   };
 
   auto individualParseWorkerCount = [](std::size_t fileCount) {
@@ -2012,7 +2060,7 @@ int ChartLibraryScanner::ScanImpl(
     if (diff.deleted) {
       reportProgress(parseCurrent, parseTotal,
                      ChartScanProgressStage::RemovingDeleted);
-      scanBatch->DeleteChart(diff.path);
+      recordStorageResult(scanBatch->DeleteChart(diff.path));
       ++parseCurrent;
       const std::size_t nextIndex = diffIndex + 1;
       const auto checkpointRequest = checkpointSaveRequest(
@@ -2096,13 +2144,13 @@ int ChartLibraryScanner::ScanImpl(
           " candidates=" + std::to_string(diff.chartCount) +
           " dbCharts=" + std::to_string(parsedChartCount));
     }
-    scanBatch->UpsertArchiveCache({
+    recordStorageResult(scanBatch->UpsertArchiveCache({
         .path = diff.path,
         .solid = diff.solid,
         .uncompressedSize = diff.uncompressedSize,
         .fileCount = diff.fileCount,
         .chartCount = parsedChartCount,
-    });
+    }));
   };
 
   auto archiveBatchForIndex =
@@ -2498,9 +2546,15 @@ int ChartLibraryScanner::ScanImpl(
     const ArchiveParseBatch &batch = *batchPtr;
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (innerStart >= batch.innerPaths.size()) {
-      const int storedChartCount =
-          innerStart > 0 ? scanBatch->CountChartsInArchive(batch.archivePath)
-                         : 0;
+      int storedChartCount = 0;
+      if (innerStart > 0) {
+        const auto count =
+            scanBatch->CountChartsInArchive(batch.archivePath);
+        if (!recordStorageResult(count.has_value())) {
+          continue;
+        }
+        storedChartCount = *count;
+      }
       writePendingArchiveCache(batch, storedChartCount);
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
@@ -2551,14 +2605,22 @@ int ChartLibraryScanner::ScanImpl(
           batch.archivePath, batch.innerPaths[innerIndex]));
     }
     bool archiveStorageHealthy = true;
-    if (innerStart > 0 && !scanBatch->DeleteCharts(pendingChartPaths)) {
+    if (innerStart > 0 &&
+        !recordStorageResult(scanBatch->DeleteCharts(pendingChartPaths))) {
       archiveStorageHealthy = false;
       archive_file::appendDebugLogLine(
           "Failed to clear uncheckpointed archive chart rows: " +
           archiveText);
     }
-    int storedChartCount =
-        innerStart > 0 ? scanBatch->CountChartsInArchive(batch.archivePath) : 0;
+    int storedChartCount = 0;
+    if (innerStart > 0) {
+      const auto count = scanBatch->CountChartsInArchive(batch.archivePath);
+      if (recordStorageResult(count.has_value())) {
+        storedChartCount = *count;
+      } else {
+        archiveStorageHealthy = false;
+      }
+    }
     std::chrono::steady_clock::duration insertDuration{};
     bool insertionStarted = false;
     bool checkpointOrderReliable = true;
@@ -2582,10 +2644,13 @@ int ChartLibraryScanner::ScanImpl(
         reportProgress(parseCurrent, parseTotal,
                        ChartScanProgressStage::ParsingCharts);
         if (parsed.meta.has_value()) {
-          if (scanBatch->UpsertChart(*parsed.meta,
-                                     storedArchiveSourcePreference)) {
+          if (recordStorageResult(scanBatch->UpsertChart(
+                  *parsed.meta, storedArchiveSourcePreference))) {
             ++insertedCharts;
             ++storedChartCount;
+            if (!reconcileExisting) {
+              upsertedChartPaths.push_back(parsed.meta->BmsPath);
+            }
           } else {
             archiveStorageHealthy = false;
           }
@@ -2649,7 +2714,8 @@ int ChartLibraryScanner::ScanImpl(
         parseCurrent +=
             static_cast<int>(batch.innerPaths.size() - parsedInBatch);
         if (insertedCharts > 0 &&
-            !scanBatch->DeleteCharts(pendingChartPaths)) {
+            !recordStorageResult(
+                scanBatch->DeleteCharts(pendingChartPaths))) {
           archiveStorageHealthy = false;
           archive_file::appendDebugLogLine(
               "Failed to remove partially streamed DB chart batch: " +
@@ -2724,9 +2790,13 @@ int ChartLibraryScanner::ScanImpl(
     }
   }
   const int changedCount = scanBatch->ChangedCount();
-  if (!scanBatch->Commit()) {
+  const bool commitSucceeded = scanBatch->Commit();
+  if (!commitSucceeded) {
     archive_file::appendDebugLogLine(
         "Failed to commit final chart scan batch.");
+  }
+  if (stopRequested(stopToken)) {
+    interrupted = true;
   }
   acknowledgeFlushRequest(pendingFlushRequest());
   if (!stopRequested(stopToken)) {
@@ -2735,5 +2805,14 @@ int ChartLibraryScanner::ScanImpl(
       session.ClearChartMetadataRebuildRequired();
     }
   }
-  return changedCount;
+  const bool committed = storageHealthy && commitSucceeded;
+  if (!committed) {
+    upsertedChartPaths.clear();
+  }
+  return ChartScanResult{
+      .changedCount = changedCount,
+      .completed = !interrupted && committed,
+      .committed = committed,
+      .upsertedChartPaths = std::move(upsertedChartPaths),
+  };
 }

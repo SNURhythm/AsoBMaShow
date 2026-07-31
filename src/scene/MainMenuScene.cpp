@@ -2119,7 +2119,7 @@ void MainMenuScene::runDownloadedPathIndexTask(
   if (entries.empty()) {
     throw std::runtime_error("Downloaded chart path is empty");
   }
-  LoadCharts(
+  const ChartScanResult scanResult = LoadCharts(
       *taskSession, entries, *this, stopToken,
       [this, taskId = task.id](const ChartScanProgress &progress) {
         updateLibraryTaskProgress(taskId, progress);
@@ -2131,13 +2131,17 @@ void MainMenuScene::runDownloadedPathIndexTask(
   if (stopToken.stop_requested()) {
     return;
   }
+  if (!scanResult.completed) {
+    requestLibraryReload(true);
+    throw std::runtime_error("Failed to index downloaded BMS charts");
+  }
 
-  if (task.downloadedTargetIdentity.valid()) {
+  if (scanResult.committed && task.downloadedTargetIdentity.valid()) {
     const auto matches = taskSession->SelectChartMetaByHash(
         task.downloadedTargetIdentity.sha256,
         task.downloadedTargetIdentity.md5);
     const auto chartPath = main_menu_library::downloadedChartPath(
-        matches, task.downloadedPath);
+        matches, task.downloadedPath, scanResult.upsertedChartPaths);
     if (chartPath.has_value()) {
       std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
       pendingFindBmsSelectionHandoff = PendingFindBmsSelectionHandoff{
@@ -12104,13 +12108,12 @@ void MainMenuScene::cleanupScene() {
   lastSafeRight = -1;
 }
 
-void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
-                               std::vector<ChartEntry> &entries,
-                               MainMenuScene &scene,
-                               const std::stop_token &stop_token,
-                               ChartScanProgressCallback progressCallback,
-                               ChartScanPauseCallback pauseCallback,
-                               bool addedPathsOnly, bool requestReload) {
+ChartScanResult MainMenuScene::LoadCharts(
+    ChartRepository::Session &chartSession, std::vector<ChartEntry> &entries,
+    MainMenuScene &scene, const std::stop_token &stop_token,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback, bool addedPathsOnly,
+    bool requestReload) {
   std::vector<std::filesystem::path> roots;
   roots.reserve(entries.size());
   for (auto &entry : entries) {
@@ -12129,26 +12132,27 @@ void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
   }
 
   if (stop_token.stop_requested()) {
-    return;
+    return {};
   }
 
   SDL_Log("Refreshing chart library");
   ChartLibraryScanner scanner;
-  const int changedCount =
+  const ChartScanResult result =
       addedPathsOnly
-          ? scanner.ScanAdded(chartSession, roots, &stop_token,
-                              progressCallback, pauseCallback)
-          : scanner.Scan(
+          ? scanner.ScanAddedWithResult(chartSession, roots, &stop_token,
+                                        progressCallback, pauseCallback)
+          : scanner.ScanWithResult(
                 chartSession, roots, &stop_token, progressCallback,
                 pauseCallback,
                 [&scene]() { return scene.pendingLibraryScanFlushRequest(); },
                 [&scene](std::uint64_t request) {
                   scene.completeLibraryScanFlush(request);
                 });
-  SDL_Log("Chart library refresh changed %d entries", changedCount);
+  SDL_Log("Chart library refresh changed %d entries", result.changedCount);
   if (requestReload && !stop_token.stop_requested()) {
     scene.requestLibraryReload(true);
   }
+  return result;
 }
 
 #ifdef _WIN32

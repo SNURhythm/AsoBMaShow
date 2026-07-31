@@ -194,13 +194,23 @@ void testAddedDirectoryScanPreservesUnrelatedMissingChart() {
   assert(scanner.Scan(*session, {existingRoot}) == 1);
   std::filesystem::remove(existing);
 
-  assert(scanner.ScanAdded(*session, {addedRoot}) == 1);
+  const ChartScanResult addedResult =
+      scanner.ScanAddedWithResult(*session, {addedRoot});
+  assert(addedResult.changedCount == 1);
+  assert(addedResult.completed);
+  assert(addedResult.committed);
   const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
   assert(snapshot.charts.size() == 2);
   assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
                      [](const auto &meta) { return meta.Title == "Existing"; }));
   assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
                      [](const auto &meta) { return meta.Title == "Added"; }));
+
+  const ChartScanResult noWorkResult =
+      scanner.ScanAddedWithResult(*session, {temporary.path() / "missing"});
+  assert(noWorkResult.changedCount == 0);
+  assert(noWorkResult.completed);
+  assert(!noWorkResult.committed);
 }
 
 void testAddedArchivePathIsIndexed() {
@@ -343,6 +353,37 @@ public:
   }
 };
 
+std::atomic_bool denyChartRead{false};
+
+int denyChartReadAuthorizer(void *, int action, const char *first,
+                            const char *, const char *, const char *) {
+  if (denyChartRead.load(std::memory_order_relaxed) && action == SQLITE_READ &&
+      first != nullptr && std::string_view(first) == "chart_meta") {
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+int installDenyChartRead(sqlite3 *database, char **,
+                         const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(database, denyChartReadAuthorizer, nullptr);
+}
+
+class ScopedChartReadDenial {
+public:
+  ScopedChartReadDenial() {
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(
+               reinterpret_cast<void (*)()>(installDenyChartRead)) ==
+           SQLITE_OK);
+  }
+
+  ~ScopedChartReadDenial() {
+    denyChartRead.store(false, std::memory_order_relaxed);
+    sqlite3_reset_auto_extension();
+  }
+};
+
 std::atomic_bool countPostInsertChartPathReads{false};
 std::atomic_bool observedChartInsert{false};
 std::atomic_int postInsertChartPathReads{0};
@@ -415,6 +456,75 @@ void testStorageFailureLeavesNoChart() {
   ChartLibraryScanner scanner;
   assert(scanner.Scan(*session, {root}) == 0);
   assert(session->CountAllChartMeta() == 0);
+}
+
+void testAddedScanStorageFailureDoesNotQualifyExistingChart() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  writeChart(root, "sample", "Existing Scanner");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  ChartLibraryScanner scanner;
+  {
+    auto session = repository.OpenSession();
+    assert(session.has_value());
+    assert(scanner.ScanAdded(*session, {root}) == 1);
+    assert(session->CountAllChartMeta() == 1);
+  }
+
+  ScopedInsertDenial denial;
+  auto deniedSession = repository.OpenSession();
+  assert(deniedSession.has_value());
+  denyChartInsert.store(true, std::memory_order_relaxed);
+
+  const ChartScanResult result =
+      scanner.ScanAddedWithResult(*deniedSession, {root});
+  assert(!result.completed);
+  assert(!result.committed);
+  assert(deniedSession->CountAllChartMeta() == 1);
+}
+
+void testAddedScanParseFailureDoesNotQualifyExistingChart() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto chartPath = writeChart(root, "sample", "Existing Parser");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  const ChartScanResult initial = scanner.ScanAddedWithResult(*session, {root});
+  assert(initial.completed);
+  assert(initial.committed);
+  assert(initial.upsertedChartPaths.size() == 1);
+
+  {
+    std::ofstream invalidChart(chartPath);
+    invalidChart << "#TITLE Invalid replacement\n";
+  }
+  const ChartScanResult failedParse =
+      scanner.ScanAddedWithResult(*session, {root});
+  assert(failedParse.completed);
+  assert(failedParse.committed);
+  assert(failedParse.upsertedChartPaths.empty());
+  assert(session->CountAllChartMeta() == 1);
+}
+
+void testArchiveChartCountReportsStorageReadFailure() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  ScopedChartReadDenial denial;
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  auto batch = session->BeginScanBatch();
+  assert(batch.has_value());
+  denyChartRead.store(true, std::memory_order_relaxed);
+
+  assert(!batch->CountChartsInArchive(temporary.path() / "archive.zip")
+              .has_value());
 }
 
 void testArchiveStorageFailureDoesNotWriteCache() {
@@ -1123,6 +1233,9 @@ int main() {
   testStopAndPauseBeforeWork();
   testCheckpointResume();
   testStorageFailureLeavesNoChart();
+  testAddedScanStorageFailureDoesNotQualifyExistingChart();
+  testAddedScanParseFailureDoesNotQualifyExistingChart();
+  testArchiveChartCountReportsStorageReadFailure();
   testArchiveStorageFailureDoesNotWriteCache();
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
   testArchiveIndexProgressFollowsFolderTraversal();

@@ -782,25 +782,30 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreference(
   return true;
 }
 
-int ChartRepository::Session::ScanBatch::CountChartsInArchive(
+std::optional<int> ChartRepository::Session::ScanBatch::CountChartsInArchive(
     const std::filesystem::path &path) {
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
-    return 0;
+    return std::nullopt;
   }
   SqliteStatementHandle statement;
   if (!prepareSqliteStatementLogged(
           impl_->database(), "SELECT path FROM chart_meta", statement,
           "counting archive chart rows", logSqlErrorText)) {
-    return 0;
+    return std::nullopt;
   }
   int count = 0;
   const auto target = path.lexically_normal();
-  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+  int stepResult = SQLITE_OK;
+  while ((stepResult = sqlite3_step(statement.get())) == SQLITE_ROW) {
     const auto chartPath =
         storedPathFromDatabase(sqliteColumnString(statement.get(), 0));
     if (pathIsInsideDirectory(chartPath, target)) {
       ++count;
     }
+  }
+  if (stepResult != SQLITE_DONE) {
+    logSqlError("counting archive chart rows", impl_->database());
+    return std::nullopt;
   }
   return count;
 }

@@ -257,6 +257,19 @@ int main() {
             *main_menu_library::downloadedChartPath(
                 downloadedMatches, "/library/downloaded"),
             "downloaded directory selects the stable first in-scope match");
+  const std::vector<std::filesystem::path> upsertedDownloadedPaths{
+      "/library/downloaded/z-chart.bms"};
+  ASSERT_EQ(std::filesystem::path("/library/downloaded/z-chart.bms"),
+            *main_menu_library::downloadedChartPath(
+                downloadedMatches, "/library/downloaded",
+                upsertedDownloadedPaths),
+            "downloaded handoff selects only a chart upserted by this scan");
+  ASSERT_EQ(false,
+            main_menu_library::downloadedChartPath(
+                downloadedMatches, "/library/downloaded",
+                std::vector<std::filesystem::path>{})
+                .has_value(),
+            "downloaded handoff rejects stale rows not upserted by this scan");
 
   downloadedMatches.resize(1);
   downloadedMatches[0].BmsPath =

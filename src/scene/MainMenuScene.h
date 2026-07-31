@@ -920,13 +920,13 @@ private:
   void pollPendingAndroidArchiveImport();
   void applyPendingAndroidArchiveImport();
 #endif
-  static void LoadCharts(ChartRepository::Session &chartSession,
-                         std::vector<ChartEntry> &entries, MainMenuScene &scene,
-                         const std::stop_token &stop_token,
-                         ChartScanProgressCallback progressCallback = nullptr,
-                         ChartScanPauseCallback pauseCallback = nullptr,
-                         bool addedPathsOnly = false,
-                         bool requestReload = true);
+  static ChartScanResult
+  LoadCharts(ChartRepository::Session &chartSession,
+             std::vector<ChartEntry> &entries, MainMenuScene &scene,
+             const std::stop_token &stop_token,
+             ChartScanProgressCallback progressCallback = nullptr,
+             ChartScanPauseCallback pauseCallback = nullptr,
+             bool addedPathsOnly = false, bool requestReload = true);
   enum DiffType { Deleted, Added };
   struct Diff {
     std::filesystem::path path;

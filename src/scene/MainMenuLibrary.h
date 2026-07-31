@@ -70,6 +70,11 @@ std::optional<std::filesystem::path> downloadedChartPath(
     const std::vector<bms_parser::ChartMeta> &matchingCharts,
     const std::filesystem::path &downloadedPath);
 
+std::optional<std::filesystem::path> downloadedChartPath(
+    const std::vector<bms_parser::ChartMeta> &matchingCharts,
+    const std::filesystem::path &downloadedPath,
+    const std::vector<std::filesystem::path> &upsertedChartPaths);
+
 std::optional<std::filesystem::path>
 sameFolderForChart(const ChartMetaRecord &record);
 
