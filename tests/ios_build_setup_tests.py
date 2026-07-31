@@ -137,6 +137,7 @@ class IOSBuildSetupTests(unittest.TestCase):
                     self.assertIn("7zRegister.cpp.o", linker_flags)
                     self.assertIn("LzmaRegister.cpp.o", linker_flags)
                     self.assertIn("Lzma2Register.cpp.o", linker_flags)
+                    self.assertIn("DeltaFilter.cpp.o", linker_flags)
 
 
 class DerivedDataPathTests(unittest.TestCase):
