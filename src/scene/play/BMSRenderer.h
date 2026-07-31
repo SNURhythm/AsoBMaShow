@@ -19,6 +19,7 @@
 #include "Judge.h"
 #include "Pacemaker.h"
 #include "GameplayChartEntityRenderBudget.h"
+#include "GameplayGaugeRules.h"
 #include "GameplayNoteSubmissionOrder.h"
 #include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
@@ -244,6 +245,9 @@ private:
   GaugeProfile currentGaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode currentGaugeAutoShift = GaugeAutoShiftMode::None;
   float currentGaugeValue = 0.0f;
+  float currentGaugeMaximum = 100.0f;
+  float currentGaugeBorder = 80.0f;
+  float currentGaugeReducedDamageZone = 0.0f;
   bool renderLaneBeams = true;
   bool laneCoverFloatingEnabled = true;
   bool useRenderTimeForLaneBeams = false;
@@ -441,7 +445,7 @@ public:
   void setGaugeBarPosition(AppSettings::GaugeBarPosition position);
   void setGaugeStatus(GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
                       float currentGauge,
-                      GaugeProfile gaugeProfile = GaugeProfile::Standard);
+                      const GameplayGaugeRules &gaugeRules);
   void setPacemakerTarget(const pacemaker::Target &target);
   void setPacemakerStatus(const pacemaker::Snapshot &snapshot);
   void setPlayOptionStatus(const std::string &label);

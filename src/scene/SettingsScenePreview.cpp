@@ -280,8 +280,11 @@ void SettingsScene::resetPreviewHudSample() {
     return;
   }
   previewRenderer->setJudgementCounters(previewJudgeCount, previewComboBreak);
+  const GameplayGaugeRules previewGaugeRules = compileGameplayGaugeRules(
+      kDefaultGameplayRuleset, previewChart->Meta, GaugeProfile::Standard);
   previewRenderer->setGaugeStatus(GaugeType::Normal,
-                                  GaugeAutoShiftMode::None, 74.0f);
+                                  GaugeAutoShiftMode::None, 74.0f,
+                                  previewGaugeRules);
   previewRenderer->onJudge(JudgeResult(Great, 50000), previewCombo,
                            previewScore, previewElapsedMicros, false);
 }

@@ -1049,7 +1049,7 @@ bool applyReplayEventForVideo(
     const bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const ReplayEvent &event, long long visualTimeMicros, GaugeAutoShiftMode gaugeAutoShift,
-    GaugeProfile gaugeProfile = GaugeProfile::Standard) {
+    const GameplayGaugeRules &gaugeRules) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
   auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
@@ -1059,7 +1059,7 @@ bool applyReplayEventForVideo(
                      visualTimeMicros,
                      event.action != ReplayEventAction::Miss);
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
-                            gaugeProfile);
+                            gaugeRules);
     return true;
   };
 
@@ -1121,11 +1121,11 @@ bool applyReplayEventForVideo(
       note->PlayedTime = event.judgeTimeMicros;
     }
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
-                            gaugeProfile);
+                            gaugeRules);
     return false;
   case ReplayEventAction::Gauge:
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
-                            gaugeProfile);
+                            gaugeRules);
     return false;
   }
   return false;
@@ -2808,7 +2808,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   renderer.setGaugeStatus(initialGaugeState.gaugeType,
                           initialGaugeState.gaugeAutoShift,
                           initialGaugeState.currentGauge,
-                          initialGaugeState.gaugeProfile);
+                          initialGaugeState.gaugeRules());
   renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
   renderer.setStartLaneIndicators(preparationPlan.laneIndicator.lanes);
@@ -3112,7 +3112,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           applyReplayEventForVideo(renderer, chart, replayNotes, event,
                                    frameTiming.visualTimeMicros,
                                    replay.gaugeAutoShift,
-                                   gaugeProfile);
+                                   initialGaugeState.gaugeRules());
       if (appliedHud && event.judgement != None) {
         applyReplayEventToPacemakerState(pacemakerState, event);
         renderer.setPacemakerStatus(pacemaker::snapshotForState(
@@ -3690,7 +3690,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     renderer.setGaugeStatus(stage.initialGaugeState.gaugeType,
                             stage.initialGaugeState.gaugeAutoShift,
                             stage.initialGaugeState.currentGauge,
-                            stage.initialGaugeState.gaugeProfile);
+                            stage.resultState.gaugeRules());
     renderer.setPlayOptionStatus(replayExportPlayOptionLabel(stageReplay));
     renderer.setReplayData(&stageReplay);
     renderer.setStartLaneIndicators(
@@ -3756,7 +3756,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             applyReplayEventForVideo(renderer, chart, replayNotes, event,
                                      frameTiming.visualTimeMicros,
                                      replay.gaugeAutoShift,
-                                     replay.gaugeProfile);
+                                     stage.resultState.gaugeRules());
         if (appliedHud && event.judgement != None) {
           replayJudgeCounts[event.judgement]++;
           if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {

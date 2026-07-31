@@ -64,7 +64,7 @@ CompiledGaugeDefinition lr2GrooveDefinition(
 }
 
 CompiledGaugeDefinition lr2SurvivalDefinition(
-    std::array<float, 6> deltas, bool scaleDamage, bool guts) {
+    std::array<float, 6> deltas, bool scaleDamage) {
   return {
       .initial = 100.0F,
       .minimum = 0.0F,
@@ -74,7 +74,6 @@ CompiledGaugeDefinition lr2SurvivalDefinition(
       .baseDelta = deltas,
       .scalePositiveByTotal = false,
       .scaleNegativeByLr2Damage = scaleDamage,
-      .hardGutsBelow32 = guts,
       .survival = true,
   };
 }
@@ -89,11 +88,11 @@ void compileLr2Standard(GameplayGaugeRules &rules) {
   rules.gauges[gaugeTypeIndex(GaugeType::Normal)] = lr2GrooveDefinition(
       80.0F, {1.0F, 1.0F, 0.5F, -4.0F, -6.0F, -2.0F});
   rules.gauges[gaugeTypeIndex(GaugeType::Hard)] = lr2SurvivalDefinition(
-      {0.1F, 0.1F, 0.05F, -6.0F, -10.0F, -2.0F}, true, true);
+      {0.1F, 0.1F, 0.05F, -6.0F, -10.0F, -2.0F}, true);
   rules.gauges[gaugeTypeIndex(GaugeType::ExHard)] = lr2SurvivalDefinition(
-      {0.1F, 0.1F, 0.05F, -12.0F, -20.0F, -2.0F}, true, false);
+      {0.1F, 0.1F, 0.05F, -12.0F, -20.0F, -2.0F}, true);
   rules.gauges[gaugeTypeIndex(GaugeType::Hazard)] = lr2SurvivalDefinition(
-      {0.15F, 0.06F, 0.0F, -100.0F, -100.0F, -10.0F}, false, false);
+      {0.15F, 0.06F, 0.0F, -100.0F, -100.0F, -10.0F}, false);
 }
 
 void compileLr2Course(GameplayGaugeRules &rules) {
@@ -105,8 +104,7 @@ void compileLr2Course(GameplayGaugeRules &rules) {
   for (int index = 0; index < static_cast<int>(kGaugeTypeCount); ++index) {
     const int classIndex = courseGaugeClassIndexForType(
         gaugeTypeAtIndex(index));
-    rules.gauges[index] =
-        lr2SurvivalDefinition(tables[classIndex], false, classIndex <= 1);
+    rules.gauges[index] = lr2SurvivalDefinition(tables[classIndex], false);
   }
 }
 
@@ -140,6 +138,34 @@ double resolveEffectiveGaugeTotal(
   return meta.HasTotal
              ? meta.Total
              : beatorajaDefaultGaugeTotal(meta.KeyMode, meta.TotalNotes);
+}
+
+float gaugeReducedDamageZoneUpperBound(
+    GameplayRuleset ruleset, GaugeType gaugeType,
+    GaugeProfile profile) noexcept {
+  if (ruleset == GameplayRuleset::LR2) {
+    if (!gaugeProfileIsCourse(profile)) {
+      return gaugeType == GaugeType::Hard ? 32.0F : 0.0F;
+    }
+    return courseGaugeClassIndexForType(gaugeType) <= 1 ? 32.0F : 0.0F;
+  }
+
+  if (!gaugeProfileIsCourse(profile)) {
+    return gaugeType == GaugeType::Hard &&
+                   profile != GaugeProfile::Standard5Keys
+               ? 50.0F
+               : 0.0F;
+  }
+
+  const int classIndex = courseGaugeClassIndexForType(gaugeType);
+  if (profile == GaugeProfile::CourseLR2 && classIndex <= 1) {
+    return 30.0F;
+  }
+  if (profile != GaugeProfile::Course5Keys &&
+      profile != GaugeProfile::CourseLR2 && classIndex == 0) {
+    return 25.0F;
+  }
+  return 0.0F;
 }
 
 GameplayGaugeRules compileGameplayGaugeRules(
@@ -192,8 +218,10 @@ float GameplayGaugeRules::delta(GaugeType type, Judgement judgement,
     result *= static_cast<float>(
         lr2DamageMultiplier(effectiveTotal, totalNotes));
   }
-  if (result < 0.0F && definition.hardGutsBelow32 &&
-      currentGauge < 32.0F) {
+  const float reducedDamageZone = gaugeReducedDamageZoneUpperBound(
+      ruleset, type, resolvedProfile);
+  if (result < 0.0F && reducedDamageZone > 0.0F &&
+      currentGauge < reducedDamageZone) {
     result *= 0.6F;
   }
   return result * rate;

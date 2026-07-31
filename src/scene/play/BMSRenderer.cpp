@@ -907,8 +907,12 @@ BMSRenderer::BMSRenderer(
   gaugeAutoShiftText->setVAlign(TextView::MIDDLE);
   gaugeAutoShiftText->setOverflow(TextView::TextOverflow::Hidden);
   gaugeAutoShiftText->setRotationDegrees(90.0f);
+  const GameplayGaugeRules initialGaugeRules = compileGameplayGaugeRules(
+      kDefaultGameplayRuleset, chart->Meta, GaugeProfile::Standard);
   setGaugeStatus(GaugeType::Normal, GaugeAutoShiftMode::None,
-                 gaugeInitialValue(GaugeType::Normal));
+                 initialGaugeRules.gauges[gaugeTypeIndex(GaugeType::Normal)]
+                     .initial,
+                 initialGaugeRules);
   playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
   playOptionText->setAlign(TextView::LEFT);
   playOptionText->setVAlign(TextView::MIDDLE);
@@ -1197,8 +1201,7 @@ void BMSRenderer::drawWorldGaugeBar() {
   const float y = rect[1];
   const float width = rect[2];
   const float height = rect[3];
-  const float maximum =
-      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
+  const float maximum = currentGaugeMaximum;
   const float progress =
       std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const Color accent =
@@ -1224,8 +1227,7 @@ void BMSRenderer::drawWorldGaugeBar() {
                                        gaugeFillColor(accent).toABGR());
   }
 
-  const float borderValue =
-      gaugeBorderValue(currentGaugeType, currentGaugeProfile);
+  const float borderValue = currentGaugeBorder;
   if (borderValue > 0.0f) {
     const float markerX =
         x + width * std::clamp(borderValue / maximum, 0.0f, 1.0f);
@@ -1235,8 +1237,7 @@ void BMSRenderer::drawWorldGaugeBar() {
                                 height * 1.36f, gaugeMarkerColor().toABGR());
   }
 
-  const float reducedDamageZone = gaugeReducedDamageZoneUpperBound(
-      currentGaugeType, currentGaugeProfile);
+  const float reducedDamageZone = currentGaugeReducedDamageZone;
   if (reducedDamageZone > 0.0f) {
     const float markerX =
         x + width * std::clamp(reducedDamageZone / maximum, 0.0f, 1.0f);
@@ -1253,8 +1254,7 @@ void BMSRenderer::drawHudGaugeBar() {
   const float y = rect[1];
   const float width = rect[2];
   const float height = rect[3];
-  const float maximum =
-      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
+  const float maximum = currentGaugeMaximum;
   const float progress =
       std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const Color accent =
@@ -1275,8 +1275,7 @@ void BMSRenderer::drawHudGaugeBar() {
         gaugeFillColor(accent).toABGR());
   }
 
-  const float borderValue =
-      gaugeBorderValue(currentGaugeType, currentGaugeProfile);
+  const float borderValue = currentGaugeBorder;
   if (borderValue > 0.0f) {
     const float markerY =
         y + height * (1.0f - std::clamp(borderValue / maximum, 0.0f, 1.0f));
@@ -1284,8 +1283,7 @@ void BMSRenderer::drawHudGaugeBar() {
                                 gaugeMarkerColor().toABGR());
   }
 
-  const float reducedDamageZone = gaugeReducedDamageZoneUpperBound(
-      currentGaugeType, currentGaugeProfile);
+  const float reducedDamageZone = currentGaugeReducedDamageZone;
   if (reducedDamageZone > 0.0f) {
     const float markerProgress =
         std::clamp(reducedDamageZone / maximum, 0.0f, 1.0f);
@@ -1499,8 +1497,7 @@ void BMSRenderer::layoutGaugeText() {
   const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + 8.0f))
                      : static_cast<int>(
                            std::round(rect[0] - textWidth - 8.0f));
-  const float maximum =
-      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
+  const float maximum = currentGaugeMaximum;
   const float progress =
       std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const float tipY = rect[1] + rect[3] * (1.0f - progress);
@@ -3521,13 +3518,17 @@ void BMSRenderer::setJudgementCounters(
 void BMSRenderer::setGaugeStatus(GaugeType gaugeType,
                                  GaugeAutoShiftMode gaugeAutoShift,
                                  float currentGauge,
-                                 GaugeProfile gaugeProfile) {
+                                 const GameplayGaugeRules &gaugeRules) {
   currentGaugeType = gaugeType;
-  currentGaugeProfile = gaugeProfile;
+  currentGaugeProfile = gaugeRules.resolvedProfile;
   currentGaugeAutoShift = gaugeAutoShift;
+  const auto &definition = gaugeRules.gauges[gaugeTypeIndex(gaugeType)];
+  currentGaugeMaximum = definition.maximum;
+  currentGaugeBorder = definition.clearBorder;
+  currentGaugeReducedDamageZone = gaugeReducedDamageZoneUpperBound(
+      gaugeRules.ruleset, gaugeType, gaugeRules.resolvedProfile);
   currentGaugeValue =
-      std::clamp(currentGauge, 0.0f,
-                 gaugeMaximumValue(currentGaugeType, currentGaugeProfile));
+      std::clamp(currentGauge, 0.0f, currentGaugeMaximum);
   if (gaugeText == nullptr) {
     return;
   }

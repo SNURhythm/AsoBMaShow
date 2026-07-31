@@ -273,27 +273,6 @@ inline GaugeType gaugeClearTypeForProfile(GaugeType gaugeType,
   return gaugeType;
 }
 
-inline float gaugeReducedDamageZoneUpperBound(
-    GaugeType gaugeType,
-    GaugeProfile profile = GaugeProfile::Standard) {
-  if (!gaugeProfileIsCourse(profile)) {
-    return gaugeType == GaugeType::Hard &&
-                   profile != GaugeProfile::Standard5Keys
-               ? 50.0f
-               : 0.0f;
-  }
-
-  const int classIndex = courseGaugeClassIndexForType(gaugeType);
-  if (profile == GaugeProfile::CourseLR2 && classIndex <= 1) {
-    return 30.0f;
-  }
-  if (profile != GaugeProfile::Course5Keys &&
-      profile != GaugeProfile::CourseLR2 && classIndex == 0) {
-    return 25.0f;
-  }
-  return 0.0f;
-}
-
 inline float courseGaugeBaseDeltaForJudgement(GaugeProfile profile,
                                               GaugeType gaugeType,
                                               Judgement judgement) {
@@ -468,7 +447,8 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
     }
   }
   if (gaugeType == GaugeType::Hard &&
-      gaugeReducedDamageZoneUpperBound(gaugeType, profile) > 0.0f) {
+      gaugeReducedDamageZoneUpperBound(GameplayRuleset::Beatoraja, gaugeType,
+                                       profile) > 0.0f) {
     delta = applyHardGaugeGuts(currentGauge, delta);
   }
   return delta;
