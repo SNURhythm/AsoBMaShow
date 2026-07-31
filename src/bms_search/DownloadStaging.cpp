@@ -1,4 +1,5 @@
 #include "DownloadStaging.h"
+#include "DownloadStorageIdentity.h"
 
 #include "../ArchiveFile.h"
 #include "../Uuid.h"
@@ -314,15 +315,23 @@ bool commitFindBmsPendingArtifact(
                    error.message();
     return false;
   }
-  const std::string transactionId = uuid::generateV4();
-  const auto commitPath = destination.parent_path() /
-                          (destination.filename().string() + ".commit-" +
-                           transactionId);
-  const auto backupPath = destination.parent_path() /
-                          (destination.filename().string() + ".backup-" +
-                           transactionId);
-  removePath(commitPath);
-  removePath(backupPath);
+  const auto transactionRoot =
+      artifact.downloadRoot / kFindBmsTransactionDirectoryName;
+  const auto transactionPath = transactionRoot / uuid::generateV4();
+  const auto commitPath = transactionPath / "commit";
+  const auto backupPath = transactionPath / "backup";
+  removePath(transactionPath);
+  std::filesystem::create_directories(transactionPath, error);
+  if (error) {
+    errorMessage = "Could not create the private Find BMS transaction folder: " +
+                   error.message();
+    return false;
+  }
+  auto cleanupTransaction = [&]() {
+    removePath(transactionPath);
+    std::error_code ignored;
+    std::filesystem::remove(transactionRoot, ignored);
+  };
 
   if (artifact.kind == BmsSearchPendingArtifactKind::Archive) {
     std::filesystem::copy_file(artifact.sourcePath, commitPath,
@@ -344,7 +353,7 @@ bool commitFindBmsPendingArtifact(
     }
   }
   if (error) {
-    removePath(commitPath);
+    cleanupTransaction();
     errorMessage = "Could not prepare downloaded files: " + error.message();
     return false;
   }
@@ -362,7 +371,7 @@ bool commitFindBmsPendingArtifact(
 
   const bool hadDestination = std::filesystem::exists(destination, error);
   if (error) {
-    removePath(commitPath);
+    cleanupTransaction();
     errorMessage = "Could not inspect the Find BMS destination: " +
                    error.message();
     return false;
@@ -370,7 +379,7 @@ bool commitFindBmsPendingArtifact(
   if (hadDestination) {
     renamePath(destination, backupPath, error);
     if (error) {
-      removePath(commitPath);
+      cleanupTransaction();
       errorMessage = "Could not back up existing downloaded files: " +
                      error.message();
       return false;
@@ -390,7 +399,7 @@ bool commitFindBmsPendingArtifact(
         return false;
       }
     }
-    removePath(commitPath);
+    cleanupTransaction();
     errorMessage = "Could not install downloaded files: " + swapError;
     return false;
   }
@@ -398,6 +407,7 @@ bool commitFindBmsPendingArtifact(
   if (hadDestination) {
     removePath(backupPath);
   }
+  cleanupTransaction();
   if (!artifact.alternateDestinationPath.empty()) {
     std::error_code ignoredCleanupError;
     std::filesystem::remove_all(artifact.alternateDestinationPath,

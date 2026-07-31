@@ -116,6 +116,24 @@ The prior `findBmsDownloadRoot` and `additionalFolderToScan` plumbing becomes
 unnecessary and is removed. Manual Refresh Library and Rebuild Library continue
 using every configured entry and `ChartLibraryScanner::Scan()`.
 
+## Concurrency with a Full Scan
+
+The downloaded-path task shares the existing FIFO library worker with full
+refresh and rebuild tasks. If one of those tasks is running or paused, database
+ingestion for the download waits behind it and runs after its scan transaction
+finishes.
+
+The filesystem commit itself remains on the Find BMS download thread. Its
+existing system-temp staging root cannot be used as the final swap source
+because a configured library can live on another filesystem, where rename is
+not atomic and may fail as a cross-device operation. Commit and backup payloads
+therefore live under the reserved same-volume private namespace
+`BMSSEARCH/.asobmashow-transactions/<uuid>/` until the final rename succeeds or
+rolls back. A full scan that is already traversing the library disables
+recursion at that exact reserved directory. Similarly named user directories
+remain scannable. The queued exact-path scan then indexes the installed
+destination after the full scan completes.
+
 ## Error Handling and Cancellation
 
 An empty Find BMS `outputPath` does not enqueue an indexing task. A repository
@@ -136,6 +154,11 @@ Scanner regression tests will prove that additions-only scanning:
 - preserves an unrelated database chart whose file is now missing, proving no
   global reconciliation occurred; and
 - imports charts from an exact archive path and updates its archive cache.
+
+Full-scan and commit regressions also prove that the private transaction
+namespace stays out of chart metadata, a similarly named normal directory
+remains eligible, swap rollback restores the old destination, and the private
+transaction directory is cleaned after rollback succeeds.
 
 Main-menu library policy tests will prove that a downloaded-path request
 produces exactly one scan entry for either a directory or archive path. The

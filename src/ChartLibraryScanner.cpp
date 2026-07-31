@@ -7,6 +7,7 @@
 #include "ChartScanWorkScheduler.h"
 #include "ThreadCompat.h"
 #include "Utils.h"
+#include "bms_search/DownloadStorageIdentity.h"
 #include "path.h"
 #include "repositories/ChartStorageIdentity.h"
 #include "targets.h"
@@ -53,6 +54,14 @@ constexpr std::size_t kArchiveDirectConcurrentMinCharts = 16;
 constexpr std::size_t kArchiveClassificationPauseInterval = 256;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
+
+bool isFindBmsPrivateStorageDirectory(const std::filesystem::path &path) {
+  if (path.empty() || path.parent_path().filename() != "BMSSEARCH") {
+    return false;
+  }
+  return fspath_to_utf8(path.filename()) ==
+         asobmshow::bms_search::kFindBmsTransactionDirectoryName;
+}
 
 std::int64_t clampScanInteger(std::uint64_t value) {
   return value > static_cast<std::uint64_t>(
@@ -1322,6 +1331,13 @@ int ChartLibraryScanner::ScanImpl(
       if (shouldStop()) {
         entityScheduler.cancel();
         return 0;
+      }
+      std::error_code directoryTypeError;
+      if (iterator->is_directory(directoryTypeError) && !directoryTypeError) {
+        if (isFindBmsPrivateStorageDirectory(iterator->path())) {
+          iterator.disable_recursion_pending();
+        }
+        continue;
       }
       std::error_code typeError;
       if (!iterator->is_regular_file(typeError) || typeError) {

@@ -220,12 +220,18 @@ void testCommitRestoresDestinationWhenSwapFails() {
   const auto artifact = extractedArtifact(*attempt, downloadRoot);
   writeText(artifact.destinationPath / "chart.bms", "old chart");
   writeText(attempt->extractedPath / "chart.bms", "new chart");
+  bool sawPrivateCommitPath = false;
   auto failCommitSwap =
-      [destination = artifact.destinationPath](
+      [destination = artifact.destinationPath, downloadRoot,
+       &sawPrivateCommitPath](
           const std::filesystem::path &from, const std::filesystem::path &to,
           std::error_code &renameError) {
-        if (from.filename().string().find(".commit-") != std::string::npos &&
+        const auto transactionRoot =
+            downloadRoot / ".asobmashow-transactions";
+        if (from.filename() == "commit" &&
+            from.parent_path().parent_path() == transactionRoot &&
             to == destination) {
+          sawPrivateCommitPath = true;
           renameError = std::make_error_code(std::errc::io_error);
           return;
         }
@@ -234,8 +240,11 @@ void testCommitRestoresDestinationWhenSwapFails() {
 
   assert(!asobmshow::bms_search::commitFindBmsPendingArtifact(
       artifact, error, failCommitSwap));
+  assert(sawPrivateCommitPath);
   assert(readText(artifact.destinationPath / "chart.bms") == "old chart");
   assert(std::filesystem::exists(attempt->root));
+  assert(!std::filesystem::exists(downloadRoot /
+                                  ".asobmashow-transactions"));
   assert(!error.empty());
 }
 

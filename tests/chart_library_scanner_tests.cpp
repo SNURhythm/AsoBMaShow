@@ -231,6 +231,35 @@ void testAddedArchivePathIsIndexed() {
   assert(updatedSnapshot.archiveCache.front().chartCount == 1);
 }
 
+void testFullScanSkipsOnlyFindBmsPrivateStorageDirectory() {
+  TempDirectory temporary;
+  const auto libraryRoot = temporary.path() / "library";
+  const auto downloadRoot = libraryRoot / "BMSSEARCH";
+  writeChart(downloadRoot / "package", "final", "Final Download");
+  writeChart(downloadRoot / ".asobmashow-transactions" / "active" / "commit",
+             "commit", "Private Transaction");
+  writeChart(downloadRoot / ".asobmashow-transactions-user", "legitimate",
+             "Legitimate Similar Name");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.Scan(*session, {libraryRoot}) > 0);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 2);
+  assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
+                     [](const auto &meta) {
+                       return meta.Title == "Final Download";
+                     }));
+  assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
+                     [](const auto &meta) {
+                       return meta.Title == "Legitimate Similar Name";
+                     }));
+}
+
 void testStopAndPauseBeforeWork() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -1090,6 +1119,7 @@ int main() {
   testBasicNoOpAndDeleteScan();
   testAddedDirectoryScanPreservesUnrelatedMissingChart();
   testAddedArchivePathIsIndexed();
+  testFullScanSkipsOnlyFindBmsPrivateStorageDirectory();
   testStopAndPauseBeforeWork();
   testCheckpointResume();
   testStorageFailureLeavesNoChart();

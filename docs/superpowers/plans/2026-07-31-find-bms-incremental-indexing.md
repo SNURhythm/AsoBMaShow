@@ -265,6 +265,45 @@ python3 scripts/check_find_bms_archive_flow.py
 
 Expected: both binaries/scripts exit 0 and the audit prints `Find BMS archive-flow audit passed`.
 
+### Task 2A: Guard an in-flight full scan from download transaction paths
+
+**Files:**
+- Modify: `tests/chart_library_scanner_tests.cpp`
+- Modify: `tests/find_bms_download_tests.cpp`
+- Modify: `src/ChartLibraryScanner.cpp`
+- Modify: `src/bms_search/DownloadStorageIdentity.h`
+- Modify: `src/bms_search/DownloadStaging.cpp`
+
+- [ ] **Step 1: Add a failing transaction-directory regression**
+
+Create a `BMSSEARCH` fixture containing a final chart directory, a chart beneath
+`.asobmashow-transactions/<uuid>/commit`, and a similarly named non-reserved
+directory. Run a full scan and assert that only the final and similarly named
+normal charts are stored. Update the swap-failure regression to require the
+commit rename source to come from that private namespace and require cleanup
+after rollback restores the destination.
+
+- [ ] **Step 2: Verify RED**
+
+Build and run `chart_library_scanner_tests` and `find_bms_download_tests`.
+Expected: the scanner assertion fails because the iterator enters the private
+tree, and swap-failure injection does not trigger because the commit source is
+still a destination-like sibling.
+
+- [ ] **Step 3: Add the narrow traversal exclusion**
+
+Define one reserved Find BMS transaction directory name. Prepare commit and
+backup payloads under `BMSSEARCH/.asobmashow-transactions/<uuid>/` so they stay
+on the destination filesystem while remaining outside the chart namespace.
+Clean the UUID directory and remove the reserved parent only when empty. In the
+scanner, call `disable_recursion_pending()` only for that exact reserved direct
+child of `BMSSEARCH`.
+
+- [ ] **Step 4: Verify GREEN**
+
+Rebuild and run both focused binaries. Expected: the private-namespace,
+rollback, and existing scanner/download suites exit 0.
+
 ### Task 3: Verify, self-review, commit, and publish
 
 **Files:**
@@ -304,7 +343,9 @@ diff, and verify each design requirement against code/tests. In particular,
 confirm manual refresh still selects effective entries and imports tables,
 incremental scanning uses only `outputPath`, unrelated metadata cannot be
 deleted, exact archives are reindexed, and rebuild-required state is not
-cleared by `ScanAdded()`.
+cleared by `ScanAdded()`. Confirm a running full scan cannot descend into the
+reserved Find BMS private transaction namespace, while similarly named user
+folders remain scannable and transactional rename/rollback stays same-volume.
 
 - [ ] **Step 4: Commit scoped implementation changes**
 
