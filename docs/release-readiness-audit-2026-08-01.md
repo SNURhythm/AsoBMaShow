@@ -33,6 +33,13 @@ CTest, and fatal Android lint.
   one checked YUV420 layout now uses ceiling chroma dimensions for allocation,
   texture creation, and padded-plane uploads; invalid or unrepresentable
   layouts fail cleanly. Table-driven layout and jukebox regressions pass.
+- R10 decoder lifecycle remediation is implemented and verified locally: codec
+  output is drained before input, packets survive send backpressure, demux EOF
+  sends exactly one accepted null flush, delayed output drains through decoder
+  EOF, and seeks reset retained state. Per-player buffering is reduced from ten
+  queued plus up to twenty recycled frames to three queued plus two recycled
+  frames. Deterministic state-machine, real FFmpeg/jukebox, and main-build
+  regressions pass.
 - The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
   app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
   difficulty-table loading.

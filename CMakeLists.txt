@@ -2443,6 +2443,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/utils/Stopwatch.cpp
+        src/video/VideoDecodeState.cpp
         src/video/VideoFrameLayout.cpp
         src/video/VideoPlayer.cpp
     )
@@ -2469,6 +2470,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(video_frame_layout_tests PRIVATE cxx_std_23)
+
+    add_executable(video_decode_state_tests
+        tests/video_decode_state_tests.cpp
+        src/video/VideoDecodeState.cpp
+    )
+    target_include_directories(video_decode_state_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(video_decode_state_tests PRIVATE cxx_std_23)
 
     add_executable(audio_device_manager_tests
         tests/audio_device_manager_tests.cpp
@@ -3828,6 +3838,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(video_frame_layout_tests)
+    asobmashow_register_test(video_decode_state_tests)
 
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)

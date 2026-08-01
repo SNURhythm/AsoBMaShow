@@ -2,6 +2,8 @@
 
 #include <SDL2/SDL.h>
 #include <bgfx/bgfx.h>
+#include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 #include "../utils/Stopwatch.h"
@@ -51,6 +53,7 @@ private:
   std::atomic<bool> isPaused{false};
   std::atomic<bool> predecodingActive{false};
   std::atomic<bool> decodeSuspended{false};
+  std::atomic<std::uint64_t> decodeGeneration{0};
   std::thread predecodeThread;
 
   AVFormatContext *formatContext = nullptr;
@@ -62,7 +65,8 @@ private:
   std::vector<AVFrame *> frameBuffer; // Fixed-size ring buffer
   std::atomic<size_t> bufferHead = 0;
   std::atomic<size_t> bufferTail = 0;
-  static const int maxBufferSize = 10; // Adjust as needed
+  static constexpr std::size_t maxBufferSize = 3;
+  static constexpr std::size_t maxRecyclePoolSize = 2;
   std::atomic<size_t> bufferSize = 0;
   std::condition_variable freeSpace;
   std::mutex bufferMutex; // Protect ring buffer operations
