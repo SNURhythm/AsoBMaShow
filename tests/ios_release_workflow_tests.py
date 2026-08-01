@@ -16,6 +16,7 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
     def setUpClass(cls):
         cls.fastfile = FASTFILE.read_text(encoding="utf-8")
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
+        cls.verify_script = VERIFY_SCRIPT.read_text(encoding="utf-8")
 
     def test_distribution_lanes_are_explicit_and_cannot_route_by_accident(self):
         self.assertIn("lane :firebase do", self.fastfile)
@@ -75,6 +76,10 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("upload_to_testflight", output)
         self.assertNotIn("firebase_app_distribution", output)
         self.assertNotIn("fastlane ios", output)
+
+    def test_release_verifier_includes_math_regressions(self):
+        self.assertIn("quaternion_math_tests", self.verify_script)
+        self.assertIn("foundation_math_quaternion", self.verify_script)
 
     def test_local_firebase_wrapper_calls_only_the_firebase_lane(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
