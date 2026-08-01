@@ -1,4 +1,5 @@
 #include "DownloadStaging.h"
+#include "DownloadStorageIdentity.h"
 
 #include "../ArchiveFile.h"
 #include "../Uuid.h"
@@ -158,6 +159,16 @@ void removePath(const std::filesystem::path &path) {
   std::filesystem::remove_all(path, ignored);
 }
 
+void removeVariantPath(
+    const std::filesystem::path &path,
+    std::vector<std::filesystem::path> *removedPaths) {
+  std::error_code error;
+  const std::uintmax_t removed = std::filesystem::remove_all(path, error);
+  if (!error && removed > 0 && removedPaths != nullptr) {
+    removedPaths->push_back(path.lexically_normal());
+  }
+}
+
 std::optional<std::string_view> storageIdFromKey(std::string_view storageKey) {
   constexpr std::size_t kStorageIdLength = 16;
   constexpr std::size_t kDelimiterLength = 2;
@@ -190,7 +201,9 @@ bool storageKeysShareIdentity(std::string_view candidateKey,
   return candidateId && *candidateId == *storageId;
 }
 
-void removeStaleExtractedVariants(const BmsSearchPendingArtifact &artifact) {
+void removeStaleExtractedVariants(
+    const BmsSearchPendingArtifact &artifact,
+    std::vector<std::filesystem::path> *removedPaths) {
   std::error_code error;
   for (std::filesystem::directory_iterator iterator(artifact.downloadRoot,
                                                      error),
@@ -208,12 +221,14 @@ void removeStaleExtractedVariants(const BmsSearchPendingArtifact &artifact) {
     }
     if (storageKeysShareIdentity(fspath_to_utf8(path.filename()),
                                  artifact.storageKey)) {
-      removePath(path);
+      removeVariantPath(path, removedPaths);
     }
   }
 }
 
-void removeStaleArchiveVariants(const BmsSearchPendingArtifact &artifact) {
+void removeStaleArchiveVariants(
+    const BmsSearchPendingArtifact &artifact,
+    std::vector<std::filesystem::path> *removedPaths) {
   if (artifact.storageKey.empty()) {
     return;
   }
@@ -236,7 +251,7 @@ void removeStaleArchiveVariants(const BmsSearchPendingArtifact &artifact) {
     archiveKey.resize(archiveKey.size() - extension.size());
     if (storageKeysShareIdentity(archiveKey, artifact.storageKey) &&
         path.lexically_normal() != artifact.destinationPath.lexically_normal()) {
-      removePath(path);
+      removeVariantPath(path, removedPaths);
     }
   }
 }
@@ -292,7 +307,11 @@ createFindBmsDownloadAttempt(const std::string &archiveName,
 
 bool commitFindBmsPendingArtifact(
     const BmsSearchPendingArtifact &artifact, std::string &errorMessage,
-    FindBmsRenameOperation renameOperation) {
+    FindBmsRenameOperation renameOperation,
+    std::vector<std::filesystem::path> *removedPaths) {
+  if (removedPaths != nullptr) {
+    removedPaths->clear();
+  }
   if (!validatePendingArtifact(artifact, errorMessage)) {
     return false;
   }
@@ -314,15 +333,23 @@ bool commitFindBmsPendingArtifact(
                    error.message();
     return false;
   }
-  const std::string transactionId = uuid::generateV4();
-  const auto commitPath = destination.parent_path() /
-                          (destination.filename().string() + ".commit-" +
-                           transactionId);
-  const auto backupPath = destination.parent_path() /
-                          (destination.filename().string() + ".backup-" +
-                           transactionId);
-  removePath(commitPath);
-  removePath(backupPath);
+  const auto transactionRoot =
+      artifact.downloadRoot / kFindBmsTransactionDirectoryName;
+  const auto transactionPath = transactionRoot / uuid::generateV4();
+  const auto commitPath = transactionPath / "commit";
+  const auto backupPath = transactionPath / "backup";
+  removePath(transactionPath);
+  std::filesystem::create_directories(transactionPath, error);
+  if (error) {
+    errorMessage = "Could not create the private Find BMS transaction folder: " +
+                   error.message();
+    return false;
+  }
+  auto cleanupTransaction = [&]() {
+    removePath(transactionPath);
+    std::error_code ignored;
+    std::filesystem::remove(transactionRoot, ignored);
+  };
 
   if (artifact.kind == BmsSearchPendingArtifactKind::Archive) {
     std::filesystem::copy_file(artifact.sourcePath, commitPath,
@@ -331,6 +358,7 @@ bool commitFindBmsPendingArtifact(
   } else {
     if (std::filesystem::exists(destination, error) && !error &&
         !std::filesystem::is_directory(destination, error)) {
+      cleanupTransaction();
       errorMessage = "Existing Find BMS destination is not a folder.";
       return false;
     }
@@ -344,7 +372,7 @@ bool commitFindBmsPendingArtifact(
     }
   }
   if (error) {
-    removePath(commitPath);
+    cleanupTransaction();
     errorMessage = "Could not prepare downloaded files: " + error.message();
     return false;
   }
@@ -362,7 +390,7 @@ bool commitFindBmsPendingArtifact(
 
   const bool hadDestination = std::filesystem::exists(destination, error);
   if (error) {
-    removePath(commitPath);
+    cleanupTransaction();
     errorMessage = "Could not inspect the Find BMS destination: " +
                    error.message();
     return false;
@@ -370,7 +398,7 @@ bool commitFindBmsPendingArtifact(
   if (hadDestination) {
     renamePath(destination, backupPath, error);
     if (error) {
-      removePath(commitPath);
+      cleanupTransaction();
       errorMessage = "Could not back up existing downloaded files: " +
                      error.message();
       return false;
@@ -390,7 +418,7 @@ bool commitFindBmsPendingArtifact(
         return false;
       }
     }
-    removePath(commitPath);
+    cleanupTransaction();
     errorMessage = "Could not install downloaded files: " + swapError;
     return false;
   }
@@ -398,13 +426,12 @@ bool commitFindBmsPendingArtifact(
   if (hadDestination) {
     removePath(backupPath);
   }
+  cleanupTransaction();
   if (!artifact.alternateDestinationPath.empty()) {
-    std::error_code ignoredCleanupError;
-    std::filesystem::remove_all(artifact.alternateDestinationPath,
-                                ignoredCleanupError);
+    removeVariantPath(artifact.alternateDestinationPath, removedPaths);
   }
-  removeStaleExtractedVariants(artifact);
-  removeStaleArchiveVariants(artifact);
+  removeStaleExtractedVariants(artifact, removedPaths);
+  removeStaleArchiveVariants(artifact, removedPaths);
   removePath(artifact.stagingRoot);
   errorMessage.clear();
   return true;

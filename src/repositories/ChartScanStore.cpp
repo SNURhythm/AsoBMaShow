@@ -344,41 +344,45 @@ bool clearMetadataRebuildRequired(sqlite3 *database) {
   return true;
 }
 
-ChartScanSnapshot loadScanSnapshot(sqlite3 *database) {
+ChartScanSnapshot loadScanSnapshot(sqlite3 *database,
+                                   ChartScanSnapshotLoad load) {
   ChartScanSnapshot snapshot;
-  chart_repository_detail::SelectAllChartMeta(database, snapshot.charts);
+  if (load == ChartScanSnapshotLoad::Full) {
+    chart_repository_detail::SelectAllChartMeta(database, snapshot.charts);
 
-  SqliteStatementHandle solidStatement;
-  if (prepareSqliteStatementLogged(
-          database, "SELECT path FROM solid_archives", solidStatement,
-          "selecting solid archive paths", logSqlErrorText)) {
-    while (sqlite3_step(solidStatement.get()) == SQLITE_ROW) {
-      snapshot.solidArchives.push_back(
-          {.path = storedPathFromDatabase(
-               sqliteColumnString(solidStatement.get(), 0))});
+    SqliteStatementHandle solidStatement;
+    if (prepareSqliteStatementLogged(
+            database, "SELECT path FROM solid_archives", solidStatement,
+            "selecting solid archive paths", logSqlErrorText)) {
+      while (sqlite3_step(solidStatement.get()) == SQLITE_ROW) {
+        snapshot.solidArchives.push_back(
+            {.path = storedPathFromDatabase(
+                 sqliteColumnString(solidStatement.get(), 0))});
+      }
     }
-  }
 
-  const char *cacheQuery =
-      "SELECT path, archive_size, mtime_ns, solid, uncompressed_size, "
-      "file_count, chart_count FROM archive_scan_cache";
-  SqliteStatementHandle cacheStatement;
-  if (prepareSqliteStatementLogged(database, cacheQuery, cacheStatement,
-                                   "selecting archive scan cache",
-                                   logSqlErrorText)) {
-    while (sqlite3_step(cacheStatement.get()) == SQLITE_ROW) {
-      snapshot.archiveCache.push_back({
-          .path = storedPathFromDatabase(
-              sqliteColumnString(cacheStatement.get(), 0)),
-          .archiveSize = sqlite3_column_int64(cacheStatement.get(), 1),
-          .mtimeNs = sqlite3_column_int64(cacheStatement.get(), 2),
-          .solid = sqlite3_column_int(cacheStatement.get(), 3) != 0,
-          .uncompressedSize =
-              static_cast<std::uint64_t>(std::max<sqlite3_int64>(
-                  0, sqlite3_column_int64(cacheStatement.get(), 4))),
-          .fileCount = std::max(0, sqlite3_column_int(cacheStatement.get(), 5)),
-          .chartCount = sqlite3_column_int(cacheStatement.get(), 6),
-      });
+    const char *cacheQuery =
+        "SELECT path, archive_size, mtime_ns, solid, uncompressed_size, "
+        "file_count, chart_count FROM archive_scan_cache";
+    SqliteStatementHandle cacheStatement;
+    if (prepareSqliteStatementLogged(database, cacheQuery, cacheStatement,
+                                     "selecting archive scan cache",
+                                     logSqlErrorText)) {
+      while (sqlite3_step(cacheStatement.get()) == SQLITE_ROW) {
+        snapshot.archiveCache.push_back({
+            .path = storedPathFromDatabase(
+                sqliteColumnString(cacheStatement.get(), 0)),
+            .archiveSize = sqlite3_column_int64(cacheStatement.get(), 1),
+            .mtimeNs = sqlite3_column_int64(cacheStatement.get(), 2),
+            .solid = sqlite3_column_int(cacheStatement.get(), 3) != 0,
+            .uncompressedSize =
+                static_cast<std::uint64_t>(std::max<sqlite3_int64>(
+                    0, sqlite3_column_int64(cacheStatement.get(), 4))),
+            .fileCount =
+                std::max(0, sqlite3_column_int(cacheStatement.get(), 5)),
+            .chartCount = sqlite3_column_int(cacheStatement.get(), 6),
+        });
+      }
     }
   }
 
@@ -778,25 +782,30 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreference(
   return true;
 }
 
-int ChartRepository::Session::ScanBatch::CountChartsInArchive(
+std::optional<int> ChartRepository::Session::ScanBatch::CountChartsInArchive(
     const std::filesystem::path &path) {
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
-    return 0;
+    return std::nullopt;
   }
   SqliteStatementHandle statement;
   if (!prepareSqliteStatementLogged(
           impl_->database(), "SELECT path FROM chart_meta", statement,
           "counting archive chart rows", logSqlErrorText)) {
-    return 0;
+    return std::nullopt;
   }
   int count = 0;
   const auto target = path.lexically_normal();
-  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+  int stepResult = SQLITE_OK;
+  while ((stepResult = sqlite3_step(statement.get())) == SQLITE_ROW) {
     const auto chartPath =
         storedPathFromDatabase(sqliteColumnString(statement.get(), 0));
     if (pathIsInsideDirectory(chartPath, target)) {
       ++count;
     }
+  }
+  if (stepResult != SQLITE_DONE) {
+    logSqlError("counting archive chart rows", impl_->database());
+    return std::nullopt;
   }
   return count;
 }
@@ -831,8 +840,9 @@ int ChartRepository::Session::ScanBatch::ChangedCount() const {
   return impl_ != nullptr ? impl_->changedCount : 0;
 }
 
-ChartScanSnapshot ChartRepository::Session::LoadScanSnapshot() {
-  return loadScanSnapshot(impl_->database());
+ChartScanSnapshot ChartRepository::Session::LoadScanSnapshot(
+    ChartScanSnapshotLoad load) {
+  return loadScanSnapshot(impl_->database(), load);
 }
 
 std::optional<ChartRepository::Session::ScanBatch>

@@ -179,6 +179,97 @@ void testBasicNoOpAndDeleteScan() {
   assert(repository.GetLibraryRevision() > stableRevision);
 }
 
+void testAddedDirectoryScanPreservesUnrelatedMissingChart() {
+  TempDirectory temporary;
+  const auto existingRoot = temporary.path() / "existing";
+  const auto addedRoot = temporary.path() / "downloaded";
+  const auto existing = writeChart(existingRoot, "existing", "Existing");
+  writeChart(addedRoot, "added", "Added");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {existingRoot}) == 1);
+  std::filesystem::remove(existing);
+
+  const ChartScanResult addedResult =
+      scanner.ScanAddedWithResult(*session, {addedRoot});
+  assert(addedResult.changedCount == 1);
+  assert(addedResult.completed);
+  assert(addedResult.committed);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 2);
+  assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
+                     [](const auto &meta) { return meta.Title == "Existing"; }));
+  assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
+                     [](const auto &meta) { return meta.Title == "Added"; }));
+
+  const ChartScanResult noWorkResult =
+      scanner.ScanAddedWithResult(*session, {temporary.path() / "missing"});
+  assert(noWorkResult.changedCount == 0);
+  assert(noWorkResult.completed);
+  assert(!noWorkResult.committed);
+}
+
+void testAddedArchivePathIsIndexed() {
+  TempDirectory temporary;
+  const auto archive = writeZip(
+      temporary.path() / "downloaded.zip",
+      {{"inside.bms", chartText("Downloaded Archive")}});
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.ScanAdded(*session, {archive}) == 2);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 1);
+  assert(snapshot.charts.front().Title == "Downloaded Archive");
+  assert(snapshot.archiveCache.size() == 1);
+  assert(snapshot.archiveCache.front().chartCount == 1);
+
+  writeZip(archive, {{"replacement.bms", chartText("Updated Archive")}});
+  assert(scanner.ScanAdded(*session, {archive}) > 0);
+  const ChartScanSnapshot updatedSnapshot = session->LoadScanSnapshot();
+  assert(updatedSnapshot.charts.size() == 1);
+  assert(updatedSnapshot.charts.front().Title == "Updated Archive");
+  assert(updatedSnapshot.archiveCache.size() == 1);
+  assert(updatedSnapshot.archiveCache.front().chartCount == 1);
+}
+
+void testFullScanSkipsOnlyFindBmsPrivateStorageDirectory() {
+  TempDirectory temporary;
+  const auto libraryRoot = temporary.path() / "library";
+  const auto downloadRoot = libraryRoot / "BMSSEARCH";
+  writeChart(downloadRoot / "package", "final", "Final Download");
+  writeChart(downloadRoot / ".asobmashow-transactions" / "active" / "commit",
+             "commit", "Private Transaction");
+  writeChart(downloadRoot / ".asobmashow-transactions-user", "legitimate",
+             "Legitimate Similar Name");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  assert(scanner.Scan(*session, {libraryRoot}) > 0);
+  const ChartScanSnapshot snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 2);
+  assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
+                     [](const auto &meta) {
+                       return meta.Title == "Final Download";
+                     }));
+  assert(std::any_of(snapshot.charts.begin(), snapshot.charts.end(),
+                     [](const auto &meta) {
+                       return meta.Title == "Legitimate Similar Name";
+                     }));
+}
+
 void testStopAndPauseBeforeWork() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -262,6 +353,37 @@ public:
   }
 };
 
+std::atomic_bool denyChartRead{false};
+
+int denyChartReadAuthorizer(void *, int action, const char *first,
+                            const char *, const char *, const char *) {
+  if (denyChartRead.load(std::memory_order_relaxed) && action == SQLITE_READ &&
+      first != nullptr && std::string_view(first) == "chart_meta") {
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+int installDenyChartRead(sqlite3 *database, char **,
+                         const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(database, denyChartReadAuthorizer, nullptr);
+}
+
+class ScopedChartReadDenial {
+public:
+  ScopedChartReadDenial() {
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(
+               reinterpret_cast<void (*)()>(installDenyChartRead)) ==
+           SQLITE_OK);
+  }
+
+  ~ScopedChartReadDenial() {
+    denyChartRead.store(false, std::memory_order_relaxed);
+    sqlite3_reset_auto_extension();
+  }
+};
+
 std::atomic_bool countPostInsertChartPathReads{false};
 std::atomic_bool observedChartInsert{false};
 std::atomic_int postInsertChartPathReads{0};
@@ -334,6 +456,75 @@ void testStorageFailureLeavesNoChart() {
   ChartLibraryScanner scanner;
   assert(scanner.Scan(*session, {root}) == 0);
   assert(session->CountAllChartMeta() == 0);
+}
+
+void testAddedScanStorageFailureDoesNotQualifyExistingChart() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  writeChart(root, "sample", "Existing Scanner");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  ChartLibraryScanner scanner;
+  {
+    auto session = repository.OpenSession();
+    assert(session.has_value());
+    assert(scanner.ScanAdded(*session, {root}) == 1);
+    assert(session->CountAllChartMeta() == 1);
+  }
+
+  ScopedInsertDenial denial;
+  auto deniedSession = repository.OpenSession();
+  assert(deniedSession.has_value());
+  denyChartInsert.store(true, std::memory_order_relaxed);
+
+  const ChartScanResult result =
+      scanner.ScanAddedWithResult(*deniedSession, {root});
+  assert(!result.completed);
+  assert(!result.committed);
+  assert(deniedSession->CountAllChartMeta() == 1);
+}
+
+void testAddedScanParseFailureDoesNotQualifyExistingChart() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto chartPath = writeChart(root, "sample", "Existing Parser");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  const ChartScanResult initial = scanner.ScanAddedWithResult(*session, {root});
+  assert(initial.completed);
+  assert(initial.committed);
+  assert(initial.upsertedChartPaths.size() == 1);
+
+  {
+    std::ofstream invalidChart(chartPath);
+    invalidChart << "#TITLE Invalid replacement\n";
+  }
+  const ChartScanResult failedParse =
+      scanner.ScanAddedWithResult(*session, {root});
+  assert(failedParse.completed);
+  assert(failedParse.committed);
+  assert(failedParse.upsertedChartPaths.empty());
+  assert(session->CountAllChartMeta() == 1);
+}
+
+void testArchiveChartCountReportsStorageReadFailure() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  ScopedChartReadDenial denial;
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  auto batch = session->BeginScanBatch();
+  assert(batch.has_value());
+  denyChartRead.store(true, std::memory_order_relaxed);
+
+  assert(!batch->CountChartsInArchive(temporary.path() / "archive.zip")
+              .has_value());
 }
 
 void testArchiveStorageFailureDoesNotWriteCache() {
@@ -973,6 +1164,55 @@ void testArchiveInspectionUsesMultipleEntityWorkers() {
   assert(session->LoadScanSnapshot().archiveCache.size() == kFixtureCount);
 }
 
+void testConcurrentPauseInterruptionStopsScanCleanly() {
+  constexpr int kFixtureCount = 8;
+  if (parallel_worker_count(kFixtureCount) <= 2) {
+    return;
+  }
+
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  for (int index = 0; index < kFixtureCount; ++index) {
+    writeChart(root, "chart-" + std::to_string(index),
+               "Interrupted " + std::to_string(index));
+  }
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  const std::thread::id callerThread = std::this_thread::get_id();
+  std::mutex rendezvousMutex;
+  std::condition_variable rendezvousCv;
+  std::set<std::thread::id> workerThreads;
+  bool timedOut = false;
+  const auto pauseCallback = [&]() {
+    const std::thread::id currentThread = std::this_thread::get_id();
+    if (currentThread == callerThread) {
+      return true;
+    }
+    std::unique_lock lock(rendezvousMutex);
+    workerThreads.insert(currentThread);
+    rendezvousCv.notify_all();
+    if (!rendezvousCv.wait_for(lock, std::chrono::seconds(2),
+                               [&] { return workerThreads.size() >= 2; })) {
+      timedOut = true;
+      rendezvousCv.notify_all();
+    }
+    return false;
+  };
+
+  const ChartScanResult result =
+      scanner.ScanWithResult(*session, {root}, nullptr, nullptr,
+                             pauseCallback);
+  assert(!result.completed);
+  assert(!result.committed);
+  assert(workerThreads.size() >= 2);
+  assert(!timedOut);
+}
+
 void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
   constexpr int kEntityCount = 4;
   if (parallel_worker_count(kEntityCount) <= 1) {
@@ -1036,9 +1276,15 @@ void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
 
 int main() {
   testBasicNoOpAndDeleteScan();
+  testAddedDirectoryScanPreservesUnrelatedMissingChart();
+  testAddedArchivePathIsIndexed();
+  testFullScanSkipsOnlyFindBmsPrivateStorageDirectory();
   testStopAndPauseBeforeWork();
   testCheckpointResume();
   testStorageFailureLeavesNoChart();
+  testAddedScanStorageFailureDoesNotQualifyExistingChart();
+  testAddedScanParseFailureDoesNotQualifyExistingChart();
+  testArchiveChartCountReportsStorageReadFailure();
   testArchiveStorageFailureDoesNotWriteCache();
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
   testArchiveIndexProgressFollowsFolderTraversal();
@@ -1054,6 +1300,7 @@ int main() {
   testArchiveResultApplicationOverlapsLaterArchiveStreaming();
   testArchiveResultApplicationOverlapsItsOwnStreaming();
   testArchiveInspectionUsesMultipleEntityWorkers();
+  testConcurrentPauseInterruptionStopsScanCleanly();
   testBlockedArchiveDoesNotDelayLaterOrdinaryEntities();
   return 0;
 }

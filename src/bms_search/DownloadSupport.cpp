@@ -547,8 +547,10 @@ bool downloadAndExtractArchive(
       .decideExtracted = decideExtractedArchive,
       .commitArtifact =
           [](const BmsSearchPendingArtifact &artifact,
-             std::string &errorMessage) {
-            return commitFindBmsPendingArtifact(artifact, errorMessage);
+             std::string &errorMessage,
+             std::vector<std::filesystem::path> &removedPaths) {
+            return commitFindBmsPendingArtifact(artifact, errorMessage, {},
+                                                &removedPaths);
           }};
   const DownloadedArchiveWorkflowRequest request{
       .attempt = *attempt,

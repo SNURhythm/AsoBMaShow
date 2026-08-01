@@ -73,6 +73,7 @@ bool reportCancelled(std::atomic_bool &cancelled, BmsSearchResult &result) {
   result.status = BmsSearchResult::Status::DownloadFailed;
   result.message = "Lookup cancelled.";
   result.outputPath.clear();
+  result.removedPaths.clear();
   result.pendingArtifact.reset();
   return true;
 }
@@ -174,6 +175,7 @@ bool processDownloadedArchive(
     BmsSearchResult &result,
     const DownloadedArchiveWorkflowDependencies &dependencies) {
   result.outputPath.clear();
+  result.removedPaths.clear();
   result.pendingArtifact.reset();
   if (!dependencies.decideArchive || !dependencies.commitArtifact) {
     result.status = BmsSearchResult::Status::DownloadFailed;
@@ -200,7 +202,8 @@ bool processDownloadedArchive(
     reportProgress(progressCallback, "Saving downloaded archive");
     const auto artifact = archiveArtifact(request);
     std::string commitError;
-    if (!dependencies.commitArtifact(artifact, commitError)) {
+    std::vector<std::filesystem::path> removedPaths;
+    if (!dependencies.commitArtifact(artifact, commitError, removedPaths)) {
       result.status = BmsSearchResult::Status::DownloadFailed;
       result.message = commitError.empty() ? "Could not keep downloaded archive."
                                            : commitError;
@@ -208,6 +211,7 @@ bool processDownloadedArchive(
     }
     result.status = BmsSearchResult::Status::Downloaded;
     result.outputPath = artifact.destinationPath;
+    result.removedPaths = std::move(removedPaths);
     result.message = directDecision.message.empty()
                          ? "Downloaded BMS archive."
                          : directDecision.message;
@@ -267,7 +271,8 @@ bool processDownloadedArchive(
 
   const auto artifact = extractedArtifact(request);
   std::string commitError;
-  if (!dependencies.commitArtifact(artifact, commitError)) {
+  std::vector<std::filesystem::path> removedPaths;
+  if (!dependencies.commitArtifact(artifact, commitError, removedPaths)) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = commitError.empty() ? "Could not keep unarchived files."
                                          : commitError;
@@ -275,6 +280,7 @@ bool processDownloadedArchive(
   }
   result.status = BmsSearchResult::Status::Downloaded;
   result.outputPath = artifact.destinationPath;
+  result.removedPaths = std::move(removedPaths);
   result.message = extractedDecision.foundBmsFile
                        ? "Downloaded and unarchived BMS archive."
                        : "Archive unarchived, but no BMS file was found.";

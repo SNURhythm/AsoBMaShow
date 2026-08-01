@@ -176,6 +176,27 @@ void testExtractedCommitMergesTransactionally() {
   assert(!std::filesystem::exists(attempt->root));
 }
 
+void testExtractedCommitConflictCleansPrivateTransaction() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  const auto artifact = extractedArtifact(*attempt, downloadRoot);
+  writeText(attempt->extractedPath / "chart.bms", "new chart");
+  writeText(artifact.destinationPath, "not a directory");
+
+  assert(!asobmshow::bms_search::commitFindBmsPendingArtifact(artifact,
+                                                              error));
+  assert(error == "Existing Find BMS destination is not a folder.");
+  assert(readText(artifact.destinationPath) == "not a directory");
+  assert(!std::filesystem::exists(downloadRoot /
+                                  ".asobmashow-transactions"));
+}
+
 void testDeleteRemovesOnlyAttempt() {
   CleanupPaths cleanup;
   std::string error;
@@ -220,12 +241,18 @@ void testCommitRestoresDestinationWhenSwapFails() {
   const auto artifact = extractedArtifact(*attempt, downloadRoot);
   writeText(artifact.destinationPath / "chart.bms", "old chart");
   writeText(attempt->extractedPath / "chart.bms", "new chart");
+  bool sawPrivateCommitPath = false;
   auto failCommitSwap =
-      [destination = artifact.destinationPath](
+      [destination = artifact.destinationPath, downloadRoot,
+       &sawPrivateCommitPath](
           const std::filesystem::path &from, const std::filesystem::path &to,
           std::error_code &renameError) {
-        if (from.filename().string().find(".commit-") != std::string::npos &&
+        const auto transactionRoot =
+            downloadRoot / ".asobmashow-transactions";
+        if (from.filename() == "commit" &&
+            from.parent_path().parent_path() == transactionRoot &&
             to == destination) {
+          sawPrivateCommitPath = true;
           renameError = std::make_error_code(std::errc::io_error);
           return;
         }
@@ -234,8 +261,11 @@ void testCommitRestoresDestinationWhenSwapFails() {
 
   assert(!asobmshow::bms_search::commitFindBmsPendingArtifact(
       artifact, error, failCommitSwap));
+  assert(sawPrivateCommitPath);
   assert(readText(artifact.destinationPath / "chart.bms") == "old chart");
   assert(std::filesystem::exists(attempt->root));
+  assert(!std::filesystem::exists(downloadRoot /
+                                  ".asobmashow-transactions"));
   assert(!error.empty());
 }
 
@@ -249,12 +279,17 @@ void testArchiveCommitAndResolution() {
   const auto downloadRoot = testDownloadRoot(*attempt);
   cleanup.add(downloadRoot.parent_path());
   writeText(attempt->archivePath, "archive bytes");
+  const auto extractedAlternate = downloadRoot / "package";
+  writeText(extractedAlternate / "stale.bms", "stale chart");
   const BmsSearchPendingArtifact artifact{
       .kind = BmsSearchPendingArtifactKind::Archive,
       .stagingRoot = attempt->root,
       .sourcePath = attempt->archivePath,
       .downloadRoot = downloadRoot,
-      .destinationPath = downloadRoot / "_archives/package.zip"};
+      .destinationPath = downloadRoot / "_archives/package.zip",
+      .archiveName = "package.zip",
+      .storageKey = "package",
+      .alternateDestinationPath = extractedAlternate};
   BmsSearchResult result;
   result.status = BmsSearchResult::Status::HashMismatch;
   result.pendingArtifact = artifact;
@@ -264,6 +299,8 @@ void testArchiveCommitAndResolution() {
       std::move(result), BmsSearchPendingArtifactDecision::Keep);
   assert(!result.pendingArtifact);
   assert(result.outputPath == artifact.destinationPath);
+  assert(result.removedPaths ==
+         std::vector<std::filesystem::path>{extractedAlternate});
   assert(readText(artifact.destinationPath) == "archive bytes");
 }
 
@@ -289,9 +326,13 @@ void testArchiveCommitRemovesExtractedAlternate() {
       .storageKey = "package",
       .alternateDestinationPath = extractedAlternate};
 
-  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error));
+  std::vector<std::filesystem::path> removedPaths;
+  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(
+      artifact, error, {}, &removedPaths));
   assert(readText(artifact.destinationPath) == "archive bytes");
   assert(!std::filesystem::exists(extractedAlternate));
+  assert(removedPaths ==
+         std::vector<std::filesystem::path>{extractedAlternate});
 }
 
 void testExtractedCommitRemovesArchiveAlternate() {
@@ -316,9 +357,13 @@ void testExtractedCommitRemovesArchiveAlternate() {
       .storageKey = "package",
       .alternateDestinationPath = archiveAlternate};
 
-  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error));
+  std::vector<std::filesystem::path> removedPaths;
+  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(
+      artifact, error, {}, &removedPaths));
   assert(readText(artifact.destinationPath / "chart.bms") == "new chart");
   assert(!std::filesystem::exists(archiveAlternate));
+  assert(removedPaths ==
+         std::vector<std::filesystem::path>{archiveAlternate});
 }
 
 void testExtractedCommitRemovesSameKeyArchiveWithDifferentExtension() {
@@ -385,12 +430,23 @@ void testCommitRemovesRenamedRepresentationsWithSameStorageId() {
       .alternateDestinationPath =
           downloadRoot / "_archives" / (storageKey + ".zip")};
 
-  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error));
+  std::vector<std::filesystem::path> removedPaths;
+  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(
+      artifact, error, {}, &removedPaths));
   assert(readText(artifact.destinationPath / "chart.bms") == "new chart");
   assert(!std::filesystem::exists(renamedExtracted));
   assert(!std::filesystem::exists(renamedArchive));
   assert(std::filesystem::exists(otherExtracted));
   assert(std::filesystem::exists(otherArchive));
+  assert(removedPaths.size() == 2);
+  assert(std::find(removedPaths.begin(), removedPaths.end(),
+                   renamedExtracted) != removedPaths.end());
+  assert(std::find(removedPaths.begin(), removedPaths.end(), renamedArchive) !=
+         removedPaths.end());
+  assert(std::find(removedPaths.begin(), removedPaths.end(), otherExtracted) ==
+         removedPaths.end());
+  assert(std::find(removedPaths.begin(), removedPaths.end(), otherArchive) ==
+         removedPaths.end());
 }
 
 #if !defined(_WIN32)
@@ -423,8 +479,9 @@ void testAlternateCleanupFailureDoesNotFailCommit() {
       std::filesystem::perm_options::replace, permissionError);
   assert(!permissionError);
 
-  const bool committed =
-      asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error);
+  std::vector<std::filesystem::path> removedPaths;
+  const bool committed = asobmshow::bms_search::commitFindBmsPendingArtifact(
+      artifact, error, {}, &removedPaths);
   std::error_code restoreError;
   std::filesystem::permissions(extractedAlternate,
                                std::filesystem::perms::owner_all,
@@ -436,6 +493,7 @@ void testAlternateCleanupFailureDoesNotFailCommit() {
   assert(error.empty());
   assert(readText(artifact.destinationPath) == "archive bytes");
   assert(std::filesystem::exists(extractedAlternate / "stale.bms"));
+  assert(removedPaths.empty());
   assert(!std::filesystem::exists(attempt->root));
 }
 #endif
@@ -692,6 +750,7 @@ void testWorkflowKeepsDirectArchiveWithoutExtraction() {
   writeText(attempt->archivePath, "archive");
   bool extracted = false;
   std::optional<BmsSearchPendingArtifactKind> committedKind;
+  const auto removedVariant = downloadRoot / "old-package";
   asobmshow::bms_search::DownloadedArchiveWorkflowDependencies dependencies{
       .decideArchive =
           [](const std::filesystem::path &, const std::string &, bool,
@@ -711,9 +770,11 @@ void testWorkflowKeepsDirectArchiveWithoutExtraction() {
           },
       .decideExtracted = {},
       .commitArtifact =
-          [&committedKind](const BmsSearchPendingArtifact &artifact,
-                           std::string &) {
+          [&committedKind, &removedVariant](
+              const BmsSearchPendingArtifact &artifact, std::string &,
+              std::vector<std::filesystem::path> &removedPaths) {
             committedKind = artifact.kind;
+            removedPaths = {removedVariant};
             return true;
           }};
   std::atomic_bool cancelled = false;
@@ -729,6 +790,8 @@ void testWorkflowKeepsDirectArchiveWithoutExtraction() {
   assert(committedKind == BmsSearchPendingArtifactKind::Archive);
   assert(result.status == BmsSearchResult::Status::Downloaded);
   assert(result.outputPath == downloadRoot / "_archives/package.zip");
+  assert(result.removedPaths ==
+         std::vector<std::filesystem::path>{removedVariant});
   assert(result.message == "Downloaded BMS archive.");
   assert(std::find(progress.begin(), progress.end(),
                    "Inspecting downloaded archive") != progress.end());
@@ -761,18 +824,21 @@ void testWorkflowStagesDirectArchiveMismatch() {
       .extractArchive = {},
       .decideExtracted = {},
       .commitArtifact =
-          [&committed](const BmsSearchPendingArtifact &, std::string &) {
+          [&committed](const BmsSearchPendingArtifact &, std::string &,
+                       std::vector<std::filesystem::path> &) {
             committed = true;
             return true;
           }};
   std::atomic_bool cancelled = false;
   BmsSearchResult result;
+  result.removedPaths = {downloadRoot / "stale-result-path"};
   assert(asobmshow::bms_search::processDownloadedArchive(
       workflowRequest(*attempt, downloadRoot), cancelled, nullptr, result,
       dependencies));
   assert(!committed);
   assert(result.status == BmsSearchResult::Status::HashMismatch);
   assert(result.outputPath.empty());
+  assert(result.removedPaths.empty());
   assert(result.pendingArtifact);
   assert(result.pendingArtifact->kind == BmsSearchPendingArtifactKind::Archive);
   assert(result.pendingArtifact->alternateDestinationPath ==
@@ -814,7 +880,8 @@ void testWorkflowCommitsFallbackExtractionMatch() {
           },
       .commitArtifact =
           [&committedKind](const BmsSearchPendingArtifact &artifact,
-                           std::string &) {
+                           std::string &,
+                           std::vector<std::filesystem::path> &) {
             committedKind = artifact.kind;
             return true;
           }};
@@ -867,7 +934,8 @@ void testWorkflowStagesFallbackExtractionMismatch() {
                 .foundBmsFile = true};
           },
       .commitArtifact =
-          [&committed](const BmsSearchPendingArtifact &, std::string &) {
+          [&committed](const BmsSearchPendingArtifact &, std::string &,
+                       std::vector<std::filesystem::path> &) {
             committed = true;
             return true;
           }};
@@ -918,7 +986,8 @@ void testWorkflowKeepsMismatchDecisionWhenArchiveCleanupFails() {
                 .foundBmsFile = true};
           },
       .commitArtifact =
-          [](const BmsSearchPendingArtifact &, std::string &) { return true; }};
+          [](const BmsSearchPendingArtifact &, std::string &,
+             std::vector<std::filesystem::path> &) { return true; }};
   std::atomic_bool cancelled = false;
   BmsSearchResult result;
   assert(asobmshow::bms_search::processDownloadedArchive(
@@ -964,7 +1033,8 @@ void testWorkflowRejectsInconclusiveExtractedValidation() {
                 .message = "Could not read extracted chart."};
           },
       .commitArtifact =
-          [&committed](const BmsSearchPendingArtifact &, std::string &) {
+          [&committed](const BmsSearchPendingArtifact &, std::string &,
+                       std::vector<std::filesystem::path> &) {
             committed = true;
             return true;
           }};
@@ -1092,6 +1162,7 @@ int main() {
   testStorageNamesPreserveLongAndCompoundExtensions();
   testPackageCandidateRespectsBuildArchiveSupport();
   testExtractedCommitMergesTransactionally();
+  testExtractedCommitConflictCleansPrivateTransaction();
   testDeleteRemovesOnlyAttempt();
   testUnsafeStagingRootIsRefused();
   testCommitRestoresDestinationWhenSwapFails();

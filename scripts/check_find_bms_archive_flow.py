@@ -123,20 +123,130 @@ require(
     "automatic and candidate downloads must share destination resolution",
 )
 require(
-    "additionalFolderToScan" in main_menu_source
-    and "additionalFolderToScan" in (
-        root / "src/scene/MainMenuScene.h"
-    ).read_text(encoding="utf-8"),
-    "Find BMS refresh tasks must carry a transient download root",
+    "IndexDownloadedPath" in main_menu_source
+    and "IndexDownloadedPath"
+    in (root / "src/scene/MainMenuScene.h").read_text(encoding="utf-8"),
+    "Find BMS downloads must use a dedicated incremental library task",
 )
 require(
-    "appendUniqueScanFolder(entries, task.additionalFolderToScan)"
-    in main_menu_source,
-    "library refresh must include the transient Find BMS download root",
+    "scanner.ScanAddedWithResult" in main_menu_source
+    and "scanResult.completed" in main_menu_source
+    and "scanResult.committed" in main_menu_source,
+    "downloaded-path tasks must require a completed, committed additions-only scan",
 )
 require(
-    "startLibraryRefresh(findBmsDownloadRoot)" in main_menu_source,
-    "successful Find BMS downloads must refresh their actual library root",
+    "findBmsIndexTaskSucceeded(" in main_menu_source
+    and "Downloaded BMS target was not parsed and indexed" in main_menu_source,
+    "validated Find BMS tasks must fail without their committed target upsert",
+)
+require(
+    "enqueueDownloadedPathIndexTask(" in main_menu_source
+    and "findBmsResult.outputPath" in main_menu_source,
+    "successful Find BMS downloads must index their exact committed output",
+)
+apply_find_bms_start = main_menu_source.find(
+    "void MainMenuScene::applyFindBmsUpdates()"
+)
+apply_find_bms_end = main_menu_source.find(
+    "void MainMenuScene::openFindBmsResultUrl(", apply_find_bms_start
+)
+apply_find_bms = main_menu_source[apply_find_bms_start:apply_find_bms_end]
+require(
+    "findBmsResult.removedPaths" in apply_find_bms,
+    "Find BMS results must pass removed package variants to indexing",
+)
+download_task_start = main_menu_source.find(
+    "void MainMenuScene::runDownloadedPathIndexTask("
+)
+download_task_end = main_menu_source.find(
+    "bool MainMenuScene::insertChartFolderEntryImmediately(",
+    download_task_start,
+)
+download_task = main_menu_source[download_task_start:download_task_end]
+removed_paths_index = download_task.find("task.downloadedRemovedPaths")
+targeted_delete_index = download_task.find("DeleteChartMetaInDirectory")
+incremental_scan_index = download_task.find("LoadCharts(")
+require(
+    removed_paths_index >= 0
+    and targeted_delete_index >= 0
+    and incremental_scan_index >= 0
+    and removed_paths_index <= targeted_delete_index < incremental_scan_index,
+    "removed Find BMS variants must be reconciled before incremental indexing",
+)
+require(
+    main_menu_source.count(
+        "findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration"
+    )
+    >= 2,
+    "automatic and candidate downloads must capture chart selection generation",
+)
+require(
+    "downloadedTargetIdentity" in main_menu_source
+    and "downloadedSelectionGeneration" in main_menu_source
+    and "SelectChartMetaByHash" in main_menu_source
+    and "scanResult.upsertedChartPaths" in main_menu_source
+    and "pendingFindBmsSelectionHandoff" in main_menu_source,
+    "downloaded-path parsing must publish only a chart upserted by that scan",
+)
+require(
+    "findBmsSelectionHandoffAllowed(" in main_menu_source
+    and "AutoSelectionPreview::Load" in main_menu_source
+    and "schedulePreviewLoad(meta)" in main_menu_source,
+    "unchanged Find BMS selection must re-enter normal preview loading",
+)
+apply_updates_start = main_menu_source.find(
+    "void MainMenuScene::applyPendingUiUpdates()"
+)
+apply_updates_end = main_menu_source.find(
+    "void MainMenuScene::selectChartByPathAfterReload(", apply_updates_start
+)
+apply_updates = main_menu_source[apply_updates_start:apply_updates_end]
+handoff_snapshot_index = apply_updates.find("findBmsSelectionBeforeReload")
+reload_index = apply_updates.find("reloadChartList(true)")
+handoff_validation_index = apply_updates.find(
+    "*findBmsSelectionBeforeReload", reload_index
+)
+require(
+    handoff_snapshot_index >= 0
+    and reload_index >= 0
+    and handoff_snapshot_index < reload_index
+    and handoff_validation_index > reload_index,
+    "Find BMS handoff must retain the unavailable selection before reload",
+)
+select_path_start = main_menu_source.find(
+    "void MainMenuScene::selectChartByPathAfterReload("
+)
+select_path_end = main_menu_source.find(
+    "void MainMenuScene::selectFolder(", select_path_start
+)
+select_path = main_menu_source[select_path_start:select_path_end]
+load_fallback_index = select_path.find("AutoSelectionPreview::Load")
+exact_lookup_index = select_path.find("SelectChartMetaByPaths")
+handoff_record_index = select_path.find("findBmsUnfilteredHandoffRecord")
+all_songs_fallback_index = select_path.find(
+    "activeFolder.type != LibraryFolderItem::Type::AllSongs"
+)
+require(
+    load_fallback_index >= 0
+    and exact_lookup_index > load_fallback_index
+    and handoff_record_index > exact_lookup_index
+    and all_songs_fallback_index > handoff_record_index,
+    "Find BMS preview handoff must exact-load charts hidden by active filters",
+)
+require(
+    "searchText.clear()" not in select_path
+    and "chartRecordFilters =" not in select_path,
+    "Find BMS preview handoff must preserve active search and chart filters",
+)
+require(
+    "AutoSelectionPreview::Suppress" in main_menu_source
+    and "suppressPreviewForChartPath = record.meta.BmsPath" in main_menu_source,
+    "unzip auto-selection must keep suppressing preview",
+)
+require(
+    "startLibraryRefresh(findBmsDownloadRoot)" not in main_menu_source
+    and "additionalFolderToScan" not in main_menu_source,
+    "Find BMS indexing must not route through a full-library refresh",
 )
 require(
     "candidate.name, candidate.id" in horie_source,

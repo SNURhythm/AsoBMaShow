@@ -446,6 +446,48 @@ void testSelectChartMetaByPathsHydratesInInputOrder() {
   assert(storageFailure.records.empty());
 }
 
+void testSelectChartMetaByHashUsesDurableIndexedIdentity() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  const std::string shaA(64, 'a');
+  const std::string shaB(64, 'b');
+  const std::string md5A(32, '1');
+  const std::string md5B(32, '2');
+
+  auto second = chartMeta(temporary.path());
+  second.BmsPath = temporary.path() / "z-second.bms";
+  second.SHA256 = shaA;
+  second.MD5 = md5A;
+  auto first = second;
+  first.BmsPath = temporary.path() / "a-first.bms";
+  auto md5Fallback = chartMeta(temporary.path());
+  md5Fallback.BmsPath = temporary.path() / "md5-fallback.bms";
+  md5Fallback.SHA256 = shaB;
+  md5Fallback.MD5 = md5B;
+  assert(session->InsertChartMeta(second));
+  assert(session->InsertChartMeta(first));
+  assert(session->InsertChartMeta(md5Fallback));
+
+  const auto shaMatches = session->SelectChartMetaByHash(
+      "  " + std::string(64, 'A') + "\n", md5B);
+  assert(shaMatches.size() == 2);
+  assert(shaMatches[0].BmsPath == first.BmsPath);
+  assert(shaMatches[1].BmsPath == second.BmsPath);
+
+  const auto md5Matches = session->SelectChartMetaByHash({},
+                                                         " " + md5B + " ");
+  assert(md5Matches.size() == 1);
+  assert(md5Matches.front().BmsPath == md5Fallback.BmsPath);
+
+  assert(session->SelectChartMetaByHash(std::string(64, 'c'), md5B).empty());
+  assert(session->SelectChartMetaByHash("invalid", "also-invalid").empty());
+  assert(session->SelectChartMetaByHash({}, {}).empty());
+}
+
 void testRejectedFamiliesRemainUnchanged() {
   TempDirectory temporary;
 
@@ -1105,6 +1147,7 @@ int main() {
   testScanBatchReusesPreparedInsertAndTransaction();
   testSessionRoundTripAndReadinessCost();
   testSelectChartMetaByPathsHydratesInInputOrder();
+  testSelectChartMetaByHashUsesDurableIndexedIdentity();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
   testExactFolderQuery();

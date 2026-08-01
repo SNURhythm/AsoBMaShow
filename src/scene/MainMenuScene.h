@@ -124,6 +124,7 @@ private:
   };
   enum class LibraryTaskKind {
     RefreshLibrary,
+    IndexDownloadedPath,
     AndroidImport,
   };
   struct LibraryTaskRequest {
@@ -132,7 +133,10 @@ private:
     std::string title;
     std::filesystem::path folderToAdd;
     std::string iosBookmark;
-    std::filesystem::path additionalFolderToScan;
+    std::filesystem::path downloadedPath;
+    std::vector<std::filesystem::path> downloadedRemovedPaths;
+    main_menu_library::FindBmsChartIdentity downloadedTargetIdentity;
+    std::uint64_t downloadedSelectionGeneration = 0;
     std::filesystem::path androidImportPath;
     bool androidImportFolder = false;
     bool rebuildLibraryMetadata = false;
@@ -475,6 +479,14 @@ private:
   std::atomic_bool androidArchiveImportCopyPending = false;
   std::uint64_t nextAndroidArchiveImportPollMs = 0;
   std::optional<std::filesystem::path> pendingSelectChartPath;
+  struct PendingFindBmsSelectionHandoff {
+    std::filesystem::path chartPath;
+    main_menu_library::FindBmsChartIdentity targetIdentity;
+    std::uint64_t selectionGeneration = 0;
+  };
+  std::mutex findBmsSelectionHandoffMutex;
+  std::optional<PendingFindBmsSelectionHandoff>
+      pendingFindBmsSelectionHandoff;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
   std::optional<std::filesystem::path> unzipDeleteCandidatePath;
   std::uint64_t unzipEstimatedUncompressedSize = 0;
@@ -491,7 +503,8 @@ private:
   std::mutex findBmsUpdateMutex;
   std::deque<BmsSearchDownloadProgress> pendingFindBmsProgressEvents;
   std::optional<BmsSearchResult> pendingFindBmsResult;
-  std::filesystem::path findBmsDownloadRoot;
+  std::uint64_t chartSelectionGeneration = 0;
+  std::uint64_t findBmsSelectionGenerationAtDownloadStart = 0;
 
   LibraryFolderItem activeFolder;
   LibraryFolderMetadataCache folderMetadataCache;
@@ -627,8 +640,7 @@ private:
   void refreshScoreClearRanksIfNeeded();
   void refreshIrRecordListIfNeeded();
   void refreshLibraryIfNeeded();
-  void startLibraryRefresh(
-      const std::filesystem::path &additionalFolderToScan = {});
+  void startLibraryRefresh();
   void startLibraryRebuild();
   void startLibraryTaskWorker();
   void stopLibraryTaskWorker();
@@ -637,12 +649,17 @@ private:
   void syncLibraryTaskPauseStateWithForegroundScene();
   bool waitForLibraryTaskResume(std::uint64_t id,
                                 const std::stop_token &stopToken);
+  void enqueueLibraryTask(LibraryTaskRequest task);
   void enqueueLibraryRefreshTask(
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
       const std::string &iosBookmark = "",
-      bool rebuildLibraryMetadata = false,
-      const std::filesystem::path &additionalFolderToScan = {});
+      bool rebuildLibraryMetadata = false);
+  void enqueueDownloadedPathIndexTask(
+      const std::filesystem::path &path,
+      const main_menu_library::FindBmsChartIdentity &targetIdentity = {},
+      std::uint64_t selectionGeneration = 0,
+      std::vector<std::filesystem::path> removedPaths = {});
 #if TARGET_OS_ANDROID
   void createPendingAndroidImportTask(bool folderImport);
   void enqueueAndroidImportTask(std::uint64_t id,
@@ -652,6 +669,8 @@ private:
   void libraryTaskLoop(const std::stop_token &stopToken);
   void runLibraryRefreshTask(const LibraryTaskRequest &task,
                              const std::stop_token &stopToken);
+  void runDownloadedPathIndexTask(const LibraryTaskRequest &task,
+                                  const std::stop_token &stopToken);
 #if TARGET_OS_ANDROID
   void runAndroidImportTask(const LibraryTaskRequest &task,
                             const std::stop_token &stopToken);
@@ -764,7 +783,9 @@ private:
   void deleteUnzippedSourceArchive();
   void applyUnzipProgress();
   void applyUnzipResult();
-  void selectChartByPathAfterReload(const std::filesystem::path &path);
+  enum class AutoSelectionPreview { Load, Suppress };
+  void selectChartByPathAfterReload(const std::filesystem::path &path,
+                                    AutoSelectionPreview preview);
   void setFindBmsButtonVisible(bool visible);
   void openFindBmsForSelection();
   void buildParseLogModal();
@@ -901,11 +922,13 @@ private:
   void pollPendingAndroidArchiveImport();
   void applyPendingAndroidArchiveImport();
 #endif
-  static void LoadCharts(ChartRepository::Session &chartSession,
-                         std::vector<ChartEntry> &entries, MainMenuScene &scene,
-                         const std::stop_token &stop_token,
-                         ChartScanProgressCallback progressCallback = nullptr,
-                         ChartScanPauseCallback pauseCallback = nullptr);
+  static ChartScanResult
+  LoadCharts(ChartRepository::Session &chartSession,
+             std::vector<ChartEntry> &entries, MainMenuScene &scene,
+             const std::stop_token &stop_token,
+             ChartScanProgressCallback progressCallback = nullptr,
+             ChartScanPauseCallback pauseCallback = nullptr,
+             bool addedPathsOnly = false, bool requestReload = true);
   enum DiffType { Deleted, Added };
   struct Diff {
     std::filesystem::path path;

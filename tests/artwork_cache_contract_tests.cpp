@@ -53,7 +53,7 @@ void testCompletedScanInvalidatesOnlyTheMemoryHotPath() {
   const std::string image = readText(root / "src/view/ImageView.cpp");
 
   const std::string_view scan = functionBody(
-      menu, "void MainMenuScene::LoadCharts(ChartRepository::Session");
+      menu, "ChartScanResult MainMenuScene::LoadCharts(");
   require(scan.contains("scene.requestLibraryReload(true)") &&
               !scan.contains("if (changedCount > 0)"),
           "every completed library scan enters the shared reload boundary "

@@ -5,6 +5,9 @@
 
 namespace asobmshow::bms_search {
 
+inline constexpr std::string_view kFindBmsTransactionDirectoryName =
+    ".asobmashow-transactions";
+
 struct FindBmsStorageNames {
   std::string storageKey;
   std::string archiveName;

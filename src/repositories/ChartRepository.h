@@ -181,7 +181,8 @@ public:
       bool UpsertArchiveCache(const ArchiveScanCacheUpdate &update);
       bool UpdateSourcePreference(
           const ChartSourcePreferenceUpdate &update);
-      int CountChartsInArchive(const std::filesystem::path &path);
+      std::optional<int>
+      CountChartsInArchive(const std::filesystem::path &path);
       bool CheckpointAndContinue(const ChartScanCheckpoint &checkpoint);
       bool Commit();
       int ChangedCount() const;
@@ -211,6 +212,9 @@ public:
                         std::vector<ChartMetaRecord> &chartMetas);
     ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(
         std::span<const std::filesystem::path> paths);
+    std::vector<bms_parser::ChartMeta>
+    SelectChartMetaByHash(const std::string &sha256,
+                          const std::string &md5);
     int CountChartMeta(const ChartMetaQuery &query);
     int FindChartMetaIndex(const ChartMetaQuery &query,
                            const std::filesystem::path &path);
@@ -228,7 +232,8 @@ public:
     bool DeleteEntryAndChartMetaInDirectory(
         const std::filesystem::path &path, int &removedChartCount);
     bool ClearEntries();
-    ChartScanSnapshot LoadScanSnapshot();
+    ChartScanSnapshot LoadScanSnapshot(
+        ChartScanSnapshotLoad load = ChartScanSnapshotLoad::Full);
     std::optional<ScanBatch> BeginScanBatch();
     bool ClearScanCheckpoint();
     bool ClearChartMetadataRebuildRequired();

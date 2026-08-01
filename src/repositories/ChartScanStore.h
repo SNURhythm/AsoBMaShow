@@ -66,3 +66,5 @@ struct ChartScanSnapshot {
   std::vector<ArchiveScanCacheRecord> archiveCache;
   std::optional<ChartScanCheckpoint> checkpoint;
 };
+
+enum class ChartScanSnapshotLoad { Full, CheckpointOnly };
