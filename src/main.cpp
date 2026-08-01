@@ -27,6 +27,7 @@
 #include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
 #include "view/TextInputBox.h"
+#include "view/ImageView.h"
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -1103,6 +1104,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       ++processedEventsInWindow;
       if (event.type == SDL_QUIT) {
         context.quitFlag = true;
+      }
+
+      if (event.type == SDL_APP_LOWMEMORY) {
+        ImageView::evictDecodedImageCache();
+        context.jukebox.handleMemoryPressure();
+        SDL_Log("Released evictable resources after a low-memory warning");
       }
 
       if (isAppBackgroundEvent(event)) {

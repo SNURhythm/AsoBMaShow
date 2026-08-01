@@ -2535,6 +2535,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(image_decode_coordinator_tests PRIVATE cxx_std_23)
 
+    add_executable(mobile_memory_pressure_tests
+        tests/mobile_memory_pressure_tests.cpp
+    )
+    target_compile_features(mobile_memory_pressure_tests PRIVATE cxx_std_23)
+    target_compile_definitions(mobile_memory_pressure_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(image_view_fade_tests
         tests/image_view_fade_tests.cpp
         src/view/DecodedImageCache.cpp
@@ -3983,6 +3991,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         image_fade_tests
         decoded_image_cache_tests
         image_decode_coordinator_tests
+        mobile_memory_pressure_tests
         image_view_fade_tests
         artwork_cache_contract_tests
         chart_list_item_view_tests

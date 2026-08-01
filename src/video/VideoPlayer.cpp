@@ -418,6 +418,30 @@ void VideoPlayer::setDecodeSuspended(bool suspended) {
   eofCV.notify_all();
 }
 
+void VideoPlayer::handleMemoryPressure(MemoryPressureMode mode) {
+  if (mode == MemoryPressureMode::DiscardIdle) {
+    setDecodeSuspended(true);
+    std::lock_guard<std::mutex> videoLock(videoMutex);
+    std::lock_guard<std::mutex> bufferLock(bufferMutex);
+    for (AVFrame *&frame : frameBuffer) {
+      if (frame != nullptr) {
+        av_frame_free(&frame);
+      }
+    }
+    bufferHead = 0;
+    bufferTail = 0;
+    bufferSize = 0;
+  }
+  {
+    std::lock_guard<std::mutex> recycleLock(recycleMutex);
+    for (AVFrame *&frame : recyclePool) {
+      av_frame_free(&frame);
+    }
+    recyclePool.clear();
+  }
+  freeSpace.notify_all();
+}
+
 bool VideoPlayer::updateVideoTexture(int width, int height) {
   const auto layout = video::makeYuv420FrameLayout(width, height);
   if (!layout) {

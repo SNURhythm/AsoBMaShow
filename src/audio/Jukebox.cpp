@@ -898,6 +898,21 @@ bool Jukebox::getVisualsSuspended() const {
   return visualsSuspended.load(std::memory_order_acquire);
 }
 
+void Jukebox::handleMemoryPressure() {
+  const int activeBase = currentBga.load(std::memory_order_relaxed);
+  const int activeLayer = currentBmpLayer.load(std::memory_order_relaxed);
+  std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+  for (auto &[visualId, videoPlayer] : videoPlayerTable) {
+    if (videoPlayer == nullptr) {
+      continue;
+    }
+    const bool active = visualId == activeBase || visualId == activeLayer;
+    videoPlayer->handleMemoryPressure(
+        active ? VideoPlayer::MemoryPressureMode::PreserveActive
+               : VideoPlayer::MemoryPressureMode::DiscardIdle);
+  }
+}
+
 void Jukebox::setBgaOffsetMs(int offsetMs) {
   const int previous = bgaOffsetMs.exchange(offsetMs, std::memory_order_relaxed);
   if (previous != offsetMs) {
@@ -2963,6 +2978,9 @@ bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
     auto videoIt = videoPlayerTable.find(visualId);
     if (videoIt != videoPlayerTable.end()) {
       auto *videoPlayer = videoIt->second.get();
+      videoPlayer->setDecodeSuspended(
+          visualsSuspended.load(std::memory_order_acquire) ||
+          !visualsEnabled.load(std::memory_order_relaxed));
       if (elapsedMicros > 0) {
         videoPlayer->playFrom(elapsedMicros);
       } else {

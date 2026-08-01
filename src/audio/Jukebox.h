@@ -155,6 +155,7 @@ public:
   bool getVisualsEnabled() const;
   void setVisualsSuspended(bool suspended);
   bool getVisualsSuspended() const;
+  void handleMemoryPressure();
   void setBgaOffsetMs(int offsetMs);
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
 

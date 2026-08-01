@@ -20,6 +20,8 @@ extern "C" {
 
 class VideoPlayer {
 public:
+  enum class MemoryPressureMode { PreserveActive, DiscardIdle };
+
   VideoPlayer(Stopwatch *stopwatch);
   ~VideoPlayer();
   VideoPlayer(const VideoPlayer &) = delete;
@@ -36,6 +38,7 @@ public:
   void stop();
   void seek(int64_t micro);
   void setDecodeSuspended(bool suspended);
+  void handleMemoryPressure(MemoryPressureMode mode);
   long long getDurationMicros() const;
   int getFrameWidth() const { return videoFrameWidth; }
   int getFrameHeight() const { return videoFrameHeight; }
