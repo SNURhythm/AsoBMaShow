@@ -98,10 +98,7 @@ Vector3 Quaternion::rotate(const Vector3 &v) const {
   return {w.x, w.y, w.z};
 }
 Vector3 Quaternion::getEulerAngles() const {
-  float x = atan2f(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
-  float y = asinf(2 * (w * y - z * x));
-  float z = atan2f(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
-  return {x, y, z};
+  return toEuler();
 }
 Vector3 Quaternion::getForward() const {
   return {2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)};

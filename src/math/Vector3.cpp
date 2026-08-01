@@ -101,8 +101,9 @@ Vector3 Vector3::rotate(const Vector3 &axis, float angle) const {
   return {w.x, w.y, w.z};
 }
 Vector3 &Vector3::operator*=(Vector3 &other) {
-  x = y * other.z - z * other.y;
-  y = z * other.x - x * other.z;
-  z = x * other.y - y * other.x;
+  const Vector3 result = cross(other);
+  x = result.x;
+  y = result.y;
+  z = result.z;
   return *this;
 }

@@ -3799,6 +3799,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(frame_pacer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(frame_pacer_tests PRIVATE cxx_std_23)
 
+    add_executable(quaternion_math_tests
+        tests/quaternion_math_tests.cpp
+        src/math/Quaternion.cpp
+        src/math/Vector3.cpp
+    )
+    target_include_directories(quaternion_math_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(quaternion_math_tests PRIVATE cxx_std_23)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(quaternion_math_tests PRIVATE
+            -Wuninitialized
+            -Werror=uninitialized
+        )
+    endif()
+
     add_executable(sdl_display_backend_tests
         tests/sdl_display_backend_tests.cpp
         src/video/DisplaySettingsManager.cpp
@@ -4078,6 +4092,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(quaternion_math_tests foundation_math_quaternion)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
     add_test(NAME foundation_provenance_db
         COMMAND $<TARGET_FILE:score_provenance_db_tests>)
