@@ -110,7 +110,8 @@ unchanged, but they are outside the first iOS-only release stage.
   covered by static release tests.
 - iOS verification and distribution are now separate release gates. A
   no-upload script runs the release-critical C++ tests, iOS contract tests, and
-  unsigned device build. Firebase is an explicit PR-to-`develop` fast-iteration
+  unsigned device build, including the durable IR credential-cleanup recovery
+  regression. Firebase is an explicit PR-to-`develop` fast-iteration
   lane that neither schedules nor waits for the release verifier. TestFlight is
   a distinct non-PR lane whose GitHub job waits for verification, uses a global
   non-canceling concurrency group, and allocates the next build number only
@@ -543,12 +544,12 @@ drain the decoder at EOF, and add odd-dimension plus B-frame end-of-stream tests
 | Branch created from clean `develop` | pass |
 | `cmake --build cmake-build-debug --target main -j 6` | pass |
 | Full debug all-target build after remediation | pass |
-| `ctest --test-dir cmake-build-debug --output-on-failure -j 6` | pass, 185/185 (40.41 s) |
+| `ctest --test-dir cmake-build-debug --output-on-failure -j 6` | pass, 186/186 |
 | `python3 tests/ios_build_setup_tests.py` | pass, 24/24 (12.21 s) |
-| iOS release workflow tests | pass, 8/8 |
-| iOS artifact-audit fixtures | pass, 6/6 |
+| iOS release workflow tests | pass, 11/11 |
+| iOS artifact-audit fixtures | pass, 8/8 |
 | iOS release-documentation tests | pass, 3/3 |
-| `scripts/ios_release_verify.sh` | pass; 9 native release tests, unsigned device build, and app audit |
+| `scripts/ios_release_verify.sh` | pass; 10 native release tests, unsigned device build, and app audit |
 | Unsigned device `AsoBMaShow.app` audit | pass; signature check correctly skipped only for unsigned build |
 | iPhone 17 Pro Release simulator launch | pass; Metal, Main Thread Checker crash-on-report, no fatal issue |
 | iPad Pro 11-inch Release simulator launch | pass; Metal, Main Thread Checker crash-on-report, no fatal issue |

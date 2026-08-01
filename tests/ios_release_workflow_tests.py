@@ -129,6 +129,13 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("quaternion_math_tests", self.verify_script)
         self.assertIn("foundation_math_quaternion", self.verify_script)
 
+    def test_release_verifier_includes_durable_credential_cleanup(self):
+        self.assertGreaterEqual(
+            self.verify_script.count("pending_ir_credential_cleanup_tests"),
+            2,
+            "the cleanup regression must be built and selected by CTest",
+        )
+
     def test_local_firebase_wrapper_calls_only_the_firebase_lane(self):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("fastlane ios firebase", script)

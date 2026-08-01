@@ -42,6 +42,7 @@ run cmake --build "${BUILD_DIR}" --target \
   chart_repository_tests \
   ir_credential_store_tests \
   ir_credential_migration_tests \
+  pending_ir_credential_cleanup_tests \
   video_frame_layout_tests \
   video_decode_state_tests \
   decoded_image_cache_tests \
@@ -50,7 +51,7 @@ run cmake --build "${BUILD_DIR}" --target \
   quaternion_math_tests \
   -j "${BUILD_JOBS}"
 run ctest --test-dir "${BUILD_DIR}" \
-  -R '^(chart_repository_tests|ir_credential_store_tests|ir_credential_migration_tests|video_frame_layout_tests|video_decode_state_tests|decoded_image_cache_tests|image_decode_coordinator_tests|foundation_av_jukebox_restore|foundation_math_quaternion)$' \
+  -R '^(chart_repository_tests|ir_credential_store_tests|ir_credential_migration_tests|pending_ir_credential_cleanup_tests|video_frame_layout_tests|video_decode_state_tests|decoded_image_cache_tests|image_decode_coordinator_tests|foundation_av_jukebox_restore|foundation_math_quaternion)$' \
   --output-on-failure
 run python3 tests/ios_build_setup_tests.py
 run python3 tests/ios_release_workflow_tests.py
