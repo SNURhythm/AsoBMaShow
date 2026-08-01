@@ -16,7 +16,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/ios_firebase_deploy.sh [options]
 
-Deploys through the iOS Fastlane beta lane in its Firebase App Distribution mode.
+Deploys through the explicit iOS Fastlane Firebase App Distribution lane.
 With --build-only, runs a plain xcodebuild build and skips archive/sign/upload.
 Secrets are read from the current environment or optional shell-compatible .env files.
 
@@ -251,4 +251,4 @@ fi
 
 cd "${IOS_DIR}"
 echo "Deploying Firebase iOS build ${GITHUB_RUN_NUMBER} from ${GITHUB_HEAD_REF} (${GITHUB_SHA})"
-bundle exec fastlane ios beta --verbose
+bundle exec fastlane ios firebase --verbose

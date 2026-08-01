@@ -24,6 +24,11 @@ def github_pull_request_to_develop?
     ENV["GITHUB_BASE_REF"] == "develop"
 end
 
+def github_pull_request?
+  ENV["GITHUB_ACTIONS"] == "true" &&
+    ENV["GITHUB_EVENT_NAME"] == "pull_request"
+end
+
 def firebase_option_env
   {
     app: "FIREBASE_IOS_APP_ID",
@@ -82,11 +87,49 @@ def app_store_key_id
 end
 
 platform :ios do
-  desc "Push a new beta build to Firebase App Distribution or TestFlight"
-  lane :beta do
-    distribute_to_firebase = github_pull_request_to_develop?
-    match_type = distribute_to_firebase ? "adhoc" : "appstore"
-    export_method = distribute_to_firebase ? "ad-hoc" : "app-store"
+  desc "Build and distribute a pull request to Firebase App Distribution"
+  lane :firebase do
+    unless github_pull_request_to_develop?
+      UI.user_error!("Firebase distribution is limited to pull requests targeting develop")
+    end
+    unlock_keychain(
+      password: ENV["KEYCHAIN_PASSWORD"]
+    )
+    api_key = app_store_connect_api_key(
+      key_id: app_store_key_id,
+      issuer_id: "5e03957a-e681-458f-8011-a8f608b71a70",
+      key_content: ENV["APP_STORE_KEY"],
+      duration: 1200,
+      in_house: false,
+    )
+    match(type: "adhoc", git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
+    build_number = firebase_build_number
+    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0"
+    derived_data_path = firebase_derived_data_path
+    build_options = {
+      scheme: "AsoBMaShow",
+      workspace: "AsoBMaShow.xcworkspace",
+      export_method: "ad-hoc",
+      derived_data_path: derived_data_path,
+      xcargs: "#{xcargs} OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}",
+      clean: false
+    }
+    build_app(**build_options)
+    temporary_fix_ios_post_build
+
+    firebase_options = firebase_option_env
+    firebase_app_distribution(
+      **firebase_options,
+      groups: firebase_distribution_groups,
+      release_notes: firebase_release_notes
+    )
+  end
+
+  desc "Build and upload one serialized App Store build to TestFlight"
+  lane :testflight_release do
+    if github_pull_request?
+      UI.user_error!("Pull requests cannot upload TestFlight builds")
+    end
 
     unlock_keychain(
       password: ENV["KEYCHAIN_PASSWORD"]
@@ -98,41 +141,19 @@ platform :ios do
       duration: 1200,
       in_house: false,
     )
-    match(type: match_type, git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
-    build_number = if distribute_to_firebase
-                     firebase_build_number
-                   else
-                     latest_testflight_build_number(initial_build_number: 0) + 1
-                   end
+    match(type: "appstore", git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
 
+    build_number = latest_testflight_build_number(initial_build_number: 0) + 1
     xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0"
-    build_options = {
+    build_app(
       scheme: "AsoBMaShow",
       workspace: "AsoBMaShow.xcworkspace",
-      export_method: export_method,
+      export_method: "app-store",
       xcargs: xcargs,
-      clean: !distribute_to_firebase
-    }
-
-    if distribute_to_firebase
-      derived_data_path = firebase_derived_data_path
-      build_options[:derived_data_path] = derived_data_path
-      build_options[:xcargs] = "#{xcargs} OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}"
-    end
-
-    build_app(**build_options)
+      clean: true
+    )
     temporary_fix_ios_post_build
-
-    if distribute_to_firebase
-      firebase_options = firebase_option_env
-      firebase_app_distribution(
-        **firebase_options,
-        groups: firebase_distribution_groups,
-        release_notes: firebase_release_notes
-      )
-    else
-      upload_to_testflight
-    end
+    upload_to_testflight
   end
 end
 

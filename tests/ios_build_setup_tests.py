@@ -236,7 +236,7 @@ class DerivedDataPathTests(unittest.TestCase):
         self.assertIn("ios_derived_data_path.sh", DEPLOY_SCRIPT.read_text())
         fastfile = FASTFILE.read_text()
         self.assertIn("ios_derived_data_path.sh", fastfile)
-        self.assertIn("clean: !distribute_to_firebase", fastfile)
+        self.assertIn("clean: false", fastfile)
 
     def test_firebase_archive_uses_stable_object_root(self):
         fastfile = FASTFILE.read_text()
@@ -247,7 +247,7 @@ class DerivedDataPathTests(unittest.TestCase):
             fastfile,
         )
         self.assertIn(
-            'build_options[:xcargs] = "#{xcargs} '
+            'xcargs: "#{xcargs} '
             'OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}"',
             fastfile,
         )

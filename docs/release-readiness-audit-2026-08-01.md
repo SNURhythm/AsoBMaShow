@@ -66,6 +66,13 @@ CTest, and fatal Android lint.
   to referenced SDL/bgfx projects. Setup is idempotent with the project Ruby;
   the version, ATS exception, and intentional absence of a privacy manifest are
   covered by static release tests.
+- iOS verification and distribution are now separate release gates. A
+  no-upload script runs the release-critical C++ tests, iOS contract tests, and
+  unsigned device build. Firebase is an explicit PR-to-`develop` lane;
+  TestFlight is a distinct non-PR lane whose GitHub job waits for verification,
+  uses a global non-canceling concurrency group, and allocates the next build
+  number only after entering that serialized lane. The end-to-end verification
+  command passed without invoking signing or distribution.
 
 | Release gate | Result | Release significance |
 | --- | --- | --- |
