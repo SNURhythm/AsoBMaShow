@@ -70,6 +70,10 @@ bool findBmsIndexTaskSucceeded(
     const FindBmsChartIdentity &target, bool scanCommitted,
     const std::optional<std::filesystem::path> &indexedTargetPath);
 
+std::optional<ChartMetaRecord> findBmsUnfilteredHandoffRecord(
+    const ChartMetaPathBatchReadOutcome &outcome,
+    const std::filesystem::path &requestedPath);
+
 std::optional<std::filesystem::path> downloadedChartPath(
     const std::vector<bms_parser::ChartMeta> &matchingCharts,
     const std::filesystem::path &downloadedPath);

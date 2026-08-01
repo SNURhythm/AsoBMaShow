@@ -144,6 +144,35 @@ require(
     and "findBmsResult.outputPath" in main_menu_source,
     "successful Find BMS downloads must index their exact committed output",
 )
+apply_find_bms_start = main_menu_source.find(
+    "void MainMenuScene::applyFindBmsUpdates()"
+)
+apply_find_bms_end = main_menu_source.find(
+    "void MainMenuScene::openFindBmsResultUrl(", apply_find_bms_start
+)
+apply_find_bms = main_menu_source[apply_find_bms_start:apply_find_bms_end]
+require(
+    "findBmsResult.removedPaths" in apply_find_bms,
+    "Find BMS results must pass removed package variants to indexing",
+)
+download_task_start = main_menu_source.find(
+    "void MainMenuScene::runDownloadedPathIndexTask("
+)
+download_task_end = main_menu_source.find(
+    "bool MainMenuScene::insertChartFolderEntryImmediately(",
+    download_task_start,
+)
+download_task = main_menu_source[download_task_start:download_task_end]
+removed_paths_index = download_task.find("task.downloadedRemovedPaths")
+targeted_delete_index = download_task.find("DeleteChartMetaInDirectory")
+incremental_scan_index = download_task.find("LoadCharts(")
+require(
+    removed_paths_index >= 0
+    and targeted_delete_index >= 0
+    and incremental_scan_index >= 0
+    and removed_paths_index <= targeted_delete_index < incremental_scan_index,
+    "removed Find BMS variants must be reconciled before incremental indexing",
+)
 require(
     main_menu_source.count(
         "findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration"
@@ -183,6 +212,31 @@ require(
     and handoff_snapshot_index < reload_index
     and handoff_validation_index > reload_index,
     "Find BMS handoff must retain the unavailable selection before reload",
+)
+select_path_start = main_menu_source.find(
+    "void MainMenuScene::selectChartByPathAfterReload("
+)
+select_path_end = main_menu_source.find(
+    "void MainMenuScene::selectFolder(", select_path_start
+)
+select_path = main_menu_source[select_path_start:select_path_end]
+load_fallback_index = select_path.find("AutoSelectionPreview::Load")
+exact_lookup_index = select_path.find("SelectChartMetaByPaths")
+handoff_record_index = select_path.find("findBmsUnfilteredHandoffRecord")
+all_songs_fallback_index = select_path.find(
+    "activeFolder.type != LibraryFolderItem::Type::AllSongs"
+)
+require(
+    load_fallback_index >= 0
+    and exact_lookup_index > load_fallback_index
+    and handoff_record_index > exact_lookup_index
+    and all_songs_fallback_index > handoff_record_index,
+    "Find BMS preview handoff must exact-load charts hidden by active filters",
+)
+require(
+    "searchText.clear()" not in select_path
+    and "chartRecordFilters =" not in select_path,
+    "Find BMS preview handoff must preserve active search and chart filters",
 )
 require(
     "AutoSelectionPreview::Suppress" in main_menu_source

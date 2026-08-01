@@ -134,6 +134,7 @@ private:
     std::filesystem::path folderToAdd;
     std::string iosBookmark;
     std::filesystem::path downloadedPath;
+    std::vector<std::filesystem::path> downloadedRemovedPaths;
     main_menu_library::FindBmsChartIdentity downloadedTargetIdentity;
     std::uint64_t downloadedSelectionGeneration = 0;
     std::filesystem::path androidImportPath;
@@ -657,7 +658,8 @@ private:
   void enqueueDownloadedPathIndexTask(
       const std::filesystem::path &path,
       const main_menu_library::FindBmsChartIdentity &targetIdentity = {},
-      std::uint64_t selectionGeneration = 0);
+      std::uint64_t selectionGeneration = 0,
+      std::vector<std::filesystem::path> removedPaths = {});
 #if TARGET_OS_ANDROID
   void createPendingAndroidImportTask(bool folderImport);
   void enqueueAndroidImportTask(std::uint64_t id,

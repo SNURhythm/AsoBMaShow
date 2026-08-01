@@ -163,6 +163,24 @@ bool findBmsIndexTaskSucceeded(
   return !target.valid() || (scanCommitted && indexedTargetPath.has_value());
 }
 
+std::optional<ChartMetaRecord> findBmsUnfilteredHandoffRecord(
+    const ChartMetaPathBatchReadOutcome &outcome,
+    const std::filesystem::path &requestedPath) {
+  if (outcome.status != ChartMetaPathBatchReadStatus::Loaded ||
+      requestedPath.empty()) {
+    return std::nullopt;
+  }
+  const std::filesystem::path normalizedRequest =
+      requestedPath.lexically_normal();
+  const auto record = std::find_if(
+      outcome.records.begin(), outcome.records.end(), [&](const auto &value) {
+        return value.meta.BmsPath.lexically_normal() == normalizedRequest;
+      });
+  return record != outcome.records.end()
+             ? std::optional<ChartMetaRecord>(*record)
+             : std::nullopt;
+}
+
 std::optional<std::filesystem::path> downloadedChartPath(
     const std::vector<bms_parser::ChartMeta> &matchingCharts,
     const std::filesystem::path &downloadedPath) {

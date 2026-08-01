@@ -68,6 +68,7 @@ struct BmsSearchResult {
   std::string fallbackUrl;
   std::filesystem::path outputPath;
   std::filesystem::path debugPath;
+  std::vector<std::filesystem::path> removedPaths;
   std::vector<BmsSearchCandidate> candidates;
   std::optional<BmsSearchPendingArtifact> pendingArtifact;
 };

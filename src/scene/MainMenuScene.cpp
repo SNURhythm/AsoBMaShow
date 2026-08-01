@@ -1565,7 +1565,8 @@ void MainMenuScene::enqueueLibraryRefreshTask(
 void MainMenuScene::enqueueDownloadedPathIndexTask(
     const std::filesystem::path &path,
     const main_menu_library::FindBmsChartIdentity &targetIdentity,
-    std::uint64_t selectionGeneration) {
+    std::uint64_t selectionGeneration,
+    std::vector<std::filesystem::path> removedPaths) {
   if (path.empty()) {
     return;
   }
@@ -1573,6 +1574,7 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
       .kind = LibraryTaskKind::IndexDownloadedPath,
       .title = "Index Downloaded BMS",
       .downloadedPath = path,
+      .downloadedRemovedPaths = std::move(removedPaths),
       .downloadedTargetIdentity = targetIdentity,
       .downloadedSelectionGeneration = selectionGeneration,
   });
@@ -2112,6 +2114,14 @@ void MainMenuScene::runDownloadedPathIndexTask(
   }
   if (!waitForLibraryTaskResume(task.id, stopToken)) {
     return;
+  }
+
+  for (const auto &removedPath : task.downloadedRemovedPaths) {
+    if (taskSession->DeleteChartMetaInDirectory(removedPath) < 0) {
+      requestLibraryReload(true);
+      throw std::runtime_error(
+          "Failed to reconcile replaced Find BMS files");
+    }
   }
 
   auto entries =
@@ -4714,6 +4724,31 @@ void MainMenuScene::selectChartByPathAfterReload(
                           ? "Selected unzipped chart: "
                           : "Selected indexed Find BMS chart: ") +
           fspath_to_utf8(record.meta.BmsPath));
+      return;
+    }
+  }
+
+  if (preview == AutoSelectionPreview::Load) {
+    const std::array requestedPaths{path};
+    const auto lookup = chartSession->SelectChartMetaByPaths(requestedPaths);
+    const auto record =
+        main_menu_library::findBmsUnfilteredHandoffRecord(lookup, path);
+    if (record.has_value() && recyclerView->onSelected) {
+      const int previous = recyclerView->selectedIndex;
+      if (previous >= 0 && previous < recyclerView->size() &&
+          recyclerView->onUnselected) {
+        recyclerView->onUnselected(recyclerView->get(previous), previous);
+      }
+      recyclerView->selectedIndex = -1;
+      recyclerView->rebindVisibleItems();
+      if (suppressPreviewForChartPath.has_value() &&
+          fspath_to_path_t(*suppressPreviewForChartPath) == target) {
+        suppressPreviewForChartPath.reset();
+      }
+      recyclerView->onSelected(*record, -1);
+      archive_file::appendDebugLogLine(
+          "Selected indexed Find BMS chart outside active filters: " +
+          fspath_to_utf8(record->meta.BmsPath));
       return;
     }
   }
@@ -8075,9 +8110,11 @@ void MainMenuScene::applyFindBmsUpdates() {
       enqueueDownloadedPathIndexTask(
           findBmsResult.outputPath,
           main_menu_library::findBmsChartIdentity(findBmsModalChart.meta),
-          findBmsSelectionGenerationAtDownloadStart);
+          findBmsSelectionGenerationAtDownloadStart,
+          findBmsResult.removedPaths);
     } else if (keptMismatchedFiles) {
-      enqueueDownloadedPathIndexTask(findBmsResult.outputPath);
+      enqueueDownloadedPathIndexTask(findBmsResult.outputPath, {}, 0,
+                                     findBmsResult.removedPaths);
     }
     shouldRefresh = true;
   }

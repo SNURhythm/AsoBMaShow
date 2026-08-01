@@ -304,6 +304,51 @@ int main() {
                 .has_value(),
             "downloaded chart lookup rejects matches outside exact output");
 
+  ChartMetaPathBatchReadOutcome unfilteredLookup;
+  unfilteredLookup.status = ChartMetaPathBatchReadStatus::Loaded;
+  ChartMetaRecord unfilteredRecord;
+  unfilteredRecord.meta.BmsPath = "/library/downloaded/chart.bms";
+  unfilteredLookup.records.push_back(unfilteredRecord);
+  const auto unfilteredHandoff =
+      main_menu_library::findBmsUnfilteredHandoffRecord(
+          unfilteredLookup, "/library/downloaded/./chart.bms");
+  ASSERT_EQ(true, unfilteredHandoff.has_value(),
+            "Find BMS handoff accepts an exact unfiltered path lookup");
+  ASSERT_EQ(std::filesystem::path("/library/downloaded/chart.bms"),
+            unfilteredHandoff->meta.BmsPath,
+            "Find BMS handoff returns the hydrated downloaded record");
+
+  ChartMetaPathBatchReadOutcome failedUnfilteredLookup = unfilteredLookup;
+  failedUnfilteredLookup.status = ChartMetaPathBatchReadStatus::StorageFailure;
+  ASSERT_EQ(false,
+            main_menu_library::findBmsUnfilteredHandoffRecord(
+                failedUnfilteredLookup, "/library/downloaded/chart.bms")
+                .has_value(),
+            "Find BMS handoff rejects a failed unfiltered lookup");
+
+  ChartMetaPathBatchReadOutcome missingUnfilteredLookup;
+  missingUnfilteredLookup.status = ChartMetaPathBatchReadStatus::Loaded;
+  missingUnfilteredLookup.missingPaths = 1;
+  ASSERT_EQ(false,
+            main_menu_library::findBmsUnfilteredHandoffRecord(
+                missingUnfilteredLookup, "/library/downloaded/chart.bms")
+                .has_value(),
+            "Find BMS handoff rejects a missing exact path");
+
+  ChartMetaPathBatchReadOutcome mismatchedUnfilteredLookup = unfilteredLookup;
+  mismatchedUnfilteredLookup.records.front().meta.BmsPath =
+      "/library/other/chart.bms";
+  ASSERT_EQ(false,
+            main_menu_library::findBmsUnfilteredHandoffRecord(
+                mismatchedUnfilteredLookup, "/library/downloaded/chart.bms")
+                .has_value(),
+            "Find BMS handoff rejects a different returned path");
+  ASSERT_EQ(false,
+            main_menu_library::findBmsUnfilteredHandoffRecord(
+                unfilteredLookup, {})
+                .has_value(),
+            "Find BMS handoff rejects an empty requested path");
+
   ChartMetaRecord explicitFolderRecord;
   explicitFolderRecord.meta.Folder = "/library/A/../A";
   const auto explicitFolder =

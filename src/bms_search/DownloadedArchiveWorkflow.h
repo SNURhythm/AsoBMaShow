@@ -43,7 +43,8 @@ struct DownloadedArchiveWorkflowDependencies {
   std::function<ExtractedArchiveDecision(const std::filesystem::path &,
                                          const std::string &)>
       decideExtracted;
-  std::function<bool(const BmsSearchPendingArtifact &, std::string &)>
+  std::function<bool(const BmsSearchPendingArtifact &, std::string &,
+                     std::vector<std::filesystem::path> &)>
       commitArtifact;
 };
 

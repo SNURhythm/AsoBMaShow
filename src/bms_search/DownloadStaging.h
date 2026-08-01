@@ -25,7 +25,8 @@ using FindBmsRenameOperation = std::function<void(
 
 bool commitFindBmsPendingArtifact(
     const BmsSearchPendingArtifact &artifact, std::string &errorMessage,
-    FindBmsRenameOperation renameOperation = {});
+    FindBmsRenameOperation renameOperation = {},
+    std::vector<std::filesystem::path> *removedPaths = nullptr);
 
 bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
                                   std::string &errorMessage);

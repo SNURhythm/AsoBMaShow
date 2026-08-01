@@ -3,6 +3,7 @@
 BmsSearchResult BmsSearchService::resolvePendingArtifact(
     BmsSearchResult result,
     BmsSearchPendingArtifactDecision decision) const {
+  result.removedPaths.clear();
   if (!result.pendingArtifact) {
     result.message = "No downloaded files are awaiting a decision.";
     return result;
@@ -11,7 +12,7 @@ BmsSearchResult BmsSearchService::resolvePendingArtifact(
   std::string error;
   const bool resolved = decision == BmsSearchPendingArtifactDecision::Keep
                             ? asobmshow::bms_search::commitFindBmsPendingArtifact(
-                                  artifact, error)
+                                  artifact, error, {}, &result.removedPaths)
                             : asobmshow::bms_search::deleteFindBmsPendingArtifact(
                                   artifact, error);
   if (!resolved) {
