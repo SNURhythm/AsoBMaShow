@@ -80,6 +80,14 @@
 #include <system_error>
 #include <thread>
 #include <vector>
+
+// CMake defines this for desktop and Android targets. The iOS app is built by
+// its generated Xcode project, so keep telemetry opt-in when that build system
+// does not provide the definition.
+#ifndef ASOBMASHOW_ENABLE_PERF_TELEMETRY
+#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 0
+#endif
+
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif

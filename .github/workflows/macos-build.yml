@@ -13,7 +13,6 @@ on:
 
 env:
   ASOBMASHOW_MACOS_DEPLOYMENT_TARGET: "13.0"
-  ASOBMASHOW_MACOS_BUILD_DIR: ${{ runner.temp }}/asobmashow-macos-${{ github.run_id }}-${{ github.run_attempt }}
   VCPKG_TOOL_COMMIT: 75a2e14262fc23c1f03bac18e135c4866dd25b51
 
 jobs:
@@ -26,6 +25,9 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      - name: Set job build directory
+        run: echo "ASOBMASHOW_MACOS_BUILD_DIR=$RUNNER_TEMP/asobmashow-macos-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:

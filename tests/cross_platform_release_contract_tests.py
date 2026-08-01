@@ -70,7 +70,19 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn("ZLIB::ZLIB", self.cmake)
         self.assertNotRegex(self.cmake, r"\bbz2 z iconv\b")
         self.assertIn("$<$<CONFIG:Release>:LINKER:-fatal_warnings>", self.cmake)
-        self.assertIn("set_target_properties(main PROPERTIES SKIP_BUILD_RPATH TRUE)", self.cmake)
+        static_release_bundle_guard = (
+            'if (BUILD_MACOS_BUNDLE\n'
+            '        AND CMAKE_BUILD_TYPE STREQUAL "Release"\n'
+            '        AND VCPKG_TARGET_TRIPLET STREQUAL "arm64-osx-asobmashow")'
+        )
+        self.assertIn(static_release_bundle_guard, self.cmake)
+        guarded_rpath = self.cmake.split(static_release_bundle_guard, 1)[1].split(
+            "endif()", 1
+        )[0]
+        self.assertIn(
+            "set_target_properties(main PROPERTIES SKIP_BUILD_RPATH TRUE)",
+            guarded_rpath,
+        )
         self.assertIn("MACOSX_BUNDLE_ICON_FILE", self.cmake)
         self.assertIn("<key>CFBundleIconFile</key>", self.info_plist)
         self.assertIn("@MACOS_BUNDLE_ICON_FILE@", self.info_plist)
@@ -91,6 +103,12 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
     def test_performance_telemetry_is_compile_time_opt_in(self):
         self.assertIn("option(ASOBMASHOW_ENABLE_PERF_TELEMETRY", self.cmake)
         self.assertIn("ASOBMASHOW_ENABLE_PERF_TELEMETRY=$<BOOL:", self.cmake)
+        self.assertIn(
+            "#ifndef ASOBMASHOW_ENABLE_PERF_TELEMETRY\n"
+            "#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 0\n"
+            "#endif",
+            self.main,
+        )
         self.assertIn("#if ASOBMASHOW_ENABLE_PERF_TELEMETRY", self.main)
         self.assertNotIn("constexpr bool kEnablePerfTelemetry = true", self.main)
 
@@ -123,6 +141,16 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn("tests/macos_artifact_audit_tests.py", build_job)
 
     def test_macos_ci_pins_vcpkg_and_has_strict_tag_release_gates(self):
+        workflow_scope = self.macos_workflow.split("jobs:", 1)[0]
+        build_job = self.macos_workflow.split("jobs:", 1)[1]
+        self.assertNotIn("runner.temp", workflow_scope)
+        self.assertNotIn("${{ runner.temp }}", build_job)
+        self.assertIn(
+            'ASOBMASHOW_MACOS_BUILD_DIR=$RUNNER_TEMP/asobmashow-macos-'
+            '$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT',
+            build_job,
+        )
+        self.assertIn('>> "$GITHUB_ENV"', build_job)
         self.assertIn("VCPKG_TOOL_COMMIT:", self.macos_workflow)
         self.assertIn("GITHUB_RUN_ATTEMPT", self.macos_workflow)
         self.assertRegex(self.macos_workflow, r"git .*checkout --detach")

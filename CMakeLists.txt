@@ -354,10 +354,15 @@ endif()
 
 if (PLATFORM_MACOS)
     find_package(ZLIB REQUIRED)
-    # vcpkg's pkg-config imports expose their library directory to CMake. The
-    # release triplet is static, so a checkout-local runtime search path is
-    # unnecessary and would make the packaged app machine-specific.
-    set_target_properties(main PROPERTIES SKIP_BUILD_RPATH TRUE)
+    # The release bundle triplet is fully static, so a checkout-local runtime
+    # search path is unnecessary and would make the package machine-specific.
+    # Keep normal build rpaths for developer builds that use dynamic vcpkg
+    # triplets.
+    if (BUILD_MACOS_BUNDLE
+        AND CMAKE_BUILD_TYPE STREQUAL "Release"
+        AND VCPKG_TARGET_TRIPLET STREQUAL "arm64-osx-asobmashow")
+        set_target_properties(main PROPERTIES SKIP_BUILD_RPATH TRUE)
+    endif()
     include(CheckLinkerFlag)
     check_linker_flag(CXX "LINKER:-no_warn_duplicate_libraries"
         ASOBMASHOW_HAS_NO_WARN_DUPLICATE_LIBRARIES)
