@@ -71,11 +71,12 @@ unchanged, but they are outside the first iOS-only release stage.
   covered by static release tests.
 - iOS verification and distribution are now separate release gates. A
   no-upload script runs the release-critical C++ tests, iOS contract tests, and
-  unsigned device build. Firebase is an explicit PR-to-`develop` lane;
-  TestFlight is a distinct non-PR lane whose GitHub job waits for verification,
-  uses a global non-canceling concurrency group, and allocates the next build
-  number only after entering that serialized lane. The end-to-end verification
-  command passed without invoking signing or distribution.
+  unsigned device build. Firebase is an explicit PR-to-`develop` fast-iteration
+  lane that neither schedules nor waits for the release verifier. TestFlight is
+  a distinct non-PR lane whose GitHub job waits for verification, uses a global
+  non-canceling concurrency group, and allocates the next build number only
+  after entering that serialized lane. The end-to-end verification command
+  passed without invoking signing or distribution.
 - A deterministic app/IPA audit now verifies release version `0.0.1`, iOS 14
   plist and Mach-O minimums, iPhone/iPad families, device SDK, icons,
   permissions, the retained ATS exception, arm64 slices, resolvable embedded
@@ -240,8 +241,10 @@ false positives, then make lint fatal in CI.
 
 Evidence:
 
-- `.github/workflows/mobile-beta-deploy.yml` initializes/builds/deploys iOS and
-  Android without executing CTest, platform unit tests, or Android lint.
+- `.github/workflows/mobile-beta-deploy.yml` intentionally lets the iOS Firebase
+  PR iteration lane and Android Firebase deploy without executing CTest,
+  platform unit tests, or Android lint. The TestFlight lane has a separate
+  required iOS verifier.
 - `.github/workflows/macos-build.yml` builds and packages without running CTest.
 - `ASOBMASHOW_BUILD_TESTS` is on by default, so the macOS workflow compiles the
   large test graph but never runs it. The local all-target build had 1,097 Ninja
@@ -250,14 +253,17 @@ Evidence:
   22 targets and the BMS amalgamation in 55 targets. The debug build tree reached
   4.4 GiB.
 
-Impact: regressions can be uploaded to Firebase/TestFlight or attached to a
-GitHub release despite a broad, currently healthy test suite. macOS CI also pays
-the test compilation cost without receiving its validation benefit.
+Impact: regressions can be uploaded to the accepted fast-iteration Firebase
+track, Android Firebase, or a GitHub release despite a broad, currently healthy
+test suite. TestFlight is protected by the iOS release verifier. macOS CI also
+pays the test compilation cost without receiving its validation benefit.
 
-Recommendation: add required test/lint jobs before deployment, run CTest after
-building on macOS, and decide explicitly whether packaging jobs should compile
-tests or depend on a separate test job. Extract common object/static test-support
-libraries so large amalgamations and shared production sources compile once.
+Recommendation: retain the required TestFlight verifier, treat Firebase builds
+as non-release iteration artifacts, add required Android test/lint jobs before
+release deployment, and run CTest after building on macOS. Decide explicitly
+whether packaging jobs should compile tests or depend on a separate test job.
+Extract common object/static test-support libraries so large amalgamations and
+shared production sources compile once.
 
 ### R4 — Decoded artwork caches and stale async work are unbounded (high, performance)
 

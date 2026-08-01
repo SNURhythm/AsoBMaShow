@@ -21,6 +21,7 @@ jobs:
       VCPKG_ROOT: /Users/xf/vcpkg
     name: Verify iOS release candidate
     runs-on: [self-hosted, macOS]
+    if: ${{ github.event_name != 'pull_request' || github.base_ref != 'develop' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +36,6 @@ jobs:
   ios-firebase:
     name: Distribute iOS PR to Firebase
     runs-on: [self-hosted, macOS]
-    needs: ios-verify
     if: ${{ github.event_name == 'pull_request' && github.base_ref == 'develop' }}
     timeout-minutes: 30
     env:

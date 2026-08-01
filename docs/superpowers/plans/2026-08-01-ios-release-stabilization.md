@@ -422,7 +422,7 @@ CMake/CTest, Xcode 26, Python `unittest`, Ruby/Fastlane, GitHub Actions.
    - verification has no upload action;
    - Firebase and TestFlight are explicit lanes;
    - PRs cannot route to TestFlight;
-   - distribution jobs depend on verification;
+   - TestFlight depends on verification while Firebase PR iteration does not;
    - TestFlight has one non-canceling concurrency group; and
    - the serialized lane allocates `latest_testflight_build_number + 1`.
 2. Add `scripts/ios_release_verify.sh` tests/dry-run support so CI can prove the
@@ -432,7 +432,8 @@ CMake/CTest, Xcode 26, Python `unittest`, Ruby/Fastlane, GitHub Actions.
    existing PR-to-`develop` Firebase path and its DerivedData/archive object
    behavior.
 5. Make verification run the core required tests, iOS setup tests, and unsigned
-   iOS build-only path before either distribution job is eligible.
+   iOS build-only path before TestFlight is eligible. Keep the Firebase PR lane
+   independent for fast iteration.
 6. Run Python tests and shell syntax checks; never invoke a distribution lane.
 7. Commit release-engineering changes.
 

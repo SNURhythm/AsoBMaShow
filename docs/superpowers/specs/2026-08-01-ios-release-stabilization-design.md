@@ -232,11 +232,12 @@ Fastlane responsibilities are separated by intent:
 - TestFlight distribution runs only for its explicitly selected push/tag/manual
   events, never as the default branch of ambiguous event detection.
 
-Every distribution job depends on the required test/build gate. TestFlight
-publishing uses a workflow concurrency group with `cancel-in-progress: false`.
-Serialized jobs may continue using `latest_testflight_build_number + 1` without
-selecting the same build number concurrently. Firebase builds continue to use
-the GitHub run number. The public version remains `0.0.1`.
+TestFlight depends on the required test/build gate and uses a workflow
+concurrency group with `cancel-in-progress: false`. Serialized TestFlight jobs
+may continue using `latest_testflight_build_number + 1` without selecting the
+same build number concurrently. Firebase PR distribution intentionally skips
+the verifier for fast iteration and continues to use the GitHub run number. The
+public version remains `0.0.1`.
 
 The workflow must not upload from the verification path. Local verification
 uses `scripts/ios_firebase_deploy.sh --build-only`; a real deployment remains an
