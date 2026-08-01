@@ -1,7 +1,6 @@
 #include "SettingsSceneShared.h"
 
 #include "../AppSettingsStore.h"
-#include "../ir/IrCredentialStore.h"
 #include "../ir/IrRankingService.h"
 #include "../ir/IrSubmissionService.h"
 
@@ -93,14 +92,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
 
   bool hasCredential = false;
   if (context.profileReady()) {
-    const auto loaded = ir::IrCredentialStore::load(
-        context.profileManager.activePaths().irCredentialsJson);
-    if (loaded.status == ir::IrCredentialLoadStatus::Loaded) {
-      const auto found =
-          loaded.credentials.apiKeys.find(std::string(kProviderId));
-      hasCredential =
-          found != loaded.credentials.apiKeys.end() && !found->second.empty();
-    }
+    hasCredential = !context.lookupActiveIrCredential(
+                                context.profileManager.activeProfile().id,
+                                kProviderId)
+                         .empty();
   }
 
   ir::IrOutboxCounts counts;
@@ -152,21 +147,9 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               diagnostic = "The active profile is unavailable.";
               return false;
             }
-            auto loaded = ir::IrCredentialStore::load(
-                context.profileManager.activePaths().irCredentialsJson);
-            if (loaded.status == ir::IrCredentialLoadStatus::Missing) {
-              return true;
-            }
-            if (loaded.status != ir::IrCredentialLoadStatus::Loaded) {
-              diagnostic = "The credential file could not be read.";
-              return false;
-            }
-            const auto found =
-                loaded.credentials.apiKeys.find(std::string(kProviderId));
-            if (found != loaded.credentials.apiKeys.end()) {
-              apiKey = std::move(found->second);
-            }
-            return true;
+            return context.loadIrCredential(
+                context.profileManager.activeProfile().id, kProviderId,
+                apiKey, diagnostic);
           },
       .invalidateProviderIdentity =
           [this](std::string_view providerId, std::string &diagnostic) {
@@ -218,11 +201,9 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               diagnostic = "The active profile is unavailable.";
               return false;
             }
-            auto result = ir::IrCredentialStore::replaceApiKey(
-                context.profileManager.activePaths().irCredentialsJson,
-                std::string(kProviderId), std::string(apiKey));
-            diagnostic = std::move(result.diagnostic);
-            return result.succeeded;
+            return context.replaceIrCredential(
+                context.profileManager.activeProfile().id, kProviderId,
+                apiKey, diagnostic);
           },
       .removeCredential =
           [this](std::string &diagnostic) {
@@ -230,11 +211,9 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               diagnostic = "The active profile is unavailable.";
               return false;
             }
-            auto result = ir::IrCredentialStore::removeApiKey(
-                context.profileManager.activePaths().irCredentialsJson,
-                std::string(kProviderId));
-            diagnostic = std::move(result.diagnostic);
-            return result.succeeded;
+            return context.removeIrCredential(
+                context.profileManager.activeProfile().id, kProviderId,
+                diagnostic);
           },
       .credentialCommitted =
           [this]() {

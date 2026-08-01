@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -34,7 +35,8 @@
 #include "input/InputProfile.h"
 #include "input/InputProfileReplacementNotifier.h"
 #include "input/InputProfileStore.h"
-#include "ir/IrCredentialStore.h"
+#include "ir/IrCredentialBackend.h"
+#include "ir/IrCredentialMigration.h"
 #include "ir/IrHttpClient.h"
 #include "ir/IrRankingService.h"
 #include "ir/IrSubmissionService.h"
@@ -105,6 +107,7 @@ public:
   std::filesystem::path applicationDataRoot;
   PlayerProfileManager profileManager;
   ProfileResult profileInitializationResult;
+  std::unique_ptr<ir::IrCredentialBackend> irCredentialBackend;
   AppSettings settings;
   InputProfile inputProfile;
   ChartRepository chartRepository;
@@ -117,6 +120,9 @@ public:
   std::unique_ptr<ir::IrRankingService> irRankingService;
   std::unique_ptr<ir::IrSubmissionService> irSubmissionService;
   std::atomic<std::uint64_t> irAccountEvidenceRevision{0};
+  std::mutex irCredentialMutex;
+  std::set<std::string> irCredentialReadyProfiles;
+  std::set<std::string> irCredentialBlockedProfiles;
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
   std::atomic<bool> profileGameplayActive{false};
@@ -162,6 +168,8 @@ public:
       : quitFlag(false), applicationDataRoot(Utils::GetDocumentsPath()),
         profileManager(applicationDataRoot),
         profileInitializationResult(profileManager.Initialize()),
+        irCredentialBackend(
+            ir::CreatePlatformIrCredentialBackend(applicationDataRoot)),
         settings(application_context_detail::loadActiveSettings(
             profileManager, profileInitializationResult)),
         inputProfile(application_context_detail::loadActiveInput(
@@ -410,19 +418,127 @@ public:
 
   [[nodiscard]] std::string
   lookupActiveIrCredential(std::string_view profileId,
-                           std::string_view providerId) const {
+                           std::string_view providerId) {
     if (!profileInitializationResult.ok() ||
         profileManager.activeProfile().id != profileId) {
       return {};
     }
-    const auto loaded = ir::IrCredentialStore::load(
-        profileManager.activePaths().irCredentialsJson);
-    if (loaded.status != ir::IrCredentialLoadStatus::Loaded) {
+    std::optional<std::string> apiKey;
+    std::string diagnostic;
+    if (!loadIrCredential(profileId, providerId, apiKey, diagnostic) ||
+        !apiKey) {
       return {};
     }
-    const auto found = loaded.credentials.apiKeys.find(std::string(providerId));
-    return found == loaded.credentials.apiKeys.end() ? std::string{}
-                                                     : found->second;
+    return std::move(*apiKey);
+  }
+
+  bool prepareIrCredentials(std::string_view profileId,
+                            std::string &diagnostic) noexcept {
+    try {
+      std::lock_guard lock(irCredentialMutex);
+      const std::string identity(profileId);
+      if (irCredentialReadyProfiles.contains(identity)) {
+        return true;
+      }
+      if (irCredentialBlockedProfiles.contains(identity)) {
+        diagnostic =
+            "Secure IR credential migration is unavailable this session.";
+        return false;
+      }
+      if (!irCredentialBackend) {
+        irCredentialBlockedProfiles.insert(identity);
+        diagnostic = "Secure IR credential storage is unavailable.";
+        return false;
+      }
+      if (irCredentialBackend->requiresLegacyFileMigration()) {
+        const auto migrated = ir::migrateLegacyIrCredentials(
+            profileId, profileManager.pathsFor(profileId).irCredentialsJson,
+            *irCredentialBackend);
+        if (!migrated.ready()) {
+          irCredentialBlockedProfiles.insert(identity);
+          diagnostic = migrated.diagnostic.empty()
+                           ? "Secure IR credential migration failed."
+                           : migrated.diagnostic;
+          return false;
+        }
+      }
+      irCredentialReadyProfiles.insert(identity);
+      return true;
+    } catch (...) {
+      irCredentialBlockedProfiles.insert(std::string(profileId));
+      diagnostic = "Secure IR credential storage failed unexpectedly.";
+      return false;
+    }
+  }
+
+  bool loadIrCredential(std::string_view profileId,
+                        std::string_view providerId,
+                        std::optional<std::string> &apiKey,
+                        std::string &diagnostic) noexcept {
+    apiKey.reset();
+    if (!prepareIrCredentials(profileId, diagnostic)) {
+      return false;
+    }
+    std::lock_guard lock(irCredentialMutex);
+    const auto loaded = irCredentialBackend->load(profileId, providerId);
+    if (loaded.status == ir::IrCredentialBackendReadStatus::Missing) {
+      return true;
+    }
+    if (loaded.status != ir::IrCredentialBackendReadStatus::Loaded ||
+        !loaded.apiKey) {
+      diagnostic = loaded.diagnostic.empty()
+                       ? "Secure IR credential could not be read."
+                       : loaded.diagnostic;
+      return false;
+    }
+    apiKey = std::move(loaded.apiKey);
+    return true;
+  }
+
+  bool replaceIrCredential(std::string_view profileId,
+                           std::string_view providerId,
+                           std::string_view apiKey,
+                           std::string &diagnostic) noexcept {
+    if (!prepareIrCredentials(profileId, diagnostic)) {
+      return false;
+    }
+    std::lock_guard lock(irCredentialMutex);
+    auto result = irCredentialBackend->replace(profileId, providerId, apiKey);
+    diagnostic = std::move(result.diagnostic);
+    return result.succeeded;
+  }
+
+  bool removeIrCredential(std::string_view profileId,
+                          std::string_view providerId,
+                          std::string &diagnostic) noexcept {
+    if (!prepareIrCredentials(profileId, diagnostic)) {
+      return false;
+    }
+    std::lock_guard lock(irCredentialMutex);
+    auto result = irCredentialBackend->remove(profileId, providerId);
+    diagnostic = std::move(result.diagnostic);
+    return result.succeeded;
+  }
+
+  bool removeProfileIrCredentials(std::string_view profileId,
+                                  std::string &diagnostic) noexcept {
+    try {
+      std::lock_guard lock(irCredentialMutex);
+      if (!irCredentialBackend) {
+        diagnostic = "Secure IR credential storage is unavailable.";
+        return false;
+      }
+      auto result = irCredentialBackend->removeProfile(profileId);
+      diagnostic = std::move(result.diagnostic);
+      if (result.succeeded) {
+        irCredentialReadyProfiles.erase(std::string(profileId));
+        irCredentialBlockedProfiles.erase(std::string(profileId));
+      }
+      return result.succeeded;
+    } catch (...) {
+      diagnostic = "Profile IR credentials could not be removed.";
+      return false;
+    }
   }
 
   bool projectMirroredIrScores(std::string_view profileId,
@@ -492,6 +608,11 @@ public:
     try {
       if (!profileReady()) {
         return false;
+      }
+      std::string credentialDiagnostic;
+      if (!prepareIrCredentials(profileManager.activeProfile().id,
+                                credentialDiagnostic)) {
+        SDL_Log("Authenticated IR is disabled for the active profile");
       }
       if (!irHttpClient) {
         irHttpClient = ir::CreatePlatformIrHttpClient();
@@ -610,6 +731,10 @@ public:
                                  const AppSettings &profileSettings,
                                  std::string &error) noexcept {
     try {
+      std::string credentialDiagnostic;
+      if (!prepareIrCredentials(profileId, credentialDiagnostic)) {
+        SDL_Log("Authenticated IR is disabled for the selected profile");
+      }
       std::string cacheDiagnostic;
       if (!bokutachiCacheStore->activate(
               profileManager.activePaths().bokutachiCacheJson,

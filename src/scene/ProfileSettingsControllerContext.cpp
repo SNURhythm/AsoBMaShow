@@ -32,7 +32,17 @@ applicationDependencies(ApplicationContext &context) {
                                                        std::move(name));
       },
       .remove = [&context](std::string_view profileId) {
-        return context.profileManager.deleteProfile(profileId);
+        auto result = context.profileManager.deleteProfile(profileId);
+        if (result.ok()) {
+          std::string diagnostic;
+          if (!context.removeProfileIrCredentials(profileId, diagnostic)) {
+            result.message = diagnostic.empty()
+                                 ? "The profile was deleted, but its secure IR "
+                                   "credentials could not be removed."
+                                 : std::move(diagnostic);
+          }
+        }
+        return result;
       },
       .activate = [&context](std::string_view profileId) {
         return context.switchProfile(profileId);

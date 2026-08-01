@@ -17,14 +17,18 @@ CTest, and fatal Android lint.
 
 - `38ffb3dd` resolves R7: chart migration now fails atomically when SQLite
   rejects the savepoint release, with a real authorizer-driven regression test.
-- R5 transport remediation is implemented and verified locally: stored HTTP
+- `fc41b0af` resolves the R5 transport risk: stored HTTP
   origins remain supported, anonymous public ranking requests remain available
   without credentials, and every Tachi path that sends a bearer token or reads
   private scores now rejects HTTP before network I/O. The settings UI disables
   authenticated actions and persisted HTTP settings clear auto-submit.
-- R5 credential-at-rest remediation is next: iOS credentials will move to
-  Keychain with fail-safe migration from the legacy file. No privacy manifest
-  will be added, per the accepted release policy.
+- R5 credential-at-rest remediation is implemented and verified locally: iOS
+  credentials use Keychain with device-only, after-first-unlock accessibility;
+  legacy plaintext files are removed only after every entry has been written
+  and byte-verified. A partial migration keeps the legacy source and disables
+  authenticated IR for that profile for the session. Portable migration,
+  profile archive/lifecycle, device compilation, and simulator build/launch
+  checks pass. No privacy manifest was added, per the accepted release policy.
 - The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
   app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
   difficulty-table loading.

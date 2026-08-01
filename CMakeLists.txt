@@ -120,8 +120,9 @@ if (IOS)
     find_library(CORE_GRAPHICS CoreGraphics)
     find_library(CORE_TEXT CoreText)
     find_library(PHOTOS Photos)
+    find_library(SECURITY Security)
     list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${CORE_GRAPHICS}
-        ${CORE_TEXT} ${PHOTOS} ${SDL2_LIB} ${SDL2_TFF_LIB})
+        ${CORE_TEXT} ${PHOTOS} ${SECURITY} ${SDL2_LIB} ${SDL2_TFF_LIB})
 
 elseif(ANDROID)
     # --- Android: SDL submodules + vcpkg-compatible native packages ---
@@ -3033,6 +3034,37 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(ir_credential_store_tests PRIVATE cxx_std_23)
 
+    add_executable(ir_credential_migration_tests
+        tests/ir_credential_migration_tests.cpp
+        src/ir/IrCredentialBackend.cpp
+        src/ir/IrCredentialMigration.cpp
+        src/ir/IrCredentialStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+    )
+    target_include_directories(ir_credential_migration_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_credential_migration_tests PRIVATE cxx_std_23)
+
+    if (IOS)
+        add_executable(ios_keychain_credential_tests
+            tests/ios_keychain_credential_tests.mm
+            src/ir/IrCredentialBackend.cpp
+            src/ir/IosKeychainCredentialBackend.mm
+            src/ir/IrCredentialStore.cpp
+            src/AtomicFile.cpp
+            src/VersionedJson.cpp
+        )
+        target_include_directories(ios_keychain_credential_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(ios_keychain_credential_tests PRIVATE cxx_std_23)
+        target_link_libraries(ios_keychain_credential_tests PRIVATE
+            ${FOUNDATION} ${SECURITY}
+        )
+    endif()
+
     add_executable(practice_configuration_tests
         tests/practice_configuration_tests.cpp
         src/practice/PracticeConfiguration.cpp
@@ -3949,6 +3981,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
+    asobmashow_register_test(ir_credential_migration_tests ir_credential_migration_tests)
     asobmashow_register_test(practice_configuration_tests)
     asobmashow_register_test(practice_rule_override_tests)
     asobmashow_register_test(gameplay_score_state_tests)

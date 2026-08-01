@@ -1,6 +1,5 @@
 #include "IrUploadsScene.h"
 
-#include "../ir/IrCredentialStore.h"
 #include "../ir/IrProfileSettings.h"
 #include "../ir/IrSubmissionService.h"
 #include "../rendering/common.h"
@@ -408,13 +407,11 @@ void IrUploadsScene::refreshProviderState() {
       context.settings.irProviders.find(std::string(ir::kTachiProviderId));
   const bool enabled = provider != context.settings.irProviders.end() &&
                        provider->second.enabled;
-  const auto credentials = ir::IrCredentialStore::load(
-      context.profileManager.activePaths().irCredentialsJson);
-  const auto key =
-      credentials.credentials.apiKeys.find(std::string(ir::kTachiProviderId));
   const bool hasCredential =
-      credentials.status == ir::IrCredentialLoadStatus::Loaded &&
-      key != credentials.credentials.apiKeys.end() && !key->second.empty();
+      !context
+           .lookupActiveIrCredential(context.profileManager.activeProfile().id,
+                                     ir::kTachiProviderId)
+           .empty();
   const auto driver = context.irDrivers.find(ir::kTachiProviderId);
   const bool driverCanSubmit = driver != nullptr &&
                                !driver->capabilities().readOnly &&
