@@ -1,6 +1,6 @@
 # Release-readiness audit — 2026-08-01
 
-- Status: complete
+- Status: audit complete; iOS-first remediation in progress
 - Branch: `agent/release-readiness-audit-2026-08-01`
 - Baseline: `develop` at `868c091b`
 
@@ -13,6 +13,22 @@ bundle is not portable, validly signed, or runnable below macOS 26. The release
 workflows would not catch either failure because they omit runtime smoke tests,
 CTest, and fatal Android lint.
 
+## Remediation log
+
+- `38ffb3dd` resolves R7: chart migration now fails atomically when SQLite
+  rejects the savepoint release, with a real authorizer-driven regression test.
+- R5 transport remediation is implemented and verified locally: stored HTTP
+  origins remain supported, anonymous public ranking requests remain available
+  without credentials, and every Tachi path that sends a bearer token or reads
+  private scores now rejects HTTP before network I/O. The settings UI disables
+  authenticated actions and persisted HTTP settings clear auto-submit.
+- R5 credential-at-rest remediation is next: iOS credentials will move to
+  Keychain with fail-safe migration from the legacy file. No privacy manifest
+  will be added, per the accepted release policy.
+- The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
+  app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
+  difficulty-table loading.
+
 | Release gate | Result | Release significance |
 | --- | --- | --- |
 | Android supported-device startup/upgrade | **fail** | Profile/database initialization fails reproducibly on API 29 |
@@ -24,9 +40,10 @@ CTest, and fatal Android lint.
 
 ## Audit scope
 
-This was a source, workflow, build, static-analysis, package-inspection, and
-Android emulator smoke audit. No production source fixes or deployments were
-performed. A signed iOS archive/device run, physical-device performance trace,
+This audit was a source, workflow, build, static-analysis, package-inspection,
+and Android emulator smoke audit. No deployments were performed. Production
+remediation began afterward and is tracked above. A signed iOS archive/device
+run, physical-device performance trace,
 sanitizer campaign, dependency CVE scan, and formal license/SBOM review remain
 outside this pass; they should be explicit release gates rather than inferred
 from the green compile.

@@ -49,11 +49,12 @@ void testBokutachiPresentationExposesWriteControlsWithoutSecrets() {
   REQUIRE(presentation.providerId == "tachi");
   REQUIRE(presentation.displayName == "Bokutachi");
   REQUIRE(presentation.enabled);
-  REQUIRE(presentation.autoSubmit);
+  REQUIRE(!presentation.autoSubmit);
   REQUIRE(presentation.hasCredential);
   REQUIRE(presentation.showAutoSubmit);
+  REQUIRE(!presentation.authenticatedActionsAvailable);
   REQUIRE(presentation.showQueueActions);
-  REQUIRE(presentation.canRetryAll);
+  REQUIRE(!presentation.canRetryAll);
   REQUIRE(presentation.canDiscard);
   REQUIRE(presentation.insecureServerOrigin);
   REQUIRE(presentation.credentialLabel == "API key saved (••••••••)");
@@ -131,6 +132,13 @@ void testRecordSyncRequiresCompleteActiveConfiguration() {
   const auto inactive = ir::makeIrSettingsPresentation(input);
   REQUIRE(!inactive.showRecordSync);
   REQUIRE(!inactive.canSyncRecords);
+
+  input.serviceActive = true;
+  input.settings.serverOrigin = "http://boku.tachi.ac";
+  const auto insecure = ir::makeIrSettingsPresentation(input);
+  REQUIRE(insecure.showRecordSync);
+  REQUIRE(!insecure.canSyncRecords);
+  REQUIRE(!insecure.authenticatedActionsAvailable);
 }
 
 ir::IrSettingsPresentationInput recordSyncInput(
@@ -404,6 +412,44 @@ void testSettingsActionsPublishOnlyAfterDurableStore() {
   REQUIRE(model.setServerOrigin("HTTPS://Other.Example/").succeeded());
   REQUIRE(model.settings().serverOrigin == "https://other.example");
   REQUIRE(fake.active == model.settings());
+}
+
+void testAuthenticatedSettingsActionsRequireHttps() {
+  FakeActions fake;
+  auto settings = initialSettings();
+  settings.enabled = true;
+  settings.autoSubmit = true;
+  fake.stored = settings;
+  fake.active = settings;
+  ir::IrSettingsActionModel model("tachi",
+                                  {.chartRankings = true,
+                                   .scoreSubmission = true,
+                                   .deferredSubmission = true},
+                                  settings, true, fake.dependencies());
+
+  const auto originResult = model.setServerOrigin("http://local.example");
+  REQUIRE(originResult.succeeded());
+  REQUIRE(model.settings().serverOrigin == "http://local.example");
+  REQUIRE(!model.settings().autoSubmit);
+  REQUIRE(!fake.stored.autoSubmit);
+
+  const auto autoSubmitResult = model.setAutoSubmit(true);
+  REQUIRE(autoSubmitResult.status ==
+          ir::IrSettingsActionResult::Status::Invalid);
+  REQUIRE(!model.settings().autoSubmit);
+
+  const auto credentialResult = model.replaceCredential("replacement-key");
+  REQUIRE(credentialResult.status ==
+          ir::IrSettingsActionResult::Status::Invalid);
+  REQUIRE(fake.quiesceCalls == 0);
+  REQUIRE(fake.replaceCredentialCalls == 0);
+
+  const auto retryResult = model.retryAll();
+  REQUIRE(retryResult.status == ir::IrSettingsActionResult::Status::Invalid);
+  REQUIRE(fake.retryCalls == 0);
+
+  REQUIRE(model.removeCredential().succeeded());
+  REQUIRE(!model.hasCredential());
 }
 
 void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
@@ -721,6 +767,7 @@ int main() {
   testRecordSyncRequiresCompleteActiveConfiguration();
   testRecordSyncProjectsEveryPhaseAndBoundedMutationSummary();
   testSettingsActionsPublishOnlyAfterDurableStore();
+  testAuthenticatedSettingsActionsRequireHttps();
   testCredentialActionsNeverRetainKeyAndPublishAfterStore();
   testFailedCredentialReplacementPreservesExistingAccountEvidence();
   testUnchangedCredentialPreservesExistingAccountEvidence();

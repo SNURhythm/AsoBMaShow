@@ -628,6 +628,10 @@ DeliveryOutcome TachiDriver::submitBatch(std::span<const IrOutboxEntry> entries,
     return blocked("invalid_server_origin",
                    "Tachi server origin is missing or invalid");
   }
+  if (!isHttpsServerOrigin(*origin)) {
+    return blocked("insecure_server_origin",
+                   "Authenticated Tachi submission requires HTTPS");
+  }
   const auto built = buildBatchManualOutboxDocument(entries);
   if (built.status != BuildTachiOutboxBatchStatus::Built || !built.document ||
       built.document->rowIds.size() != entries.size()) {
@@ -684,6 +688,10 @@ DeliveryOutcome TachiDriver::pollBatch(std::span<const IrOutboxEntry> entries,
     return permanent("invalid_remote_job",
                      "Tachi deferred import state is missing or invalid");
   }
+  if (!isHttpsServerOrigin(*origin)) {
+    return blocked("insecure_server_origin",
+                   "Authenticated Tachi polling requires HTTPS");
+  }
   for (const auto &entry : entries.subspan(1)) {
     const auto entryOrigin = normalizeServerOrigin(entry.remoteOrigin);
     if (entry.remoteJobId != first.remoteJobId || !entryOrigin ||
@@ -730,6 +738,10 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
   if (!origin) {
     return rankingFailure(ChartRankingStatus::MalformedResponse,
                           "Tachi server origin is missing or invalid");
+  }
+  if (authenticated && !isHttpsServerOrigin(*origin)) {
+    return rankingFailure(ChartRankingStatus::AuthenticationRequired,
+                          "Authenticated Tachi ranking requires HTTPS");
   }
   const auto sha256 = normalizedSha256(query.chartSha256);
   if (!sha256 || query.totalNotes <= 0 ||
@@ -894,6 +906,11 @@ IrUserScoreSnapshotOutcome TachiDriver::fetchUserScoreSnapshot(
     return userScoreFailure(IrUserScoreSnapshotStatus::MalformedResponse,
                             "invalid_server_origin",
                             "Tachi server origin is missing or invalid");
+  }
+  if (!isHttpsServerOrigin(*origin)) {
+    return userScoreFailure(IrUserScoreSnapshotStatus::AuthenticationRequired,
+                            "insecure_server_origin",
+                            "Authenticated Tachi score import requires HTTPS");
   }
 
   constexpr std::array games{std::string_view("bms-7k"),

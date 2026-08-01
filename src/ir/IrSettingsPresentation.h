@@ -41,6 +41,7 @@ struct IrSettingsPresentation {
   bool canDiscard = false;
   bool showRecordSync = false;
   bool canSyncRecords = false;
+  bool authenticatedActionsAvailable = true;
   bool insecureServerOrigin = false;
   std::string serverOrigin;
   std::string credentialLabel;

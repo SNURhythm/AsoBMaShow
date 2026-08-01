@@ -334,6 +334,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     auto *autoButton = makeIrButton(
         metrics, presentation.autoSubmit ? "Auto Submit On" : "Auto Submit Off",
         presentation.autoSubmit ? ui_theme::lime() : ui_theme::amber());
+    autoButton->setEnabled(presentation.authenticatedActionsAvailable);
     autoButton->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel) {
         return;
@@ -367,8 +368,9 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   settingsBody->addView(originRow);
   if (presentation.insecureServerOrigin) {
     settingsBody->addView(makeWrappedText(
-        "Insecure HTTP origin: API keys and scores are not protected in "
-        "transit.",
+        "HTTP origin: authenticated actions are disabled until you save an "
+        "HTTPS origin. Remove the saved API key to use anonymous public "
+        "rankings over HTTP.",
         metrics.smallTextSize, ui_theme::coral()));
   }
 
@@ -385,6 +387,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     irApiKeyInput->setEditingText("");
     keyRow->addView(irApiKeyInput);
     auto *saveKey = makeIrButton(metrics, "Save Key", ui_theme::lime());
+    saveKey->setEnabled(presentation.authenticatedActionsAvailable);
     saveKey->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel || !irApiKeyInput) {
         return;
@@ -416,6 +419,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     auto *keyActions = makeActionRow(metrics);
     auto *replaceKey = makeIrButton(
         metrics, presentation.hasCredential ? "Replace Key" : "Add Key");
+    replaceKey->setEnabled(presentation.authenticatedActionsAvailable);
     replaceKey->setOnClickListener([this]() {
       irKeyEditorActive = true;
       irStatusMessage.clear();

@@ -138,6 +138,8 @@ makeIrSettingsPresentation(IrSettingsPresentationInput input) {
       !input.capabilities.readOnly && input.capabilities.scoreSubmission;
   const bool supportsQueue =
       supportsSubmission && input.capabilities.deferredSubmission;
+  const bool secureServerOrigin =
+      isHttpsServerOrigin(input.settings.serverOrigin);
   const bool supportsRecordSync = input.capabilities.scoreReconciliation &&
                                   input.settings.enabled &&
                                   input.hasCredential && input.serviceActive;
@@ -156,12 +158,14 @@ makeIrSettingsPresentation(IrSettingsPresentationInput input) {
       .displayName = std::move(input.displayName),
       .readOnly = input.capabilities.readOnly,
       .enabled = input.settings.enabled,
-      .autoSubmit = supportsSubmission && input.settings.autoSubmit,
+      .autoSubmit = supportsSubmission && secureServerOrigin &&
+                    input.settings.autoSubmit,
       .hasCredential = input.hasCredential,
       .showAutoSubmit = supportsSubmission,
       .showQueueActions = supportsQueue,
       .canRetryAll =
-          supportsQueue && input.counts.storageAvailable &&
+          supportsQueue && secureServerOrigin &&
+          input.counts.storageAvailable &&
           (input.counts.pending > 0 || input.counts.awaitingRemoteResult > 0 ||
            input.counts.failedPermanent > 0 ||
            input.counts.blockedConfiguration > 0),
@@ -172,7 +176,9 @@ makeIrSettingsPresentation(IrSettingsPresentationInput input) {
            input.counts.failedPermanent > 0),
       .showRecordSync = supportsRecordSync,
       .canSyncRecords =
-          supportsRecordSync && !recordSyncRunning && !cooldownActive,
+          supportsRecordSync && secureServerOrigin && !recordSyncRunning &&
+          !cooldownActive,
+      .authenticatedActionsAvailable = secureServerOrigin,
       .insecureServerOrigin =
           input.settings.serverOrigin.starts_with("http://"),
       .serverOrigin = std::move(input.settings.serverOrigin),
@@ -241,6 +247,11 @@ IrSettingsActionResult IrSettingsActionModel::setAutoSubmit(bool autoSubmit) {
   if (!supportsSubmissionActions()) {
     return unsupported("This IR provider is read-only.");
   }
+  if (autoSubmit && !isHttpsServerOrigin(settings_.serverOrigin)) {
+    return {.status = IrSettingsActionResult::Status::Invalid,
+            .diagnostic =
+                "Use an HTTPS server origin before enabling submissions."};
+  }
   IrProviderSettings candidate = settings_;
   candidate.autoSubmit = autoSubmit;
   return commitSettings(std::move(candidate));
@@ -255,6 +266,9 @@ IrSettingsActionModel::setServerOrigin(std::string_view serverOrigin) {
   }
   IrProviderSettings candidate = settings_;
   candidate.serverOrigin = *normalized;
+  if (!isHttpsServerOrigin(candidate.serverOrigin)) {
+    candidate.autoSubmit = false;
+  }
   return commitSettings(std::move(candidate));
 }
 
@@ -263,6 +277,11 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
   if (!IrCredentialStore::isApiKeyFormatValid(apiKey)) {
     return {.status = IrSettingsActionResult::Status::Invalid,
             .diagnostic = "Enter a valid API key."};
+  }
+  if (!isHttpsServerOrigin(settings_.serverOrigin)) {
+    return {.status = IrSettingsActionResult::Status::Invalid,
+            .diagnostic =
+                "Use an HTTPS server origin before saving an API key."};
   }
   if (!dependencies_.replaceCredential) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
@@ -461,6 +480,11 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
 IrSettingsActionResult IrSettingsActionModel::retryAll() {
   if (!supportsSubmissionActions() || !capabilities_.deferredSubmission) {
     return unsupported("This IR provider has no submission queue.");
+  }
+  if (!isHttpsServerOrigin(settings_.serverOrigin)) {
+    return {.status = IrSettingsActionResult::Status::Invalid,
+            .diagnostic =
+                "Use an HTTPS server origin before retrying submissions."};
   }
   if (!dependencies_.retryAll) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
