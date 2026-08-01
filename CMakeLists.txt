@@ -3100,6 +3100,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(ir_credential_migration_tests PRIVATE cxx_std_23)
 
+    add_executable(pending_ir_credential_cleanup_tests
+        tests/pending_ir_credential_cleanup_tests.cpp
+        src/ir/PendingIrCredentialCleanup.cpp
+        src/ir/IrCredentialBackend.cpp
+        src/ir/IrCredentialStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+    )
+    target_include_directories(pending_ir_credential_cleanup_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(pending_ir_credential_cleanup_tests PRIVATE
+        cxx_std_23
+    )
+
     if (IOS)
         add_executable(ios_keychain_credential_tests
             tests/ios_keychain_credential_tests.mm
@@ -4054,6 +4069,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
     asobmashow_register_test(ir_credential_migration_tests ir_credential_migration_tests)
+    asobmashow_register_test(pending_ir_credential_cleanup_tests pending_ir_credential_cleanup_tests)
     asobmashow_register_test(practice_configuration_tests)
     asobmashow_register_test(practice_rule_override_tests)
     asobmashow_register_test(gameplay_score_state_tests)

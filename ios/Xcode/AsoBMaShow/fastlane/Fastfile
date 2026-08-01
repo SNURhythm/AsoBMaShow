@@ -153,6 +153,17 @@ platform :ios do
       clean: true
     )
     temporary_fix_ios_post_build
+    ipa_location = lane_context[SharedValues::IPA_OUTPUT_PATH].to_s.strip
+    UI.user_error!("TestFlight build did not produce an IPA") if ipa_location.empty?
+    artifact_audit = File.expand_path(
+      "../../../../scripts/ios_artifact_audit.sh",
+      __dir__
+    )
+    UI.user_error!("iOS artifact audit script is not executable") unless File.executable?(artifact_audit)
+    sh(
+      "#{Shellwords.escape(artifact_audit)} --require-signature " \
+      "#{Shellwords.escape(ipa_location)}"
+    )
     upload_to_testflight
   end
 end
@@ -161,6 +172,7 @@ desc "Temporary workaround to remove unwanted files from the IPA"
 private_lane :temporary_fix_ios_post_build do
   # Workaround to remove ._Symbols from ipa.
   ipa_location = lane_context[SharedValues::IPA_OUTPUT_PATH]
-  sh("unzip -l #{ipa_location} | grep ._Symbols || true")
-  sh("zip -d #{ipa_location} ._Symbols/ || true")
+  escaped_ipa_location = Shellwords.escape(ipa_location)
+  sh("unzip -l #{escaped_ipa_location} | grep ._Symbols || true")
+  sh("zip -d #{escaped_ipa_location} ._Symbols/ || true")
 end

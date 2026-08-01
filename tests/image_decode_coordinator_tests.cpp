@@ -206,7 +206,11 @@ void testDropPreventsStaleCompletionFromReplacingNewWork() {
   const auto stale = coordinator.request(request("same"));
   expect(stale != 0 && waitUntil([&] { return loader.hasStarted("same", 1); }),
          "stale request reaches a worker");
+  expect(coordinator.isTracked(stale),
+         "a live consumer ticket is observable before eviction");
   coordinator.drop("same");
+  expect(!coordinator.isTracked(stale),
+         "dropping decode work makes its consumer ticket observably stale");
   const auto current = coordinator.request(request("same"));
   expect(current != 0 && waitUntil([&] { return loader.hasStarted("same", 2); }),
          "new generation can start while stale work completes");

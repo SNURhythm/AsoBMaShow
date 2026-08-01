@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -37,6 +38,7 @@
 #include "input/InputProfileStore.h"
 #include "ir/IrCredentialBackend.h"
 #include "ir/IrCredentialMigration.h"
+#include "ir/PendingIrCredentialCleanup.h"
 #include "ir/IrHttpClient.h"
 #include "ir/IrRankingService.h"
 #include "ir/IrSubmissionService.h"
@@ -105,6 +107,7 @@ public:
   SceneManager *sceneManager = nullptr;
   Uint64 currentFrame = 0;
   std::filesystem::path applicationDataRoot;
+  ir::PendingIrCredentialCleanup pendingIrCredentialCleanup;
   PlayerProfileManager profileManager;
   ProfileResult profileInitializationResult;
   std::unique_ptr<ir::IrCredentialBackend> irCredentialBackend;
@@ -166,6 +169,7 @@ public:
 
   ApplicationContext()
       : quitFlag(false), applicationDataRoot(Utils::GetDocumentsPath()),
+        pendingIrCredentialCleanup(applicationDataRoot),
         profileManager(applicationDataRoot),
         profileInitializationResult(profileManager.Initialize()),
         irCredentialBackend(
@@ -188,6 +192,8 @@ public:
     if (!profileInitializationResult.ok()) {
       return;
     }
+
+    retryPendingIrCredentialCleanup();
 
     inputDeviceRegistry.configureGyroscopeTurntable(
         inputProfile.gyroscopeTurntable);
@@ -538,6 +544,35 @@ public:
     } catch (...) {
       diagnostic = "Profile IR credentials could not be removed.";
       return false;
+    }
+  }
+
+  void retryPendingIrCredentialCleanup() noexcept {
+    try {
+      const auto retried = ir::retryPendingProfileCredentialCleanup(
+          pendingIrCredentialCleanup,
+          [this](std::string_view profileId) {
+            std::error_code error;
+            const auto status = std::filesystem::symlink_status(
+                profileManager.pathsFor(profileId).root, error);
+            if (error == std::errc::no_such_file_or_directory ||
+                status.type() == std::filesystem::file_type::not_found) {
+              return false;
+            }
+            // Treat inspection failures conservatively: a profile that might
+            // still exist must keep its secure credentials.
+            return error || status.type() !=
+                                std::filesystem::file_type::not_found;
+          },
+          [this](std::string_view profileId, std::string &diagnostic) {
+            return removeProfileIrCredentials(profileId, diagnostic);
+          });
+      if (retried.retained != 0 || !retried.diagnostic.empty()) {
+        SDL_Log("Pending secure IR credential cleanup retained %zu item(s): %s",
+                retried.retained, retried.diagnostic.c_str());
+      }
+    } catch (...) {
+      SDL_Log("Pending secure IR credential cleanup could not be retried");
     }
   }
 

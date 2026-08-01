@@ -580,6 +580,10 @@ void ImageView::applyAsyncImageIfReady() {
   if (currentImageKey.empty() || !asyncImagePending) {
     return;
   }
+  if (resetDroppedAsyncRequest()) {
+    const path_t path = currentImagePath;
+    setImageAsync(path, true);
+  }
   if (applyCachedTexture(currentImagePath, currentImageKey)) {
     asyncImagePending = false;
     return;
@@ -591,6 +595,9 @@ void ImageView::applyAsyncImageIfReady() {
 }
 
 bool ImageView::loadTexture(const path_t &path) {
+  asyncImageBound = false;
+  asyncTargetWidth = 0;
+  asyncTargetHeight = 0;
   const std::string utf8Path = path_t_to_utf8(path);
   const int targetWidth = std::max(1, getWidth());
   const int targetHeight = std::max(1, getHeight());
@@ -634,10 +641,22 @@ void ImageView::cancelAsyncRequest() {
   }
 }
 
+bool ImageView::resetDroppedAsyncRequest() {
+  if (asyncTicket == 0 || imageDecodeCoordinator().isTracked(asyncTicket)) {
+    return false;
+  }
+  asyncTicket = 0;
+  return true;
+}
+
 bool ImageView::setImage(const path_t &path) { return loadTexture(path); }
 bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
+  resetDroppedAsyncRequest();
   const int targetWidth = std::max(1, getWidth());
   const int targetHeight = std::max(1, getHeight());
+  asyncImageBound = true;
+  asyncTargetWidth = targetWidth;
+  asyncTargetHeight = targetHeight;
   const std::string key =
       isArchiveEntryImagePath(std::filesystem::path(path))
           ? imageCacheKey(path, targetWidth, targetHeight)
@@ -668,7 +687,9 @@ bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
   }
 
   cancelAsyncRequest();
-  freeTexture();
+  if (currentImagePath != path) {
+    freeTexture();
+  }
   currentImageKey = key;
   currentImagePath = path;
   if (applyCachedTexture(path, key)) {
@@ -690,6 +711,9 @@ void ImageView::freeImage() {
   cancelAsyncRequest();
   currentImageKey.clear();
   currentImagePath.clear();
+  asyncImageBound = false;
+  asyncTargetWidth = 0;
+  asyncTargetHeight = 0;
   asyncImagePending = false;
   freeTexture();
 }
@@ -725,6 +749,19 @@ void ImageView::onThemeChanged() {
   if (themedScrimColorProvider_) {
     scrimColor_ = themedScrimColorProvider_();
   }
+}
+void ImageView::onLayout() {
+  View::onLayout();
+  if (!asyncImageBound || currentImagePath.empty()) {
+    return;
+  }
+  const int targetWidth = std::max(1, getWidth());
+  const int targetHeight = std::max(1, getHeight());
+  if (targetWidth <= asyncTargetWidth && targetHeight <= asyncTargetHeight) {
+    return;
+  }
+  const path_t path = currentImagePath;
+  setImageAsync(path, true);
 }
 void ImageView::renderImpl(RenderContext &context) {
   applyAsyncImageIfReady();

@@ -4,6 +4,7 @@ target_sources(main PRIVATE
     IrCredentialStore.cpp
     IrCredentialBackend.cpp
     IrCredentialMigration.cpp
+    PendingIrCredentialCleanup.cpp
     IrOutboxModels.cpp
     IrReceiptModels.cpp
     IrReplayRecordState.cpp

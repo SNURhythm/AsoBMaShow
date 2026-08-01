@@ -248,6 +248,8 @@ void testVideoMaterializationCompletesBeforePlayback() {
   jukebox.loadVisuals(chart, cancelled);
   require(jukebox.activeMaterializedVideoPaths().size() == 4,
           "every scheduled video is materialized before playback");
+  require(jukebox.getScheduledVisualEndMicros() > 3'000,
+          "preloaded video duration preserves the replay export BGA tail");
   require(jukebox.play(0).success, "preloaded video fixture starts playback");
   for (int id = 1; id <= 4; ++id) {
     jukebox.seekVisualsToSongTime(static_cast<long long>(id - 1) * 1'000);

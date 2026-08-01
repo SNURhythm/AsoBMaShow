@@ -33,6 +33,19 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("upload_to_testflight", lane)
 
+    def test_testflight_audits_the_final_signed_ipa_before_upload(self):
+        lane = self.fastfile.split("lane :testflight_release do", 1)[1].split(
+            "\n  end\nend", 1
+        )[0]
+        post_build = lane.index("temporary_fix_ios_post_build")
+        artifact_audit = lane.index("ios_artifact_audit.sh")
+        upload = lane.index("upload_to_testflight")
+
+        self.assertLess(post_build, artifact_audit)
+        self.assertLess(artifact_audit, upload)
+        self.assertIn("SharedValues::IPA_OUTPUT_PATH", lane)
+        self.assertIn("--require-signature", lane)
+
     def test_firebase_pr_bypasses_release_verification_but_testflight_does_not(self):
         verify = self.workflow.split("  ios-verify:", 1)[1].split(
             "  ios-firebase:", 1

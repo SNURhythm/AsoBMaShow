@@ -42,6 +42,7 @@ public:
   void cancel(Ticket ticket);
   [[nodiscard]] std::optional<DecodedImageData> takeReady(Ticket ticket);
   [[nodiscard]] bool hasFailed(Ticket ticket) const;
+  [[nodiscard]] bool isTracked(Ticket ticket) const;
   void drop(std::string_view key);
   void dropPrefix(std::string_view prefix);
   void dropAll();

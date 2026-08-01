@@ -143,6 +143,17 @@ class IOSArtifactAuditTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("credential material", result.stderr)
 
+    def test_embedded_binary_secret_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = self.make_app(Path(temp))
+            with (app / "Fixture").open("ab") as executable:
+                executable.write(b"\0APP_STORE_KEY=embedded-binary-fixture\0")
+
+            result = self.run_audit(app)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("credential material", result.stderr)
+
     def test_architecture_and_dependency_resolution_failures_are_detected(self):
         with tempfile.TemporaryDirectory() as temp:
             app = self.make_app(Path(temp))

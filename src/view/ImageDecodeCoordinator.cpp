@@ -90,6 +90,11 @@ bool ImageDecodeCoordinator::hasFailed(Ticket ticket) const {
   return work != work_.end() && work->second.state == WorkState::Failed;
 }
 
+bool ImageDecodeCoordinator::isTracked(Ticket ticket) const {
+  std::lock_guard lock(mutex_);
+  return tickets_.contains(ticket);
+}
+
 void ImageDecodeCoordinator::drop(std::string_view key) {
   std::lock_guard lock(mutex_);
   const auto work = work_.find(key);

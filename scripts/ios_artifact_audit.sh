@@ -215,10 +215,16 @@ UNWANTED="$(find "${APP_PATH}" \( \
 \) -print -quit)"
 [ -z "${UNWANTED}" ] || fail "unwanted file is embedded: ${UNWANTED}"
 
-SECRET_MATCH="$(LC_ALL=C grep -R -I -n -E \
-  'BEGIN ([A-Z]+ )?PRIVATE KEY|APP_STORE_KEY[[:space:]:=]|MATCH_PASSWORD[[:space:]:=]|FIREBASE_(CLI_)?TOKEN[[:space:]:=]|Authorization:[[:space:]]*Bearer' \
+SECRET_PATTERN='BEGIN ([A-Z]+ )?PRIVATE KEY|APP_STORE_KEY[[:space:]:=]|MATCH_PASSWORD[[:space:]:=]|FIREBASE_(CLI_)?TOKEN[[:space:]:=]|Authorization:[[:space:]]*Bearer'
+SECRET_MATCH="$(LC_ALL=C grep -R -I -n -E "${SECRET_PATTERN}" \
   "${APP_PATH}" 2>/dev/null | head -n 1 || true)"
 [ -z "${SECRET_MATCH}" ] || fail "credential material is embedded: ${SECRET_MATCH}"
+
+for binary in "${BINARIES[@]}"; do
+  if LC_ALL=C grep -a -q -E "${SECRET_PATTERN}" "${binary}"; then
+    fail "credential material is embedded in binary: ${binary}"
+  fi
+done
 
 if codesign -dv "${APP_PATH}" >/dev/null 2>&1; then
   codesign --verify --deep --strict "${APP_PATH}" >/dev/null 2>&1 || \

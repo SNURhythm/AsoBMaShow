@@ -32,17 +32,43 @@ applicationDependencies(ApplicationContext &context) {
                                                        std::move(name));
       },
       .remove = [&context](std::string_view profileId) {
-        auto result = context.profileManager.deleteProfile(profileId);
-        if (result.ok()) {
-          std::string diagnostic;
-          if (!context.removeProfileIrCredentials(profileId, diagnostic)) {
-            result.message = diagnostic.empty()
-                                 ? "The profile was deleted, but its secure IR "
-                                   "credentials could not be removed."
-                                 : std::move(diagnostic);
-          }
+        ProfileResult deleted{.error = ProfileError::IoFailure};
+        const auto coordinated = ir::coordinateProfileCredentialDeletion(
+            context.pendingIrCredentialCleanup, profileId,
+            [&context, profileId, &deleted](std::string &diagnostic) {
+              deleted = context.profileManager.deleteProfile(profileId);
+              diagnostic = deleted.message;
+              return deleted.ok();
+            },
+            [&context, profileId](std::string &diagnostic) {
+              return context.removeProfileIrCredentials(profileId,
+                                                        diagnostic);
+            });
+        if (coordinated.status ==
+            ir::ProfileCredentialDeletionStatus::QueueFailed) {
+          return ProfileResult{
+              .error = ProfileError::IoFailure,
+              .message = coordinated.diagnostic.empty()
+                             ? "Secure credential cleanup could not be queued; "
+                               "the profile was not deleted."
+                             : coordinated.diagnostic};
         }
-        return result;
+        if (coordinated.status ==
+            ir::ProfileCredentialDeletionStatus::ProfileDeletionFailed) {
+          if (!coordinated.diagnostic.empty()) {
+            deleted.message = coordinated.diagnostic;
+          }
+          return deleted;
+        }
+        if (coordinated.status ==
+            ir::ProfileCredentialDeletionStatus::CredentialCleanupPending) {
+          deleted.message = coordinated.diagnostic.empty()
+                                ? "The profile was deleted; secure IR "
+                                  "credential cleanup will retry."
+                                : coordinated.diagnostic +
+                                      " Cleanup will retry automatically.";
+        }
+        return deleted;
       },
       .activate = [&context](std::string_view profileId) {
         return context.switchProfile(profileId);

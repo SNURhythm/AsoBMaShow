@@ -18,6 +18,7 @@ private:
   void renderImpl(RenderContext &context) override;
   using ImageCache = image_decode::DecodedImageData;
   void cancelAsyncRequest();
+  bool resetDroppedAsyncRequest();
   void freeTexture();
   bool applyCachedTexture(const path_t &path, const std::string &key);
   bool applyCachedThumbnail(const path_t &path, const std::string &key);
@@ -33,6 +34,9 @@ private:
   path_t currentImagePath;
   int currentImageWidth = 0;
   int currentImageHeight = 0;
+  int asyncTargetWidth = 0;
+  int asyncTargetHeight = 0;
+  bool asyncImageBound = false;
   bool asyncImagePending = false;
   image_decode::ImageDecodeCoordinator::Ticket asyncTicket = 0;
   std::optional<ImageFade> fade_;
@@ -40,6 +44,7 @@ private:
   ThemeColorProvider themedScrimColorProvider_;
 
 protected:
+  void onLayout() override;
   void onThemeChanged() override;
 
 public:
