@@ -51,6 +51,12 @@ CTest, and fatal Android lint.
   and idle video frame/recycle buffers are discarded and suspended until their
   next activation/seek. Repeated notifications are safe and non-active media
   can resume through the normal visual activation path.
+- R9 BGA startup remediation is implemented and verified locally: chart load
+  records visual descriptors without constructing decoders or uploading image
+  textures, first use materializes the requested visual through one serialized
+  path, and an active-aware LRU enforces a hard ceiling of three live video
+  players. A four-ID video fixture verifies zero eager players and the ceiling;
+  jukebox restore, audio lifecycle/mix, and desktop main-build regressions pass.
 - The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
   app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
   difficulty-table loading.

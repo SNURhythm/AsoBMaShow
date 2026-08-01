@@ -184,8 +184,8 @@ void runManagerVisualRestoreCase(bool layer, bool paused, bool candidateStarts,
   populateVisualChart(chart, layer, folder, std::move(resource));
   std::atomic_bool cancelled = false;
   jukebox.loadVisuals(chart, cancelled);
-  require(!expectVideo || jukebox.activeMaterializedVideoPaths().size() == 1,
-          "production Jukebox loads the video restoration fixture");
+  require(!expectVideo || jukebox.activeMaterializedVideoPaths().empty(),
+          "video descriptors do not eagerly create decoder threads");
 
   require(jukebox.stop().success,
           "production Jukebox drains before selecting a playback rate");
@@ -200,6 +200,8 @@ void runManagerVisualRestoreCase(bool layer, bool paused, bool candidateStarts,
   jukebox.seekVisualsToSongTime(snapshotMicros);
   require(jukebox.hasActiveVisuals(),
           "fixture publishes the visual active at the snapshot");
+  require(!expectVideo || jukebox.activeMaterializedVideoPaths().size() == 1,
+          "first activation materializes its video descriptor");
 
   player_settings::AudioSettings initial;
   audio::AudioDeviceManager manager(jukebox.audioRuntime(), jukebox, initial);
@@ -224,6 +226,34 @@ void runManagerVisualRestoreCase(bool layer, bool paused, bool candidateStarts,
           "visual restoration preserves the exact song position");
   require(jukebox.playbackRate() == audio::PlaybackRate{.percent = 50},
           "visual restoration preserves the playback rate");
+}
+
+void testVideoMaterializationHasThreeSlotHardLimit() {
+  TemporaryVideoFixture video;
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  bms_parser::Chart chart;
+  chart.Meta.Folder = video.directory;
+  for (int id = 1; id <= 4; ++id) {
+    chart.ReferencedBmpTable.emplace(id, "clip.bmp");
+    auto *measure = new bms_parser::Measure();
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->Timing = static_cast<long long>(id - 1) * 1'000;
+    timeline->BgaBase = id;
+    measure->TimeLines.push_back(timeline);
+    chart.Measures.push_back(measure);
+  }
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  require(jukebox.activeMaterializedVideoPaths().empty(),
+          "descriptor load keeps zero eager video players");
+  require(jukebox.play(0).success, "bounded video fixture starts playback");
+  for (int id = 1; id <= 4; ++id) {
+    jukebox.seekVisualsToSongTime(static_cast<long long>(id - 1) * 1'000);
+    require(jukebox.activeMaterializedVideoPaths().size() <= 3,
+            "video materialization never exceeds three slots");
+  }
 }
 
 void testManagerRestartAndRollbackRestoreProductionJukeboxVisuals() {
@@ -329,6 +359,7 @@ int main() {
 
   try {
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
+    testVideoMaterializationHasThreeSlotHardLimit();
     testRateScaledSnapshotRestoresBgaTimeline();
     testNegativeCountInKeepsBgaAtPreChartState();
     rendering::UniformCache::getInstance().destroyAll();
