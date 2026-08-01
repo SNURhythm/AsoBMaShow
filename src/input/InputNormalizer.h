@@ -11,4 +11,5 @@ enum KeySource { VirtualKey, ScanCode, SDLKey };
 
 namespace InputNormalizer {
 SDL_Keycode normalize(int keyCode, KeySource keySource);
+SDL_Scancode normalizeScancode(int keyCode, KeySource keySource);
 }

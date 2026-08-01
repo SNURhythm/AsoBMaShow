@@ -1,15 +1,21 @@
 #pragma once
 
+#include "AudioMix.h"
+#include "AudioDeviceManager.h"
+#include "../settings/AudioVideoSettings.h"
+
 #include <miniaudio.h>
-#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../path.h"
 #include "../utils/Stopwatch.h"
 #include <mutex>
 #include <atomic>
-#include <atomic>
 #include <cmath>
+#include <cstdint>
+#include <optional>
+#include <unordered_map>
 
 // Simple Biquad Filter
 struct Biquad {
@@ -83,63 +89,156 @@ struct SoftKneeCompressor {
   void setParams(float threshold, float ratio, float attack, float release);
 };
 
-// Custom data structure to hold PCM data and playback state
-struct SoundData {
-
-  size_t currentFrame;
-  int channels;
-  int originalSampleRate;
-  bool playing;
-  bool isResampled;
-  ma_resampler resampler;
-  std::vector<short> resampledData;
-  size_t resampledFrameCount;
-};
 struct UserData {
   Stopwatch *stopwatch;
-  std::mutex *mutex;
-  std::vector<std::shared_ptr<SoundData>> *soundDataList;
+  AudioCallbackState *callbackState;
+  std::atomic<int> *sampleRate;
+  std::atomic<long long> *audioClockBaseMicros;
+  std::atomic<int64_t> *audioClockFrameCursor;
+  std::atomic<long long> *audioClockAnchorMicros;
+  std::atomic<long long> *audioClockAnchorWallMicros;
+  std::atomic<long long> *audioClockAnchorEndMicros;
+  std::atomic<int> *audioClockAnchorRatePercent;
+  std::atomic<std::uint64_t> *audioClockAnchorSequence;
+  std::atomic_flag *audioClockAnchorWriter;
+  std::atomic<int> *playbackRatePercent;
+  std::atomic<float> *bgmGain;
+  std::atomic<float> *keysoundGain;
   std::vector<float> *mixBuffer;
   Biquad *bassFilter;
   Biquad *trebleFilter;
   PlateReverb *reverb;
   SoftKneeCompressor *compressor;
 };
-class AudioWrapper {
+
+class AudioWrapper;
+
+namespace audio {
+
+class RealtimeSoundHandle {
+public:
+  [[nodiscard]] bool valid() const noexcept { return soundData_ != nullptr; }
+
+private:
+  friend class ::AudioWrapper;
+  explicit RealtimeSoundHandle(std::shared_ptr<SoundData> soundData)
+      : soundData_(std::move(soundData)) {}
+
+  std::shared_ptr<SoundData> soundData_;
+};
+
+} // namespace audio
+
+class AudioWrapper : public audio::IAudioRuntime {
 public:
   AudioWrapper(Stopwatch *stopwatch);
+  AudioWrapper(Stopwatch *stopwatch,
+               std::unique_ptr<audio::IBackendFactory> injectedFactory);
+  AudioWrapper(
+      Stopwatch *stopwatch,
+      std::unique_ptr<audio::playback::IBackendLifecycle> injectedBackend);
   ~AudioWrapper();
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
+  bool loadSoundFromMemory(const path_t &path,
+                           const std::vector<unsigned char> &bytes,
+                           std::atomic<bool> &isCancelled);
+  bool loadGeneratedSound(const path_t &path, std::vector<short> pcmData,
+                          int channels, int sampleRate);
   void preloadSounds(const std::vector<path_t> &paths,
                      std::atomic<bool> &isCancelled);
-  bool playSound(const path_t &path);
-  void startDevice();
-  void stopSounds();
-  void unloadSound(const path_t &path);
+  bool playSound(const path_t &path, audio::Bus bus,
+                 long long startOffsetMicros = 0);
+  bool scheduleSound(const path_t &path, audio::Bus bus, long long startMicros);
+  bool stageScheduledSound(const path_t &path, audio::Bus bus,
+                           long long startMicros);
+  [[nodiscard]] std::optional<audio::RealtimeSoundHandle>
+  resolveRealtimeSound(const path_t &path) const;
+  [[nodiscard]] std::optional<RealtimeAudioCommandReservation>
+  tryReserveRealtimeSoundCommand() const noexcept;
+  bool commitRealtimeKeysound(RealtimeAudioCommandReservation reservation,
+                              const audio::RealtimeSoundHandle &handle,
+                              size_t startFrame = 0) noexcept;
+  void cancelRealtimeSoundCommand(
+      RealtimeAudioCommandReservation reservation) noexcept;
+  std::optional<long long> getSoundDurationMicros(const path_t &path) const;
+  long long getTimeMicros() const;
+  [[nodiscard]] std::optional<long long>
+  songTimeMicrosAtSteadyMicros(long long steadyMicros) const noexcept;
+  void seekClock(long long micros);
+  bool setPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
+  [[nodiscard]] audio::PlaybackRate playbackRate() const;
+  audio::playback::BackendOperationResult startDevice();
+  audio::playback::BackendOperationResult stopSounds();
+  audio::playback::BackendOperationResult unloadSound(const path_t &path);
+  audio::playback::BackendOperationResult
+  pruneSounds(const std::vector<path_t> &paths);
 
   void setBassBoost(float db);
   void setTrebleBoost(float db);
   void setReverbMix(float mix);
   void setCompressor(float threshold, float ratio);
+  [[nodiscard]] audio::Capabilities capabilities() const override;
+  [[nodiscard]] audio::RuntimeState runtimeState() const override;
+  bool restart(const audio::StreamRequest &request,
+               std::string &errorMessage) override;
+  bool restore(const audio::RuntimeState &previous,
+               std::string &errorMessage) override;
+  void setVolumes(const audio::Volumes &volumes) override;
+  void setVolumes(const player_settings::AudioSettings &settings);
 
-  void unloadSounds();
-
-  struct IAudioBackend; // Forward declaration
+  audio::playback::BackendOperationResult unloadSounds();
 
 private:
-  std::unique_ptr<IAudioBackend> backend;
+  void openRealtimeSoundGate() noexcept;
+  void closeRealtimeSoundGateAndWait() noexcept;
+  void releaseRealtimeSoundReservation() const noexcept;
+
+  std::unique_ptr<audio::IBackendFactory> backendFactory;
+  std::unique_ptr<audio::playback::IBackendLifecycle> backend;
 
   std::vector<std::shared_ptr<SoundData>> soundDataList;
-  std::map<path_t, size_t>
+  AudioCallbackState callbackState;
+  std::atomic<uint64_t> scheduledSoundSequence{0};
+  mutable std::mutex deviceLifecycleMutex;
+  std::mutex audioCommandMutex;
+  std::unordered_map<path_t, size_t>
       soundDataIndexMap; // Map to store index of SoundData in soundDataList
-  std::mutex soundDataListMutex;
+  mutable std::mutex soundDataListMutex;
   std::vector<float> mixBuffer;
   Biquad bassFilter;
   Biquad trebleFilter;
   PlateReverb reverb;
   SoftKneeCompressor compressor;
-  int currentSampleRate = 44100;
+  std::atomic<int> currentSampleRate{44100};
+  std::atomic<audio::playback::BackendRunState> backendState{
+      audio::playback::BackendRunState::Unknown};
+  std::atomic_bool realtimeSoundGateOpen{false};
+  mutable std::atomic<std::uint32_t> realtimeSoundReservations{0};
+  std::atomic<long long> audioClockBaseMicros{0};
+  std::atomic<int64_t> audioClockFrameCursor{0};
+  std::atomic<long long> audioClockAnchorMicros{0};
+  std::atomic<long long> audioClockAnchorWallMicros{0};
+  std::atomic<long long> audioClockAnchorEndMicros{0};
+  std::atomic<int> audioClockAnchorRatePercent{100};
+  std::atomic<std::uint64_t> audioClockAnchorSequence{0};
+  std::atomic_flag audioClockAnchorWriter = ATOMIC_FLAG_INIT;
+  mutable std::atomic<long long> audioClockPublishedMicros{0};
+  std::atomic<int> playbackRatePercent{100};
+  std::atomic<float> bgmGain{1.0f};
+  std::atomic<float> keysoundGain{1.0f};
+  audio::RuntimeState runtimeState_;
 
   UserData userData;
   Stopwatch *stopwatch;
+
+  bool loadDecodedSound(const path_t &path, std::vector<short> pcmData,
+                        int channels, int sampleRate,
+                        std::atomic<bool> &isCancelled);
+  void initializeUserData();
+  void startBackendAfterConstruction();
+  audio::playback::BackendOperationResult
+  startDeviceWithLifecycleAndSoundLocked();
+  audio::playback::BackendOperationResult
+  stopSoundsWithLifecycleAndCommandLocked();
+  void clearCallbackState();
 };

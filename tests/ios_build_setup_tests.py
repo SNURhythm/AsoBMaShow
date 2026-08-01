@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PROJECT = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj"
+PODFILE = ROOT / "ios/Xcode/AsoBMaShow/Podfile"
+INFO_PLIST = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow/Info.plist"
+WORKSPACE = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow.xcworkspace/contents.xcworkspacedata"
+SRC_GROUP_ID = "B76AAF3F2DA4A1C400E8327C"
+EXCEPTION_SET_ID = "B76AAF692DA4A1C400E8327C"
+TARGET_ID = "B70027002BF7A8D8000DB8EC"
+DERIVED_DATA_HELPER = ROOT / "scripts/ios_derived_data_path.sh"
+DEPLOY_SCRIPT = ROOT / "scripts/ios_firebase_deploy.sh"
+FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
+PODS_CACHE_HELPER = ROOT / "scripts/ios_pods_cache.sh"
+IOS_INIT = ROOT / "scripts/ios_init.sh"
+IOS_RELEASE_VERIFY = ROOT / "scripts/ios_release_verify.sh"
+AGENT_GUIDANCE = ROOT / "AGENTS.md"
+SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
+MAIN_SOURCE = ROOT / "src/main.cpp"
+IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
+
+
+def object_block(project: str, object_id: str, next_section: str) -> str:
+    start = project.index(f"\t\t{object_id}")
+    end = project.index(next_section, start)
+    return project[start:end]
+
+
+class IOSBuildSetupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.project = PROJECT.read_text(encoding="utf-8")
+
+    def test_app_target_owns_synchronized_src_group(self):
+        target = object_block(
+            self.project, TARGET_ID, "/* End PBXNativeTarget section */"
+        )
+        self.assertIn("fileSystemSynchronizedGroups = (", target)
+        self.assertIn(SRC_GROUP_ID, target)
+
+    def test_only_platform_and_build_metadata_are_membership_exceptions(self):
+        exceptions = object_block(
+            self.project,
+            EXCEPTION_SET_ID,
+            "/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */",
+        )
+        start = exceptions.index("membershipExceptions = (")
+        end = exceptions.index("\n\t\t\t);", start)
+        paths = [
+            line.strip().removesuffix(",")
+            for line in exceptions[start:end].splitlines()[1:]
+            if line.strip()
+        ]
+        cmake_files = sorted(
+            str(path.relative_to(ROOT / "src"))
+            for path in (ROOT / "src").rglob("CMakeLists.txt")
+        )
+        self.assertEqual(
+            sorted(
+                ["AndroidNatives.cpp", "ChartScanWorkScheduler.md", *cmake_files]
+            ),
+            paths,
+        )
+        self.assertIn(f"target = {TARGET_ID}", exceptions)
+
+    def test_audio_wrapper_keeps_objective_cpp_override(self):
+        group = object_block(
+            self.project,
+            SRC_GROUP_ID,
+            "/* End PBXFileSystemSynchronizedRootGroup section */",
+        )
+        self.assertIn(
+            "audio/AudioWrapper.cpp = sourcecode.cpp.objcpp;", group
+        )
+
+    def test_ios_release_contract_remains_version_0_0_1_on_ios_14(self):
+        target_configurations = [
+            object_block(
+                self.project,
+                configuration_id,
+                "\n\t\t};",
+            )
+            for configuration_id in (
+                "B700271D2BF7A8DA000DB8EC",
+                "B700271E2BF7A8DA000DB8EC",
+            )
+        ]
+        for configuration in target_configurations:
+            self.assertIn("IPHONEOS_DEPLOYMENT_TARGET = 14.0;", configuration)
+            self.assertIn("MARKETING_VERSION = 0.0.1;", configuration)
+
+    def test_pods_and_generated_bgfx_align_to_ios_14(self):
+        podfile = PODFILE.read_text(encoding="utf-8")
+        self.assertIn("platform :ios, '14.0'", podfile)
+        self.assertIn("IPHONEOS_DEPLOYMENT_TARGET", podfile)
+        self.assertIn("'14.0'", podfile)
+        init_script = IOS_INIT.read_text(encoding="utf-8")
+        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0", init_script)
+
+    def test_all_ios_build_entrypoints_override_dependencies_to_ios_14(self):
+        self.assertIn(
+            "IPHONEOS_DEPLOYMENT_TARGET=14.0", DEPLOY_SCRIPT.read_text()
+        )
+        self.assertIn("IPHONEOS_DEPLOYMENT_TARGET=14.0", FASTFILE.read_text())
+
+    def test_ats_exception_is_retained_without_privacy_manifest(self):
+        plist = subprocess.run(
+            [
+                "plutil",
+                "-extract",
+                "NSAppTransportSecurity.NSAllowsArbitraryLoads",
+                "raw",
+                str(INFO_PLIST),
+            ],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual("true", plist.stdout.strip())
+        self.assertFalse(any(ROOT.rglob("PrivacyInfo.xcprivacy")))
+        verify_script = IOS_RELEASE_VERIFY.read_text(encoding="utf-8")
+        self.assertIn("ios_artifact_audit.sh", verify_script)
+        self.assertNotIn("PrivacyInfo.xcprivacy", verify_script)
+
+    def test_ios_forces_bgfx_metal_work_onto_the_main_thread(self):
+        source = MAIN_SOURCE.read_text(encoding="utf-8")
+        limits = source.index("rendering::applyBgfxTransientBufferLimits")
+        ios_guard = source.index("#if TARGET_OS_IPHONE", limits)
+        force_single_threaded = source.index("bgfx::renderFrame();", ios_guard)
+        non_ios_branch = source.index("#else", ios_guard)
+        initialize_bgfx = source.index("int appExitCode = runApplication(bgfx_init);")
+        self.assertLess(ios_guard, force_single_threaded)
+        self.assertLess(force_single_threaded, non_ios_branch)
+        self.assertLess(force_single_threaded, initialize_bgfx)
+        self.assertIn("Using bgfx single-threaded mode on iOS", source)
+
+    def test_ios_active_window_lookup_uses_a_validated_weak_cache(self):
+        source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
+        lookup_start = source.index("UIWindow *FindActiveWindow()")
+        lookup_end = source.index(
+            "void RestoreIOSViewportAfterKeyboardFocusOnce()", lookup_start
+        )
+        lookup = source[lookup_start:lookup_end]
+
+        cache_declaration = lookup.index(
+            "static __weak UIWindow *cachedActiveWindow"
+        )
+        cache_validation = lookup.index(
+            "cachedWindow.windowScene.activationState =="
+        )
+        key_window_validation = lookup.index("cachedWindow.isKeyWindow")
+        visible_window_validation = lookup.index("!cachedWindow.hidden")
+        scene_enumeration = lookup.index(
+            "UIApplication.sharedApplication.connectedScenes"
+        )
+        self.assertLess(cache_declaration, cache_validation)
+        self.assertLess(cache_validation, key_window_validation)
+        self.assertLess(key_window_validation, visible_window_validation)
+        self.assertLess(visible_window_validation, scene_enumeration)
+        self.assertIn("cachedActiveWindow = window;", lookup)
+
+    def test_workspace_has_one_relative_pods_project(self):
+        tree = ET.parse(WORKSPACE)
+        locations = [node.attrib["location"] for node in tree.findall("FileRef")]
+        pods_locations = [value for value in locations if "Pods.xcodeproj" in value]
+        self.assertEqual(["group:Pods/Pods.xcodeproj"], pods_locations)
+
+    def test_pods_path_is_not_tracked(self):
+        result = subprocess.run(
+            ["git", "ls-files", "--", "ios/Xcode/AsoBMaShow/Pods"],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual("", result.stdout.strip())
+
+    def test_agent_guidance_describes_automatic_ios_sources(self):
+        guidance = AGENT_GUIDANCE.read_text(encoding="utf-8")
+        self.assertNotIn("add its path to `membershipExceptions`", guidance)
+        self.assertIn("automatically discovers supported files under `src`", guidance)
+        self.assertIn("checkout-specific DerivedData", guidance)
+        self.assertIn("stable Firebase archive object root", guidance)
+
+    def test_ios_uses_portable_stable_sdl_header_alias(self):
+        self.assertTrue(SDL_HEADER_ALIAS.is_symlink())
+        self.assertFalse(os.path.isabs(os.readlink(SDL_HEADER_ALIAS)))
+        self.assertEqual((ROOT / "SDL/include").resolve(), SDL_HEADER_ALIAS.resolve())
+
+    def test_ios_links_7zip_archive_registration_for_device_and_simulator(self):
+        xcodebuild = shutil.which("xcodebuild")
+        if xcodebuild is None:
+            self.skipTest("xcodebuild is only available with Xcode")
+        for configuration in ("Debug", "Release"):
+            for sdk in ("iphoneos", "iphonesimulator"):
+                with self.subTest(configuration=configuration, sdk=sdk):
+                    result = subprocess.run(
+                        [
+                            xcodebuild,
+                            "-project",
+                            str(PROJECT.parent),
+                            "-target",
+                            "AsoBMaShow",
+                            "-configuration",
+                            configuration,
+                            "-sdk",
+                            sdk,
+                            "-showBuildSettings",
+                        ],
+                        cwd=ROOT,
+                        check=True,
+                        text=True,
+                        capture_output=True,
+                    )
+                    linker_flags = next(
+                        line.partition("=")[2].strip()
+                        for line in result.stdout.splitlines()
+                        if line.strip().startswith("OTHER_LDFLAGS =")
+                    )
+                    self.assertIn("7zRegister.cpp.o", linker_flags)
+                    self.assertIn("LzmaRegister.cpp.o", linker_flags)
+                    self.assertIn("Lzma2Register.cpp.o", linker_flags)
+                    self.assertIn("DeltaFilter.cpp.o", linker_flags)
+
+
+class DerivedDataPathTests(unittest.TestCase):
+    def resolve(self, root: Path, **environment: str) -> str:
+        env = os.environ.copy()
+        env.update(environment)
+        return subprocess.run(
+            [str(DERIVED_DATA_HELPER), "--root", str(root)],
+            cwd=ROOT,
+            env=env,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+    def test_explicit_override_is_returned_exactly(self):
+        self.assertEqual(
+            "/tmp/custom-ios-derived-data",
+            self.resolve(ROOT, IOS_DERIVED_DATA_PATH="/tmp/custom-ios-derived-data"),
+        )
+
+    def test_checkout_path_is_stable_and_isolated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            first = parent / "checkout-a"
+            second = parent / "checkout-b"
+            first.mkdir()
+            second.mkdir()
+            home = parent / "home"
+            home.mkdir()
+            first_path = self.resolve(first, HOME=str(home), IOS_DERIVED_DATA_PATH="")
+            self.assertEqual(
+                first_path,
+                self.resolve(first, HOME=str(home), IOS_DERIVED_DATA_PATH=""),
+            )
+            self.assertNotEqual(
+                first_path,
+                self.resolve(second, HOME=str(home), IOS_DERIVED_DATA_PATH=""),
+            )
+            self.assertTrue(
+                first_path.startswith(
+                    str(home / "Library/Developer/Xcode/DerivedData/AsoBMaShow-FirebaseCI-")
+                )
+            )
+
+    def test_fastlane_and_build_only_share_resolver(self):
+        self.assertIn("ios_derived_data_path.sh", DEPLOY_SCRIPT.read_text())
+        fastfile = FASTFILE.read_text()
+        self.assertIn("ios_derived_data_path.sh", fastfile)
+        self.assertIn("clean: false", fastfile)
+
+    def test_firebase_archive_uses_stable_object_root(self):
+        fastfile = FASTFILE.read_text()
+        self.assertIn("def firebase_archive_objroot(derived_data_path)", fastfile)
+        self.assertIn(
+            'File.join(derived_data_path, "Build", '
+            '"FirebaseArchiveIntermediates.noindex")',
+            fastfile,
+        )
+        self.assertIn(
+            'xcargs: "#{xcargs} '
+            'OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}"',
+            fastfile,
+        )
+        self.assertNotIn("SYMROOT=", fastfile)
+
+
+class PodsCacheTests(unittest.TestCase):
+    def bash(self, command: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "-c", f'source "{PODS_CACHE_HELPER}"; {command}'],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+
+    def cache_key(self, podfile: Path, pod_lock: Path, gem_lock: Path) -> str:
+        result = self.bash(
+            f'ios_pods_cache_key "{podfile}" "{pod_lock}" "{gem_lock}"'
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return result.stdout.strip()
+
+    @staticmethod
+    def make_valid_pods(directory: Path, lock: Path, marker: str) -> None:
+        (directory / "Pods.xcodeproj").mkdir(parents=True)
+        (directory / "Pods.xcodeproj/project.pbxproj").write_text(
+            "// generated pods project\n", encoding="utf-8"
+        )
+        support = directory / "Target Support Files/Pods-AsoBMaShow"
+        support.mkdir(parents=True)
+        for configuration in ("debug", "release"):
+            (support / f"Pods-AsoBMaShow.{configuration}.xcconfig").write_text(
+                "PODS_ROOT = ${SRCROOT}/Pods\n", encoding="utf-8"
+            )
+        (directory / "Manifest.lock").write_bytes(lock.read_bytes())
+        (directory / "marker.txt").write_text(marker, encoding="utf-8")
+
+    def test_restore_creates_real_local_directory_and_preserves_timestamp(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock = root / "Podfile.lock"
+            lock.write_text("PODS:\n", encoding="utf-8")
+            cache = root / "cache"
+            local = root / "Pods"
+            self.make_valid_pods(cache, lock, "cached")
+            marker_time = 1_700_000_000
+            os.utime(cache / "marker.txt", (marker_time, marker_time))
+
+            result = self.bash(
+                f'ios_pods_cache_restore "{cache}" "{local}" "{lock}"'
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue(local.is_dir())
+            self.assertFalse(local.is_symlink())
+            self.assertEqual("cached", (local / "marker.txt").read_text())
+            self.assertEqual(marker_time, int((local / "marker.txt").stat().st_mtime))
+
+    def test_cache_key_changes_when_only_podfile_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            podfile = root / "Podfile"
+            pod_lock = root / "Podfile.lock"
+            gem_lock = root / "Gemfile.lock"
+            podfile.write_text("platform :ios, '13.4'\n", encoding="utf-8")
+            pod_lock.write_text("PODS:\n", encoding="utf-8")
+            gem_lock.write_text("GEM\n", encoding="utf-8")
+            original = self.cache_key(podfile, pod_lock, gem_lock)
+
+            podfile.write_text(
+                "platform :ios, '13.4'\npost_install { |installer| installer }\n",
+                encoding="utf-8",
+            )
+
+            self.assertNotEqual(original, self.cache_key(podfile, pod_lock, gem_lock))
+
+    def test_ios_init_includes_podfile_in_cache_key(self):
+        script = IOS_INIT.read_text(encoding="utf-8")
+        self.assertIn('ios_pods_cache_key "${IOS_DIR}/Podfile"', script)
+
+    def test_invalid_source_does_not_replace_existing_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock = root / "Podfile.lock"
+            lock.write_text("PODS:\n", encoding="utf-8")
+            source = root / "Pods"
+            source.mkdir()
+            cache = root / "cache"
+            self.make_valid_pods(cache, lock, "preserved")
+
+            result = self.bash(
+                f'ios_pods_cache_store "{source}" "{cache}" "{lock}"'
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual("preserved", (cache / "marker.txt").read_text())
+
+    def test_restore_rejects_cache_generated_for_external_pods_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock = root / "Podfile.lock"
+            lock.write_text("PODS:\n", encoding="utf-8")
+            cache = root / "cache"
+            local = root / "Pods"
+            self.make_valid_pods(cache, lock, "stale")
+            xcconfig = (
+                cache
+                / "Target Support Files/Pods-AsoBMaShow/Pods-AsoBMaShow.release.xcconfig"
+            )
+            xcconfig.write_text(
+                "PODS_ROOT = ${SRCROOT}/../../Library/Caches/Pods\n",
+                encoding="utf-8",
+            )
+
+            result = self.bash(
+                f'ios_pods_cache_restore "{cache}" "{local}" "{lock}"'
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse(local.exists())
+
+    def test_ios_init_uses_copy_cache_instead_of_pods_symlink(self):
+        script = IOS_INIT.read_text(encoding="utf-8")
+        self.assertIn("ios_pods_cache_restore", script)
+        self.assertIn("ios_pods_cache_store", script)
+        self.assertNotIn('link_cache_dir "${IOS_DIR}/Pods"', script)
+
+
+if __name__ == "__main__":
+    unittest.main()

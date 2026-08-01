@@ -13,39 +13,157 @@
 # Uncomment the line if you want fastlane to automatically update itself
 # update_fastlane
 
+require "open3"
+require "shellwords"
+
 default_platform(:ios)
 
+def github_pull_request_to_develop?
+  ENV["GITHUB_ACTIONS"] == "true" &&
+    ENV["GITHUB_EVENT_NAME"] == "pull_request" &&
+    ENV["GITHUB_BASE_REF"] == "develop"
+end
+
+def github_pull_request?
+  ENV["GITHUB_ACTIONS"] == "true" &&
+    ENV["GITHUB_EVENT_NAME"] == "pull_request"
+end
+
+def firebase_option_env
+  {
+    app: "FIREBASE_IOS_APP_ID",
+    testers: "FIREBASE_APP_DISTRIBUTION_TESTERS",
+    firebase_cli_token: "FIREBASE_CLI_TOKEN",
+    service_credentials_json_data: "FIREBASE_SERVICE_CREDENTIALS_JSON"
+  }.each_with_object({}) do |(option, env_name), options|
+    value = ENV[env_name].to_s.strip
+    options[option] = value unless value.empty?
+  end
+end
+
+def firebase_distribution_groups
+  groups = ENV["FIREBASE_APP_DISTRIBUTION_GROUPS"].to_s.split(",").map(&:strip)
+  (["internal"] + groups).reject(&:empty?).uniq.join(",")
+end
+
+def firebase_release_notes
+  notes = ENV["FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES"].to_s.strip
+  return notes unless notes.empty?
+
+  [
+    "GitHub pull request build",
+    "Base: #{ENV['GITHUB_BASE_REF']}",
+    "Head: #{ENV['GITHUB_HEAD_REF']}",
+    "SHA: #{ENV['GITHUB_SHA']}",
+    "Run: #{ENV['GITHUB_SERVER_URL']}/#{ENV['GITHUB_REPOSITORY']}/actions/runs/#{ENV['GITHUB_RUN_ID']}"
+  ].reject { |line| line.end_with?(": ") }.join("\n")
+end
+
+def firebase_build_number
+  run_number = ENV["GITHUB_RUN_NUMBER"].to_s.strip
+  return run_number unless run_number.empty?
+
+  Time.now.utc.strftime("%Y%m%d%H%M")
+end
+
+def firebase_derived_data_path
+  repository_root = File.expand_path("../../../..", __dir__)
+  helper = File.join(repository_root, "scripts", "ios_derived_data_path.sh")
+  output, error, status = Open3.capture3(helper)
+  UI.user_error!("Unable to resolve iOS DerivedData path: #{error.strip}") unless status.success?
+
+  path = output.strip
+  UI.user_error!("iOS DerivedData path resolver returned an empty path") if path.empty?
+  path
+end
+
+def firebase_archive_objroot(derived_data_path)
+  File.join(derived_data_path, "Build", "FirebaseArchiveIntermediates.noindex")
+end
+
+def app_store_key_id
+  key_id = ENV["APP_STORE_KEY_ID"].to_s.strip
+  key_id.empty? ? "7459U6UPUW" : key_id
+end
+
 platform :ios do
-  desc "Push a new beta build to TestFlight"
-  lane :beta do
+  desc "Build and distribute a pull request to Firebase App Distribution"
+  lane :firebase do
+    unless github_pull_request_to_develop?
+      UI.user_error!("Firebase distribution is limited to pull requests targeting develop")
+    end
     unlock_keychain(
       password: ENV["KEYCHAIN_PASSWORD"]
     )
     api_key = app_store_connect_api_key(
-      key_id: "7459U6UPUW",
+      key_id: app_store_key_id,
+      issuer_id: "5e03957a-e681-458f-8011-a8f608b71a70",
+      key_content: ENV["APP_STORE_KEY"],
+      duration: 1200,
+      in_house: false,
+    )
+    match(type: "adhoc", git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
+    build_number = firebase_build_number
+    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0"
+    derived_data_path = firebase_derived_data_path
+    build_options = {
+      scheme: "AsoBMaShow",
+      workspace: "AsoBMaShow.xcworkspace",
+      export_method: "ad-hoc",
+      derived_data_path: derived_data_path,
+      xcargs: "#{xcargs} OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}",
+      clean: false
+    }
+    build_app(**build_options)
+    temporary_fix_ios_post_build
+
+    firebase_options = firebase_option_env
+    firebase_app_distribution(
+      **firebase_options,
+      groups: firebase_distribution_groups,
+      release_notes: firebase_release_notes
+    )
+  end
+
+  desc "Build and upload one serialized App Store build to TestFlight"
+  lane :testflight_release do
+    if github_pull_request?
+      UI.user_error!("Pull requests cannot upload TestFlight builds")
+    end
+
+    unlock_keychain(
+      password: ENV["KEYCHAIN_PASSWORD"]
+    )
+    api_key = app_store_connect_api_key(
+      key_id: app_store_key_id,
       issuer_id: "5e03957a-e681-458f-8011-a8f608b71a70",
       key_content: ENV["APP_STORE_KEY"],
       duration: 1200,
       in_house: false,
     )
     match(type: "appstore", git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
-    increment_build_number(
-      build_number: latest_testflight_build_number + 1,
-      xcodeproj: "AsoBMaShow.xcodeproj"
-    )
+
+    build_number = latest_testflight_build_number(initial_build_number: 0) + 1
+    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0"
     build_app(
       scheme: "AsoBMaShow",
+      workspace: "AsoBMaShow.xcworkspace",
       export_method: "app-store",
-      export_options: {
-        provisioningProfiles: {
-          "com.SNURhythm.AsoBMaShow" => "match AppStore com.SNURhythm.AsoBMaShow"
-        },
-        signingStyle: "manual"
-      },
-      xcargs: "-allowProvisioningUpdates",
+      xcargs: xcargs,
       clean: true
     )
     temporary_fix_ios_post_build
+    ipa_location = lane_context[SharedValues::IPA_OUTPUT_PATH].to_s.strip
+    UI.user_error!("TestFlight build did not produce an IPA") if ipa_location.empty?
+    artifact_audit = File.expand_path(
+      "../../../../scripts/ios_artifact_audit.sh",
+      __dir__
+    )
+    UI.user_error!("iOS artifact audit script is not executable") unless File.executable?(artifact_audit)
+    sh(
+      "#{Shellwords.escape(artifact_audit)} --require-signature " \
+      "#{Shellwords.escape(ipa_location)}"
+    )
     upload_to_testflight
   end
 end
@@ -54,6 +172,7 @@ desc "Temporary workaround to remove unwanted files from the IPA"
 private_lane :temporary_fix_ios_post_build do
   # Workaround to remove ._Symbols from ipa.
   ipa_location = lane_context[SharedValues::IPA_OUTPUT_PATH]
-  sh("unzip -l #{ipa_location} | grep ._Symbols || true")
-  sh("zip -d #{ipa_location} ._Symbols/ || true")
+  escaped_ipa_location = Shellwords.escape(ipa_location)
+  sh("unzip -l #{escaped_ipa_location} | grep ._Symbols || true")
+  sh("zip -d #{escaped_ipa_location} ._Symbols/ || true")
 end

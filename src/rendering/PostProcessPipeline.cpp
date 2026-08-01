@@ -3,6 +3,8 @@
 #include "BlurPass.h"
 
 namespace rendering {
+PostProcessPipeline::~PostProcessPipeline() { shutdown(); }
+
 void PostProcessPipeline::init(uint16_t windowW, uint16_t windowH) {
   window_width_ = windowW;
   window_height_ = windowH;

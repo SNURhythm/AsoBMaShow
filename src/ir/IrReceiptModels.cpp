@@ -1,0 +1,130 @@
+#include "IrReceiptModels.h"
+
+#include "IrOutboxModels.h"
+#include "IrProfileSettings.h"
+#include "../CanonicalDigest.h"
+#include "../Uuid.h"
+
+#include <algorithm>
+#include <string_view>
+
+namespace ir {
+namespace {
+
+bool isBoundedRemoteId(std::string_view value) noexcept {
+  return value.size() <= kMaximumIrRemoteValueBytes &&
+         std::ranges::none_of(value, [](unsigned char character) {
+           return character < 0x20U || character == 0x7fU;
+         });
+}
+
+bool isKnownSource(IrReceiptConfirmationSource source) noexcept {
+  switch (source) {
+  case IrReceiptConfirmationSource::Submission:
+  case IrReceiptConfirmationSource::Snapshot:
+    return true;
+  }
+  return false;
+}
+
+bool validateDraft(const IrSuccessfulReceiptDraft &draft,
+                   std::string &diagnostic) {
+  const auto normalizedOrigin = normalizeServerOrigin(draft.serverOrigin);
+  if (!normalizedOrigin || *normalizedOrigin != draft.serverOrigin) {
+    diagnostic = "IR receipt server origin is invalid or not normalized";
+  } else if (draft.remoteUserId && *draft.remoteUserId <= 0) {
+    diagnostic = "IR receipt remote user ID is invalid";
+  } else if (!isBoundedRemoteId(draft.remoteChartId)) {
+    diagnostic = "IR receipt remote chart ID is invalid";
+  } else if (!isBoundedRemoteId(draft.remoteScoreId)) {
+    diagnostic = "IR receipt remote score ID is invalid";
+  } else if (!isKnownSource(draft.source)) {
+    diagnostic = "IR receipt confirmation source is invalid";
+  } else if (draft.confirmedAtUnixMillis <= 0) {
+    diagnostic = "IR receipt confirmation time is invalid";
+  } else {
+    diagnostic.clear();
+    return true;
+  }
+  return false;
+}
+
+} // namespace
+
+IrRecordState resolveIrRecordState(IrRecordStateInput input) noexcept {
+  if (input.hasReceipt || input.outboxState == IrOutboxState::Succeeded) {
+    return IrRecordState::Uploaded;
+  }
+  if (input.activity == IrRecordActivity::Submitting) {
+    return IrRecordState::Uploading;
+  }
+  if (input.activity == IrRecordActivity::Polling) {
+    return IrRecordState::AwaitingRemote;
+  }
+  if (input.outboxState) {
+    switch (*input.outboxState) {
+    case IrOutboxState::Pending:
+      return IrRecordState::Queued;
+    case IrOutboxState::Uploading:
+      return IrRecordState::Uploading;
+    case IrOutboxState::AwaitingRemoteResult:
+      return IrRecordState::AwaitingRemote;
+    case IrOutboxState::BlockedConfiguration:
+      return IrRecordState::Blocked;
+    case IrOutboxState::FailedPermanent:
+      return IrRecordState::Failed;
+    case IrOutboxState::Succeeded:
+      return IrRecordState::Uploaded;
+    }
+  }
+  return input.eligible ? IrRecordState::Eligible : IrRecordState::Hidden;
+}
+
+bool validateIrSuccessfulReceiptDraft(const IrSuccessfulReceiptDraft &draft,
+                                      std::string &diagnostic) noexcept {
+  try {
+    return validateDraft(draft, diagnostic);
+  } catch (...) {
+    diagnostic = "IR receipt draft validation failed";
+    return false;
+  }
+}
+
+bool validateIrSubmissionReceipt(const IrSubmissionReceipt &receipt,
+                                 std::string &diagnostic) noexcept {
+  try {
+    if (receipt.id <= 0) {
+      diagnostic = "IR receipt row ID is invalid";
+    } else if (!ir::isValidProviderId(receipt.providerId)) {
+      diagnostic = "IR receipt provider ID is invalid";
+    } else if (receipt.replayId < 0 || receipt.modernChartResultId < 0 ||
+               (receipt.replayId > 0) == (receipt.modernChartResultId > 0)) {
+      diagnostic = "IR receipt must have exactly one durable result owner";
+    } else if (!uuid::isCanonicalLowerV4(receipt.attemptId)) {
+      diagnostic = "IR receipt attempt ID is invalid";
+    } else if (!receipt.chartMd5.empty() &&
+               !canonical_digest::isCanonicalLowerHex(receipt.chartMd5, 32)) {
+      diagnostic = "IR receipt chart MD5 is invalid";
+    } else if (!canonical_digest::isCanonicalLowerHex(receipt.chartSha256,
+                                                        64)) {
+      diagnostic = "IR receipt chart SHA-256 is invalid";
+    } else {
+      const IrSuccessfulReceiptDraft draft{
+          .serverOrigin = receipt.serverOrigin,
+          .remoteUserId = receipt.remoteUserId,
+          .remoteChartId = receipt.remoteChartId,
+          .remoteScoreId = receipt.remoteScoreId,
+          .source = receipt.source,
+          .observedInSnapshot = receipt.observedInSnapshot,
+          .confirmedAtUnixMillis = receipt.confirmedAtUnixMillis,
+      };
+      return validateDraft(draft, diagnostic);
+    }
+    return false;
+  } catch (...) {
+    diagnostic = "IR receipt row validation failed";
+    return false;
+  }
+}
+
+} // namespace ir

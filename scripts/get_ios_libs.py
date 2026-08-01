@@ -14,6 +14,7 @@ if vcpkg_root is None:
 # copy current path
 current_path = f"{os.path.dirname(os.path.realpath(__file__))}/.."
 tmp_path = os.path.join(current_path, "tmp")
+triplet_overlay_path = os.path.join(current_path, "vcpkg-triplets")
 shutil.rmtree(tmp_path, ignore_errors=True)
 # set pwd to vcpkg_root
 os.chdir(vcpkg_root)
@@ -22,14 +23,25 @@ os.makedirs(tmp_path, exist_ok=True)
 dependency = {
     "ffmpeg": ["libavformat", "libavcodec", "libavutil", "libswresample", "libswscale", "libavdevice", "libavfilter"],
     "libsndfile": ["libsndfile", "libFLAC", "libFLAC++", "libvorbis", "libvorbisenc", "libvorbisfile", "libmp3lame", "libmpg123", "libsyn123", "libout123", "libopus", "libogg"],
+    "libarchive": ["libarchive", "libz", "libbz2", "liblz4", "liblzma", "libzstd"],
+    "lib7zip": ["lib7zip"],
+}
+extra_static_dependencies = {
+    "ffmpeg": ["libx264"],
+}
+package_specs = {
+    "ffmpeg": "ffmpeg[gpl,x264]",
+    "libarchive": "libarchive[core,bzip2,lz4,lzma,zstd]",
+    "lib7zip": "7zip",
 }
 triplets = ["arm64-ios", "arm64-ios-simulator"]
 
 # 1. ffmpeg, libsndfile from vcpkg with both arm64-ios and arm64-ios-simulator triplets
 def install_package(package_name):
     # join like package_name:triplet1 package_name:triplet2
-    joined_triplets = [f"{package_name}:{triplet}" for triplet in triplets]
-    subprocess.run([f"{vcpkg_root}/vcpkg", "install", *joined_triplets, "--overlay-ports", f"{current_path}/vcpkg-overlays"], check=True)
+    package_spec = package_specs.get(package_name, package_name)
+    joined_triplets = [f"{package_spec}:{triplet}" for triplet in triplets]
+    subprocess.run([f"{vcpkg_root}/vcpkg", "install", "--classic", "--recurse", *joined_triplets, "--overlay-ports", f"{current_path}/vcpkg-overlays", "--overlay-triplets", triplet_overlay_path], check=True)
 
 
 # 2. generate xcframeworks with xcodebuild -create-xcframework to merge iOS Device and iOS Simulator triplets
@@ -52,9 +64,17 @@ def copy_xcframework(package_name):
 def copy_includes(package_name, is_dir=False):
     subprocess.run(["cp", "-r" if is_dir else "-f", f"{vcpkg_root}/installed/arm64-ios/include/{package_name}", f"{current_path}/ios/Xcode/AsoBMaShow/include"], check=True)
 
+def copy_license(package_name, output_name):
+    output_dir = f"{current_path}/assets/legal"
+    os.makedirs(output_dir, exist_ok=True)
+    shutil.copyfile(f"{vcpkg_root}/installed/arm64-ios/share/{package_name}/copyright", f"{output_dir}/{output_name}")
+
 def merge_all_dependents(package_name):
     for triplet in triplets:
-        libtool_merge_list= [f"{vcpkg_root}/installed/{triplet}/lib/{dep}.a" for dep in dependency[package_name]]
+        libtool_merge_list= [
+            f"{vcpkg_root}/installed/{triplet}/lib/{dep}.a"
+            for dep in dependency[package_name] + extra_static_dependencies.get(package_name, [])
+        ]
         subprocess.run(["libtool", "-static", "-o", f"{tmp_path}/{package_name}-{triplet}.a", *libtool_merge_list], check=True)
 
 # ffmpeg (libavformat, libavcodec, libavutil, libswresample, libswscale, libavdevice, libavfilter)
@@ -63,11 +83,27 @@ merge_all_dependents("ffmpeg")
 generate_xcframework("ffmpeg", True)
 copy_xcframework("ffmpeg")
 [copy_includes(name, True) for name in dependency["ffmpeg"]]
+copy_license("ffmpeg", "ffmpeg.txt")
+copy_license("x264", "x264.txt")
 
 install_package("libsndfile")
 merge_all_dependents("libsndfile")
 generate_xcframework("libsndfile", True)
 copy_xcframework("libsndfile")
 copy_includes("sndfile.h")
+
+install_package("libarchive")
+merge_all_dependents("libarchive")
+generate_xcframework("libarchive", True)
+copy_xcframework("libarchive")
+copy_includes("archive.h")
+copy_includes("archive_entry.h")
+
+install_package("lib7zip")
+merge_all_dependents("lib7zip")
+generate_xcframework("lib7zip", True)
+copy_xcframework("lib7zip")
+copy_includes("7zip", True)
+copy_license("7zip", "7zip.txt")
 # remove tmp
 shutil.rmtree(tmp_path)

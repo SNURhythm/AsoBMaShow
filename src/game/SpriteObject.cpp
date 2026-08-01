@@ -45,10 +45,14 @@ void SpriteObject::renderImpl(RenderContext &context) {
   bgfx::setTexture(0, s_texColor, texture);
 
   // Submit the draw call
-  bgfx::submit(rendering::main_view,
-               rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT));
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+  bgfx::submit(rendering::main_view, kProgram);
 }
 void SpriteObject::setTexture(bgfx::TextureHandle texture) {
+  if (bgfx::isValid(this->texture) && this->texture.idx != texture.idx) {
+    bgfx::destroy(this->texture);
+  }
   this->texture = texture;
 }
 void SpriteObject::update(float dt) {}

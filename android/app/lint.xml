@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+      These permission checks are confined to optional upstream SDL features.
+      Bluetooth HID initialization checks BLUETOOTH_CONNECT before entering
+      these paths, and AsoBMaShow never opens SDL audio capture.
+    -->
+    <issue id="MissingPermission">
+        <ignore path="../../SDL/android-project/app/src/main/java/org/libsdl/app/HIDDeviceBLESteamController.java" />
+        <ignore path="../../SDL/android-project/app/src/main/java/org/libsdl/app/HIDDeviceManager.java" />
+        <ignore path="../../SDL/android-project/app/src/main/java/org/libsdl/app/SDLAudioManager.java" />
+    </issue>
+</lint>

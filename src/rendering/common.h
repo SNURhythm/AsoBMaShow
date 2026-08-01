@@ -5,8 +5,10 @@ class Camera;
 #include "RenderPlan.h"
 #include <string>
 #include <algorithm>
+#include <cmath>
 #define SHADER_SIMPLE "vs_simple.bin", "fs_simple.bin"
 #define SHADER_TEXT "vs_text.bin", "fs_text.bin"
+#define SHADER_UI_SHADOW "vs_text.bin", "fs_shadow.bin"
 #define SHADER_YUVRGB "vs_yuvrgb.bin", "fs_yuvrgb.bin"
 #define SHADER_BGALAYER "vs_text.bin", "fs_bgalayer.bin"
 namespace rendering {
@@ -127,12 +129,20 @@ inline void setScissorUI(int x, int y, int width, int height) {
     bgfx::setScissor();
     return;
   }
-  int sx = ui_offset_x + static_cast<int>(x * ui_scale_x);
-  int sy = ui_offset_y + static_cast<int>(y * ui_scale_y);
-  int sw = static_cast<int>(width * ui_scale_x);
-  int sh = static_cast<int>(height * ui_scale_y);
+  const int sx0 =
+      ui_offset_x + static_cast<int>(std::floor(x * ui_scale_x));
+  const int sy0 =
+      ui_offset_y + static_cast<int>(std::floor(y * ui_scale_y));
+  const int sx1 = ui_offset_x +
+                  static_cast<int>(std::ceil((x + width) * ui_scale_x));
+  const int sy1 = ui_offset_y +
+                  static_cast<int>(std::ceil((y + height) * ui_scale_y));
+  int sx = sx0;
+  int sy = sy0;
+  int sw = sx1 - sx0;
+  int sh = sy1 - sy0;
   if (sw <= 0 || sh <= 0) {
-    bgfx::setScissor();
+    bgfx::setScissor(0, 0, 0, 0);
     return;
   }
   if (sx < 0) {
@@ -148,7 +158,7 @@ inline void setScissorUI(int x, int y, int width, int height) {
   sw = std::min(sw, maxW);
   sh = std::min(sh, maxH);
   if (sw <= 0 || sh <= 0) {
-    bgfx::setScissor();
+    bgfx::setScissor(0, 0, 0, 0);
     return;
   }
   bgfx::setScissor(static_cast<uint16_t>(sx), static_cast<uint16_t>(sy),
@@ -163,10 +173,15 @@ void createRect(bgfx::TransientVertexBuffer &tvb,
 
 void renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
                          float x, float y, float width, float height);
+void renderTextureRegionTint(bgfx::TextureHandle texture, bgfx::ViewId viewId,
+                             float x, float y, float width, float height,
+                             float brightness);
 void renderTextureRegionScissor(bgfx::TextureHandle texture,
                                 bgfx::ViewId viewId, int x, int y, int width,
                                 int height);
 void renderFullscreenTexture(bgfx::TextureHandle texture, bgfx::ViewId viewId);
+void renderFullscreenTextureTint(bgfx::TextureHandle texture,
+                                 bgfx::ViewId viewId, float brightness);
 
 static PosTexCoord0Vertex s_quadVertices[] = {
     {-1.0f, 1.0f, 0.0f, 0.0f, 0.0f},

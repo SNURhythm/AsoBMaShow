@@ -3,42 +3,59 @@
 //
 
 #include "Stopwatch.h"
+
+int64_t Stopwatch::nowMicrosInternal() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
 void Stopwatch::start() {
-  if (!running) {
-    start_time = std::chrono::high_resolution_clock::now();
-    running = true;
+  bool expected = false;
+  if (running.compare_exchange_strong(expected, true,
+                                      std::memory_order_acq_rel)) {
+    start_time_us.store(nowMicrosInternal(), std::memory_order_release);
   }
 }
+
 void Stopwatch::pause() {
-  if (running) {
-    auto pause_time = std::chrono::high_resolution_clock::now();
-    elapsed_time += std::chrono::duration_cast<std::chrono::microseconds>(
-                        pause_time - start_time)
-                        .count();
-    running = false;
+  if (running.exchange(false, std::memory_order_acq_rel)) {
+    const int64_t pauseTimeUs = nowMicrosInternal();
+    const int64_t startTimeUs = start_time_us.load(std::memory_order_acquire);
+    if (pauseTimeUs > startTimeUs) {
+      elapsed_time_us.fetch_add(pauseTimeUs - startTimeUs,
+                                std::memory_order_acq_rel);
+    }
   }
 }
+
 void Stopwatch::resume() {
-  if (!running) {
-    start_time = std::chrono::high_resolution_clock::now();
-    running = true;
-  }
+  start();
 }
+
 void Stopwatch::reset() {
-  running = false;
-  elapsed_time = 0;
+  elapsed_time_us.store(0, std::memory_order_release);
+  start_time_us.store(nowMicrosInternal(), std::memory_order_release);
+  running.store(false, std::memory_order_release);
 }
+
 long long Stopwatch::elapsedMicros() const {
-  if (running) {
-    auto current_time = std::chrono::high_resolution_clock::now();
-    return elapsed_time + std::chrono::duration_cast<std::chrono::microseconds>(
-                              current_time - start_time)
-                              .count();
+  const int64_t elapsedUs = elapsed_time_us.load(std::memory_order_acquire);
+  if (running.load(std::memory_order_acquire)) {
+    const int64_t currentTimeUs = nowMicrosInternal();
+    const int64_t startTimeUs = start_time_us.load(std::memory_order_acquire);
+    if (currentTimeUs > startTimeUs) {
+      return elapsedUs + (currentTimeUs - startTimeUs);
+    }
   }
-  return elapsed_time;
+  return elapsedUs;
 }
+
 void Stopwatch::seek(long long int micro) {
-  elapsed_time = micro;
-  start_time = std::chrono::high_resolution_clock::now();
+  elapsed_time_us.store(micro, std::memory_order_release);
+  start_time_us.store(nowMicrosInternal(), std::memory_order_release);
 }
-bool Stopwatch::isRunning() const { return running; }
+
+bool Stopwatch::isRunning() const {
+  return running.load(std::memory_order_acquire);
+}

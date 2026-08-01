@@ -3,20 +3,24 @@
 #include <string>
 #ifdef _WIN32
 #include <windows.h>
-typedef std::wstring path_t;
+using path_t = std::wstring;
 #define PATH(x) L##x
 #else
-typedef std::string path_t;
+using path_t = std::string;
 #define PATH(x) x
 #endif
 
+inline path_t fspath_to_path_t(const std::filesystem::path &path) {
 #ifdef _WIN32
-#define wstring_to_path_t(wstr) (wstr)
-#define fspath_to_path_t(fspath) (fspath.wstring())
+  return path.wstring();
 #else
-#define wstring_to_path_t(wstr) (std::string().assign(wstr.begin(), wstr.end()))
-#define fspath_to_path_t(fspath) (fspath.string())
+  return path.string();
 #endif
+}
 
 std::string path_t_to_utf8(const path_t &input);
 path_t utf8_to_path_t(const std::string &input);
+
+inline std::string fspath_to_utf8(const std::filesystem::path &path) {
+  return path_t_to_utf8(fspath_to_path_t(path));
+}

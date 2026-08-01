@@ -4,6 +4,7 @@
 #include <SDL2/SDL.h>
 #include <vector>
 #include <set>
+#include <memory>
 struct EventHandleResult {
   bool quit = false;
 };
@@ -12,10 +13,17 @@ class Scene {
 public:
   Scene() = delete;
   Scene(ApplicationContext &context) : context(context) {}
+  Scene(const Scene &) = delete;
+  Scene &operator=(const Scene &) = delete;
+  Scene(Scene &&) = delete;
+  Scene &operator=(Scene &&) = delete;
   std::vector<View *> views;
   std::map<Uint64, std::pair<Uint64, std::vector<std::function<bool()>>>>
       deferred;
   virtual void init() = 0; // Initialize the scene
+  virtual void onPause() {}
+  virtual void onResume() {}
+  virtual bool pausesBackgroundTasksForPerformance() const { return false; }
   virtual EventHandleResult handleEvents(SDL_Event &event) {
     for (auto view : views) {
       if (!view->handleEvents(event)) {
@@ -36,13 +44,15 @@ public:
     deferred[time].second.push_back(func);
   }
   void handleDeferred() {
+    if (deferred.empty()) {
+      return;
+    }
 
     Uint64 time = SDL_GetTicks64();
     auto it = deferred.begin();
     while (it != deferred.end()) {
       if (it->first <= time) {
         if (it->second.first <= context.currentFrame) {
-          SDL_Log("Handling deferred");
           for (const auto &func : it->second.second) {
             if (!func())
               return;
@@ -50,7 +60,6 @@ public:
               return;
             }
           }
-          SDL_Log("Done");
           it = deferred.erase(it);
         } else {
           ++it;
@@ -64,27 +73,50 @@ public:
   void render() {
     RenderContext context;
     for (auto view : views) {
-      view->render(context);
+      if (renderViewBeforeScene(view)) {
+        view->render(context);
+      }
     }
     renderScene(); // Additional custom rendering
+    for (auto view : views) {
+      if (!renderViewBeforeScene(view)) {
+        view->render(context);
+      }
+    }
   }
 
   // Cleanup resources when exiting the scene (non-virtual public method)
   inline void cleanup() {
-    isDead = true;
-    SDL_Log("Cleaning up");
-    cleanupScene(); // Additional custom cleanup
-    for (auto view : views) {
-      delete view;
+    if (isCleaned) {
+      return;
     }
+    isDead = true;
+    cleanupScene(); // Additional custom cleanup
+    destroyOwnedViews();
+    isCleaned = true;
   }
 
-  inline void addView(View *view) { views.push_back(view); }
+  inline void prepareForUse() {
+    isDead = false;
+    isCleaned = false;
+    deferred.clear();
+  }
 
-  virtual ~Scene() {}
+  inline void addView(View *view) {
+    if (view == nullptr) {
+      return;
+    }
+    std::unique_ptr<View> pending(view);
+    views.push_back(view);
+    pending.release();
+  }
+
+  virtual ~Scene() { destroyOwnedViews(); }
 
 protected:
   // Protected virtual methods for customization by derived classes
+  virtual bool renderViewBeforeScene(const View *view) const { return true; }
+
   virtual void renderScene() = 0;
 
   virtual void cleanupScene() = 0;
@@ -92,5 +124,14 @@ protected:
   ApplicationContext &context;
 
 private:
+  void destroyOwnedViews() {
+    for (auto *view : views) {
+      delete view;
+    }
+    views.clear();
+    deferred.clear();
+  }
+
   bool isDead = false;
+  bool isCleaned = false;
 };

@@ -1,4 +1,4 @@
-app_identifier("com.SNURhythm.AsoBMaShow") # The bundle identifier of your app
+app_identifier("com.snurhythm.AsoBMaShow") # The bundle identifier of your app
 apple_id("zudevxf@gmail.com") # Your Apple Developer Portal username
 
 itc_team_id("127583546") # App Store Connect Team ID

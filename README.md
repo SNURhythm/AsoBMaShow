@@ -1,5 +1,5 @@
-# AsoBMaShow [WIP]
-![Build Status](https://github.com/SNURhythm/AsoBMaShow/actions/workflows/ios-testflight.yml/badge.svg)
+# AsoBMaShow
+![Mobile Build Status](https://github.com/SNURhythm/AsoBMaShow/actions/workflows/mobile-beta-deploy.yml/badge.svg)
 ![Build Status](https://github.com/SNURhythm/AsoBMaShow/actions/workflows/macos-build.yml/badge.svg)
 
 AsoBMaShow \[asobimashou: Let's play\] is a crossplatform BMS player which depends on open source libraries only
@@ -41,5 +41,5 @@ git submodule update --init --recursive
 - SQLite3
 - PortAudio (for desktop) + miniaudio (for mobile)
 - libsndfile
+- 7-Zip SDK (archive reading; see [third-party notices](THIRD_PARTY_NOTICES.md))
 - [bms-parser-cpp](https://github.com/SNURhythm/bms-parser-cpp) for fast BMS parsing
-

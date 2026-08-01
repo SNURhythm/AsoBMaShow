@@ -3,10 +3,19 @@
 //
 
 #include "SpriteLoader.h"
-#include <stb_image.h>
+#include "../ArchiveFile.h"
+#include "../targets.h"
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#include <unistd.h>
+#endif
 #include <SDL2/SDL_error.h>
 #include <SDL2/SDL_log.h>
 #include <SDL2/SDL_stdinc.h>
+#include <stb_image.h>
+#include <cstdio>
+#include <limits>
+#include <vector>
 
 SpriteLoader::SpriteLoader(const path_t& path) {
   if (path.empty()) {
@@ -15,11 +24,7 @@ SpriteLoader::SpriteLoader(const path_t& path) {
   this->path = path;
 }
 
-SpriteLoader::~SpriteLoader() {
-  if (data) {
-    free(data);
-  }
-}
+SpriteLoader::~SpriteLoader() = default;
 
 bool SpriteLoader::load() {
   if (data) {
@@ -27,11 +32,46 @@ bool SpriteLoader::load() {
     return true;
   }
   const std::string utf8Path = path_t_to_utf8(path);
-  data = stbi_load(utf8Path.c_str(), &width, &height, &channels, 4);
+  constexpr int kRequestedChannels = 4;
+  std::string errorMessage;
+#if TARGET_OS_ANDROID
+  const std::filesystem::path fsPath(path);
+  if (IsAndroidTreePath(fsPath)) {
+    const auto fd = OpenAndroidTreeFileDescriptor(fsPath, errorMessage);
+    if (fd.has_value()) {
+      FILE *file = fdopen(*fd, "rb");
+      if (file != nullptr) {
+        data.reset(stbi_load_from_file(file, &width, &height, &channels,
+                                       kRequestedChannels));
+        fclose(file);
+      } else {
+        close(*fd);
+        errorMessage = "Failed to create FILE for Android image descriptor.";
+      }
+    }
+  }
+#endif
+  std::vector<unsigned char> bytes;
+  if (!data &&
+      archive_file::readFile(std::filesystem::path(path), bytes,
+                             &errorMessage) &&
+      !bytes.empty() &&
+      bytes.size() <= static_cast<size_t>(std::numeric_limits<int>::max())) {
+    data.reset(stbi_load_from_memory(
+        bytes.data(), static_cast<int>(bytes.size()), &width, &height,
+        &channels, kRequestedChannels));
+  }
   if (!data) {
-    SDL_Log("Failed to load image: %s", SDL_GetError());
+    data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels,
+                         kRequestedChannels));
+  }
+  if (!data) {
+    SDL_Log("Failed to load image %s: %s",
+            utf8Path.c_str(),
+            errorMessage.empty() ? SDL_GetError() : errorMessage.c_str());
     return false;
   }
+  channels = kRequestedChannels;
   switch (channels) {
   case 1:
     SDL_Log("Image has 1 channel");
@@ -54,32 +94,41 @@ bool SpriteLoader::load() {
 }
 
 void SpriteLoader::unload() {
-  if (data) {
-    free(data);
-    data = nullptr;
-  }
+  data.reset();
 }
 bool SpriteLoader::isLoaded() const { return data != nullptr; }
 int SpriteLoader::getWidth() const { return width; }
 int SpriteLoader::getHeight() const { return height; }
 int SpriteLoader::getChannels() const { return channels; }
-unsigned char *SpriteLoader::getData() const { return data; }
+unsigned char *SpriteLoader::getData() const { return data.get(); }
 unsigned char *SpriteLoader::crop(const int x, const int y, const int w,
                                   const int h) const {
-  if (x < 0 || y < 0 || w < 0 || h < 0) {
+  if (data == nullptr) {
     return nullptr;
   }
-  if (x + w > width || y + h > height) {
+  if (x < 0 || y < 0 || w <= 0 || h <= 0 || channels <= 0) {
     return nullptr;
   }
-  auto *newData = static_cast<unsigned char *>(SDL_malloc(w * h * channels));
+  if (x > width - w || y > height - h) {
+    return nullptr;
+  }
+  const auto rowBytes = static_cast<size_t>(w) * static_cast<size_t>(channels);
+  if (rowBytes / static_cast<size_t>(channels) != static_cast<size_t>(w)) {
+    return nullptr;
+  }
+  if (rowBytes > std::numeric_limits<size_t>::max() / static_cast<size_t>(h)) {
+    return nullptr;
+  }
+  const size_t byteCount = rowBytes * static_cast<size_t>(h);
+  auto *newData = static_cast<unsigned char *>(SDL_malloc(byteCount));
   if (!newData) {
     return nullptr;
   }
   for (int row = 0; row < h; ++row) {
-    const unsigned char* src_ptr = data + ((y + row) * width + x) * channels;
-    unsigned char* dst_ptr = newData + row * w * channels;
-    SDL_memcpy(dst_ptr, src_ptr, w * channels);
+    const unsigned char* src_ptr =
+        data.get() + ((y + row) * width + x) * channels;
+    unsigned char* dst_ptr = newData + static_cast<size_t>(row) * rowBytes;
+    SDL_memcpy(dst_ptr, src_ptr, rowBytes);
   }
   return newData;
 }

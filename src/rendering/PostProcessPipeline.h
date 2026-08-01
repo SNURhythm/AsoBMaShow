@@ -8,6 +8,11 @@ namespace rendering {
 class PostProcessPass {
 public:
   virtual ~PostProcessPass() = default;
+  PostProcessPass() = default;
+  PostProcessPass(const PostProcessPass &) = delete;
+  PostProcessPass &operator=(const PostProcessPass &) = delete;
+  PostProcessPass(PostProcessPass &&) = delete;
+  PostProcessPass &operator=(PostProcessPass &&) = delete;
   virtual void init(uint16_t windowW, uint16_t windowH) = 0;
   virtual void resize(uint16_t windowW, uint16_t windowH) = 0;
   virtual void execute() = 0;
@@ -23,6 +28,7 @@ class BlurPass;
 
 class PostProcessPipeline {
 public:
+  ~PostProcessPipeline();
   void init(uint16_t windowW, uint16_t windowH);
   void resize(uint16_t windowW, uint16_t windowH);
   void apply();

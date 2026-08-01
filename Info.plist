@@ -3,23 +3,27 @@
 <plist version="1.0">
     <dict>
         <key>CFBundleExecutable</key>
-        <string>AsoBMaShow</string>
+        <string>@MACOS_EXECUTABLE_NAME@</string>
         <key>CFBundleIdentifier</key>
-        <string>com.SNURhythm.AsoBMaShow</string>
+        <string>@MACOS_BUNDLE_IDENTIFIER@</string>
         <key>CFBundleInfoDictionaryVersion</key>
         <string>6.0</string>
         <key>CFBundleName</key>
-        <string>AsoBMaShow</string>
+        <string>@MACOS_BUNDLE_NAME@</string>
         <key>CFBundlePackageType</key>
         <string>APPL</string>
         <key>CFBundleVersion</key>
-        <string>1.0</string>
+        <string>@PROJECT_VERSION@</string>
         <key>CFBundleShortVersionString</key>
-        <string>1.0</string>
+        <string>@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@</string>
         <key>CFBundleGetInfoString</key>
-        <string>AsoBMaShow 1.0</string>
+        <string>@MACOS_BUNDLE_NAME@ @PROJECT_VERSION@</string>
+        <key>LSApplicationCategoryType</key>
+        <string>public.app-category.games</string>
+        <key>LSSupportsGameMode</key>
+        <true/>
         <key>LSMinimumSystemVersion</key>
-        <string>11.0</string>
+        <string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
         <key>NSHighResolutionCapable</key>
         <true/>
         <key>CADisableMinimumFrameDurationOnPhone</key>

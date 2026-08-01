@@ -8,26 +8,19 @@ uniform vec4 u_blurScale; // x=scale factor
 
 void main()
 {
-    const float offsets[9] = {
-    -4.0, -3.0, -2.0, -1.0,
-        0.0,
-        1.0,  2.0,  3.0,  4.0
-    };
-
-    const float weights[9] = {
-        0.05, 0.09, 0.12, 0.15,
-        0.18,
-        0.15, 0.12, 0.09, 0.05
-    };
     vec2 uv = v_texcoord0;
+    vec2 step = vec2(0.0, u_texelSize.y * u_blurScale.x);
     vec3 c  = vec3(0.0, 0.0, 0.0);
 
-    for (int i = 0; i < 9; i++)
-    {
-        float4 sampleColor = bgfxTexture2D(
-            s_texColor,
-            uv + vec2(0.0, offsets[i] * u_texelSize.y * u_blurScale.x));
-        c += sampleColor.rgb * weights[i];
-    }
+    c += texture2D(s_texColor, uv + step * -4.0).rgb * 0.05;
+    c += texture2D(s_texColor, uv + step * -3.0).rgb * 0.09;
+    c += texture2D(s_texColor, uv + step * -2.0).rgb * 0.12;
+    c += texture2D(s_texColor, uv + step * -1.0).rgb * 0.15;
+    c += texture2D(s_texColor, uv).rgb * 0.18;
+    c += texture2D(s_texColor, uv + step * 1.0).rgb * 0.15;
+    c += texture2D(s_texColor, uv + step * 2.0).rgb * 0.12;
+    c += texture2D(s_texColor, uv + step * 3.0).rgb * 0.09;
+    c += texture2D(s_texColor, uv + step * 4.0).rgb * 0.05;
+
     gl_FragColor = vec4(c, 1.0);
 }

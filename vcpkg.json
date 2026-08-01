@@ -7,9 +7,40 @@
         "libsndfile",
         "sdl2",
         "sdl2-ttf",
-        "ffmpeg",
-        "lua",
-        "luajit",
+        {
+            "name": "ffmpeg",
+            "features": [
+                "gpl",
+                "x264"
+            ]
+        },
+        {
+            "name": "curl",
+            "platform": "!ios"
+        },
+        {
+            "name": "libarchive",
+            "default-features": false,
+            "features": [
+                "bzip2",
+                "lz4",
+                "lzma",
+                "zstd"
+            ]
+        },
+        "7zip",
+        {
+            "name": "unarr",
+            "platform": "!ios"
+        },
+        {
+            "name": "lua",
+            "platform": "!android"
+        },
+        {
+            "name": "luajit",
+            "platform": "!android"
+        },
         {
             "name": "portaudio",
             "features": [
@@ -19,7 +50,7 @@
         },
         {
             "name": "portaudio",
-            "platform": "!windows"
+            "platform": "!windows & !android"
         }
     ],
     "overrides": [

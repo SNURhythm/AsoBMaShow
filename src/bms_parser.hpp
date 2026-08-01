@@ -189,6 +189,7 @@ public:
 
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -208,6 +209,7 @@ public:
   std::string SubTitle;
   int Rank = 3;
   double Total = 100;
+  bool HasTotal = false;
   long long PlayLength = 0; // Timing of the last playable note, in microseconds
   long long TotalLength = 0;
   // Timing of the last timeline(including background note, bga change note,
@@ -221,6 +223,9 @@ public:
   double PlayLevel = 3;
   double MinBpm = 0;
   double MaxBpm = 0;
+  double MostPrevalentBpm = 0;
+  double GuessedBeatBpm = 0;
+  int GuessedBeatsPerMeasure = 4;
   int Player = 1;
   int KeyMode = 5;
   bool IsDP = false;
@@ -230,30 +235,65 @@ public:
   int TotalBackSpinNotes = 0;
   int TotalLandmineNotes = 0;
   int LnMode = 0; // 0: user decides, 1: LN, 2: CN, 3: HCN
+  std::optional<unsigned int> RandomSeed;
+  std::optional<std::string> RandomPrng;
+  std::vector<int> RandomValues;
 
   [[nodiscard]] int GetKeyLaneCount() const { return KeyMode; }
-  [[nodiscard]] int GetScratchLaneCount() const { return IsDP ? 2 : 1; }
+  [[nodiscard]] bool IsScratchlessKeyMode() const {
+    return KeyMode == 4 || KeyMode == 6 || KeyMode == 8;
+  }
+  [[nodiscard]] int GetScratchLaneCount() const {
+    // Only legacy beat modes synthesize scratch lanes. Other positive key
+    // counts describe dense key lanes unless a format-specific map above says
+    // otherwise.
+    if (KeyMode == 10 || KeyMode == 14) {
+      return 2;
+    }
+    if (KeyMode == 5 || KeyMode == 7) {
+      return IsDP ? 2 : 1;
+    }
+    return 0;
+  }
   [[nodiscard]] int GetTotalLaneCount() const {
     return KeyMode + GetScratchLaneCount();
   }
 
   [[nodiscard]] std::vector<int> GetKeyLaneIndices() const {
     switch (KeyMode) {
+    case 4:
+      return {0, 1, 3, 4};
     case 5:
       return {0, 1, 2, 3, 4};
+    case 6:
+      return {0, 1, 2, 4, 5, 6};
     case 7:
       return {0, 1, 2, 3, 4, 5, 6};
+    case 8:
+      return {7, 0, 1, 2, 3, 4, 5, 6};
     case 10:
       return {0, 1, 2, 3, 4, 8, 9, 10, 11, 12};
     case 14:
       return {0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14};
     default:
-      return {};
+      if (KeyMode <= 0) {
+        return {};
+      }
+      std::vector<int> lanes;
+      lanes.reserve(static_cast<std::size_t>(KeyMode));
+      for (int lane = 0; lane < KeyMode; ++lane) {
+        lanes.push_back(lane);
+      }
+      return lanes;
     }
   }
 
   [[nodiscard]] std::vector<int> GetScratchLaneIndices() const {
-    if (IsDP) {
+    const int scratchLaneCount = GetScratchLaneCount();
+    if (scratchLaneCount == 0) {
+      return {};
+    }
+    if (scratchLaneCount == 2) {
       return {7, 15};
     }
     return {7};
@@ -263,9 +303,13 @@ public:
     std::vector<int> Result;
     std::vector<int> keyLaneIndices = GetKeyLaneIndices();
     std::vector<int> scratchLaneIndices = GetScratchLaneIndices();
+    if (!scratchLaneIndices.empty()) {
+      Result.push_back(scratchLaneIndices.front());
+    }
     Result.insert(Result.end(), keyLaneIndices.begin(), keyLaneIndices.end());
-    Result.insert(Result.end(), scratchLaneIndices.begin(),
-                  scratchLaneIndices.end());
+    if (scratchLaneIndices.size() > 1) {
+      Result.push_back(scratchLaneIndices[1]);
+    }
 
     return Result;
   }
@@ -278,9 +322,21 @@ public:
   ChartMeta Meta;
   std::vector<Measure *> Measures;
   std::unordered_map<int, std::string> WavTable;
+  std::unordered_map<int, std::string> ReferencedWavTable;
   std::unordered_map<int, std::string> BmpTable;
+  std::unordered_map<int, std::string> ReferencedBmpTable;
 };
 } // namespace bms_parser
+
+
+#include <string>
+
+namespace bms_parser {
+namespace EucKrConverter {
+void BytesToUTF8(const unsigned char *input, size_t size, std::string &result);
+}
+} // namespace bms_parser
+
 /*
  * Copyright (C) 2024 VioletXF, khoeun03
  * This program is free software: you can redistribute it and/or modify
@@ -302,16 +358,31 @@ public:
  *
  */
 namespace bms_parser {
+enum class LongNoteType {
+  Undefined = 0,
+  LongNote = 1,
+  ChargeNote = 2,
+  HellChargeNote = 3,
+};
+
+LongNoteType LongNoteTypeFromLnMode(int LnMode);
+LongNoteType ResolveLongNoteType(LongNoteType Type, int LnMode);
+
 class LongNote : public Note {
 public:
   ~LongNote() override;
   LongNote *Tail;
   LongNote *Head = nullptr;
   bool IsHolding = false;
+  LongNoteType Type = LongNoteType::Undefined;
   [[nodiscard]] bool IsTail() const;
   long long ReleaseTime{};
 
-  explicit LongNote(int Wav);
+  explicit LongNote(int Wav,
+                    LongNoteType Type = LongNoteType::Undefined);
+
+  [[nodiscard]] LongNoteType GetType() const;
+  void SetType(LongNoteType Type);
 
   void Press(long long Time) override;
 
@@ -341,6 +412,219 @@ public:
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace bms_parser {
+
+enum class PlayOptionModifier {
+  Normal,
+  Mirror,
+  Random,
+  RRandom,
+  SRandom,
+  Spiral,
+  HRandom,
+  AllScratch,
+  RandomEx,
+  SRandomEx,
+};
+
+class BaseModifier {
+public:
+  explicit BaseModifier(long long seed = -1, int player = 0);
+  virtual ~BaseModifier();
+
+  virtual void Modify(Chart &chart) = 0;
+  [[nodiscard]] virtual const char *Name() const = 0;
+
+  void SetSeed(long long seed);
+  [[nodiscard]] long long GetSeed() const;
+
+  void SetPlayer(int player);
+  [[nodiscard]] int GetPlayer() const;
+  [[nodiscard]] std::vector<int> GetLaneOrder(const ChartMeta &meta) const;
+
+  static void RecalculateNoteCounts(Chart &chart);
+
+protected:
+  [[nodiscard]] std::vector<int> GetModifyLanes(const ChartMeta &meta,
+                                                bool includeScratch) const;
+  void SetLaneMap(std::vector<int> laneMap);
+  void ClearLaneMap();
+
+private:
+  long long Seed;
+  int Player;
+  std::vector<int> LaneMap;
+};
+
+[[nodiscard]] const char *ToString(PlayOptionModifier option);
+[[nodiscard]] bool ValidateLaneAssignNotation(const ChartMeta &meta,
+                                              std::string_view notation,
+                                              std::string *error = nullptr);
+[[nodiscard]] std::unique_ptr<BaseModifier>
+CreatePlayOptionModifier(PlayOptionModifier option, long long seed = -1,
+                         int player = 0, int hranThresholdBpm = 120);
+[[nodiscard]] std::unique_ptr<BaseModifier>
+CreatePlayOptionModifier(std::string_view option, long long seed = -1,
+                         int player = 0, int hranThresholdBpm = 120);
+
+class LaneShuffleModifier : public BaseModifier {
+public:
+  void Modify(Chart &chart) override;
+
+protected:
+  LaneShuffleModifier(bool includeScratch, long long seed = -1, int player = 0);
+
+  [[nodiscard]] bool IncludesScratch() const;
+  [[nodiscard]] virtual std::vector<int>
+  MakeLaneMap(const Chart &chart, const std::vector<int> &keys,
+              size_t laneCount) = 0;
+
+private:
+  bool IncludeScratch;
+};
+
+class MirrorModifier final : public LaneShuffleModifier {
+public:
+  explicit MirrorModifier(int player = 0);
+  MirrorModifier(long long seed, int player);
+
+  [[nodiscard]] const char *Name() const override;
+
+private:
+  [[nodiscard]] std::vector<int> MakeLaneMap(const Chart &chart,
+                                             const std::vector<int> &keys,
+                                             size_t laneCount) override;
+};
+
+class RandomModifier final : public LaneShuffleModifier {
+public:
+  explicit RandomModifier(long long seed = -1, int player = 0);
+
+  [[nodiscard]] const char *Name() const override;
+
+private:
+  [[nodiscard]] std::vector<int> MakeLaneMap(const Chart &chart,
+                                             const std::vector<int> &keys,
+                                             size_t laneCount) override;
+};
+
+class RRandomModifier final : public LaneShuffleModifier {
+public:
+  explicit RRandomModifier(long long seed = -1, int player = 0);
+
+  [[nodiscard]] const char *Name() const override;
+
+private:
+  [[nodiscard]] std::vector<int> MakeLaneMap(const Chart &chart,
+                                             const std::vector<int> &keys,
+                                             size_t laneCount) override;
+};
+
+class RandomExModifier final : public LaneShuffleModifier {
+public:
+  explicit RandomExModifier(long long seed = -1, int player = 0);
+
+  [[nodiscard]] const char *Name() const override;
+
+private:
+  [[nodiscard]] std::vector<int> MakeLaneMap(const Chart &chart,
+                                             const std::vector<int> &keys,
+                                             size_t laneCount) override;
+};
+
+class LaneAssignModifier final : public BaseModifier {
+public:
+  explicit LaneAssignModifier(std::string notation, int player = 0);
+
+  void Modify(Chart &chart) override;
+  [[nodiscard]] const char *Name() const override;
+
+private:
+  std::string Notation;
+  std::string NameText;
+};
+
+class NoteShuffleModifier : public BaseModifier {
+public:
+  void Modify(Chart &chart) override;
+
+protected:
+  NoteShuffleModifier(bool includeScratch, int keyRepeatThresholdMillis,
+                      bool allScratch, bool spiral, long long seed = -1,
+                      int player = 0);
+
+private:
+  bool IncludeScratch;
+  int KeyRepeatThresholdMillis;
+  bool AllScratch;
+  bool Spiral;
+};
+
+class SRandomModifier final : public NoteShuffleModifier {
+public:
+  explicit SRandomModifier(long long seed = -1, int player = 0);
+
+  [[nodiscard]] const char *Name() const override;
+};
+
+class SpiralModifier final : public NoteShuffleModifier {
+public:
+  explicit SpiralModifier(long long seed = -1, int player = 0);
+
+  [[nodiscard]] const char *Name() const override;
+};
+
+class HRandomModifier final : public NoteShuffleModifier {
+public:
+  explicit HRandomModifier(long long seed = -1, int player = 0,
+                           int thresholdBpm = 120);
+  static HRandomModifier FromThresholdMillis(long long seed, int player,
+                                             int thresholdMillis);
+
+  [[nodiscard]] const char *Name() const override;
+};
+
+class AllScratchModifier final : public NoteShuffleModifier {
+public:
+  explicit AllScratchModifier(long long seed = -1, int player = 0,
+                              int thresholdBpm = 120);
+  static AllScratchModifier FromThresholdMillis(long long seed, int player,
+                                                int thresholdMillis);
+
+  [[nodiscard]] const char *Name() const override;
+};
+
+class SRandomExModifier final : public NoteShuffleModifier {
+public:
+  explicit SRandomExModifier(long long seed = -1, int player = 0);
+
+  [[nodiscard]] const char *Name() const override;
+};
+
+} // namespace bms_parser
+
+/*
+ * Copyright (C) 2024 VioletXF, khoeun03
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -348,6 +632,7 @@ public:
 #include <filesystem>
 #include <map>
 #include <string>
+#include <vector>
 
 /**
  *
@@ -355,8 +640,16 @@ public:
 namespace bms_parser {
 class Parser {
 public:
+  static constexpr const char *RandomPrngId = "std::mt19937_64";
+
   Parser();
+  static bool IsSupportedRandomPrng(const std::string &RandomPrng);
+  bool SetRandomPrng(const std::string &RandomPrng);
+  [[nodiscard]] const std::string &GetRandomPrng() const;
   void SetRandomSeed(unsigned int RandomSeed);
+  [[nodiscard]] unsigned int GetRandomSeed() const;
+  void SetRandomValues(const std::vector<int> &RandomValues);
+  [[nodiscard]] const std::vector<int> &GetRandomValues() const;
 
   void Parse(const std::filesystem::path &path, Chart **Chart,
              bool addReadyMeasure, bool metaOnly, std::atomic_bool &bCancelled);
@@ -376,6 +669,8 @@ private:
   int Lnobj = -1;
   int Lntype = 1;
   unsigned int Seed;
+  std::string RandomPrng = RandomPrngId;
+  std::vector<int> RandomValues;
   static inline int ParseHex(std::string_view Str);
   inline int ParseInt(std::string_view Str, bool forceBase32 = false) const;
   void ParseHeader(Chart *Chart, std::string_view cmd, std::string_view Xx,
@@ -386,6 +681,9 @@ private:
                                        unsigned long long B);
   inline bool CheckResourceIdRange(int Id) const;
   inline int ToWaveId(Chart *Chart, std::string_view Wav, bool metaOnly);
+  inline void RegisterReferencedWaveId(Chart *Chart, int WavId) const;
+  inline void RegisterReferencedBmpId(Chart *Chart, int BmpId,
+                                      bool metaOnly) const;
 #ifdef _WIN32
   static std::wstring utf8_to_path_t(const std::string &input);
 #else
@@ -2682,4 +2980,3 @@ private:
 std::string md5(const std::string str);
 } // namespace bms_parser
 #endif
-

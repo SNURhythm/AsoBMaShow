@@ -1,2 +1,33 @@
-target_sources(main PRIVATE MainMenuScene.cpp SceneManager.cpp)
+target_sources(main PRIVATE
+    ChartFilterSortPanelView.cpp
+    ChartViewerScene.cpp
+    FindBmsDialogPolicy.cpp
+    FindBmsProgressPresentation.cpp
+    IrUploadsController.cpp
+    IrUploadsScene.cpp
+    PracticePanelView.cpp
+    MainMenuLibrary.cpp
+    MainMenuScene.cpp
+    MusicPlayerScene.cpp
+    PracticeAnalyticsPresentation.cpp
+    PracticeAnalyticsView.cpp
+    ProfileSettingsController.cpp
+    ProfileSettingsControllerContext.cpp
+    ProfileRuntimeReapply.cpp
+    RemoteResultRecallController.cpp
+    ResultPresentationModel.cpp
+    SceneManager.cpp
+    ResultGaugeHistory.cpp
+    ResultScene.cpp
+    SettingsScene.cpp
+    SettingsAudioVideoModel.cpp
+    SettingsSceneAudioVideo.cpp
+    SettingsSceneControls.cpp
+    SettingsSceneInput.cpp
+    SettingsSceneIr.cpp
+    SettingsSceneLayout.cpp
+    SettingsScenePreview.cpp
+    SettingsSceneProfiles.cpp
+    SettingsSceneTables.cpp
+)
 add_subdirectory(play)

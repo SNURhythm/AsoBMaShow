@@ -11,6 +11,8 @@ BlurPass::BlurPass(uint16_t downsampleFactor, float tintAlpha)
       blur_view_v_(rendering::blur_view_v), final_view_(rendering::final_view) {
 }
 
+BlurPass::~BlurPass() { shutdown(); }
+
 void BlurPass::init(uint16_t windowW, uint16_t windowH) {
   window_width_ = windowW;
   window_height_ = windowH;
@@ -55,6 +57,11 @@ void BlurPass::resize(uint16_t windowW, uint16_t windowH) {
 void BlurPass::execute() {
   if (!initialized_)
     return;
+  if (!bgfx::isValid(fb_scene_) || !bgfx::isValid(fb_blur_a_) ||
+      !bgfx::isValid(fb_blur_b_) || !bgfx::isValid(tex_scene_color_) ||
+      !bgfx::isValid(tex_blur_a_) || !bgfx::isValid(tex_blur_b_)) {
+    return;
+  }
   blurHorizontal();
   blurVertical();
   if (composite_enabled_) {
@@ -115,20 +122,69 @@ void BlurPass::setBlurStrength(float strength) {
 void BlurPass::setTintAlpha(float alpha) { tint_alpha_ = alpha; }
 
 void BlurPass::createFrameBuffers() {
-  tex_scene_color_ =
-      bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
-                            bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
-  fb_scene_ = bgfx::createFrameBuffer(1, &tex_scene_color_, true);
+  auto destroyTarget = [](bgfx::TextureHandle &texture,
+                          bgfx::FrameBufferHandle &frameBuffer) {
+    if (bgfx::isValid(frameBuffer)) {
+      bgfx::destroy(frameBuffer);
+      frameBuffer = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(texture)) {
+      bgfx::destroy(texture);
+      texture = BGFX_INVALID_HANDLE;
+    }
+  };
 
-  tex_blur_a_ =
+  bgfx::TextureHandle sceneTexture =
       bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
                             bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
-  fb_blur_a_ = bgfx::createFrameBuffer(1, &tex_blur_a_, true);
+  if (!bgfx::isValid(sceneTexture)) {
+    return;
+  }
+  bgfx::FrameBufferHandle sceneFrameBuffer =
+      bgfx::createFrameBuffer(1, &sceneTexture, false);
+  if (!bgfx::isValid(sceneFrameBuffer)) {
+    destroyTarget(sceneTexture, sceneFrameBuffer);
+    return;
+  }
 
-  tex_blur_b_ =
+  bgfx::TextureHandle blurATexture =
       bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
                             bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
-  fb_blur_b_ = bgfx::createFrameBuffer(1, &tex_blur_b_, true);
+  if (!bgfx::isValid(blurATexture)) {
+    destroyTarget(sceneTexture, sceneFrameBuffer);
+    return;
+  }
+  bgfx::FrameBufferHandle blurAFrameBuffer =
+      bgfx::createFrameBuffer(1, &blurATexture, false);
+  if (!bgfx::isValid(blurAFrameBuffer)) {
+    destroyTarget(sceneTexture, sceneFrameBuffer);
+    destroyTarget(blurATexture, blurAFrameBuffer);
+    return;
+  }
+
+  bgfx::TextureHandle blurBTexture =
+      bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
+                            bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+  if (!bgfx::isValid(blurBTexture)) {
+    destroyTarget(sceneTexture, sceneFrameBuffer);
+    destroyTarget(blurATexture, blurAFrameBuffer);
+    return;
+  }
+  bgfx::FrameBufferHandle blurBFrameBuffer =
+      bgfx::createFrameBuffer(1, &blurBTexture, false);
+  if (!bgfx::isValid(blurBFrameBuffer)) {
+    destroyTarget(sceneTexture, sceneFrameBuffer);
+    destroyTarget(blurATexture, blurAFrameBuffer);
+    destroyTarget(blurBTexture, blurBFrameBuffer);
+    return;
+  }
+
+  tex_scene_color_ = sceneTexture;
+  fb_scene_ = sceneFrameBuffer;
+  tex_blur_a_ = blurATexture;
+  fb_blur_a_ = blurAFrameBuffer;
+  tex_blur_b_ = blurBTexture;
+  fb_blur_b_ = blurBFrameBuffer;
 
   for (const auto view : input_views_) {
     bgfx::setViewFrameBuffer(view, fb_scene_);

@@ -2,15 +2,25 @@
 
 #include <SDL2/SDL.h>
 #include <yoga/Yoga.h>
-#include <vector>
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/Color.h"
 #include "bgfx/bgfx.h"
 #include "bgfx/defines.h"
+
+namespace ui_theme {
+struct ShadowSpec;
+}
+
 enum class Edge {
   Left = YGEdgeLeft,
   Top = YGEdgeTop,
@@ -31,11 +41,44 @@ struct Scissor {
   int x, y, width, height;
 };
 struct RenderContext {
+  struct Point {
+    float x = 0.0f;
+    float y = 0.0f;
+  };
+
+  RenderContext() {
+    scissorStack.reserve(16);
+    transformStack.reserve(16);
+    refreshTransformMatrix();
+  }
   Scissor scissor = {0, 0, -1, -1};
   std::vector<Scissor> scissorStack;
 
   inline void pushScissor(int x, int y, int width, int height) {
     scissorStack.push_back(scissor);
+    if (!transformStack.empty()) {
+      const Point topLeft = transformPoint(static_cast<float>(x),
+                                           static_cast<float>(y));
+      const Point topRight = transformPoint(static_cast<float>(x + width),
+                                            static_cast<float>(y));
+      const Point bottomRight =
+          transformPoint(static_cast<float>(x + width),
+                         static_cast<float>(y + height));
+      const Point bottomLeft = transformPoint(static_cast<float>(x),
+                                              static_cast<float>(y + height));
+      const float minX =
+          std::min({topLeft.x, topRight.x, bottomRight.x, bottomLeft.x});
+      const float minY =
+          std::min({topLeft.y, topRight.y, bottomRight.y, bottomLeft.y});
+      const float maxX =
+          std::max({topLeft.x, topRight.x, bottomRight.x, bottomLeft.x});
+      const float maxY =
+          std::max({topLeft.y, topRight.y, bottomRight.y, bottomLeft.y});
+      x = static_cast<int>(std::floor(minX));
+      y = static_cast<int>(std::floor(minY));
+      width = std::max(0, static_cast<int>(std::ceil(maxX)) - x);
+      height = std::max(0, static_cast<int>(std::ceil(maxY)) - y);
+    }
     if (scissor.width < 0 || scissor.height < 0) {
       scissor = {x, y, width, height};
       return;
@@ -54,6 +97,89 @@ struct RenderContext {
     scissor = scissorStack.back();
     scissorStack.pop_back();
   }
+
+  inline void pushRotation(float degrees, float centerX, float centerY) {
+    transformStack.push_back(transform);
+    const float radians = degrees * 3.14159265358979323846f / 180.0f;
+    float cosine = std::cos(radians);
+    float sine = std::sin(radians);
+    if (std::abs(cosine) < 0.000001f) {
+      cosine = 0.0f;
+    }
+    if (std::abs(sine) < 0.000001f) {
+      sine = 0.0f;
+    }
+
+    const Transform local{
+        .a = cosine,
+        .b = sine,
+        .c = -sine,
+        .d = cosine,
+        .tx = centerX - cosine * centerX + sine * centerY,
+        .ty = centerY - sine * centerX - cosine * centerY,
+    };
+    transform = compose(transform, local);
+    refreshTransformMatrix();
+  }
+
+  inline void popTransform() {
+    if (transformStack.empty()) {
+      return;
+    }
+    transform = transformStack.back();
+    transformStack.pop_back();
+    refreshTransformMatrix();
+  }
+
+  [[nodiscard]] inline Point transformPoint(float x, float y) const {
+    return {.x = transform.a * x + transform.c * y + transform.tx,
+            .y = transform.b * x + transform.d * y + transform.ty};
+  }
+
+  inline void applyTransform() const {
+    if (!transformStack.empty()) {
+      bgfx::setTransform(transformMatrix.data());
+    }
+  }
+
+  [[nodiscard]] inline const float *getTransformMatrix() const {
+    return transformStack.empty() ? nullptr : transformMatrix.data();
+  }
+
+private:
+  struct Transform {
+    float a = 1.0f;
+    float b = 0.0f;
+    float c = 0.0f;
+    float d = 1.0f;
+    float tx = 0.0f;
+    float ty = 0.0f;
+  };
+
+  static inline Transform compose(const Transform &outer,
+                                  const Transform &inner) {
+    return {
+        .a = outer.a * inner.a + outer.c * inner.b,
+        .b = outer.b * inner.a + outer.d * inner.b,
+        .c = outer.a * inner.c + outer.c * inner.d,
+        .d = outer.b * inner.c + outer.d * inner.d,
+        .tx = outer.a * inner.tx + outer.c * inner.ty + outer.tx,
+        .ty = outer.b * inner.tx + outer.d * inner.ty + outer.ty,
+    };
+  }
+
+  inline void refreshTransformMatrix() {
+    transformMatrix = {
+        transform.a,  transform.b, 0.0f, 0.0f,
+        transform.c,  transform.d, 0.0f, 0.0f,
+        0.0f,         0.0f,        1.0f, 0.0f,
+        transform.tx, transform.ty, 0.0f, 1.0f,
+    };
+  }
+
+  Transform transform;
+  std::vector<Transform> transformStack;
+  std::array<float, 16> transformMatrix{};
 };
 
 struct ScissorScope {
@@ -68,8 +194,30 @@ private:
   RenderContext &context;
 };
 
+struct RenderTransformScope {
+  RenderTransformScope(RenderContext &context, float degrees, float centerX,
+                       float centerY)
+      : context(context) {
+    active = std::abs(degrees) > 0.000001f;
+    if (active) {
+      context.pushRotation(degrees, centerX, centerY);
+    }
+  }
+  ~RenderTransformScope() {
+    if (active) {
+      context.popTransform();
+    }
+  }
+
+private:
+  RenderContext &context;
+  bool active = false;
+};
+
 class View {
 public:
+  using ThemeColorProvider = std::function<Color()>;
+
   struct LayoutBatchScope {
     LayoutBatchScope() { View::beginLayoutBatch(); }
     ~LayoutBatchScope() { View::endLayoutBatch(); }
@@ -84,6 +232,7 @@ public:
     YGNodeStyleSetPosition(node, YGEdgeTop, y);
     YGNodeStyleSetWidth(node, width);
     YGNodeStyleSetHeight(node, height);
+    YGNodeSetContext(node, this);
     applyYogaLayout();
   }
   inline View() : isVisible(true) {
@@ -91,16 +240,31 @@ public:
                 static_cast<uint8_t>(rand() % 256),
                 static_cast<uint8_t>(rand() % 256), 64};
     node = YGNodeNew();
+    YGNodeSetContext(node, this);
     applyYogaLayout();
   }
 
+  View(const View &) = delete;
+  View &operator=(const View &) = delete;
+  View(View &&) = delete;
+  View &operator=(View &&) = delete;
+
   virtual ~View() {
+    dirtyRoots.erase(this);
+    for (auto *view : children) {
+      dirtyRoots.erase(view);
+      if (node != nullptr && view != nullptr && view->node != nullptr) {
+        YGNodeRemoveChild(node, view->node);
+      }
+      if (view != nullptr) {
+        view->parent = nullptr;
+        delete view;
+      }
+    }
+    children.clear();
     if (node != nullptr) {
       YGNodeFree(node);
       node = nullptr;
-    }
-    for (auto view : children) {
-      delete view;
     }
   }
 
@@ -108,6 +272,10 @@ public:
     if (!isVisible)
       return;
     sortChildrenIfNeeded();
+    RenderTransformScope transformScope(
+        context, rotationDegrees,
+        static_cast<float>(getX()) + static_cast<float>(getWidth()) * 0.5f,
+        static_cast<float>(getY()) + static_cast<float>(getHeight()) * 0.5f);
 #if DEBUG
     if (drawBoundingBox) {
       float x = getX();
@@ -140,20 +308,22 @@ public:
       index[5] = 0;
 
       // Set up state (e.g., render state, texture, shaders)
-      uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
+      uint64_t state =
+          BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
       bgfx::setState(state);
+      context.applyTransform();
 
       // Set the vertex and index buffers
       bgfx::setVertexBuffer(0, &tvb);
       bgfx::setIndexBuffer(&tib);
 
       // Submit the draw call
-      bgfx::submit(
-          rendering::ui_view,
-          rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE));
+      static const bgfx::ProgramHandle kSimpleProgram =
+          rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+      bgfx::submit(rendering::ui_view, kSimpleProgram);
     }
 #endif
+    renderBoxDecoration(context);
     renderImpl(context);
     for (auto view : children) {
       view->render(context);
@@ -173,21 +343,28 @@ public:
     return handleEventsImpl(event);
   }
 
+  using TemporaryEventListener = std::function<void(SDL_Event &)>;
+  static uint64_t addTemporaryEventListener(TemporaryEventListener listener);
+  static void removeTemporaryEventListener(uint64_t listenerId);
+  static void dispatchTemporaryEventListeners(SDL_Event &event);
+  static void deferAfterEvent(std::function<void()> callback);
+  static void dispatchDeferredEventCallbacks();
+
   virtual inline void onLayout() {};
 
   inline void setSize(int newWidth, int newHeight) {
-    auto width = YGNodeLayoutGetWidth(node);
-    auto height = YGNodeLayoutGetHeight(node);
-    bool isResized = width != newWidth || height != newHeight;
+    const float width = YGNodeLayoutGetWidth(node);
+    const float height = YGNodeLayoutGetHeight(node);
+    const bool isResized =
+        !std::isfinite(width) || !std::isfinite(height) ||
+        std::abs(width - static_cast<float>(newWidth)) > 0.1f ||
+        std::abs(height - static_cast<float>(newHeight)) > 0.1f;
 
-    width = newWidth;
-    height = newHeight;
-    if (isResized) {
-      SDL_Log("View::setSize: %d, %d", newWidth, newHeight);
-      onResize(newWidth, newHeight);
-      YGNodeStyleSetWidth(node, width);
-      YGNodeStyleSetHeight(node, height);
-      applyYogaLayout();
+    YGNodeStyleSetWidth(node, newWidth);
+    YGNodeStyleSetHeight(node, newHeight);
+
+    if (isResized || YGNodeIsDirty(node)) {
+      requestLayout();
     }
   }
 
@@ -207,8 +384,7 @@ public:
     YGNodeStyleSetPosition(node, YGEdgeLeft, newX);
     YGNodeStyleSetPosition(node, YGEdgeTop, newY);
 
-    applyYogaLayout();
-    onMove(newX, newY);
+    requestLayoutIfDirty();
   }
   // Use for absolute-positioned views to avoid full layout recalculation.
   inline void setPositionNoLayout(
@@ -239,14 +415,32 @@ public:
   [[nodiscard]] inline int getHeight() const {
     return YGNodeLayoutGetHeight(node);
   }
+  [[nodiscard]] inline int getContentX() const {
+    return getX() + getLayoutInset(YGEdgeLeft);
+  }
+  [[nodiscard]] inline int getContentY() const {
+    return getY() + getLayoutInset(YGEdgeTop);
+  }
+  [[nodiscard]] inline int getContentWidth() const {
+    return std::max(0, getWidth() - getLayoutInset(YGEdgeLeft) -
+                           getLayoutInset(YGEdgeRight));
+  }
+  [[nodiscard]] inline int getContentHeight() const {
+    return std::max(0, getHeight() - getLayoutInset(YGEdgeTop) -
+                           getLayoutInset(YGEdgeBottom));
+  }
 
   virtual void onSelected() {}
   virtual void onUnselected() {}
 
   View *setWidth(float width);
+  View *setWidthPercent(float widthPercent);
   View *setHeight(float height);
+  View *setMinWidth(float minWidth);
+  View *setMinHeight(float minHeight);
   View *setFlex(float flex);
   View *setFlexGrow(float flexGrow);
+  View *setFlexBasis(float flexBasis);
   View *setFlexWrap(YGWrap flexWrap);
   View *setFlexShrink(float flexShrink);
   View *setMargin(Edge edge, float margin);
@@ -261,12 +455,45 @@ public:
   View *setGap(YGGutter gutter, float gap);
   View *setGap(float gap);
   View *setDirection(YGDirection direction);
+  View *setDisplay(YGDisplay display);
+  View *setBackgroundColor(const Color &color);
+  View *setThemedBackgroundColor(ThemeColorProvider provider);
+  View *setBackgroundGradient(const Color &topColor, const Color &bottomColor);
+  View *clearBackgroundColor();
+  View *setCornerRadius(float radius);
+  [[nodiscard]] float getCornerRadius() const { return cornerRadius; }
+  View *setRotationDegrees(float degrees) {
+    rotationDegrees = std::isfinite(degrees) ? std::fmod(degrees, 360.0f)
+                                              : 0.0f;
+    return this;
+  }
+  [[nodiscard]] float getRotationDegrees() const { return rotationDegrees; }
+  View *setShadow(const Color &color, int offsetX, int offsetY, int spread);
+  View *setShadow(const Color &color, const ui_theme::ShadowSpec &shadow);
+  View *setThemedShadow(ThemeColorProvider provider, int offsetX, int offsetY,
+                        int spread);
+  View *setThemedShadow(ThemeColorProvider provider,
+                        const ui_theme::ShadowSpec &shadow);
+  View *clearShadow();
+  View *setBorderColor(const Color &color);
+  View *setThemedBorderColor(ThemeColorProvider provider);
+  View *clearBorderColor();
+  View *setBorderWidth(int width);
   View *addView(View *view);
+  View *insertViewBefore(View *view, const View *sibling);
+  View *clearChildren();
   YGNodeRef getNode() const { return node; }
+  // This collection may be z-sorted for render/event dispatch. It is not a
+  // stable Yoga layout-order index; use sibling identity for layout insertion.
   std::vector<View *> &getChildren() { return children; }
+  void setName(const std::string &name) { this->name = name; }
+  const std::string &getName() const { return name; }
+  View *findViewByName(const std::string &name);
 
   bool drawBoundingBox = false;
   void applyYogaLayout();
+  void applyYogaLayoutFromRoot();
+  virtual void propagateThemeChange();
   static void beginLayoutBatch() { ++layoutBatchDepth; }
   static void endLayoutBatch() {
     if (layoutBatchDepth == 0) {
@@ -281,12 +508,67 @@ public:
 protected:
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };
+  virtual void onThemeChanged();
   // onResize
   virtual void onResize(int newWidth, int newHeight) {}
   // onMove
   virtual void onMove(int newX, int newY) {}
 
 private:
+  View *insertViewAtLayoutIndex(View *view, std::size_t layoutIndex);
+  void refreshInsertionOrderFromLayout();
+  void renderBoxDecoration(RenderContext &context) const;
+  [[nodiscard]] int getLayoutInset(YGEdge edge) const {
+    return (hasBorder ? std::max(0, borderWidth) : 0) + getStoredPadding(edge);
+  }
+  [[nodiscard]] int getStoredPadding(YGEdge edge) const {
+    switch (edge) {
+    case YGEdgeLeft:
+    case YGEdgeStart:
+      return paddingLeft;
+    case YGEdgeTop:
+      return paddingTop;
+    case YGEdgeRight:
+    case YGEdgeEnd:
+      return paddingRight;
+    case YGEdgeBottom:
+      return paddingBottom;
+    default:
+      return 0;
+    }
+  }
+  void updateStoredPadding(Edge edge, float padding) {
+    const int value =
+        std::max(0, static_cast<int>(std::round(std::max(0.0f, padding))));
+    switch (edge) {
+    case Edge::Left:
+    case Edge::Start:
+      paddingLeft = value;
+      break;
+    case Edge::Top:
+      paddingTop = value;
+      break;
+    case Edge::Right:
+    case Edge::End:
+      paddingRight = value;
+      break;
+    case Edge::Bottom:
+      paddingBottom = value;
+      break;
+    case Edge::All:
+      paddingLeft = value;
+      paddingTop = value;
+      paddingRight = value;
+      paddingBottom = value;
+      break;
+    }
+  }
+  void syncYogaBorderWidth() {
+    YGNodeStyleSetBorder(
+        node, YGEdgeAll,
+        hasBorder ? static_cast<float>(std::max(0, borderWidth)) : 0.0f);
+    requestLayoutIfDirty();
+  }
   void markLayoutDirty() {
     View *root = this;
     while (root->parent != nullptr) {
@@ -295,11 +577,34 @@ private:
     dirtyRoots.insert(root);
   }
   static void flushLayoutBatches() {
-    for (auto *root : dirtyRoots) {
-      root->applyYogaLayoutImmediate();
+    if (dirtyRoots.empty()) {
+      return;
     }
-    SDL_Log("flushLayoutBatches: %d", dirtyRoots.size());
-    dirtyRoots.clear();
+    while (!dirtyRoots.empty()) {
+      auto roots = std::move(dirtyRoots);
+      dirtyRoots.clear();
+      for (auto *root : roots) {
+        if (root != nullptr) {
+          root->applyYogaLayoutImmediate();
+        }
+      }
+    }
+  }
+  void requestLayout() {
+    if (layoutBatchDepth > 0 || layoutApplyDepth > 0) {
+      markLayoutDirty();
+      return;
+    }
+    View *root = this;
+    while (root->parent != nullptr) {
+      root = root->parent;
+    }
+    root->applyYogaLayoutImmediate();
+  }
+  void requestLayoutIfDirty() {
+    if (YGNodeIsDirty(node)) {
+      requestLayout();
+    }
   }
   void applyYogaLayoutImmediate();
 
@@ -311,6 +616,8 @@ private:
       child->absoluteX += dx;
       child->absoluteY += dy;
       child->updateChildrenAbsolute(dx, dy);
+      child->onMove(YGNodeLayoutGetLeft(child->node),
+                    YGNodeLayoutGetTop(child->node));
     }
   }
   void markChildrenOrderDirty() { childrenOrderDirty = true; }
@@ -327,11 +634,40 @@ private:
               });
     childrenOrderDirty = false;
   }
+  struct TemporaryEventListenerEntry {
+    uint64_t id = 0;
+    TemporaryEventListener listener;
+    bool active = false;
+  };
+  static void eraseInactiveTemporaryEventListeners();
 
   Color dbgColor;
-  int absoluteX;
-  int absoluteY;
+  Color backgroundColor;
+  Color backgroundGradientTopColor;
+  Color backgroundGradientBottomColor;
+  Color borderColor;
+  Color shadowColor;
+  ThemeColorProvider themedBackgroundColorProvider;
+  ThemeColorProvider themedBorderColorProvider;
+  ThemeColorProvider themedShadowColorProvider;
+  int absoluteX = 0;
+  int absoluteY = 0;
   bool isVisible; // Visibility of the view
+  bool hasBackground = false;
+  bool hasGradientBackground = false;
+  bool hasBorder = false;
+  bool hasShadow = false;
+  int borderWidth = 0;
+  int paddingLeft = 0;
+  int paddingTop = 0;
+  int paddingRight = 0;
+  int paddingBottom = 0;
+  float cornerRadius = 0.0f;
+  float rotationDegrees = 0.0f;
+  int shadowOffsetX = 0;
+  int shadowOffsetY = 0;
+  int shadowSpread = 0;
+  float shadowRadiusInset = 0.0f;
   YGNodeRef node;
   View *parent = nullptr;
 
@@ -341,5 +677,12 @@ private:
   uint64_t insertionOrder = 0;
   inline static uint64_t nextInsertionOrder = 1;
   inline static int layoutBatchDepth = 0;
+  inline static int layoutApplyDepth = 0;
   inline static std::unordered_set<View *> dirtyRoots;
+  inline static std::vector<TemporaryEventListenerEntry>
+      temporaryEventListeners;
+  inline static std::vector<std::function<void()>> deferredEventCallbacks;
+  inline static uint64_t nextTemporaryEventListenerId = 1;
+  inline static bool dispatchingTemporaryEventListeners = false;
+  std::string name;
 };

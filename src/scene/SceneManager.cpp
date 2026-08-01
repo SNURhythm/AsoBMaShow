@@ -4,8 +4,75 @@ SceneManager::SceneManager(ApplicationContext &context) : context(context) {
   context.sceneManager = this;
 }
 
+bool SceneManager::isRegisteredScene(const Scene *scene) const {
+  if (scene == nullptr) {
+    return false;
+  }
+  for (const auto &[name, registeredScene] : registeredScenes) {
+    (void)name;
+    if (registeredScene.get() == scene) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void SceneManager::cleanupSceneInstance(Scene *scene) {
+  if (scene == nullptr) {
+    return;
+  }
+  scene->cleanup();
+  if (!isRegisteredScene(scene)) {
+    delete scene;
+  }
+}
+
+void SceneManager::updateBackgroundTaskPauseState() {
+  const bool shouldPause =
+      currentScene != nullptr &&
+      currentScene->pausesBackgroundTasksForPerformance();
+  const bool changed =
+      context.backgroundTasksPausedForForegroundScene.exchange(shouldPause) !=
+      shouldPause;
+  if (changed && context.notifyBackgroundTaskPauseStateChanged) {
+    context.notifyBackgroundTaskPauseStateChanged();
+  }
+}
+
 void SceneManager::registerScene(const std::string& name, std::unique_ptr<Scene> scene) {
   registeredScenes[name] = std::move(scene);
+}
+
+void SceneManager::changeScene(std::unique_ptr<Scene> newScene,
+                               bool keepBackground) {
+  if (newScene == nullptr) {
+    return;
+  }
+
+  Scene *newScenePtr = newScene.get();
+  if (currentScene && !keepBackground) {
+    Scene *sceneToRelease = currentScene;
+    currentScene = nullptr;
+    cleanupSceneInstance(sceneToRelease);
+  }
+  if (keepBackground && currentScene && currentScene != newScenePtr) {
+    currentScene->onPause();
+    backgroundScenes.insert(currentScene);
+  }
+
+  currentScene = newScenePtr;
+  updateBackgroundTaskPauseState();
+  try {
+    currentScene->prepareForUse();
+    currentScene->init();
+  } catch (...) {
+    if (currentScene == newScenePtr) {
+      currentScene = nullptr;
+      updateBackgroundTaskPauseState();
+    }
+    throw;
+  }
+  newScene.release();
 }
 
 void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
@@ -14,9 +81,11 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
   
   // Handle current scene (common logic)
   if (currentScene && !keepBackground) {
-    currentScene->cleanup();
+    Scene *sceneToRelease = currentScene;
+    cleanupSceneInstance(sceneToRelease);
   }
-  if (keepBackground && currentScene) {
+  if (keepBackground && currentScene && currentScene != newScene) {
+    currentScene->onPause();
     backgroundScenes.insert(currentScene);
   }
   
@@ -24,10 +93,14 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
     // Scene is in background, bring it to foreground
     currentScene = newScene;
     backgroundScenes.erase(it);
+    updateBackgroundTaskPauseState();
+    currentScene->onResume();
     // Don't call init() again since the scene is already initialized
   } else {
     // Normal scene change for new or registered scenes
     currentScene = newScene;
+    updateBackgroundTaskPauseState();
+    currentScene->prepareForUse();
     currentScene->init();
   }
 }
@@ -44,9 +117,11 @@ void SceneManager::changeScene(const std::string& sceneName, bool keepBackground
 
 EventHandleResult SceneManager::handleEvents(SDL_Event &event) {
   EventHandleResult result;
+  View::dispatchTemporaryEventListeners(event);
   if (currentScene) {
     result = currentScene->handleEvents(event);
   }
+  View::dispatchDeferredEventCallbacks();
   return result;
 }
 
@@ -69,12 +144,24 @@ void SceneManager::render() {
 }
 
 void SceneManager::cleanup() {
-  currentScene = nullptr;
+  if (currentScene != nullptr) {
+    cleanupSceneInstance(currentScene);
+    currentScene = nullptr;
+    updateBackgroundTaskPauseState();
+  }
+
+  for (auto *scene : backgroundScenes) {
+    if (!isRegisteredScene(scene)) {
+      cleanupSceneInstance(scene);
+    }
+  }
   backgroundScenes.clear();
-  
+
   for (auto &[name, scene] : registeredScenes) {
+    (void)name;
     scene->cleanup();
   }
   registeredScenes.clear();
+  updateBackgroundTaskPauseState();
 }
 SceneManager::~SceneManager() { cleanup(); }

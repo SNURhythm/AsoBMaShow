@@ -2,8 +2,45 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSMotionUsageDescription</key>
+	<string>AsoBMaShow uses motion sensors to let you rotate your iPhone or iPad as a turntable controller.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>AsoBMaShow saves exported replay videos to your Photos library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>AsoBMaShow needs Photos access to save exported replay videos.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>AsoBMaShow Player Profile</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.snurhythm.asobmashow.profile</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>asobprofile</string>
+				</array>
+				<key>public.mime-type</key>
+				<string>application/vnd.snurhythm.asobmashow.profile+zip</string>
+			</dict>
+		</dict>
+	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 </dict>

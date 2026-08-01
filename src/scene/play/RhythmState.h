@@ -1,32 +1,61 @@
 #pragma once
 #include "../../bms_parser.hpp"
-#include "Judge.h"
-class RhythmState {
+#include "GameplayScoreState.h"
+
+class RhythmState : public GameplayScoreState {
 public:
-  bool isPlaying = false;
-
-  size_t passedMeasureCount = 0;
-  size_t passedTimelineCount = 0;
-
-  int combo = 0;
-  int comboBreak = 0;
-  JudgeResult latestJudgeResult = JudgeResult(None, 0);
-  // judge count. default 0
-  std::map<Judgement, int> judgeCount;
-
-  explicit RhythmState(const bms_parser::Chart *Chart, bool addReadyMeasure) {
-    for (int i = 0; i < JudgementCount; i++) {
-      judgeCount[static_cast<Judgement>(i)] = 0;
-    }
+  explicit RhythmState(
+      const bms_parser::Chart *chart, bool addReadyMeasure,
+      GameplayRuleset ruleset = GameplayRuleset::Beatoraja,
+      GaugeProfile profile = GaugeProfile::Standard)
+      : GameplayScoreState(configFor(chart, ruleset, profile)), chart_(chart),
+        ruleset_(ruleset) {
+    (void)addReadyMeasure;
   }
 
-  int getScore() {
-    // PGreat * 2 + Great
-    return judgeCount[PGreat] * 2 + judgeCount[Great];
+  explicit RhythmState(const bms_parser::Chart *chart, bool addReadyMeasure,
+                       GameplayGaugeRules gaugeRules)
+      : GameplayScoreState(
+            {.gaugeRules = gaugeRules,
+             .keyMode = chart == nullptr ? 7 : chart->Meta.KeyMode}),
+        chart_(chart), ruleset_(gaugeRules.ruleset),
+        fixedGaugeRules_(std::move(gaugeRules)) {
+    (void)addReadyMeasure;
   }
 
-  ~RhythmState() {}
+  void configureGauge(GaugeType newSelectedGaugeType,
+                      GaugeAutoShiftMode autoShift,
+                      GaugeProfile selectedGaugeProfile =
+                          GaugeProfile::Standard,
+                      GaugeType autoShiftLowerBound =
+                          GaugeType::AssistedEasy) {
+    setGaugeRules(fixedGaugeRules_.has_value()
+                      ? *fixedGaugeRules_
+                      : compileGameplayGaugeRules(
+                            ruleset_, chartMeta(), selectedGaugeProfile),
+                  chart_ == nullptr ? 7 : chart_->Meta.KeyMode);
+    GameplayScoreState::configureGauge(newSelectedGaugeType, autoShift,
+                                       selectedGaugeProfile,
+                                       autoShiftLowerBound);
+  }
 
 private:
-  long long firstTiming = 0;
+  [[nodiscard]] bms_parser::ChartMeta chartMeta() const {
+    return chart_ == nullptr ? bms_parser::ChartMeta{} : chart_->Meta;
+  }
+
+  static GameplayScoreConfig configFor(const bms_parser::Chart *chart,
+                                       GameplayRuleset ruleset,
+                                       GaugeProfile profile) {
+    const bms_parser::ChartMeta meta =
+        chart == nullptr ? bms_parser::ChartMeta{} : chart->Meta;
+    return {
+        .gaugeRules = compileGameplayGaugeRules(ruleset, meta, profile),
+        .keyMode = meta.KeyMode,
+    };
+  }
+
+  const bms_parser::Chart *chart_ = nullptr;
+  GameplayRuleset ruleset_ = GameplayRuleset::Beatoraja;
+  std::optional<GameplayGaugeRules> fixedGaugeRules_;
 };

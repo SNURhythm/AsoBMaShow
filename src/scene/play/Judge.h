@@ -1,48 +1,12 @@
 // ReSharper disable StringLiteralTypo
 // ReSharper disable IdentifierTypo
 #pragma once
-#include <string>
-#include <map>
 #include "../../bms_parser.hpp"
-enum Judgement { PGreat, Great, Good, Bad, Kpoor, Poor, None, JudgementCount };
-
-class JudgeResult {
-public:
-  JudgeResult(Judgement Judgement, long long Diff)
-      : judgement(Judgement), Diff(Diff) {}
-
-  Judgement judgement = None;
-  long long Diff;
-
-  [[nodiscard]] bool isComboBreak() const {
-    return judgement == Bad || judgement == Poor;
-  }
-
-  [[nodiscard]] bool isNotePlayed() const {
-    return judgement != Kpoor && judgement != None;
-  }
-
-  [[nodiscard]] std::string toString() const {
-    switch (judgement) {
-    case PGreat:
-      return "PGREAT";
-    case Great:
-      return "GREAT";
-    case Good:
-      return "GOOD";
-    case Bad:
-      return "BAD";
-    case Kpoor:
-      return "KPOOR";
-    case Poor:
-      return "POOR";
-    case None:
-      return "NONE";
-    default:
-      return "NONE";
-    }
-  }
-};
+#include "Judgement.h"
+#include "NoteTimeRange.h"
+#include <map>
+#include <optional>
+#include <string>
 
 class Judge {
 private:
@@ -73,10 +37,15 @@ private:
               {Good, std::pair<long long, long long>(-150000, 150000)},
               {Bad, std::pair<long long, long long>(-220000, 280000)},
               {Kpoor, std::pair<long long, long long>(-500000, 150000)}}};
+  std::optional<NoteTimeRange> allowedNoteRange;
 
 public:
   std::map<Judgement, std::pair<long long, long long>> timingWindows;
   explicit Judge(int Rank);
+  void applyCourseJudgementConstraint(CourseJudgementConstraint constraint);
+  void applyWindowScale(int playbackRatePercent, int judgeScalePercent);
+  void setAllowedNoteRange(std::optional<NoteTimeRange> range);
+  [[nodiscard]] bool allowsNote(const bms_parser::Note *note) const;
   static bool checkRange(long long Diff, long long Early, long long Late);
   JudgeResult judgeNow(const bms_parser::Note *Note, long long InputTime);
   static int clampRank(int rank);

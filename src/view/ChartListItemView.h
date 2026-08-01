@@ -3,35 +3,54 @@
 #include "View.h"
 #include "ImageView.h"
 #include <SDL2/SDL.h>
+#include <functional>
 #include <string>
-#include "../bms_parser.hpp"
+#include "../repositories/ChartRepository.h"
+
+class Button;
 
 class ChartListItemView : public View {
 public:
   ChartListItemView(int x, int y, int width, int height,
-                    const bms_parser::ChartMeta &meta);
-  ~ChartListItemView() override { delete keyModeOverlay; }
+                    const ChartMetaRecord &record);
 
-  void setMeta(const bms_parser::ChartMeta &meta);
+  void setMeta(const ChartMetaRecord &record,
+               bool prioritizeArtwork = false);
+  void setClearRank(int clearRank);
+  void setBestScoreRank(int score, int maxScore);
+  void setFavoriteToggleHandler(
+      std::function<bool(const ChartMetaRecord &, bool)> handler);
   void onSelected() override;
   void onUnselected() override;
 
 private:
-  void renderImpl(RenderContext &context) override;
+  void applyTextColors(bool selected);
+  void setFavoriteState(bool favorite);
+  void refreshFavoriteButton();
+  void refreshScoreRankColor();
+
+  ChartMetaRecord currentRecord;
+  bool unavailable = false;
+  bool solidArchive = false;
+  bool favorite = false;
+  bool selected = false;
+  std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler;
+  View *contentCard;
+  ImageView *bannerImage;
+  View *clearLamp;
+  View *artworkFrame;
+  ImageView *jacketImage;
   View *textLayout;
+  View *detailsLayout;
+  View *scoreRankColumn;
   TextView *titleView;
   TextView *artistView;
   TextView *levelView;
-  ImageView *bannerImage;
-  TextView *keyModeOverlay;
-
-protected:
-  inline void onMove(int newX, int newY) override {
-    keyModeOverlay->setPosition(newX, newY);
-  }
-  inline void onResize(int newWidth, int newHeight) override {
-    View::onResize(newWidth, newHeight);
-    SDL_Log("ChartListItemView::onResize: %d, %d", newWidth, newHeight);
-    keyModeOverlay->setSize(newWidth, newHeight);
-  }
+  TextView *keyModeView;
+  TextView *scoreRankShadowView;
+  TextView *scoreRankWeightView;
+  TextView *scoreRankView;
+  std::string scoreRank;
+  Button *favoriteButton;
+  TextView *favoriteIconView;
 };

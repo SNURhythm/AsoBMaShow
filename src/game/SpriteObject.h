@@ -10,7 +10,11 @@
 #include "../rendering/UniformCache.h"
 class SpriteObject : public GameObject {
 public:
-  ~SpriteObject() override { bgfx::destroy(texture); }
+  ~SpriteObject() override {
+    if (bgfx::isValid(texture)) {
+      bgfx::destroy(texture);
+    }
+  }
   float width = 0.1f;
   float height = 0.1f;
   float tileU = 1.0f;
