@@ -87,6 +87,11 @@ CTest, and fatal Android lint.
   metadata, screenshots, signed-artifact inspection, and physical iPhone/iPad
   smoke gates. Both documents are enforced by the no-upload verification script;
   privacy manifests remain intentionally omitted for release 0.0.1.
+- iOS now selects bgfx's documented single-threaded renderer mode before
+  initialization, keeping CAMetalLayer setup and presentation on the UIKit
+  thread. A Release simulator launch with Main Thread Checker injected and
+  crash-on-report enabled reached the main menu through Metal without the
+  previously reproduced off-main-thread layer mutation.
 
 | Release gate | Result | Release significance |
 | --- | --- | --- |
@@ -409,6 +414,18 @@ drain the decoder at EOF, and add odd-dimension plus B-frame end-of-stream tests
 - Performance telemetry is hard-coded on in Release (`src/main.cpp:826`) and
   logs every five seconds. It is low overhead, but should be an explicit runtime
   diagnostic option rather than permanent production behavior.
+- The iOS 26 simulator logs SDL UIKit-controller appearance-transition warnings
+  at launch and UIKit's forward-looking requirement to adopt the `UIScene`
+  lifecycle. Moving fullscreen selection into window creation did not change
+  the warnings, so that ineffective workaround was discarded. They do not
+  currently stop launch or rendering, but the SDL/UIKit lifecycle integration
+  needs a focused upgrade before a future iOS SDK turns the warning into an
+  assertion.
+- Simulator-only prebuilt archive members report iOS-simulator 26.0 minimums
+  while linking the app at 14.0. They are not included in the shipping device
+  artifact, whose complete Mach-O closure passes the iOS 14 audit, but they
+  prevent this Xcode 26 environment from proving runtime behavior on an iOS 14
+  simulator.
 - The macOS workflow runs `git pull` on a persistent, unpinned vcpkg checkout.
   The manifest baseline pins port resolution, but the package-manager executable
   itself can change between identical source builds. Pin the tool revision and

@@ -24,6 +24,7 @@ IOS_INIT = ROOT / "scripts/ios_init.sh"
 IOS_RELEASE_VERIFY = ROOT / "scripts/ios_release_verify.sh"
 AGENT_GUIDANCE = ROOT / "AGENTS.md"
 SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
+MAIN_SOURCE = ROOT / "src/main.cpp"
 
 
 def object_block(project: str, object_id: str, next_section: str) -> str:
@@ -128,6 +129,18 @@ class IOSBuildSetupTests(unittest.TestCase):
         verify_script = IOS_RELEASE_VERIFY.read_text(encoding="utf-8")
         self.assertIn("ios_artifact_audit.sh", verify_script)
         self.assertNotIn("PrivacyInfo.xcprivacy", verify_script)
+
+    def test_ios_forces_bgfx_metal_work_onto_the_main_thread(self):
+        source = MAIN_SOURCE.read_text(encoding="utf-8")
+        limits = source.index("rendering::applyBgfxTransientBufferLimits")
+        ios_guard = source.index("#if TARGET_OS_IPHONE", limits)
+        force_single_threaded = source.index("bgfx::renderFrame();", ios_guard)
+        non_ios_branch = source.index("#else", ios_guard)
+        initialize_bgfx = source.index("int appExitCode = runApplication(bgfx_init);")
+        self.assertLess(ios_guard, force_single_threaded)
+        self.assertLess(force_single_threaded, non_ios_branch)
+        self.assertLess(force_single_threaded, initialize_bgfx)
+        self.assertIn("Using bgfx single-threaded mode on iOS", source)
 
     def test_workspace_has_one_relative_pods_project(self):
         tree = ET.parse(WORKSPACE)
