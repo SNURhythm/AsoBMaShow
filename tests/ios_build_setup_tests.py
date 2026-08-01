@@ -21,6 +21,7 @@ DEPLOY_SCRIPT = ROOT / "scripts/ios_firebase_deploy.sh"
 FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 PODS_CACHE_HELPER = ROOT / "scripts/ios_pods_cache.sh"
 IOS_INIT = ROOT / "scripts/ios_init.sh"
+IOS_RELEASE_VERIFY = ROOT / "scripts/ios_release_verify.sh"
 AGENT_GUIDANCE = ROOT / "AGENTS.md"
 SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
 
@@ -124,6 +125,9 @@ class IOSBuildSetupTests(unittest.TestCase):
         )
         self.assertEqual("true", plist.stdout.strip())
         self.assertFalse(any(ROOT.rglob("PrivacyInfo.xcprivacy")))
+        verify_script = IOS_RELEASE_VERIFY.read_text(encoding="utf-8")
+        self.assertIn("ios_artifact_audit.sh", verify_script)
+        self.assertNotIn("PrivacyInfo.xcprivacy", verify_script)
 
     def test_workspace_has_one_relative_pods_project(self):
         tree = ET.parse(WORKSPACE)

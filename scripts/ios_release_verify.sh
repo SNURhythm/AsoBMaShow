@@ -53,4 +53,19 @@ run ctest --test-dir "${BUILD_DIR}" \
   --output-on-failure
 run python3 tests/ios_build_setup_tests.py
 run python3 tests/ios_release_workflow_tests.py
-run scripts/ios_firebase_deploy.sh --build-only
+run python3 tests/ios_artifact_audit_tests.py
+if [ "${DRY_RUN}" -eq 1 ]; then
+  run scripts/ios_firebase_deploy.sh --build-only
+  run scripts/ios_artifact_audit.sh IOS_BUILD_OUTPUT_APP_PATH
+else
+  BUILD_OUTPUT_PATH_FILE="$(mktemp "${TMPDIR:-/tmp}/asobmashow-ios-build-path.XXXXXX")"
+  trap 'rm -f "${BUILD_OUTPUT_PATH_FILE}"' EXIT
+  IOS_BUILD_OUTPUT_PATH_FILE="${BUILD_OUTPUT_PATH_FILE}" \
+    scripts/ios_firebase_deploy.sh --build-only
+  [ -s "${BUILD_OUTPUT_PATH_FILE}" ] || {
+    echo "iOS build did not publish its output app path" >&2
+    exit 1
+  }
+  APP_PATH="${IOS_RELEASE_APP_PATH:-$(<"${BUILD_OUTPUT_PATH_FILE}")}"
+  scripts/ios_artifact_audit.sh "${APP_PATH}"
+fi

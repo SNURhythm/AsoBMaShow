@@ -68,6 +68,8 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         output = result.stdout
         self.assertIn("ios_build_setup_tests.py", output)
         self.assertIn("ios_release_workflow_tests.py", output)
+        self.assertIn("ios_artifact_audit_tests.py", output)
+        self.assertIn("ios_artifact_audit.sh", output)
         self.assertIn("--build-only", output)
         self.assertNotIn("upload_to_testflight", output)
         self.assertNotIn("firebase_app_distribution", output)
@@ -77,6 +79,7 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("fastlane ios firebase", script)
         self.assertNotIn("fastlane ios beta", script)
+        self.assertIn("IOS_BUILD_OUTPUT_PATH_FILE", script)
 
 
 if __name__ == "__main__":

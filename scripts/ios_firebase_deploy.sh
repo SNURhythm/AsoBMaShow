@@ -177,7 +177,9 @@ has_firebase_auth() {
 
 run_build_only() {
   local derived_data_path
+  local app_path
   derived_data_path="$("${ROOT_DIR}/scripts/ios_derived_data_path.sh")"
+  app_path="${derived_data_path}/Build/Products/Release-iphoneos/AsoBMaShow.app"
 
   cd "${IOS_DIR}"
   echo "Building iOS app only from ${GITHUB_HEAD_REF} (${GITHUB_SHA})"
@@ -191,6 +193,9 @@ run_build_only() {
     CODE_SIGN_IDENTITY= \
     IPHONEOS_DEPLOYMENT_TARGET=14.0 \
     build
+  if [ -n "${IOS_BUILD_OUTPUT_PATH_FILE:-}" ]; then
+    printf '%s\n' "${app_path}" > "${IOS_BUILD_OUTPUT_PATH_FILE}"
+  fi
 }
 
 for env_file in "${ENV_FILES[@]}"; do
