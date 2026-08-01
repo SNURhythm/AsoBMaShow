@@ -1,17 +1,20 @@
 # Release-readiness audit — 2026-08-01
 
-- Status: audit complete; iOS-first remediation in progress
+- Status: iOS-first automated remediation complete; signed/hardware gates pending
 - Branch: `agent/release-readiness-audit-2026-08-01`
 - Baseline: `develop` at `868c091b`
 
 ## Verdict
 
-**No-go.** The ordinary test suites and platform compilation checks are green,
-but the signed Android Firebase APK cannot initialize profiles while migrating
-an existing database on a supported Android 10 device, and the produced macOS
-bundle is not portable, validly signed, or runnable below macOS 26. The release
-workflows would not catch either failure because they omit runtime smoke tests,
-CTest, and fatal Android lint.
+**iOS 0.0.1 candidate: conditional go for producing the signed release
+archive; not yet cleared for App Store submission.** The automated iOS contract,
+test, unsigned-device-build, package-audit, and iPhone/iPad simulator runtime
+gates are green. Submission still requires auditing the signed archive and
+completing the physical iPhone/iPad and App Store metadata checks in the
+versioned release checklist.
+
+**The later Android/macOS release remains no-go.** Their confirmed blockers are
+unchanged, but they are outside the first iOS-only release stage.
 
 ## Remediation log
 
@@ -92,25 +95,42 @@ CTest, and fatal Android lint.
   thread. A Release simulator launch with Main Thread Checker injected and
   crash-on-report enabled reached the main menu through Metal without the
   previously reproduced off-main-thread layer mutation.
+- A focused idle-main-menu Time Profiler comparison removed per-frame
+  `UIApplication.connectedScenes` enumeration from samples. A weak cache is
+  reused only while its `UIWindowScene` remains foreground-active;
+  `FindActiveWindow` inclusive samples fell from 46 ms to 26 ms across matched
+  10.7-second iPad simulator runs. Both runs reported zero potential hangs.
+  Total simulator CPU was noisy between single runs, so no broader throughput
+  claim is made from this targeted result.
+- Release compilation exposed three uninitialized reads in
+  `Quaternion::getEulerAngles` and a compound vector cross-product that reused
+  already-overwritten components. The Euler accessor now delegates to the
+  guarded canonical conversion and the cross-product assigns from a temporary;
+  deterministic numeric and compiler-warning regressions cover both defects.
 
 | Release gate | Result | Release significance |
 | --- | --- | --- |
-| Android supported-device startup/upgrade | **fail** | Profile/database initialization fails reproducibly on API 29 |
-| macOS package validation | **fail** | macOS 26-only, invalid/ad-hoc signature, unbundled Homebrew dylib |
-| Android lint | **fail** | 28 errors, but Gradle is configured to return success |
-| Desktop and platform unit tests | pass | 178/178 CTest, 18/18 iOS setup tests, Android unit tasks pass |
-| Android/iOS/macOS compilation | pass | Release/build-only artifacts compile on this machine |
-| Android APK signature | pass | Firebase release APK verifies with APK Signature Scheme v2 |
+| iOS release contract and unsigned device build | pass | Version 0.0.1, iOS 14 minimum, retained ATS exception, no privacy manifest |
+| iOS unsigned artifact audit | pass | Device Mach-O closure, min OS, architecture, resources, and sensitive-file checks pass |
+| iPhone/iPad simulator runtime | pass | Release app reaches main menu through Metal with Main Thread Checker crash-on-report |
+| Desktop and iOS release tests | pass | 185/185 CTest and 24/24 iOS setup tests pass |
+| iOS signed archive audit | **pending** | Requires release signing material; signature enforcement was not bypassed |
+| Physical iPhone/iPad smoke and performance | **pending** | Required before submission; not substitutable with the iOS 26 simulator |
+| App Store metadata/checklist | **pending** | Human-owned screenshots, disclosures, support URLs, and final approval remain |
+| Android supported-device startup/upgrade (later stage) | **fail** | Profile/database initialization fails reproducibly on API 29 |
+| macOS package validation (later stage) | **fail** | macOS 26-only, invalid/ad-hoc signature, unbundled Homebrew dylib |
+| Android lint (later stage) | **fail** | 28 errors, but Gradle is configured to return success |
 
 ## Audit scope
 
-This audit was a source, workflow, build, static-analysis, package-inspection,
-and Android emulator smoke audit. No deployments were performed. Production
-remediation began afterward and is tracked above. A signed iOS archive/device
-run, physical-device performance trace,
-sanitizer campaign, dependency CVE scan, and formal license/SBOM review remain
-outside this pass; they should be explicit release gates rather than inferred
-from the green compile.
+This audit covered source, workflows, builds, static analysis, package
+inspection, Android emulator smoke, iPhone/iPad simulator smoke with Main
+Thread Checker, and an iPad simulator Time Profiler comparison. No deployments,
+uploads, archives, or signing operations were performed. The signed iOS
+archive audit, physical-device smoke/performance trace, sanitizer campaign,
+dependency CVE scan, and formal license/SBOM review remain outside this pass;
+the first two are explicit iOS 0.0.1 submission gates rather than implications
+of the green compile.
 
 ## Confirmed findings
 
@@ -393,9 +413,13 @@ drain the decoder at EOF, and add odd-dimension plus B-frame end-of-stream tests
 
 ## Additional technical debt
 
-- Review iOS dependency-project warnings: SDL and SDL_ttf still declare iOS 9.0,
-  below Xcode 26's supported deployment-target range, and SDL_ttf has ambiguous
-  implicit SDL framework linkage plus legacy build settings/phases.
+- The workspace still has ambiguous same-named SDL framework products. A clean,
+  unconstrained simulator scheme build can select SDL's macOS `Framework`
+  target and fail on `Cocoa/Cocoa.h`; the successful arm64 simulator audit used
+  the already-built iOS dependency products with implicit dependency discovery
+  disabled temporarily. Generic device release verification selects the iOS
+  products and passes. Add explicit cross-project target dependencies so
+  simulator builds do not depend on product-name inference.
 - The static-analyzer pass completed. It found the ignored SQLite commit result
   described above and several dead stores. Its possible replay-UI null access,
   jukebox image-dimension uninitialized access, and moved-`std::function` leak
@@ -436,18 +460,19 @@ drain the decoder at EOF, and add odd-dimension plus B-frame end-of-stream tests
 
 ## Recommended release order
 
-1. Fix the Android writable-temporary-root bug and prove legacy upgrade plus
-   first/second launch on every supported Android API family.
-2. Produce a portable macOS artifact with an explicit deployment target,
-   audited dylib closure, valid Developer ID signature, hardened runtime, and
-   notarization/stapling.
-3. Resolve Android lint errors, make lint fatal, and add Android runtime smoke,
-   CTest, and platform unit-test dependencies ahead of every upload/release job.
-4. Bound artwork/video memory and worker counts, then measure on representative
-   low-memory mobile hardware.
-5. Move credentials to protected storage, require HTTPS for production IR, fix
-   the ignored SQLite commit result and video edge cases, and unify release
-   version/build numbering.
+1. Produce the signed iOS 0.0.1 archive and run the artifact audit with
+   signature enforcement enabled; do not distribute an artifact that only
+   passed the unsigned path.
+2. Complete the checklist's physical iPhone and iPad smoke tests, including
+   chart import, difficulty-table HTTP loading, authenticated IR over HTTPS,
+   playback/BGA memory pressure, background/foreground, and a representative
+   performance trace.
+3. Complete App Store screenshots, URLs, disclosures, export-compliance answers,
+   age rating, and the final release-owner approval, then submit the exact
+   audited archive.
+4. After the iOS stage, fix the Android writable-temporary-root/lint/runtime
+   blockers and the macOS portability/signing/notarization blockers before
+   enabling either platform's release.
 
 ## Verification log
 
@@ -455,9 +480,17 @@ drain the decoder at EOF, and add odd-dimension plus B-frame end-of-stream tests
 | --- | --- |
 | Branch created from clean `develop` | pass |
 | `cmake --build cmake-build-debug --target main -j 6` | pass |
-| Full debug all-target build | pass (1,097 Ninja steps) |
-| `ctest --test-dir cmake-build-debug --output-on-failure -j 6` | pass, 178/178 (60.83 s) |
-| `python3 tests/ios_build_setup_tests.py` | pass, 18/18 (9.05 s) |
+| Full debug all-target build after remediation | pass |
+| `ctest --test-dir cmake-build-debug --output-on-failure -j 6` | pass, 185/185 (40.41 s) |
+| `python3 tests/ios_build_setup_tests.py` | pass, 24/24 (12.21 s) |
+| iOS release workflow tests | pass, 7/7 |
+| iOS artifact-audit fixtures | pass, 6/6 |
+| iOS release-documentation tests | pass, 3/3 |
+| `scripts/ios_release_verify.sh` | pass; release tests, unsigned device build, and app audit |
+| Unsigned device `AsoBMaShow.app` audit | pass; signature check correctly skipped only for unsigned build |
+| iPhone 17 Pro Release simulator launch | pass; Metal, Main Thread Checker crash-on-report, no fatal issue |
+| iPad Pro 11-inch Release simulator launch | pass; Metal, Main Thread Checker crash-on-report, no fatal issue |
+| iPad idle Time Profiler before/after | zero hangs both; `FindActiveWindow` 46 ms → 26 ms, `connectedScenes` 11 ms → 0 ms |
 | Android Firebase debug unit tests | pass |
 | Android Play debug unit tests | pass |
 | Android Play/Firebase lint | command succeeds, reports 28 errors and 57/58 warnings |
