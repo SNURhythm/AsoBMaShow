@@ -154,6 +154,21 @@ class IOSArtifactAuditTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("credential material", result.stderr)
 
+    def test_resource_secret_is_rejected_without_disclosing_value(self):
+        token = "synthetic-review-token-0123456789"
+        with tempfile.TemporaryDirectory() as temp:
+            app = self.make_app(Path(temp))
+            (app / "credentials.txt").write_text(
+                f"Authorization: Bearer {token}\n", encoding="utf-8"
+            )
+
+            result = self.run_audit(app)
+            output = result.stdout + result.stderr
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("credential material", output)
+            self.assertNotIn(token, output)
+
     def test_architecture_and_dependency_resolution_failures_are_detected(self):
         with tempfile.TemporaryDirectory() as temp:
             app = self.make_app(Path(temp))

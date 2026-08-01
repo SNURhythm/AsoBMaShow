@@ -15,7 +15,9 @@
         <key>CFBundleVersion</key>
         <string>@PROJECT_VERSION@</string>
         <key>CFBundleShortVersionString</key>
-        <string>@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@</string>
+        <string>@PROJECT_VERSION@</string>
+        <key>CFBundleIconFile</key>
+        <string>@MACOS_BUNDLE_ICON_FILE@</string>
         <key>CFBundleGetInfoString</key>
         <string>@MACOS_BUNDLE_NAME@ @PROJECT_VERSION@</string>
         <key>LSApplicationCategoryType</key>

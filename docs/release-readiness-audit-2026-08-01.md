@@ -4,6 +4,55 @@
 - Branch: `agent/release-readiness-audit-2026-08-01`
 - Baseline: `develop` at `868c091b`
 
+## Other-platform follow-up — 2026-08-01
+
+Branch `agent/deferred-platform-release-fixes`, based on `develop` at
+`82b74406`, resolves the actionable Android, macOS, and shared-desktop findings
+that were deferred during the iOS-first pass. This addendum supersedes the
+original automated Android/macOS assessment while retaining its baseline
+evidence below; it does not waive signing, notarization, older-hardware, or
+store-owner gates.
+
+- R1 macOS packaging is remediated in source and verified with a real local
+  Release bundle. The app and its static vcpkg dependency closure target a
+  compatible floor, the executable declares macOS 13.0/arm64, version 0.0.1 and
+  an application icon are present, local build rpaths and Homebrew dylib
+  dependencies are absent, and Release linkage treats warnings as failures.
+  The hardened-runtime ad-hoc bundle passed the deterministic artifact audit,
+  launched through Metal to the main menu, and completed a normal application
+  quit. Developer ID signing, notarization, stapling, Gatekeeper on a clean Mac,
+  and a macOS 13 machine remain release-owner/external gates.
+- R2's prior Android permission, URI-grant, receiver, and fatal-lint fixes are
+  preserved, and Android now uses the approved application icon. Firebase and
+  Play debug lint both pass. A signed APK/device pass was intentionally not run
+  because this remediation did not invoke the fast-iteration Firebase build or
+  upload track.
+- R3 is closed for macOS CI: it now compiles the Release app and tests, executes
+  CTest plus release/artifact contracts, signs and audits before packaging, and
+  requires Developer ID signing plus notarization/Gatekeeper gates for tags.
+  Running the previously compile-only Release tests exposed a latent `NDEBUG`
+  problem: assertion-wrapped fixture setup was being compiled out. Test targets
+  now retain assertions while the shipped app remains optimized; the resulting
+  Release suite passes 186/186 with the same parallel command used in CI.
+- R6 portability diagnostics are fixed: `sf_count_t` logging uses `PRId64` with
+  an explicit width-safe cast, and the replay metadata designated initializer
+  follows declaration order. Both objects compile with the Android NDK.
+- R8 public versioning is aligned to 0.0.1. Serialized Android Firebase jobs use
+  Unix-second version codes, avoiding the old minute-resolution collision while
+  remaining below Android's version-code ceiling until 2036.
+- The invalid Metal shader dependency form is replaced by a real target
+  dependency, global Release `-g` is removed, production performance telemetry
+  is compile-time opt-in and defaults off, and the macOS workflow uses a pinned,
+  per-run vcpkg checkout instead of mutating a shared checkout with `git pull`.
+- R9 remains deliberate technical debt. No decoder is moved onto event-time
+  activation: every scheduled BGA stays materialized before playback, preserving
+  the rhythm game's audio-clock synchronization invariant.
+
+Current automated status is therefore **source/build gates green, distribution
+gates pending** for the later Android/macOS stages. Windows shares the portable
+C++/CMake fixes, but Windows-native compilation and packaging were not available
+on this macOS host and remain a separate platform gate.
+
 ## Verdict
 
 **iOS 0.0.1 candidate: conditional go for producing the signed release
@@ -13,8 +62,9 @@ gates are green. Submission still requires auditing the signed archive and
 completing the physical iPhone/iPad and App Store metadata checks in the
 versioned release checklist.
 
-**The later Android/macOS release remains no-go.** Their confirmed blockers are
-unchanged, but they are outside the first iOS-only release stage.
+**The later Android/macOS automated source gates are now green.** Distribution
+remains conditional on the signed-device checks and, for macOS, Developer ID
+signing, notarization, and Gatekeeper checks listed in the follow-up above.
 
 ## Remediation log
 
@@ -172,9 +222,10 @@ unchanged, but they are outside the first iOS-only release stage.
 | iOS signed archive audit | **pending** | Requires release signing material; signature enforcement was not bypassed |
 | Physical iPhone/iPad smoke and performance | **pending** | Required before submission; not substitutable with the iOS 26 simulator |
 | App Store metadata/checklist | **pending** | Human-owned screenshots, disclosures, support URLs, and final approval remain |
-| Android supported-device startup/upgrade (later stage) | **fail** | Profile/database initialization fails reproducibly on API 29 |
-| macOS package validation (later stage) | **fail** | macOS 26-only, invalid/ad-hoc signature, unbundled Homebrew dylib |
-| Android lint (later stage) | **fail** | 28 errors, but Gradle is configured to return success |
+| Android supported-device startup/upgrade (later stage) | **pending recheck** | API-29 temporary-root fix is on `develop`; this branch did not rebuild or deploy the Firebase APK |
+| macOS local Release build/audit/runtime (later stage) | pass | 0.0.1, arm64/macOS 13, closed dependencies, ad-hoc hardened-runtime signature, Metal main-menu launch and clean quit |
+| macOS Developer ID/notarization/Gatekeeper (later stage) | **pending** | Workflow gate is implemented; release credentials and the live Apple service are external |
+| Android Play/Firebase lint (later stage) | pass | Both debug flavors complete with fatal lint enabled |
 
 ## Audit scope
 
