@@ -1,7 +1,10 @@
+#include "ArchiveFile.h"
 #include "audio/AudioDeviceManager.h"
 #include "audio/Jukebox.h"
 #include "rendering/UniformCache.h"
 
+#include <archive.h>
+#include <archive_entry.h>
 #include <bgfx/bgfx.h>
 
 #include <atomic>
@@ -14,6 +17,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -155,6 +160,83 @@ public:
   std::filesystem::path directory;
 };
 
+std::string singlePixelPpm(unsigned char red, unsigned char green,
+                           unsigned char blue) {
+  std::string bytes = "P6\n1 1\n255\n";
+  bytes.push_back(static_cast<char>(red));
+  bytes.push_back(static_cast<char>(green));
+  bytes.push_back(static_cast<char>(blue));
+  return bytes;
+}
+
+std::string singleFrameY4m() {
+  std::string bytes = "YUV4MPEG2 W2 H2 F1:1 Ip A1:1 C420jpeg\nFRAME\n";
+  constexpr char frame[] = {
+      16, 16, 16, 16, static_cast<char>(128), static_cast<char>(128)};
+  bytes.append(frame, sizeof(frame));
+  return bytes;
+}
+
+void writeZip(
+    const std::filesystem::path &path,
+    const std::vector<std::pair<std::string, std::string>> &files) {
+  archive *writer = archive_write_new();
+  require(writer != nullptr, "archive visual fixture creates a writer");
+  require(archive_write_set_format_zip(writer) == ARCHIVE_OK,
+          "archive visual fixture selects ZIP");
+  require(archive_write_set_options(writer, "zip:compression=store") ==
+              ARCHIVE_OK,
+          "archive visual fixture selects deterministic storage");
+  require(archive_write_open_filename(writer, path.string().c_str()) ==
+              ARCHIVE_OK,
+          "archive visual fixture opens its destination");
+  for (const auto &[name, contents] : files) {
+    archive_entry *entry = archive_entry_new();
+    require(entry != nullptr, "archive visual fixture creates an entry");
+    archive_entry_set_pathname(entry, name.c_str());
+    archive_entry_set_filetype(entry, AE_IFREG);
+    archive_entry_set_perm(entry, 0644);
+    archive_entry_set_size(entry, static_cast<la_int64_t>(contents.size()));
+    require(archive_write_header(writer, entry) == ARCHIVE_OK,
+            "archive visual fixture writes an entry header");
+    require(archive_write_data(writer, contents.data(), contents.size()) ==
+                static_cast<la_ssize_t>(contents.size()),
+            "archive visual fixture writes complete entry bytes");
+    require(archive_write_finish_entry(writer) == ARCHIVE_OK,
+            "archive visual fixture finishes an entry");
+    archive_entry_free(entry);
+  }
+  require(archive_write_close(writer) == ARCHIVE_OK,
+          "archive visual fixture closes cleanly");
+  require(archive_write_free(writer) == ARCHIVE_OK,
+          "archive visual fixture releases its writer");
+}
+
+class TemporaryArchivedVisualFixture {
+public:
+  TemporaryArchivedVisualFixture() {
+    directory =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-jukebox-archive-visual-" +
+         std::to_string(
+             std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(directory);
+    archivePath = directory / "visuals.zip";
+    writeZip(archivePath,
+             {{"song/chart.bms", "#TITLE archive visual fixture\n"},
+              {"song/first.bmp", singlePixelPpm(0x22, 0x44, 0x66)},
+              {"song/second.mp4", singleFrameY4m()}});
+  }
+
+  ~TemporaryArchivedVisualFixture() {
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+  }
+
+  std::filesystem::path directory;
+  std::filesystem::path archivePath;
+};
+
 void populateVisualChart(bms_parser::Chart &chart, bool layer,
                          const std::filesystem::path &folder,
                          std::string resource, long long timingMicros = 0) {
@@ -256,6 +338,57 @@ void testVideoMaterializationCompletesBeforePlayback() {
     require(jukebox.activeMaterializedVideoPaths().size() == 4,
             "event activation performs no video materialization or eviction");
   }
+}
+
+void testArchivedVisualsPreloadInOneArchiveBatch() {
+  TemporaryArchivedVisualFixture fixture;
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  bms_parser::Chart chart;
+  chart.Meta.BmsPath = archive_file::makeVirtualPath(
+      fixture.archivePath, std::filesystem::path("song/chart.bms"));
+  chart.Meta.Folder = archive_file::makeVirtualPath(
+      fixture.archivePath, std::filesystem::path("song"));
+  chart.ReferencedBmpTable.emplace(1, "first.bmp");
+  chart.ReferencedBmpTable.emplace(2, "second.bmp");
+  for (int id = 1; id <= 2; ++id) {
+    auto *measure = new bms_parser::Measure();
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->Timing = static_cast<long long>(id - 1) * 1'000;
+    timeline->BgaBase = id;
+    measure->TimeLines.push_back(timeline);
+    chart.Measures.push_back(measure);
+  }
+
+  const std::size_t logStart = archive_file::debugLogLines().size();
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  const auto logLines = archive_file::debugLogLines();
+  std::size_t batchReads = 0;
+  for (std::size_t index = std::min(logStart, logLines.size());
+       index < logLines.size(); ++index) {
+    if (logLines[index].find("Read preloaded visual archive batch:") !=
+        std::string::npos) {
+      ++batchReads;
+    }
+  }
+  require(batchReads == 1,
+          "all visuals from one archive are extracted in one preload batch");
+  require(jukebox.activeMaterializedVideoPaths().size() == 1,
+          "the archived video is materialized before playback");
+  require(jukebox.getScheduledVisualEndMicros() > 1'000,
+          "the archived video duration is known before its scheduled event");
+  require(jukebox.play(0).success,
+          "batched archive visual fixture starts playback");
+  jukebox.seekVisualsToSongTime(0);
+  require(jukebox.hasActiveVisuals(),
+          "first archive visual is ready at its scheduled event");
+  jukebox.seekVisualsToSongTime(1'000);
+  require(jukebox.hasActiveVisuals(),
+          "second archive visual is ready without event-time extraction");
+  require(jukebox.activeMaterializedVideoPaths().size() == 1,
+          "timed activation reuses the preloaded archived video");
 }
 
 void testManagerRestartAndRollbackRestoreProductionJukeboxVisuals() {
@@ -362,6 +495,7 @@ int main() {
   try {
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
     testVideoMaterializationCompletesBeforePlayback();
+    testArchivedVisualsPreloadInOneArchiveBatch();
     testRateScaledSnapshotRestoresBgaTimeline();
     testNegativeCountInKeepsBgaAtPreChartState();
     rendering::UniformCache::getInstance().destroyAll();

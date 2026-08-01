@@ -179,6 +179,50 @@ class IOSArtifactAuditTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("local build dependency", result.stderr)
 
+    def test_simulator_slice_in_distribution_binary_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            app = self.make_app(root)
+            simulator = root / "Fixture-simulator"
+            subprocess.run(
+                [
+                    "xcrun",
+                    "--sdk",
+                    "iphonesimulator",
+                    "clang",
+                    "-arch",
+                    "x86_64",
+                    "-mios-simulator-version-min=14.0",
+                    str(root / "main.c"),
+                    "-o",
+                    str(simulator),
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            device = root / "Fixture-device"
+            (app / "Fixture").replace(device)
+            subprocess.run(
+                [
+                    "xcrun",
+                    "lipo",
+                    "-create",
+                    str(device),
+                    str(simulator),
+                    "-output",
+                    str(app / "Fixture"),
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            result = self.run_audit(app)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("device arm64 only", result.stderr)
+
     def test_signature_is_only_mandatory_when_requested(self):
         with tempfile.TemporaryDirectory() as temp:
             app = self.make_app(Path(temp))

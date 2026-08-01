@@ -2298,7 +2298,6 @@ Jukebox::reconcileSoundResources(bms_parser::Chart &chart,
 void Jukebox::reconcileVisualResources(
     bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
     std::atomic_bool &isCancelled) {
-  (void)chart;
   clearVisualResources();
   if (isCancelled) {
     return;
@@ -2314,13 +2313,129 @@ void Jukebox::reconcileVisualResources(
     }
   }
 
+  std::unordered_map<path_t, ArchiveChartAssetBatch> archiveBatches;
+  std::vector<path_t> archiveBatchOrder;
+  std::vector<const ResolvedVisualAsset *> regularVisuals;
+  regularVisuals.reserve(assets.size());
   for (const auto &asset : assets) {
+    if (!addArchiveChartAssetTarget(
+            archiveBatches, archiveBatchOrder, asset.path, asset.id,
+            asset.video ? ArchiveChartAssetKind::Video
+                        : ArchiveChartAssetKind::Image)) {
+      regularVisuals.push_back(&asset);
+    }
+  }
+
+  for (const ResolvedVisualAsset *asset : regularVisuals) {
     if (isCancelled) {
       return;
     }
-    if (!preloadVisual(asset.id, isCancelled)) {
-      SDL_Log("Failed to preload visual %d before playback: %s", asset.id,
-              path_t_to_utf8(asset.key).c_str());
+    if (!preloadVisual(asset->id, isCancelled)) {
+      SDL_Log("Failed to preload visual %d before playback: %s", asset->id,
+              path_t_to_utf8(asset->key).c_str());
+    }
+  }
+
+  for (const path_t &archiveKey : archiveBatchOrder) {
+    if (isCancelled) {
+      return;
+    }
+    const auto batchIt = archiveBatches.find(archiveKey);
+    if (batchIt == archiveBatches.end()) {
+      continue;
+    }
+    const ArchiveChartAssetBatch &batch = batchIt->second;
+    ArchiveAssetBatch readBatch{
+        .archivePath = batch.archivePath,
+        .innerPaths = batch.innerPaths,
+        .idsByPath = {},
+    };
+    std::vector<archive_file::FileData> files;
+    std::string errorMessage;
+    const auto entryRange = entryRangeForChartArchive(chart, batch.archivePath);
+    if (!readArchiveBatchEntries(readBatch, entryRange, files, &errorMessage,
+                                 isCancelled)) {
+      SDL_Log("Failed to read visual preload batch from archive %s: %s",
+              fspath_to_utf8(batch.archivePath).c_str(),
+              errorMessage.c_str());
+      archive_file::appendDebugLogLine(
+          "Failed to read preloaded visual archive batch: " +
+          fspath_to_utf8(batch.archivePath) + ": " + errorMessage);
+
+      // The batch reader already tried concurrent, ranged, and serial paths.
+      // Keep the previous per-file path as a last-resort compatibility fallback
+      // during chart loading, never during scheduled activation.
+      for (const auto &[path, ids] : batch.videoIdsByPath) {
+        (void)path;
+        for (const int visualId : ids) {
+          if (isCancelled) {
+            return;
+          }
+          (void)preloadVisual(visualId, isCancelled);
+        }
+      }
+      for (const auto &[path, ids] : batch.imageIdsByPath) {
+        (void)path;
+        for (const int visualId : ids) {
+          if (isCancelled) {
+            return;
+          }
+          (void)preloadVisual(visualId, isCancelled);
+        }
+      }
+      continue;
+    }
+
+    archive_file::appendDebugLogLine(
+        "Read preloaded visual archive batch: " +
+        fspath_to_utf8(batch.archivePath) +
+        " targets=" + std::to_string(batch.innerPaths.size()) +
+        " files=" + std::to_string(files.size()));
+
+    for (const auto &file : files) {
+      if (isCancelled) {
+        return;
+      }
+      const std::filesystem::path virtualPath =
+          archive_file::makeVirtualPath(batch.archivePath, file.path);
+      const path_t pathKey = fspath_to_path_t(virtualPath);
+
+      if (const auto ids = batch.videoIdsByPath.find(pathKey);
+          ids != batch.videoIdsByPath.end()) {
+        std::string materializeError;
+        const auto playablePath = archive_file::materializeFileBytes(
+            virtualPath, file.bytes, &materializeError, &isCancelled);
+        if (!playablePath.has_value()) {
+          SDL_Log("Failed to materialize preloaded video %s: %s",
+                  fspath_to_utf8(virtualPath).c_str(),
+                  materializeError.c_str());
+        } else {
+          for (const int visualId : ids->second) {
+            if (isCancelled) {
+              return;
+            }
+            if (!loadMaterializedVideoPath(visualId, *playablePath,
+                                           virtualPath, isCancelled)) {
+              SDL_Log("Failed to preload visual %d before playback: %s",
+                      visualId, fspath_to_utf8(virtualPath).c_str());
+            }
+          }
+        }
+      }
+
+      if (const auto ids = batch.imageIdsByPath.find(pathKey);
+          ids != batch.imageIdsByPath.end()) {
+        for (const int visualId : ids->second) {
+          if (isCancelled) {
+            return;
+          }
+          if (!loadImageBytes(visualId, virtualPath, file.bytes,
+                              isCancelled)) {
+            SDL_Log("Failed to preload visual %d before playback: %s",
+                    visualId, fspath_to_utf8(virtualPath).c_str());
+          }
+        }
+      }
     }
   }
 }

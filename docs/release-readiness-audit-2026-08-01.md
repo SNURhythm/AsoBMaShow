@@ -24,7 +24,10 @@ unchanged, but they are outside the first iOS-only release stage.
   origins remain supported, anonymous public ranking requests remain available
   without credentials, and every Tachi path that sends a bearer token or reads
   private scores now rejects HTTP before network I/O. The settings UI disables
-  authenticated actions and persisted HTTP settings clear auto-submit.
+  authenticated actions and persisted HTTP settings clear auto-submit. Manual
+  result uploads now use the same HTTPS availability gate, so a configured API
+  key cannot leave the upload action enabled for an HTTP origin and the UI
+  directs the user to switch the origin to HTTPS.
 - R5 credential-at-rest remediation is implemented and verified locally: iOS
   credentials use Keychain with device-only, after-first-unlock accessibility;
   legacy plaintext files are removed only after every entry has been written
@@ -75,6 +78,15 @@ unchanged, but they are outside the first iOS-only release stage.
   extends replay export through the BGA tail. R9's decoder-count/memory cost
   remains technical debt because rhythm-game synchronization takes precedence
   for release 0.0.1.
+- Archived visuals preserve that eager-preload invariant without reopening a
+  solid archive once per referenced ID: chart loading groups image and video
+  targets by archive, reads each group as one batch, and initializes every
+  referenced visual before playback. The compatibility fallback also runs only
+  during chart loading. The proposed memory-pressure eviction of inactive BGA
+  allocations is intentionally not applied because it would require later
+  rematerialization or decoder setup on the timing-critical playback path;
+  memory warnings continue to discard idle decoder frame/recycle buffers while
+  keeping preloaded visual resources ready for synchronized activation.
 - The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
   app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
   difficulty-table loading.
@@ -105,6 +117,10 @@ unchanged, but they are outside the first iOS-only release stage.
   binary payloads cannot bypass the gate. The TestFlight lane runs this audit
   with signature enforcement against the final post-processed IPA before any
   upload; the Firebase fast-iteration lane remains intentionally unchanged.
+- Distribution architecture validation now requires every executable and
+  embedded framework binary to contain exactly the device `arm64` slice and to
+  declare the iOS platform. A synthetic fat binary containing an x86_64
+  simulator slice is rejected before it can reach signing or upload.
 - The public privacy policy now matches the shipped iOS Keychain migration and
   authenticated-HTTPS behavior while documenting the retained anonymous HTTP
   and difficulty-table paths. A versioned iOS-first checklist covers App Store
@@ -134,7 +150,7 @@ unchanged, but they are outside the first iOS-only release stage.
 | iOS release contract and unsigned device build | pass | Version 0.0.1, iOS 14 minimum, retained ATS exception, no privacy manifest |
 | iOS unsigned artifact audit | pass | Device Mach-O closure, min OS, architecture, resources, and sensitive-file checks pass |
 | iPhone/iPad simulator runtime | pass | Release app reaches main menu through Metal with Main Thread Checker crash-on-report |
-| Desktop and iOS release tests | pass | 186/186 CTest and 43/43 iOS release-policy tests pass |
+| Desktop and iOS release tests | pass | 186/186 CTest and 44/44 iOS release-policy tests pass |
 | iOS signed archive audit | **pending** | Requires release signing material; signature enforcement was not bypassed |
 | Physical iPhone/iPad smoke and performance | **pending** | Required before submission; not substitutable with the iOS 26 simulator |
 | App Store metadata/checklist | **pending** | Human-owned screenshots, disclosures, support URLs, and final approval remain |

@@ -23,6 +23,29 @@ std::string normalizedFailureReason(std::string_view diagnostic,
 
 } // namespace
 
+ProviderAvailability
+evaluateProviderAvailability(const ProviderAvailabilityInput &input) {
+  if (!input.enabled) {
+    return {.statusText =
+                "Bokutachi is disabled. Enable it before uploading."};
+  }
+  if (!input.hasCredential) {
+    return {.statusText =
+                "A Bokutachi API key is required before uploading."};
+  }
+  if (!input.httpsOrigin) {
+    return {.statusText =
+                "Use an HTTPS server origin before uploading."};
+  }
+  if (!input.driverCanSubmit || !input.submissionServiceAvailable) {
+    return {.statusText = "Bokutachi score submission is unavailable."};
+  }
+  return {
+      .canSubmit = true,
+      .statusText = "Ready to queue verified scores for batch delivery.",
+  };
+}
+
 std::size_t detail::eraseQueuedAttemptIds(
     std::vector<std::string> &failedAttemptIds,
     std::span<const std::string> queuedAttemptIds) {

@@ -282,10 +282,86 @@
   python3 tests/ios_release_documentation_tests.py
   ```
 
-- [ ] **Step 4: Commit and run exact-commit verification**
+- [x] **Step 4: Commit and run exact-commit verification**
 
   Commit the review remediation, then run `scripts/ios_release_verify.sh` without deploying.
 
 - [ ] **Step 5: Push and update PR #89**
 
   Push the existing branch, summarize addressed and already-fixed threads on the PR, and report any remaining unresolved non-actionable thread without resolving or replying unless explicitly authorized.
+
+### Task 8: Batch Archived Visual Preloading
+
+**Files:**
+
+- Modify: `src/audio/Jukebox.cpp`
+- Modify: `tests/jukebox_restore_tests.cpp`
+
+**Interfaces:**
+
+- Consumes: the existing archive batch reader and resolved visual descriptors.
+- Produces: one grouped archive read per chart archive while retaining the
+  invariant that every referenced visual is initialized before playback.
+
+- [x] **Step 1: Add an archived-visual regression**
+
+  Create a chart archive containing two referenced images, load it through the
+  jukebox, and assert one combined preload batch plus successful timed
+  activation of both visuals.
+
+- [x] **Step 2: Observe the per-ID preload path fail the batch assertion**
+
+- [x] **Step 3: Group archive targets and preload them before playback**
+
+  Batch images and videos by archive, reuse materialized video files for every
+  ID targeting the same entry, and keep all compatibility fallback work in the
+  chart-loading phase.
+
+- [x] **Step 4: Run the focused jukebox test**
+
+### Task 9: Apply HTTPS Gating to Manual IR Uploads
+
+**Files:**
+
+- Modify: `src/scene/IrUploadsController.h`
+- Modify: `src/scene/IrUploadsController.cpp`
+- Modify: `src/scene/IrUploadsScene.cpp`
+- Modify: `tests/ir_uploads_controller_tests.cpp`
+
+- [x] **Step 1: Add a controller regression for an HTTP origin with a credential**
+
+- [x] **Step 2: Observe the missing provider-availability policy fail to compile**
+
+- [x] **Step 3: Centralize upload availability and require HTTPS**
+
+- [x] **Step 4: Run the focused controller test**
+
+### Task 10: Reject Simulator Slices in Distribution Artifacts
+
+**Files:**
+
+- Modify: `scripts/ios_artifact_audit.sh`
+- Modify: `tests/ios_artifact_audit_tests.py`
+
+- [x] **Step 1: Add a fat device-plus-simulator binary fixture**
+
+- [x] **Step 2: Observe the old audit miss the architecture violation**
+
+- [x] **Step 3: Require device arm64 and iOS platform metadata for every binary**
+
+- [x] **Step 4: Run the artifact-audit suite**
+
+### Task 11: Verify and Publish the Remaining Review Fixes
+
+- [x] **Step 1: Record the BGA synchronization decision**
+
+  Keep inactive BGA resources preloaded under memory pressure. The suggested
+  descriptor-based rematerialization conflicts with the explicit requirement
+  that no archive access or decoder setup occur after playback becomes
+  eligible; only idle decoder frame/recycle buffers remain discardable.
+
+- [x] **Step 2: Run full native and iOS policy verification**
+
+- [ ] **Step 3: Commit and run exact-commit iOS release verification**
+
+- [ ] **Step 4: Push the branch and refresh PR #89**

@@ -123,8 +123,8 @@ MAIN_EXECUTABLE="${APP_PATH}/${EXECUTABLE_NAME}"
 BINARY_DESCRIPTION="$(file "${MAIN_EXECUTABLE}")"
 [[ "${BINARY_DESCRIPTION}" == *"Mach-O"* ]] || fail "main executable is not Mach-O"
 ARCHITECTURES="$(lipo -archs "${MAIN_EXECUTABLE}" 2>/dev/null || true)"
-[[ " ${ARCHITECTURES} " == *" arm64 "* ]] || \
-  fail "main executable must contain the arm64 architecture"
+[ "${ARCHITECTURES}" = "arm64" ] || \
+  fail "main executable architectures must be device arm64 only: ${ARCHITECTURES:-missing}"
 
 LOAD_COMMANDS="$(otool -l "${MAIN_EXECUTABLE}")"
 BUILD_PLATFORM="$(printf '%s\n' "${LOAD_COMMANDS}" | awk '
@@ -159,10 +159,16 @@ for binary in "${BINARIES[@]}"; do
   [[ "${binary_description}" == *"Mach-O"* ]] || \
     fail "embedded executable is not Mach-O: ${binary}"
   binary_architectures="$(lipo -archs "${binary}" 2>/dev/null || true)"
-  [[ " ${binary_architectures} " == *" arm64 "* ]] || \
-    fail "embedded binary lacks arm64: ${binary}"
+  [ "${binary_architectures}" = "arm64" ] || \
+    fail "embedded binary architectures must be device arm64 only: ${binary} (${binary_architectures:-missing})"
 
   binary_load_commands="$(otool -l "${binary}")"
+  binary_platform="$(printf '%s\n' "${binary_load_commands}" | awk '
+    $1 == "cmd" && $2 == "LC_BUILD_VERSION" { active = 1; next }
+    active && $1 == "platform" { print $2; exit }
+  ')"
+  [ "${binary_platform}" = "2" ] || \
+    fail "embedded binary SDK platform is not iOS: ${binary}"
   binary_min_os="$(printf '%s\n' "${binary_load_commands}" | awk '
     $1 == "cmd" && $2 == "LC_BUILD_VERSION" { active = 1; next }
     active && $1 == "minos" { print $2; exit }
