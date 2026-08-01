@@ -183,7 +183,7 @@ SECRET_MATCH="$(LC_ALL=C grep -R -I -n -E "${SECRET_PATTERN}" \
   "${APP_PATH}/Contents/Resources" 2>/dev/null | head -n 1 || true)"
 [ -z "${SECRET_MATCH}" ] || fail "credential material is embedded: ${SECRET_MATCH}"
 for binary in "${BINARIES[@]}"; do
-  if LC_ALL=C strings -a "${binary}" | grep -q -E "${SECRET_PATTERN}"; then
+  if LC_ALL=C strings -a "${binary}" | grep -E "${SECRET_PATTERN}" >/dev/null; then
     fail "credential material is embedded in binary: ${binary}"
   fi
 done

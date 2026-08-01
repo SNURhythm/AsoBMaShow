@@ -21,7 +21,7 @@ class MacOSArtifactAuditTests(unittest.TestCase):
         if platform.machine() != "arm64":
             raise unittest.SkipTest("fixtures currently exercise the arm64 release contract")
 
-    def make_app(self, root: Path) -> Path:
+    def make_app(self, root: Path, *, binary_secret_with_large_trailer=False) -> Path:
         app = root / "AsoBMaShow.app"
         executable_dir = app / "Contents/MacOS"
         resource_dir = app / "Contents/Resources"
@@ -30,11 +30,22 @@ class MacOSArtifactAuditTests(unittest.TestCase):
         (resource_dir / "shaders/metal").mkdir(parents=True)
 
         source = root / "main.c"
-        source.write_text(
-            'int main(void) { const char *volatile header = "Authorization: Bearer %s"; '
-            "return header[0] == 0; }\n",
-            encoding="utf-8",
-        )
+        if binary_secret_with_large_trailer:
+            trailer = "post-secret-padding" * (1024 * 128)
+            source_text = (
+                '__attribute__((used, section("__TEXT,__secret"))) '
+                'static const char secret[] = "Authorization: Bearer '
+                'abcdefghijklmnopqrstuvwxyz0123456789";\n'
+                '__attribute__((used, section("__TEXT,__trailer"))) '
+                f'static const char trailer[] = "{trailer}";\n'
+                "int main(void) { return secret[0] == 0 || trailer[0] == 0; }\n"
+            )
+        else:
+            source_text = (
+                'int main(void) { const char *volatile header = '
+                '"Authorization: Bearer %s"; return header[0] == 0; }\n'
+            )
+        source.write_text(source_text, encoding="utf-8")
         subprocess.run(
             [
                 "clang",
@@ -144,6 +155,19 @@ class MacOSArtifactAuditTests(unittest.TestCase):
             result = self.run_audit(app)
             self.assertNotEqual(0, result.returncode)
             self.assertIn("credential material", result.stderr)
+
+    def test_binary_secret_before_large_trailer_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = self.make_app(
+                Path(temp), binary_secret_with_large_trailer=True
+            )
+
+            result = self.run_audit(app)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(
+                "credential material is embedded in binary", result.stderr
+            )
 
     def test_release_mode_rejects_ad_hoc_signature(self):
         with tempfile.TemporaryDirectory() as temp:
