@@ -1,4 +1,5 @@
 #include "VideoPlayer.h"
+#include "VideoFrameLayout.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
@@ -165,7 +166,11 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     //   fps = static_cast<float>(num) / static_cast<float>(den);
     // }
 
-    updateVideoTexture(codecContext->width, codecContext->height);
+    if (!updateVideoTexture(codecContext->width, codecContext->height)) {
+      SDL_Log("Unsupported YUV420 video dimensions: %d x %d",
+              codecContext->width, codecContext->height);
+      return fail();
+    }
 
     formatContext = tempFormatContext;
     tempFormatContext = nullptr;
@@ -262,25 +267,27 @@ void VideoPlayer::update() {
   // Upload to BGFX textures.
   // Use bgfx::copy + explicit pitch because decoder output can be padded
   // (linesize > plane width), and the frame is recycled right after upload.
-  const uint16_t yPitch = static_cast<uint16_t>(currentFrame->linesize[0]);
-  const uint16_t uPitch = static_cast<uint16_t>(currentFrame->linesize[1]);
-  const uint16_t vPitch = static_cast<uint16_t>(currentFrame->linesize[2]);
-  const uint32_t yBytes = static_cast<uint32_t>(currentFrame->linesize[0]) *
-                          static_cast<uint32_t>(videoFrameHeight);
-  const uint32_t uBytes = static_cast<uint32_t>(currentFrame->linesize[1]) *
-                          static_cast<uint32_t>(videoFrameHeight / 2);
-  const uint32_t vBytes = static_cast<uint32_t>(currentFrame->linesize[2]) *
-                          static_cast<uint32_t>(videoFrameHeight / 2);
+  const auto layout = video::makeYuv420FrameLayout(
+      videoFrameWidth, videoFrameHeight, currentFrame->linesize[0],
+      currentFrame->linesize[1], currentFrame->linesize[2]);
+  if (!layout || currentFrame->data[0] == nullptr ||
+      currentFrame->data[1] == nullptr || currentFrame->data[2] == nullptr) {
+    SDL_Log("Rejected invalid decoded YUV420 frame layout");
+    recycleFrame(currentFrame);
+    return;
+  }
 
-  bgfx::updateTexture2D(videoTextureY, 0, 0, 0, 0, videoFrameWidth,
-                        videoFrameHeight,
-                        bgfx::copy(currentFrame->data[0], yBytes), yPitch);
-  bgfx::updateTexture2D(videoTextureU, 0, 0, 0, 0, videoFrameWidth / 2,
-                        videoFrameHeight / 2,
-                        bgfx::copy(currentFrame->data[1], uBytes), uPitch);
-  bgfx::updateTexture2D(videoTextureV, 0, 0, 0, 0, videoFrameWidth / 2,
-                        videoFrameHeight / 2,
-                        bgfx::copy(currentFrame->data[2], vBytes), vPitch);
+  bgfx::updateTexture2D(
+      videoTextureY, 0, 0, 0, 0, layout->width, layout->height,
+      bgfx::copy(currentFrame->data[0], layout->yBytes), layout->yPitch);
+  bgfx::updateTexture2D(
+      videoTextureU, 0, 0, 0, 0, layout->chromaWidth,
+      layout->chromaHeight,
+      bgfx::copy(currentFrame->data[1], layout->uBytes), layout->uPitch);
+  bgfx::updateTexture2D(
+      videoTextureV, 0, 0, 0, 0, layout->chromaWidth,
+      layout->chromaHeight,
+      bgfx::copy(currentFrame->data[2], layout->vBytes), layout->vPitch);
 
   lastFramePTS = frameTime;
   hasVideoFrame = true;
@@ -403,9 +410,13 @@ void VideoPlayer::setDecodeSuspended(bool suspended) {
   eofCV.notify_all();
 }
 
-void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
+bool VideoPlayer::updateVideoTexture(int width, int height) {
+  const auto layout = video::makeYuv420FrameLayout(width, height);
+  if (!layout) {
+    return false;
+  }
   std::lock_guard<std::mutex> lock(videoFrameMutex);
-  if (width != videoFrameWidth || height != videoFrameHeight) {
+  if (layout->width != videoFrameWidth || layout->height != videoFrameHeight) {
     if (bgfx::isValid(videoTextureY)) {
       bgfx::destroy(videoTextureY);
       videoTextureY = BGFX_INVALID_HANDLE;
@@ -419,22 +430,41 @@ void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
       videoTextureV = BGFX_INVALID_HANDLE;
     }
 
-    videoFrameWidth = width;
-    videoFrameHeight = height;
+    videoFrameWidth = layout->width;
+    videoFrameHeight = layout->height;
 
     // Create textures for Y, U, and V planes
     videoTextureY = bgfx::createTexture2D(
-        uint16_t(videoFrameWidth), uint16_t(videoFrameHeight), false, 1,
+        layout->width, layout->height, false, 1,
         bgfx::TextureFormat::R8, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE);
 
     videoTextureU = bgfx::createTexture2D(
-        uint16_t(videoFrameWidth / 2), uint16_t(videoFrameHeight / 2), false, 1,
+        layout->chromaWidth, layout->chromaHeight, false, 1,
         bgfx::TextureFormat::R8, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE);
 
     videoTextureV = bgfx::createTexture2D(
-        uint16_t(videoFrameWidth / 2), uint16_t(videoFrameHeight / 2), false, 1,
+        layout->chromaWidth, layout->chromaHeight, false, 1,
         bgfx::TextureFormat::R8, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE);
+    if (!bgfx::isValid(videoTextureY) || !bgfx::isValid(videoTextureU) ||
+        !bgfx::isValid(videoTextureV)) {
+      if (bgfx::isValid(videoTextureY)) {
+        bgfx::destroy(videoTextureY);
+      }
+      if (bgfx::isValid(videoTextureU)) {
+        bgfx::destroy(videoTextureU);
+      }
+      if (bgfx::isValid(videoTextureV)) {
+        bgfx::destroy(videoTextureV);
+      }
+      videoTextureY = BGFX_INVALID_HANDLE;
+      videoTextureU = BGFX_INVALID_HANDLE;
+      videoTextureV = BGFX_INVALID_HANDLE;
+      videoFrameWidth = 0;
+      videoFrameHeight = 0;
+      return false;
+    }
   }
+  return true;
 }
 
 void VideoPlayer::seek(int64_t micro) {

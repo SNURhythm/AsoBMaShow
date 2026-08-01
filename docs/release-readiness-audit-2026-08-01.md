@@ -29,6 +29,10 @@ CTest, and fatal Android lint.
   authenticated IR for that profile for the session. Portable migration,
   profile archive/lifecycle, device compilation, and simulator build/launch
   checks pass. No privacy manifest was added, per the accepted release policy.
+- R10 odd-dimension rendering remediation is implemented and verified locally:
+  one checked YUV420 layout now uses ceiling chroma dimensions for allocation,
+  texture creation, and padded-plane uploads; invalid or unrepresentable
+  layouts fail cleanly. Table-driven layout and jukebox regressions pass.
 - The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
   app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
   difficulty-table loading.

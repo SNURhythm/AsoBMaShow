@@ -3,5 +3,6 @@ target_sources(main PRIVATE
     FramePacer.cpp
     RendererAccessCoordinator.cpp
     SDLDisplayBackend.cpp
+    VideoFrameLayout.cpp
     VideoPlayer.cpp
 )

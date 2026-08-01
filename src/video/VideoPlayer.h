@@ -78,7 +78,7 @@ private:
   void predecodeFrames();
   void stopPredecoding();
 
-  void updateVideoTexture(unsigned int width, unsigned int height);
+  bool updateVideoTexture(int width, int height);
   std::mutex videoFrameMutex;
 
   int videoFrameWidth;

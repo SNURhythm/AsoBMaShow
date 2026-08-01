@@ -2443,6 +2443,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/utils/Stopwatch.cpp
+        src/video/VideoFrameLayout.cpp
         src/video/VideoPlayer.cpp
     )
     target_include_directories(jukebox_restore_tests PRIVATE
@@ -2459,6 +2460,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(WIN32)
         target_link_libraries(jukebox_restore_tests PRIVATE shell32 ole32)
     endif()
+
+    add_executable(video_frame_layout_tests
+        tests/video_frame_layout_tests.cpp
+        src/video/VideoFrameLayout.cpp
+    )
+    target_include_directories(video_frame_layout_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(video_frame_layout_tests PRIVATE cxx_std_23)
 
     add_executable(audio_device_manager_tests
         tests/audio_device_manager_tests.cpp
@@ -3817,6 +3827,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
+    asobmashow_register_test(video_frame_layout_tests)
 
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)
