@@ -36,7 +36,7 @@ run() {
 
 cd "${ROOT_DIR}"
 if [ "${DRY_RUN}" -eq 1 ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
-  run cmake --preset debug
+  run cmake --preset debug -B "${BUILD_DIR}"
 fi
 run cmake --build "${BUILD_DIR}" --target \
   chart_repository_tests \

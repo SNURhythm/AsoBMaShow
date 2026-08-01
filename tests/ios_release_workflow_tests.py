@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -101,6 +103,27 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("upload_to_testflight", output)
         self.assertNotIn("firebase_app_distribution", output)
         self.assertNotIn("fastlane ios", output)
+
+    def test_fresh_custom_verifier_build_directory_is_configured_in_place(self):
+        with tempfile.TemporaryDirectory() as temp:
+            build_dir = Path(temp) / "fresh-build"
+            env = dict(os.environ)
+            env["IOS_RELEASE_CMAKE_BUILD_DIR"] = str(build_dir)
+            result = subprocess.run(
+                [str(VERIFY_SCRIPT), "--dry-run"],
+                cwd=ROOT,
+                env=env,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+        configure = next(
+            line for line in result.stdout.splitlines()
+            if line.startswith("+ cmake ") and "--preset debug" in line
+        )
+        self.assertIn(f"-B {build_dir}", configure)
+        self.assertIn(f"cmake --build {build_dir}", result.stdout)
 
     def test_release_verifier_includes_math_regressions(self):
         self.assertIn("quaternion_math_tests", self.verify_script)

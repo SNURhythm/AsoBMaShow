@@ -208,6 +208,43 @@ int main() {
     std::filesystem::remove_all(fixtureRoot);
   }
 
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-failed-ticket-" +
+         std::to_string(std::chrono::steady_clock::now()
+                            .time_since_epoch()
+                            .count()));
+    std::filesystem::create_directories(fixtureRoot);
+    const std::filesystem::path artworkPath = fixtureRoot / "artwork.ppm";
+    const path_t imagePath = fspath_to_path_t(artworkPath);
+    ImageView::dropAllCache();
+    ImageView image(0, 0, 8, 8);
+    image.setImageAsync(imagePath, true);
+
+    const auto failureDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (ImageView::pendingAsyncDecodeCountForTesting(imagePath) != 0 &&
+           std::chrono::steady_clock::now() < failureDeadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ImageView::pendingAsyncDecodeCountForTesting(imagePath) == 0,
+            "missing image decode reaches a terminal failure");
+
+    writeSinglePixelPpm(artworkPath);
+    const auto retryDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (image.imageWidth() == 0 &&
+           std::chrono::steady_clock::now() < retryDeadline) {
+      image.setImageAsync(imagePath, true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(image.imageWidth() == 1 && image.imageHeight() == 1,
+            "a failed async decode can retry when its source becomes ready");
+    ImageView::dropAllCache();
+    std::filesystem::remove_all(fixtureRoot);
+  }
+
 #ifndef _WIN32
   {
     const std::filesystem::path fixtureRoot =

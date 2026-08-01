@@ -25,11 +25,6 @@ bool removeLegacyFile(const std::filesystem::path &path,
   if (!removed) {
     return true;
   }
-  const auto parent = path.parent_path().empty()
-                          ? std::filesystem::path(".")
-                          : path.parent_path();
-  std::string ignoredDiagnostic;
-  (void)atomic_file::syncDirectory(parent, ignoredDiagnostic);
   return true;
 }
 
@@ -42,6 +37,10 @@ IrCredentialMigrationOperations defaultIrCredentialMigrationOperations() {
             return atomic_file::removeBackupArtifacts(path, diagnostic);
           },
       .removeLegacyFile = removeLegacyFile,
+      .syncDirectory =
+          [](const std::filesystem::path &path, std::string &diagnostic) {
+            return atomic_file::syncDirectory(path, diagnostic);
+          },
   };
 }
 
@@ -56,7 +55,8 @@ IrCredentialMigrationResult migrateLegacyIrCredentials(
     const IrCredentialMigrationOperations defaults =
         defaultIrCredentialMigrationOperations();
     const auto &ops = operations == nullptr ? defaults : *operations;
-    if (!ops.removeBackupArtifacts || !ops.removeLegacyFile) {
+    if (!ops.removeBackupArtifacts || !ops.removeLegacyFile ||
+        !ops.syncDirectory) {
       return failure("credential migration cleanup is unavailable");
     }
     const auto loaded = IrCredentialStore::load(legacyPath);
@@ -91,6 +91,12 @@ IrCredentialMigrationResult migrateLegacyIrCredentials(
     }
     if (!ops.removeLegacyFile(legacyPath, ignoredDiagnostic)) {
       return failure("legacy credential file could not be removed");
+    }
+    const auto parent = legacyPath.parent_path().empty()
+                            ? std::filesystem::path(".")
+                            : legacyPath.parent_path();
+    if (!ops.syncDirectory(parent, ignoredDiagnostic)) {
+      return failure("legacy credential file removal could not be persisted");
     }
     return {.status = IrCredentialMigrationStatus::Succeeded,
             .migratedCredentials = migrated};

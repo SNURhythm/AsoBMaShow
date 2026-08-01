@@ -590,6 +590,7 @@ void ImageView::applyAsyncImageIfReady() {
   }
   if (asyncTicket != 0 &&
       imageDecodeCoordinator().hasFailed(asyncTicket)) {
+    cancelAsyncRequest();
     asyncImagePending = false;
   }
 }
@@ -652,6 +653,10 @@ bool ImageView::resetDroppedAsyncRequest() {
 bool ImageView::setImage(const path_t &path) { return loadTexture(path); }
 bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
   resetDroppedAsyncRequest();
+  if (asyncTicket != 0 &&
+      imageDecodeCoordinator().hasFailed(asyncTicket)) {
+    cancelAsyncRequest();
+  }
   const int targetWidth = std::max(1, getWidth());
   const int targetHeight = std::max(1, getHeight());
   asyncImageBound = true;

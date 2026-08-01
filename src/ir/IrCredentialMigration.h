@@ -28,6 +28,8 @@ struct IrCredentialMigrationOperations {
       removeBackupArtifacts;
   std::function<bool(const std::filesystem::path &, std::string &)>
       removeLegacyFile;
+  std::function<bool(const std::filesystem::path &, std::string &)>
+      syncDirectory;
 };
 
 [[nodiscard]] IrCredentialMigrationOperations

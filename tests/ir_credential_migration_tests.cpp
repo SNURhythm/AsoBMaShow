@@ -174,6 +174,11 @@ void testMigrationWritesVerifiesThenDeletes() {
             cleanupEvents.emplace_back("file");
             std::error_code error;
             return std::filesystem::remove(candidate, error) && !error;
+          },
+      .syncDirectory =
+          [&](const auto &, std::string &) {
+            cleanupEvents.emplace_back("directory");
+            return true;
           }};
 
   const auto result = ir::migrateLegacyIrCredentials(
@@ -188,8 +193,9 @@ void testMigrationWritesVerifiesThenDeletes() {
                  "replace:11111111-1111-4111-8111-111111111111:tachi",
                  "load:11111111-1111-4111-8111-111111111111:tachi"},
          "each credential is verified immediately after its write");
-  expect(cleanupEvents == std::vector<std::string>{"artifacts", "file"},
-         "secret-bearing backups are cleaned before the canonical file");
+  expect(cleanupEvents ==
+             std::vector<std::string>{"artifacts", "file", "directory"},
+         "secret-bearing backups are cleaned before durable file removal");
   expect(!std::filesystem::exists(path),
          "verified migration deletes the plaintext file");
 }
@@ -248,12 +254,46 @@ void testInvalidLegacyAndCleanupFailuresFailClosed() {
           [&](const auto &, std::string &) {
             fileRemovalCalled = true;
             return true;
+          },
+      .syncDirectory =
+          [](const auto &, std::string &) {
+            return true;
           }};
   result = ir::migrateLegacyIrCredentials(kProfileId, cleanupPath,
                                            cleanupBackend, &operations);
   expect(result.status == ir::IrCredentialMigrationStatus::Failed &&
              std::filesystem::exists(cleanupPath) && !fileRemovalCalled,
          "cleanup failure preserves the canonical recovery source");
+}
+
+void testDirectorySyncFailureKeepsMigrationFailed() {
+  TempDirectory temp;
+  const auto path = seedLegacyFile(temp);
+  FakeBackend backend;
+  bool directorySyncCalled = false;
+  ir::IrCredentialMigrationOperations operations{
+      .removeBackupArtifacts =
+          [](const auto &, std::string &) {
+            return true;
+          },
+      .removeLegacyFile =
+          [](const auto &candidate, std::string &) {
+            std::error_code error;
+            return std::filesystem::remove(candidate, error) && !error;
+          },
+      .syncDirectory =
+          [&](const auto &, std::string &diagnostic) {
+            directorySyncCalled = true;
+            diagnostic = "injected directory sync failure";
+            return false;
+          }};
+
+  const auto result = ir::migrateLegacyIrCredentials(
+      kProfileId, path, backend, &operations);
+  expect(result.status == ir::IrCredentialMigrationStatus::Failed &&
+             !result.ready() && directorySyncCalled &&
+             !std::filesystem::exists(path),
+         "migration does not report success after an undurable unlink");
 }
 
 } // namespace
@@ -264,6 +304,7 @@ int main() {
   testMigrationWritesVerifiesThenDeletes();
   testPartialWriteAndVerificationFailuresKeepLegacyFile();
   testInvalidLegacyAndCleanupFailuresFailClosed();
+  testDirectorySyncFailureKeepsMigrationFailed();
   if (failures != 0) {
     std::cerr << failures << " IR credential migration test(s) failed\n";
     return 1;

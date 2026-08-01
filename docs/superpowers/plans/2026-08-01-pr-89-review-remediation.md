@@ -286,7 +286,7 @@
 
   Commit the review remediation, then run `scripts/ios_release_verify.sh` without deploying.
 
-- [ ] **Step 5: Push and update PR #89**
+- [x] **Step 5: Push and update PR #89**
 
   Push the existing branch, summarize addressed and already-fixed threads on the PR, and report any remaining unresolved non-actionable thread without resolving or replying unless explicitly authorized.
 
@@ -362,6 +362,64 @@
 
 - [x] **Step 2: Run full native and iOS policy verification**
 
-- [ ] **Step 3: Commit and run exact-commit iOS release verification**
+- [x] **Step 3: Commit and run exact-commit iOS release verification**
 
-- [ ] **Step 4: Push the branch and refresh PR #89**
+- [x] **Step 4: Push the branch and refresh PR #89**
+
+### Task 12: Retry Failed Async Image Decodes
+
+**Files:**
+
+- Modify: `src/view/ImageView.cpp`
+- Modify: `tests/image_view_fade_tests.cpp`
+
+- [x] **Step 1: Add a temporarily missing-source regression**
+
+  Let an async decode reach terminal failure, create the source file, bind the
+  same path again, and require the image to load without changing paths or
+  dropping the global cache.
+
+- [x] **Step 2: Observe the retained failed ticket block the retry**
+
+- [x] **Step 3: Cancel failed tickets wherever ImageView observes them**
+
+- [x] **Step 4: Run the focused ImageView test**
+
+### Task 13: Propagate Credential Directory-Sync Failure
+
+**Files:**
+
+- Modify: `src/ir/IrCredentialMigration.h`
+- Modify: `src/ir/IrCredentialMigration.cpp`
+- Modify: `tests/ir_credential_migration_tests.cpp`
+
+- [x] **Step 1: Add an injected post-unlink directory-sync failure**
+
+- [x] **Step 2: Observe that migration has no injectable sync operation**
+
+- [x] **Step 3: Make directory sync part of the migration transaction**
+
+- [x] **Step 4: Run the focused credential migration test**
+
+### Task 14: Configure Fresh Custom Verifier Build Directories
+
+**Files:**
+
+- Modify: `scripts/ios_release_verify.sh`
+- Modify: `tests/ios_release_workflow_tests.py`
+
+- [x] **Step 1: Add a dry-run regression with a fresh custom build path**
+
+- [x] **Step 2: Observe CMake configure only the preset default directory**
+
+- [x] **Step 3: Override the preset binary directory with `-B`**
+
+- [x] **Step 4: Run the focused workflow test**
+
+### Task 15: Verify and Publish the Final Review Batch
+
+- [x] **Step 1: Run full native and iOS policy verification**
+
+- [ ] **Step 2: Commit and run exact-commit iOS release verification**
+
+- [ ] **Step 3: Push, refresh PR #89, and re-read all review threads**

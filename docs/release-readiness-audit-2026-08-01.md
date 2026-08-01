@@ -35,6 +35,10 @@ unchanged, but they are outside the first iOS-only release stage.
   authenticated IR for that profile for the session. Portable migration,
   profile archive/lifecycle, device compilation, and simulator build/launch
   checks pass. No privacy manifest was added, per the accepted release policy.
+- Plaintext migration cleanup now treats the legacy-file parent-directory sync
+  as part of the transaction. If the unlink succeeds but directory metadata
+  cannot be persisted, migration remains failed instead of accepting a
+  potentially reversible credential deletion.
 - Profile deletion now coordinates its filesystem and Keychain work through a
   durable, non-secret marker. The marker is committed before profile deletion,
   cancelled if the profile survives, retained after a transient Keychain
@@ -62,7 +66,9 @@ unchanged, but they are outside the first iOS-only release stage.
   eviction and issue replacement work. Async artwork also tracks its requested
   layout bounds: growing a view starts a prioritized higher-resolution decode
   while retaining the usable smaller texture until replacement. Named-pipe
-  regressions prove that layout growth initiates the refresh itself.
+  regressions prove that layout growth initiates the refresh itself. Terminal
+  decode failures also cancel their coordinator ticket, allowing a later bind
+  to retry when a temporarily unavailable source becomes readable.
 - iOS low-memory warnings now flow through one main-loop handler: evictable
   artwork and orphaned decode work are cleared, active video buffers are kept,
   and idle video frame/recycle buffers are discarded and suspended until their
@@ -103,7 +109,10 @@ unchanged, but they are outside the first iOS-only release stage.
   a distinct non-PR lane whose GitHub job waits for verification, uses a global
   non-canceling concurrency group, and allocates the next build number only
   after entering that serialized lane. The end-to-end verification command
-  passed without invoking signing or distribution.
+  passed without invoking signing or distribution. A fresh
+  `IOS_RELEASE_CMAKE_BUILD_DIR` override is configured at the requested path
+  with the debug preset rather than accidentally configuring the default
+  directory and then trying to build an empty override directory.
 - A deterministic app/IPA audit now verifies release version `0.0.1`, iOS 14
   plist and Mach-O minimums, iPhone/iPad families, device SDK, icons,
   permissions, the retained ATS exception, arm64 slices, resolvable embedded
@@ -150,7 +159,7 @@ unchanged, but they are outside the first iOS-only release stage.
 | iOS release contract and unsigned device build | pass | Version 0.0.1, iOS 14 minimum, retained ATS exception, no privacy manifest |
 | iOS unsigned artifact audit | pass | Device Mach-O closure, min OS, architecture, resources, and sensitive-file checks pass |
 | iPhone/iPad simulator runtime | pass | Release app reaches main menu through Metal with Main Thread Checker crash-on-report |
-| Desktop and iOS release tests | pass | 186/186 CTest and 44/44 iOS release-policy tests pass |
+| Desktop and iOS release tests | pass | 186/186 CTest and 45/45 iOS release-policy tests pass |
 | iOS signed archive audit | **pending** | Requires release signing material; signature enforcement was not bypassed |
 | Physical iPhone/iPad smoke and performance | **pending** | Required before submission; not substitutable with the iOS 26 simulator |
 | App Store metadata/checklist | **pending** | Human-owned screenshots, disclosures, support URLs, and final approval remain |
