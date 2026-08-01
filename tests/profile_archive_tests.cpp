@@ -5,6 +5,7 @@
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileArchive.h"
 #include "../src/ProfileDatabaseTools.h"
+#include "../src/ir/PendingIrCredentialCleanup.h"
 #include "../src/practice/PracticePresetStore.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreRepository.h"
@@ -1524,6 +1525,11 @@ void testOverwriteIsRestrictedAndReplacesInactiveProfile() {
           readFile(targetPaths.settingsJson) ==
               readFile(fixture.manager.pathsFor(fixture.sourceId).settingsJson),
       "overwrite installs the imported profile components");
+  ir::PendingIrCredentialCleanup pending(fixture.temp.path());
+  std::string resetDiagnostic;
+  expect(pending.pendingOverwriteResets(resetDiagnostic) ==
+             std::vector<std::string>{fixture.targetId},
+         "committed overwrite carries a durable credential reset marker");
 
   options.overwriteProfileId = fixture.manager.activeProfile().id;
   const auto active = service.Import(archive, options);
@@ -1756,6 +1762,10 @@ void testOverwriteRollbackRestoresOriginalProfile() {
          "rolled-back overwrite target remains valid");
   expect(transactionArtifacts(temp.path()).empty(),
          "failed overwrite cleans staging and backup artifacts");
+  ir::PendingIrCredentialCleanup pending(temp.path());
+  std::string resetDiagnostic;
+  expect(pending.pendingOverwriteResets(resetDiagnostic).empty(),
+         "rolled-back overwrite does not mark the original profile for reset");
 }
 
 void expectRejectedWithoutMutation(

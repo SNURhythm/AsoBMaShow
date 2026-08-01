@@ -45,6 +45,12 @@ unchanged, but they are outside the first iOS-only release stage.
   failure, and retried at the next successful startup only when the profile is
   absent. A restart-level regression verifies that failed secure cleanup can no
   longer be silently orphaned.
+- Profile archive overwrite now stages a non-secret credential-reset marker
+  inside the replacement profile. The marker moves atomically with the durable
+  profile-directory commit, so rollback keeps the old account intact while a
+  committed overwrite clears the old profile ID's Keychain credentials. A
+  transient failure or crash retains the marker and retries cleanup on startup
+  even though the replacement profile still exists.
 - R10 odd-dimension rendering remediation is implemented and verified locally:
   one checked YUV420 layout now uses ceiling chroma dimensions for allocation,
   texture creation, and padded-plane uploads; invalid or unrepresentable
@@ -143,7 +149,9 @@ unchanged, but they are outside the first iOS-only release stage.
   previously reproduced off-main-thread layer mutation.
 - A focused idle-main-menu Time Profiler comparison removed per-frame
   `UIApplication.connectedScenes` enumeration from samples. A weak cache is
-  reused only while its `UIWindowScene` remains foreground-active;
+  reused only while its `UIWindowScene` remains foreground-active and the
+  window is still key and visible; same-scene key-window changes therefore
+  force a rescan instead of returning a detached controller;
   `FindActiveWindow` inclusive samples fell from 46 ms to 26 ms across matched
   10.7-second iPad simulator runs. Both runs reported zero potential hangs.
   Total simulator CPU was noisy between single runs, so no broader throughput

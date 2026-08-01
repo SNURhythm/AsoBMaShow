@@ -155,14 +155,17 @@ class IOSBuildSetupTests(unittest.TestCase):
             "static __weak UIWindow *cachedActiveWindow"
         )
         cache_validation = lookup.index(
-            "cachedWindow.windowScene.activationState ==\n"
-            "        UISceneActivationStateForegroundActive"
+            "cachedWindow.windowScene.activationState =="
         )
+        key_window_validation = lookup.index("cachedWindow.isKeyWindow")
+        visible_window_validation = lookup.index("!cachedWindow.hidden")
         scene_enumeration = lookup.index(
             "UIApplication.sharedApplication.connectedScenes"
         )
         self.assertLess(cache_declaration, cache_validation)
-        self.assertLess(cache_validation, scene_enumeration)
+        self.assertLess(cache_validation, key_window_validation)
+        self.assertLess(key_window_validation, visible_window_validation)
+        self.assertLess(visible_window_validation, scene_enumeration)
         self.assertIn("cachedActiveWindow = window;", lookup)
 
     def test_workspace_has_one_relative_pods_project(self):

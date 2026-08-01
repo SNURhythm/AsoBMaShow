@@ -420,6 +420,53 @@
 
 - [x] **Step 1: Run full native and iOS policy verification**
 
+- [x] **Step 2: Commit and run exact-commit iOS release verification**
+
+- [x] **Step 3: Push, refresh PR #89, and re-read all review threads**
+
+### Task 16: Reset Credentials on Profile Archive Overwrite
+
+**Files:**
+
+- Modify: `src/ProfileArchive.cpp`
+- Modify: `src/ir/PendingIrCredentialCleanup.h`
+- Modify: `src/ir/PendingIrCredentialCleanup.cpp`
+- Modify: `src/context.h`
+- Modify: `src/scene/ProfileSettingsControllerContext.cpp`
+- Modify: `tests/profile_archive_tests.cpp`
+- Modify: `tests/pending_ir_credential_cleanup_tests.cpp`
+
+- [x] **Step 1: Add committed-overwrite and restart-retry regressions**
+
+- [x] **Step 2: Observe that overwrite has no external-credential reset**
+
+- [x] **Step 3: Commit a non-secret reset marker with the staged profile**
+
+  The marker moves with the replacement directory, disappears with rollback,
+  and remains after a transient Keychain failure so startup cleanup can remove
+  stale credentials even while the replacement profile is live.
+
+- [x] **Step 4: Run focused archive and cleanup tests**
+
+### Task 17: Revalidate the Cached UIKit Window
+
+**Files:**
+
+- Modify: `src/iOSNatives.mm`
+- Modify: `tests/ios_build_setup_tests.py`
+
+- [x] **Step 1: Require key and visible state in the cache regression**
+
+- [x] **Step 2: Observe the scene-only cache validation fail**
+
+- [x] **Step 3: Rescan when the cached window is no longer key or visible**
+
+- [x] **Step 4: Run the iOS setup policy suite**
+
+### Task 18: Verify and Publish the Post-Refresh Review Batch
+
+- [x] **Step 1: Run the full native and iOS policy suites**
+
 - [ ] **Step 2: Commit and run exact-commit iOS release verification**
 
-- [ ] **Step 3: Push, refresh PR #89, and re-read all review threads**
+- [ ] **Step 3: Push, update PR #89, and re-read all review threads**

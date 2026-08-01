@@ -21,11 +21,20 @@ public:
                               std::string &diagnostic) noexcept;
   [[nodiscard]] std::vector<std::string>
   pending(std::string &diagnostic) const noexcept;
+  [[nodiscard]] bool scheduleOverwriteReset(
+      std::string_view profileId, std::string &diagnostic) noexcept;
+  [[nodiscard]] bool completeOverwriteReset(
+      std::string_view profileId, std::string &diagnostic) noexcept;
+  [[nodiscard]] std::vector<std::string>
+  pendingOverwriteResets(std::string &diagnostic) const noexcept;
 
 private:
   [[nodiscard]] std::filesystem::path
   markerPath(std::string_view profileId) const;
+  [[nodiscard]] std::filesystem::path
+  overwriteResetMarkerPath(std::string_view profileId, bool staging) const;
 
+  std::filesystem::path applicationDataRoot_;
   std::filesystem::path directory_;
   mutable std::mutex mutex_;
 };
@@ -47,6 +56,22 @@ using ProfileDeletionOperation = std::function<bool(std::string &diagnostic)>;
 using ProfileCredentialRemovalOperation =
     std::function<bool(std::string &diagnostic)>;
 
+enum class ProfileCredentialOverwriteCleanupStatus {
+  Removed,
+  CleanupPending,
+};
+
+struct ProfileCredentialOverwriteCleanupResult {
+  ProfileCredentialOverwriteCleanupStatus status =
+      ProfileCredentialOverwriteCleanupStatus::CleanupPending;
+  std::string diagnostic;
+};
+
+[[nodiscard]] ProfileCredentialOverwriteCleanupResult
+finishProfileCredentialOverwriteCleanup(
+    PendingIrCredentialCleanup &pending, std::string_view profileId,
+    ProfileCredentialRemovalOperation removeCredentials) noexcept;
+
 [[nodiscard]] ProfileCredentialDeletionResult coordinateProfileCredentialDeletion(
     PendingIrCredentialCleanup &pending, std::string_view profileId,
     ProfileDeletionOperation deleteProfile,
@@ -66,6 +91,11 @@ using PendingProfileCredentialRemoval =
 [[nodiscard]] PendingIrCredentialCleanupRetryResult
 retryPendingProfileCredentialCleanup(
     PendingIrCredentialCleanup &pending, ProfileExistenceLookup profileExists,
+    PendingProfileCredentialRemoval removeCredentials) noexcept;
+
+[[nodiscard]] PendingIrCredentialCleanupRetryResult
+retryPendingProfileCredentialOverwriteCleanup(
+    PendingIrCredentialCleanup &pending,
     PendingProfileCredentialRemoval removeCredentials) noexcept;
 
 } // namespace ir

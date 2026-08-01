@@ -549,6 +549,19 @@ public:
 
   void retryPendingIrCredentialCleanup() noexcept {
     try {
+      const auto overwriteRetried =
+          ir::retryPendingProfileCredentialOverwriteCleanup(
+              pendingIrCredentialCleanup,
+              [this](std::string_view profileId, std::string &diagnostic) {
+                return removeProfileIrCredentials(profileId, diagnostic);
+              });
+      if (overwriteRetried.retained != 0 ||
+          !overwriteRetried.diagnostic.empty()) {
+        SDL_Log("Pending overwritten-profile credential cleanup retained %zu "
+                "item(s): %s",
+                overwriteRetried.retained,
+                overwriteRetried.diagnostic.c_str());
+      }
       const auto retried = ir::retryPendingProfileCredentialCleanup(
           pendingIrCredentialCleanup,
           [this](std::string_view profileId) {

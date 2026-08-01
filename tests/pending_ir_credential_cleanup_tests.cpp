@@ -118,12 +118,60 @@ void testRetryNeverRemovesCredentialsForLiveProfile() {
   expect(pending.pending(diagnostic).empty(),
          "the cancelled live-profile marker does not linger");
 }
+
+void testOverwriteResetRetriesForAReplacedLiveProfile() {
+  TemporaryDirectory temp;
+  constexpr std::string_view profileId = "profile-d";
+  const auto profiles = temp.path / "profiles";
+  const auto staging = profiles / ".staging-profile-d";
+  const auto installed = profiles / profileId;
+  std::filesystem::create_directories(staging);
+
+  {
+    ir::PendingIrCredentialCleanup pending(temp.path);
+    std::string diagnostic;
+    expect(pending.scheduleOverwriteReset(profileId, diagnostic),
+           "overwrite staging records a durable credential reset marker");
+    std::filesystem::rename(staging, installed);
+    expect(pending.pendingOverwriteResets(diagnostic) ==
+               std::vector<std::string>{std::string(profileId)},
+           "the marker moves atomically with the replacement profile");
+
+    const auto cleanup = ir::finishProfileCredentialOverwriteCleanup(
+        pending, profileId, [](std::string &error) {
+          error = "transient Keychain failure";
+          return false;
+        });
+    expect(cleanup.status ==
+               ir::ProfileCredentialOverwriteCleanupStatus::CleanupPending,
+           "a transient overwrite cleanup failure remains retryable");
+    expect(pending.pendingOverwriteResets(diagnostic) ==
+               std::vector<std::string>{std::string(profileId)},
+           "failed overwrite cleanup retains its committed marker");
+  }
+
+  ir::PendingIrCredentialCleanup afterRestart(temp.path);
+  int credentialRemovals = 0;
+  const auto retry = ir::retryPendingProfileCredentialOverwriteCleanup(
+      afterRestart,
+      [&](std::string_view id, std::string &) {
+        ++credentialRemovals;
+        return id == profileId;
+      });
+  std::string diagnostic;
+  expect(retry.completed == 1 && retry.retained == 0 &&
+             credentialRemovals == 1,
+         "restart cleanup removes stale credentials despite the live profile");
+  expect(afterRestart.pendingOverwriteResets(diagnostic).empty(),
+         "successful overwrite cleanup removes the embedded marker");
+}
 } // namespace
 
 int main() {
   testFailedProfileDeletionCancelsCleanupWithoutTouchingCredentials();
   testFailedCredentialRemovalPersistsAndRetriesAfterRestart();
   testRetryNeverRemovesCredentialsForLiveProfile();
+  testOverwriteResetRetriesForAReplacedLiveProfile();
   if (failures != 0) {
     std::cerr << failures << " pending IR cleanup test(s) failed\n";
     return 1;

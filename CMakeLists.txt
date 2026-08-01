@@ -3696,6 +3696,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrCredentialBackend.cpp
+        src/ir/IrCredentialStore.cpp
+        src/ir/PendingIrCredentialCleanup.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
