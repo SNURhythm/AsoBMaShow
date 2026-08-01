@@ -483,10 +483,10 @@ drain the decoder at EOF, and add odd-dimension plus B-frame end-of-stream tests
 | Full debug all-target build after remediation | pass |
 | `ctest --test-dir cmake-build-debug --output-on-failure -j 6` | pass, 185/185 (40.41 s) |
 | `python3 tests/ios_build_setup_tests.py` | pass, 24/24 (12.21 s) |
-| iOS release workflow tests | pass, 7/7 |
+| iOS release workflow tests | pass, 8/8 |
 | iOS artifact-audit fixtures | pass, 6/6 |
 | iOS release-documentation tests | pass, 3/3 |
-| `scripts/ios_release_verify.sh` | pass; release tests, unsigned device build, and app audit |
+| `scripts/ios_release_verify.sh` | pass; 9 native release tests, unsigned device build, and app audit |
 | Unsigned device `AsoBMaShow.app` audit | pass; signature check correctly skipped only for unsigned build |
 | iPhone 17 Pro Release simulator launch | pass; Metal, Main Thread Checker crash-on-report, no fatal issue |
 | iPad Pro 11-inch Release simulator launch | pass; Metal, Main Thread Checker crash-on-report, no fatal issue |
