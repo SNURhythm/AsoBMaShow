@@ -25,6 +25,7 @@ IOS_RELEASE_VERIFY = ROOT / "scripts/ios_release_verify.sh"
 AGENT_GUIDANCE = ROOT / "AGENTS.md"
 SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
 MAIN_SOURCE = ROOT / "src/main.cpp"
+IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
 
 
 def object_block(project: str, object_id: str, next_section: str) -> str:
@@ -141,6 +142,28 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertLess(force_single_threaded, non_ios_branch)
         self.assertLess(force_single_threaded, initialize_bgfx)
         self.assertIn("Using bgfx single-threaded mode on iOS", source)
+
+    def test_ios_active_window_lookup_uses_a_validated_weak_cache(self):
+        source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
+        lookup_start = source.index("UIWindow *FindActiveWindow()")
+        lookup_end = source.index(
+            "void RestoreIOSViewportAfterKeyboardFocusOnce()", lookup_start
+        )
+        lookup = source[lookup_start:lookup_end]
+
+        cache_declaration = lookup.index(
+            "static __weak UIWindow *cachedActiveWindow"
+        )
+        cache_validation = lookup.index(
+            "cachedWindow.windowScene.activationState ==\n"
+            "        UISceneActivationStateForegroundActive"
+        )
+        scene_enumeration = lookup.index(
+            "UIApplication.sharedApplication.connectedScenes"
+        )
+        self.assertLess(cache_declaration, cache_validation)
+        self.assertLess(cache_validation, scene_enumeration)
+        self.assertIn("cachedActiveWindow = window;", lookup)
 
     def test_workspace_has_one_relative_pods_project(self):
         tree = ET.parse(WORKSPACE)

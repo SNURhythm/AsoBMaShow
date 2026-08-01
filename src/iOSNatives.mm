@@ -148,7 +148,18 @@ CTLineRef CreateIOSSystemTextLine(const std::string &utf8, int fontSize) {
 }
 
 UIWindow *FindActiveWindow() {
+  // Safe-area queries run every rendered frame. Reuse the app window while its
+  // scene remains active instead of rebuilding connectedScenes collections on
+  // the hot path. The weak reference cannot extend the UIKit window lifetime.
+  static __weak UIWindow *cachedActiveWindow = nil;
+  UIWindow *cachedWindow = cachedActiveWindow;
   if (@available(iOS 13.0, *)) {
+    if (cachedWindow != nil && cachedWindow.windowScene != nil &&
+        cachedWindow.windowScene.activationState ==
+        UISceneActivationStateForegroundActive) {
+      return cachedWindow;
+    }
+
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
       if (![scene isKindOfClass:[UIWindowScene class]]) {
         continue;
@@ -160,15 +171,20 @@ UIWindow *FindActiveWindow() {
       }
       for (UIWindow *window in windowScene.windows) {
         if (window.isKeyWindow) {
+          cachedActiveWindow = window;
           return window;
         }
       }
       if (windowScene.windows.count > 0) {
-        return windowScene.windows.firstObject;
+        UIWindow *window = windowScene.windows.firstObject;
+        cachedActiveWindow = window;
+        return window;
       }
     }
   }
-  return UIApplication.sharedApplication.keyWindow;
+  UIWindow *window = UIApplication.sharedApplication.keyWindow;
+  cachedActiveWindow = window;
+  return window;
 }
 
 void RestoreIOSViewportAfterKeyboardFocusOnce() {
