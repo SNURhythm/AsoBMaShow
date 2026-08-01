@@ -44,7 +44,6 @@ constexpr long long kSchedulerTickMicros = 1000000LL / 8000;
 constexpr long long kSchedulerMaxIdleSleepMicros = 250000;
 constexpr std::uint64_t kArchiveAssetMaxInFlightBytes =
     64ull * 1024ull * 1024ull;
-constexpr std::size_t kMaxMaterializedVideoPlayers = 3;
 constexpr int kPrepMetronomeAccentWav = -100000;
 constexpr int kPrepMetronomeRegularWav = -100001;
 constexpr int kClubKickWav = -100002;
@@ -2305,63 +2304,28 @@ void Jukebox::reconcileVisualResources(
     return;
   }
 
-  std::lock_guard<std::mutex> lock(visualMaterializationMutex);
-  visualDescriptors.reserve(assets.size());
-  visualPathTable.reserve(assets.size());
+  {
+    std::lock_guard<std::mutex> lock(visualMaterializationMutex);
+    visualDescriptors.reserve(assets.size());
+    visualPathTable.reserve(assets.size());
+    for (const auto &asset : assets) {
+      visualDescriptors[asset.id] = asset;
+      visualPathTable[asset.id] = asset.key;
+    }
+  }
+
   for (const auto &asset : assets) {
-    visualDescriptors[asset.id] = asset;
-    visualPathTable[asset.id] = asset.key;
+    if (isCancelled) {
+      return;
+    }
+    if (!preloadVisual(asset.id, isCancelled)) {
+      SDL_Log("Failed to preload visual %d before playback: %s", asset.id,
+              path_t_to_utf8(asset.key).c_str());
+    }
   }
 }
 
-std::size_t Jukebox::materializedVisualCount() const {
-  std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
-  return videoPlayerTable.size();
-}
-
-void Jukebox::touchMaterializedVisual(int visualId) {
-  const auto existing = std::find(visualMaterializationOrder.begin(),
-                                  visualMaterializationOrder.end(), visualId);
-  if (existing != visualMaterializationOrder.end()) {
-    visualMaterializationOrder.erase(existing);
-  }
-  visualMaterializationOrder.push_back(visualId);
-}
-
-bool Jukebox::evictOneMaterializedVisual(int protectedVisualId) {
-  const int activeBase = currentBga.load(std::memory_order_relaxed);
-  const int activeLayer = currentBmpLayer.load(std::memory_order_relaxed);
-
-  for (auto orderIt = visualMaterializationOrder.begin();
-       orderIt != visualMaterializationOrder.end(); ++orderIt) {
-    const int candidate = *orderIt;
-    if (candidate == protectedVisualId || candidate == activeBase ||
-        candidate == activeLayer) {
-      continue;
-    }
-
-    std::unique_ptr<VideoPlayer> evicted;
-    {
-      std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
-      const auto playerIt = videoPlayerTable.find(candidate);
-      if (playerIt == videoPlayerTable.end()) {
-        visualMaterializationOrder.erase(orderIt);
-        return true;
-      }
-      evicted = std::move(playerIt->second);
-      videoPlayerTable.erase(playerIt);
-      videoMaterializedPathTable.erase(candidate);
-    }
-    visualMaterializationOrder.erase(orderIt);
-    if (evicted != nullptr) {
-      evicted->stop();
-    }
-    return true;
-  }
-  return false;
-}
-
-bool Jukebox::ensureVisualMaterialized(int visualId) {
+bool Jukebox::preloadVisual(int visualId, std::atomic_bool &isCancelled) {
   std::lock_guard<std::mutex> materializationLock(
       visualMaterializationMutex);
   const auto descriptorIt = visualDescriptors.find(visualId);
@@ -2377,31 +2341,17 @@ bool Jukebox::ensureVisualMaterialized(int visualId) {
         return true;
       }
     }
-    std::atomic_bool cancelled = false;
-    return loadImagePath(visualId, descriptor.path, cancelled);
+    return loadImagePath(visualId, descriptor.path, isCancelled);
   }
 
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     if (videoPlayerTable.contains(visualId)) {
-      touchMaterializedVisual(visualId);
       return true;
     }
   }
 
-  while (materializedVisualCount() >= kMaxMaterializedVideoPlayers) {
-    if (!evictOneMaterializedVisual(visualId)) {
-      SDL_Log("No idle BGA video slot is available for visual %d", visualId);
-      return false;
-    }
-  }
-
-  std::atomic_bool cancelled = false;
-  if (!loadVideoPath(visualId, descriptor.path, cancelled)) {
-    return false;
-  }
-  touchMaterializedVisual(visualId);
-  return true;
+  return loadVideoPath(visualId, descriptor.path, isCancelled);
 }
 
 void Jukebox::clearVisualResources() {
@@ -2426,7 +2376,6 @@ void Jukebox::clearVisualResources() {
   }
   visualPathTable.clear();
   visualDescriptors.clear();
-  visualMaterializationOrder.clear();
 }
 
 void Jukebox::scheduleVisuals(bms_parser::Chart &chart,
@@ -2878,9 +2827,6 @@ bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
 
 bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
                                long long elapsedMicros) {
-  if (!ensureVisualMaterialized(visualId)) {
-    return false;
-  }
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     auto videoIt = videoPlayerTable.find(visualId);

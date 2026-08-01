@@ -28,7 +28,7 @@ This stabilization pass covers:
 - R5: iOS Keychain storage and HTTPS-only authenticated IR traffic;
 - R7: correct handling of failed chart-migration commits;
 - R8: serialized, event-safe iOS distribution and build numbering;
-- R9: bounded and lazy BGA/video-player construction;
+- R9: timing-safe BGA preparation with bounded per-player frame storage;
 - R10: correct YUV420 layout and FFmpeg end-of-stream draining;
 - iOS dependency deployment-target alignment and release artifact checks; and
 - iPhone/iPad simulator smoke and focused performance verification.
@@ -146,33 +146,23 @@ work with no live consumer, cancels queued orphan work, and releases idle BGA
 resources. Visible/active resources remain pinned long enough to render the
 current screen safely.
 
-### 4. Lazy, Bounded BGA Playback
+### 4. Timing-Safe BGA Preparation
 
-Chart loading records visual descriptors, event timing, media identity, and
-duration metadata. It does not construct a `VideoPlayer` for every referenced
-video.
+Chart loading resolves and fully materializes every referenced visual before
+playback is eligible. Video file/archive access and `VideoPlayer`
+initialization happen only in that preparation phase. Event activation performs
+only an in-memory lookup followed by seek/play, so decoder startup latency can
+never shift a BGA event relative to the audio clock.
 
-At runtime, the jukebox owns independent base and layer playback slots. A hard
-limit of three materialized `VideoPlayer` instances applies on iOS:
+Duplicate BGA IDs retain independent mutable player/playback state. Missing or
+malformed visuals log a bounded diagnostic during chart loading and are skipped
+at their event without blocking or resetting audio.
 
-- one active base slot;
-- one active layer slot; and
-- one next-event prefetch slot.
-
-Duplicate BGA IDs share canonical media identity, probe metadata, and static
-image cache entries, but never share mutable player/playback state. Replacing a
-slot returns its player resources to the bounded pool or destroys them.
-
-A single visual-loader worker materializes the prefetch candidate selected from
-the next relevant event. Seeking invalidates obsolete prefetch, immediately
-prioritizes the target base/layer media, and must not block or reset audio
-playback. Missing or malformed visuals log a bounded diagnostic and leave audio
-running.
-
-Each video player buffers at most three decoded frames. The recycled-frame pool
-holds at most two frames. Static BGA images use their own byte-budgeted LRU;
-active base/layer images are pinned, while inactive entries participate in
-eviction.
+Each video player buffers at most three decoded frames, and the recycled-frame
+pool holds at most two frames. The per-ID decoder/thread count remains accepted
+technical debt for release 0.0.1. Any future pool, prefetch, or eviction design
+must prove that all scheduled and seek-target visuals are ready before audio
+starts; event-time materialization is forbidden.
 
 ### 5. Correct Video Decode State Machine
 
@@ -308,11 +298,11 @@ before each production change.
 
 ### Jukebox and Video Tests
 
-- descriptor-only chart setup and zero eager player construction;
-- maximum three materialized players and one loader worker;
+- every referenced video materialized before playback;
+- event activation performs no materialization or eviction;
 - independent base/layer state for duplicate media IDs;
 - bounded three-frame buffer and two-frame recycle pool;
-- event timing, prefetch replacement, seek targeting, and uninterrupted audio;
+- event timing, seek targeting, and uninterrupted audio;
 - odd-width/height YUV420 plane sizes and uploads;
 - packet `EAGAIN` retention and full-buffer resume;
 - delayed/B-frame EOF drain; and
@@ -355,7 +345,8 @@ This stabilization pass is complete when:
 - all scoped regression and existing test suites pass;
 - the iOS build-only path succeeds with deployment targets aligned to 14;
 - simulator smoke passes on iPhone and iPad targets;
-- cache, player, frame, queue, and worker bounds are proven by tests;
+- cache, frame, queue, and worker bounds plus pre-playback BGA readiness are
+  proven by tests;
 - ETTrace shows no new dominant first-party hotspot in the two focused flows;
 - the release workflow cannot upload to TestFlight before verification or race
   TestFlight build numbers, while Firebase PR iteration stays independent;

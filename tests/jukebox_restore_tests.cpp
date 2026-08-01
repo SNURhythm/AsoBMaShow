@@ -184,8 +184,8 @@ void runManagerVisualRestoreCase(bool layer, bool paused, bool candidateStarts,
   populateVisualChart(chart, layer, folder, std::move(resource));
   std::atomic_bool cancelled = false;
   jukebox.loadVisuals(chart, cancelled);
-  require(!expectVideo || jukebox.activeMaterializedVideoPaths().empty(),
-          "video descriptors do not eagerly create decoder threads");
+  require(!expectVideo || jukebox.activeMaterializedVideoPaths().size() == 1,
+          "scheduled video is fully materialized before playback can start");
 
   require(jukebox.stop().success,
           "production Jukebox drains before selecting a playback rate");
@@ -201,7 +201,7 @@ void runManagerVisualRestoreCase(bool layer, bool paused, bool candidateStarts,
   require(jukebox.hasActiveVisuals(),
           "fixture publishes the visual active at the snapshot");
   require(!expectVideo || jukebox.activeMaterializedVideoPaths().size() == 1,
-          "first activation materializes its video descriptor");
+          "activation reuses the video materialized during chart loading");
 
   player_settings::AudioSettings initial;
   audio::AudioDeviceManager manager(jukebox.audioRuntime(), jukebox, initial);
@@ -228,7 +228,7 @@ void runManagerVisualRestoreCase(bool layer, bool paused, bool candidateStarts,
           "visual restoration preserves the playback rate");
 }
 
-void testVideoMaterializationHasThreeSlotHardLimit() {
+void testVideoMaterializationCompletesBeforePlayback() {
   TemporaryVideoFixture video;
   Stopwatch stopwatch;
   auto control = std::make_shared<BackendControl>();
@@ -246,13 +246,13 @@ void testVideoMaterializationHasThreeSlotHardLimit() {
   }
   std::atomic_bool cancelled = false;
   jukebox.loadVisuals(chart, cancelled);
-  require(jukebox.activeMaterializedVideoPaths().empty(),
-          "descriptor load keeps zero eager video players");
-  require(jukebox.play(0).success, "bounded video fixture starts playback");
+  require(jukebox.activeMaterializedVideoPaths().size() == 4,
+          "every scheduled video is materialized before playback");
+  require(jukebox.play(0).success, "preloaded video fixture starts playback");
   for (int id = 1; id <= 4; ++id) {
     jukebox.seekVisualsToSongTime(static_cast<long long>(id - 1) * 1'000);
-    require(jukebox.activeMaterializedVideoPaths().size() <= 3,
-            "video materialization never exceeds three slots");
+    require(jukebox.activeMaterializedVideoPaths().size() == 4,
+            "event activation performs no video materialization or eviction");
   }
 }
 
@@ -359,7 +359,7 @@ int main() {
 
   try {
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
-    testVideoMaterializationHasThreeSlotHardLimit();
+    testVideoMaterializationCompletesBeforePlayback();
     testRateScaledSnapshotRestoresBgaTimeline();
     testNegativeCountInKeepsBgaAtPreChartState();
     rendering::UniformCache::getInstance().destroyAll();

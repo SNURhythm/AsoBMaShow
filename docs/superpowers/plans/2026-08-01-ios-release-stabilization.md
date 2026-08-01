@@ -331,49 +331,42 @@ CMake/CTest, Xcode 26, Python `unittest`, Ruby/Fastlane, GitHub Actions.
    idempotent.
 5. Run focused tests and commit.
 
-## Task 8: Materialize BGA Players Lazily Within Hard Bounds
+## Task 8: Prepare BGA Players Before Playback
 
 **Files:**
 
-- Create: `src/audio/JukeboxVisualResources.h`
-- Create: `src/audio/JukeboxVisualResources.cpp`
 - Modify: `src/audio/Jukebox.h`
 - Modify: `src/audio/Jukebox.cpp`
 - Modify: `tests/jukebox_restore_tests.cpp`
-- Create: `tests/jukebox_visual_resource_tests.cpp`
-- Modify: `src/audio/CMakeLists.txt`
-- Modify: `CMakeLists.txt`
 
 ### Steps
 
-1. Extend the injectable visual factory to record probe/materialize/destroy,
-   worker concurrency, slot ownership, and audio-clock interactions.
-2. Add failing tests for descriptor-only load, zero eager players, hard maximum
-   of three materialized players, one loader worker, duplicate ID canonical
-   metadata with independent slot state, next-event prefetch, replacement,
-   seek invalidation/prioritization, visual failure, and audio continuity.
-3. Add a byte-LRU test for static BGA images with active base/layer pinning.
-4. Run `jukebox_visual_resource_tests` and `jukebox_restore_tests` to establish
-   red.
-5. Replace the all-ID `videoPlayerTable` ownership model with descriptor state,
-   base/layer slots, and one prefetch slot. Keep media probing/canonicalization
-   shared and playback state per slot.
-6. Add the single visual-loader worker and generation/ticket checks so stale
-   materialization cannot replace a seek target.
-7. Preserve existing render rectangles, offsets, suspension, playback-rate,
-   restore, and audio lifecycle behavior.
-8. Run focused tests plus audio lifecycle/mix regressions and commit:
+1. Add a failing production Jukebox test that requires every referenced video
+   to be materialized after chart loading and before `play()`.
+2. Verify the test fails because descriptor-only loading leaves zero prepared
+   videos and defers decoder initialization until the event timestamp.
+3. Materialize images and videos during visual reconciliation, propagating the
+   chart-load cancellation token through archive/file reads and decoder setup.
+4. Remove event-time materialization and the three-player eviction policy so
+   scheduled activation performs only lookup plus seek/play.
+5. Verify a four-ID chart retains all four prepared players across activation,
+   proving no event-time loading or eviction occurs.
+6. Preserve the existing three-frame decode buffer, two-frame recycle pool,
+   render rectangles, offsets, suspension, playback-rate, restore, and audio
+   lifecycle behavior.
+7. Run focused tests plus audio lifecycle/mix regressions and commit:
 
    ```bash
    cmake --build cmake-build-debug --target \
-     jukebox_visual_resource_tests jukebox_restore_tests \
-     audio_wrapper_lifecycle_tests audio_mix_tests -j 6
+     jukebox_restore_tests \
+     audio_wrapper_lifecycle_tests audio_mix_tests \
+     mobile_memory_pressure_tests -j 6
    ctest --test-dir cmake-build-debug \
-     -R '^(jukebox_visual_resource|jukebox_restore|audio_wrapper_lifecycle|audio_mix)$' \
+     -R '^(foundation_av_jukebox_restore|foundation_av_audio_wrapper_lifecycle|foundation_av_audio_mix|mobile_memory_pressure_tests)$' \
      --output-on-failure
-   git add src/audio tests/jukebox_restore_tests.cpp \
-     tests/jukebox_visual_resource_tests.cpp CMakeLists.txt
-   git commit -m "perf: materialize BGA players on demand"
+   git add src/audio/Jukebox.cpp src/audio/Jukebox.h \
+     tests/jukebox_restore_tests.cpp
+   git commit -m "fix: preload BGA before playback"
    ```
 
 ## Task 9: Align the iOS 14 Build Configuration

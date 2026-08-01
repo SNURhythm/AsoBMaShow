@@ -54,12 +54,14 @@ unchanged, but they are outside the first iOS-only release stage.
   and idle video frame/recycle buffers are discarded and suspended until their
   next activation/seek. Repeated notifications are safe and non-active media
   can resume through the normal visual activation path.
-- R9 BGA startup remediation is implemented and verified locally: chart load
-  records visual descriptors without constructing decoders or uploading image
-  textures, first use materializes the requested visual through one serialized
-  path, and an active-aware LRU enforces a hard ceiling of three live video
-  players. A four-ID video fixture verifies zero eager players and the ceiling;
-  jukebox restore, audio lifecycle/mix, and desktop main-build regressions pass.
+- The attempted R9 on-demand BGA remediation was removed after it caused visual
+  drift: event-time materialization blocked the scheduler and then started the
+  video from zero after the audio clock had advanced. Chart loading now fully
+  materializes every referenced visual before playback is eligible, and event
+  activation performs only lookup plus seek/play. A four-ID fixture verifies
+  every video is ready before playback and that activation performs no loading
+  or eviction. R9's decoder-count/memory cost remains technical debt because
+  rhythm-game synchronization takes precedence for release 0.0.1.
 - The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
   app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
   difficulty-table loading.
@@ -393,10 +395,13 @@ are roughly 30 MiB per player before alignment and decoder overhead; ten unique
 players are roughly 300 MiB. Duplicate IDs multiply the cost without adding
 unique content. This is an OOM/startup-stall risk on mobile.
 
-Recommendation: share immutable visual sources by canonical path, decode only
-the active/soon-to-be-active video with a small global worker budget, evict idle
-buffers/decoders, and load/downsample static BGAs on demand. Add a stress fixture
-with many and duplicate visual IDs and assert thread/memory ceilings.
+Recommendation: preserve the invariant that every scheduled visual is ready
+before playback starts and that event activation never performs file/archive
+I/O or decoder initialization. Future memory work may share immutable sources,
+reduce per-player buffers, and prepare a bounded decoder pool during chart
+loading, but it must prove all event targets are ready (including after seek)
+before replacing eager preparation. Add a many-ID stress fixture that checks
+both memory and exact audio-clock alignment.
 
 ### R10 — Video decoding mishandles valid edge cases and has no focused tests (medium, bug)
 

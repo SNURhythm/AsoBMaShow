@@ -10,7 +10,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -248,10 +247,7 @@ private:
   void reconcileVisualResources(
       bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
       std::atomic_bool &isCancelled);
-  bool ensureVisualMaterialized(int visualId);
-  bool evictOneMaterializedVisual(int protectedVisualId);
-  std::size_t materializedVisualCount() const;
-  void touchMaterializedVisual(int visualId);
+  bool preloadVisual(int visualId, std::atomic_bool &isCancelled);
   bool scheduleAudioFromCursor(size_t cursor);
   void playOverlappingAudioAt(long long micro);
   audio::playback::BackendOperationResult
@@ -297,7 +293,6 @@ private:
   mutable std::mutex imageTableMutex;
   std::unordered_map<int, path_t> visualPathTable;
   std::unordered_map<int, ResolvedVisualAsset> visualDescriptors;
-  std::deque<int> visualMaterializationOrder;
   mutable std::mutex visualMaterializationMutex;
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
