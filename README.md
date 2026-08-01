@@ -1,5 +1,5 @@
-# AsoBMaShow [WIP]
-![Build Status](https://github.com/SNURhythm/AsoBMaShow/actions/workflows/ios-testflight.yml/badge.svg)
+# AsoBMaShow
+![Mobile Build Status](https://github.com/SNURhythm/AsoBMaShow/actions/workflows/mobile-beta-deploy.yml/badge.svg)
 ![Build Status](https://github.com/SNURhythm/AsoBMaShow/actions/workflows/macos-build.yml/badge.svg)
 
 AsoBMaShow \[asobimashou: Let's play\] is a crossplatform BMS player which depends on open source libraries only

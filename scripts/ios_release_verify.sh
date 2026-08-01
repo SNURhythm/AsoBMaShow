@@ -54,6 +54,7 @@ run ctest --test-dir "${BUILD_DIR}" \
 run python3 tests/ios_build_setup_tests.py
 run python3 tests/ios_release_workflow_tests.py
 run python3 tests/ios_artifact_audit_tests.py
+run python3 tests/ios_release_documentation_tests.py
 if [ "${DRY_RUN}" -eq 1 ]; then
   run scripts/ios_firebase_deploy.sh --build-only
   run scripts/ios_artifact_audit.sh IOS_BUILD_OUTPUT_APP_PATH

@@ -69,6 +69,7 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("ios_build_setup_tests.py", output)
         self.assertIn("ios_release_workflow_tests.py", output)
         self.assertIn("ios_artifact_audit_tests.py", output)
+        self.assertIn("ios_release_documentation_tests.py", output)
         self.assertIn("ios_artifact_audit.sh", output)
         self.assertIn("--build-only", output)
         self.assertNotIn("upload_to_testflight", output)
