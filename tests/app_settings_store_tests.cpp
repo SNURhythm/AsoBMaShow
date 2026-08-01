@@ -390,6 +390,17 @@ void testIrDefaultsMigrationAndOriginSanitization() {
              "https://boku.tachi.ac",
          "origin normalization lowercases and removes default syntax");
 
+  const auto insecurePath = temp.path() / "insecure-origin.json";
+  writeFile(insecurePath,
+            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"http://LOCALHOST:80/"}}}})");
+  const auto insecure = AppSettingsStore::Load(insecurePath);
+  expect(insecure.status == AppSettingsLoadStatus::Loaded &&
+             insecure.settings.irProviders.at("tachi").serverOrigin ==
+                 "http://localhost" &&
+             !insecure.settings.irProviders.at("tachi").autoSubmit,
+         "HTTP origins remain stored but automatic authenticated work is "
+         "disabled");
+
   const auto invalidPath = temp.path() / "invalid-origin.json";
   writeFile(invalidPath,
             R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"https://secret@example.test/path?key=value#fragment"}}}})");

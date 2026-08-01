@@ -40,6 +40,9 @@ struct IrProviderSettings {
 [[nodiscard]] std::optional<std::string>
 normalizeServerOrigin(std::string_view value) noexcept;
 
+[[nodiscard]] bool
+isHttpsServerOrigin(std::string_view value) noexcept;
+
 void sanitizeProviderSettings(IrProviderSettings &settings) noexcept;
 
 } // namespace ir

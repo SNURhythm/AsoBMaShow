@@ -32,7 +32,43 @@ applicationDependencies(ApplicationContext &context) {
                                                        std::move(name));
       },
       .remove = [&context](std::string_view profileId) {
-        return context.profileManager.deleteProfile(profileId);
+        ProfileResult deleted{.error = ProfileError::IoFailure};
+        const auto coordinated = ir::coordinateProfileCredentialDeletion(
+            context.pendingIrCredentialCleanup, profileId,
+            [&context, profileId, &deleted](std::string &diagnostic) {
+              deleted = context.profileManager.deleteProfile(profileId);
+              diagnostic = deleted.message;
+              return deleted.ok();
+            },
+            [&context, profileId](std::string &diagnostic) {
+              return context.removeProfileIrCredentials(profileId,
+                                                        diagnostic);
+            });
+        if (coordinated.status ==
+            ir::ProfileCredentialDeletionStatus::QueueFailed) {
+          return ProfileResult{
+              .error = ProfileError::IoFailure,
+              .message = coordinated.diagnostic.empty()
+                             ? "Secure credential cleanup could not be queued; "
+                               "the profile was not deleted."
+                             : coordinated.diagnostic};
+        }
+        if (coordinated.status ==
+            ir::ProfileCredentialDeletionStatus::ProfileDeletionFailed) {
+          if (!coordinated.diagnostic.empty()) {
+            deleted.message = coordinated.diagnostic;
+          }
+          return deleted;
+        }
+        if (coordinated.status ==
+            ir::ProfileCredentialDeletionStatus::CredentialCleanupPending) {
+          deleted.message = coordinated.diagnostic.empty()
+                                ? "The profile was deleted; secure IR "
+                                  "credential cleanup will retry."
+                                : coordinated.diagnostic +
+                                      " Cleanup will retry automatically.";
+        }
+        return deleted;
       },
       .activate = [&context](std::string_view profileId) {
         return context.switchProfile(profileId);
@@ -59,7 +95,33 @@ applicationDependencies(ApplicationContext &context) {
                   .message = "The profile archive pipeline is not active."};
             }
             ProfileArchiveService service(context.profileManager);
-            return service.Import(archive, options);
+            auto imported = service.Import(archive, options);
+            if (!imported.ok() || !imported.profile ||
+                options.mode != ProfileImportMode::Overwrite ||
+                !options.overwriteProfileId) {
+              return imported;
+            }
+            const auto cleanup =
+                ir::finishProfileCredentialOverwriteCleanup(
+                    context.pendingIrCredentialCleanup,
+                    *options.overwriteProfileId,
+                    [&context, &options](std::string &diagnostic) {
+                      return context.removeProfileIrCredentials(
+                          *options.overwriteProfileId, diagnostic);
+                    });
+            if (cleanup.status ==
+                ir::ProfileCredentialOverwriteCleanupStatus::CleanupPending) {
+              if (!imported.message.empty()) {
+                imported.message += "; ";
+              }
+              imported.message += cleanup.diagnostic.empty()
+                                      ? "secure IR credential cleanup will "
+                                        "retry automatically"
+                                      : cleanup.diagnostic +
+                                            " Cleanup will retry "
+                                            "automatically.";
+            }
+            return imported;
           },
       .flushSettings = [&context](std::string &errorMessage) {
         return context.saveSettings(&errorMessage);

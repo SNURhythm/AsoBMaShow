@@ -155,6 +155,7 @@ public:
   bool getVisualsEnabled() const;
   void setVisualsSuspended(bool suspended);
   bool getVisualsSuspended() const;
+  void handleMemoryPressure();
   void setBgaOffsetMs(int offsetMs);
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
 
@@ -246,6 +247,7 @@ private:
   void reconcileVisualResources(
       bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
       std::atomic_bool &isCancelled);
+  bool preloadVisual(int visualId, std::atomic_bool &isCancelled);
   bool scheduleAudioFromCursor(size_t cursor);
   void playOverlappingAudioAt(long long micro);
   audio::playback::BackendOperationResult
@@ -290,6 +292,8 @@ private:
   std::unordered_map<int, ImageData> imageTable;
   mutable std::mutex imageTableMutex;
   std::unordered_map<int, path_t> visualPathTable;
+  std::unordered_map<int, ResolvedVisualAsset> visualDescriptors;
+  mutable std::mutex visualMaterializationMutex;
   std::atomic<int> currentBga{-1};
   std::atomic<int> currentBmpLayer{-1};
   std::atomic_bool visualsEnabled{true};

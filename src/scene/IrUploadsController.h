@@ -17,6 +17,22 @@
 
 namespace ir_uploads {
 
+struct ProviderAvailabilityInput {
+  bool enabled = false;
+  bool hasCredential = false;
+  bool httpsOrigin = false;
+  bool driverCanSubmit = false;
+  bool submissionServiceAvailable = false;
+};
+
+struct ProviderAvailability {
+  bool canSubmit = false;
+  std::string statusText;
+};
+
+[[nodiscard]] ProviderAvailability
+evaluateProviderAvailability(const ProviderAvailabilityInput &input);
+
 namespace detail {
 
 [[nodiscard]] std::size_t

@@ -475,6 +475,32 @@ void testMaximumQueuedAttemptFilterHasLinearOperationCount() {
          "operation per supplied row");
 }
 
+void testProviderAvailabilityRejectsAuthenticatedHttpUploads() {
+  const auto insecure = ir_uploads::evaluateProviderAvailability({
+      .enabled = true,
+      .hasCredential = true,
+      .httpsOrigin = false,
+      .driverCanSubmit = true,
+      .submissionServiceAvailable = true,
+  });
+  expect(!insecure.canSubmit &&
+             insecure.statusText ==
+                 "Use an HTTPS server origin before uploading.",
+         "manual upload availability rejects a stored credential over HTTP");
+
+  const auto secure = ir_uploads::evaluateProviderAvailability({
+      .enabled = true,
+      .hasCredential = true,
+      .httpsOrigin = true,
+      .driverCanSubmit = true,
+      .submissionServiceAvailable = true,
+  });
+  expect(secure.canSubmit &&
+             secure.statusText ==
+                 "Ready to queue verified scores for batch delivery.",
+         "manual upload availability accepts the complete HTTPS path");
+}
+
 } // namespace
 
 int main() {
@@ -490,6 +516,7 @@ int main() {
   testSessionFailureReasonsOverrideRefreshAndClearAfterQueue();
   testCancellationPreservesExistingSessionFailureReason();
   testMaximumQueuedAttemptFilterHasLinearOperationCount();
+  testProviderAvailabilityRejectsAuthenticatedHttpUploads();
   if (failures != 0) {
     std::cerr << failures << " IR uploads controller test(s) failed\n";
     return 1;

@@ -5,6 +5,7 @@
 #include "AtomicFile.h"
 #include "FileChecksum.h"
 #include "ProfileDatabaseTools.h"
+#include "ir/PendingIrCredentialCleanup.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
 #include "input/InputProfile.h"
@@ -2098,6 +2099,18 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
               "unable to remove account-scoped IR data from import: " +
               errorMessage;
           return false;
+        }
+        if (overwrite) {
+          // Keep the reset marker inside staging so the same durable directory
+          // rename commits both the replacement and its credential cleanup.
+          // A rollback removes staging and cannot clear the old account.
+          ir::PendingIrCredentialCleanup pending(
+              manager_.applicationDataRoot());
+          if (!pending.scheduleOverwriteReset(*overwrite, errorMessage)) {
+            errorMessage =
+                "unable to schedule secure credential reset: " + errorMessage;
+            return false;
+          }
         }
         return true;
       });

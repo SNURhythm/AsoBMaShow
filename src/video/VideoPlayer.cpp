@@ -1,4 +1,6 @@
 #include "VideoPlayer.h"
+#include "VideoDecodeState.h"
+#include "VideoFrameLayout.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
@@ -71,6 +73,9 @@ void VideoPlayer::unloadVideo() {
 bool VideoPlayer::loadVideo(const std::string &videoPath,
                             std::atomic<bool> &isCancelled) {
   unloadVideo();
+  if (isCancelled.load(std::memory_order_relaxed)) {
+    return false;
+  }
   {
     std::lock_guard<std::mutex> videoLock(videoMutex);
     AVFormatContext *tempFormatContext = avformat_alloc_context();
@@ -165,10 +170,18 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     //   fps = static_cast<float>(num) / static_cast<float>(den);
     // }
 
-    updateVideoTexture(codecContext->width, codecContext->height);
+    if (!updateVideoTexture(codecContext->width, codecContext->height)) {
+      SDL_Log("Unsupported YUV420 video dimensions: %d x %d",
+              codecContext->width, codecContext->height);
+      return fail();
+    }
 
     formatContext = tempFormatContext;
     tempFormatContext = nullptr;
+    if (isCancelled.load(std::memory_order_relaxed)) {
+      return fail();
+    }
+    isEOF = false;
     predecodingActive = true;
     try {
       predecodeThread = std::thread(&VideoPlayer::predecodeFrames, this);
@@ -262,25 +275,27 @@ void VideoPlayer::update() {
   // Upload to BGFX textures.
   // Use bgfx::copy + explicit pitch because decoder output can be padded
   // (linesize > plane width), and the frame is recycled right after upload.
-  const uint16_t yPitch = static_cast<uint16_t>(currentFrame->linesize[0]);
-  const uint16_t uPitch = static_cast<uint16_t>(currentFrame->linesize[1]);
-  const uint16_t vPitch = static_cast<uint16_t>(currentFrame->linesize[2]);
-  const uint32_t yBytes = static_cast<uint32_t>(currentFrame->linesize[0]) *
-                          static_cast<uint32_t>(videoFrameHeight);
-  const uint32_t uBytes = static_cast<uint32_t>(currentFrame->linesize[1]) *
-                          static_cast<uint32_t>(videoFrameHeight / 2);
-  const uint32_t vBytes = static_cast<uint32_t>(currentFrame->linesize[2]) *
-                          static_cast<uint32_t>(videoFrameHeight / 2);
+  const auto layout = video::makeYuv420FrameLayout(
+      videoFrameWidth, videoFrameHeight, currentFrame->linesize[0],
+      currentFrame->linesize[1], currentFrame->linesize[2]);
+  if (!layout || currentFrame->data[0] == nullptr ||
+      currentFrame->data[1] == nullptr || currentFrame->data[2] == nullptr) {
+    SDL_Log("Rejected invalid decoded YUV420 frame layout");
+    recycleFrame(currentFrame);
+    return;
+  }
 
-  bgfx::updateTexture2D(videoTextureY, 0, 0, 0, 0, videoFrameWidth,
-                        videoFrameHeight,
-                        bgfx::copy(currentFrame->data[0], yBytes), yPitch);
-  bgfx::updateTexture2D(videoTextureU, 0, 0, 0, 0, videoFrameWidth / 2,
-                        videoFrameHeight / 2,
-                        bgfx::copy(currentFrame->data[1], uBytes), uPitch);
-  bgfx::updateTexture2D(videoTextureV, 0, 0, 0, 0, videoFrameWidth / 2,
-                        videoFrameHeight / 2,
-                        bgfx::copy(currentFrame->data[2], vBytes), vPitch);
+  bgfx::updateTexture2D(
+      videoTextureY, 0, 0, 0, 0, layout->width, layout->height,
+      bgfx::copy(currentFrame->data[0], layout->yBytes), layout->yPitch);
+  bgfx::updateTexture2D(
+      videoTextureU, 0, 0, 0, 0, layout->chromaWidth,
+      layout->chromaHeight,
+      bgfx::copy(currentFrame->data[1], layout->uBytes), layout->uPitch);
+  bgfx::updateTexture2D(
+      videoTextureV, 0, 0, 0, 0, layout->chromaWidth,
+      layout->chromaHeight,
+      bgfx::copy(currentFrame->data[2], layout->vBytes), layout->vPitch);
 
   lastFramePTS = frameTime;
   hasVideoFrame = true;
@@ -403,9 +418,37 @@ void VideoPlayer::setDecodeSuspended(bool suspended) {
   eofCV.notify_all();
 }
 
-void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
+void VideoPlayer::handleMemoryPressure(MemoryPressureMode mode) {
+  if (mode == MemoryPressureMode::DiscardIdle) {
+    setDecodeSuspended(true);
+    std::lock_guard<std::mutex> videoLock(videoMutex);
+    std::lock_guard<std::mutex> bufferLock(bufferMutex);
+    for (AVFrame *&frame : frameBuffer) {
+      if (frame != nullptr) {
+        av_frame_free(&frame);
+      }
+    }
+    bufferHead = 0;
+    bufferTail = 0;
+    bufferSize = 0;
+  }
+  {
+    std::lock_guard<std::mutex> recycleLock(recycleMutex);
+    for (AVFrame *&frame : recyclePool) {
+      av_frame_free(&frame);
+    }
+    recyclePool.clear();
+  }
+  freeSpace.notify_all();
+}
+
+bool VideoPlayer::updateVideoTexture(int width, int height) {
+  const auto layout = video::makeYuv420FrameLayout(width, height);
+  if (!layout) {
+    return false;
+  }
   std::lock_guard<std::mutex> lock(videoFrameMutex);
-  if (width != videoFrameWidth || height != videoFrameHeight) {
+  if (layout->width != videoFrameWidth || layout->height != videoFrameHeight) {
     if (bgfx::isValid(videoTextureY)) {
       bgfx::destroy(videoTextureY);
       videoTextureY = BGFX_INVALID_HANDLE;
@@ -419,22 +462,41 @@ void VideoPlayer::updateVideoTexture(unsigned int width, unsigned int height) {
       videoTextureV = BGFX_INVALID_HANDLE;
     }
 
-    videoFrameWidth = width;
-    videoFrameHeight = height;
+    videoFrameWidth = layout->width;
+    videoFrameHeight = layout->height;
 
     // Create textures for Y, U, and V planes
     videoTextureY = bgfx::createTexture2D(
-        uint16_t(videoFrameWidth), uint16_t(videoFrameHeight), false, 1,
+        layout->width, layout->height, false, 1,
         bgfx::TextureFormat::R8, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE);
 
     videoTextureU = bgfx::createTexture2D(
-        uint16_t(videoFrameWidth / 2), uint16_t(videoFrameHeight / 2), false, 1,
+        layout->chromaWidth, layout->chromaHeight, false, 1,
         bgfx::TextureFormat::R8, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE);
 
     videoTextureV = bgfx::createTexture2D(
-        uint16_t(videoFrameWidth / 2), uint16_t(videoFrameHeight / 2), false, 1,
+        layout->chromaWidth, layout->chromaHeight, false, 1,
         bgfx::TextureFormat::R8, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE);
+    if (!bgfx::isValid(videoTextureY) || !bgfx::isValid(videoTextureU) ||
+        !bgfx::isValid(videoTextureV)) {
+      if (bgfx::isValid(videoTextureY)) {
+        bgfx::destroy(videoTextureY);
+      }
+      if (bgfx::isValid(videoTextureU)) {
+        bgfx::destroy(videoTextureU);
+      }
+      if (bgfx::isValid(videoTextureV)) {
+        bgfx::destroy(videoTextureV);
+      }
+      videoTextureY = BGFX_INVALID_HANDLE;
+      videoTextureU = BGFX_INVALID_HANDLE;
+      videoTextureV = BGFX_INVALID_HANDLE;
+      videoFrameWidth = 0;
+      videoFrameHeight = 0;
+      return false;
+    }
   }
+  return true;
 }
 
 void VideoPlayer::seek(int64_t micro) {
@@ -447,31 +509,27 @@ void VideoPlayer::seek(int64_t micro) {
       av_rescale_q(micro, {1, AV_TIME_BASE},
                    formatContext->streams[videoStreamIndex]->time_base);
 
-  {
-    // Stop playback and clear the ring buffer
-    std::lock_guard<std::mutex> lock(bufferMutex);
-    avcodec_flush_buffers(codecContext);
-
-    // Free all frames in the ring buffer
-    for (size_t i = 0; i < maxBufferSize; ++i) {
-      if (frameBuffer[i] != nullptr) {
-        recycleFrame(frameBuffer[i]);
-        frameBuffer[i] = nullptr;
-      }
-    }
-    bufferHead = bufferTail = 0; // Reset buffer indices
-
-    // Reset freeSpace
-    bufferSize = 0;
-    freeSpace.notify_all();
-  }
-
   // Perform the seek operation
   if (av_seek_frame(formatContext, videoStreamIndex, seekTarget,
                     AVSEEK_FLAG_BACKWARD) < 0) {
     SDL_Log("Failed to seek to %" PRId64 " microseconds", micro);
     return;
   }
+  avcodec_flush_buffers(codecContext);
+
+  {
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    for (size_t i = 0; i < maxBufferSize; ++i) {
+      if (frameBuffer[i] != nullptr) {
+        recycleFrame(frameBuffer[i]);
+        frameBuffer[i] = nullptr;
+      }
+    }
+    bufferHead = bufferTail = 0;
+    bufferSize = 0;
+  }
+  decodeGeneration.fetch_add(1, std::memory_order_release);
+  freeSpace.notify_all();
 
   // Reinitialize timing
   lastFramePTS = 0;
@@ -493,128 +551,179 @@ void VideoPlayer::predecodeFrames() {
     return;
   }
 
-  while (predecodingActive) {
+  video::VideoDecodeState decodeState;
+  std::uint64_t observedGeneration =
+      decodeGeneration.load(std::memory_order_acquire);
+
+  auto queueDecodedFrame = [&]() {
+    AVFrame *targetFrame = getRecycledFrame();
+    if (targetFrame == nullptr) {
+      SDL_Log("Failed to allocate a decoded video frame");
+      return;
+    }
+    if (videoFrameWidth <= 0 || videoFrameHeight <= 0) {
+      recycleFrame(targetFrame);
+      return;
+    }
+
+    const bool canReuseExistingBuffer =
+        targetFrame->buf[0] != nullptr &&
+        targetFrame->format == AV_PIX_FMT_YUV420P &&
+        targetFrame->width == videoFrameWidth &&
+        targetFrame->height == videoFrameHeight;
+    if (!canReuseExistingBuffer) {
+      av_frame_unref(targetFrame);
+      targetFrame->format = AV_PIX_FMT_YUV420P;
+      targetFrame->width = videoFrameWidth;
+      targetFrame->height = videoFrameHeight;
+      if (av_frame_get_buffer(targetFrame, 32) < 0) {
+        recycleFrame(targetFrame);
+        return;
+      }
+    }
+    if (av_frame_make_writable(targetFrame) < 0) {
+      SDL_Log("Failed to make target frame writable");
+      recycleFrame(targetFrame);
+      return;
+    }
+    if (sws_scale(swsContext, decodedFrame->data, decodedFrame->linesize, 0,
+                  codecContext->height, targetFrame->data,
+                  targetFrame->linesize) <= 0) {
+      SDL_Log("Failed to convert a decoded video frame");
+      recycleFrame(targetFrame);
+      return;
+    }
+
+    targetFrame->pts =
+        decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE
+            ? decodedFrame->best_effort_timestamp
+            : decodedFrame->pts;
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    if (predecodingActive && bufferSize < maxBufferSize) {
+      frameBuffer[bufferTail] = targetFrame;
+      bufferTail = (bufferTail + 1) % maxBufferSize;
+      ++bufferSize;
+    } else {
+      recycleFrame(targetFrame);
+    }
+  };
+
+  while (predecodingActive.load(std::memory_order_acquire)) {
+    const std::uint64_t generation =
+        decodeGeneration.load(std::memory_order_acquire);
+    if (generation != observedGeneration) {
+      av_packet_unref(localPacket);
+      decodeState.reset();
+      observedGeneration = generation;
+      isEOF = false;
+    }
+
     {
       std::unique_lock<std::mutex> lock(bufferMutex);
       freeSpace.wait(lock, [this] {
-        return !predecodingActive ||
+        return !predecodingActive.load(std::memory_order_acquire) ||
                (!decodeSuspended.load(std::memory_order_acquire) &&
                 bufferSize < maxBufferSize);
       });
     }
 
-    if (!predecodingActive)
+    if (!predecodingActive.load(std::memory_order_acquire)) {
+      decodeState.cancel();
       break;
-    if (decodeSuspended.load(std::memory_order_acquire))
+    }
+    if (decodeSuspended.load(std::memory_order_acquire)) {
       continue;
+    }
 
-    bool readFailed = false;
+    const auto action = decodeState.nextAction(
+        bufferSize.load(std::memory_order_acquire) < maxBufferSize);
+    if (action == video::VideoDecodeAction::WaitForOutput) {
+      continue;
+    }
+    if (action == video::VideoDecodeAction::Finished) {
+      isEOF = true;
+      std::unique_lock<std::mutex> lock(eofMutex);
+      eofCV.wait(lock, [this, observedGeneration] {
+        return !predecodingActive.load(std::memory_order_acquire) ||
+               decodeGeneration.load(std::memory_order_acquire) !=
+                   observedGeneration;
+      });
+      continue;
+    }
+
     {
       std::lock_guard<std::mutex> videoLock(videoMutex);
       if (!formatContext || !codecContext) {
+        decodeState.onReceive(video::VideoReceiveResult::Error);
+        continue;
+      }
+      if (decodeGeneration.load(std::memory_order_acquire) !=
+          observedGeneration) {
         continue;
       }
 
-      av_packet_unref(localPacket);
-      if (av_read_frame(formatContext, localPacket) >= 0) {
-        if (localPacket->stream_index == videoStreamIndex) {
-
-          // Send packet to decoder
-          int send_ret = avcodec_send_packet(codecContext, localPacket);
-
-          if (send_ret >= 0) {
-            // FFmpeg 7.1 Fix: Drain all available frames from the decoder
-            while (true) {
-              av_frame_unref(decodedFrame);
-              int receive_ret =
-                  avcodec_receive_frame(codecContext, decodedFrame);
-
-              if (receive_ret == 0) {
-                // Frame decoded successfully. Now scale it on this thread.
-                AVFrame *targetFrame = getRecycledFrame();
-                if (targetFrame) {
-                  if (videoFrameWidth <= 0 || videoFrameHeight <= 0) {
-                    recycleFrame(targetFrame);
-                    continue;
-                  }
-
-                  const bool canReuseExistingBuffer =
-                      targetFrame->buf[0] != nullptr &&
-                      targetFrame->format == AV_PIX_FMT_YUV420P &&
-                      targetFrame->width == videoFrameWidth &&
-                      targetFrame->height == videoFrameHeight;
-
-                  if (!canReuseExistingBuffer) {
-                    av_frame_unref(targetFrame);
-                    targetFrame->format = AV_PIX_FMT_YUV420P;
-                    targetFrame->width = videoFrameWidth;
-                    targetFrame->height = videoFrameHeight;
-                    if (av_frame_get_buffer(targetFrame, 32) < 0) {
-                      recycleFrame(targetFrame);
-                      continue;
-                    }
-                  }
-                  if (av_frame_make_writable(targetFrame) < 0) {
-                    SDL_Log("Failed to make target frame writable");
-                    recycleFrame(targetFrame);
-                    continue;
-                  }
-
-                  // Perform sws_scale
-                  // We need to set up the data pointers for sws_scale
-                  // Since targetFrame is allocated by av_frame_get_buffer, its
-                  // data/linesize are set.
-
-                  sws_scale(swsContext, decodedFrame->data,
-                            decodedFrame->linesize, 0, codecContext->height,
-                            targetFrame->data, targetFrame->linesize);
-
-                  const int64_t bestPts =
-                      decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE
-                          ? decodedFrame->best_effort_timestamp
-                          : decodedFrame->pts;
-                  targetFrame->pts = bestPts;
-
-                  std::lock_guard<std::mutex> lock(bufferMutex);
-                  if (bufferSize < maxBufferSize) {
-                    frameBuffer[bufferTail] = targetFrame;
-                    bufferTail = (bufferTail + 1) % maxBufferSize;
-                    ++bufferSize;
-                  } else {
-                    recycleFrame(targetFrame);
-                    break;
-                  }
-
-                  // If buffer is full, we must stop receiving for now
-                  if (bufferSize >= maxBufferSize) {
-                    break;
-                  }
-                } else {
-                  SDL_Log("Failed to get recycled frame");
-                }
-              } else {
-                if (receive_ret == AVERROR(EAGAIN) ||
-                    receive_ret == AVERROR_EOF)
-                  break;
-                readFailed = true; // Actual error
-                break;
-              }
-            }
-          }
+      if (action == video::VideoDecodeAction::ReceiveFrame) {
+        av_frame_unref(decodedFrame);
+        const int result = avcodec_receive_frame(codecContext, decodedFrame);
+        if (result == 0) {
+          decodeState.onReceive(video::VideoReceiveResult::Frame);
+          queueDecodedFrame();
+        } else if (result == AVERROR(EAGAIN)) {
+          decodeState.onReceive(video::VideoReceiveResult::NeedInput);
+        } else if (result == AVERROR_EOF) {
+          decodeState.onReceive(video::VideoReceiveResult::EndOfStream);
+        } else {
+          SDL_Log("Video decoder receive failed: %d", result);
+          decodeState.onReceive(video::VideoReceiveResult::Error);
         }
+      } else if (action == video::VideoDecodeAction::ReadPacket) {
         av_packet_unref(localPacket);
-      } else {
-        isEOF = true;
-        readFailed = true;
+        const int result = av_read_frame(formatContext, localPacket);
+        if (result >= 0) {
+          if (localPacket->stream_index == videoStreamIndex) {
+            decodeState.onDemux(video::VideoDemuxResult::VideoPacket);
+          } else {
+            av_packet_unref(localPacket);
+            decodeState.onDemux(video::VideoDemuxResult::SkippedPacket);
+          }
+        } else if (result == AVERROR_EOF) {
+          decodeState.onDemux(video::VideoDemuxResult::EndOfStream);
+        } else {
+          SDL_Log("Video demux failed before EOF: %d", result);
+          decodeState.onDemux(video::VideoDemuxResult::Error);
+        }
+      } else if (action == video::VideoDecodeAction::SendPacket) {
+        const int result = avcodec_send_packet(codecContext, localPacket);
+        if (result == 0) {
+          av_packet_unref(localPacket);
+          decodeState.onPacketSend(video::VideoSendResult::Accepted);
+        } else if (result == AVERROR(EAGAIN)) {
+          decodeState.onPacketSend(video::VideoSendResult::NeedDrain);
+        } else if (result == AVERROR_EOF) {
+          av_packet_unref(localPacket);
+          decodeState.onPacketSend(video::VideoSendResult::EndOfStream);
+        } else {
+          SDL_Log("Video decoder rejected a packet: %d", result);
+          av_packet_unref(localPacket);
+          decodeState.onPacketSend(video::VideoSendResult::Error);
+        }
+      } else if (action == video::VideoDecodeAction::SendFlush) {
+        const int result = avcodec_send_packet(codecContext, nullptr);
+        if (result == 0) {
+          decodeState.onFlushSend(video::VideoSendResult::Accepted);
+        } else if (result == AVERROR(EAGAIN)) {
+          decodeState.onFlushSend(video::VideoSendResult::NeedDrain);
+        } else if (result == AVERROR_EOF) {
+          decodeState.onFlushSend(video::VideoSendResult::EndOfStream);
+        } else {
+          SDL_Log("Video decoder flush failed: %d", result);
+          decodeState.onFlushSend(video::VideoSendResult::Error);
+        }
       }
-    }
-
-    if (readFailed && isEOF) {
-      std::unique_lock<std::mutex> lock(eofMutex);
-      eofCV.wait(lock, [this] { return !isEOF || !predecodingActive; });
     }
   }
 
+  av_packet_unref(localPacket);
   av_frame_free(&decodedFrame);
   av_packet_free(&localPacket);
 }
@@ -622,9 +731,7 @@ void VideoPlayer::predecodeFrames() {
 void VideoPlayer::stopPredecoding() {
   predecodingActive = false;
 
-  // Release all semaphores to unblock any waiting threads
-  bufferSize = 0;
-  freeSpace.notify_all(); // Release all free space
+  freeSpace.notify_all();
   eofCV.notify_all();
   if (predecodeThread.joinable()) {
     predecodeThread.join();
@@ -659,7 +766,7 @@ void VideoPlayer::recycleFrame(AVFrame *frame) {
   if (!frame)
     return;
   std::lock_guard<std::mutex> lock(recycleMutex);
-  if (recyclePool.size() >= maxBufferSize * 2) {
+  if (recyclePool.size() >= maxRecyclePoolSize) {
     av_frame_free(&frame);
     return;
   }

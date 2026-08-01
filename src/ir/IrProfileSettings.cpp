@@ -153,11 +153,19 @@ normalizeServerOrigin(std::string_view value) noexcept {
   }
 }
 
+bool isHttpsServerOrigin(std::string_view value) noexcept {
+  const auto normalized = normalizeServerOrigin(value);
+  return normalized && normalized->starts_with("https://");
+}
+
 void sanitizeProviderSettings(IrProviderSettings &settings) noexcept {
   if (const auto normalized = normalizeServerOrigin(settings.serverOrigin)) {
     settings.serverOrigin = *normalized;
   } else {
     settings.serverOrigin = std::string(kDefaultTachiServerOrigin);
+  }
+  if (!isHttpsServerOrigin(settings.serverOrigin)) {
+    settings.autoSubmit = false;
   }
 }
 

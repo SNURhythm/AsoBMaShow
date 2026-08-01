@@ -2,6 +2,9 @@ target_sources(main PRIVATE
     IrDriver.cpp
     IrHttpClient.cpp
     IrCredentialStore.cpp
+    IrCredentialBackend.cpp
+    IrCredentialMigration.cpp
+    PendingIrCredentialCleanup.cpp
     IrOutboxModels.cpp
     IrReceiptModels.cpp
     IrReplayRecordState.cpp
@@ -29,3 +32,7 @@ target_sources(main PRIVATE
     tachi/TachiResponseParser.cpp
     tachi/TachiUserScoreParser.cpp
 )
+
+if (IOS)
+    target_sources(main PRIVATE IosKeychainCredentialBackend.mm)
+endif()

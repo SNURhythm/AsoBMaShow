@@ -399,8 +399,16 @@ bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
   }
 
   if (ok) {
-    ok = execSql(db, "RELEASE chart_metadata_rebuild_migration",
-                 "committing chart metadata rebuild migration");
+    if (!execSql(db, "RELEASE chart_metadata_rebuild_migration",
+                 "committing chart metadata rebuild migration")) {
+      execSql(db, "ROLLBACK TO chart_metadata_rebuild_migration",
+              "rolling back chart metadata rebuild migration after commit "
+              "failure");
+      execSql(db, "RELEASE chart_metadata_rebuild_migration",
+              "releasing chart metadata rebuild migration after commit "
+              "failure");
+      return false;
+    }
   } else {
     execSql(db, "ROLLBACK TO chart_metadata_rebuild_migration",
             "rolling back chart metadata rebuild migration");
@@ -1312,13 +1320,9 @@ static bool createEntriesTable(sqlite3 *db) {
 }
 
 bool chart_repository_detail::EnsureCoreSchema(sqlite3 *database) {
-  bool ok = true;
-  ok = createChartMetaTable(database) && ok;
-  ok = createSolidArchiveTable(database) && ok;
-  ok = createFavoritesTable(database) && ok;
-  ok = createEntriesTable(database) && ok;
-  ok = createChartStateTables(database) && ok;
-  return ok;
+  return createChartMetaTable(database) && createSolidArchiveTable(database) &&
+         createFavoritesTable(database) && createEntriesTable(database) &&
+         createChartStateTables(database);
 }
 
 static bool insertEntry(sqlite3 *db, const std::filesystem::path &path,

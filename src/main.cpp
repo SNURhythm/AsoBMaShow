@@ -27,6 +27,7 @@
 #include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
 #include "view/TextInputBox.h"
+#include "view/ImageView.h"
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -697,7 +698,15 @@ int main(int argv, char **args) {
   bgfx_init.resolution.reset = s_bgfxResetFlags;
   bgfx_init.platformData = pd;
   rendering::applyBgfxTransientBufferLimits(bgfx_init.limits);
+#if TARGET_OS_IPHONE
+  // Metal owns a CAMetalLayer supplied by UIKit. Register this thread as the
+  // render thread before init so bgfx does not mutate that layer from its
+  // internal worker. In single-threaded mode bgfx::frame() drives rendering.
+  bgfx::renderFrame();
+  SDL_Log("Using bgfx single-threaded mode on iOS");
+#else
   SDL_Log("Using bgfx internal multithreaded mode");
+#endif
 
   int appExitCode = runApplication(bgfx_init);
 
@@ -1103,6 +1112,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       ++processedEventsInWindow;
       if (event.type == SDL_QUIT) {
         context.quitFlag = true;
+      }
+
+      if (event.type == SDL_APP_LOWMEMORY) {
+        ImageView::evictDecodedImageCache();
+        context.jukebox.handleMemoryPressure();
+        SDL_Log("Released evictable resources after a low-memory warning");
       }
 
       if (isAppBackgroundEvent(event)) {

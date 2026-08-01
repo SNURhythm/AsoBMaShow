@@ -1,6 +1,6 @@
 # AsoBMaShow Privacy Policy
 
-**Effective date:** July 29, 2026
+**Effective date:** August 1, 2026
 
 VioletXF (Jaewoo Ahn) ("VioletXF," "we," "us," or "our") provides AsoBMaShow. This Privacy Policy explains how AsoBMaShow handles information on iOS, Android, macOS, and Windows.
 
@@ -33,7 +33,7 @@ IR is an optional connection between AsoBMaShow and an independent Tachi-compati
 
 When an IR provider is enabled and you open a chart ranking, AsoBMaShow sends the chart's cryptographic hash, game mode in the request path, and ordinary network request information to the configured provider. It then downloads the provider's chart identifier, player account names or identifiers, ranks, scores, clear statuses, judgement or timing details when available, combo and bad-point information, and achievement times for display in the app.
 
-Public chart-resolution and leaderboard requests do not contain your API key. If you saved an API key, AsoBMaShow separately sends it to the configured provider to authenticate the provider account and obtain its numeric account identifier. The app uses that identifier to mark your row in the public ranking and may cache the identifier locally.
+Public chart-resolution and leaderboard requests do not contain your API key. Anonymous public ranking requests may use the HTTP or HTTPS origin you configured. If you saved an API key, AsoBMaShow separately sends it to the configured provider to authenticate the provider account and obtain its numeric account identifier, but authenticated IR operations require HTTPS. The app uses that identifier to mark your row in the public ranking and may cache the identifier locally.
 
 ### Score Submission and History Reconciliation
 
@@ -52,7 +52,9 @@ If you choose to import or reconcile IR history, AsoBMaShow authenticates to the
 
 ### IR Credentials, Local Queue, and Controls
 
-The API key is stored in a separate file inside the local AsoBMaShow profile. The app masks it in the interface, excludes it from profile exports and duplication, and does not copy it into score-submission payloads, queue rows, diagnostics, or logs. AsoBMaShow uses file protections intended to restrict the credential file to the device user, but it does not store the key in Apple Keychain, Android Keystore, or another platform credential manager.
+On iOS, the API key is stored in Apple Keychain under the stable profile and provider identity. Keychain items use `AfterFirstUnlockThisDeviceOnly` accessibility: they become available after the device is first unlocked following a restart, do not synchronize through iCloud Keychain, and do not migrate to another device. A transactional legacy migration copies every valid key from the earlier profile credential file into Keychain, reads each item back for byte verification, and removes the legacy file only after the entire migration succeeds. If any write or verification fails, the legacy source is retained and authenticated IR is disabled for the affected profile for that app session rather than exposing a partially migrated key.
+
+On other supported platforms, the API key remains in a separate local credential file protected by the operating system's file permissions. On every platform, the app masks the key in the interface, excludes it from profile exports and duplication, and does not copy it into score-submission payloads, queue rows, diagnostics, or logs.
 
 IR settings let you:
 
@@ -81,7 +83,7 @@ You can decline or revoke optional permissions in your operating-system settings
 Other network activity is initiated by features you choose to use. In particular:
 
 - BMS search and download features may send chart hashes or title and artist search terms to third-party catalog, search, archive, or download hosts.
-- Difficulty-table import sends the table URL you provide or select to the host serving that table and its related data.
+- HTTP difficulty-table sources remain supported. Difficulty-table import sends the HTTP or HTTPS table URL you provide or select to the host serving that table and its related data.
 - Opening an external page sends the requested address to your browser and the destination website.
 - Exporting or sharing content sends the selected file to the app, person, or storage provider you choose.
 
@@ -89,7 +91,7 @@ Like ordinary internet services, IR providers and these other third parties may 
 
 ## Device Backups
 
-Your operating system or a backup provider may include local AsoBMaShow data, including local IR settings or operational data, in a device backup depending on your Apple, Google, device, and backup settings. IR API keys are excluded from AsoBMaShow profile exports, but operating-system backup behavior is controlled by the platform. You control these settings, and the provider's policies govern backup storage, retention, and deletion.
+Your operating system or a backup provider may include local AsoBMaShow data, including local IR settings or operational data, in a device backup depending on your Apple, Google, device, and backup settings. IR API keys are excluded from AsoBMaShow profile exports. On iOS, the device-only Keychain accessibility described above prevents the key from migrating to another device; backup handling for other local data and platforms is controlled by the operating system or backup provider. You control these settings, and the provider's policies govern backup storage, retention, and deletion.
 
 ## Information You Send to Us
 
@@ -115,9 +117,9 @@ We retain email correspondence only for as long as reasonably necessary for the 
 
 ## Security
 
-We limit information access to what app features require and rely on operating-system and device protections for locally stored data. The default Bokutachi origin uses HTTPS, authenticated IR requests do not follow redirects, and AsoBMaShow is designed to keep API keys out of submission bodies, queue rows, exports, diagnostics, and logs.
+We limit information access to what app features require and rely on operating-system and device protections for locally stored data. The default Bokutachi origin uses HTTPS, authenticated IR requests do not follow redirects, authenticated IR operations require HTTPS, and AsoBMaShow is designed to keep API keys out of submission bodies, queue rows, exports, diagnostics, and logs.
 
-The app permits an advanced user to configure another HTTP or HTTPS Tachi-compatible origin. The settings screen identifies an HTTP origin as insecure because an API key and gameplay data would not be protected in transit. Use HTTPS and only a server operator you trust. Independent services have their own security practices, and no storage or transmission method can be guaranteed to be completely secure.
+The app permits an advanced user to configure another HTTP or HTTPS Tachi-compatible origin. An HTTP origin can serve anonymous public chart and leaderboard data, but the app refuses to send a bearer credential, submit a score, resolve an authenticated identity, or download private account history until the origin is changed to HTTPS. Use only a server operator you trust. Independent services have their own security practices, and no storage or transmission method can be guaranteed to be completely secure.
 
 ## Children's Privacy
 

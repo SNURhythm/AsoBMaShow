@@ -10,6 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj"
+PODFILE = ROOT / "ios/Xcode/AsoBMaShow/Podfile"
+INFO_PLIST = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow/Info.plist"
 WORKSPACE = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow.xcworkspace/contents.xcworkspacedata"
 SRC_GROUP_ID = "B76AAF3F2DA4A1C400E8327C"
 EXCEPTION_SET_ID = "B76AAF692DA4A1C400E8327C"
@@ -19,8 +21,11 @@ DEPLOY_SCRIPT = ROOT / "scripts/ios_firebase_deploy.sh"
 FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 PODS_CACHE_HELPER = ROOT / "scripts/ios_pods_cache.sh"
 IOS_INIT = ROOT / "scripts/ios_init.sh"
+IOS_RELEASE_VERIFY = ROOT / "scripts/ios_release_verify.sh"
 AGENT_GUIDANCE = ROOT / "AGENTS.md"
 SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
+MAIN_SOURCE = ROOT / "src/main.cpp"
+IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
 
 
 def object_block(project: str, object_id: str, next_section: str) -> str:
@@ -75,6 +80,93 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertIn(
             "audio/AudioWrapper.cpp = sourcecode.cpp.objcpp;", group
         )
+
+    def test_ios_release_contract_remains_version_0_0_1_on_ios_14(self):
+        target_configurations = [
+            object_block(
+                self.project,
+                configuration_id,
+                "\n\t\t};",
+            )
+            for configuration_id in (
+                "B700271D2BF7A8DA000DB8EC",
+                "B700271E2BF7A8DA000DB8EC",
+            )
+        ]
+        for configuration in target_configurations:
+            self.assertIn("IPHONEOS_DEPLOYMENT_TARGET = 14.0;", configuration)
+            self.assertIn("MARKETING_VERSION = 0.0.1;", configuration)
+
+    def test_pods_and_generated_bgfx_align_to_ios_14(self):
+        podfile = PODFILE.read_text(encoding="utf-8")
+        self.assertIn("platform :ios, '14.0'", podfile)
+        self.assertIn("IPHONEOS_DEPLOYMENT_TARGET", podfile)
+        self.assertIn("'14.0'", podfile)
+        init_script = IOS_INIT.read_text(encoding="utf-8")
+        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0", init_script)
+
+    def test_all_ios_build_entrypoints_override_dependencies_to_ios_14(self):
+        self.assertIn(
+            "IPHONEOS_DEPLOYMENT_TARGET=14.0", DEPLOY_SCRIPT.read_text()
+        )
+        self.assertIn("IPHONEOS_DEPLOYMENT_TARGET=14.0", FASTFILE.read_text())
+
+    def test_ats_exception_is_retained_without_privacy_manifest(self):
+        plist = subprocess.run(
+            [
+                "plutil",
+                "-extract",
+                "NSAppTransportSecurity.NSAllowsArbitraryLoads",
+                "raw",
+                str(INFO_PLIST),
+            ],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual("true", plist.stdout.strip())
+        self.assertFalse(any(ROOT.rglob("PrivacyInfo.xcprivacy")))
+        verify_script = IOS_RELEASE_VERIFY.read_text(encoding="utf-8")
+        self.assertIn("ios_artifact_audit.sh", verify_script)
+        self.assertNotIn("PrivacyInfo.xcprivacy", verify_script)
+
+    def test_ios_forces_bgfx_metal_work_onto_the_main_thread(self):
+        source = MAIN_SOURCE.read_text(encoding="utf-8")
+        limits = source.index("rendering::applyBgfxTransientBufferLimits")
+        ios_guard = source.index("#if TARGET_OS_IPHONE", limits)
+        force_single_threaded = source.index("bgfx::renderFrame();", ios_guard)
+        non_ios_branch = source.index("#else", ios_guard)
+        initialize_bgfx = source.index("int appExitCode = runApplication(bgfx_init);")
+        self.assertLess(ios_guard, force_single_threaded)
+        self.assertLess(force_single_threaded, non_ios_branch)
+        self.assertLess(force_single_threaded, initialize_bgfx)
+        self.assertIn("Using bgfx single-threaded mode on iOS", source)
+
+    def test_ios_active_window_lookup_uses_a_validated_weak_cache(self):
+        source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
+        lookup_start = source.index("UIWindow *FindActiveWindow()")
+        lookup_end = source.index(
+            "void RestoreIOSViewportAfterKeyboardFocusOnce()", lookup_start
+        )
+        lookup = source[lookup_start:lookup_end]
+
+        cache_declaration = lookup.index(
+            "static __weak UIWindow *cachedActiveWindow"
+        )
+        cache_validation = lookup.index(
+            "cachedWindow.windowScene.activationState =="
+        )
+        key_window_validation = lookup.index("cachedWindow.isKeyWindow")
+        visible_window_validation = lookup.index("!cachedWindow.hidden")
+        scene_enumeration = lookup.index(
+            "UIApplication.sharedApplication.connectedScenes"
+        )
+        self.assertLess(cache_declaration, cache_validation)
+        self.assertLess(cache_validation, key_window_validation)
+        self.assertLess(key_window_validation, visible_window_validation)
+        self.assertLess(visible_window_validation, scene_enumeration)
+        self.assertIn("cachedActiveWindow = window;", lookup)
 
     def test_workspace_has_one_relative_pods_project(self):
         tree = ET.parse(WORKSPACE)
@@ -187,7 +279,7 @@ class DerivedDataPathTests(unittest.TestCase):
         self.assertIn("ios_derived_data_path.sh", DEPLOY_SCRIPT.read_text())
         fastfile = FASTFILE.read_text()
         self.assertIn("ios_derived_data_path.sh", fastfile)
-        self.assertIn("clean: !distribute_to_firebase", fastfile)
+        self.assertIn("clean: false", fastfile)
 
     def test_firebase_archive_uses_stable_object_root(self):
         fastfile = FASTFILE.read_text()
@@ -198,7 +290,7 @@ class DerivedDataPathTests(unittest.TestCase):
             fastfile,
         )
         self.assertIn(
-            'build_options[:xcargs] = "#{xcargs} '
+            'xcargs: "#{xcargs} '
             'OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}"',
             fastfile,
         )

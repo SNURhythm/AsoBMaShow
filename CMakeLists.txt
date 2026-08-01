@@ -120,8 +120,9 @@ if (IOS)
     find_library(CORE_GRAPHICS CoreGraphics)
     find_library(CORE_TEXT CoreText)
     find_library(PHOTOS Photos)
+    find_library(SECURITY Security)
     list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${CORE_GRAPHICS}
-        ${CORE_TEXT} ${PHOTOS} ${SDL2_LIB} ${SDL2_TFF_LIB})
+        ${CORE_TEXT} ${PHOTOS} ${SECURITY} ${SDL2_LIB} ${SDL2_TFF_LIB})
 
 elseif(ANDROID)
     # --- Android: SDL submodules + vcpkg-compatible native packages ---
@@ -2442,6 +2443,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/utils/Stopwatch.cpp
+        src/video/VideoDecodeState.cpp
+        src/video/VideoFrameLayout.cpp
         src/video/VideoPlayer.cpp
     )
     target_include_directories(jukebox_restore_tests PRIVATE
@@ -2458,6 +2461,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(WIN32)
         target_link_libraries(jukebox_restore_tests PRIVATE shell32 ole32)
     endif()
+
+    add_executable(video_frame_layout_tests
+        tests/video_frame_layout_tests.cpp
+        src/video/VideoFrameLayout.cpp
+    )
+    target_include_directories(video_frame_layout_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(video_frame_layout_tests PRIVATE cxx_std_23)
+
+    add_executable(video_decode_state_tests
+        tests/video_decode_state_tests.cpp
+        src/video/VideoDecodeState.cpp
+    )
+    target_include_directories(video_decode_state_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(video_decode_state_tests PRIVATE cxx_std_23)
 
     add_executable(audio_device_manager_tests
         tests/audio_device_manager_tests.cpp
@@ -2495,8 +2516,37 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(image_fade_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(image_fade_tests PRIVATE cxx_std_23)
 
+    add_executable(decoded_image_cache_tests
+        tests/decoded_image_cache_tests.cpp
+        src/view/DecodedImageCache.cpp
+    )
+    target_include_directories(decoded_image_cache_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(decoded_image_cache_tests PRIVATE cxx_std_23)
+
+    add_executable(image_decode_coordinator_tests
+        tests/image_decode_coordinator_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
+    )
+    target_include_directories(image_decode_coordinator_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(image_decode_coordinator_tests PRIVATE cxx_std_23)
+
+    add_executable(mobile_memory_pressure_tests
+        tests/mobile_memory_pressure_tests.cpp
+    )
+    target_compile_features(mobile_memory_pressure_tests PRIVATE cxx_std_23)
+    target_compile_definitions(mobile_memory_pressure_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(image_view_fade_tests
         tests/image_view_fade_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
         src/view/ImageFade.cpp
         src/view/ImageView.cpp
         src/view/View.cpp
@@ -2532,6 +2582,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(chart_list_item_view_tests
         tests/chart_list_item_view_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
         src/view/ChartListItemView.cpp
         src/view/ImageFade.cpp
         src/view/ImageView.cpp
@@ -2724,6 +2776,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(ir_upload_candidate_list_view_tests
         tests/ir_upload_candidate_list_view_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
         src/view/IrUploadCandidateListView.cpp
         src/view/ImageFade.cpp
         src/view/ImageView.cpp
@@ -3032,6 +3086,52 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(ir_credential_store_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_credential_migration_tests
+        tests/ir_credential_migration_tests.cpp
+        src/ir/IrCredentialBackend.cpp
+        src/ir/IrCredentialMigration.cpp
+        src/ir/IrCredentialStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+    )
+    target_include_directories(ir_credential_migration_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_credential_migration_tests PRIVATE cxx_std_23)
+
+    add_executable(pending_ir_credential_cleanup_tests
+        tests/pending_ir_credential_cleanup_tests.cpp
+        src/ir/PendingIrCredentialCleanup.cpp
+        src/ir/IrCredentialBackend.cpp
+        src/ir/IrCredentialStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+    )
+    target_include_directories(pending_ir_credential_cleanup_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(pending_ir_credential_cleanup_tests PRIVATE
+        cxx_std_23
+    )
+
+    if (IOS)
+        add_executable(ios_keychain_credential_tests
+            tests/ios_keychain_credential_tests.mm
+            src/ir/IrCredentialBackend.cpp
+            src/ir/IosKeychainCredentialBackend.mm
+            src/ir/IrCredentialStore.cpp
+            src/AtomicFile.cpp
+            src/VersionedJson.cpp
+        )
+        target_include_directories(ios_keychain_credential_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(ios_keychain_credential_tests PRIVATE cxx_std_23)
+        target_link_libraries(ios_keychain_credential_tests PRIVATE
+            ${FOUNDATION} ${SECURITY}
+        )
+    endif()
 
     add_executable(practice_configuration_tests
         tests/practice_configuration_tests.cpp
@@ -3596,6 +3696,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrCredentialBackend.cpp
+        src/ir/IrCredentialStore.cpp
+        src/ir/PendingIrCredentialCleanup.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionModern.cpp
@@ -3714,6 +3817,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(frame_pacer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(frame_pacer_tests PRIVATE cxx_std_23)
 
+    add_executable(quaternion_math_tests
+        tests/quaternion_math_tests.cpp
+        src/math/Quaternion.cpp
+        src/math/Vector3.cpp
+    )
+    target_include_directories(quaternion_math_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(quaternion_math_tests PRIVATE cxx_std_23)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(quaternion_math_tests PRIVATE
+            -Wuninitialized
+            -Werror=uninitialized
+        )
+    endif()
+
     add_executable(sdl_display_backend_tests
         tests/sdl_display_backend_tests.cpp
         src/video/DisplaySettingsManager.cpp
@@ -3785,6 +3902,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
+    asobmashow_register_test(video_frame_layout_tests)
+    asobmashow_register_test(video_decode_state_tests)
 
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)
@@ -3902,6 +4021,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         application_result_recovery_tests
         chart_filter_sort_panel_view_tests
         image_fade_tests
+        decoded_image_cache_tests
+        image_decode_coordinator_tests
+        mobile_memory_pressure_tests
         image_view_fade_tests
         artwork_cache_contract_tests
         chart_list_item_view_tests
@@ -3949,6 +4071,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
+    asobmashow_register_test(ir_credential_migration_tests ir_credential_migration_tests)
+    asobmashow_register_test(pending_ir_credential_cleanup_tests pending_ir_credential_cleanup_tests)
     asobmashow_register_test(practice_configuration_tests)
     asobmashow_register_test(practice_rule_override_tests)
     asobmashow_register_test(gameplay_score_state_tests)
@@ -3987,6 +4111,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(quaternion_math_tests foundation_math_quaternion)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
     add_test(NAME foundation_provenance_db
         COMMAND $<TARGET_FILE:score_provenance_db_tests>)

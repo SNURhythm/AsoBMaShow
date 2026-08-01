@@ -4,14 +4,15 @@
 
 - To deploy an iOS build to Firebase App Distribution from this machine, use:
   `scripts/ios_firebase_deploy.sh`
-- Do not run `bundle exec fastlane ios beta` directly unless you have already selected the project Ruby. The default Ruby in this environment is the macOS system Ruby, which is too old for this repo.
+- Do not run an iOS Fastlane distribution lane directly unless you have already selected the project Ruby. The default Ruby in this environment is the macOS system Ruby, which is too old for this repo.
 - The deploy script loads `.env`, `.env.local`, `ios/Xcode/AsoBMaShow/.env`, and `ios/Xcode/AsoBMaShow/.env.local`, then selects the Ruby version from `ios/Xcode/AsoBMaShow/.ruby-version` or `.tool-versions`.
 - Use `scripts/ios_firebase_deploy.env.example` as the private env template. Real env files must stay out of git.
-- The script simulates the GitHub PR-to-`develop` environment so the Fastlane `ios beta` lane takes the Firebase App Distribution path instead of TestFlight.
+- The script simulates the GitHub PR-to-`develop` environment required by the explicit Fastlane `ios firebase` lane. TestFlight uses the separate serialized `ios testflight_release` lane.
 - For a fast local compile check without archive, signing, or Firebase upload, run:
   `scripts/ios_firebase_deploy.sh --build-only`
   This still selects the project Ruby and runs `scripts/ios_init.sh` unless `--skip-init` is passed.
 - Running the deploy script uploads a build. Only run it when the user explicitly asks for deployment.
+- For the release-critical native tests plus an unsigned iOS build, use `scripts/ios_release_verify.sh`; it has no distribution action.
 
 ## iOS Build Setup
 

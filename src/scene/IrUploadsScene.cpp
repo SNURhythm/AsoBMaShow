@@ -1,6 +1,5 @@
 #include "IrUploadsScene.h"
 
-#include "../ir/IrCredentialStore.h"
 #include "../ir/IrProfileSettings.h"
 #include "../ir/IrSubmissionService.h"
 #include "../rendering/common.h"
@@ -408,34 +407,29 @@ void IrUploadsScene::refreshProviderState() {
       context.settings.irProviders.find(std::string(ir::kTachiProviderId));
   const bool enabled = provider != context.settings.irProviders.end() &&
                        provider->second.enabled;
-  const auto credentials = ir::IrCredentialStore::load(
-      context.profileManager.activePaths().irCredentialsJson);
-  const auto key =
-      credentials.credentials.apiKeys.find(std::string(ir::kTachiProviderId));
+  const bool httpsOrigin =
+      provider != context.settings.irProviders.end() &&
+      ir::isHttpsServerOrigin(provider->second.serverOrigin);
   const bool hasCredential =
-      credentials.status == ir::IrCredentialLoadStatus::Loaded &&
-      key != credentials.credentials.apiKeys.end() && !key->second.empty();
+      !context
+           .lookupActiveIrCredential(context.profileManager.activeProfile().id,
+                                     ir::kTachiProviderId)
+           .empty();
   const auto driver = context.irDrivers.find(ir::kTachiProviderId);
   const bool driverCanSubmit = driver != nullptr &&
                                !driver->capabilities().readOnly &&
                                driver->capabilities().scoreSubmission;
-  providerCanSubmit = enabled && hasCredential && driverCanSubmit &&
-                      context.irSubmissionService != nullptr;
+  const auto availability = ir_uploads::evaluateProviderAvailability({
+      .enabled = enabled,
+      .hasCredential = hasCredential,
+      .httpsOrigin = httpsOrigin,
+      .driverCanSubmit = driverCanSubmit,
+      .submissionServiceAvailable = context.irSubmissionService != nullptr,
+  });
+  providerCanSubmit = availability.canSubmit;
 
-  if (providerStatusText == nullptr) {
-    return;
-  }
-  if (!enabled) {
-    providerStatusText->setText(
-        "Bokutachi is disabled. Enable it before uploading.");
-  } else if (!hasCredential) {
-    providerStatusText->setText(
-        "A Bokutachi API key is required before uploading.");
-  } else if (!driverCanSubmit || context.irSubmissionService == nullptr) {
-    providerStatusText->setText("Bokutachi score submission is unavailable.");
-  } else {
-    providerStatusText->setText(
-        "Ready to queue verified scores for batch delivery.");
+  if (providerStatusText != nullptr) {
+    providerStatusText->setText(availability.statusText);
   }
 }
 

@@ -66,6 +66,37 @@ void writePpm(const std::filesystem::path &path, int width, int height) {
     output.write(pixel, sizeof(pixel));
   }
 }
+
+#ifndef _WIN32
+bool writeAll(int descriptor, const char *data, std::size_t size) {
+  while (size > 0) {
+    const ssize_t written = write(descriptor, data, size);
+    if (written <= 0) {
+      return false;
+    }
+    data += written;
+    size -= static_cast<std::size_t>(written);
+  }
+  return true;
+}
+
+bool writePpm(int descriptor, int width, int height) {
+  const std::string header =
+      "P6\n" + std::to_string(width) + ' ' + std::to_string(height) +
+      "\n255\n";
+  if (!writeAll(descriptor, header.data(), header.size())) {
+    return false;
+  }
+  const std::vector<char> row(static_cast<std::size_t>(width) * 3U,
+                              static_cast<char>(0x66));
+  for (int y = 0; y < height; ++y) {
+    if (!writeAll(descriptor, row.data(), row.size())) {
+      return false;
+    }
+  }
+  return true;
+}
+#endif
 } // namespace
 
 int main() {
@@ -149,6 +180,71 @@ int main() {
             "normal async jacket polling remains source-metadata-free");
   }
 
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-evicted-ticket-" +
+         std::to_string(std::chrono::steady_clock::now()
+                            .time_since_epoch()
+                            .count()));
+    std::filesystem::create_directories(fixtureRoot);
+    const std::filesystem::path artworkPath = fixtureRoot / "artwork.ppm";
+    const path_t imagePath = fspath_to_path_t(artworkPath);
+    writeSinglePixelPpm(artworkPath);
+    ImageView::dropAllCache();
+    ImageView image(0, 0, 8, 8);
+    image.setImageAsync(imagePath, true);
+
+    ImageView::evictDecodedImageCache();
+    const auto reloadDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (image.imageWidth() == 0 &&
+           std::chrono::steady_clock::now() < reloadDeadline) {
+      image.setImageAsync(imagePath, true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(image.imageWidth() == 1 && image.imageHeight() == 1,
+            "memory eviction lets a live image replace its stale ticket");
+    std::filesystem::remove_all(fixtureRoot);
+  }
+
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-failed-ticket-" +
+         std::to_string(std::chrono::steady_clock::now()
+                            .time_since_epoch()
+                            .count()));
+    std::filesystem::create_directories(fixtureRoot);
+    const std::filesystem::path artworkPath = fixtureRoot / "artwork.ppm";
+    const path_t imagePath = fspath_to_path_t(artworkPath);
+    ImageView::dropAllCache();
+    ImageView image(0, 0, 8, 8);
+    image.setImageAsync(imagePath, true);
+
+    const auto failureDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (ImageView::pendingAsyncDecodeCountForTesting(imagePath) != 0 &&
+           std::chrono::steady_clock::now() < failureDeadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ImageView::pendingAsyncDecodeCountForTesting(imagePath) == 0,
+            "missing image decode reaches a terminal failure");
+
+    writeSinglePixelPpm(artworkPath);
+    const auto retryDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (image.imageWidth() == 0 &&
+           std::chrono::steady_clock::now() < retryDeadline) {
+      image.setImageAsync(imagePath, true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(image.imageWidth() == 1 && image.imageHeight() == 1,
+            "a failed async decode can retry when its source becomes ready");
+    ImageView::dropAllCache();
+    std::filesystem::remove_all(fixtureRoot);
+  }
+
 #ifndef _WIN32
   {
     const std::filesystem::path fixtureRoot =
@@ -183,18 +279,82 @@ int main() {
 
     const auto refreshDeadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (coldReload.imageWidth() != 512 &&
+    while (coldReload.imageWidth() != 256 &&
            std::chrono::steady_clock::now() < refreshDeadline) {
       coldReload.setImageAsync(artworkPath.string(), false);
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    require(coldReload.imageWidth() == 512 && coldReload.imageHeight() == 256,
-            "ordinary artwork cold reload finishes from its source");
+    require(coldReload.imageWidth() == 256 && coldReload.imageHeight() == 128,
+            "ordinary artwork is downsampled to its rendered dimensions");
 
     ImageView::dropAllCache();
     std::filesystem::remove_all(fixtureRoot);
     require(!restoredThumbnailImmediately,
             "ordinary jacket or banner does not restore a disk preview");
+  }
+
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-resize-refresh-" + std::to_string(getpid()));
+    std::filesystem::remove_all(fixtureRoot);
+    std::filesystem::create_directories(fixtureRoot);
+    const std::filesystem::path artworkPath = fixtureRoot / "jacket.ppm";
+    writePpm(artworkPath, 512, 256);
+
+    ImageView::dropAllCache();
+    ImageView artwork(0, 0, 64, 32);
+    artwork.setImageAsync(artworkPath.string(), true);
+    const auto initialDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (artwork.imageWidth() != 64 &&
+           std::chrono::steady_clock::now() < initialDeadline) {
+      artwork.setImageAsync(artworkPath.string(), true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(artwork.imageWidth() == 64 && artwork.imageHeight() == 32,
+            "artwork initially decodes for its compact layout");
+
+    std::filesystem::remove(artworkPath);
+    require(mkfifo(artworkPath.c_str(), 0600) == 0,
+            "resize refresh fixture creates a named pipe");
+    {
+      View::LayoutBatchScope layoutBatch;
+      artwork.setWidth(256);
+      artwork.setHeight(128);
+    }
+
+    int writer = -1;
+    const auto readerDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    while (writer < 0 && std::chrono::steady_clock::now() < readerDeadline) {
+      writer = open(artworkPath.c_str(), O_WRONLY | O_NONBLOCK);
+      if (writer < 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    }
+    require(writer >= 0,
+            "enlarging a bound image starts a higher-resolution decode");
+    const int writerFlags = fcntl(writer, F_GETFL);
+    require(writerFlags >= 0 &&
+                fcntl(writer, F_SETFL, writerFlags & ~O_NONBLOCK) == 0,
+            "resize refresh fixture enables blocking writes");
+    require(writePpm(writer, 512, 256),
+            "resize refresh worker receives a complete image");
+    close(writer);
+
+    const auto refreshDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (artwork.imageWidth() != 256 &&
+           std::chrono::steady_clock::now() < refreshDeadline) {
+      artwork.setImageAsync(artworkPath.string(), true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(artwork.imageWidth() == 256 && artwork.imageHeight() == 128,
+            "enlarged artwork replaces its compact decoded texture");
+
+    ImageView::dropAllCache();
+    std::filesystem::remove_all(fixtureRoot);
   }
 
   {
@@ -252,9 +412,9 @@ int main() {
     std::filesystem::remove_all(fixtureRoot);
     std::filesystem::create_directories(fixtureRoot);
 
-    std::array<std::filesystem::path, 4> activePaths;
-    std::array<std::unique_ptr<ImageView>, 4> activeArtwork;
-    std::array<int, 4> activeWriters = {-1, -1, -1, -1};
+    std::array<std::filesystem::path, 2> activePaths;
+    std::array<std::unique_ptr<ImageView>, 2> activeArtwork;
+    std::array<int, 2> activeWriters = {-1, -1};
     ImageView::dropAllCache();
     for (std::size_t index = 0; index < activePaths.size(); ++index) {
       activePaths[index] =
@@ -290,7 +450,7 @@ int main() {
     ImageView staleArtwork(0, 0, 8, 8);
     ImageView newlyVisibleArtwork(0, 0, 8, 8);
     staleArtwork.setImageAsync(stalePath.string(), false);
-    newlyVisibleArtwork.setImageAsync(newlyVisiblePath.string(), false);
+    newlyVisibleArtwork.setImageAsync(newlyVisiblePath.string(), true);
 
     const char ppm[] = "P6\n1 1\n255\n\x33\x66\x99";
     require(write(activeWriters[0], ppm, sizeof(ppm) - 1) ==
@@ -409,8 +569,8 @@ int main() {
       }
     }
     std::filesystem::remove_all(fixtureRoot);
-    require(openedCount == writers.size(),
-            "all newly visible folder items can use the priority worker pool");
+    require(openedCount == 2,
+            "priority artwork obeys the hard two-worker decode limit");
   }
 
   {

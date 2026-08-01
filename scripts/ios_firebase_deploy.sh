@@ -16,7 +16,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/ios_firebase_deploy.sh [options]
 
-Deploys through the iOS Fastlane beta lane in its Firebase App Distribution mode.
+Deploys through the explicit iOS Fastlane Firebase App Distribution lane.
 With --build-only, runs a plain xcodebuild build and skips archive/sign/upload.
 Secrets are read from the current environment or optional shell-compatible .env files.
 
@@ -177,7 +177,9 @@ has_firebase_auth() {
 
 run_build_only() {
   local derived_data_path
+  local app_path
   derived_data_path="$("${ROOT_DIR}/scripts/ios_derived_data_path.sh")"
+  app_path="${derived_data_path}/Build/Products/Release-iphoneos/AsoBMaShow.app"
 
   cd "${IOS_DIR}"
   echo "Building iOS app only from ${GITHUB_HEAD_REF} (${GITHUB_SHA})"
@@ -189,7 +191,11 @@ run_build_only() {
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGN_IDENTITY= \
+    IPHONEOS_DEPLOYMENT_TARGET=14.0 \
     build
+  if [ -n "${IOS_BUILD_OUTPUT_PATH_FILE:-}" ]; then
+    printf '%s\n' "${app_path}" > "${IOS_BUILD_OUTPUT_PATH_FILE}"
+  fi
 }
 
 for env_file in "${ENV_FILES[@]}"; do
@@ -250,4 +256,4 @@ fi
 
 cd "${IOS_DIR}"
 echo "Deploying Firebase iOS build ${GITHUB_RUN_NUMBER} from ${GITHUB_HEAD_REF} (${GITHUB_SHA})"
-bundle exec fastlane ios beta --verbose
+bundle exec fastlane ios firebase --verbose

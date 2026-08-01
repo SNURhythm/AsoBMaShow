@@ -121,6 +121,8 @@ ir::IrProviderRuntimeConfig runtimeConfig() {
           .apiKey = "fresh-api-key"};
 }
 
+ir::IrChartQuery rankingQuery();
+
 std::string immediate(std::string_view scoreIds,
                       std::string_view errors = "[]") {
   return std::string(
@@ -594,6 +596,39 @@ void testPollUsesPersistedOriginAndCurrentKey() {
   expect(request.body.empty(), "poll has no request body");
   expect(!request.followRedirects,
          "authenticated poll does not follow redirects");
+}
+
+void testAuthenticatedHttpOriginsNeverSend() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  auto config = runtimeConfig();
+  config.serverOrigin = "http://boku.tachi.ac";
+
+  auto delivery = driver.submit(pendingEntry(), config, http, {});
+  expect(delivery.status == ir::DeliveryStatus::BlockedConfiguration &&
+             delivery.code == "insecure_server_origin",
+         "authenticated submission requires HTTPS");
+
+  auto awaiting = awaitingEntry();
+  awaiting.remoteOrigin = "http://boku.tachi.ac";
+  delivery = driver.poll(awaiting, config, http, {});
+  expect(delivery.status == ir::DeliveryStatus::BlockedConfiguration &&
+             delivery.code == "insecure_server_origin",
+         "authenticated polling requires its persisted origin to use HTTPS");
+
+  const auto snapshot =
+      driver.fetchUserScoreSnapshot(config, http, {}, {});
+  expect(snapshot.status ==
+                 ir::IrUserScoreSnapshotStatus::AuthenticationRequired &&
+             snapshot.code == "insecure_server_origin",
+         "private score import requires HTTPS");
+
+  const auto ranking =
+      driver.fetchChartRanking(rankingQuery(), config, http, {});
+  expect(ranking.status == ir::ChartRankingStatus::AuthenticationRequired,
+         "ranking identity lookup requires HTTPS");
+  expect(http.requests.empty(),
+         "no authenticated operation performs HTTP before rejecting origin");
 }
 
 void testCompletedPollsUseImportParser() {
@@ -1485,6 +1520,28 @@ void testAnonymousRankingAndPagination() {
          "anonymous continuation performs one public PB request");
 }
 
+void testAnonymousRankingStillAllowsHttpOrigin() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  auto config = runtimeConfig();
+  config.serverOrigin = "http://local.example";
+  config.apiKey.clear();
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200,
+                            .body = rankingPageBody(nlohmann::json::array(),
+                                                    nlohmann::json::array())});
+
+  const auto result =
+      driver.fetchChartRanking(rankingQuery(), config, http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded &&
+             http.requests.size() == 2,
+         "anonymous public ranking remains available over HTTP");
+  expect(http.requests.size() == 2 &&
+             !hasHeaderNamed(http.requests[0], "Authorization") &&
+             !hasHeaderNamed(http.requests[1], "Authorization"),
+         "anonymous HTTP ranking never attaches a credential");
+}
+
 void testRankingPreflightNeverLeaksCredentials() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
@@ -1531,6 +1588,7 @@ int main() {
   testMalformedAndBoundedDiagnostics();
   testDeferredAcceptanceAndValidation();
   testPollUsesPersistedOriginAndCurrentKey();
+  testAuthenticatedHttpOriginsNeverSend();
   testCompletedPollsUseImportParser();
   testAwaitingSubmitNeverPostsAgain();
   testHttpAndTransportClassification();
@@ -1541,6 +1599,7 @@ int main() {
   testStaleCachedChartIsResolvedOnce();
   testCancelledIdentityResponseIsNotCached();
   testAnonymousRankingAndPagination();
+  testAnonymousRankingStillAllowsHttpOrigin();
   testRankingPreflightNeverLeaksCredentials();
   testUserScoreSnapshotRequestContractAndMerge();
   testUserScoreSnapshotRejectsCrossGameIdentityAndScoreIdConflicts();
