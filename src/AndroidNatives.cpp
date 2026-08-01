@@ -758,7 +758,7 @@ std::string GetAndroidInternalFilesDir() {
       result.rfind(kErrorPrefix, 0) != 0) {
     return result;
   }
-  return GetAndroidExternalFilesDir();
+  return {};
 }
 
 std::string GetAndroidCacheDir() {

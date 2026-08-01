@@ -5,6 +5,10 @@
 #include "IrCredentialStore.h"
 #include "IrProfileSettings.h"
 
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#endif
+
 #if TARGET_OS_IOS || TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
 #include "IosKeychainCredentialBackend.h"
 #endif
@@ -19,10 +23,14 @@ namespace {
 
 class FileIrCredentialBackend final : public IrCredentialBackend {
 public:
-  explicit FileIrCredentialBackend(std::filesystem::path applicationDataRoot)
-      : applicationDataRoot_(std::move(applicationDataRoot)) {}
+  FileIrCredentialBackend(std::filesystem::path storageRoot,
+                          bool requiresLegacyFileMigration)
+      : storageRoot_(std::move(storageRoot)),
+        requiresLegacyFileMigration_(requiresLegacyFileMigration) {}
 
-  bool requiresLegacyFileMigration() const noexcept override { return false; }
+  bool requiresLegacyFileMigration() const noexcept override {
+    return requiresLegacyFileMigration_;
+  }
 
   IrCredentialBackendReadResult
   load(std::string_view profileId,
@@ -114,7 +122,7 @@ private:
 
   [[nodiscard]] std::filesystem::path
   pathFor(std::string_view profileId) const {
-    return applicationDataRoot_ / "profiles" / std::string(profileId) /
+    return storageRoot_ / "profiles" / std::string(profileId) /
            "ir-credentials.json";
   }
 
@@ -127,7 +135,8 @@ private:
     return {.succeeded = false, .diagnostic = std::move(diagnostic)};
   }
 
-  std::filesystem::path applicationDataRoot_;
+  std::filesystem::path storageRoot_;
+  bool requiresLegacyFileMigration_ = false;
 };
 
 } // namespace
@@ -140,13 +149,31 @@ bool isValidCredentialProfileId(std::string_view profileId) noexcept {
          });
 }
 
+namespace detail {
+
+std::unique_ptr<IrCredentialBackend>
+CreateFileIrCredentialBackend(const std::filesystem::path &storageRoot,
+                              bool requiresLegacyFileMigration) {
+  return std::make_unique<FileIrCredentialBackend>(
+      storageRoot, requiresLegacyFileMigration);
+}
+
+} // namespace detail
+
 std::unique_ptr<IrCredentialBackend> CreatePlatformIrCredentialBackend(
     const std::filesystem::path &applicationDataRoot) {
 #if TARGET_OS_IOS || TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
   (void)applicationDataRoot;
   return CreateIosKeychainCredentialBackend();
+#elif TARGET_OS_ANDROID
+  (void)applicationDataRoot;
+  const std::string internalFilesDirectory = GetAndroidInternalFilesDir();
+  if (internalFilesDirectory.empty()) {
+    return nullptr;
+  }
+  return detail::CreateFileIrCredentialBackend(internalFilesDirectory, true);
 #else
-  return std::make_unique<FileIrCredentialBackend>(applicationDataRoot);
+  return detail::CreateFileIrCredentialBackend(applicationDataRoot, false);
 #endif
 }
 

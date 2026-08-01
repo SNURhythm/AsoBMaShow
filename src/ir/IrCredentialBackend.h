@@ -45,4 +45,12 @@ isValidCredentialProfileId(std::string_view profileId) noexcept;
 CreatePlatformIrCredentialBackend(
     const std::filesystem::path &applicationDataRoot);
 
+namespace detail {
+
+[[nodiscard]] std::unique_ptr<IrCredentialBackend>
+CreateFileIrCredentialBackend(const std::filesystem::path &storageRoot,
+                              bool requiresLegacyFileMigration);
+
+} // namespace detail
+
 } // namespace ir

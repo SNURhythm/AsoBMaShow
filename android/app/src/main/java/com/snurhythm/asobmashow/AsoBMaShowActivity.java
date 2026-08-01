@@ -1,10 +1,12 @@
 package com.snurhythm.asobmashow;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.NotificationManager;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -56,6 +58,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final int REQUEST_OPEN_ARCHIVE = 0x41534f44;
     private static final int REQUEST_MANAGE_EXTERNAL_STORAGE = 0x41534f45;
     private static final int REQUEST_OPEN_IMPORT_FOLDER = 0x41534f46;
+    private static final int REQUEST_POST_NOTIFICATIONS = 0x41534f47;
     private static final int FIRST_DOCUMENT_HANDOFF_REQUEST = 0x5300;
     private static final int LAST_DOCUMENT_HANDOFF_REQUEST = 0xffff;
     private static final DocumentHandoffRequestCodeAllocator
@@ -69,6 +72,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final String PENDING_IMPORT_RESULT = "__PENDING_ARCHIVE_IMPORT__";
     private static final int MAX_TEXT_DOWNLOAD_BYTES = 16 * 1024 * 1024;
     private static final long NATIVE_MUSIC_UNKNOWN_QUEUE_ID = -1L;
+    private boolean notificationPermissionRequestStarted;
 
     private final Object pickerLock = new Object();
     private CountDownLatch pickerLatch;
@@ -449,14 +453,16 @@ public class AsoBMaShowActivity extends SDLActivity {
         if (requestCode == REQUEST_OPEN_TREE) {
             if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
                 Uri treeUri = data.getData();
-                int flags = data.getFlags()
-                        & (Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                try {
-                    getContentResolver().takePersistableUriPermission(
-                            treeUri, flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                } catch (Exception ignored) {
-                    // Some providers grant transient access only; keep using the URI for this run.
+                int flags = data.getFlags();
+                int requiredFlags = Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_READ_URI_PERMISSION;
+                if ((flags & requiredFlags) == requiredFlags) {
+                    try {
+                        getContentResolver().takePersistableUriPermission(
+                                treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    } catch (Exception ignored) {
+                        // Some providers grant transient access only; keep using the URI for this run.
+                    }
                 }
                 String displayName = displayNameForTree(treeUri);
                 String directPath = directPathForTree(treeUri);
@@ -494,14 +500,16 @@ public class AsoBMaShowActivity extends SDLActivity {
                     return;
                 }
                 if (isTree) {
-                    int flags = data.getFlags()
-                            & (Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                    try {
-                        getContentResolver().takePersistableUriPermission(
-                                importUri, flags & Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    } catch (Exception ignored) {
-                        // Some providers grant transient access only; keep using it for this copy.
+                    int flags = data.getFlags();
+                    int requiredFlags = Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                            | Intent.FLAG_GRANT_READ_URI_PERMISSION;
+                    if ((flags & requiredFlags) == requiredFlags) {
+                        try {
+                            getContentResolver().takePersistableUriPermission(
+                                    importUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        } catch (Exception ignored) {
+                            // Some providers grant transient access only; keep using it for this copy.
+                        }
                     }
                 }
                 archivePickerUri.set(importUri);
@@ -1553,6 +1561,9 @@ public class AsoBMaShowActivity extends SDLActivity {
                 .putExtra(AsoBMaShowMusicService.EXTRA_PLAYING, playing)
                 .putExtra(AsoBMaShowMusicService.EXTRA_SESSION_TOKEN,
                         nativeMusicSession.getSessionToken());
+        if (playing) {
+            requestMusicNotificationPermissionIfNeeded();
+        }
         try {
             if (playing && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent);
@@ -1561,6 +1572,19 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
         } catch (Exception ignored) {
         }
+    }
+
+    private void requestMusicNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                        == PackageManager.PERMISSION_GRANTED ||
+                notificationPermissionRequestStarted) {
+            return;
+        }
+        notificationPermissionRequestStarted = true;
+        runOnUiThread(() -> requestPermissions(
+                new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                REQUEST_POST_NOTIFICATIONS));
     }
 
     private void stopNativeMusicForegroundServiceLocked() {

@@ -3,6 +3,11 @@
 #include "../RAII.h"
 #include "../path.h"
 #include "../sqlite3.h"
+#include "../targets.h"
+
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -546,6 +551,37 @@ inline bool validateSqliteSchemaUsability(sqlite3 *db,
   return true;
 }
 
+inline std::optional<std::filesystem::path>
+sqliteSnapshotTemporaryRoot(std::string &errorMessage) {
+#if TARGET_OS_ANDROID
+  const std::string cacheDirectory = GetAndroidCacheDir();
+  if (cacheDirectory.empty()) {
+    errorMessage = "Android private cache directory is unavailable";
+    return std::nullopt;
+  }
+  const std::filesystem::path temporaryRoot(cacheDirectory);
+  std::error_code statusError;
+  if (!std::filesystem::is_directory(temporaryRoot, statusError)) {
+    errorMessage = statusError
+                       ? "could not inspect Android private cache directory: " +
+                             statusError.message()
+                       : "Android private cache directory does not exist";
+    return std::nullopt;
+  }
+  return temporaryRoot;
+#else
+  std::error_code temporaryRootError;
+  const std::filesystem::path temporaryRoot =
+      std::filesystem::temp_directory_path(temporaryRootError);
+  if (temporaryRootError) {
+    errorMessage =
+        "could not locate temporary directory: " + temporaryRootError.message();
+    return std::nullopt;
+  }
+  return temporaryRoot;
+#endif
+}
+
 inline std::optional<int> readSqliteUserVersionFromIsolatedSnapshot(
     const std::filesystem::path &path,
     const SqliteDatabaseFamilyState &expectedFamily,
@@ -557,12 +593,8 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedSnapshot(
     return std::nullopt;
   }
 
-  std::error_code temporaryRootError;
-  const std::filesystem::path temporaryRoot =
-      std::filesystem::temp_directory_path(temporaryRootError);
-  if (temporaryRootError) {
-    errorMessage =
-        "could not locate temporary directory: " + temporaryRootError.message();
+  const auto temporaryRoot = sqliteSnapshotTemporaryRoot(errorMessage);
+  if (!temporaryRoot.has_value()) {
     return std::nullopt;
   }
 
@@ -570,8 +602,8 @@ inline std::optional<int> readSqliteUserVersionFromIsolatedSnapshot(
   for (int attempt = 0; attempt < 32 && snapshotDirectory.empty(); ++attempt) {
     std::uint64_t randomValue = 0;
     sqlite3_randomness(sizeof(randomValue), &randomValue);
-    const auto candidate = temporaryRoot / ("asobmashow-sqlite-preflight-" +
-                                            std::to_string(randomValue));
+    const auto candidate = *temporaryRoot / ("asobmashow-sqlite-preflight-" +
+                                             std::to_string(randomValue));
     std::error_code createError;
     if (std::filesystem::create_directory(candidate, createError)) {
       std::error_code permissionsError;

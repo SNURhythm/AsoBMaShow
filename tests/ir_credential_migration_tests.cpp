@@ -158,6 +158,39 @@ void testFileBackendPreservesProfileIsolationAndRemoval() {
          "profile removal cannot delete another profile's credential");
 }
 
+void testMigratingFileBackendMovesLegacyCredentialsIntoPrivateRoot() {
+  TempDirectory temp;
+  const auto externalRoot = temp.path() / "external";
+  const auto privateRoot = temp.path() / "private";
+  const auto legacyPath = externalRoot / "profiles" /
+                          std::string(kProfileId) / "ir-credentials.json";
+  std::filesystem::create_directories(legacyPath.parent_path());
+
+  ir::IrCredentials credentials;
+  credentials.apiKeys = {{"tachi", "private-storage-secret"}};
+  expect(ir::IrCredentialStore::save(legacyPath, credentials).succeeded,
+         "Android legacy credential fixture saves in external storage");
+
+  auto backend = ir::detail::CreateFileIrCredentialBackend(
+      privateRoot, true);
+  expect(backend && backend->requiresLegacyFileMigration(),
+         "Android private file backend requests legacy migration");
+
+  const auto result = ir::migrateLegacyIrCredentials(
+      kProfileId, legacyPath, *backend);
+  const auto loaded = backend->load(kProfileId, "tachi");
+  expect(result.status == ir::IrCredentialMigrationStatus::Succeeded &&
+             loaded.status == ir::IrCredentialBackendReadStatus::Loaded &&
+             loaded.apiKey == "private-storage-secret",
+         "legacy credential migrates into the private backend");
+  expect(!std::filesystem::exists(legacyPath),
+         "verified migration removes the external plaintext credential");
+  expect(std::filesystem::exists(privateRoot / "profiles" /
+                                 std::string(kProfileId) /
+                                 "ir-credentials.json"),
+         "migrated credential is stored under the private root");
+}
+
 void testMigrationWritesVerifiesThenDeletes() {
   TempDirectory temp;
   const auto path = seedLegacyFile(temp);
@@ -301,6 +334,7 @@ void testDirectorySyncFailureKeepsMigrationFailed() {
 int main() {
   testMissingLegacyFileNeedsNoBackendMutation();
   testFileBackendPreservesProfileIsolationAndRemoval();
+  testMigratingFileBackendMovesLegacyCredentialsIntoPrivateRoot();
   testMigrationWritesVerifiesThenDeletes();
   testPartialWriteAndVerificationFailuresKeepLegacyFile();
   testInvalidLegacyAndCleanupFailuresFailClosed();
