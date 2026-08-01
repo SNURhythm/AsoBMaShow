@@ -183,13 +183,13 @@ int main() {
 
     const auto refreshDeadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (coldReload.imageWidth() != 512 &&
+    while (coldReload.imageWidth() != 256 &&
            std::chrono::steady_clock::now() < refreshDeadline) {
       coldReload.setImageAsync(artworkPath.string(), false);
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    require(coldReload.imageWidth() == 512 && coldReload.imageHeight() == 256,
-            "ordinary artwork cold reload finishes from its source");
+    require(coldReload.imageWidth() == 256 && coldReload.imageHeight() == 128,
+            "ordinary artwork is downsampled to its rendered dimensions");
 
     ImageView::dropAllCache();
     std::filesystem::remove_all(fixtureRoot);
@@ -252,9 +252,9 @@ int main() {
     std::filesystem::remove_all(fixtureRoot);
     std::filesystem::create_directories(fixtureRoot);
 
-    std::array<std::filesystem::path, 4> activePaths;
-    std::array<std::unique_ptr<ImageView>, 4> activeArtwork;
-    std::array<int, 4> activeWriters = {-1, -1, -1, -1};
+    std::array<std::filesystem::path, 2> activePaths;
+    std::array<std::unique_ptr<ImageView>, 2> activeArtwork;
+    std::array<int, 2> activeWriters = {-1, -1};
     ImageView::dropAllCache();
     for (std::size_t index = 0; index < activePaths.size(); ++index) {
       activePaths[index] =
@@ -290,7 +290,7 @@ int main() {
     ImageView staleArtwork(0, 0, 8, 8);
     ImageView newlyVisibleArtwork(0, 0, 8, 8);
     staleArtwork.setImageAsync(stalePath.string(), false);
-    newlyVisibleArtwork.setImageAsync(newlyVisiblePath.string(), false);
+    newlyVisibleArtwork.setImageAsync(newlyVisiblePath.string(), true);
 
     const char ppm[] = "P6\n1 1\n255\n\x33\x66\x99";
     require(write(activeWriters[0], ppm, sizeof(ppm) - 1) ==
@@ -409,8 +409,8 @@ int main() {
       }
     }
     std::filesystem::remove_all(fixtureRoot);
-    require(openedCount == writers.size(),
-            "all newly visible folder items can use the priority worker pool");
+    require(openedCount == 2,
+            "priority artwork obeys the hard two-worker decode limit");
   }
 
   {

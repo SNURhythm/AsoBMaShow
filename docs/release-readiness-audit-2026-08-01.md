@@ -40,6 +40,12 @@ CTest, and fatal Android lint.
   queued plus up to twenty recycled frames to three queued plus two recycled
   frames. Deterministic state-machine, real FFmpeg/jukebox, and main-build
   regressions pass.
+- R4 artwork remediation is implemented and verified locally: decoded RGBA is
+  downsampled to the requested render bounds and stored in a byte-accounted LRU
+  capped at 64 MiB on iOS (128 MiB elsewhere). Async work is deduplicated by
+  source and size, limited to two workers, owned by cancellable consumer
+  tickets, priority-aware, and generation-safe against stale completion.
+  Focused cache/coordinator tests and existing image-view/list regressions pass.
 - The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
   app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
   difficulty-table loading.

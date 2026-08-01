@@ -2516,8 +2516,29 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(image_fade_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(image_fade_tests PRIVATE cxx_std_23)
 
+    add_executable(decoded_image_cache_tests
+        tests/decoded_image_cache_tests.cpp
+        src/view/DecodedImageCache.cpp
+    )
+    target_include_directories(decoded_image_cache_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(decoded_image_cache_tests PRIVATE cxx_std_23)
+
+    add_executable(image_decode_coordinator_tests
+        tests/image_decode_coordinator_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
+    )
+    target_include_directories(image_decode_coordinator_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(image_decode_coordinator_tests PRIVATE cxx_std_23)
+
     add_executable(image_view_fade_tests
         tests/image_view_fade_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
         src/view/ImageFade.cpp
         src/view/ImageView.cpp
         src/view/View.cpp
@@ -2553,6 +2574,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(chart_list_item_view_tests
         tests/chart_list_item_view_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
         src/view/ChartListItemView.cpp
         src/view/ImageFade.cpp
         src/view/ImageView.cpp
@@ -2745,6 +2768,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(ir_upload_candidate_list_view_tests
         tests/ir_upload_candidate_list_view_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
         src/view/IrUploadCandidateListView.cpp
         src/view/ImageFade.cpp
         src/view/ImageView.cpp
@@ -3956,6 +3981,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         application_result_recovery_tests
         chart_filter_sort_panel_view_tests
         image_fade_tests
+        decoded_image_cache_tests
+        image_decode_coordinator_tests
         image_view_fade_tests
         artwork_cache_contract_tests
         chart_list_item_view_tests

@@ -3,24 +3,21 @@
 //
 
 #pragma once
+#include "DecodedImageCache.h"
 #include "ImageFade.h"
+#include "ImageDecodeCoordinator.h"
 #include "View.h"
 #include "../path.h"
 #include <bgfx/bgfx.h>
 #include <cstddef>
-#include <map>
-#include <memory>
 #include <optional>
 #include <string>
-#include <vector>
 
 class ImageView : public View {
 private:
   void renderImpl(RenderContext &context) override;
-  struct ImageCache {
-    int width, height;
-    std::shared_ptr<std::vector<unsigned char>> rgba;
-  };
+  using ImageCache = image_decode::DecodedImageData;
+  void cancelAsyncRequest();
   void freeTexture();
   bool applyCachedTexture(const path_t &path, const std::string &key);
   bool applyCachedThumbnail(const path_t &path, const std::string &key);
@@ -31,12 +28,13 @@ private:
   bool loadTexture(const path_t &path);
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texColor = BGFX_INVALID_HANDLE;
-  static std::map<std::string, ImageCache> imageCache;
+  static image_decode::DecodedImageCache imageCache;
   std::string currentImageKey;
   path_t currentImagePath;
   int currentImageWidth = 0;
   int currentImageHeight = 0;
   bool asyncImagePending = false;
+  image_decode::ImageDecodeCoordinator::Ticket asyncTicket = 0;
   std::optional<ImageFade> fade_;
   std::optional<Color> scrimColor_;
   ThemeColorProvider themedScrimColorProvider_;
@@ -69,8 +67,10 @@ public:
 
   static void dropCache(const path_t &path);
   static void dropAllCache();
+  static void evictDecodedImageCache();
 #if defined(ASOBMASHOW_IMAGE_VIEW_TESTING)
   [[nodiscard]] static std::size_t
   pendingAsyncDecodeCountForTesting(const path_t &path);
+  [[nodiscard]] static std::size_t decodedImageCacheBytesForTesting();
 #endif
 };
