@@ -113,6 +113,7 @@ struct ScanBatchSqlObservation {
   std::vector<std::string> chartMetaInsertExecutions;
 };
 ScanBatchSqlObservation *scanBatchSqlObservation = nullptr;
+std::atomic<int> chartMetadataReleasesToDeny{0};
 std::mutex traceMutex;
 std::vector<std::string> tracedStatements;
 
@@ -138,8 +139,21 @@ int traceStatement(unsigned mask, void *, void *statement, void *) {
   return 0;
 }
 
-int observeAuthorization(void *, int action, const char *first, const char *,
+int observeAuthorization(void *, int action, const char *first,
+                         const char *second,
                          const char *, const char *) {
+  if (action == SQLITE_SAVEPOINT && first != nullptr && second != nullptr &&
+      std::string_view(first) == "RELEASE" &&
+      std::string_view(second) == "chart_metadata_rebuild_migration") {
+    int remaining = chartMetadataReleasesToDeny.load(std::memory_order_relaxed);
+    while (remaining > 0 &&
+           !chartMetadataReleasesToDeny.compare_exchange_weak(
+               remaining, remaining - 1, std::memory_order_relaxed)) {
+    }
+    if (remaining > 0) {
+      return SQLITE_DENY;
+    }
+  }
   if (scanBatchSqlObservation != nullptr && action == SQLITE_INSERT &&
       first != nullptr && std::string_view(first) == "chart_meta") {
     scanBatchSqlObservation->chartMetaInsertPrepares.fetch_add(
@@ -161,11 +175,14 @@ class ScopedConnectionObserver {
 public:
   explicit ScopedConnectionObserver(
       std::atomic<int> &count,
-      ScanBatchSqlObservation *scanObservation = nullptr) {
+      ScanBatchSqlObservation *scanObservation = nullptr,
+      int deniedChartMetadataReleases = 0) {
     assert(connectionCount == nullptr);
     assert(scanBatchSqlObservation == nullptr);
     connectionCount = &count;
     scanBatchSqlObservation = scanObservation;
+    chartMetadataReleasesToDeny.store(deniedChartMetadataReleases,
+                                      std::memory_order_relaxed);
     {
       std::lock_guard lock(traceMutex);
       tracedStatements.clear();
@@ -179,6 +196,7 @@ public:
     sqlite3_reset_auto_extension();
     connectionCount = nullptr;
     scanBatchSqlObservation = nullptr;
+    chartMetadataReleasesToDeny.store(0, std::memory_order_relaxed);
   }
 };
 
@@ -921,6 +939,50 @@ void testChartMigrationCompatibilityMatrix() {
   }
 }
 
+void testChartMigrationReleaseFailureDoesNotReportSuccess() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "release-failure.db";
+  {
+    Database database = openDatabase(path);
+    assert(database);
+    assert(execute(database.get(),
+                   "CREATE TABLE chart_meta(path TEXT PRIMARY KEY);"
+                   "INSERT INTO chart_meta(path) VALUES ('legacy.bms');"
+                   "PRAGMA user_version=2"));
+  }
+
+  ChartRepository repository(path);
+  const std::uint64_t revisionBefore = repository.GetLibraryRevision();
+  std::atomic<int> connections{0};
+  {
+    ScopedConnectionObserver observer(connections, nullptr, 1);
+    assert(!repository.EnsureReady());
+  }
+
+  {
+    Database database = openDatabase(path);
+    assert(database);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 2);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 1);
+    assert(queryInt(database.get(),
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                    "AND name='chart_meta_rebuild_state'") == 0);
+  }
+  assert(repository.GetLibraryRevision() == revisionBefore);
+
+  assert(repository.EnsureReady());
+  {
+    Database database = openDatabase(path);
+    assert(database);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 3);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
+    assert(queryInt(database.get(),
+                    "SELECT required FROM chart_meta_rebuild_state "
+                    "WHERE id=1") == 1);
+  }
+  assert(repository.GetLibraryRevision() == revisionBefore + 1);
+}
+
 void testLegacyIosContainerPathRebasesToCurrentDocuments() {
   const std::filesystem::path currentDocuments =
       "/private/var/mobile/Containers/Data/Application/"
@@ -1152,6 +1214,7 @@ int main() {
   testChartQueryBehaviorMatrix();
   testExactFolderQuery();
   testChartMigrationCompatibilityMatrix();
+  testChartMigrationReleaseFailureDoesNotReportSuccess();
   testLegacyIosContainerPathRebasesToCurrentDocuments();
   testFindBmsDownloadEntrySelectionLifecycle();
   testFindBmsDownloadEntryRejectsIneligiblePaths();
