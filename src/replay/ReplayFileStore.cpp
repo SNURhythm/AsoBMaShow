@@ -421,8 +421,8 @@ ReplayFileInspection inspectFileAtPath(const std::filesystem::path &path,
   }
   outcome.observedMetadata = ReplayFileMetadata{
       .relativePath = metadata.relativePath,
-      .compressedSize = size,
       .sha256 = *checksum,
+      .compressedSize = size,
       .codecVersion = metadata.codecVersion,
   };
   if (!sizeMatches) {

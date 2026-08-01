@@ -5,6 +5,7 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
+#include <cinttypes>
 #include <cstring>
 #include <iostream>
 namespace {
@@ -110,8 +111,10 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   }
 
   if (numFrames < fileInfo.frames) {
-    SDL_Log("Failed to read all audio data from file %s, read %lld frames",
-            path_t_to_utf8(displayPath).c_str(), numFrames);
+    SDL_Log("Failed to read all audio data from file %s, read %" PRId64
+            " frames",
+            path_t_to_utf8(displayPath).c_str(),
+            static_cast<std::int64_t>(numFrames));
     // Zero out the remaining buffer
     std::fill(buffer.begin() + numFrames * fileInfo.channels, buffer.end(), 0);
   }

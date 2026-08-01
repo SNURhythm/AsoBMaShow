@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
 
 include(ExternalProject)
-project(AsoBMaShow VERSION 1.0 LANGUAGES C CXX)
+project(AsoBMaShow VERSION 0.0.1 LANGUAGES C CXX)
 include(CTest)
 option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
+option(ASOBMASHOW_ENABLE_PERF_TELEMETRY
+       "Log periodic frame, audio, and input performance telemetry" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # Set C++ standard
@@ -42,6 +44,9 @@ if (PLATFORM_MACOS)
 
     set(MACOS_BUNDLE_IDENTIFIER "com.SNURhythm.AsoBMaShow")
     set(MACOS_BUNDLE_NAME "AsoBMaShow")
+    set(MACOS_BUNDLE_ICON_FILE "AsoBMaShow.icns")
+    set(MACOS_BUNDLE_ICON_SOURCE
+        "${CMAKE_SOURCE_DIR}/assets/platform/${MACOS_BUNDLE_ICON_FILE}")
     if (BUILD_MACOS_BUNDLE)
         set(MACOS_EXECUTABLE_NAME "${MACOS_BUNDLE_NAME}")
     else()
@@ -89,7 +94,7 @@ if (MSVC)
         add_definitions(-DIA32)
     endif ()
 else ()
-    add_compile_options(-Wno-strict-prototypes -Wno-unused-but-set-variable -pedantic -Wno-ignored-attributes -Wstrict-aliasing -Wstrict-overflow -g)
+    add_compile_options(-Wno-strict-prototypes -Wno-unused-but-set-variable -pedantic -Wno-ignored-attributes -Wstrict-aliasing -Wstrict-overflow)
 endif ()
 
 
@@ -304,13 +309,18 @@ if (ANDROID)
     add_library(main SHARED)
 elseif (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     add_executable(main MACOSX_BUNDLE)
+    target_sources(main PRIVATE "${MACOS_BUNDLE_ICON_SOURCE}")
+    set_source_files_properties("${MACOS_BUNDLE_ICON_SOURCE}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
     set_target_properties(main PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST ${MACOS_INFO_PLIST}
         MACOSX_BUNDLE_GUI_IDENTIFIER "${MACOS_BUNDLE_IDENTIFIER}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_BUNDLE_NAME "${MACOS_BUNDLE_NAME}"
+        MACOSX_BUNDLE_ICON_FILE "${MACOS_BUNDLE_ICON_FILE}"
         MACOSX_BUNDLE_COPYRIGHT "Copyright © SNURhythm"
         OUTPUT_NAME "${MACOS_BUNDLE_NAME}"
     )
@@ -321,6 +331,9 @@ endif()
 if (ANDROID)
     target_compile_definitions(main PRIVATE PLATFORM_ANDROID=1)
 endif()
+target_compile_definitions(main PRIVATE
+    ASOBMASHOW_ENABLE_PERF_TELEMETRY=$<BOOL:${ASOBMASHOW_ENABLE_PERF_TELEMETRY}>
+)
 
 option(ENABLE_DEBUG_OPTIMIZED_BUILD
        "Use lightweight optimization in Debug builds for runtime profiling"
@@ -340,12 +353,23 @@ if (PLATFORM_MACOS AND NOT BUILD_MACOS_BUNDLE)
 endif()
 
 if (PLATFORM_MACOS)
+    find_package(ZLIB REQUIRED)
+    # vcpkg's pkg-config imports expose their library directory to CMake. The
+    # release triplet is static, so a checkout-local runtime search path is
+    # unnecessary and would make the packaged app machine-specific.
+    set_target_properties(main PROPERTIES SKIP_BUILD_RPATH TRUE)
     include(CheckLinkerFlag)
     check_linker_flag(CXX "LINKER:-no_warn_duplicate_libraries"
         ASOBMASHOW_HAS_NO_WARN_DUPLICATE_LIBRARIES)
     if (ASOBMASHOW_HAS_NO_WARN_DUPLICATE_LIBRARIES)
         target_link_options(main PRIVATE "LINKER:-no_warn_duplicate_libraries")
     endif()
+    # A static dependency built for a newer macOS can silently raise the
+    # bundle's real deployment floor while leaving LC_BUILD_VERSION unchanged.
+    # Make that (and every other linker warning) fatal for release artifacts.
+    target_link_options(main PRIVATE
+        $<$<CONFIG:Release>:LINKER:-fatal_warnings>
+    )
 endif()
 
 # Linking
@@ -412,7 +436,7 @@ if (PLATFORM_MACOS)
         ${FOUNDATION} ${AUDIO_TOOLBOX} ${VIDEO_TOOLBOX} ${CORE_AUDIO}
         ${AV_KIT} ${CORE_IMAGE} ${CORE_MEDIA} ${ACCELERATE}
         ${OPENGL} ${OPENCL} ${COCOA} ${METAL} ${SECURITY}
-        bz2 z iconv
+        bz2 ZLIB::ZLIB iconv
     )
 endif()
 
@@ -446,12 +470,12 @@ elseif (PLATFORM_MACOS)
      # macOS (Metal)
     file(GLOB_RECURSE METAL_SHADER_FILES "${CMAKE_SOURCE_DIR}/shaders/metal/*.*")
     if (BUILD_MACOS_BUNDLE)
-        add_custom_command(
-            TARGET main POST_BUILD
+        add_custom_target(copy_macos_bundle_shaders
             COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_BUNDLE_DIR:main>/Contents/Resources/shaders
             COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/shaders/metal $<TARGET_BUNDLE_DIR:main>/Contents/Resources/shaders/metal
             DEPENDS ${METAL_SHADER_FILES}
         )
+        add_dependencies(main copy_macos_bundle_shaders)
     else()
         add_custom_target(copy_shaders ALL
             DEPENDS ${METAL_SHADER_FILES}
@@ -3869,6 +3893,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         if(ARGC GREATER 1)
             set(test_name ${ARGV1})
         endif()
+        # Many legacy fixtures use assert() for setup as well as validation.
+        # Release's NDEBUG would otherwise remove database/resource setup calls
+        # and make the test binaries exercise a different program.
+        if(MSVC)
+            target_compile_options(${target_name} PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(${target_name} PRIVATE -UNDEBUG)
+        endif()
         add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}>)
         set_tests_properties(${test_name} PROPERTIES
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
@@ -3905,37 +3937,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(video_frame_layout_tests)
     asobmashow_register_test(video_decode_state_tests)
 
-    add_test(NAME foundation_av_settings
-        COMMAND $<TARGET_FILE:audio_video_settings_tests>)
-    set_tests_properties(foundation_av_settings PROPERTIES
-        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_video_settings_tests>
-    )
-
-    add_test(NAME foundation_av_audio_mix
-        COMMAND $<TARGET_FILE:audio_mix_tests>)
-    set_tests_properties(foundation_av_audio_mix PROPERTIES
-        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_mix_tests>
-    )
-
-    add_test(NAME foundation_av_audio_wrapper_lifecycle
-        COMMAND $<TARGET_FILE:audio_wrapper_lifecycle_tests>)
-    set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES
-        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_wrapper_lifecycle_tests>
-        TIMEOUT 15
-    )
-
-    add_test(NAME foundation_av_audio_device
-        COMMAND $<TARGET_FILE:audio_device_manager_tests>)
-    set_tests_properties(foundation_av_audio_device PROPERTIES
-        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_device_manager_tests>
-    )
-
-    add_test(NAME foundation_av_jukebox_restore
-        COMMAND $<TARGET_FILE:jukebox_restore_tests>)
-    set_tests_properties(foundation_av_jukebox_restore PROPERTIES
-        WORKING_DIRECTORY $<TARGET_FILE_DIR:jukebox_restore_tests>
-        TIMEOUT 30
-    )
+    asobmashow_register_test(audio_video_settings_tests foundation_av_settings)
+    asobmashow_register_test(audio_mix_tests foundation_av_audio_mix)
+    asobmashow_register_test(audio_wrapper_lifecycle_tests foundation_av_audio_wrapper_lifecycle)
+    set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES TIMEOUT 15)
+    asobmashow_register_test(audio_device_manager_tests foundation_av_audio_device)
+    asobmashow_register_test(jukebox_restore_tests foundation_av_jukebox_restore)
+    set_tests_properties(foundation_av_jukebox_restore PROPERTIES TIMEOUT 30)
 
     foreach(test_target IN ITEMS
         prep_metronome_tests
@@ -4047,11 +4055,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10
     )
-    add_test(NAME foundation_provenance_contract
-        COMMAND $<TARGET_FILE:score_provenance_tests>)
-    set_tests_properties(foundation_provenance_contract PROPERTIES
-        WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_tests>
-    )
+    asobmashow_register_test(score_provenance_tests foundation_provenance_contract)
     asobmashow_register_test(gameplay_ruleset_tests)
     asobmashow_register_test(play_options_panel_view_tests)
     asobmashow_register_test(gameplay_judge_rules_tests)
@@ -4113,10 +4117,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
     asobmashow_register_test(quaternion_math_tests foundation_math_quaternion)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
-    add_test(NAME foundation_provenance_db
-        COMMAND $<TARGET_FILE:score_provenance_db_tests>)
-    set_tests_properties(foundation_provenance_db PROPERTIES
-        WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_db_tests>
-    )
+    asobmashow_register_test(score_provenance_db_tests foundation_provenance_db)
     asobmashow_register_test(midi_input_tests foundation_input_midi)
 endif()

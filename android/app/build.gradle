@@ -30,7 +30,7 @@ if (androidNdkRoot == null || androidNdkRoot.trim().isEmpty()) {
 
 def generatedAssetsDir = layout.buildDirectory.dir('generated/assets/asobmashow')
 def androidVersionCodeText = System.getenv('ANDROID_VERSION_CODE') ?: (findProperty('androidVersionCode') ?: '1')
-def androidVersionNameText = System.getenv('ANDROID_VERSION_NAME') ?: (findProperty('androidVersionName') ?: '1.0')
+def androidVersionNameText = System.getenv('ANDROID_VERSION_NAME') ?: (findProperty('androidVersionName') ?: '0.0.1')
 def envOrProperty = { String envName, String propertyName ->
     def value = System.getenv(envName)
     if (value == null || value.toString().trim().isEmpty()) {

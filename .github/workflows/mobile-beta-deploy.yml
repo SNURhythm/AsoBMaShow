@@ -102,6 +102,9 @@ jobs:
     runs-on: [self-hosted, macOS]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
     timeout-minutes: 60
+    concurrency:
+      group: android-firebase-distribution
+      cancel-in-progress: false
     env:
       LANG: en_US.UTF-8
       LC_ALL: en_US.UTF-8

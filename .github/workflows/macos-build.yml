@@ -11,11 +11,19 @@ on:
       - main
   workflow_dispatch:
 
+env:
+  ASOBMASHOW_MACOS_DEPLOYMENT_TARGET: "13.0"
+  ASOBMASHOW_MACOS_BUILD_DIR: ${{ runner.temp }}/asobmashow-macos-${{ github.run_id }}-${{ github.run_attempt }}
+  VCPKG_TOOL_COMMIT: 75a2e14262fc23c1f03bac18e135c4866dd25b51
+
 jobs:
   build:
-    name: Build macOS App Bundle
+    name: Verify and package macOS app
     runs-on: [self-hosted, macOS]
-    timeout-minutes: 60
+    timeout-minutes: 90
+    concurrency:
+      group: ${{ startsWith(github.ref, 'refs/tags/') && 'macos-release' || format('macos-build-{0}', github.run_id) }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout code
@@ -23,83 +31,112 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up cmake
+      - name: Set up CMake
         uses: lukka/get-cmake@v3.27.7
         with:
           cmakeVersion: "3.27.7"
 
-      - name: Install ccache
+      - name: Select optional compiler cache
         run: |
-          if ! command -v ccache &> /dev/null; then
-            echo "Installing ccache..."
-            brew install ccache
-          else
-            echo "ccache is already installed"
+          if command -v ccache >/dev/null 2>&1; then
+            echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+            echo "CCACHE_DIR=$RUNNER_TEMP/asobmashow-ccache" >> "$GITHUB_ENV"
           fi
-          # Configure ccache to strictly use a persistent directory
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-          # Establish the directory immediately
-          mkdir -p $HOME/.ccache
-          echo "ccache configured at $HOME/.ccache"
 
-      - name: Install vcpkg
+      - name: Install pinned vcpkg tool
         run: |
-          if [ ! -d "$HOME/vcpkg" ]; then
-            git clone https://github.com/Microsoft/vcpkg.git $HOME/vcpkg
+          VCPKG_CHECKOUT="$RUNNER_TEMP/vcpkg-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [ ! -d "$VCPKG_CHECKOUT/.git" ]; then
+            git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git "$VCPKG_CHECKOUT"
           fi
-          cd $HOME/vcpkg
-          git pull
-          cd ..
-          $HOME/vcpkg/bootstrap-vcpkg.sh
-          echo "VCPKG_ROOT=$HOME/vcpkg" >> $GITHUB_ENV
+          git -C "$VCPKG_CHECKOUT" fetch origin "$VCPKG_TOOL_COMMIT" --depth=1
+          git -C "$VCPKG_CHECKOUT" checkout --detach "$VCPKG_TOOL_COMMIT"
+          "$VCPKG_CHECKOUT/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$VCPKG_CHECKOUT" >> "$GITHUB_ENV"
 
       - name: Generate user presets
-        run: |
-          chmod +x scripts/generate_user_presets.sh
-          VCPKG_ROOT="$HOME/vcpkg" ./scripts/generate_user_presets.sh
+        run: ./scripts/generate_user_presets.sh
 
-      - name: Configure CMake
-        env:
-          VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
-          CMAKE_C_COMPILER_LAUNCHER: ccache
-          CMAKE_CXX_COMPILER_LAUNCHER: ccache
-        run: |
-          ./scripts/macos_init.sh release ON
+      - name: Configure Release bundle
+        run: ./scripts/macos_init.sh release ON
 
-      - name: Build
+      - name: Build Release bundle and tests
+        run: cmake --build "$ASOBMASHOW_MACOS_BUILD_DIR" --config Release -j"$(sysctl -n hw.ncpu)"
+
+      - name: Run native and release contract tests
         run: |
-          cmake --build cmake-build-release-bundle --config Release -j$(sysctl -n hw.ncpu)
+          ctest --test-dir "$ASOBMASHOW_MACOS_BUILD_DIR" --output-on-failure -j"$(sysctl -n hw.ncpu)"
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/cross_platform_release_contract_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/macos_artifact_audit_tests.py
 
       - name: Find app bundle
         id: find-bundle
         run: |
-          APP_BUNDLE=$(find cmake-build-release-bundle -name "AsoBMaShow.app" -type d | head -1)
+          APP_BUNDLE="$(find "$ASOBMASHOW_MACOS_BUILD_DIR" -name AsoBMaShow.app -type d -print -quit)"
           if [ -z "$APP_BUNDLE" ]; then
-            echo "Error: AsoBMaShow.app not found"
+            echo "AsoBMaShow.app not found" >&2
             exit 1
           fi
-          echo "bundle_path=$APP_BUNDLE" >> $GITHUB_OUTPUT
-          echo "Found app bundle at: $APP_BUNDLE"
+          APP_BUNDLE="$(cd "$(dirname "$APP_BUNDLE")" && pwd -P)/$(basename "$APP_BUNDLE")"
+          echo "bundle_path=$APP_BUNDLE" >> "$GITHUB_OUTPUT"
 
-      - name: Zip app bundle
+      - name: Ad-hoc sign verification bundle
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          codesign --force --deep --options runtime --entitlements macos/AsoBMaShow.entitlements --sign - "${{ steps.find-bundle.outputs.bundle_path }}"
+
+      - name: Developer ID sign tag bundle
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+        run: |
+          if [ -z "$MACOS_CODESIGN_IDENTITY" ]; then
+            echo "MACOS_CODESIGN_IDENTITY is required for a tagged macOS release" >&2
+            exit 1
+          fi
+          security find-identity -v -p codesigning | grep -F -- "$MACOS_CODESIGN_IDENTITY"
+          codesign --force --deep --options runtime --timestamp --entitlements macos/AsoBMaShow.entitlements --sign "$MACOS_CODESIGN_IDENTITY" "${{ steps.find-bundle.outputs.bundle_path }}"
+
+      - name: Audit built app
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            scripts/macos_artifact_audit.sh --require-signature "${{ steps.find-bundle.outputs.bundle_path }}"
+          else
+            scripts/macos_artifact_audit.sh "${{ steps.find-bundle.outputs.bundle_path }}"
+          fi
+
+      - name: Notarize and staple tag bundle
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_P8: ${{ secrets.MACOS_NOTARY_KEY_P8 }}
+        run: |
+          if [ -z "$MACOS_NOTARY_KEY_ID" ] || [ -z "$MACOS_NOTARY_ISSUER_ID" ] || [ -z "$MACOS_NOTARY_KEY_P8" ]; then
+            echo "MACOS_NOTARY_KEY_ID, MACOS_NOTARY_ISSUER_ID, and MACOS_NOTARY_KEY_P8 are required" >&2
+            exit 1
+          fi
+          APP_BUNDLE="${{ steps.find-bundle.outputs.bundle_path }}"
+          NOTARY_ARCHIVE="$RUNNER_TEMP/AsoBMaShow-notary.zip"
+          NOTARY_KEY="$RUNNER_TEMP/AuthKey_$MACOS_NOTARY_KEY_ID.p8"
+          trap 'rm -f "$NOTARY_KEY" "$NOTARY_ARCHIVE"' EXIT
+          printf '%s' "$MACOS_NOTARY_KEY_P8" > "$NOTARY_KEY"
+          chmod 600 "$NOTARY_KEY"
+          ditto -c -k --keepParent "$APP_BUNDLE" "$NOTARY_ARCHIVE"
+          xcrun notarytool submit "$NOTARY_ARCHIVE" --key "$NOTARY_KEY" --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" --wait
+          xcrun stapler staple "$APP_BUNDLE"
+          scripts/macos_artifact_audit.sh --require-signature --require-gatekeeper "$APP_BUNDLE"
+
+      - name: Package verified app bundle
         id: zip-bundle
         run: |
           APP_BUNDLE="${{ steps.find-bundle.outputs.bundle_path }}"
-          # Make paths absolute so they remain valid after `cd`
-          APP_BUNDLE="$(cd "$(dirname "$APP_BUNDLE")" && pwd)/$(basename "$APP_BUNDLE")"
-          BUNDLE_DIR=$(dirname "$APP_BUNDLE")
-          BUNDLE_NAME=$(basename "$APP_BUNDLE")
-          ZIP_NAME="AsoBMaShow-macOS.zip"
-          ZIP_PATH="${BUNDLE_DIR}/${ZIP_NAME}"
+          ZIP_PATH="$(dirname "$APP_BUNDLE")/AsoBMaShow-macOS.zip"
+          ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_PATH"
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
 
-          cd "$BUNDLE_DIR"
-          zip -r "${ZIP_NAME}" "${BUNDLE_NAME}"
-
-          echo "zip_path=$ZIP_PATH" >> $GITHUB_OUTPUT
-          echo "Created zip at: $ZIP_PATH"
-          ls -lh "$ZIP_PATH"
-
-      - name: Upload app bundle artifact
+      - name: Upload verification artifact
         if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
@@ -107,19 +144,13 @@ jobs:
           path: ${{ steps.zip-bundle.outputs.zip_path }}
           retention-days: 30
 
-      - name: Get app bundle size
+      - name: Report package size
         run: |
-          APP_BUNDLE="${{ steps.find-bundle.outputs.bundle_path }}"
-          ZIP_PATH="${{ steps.zip-bundle.outputs.zip_path }}"
-          echo "App bundle size:"
-          du -sh "$APP_BUNDLE"
-          echo "Zipped size:"
-          ls -lh "$ZIP_PATH"
-          echo "Total files in bundle:"
-          find "$APP_BUNDLE" -type f | wc -l
+          du -sh "${{ steps.find-bundle.outputs.bundle_path }}"
+          ls -lh "${{ steps.zip-bundle.outputs.zip_path }}"
 
-      - name: Release
-        uses: softprops/action-gh-release@v1
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           draft: true
