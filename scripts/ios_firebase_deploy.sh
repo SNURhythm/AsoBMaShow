@@ -189,6 +189,7 @@ run_build_only() {
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGN_IDENTITY= \
+    IPHONEOS_DEPLOYMENT_TARGET=14.0 \
     build
 }
 

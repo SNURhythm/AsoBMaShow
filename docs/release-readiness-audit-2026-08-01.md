@@ -60,6 +60,12 @@ CTest, and fatal Android lint.
 - The agreed iOS constraints remain unchanged: app marketing version `0.0.1`,
   app deployment target iOS 14, and `NSAllowsArbitraryLoads = true` for
   difficulty-table loading.
+- iOS dependency builds are now aligned with that contract: CocoaPods declares
+  and post-processes iOS 14, generated bgfx projects use a 14.0 deployment
+  target, and both unsigned and Fastlane build entrypoints pass the same target
+  to referenced SDL/bgfx projects. Setup is idempotent with the project Ruby;
+  the version, ATS exception, and intentional absence of a privacy manifest are
+  covered by static release tests.
 
 | Release gate | Result | Release significance |
 | --- | --- | --- |

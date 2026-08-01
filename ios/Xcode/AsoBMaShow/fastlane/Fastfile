@@ -105,7 +105,7 @@ platform :ios do
                      latest_testflight_build_number(initial_build_number: 0) + 1
                    end
 
-    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number}"
+    xcargs = "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0"
     build_options = {
       scheme: "AsoBMaShow",
       workspace: "AsoBMaShow.xcworkspace",

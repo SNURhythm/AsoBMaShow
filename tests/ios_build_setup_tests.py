@@ -10,6 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj"
+PODFILE = ROOT / "ios/Xcode/AsoBMaShow/Podfile"
+INFO_PLIST = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow/Info.plist"
 WORKSPACE = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow.xcworkspace/contents.xcworkspacedata"
 SRC_GROUP_ID = "B76AAF3F2DA4A1C400E8327C"
 EXCEPTION_SET_ID = "B76AAF692DA4A1C400E8327C"
@@ -75,6 +77,53 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertIn(
             "audio/AudioWrapper.cpp = sourcecode.cpp.objcpp;", group
         )
+
+    def test_ios_release_contract_remains_version_0_0_1_on_ios_14(self):
+        target_configurations = [
+            object_block(
+                self.project,
+                configuration_id,
+                "\n\t\t};",
+            )
+            for configuration_id in (
+                "B700271D2BF7A8DA000DB8EC",
+                "B700271E2BF7A8DA000DB8EC",
+            )
+        ]
+        for configuration in target_configurations:
+            self.assertIn("IPHONEOS_DEPLOYMENT_TARGET = 14.0;", configuration)
+            self.assertIn("MARKETING_VERSION = 0.0.1;", configuration)
+
+    def test_pods_and_generated_bgfx_align_to_ios_14(self):
+        podfile = PODFILE.read_text(encoding="utf-8")
+        self.assertIn("platform :ios, '14.0'", podfile)
+        self.assertIn("IPHONEOS_DEPLOYMENT_TARGET", podfile)
+        self.assertIn("'14.0'", podfile)
+        init_script = IOS_INIT.read_text(encoding="utf-8")
+        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0", init_script)
+
+    def test_all_ios_build_entrypoints_override_dependencies_to_ios_14(self):
+        self.assertIn(
+            "IPHONEOS_DEPLOYMENT_TARGET=14.0", DEPLOY_SCRIPT.read_text()
+        )
+        self.assertIn("IPHONEOS_DEPLOYMENT_TARGET=14.0", FASTFILE.read_text())
+
+    def test_ats_exception_is_retained_without_privacy_manifest(self):
+        plist = subprocess.run(
+            [
+                "plutil",
+                "-extract",
+                "NSAppTransportSecurity.NSAllowsArbitraryLoads",
+                "raw",
+                str(INFO_PLIST),
+            ],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual("true", plist.stdout.strip())
+        self.assertFalse(any(ROOT.rglob("PrivacyInfo.xcprivacy")))
 
     def test_workspace_has_one_relative_pods_project(self):
         tree = ET.parse(WORKSPACE)

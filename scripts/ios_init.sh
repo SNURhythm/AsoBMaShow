@@ -39,7 +39,8 @@ prepare_bgfx_project() {
     -B "${build_dir}" \
     -GXcode \
     -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_SYSROOT=iphoneos
+    -DCMAKE_OSX_SYSROOT=iphoneos \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
 }
 
 install_gems() {
