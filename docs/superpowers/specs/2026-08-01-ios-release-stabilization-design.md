@@ -6,7 +6,7 @@
 
 **Baseline:** `develop` at `868c091b`
 
-**Status:** Approved design, pending implementation plan
+**Status:** Approved and implemented; Firebase iteration policy amended 2026-08-01
 
 ## Purpose
 
@@ -50,6 +50,10 @@ No Android or macOS release claim is made by this work.
 - Do not add `PrivacyInfo.xcprivacy` manifests in this pass. The omission is an
   explicitly accepted release risk, even though the binaries import Apple
   required-reason APIs.
+- Treat PR-to-`develop` Firebase distribution as a fast iteration track: do not
+  schedule the release verifier for that event and do not make Firebase depend
+  on it. TestFlight remains the release track and must continue to depend on
+  the full verifier.
 - Do not deploy or upload a build while implementing or verifying this work.
 
 ## Architecture
@@ -274,7 +278,8 @@ and physical-device smoke results.
 - Decode corruption or layout overflow fails that visual safely.
 - Database transaction-boundary failure prevents application readiness from
   being reported as successful.
-- Distribution never begins if required verification fails.
+- TestFlight distribution never begins if required verification fails.
+  Firebase PR distribution intentionally bypasses that release gate.
 
 ## Test Strategy
 
@@ -317,7 +322,8 @@ before each production change.
 - failed chart savepoint release leaves durable state/revision unchanged;
 - clean retry commits once;
 - iOS project setup remains idempotent and every deployment target is 14;
-- workflow event routing and distribution dependencies are statically tested;
+- workflow event routing proves Firebase PRs bypass verification while
+  TestFlight remains dependent on it;
 - IPA audit positive and negative fixtures cover every enforced check; and
 - existing CTest and iOS setup suites remain green.
 
@@ -350,8 +356,8 @@ This stabilization pass is complete when:
 - simulator smoke passes on iPhone and iPad targets;
 - cache, player, frame, queue, and worker bounds are proven by tests;
 - ETTrace shows no new dominant first-party hotspot in the two focused flows;
-- the release workflow cannot upload before verification or race TestFlight
-  build numbers;
+- the release workflow cannot upload to TestFlight before verification or race
+  TestFlight build numbers, while Firebase PR iteration stays independent;
 - the artifact audit passes a locally produced release candidate;
 - the privacy policy and release checklist match shipped behavior; and
 - deferred Android/macOS findings remain clearly marked as outside the first
