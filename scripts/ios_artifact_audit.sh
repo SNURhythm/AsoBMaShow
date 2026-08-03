@@ -222,9 +222,9 @@ UNWANTED="$(find "${APP_PATH}" \( \
 [ -z "${UNWANTED}" ] || fail "unwanted file is embedded: ${UNWANTED}"
 
 SECRET_PATTERN='BEGIN ([A-Z]+ )?PRIVATE KEY|APP_STORE_KEY[[:space:]:=]|MATCH_PASSWORD[[:space:]:=]|FIREBASE_(CLI_)?TOKEN[[:space:]:=]|Authorization:[[:space:]]*Bearer'
-SECRET_MATCH="$(LC_ALL=C grep -R -I -n -E "${SECRET_PATTERN}" \
-  "${APP_PATH}" 2>/dev/null | head -n 1 || true)"
-[ -z "${SECRET_MATCH}" ] || fail "credential material is embedded: ${SECRET_MATCH}"
+if LC_ALL=C grep -R -I -q -E "${SECRET_PATTERN}" "${APP_PATH}" 2>/dev/null; then
+  fail "credential material is embedded in resources"
+fi
 
 for binary in "${BINARIES[@]}"; do
   if LC_ALL=C grep -a -q -E "${SECRET_PATTERN}" "${binary}"; then

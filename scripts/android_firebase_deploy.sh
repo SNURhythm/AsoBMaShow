@@ -249,7 +249,7 @@ setup_android_signing_env() {
 
   resolved_path="${ANDROID_KEYSTORE_PATH}"
   case "${resolved_path}" in
-    "~/"*)
+    [~]/*)
       resolved_path="${HOME}/${resolved_path#~/}"
       ;;
     /*)
@@ -267,9 +267,9 @@ setup_android_signing_env() {
 }
 
 android_timestamp_version_code() {
-  # YY + day-of-year + HHMM stays monotonic enough for local builds and below
-  # Android's 2,100,000,000 versionCode ceiling.
-  date -u +%y%j%H%M
+  # Unix seconds are monotonic, have finer collision resistance than the old
+  # minute code, and remain below Android's 2,100,000,000 ceiling until 2036.
+  date -u +%s
 }
 
 apply_cli_overrides() {
@@ -302,7 +302,7 @@ set_android_version_code() {
   export ANDROID_VERSION_CODE="$1"
   validate_android_version_code
   if [ "${ANDROID_VERSION_NAME_FIXED}" -eq 0 ]; then
-    export ANDROID_VERSION_NAME="1.0.${ANDROID_VERSION_CODE}"
+    export ANDROID_VERSION_NAME="0.0.1"
   fi
 }
 
@@ -420,7 +420,7 @@ setup_java_env() {
 }
 
 setup_build_metadata() {
-  local default_version_code
+  local default_version_code release_notes
   default_version_code="$(android_timestamp_version_code)"
 
   export GITHUB_ACTIONS=true
@@ -438,17 +438,18 @@ setup_build_metadata() {
   else
     validate_android_version_code
     if [ -z "${ANDROID_VERSION_NAME:-}" ]; then
-      export ANDROID_VERSION_NAME="1.0.${ANDROID_VERSION_CODE}"
+      export ANDROID_VERSION_NAME="0.0.1"
     fi
   fi
 
   if [ -z "${FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES:-}" ]; then
-    export FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES=$(
+    release_notes=$(
       printf 'Local Android Firebase build\nBranch: %s\nSHA: %s\nMachine: %s\n' \
         "${GITHUB_HEAD_REF}" \
         "${GITHUB_SHA}" \
         "$(hostname)"
     )
+    export FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES="${release_notes}"
   fi
 }
 

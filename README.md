@@ -27,11 +27,13 @@ git submodule update --init --recursive
 ```
 
 ### Current Progress 
-- [x] Implement basic chart select screen 
-- [x] Implement audio output
-- [x] Implement BGA playback
-- [ ] Implement gameplay
-  - [x] Implement basic judgement system
+- [x] BGA playback
+- [x] Gameplay
+- [x] Course mode
+- [x] Integrate Bokutachi IR
+- [x] Chart viewer
+- [ ] Support PMS
+- [ ] Portrait mode (mobile)
 - [ ] Support skin
 
 ## Dependency

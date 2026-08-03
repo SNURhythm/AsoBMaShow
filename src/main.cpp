@@ -80,6 +80,14 @@
 #include <system_error>
 #include <thread>
 #include <vector>
+
+// CMake defines this for desktop and Android targets. The iOS app is built by
+// its generated Xcode project, so keep telemetry opt-in when that build system
+// does not provide the definition.
+#ifndef ASOBMASHOW_ENABLE_PERF_TELEMETRY
+#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 0
+#endif
+
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -832,7 +840,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   };
   context.restoreGameplayRenderViews();
 
-  constexpr bool kEnablePerfTelemetry = true;
   uint64_t rawEventsInWindow = 0;
   uint64_t processedEventsInWindow = 0;
   uint64_t coalescedMouseMotionInWindow = 0;
@@ -1109,7 +1116,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
 
     auto processEvent = [&](SDL_Event event) {
-      ++processedEventsInWindow;
+      if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+        ++processedEventsInWindow;
+      }
       if (event.type == SDL_QUIT) {
         context.quitFlag = true;
       }
@@ -1174,14 +1183,18 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     auto waitForBackgroundEvent = [&]() {
       SDL_Event waitEvent{};
       if (SDL_WaitEventTimeout(&waitEvent, kBackgroundEventWaitTimeoutMs)) {
-        ++rawEventsInWindow;
+        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+          ++rawEventsInWindow;
+        }
         context.inputDeviceRegistry.handleSdlEventAndDispatch(waitEvent);
         processEvent(waitEvent);
       }
     };
 
     while (SDL_PollEvent(&e)) {
-      ++rawEventsInWindow;
+      if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+        ++rawEventsInWindow;
+      }
       context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
 
       if (e.type == SDL_MOUSEMOTION) {
@@ -1220,7 +1233,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (hasPendingResize) {
       processEvent(pendingResizeEvent);
       if (pendingResizeCount > 1) {
-        coalescedResizeInWindow += (pendingResizeCount - 1);
+        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+          coalescedResizeInWindow += (pendingResizeCount - 1);
+        }
       }
     }
     if (!pendingFingerMotions.empty()) {
@@ -1228,14 +1243,18 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         processEvent(pendingFingerMotion);
       }
       if (pendingFingerMotionCount > pendingFingerMotions.size()) {
-        coalescedFingerMotionInWindow +=
-            pendingFingerMotionCount - pendingFingerMotions.size();
+        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+          coalescedFingerMotionInWindow +=
+              pendingFingerMotionCount - pendingFingerMotions.size();
+        }
       }
     }
     if (hasPendingMouseMotion) {
       processEvent(pendingMouseMotion);
       if (pendingMouseMotionCount > 1) {
-        coalescedMouseMotionInWindow += (pendingMouseMotionCount - 1);
+        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+          coalescedMouseMotionInWindow += (pendingMouseMotionCount - 1);
+        }
       }
     }
     if (hasDeferredRenderResize &&
@@ -1354,7 +1373,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
     }
 
-    if constexpr (kEnablePerfTelemetry) {
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+    {
       constexpr float kTelemetryLogIntervalSec = 5.0f;
       static FPSCounter fpsCounter;
       static float telemetryLogInterval = 0.0f;
@@ -1384,6 +1404,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         coalescedResizeInWindow = 0;
       }
     }
+#endif
 
     // shift left by 1
     // float translate[16];
