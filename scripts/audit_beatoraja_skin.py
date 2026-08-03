@@ -1243,30 +1243,105 @@ def _function_operation_events(
     _, function_depths = _lua_context_flags(tokens)
     direct_depth = function_depths[start] + 1
     events: list[tuple[str, object]] = []
+    classified_call_opens: set[int] = set()
+
+    def complex_receiver_root(member_index: int) -> str | None:
+        cursor = member_index - 2
+        root = None
+        while cursor >= start:
+            if tokens[cursor].value == "]":
+                bracket_depth = 1
+                cursor -= 1
+                while cursor >= start and bracket_depth:
+                    if tokens[cursor].value == "]":
+                        bracket_depth += 1
+                    elif tokens[cursor].value == "[":
+                        bracket_depth -= 1
+                    cursor -= 1
+                if bracket_depth:
+                    return None
+                continue
+            if tokens[cursor].value == ".":
+                cursor -= 1
+                continue
+            if tokens[cursor].kind == "identifier":
+                if tokens[cursor].value in {
+                    "and", "do", "else", "elseif", "for", "function", "if", "in",
+                    "local", "not", "or", "repeat", "return", "then", "until", "while",
+                }:
+                    break
+                root = tokens[cursor].value
+                cursor -= 1
+                continue
+            break
+        return root
     for index in range(start + 1, end):
         if function_depths[index] != direct_depth:
             continue
         if (
-            tokens[index].kind == "identifier"
-            and index + 3 < end
-            and tokens[index + 1].value == ":"
-            and tokens[index + 2].kind == "identifier"
-            and tokens[index + 3].value == "("
+            tokens[index].value == ":"
+            and index + 2 < end
+            and tokens[index + 1].kind == "identifier"
+            and tokens[index + 2].value == "("
         ):
+            receiver = []
+            cursor = index - 1
+            if cursor >= start and tokens[cursor].kind == "identifier":
+                receiver.append(tokens[cursor].value)
+                while (
+                    cursor - 2 >= start
+                    and tokens[cursor - 1].value == "."
+                    and tokens[cursor - 2].kind == "identifier"
+                ):
+                    cursor -= 2
+                    receiver.append(tokens[cursor].value)
+                receiver.reverse()
             events.append(
-                ("method", (tokens[index].value, tokens[index + 2].value, index))
+                ("method", (tuple(receiver), tokens[index + 1].value, index))
             )
+            classified_call_opens.add(index + 2)
             continue
         chain = _call_chain_at(tokens, index, end)
         if chain is None:
             continue
         open_index = index + (2 * len(chain) - 1)
+        classified_call_opens.add(open_index)
         if chain == ("io", "open"):
             events.append(("operation", _static_io_open_kind(tokens, open_index)))
         elif chain == ("dofile",):
             events.append(("operation", "filesystemRead"))
         else:
             events.append(("call", chain))
+    for index in range(start + 1, end):
+        if (
+            function_depths[index] != direct_depth
+            or tokens[index].value != "("
+            or index in classified_call_opens
+            or index == 0
+        ):
+            continue
+        previous = tokens[index - 1]
+        if previous.value in {
+            "and", "do", "else", "elseif", "for", "function", "if", "in",
+            "local", "not", "or", "repeat", "return", "then", "until", "while",
+        }:
+            continue
+        if (
+            previous.kind == "identifier"
+            and index >= 2
+            and tokens[index - 2].value == "function"
+        ):
+            continue
+        if previous.kind == "identifier":
+            receiver_root = complex_receiver_root(index - 1)
+            if receiver_root is not None:
+                events.append(
+                    ("object-call", (receiver_root, previous.value, index))
+                )
+            else:
+                events.append(("unclassified-call", index))
+        elif previous.value in {")", "]", "}"}:
+            events.append(("unclassified-call", index))
     return events
 
 
@@ -1311,9 +1386,119 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
         ]
         return max(containing, key=lambda item: item[0]) if containing else None
 
+    closed_source_methods: dict[str, set[str]] = {}
+    forbidden_source_roots = {
+        "File", "Gdx", "dofile", "io", "luajava", "main_state", "os",
+        "require", "skin_config", "sound",
+    }
+    closed_source_builtins = {
+        "assert", "error", "ipairs", "math", "next", "pairs", "pcall",
+        "select", "string", "table", "tonumber", "tostring", "type", "xpcall",
+    }
+    for source_path, source_tokens in token_by_path.items():
+        if any(token.value in forbidden_source_roots for token in source_tokens):
+            continue
+        declared = {
+            name
+            for _, _, name in _function_ranges(source_tokens)
+            if name is not None
+        }
+        for index, token in enumerate(source_tokens[:-1]):
+            if token.value != "local":
+                continue
+            cursor = index + 1
+            if source_tokens[cursor].value == "function":
+                cursor += 1
+            while cursor < len(source_tokens) and source_tokens[cursor].kind == "identifier":
+                declared.add(source_tokens[cursor].value)
+                cursor += 1
+                if cursor >= len(source_tokens) or source_tokens[cursor].value != ",":
+                    break
+                cursor += 1
+        for function_start, _, _ in _function_ranges(source_tokens):
+            cursor = function_start + 1
+            if cursor < len(source_tokens) and source_tokens[cursor].kind == "identifier":
+                cursor += 1
+            if cursor >= len(source_tokens) or source_tokens[cursor].value != "(":
+                continue
+            close_index = _matching_token(source_tokens, cursor, "(", ")")
+            declared.update(
+                token.value
+                for token in source_tokens[cursor + 1:close_index]
+                if token.kind == "identifier"
+            )
+        closed = True
+        for index in range(len(source_tokens)):
+            chain = _call_chain_at(source_tokens, index, len(source_tokens))
+            if chain is not None and chain[0] not in declared | closed_source_builtins:
+                closed = False
+                break
+        if closed:
+            for function_start, function_end, _ in _function_ranges(source_tokens):
+                for kind, value in _function_operation_events(
+                    source_tokens, function_start, function_end
+                ):
+                    if kind == "operation" or kind == "unclassified-call":
+                        closed = False
+                        break
+                    if kind == "method":
+                        receiver, _, _ = value
+                        if not receiver or receiver[0] not in declared:
+                            closed = False
+                            break
+                    if kind == "object-call" and value[0] not in declared:
+                        closed = False
+                        break
+                if not closed:
+                    break
+        if not closed:
+            continue
+        methods = {
+            source_tokens[index].value
+            for index in range(len(source_tokens) - 2)
+            if source_tokens[index].kind == "identifier"
+            and source_tokens[index + 1].value == "="
+            and source_tokens[index + 2].value == "function"
+        }
+        if methods:
+            closed_source_methods[source_path] = methods
+
+    source_object_origins: dict[
+        str,
+        dict[str, list[tuple[str, int, tuple[int, int] | None]]],
+    ] = {}
+    for path, tokens in token_by_path.items():
+        path_origins: dict[str, list[tuple[str, int, tuple[int, int] | None]]] = {}
+        for index in range(len(tokens) - 8):
+            if tokens[index].kind != "identifier" or tokens[index + 1].value != "=":
+                continue
+            target_path = None
+            if (
+                [token.value for token in tokens[index + 2:index + 4]]
+                == ["require", "("]
+                and tokens[index + 4].kind == "string"
+                and tokens[index + 5].value == ")"
+                and tokens[index + 6].value == "."
+                and tokens[index + 7].kind == "identifier"
+                and tokens[index + 8].value == "("
+            ):
+                target_path = _lua_module_path(tokens[index + 4].value, loaded)
+            elif (
+                tokens[index + 2].kind == "identifier"
+                and tokens[index + 3].value == "."
+                and tokens[index + 4].kind == "identifier"
+                and tokens[index + 5].value == "("
+            ):
+                target_path = aliases[path].get(tokens[index + 2].value)
+            if target_path in closed_source_methods:
+                path_origins.setdefault(tokens[index].value, []).append(
+                    (target_path, index, lexical_scope(path, index))
+                )
+        source_object_origins[path] = path_origins
+
     handle_origins: dict[
         str,
-        dict[str, list[tuple[str, bool, int, tuple[int, int] | None]]],
+        dict[str, list[tuple[str | None, bool, int, tuple[int, int] | None]]],
     ] = {}
     guarded_by_path = {
         path: _lua_guarded_flags(tokens) for path, tokens in token_by_path.items()
@@ -1322,20 +1507,32 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
     for path, tokens in token_by_path.items():
         path_handles: dict[
             str,
-            list[tuple[str, bool, int, tuple[int, int] | None]],
+            list[tuple[str | None, bool, int, tuple[int, int] | None]],
         ] = {}
+        canonical_handle_names = {
+            tokens[index].value
+            for index in range(len(tokens) - 5)
+            if tokens[index].kind == "identifier"
+            and tokens[index + 1].value == "="
+            and [token.value for token in tokens[index + 2:index + 6]]
+            == ["io", ".", "open", "("]
+        }
         file_classes: set[str] = set()
         path_legacy: dict[str, list[tuple[int, tuple[int, int] | None]]] = {}
         for index in range(len(tokens) - 6):
             if (
                 tokens[index].kind == "identifier"
                 and tokens[index + 1].value == "="
-                and [token.value for token in tokens[index + 2:index + 6]]
-                == ["io", ".", "open", "("]
+                and tokens[index].value in canonical_handle_names
             ):
+                canonical_open = (
+                    [token.value for token in tokens[index + 2:index + 6]]
+                    == ["io", ".", "open", "("]
+                )
                 path_handles.setdefault(tokens[index].value, []).append(
                     (
-                        _static_io_open_kind(tokens, index + 5),
+                        _static_io_open_kind(tokens, index + 5)
+                        if canonical_open else None,
                         guarded_by_path[path][index],
                         index,
                         lexical_scope(path, index),
@@ -1385,25 +1582,36 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
         path: str,
         start: int,
         end: int,
-        receiver: str,
+        receiver: tuple[str, ...],
         method: str,
         index: int,
     ) -> str | None:
+        receiver_name = ".".join(receiver) if receiver else "<expression>"
         if method in {"mkdir", "listFiles"}:
+            if len(receiver) != 1:
+                raise AuditError(
+                    "ambiguous render-I/O operation graph legacy File origin for "
+                    f"{receiver_name!r}"
+                )
             origins = visible_records(
-                legacy_file_origins[path].get(receiver, []), start, end, index
+                legacy_file_origins[path].get(receiver[0], []), start, end, index
             )
             if not origins:
                 raise AuditError(
-                    f"ambiguous render-I/O operation graph legacy File origin for {receiver!r}"
+                    f"ambiguous render-I/O operation graph legacy File origin for {receiver_name!r}"
                 )
             return "filesystemWrite" if method == "mkdir" else "filesystemDirectoryScan"
         if method not in {"lines", "write", "close"}:
             return None
-        origins = visible_records(handle_origins[path].get(receiver, []), start, end, index)
+        if len(receiver) != 1:
+            raise AuditError(
+                "ambiguous render-I/O operation graph captured handle origin for "
+                f"{receiver_name!r}"
+            )
+        origins = visible_records(handle_origins[path].get(receiver[0], []), start, end, index)
         if not origins:
             raise AuditError(
-                f"ambiguous render-I/O operation graph captured handle origin for {receiver!r}"
+                f"ambiguous render-I/O operation graph captured handle origin for {receiver_name!r}"
             )
         same_scope_origins = [
             record for record in origins
@@ -1428,9 +1636,9 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
             elif unguarded:
                 origins = [max(unguarded, key=lambda record: record[-2])]
         operation_kinds = {record[0] for record in origins}
-        if len(operation_kinds) != 1:
+        if len(operation_kinds) != 1 or None in operation_kinds:
             raise AuditError(
-                f"ambiguous render-I/O operation graph captured handle modes for {receiver!r}"
+                f"ambiguous render-I/O operation graph captured handle modes for {receiver_name!r}"
             )
         operation_kind = next(iter(operation_kinds))
         if method == "lines" and operation_kind != "filesystemRead":
@@ -1438,8 +1646,27 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
         if method == "write" and operation_kind != "filesystemWrite":
             raise AuditError("ambiguous render-I/O operation graph write mode mismatch")
         if all(start < record[-2] < end for record in origins):
-            return None
+            return ""
         return operation_kind
+
+    def is_closed_source_method(
+        path: str,
+        start: int,
+        end: int,
+        receiver_root: str,
+        method: str,
+        index: int,
+    ) -> bool:
+        origins = visible_records(
+            source_object_origins[path].get(receiver_root, []), start, end, index
+        )
+        targets = {record[0] for record in origins}
+        if len(targets) > 1:
+            raise AuditError(
+                "ambiguous render-I/O operation graph source object origin for "
+                f"{receiver_root!r}"
+            )
+        return bool(targets) and method in closed_source_methods[next(iter(targets))]
 
     def known_non_io_call(chain: tuple[str, ...]) -> bool:
         if chain in {
@@ -1502,9 +1729,34 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
                 continue
             if kind == "method":
                 operation = classify_method(path, start, end, *value)
-                if operation is not None:
+                if operation:
                     operations.append(operation)
+                elif operation is None:
+                    receiver, method, _ = value
+                    if receiver and is_closed_source_method(
+                        path, start, end, receiver[0], method, value[2]
+                    ):
+                        continue
+                    rendered = ".".join((*receiver, method)) if receiver else method
+                    raise AuditError(
+                        "unresolved render-I/O operation graph retained method: "
+                        + rendered
+                    )
                 continue
+            if kind == "object-call":
+                receiver_root, method, call_index = value
+                if is_closed_source_method(
+                    path, start, end, receiver_root, method, call_index
+                ):
+                    continue
+                raise AuditError(
+                    "unresolved render-I/O operation graph retained method: "
+                    f"{receiver_root}.{method}"
+                )
+            if kind == "unclassified-call":
+                raise AuditError(
+                    "unresolved render-I/O operation graph retained call expression"
+                )
             target = resolve(path, value)
             if target is not None:
                 operations.extend(expand(*target, stack + (identity,)))
@@ -1884,7 +2136,7 @@ def _validate_configured_model_mutations(
             raise AuditError("configured return model mutator target is ambiguous")
         return ranges[0] if ranges else None
 
-    checked_targets: set[tuple[str, int]] = set()
+    allowed_model_uses: set[int] = set()
     for index in range(start + 1, end):
         if depths[index] != direct_depth:
             continue
@@ -1892,31 +2144,39 @@ def _validate_configured_model_mutations(
         if chain is None:
             continue
         open_index = index + (2 * len(chain) - 1)
-        if (
-            open_index + 1 >= end
-            or tokens[open_index + 1].value != model
-            or (open_index + 2 < end and tokens[open_index + 2].value not in {",", ")"})
-        ):
+        close_index = _matching_token(tokens, open_index, "(", ")")
+        bare_model_arguments = [
+            argument
+            for argument in range(open_index + 1, close_index)
+            if tokens[argument].value == model
+            and depths[argument] == direct_depth
+            and (
+                argument + 1 >= close_index
+                or tokens[argument + 1].value not in {".", "["}
+            )
+        ]
+        if not bare_model_arguments:
             continue
+        if (
+            chain[-1] != "LOAD_HEADER"
+            or bare_model_arguments != [open_index + 1]
+            or open_index + 2 >= end
+            or tokens[open_index + 2].value != ","
+        ):
+            raise AuditError(
+                "configured return model escapes to an unsupported helper call"
+            )
         target = resolve(chain)
         if target is None:
             raise AuditError("configured return model is passed to an unresolved mutator")
-        identity = (target[0], target[2])
-        if identity in checked_targets:
-            continue
-        checked_targets.add(identity)
-        if chain[-1] == "LOAD_HEADER":
-            if open_index + 3 >= end or tokens[open_index + 2].value != ",":
-                raise AuditError("configured return model header call has an unsupported shape")
-            _validate_header_copy(
-                loaded,
-                path,
-                tokens,
-                tokens[open_index + 3].value,
-                target,
-            )
-        else:
-            _validate_literal_field_mutator(target[1], target[2], target[3])
+        _validate_header_copy(
+            loaded,
+            path,
+            tokens,
+            tokens[open_index + 3].value,
+            target,
+        )
+        allowed_model_uses.add(open_index + 1)
 
     for index in range(start + 1, end - 1):
         if (
@@ -1924,11 +2184,38 @@ def _validate_configured_model_mutations(
             and tokens[index].value == "addSourceSP"
             and tokens[index + 1].value == "("
             and tokens[index + 2].value == model
+            and index >= 5
+            and tokens[index - 5].value == "require"
+            and tokens[index - 4].value == "("
+            and tokens[index - 3].kind == "string"
+            and tokens[index - 3].value == "Play.lua.base"
+            and tokens[index - 2].value == ")"
+            and tokens[index - 1].value == "."
         ):
             candidates = function_ranges.get("Play/lua/base.lua\0addSourceSP", [])
             if len(candidates) != 1:
                 raise AuditError("configured return model addSourceSP target is unresolved")
             _validate_literal_field_mutator(candidates[0][1], candidates[0][2], candidates[0][3])
+            allowed_model_uses.add(index + 2)
+
+    for index in range(start + 1, end):
+        if tokens[index].value != model:
+            continue
+        if depths[index] != direct_depth:
+            raise AuditError("configured return model is captured by a nested function")
+        if index in allowed_model_uses:
+            continue
+        if (
+            index + 2 < end
+            and tokens[index + 1].value == "="
+            and tokens[index + 2].value == "{"
+        ):
+            continue
+        if index + 1 < end and tokens[index + 1].value in {".", "["}:
+            continue
+        if index > start and tokens[index - 1].value == "return":
+            continue
+        raise AuditError("configured return model has an unclassified alias or escape")
 
 
 def _configured_return_model_counts(loaded: dict[str, str]) -> dict[str, int]:

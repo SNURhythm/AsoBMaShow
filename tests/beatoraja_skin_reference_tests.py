@@ -714,6 +714,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         computed_custom_key=None,
         indirect_computed_custom_key=None,
         custom_map_mutation=None,
+        model_escape=None,
         explicit_custom_counts=None,
         duplicate_first_callback=False,
     ):
@@ -772,6 +773,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
 
         helper_lines = ["local module = {}"]
         model_prelude = []
+        additional_files = {}
         callback_lines = []
         for index, operation in enumerate(operations):
             if operation == "read":
@@ -787,6 +789,8 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 direct_body = 'dofile("state.lua")'
             elif operation == "unresolved-call":
                 direct_body = "UNKNOWN.perform()"
+            elif operation == "unresolved-method":
+                direct_body = "UNKNOWN:perform()"
             elif operation == "mkdir":
                 direct_body = (
                     'local File = luajava.bindClass("java.io.File"); '
@@ -796,6 +800,17 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 direct_body = (
                     'local File = luajava.bindClass("java.io.File"); '
                     'local dir = luajava.new(File, "state"); dir:listFiles()'
+                )
+            elif operation == "chained-mkdir":
+                direct_body = (
+                    'local File = luajava.bindClass("java.io.File"); '
+                    'luajava.new(File, "state"):mkdir()'
+                )
+            elif operation == "legacy-alias-mkdir":
+                direct_body = (
+                    'local File = luajava.bindClass("java.io.File"); '
+                    'local dir = luajava.new(File, "state"); '
+                    'local dir_alias = dir; dir_alias:mkdir()'
                 )
             elif operation in {"captured-lines", "captured-close-read"}:
                 model_prelude.append(
@@ -825,6 +840,53 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                     ]
                 )
                 direct_body = f'captured{index}:close()'
+            elif operation == "captured-wrapped-overwrite":
+                model_prelude.extend(
+                    [
+                        f'local captured{index} = io.open("captured{index}.txt", "r")',
+                        "local function wrapped_open(path)",
+                        '  return io.open(path, "w")',
+                        "end",
+                    ]
+                )
+                direct_body = (
+                    f'captured{index} = wrapped_open("wrapped{index}.txt"); '
+                    f'captured{index}:close()'
+                )
+            elif operation == "captured-handle-alias":
+                model_prelude.append(
+                    f'local captured{index} = io.open("captured{index}.txt", "r")'
+                )
+                direct_body = (
+                    f'local captured_alias = captured{index}; captured_alias:close()'
+                )
+            elif operation == "source-backed-local-methods":
+                model_prelude.append(
+                    'local local_state = require("fixture.local_state").load()'
+                )
+                additional_files["fixture/local_state.lua"] = (
+                    "local module = {value = 0}\n"
+                    "module.increment = function(self) self.value = self.value + 1 end\n"
+                    "module.values = {{get = function() return 1 end}}\n"
+                    "return {load = function() return module end}\n"
+                )
+                direct_body = (
+                    "local_state:increment(); local_state.values[1].get(); "
+                    'local f = io.open("state.txt", "r"); f:close()'
+                )
+            elif operation == "source-backed-unknown-call":
+                model_prelude.append(
+                    'local unsafe_state = require("fixture.unsafe_state").load()'
+                )
+                additional_files["fixture/unsafe_state.lua"] = (
+                    "local module = {}\n"
+                    "module.perform = function() UNKNOWN.perform() end\n"
+                    "return {load = function() return module end}\n"
+                )
+                direct_body = (
+                    "unsafe_state:perform(); "
+                    'local f = io.open("state.txt", "r"); f:close()'
+                )
             else:
                 raise AssertionError(operation)
             helper_lines.extend(
@@ -918,12 +980,42 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 )
             else:
                 raise AssertionError(mutation)
+        if model_escape is not None:
+            field, escape = model_escape
+            if escape == "alias":
+                model_lines.extend(
+                    [
+                        "  local model_alias = skin",
+                        f"  model_alias.{field} = {{{{id = 1}}}}",
+                    ]
+                )
+            elif escape == "captured-helper":
+                model_lines.extend(
+                    [
+                        "  local function mutate_captured_model()",
+                        f"    skin.{field} = {{{{id = 1}}}}",
+                        "  end",
+                        "  mutate_captured_model()",
+                    ]
+                )
+            elif escape == "later-argument":
+                model_lines.extend(
+                    [
+                        "  local function mutate_later_argument(ignored, model)",
+                        f"    model.{field} = {{{{id = 1}}}}",
+                        "  end",
+                        "  mutate_later_argument(nil, skin)",
+                    ]
+                )
+            else:
+                raise AssertionError(escape)
         model_lines.extend(["  return skin", "end", "return {main = main}"])
         return {
             "play7_fixture.luaskin": 'local t = require("fixture.model"); return t.main()\n',
             "fixture/model.lua": "\n".join(model_lines) + "\n",
             "fixture/property.lua": "\n".join(property_lines) + "\n",
             "fixture/helper.lua": "\n".join(helper_lines) + "\n",
+            **additional_files,
         }
 
     def analyze_render_policy(self, closure):
@@ -1057,6 +1149,82 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 "11" * 32,
             )
 
+    def test_render_operation_graph_rejects_unclassified_retained_methods(self):
+        audit = load_audit_module()
+        with self.assertRaisesRegex(audit.AuditError, "unresolved render-I/O operation graph"):
+            audit.analyze_selected_file_io_surface(
+                self.make_render_policy_closure(
+                    operations=("unresolved-method",),
+                    direct_callbacks=True,
+                ),
+                "22" * 32,
+                "11" * 32,
+            )
+
+    def test_render_operation_graph_rejects_unproven_legacy_expression_origins(self):
+        audit = load_audit_module()
+        for operation in ("chained-mkdir", "legacy-alias-mkdir"):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(
+                    audit.AuditError, "ambiguous render-I/O operation graph"
+                ):
+                    audit.analyze_selected_file_io_surface(
+                        self.make_render_policy_closure(
+                            operations=(operation,),
+                            direct_callbacks=True,
+                        ),
+                        "22" * 32,
+                        "11" * 32,
+                    )
+
+    def test_render_operation_graph_invalidates_unproven_handle_assignments_and_aliases(self):
+        audit = load_audit_module()
+        for operation in ("captured-wrapped-overwrite", "captured-handle-alias"):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(
+                    audit.AuditError, "ambiguous render-I/O operation graph captured handle"
+                ):
+                    audit.analyze_selected_file_io_surface(
+                        self.make_render_policy_closure(
+                            operations=(operation,),
+                            direct_callbacks=True,
+                        ),
+                        "22" * 32,
+                        "11" * 32,
+                    )
+
+    def test_render_operation_graph_accepts_only_closed_source_backed_local_methods(self):
+        audit = load_audit_module()
+        try:
+            selected, _ = audit.analyze_selected_file_io_surface(
+                self.make_render_policy_closure(
+                    operations=("source-backed-local-methods",),
+                    direct_callbacks=True,
+                ),
+                "22" * 32,
+                "11" * 32,
+            )
+        except audit.AuditError as error:
+            self.fail(f"closed source-backed local method was not classified: {error}")
+        self.assertEqual(
+            selected["runtimeConfigurationBinding"]["guardBindings"][0][
+                "orderedOperationKinds"
+            ],
+            ["filesystemRead"],
+        )
+
+    def test_render_operation_graph_rejects_source_backed_methods_with_unknown_calls(self):
+        audit = load_audit_module()
+        with self.assertRaisesRegex(audit.AuditError, "unresolved render-I/O operation graph"):
+            audit.analyze_selected_file_io_surface(
+                self.make_render_policy_closure(
+                    operations=("source-backed-unknown-call",),
+                    direct_callbacks=True,
+                ),
+                "22" * 32,
+                "11" * 32,
+            )
+
     def test_negative_kind_comes_from_selected_first_operation_and_is_order_independent(self):
         read_then_write = self.make_render_policy_closure(operations=("read", "write"))
         selected, _ = self.analyze_render_policy(read_then_write)
@@ -1130,6 +1298,20 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                         audit.analyze_selected_file_io_surface(
                             self.make_render_policy_closure(
                                 custom_map_mutation=(field, mutation)
+                            ),
+                            "22" * 32,
+                            "11" * 32,
+                        )
+
+    def test_configured_model_rejects_alias_capture_and_argument_escapes(self):
+        audit = load_audit_module()
+        for field in ("customTimers", "customEvents"):
+            for escape in ("alias", "captured-helper", "later-argument"):
+                with self.subTest(field=field, escape=escape):
+                    with self.assertRaisesRegex(audit.AuditError, "configured return model"):
+                        audit.analyze_selected_file_io_surface(
+                            self.make_render_policy_closure(
+                                model_escape=(field, escape)
                             ),
                             "22" * 32,
                             "11" * 32,
