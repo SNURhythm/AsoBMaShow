@@ -4076,6 +4076,52 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(skin_archive_importer_tests PRIVATE advapi32)
     endif()
 
+    # The operation-service target owns only queue/worker semantics. Its test
+    # provides a narrow public-contract Store harness while Store/catalog
+    # transactional integration remains in skin_package_store_tests.
+    add_executable(skin_package_operation_service_tests
+        tests/skin_package_operation_service_tests.cpp
+        src/FileChecksum.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/SkinStoragePaths.cpp
+        src/skin/package/SkinAliasDetector.cpp
+        src/skin/package/SkinArchiveImporter.cpp
+        src/skin/package/SkinPackageCatalog.cpp
+        src/skin/package/SkinPackageOperationService.cpp
+        src/skin/package/SkinPackageStore.cpp
+        src/skin/package/SkinPathPolicy.cpp
+        src/skin/package/SkinTreeSnapshotter.cpp
+    )
+    target_include_directories(skin_package_operation_service_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(skin_package_operation_service_tests PRIVATE cxx_std_23)
+    target_compile_definitions(skin_package_operation_service_tests PRIVATE
+        ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+    )
+    target_link_libraries(skin_package_operation_service_tests PRIVATE
+        BZip2::BZip2
+        LibLZMA::LibLZMA
+        ZLIB::ZLIB
+        utf8proc::utf8proc
+    )
+    if(TARGET LibArchive::LibArchive)
+        target_link_libraries(skin_package_operation_service_tests PRIVATE LibArchive::LibArchive)
+    else()
+        target_include_directories(skin_package_operation_service_tests PRIVATE ${LibArchive_INCLUDE_DIRS})
+        target_link_libraries(skin_package_operation_service_tests PRIVATE ${LibArchive_LIBRARIES})
+    endif()
+    if(APPLE)
+        target_sources(skin_package_operation_service_tests PRIVATE
+            src/skin/package/SkinAliasDetectorApple.mm
+        )
+        target_link_libraries(skin_package_operation_service_tests PRIVATE "-framework Foundation")
+    endif()
+    add_test(NAME skin_package_operation_service_tests
+             COMMAND $<TARGET_FILE:skin_package_operation_service_tests>)
+    set_tests_properties(skin_package_operation_service_tests PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:skin_package_operation_service_tests>)
+
     # Transactional skin package store/catalog contract suite.
     find_package(zstd CONFIG QUIET)
     add_executable(skin_package_store_tests

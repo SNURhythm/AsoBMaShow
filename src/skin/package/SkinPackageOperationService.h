@@ -71,6 +71,10 @@ public:
   SkinPackageOperationService &
   operator=(const SkinPackageOperationService &) = delete;
 
+  // Tickets are nonzero, process-monotonic, and never reused. A zero-ticket
+  // handle means the service is closed or at its bounded retention limit; the
+  // rejected cleanup callback is not invoked. Callers release picker
+  // capabilities before shutdown.
   SkinPackageOperationHandle submitPrepareArchive(std::filesystem::path zip,
                                                   SkinPackageId package,
                                                   SkinDeferredCleanup cleanup);
