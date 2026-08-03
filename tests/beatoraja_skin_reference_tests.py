@@ -36,6 +36,7 @@ TWO_PHASE_SHARED_PATH = (
 SANDBOX_PROBE_PATH = (
     ROOT / "tests/fixtures/beatoraja_skin/lua/sandbox_probe.luaskin"
 )
+TREE_DIGEST_PARITY_ROOT = ROOT / "tests/fixtures/skin_tree_digest_v1"
 GAMEPLAY_CONTRACT_PATH = ROOT / "docs/skin-compat/beatoraja-lua-gameplay-contract.md"
 ACCEPTANCE_PATH = ROOT / "docs/skin-compat/modernchic-scuro-4.02-acceptance.md"
 LOWER_SHA256 = __import__("re").compile(r"^[0-9a-f]{64}$")
@@ -199,6 +200,15 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         for relative_path in required:
             with self.subTest(path=relative_path):
                 self.assertTrue((ROOT / relative_path).is_file(), relative_path)
+
+    def test_skin_tree_digest_v1_shared_fixture_matches_task1_audit(self):
+        audit = load_audit_module()
+        expected = (TREE_DIGEST_PARITY_ROOT / "expected.sha256").read_text(
+            encoding="ascii"
+        ).strip()
+        actual, regular = audit.inspect_disk_tree(TREE_DIGEST_PARITY_ROOT / "tree")
+        self.assertEqual(expected, actual)
+        self.assertEqual(["a.txt", "nested/b.txt"], [item.path for item in regular])
 
     def load_trace(self, kind: str) -> dict:
         path = TRACE_ROOT / TRACE_FILES[kind]

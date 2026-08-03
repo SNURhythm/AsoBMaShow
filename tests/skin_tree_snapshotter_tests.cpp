@@ -112,6 +112,25 @@ private:
   std::string filename_;
 };
 
+class FailOneSnapshotOperation final : public SkinSnapshotFailureInjector {
+public:
+  explicit FailOneSnapshotOperation(SkinSnapshotIoOperation operation)
+      : operation_(operation) {}
+
+  bool shouldFail(SkinSnapshotIoOperation operation,
+                  const fs::path &) const noexcept override {
+    if (!failed_ && operation == operation_) {
+      failed_ = true;
+      return true;
+    }
+    return false;
+  }
+
+private:
+  SkinSnapshotIoOperation operation_;
+  mutable bool failed_ = false;
+};
+
 std::size_t stagingEntryCount(const SkinStorageRoots &roots) {
   const fs::path staging = roots.privateRevisions / ".staging";
   std::error_code error;
@@ -145,6 +164,28 @@ void testDigestUsesExactTreeV1FramingAndStableSorting() {
            "snapshot copies root files");
     expect(fs::exists(result.prepared->stagingRoot() / "dir/b.bin"),
            "snapshot copies nested files");
+  }
+}
+
+void testTask1PythonAuditFixtureMatchesCppSnapshotter() {
+  TempDirectory temp;
+  const fs::path fixtureRoot =
+      fs::path(ASOBMASHOW_SOURCE_DIR) / "tests/fixtures/skin_tree_digest_v1";
+  std::string expected = readBytes(fixtureRoot / "expected.sha256");
+  while (!expected.empty() &&
+         (expected.back() == '\n' || expected.back() == '\r')) {
+    expected.pop_back();
+  }
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
+  const auto result =
+      snapshotter.snapshot(fixtureRoot / "tree", packageId(), {}, {});
+  expect(result.prepared.has_value(),
+         "shared Task 1 digest fixture prepares in the C++ snapshotter");
+  if (result.prepared) {
+    expect(result.prepared->revision().lowercaseSha256 == expected,
+           "Task 1 Python audit and C++ snapshotter produce the exact same "
+           "SkinTreeDigestV1");
   }
 }
 
@@ -569,14 +610,27 @@ void testPublishedRevisionIsImmutableAndLeaseClonesShareThePin() {
   expect((permissions & fs::perms::owner_write) == fs::perms::none,
          "published files are not owner-writable");
   auto second = lease->clone();
+  const auto weakPin = lease->weakPin();
+  expect(weakPin.hasLiveLease(),
+         "store-observable weak pin reports the original lease");
   expect(second.root() == publishedRoot &&
              second.revision().package == lease->revision().package &&
              second.revision().lowercaseSha256 ==
                  lease->revision().lowercaseSha256,
          "clone is an independent handle over the same revision pin");
   lease.reset();
+  expect(weakPin.hasLiveLease(),
+         "weak pin remains live while an independent clone exists");
   expect(fs::exists(second.readView().root() / "a"),
          "clone remains valid after the original lease is released");
+  {
+    auto finalOwner = std::optional<SkinRevisionLease>(std::move(second));
+    expect(weakPin.hasLiveLease(),
+           "moving the final lease does not release the shared pin");
+    finalOwner.reset();
+  }
+  expect(!weakPin.hasLiveLease(),
+         "weak pin expires only after the final cloned lease is released");
 }
 
 void testPreparedRevisionIsFrozenAndPublishRevalidatesItsDigest() {
@@ -822,6 +876,58 @@ void testSnapshotRejectsRelativePrivateRevisionRoot() {
          "snapshot rejects a relative private revision root fail-closed");
 }
 
+void testInjectedFileAndPreparedDirectoryFsyncFailuresCleanStaging() {
+  for (const auto operation : {SkinSnapshotIoOperation::CopiedFileFsync,
+                               SkinSnapshotIoOperation::PreparedParentFsync}) {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path source = temp.root() / "source";
+    writeBytes(source / "main.luaskin", "return {}\n");
+    FakeAliasDetector aliases;
+    auto failures = std::make_shared<FailOneSnapshotOperation>(operation);
+    SkinTreeSnapshotter snapshotter(roots, aliases, failures);
+    const auto result = snapshotter.snapshot(source, packageId(), {}, {});
+    expect(!result.prepared && !result.diagnostics.empty(),
+           "injected snapshot fsync failure rejects preparation");
+    expect(stagingEntryCount(roots) == 0,
+           "injected snapshot fsync failure leaves no staging orphan");
+  }
+}
+
+void testInjectedPublicationFailuresRetainCleanupOwnership() {
+  for (const auto operation : {SkinSnapshotIoOperation::PublicationRename,
+                               SkinSnapshotIoOperation::PublishedParentFsync}) {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path source = temp.root() / "source";
+    writeBytes(source / "main.luaskin", "return {}\n");
+    FakeAliasDetector aliases;
+    auto failures = std::make_shared<FailOneSnapshotOperation>(operation);
+    SkinTreeSnapshotter snapshotter(roots, aliases, failures);
+    fs::path stagingRoot;
+    fs::path publishedRoot;
+    {
+      auto result = snapshotter.snapshot(source, packageId(), {}, {});
+      expect(result.prepared.has_value(),
+             "publication fault fixture reaches a prepared revision");
+      if (!result.prepared) {
+        continue;
+      }
+      stagingRoot = result.prepared->stagingRoot();
+      publishedRoot =
+          roots.privateRevisions / result.prepared->revision().lowercaseSha256;
+      std::string error;
+      const auto lease = std::move(*result.prepared).publish(error);
+      expect(!lease && !error.empty(),
+             "injected publication boundary failure rejects publication");
+    }
+    expect(!fs::exists(stagingRoot),
+           "publication failure leaves no staging orphan");
+    expect(!fs::exists(publishedRoot),
+           "post-rename fsync failure removes the stale published tree");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -829,6 +935,7 @@ int main() {
   static_assert(!std::is_copy_assignable_v<SkinRevisionLease>);
   static_assert(std::is_move_constructible_v<SkinRevisionLease>);
   testDigestUsesExactTreeV1FramingAndStableSorting();
+  testTask1PythonAuditFixtureMatchesCppSnapshotter();
   testEmptyTreeIsRejectedForDigestParity();
   testRevisionStoresTheNormalizedCanonicalPackageIdentity();
   testFramingSeparatesDifferentFileBoundaries();
@@ -849,6 +956,8 @@ int main() {
   testOverlayIdentityIsPrivateContainedAndCanonical();
   testOverlayIdentityRejectsUnsafeInputsAndFramesFields();
   testSnapshotRejectsRelativePrivateRevisionRoot();
+  testInjectedFileAndPreparedDirectoryFsyncFailuresCleanStaging();
+  testInjectedPublicationFailuresRetainCleanupOwnership();
   if (failures != 0) {
     std::cerr << failures << " test assertion(s) failed\n";
     return 1;

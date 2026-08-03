@@ -3,6 +3,7 @@
 #include "../SkinStoragePaths.h"
 #include "SkinAliasDetector.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -14,6 +15,32 @@ namespace skin {
 
 class SkinRevisionLease;
 struct SkinRevisionPin;
+
+class SkinRevisionWeakPin {
+public:
+  bool hasLiveLease() const noexcept;
+
+private:
+  explicit SkinRevisionWeakPin(std::weak_ptr<const SkinRevisionPin>);
+  std::weak_ptr<const SkinRevisionPin> pin_;
+  friend class SkinRevisionLease;
+};
+
+enum class SkinSnapshotIoOperation : std::uint8_t {
+  CopiedFileFsync,
+  PreparedParentFsync,
+  PublicationRename,
+  PublishedParentFsync,
+};
+
+// Narrow fault seam for deterministic durability-boundary tests. Production
+// leaves this unset and performs every operation normally.
+class SkinSnapshotFailureInjector {
+public:
+  virtual ~SkinSnapshotFailureInjector() = default;
+  virtual bool shouldFail(SkinSnapshotIoOperation,
+                          const std::filesystem::path &) const noexcept = 0;
+};
 
 class SkinRevisionReadView {
 public:
@@ -39,6 +66,7 @@ public:
   const std::filesystem::path &root() const noexcept;
   SkinRevisionReadView readView() const noexcept;
   SkinRevisionLease clone() const;
+  SkinRevisionWeakPin weakPin() const noexcept;
 
 private:
   explicit SkinRevisionLease(std::shared_ptr<const SkinRevisionPin>);
@@ -61,7 +89,8 @@ public:
 
 private:
   PreparedSkinRevision(SkinRevision, std::filesystem::path,
-                       std::filesystem::path);
+                       std::filesystem::path,
+                       std::shared_ptr<const SkinSnapshotFailureInjector>);
   struct State;
   std::unique_ptr<State> state_;
   friend class SkinTreeSnapshotter;
@@ -75,7 +104,9 @@ struct SnapshotTreeResult {
 
 class SkinTreeSnapshotter {
 public:
-  SkinTreeSnapshotter(SkinStorageRoots, const SkinAliasDetector &);
+  SkinTreeSnapshotter(
+      SkinStorageRoots, const SkinAliasDetector &,
+      std::shared_ptr<const SkinSnapshotFailureInjector> failures = {});
   SnapshotTreeResult snapshot(const std::filesystem::path &sourceRoot,
                               const SkinPackageId &, std::stop_token,
                               SkinProgressCallback);
@@ -83,6 +114,7 @@ public:
 private:
   SkinStorageRoots roots_;
   const SkinAliasDetector &aliases_;
+  std::shared_ptr<const SkinSnapshotFailureInjector> failures_;
 };
 
 } // namespace skin
