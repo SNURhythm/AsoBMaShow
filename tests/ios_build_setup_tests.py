@@ -26,6 +26,9 @@ AGENT_GUIDANCE = ROOT / "AGENTS.md"
 SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
 MAIN_SOURCE = ROOT / "src/main.cpp"
 IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
+VCPKG_MANIFEST = ROOT / "vcpkg.json"
+IOS_LIB_SCRIPT = ROOT / "scripts/get_ios_libs.py"
+UTF8PROC_LICENSE = ROOT / "assets/legal/utf8proc.txt"
 
 
 def object_block(project: str, object_id: str, next_section: str) -> str:
@@ -230,6 +233,22 @@ class IOSBuildSetupTests(unittest.TestCase):
                     self.assertIn("LzmaRegister.cpp.o", linker_flags)
                     self.assertIn("Lzma2Register.cpp.o", linker_flags)
                     self.assertIn("DeltaFilter.cpp.o", linker_flags)
+
+    def test_utf8proc_is_packaged_for_device_and_simulator(self):
+        manifest = VCPKG_MANIFEST.read_text(encoding="utf-8")
+        script = IOS_LIB_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('"utf8proc"', manifest)
+        self.assertIn('install_package("utf8proc")', script)
+        self.assertIn(
+            'generate_xcframework("utf8proc", False, "libutf8proc", "libutf8proc")',
+            script,
+        )
+        self.assertIn('copy_xcframework("utf8proc", "libutf8proc")', script)
+        self.assertIn('copy_includes("utf8proc.h")', script)
+        self.assertIn('copy_license("utf8proc", "utf8proc.txt")', script)
+        self.assertTrue(UTF8PROC_LICENSE.is_file())
+        self.assertIn("libutf8proc.xcframework", self.project)
+        self.assertIn("libutf8proc.xcframework in Frameworks", self.project)
 
 
 class DerivedDataPathTests(unittest.TestCase):

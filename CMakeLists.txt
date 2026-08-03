@@ -106,6 +106,11 @@ endif ()
 find_package(SndFile CONFIG REQUIRED)
 set(COMMON_LIBS SndFile::sndfile)
 
+if (NOT IOS)
+    find_package(utf8proc CONFIG REQUIRED)
+    list(APPEND COMMON_LIBS utf8proc::utf8proc)
+endif()
+
 # 2. SDL2, SDL2_ttf, FFmpeg, Lua, LuaJIT
 if (IOS)
     # --- iOS: Use Submodules ---
@@ -532,6 +537,16 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(skin_path_policy_tests
+        tests/skin_path_policy_tests.cpp
+        src/skin/package/SkinPathPolicy.cpp
+    )
+    target_include_directories(skin_path_policy_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(skin_path_policy_tests PRIVATE cxx_std_23)
+    target_link_libraries(skin_path_policy_tests PRIVATE utf8proc::utf8proc)
+
     add_test(NAME beatoraja_skin_reference_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/beatoraja_skin_reference_tests.py -v)
@@ -3943,6 +3958,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endforeach()
 
     asobmashow_register_test(repository_boundary_tests)
+    asobmashow_register_test(skin_path_policy_tests)
     asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(video_frame_layout_tests)
