@@ -29,40 +29,6 @@ skin::SkinProfileCommitResult unknownCommit(std::uint64_t ticket) {
 
 namespace skin {
 
-ProfileInventoryCommitFence::ProfileInventoryCommitFence(
-    std::function<void()> release)
-    : release_(std::move(release)) {}
-
-ProfileInventoryCommitFence::ProfileInventoryCommitFence(
-    ProfileInventoryCommitFence &&other) noexcept
-    : release_(std::move(other.release_)) {
-  other.release_ = {};
-}
-
-ProfileInventoryCommitFence &ProfileInventoryCommitFence::operator=(
-    ProfileInventoryCommitFence &&other) noexcept {
-  if (this != &other) {
-    if (release_) {
-      try {
-        release_();
-      } catch (...) {
-      }
-    }
-    release_ = std::move(other.release_);
-    other.release_ = {};
-  }
-  return *this;
-}
-
-ProfileInventoryCommitFence::~ProfileInventoryCommitFence() {
-  if (release_) {
-    try {
-      release_();
-    } catch (...) {
-    }
-  }
-}
-
 ProfileInventoryMutationBarrier::ProfileInventoryMutationBarrier(
     std::function<void()> release)
     : release_(std::move(release)) {}

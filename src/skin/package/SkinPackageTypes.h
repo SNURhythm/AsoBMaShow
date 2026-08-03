@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace skin {
 
@@ -82,6 +83,56 @@ struct SkinRevision {
   std::string lowercaseSha256;
   std::uint64_t fileCount = 0;
   std::uint64_t totalBytes = 0;
+};
+
+enum class SkinValidationDisposition : std::uint8_t {
+  Selectable7Key,
+  UnavailableType,
+  Invalid,
+};
+
+struct SkinCatalogCategoryDeclaration {
+  std::string name;
+  std::vector<std::string> items;
+};
+
+struct SkinCatalogOptionChoice {
+  std::string label;
+  int value = 0;
+};
+
+struct SkinCatalogOptionDeclaration {
+  std::string category;
+  std::string name;
+  std::vector<SkinCatalogOptionChoice> choices;
+  std::string defaultLabel;
+};
+
+struct SkinCatalogFileDeclaration {
+  std::string category;
+  std::string name;
+  std::string pattern;
+  std::string defaultValue;
+  std::vector<std::string> choices;
+};
+
+struct SkinCatalogOffsetDeclaration {
+  std::string category;
+  std::string name;
+  int id = 0;
+  std::uint8_t permissions = 0;
+};
+
+struct SkinEntryMetadataSnapshot {
+  std::string displayName;
+  std::string author;
+  int skinType = -1;
+  int authoredWidth = 0;
+  int authoredHeight = 0;
+  std::vector<SkinCatalogCategoryDeclaration> categories;
+  std::vector<SkinCatalogOptionDeclaration> options;
+  std::vector<SkinCatalogFileDeclaration> files;
+  std::vector<SkinCatalogOffsetDeclaration> offsets;
 };
 
 struct SkinPackageIdResult {

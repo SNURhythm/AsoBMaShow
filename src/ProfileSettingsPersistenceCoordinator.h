@@ -10,11 +10,14 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 class ProfileSettingsPersistenceCoordinator;
 
 namespace skin {
+
+class ISkinProfileSnapshotProvider;
 
 struct VersionedSkinProfileSettings {
   SkinProfileId profileId;
@@ -50,17 +53,39 @@ struct AllSkinProfileSnapshotsResult {
 
 class ProfileInventoryCommitFence {
 public:
-  ProfileInventoryCommitFence(ProfileInventoryCommitFence &&) noexcept;
+  ProfileInventoryCommitFence(ProfileInventoryCommitFence &&other) noexcept
+      : release_(std::move(other.release_)) {
+    other.release_ = {};
+  }
   ProfileInventoryCommitFence &
-  operator=(ProfileInventoryCommitFence &&) noexcept;
+  operator=(ProfileInventoryCommitFence &&other) noexcept {
+    if (this != &other) {
+      releaseNoThrow();
+      release_ = std::move(other.release_);
+      other.release_ = {};
+    }
+    return *this;
+  }
   ProfileInventoryCommitFence(const ProfileInventoryCommitFence &) = delete;
   ProfileInventoryCommitFence &
   operator=(const ProfileInventoryCommitFence &) = delete;
-  ~ProfileInventoryCommitFence();
+  ~ProfileInventoryCommitFence() { releaseNoThrow(); }
 
 private:
   friend class ::ProfileSettingsPersistenceCoordinator;
-  explicit ProfileInventoryCommitFence(std::function<void()> release);
+  friend class ISkinProfileSnapshotProvider;
+  explicit ProfileInventoryCommitFence(std::function<void()> release)
+      : release_(std::move(release)) {}
+  void releaseNoThrow() noexcept {
+    if (!release_) {
+      return;
+    }
+    auto release = std::move(release_);
+    try {
+      release();
+    } catch (...) {
+    }
+  }
   std::function<void()> release_;
 };
 
@@ -94,6 +119,12 @@ public:
   virtual ProfileInventoryMutationBarrier beginInventoryMutation() = 0;
   virtual void
   finishInventoryMutation(ProfileInventoryMutationBarrier &&) noexcept = 0;
+
+protected:
+  static ProfileInventoryCommitFence
+  makeInventoryCommitFence(std::function<void()> release) {
+    return ProfileInventoryCommitFence(std::move(release));
+  }
 };
 
 class ISkinProfileSettingsOwner {
