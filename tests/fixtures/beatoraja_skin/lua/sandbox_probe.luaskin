@@ -1,0 +1,29 @@
+if not skin_config then
+  return {
+    type = 0,
+    name = "Synthetic sandbox probe",
+    author = "AsoBMaShow",
+    w = 1280,
+    h = 720
+  }
+end
+
+-- This fixture is redistributable input for later local sandbox tests. It
+-- names only relative synthetic paths; Task 2's upstream traces record call
+-- shapes, while AsoBMaShow policy decides containment and phase denial.
+local first, second = dofile("probe/returns.lua")
+local reader = io.open("probe/input.txt")
+local first_line = reader:lines()()
+reader:close()
+local writer = io.open("probe/output.txt", "w")
+writer:write():write(first, ":", second, ":", first_line):close()
+
+return {
+  type = 0,
+  name = "Synthetic sandbox probe configured",
+  author = "AsoBMaShow",
+  w = 1280,
+  h = 720,
+  source = {},
+  destination = {}
+}

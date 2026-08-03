@@ -1,0 +1,83 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "forms": {
+          "function": "runtime-callback",
+          "numeric": "built-in-id",
+          "other": "unsupported-null",
+          "recognizedString": "built-in-name",
+          "unrecognizedString": "runtime-script"
+        },
+        "timerNegativeId": "unsupported-null",
+        "timerZeroId": "built-in-id"
+      },
+      "input": {
+        "timerIds": [
+          -1,
+          0
+        ],
+        "values": [
+          "lua-function",
+          7,
+          "recognized-name",
+          "return function() return 9 end",
+          true
+        ]
+      },
+      "name": "model-property-dispatch",
+      "precision": 0
+    },
+    {
+      "expected": {
+        "factories": {
+          "event_exec": "MainState.executeEvent",
+          "event_index": "IntegerPropertyFactory.getImageIndexProperty",
+          "float_number": "FloatPropertyFactory.getRateProperty",
+          "number": "IntegerPropertyFactory.getIntegerProperty",
+          "option": "BooleanPropertyFactory.getBooleanProperty",
+          "text": "StringPropertyFactory.getStringProperty",
+          "timer": "MainState.timer.getMicroTimer"
+        },
+        "unknownDirectLookup": "dereference-error"
+      },
+      "input": {
+        "functions": [
+          "option",
+          "number",
+          "float_number",
+          "text",
+          "event_index",
+          "timer",
+          "event_exec"
+        ],
+        "unknownId": 2147483647
+      },
+      "name": "direct-main-state-dispatch",
+      "precision": 0
+    }
+  ],
+  "kind": "properties",
+  "provenance": [
+    {
+      "behavior": "model properties dispatch functions, numeric IDs, recognized names, and script strings distinctly",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
+      "symbol": "LuaSkinLoader.serializeLuaScript"
+    },
+    {
+      "behavior": "direct main_state calls use their named factories or direct state APIs",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "OptionFunction/NumberFunction/FloatNumberFunction/TextFunction/TimerFunction/EventExecFunction/EventIndexFunction"
+    },
+    {
+      "behavior": "negative timer IDs are unsupported",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/property/TimerPropertyFactory.java",
+      "symbol": "TimerPropertyFactory.getTimerProperty"
+    }
+  ],
+  "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "schemaVersion": 1
+}

@@ -1,0 +1,145 @@
+{
+  "cases": [
+    {
+      "callCount": {
+        "entryExecutions": 2,
+        "sharedModuleLoads": 1
+      },
+      "callOrder": [
+        "header",
+        "configured-same-state"
+      ],
+      "expected": {
+        "configuredSameState": {
+          "moduleLoadCount": 1,
+          "observedGlobalMutation": "header-mutated",
+          "observedHeaderMutation": "header-mutated",
+          "packageLoaded": true,
+          "sameModuleTable": true
+        },
+        "freshCatalogBeforeExecution": {
+          "globalMutation": null,
+          "moduleLoadCount": 0,
+          "packageLoaded": false
+        },
+        "header": {
+          "globalMutation": "header-mutated",
+          "moduleLoadCount": 1,
+          "packageLoaded": true
+        },
+        "packageLoaded": true
+      },
+      "input": {
+        "entry": "lua/two_phase/entry.luaskin",
+        "requirePrecedesSkinConfigBranch": true,
+        "requiredModule": "shared"
+      },
+      "name": "two-phase-require-before-branch",
+      "precision": 0
+    },
+    {
+      "expected": {
+        "boolean": true,
+        "float": 12.5,
+        "integer": 17,
+        "nonTableArrayLength": 0,
+        "orderedTableValues": [
+          "first",
+          "named",
+          "second"
+        ],
+        "stringFromNumber": "42"
+      },
+      "input": {
+        "arraySource": "not-a-table",
+        "boolean": 1,
+        "float": 12.5,
+        "integerFromNumber": 17.9,
+        "orderedTable": {
+          "1": "first",
+          "2": "second",
+          "named": "named"
+        },
+        "stringSource": 42
+      },
+      "name": "lua-value-conversions",
+      "precision": 1e-07
+    },
+    {
+      "expected": {
+        "arshift": 4294967295,
+        "band": 240,
+        "bnot": 4294967295,
+        "bor": 4095,
+        "bxor": 255,
+        "extract": 15,
+        "lshift": 2147483648,
+        "replace": 42405,
+        "rshift": 2147483647
+      },
+      "input": {
+        "arshift": [
+          4294967294,
+          1
+        ],
+        "band": [
+          65520,
+          255
+        ],
+        "bnot": 0,
+        "bor": [
+          3840,
+          255
+        ],
+        "bxor": [
+          240,
+          15
+        ],
+        "extract": [
+          240,
+          4,
+          4
+        ],
+        "lshift": [
+          1,
+          31
+        ],
+        "replace": [
+          42245,
+          10,
+          4,
+          4
+        ],
+        "rshift": [
+          4294967294,
+          1
+        ]
+      },
+      "name": "bit32-operations",
+      "precision": 0
+    }
+  ],
+  "kind": "lua-language",
+  "provenance": [
+    {
+      "behavior": "header execution and configured execution reuse one SkinLuaAccessor state",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
+      "symbol": "LuaSkinLoader.loadHeader/load"
+    },
+    {
+      "behavior": "package.loaded and globals persist within one accessor and start fresh in a new accessor",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.initializeModules/execFile"
+    },
+    {
+      "behavior": "Lua values coerce to model primitive and table shapes",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
+      "symbol": "LuaSkinLoader.fromLuaValue/serializeLuaScript"
+    }
+  ],
+  "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "schemaVersion": 1
+}

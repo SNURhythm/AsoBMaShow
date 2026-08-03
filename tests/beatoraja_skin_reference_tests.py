@@ -20,9 +20,31 @@ PINNED_SELECTED_LUA_CLOSURE_SHA256 = "717b46b6641c84e431490fff24f45a0ee23a120801
 MANIFEST_PATH = ROOT / "tests/fixtures/beatoraja_skin/reference_manifest.json"
 CHECKER_PATH = ROOT / "scripts/check_beatoraja_reference.py"
 AUDIT_PATH = ROOT / "scripts/audit_beatoraja_skin.py"
+TRACE_CAPTURE_PATH = ROOT / "scripts/capture_beatoraja_skin_traces.py"
+TRACE_ROOT = ROOT / "tests/fixtures/beatoraja_skin/traces"
+SANDBOX_POLICY_PATH = (
+    ROOT / "tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json"
+)
+TWO_PHASE_ENTRY_PATH = (
+    ROOT / "tests/fixtures/beatoraja_skin/lua/two_phase/entry.luaskin"
+)
+TWO_PHASE_SHARED_PATH = (
+    ROOT / "tests/fixtures/beatoraja_skin/lua/two_phase/shared.lua"
+)
+SANDBOX_PROBE_PATH = (
+    ROOT / "tests/fixtures/beatoraja_skin/lua/sandbox_probe.luaskin"
+)
 GAMEPLAY_CONTRACT_PATH = ROOT / "docs/skin-compat/beatoraja-lua-gameplay-contract.md"
 ACCEPTANCE_PATH = ROOT / "docs/skin-compat/modernchic-scuro-4.02-acceptance.md"
 LOWER_SHA256 = __import__("re").compile(r"^[0-9a-f]{64}$")
+
+TRACE_FILES = {
+    "lua-language": "lua_language_v1.json",
+    "destination": "destination_v1.json",
+    "properties": "properties_v1.json",
+    "timers-events": "timers_events_v1.json",
+    "legacy-lua-upstream": "legacy_lua_upstream_v1.json",
+}
 
 
 def run_python(script: Path, *arguments: object, env=None) -> subprocess.CompletedProcess:
@@ -43,6 +65,16 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def canonical_json_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def opaque_guard_vector_sha256(configuration_sha256: str, guard_vector: list[dict]) -> str:
@@ -119,10 +151,322 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
             "tests/fixtures/beatoraja_skin/README.md",
             "scripts/check_beatoraja_reference.py",
             "scripts/audit_beatoraja_skin.py",
+            "scripts/capture_beatoraja_skin_traces.py",
+            "tests/fixtures/beatoraja_skin/lua/two_phase/entry.luaskin",
+            "tests/fixtures/beatoraja_skin/lua/two_phase/shared.lua",
+            "tests/fixtures/beatoraja_skin/lua/sandbox_probe.luaskin",
+            "tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json",
+            *(f"tests/fixtures/beatoraja_skin/traces/{name}" for name in TRACE_FILES.values()),
         )
         for relative_path in required:
             with self.subTest(path=relative_path):
                 self.assertTrue((ROOT / relative_path).is_file(), relative_path)
+
+    def load_trace(self, kind: str) -> dict:
+        path = TRACE_ROOT / TRACE_FILES[kind]
+        self.assertTrue(path.is_file(), f"missing committed trace: {path.relative_to(ROOT)}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def trace_case(self, kind: str, name: str) -> dict:
+        trace = self.load_trace(kind)
+        matches = [case for case in trace["cases"] if case["name"] == name]
+        self.assertEqual(len(matches), 1, f"expected one {kind} case named {name}")
+        return matches[0]
+
+    def test_upstream_trace_envelopes_are_pinned_clone_independent_contracts(self):
+        for expected_kind, filename in TRACE_FILES.items():
+            with self.subTest(trace=filename):
+                trace = self.load_trace(expected_kind)
+                self.assertEqual(trace["schemaVersion"], 1)
+                self.assertEqual(trace["kind"], expected_kind)
+                self.assertEqual(trace["referenceCommit"], PINNED_COMMIT)
+                self.assertTrue(trace["provenance"])
+                self.assertTrue(trace["cases"])
+                for provenance in trace["provenance"]:
+                    self.assertEqual(provenance["commit"], PINNED_COMMIT)
+                    self.assertFalse(Path(provenance["path"]).is_absolute())
+                    self.assertTrue(provenance["path"])
+                    self.assertTrue(provenance["symbol"])
+                    self.assertTrue(provenance["behavior"])
+                names = [case["name"] for case in trace["cases"]]
+                self.assertEqual(names, list(dict.fromkeys(names)))
+                for case in trace["cases"]:
+                    self.assertTrue(case["name"])
+                    self.assertIsInstance(case["input"], dict)
+                    self.assertIsInstance(case["expected"], dict)
+                    self.assertIsInstance(case["precision"], (int, float))
+                    self.assertGreaterEqual(case["precision"], 0)
+                    if "callOrder" in case:
+                        self.assertIsInstance(case["callOrder"], list)
+                        self.assertTrue(all(isinstance(value, str) for value in case["callOrder"]))
+                    if "callCount" in case:
+                        self.assertIsInstance(case["callCount"], dict)
+                        self.assertTrue(all(
+                            isinstance(value, int) and value >= 0
+                            for value in case["callCount"].values()
+                        ))
+
+    def test_two_phase_trace_is_stable(self):
+        trace = self.load_trace("lua-language")
+        case = trace["cases"][0]
+        self.assertEqual(trace["referenceCommit"], PINNED_COMMIT)
+        self.assertEqual(case["name"], "two-phase-require-before-branch")
+        self.assertEqual(case["expected"]["packageLoaded"], True)
+        self.assertEqual(case["input"]["entry"], "lua/two_phase/entry.luaskin")
+        self.assertEqual(case["input"]["requiredModule"], "shared")
+        self.assertTrue(case["input"]["requirePrecedesSkinConfigBranch"])
+        self.assertEqual(case["expected"]["header"]["moduleLoadCount"], 1)
+        self.assertEqual(case["expected"]["configuredSameState"]["moduleLoadCount"], 1)
+        self.assertTrue(case["expected"]["configuredSameState"]["sameModuleTable"])
+        self.assertEqual(
+            case["expected"]["configuredSameState"]["observedHeaderMutation"],
+            "header-mutated",
+        )
+        self.assertFalse(case["expected"]["freshCatalogBeforeExecution"]["packageLoaded"])
+        self.assertEqual(case["expected"]["freshCatalogBeforeExecution"]["moduleLoadCount"], 0)
+        self.assertIsNone(case["expected"]["freshCatalogBeforeExecution"]["globalMutation"])
+        self.assertEqual(case["callOrder"], ["header", "configured-same-state"])
+        self.assertEqual(case["callCount"], {"entryExecutions": 2, "sharedModuleLoads": 1})
+
+    def test_lua_language_trace_freezes_conversions_and_bit32(self):
+        conversions = self.trace_case("lua-language", "lua-value-conversions")
+        self.assertEqual(
+            conversions["expected"],
+            {
+                "boolean": True,
+                "integer": 17,
+                "float": 12.5,
+                "stringFromNumber": "42",
+                "nonTableArrayLength": 0,
+                "orderedTableValues": ["first", "named", "second"],
+            },
+        )
+        bit32 = self.trace_case("lua-language", "bit32-operations")
+        self.assertEqual(
+            bit32["expected"],
+            {
+                "band": 240,
+                "bor": 4095,
+                "bxor": 255,
+                "bnot": 4294967295,
+                "lshift": 2147483648,
+                "rshift": 2147483647,
+                "arshift": 4294967295,
+                "extract": 15,
+                "replace": 42405,
+            },
+        )
+
+    def test_destination_trace_freezes_timer_loop_easing_and_geometry(self):
+        timer_off = self.trace_case("destination", "timer-off-suppresses-draw")
+        self.assertEqual(timer_off["input"]["timerStartMicros"], -9223372036854775808)
+        self.assertEqual(timer_off["expected"], {"draw": False})
+        loop = self.trace_case("destination", "loop-and-easing-vectors")
+        self.assertEqual(loop["expected"]["stopAtEndTimeMillis"], -1)
+        self.assertEqual(loop["expected"]["wrappedTimeMillis"], 650)
+        self.assertEqual(
+            loop["expected"]["easingRates"],
+            {"linear": 0.25, "easeIn": 0.0625, "easeOut": 0.4375, "step": 0.0},
+        )
+        geometry = self.trace_case("destination", "color-angle-clip-offset-interpolation")
+        self.assertEqual(
+            geometry["expected"],
+            {
+                "rect": {"x": 24.0, "y": 42.0, "w": 140.0, "h": 70.0},
+                "rgbaNormalized": [0.5, 0.2509804, 0.1254902, 0.7509804],
+                "angle": 50,
+                "clip": {"x": 9.0, "y": 12.0, "w": 100.0, "h": 50.0},
+            },
+        )
+
+    def test_property_trace_freezes_dispatch_and_missing_semantics(self):
+        dispatch = self.trace_case("properties", "model-property-dispatch")
+        self.assertEqual(
+            dispatch["expected"]["forms"],
+            {
+                "function": "runtime-callback",
+                "numeric": "built-in-id",
+                "recognizedString": "built-in-name",
+                "unrecognizedString": "runtime-script",
+                "other": "unsupported-null",
+            },
+        )
+        self.assertEqual(dispatch["expected"]["timerNegativeId"], "unsupported-null")
+        direct = self.trace_case("properties", "direct-main-state-dispatch")
+        self.assertEqual(
+            direct["expected"]["factories"],
+            {
+                "option": "BooleanPropertyFactory.getBooleanProperty",
+                "number": "IntegerPropertyFactory.getIntegerProperty",
+                "float_number": "FloatPropertyFactory.getRateProperty",
+                "text": "StringPropertyFactory.getStringProperty",
+                "event_index": "IntegerPropertyFactory.getImageIndexProperty",
+                "timer": "MainState.timer.getMicroTimer",
+                "event_exec": "MainState.executeEvent",
+            },
+        )
+        self.assertEqual(direct["expected"]["unknownDirectLookup"], "dereference-error")
+
+    def test_timer_event_trace_freezes_off_sentinel_calls_and_order(self):
+        sentinel = self.trace_case("timers-events", "timer-off-sentinel")
+        self.assertEqual(sentinel["expected"]["offValue"], -9223372036854775808)
+        self.assertEqual(sentinel["expected"]["eventAtZeroIsOn"], True)
+        caching = self.trace_case("timers-events", "custom-timer-once-per-frame")
+        self.assertEqual(caching["expected"]["readsWithinFrame"], [123456, 123456])
+        self.assertEqual(caching["expected"]["nextFrameRead"], 234567)
+        self.assertEqual(caching["callCount"], {"frame1TimerFunction": 1, "frame2TimerFunction": 1})
+        ordered = self.trace_case("timers-events", "timer-phase-before-event-phase")
+        self.assertEqual(
+            ordered["callOrder"],
+            ["timer:17", "timer:3", "event:9", "event:4"],
+        )
+        self.assertEqual(ordered["expected"]["eventObservedTimerValue"], 7000)
+        events = self.trace_case("timers-events", "zero-one-two-argument-events")
+        self.assertEqual(events["expected"]["observedArguments"], [[], [11], [11, 22]])
+        self.assertEqual(events["callCount"], {"zeroArg": 1, "oneArg": 1, "twoArg": 1})
+
+    def test_intmap_trace_records_complete_trace_specific_rng_setup(self):
+        case = self.trace_case("timers-events", "libgdx-intmap-backing-order")
+        setup = case["input"]["traceSetup"]
+        self.assertEqual(setup["initialCapacity"], 4)
+        self.assertEqual(setup["loadFactor"], 0.8)
+        self.assertEqual(setup["randomImplementation"], "java.util.Random")
+        self.assertIsInstance(setup["randomSeed"], int)
+        self.assertEqual(setup["randomStateBefore"], "setSeed-before-first-put")
+        self.assertEqual(setup["randomStateAfter"], "captured-after-final-put")
+        self.assertEqual(
+            setup["operations"],
+            [
+                {"operation": "put", "key": 1, "value": "one"},
+                {"operation": "put", "key": 217, "value": "two-one-seven"},
+                {"operation": "put", "key": 545, "value": "five-four-five"},
+                {"operation": "put", "key": 761, "value": "seven-six-one"},
+                {"operation": "put", "key": 217, "value": "TWO-ONE-SEVEN"},
+                {"operation": "put", "key": 977, "value": "nine-seven-seven"},
+                {"operation": "put", "key": 1305, "value": "thirteen-oh-five"},
+                {"operation": "put", "key": 1521, "value": "fifteen-twenty-one"},
+                {"operation": "put", "key": 1737, "value": "seventeen-thirty-seven"},
+                {"operation": "put", "key": 1953, "value": "nineteen-fifty-three"},
+                {"operation": "put", "key": 2281, "value": "twenty-two-eighty-one"},
+                {"operation": "put", "key": 2497, "value": "twenty-four-ninety-seven"},
+                {"operation": "put", "key": 2713, "value": "twenty-seven-thirteen"},
+            ],
+        )
+        self.assertTrue(setup["collisionAndResizeExercised"])
+        self.assertEqual(
+            setup["capacityAfterEachOperation"],
+            [8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 16, 16, 16],
+        )
+        self.assertEqual(len(setup["randomDraws"]), 88)
+        self.assertEqual(
+            canonical_json_sha256(setup["randomDraws"]),
+            "de2e43a8477d22cf4a30fb4dd5ed8698d582a915770d914411967cd8edddc3bf",
+        )
+        self.assertEqual(case["expected"]["replacementValue"], "TWO-ONE-SEVEN")
+        self.assertEqual(case["expected"]["size"], 12)
+        self.assertEqual(
+            case["callOrder"],
+            [
+                "key:217",
+                "key:1521",
+                "key:1305",
+                "key:2713",
+                "key:977",
+                "key:761",
+                "key:545",
+                "key:1",
+                "key:1953",
+                "key:1737",
+                "key:2497",
+                "key:2281",
+            ],
+        )
+        self.assertEqual(case["expected"]["iterationKeys"], case["callOrder"])
+        self.assertEqual(
+            case["callCount"],
+            {"uniqueInsertions": 12, "replacements": 1, "rngDraws": 88},
+        )
+        self.assertEqual(case["expected"]["selectedConfiguredMaps"], {"customTimers": 0, "customEvents": 0})
+        self.assertEqual(case["expected"]["scope"], "trace-specific-not-universal-order")
+
+    def test_legacy_trace_contains_only_normalized_upstream_facts(self):
+        file_shapes = self.trace_case("legacy-lua-upstream", "standard-file-call-shapes")
+        self.assertEqual(file_shapes["expected"]["dofileReturn"], ["alpha", 7])
+        self.assertEqual(file_shapes["expected"]["ioOpenModes"], ["default", "r", "w", "a"])
+        self.assertEqual(file_shapes["expected"]["handleMethods"], ["lines", "write", "close"])
+        self.assertEqual(file_shapes["expected"]["explicitReadFirstLine"], "first-line")
+        self.assertTrue(file_shapes["expected"]["appendReturnsSameHandle"])
+        self.assertEqual(file_shapes["expected"]["outputContent"], "alpha:7:tail")
+        self.assertEqual(
+            file_shapes["callCount"],
+            {"dofile": 1, "ioOpen": 4, "lines": 2, "write": 3, "close": 4},
+        )
+        legacy = self.trace_case("legacy-lua-upstream", "legacy-luajava-selected-facts")
+        self.assertTrue(legacy["expected"]["repeatedRequireSameTable"])
+        self.assertTrue(legacy["expected"]["requireUsesInstalledTable"])
+        self.assertEqual(legacy["expected"]["bindClasses"], ["java.io.File", "com.badlogic.gdx.Gdx"])
+        self.assertEqual(legacy["expected"]["fileConstructorArguments"], ["File-token", "relative-path"])
+        self.assertEqual(legacy["expected"]["listShape"], "normalized-relative-path-array-or-nil")
+        self.assertFalse(legacy["expected"]["gdxAppPresent"])
+        self.assertNotIn("hostPath", json.dumps(legacy, sort_keys=True))
+
+        upstream_serialized = json.dumps(
+            [self.load_trace(kind) for kind in TRACE_FILES],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        for policy_only_claim in (
+            "virtual-path-enforcement",
+            "overlay-only-writes",
+            "automatic-overlay-parents",
+            "class-member-denial",
+            "handle-invalidation",
+            "render-phase-denial",
+        ):
+            self.assertNotIn(policy_only_claim, upstream_serialized)
+
+    def test_sandbox_policy_is_separate_aso_authority_bound_to_task_1a(self):
+        self.assertTrue(SANDBOX_POLICY_PATH.is_file(), "sandbox policy must be committed separately")
+        policy = json.loads(SANDBOX_POLICY_PATH.read_text(encoding="utf-8"))
+        manifest = self.require_manifest()
+        self.assertEqual(policy["schemaVersion"], 1)
+        self.assertEqual(policy["authority"], "AsoBMaShow")
+        self.assertEqual(
+            policy["selectedSurfaceDigest"],
+            canonical_json_sha256(manifest["selectedFileIoSurface"]),
+        )
+        self.assertRegex(policy["selectedSurfaceDigest"], LOWER_SHA256)
+        self.assertTrue(policy["allowed"])
+        self.assertTrue(policy["denied"])
+        self.assertTrue(policy["phaseRules"])
+        allowed = {entry["capability"] for entry in policy["allowed"]}
+        denied = {entry["capability"] for entry in policy["denied"]}
+        self.assertTrue({
+            "package-text-dofile",
+            "restricted-io-open",
+            "legacy-file-list",
+            "legacy-overlay-mkdir",
+        }.issubset(allowed))
+        self.assertTrue({
+            "network",
+            "arbitrary-class-member",
+            "reflection",
+            "native-access",
+            "process-execution",
+        }.issubset(denied))
+        render = next(rule for rule in policy["phaseRules"] if rule["phase"] == "render")
+        self.assertEqual(
+            render["deniedOperations"],
+            ["filesystem-read", "filesystem-write", "directory-scan", "resource-upload"],
+        )
+        self.assertEqual(render["effect"], "deny-before-effect")
+        for trace_path in TRACE_ROOT.glob("*.json"):
+            self.assertNotEqual(trace_path.resolve(), SANDBOX_POLICY_PATH.resolve())
+
+    def test_capture_tool_requires_explicit_reference_root(self):
+        result = run_python(TRACE_CAPTURE_PATH, "--output-dir", TRACE_ROOT)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--beatoraja-root", result.stdout)
 
     def test_committed_contract_is_clone_independent(self):
         manifest = self.require_manifest()

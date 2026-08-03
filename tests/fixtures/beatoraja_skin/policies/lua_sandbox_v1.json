@@ -1,0 +1,90 @@
+{
+  "allowed": [
+    {
+      "capability": "package-text-dofile",
+      "constraints": [
+        "virtual-path-enforcement",
+        "audited-selected-closure"
+      ]
+    },
+    {
+      "capability": "restricted-io-open",
+      "constraints": [
+        "read-selected-revision-or-overlay",
+        "overlay-only-writes",
+        "modes-default-r-w-a"
+      ]
+    },
+    {
+      "capability": "legacy-file-list",
+      "constraints": [
+        "selected-revision-or-overlay-directories",
+        "normalized-virtual-results"
+      ]
+    },
+    {
+      "capability": "legacy-overlay-mkdir",
+      "constraints": [
+        "overlay-only-writes",
+        "automatic-overlay-parents"
+      ]
+    }
+  ],
+  "authority": "AsoBMaShow",
+  "denied": [
+    {
+      "capability": "network",
+      "effect": "deny-before-effect"
+    },
+    {
+      "capability": "arbitrary-class-member",
+      "effect": "class-member-denial"
+    },
+    {
+      "capability": "reflection",
+      "effect": "deny-before-effect"
+    },
+    {
+      "capability": "native-access",
+      "effect": "deny-before-effect"
+    },
+    {
+      "capability": "process-execution",
+      "effect": "deny-before-effect"
+    }
+  ],
+  "handlePolicy": {
+    "configuredToRenderTransition": "handle-invalidation",
+    "dirtyHandleTransition": "validation-failure",
+    "readBuffers": "release",
+    "unclosedWriteBuffers": "discard"
+  },
+  "phaseRules": [
+    {
+      "allowedOperations": [
+        "filesystem-read",
+        "filesystem-write",
+        "directory-scan",
+        "resource-upload"
+      ],
+      "effect": "audited-bounded-execution",
+      "phase": "configured-load"
+    },
+    {
+      "deniedOperations": [
+        "filesystem-read",
+        "filesystem-write",
+        "directory-scan",
+        "resource-upload"
+      ],
+      "effect": "deny-before-effect",
+      "phase": "render"
+    }
+  ],
+  "schemaVersion": 1,
+  "selectedSurfaceDigest": "2e902cccd276ea97f6b9ba192f2d19432f975d218d4510355d3e59a8e266c2ca",
+  "serialization": {
+    "externalIdentity": "opaque-ids-and-digests-only",
+    "order": "deterministic"
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "draw": false
+      },
+      "input": {
+        "nowMillis": 500,
+        "timerStartMicros": -9223372036854775808
+      },
+      "name": "timer-off-suppresses-draw",
+      "precision": 0
+    },
+    {
+      "expected": {
+        "easingRates": {
+          "easeIn": 0.0625,
+          "easeOut": 0.4375,
+          "linear": 0.25,
+          "step": 0.0
+        },
+        "stopAtEndTimeMillis": -1,
+        "wrappedTimeMillis": 650
+      },
+      "input": {
+        "endTimeMillis": 1000,
+        "intervalFraction": 0.25,
+        "loopPointMillis": 400,
+        "loopSampleMillis": 1250,
+        "stopSampleMillis": 1001
+      },
+      "name": "loop-and-easing-vectors",
+      "precision": 1e-07
+    },
+    {
+      "expected": {
+        "angle": 50,
+        "clip": {
+          "h": 50.0,
+          "w": 100.0,
+          "x": 9.0,
+          "y": 12.0
+        },
+        "rect": {
+          "h": 70.0,
+          "w": 140.0,
+          "x": 24.0,
+          "y": 42.0
+        },
+        "rgbaNormalized": [
+          0.5,
+          0.2509804,
+          0.1254902,
+          0.7509804
+        ]
+      },
+      "input": {
+        "from": {
+          "angle": 20,
+          "clip": {
+            "h": 30,
+            "w": 60,
+            "x": 0,
+            "y": 0
+          },
+          "rect": {
+            "h": 50,
+            "w": 100,
+            "x": 10,
+            "y": 20
+          },
+          "rgba": [
+            0,
+            0,
+            0,
+            128
+          ]
+        },
+        "offset": {
+          "a": 0,
+          "h": 10,
+          "r": 10,
+          "w": 20,
+          "x": 14,
+          "y": 7
+        },
+        "rate": 0.5,
+        "relative": false,
+        "to": {
+          "angle": 60,
+          "clip": {
+            "h": 50,
+            "w": 100,
+            "x": 10,
+            "y": 20
+          },
+          "rect": {
+            "h": 70,
+            "w": 140,
+            "x": 30,
+            "y": 60
+          },
+          "rgba": [
+            255,
+            128,
+            64,
+            255
+          ]
+        }
+      },
+      "name": "color-angle-clip-offset-interpolation",
+      "precision": 1e-06
+    }
+  ],
+  "kind": "destination",
+  "provenance": [
+    {
+      "behavior": "timer, loop, easing, geometry, color, angle, clip, and offset evaluation",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/SkinObject.java",
+      "symbol": "SkinObject.prepareRegion/getRate/prepareColor/prepareAngle/prepareClip"
+    },
+    {
+      "behavior": "Long.MIN_VALUE distinguishes an off destination timer",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/property/TimerProperty.java",
+      "symbol": "TimerProperty.isOff"
+    }
+  ],
+  "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "schemaVersion": 1
+}

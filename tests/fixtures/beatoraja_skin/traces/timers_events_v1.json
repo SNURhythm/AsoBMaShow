@@ -1,0 +1,649 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "eventAtZeroIsOn": true,
+        "offElapsedMicros": 0,
+        "offValue": -9223372036854775808
+      },
+      "input": {
+        "eventTimestampMicros": 0,
+        "off": -9223372036854775808
+      },
+      "name": "timer-off-sentinel",
+      "precision": 0
+    },
+    {
+      "callCount": {
+        "frame1TimerFunction": 1,
+        "frame2TimerFunction": 1
+      },
+      "callOrder": [
+        "frame1:update",
+        "frame1:read",
+        "frame1:read",
+        "frame2:update",
+        "frame2:read"
+      ],
+      "expected": {
+        "nextFrameRead": 234567,
+        "readsWithinFrame": [
+          123456,
+          123456
+        ]
+      },
+      "input": {
+        "frame1Callback": 123456,
+        "frame2Callback": 234567,
+        "readsPerFrame": 2
+      },
+      "name": "custom-timer-once-per-frame",
+      "precision": 0
+    },
+    {
+      "callCount": {
+        "event:4": 1,
+        "event:9": 1,
+        "timer:17": 1,
+        "timer:3": 1
+      },
+      "callOrder": [
+        "timer:17",
+        "timer:3",
+        "event:9",
+        "event:4"
+      ],
+      "expected": {
+        "eventObservedTimerValue": 7000,
+        "phaseOrder": [
+          "customTimers",
+          "customEvents"
+        ]
+      },
+      "input": {
+        "eventIdsInBackingOrder": [
+          9,
+          4
+        ],
+        "timerIdsInBackingOrder": [
+          17,
+          3
+        ],
+        "updatedValue": 7000
+      },
+      "name": "timer-phase-before-event-phase",
+      "precision": 0
+    },
+    {
+      "callCount": {
+        "oneArg": 1,
+        "twoArg": 1,
+        "zeroArg": 1
+      },
+      "callOrder": [
+        "zeroArg",
+        "oneArg",
+        "twoArg"
+      ],
+      "expected": {
+        "observedArguments": [
+          [],
+          [
+            11
+          ],
+          [
+            11,
+            22
+          ]
+        ],
+        "threeArgumentFunction": "unsupported-null"
+      },
+      "input": {
+        "one": [
+          11
+        ],
+        "three": [
+          1,
+          2,
+          3
+        ],
+        "two": [
+          11,
+          22
+        ],
+        "zero": []
+      },
+      "name": "zero-one-two-argument-events",
+      "precision": 0
+    },
+    {
+      "callCount": {
+        "replacements": 1,
+        "rngDraws": 88,
+        "uniqueInsertions": 12
+      },
+      "callOrder": [
+        "key:217",
+        "key:1521",
+        "key:1305",
+        "key:2713",
+        "key:977",
+        "key:761",
+        "key:545",
+        "key:1",
+        "key:1953",
+        "key:1737",
+        "key:2497",
+        "key:2281"
+      ],
+      "expected": {
+        "iterationKeys": [
+          "key:217",
+          "key:1521",
+          "key:1305",
+          "key:2713",
+          "key:977",
+          "key:761",
+          "key:545",
+          "key:1",
+          "key:1953",
+          "key:1737",
+          "key:2497",
+          "key:2281"
+        ],
+        "replacementValue": "TWO-ONE-SEVEN",
+        "scope": "trace-specific-not-universal-order",
+        "selectedConfiguredMaps": {
+          "customEvents": 0,
+          "customTimers": 0
+        },
+        "size": 12
+      },
+      "input": {
+        "traceSetup": {
+          "capacityAfterEachOperation": [
+            8,
+            8,
+            8,
+            8,
+            8,
+            8,
+            8,
+            8,
+            8,
+            8,
+            8,
+            16,
+            16,
+            16
+          ],
+          "collisionAndResizeExercised": true,
+          "initialCapacity": 4,
+          "loadFactor": 0.8,
+          "operations": [
+            {
+              "key": 1,
+              "operation": "put",
+              "value": "one"
+            },
+            {
+              "key": 217,
+              "operation": "put",
+              "value": "two-one-seven"
+            },
+            {
+              "key": 545,
+              "operation": "put",
+              "value": "five-four-five"
+            },
+            {
+              "key": 761,
+              "operation": "put",
+              "value": "seven-six-one"
+            },
+            {
+              "key": 217,
+              "operation": "put",
+              "value": "TWO-ONE-SEVEN"
+            },
+            {
+              "key": 977,
+              "operation": "put",
+              "value": "nine-seven-seven"
+            },
+            {
+              "key": 1305,
+              "operation": "put",
+              "value": "thirteen-oh-five"
+            },
+            {
+              "key": 1521,
+              "operation": "put",
+              "value": "fifteen-twenty-one"
+            },
+            {
+              "key": 1737,
+              "operation": "put",
+              "value": "seventeen-thirty-seven"
+            },
+            {
+              "key": 1953,
+              "operation": "put",
+              "value": "nineteen-fifty-three"
+            },
+            {
+              "key": 2281,
+              "operation": "put",
+              "value": "twenty-two-eighty-one"
+            },
+            {
+              "key": 2497,
+              "operation": "put",
+              "value": "twenty-four-ninety-seven"
+            },
+            {
+              "key": 2713,
+              "operation": "put",
+              "value": "twenty-seven-thirteen"
+            }
+          ],
+          "randomDraws": [
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 0
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 2
+            },
+            {
+              "bound": 3,
+              "result": 1
+            },
+            {
+              "bound": 3,
+              "result": 1
+            }
+          ],
+          "randomImplementation": "java.util.Random",
+          "randomSeed": 1592594996,
+          "randomStateAfter": "captured-after-final-put",
+          "randomStateBefore": "setSeed-before-first-put"
+        }
+      },
+      "name": "libgdx-intmap-backing-order",
+      "precision": 0
+    }
+  ],
+  "kind": "timers-events",
+  "provenance": [
+    {
+      "behavior": "active timer callback values are cached by the once-per-frame update",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/CustomTimer.java",
+      "symbol": "CustomTimer.update/getMicroTimer"
+    },
+    {
+      "behavior": "automatic conditions observe current timers and enforce minimum intervals",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/CustomEvent.java",
+      "symbol": "CustomEvent.execute/update"
+    },
+    {
+      "behavior": "all custom timers update before all automatic custom events",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/Skin.java",
+      "symbol": "Skin.updateCustomObjects"
+    },
+    {
+      "behavior": "Lua event functions support exactly zero, one, or two declared arguments",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.loadEvent"
+    },
+    {
+      "behavior": "synthetic nonempty maps iterate backing-table order and collision eviction uses MathUtils.random",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "lib/gdx.jar",
+      "symbol": "com.badlogic.gdx.utils.IntMap.put/Entries"
+    }
+  ],
+  "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "schemaVersion": 1
+}
