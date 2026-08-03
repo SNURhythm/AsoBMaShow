@@ -1,6 +1,8 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
+#include "../src/skin/SkinProfileSettings.h"
+#include "../src/skin/package/SkinPathPolicy.h"
 
 #include <algorithm>
 #include <chrono>
@@ -175,6 +177,23 @@ void testJsonRoundTripIncludesAudioAndVideo() {
       .autoSubmit = true,
       .serverOrigin = "https://scores.example.test:8443",
   };
+  const auto package = skin::normalizePackageId("ModernChic");
+  const auto entry =
+      skin::normalizeEntryPath(*package.package, "play/7key.luaskin");
+  expected.skin.gameplayCompatibilityEnabled = true;
+  expected.skin.selected7KeyEntry = *entry.entry;
+  expected.skin.entries[*entry.entry] = {
+      .options = {{"Lane", 101}},
+      .filePaths = {{"Judge", "parts/judge.png"}},
+      .offsets = {{"Judge offset",
+                   {.x = 1, .y = -2, .w = 3, .h = 4, .r = 5, .a = -6}}},
+      .viewport = {.mode = skin::ViewportMode::Custom,
+                   .customBase = skin::CustomViewportBase::Stretch,
+                   .scaleX = 1.25F,
+                   .scaleY = 0.75F,
+                   .translateX = 123.0F,
+                   .translateY = -456.0F},
+  };
   std::string error;
   expect(AppSettingsStore::Save(path, expected, error),
          "versioned settings save succeeds: " + error);
@@ -182,16 +201,21 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded, "saved settings load");
   expect(loaded.settings == expected,
          "JSON round trip preserves every setting including audio/video");
-  expect(readFile(path).find("\"schemaVersion\": 3") != std::string::npos,
-         "saved JSON declares schema version 3");
+  expect(readFile(path).find("\"schemaVersion\": 4") != std::string::npos,
+         "saved JSON declares schema version 4");
+  expect(readFile(path).find("\"package\": \"ModernChic\"") !=
+                 std::string::npos &&
+             readFile(path).find("\"path\": \"play/7key.luaskin\"") !=
+                 std::string::npos &&
+             readFile(path).find("collisionKey") == std::string::npos,
+         "skin IDs serialize as package/path objects without collision keys");
   expect(readFile(path).find("\"selectedGameplayRuleset\": \"beatoraja\"") !=
              std::string::npos,
          "saved JSON includes the per-profile gameplay ruleset");
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
-  expect(readFile(path).find(
-             "\"judgementIndicatorRangeMilliseconds\": 333") !=
+  expect(readFile(path).find("\"judgementIndicatorRangeMilliseconds\": 333") !=
              std::string::npos,
          "saved JSON includes the judgement indicator range");
   expect(readFile(path).find("\"selectedPlaybackRatePercent\": 75") !=
@@ -220,6 +244,101 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "serialized settings contain no API key material");
 }
 
+void testSchemaThreeMigrationDisablesCompatibility() {
+  TempDirectory temp;
+  const auto path = temp.path() / "schema3.json";
+  writeFile(path, R"({"schemaVersion":3,"audioOffsetMs":11})");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "schema 3 settings migrate to schema 4");
+  expect(!loaded.settings.skin.gameplayCompatibilityEnabled,
+         "schema 3 migration disables compatibility");
+  expect(!loaded.settings.skin.selected7KeyEntry.has_value(),
+         "schema 3 migration has no selected gameplay skin");
+  expect(loaded.settings.skin.entries.empty(),
+         "schema 3 migration starts with no remembered skin entries");
+}
+
+void testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds() {
+  TempDirectory temp;
+  const auto path = temp.path() / "skin.json";
+  writeFile(path, R"JSON({
+    "schemaVersion": 4,
+    "skin": {
+      "gameplayCompatibilityEnabled": true,
+      "selected7KeyEntry": {"package":"Pack","path":"play/main.luaskin","collisionKey":"forged"},
+      "entries": [{
+        "entry":{"package":"Pack","path":"play/main.luaskin","collisionKey":"forged"},
+        "settings":{
+          "options":{"ok":7},
+          "filePaths":{"file":"parts/a.png"},
+          "offsets":{"offset":{"x":-99999,"y":99999,"w":1,"h":2,"r":3,"a":4}},
+          "viewport":{"mode":"bogus","customBase":"bogus","scaleX":1e100,"scaleY":-2,"translateX":1e100,"translateY":-1e100}
+        }
+      }]
+    }
+  })JSON");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "schema 4 skin settings load");
+  expect(loaded.settings.skin.selected7KeyEntry.has_value() &&
+             loaded.settings.skin.entries.size() == 1,
+         "valid typed selection and matching entry survive");
+  if (loaded.settings.skin.selected7KeyEntry) {
+    const auto &id = *loaded.settings.skin.selected7KeyEntry;
+    expect(id.package.collisionKey == "pack" &&
+               id.collisionKey == "pack/play/main.luaskin",
+           "collision keys are rederived rather than trusted from JSON");
+    const auto &entry = loaded.settings.skin.entries.at(id);
+    expect(entry.offsets.at("offset").x == -32768 &&
+               entry.offsets.at("offset").y == 32767,
+           "offset components clamp to the fixed range");
+    expect(entry.viewport.mode == skin::ViewportMode::Fit &&
+               entry.viewport.customBase == skin::CustomViewportBase::Fit &&
+               entry.viewport.scaleX == 1.0F && entry.viewport.scaleY == 1.0F &&
+               entry.viewport.translateX == 0.0F &&
+               entry.viewport.translateY == 0.0F,
+           "invalid viewport enums and transforms reset deterministically");
+  }
+}
+
+void testSkinSettingsDeterministicallyEnforceFixedLimits() {
+  AppSettings settings;
+  settings.skin.gameplayCompatibilityEnabled = true;
+  for (int index = 99; index >= 0; --index) {
+    const auto package =
+        skin::normalizePackageId("package-" + std::to_string(index));
+    const auto entry =
+        skin::normalizeEntryPath(*package.package, "main.luaskin");
+    skin::EntryProfileSettings remembered;
+    for (int key = 299; key >= 0; --key) {
+      const std::string name = "key-" + std::to_string(key + 1000);
+      remembered.options[name] = key;
+      remembered.filePaths[name] = "parts/" + std::to_string(key) + ".png";
+      remembered.offsets[name] = {
+          .x = key, .y = key, .w = key, .h = key, .r = key, .a = key};
+    }
+    remembered.options[std::string(129, 'x')] = 1;
+    remembered.filePaths["absolute"] = "/Users/example/secret.png";
+    settings.skin.entries[*entry.entry] = std::move(remembered);
+  }
+  settings.skin.sanitize();
+  expect(settings.skin.entries.size() == 64,
+         "skin profile retains at most 64 sorted entries");
+  expect(settings.skin.entries.begin()->first.package.directoryName ==
+             "package-0",
+         "entry truncation is deterministic map order");
+  for (const auto &[entry, remembered] : settings.skin.entries) {
+    (void)entry;
+    expect(remembered.options.size() == 256 &&
+               remembered.filePaths.size() == 256 &&
+               remembered.offsets.size() == 256,
+           "each configuration map retains at most 256 sorted valid keys");
+    expect(!remembered.filePaths.contains("absolute"),
+           "host filesystem paths are never retained in profile settings");
+  }
+}
+
 void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
   AppSettings defaults;
   expect(!defaults.findBmsSkipUnarchivingForNonSolidArchives,
@@ -243,8 +362,8 @@ void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded &&
              loaded.settings.findBmsSkipUnarchivingForNonSolidArchives,
          "Find BMS preference survives a JSON round trip");
-  expect(readFile(enabledPath).find(
-             "\"findBmsSkipUnarchivingForNonSolidArchives\": true") !=
+  expect(readFile(enabledPath)
+                 .find("\"findBmsSkipUnarchivingForNonSolidArchives\": true") !=
              std::string::npos,
          "saved JSON contains the Find BMS preference");
 }
@@ -277,8 +396,9 @@ void testJudgementIndicatorRangeDefaultsAndSanitization() {
          "settings without the range field use 180 ms");
 
   const auto malformedPath = temp.path() / "malformed-range-settings.json";
-  writeFile(malformedPath,
-            R"({"schemaVersion":3,"judgementIndicatorRangeMilliseconds":"wide"})");
+  writeFile(
+      malformedPath,
+      R"({"schemaVersion":3,"judgementIndicatorRangeMilliseconds":"wide"})");
   const auto malformed = AppSettingsStore::Load(malformedPath);
   expect(malformed.status == AppSettingsLoadStatus::Loaded,
          "malformed range does not invalidate the settings document");
@@ -362,27 +482,25 @@ void testIrDefaultsMigrationAndOriginSanitization() {
   if (defaultProvider != defaults.irProviders.end()) {
     expect(!defaultProvider->second.enabled &&
                !defaultProvider->second.autoSubmit &&
-               defaultProvider->second.serverOrigin ==
-                   "https://boku.tachi.ac",
+               defaultProvider->second.serverOrigin == "https://boku.tachi.ac",
            "Tachi defaults are disabled with the production origin");
   }
 
   TempDirectory temp;
   const auto migratedPath = temp.path() / "schema-1.json";
-  writeFile(migratedPath,
-            R"({"schemaVersion":1,"audioOffsetMs":17})");
+  writeFile(migratedPath, R"({"schemaVersion":1,"audioOffsetMs":17})");
   const auto migrated = AppSettingsStore::Load(migratedPath);
   expect(migrated.status == AppSettingsLoadStatus::Loaded,
          "schema-1 settings migrate to schema 2");
   expect(migrated.settings.audioOffsetMs == 17,
          "schema-1 migration preserves existing settings");
-  expect(migrated.settings.irProviders.at("tachi") ==
-             ir::IrProviderSettings{},
+  expect(migrated.settings.irProviders.at("tachi") == ir::IrProviderSettings{},
          "schema-1 migration inserts default Tachi settings");
 
   const auto normalizedPath = temp.path() / "normalized.json";
-  writeFile(normalizedPath,
-            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"HTTPS://BOKU.TACHI.AC:443/"}}}})");
+  writeFile(
+      normalizedPath,
+      R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"HTTPS://BOKU.TACHI.AC:443/"}}}})");
   const auto normalized = AppSettingsStore::Load(normalizedPath);
   expect(normalized.status == AppSettingsLoadStatus::Loaded,
          "valid provider settings load");
@@ -391,8 +509,9 @@ void testIrDefaultsMigrationAndOriginSanitization() {
          "origin normalization lowercases and removes default syntax");
 
   const auto insecurePath = temp.path() / "insecure-origin.json";
-  writeFile(insecurePath,
-            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"http://LOCALHOST:80/"}}}})");
+  writeFile(
+      insecurePath,
+      R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"http://LOCALHOST:80/"}}}})");
   const auto insecure = AppSettingsStore::Load(insecurePath);
   expect(insecure.status == AppSettingsLoadStatus::Loaded &&
              insecure.settings.irProviders.at("tachi").serverOrigin ==
@@ -402,8 +521,9 @@ void testIrDefaultsMigrationAndOriginSanitization() {
          "disabled");
 
   const auto invalidPath = temp.path() / "invalid-origin.json";
-  writeFile(invalidPath,
-            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"https://secret@example.test/path?key=value#fragment"}}}})");
+  writeFile(
+      invalidPath,
+      R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"https://secret@example.test/path?key=value#fragment"}}}})");
   const auto invalid = AppSettingsStore::Load(invalidPath);
   expect(invalid.status == AppSettingsLoadStatus::Loaded,
          "invalid origin is an individual setting error");
@@ -412,16 +532,18 @@ void testIrDefaultsMigrationAndOriginSanitization() {
          "invalid stored origin falls back to production");
   expect(hasDiagnostic(invalid.diagnostics, "serverOrigin", "origin"),
          "invalid stored origin emits a non-secret diagnostic");
-  expect(std::ranges::none_of(
-             invalid.diagnostics, [](const std::string &diagnostic) {
-               return diagnostic.find("secret") != std::string::npos ||
-                      diagnostic.find("key=value") != std::string::npos;
-             }),
+  expect(std::ranges::none_of(invalid.diagnostics,
+                              [](const std::string &diagnostic) {
+                                return diagnostic.find("secret") !=
+                                           std::string::npos ||
+                                       diagnostic.find("key=value") !=
+                                           std::string::npos;
+                              }),
          "origin diagnostics do not echo rejected URL contents");
 
   for (const auto &[input, expected] :
-       {std::pair<std::string_view, std::string_view>{
-            "http://LOCALHOST:80/", "http://localhost"},
+       {std::pair<std::string_view, std::string_view>{"http://LOCALHOST:80/",
+                                                      "http://localhost"},
         {"https://Example.Test:444", "https://example.test:444"},
         {"https://[::1]:443/", "https://[::1]"}}) {
     const auto origin = ir::normalizeServerOrigin(input);
@@ -793,6 +915,9 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testSchemaThreeMigrationDisablesCompatibility();
+  testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds();
+  testSkinSettingsDeterministicallyEnforceFixedLimits();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testGameplayRulesetDefaultsMigrationAndValidation();

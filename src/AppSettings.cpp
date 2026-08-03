@@ -334,9 +334,8 @@ std::string parseGaugeTypeId(const std::string &value,
 
 std::string parseGaugeAutoShiftModeId(const std::string &value,
                                       const std::string &fallback) {
-  if (value == "none" || value == "continue" ||
-      value == "survival_to_groove" || value == "best_clear" ||
-      value == "select_to_under") {
+  if (value == "none" || value == "continue" || value == "survival_to_groove" ||
+      value == "best_clear" || value == "select_to_under") {
     return value;
   }
   return fallback;
@@ -408,6 +407,7 @@ float sanitizePlayAreaWidth(float width) {
 } // namespace
 
 void AppSettings::sanitize() {
+  skin.sanitize();
   irProviders.try_emplace(std::string(ir::kTachiProviderId),
                           ir::IrProviderSettings{});
   for (auto &[providerId, settings] : irProviders) {
@@ -534,10 +534,10 @@ void AppSettings::sanitize() {
   selectedGameplayRuleset = std::string(gameplayRulesetId(
       gameplayRulesetSelectionOrDefault(selectedGameplayRuleset)));
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
-  selectedGaugeAutoShiftMode = parseGaugeAutoShiftModeId(
-      selectedGaugeAutoShiftMode, "none");
-  selectedGaugeAutoShiftLowerBound = parseGaugeTypeId(
-      selectedGaugeAutoShiftLowerBound, "assisted_easy");
+  selectedGaugeAutoShiftMode =
+      parseGaugeAutoShiftModeId(selectedGaugeAutoShiftMode, "none");
+  selectedGaugeAutoShiftLowerBound =
+      parseGaugeTypeId(selectedGaugeAutoShiftLowerBound, "assisted_easy");
   if (selectedGaugeAutoShiftLowerBound.rfind("gas", 0) == 0) {
     selectedGaugeAutoShiftLowerBound = "assisted_easy";
   }
@@ -797,8 +797,8 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         settings.selectedGaugeAutoShiftMode = parseGaugeAutoShiftModeId(
             value, settings.selectedGaugeAutoShiftMode);
       } else if (key == "selected_gauge_auto_shift_lower_bound") {
-        settings.selectedGaugeAutoShiftLowerBound = parseGaugeTypeId(
-            value, settings.selectedGaugeAutoShiftLowerBound);
+        settings.selectedGaugeAutoShiftLowerBound =
+            parseGaugeTypeId(value, settings.selectedGaugeAutoShiftLowerBound);
       } else if (key == "selected_play_option") {
         settings.selectedPlayOption =
             parsePlayOptionId(value, settings.selectedPlayOption);

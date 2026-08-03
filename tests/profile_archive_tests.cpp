@@ -12,6 +12,7 @@
 #include "../src/replay/ReplayFileStore.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/sqlite3.h"
+#include "../src/skin/package/SkinPathPolicy.h"
 #include "../yoga/lib/nlohmann/json.hpp"
 #include "ReplayLegacyFixture.h"
 
@@ -236,10 +237,9 @@ void setReplayCodecVersion(const std::filesystem::path &path,
                            std::int64_t referenceId, int codecVersion) {
   auto database = openDatabase(path);
   expect(database != nullptr, "future-codec archive database opens");
-  const std::string sql =
-      "UPDATE modern_replay_files SET codec_version=" +
-      std::to_string(codecVersion) + " WHERE id=" +
-      std::to_string(referenceId);
+  const std::string sql = "UPDATE modern_replay_files SET codec_version=" +
+                          std::to_string(codecVersion) +
+                          " WHERE id=" + std::to_string(referenceId);
   expect(database && execute(database.get(), sql) &&
              sqlite3_changes(database.get()) == 1,
          "future-codec archive metadata updates within the schema contract");
@@ -252,9 +252,9 @@ void setDatabaseVersion(const std::filesystem::path &path, int version,
   if (!database) {
     return;
   }
-  expect(execute(database.get(),
-                 "PRAGMA user_version=" + std::to_string(version)),
-         std::string(label) + " database version updates");
+  expect(
+      execute(database.get(), "PRAGMA user_version=" + std::to_string(version)),
+      std::string(label) + " database version updates");
 }
 
 std::int64_t rowCount(const std::filesystem::path &path,
@@ -297,8 +297,8 @@ void seedIrOperationalState(const std::filesystem::path &path,
   expect(repository.EnsureSchema(),
          std::string(label) + " IR outbox schema initializes");
   const auto modern = portableReplayResult(9, 'd');
-  const auto staged = repository.StageModernChartResult(
-      modern, std::nullopt, std::nullopt, {});
+  const auto staged =
+      repository.StageModernChartResult(modern, std::nullopt, std::nullopt, {});
   expect((staged.status == ModernChartStageStatus::Staged ||
           staged.status == ModernChartStageStatus::AlreadyStaged) &&
              staged.receipt,
@@ -307,49 +307,53 @@ void seedIrOperationalState(const std::filesystem::path &path,
       staged.receipt.has_value() ? staged.receipt->resultId : 0;
   repository.Shutdown();
   Database database = openDatabase(path);
-  expect(database != nullptr,
-         std::string(label) + " IR outbox database opens");
+  expect(database != nullptr, std::string(label) + " IR outbox database opens");
   if (!database) {
     return;
   }
-  expect(execute(
-             database.get(),
-             "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
-             "chart_sha256,payload_json,ruleset_id,ruleset_revision,"
-             "validation_fingerprint,state,local_result_ready,"
-             "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
-             "updated_at_ms,completed_at_ms) VALUES"
-             "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
-             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-             "'{\"score\":1}','test-rules',1,lower(hex(zeroblob(32))),"
-             "0,1,NULL,NULL,NULL,1000,1000,NULL),"
-             "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
-             "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
-             "'{\"score\":2}','test-rules',1,lower(hex(zeroblob(32))),"
-             "2,1,3000,'job-2','https://example.invalid',"
-             "2000,2000,NULL),"
-             "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
-             "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
-             "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
-             "5,1,NULL,NULL,NULL,3000,3000,3000)"),
-         std::string(label) + " pending, deferred, and succeeded IR rows seed");
-  expect(execute(
-             database.get(),
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
+          "chart_sha256,payload_json,ruleset_id,ruleset_revision,"
+          "validation_fingerprint,state,local_result_ready,"
+          "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
+          "updated_at_ms,completed_at_ms) VALUES"
+          "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "'{\"score\":1}','test-rules',1,lower(hex(zeroblob(32))),"
+          "0,1,NULL,NULL,NULL,1000,1000,NULL),"
+          "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
+          "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
+          "'{\"score\":2}','test-rules',1,lower(hex(zeroblob(32))),"
+          "2,1,3000,'job-2','https://example.invalid',"
+          "2000,2000,NULL),"
+          "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
+          "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
+          "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
+          "5,1,NULL,NULL,NULL,3000,3000,3000)"),
+      std::string(label) + " pending, deferred, and succeeded IR rows seed");
+  expect(
+      execute(
+          database.get(),
           "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
           "modern_chart_result_id,attempt_id,chart_md5,chart_sha256,"
           "confirmation_source,confirmed_at_ms) VALUES('tachi',"
-          "'https://boku.tachi.ac'," + std::to_string(modernResultId) + ", '" +
-          modern.attemptId + "','" + modern.score.chartMd5 + "','" +
-          modern.score.chartSha256 + "',"
-          "1,4000);"
-          "INSERT INTO ir_remote_scores(provider_id,server_origin,"
-          "remote_score_id,remote_user_id,game,remote_chart_id,chart_md5,"
-          "chart_sha256,title,artist,note_count,score,lamp_rank,service,"
-          "time_added_ms,sync_generation) VALUES('tachi',"
-          "'https://boku.tachi.ac','remote-score',42,'bms-7k','remote-chart',"
-          "'dddddddddddddddddddddddddddddddd',"
-          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
-          "'Remote Song','Remote Artist',1,1,0,'Bokutachi',4000,1)"),
+          "'https://boku.tachi.ac'," +
+              std::to_string(modernResultId) + ", '" + modern.attemptId +
+              "','" + modern.score.chartMd5 + "','" + modern.score.chartSha256 +
+              "',"
+              "1,4000);"
+              "INSERT INTO ir_remote_scores(provider_id,server_origin,"
+              "remote_score_id,remote_user_id,game,remote_chart_id,chart_md5,"
+              "chart_sha256,title,artist,note_count,score,lamp_rank,service,"
+              "time_added_ms,sync_generation) VALUES('tachi',"
+              "'https://"
+              "boku.tachi.ac','remote-score',42,'bms-7k','remote-chart',"
+              "'dddddddddddddddddddddddddddddddd',"
+              "'ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              "d',"
+              "'Remote Song','Remote Artist',1,1,0,'Bokutachi',4000,1)"),
       std::string(label) + " account-scoped IR evidence and mirror seed");
 }
 
@@ -598,6 +602,22 @@ struct Fixture {
     settings.visibleTimeGreenNumber = 765;
     settings.selectedGameplayRuleset = "beatoraja";
     settings.selectedPlayOption = "R-RANDOM";
+    const auto skinPackage = skin::normalizePackageId("PortableSkin").package;
+    const auto skinEntry =
+        skinPackage
+            ? skin::normalizeEntryPath(*skinPackage, "play/main.luaskin").entry
+            : std::nullopt;
+    if (skinEntry) {
+      auto &entrySettings = settings.skin.entries[*skinEntry];
+      entrySettings.options["Lane cover"] = 4;
+      entrySettings.offsets["Judge"] = {.x = 12, .y = -9, .a = 32};
+      entrySettings.viewport = {
+          .mode = skin::ViewportMode::Stretch,
+          .customBase = skin::CustomViewportBase::Fit,
+      };
+      settings.skin.selected7KeyEntry = *skinEntry;
+      settings.skin.gameplayCompatibilityEnabled = true;
+    }
     settings.sanitize();
     std::string error;
     expect(AppSettingsStore::Save(manager.pathsFor(sourceId).settingsJson,
@@ -685,17 +705,21 @@ struct Fixture {
                "clear_type,created_at,ruleset_version,eligibility,"
                "provenance_json,partial) VALUES(1,'portable.bms',"
                "'0123456789abcdef0123456789abcdef',"
-               "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+               "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+               "aa',"
                "'Portable Song','Portable Artist',0,123,7,0.75,2,"
                "'2026-07-11 01:23:45',73,0,'" +
-                   std::string(provenance) + "',0);"
-               "INSERT INTO legacy_course_result_summaries("
-               "legacy_course_replay_id,legacy_course_id,course_key,"
-               "course_name,course_group_name,constraint_json,final_score,"
-               "max_combo,final_gauge,clear_type,completed_charts,total_charts,"
-               "created_at,ruleset_version,eligibility,provenance_json,partial)"
-               " VALUES(2,7,NULL,'Portable Course','Archive Contract','[]',"
-               "321,NULL,0.5,2,1,2,'2026-07-11 01:24:45',73,0,'" +
+                   std::string(provenance) +
+                   "',0);"
+                   "INSERT INTO legacy_course_result_summaries("
+                   "legacy_course_replay_id,legacy_course_id,course_key,"
+                   "course_name,course_group_name,constraint_json,final_score,"
+                   "max_combo,final_gauge,clear_type,completed_charts,total_"
+                   "charts,"
+                   "created_at,ruleset_version,eligibility,provenance_json,"
+                   "partial)"
+                   " VALUES(2,7,NULL,'Portable Course','Archive Contract','[]',"
+                   "321,NULL,0.5,2,1,2,'2026-07-11 01:24:45',73,0,'" +
                    std::string(provenance) + "',1)"),
            "legacy chart and partial course summaries insert");
   }
@@ -708,8 +732,8 @@ std::string repeated(char value, std::size_t count) {
 result_persistence::ModernChartResult portableReplayResult(int suffix,
                                                            char hash) {
   result_persistence::ModernChartResult value;
-  value.attemptId = "123e4567-e89b-42d3-a456-42661417400" +
-                    std::to_string(suffix);
+  value.attemptId =
+      "123e4567-e89b-42d3-a456-42661417400" + std::to_string(suffix);
   value.score.chartPath = "portable/chart.bms";
   value.score.chartMd5 = repeated(hash, 32);
   value.score.chartSha256 = repeated(hash, 64);
@@ -734,9 +758,10 @@ result_persistence::ModernChartResult portableReplayResult(int suffix,
   return value;
 }
 
-ModernReplayFileReference installPortableReplay(
-    const PlayerProfilePaths &paths, ReplayRepository &repository, int suffix,
-    char hash, bool userDeleted = false) {
+ModernReplayFileReference installPortableReplay(const PlayerProfilePaths &paths,
+                                                ReplayRepository &repository,
+                                                int suffix, char hash,
+                                                bool userDeleted = false) {
   const auto result = portableReplayResult(suffix, hash);
   const auto reserved = repository.ReserveModernReplayPath(
       result.attemptId, result.score.chartSha256, result.playedAtUnixMillis);
@@ -747,25 +772,25 @@ ModernReplayFileReference installPortableReplay(
   const auto raw = std::as_bytes(std::span(payload.data(), payload.size()));
   const std::vector<std::byte> bytes(raw.begin(), raw.end());
   replay::ReplayFileStore store(paths.root);
-  const auto fileReservation = store.reserve(
-      reserved.reservation->identity, bytes, result.attemptId);
+  const auto fileReservation =
+      store.reserve(reserved.reservation->identity, bytes, result.attemptId);
   const auto installed = store.install(*fileReservation.reservation, bytes);
   expect(installed.file.has_value(), "portable replay file installs");
   const ModernReplayFileAttachment attachment{
       .identity = reserved.reservation->identity,
       .metadata = installed.file->metadata};
   expect(repository.StageModernChartResult(result, std::nullopt, attachment, {})
-             .status == ModernChartStageStatus::Staged,
+                 .status == ModernChartStageStatus::Staged,
          "portable modern result stages");
   const auto loaded =
       repository.LoadModernChartResultByAttempt(result.attemptId);
   ModernReplayFileReference reference = *loaded.record->replayFile;
   if (userDeleted) {
     expect(repository
-               .MarkModernReplayFileUserDeleted(
-                   ModernReplayOwnerKind::ChartResult, result.attemptId,
-                   reference)
-               .status == ModernReplayFileMutationStatus::Changed,
+                   .MarkModernReplayFileUserDeleted(
+                       ModernReplayOwnerKind::ChartResult, result.attemptId,
+                       reference)
+                   .status == ModernReplayFileMutationStatus::Changed,
            "portable replay deletion state persists");
     reference.userDeleted = true;
   }
@@ -866,8 +891,7 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
   const auto active = installPortableReplay(source, repository, 1, 'a');
   const auto missing = installPortableReplay(source, repository, 2, 'b');
   std::filesystem::remove(source.root / missing.metadata.relativePath);
-  const auto deleted =
-      installPortableReplay(source, repository, 3, 'c', true);
+  const auto deleted = installPortableReplay(source, repository, 3, 'c', true);
   auto future = installPortableReplay(source, repository, 4, 'd');
   repository.Shutdown();
   future.metadata.codecVersion =
@@ -880,8 +904,10 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
   std::string error;
   auto members = readArchive(archive, error);
   const std::string activeName = active.metadata.relativePath.generic_string();
-  const std::string missingName = missing.metadata.relativePath.generic_string();
-  const std::string deletedName = deleted.metadata.relativePath.generic_string();
+  const std::string missingName =
+      missing.metadata.relativePath.generic_string();
+  const std::string deletedName =
+      deleted.metadata.relativePath.generic_string();
   const std::string futureName = future.metadata.relativePath.generic_string();
   expect(error.empty() && findMember(members, activeName) != nullptr &&
              findMember(members, missingName) == nullptr &&
@@ -928,20 +954,20 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
   if (imported.profile) {
     const auto installed = fixture.manager.pathsFor(imported.profile->id);
     replay::ReplayFileStore installedStore(installed.root);
-    expect(installedStore.inspect(active.metadata).state ==
-               replay::ReplayFileState::Available &&
-               !std::filesystem::exists(installed.root /
-                                        missing.metadata.relativePath) &&
-               !std::filesystem::exists(installed.root /
-                                        deleted.metadata.relativePath) &&
-               !std::filesystem::exists(installed.root /
-                                        future.metadata.relativePath),
-           "import restores verified bytes while preserving optional omissions");
+    expect(
+        installedStore.inspect(active.metadata).state ==
+                replay::ReplayFileState::Available &&
+            !std::filesystem::exists(installed.root /
+                                     missing.metadata.relativePath) &&
+            !std::filesystem::exists(installed.root /
+                                     deleted.metadata.relativePath) &&
+            !std::filesystem::exists(installed.root /
+                                     future.metadata.relativePath),
+        "import restores verified bytes while preserving optional omissions");
     ReplayRepository installedRepository(installed.replaysDb);
     expect(installedRepository.EnsureSchema(),
            "imported replay repository opens");
-    const auto inventory =
-        installedRepository.ListModernReplayFileReferences();
+    const auto inventory = installedRepository.ListModernReplayFileReferences();
     expect(inventory.status == ModernReplayFileInventoryStatus::Loaded &&
                inventory.entries.size() == 4,
            "import preserves result references independently of replay bytes");
@@ -950,14 +976,14 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
   ArchiveMember deletedMember{
       .name = deletedName,
       .contents = readFile(source.root / deleted.metadata.relativePath)};
-  auto insertion = std::ranges::find_if(members, [&](const ArchiveMember &item) {
-    return item.name == "checksums.sha256" ||
-           (item.name.starts_with("replay/") && item.name > deletedName);
-  });
+  auto insertion =
+      std::ranges::find_if(members, [&](const ArchiveMember &item) {
+        return item.name == "checksums.sha256" ||
+               (item.name.starts_with("replay/") && item.name > deletedName);
+      });
   members.insert(insertion, std::move(deletedMember));
   refreshChecksums(members);
-  expectRejectedWithoutMutation(fixture, members,
-                                "user-deleted-replay-member");
+  expectRejectedWithoutMutation(fixture, members, "user-deleted-replay-member");
 
   writeFile(source.root / active.metadata.relativePath, "corrupt");
   const auto destination = fixture.exchange.path() / "corrupt-replay.zip";
@@ -971,13 +997,14 @@ void testReplayFilesRoundTripByVerifiedOwnership() {
 void testIrOperationalStateIsNotProfilePortable() {
   Fixture fixture;
   constexpr std::string_view credential = "sentinel-portable-api-key";
-  const PlayerProfilePaths source =
-      fixture.manager.pathsFor(fixture.sourceId);
-  writeFile(source.irCredentialsJson,
-            R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-portable-api-key"}}})");
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
+  writeFile(
+      source.irCredentialsJson,
+      R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-portable-api-key"}}})");
   constexpr std::string_view cacheMarker = "sentinel-bokutachi-cache-chart";
-  writeFile(source.bokutachiCacheJson,
-            R"({"schemaVersion":1,"origins":[{"serverOrigin":"https://boku.tachi.ac","userID":42,"charts":[{"game":"bms-7k","sha256":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","chartID":"sentinel-bokutachi-cache-chart"}]}]})");
+  writeFile(
+      source.bokutachiCacheJson,
+      R"({"schemaVersion":1,"origins":[{"serverOrigin":"https://boku.tachi.ac","userID":42,"charts":[{"game":"bms-7k","sha256":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","chartID":"sentinel-bokutachi-cache-chart"}]}]})");
   seedIrOperationalState(source.replaysDb, "archive source");
   seedImportedIrScore(source.scoresDb, "archive source");
 
@@ -998,21 +1025,27 @@ void testIrOperationalStateIsNotProfilePortable() {
   std::string error;
   auto members = readArchive(exported, error);
   expect(error.empty(), "IR-safe export reads: " + error);
-  expect(std::ranges::none_of(members, [](const ArchiveMember &member) {
-           return member.name == "ir-credentials.json";
-         }),
+  expect(std::ranges::none_of(members,
+                              [](const ArchiveMember &member) {
+                                return member.name == "ir-credentials.json";
+                              }),
          "credential file is absent from archive members and accounting");
-  expect(std::ranges::none_of(members, [](const ArchiveMember &member) {
-           return member.name == "bokutachi-cache.json";
-         }),
+  expect(std::ranges::none_of(members,
+                              [](const ArchiveMember &member) {
+                                return member.name == "bokutachi-cache.json";
+                              }),
          "Bokutachi cache is absent from archive members and accounting");
-  expect(std::ranges::none_of(members, [&](const ArchiveMember &member) {
-           return member.contents.find(credential) != std::string::npos;
-         }),
+  expect(std::ranges::none_of(members,
+                              [&](const ArchiveMember &member) {
+                                return member.contents.find(credential) !=
+                                       std::string::npos;
+                              }),
          "archive contains no credential bytes");
-  expect(std::ranges::none_of(members, [&](const ArchiveMember &member) {
-           return member.contents.find(cacheMarker) != std::string::npos;
-         }),
+  expect(std::ranges::none_of(members,
+                              [&](const ArchiveMember &member) {
+                                return member.contents.find(cacheMarker) !=
+                                       std::string::npos;
+                              }),
          "archive contains no Bokutachi cache identifiers");
 
   ArchiveMember *replays = findMember(members, "replays.db");
@@ -1080,8 +1113,7 @@ void testIrOperationalStateIsNotProfilePortable() {
 
 void testExportRejectsSupportedOlderSourceBeforeWritingArchive() {
   Fixture fixture;
-  const PlayerProfilePaths source =
-      fixture.manager.pathsFor(fixture.sourceId);
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
   setDatabaseVersion(source.scoresDb, 5, "supported-older export score");
   setDatabaseVersion(source.replaysDb, 3, "supported-older export replay");
 
@@ -1103,22 +1135,18 @@ void testExportRejectsSupportedOlderSourceBeforeWritingArchive() {
   ProfileArchiveService service(fixture.manager, std::move(dependencies));
   const auto exported = service.Export(fixture.sourceId, destination);
   expect(exported.error == ProfileError::IntegrityFailure &&
-             !temporaryArchiveWritten &&
-             !std::filesystem::exists(destination),
+             !temporaryArchiveWritten && !std::filesystem::exists(destination),
          "RuntimeReady export rejects supported-older databases before "
          "writing an archive");
 
   std::string versionError;
   expect(sqliteDatabaseUserVersion(source.scoresDb, versionError) == 5,
-         "rejected export preserves the older score version: " +
-             versionError);
+         "rejected export preserves the older score version: " + versionError);
   versionError.clear();
   expect(sqliteDatabaseUserVersion(source.replaysDb, versionError) == 3 &&
-             scalarText(source.scoresDb,
-                        "SELECT value FROM archive_marker") ==
+             scalarText(source.scoresDb, "SELECT value FROM archive_marker") ==
                  "score-source" &&
-             scalarText(source.replaysDb,
-                        "SELECT value FROM archive_marker") ==
+             scalarText(source.replaysDb, "SELECT value FROM archive_marker") ==
                  "replay-source" &&
              transactionArtifacts(fixture.temp.path()).empty(),
          "rejected export neither migrates the source nor creates profile "
@@ -1371,6 +1399,15 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
   expect(AppSettingsStore::Load(importedPaths.settingsJson)
                  .settings.selectedGameplayRuleset == "beatoraja",
          "ruleset selection round-trips through profile archives");
+  const auto importedSettings =
+      AppSettingsStore::Load(importedPaths.settingsJson);
+  const auto sourceLoadedSettings =
+      AppSettingsStore::Load(sourcePaths.settingsJson);
+  expect(
+      importedSettings.status == AppSettingsLoadStatus::Loaded &&
+          sourceLoadedSettings.status == AppSettingsLoadStatus::Loaded &&
+          importedSettings.settings.skin == sourceLoadedSettings.settings.skin,
+      "selected skin configuration and viewport round-trip through archives");
   expect(readFile(importedPaths.practiceDirectory /
                   (std::string(kPracticeHash) + ".json")) ==
              readFile(sourcePaths.practiceDirectory /
@@ -1421,8 +1458,7 @@ void testVersionOneArchiveImportsWithEmptyPracticeDirectory() {
       findMember(versionTwoMembers, "manifest.json");
   expect(versionTwoManifest != nullptr, "v2 compatibility manifest exists");
   if (versionTwoManifest) {
-    Json versionTwo =
-        Json::parse(versionTwoManifest->contents, nullptr, false);
+    Json versionTwo = Json::parse(versionTwoManifest->contents, nullptr, false);
     versionTwo["formatVersion"] = 2;
     versionTwoManifest->contents = versionTwo.dump(2) + "\n";
     refreshChecksums(versionTwoMembers);
@@ -1433,13 +1469,12 @@ void testVersionOneArchiveImportsWithEmptyPracticeDirectory() {
     ProfileArchiveService service(fixture.manager);
     const auto imported = service.Import(versionTwoArchive);
     expect(imported.ok() && imported.profile,
-           "version-two profile archive still imports: " +
-               imported.message);
+           "version-two profile archive still imports: " + imported.message);
     if (imported.profile) {
-      expect(std::filesystem::is_empty(
-                 fixture.manager.pathsFor(imported.profile->id)
-                     .replayDirectory),
-             "version-two archive imports with an empty replay directory");
+      expect(
+          std::filesystem::is_empty(
+              fixture.manager.pathsFor(imported.profile->id).replayDirectory),
+          "version-two archive imports with an empty replay directory");
     }
   }
   std::erase_if(members, [](const ArchiveMember &member) {
@@ -1566,12 +1601,9 @@ void testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile() {
   Fixture fixture;
   const auto archive =
       exportFixture(fixture, "supported-older-overwrite.asobprofile");
-  const PlayerProfilePaths target =
-      fixture.manager.pathsFor(fixture.targetId);
-  setDatabaseVersion(target.scoresDb, 5,
-                     "supported-older overwrite score");
-  setDatabaseVersion(target.replaysDb, 3,
-                     "supported-older overwrite replay");
+  const PlayerProfilePaths target = fixture.manager.pathsFor(fixture.targetId);
+  setDatabaseVersion(target.scoresDb, 5, "supported-older overwrite score");
+  setDatabaseVersion(target.replaysDb, 3, "supported-older overwrite replay");
   expect(fixture.manager.validateProfileForActivation(fixture.targetId).ok() &&
              fixture.manager.validateProfile(fixture.targetId).error ==
                  ProfileError::IntegrityFailure,
@@ -1601,15 +1633,14 @@ void testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile() {
                  ReplayRepository::kCurrentSchemaVersion &&
              fixture.manager.validateProfile(fixture.targetId).ok(),
          "overwrite installs a current RuntimeReady target: " + versionError);
-  expect(scalarText(target.scoresDb,
-                    "SELECT value FROM archive_marker") == "score-source" &&
-             scalarText(target.replaysDb,
-                        "SELECT value FROM archive_marker") ==
-                 "replay-source" &&
-             readFile(target.settingsJson) ==
-                 readFile(fixture.manager.pathsFor(fixture.sourceId)
-                              .settingsJson),
-         "overwrite installs the imported database and settings payload");
+  expect(
+      scalarText(target.scoresDb, "SELECT value FROM archive_marker") ==
+              "score-source" &&
+          scalarText(target.replaysDb, "SELECT value FROM archive_marker") ==
+              "replay-source" &&
+          readFile(target.settingsJson) ==
+              readFile(fixture.manager.pathsFor(fixture.sourceId).settingsJson),
+      "overwrite installs the imported database and settings payload");
   expect(!observedWorkspace.empty() &&
              !std::filesystem::exists(observedWorkspace) &&
              transactionArtifacts(fixture.temp.path()).empty(),
@@ -1627,9 +1658,9 @@ void testOverwriteRejectsFutureTargetWithoutMutation() {
         fixture.manager.pathsFor(fixture.targetId);
     const std::filesystem::path futureDatabase =
         futureScoreDatabase ? target.scoresDb : target.replaysDb;
-    const int futureVersion =
-        futureScoreDatabase ? ScoreRepository::kCurrentSchemaVersion + 1
-                            : ReplayRepository::kCurrentSchemaVersion + 1;
+    const int futureVersion = futureScoreDatabase
+                                  ? ScoreRepository::kCurrentSchemaVersion + 1
+                                  : ReplayRepository::kCurrentSchemaVersion + 1;
     setDatabaseVersion(futureDatabase, futureVersion,
                        futureScoreDatabase ? "future overwrite score"
                                            : "future overwrite replay");
@@ -1649,8 +1680,8 @@ void testOverwriteRejectsFutureTargetWithoutMutation() {
     ProfileImportOptions options{.mode = ProfileImportMode::Overwrite,
                                  .overwriteProfileId = fixture.targetId};
     const auto imported = service.Import(archive, options);
-    const std::string label = futureScoreDatabase ? "future score"
-                                                  : "future replay";
+    const std::string label =
+        futureScoreDatabase ? "future score" : "future replay";
     expect(imported.error == ProfileError::FutureVersion,
            label + " overwrite target fails closed");
 
@@ -1663,19 +1694,20 @@ void testOverwriteRejectsFutureTargetWithoutMutation() {
                readFile(target.inputJson) == inputBefore &&
                readFile(target.scoresDb) == scoresBefore &&
                readFile(target.replaysDb) == replaysBefore,
-           label + " overwrite rejection preserves target versions, metadata, "
-                   "and component bytes: " +
+           label +
+               " overwrite rejection preserves target versions, metadata, "
+               "and component bytes: " +
                versionError);
-    expect(scalarText(target.scoresDb,
-                      "SELECT value FROM archive_marker") == "score-target" &&
-               scalarText(target.replaysDb,
-                          "SELECT value FROM archive_marker") ==
-                   "replay-target" &&
-               !observedWorkspace.empty() &&
-               !std::filesystem::exists(observedWorkspace) &&
-               transactionArtifacts(fixture.temp.path()).empty(),
-           label + " overwrite rejection preserves target payload and cleans "
-                   "all transaction artifacts");
+    expect(
+        scalarText(target.scoresDb, "SELECT value FROM archive_marker") ==
+                "score-target" &&
+            scalarText(target.replaysDb, "SELECT value FROM archive_marker") ==
+                "replay-target" &&
+            !observedWorkspace.empty() &&
+            !std::filesystem::exists(observedWorkspace) &&
+            transactionArtifacts(fixture.temp.path()).empty(),
+        label + " overwrite rejection preserves target payload and cleans "
+                "all transaction artifacts");
   }
 }
 
@@ -1768,10 +1800,11 @@ void testOverwriteRollbackRestoresOriginalProfile() {
          "rolled-back overwrite does not mark the original profile for reset");
 }
 
-void expectRejectedWithoutMutation(
-    Fixture &fixture, const std::vector<ArchiveMember> &members,
-    std::string_view label, ProfileError expected,
-    std::string_view messageNeedle) {
+void expectRejectedWithoutMutation(Fixture &fixture,
+                                   const std::vector<ArchiveMember> &members,
+                                   std::string_view label,
+                                   ProfileError expected,
+                                   std::string_view messageNeedle) {
   const auto archive = fixture.temp.path() / (std::string(label) + ".zip");
   std::string error;
   expect(writeArchive(archive, members, error),
@@ -1821,12 +1854,11 @@ void testStrictMemberAllowlistAndTypes() {
   expectRejectedWithoutMutation(fixture, extra, "extra-member");
 
   auto credentials = valid;
-  credentials.push_back({.name = "ir-credentials.json",
-                         .contents = "sentinel-api-key"});
-  expectRejectedWithoutMutation(fixture, credentials,
-                                "credential-member-is-unknown",
-                                ProfileError::IntegrityFailure,
-                                "unexpected member name");
+  credentials.push_back(
+      {.name = "ir-credentials.json", .contents = "sentinel-api-key"});
+  expectRejectedWithoutMutation(
+      fixture, credentials, "credential-member-is-unknown",
+      ProfileError::IntegrityFailure, "unexpected member name");
 
   auto duplicate = valid;
   duplicate.push_back(valid.front());
@@ -2063,15 +2095,14 @@ void testSizePolicyBoundariesWithoutLargeAllocations() {
                                      Policy::kMaximumDatabaseBytes + 1),
       "database declared-size boundary is enforced");
   std::string replayDiagnostic;
-  const auto replayStem = replay::chartStem(std::string(64, 'a'), 1, false,
-                                            replayDiagnostic);
-  const auto replayPath =
-      replay::pathForStem(*replayStem, 0, replayDiagnostic);
+  const auto replayStem =
+      replay::chartStem(std::string(64, 'a'), 1, false, replayDiagnostic);
+  const auto replayPath = replay::pathForStem(*replayStem, 0, replayDiagnostic);
   const std::string replayMember = replayPath->relativePath.generic_string();
   expect(Policy::memberSizeAllowed(replayMember,
                                    Policy::kMaximumReplayFileBytes) &&
-             !Policy::memberSizeAllowed(
-                 replayMember, Policy::kMaximumReplayFileBytes + 1),
+             !Policy::memberSizeAllowed(replayMember,
+                                        Policy::kMaximumReplayFileBytes + 1),
          "replay member declared-size boundary shares the BRD file limit");
   expect(Policy::additionAllowed("scores.db", Policy::kMaximumDatabaseBytes, 0,
                                  0) &&
@@ -2204,16 +2235,15 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
       if (!database) {
         return;
       }
-      expect(execute(database.get(),
-                     "DROP TRIGGER IF EXISTS "
-                     "score_sha256_summary_after_insert"),
+      expect(execute(database.get(), "DROP TRIGGER IF EXISTS "
+                                     "score_sha256_summary_after_insert"),
              "legacy score fixture removes the current summary trigger");
       for (const std::string_view table : {"scores", "course_scores"}) {
         for (const std::string_view column :
              {"provenance_json", "eligibility", "ruleset_version"}) {
-          expect(execute(database.get(),
-                         "ALTER TABLE " + std::string(table) +
-                             " DROP COLUMN " + std::string(column)),
+          expect(execute(database.get(), "ALTER TABLE " + std::string(table) +
+                                             " DROP COLUMN " +
+                                             std::string(column)),
                  "authentic legacy fixture removes " + std::string(table) +
                      "." + std::string(column));
         }
@@ -2224,30 +2254,31 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
       database.reset();
     } else {
       std::string replayFixtureError;
-      expect(replay_legacy_fixture::replaceWithVersion2Database(
-                 databasePath, version,
-                 "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
-                 "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
-                 "final_score,max_combo,final_gauge,clear_type) VALUES(1,"
-                 "'portable.bms','0123456789abcdef0123456789abcdef',"
-                 "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-                 "'Portable Song','Portable Artist',0,0,0,123,7,0.75,2);"
-                 "INSERT INTO replay_events(replay_id,event_index,action,lane,"
-                 "note_time_micros,song_time_micros,judge_time_micros,judgement,"
-                 "diff_micros,gauge,gauge_type,combo,score) VALUES"
-                 "(1,0,1,2,1000,1001,1002,0,2,0.75,0,999,999999);"
-                 "INSERT INTO course_replays(id,course_id,course_name,"
-                 "course_group_name,constraint_json,gauge_type,gauge_profile,"
-                 "gauge_auto_shift,ln_mode,final_score,max_combo,final_gauge,"
-                 "clear_type,completed_charts,total_charts) VALUES"
-                 "(2,7,'Portable Course','Archive Contract','[]',0,0,0,0,"
-                 "321,8,0.5,2,1,2);"
-                 "INSERT INTO course_replay_stages(course_replay_id,"
-                 "stage_index,replay_id,rest_micros_after_stage) VALUES"
-                 "(2,0,1,123456)",
-                 replayFixtureError),
-             "authentic legacy replay fixture is written: " +
-                 replayFixtureError);
+      expect(
+          replay_legacy_fixture::replaceWithVersion2Database(
+              databasePath, version,
+              "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,"
+              "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
+              "final_score,max_combo,final_gauge,clear_type) VALUES(1,"
+              "'portable.bms','0123456789abcdef0123456789abcdef',"
+              "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              "a',"
+              "'Portable Song','Portable Artist',0,0,0,123,7,0.75,2);"
+              "INSERT INTO replay_events(replay_id,event_index,action,lane,"
+              "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+              "diff_micros,gauge,gauge_type,combo,score) VALUES"
+              "(1,0,1,2,1000,1001,1002,0,2,0.75,0,999,999999);"
+              "INSERT INTO course_replays(id,course_id,course_name,"
+              "course_group_name,constraint_json,gauge_type,gauge_profile,"
+              "gauge_auto_shift,ln_mode,final_score,max_combo,final_gauge,"
+              "clear_type,completed_charts,total_charts) VALUES"
+              "(2,7,'Portable Course','Archive Contract','[]',0,0,0,0,"
+              "321,8,0.5,2,1,2);"
+              "INSERT INTO course_replay_stages(course_replay_id,"
+              "stage_index,replay_id,rest_micros_after_stage) VALUES"
+              "(2,0,1,123456)",
+              replayFixtureError),
+          "authentic legacy replay fixture is written: " + replayFixtureError);
     }
     findMember(members, name)->contents = readFile(databasePath);
   }
@@ -2305,8 +2336,7 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
                     "SELECT course_name || '|' || final_score || '|' || "
                     "completed_charts || '|' || total_charts FROM "
                     "legacy_course_result_summaries WHERE "
-                    "legacy_course_replay_id=2") ==
-             "Portable Course|321|1|2",
+                    "legacy_course_replay_id=2") == "Portable Course|321|1|2",
          "replay v2 migration preserves course headers");
   expect(matchingRowCount(
              paths.replaysDb,

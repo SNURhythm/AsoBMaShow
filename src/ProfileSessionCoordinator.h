@@ -37,8 +37,7 @@ struct ProfileSwitchBlockers {
 };
 
 struct ProfileSessionDependencies {
-  std::function<bool(const std::filesystem::path &, const AppSettings &,
-                     std::string &)>
+  std::function<bool(std::string_view, AppSettings &, std::string &)>
       saveSettings;
   std::function<bool(const std::filesystem::path &, std::string &)> saveInput;
   std::function<bool(ScoreRepository &, const std::filesystem::path &,
@@ -54,6 +53,7 @@ struct ProfileSessionDependencies {
       activateProfileServices;
   std::function<bool(std::string_view, const AppSettings &, std::string &)>
       restoreProfileServices;
+  std::function<void(std::string_view, AppSettings &)> activeProfileCommitted;
 };
 
 class ProfileSessionCoordinator {

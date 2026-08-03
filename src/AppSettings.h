@@ -4,6 +4,7 @@
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
+#include "skin/SkinProfileSettings.h"
 
 #include <filesystem>
 #include <iosfwd>
@@ -165,8 +166,7 @@ public:
   bool systemPlaybackShowTitle = true;
   bool systemPlaybackShowArtist = true;
   int musicPlayerPlaybackRatePercent = 100;
-  audio::PlaybackMode musicPlayerPlaybackMode =
-      audio::PlaybackMode::PitchShift;
+  audio::PlaybackMode musicPlayerPlaybackMode = audio::PlaybackMode::PitchShift;
   bool gameplayClubModeEnabled = false;
   bool musicPlayerClubModeEnabled = false;
   std::string selectedGameplayRuleset = "lr2";
@@ -183,6 +183,7 @@ public:
   std::map<std::string, ir::IrProviderSettings> irProviders = {
       {std::string(ir::kTachiProviderId), ir::IrProviderSettings{}},
   };
+  skin::SkinProfileSettings skin;
 
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;

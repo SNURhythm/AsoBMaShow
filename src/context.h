@@ -19,6 +19,7 @@
 #include "AppSettings.h"
 #include "AppSettingsStore.h"
 #include "PlayerProfileManager.h"
+#include "ProfileSettingsPersistenceCoordinator.h"
 #include "ProfileSessionCoordinator.h"
 #include "repositories/ChartRepository.h"
 #include "repositories/ReplayRepository.h"
@@ -127,6 +128,8 @@ public:
   std::set<std::string> irCredentialReadyProfiles;
   std::set<std::string> irCredentialBlockedProfiles;
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
+  std::unique_ptr<ProfileSettingsPersistenceCoordinator>
+      profileSettingsPersistenceCoordinator;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
   std::atomic<bool> profileGameplayActive{false};
   std::atomic<bool> profileArchiveOperationActive{false};
@@ -201,6 +204,9 @@ public:
     const PlayerProfilePaths activePaths = profileManager.activePaths();
     scoreRepository.SetDatabasePath(activePaths.scoresDb);
     replayRepository.SetDatabasePath(activePaths.replaysDb);
+    profileSettingsPersistenceCoordinator =
+        std::make_unique<ProfileSettingsPersistenceCoordinator>(profileManager,
+                                                                settings);
     saveActiveInputProfile = [this](const InputProfile &candidate,
                                     std::string &error) {
       if (!profileInitializationResult.ok()) {
@@ -265,6 +271,17 @@ public:
           }
         },
         ProfileSessionDependencies{
+            .saveSettings =
+                [this](std::string_view profileId, AppSettings &candidate,
+                       std::string &error) {
+                  const auto typedId = skin::makeSkinProfileId(profileId);
+                  if (!typedId || !profileSettingsPersistenceCoordinator) {
+                    error = "The profile settings owner is unavailable.";
+                    return false;
+                  }
+                  return profileSettingsPersistenceCoordinator
+                      ->saveActiveSettingsAndWait(*typedId, candidate, error);
+                },
             .saveInput =
                 [this](const std::filesystem::path &path, std::string &error) {
                   if (path != profileManager.activePaths().inputJson) {
@@ -293,6 +310,16 @@ public:
                        const AppSettings &activeSettings, std::string &error) {
                   return activateIrProfileServices(profileId, activeSettings,
                                                    error);
+                },
+            .activeProfileCommitted =
+                [this](std::string_view profileId,
+                       AppSettings &activeSettings) noexcept {
+                  const auto typedId = skin::makeSkinProfileId(profileId);
+                  if (!typedId || !profileSettingsPersistenceCoordinator) {
+                    return;
+                  }
+                  profileSettingsPersistenceCoordinator
+                      ->bindCommittedActiveProfile(*typedId, activeSettings);
                 }});
 
     settings.sanitize();
@@ -366,7 +393,7 @@ public:
 
   [[nodiscard]] replay::ChartReplayPersistenceOutcome
   persistModernChart(const replay::ChartReplayPersistenceAttempt &attempt,
-      std::span<const ir::IrOutboxDraft> drafts = {}) noexcept {
+                     std::span<const ir::IrOutboxDraft> drafts = {}) noexcept {
     try {
       if (!profileInitializationResult.ok()) {
         return {.state = replay::ChartReplayPersistenceState::Retryable,
@@ -477,8 +504,7 @@ public:
     }
   }
 
-  bool loadIrCredential(std::string_view profileId,
-                        std::string_view providerId,
+  bool loadIrCredential(std::string_view profileId, std::string_view providerId,
                         std::optional<std::string> &apiKey,
                         std::string &diagnostic) noexcept {
     apiKey.reset();
@@ -502,8 +528,7 @@ public:
   }
 
   bool replaceIrCredential(std::string_view profileId,
-                           std::string_view providerId,
-                           std::string_view apiKey,
+                           std::string_view providerId, std::string_view apiKey,
                            std::string &diagnostic) noexcept {
     if (!prepareIrCredentials(profileId, diagnostic)) {
       return false;
@@ -559,8 +584,7 @@ public:
           !overwriteRetried.diagnostic.empty()) {
         SDL_Log("Pending overwritten-profile credential cleanup retained %zu "
                 "item(s): %s",
-                overwriteRetried.retained,
-                overwriteRetried.diagnostic.c_str());
+                overwriteRetried.retained, overwriteRetried.diagnostic.c_str());
       }
       const auto retried = ir::retryPendingProfileCredentialCleanup(
           pendingIrCredentialCleanup,
@@ -574,8 +598,8 @@ public:
             }
             // Treat inspection failures conservatively: a profile that might
             // still exist must keep its secure credentials.
-            return error || status.type() !=
-                                std::filesystem::file_type::not_found;
+            return error ||
+                   status.type() != std::filesystem::file_type::not_found;
           },
           [this](std::string_view profileId, std::string &diagnostic) {
             return removeProfileIrCredentials(profileId, diagnostic);
@@ -608,7 +632,7 @@ public:
       }
       if (scoreRepository.ImportedIrScoresAreCurrent(providerId, serverOrigin,
                                                      state.syncGeneration,
-              state.scoreCount)) {
+                                                     state.scoreCount)) {
         return true;
       }
       const auto mirrored =
@@ -828,14 +852,30 @@ public:
       error = profileInitializationResult.message.empty()
                   ? "Player profiles are not initialized."
                   : profileInitializationResult.message;
-    } else if (AppSettingsStore::Save(profileManager.activePaths().settingsJson,
-                                      settings, error)) {
+    } else if (saveSettingsCandidate(settings, error)) {
       return true;
     }
     if (errorMessage != nullptr) {
       *errorMessage = std::move(error);
     }
     return false;
+  }
+
+  bool saveSettingsCandidate(AppSettings candidate, std::string &error) {
+    if (!profileReady() || !profileSettingsPersistenceCoordinator) {
+      error = profileInitializationResult.message.empty()
+                  ? "Player profiles are not initialized."
+                  : profileInitializationResult.message;
+      return false;
+    }
+    const auto profileId =
+        skin::makeSkinProfileId(profileManager.activeProfile().id);
+    if (!profileId) {
+      error = "The active profile ID is invalid.";
+      return false;
+    }
+    return profileSettingsPersistenceCoordinator->saveActiveSettingsAndWait(
+        *profileId, candidate, error);
   }
 
   ProfileSwitchResult switchProfile(std::string_view profileId) {

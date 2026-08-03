@@ -2436,6 +2436,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/path.cpp
         src/settings/AudioVideoSettings.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/package/SkinPathPolicy.cpp
     )
     target_include_directories(audio_video_settings_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -2448,6 +2450,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(audio_video_settings_tests PRIVATE SDL2)
     endif()
+    target_link_libraries(audio_video_settings_tests PRIVATE utf8proc::utf8proc)
     if(WIN32)
         target_link_libraries(audio_video_settings_tests PRIVATE shell32 ole32)
     endif()
@@ -3070,6 +3073,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/AppSettings.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/package/SkinPathPolicy.cpp
         src/ir/IrProfileSettings.cpp
         src/Utils.cpp
         src/path.cpp
@@ -3089,6 +3094,67 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(app_settings_store_tests PRIVATE SDL2)
     endif()
+    target_link_libraries(app_settings_store_tests PRIVATE utf8proc::utf8proc)
+
+    add_executable(profile_settings_persistence_tests
+        tests/profile_settings_persistence_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ProfileSettingsPersistenceCoordinator.cpp
+        src/PlayerProfileManager.cpp
+        src/Uuid.cpp
+        src/ProfileDatabaseTools.cpp
+        src/AppSettingsStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/AppSettings.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/package/SkinPathPolicy.cpp
+        src/ir/IrProfileSettings.cpp
+        src/settings/AudioVideoSettings.cpp
+        src/input/GyroscopeTurntable.cpp
+        src/input/InputProfile.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputProfileStore.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/practice/PracticePresetStore.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/tachi/TachiEligibility.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/ScoreProvenance.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayProfileTransfer.cpp
+        src/replay/ReplayProfileInventory.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(profile_settings_persistence_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(profile_settings_persistence_tests PRIVATE cxx_std_23)
+    target_link_libraries(profile_settings_persistence_tests PRIVATE ${COMMON_LIBS})
 
     add_executable(find_bms_download_tests
         tests/find_bms_download_tests.cpp
@@ -3599,6 +3665,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/package/SkinPathPolicy.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrSubmission.cpp
@@ -3644,6 +3712,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(player_profile_manager_tests PRIVATE SDL2)
     endif()
+    target_link_libraries(player_profile_manager_tests PRIVATE utf8proc::utf8proc)
     if(WIN32)
         target_link_libraries(player_profile_manager_tests PRIVATE shell32 ole32)
     endif()
@@ -3654,6 +3723,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ProfileSessionCoordinator.cpp
+        src/ProfileSettingsPersistenceCoordinator.cpp
         src/replay/ReplayFileReconciler.cpp
         src/replay/ReplayProfileReconciliation.cpp
         src/PlayerProfileManager.cpp
@@ -3666,6 +3736,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/package/SkinPathPolicy.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrSubmission.cpp
@@ -3745,6 +3817,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/package/SkinPathPolicy.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrCredentialBackend.cpp
         src/ir/IrCredentialStore.cpp
@@ -4101,6 +4175,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(profile_settings_persistence_tests foundation_profile_settings_persistence)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
     asobmashow_register_test(ir_credential_migration_tests ir_credential_migration_tests)
     asobmashow_register_test(pending_ir_credential_cleanup_tests pending_ir_credential_cleanup_tests)

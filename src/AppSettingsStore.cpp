@@ -2,6 +2,7 @@
 
 #include "VersionedJson.h"
 #include "scene/play/GameplayRuleset.h"
+#include "skin/package/SkinPathPolicy.h"
 
 #include <array>
 #include <cmath>
@@ -110,6 +111,228 @@ void readEnum(const json &document, std::string_view key, Enum &destination,
   }
 }
 
+const char *viewportModeToString(skin::ViewportMode mode) {
+  switch (mode) {
+  case skin::ViewportMode::Fit:
+    return "fit";
+  case skin::ViewportMode::Stretch:
+    return "stretch";
+  case skin::ViewportMode::Custom:
+    return "custom";
+  }
+  return "fit";
+}
+
+const char *customViewportBaseToString(skin::CustomViewportBase base) {
+  switch (base) {
+  case skin::CustomViewportBase::Fit:
+    return "fit";
+  case skin::CustomViewportBase::Stretch:
+    return "stretch";
+  }
+  return "fit";
+}
+
+json skinEntryIdToJson(const skin::SkinEntryId &entry) {
+  return {{"package", entry.package.directoryName},
+          {"path", entry.packageRelativePath}};
+}
+
+json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
+  json entries = json::array();
+  for (const auto &[entry, settings] : skinSettings.entries) {
+    json offsets = json::object();
+    for (const auto &[name, offset] : settings.offsets) {
+      offsets[name] = {{"x", offset.x}, {"y", offset.y}, {"w", offset.w},
+                       {"h", offset.h}, {"r", offset.r}, {"a", offset.a}};
+    }
+    entries.push_back(
+        {{"entry", skinEntryIdToJson(entry)},
+         {"settings",
+          {{"options", settings.options},
+           {"filePaths", settings.filePaths},
+           {"offsets", std::move(offsets)},
+           {"viewport",
+            {{"mode", viewportModeToString(settings.viewport.mode)},
+             {"customBase",
+              customViewportBaseToString(settings.viewport.customBase)},
+             {"scaleX", settings.viewport.scaleX},
+             {"scaleY", settings.viewport.scaleY},
+             {"translateX", settings.viewport.translateX},
+             {"translateY", settings.viewport.translateY}}}}}});
+  }
+  json result = {
+      {"gameplayCompatibilityEnabled",
+       skinSettings.gameplayCompatibilityEnabled},
+      {"entries", std::move(entries)},
+  };
+  result["selected7KeyEntry"] =
+      skinSettings.selected7KeyEntry
+          ? skinEntryIdToJson(*skinSettings.selected7KeyEntry)
+          : json(nullptr);
+  return result;
+}
+
+std::optional<skin::SkinEntryId>
+readSkinEntryId(const json &encoded, std::string_view key,
+                std::vector<std::string> &diagnostics) {
+  if (!encoded.is_object()) {
+    invalidValue(key, "expected package/path object", diagnostics);
+    return std::nullopt;
+  }
+  std::string packageName;
+  std::string relativePath;
+  if (!readValue(encoded, "package", packageName, diagnostics) ||
+      !readValue(encoded, "path", relativePath, diagnostics)) {
+    invalidValue(key, "expected package and path strings", diagnostics);
+    return std::nullopt;
+  }
+  const auto package = skin::normalizePackageId(packageName);
+  if (!package.package) {
+    invalidValue(key, "invalid package identity", diagnostics);
+    return std::nullopt;
+  }
+  const auto entry = skin::normalizeEntryPath(*package.package, relativePath);
+  if (!entry.entry) {
+    invalidValue(key, "invalid entry identity", diagnostics);
+    return std::nullopt;
+  }
+  return *entry.entry;
+}
+
+void readViewport(const json &encoded, skin::ViewportSettings &viewport,
+                  std::vector<std::string> &diagnostics) {
+  if (!encoded.is_object()) {
+    invalidValue("skin.entries.settings.viewport", "expected object",
+                 diagnostics);
+    viewport.mode = static_cast<skin::ViewportMode>(255);
+    return;
+  }
+  std::string mode = "fit";
+  if (readValue(encoded, "mode", mode, diagnostics)) {
+    if (mode == "fit") {
+      viewport.mode = skin::ViewportMode::Fit;
+    } else if (mode == "stretch") {
+      viewport.mode = skin::ViewportMode::Stretch;
+    } else if (mode == "custom") {
+      viewport.mode = skin::ViewportMode::Custom;
+    } else {
+      viewport.mode = static_cast<skin::ViewportMode>(255);
+      invalidValue("skin.entries.settings.viewport.mode",
+                   "expected fit, stretch, or custom", diagnostics);
+    }
+  }
+  std::string base = "fit";
+  if (readValue(encoded, "customBase", base, diagnostics)) {
+    if (base == "fit") {
+      viewport.customBase = skin::CustomViewportBase::Fit;
+    } else if (base == "stretch") {
+      viewport.customBase = skin::CustomViewportBase::Stretch;
+    } else {
+      viewport.customBase = static_cast<skin::CustomViewportBase>(255);
+      invalidValue("skin.entries.settings.viewport.customBase",
+                   "expected fit or stretch", diagnostics);
+    }
+  }
+  readValue(encoded, "scaleX", viewport.scaleX, diagnostics);
+  readValue(encoded, "scaleY", viewport.scaleY, diagnostics);
+  readValue(encoded, "translateX", viewport.translateX, diagnostics);
+  readValue(encoded, "translateY", viewport.translateY, diagnostics);
+}
+
+void readSkinProfileSettings(const json &document,
+                             skin::SkinProfileSettings &destination,
+                             std::vector<std::string> &diagnostics) {
+  const auto found = document.find("skin");
+  if (found == document.end()) {
+    return;
+  }
+  if (!found->is_object()) {
+    invalidValue("skin", "expected object", diagnostics);
+    return;
+  }
+  readValue(*found, "gameplayCompatibilityEnabled",
+            destination.gameplayCompatibilityEnabled, diagnostics);
+  if (const auto selected = found->find("selected7KeyEntry");
+      selected != found->end() && !selected->is_null()) {
+    destination.selected7KeyEntry =
+        readSkinEntryId(*selected, "skin.selected7KeyEntry", diagnostics);
+  }
+  const auto entries = found->find("entries");
+  if (entries == found->end()) {
+    return;
+  }
+  if (!entries->is_array()) {
+    invalidValue("skin.entries", "expected array", diagnostics);
+    return;
+  }
+  for (const auto &record : *entries) {
+    if (!record.is_object() || !record.contains("entry") ||
+        !record.contains("settings") || !record["settings"].is_object()) {
+      invalidValue("skin.entries", "expected entry/settings record",
+                   diagnostics);
+      continue;
+    }
+    auto entry =
+        readSkinEntryId(record["entry"], "skin.entries.entry", diagnostics);
+    if (!entry) {
+      continue;
+    }
+    skin::EntryProfileSettings settings;
+    const auto &encoded = record["settings"];
+    const auto readStringIntMap = [&](std::string_view name, auto &target) {
+      const auto map = encoded.find(std::string(name));
+      if (map == encoded.end()) {
+        return;
+      }
+      if (!map->is_object()) {
+        invalidValue("skin.entries.settings." + std::string(name),
+                     "expected object", diagnostics);
+        return;
+      }
+      for (const auto &[key, value] : map->items()) {
+        try {
+          target[key] = value.template get<
+              typename std::decay_t<decltype(target)>::mapped_type>();
+        } catch (const std::exception &) {
+          invalidValue("skin.entries.settings." + std::string(name),
+                       "invalid mapped value", diagnostics);
+        }
+      }
+    };
+    readStringIntMap("options", settings.options);
+    readStringIntMap("filePaths", settings.filePaths);
+    if (const auto offsets = encoded.find("offsets");
+        offsets != encoded.end()) {
+      if (!offsets->is_object()) {
+        invalidValue("skin.entries.settings.offsets", "expected object",
+                     diagnostics);
+      } else {
+        for (const auto &[name, value] : offsets->items()) {
+          if (!value.is_object()) {
+            invalidValue("skin.entries.settings.offsets." + name,
+                         "expected object", diagnostics);
+            continue;
+          }
+          skin::ConfigOffset offset;
+          readValue(value, "x", offset.x, diagnostics);
+          readValue(value, "y", offset.y, diagnostics);
+          readValue(value, "w", offset.w, diagnostics);
+          readValue(value, "h", offset.h, diagnostics);
+          readValue(value, "r", offset.r, diagnostics);
+          readValue(value, "a", offset.a, diagnostics);
+          settings.offsets[name] = offset;
+        }
+      }
+    }
+    if (const auto viewport = encoded.find("viewport");
+        viewport != encoded.end()) {
+      readViewport(*viewport, settings.viewport, diagnostics);
+    }
+    destination.entries.try_emplace(std::move(*entry), std::move(settings));
+  }
+}
+
 json settingsToJson(const AppSettings &settings) {
   json document = {
       {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
@@ -182,6 +405,7 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
       {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
+      {"skin", skinProfileSettingsToJson(settings.skin)},
       {"audio",
        {{"outputDeviceId", settings.audioVideo.audio.outputDeviceId},
         {"requestedSampleRate", settings.audioVideo.audio.requestedSampleRate},
@@ -329,6 +553,7 @@ AppSettings settingsFromJson(const json &document,
            diagnostics);
   readValue(document, "defaultDifficultyTablesSeeded",
             settings.defaultDifficultyTablesSeeded, diagnostics);
+  readSkinProfileSettings(document, settings.skin, diagnostics);
 
   const auto irObject = document.find("ir");
   if (irObject != document.end()) {
@@ -354,10 +579,8 @@ AppSettings settingsFromJson(const json &document,
               ir::normalizeServerOrigin(provider.serverOrigin);
           if (!normalized) {
             invalidValue("ir.providers." + providerId + ".serverOrigin",
-                         "expected absolute HTTP or HTTPS origin",
-                         diagnostics);
-            provider.serverOrigin =
-                std::string(ir::kDefaultTachiServerOrigin);
+                         "expected absolute HTTP or HTTPS origin", diagnostics);
+            provider.serverOrigin = std::string(ir::kDefaultTachiServerOrigin);
           } else {
             provider.serverOrigin = *normalized;
           }
@@ -426,7 +649,7 @@ AppSettingsLoadStatus mapFailure(versioned_json::LoadStatus status) {
 
 AppSettingsLoadResult
 AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
-  const std::array<versioned_json::Migration, 3> migrations = {
+  const std::array<versioned_json::Migration, 4> migrations = {
       [](json &document, std::string &) {
         document["schemaVersion"] = 1;
         return true;
@@ -453,6 +676,16 @@ AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
       [](json &document, std::string &) {
         if (!document.contains("selectedGameplayRuleset")) {
           document["selectedGameplayRuleset"] = "lr2";
+        }
+        return true;
+      },
+      [](json &document, std::string &) {
+        if (!document.contains("skin")) {
+          document["skin"] = {
+              {"gameplayCompatibilityEnabled", false},
+              {"selected7KeyEntry", nullptr},
+              {"entries", json::array()},
+          };
         }
         return true;
       }};
