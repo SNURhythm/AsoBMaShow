@@ -21,10 +21,13 @@ from typing import BinaryIO, Iterable, Iterator
 
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
 TARGET_VERSION = "4.02"
+PINNED_ARCHIVE_SHA256 = "06ad5a4c5a1b6d0ece08b79475cbe2b4a5187ce07e490752e141518ee4fcc41c"
+PINNED_SELECTED_LUA_CLOSURE_SHA256 = "717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0"
 OFFICIAL_SOURCE_URL = "https://www.kasacontent.com/musicgame/beatoraja/4226/"
 TERMS_URL = "https://www.kasacontent.com/musicgame/beatoraja/4635/"
 ACQUISITION_DATE = "2026-08-03"
 TREE_DOMAIN = b"ASOBMSKIN-TREE-V1\0"
+SELECTED_LUA_CLOSURE_DOMAIN = b"ASOBMSKIN-SELECTED-LUA-CLOSURE-V1\0"
 AUDITED_EFFECTIVE_CONFIGURATION_DOMAIN = b"ASOBMSKIN-AUDITED-EFFECTIVE-CONFIG-V2\0"
 OPAQUE_GUARD_VECTOR_DOMAIN = b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V2\0"
 RENDER_IO_NEGATIVE_SCENARIO_ID = "scenario-f7395bddf2b0f715a900b5cd"
@@ -148,7 +151,7 @@ def copy_to_digest(stream: BinaryIO, digest, maximum: int) -> int:
         digest.update(chunk)
 
 
-def read_lua_source(stream: BinaryIO) -> str:
+def read_lua_source_bytes(stream: BinaryIO) -> bytes:
     encoded = bytearray()
     sentinel_limit = MAX_LUA_SOURCE_BYTES + 1
     while len(encoded) < sentinel_limit:
@@ -158,7 +161,11 @@ def read_lua_source(stream: BinaryIO) -> str:
         encoded.extend(chunk)
     if len(encoded) > MAX_LUA_SOURCE_BYTES:
         raise AuditError("Lua source exceeds the 16 MiB scanner limit")
-    return bytes(encoded).decode("utf-8")
+    return bytes(encoded)
+
+
+def read_lua_source(stream: BinaryIO) -> str:
+    return read_lua_source_bytes(stream).decode("utf-8")
 
 
 def normalize_relative_path(raw_path: str, *, directory: bool = False) -> str:
@@ -380,6 +387,7 @@ def inspect_archive(archive_path: Path, declared_prefix: str):
         tree_digest.update(struct.pack(">Q", len(stripped_files)))
         payload_records = []
         extracted_text: dict[str, str] = {}
+        extracted_source_bytes: dict[str, bytes] = {}
         for item in stripped_files:
             path_bytes = item.path.encode("utf-8")
             tree_digest.update(struct.pack(">I", len(path_bytes)))
@@ -413,7 +421,9 @@ def inspect_archive(archive_path: Path, declared_prefix: str):
             if item.path.lower().endswith((".lua", ".luaskin")):
                 try:
                     with archive.open(item.info, "r") as stream:
-                        extracted_text[item.path] = read_lua_source(stream)
+                        source_bytes = read_lua_source_bytes(stream)
+                        extracted_source_bytes[item.path] = source_bytes
+                        extracted_text[item.path] = source_bytes.decode("utf-8")
                 except (UnicodeDecodeError, OSError, RuntimeError, zipfile.BadZipFile) as error:
                     raise AuditError(f"Lua source is not readable UTF-8 text: {item.path!r}: {error}") from error
 
@@ -425,6 +435,7 @@ def inspect_archive(archive_path: Path, declared_prefix: str):
         "files": stripped_files,
         "payloads": payload_records,
         "luaText": extracted_text,
+        "luaSourceBytes": extracted_source_bytes,
     }
 
 
@@ -998,6 +1009,55 @@ def loaded_lua_closure(entry: str, lua_text: dict[str, str]):
                 criticality[module_path] = disposition
                 queue.append(module_path)
     return loaded, criticality, host_modules
+
+
+def selected_lua_closure_sha256(
+    loaded: dict[str, str],
+    source_bytes: dict[str, bytes],
+) -> str:
+    if set(source_bytes) != set(loaded):
+        raise AuditError(
+            "selected Lua closure contract source identities do not match the loaded closure"
+        )
+    digest = hashlib.sha256()
+    digest.update(SELECTED_LUA_CLOSURE_DOMAIN)
+    digest.update(struct.pack(">I", len(loaded)))
+    for path in sorted(loaded, key=lambda value: value.encode("utf-8")):
+        encoded_path = path.encode("utf-8")
+        encoded_source = source_bytes[path]
+        try:
+            decoded_source = encoded_source.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AuditError(
+                "selected Lua closure contract contains non-UTF-8 source bytes"
+            ) from error
+        if decoded_source != loaded[path]:
+            raise AuditError(
+                "selected Lua closure contract source bytes do not match analyzed text"
+            )
+        digest.update(struct.pack(">I", len(encoded_path)))
+        digest.update(encoded_path)
+        digest.update(struct.pack(">Q", len(encoded_source)))
+        digest.update(encoded_source)
+    return digest.hexdigest()
+
+
+def require_pinned_selected_lua_closure(
+    loaded: dict[str, str],
+    source_bytes: dict[str, bytes],
+) -> dict:
+    computed = selected_lua_closure_sha256(loaded, source_bytes)
+    if computed != PINNED_SELECTED_LUA_CLOSURE_SHA256:
+        raise AuditError(
+            "selected Lua closure contract mismatch: expected "
+            f"{PINNED_SELECTED_LUA_CLOSURE_SHA256}, computed {computed}"
+        )
+    return {
+        "schemaVersion": 1,
+        "algorithm": "SelectedLuaClosureContractV1",
+        "sha256": computed,
+        "changePolicy": "explicit-source-constant-manifest-and-acceptance-review",
+    }
 
 
 def _function_ranges(tokens: list[LuaToken]) -> list[tuple[int, int, str | None]]:
@@ -2438,7 +2498,7 @@ def _audited_guard_configurations(
     return [passing, configuration("negative", first_guard_id)]
 
 
-def analyze_selected_file_io_surface(
+def _analyze_selected_file_io_surface_unpinned(
     loaded: dict[str, str],
     entry_sha: str,
     selected_revision_sha: str,
@@ -2618,6 +2678,20 @@ def analyze_selected_file_io_surface(
         },
     }
     return selected, custom_object_maps
+
+
+def analyze_selected_file_io_surface(
+    loaded: dict[str, str],
+    source_bytes: dict[str, bytes],
+    entry_sha: str,
+    selected_revision_sha: str,
+) -> tuple[dict, dict[str, int]]:
+    require_pinned_selected_lua_closure(loaded, source_bytes)
+    return _analyze_selected_file_io_surface_unpinned(
+        loaded,
+        entry_sha,
+        selected_revision_sha,
+    )
 
 
 def read_constant_definitions(loaded: dict[str, str]):
@@ -2924,6 +2998,7 @@ def acceptance_contract(
     archive_sha: str,
     tree_sha: str,
     entry_sha: str,
+    selected_lua_closure_sha: str,
     selected_file_io_surface: dict,
 ) -> dict:
     layouts = [
@@ -2998,6 +3073,7 @@ def acceptance_contract(
             "archiveSha256": archive_sha,
             "payloadTreeSha256": tree_sha,
             "entrySha256": entry_sha,
+            "selectedLuaClosureSha256": selected_lua_closure_sha,
             "configurationSha256": pending_field(),
             "activatedRevisionSha256": pending_field(),
         },
@@ -3050,12 +3126,30 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
     lua_text = archive_data["luaText"]
     entry = choose_entry(lua_text)
     loaded, module_criticality, host_modules = loaded_lua_closure(entry, lua_text)
+    try:
+        closure_source_bytes = {
+            path: archive_data["luaSourceBytes"][path]
+            for path in loaded
+        }
+    except KeyError as error:
+        raise AuditError(
+            "selected Lua closure contract is missing exact source bytes"
+        ) from error
+    closure_contract = require_pinned_selected_lua_closure(
+        loaded,
+        closure_source_bytes,
+    )
+    if archive_data["archiveSha256"] != PINNED_ARCHIVE_SHA256:
+        raise AuditError(
+            "pinned SCURO archive contract mismatch: expected "
+            f"{PINNED_ARCHIVE_SHA256}, computed {archive_data['archiveSha256']}"
+        )
     surface = build_surface(entry, loaded, module_criticality, host_modules)
     legacy_surface = analyze_legacy_lua_api(loaded, module_criticality)
     payload_by_id = {record["id"]: record for record in archive_data["payloads"]}
     entry_payload_id = opaque_id("payload", entry)
     entry_sha = payload_by_id[entry_payload_id]["sha256"]
-    selected_file_io_surface, selected_custom_object_maps = analyze_selected_file_io_surface(
+    selected_file_io_surface, selected_custom_object_maps = _analyze_selected_file_io_surface_unpinned(
         loaded,
         entry_sha,
         disk_tree_sha,
@@ -3080,6 +3174,7 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
         "archivePackagePrefix": archive_data["prefix"],
         "archivePayloadTreeSha256": archive_data["treeSha256"],
         "auditedSourceTreeSha256": disk_tree_sha,
+        "selectedLuaClosureContract": closure_contract,
         "extractedPackageRootIdentity": "skin-tree:" + disk_tree_sha,
         "officialSource": {"url": OFFICIAL_SOURCE_URL, "accessed": ACQUISITION_DATE},
         "usageTerms": {
@@ -3093,6 +3188,7 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
             archive_data["archiveSha256"],
             disk_tree_sha,
             entry_sha,
+            closure_contract["sha256"],
             selected_file_io_surface,
         ),
         "entries": [

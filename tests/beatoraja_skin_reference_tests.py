@@ -16,6 +16,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
+PINNED_SELECTED_LUA_CLOSURE_SHA256 = "717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0"
 MANIFEST_PATH = ROOT / "tests/fixtures/beatoraja_skin/reference_manifest.json"
 CHECKER_PATH = ROOT / "scripts/check_beatoraja_reference.py"
 AUDIT_PATH = ROOT / "scripts/audit_beatoraja_skin.py"
@@ -76,6 +77,20 @@ def effective_configuration_sha256(
     return digest.hexdigest()
 
 
+def selected_lua_closure_sha256(source_bytes: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"ASOBMSKIN-SELECTED-LUA-CLOSURE-V1\0")
+    digest.update(struct.pack(">I", len(source_bytes)))
+    for path in sorted(source_bytes, key=lambda value: value.encode("utf-8")):
+        encoded_path = path.encode("utf-8")
+        encoded_source = source_bytes[path]
+        digest.update(struct.pack(">I", len(encoded_path)))
+        digest.update(encoded_path)
+        digest.update(struct.pack(">Q", len(encoded_source)))
+        digest.update(encoded_source)
+    return digest.hexdigest()
+
+
 def load_audit_module():
     module_name = "asobmashow_beatoraja_skin_audit_test"
     spec = importlib.util.spec_from_file_location(module_name, AUDIT_PATH)
@@ -129,6 +144,24 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
             manifest["auditedSourceTreeSha256"],
         )
         self.assertNotEqual(manifest["archivePackagePrefix"], "")
+        closure = manifest.get("selectedLuaClosureContract")
+        self.assertIsNotNone(closure, "the selected Lua closure must be version-locked")
+        self.assertEqual(
+            closure,
+            {
+                "schemaVersion": 1,
+                "algorithm": "SelectedLuaClosureContractV1",
+                "sha256": PINNED_SELECTED_LUA_CLOSURE_SHA256,
+                "changePolicy": "explicit-source-constant-manifest-and-acceptance-review",
+            },
+            "the closure contract must serialize metadata and one opaque digest only",
+        )
+        self.assertEqual(
+            manifest["acceptanceContract"]["externalDigests"][
+                "selectedLuaClosureSha256"
+            ],
+            PINNED_SELECTED_LUA_CLOSURE_SHA256,
+        )
 
     def test_selected_entry_and_surface_have_complete_dispositions(self):
         manifest = self.require_manifest()
@@ -703,6 +736,86 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             mode, manifest_path,
         )
 
+    def synthetic_archive_data(self, audit):
+        archive, _ = self.make_skin_archive()
+        archive_data = audit.inspect_archive(archive, "Bundle")
+        self.assertEqual(
+            set(archive_data["luaSourceBytes"]),
+            set(archive_data["luaText"]),
+        )
+        return archive, archive_data
+
+    def selected_closure_sources(self, audit, archive_data):
+        entry = audit.choose_entry(archive_data["luaText"])
+        loaded, _, _ = audit.loaded_lua_closure(entry, archive_data["luaText"])
+        return {
+            path: archive_data["luaSourceBytes"][path]
+            for path in loaded
+        }
+
+    def mutate_archive_lua(self, archive_data, label):
+        mutated = {
+            **archive_data,
+            "luaText": dict(archive_data["luaText"]),
+            "luaSourceBytes": dict(archive_data["luaSourceBytes"]),
+        }
+
+        def replace(path, old, new):
+            text = mutated["luaText"][path].replace(old, new)
+            self.assertNotEqual(text, mutated["luaText"][path], label)
+            mutated["luaText"][path] = text
+            mutated["luaSourceBytes"][path] = text.encode("utf-8")
+
+        helper = "fixture/helper.lua"
+        if label == "computed-custom-key":
+            replace(
+                helper,
+                " return { image =",
+                ' local computed = "custom" .. "Timers"\n return { [computed] = {}, image =',
+            )
+        elif label == "tuple-reassignment":
+            replace(
+                helper,
+                "return m\n",
+                "local tuple_a, tuple_b = {}, {}\ntuple_a, tuple_b = tuple_b, tuple_a\nreturn m\n",
+            )
+        elif label == "dynamic-global-alias":
+            replace(helper, "return m\n", '_G["dynamic_alias"] = m\nreturn m\n')
+        elif label == "source-object-reassignment":
+            replace(helper, "return m\n", "m = setmetatable({}, {})\nreturn m\n")
+        elif label == "one-byte":
+            mutated["luaText"][helper] += " "
+            mutated["luaSourceBytes"][helper] += b" "
+        elif label == "path-identity":
+            old_path = "fixture/options.lua"
+            new_path = "fixture/options-renamed.lua"
+            mutated["luaText"][new_path] = mutated["luaText"].pop(old_path)
+            mutated["luaSourceBytes"][new_path] = mutated["luaSourceBytes"].pop(old_path)
+            replace(
+                "fixture/entry.lua",
+                'require("fixture.options")',
+                'require("fixture.options-renamed")',
+            )
+        elif label == "add-loaded-source":
+            mutated["luaText"]["fixture/added.lua"] = "return {}\n"
+            mutated["luaSourceBytes"]["fixture/added.lua"] = b"return {}\n"
+            replace(
+                "fixture/entry.lua",
+                'local helper = require("fixture.helper")\n',
+                'local helper = require("fixture.helper")\nlocal added = require("fixture.added")\n',
+            )
+        elif label == "remove-loaded-source":
+            mutated["luaText"].pop("fixture/options.lua")
+            mutated["luaSourceBytes"].pop("fixture/options.lua")
+            replace(
+                "fixture/entry.lua",
+                'require("fixture.options")',
+                "{ SYNTHETIC_ENABLED = 777 }",
+            )
+        else:
+            raise AssertionError(label)
+        return mutated
+
     def make_render_policy_closure(
         self,
         operations=("read",),
@@ -1021,7 +1134,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def analyze_render_policy(self, closure):
         audit = load_audit_module()
         try:
-            return audit.analyze_selected_file_io_surface(
+            return audit._analyze_selected_file_io_surface_unpinned(
                 closure,
                 "22" * 32,
                 "11" * 32,
@@ -1128,7 +1241,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def test_render_operation_graph_rejects_ambiguous_captured_handle_origin(self):
         audit = load_audit_module()
         with self.assertRaisesRegex(audit.AuditError, "ambiguous render-I/O operation graph"):
-            audit.analyze_selected_file_io_surface(
+            audit._analyze_selected_file_io_surface_unpinned(
                 self.make_render_policy_closure(
                     operations=("captured-close-ambiguous",),
                     direct_callbacks=True,
@@ -1140,7 +1253,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def test_render_operation_graph_rejects_unresolved_retained_calls(self):
         audit = load_audit_module()
         with self.assertRaisesRegex(audit.AuditError, "unresolved render-I/O operation graph"):
-            audit.analyze_selected_file_io_surface(
+            audit._analyze_selected_file_io_surface_unpinned(
                 self.make_render_policy_closure(
                     operations=("unresolved-call",),
                     direct_callbacks=True,
@@ -1152,7 +1265,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def test_render_operation_graph_rejects_unclassified_retained_methods(self):
         audit = load_audit_module()
         with self.assertRaisesRegex(audit.AuditError, "unresolved render-I/O operation graph"):
-            audit.analyze_selected_file_io_surface(
+            audit._analyze_selected_file_io_surface_unpinned(
                 self.make_render_policy_closure(
                     operations=("unresolved-method",),
                     direct_callbacks=True,
@@ -1168,7 +1281,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     audit.AuditError, "ambiguous render-I/O operation graph"
                 ):
-                    audit.analyze_selected_file_io_surface(
+                    audit._analyze_selected_file_io_surface_unpinned(
                         self.make_render_policy_closure(
                             operations=(operation,),
                             direct_callbacks=True,
@@ -1184,7 +1297,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     audit.AuditError, "ambiguous render-I/O operation graph captured handle"
                 ):
-                    audit.analyze_selected_file_io_surface(
+                    audit._analyze_selected_file_io_surface_unpinned(
                         self.make_render_policy_closure(
                             operations=(operation,),
                             direct_callbacks=True,
@@ -1196,7 +1309,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def test_render_operation_graph_accepts_only_closed_source_backed_local_methods(self):
         audit = load_audit_module()
         try:
-            selected, _ = audit.analyze_selected_file_io_surface(
+            selected, _ = audit._analyze_selected_file_io_surface_unpinned(
                 self.make_render_policy_closure(
                     operations=("source-backed-local-methods",),
                     direct_callbacks=True,
@@ -1216,7 +1329,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def test_render_operation_graph_rejects_source_backed_methods_with_unknown_calls(self):
         audit = load_audit_module()
         with self.assertRaisesRegex(audit.AuditError, "unresolved render-I/O operation graph"):
-            audit.analyze_selected_file_io_surface(
+            audit._analyze_selected_file_io_surface_unpinned(
                 self.make_render_policy_closure(
                     operations=("source-backed-unknown-call",),
                     direct_callbacks=True,
@@ -1275,7 +1388,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             with self.subTest(field=field):
                 try:
                     with self.assertRaisesRegex(audit.AuditError, "configured return model"):
-                        audit.analyze_selected_file_io_surface(
+                        audit._analyze_selected_file_io_surface_unpinned(
                             self.make_render_policy_closure(computed_custom_key=field),
                             "22" * 32,
                             "11" * 32,
@@ -1283,7 +1396,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 except TypeError as error:
                     self.fail(f"selected revision must be an explicit audit input: {error}")
                 with self.assertRaisesRegex(audit.AuditError, "configured return model"):
-                    audit.analyze_selected_file_io_surface(
+                    audit._analyze_selected_file_io_surface_unpinned(
                         self.make_render_policy_closure(indirect_computed_custom_key=field),
                         "22" * 32,
                         "11" * 32,
@@ -1295,7 +1408,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             for mutation in ("direct", "alias", "rawset", "helper"):
                 with self.subTest(field=field, mutation=mutation):
                     with self.assertRaisesRegex(audit.AuditError, "configured return model"):
-                        audit.analyze_selected_file_io_surface(
+                        audit._analyze_selected_file_io_surface_unpinned(
                             self.make_render_policy_closure(
                                 custom_map_mutation=(field, mutation)
                             ),
@@ -1309,7 +1422,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             for escape in ("alias", "captured-helper", "later-argument"):
                 with self.subTest(field=field, escape=escape):
                     with self.assertRaisesRegex(audit.AuditError, "configured return model"):
-                        audit.analyze_selected_file_io_surface(
+                        audit._analyze_selected_file_io_surface_unpinned(
                             self.make_render_policy_closure(
                                 model_escape=(field, escape)
                             ),
@@ -1321,7 +1434,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         audit = load_audit_module()
         try:
             with self.assertRaisesRegex(audit.AuditError, "ambiguous render-I/O operation graph"):
-                audit.analyze_selected_file_io_surface(
+                audit._analyze_selected_file_io_surface_unpinned(
                     self.make_render_policy_closure(duplicate_first_callback=True),
                     "22" * 32,
                     "11" * 32,
@@ -1344,18 +1457,90 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         wrong = run_python(CHECKER_PATH, "--root", reference_root, env=self.tool_env)
         self.assertNotEqual(wrong.returncode, 0, wrong.stdout)
 
-    def test_audit_hashes_archive_and_extracted_tree_and_verifies_deterministically(self):
-        self.assertTrue(AUDIT_PATH.is_file(), str(AUDIT_PATH))
+    def test_build_manifest_rejects_every_selected_closure_byte_and_identity_mutation(self):
+        audit = load_audit_module()
+        archive, archive_data = self.synthetic_archive_data(audit)
+        reviewed_digest = selected_lua_closure_sha256(
+            self.selected_closure_sources(audit, archive_data)
+        )
+        arguments = type("Arguments", (), {"archive_path": archive})()
+        with (
+            mock.patch.object(
+                audit,
+                "PINNED_SELECTED_LUA_CLOSURE_SHA256",
+                reviewed_digest,
+                create=True,
+            ),
+            mock.patch.object(
+                audit,
+                "PINNED_ARCHIVE_SHA256",
+                archive_data["archiveSha256"],
+            ),
+        ):
+            baseline = audit.build_manifest(arguments, archive_data, "11" * 32, [])
+            self.assertIn("selectedLuaClosureContract", baseline)
+            self.assertEqual(
+                baseline["selectedLuaClosureContract"]["sha256"], reviewed_digest
+            )
+            for label in (
+                "computed-custom-key",
+                "tuple-reassignment",
+                "dynamic-global-alias",
+                "source-object-reassignment",
+                "one-byte",
+                "path-identity",
+                "add-loaded-source",
+                "remove-loaded-source",
+            ):
+                with self.subTest(mutation=label):
+                    with self.assertRaisesRegex(
+                        audit.AuditError, "selected Lua closure contract"
+                    ):
+                        audit.build_manifest(
+                            arguments,
+                            self.mutate_archive_lua(archive_data, label),
+                            "11" * 32,
+                            [],
+                        )
+
+    def test_audit_entrypoint_rejects_an_unpinned_selected_closure_before_evidence(self):
         reference_root = self.make_reference_root()
         archive, skin_root = self.make_skin_archive()
-        manifest_path = self.temp_path / "manifest.json"
+        manifest_path = self.temp_path / "unreviewed.json"
         result = run_python(
             AUDIT_PATH,
             *self.audit_arguments(reference_root, archive, skin_root, "--output", manifest_path),
             env=self.tool_env,
         )
-        self.assertEqual(result.returncode, 0, result.stdout)
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("selected Lua closure contract", result.stdout)
+        self.assertFalse(manifest_path.exists())
+
+    def test_audit_hashes_archive_and_extracted_tree_and_verifies_deterministically(self):
+        self.assertTrue(AUDIT_PATH.is_file(), str(AUDIT_PATH))
+        archive, skin_root = self.make_skin_archive()
+        audit = load_audit_module()
+        archive_data = audit.inspect_archive(archive, "Bundle")
+        disk_tree_sha, _ = audit.inspect_disk_tree(skin_root)
+        reviewed_digest = selected_lua_closure_sha256(
+            self.selected_closure_sources(audit, archive_data)
+        )
+        arguments = type("Arguments", (), {"archive_path": archive})()
+        with (
+            mock.patch.object(
+                audit,
+                "PINNED_SELECTED_LUA_CLOSURE_SHA256",
+                reviewed_digest,
+            ),
+            mock.patch.object(
+                audit,
+                "PINNED_ARCHIVE_SHA256",
+                archive_data["archiveSha256"],
+            ),
+        ):
+            manifest = audit.build_manifest(arguments, archive_data, disk_tree_sha, [])
+            regenerated = audit.build_manifest(arguments, archive_data, disk_tree_sha, [])
+        self.assertEqual(manifest, regenerated)
         self.assertEqual(manifest["archiveSha256"], sha256(archive))
         self.assertEqual(
             manifest["archivePayloadTreeSha256"], manifest["auditedSourceTreeSha256"]
@@ -1423,14 +1608,6 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                     expected_symbols,
                 )
 
-        verified = run_python(
-            AUDIT_PATH,
-            *self.audit_arguments(reference_root, archive, skin_root, "--verify", manifest_path),
-            env=self.tool_env,
-        )
-        self.assertEqual(verified.returncode, 0, verified.stdout)
-
-        audit = load_audit_module()
         optional_closure = {
             "play7_hw.luaskin": (
                 "-- require('comment_only_host')\n"

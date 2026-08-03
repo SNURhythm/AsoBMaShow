@@ -101,6 +101,17 @@ quota-limited private overlay, and every captured function/handle is denied
 after render phase begins. No wrapper returns or accepts an unrestricted host
 path.
 
+Before any configured-model or retained-operation claim is produced, the
+auditor checks `SelectedLuaClosureContractV1` for the pinned SCURO 4.02 target.
+The domain-separated digest covers every loaded closure virtual path identity
+and the corresponding exact ZIP source bytes in canonical UTF-8 path order.
+The manifest serializes only this digest and contract metadata, never the
+closure paths or source. Any byte or identity change, loaded-file addition or
+removal, or archive replacement fails closed and requires explicit review of
+the source constant, manifest, and acceptance record. The subsequent scanner
+is a characterization of that exact reviewed closure, not a sound or complete
+general Lua verifier; arbitrary Lua-syntax support is outside this contract.
+
 The selected-closure audit freezes 20 one-virtual-path `dofile` calls and 17
 `io.open` calls: four default reads, three explicit `r` reads, seven `w`
 writes, and three `a` appends. It also freezes six zero-argument `lines`
@@ -194,7 +205,8 @@ Beatoraja, archive, wrapper-prefix, and extracted-root arguments. It validates
 the pinned clean clone, safely inventories the ZIP, computes the archive hash,
 computes `SkinTreeDigestV1` independently over the archive payload and the
 extracted tree, and refuses to emit a manifest unless the two tree digests are
-identical.
+identical. It also requires the exact reviewed archive hash and selected Lua
+closure digest before emitting the configured evidence described above.
 
 The manifest retains the selected entry path and official provenance URLs.
 Other external module/resource names are replaced by stable opaque IDs. No

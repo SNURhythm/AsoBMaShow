@@ -22,6 +22,7 @@ evidence.
 | Selected 7-key entry | `play7_hw.luaskin` |
 | Selected entry identity | `entry-d5399e62255ddbda273e7a63` |
 | Selected entry SHA-256 | `aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13` |
+| Selected Lua closure `SelectedLuaClosureContractV1` SHA-256 | `717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0` |
 
 The archive and extraction live outside the repository. The equal, independently
 computed tree digests bind the audited source tree to the exact official ZIP.
@@ -57,8 +58,9 @@ requirements before renderer work:
   width/height, safe insets, and actual configured refresh rate;
 - a clean measurement build commit/configuration;
 - exact external archive, payload-tree, selected-entry, configuration, and
-  activated-revision digests, with configuration and activated-revision values
-  explicitly pending until physical evidence exists;
+  activated-revision digests, plus the exact selected Lua closure digest over
+  every loaded virtual identity and exact source byte, with configuration and
+  activated-revision values explicitly pending until physical evidence exists;
 - synthetic chart hashes and fixed autoplay-script hashes for normal notes,
   every supported LN/CN/HCN phase, BPM/stop/scroll changes, chords, all judgment
   grades, combo breaks, gauge thresholds/failure, lane cover, BGA transitions,
@@ -101,6 +103,13 @@ These values are static, domain-separated evidence over the selected revision,
 entry, effective opaque runtime option/choice selections, and guard outcomes.
 They do not replace the still-pending physical `SkinConfigurationDigestV1`
 value.
+
+The selected-closure digest is an input gate, not evidence inferred from the
+Lua scanner. It is domain-separated and canonically ordered; only its digest is
+stored. All configured-model and retained-operation evidence is conditional on
+an exact match. Any closure byte/path/add/remove change requires explicit
+source-constant, manifest, and acceptance review. The scanner tests characterize
+this pinned SCURO 4.02 closure and do not claim general Lua verification.
 
 The negative run must deny the read before effect, emit
 `skin_file_render_phase_denied`, discard that frame, disable the skin session,

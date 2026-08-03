@@ -136,7 +136,8 @@
         "value": null
       },
       "entrySha256": "aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13",
-      "payloadTreeSha256": "448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d"
+      "payloadTreeSha256": "448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d",
+      "selectedLuaClosureSha256": "717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0"
     },
     "hardwareModel": {
       "status": "pending",
@@ -3917,6 +3918,12 @@
         }
       ]
     }
+  },
+  "selectedLuaClosureContract": {
+    "algorithm": "SelectedLuaClosureContractV1",
+    "changePolicy": "explicit-source-constant-manifest-and-acceptance-review",
+    "schemaVersion": 1,
+    "sha256": "717b46b6641c84e431490fff24f45a0ee23a1208017cc4dae4ea2cad438f5bb0"
   },
   "sourceProvenance": [
     {

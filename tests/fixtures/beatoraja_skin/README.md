@@ -5,9 +5,22 @@ opt-in external audit. It pins the Beatoraja commit, SCURO 4.02 archive and tree
 digests, the selected 7-key entry, the opaque audited surface, source-symbol
 provenance, and acceptance schema version 1.
 
+The selected Lua closure is independently version-locked by
+`SelectedLuaClosureContractV1`. Its domain-separated SHA-256 covers every
+loaded virtual path identity and that file's exact ZIP source bytes in
+canonical UTF-8 path order. Only the digest and contract metadata are
+serialized; closure paths and source bytes are not. The audit refuses to build
+configured-model or retained-operation evidence unless this digest equals the
+reviewed SCURO 4.02 source constant. Changing any loaded byte or identity,
+adding or removing a loaded file, or selecting another archive requires an
+explicit source-constant, manifest, and acceptance review.
+
 The manifest's `selectedFileIoSurface` is generated from the selected Lua
 closure, not maintained by hand. It freezes aggregate `dofile`, `io.open`,
 handle-method, directory-scan, and configured-load/render-callback evidence.
+Its Lua scanner and focused unit tests characterize this exact version-locked
+closure; they are not a general Lua verifier and must not be extended merely to
+accept arbitrary Lua constructs.
 External option names and source paths are converted to opaque guard IDs before
 serialization. `auditedGuardConfigurationSha256` is deliberately distinct from
 the pending physical `acceptanceContract.externalDigests.configurationSha256`;
