@@ -36,6 +36,7 @@ MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REGULAR_FILE_BYTES = 512 * 1024 * 1024
 MAX_EXPANDED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_FILES = 20_000
+MAX_ARCHIVE_MEMBERS = 65_535
 MAX_PATH_BYTES = 1_024
 MAX_PATH_COMPONENTS = 64
 MAX_LUA_SOURCE_BYTES = 16 * 1024 * 1024
@@ -264,12 +265,18 @@ def inspect_archive(archive_path: Path, declared_prefix: str):
     explicit_directory_spellings: dict[str, str] = {}
     seen: dict[str, tuple[str, str]] = {}
     total_expanded = 0
+    member_count = 0
     try:
         archive = zipfile.ZipFile(archive_path)
     except (OSError, zipfile.BadZipFile) as error:
         raise AuditError(f"invalid ZIP archive: {error}") from error
     with archive:
         for info in archive.infolist():
+            member_count += 1
+            if member_count > MAX_ARCHIVE_MEMBERS:
+                raise AuditError(
+                    f"ZIP has more than {MAX_ARCHIVE_MEMBERS:,} members"
+                )
             if info.flag_bits & 0x1:
                 raise AuditError(f"encrypted ZIP entry is not allowed: {info.filename!r}")
             if info.compress_type not in SUPPORTED_COMPRESSION:

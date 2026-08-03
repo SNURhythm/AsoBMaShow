@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -39,7 +40,7 @@ class TempDirectory {
 public:
   TempDirectory() {
     static std::atomic_uint64_t serial{0};
-    root_ = fs::temp_directory_path() /
+    root_ = fs::canonical(fs::temp_directory_path()) /
             ("asobmashow-skin-import-test-" +
              std::to_string(
                  std::chrono::steady_clock::now().time_since_epoch().count()) +
@@ -73,12 +74,25 @@ public:
   }
 };
 
+class ImportIoObserver final : public SkinImportIoObserver {
+public:
+  explicit ImportIoObserver(
+      std::function<void(SkinImportIoOperation, const fs::path &)> callback)
+      : callback_(std::move(callback)) {}
+
+  void reached(SkinImportIoOperation operation,
+               const fs::path &path) const override {
+    callback_(operation, path);
+  }
+
+private:
+  std::function<void(SkinImportIoOperation, const fs::path &)> callback_;
+};
+
 struct ZipMember {
   std::string path;
   std::string bytes;
   mode_t type = AE_IFREG;
-  std::string hardlink;
-  bool sparse = false;
 };
 
 SkinStorageRoots rootsBelow(const fs::path &root) {
@@ -134,12 +148,6 @@ fs::path makeZip(const fs::path &path, const std::vector<ZipMember> &members,
     archive_entry_set_pathname(entry, member.path.c_str());
     archive_entry_set_filetype(entry, member.type);
     archive_entry_set_perm(entry, member.type == AE_IFDIR ? 0755 : 0644);
-    if (!member.hardlink.empty()) {
-      archive_entry_set_hardlink(entry, member.hardlink.c_str());
-    }
-    if (member.sparse) {
-      archive_entry_sparse_add_entry(entry, 1, 1);
-    }
     archive_entry_set_size(entry,
                            member.type == AE_IFREG
                                ? static_cast<la_int64_t>(member.bytes.size())
@@ -283,6 +291,64 @@ void corruptStoredPayload(const fs::path &path, std::string_view payload) {
   writeFile(path, bytes);
 }
 
+std::uint16_t readLittle16(const std::vector<unsigned char> &bytes,
+                           std::size_t offset) {
+  return static_cast<std::uint16_t>(bytes[offset]) |
+         (static_cast<std::uint16_t>(bytes[offset + 1]) << 8U);
+}
+
+std::uint32_t readLittle32(const std::vector<unsigned char> &bytes,
+                           std::size_t offset) {
+  return static_cast<std::uint32_t>(bytes[offset]) |
+         (static_cast<std::uint32_t>(bytes[offset + 1]) << 8U) |
+         (static_cast<std::uint32_t>(bytes[offset + 2]) << 16U) |
+         (static_cast<std::uint32_t>(bytes[offset + 3]) << 24U);
+}
+
+void writeLittle32(std::vector<unsigned char> &bytes, std::size_t offset,
+                   std::uint32_t value) {
+  for (int byte = 0; byte < 4; ++byte) {
+    bytes[offset + static_cast<std::size_t>(byte)] =
+        static_cast<unsigned char>((value >> (byte * 8)) & 0xffU);
+  }
+}
+
+std::size_t findEocd(const std::vector<unsigned char> &bytes) {
+  for (std::size_t index = bytes.size() - 22;; --index) {
+    if (readLittle32(bytes, index) == 0x06054b50U) {
+      return index;
+    }
+    if (index == 0) {
+      break;
+    }
+  }
+  throw std::runtime_error("test ZIP has no EOCD");
+}
+
+void truncateMemberDataKeepingCentralDirectory(const fs::path &path) {
+  auto bytes = readFile(path);
+  const std::size_t eocd = findEocd(bytes);
+  const std::uint32_t centralOffset = readLittle32(bytes, eocd + 16);
+  const std::uint32_t compressedBytes = readLittle32(bytes, centralOffset + 20);
+  const std::uint16_t nameBytes = readLittle16(bytes, 26);
+  const std::uint16_t extraBytes = readLittle16(bytes, 28);
+  const std::size_t dataStart = 30U + nameBytes + extraBytes;
+  expect(compressedBytes >= 4 && dataStart + compressedBytes <= centralOffset,
+         "member-data truncation fixture has at least four payload bytes");
+  bytes.erase(bytes.begin() + dataStart + compressedBytes - 4,
+              bytes.begin() + dataStart + compressedBytes);
+  writeLittle32(bytes, eocd - 4 + 16, centralOffset - 4);
+  writeFile(path, bytes);
+}
+
+void truncateCentralRecordKeepingEocd(const fs::path &path) {
+  auto bytes = readFile(path);
+  const std::size_t eocd = findEocd(bytes);
+  expect(eocd >= 3, "central truncation fixture has record bytes");
+  bytes.erase(bytes.begin() + eocd - 3, bytes.begin() + eocd);
+  writeFile(path, bytes);
+}
+
 std::size_t childCount(const fs::path &path) {
   std::error_code error;
   if (!fs::exists(path, error)) {
@@ -322,21 +388,27 @@ void expectRejectedAndClean(const PreparePackageResult &result,
          "rejection publishes no immutable revision");
 }
 
-PreparePackageResult prepareZip(const fs::path &zip,
-                                const SkinStorageRoots &roots,
-                                std::stop_token stop = {},
-                                SkinProgressCallback progress = {}) {
+bool hasDiagnosticCode(const PreparePackageResult &result,
+                       std::string_view code) {
+  return std::ranges::any_of(
+      result.diagnostics, [&](const auto &item) { return item.code == code; });
+}
+
+PreparePackageResult
+prepareZip(const fs::path &zip, const SkinStorageRoots &roots,
+           std::stop_token stop = {}, SkinProgressCallback progress = {},
+           std::shared_ptr<const SkinImportIoObserver> observer = {}) {
   static NoAliases aliases;
-  SkinArchiveImporter importer(roots, aliases);
+  SkinArchiveImporter importer(roots, aliases, std::move(observer));
   return importer.prepareArchive(zip, packageId(), stop, std::move(progress));
 }
 
-PreparePackageResult prepareFolder(const fs::path &folder,
-                                   const SkinStorageRoots &roots,
-                                   std::stop_token stop = {},
-                                   SkinProgressCallback progress = {}) {
+PreparePackageResult
+prepareFolder(const fs::path &folder, const SkinStorageRoots &roots,
+              std::stop_token stop = {}, SkinProgressCallback progress = {},
+              std::shared_ptr<const SkinImportIoObserver> observer = {}) {
   static NoAliases aliases;
-  SkinArchiveImporter importer(roots, aliases);
+  SkinArchiveImporter importer(roots, aliases, std::move(observer));
   return importer.prepareFolder(folder, packageId(), stop, std::move(progress));
 }
 
@@ -361,6 +433,7 @@ void testMoveOnlyPreparationContract() {
   static_assert(SkinPackagePolicy::maxExpandedBytes ==
                 4ULL * 1024 * 1024 * 1024);
   static_assert(SkinPackagePolicy::maxFiles == 20'000);
+  static_assert(SkinPackagePolicy::maxArchiveMembers == 65'535);
   static_assert(SkinPackagePolicy::maxPathBytes == 1'024);
   static_assert(SkinPackagePolicy::maxPathComponents == 64);
 }
@@ -550,7 +623,7 @@ void testInvalidUtf8AndNulNamesReject() {
   }
 }
 
-void testLinksSparseAndNonregularEntriesRejectWholePackage() {
+void testLinksAndNonregularEntriesRejectWholePackage() {
   {
     TempDirectory temp;
     const auto roots = rootsBelow(temp.root());
@@ -584,8 +657,11 @@ void testEncryptedTruncatedCrcAndUnsupportedCompressionReject() {
     const fs::path zip = makeZip(temp.root() / "encrypted.zip",
                                  {{"play.luaskin", "return {type = 0}\n"}});
     setEncryptionFlags(zip);
-    expectRejectedAndClean(prepareZip(zip, roots), roots,
+    auto result = prepareZip(zip, roots);
+    expectRejectedAndClean(result, roots,
                            "encrypted members reject the archive");
+    expect(hasDiagnosticCode(result, "skin_archive_member_metadata_invalid"),
+           "encrypted member rejection has a stable diagnostic code");
   }
   {
     TempDirectory temp;
@@ -593,8 +669,36 @@ void testEncryptedTruncatedCrcAndUnsupportedCompressionReject() {
     const fs::path zip = makeZip(temp.root() / "truncated.zip",
                                  {{"play.luaskin", "return {type = 0}\n"}});
     fs::resize_file(zip, fs::file_size(zip) - 8);
-    expectRejectedAndClean(prepareZip(zip, roots), roots,
+    auto result = prepareZip(zip, roots);
+    expectRejectedAndClean(result, roots,
                            "truncated central directory rejects the archive");
+    expect(hasDiagnosticCode(result, "skin_archive_eocd_invalid"),
+           "EOCD truncation has a stable diagnostic code");
+  }
+  {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path zip =
+        makeZip(temp.root() / "member-data-truncated.zip",
+                {{"play.luaskin", "return {type = 123456789}\n"}});
+    truncateMemberDataKeepingCentralDirectory(zip);
+    auto result = prepareZip(zip, roots);
+    expectRejectedAndClean(result, roots,
+                           "truncated member data rejects the archive");
+    expect(hasDiagnosticCode(result, "skin_archive_crc_or_read_failed"),
+           "member-data truncation has a stable diagnostic code");
+  }
+  {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path zip = makeZip(temp.root() / "central-record-truncated.zip",
+                                 {{"play.luaskin", "return {}\n"}});
+    truncateCentralRecordKeepingEocd(zip);
+    auto result = prepareZip(zip, roots);
+    expectRejectedAndClean(result, roots,
+                           "truncated central record rejects the archive");
+    expect(hasDiagnosticCode(result, "skin_archive_directory_invalid"),
+           "central-record truncation has a stable diagnostic code");
   }
   {
     TempDirectory temp;
@@ -603,8 +707,10 @@ void testEncryptedTruncatedCrcAndUnsupportedCompressionReject() {
     const fs::path zip =
         makeZip(temp.root() / "crc.zip", {{"play.luaskin", payload}});
     corruptStoredPayload(zip, payload);
-    expectRejectedAndClean(prepareZip(zip, roots), roots,
-                           "CRC mismatch rejects the archive");
+    auto result = prepareZip(zip, roots);
+    expectRejectedAndClean(result, roots, "CRC mismatch rejects the archive");
+    expect(hasDiagnosticCode(result, "skin_archive_crc_or_read_failed"),
+           "CRC rejection has a stable diagnostic code");
   }
   {
     TempDirectory temp;
@@ -614,8 +720,11 @@ void testEncryptedTruncatedCrcAndUnsupportedCompressionReject() {
                 {{"play.luaskin", "return {type = 0}\n"}}, true);
     expect(centralCompressionMethods(zip) == std::vector<std::uint16_t>{14},
            "unsupported-compression fixture really uses ZIP LZMA");
-    expectRejectedAndClean(prepareZip(zip, roots), roots,
+    auto result = prepareZip(zip, roots);
+    expectRejectedAndClean(result, roots,
                            "unsupported ZIP compression rejects the archive");
+    expect(hasDiagnosticCode(result, "skin_archive_member_metadata_invalid"),
+           "unsupported compression has a stable diagnostic code");
   }
 }
 
@@ -629,6 +738,81 @@ void testProgressCallbackFailureRejectsAndCleans() {
   });
   expectRejectedAndClean(result, roots,
                          "a throwing progress callback fails closed");
+}
+
+void testArchivePayloadDigestMustMatchTask5Snapshot() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path zip =
+      makeZip(temp.root() / "payload-race.zip",
+              {{"play.luaskin", "return {marker = 'archive'}\n"}});
+  auto observer = std::make_shared<ImportIoObserver>(
+      [&](SkinImportIoOperation operation, const fs::path &path) {
+        if (operation == SkinImportIoOperation::BeforeVisibleSnapshot) {
+          writeBytes(path / "play.luaskin", "return {marker = 'changed'}\n");
+        }
+      });
+  auto result = prepareZip(zip, roots, {}, {}, observer);
+  expectRejectedAndClean(
+      result, roots,
+      "Task5 candidate must match the streamed archive payload digest");
+  expect(hasDiagnosticCode(result, "skin_archive_payload_digest_mismatch"),
+         "archive payload mismatch has a stable diagnostic code");
+}
+
+void testVisibleStagingRejectsParentAndLeafSymlinkRaces() {
+#if !defined(_WIN32)
+  {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path victim = temp.root() / "parent-race-victim";
+    writeBytes(victim / "sentinel", "unchanged");
+    fs::path displaced;
+    auto observer = std::make_shared<ImportIoObserver>(
+        [&](SkinImportIoOperation operation, const fs::path &path) {
+          if (operation != SkinImportIoOperation::VisibleRootIssued) {
+            return;
+          }
+          displaced = path.parent_path() / "displaced-issued-root";
+          fs::rename(path, displaced);
+          fs::create_directory_symlink(victim, path);
+        });
+    auto result = prepareZip(makeZip(temp.root() / "parent-race.zip",
+                                     {{"play.luaskin", "return {}\n"}}),
+                             roots, {}, {}, observer);
+    expect(!result.prepared,
+           "replacing the issued staging root rejects the archive");
+    expect(hasDiagnosticCode(result, "skin_import_staging_identity_changed"),
+           "staging-root replacement has a stable diagnostic code");
+    expect(readText(victim / "sentinel") == "unchanged" &&
+               !fs::exists(victim / "play.luaskin"),
+           "staging-root symlink replacement cannot write into its target");
+    expect(!displaced.empty() && !fs::exists(displaced),
+           "cleanup finds and removes only the displaced issued root identity");
+  }
+  {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path folder = temp.root() / "picked";
+    const fs::path victim = temp.root() / "leaf-race-victim";
+    writeBytes(folder / "play.luaskin", "return {}\n");
+    writeBytes(victim, "unchanged");
+    auto observer = std::make_shared<ImportIoObserver>(
+        [&](SkinImportIoOperation operation, const fs::path &path) {
+          if (operation == SkinImportIoOperation::BeforeVisibleFile) {
+            fs::create_symlink(victim, path);
+          }
+        });
+    auto result = prepareFolder(folder, roots, {}, {}, observer);
+    expectRejectedAndClean(result, roots,
+                           "a symlink raced into a visible file leaf rejects");
+    expect(hasDiagnosticCode(result, "skin_import_visible_copy_failed"),
+           "visible leaf race has a stable diagnostic code");
+    expect(readText(victim) == "unchanged",
+           "exclusive no-follow leaf creation cannot truncate a symlink "
+           "target");
+  }
+#endif
 }
 
 void testEmptyAndDirectoryOnlyArchivesReject() {
@@ -694,10 +878,10 @@ void testZipDeclaredAndAggregateLimitsRejectBeforeExtraction() {
       members.push_back({"d" + std::to_string(index) + "/", {}, AE_IFDIR});
     }
     members.push_back({"play.luaskin", "return {}\n"});
-    expectRejectedAndClean(
-        prepareZip(makeZip(temp.root() / "directory-count.zip", members),
-                   roots),
-        roots, "total ZIP records including explicit directories are capped");
+    auto result = prepareZip(
+        makeZip(temp.root() / "directory-count.zip", members), roots);
+    expect(result.prepared.has_value(),
+           "maxFiles counts regular files, not explicit directories");
   }
 }
 
@@ -774,6 +958,69 @@ void testFixedPathDepthCountAndArchiveLimitsReject() {
 }
 
 void testArchiveMutationAndMidOperationCancellationRejectCleanly() {
+#if !defined(_WIN32)
+  {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path zip =
+        makeZip(temp.root() / "same-inode-change.zip",
+                {{"play.luaskin", std::string(256 * 1024, 'x')}});
+    bool mutated = false;
+    auto observer = std::make_shared<ImportIoObserver>(
+        [&](SkinImportIoOperation operation, const fs::path &) {
+          if (!mutated &&
+              operation == SkinImportIoOperation::OwnedArchiveCopyChunk) {
+            std::fstream stream(zip, std::ios::binary | std::ios::in |
+                                         std::ios::out);
+            stream.seekp(100);
+            stream.put('y');
+            stream.flush();
+            mutated = true;
+          }
+        });
+    auto result = prepareZip(zip, roots, {}, {}, observer);
+    expect(mutated, "same-inode source mutation fixture executed");
+    expectRejectedAndClean(result, roots,
+                           "same-inode mutation during owned copy rejects");
+    expect(hasDiagnosticCode(result, "skin_archive_source_changed"),
+           "same-inode source mutation is detected at the copy boundary");
+  }
+#endif
+  {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path zip =
+        makeZip(temp.root() / "same-manifest.zip",
+                {{"play.luaskin", "return {type = 0, marker = 'A'}\n"}});
+    const fs::path replacement =
+        makeZip(temp.root() / "replacement.zip",
+                {{"play.luaskin", "return {type = 0, marker = 'B'}\n"}});
+    const fs::path original = temp.root() / "original.zip";
+    const fs::path extractedReplacement = temp.root() / "used-replacement.zip";
+    int inspectingReports = 0;
+    bool restored = false;
+    auto result = prepareZip(zip, roots, {}, [&](const SkinProgress &progress) {
+      if (progress.phase == SkinProgressPhase::Inspecting &&
+          ++inspectingReports == 2) {
+        fs::rename(zip, original);
+        fs::rename(replacement, zip);
+      } else if (!restored && progress.phase == SkinProgressPhase::Copying &&
+                 progress.completedBytes != 0) {
+        fs::rename(zip, extractedReplacement);
+        fs::rename(original, zip);
+        restored = true;
+      }
+    });
+    expect(restored, "same-manifest source-swap fixture restores original ZIP");
+    expect(result.prepared.has_value(),
+           "source pathname replacement does not invalidate the owned ZIP");
+    if (result.prepared) {
+      expect(readText(result.prepared->readView().root() / "play.luaskin") ==
+                 "return {type = 0, marker = 'A'}\n",
+             "inventory and payload bytes come from the one initially opened "
+             "archive object");
+    }
+  }
   {
     TempDirectory temp;
     const auto roots = rootsBelow(temp.root());
@@ -786,8 +1033,13 @@ void testArchiveMutationAndMidOperationCancellationRejectCleanly() {
         makeZip(zip, {{"other.luaskin", "return {type = 1}\n"}});
       }
     });
-    expectRejectedAndClean(result, roots,
-                           "archive replacement after inventory rejects");
+    expect(result.prepared.has_value(),
+           "archive pathname replacement cannot change the owned ZIP");
+    if (result.prepared) {
+      expect(readText(result.prepared->readView().root() / "play.luaskin") ==
+                 "return {type = 0}\n",
+             "the originally opened archive remains authoritative");
+    }
   }
   {
     TempDirectory temp;
@@ -825,6 +1077,45 @@ void testArchiveMutationAndMidOperationCancellationRejectCleanly() {
            "cancellation during streamed ZIP data is reported");
     expectRejectedAndClean(result, roots,
                            "mid-data cancellation leaves no staging");
+  }
+}
+
+void testCancellationCoversOwnedCopyRawScanAndHash() {
+  struct Case {
+    SkinImportIoOperation operation;
+    const char *label;
+  };
+  const std::vector<Case> cases = {
+      {SkinImportIoOperation::OwnedArchiveCopyChunk,
+       "cancellation during owned archive copy"},
+      {SkinImportIoOperation::RawZipRecord,
+       "cancellation during raw ZIP central scan"},
+      {SkinImportIoOperation::OwnedArchiveHashChunk,
+       "cancellation during owned archive hashing"},
+  };
+  for (std::size_t index = 0; index < cases.size(); ++index) {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    std::vector<ZipMember> members = {
+        {"play.luaskin", std::string(256 * 1024, 'x')}};
+    for (int extra = 0; extra < 8; ++extra) {
+      members.push_back({"extra-" + std::to_string(extra), "x"});
+    }
+    const fs::path zip = makeZip(
+        temp.root() / ("cancel-phase-" + std::to_string(index) + ".zip"),
+        members);
+    std::stop_source source;
+    auto observer = std::make_shared<ImportIoObserver>(
+        [&](SkinImportIoOperation operation, const fs::path &) {
+          if (operation == cases[index].operation) {
+            source.request_stop();
+          }
+        });
+    auto result = prepareZip(zip, roots, source.get_token(), {}, observer);
+    expect(result.cancelled, cases[index].label);
+    expect(result.diagnostics.empty(),
+           "cooperative pre-extraction cancellation is not an error");
+    expectRejectedAndClean(result, roots, cases[index].label);
   }
 }
 
@@ -945,14 +1236,17 @@ int main() {
   testCanonicalWrapperAndExplicitDirectoryRules();
   testUnsafeNamesAndCollisionsRejectWholePackage();
   testInvalidUtf8AndNulNamesReject();
-  testLinksSparseAndNonregularEntriesRejectWholePackage();
+  testLinksAndNonregularEntriesRejectWholePackage();
   testEncryptedTruncatedCrcAndUnsupportedCompressionReject();
   testProgressCallbackFailureRejectsAndCleans();
+  testArchivePayloadDigestMustMatchTask5Snapshot();
+  testVisibleStagingRejectsParentAndLeafSymlinkRaces();
   testEmptyAndDirectoryOnlyArchivesReject();
   testZipDeclaredAndAggregateLimitsRejectBeforeExtraction();
   testFixedPathDepthCountAndArchiveLimitsReject();
   testFolderAppleDoubleRejectsWithArchiveParity();
   testArchiveMutationAndMidOperationCancellationRejectCleanly();
+  testCancellationCoversOwnedCopyRawScanAndHash();
   testVisibleSkinsRootIsNotWidenedIntoOnePackage();
   testPreparedPackageMovesOwnCleanupAndReadViewLifetime();
   testCancellationAndPreparedDestructionCleanAllStaging();

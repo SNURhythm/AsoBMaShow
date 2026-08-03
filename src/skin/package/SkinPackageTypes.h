@@ -12,11 +12,10 @@ namespace skin {
 
 struct SkinPackagePolicy {
   static constexpr std::uint64_t maxArchiveBytes = 2ULL * 1024 * 1024 * 1024;
-  static constexpr std::uint64_t maxRegularFileBytes =
-      512ULL * 1024 * 1024;
-  static constexpr std::uint64_t maxExpandedBytes =
-      4ULL * 1024 * 1024 * 1024;
+  static constexpr std::uint64_t maxRegularFileBytes = 512ULL * 1024 * 1024;
+  static constexpr std::uint64_t maxExpandedBytes = 4ULL * 1024 * 1024 * 1024;
   static constexpr std::uint64_t maxFiles = 20'000;
+  static constexpr std::uint64_t maxArchiveMembers = 65'535;
   static constexpr std::uint32_t maxPathBytes = 1'024;
   static constexpr std::uint32_t maxPathComponents = 64;
   static constexpr std::uint32_t maxPackageNameBytes = 128;

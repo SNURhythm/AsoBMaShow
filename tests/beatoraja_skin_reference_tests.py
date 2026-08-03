@@ -2559,6 +2559,28 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         self.assertIsNotNone(scanner_error)
         self.assertIn("Lua source exceeds the 16 MiB scanner limit", scanner_error)
 
+    def test_archive_member_limit_is_distinct_from_regular_file_limit(self):
+        audit = load_audit_module()
+        accepted = self.temp_path / "member-limit-accepted.zip"
+        with zipfile.ZipFile(accepted, "w") as output:
+            output.writestr("Bundle/", b"")
+            output.writestr("Bundle/empty/", b"")
+            output.writestr("Bundle/play.luaskin", b"return {}")
+        rejected = self.temp_path / "member-limit-rejected.zip"
+        with zipfile.ZipFile(rejected, "w") as output:
+            output.writestr("Bundle/", b"")
+            output.writestr("Bundle/empty-a/", b"")
+            output.writestr("Bundle/empty-b/", b"")
+            output.writestr("Bundle/play.luaskin", b"return {}")
+
+        with mock.patch.object(audit, "MAX_FILES", 1), mock.patch.object(
+            audit, "MAX_ARCHIVE_MEMBERS", 3
+        ):
+            digest = audit.inspect_archive(accepted, "Bundle")
+            self.assertEqual(1, len(digest["files"]))
+            with self.assertRaisesRegex(audit.AuditError, "more than 3 members"):
+                audit.inspect_archive(rejected, "Bundle")
+
 
 if __name__ == "__main__":
     unittest.main()

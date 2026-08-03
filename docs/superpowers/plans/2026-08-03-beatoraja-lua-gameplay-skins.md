@@ -62,7 +62,7 @@ This reference refresh is an implementation-process gate, not a default build de
 
 Put these values in typed policy structs and assert them in tests; do not scatter literals:
 
-- Package input: 2 GiB maximum archive, 512 MiB maximum regular file, 4 GiB maximum expanded package, 20,000 files, 1,024 UTF-8 bytes per normalized relative path, 64 path components, and 128 UTF-8 bytes for an app-chosen package directory name.
+- Package input: 2 GiB maximum archive, 512 MiB maximum regular file, 4 GiB maximum expanded package, 20,000 regular files, 65,535 total ZIP members (regular files plus explicit directories), 1,024 UTF-8 bytes per normalized relative path, 64 path components, and 128 UTF-8 bytes for an app-chosen package directory name.
 - Package identity: valid UTF-8, slash separators, no empty/dot components, NFC storage spelling, and a full Unicode case-folded collision key.
 - Profile settings: at most 64 remembered entries; 256 options, 256 file choices, and 256 offsets per entry; 128-byte configuration keys; 1,024-byte entry/file values; offset components clamped to `[-32768, 32767]`; custom scale clamped to `[0.1, 10.0]`; custom translation clamped to `[-8192, 8192]` authored pixels.
 - Lua catalog state: 32 MiB allocator limit, 2,000,000 VM instructions, and 2 seconds wall time per execution.

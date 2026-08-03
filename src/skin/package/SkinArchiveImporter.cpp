@@ -10,12 +10,25 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <set>
 #include <string_view>
 #include <system_error>
 #include <utility>
+
+#if defined(_WIN32)
+#include <io.h>
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace skin {
 namespace {
@@ -35,9 +48,20 @@ struct ArchiveMember {
   std::string installedCollisionKey;
   MemberKind kind = MemberKind::Regular;
   std::uint64_t declaredSize = 0;
+  std::uint32_t expectedCrc32 = 0;
+  std::uint16_t compressionMethod = 0;
 
   auto operator<=>(const ArchiveMember &) const = default;
 };
+
+struct RawZipMember {
+  std::uint64_t uncompressedBytes = 0;
+  std::uint64_t compressedBytes = 0;
+  std::uint32_t crc32 = 0;
+  std::uint16_t compressionMethod = 0;
+};
+
+using RawZipMembers = std::map<std::string, RawZipMember, std::less<>>;
 
 struct ArchiveInventory {
   std::vector<ArchiveMember> members;
@@ -58,16 +82,268 @@ std::uint32_t little32(const unsigned char *bytes) {
          (static_cast<std::uint32_t>(bytes[3]) << 24U);
 }
 
-bool readAt(std::ifstream &input, std::uint64_t offset,
-            std::span<unsigned char> bytes) {
-  input.clear();
-  input.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-  if (!input) {
-    return false;
+SkinDiagnostic diagnostic(std::string code, std::string message,
+                          std::string virtualPath = {});
+void observe(const std::shared_ptr<const SkinImportIoObserver> &observer,
+             SkinImportIoOperation operation, const fs::path &path);
+
+class OwnedArchiveFile {
+public:
+  OwnedArchiveFile() : file_(std::tmpfile()) {}
+  OwnedArchiveFile(const OwnedArchiveFile &) = delete;
+  OwnedArchiveFile &operator=(const OwnedArchiveFile &) = delete;
+  OwnedArchiveFile(OwnedArchiveFile &&other) noexcept
+      : file_(std::exchange(other.file_, nullptr)), bytes_(other.bytes_) {}
+  OwnedArchiveFile &operator=(OwnedArchiveFile &&other) noexcept {
+    if (this != &other) {
+      if (file_ != nullptr) {
+        std::fclose(file_);
+      }
+      file_ = std::exchange(other.file_, nullptr);
+      bytes_ = other.bytes_;
+    }
+    return *this;
   }
-  input.read(reinterpret_cast<char *>(bytes.data()),
-             static_cast<std::streamsize>(bytes.size()));
-  return input.gcount() == static_cast<std::streamsize>(bytes.size());
+  ~OwnedArchiveFile() {
+    if (file_ != nullptr) {
+      std::fclose(file_);
+    }
+  }
+
+  [[nodiscard]] bool valid() const noexcept { return file_ != nullptr; }
+  [[nodiscard]] std::uint64_t bytes() const noexcept { return bytes_; }
+  void setBytes(std::uint64_t bytes) noexcept { bytes_ = bytes; }
+
+  bool rewind() {
+    std::clearerr(file_);
+#if defined(_WIN32)
+    return _fseeki64(file_, 0, SEEK_SET) == 0;
+#else
+    return ::fseeko(file_, 0, SEEK_SET) == 0;
+#endif
+  }
+
+  bool readAt(std::uint64_t offset, std::span<unsigned char> bytes) {
+    if (!rewindTo(offset)) {
+      return false;
+    }
+    return std::fread(bytes.data(), 1, bytes.size(), file_) == bytes.size();
+  }
+
+  bool write(std::span<const char> bytes) {
+    return std::fwrite(bytes.data(), 1, bytes.size(), file_) == bytes.size();
+  }
+
+  bool finishCopy() {
+    if (std::fflush(file_) != 0) {
+      return false;
+    }
+#if !defined(_WIN32)
+    struct stat status{};
+    const int descriptor = ::fileno(file_);
+    if (descriptor < 0 || ::fchmod(descriptor, 0400) != 0 ||
+        ::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) ||
+        status.st_uid != geteuid() || (status.st_mode & 0777) != 0400 ||
+        status.st_nlink > 1) {
+      return false;
+    }
+#endif
+    return rewind();
+  }
+  FILE *get() const noexcept { return file_; }
+
+private:
+  bool rewindTo(std::uint64_t offset) {
+    std::clearerr(file_);
+#if defined(_WIN32)
+    return offset <= static_cast<std::uint64_t>(INT64_MAX) &&
+           _fseeki64(file_, static_cast<__int64>(offset), SEEK_SET) == 0;
+#else
+    return offset <= static_cast<std::uint64_t>(INT64_MAX) &&
+           ::fseeko(file_, static_cast<off_t>(offset), SEEK_SET) == 0;
+#endif
+  }
+
+  FILE *file_ = nullptr;
+  std::uint64_t bytes_ = 0;
+};
+
+std::optional<OwnedArchiveFile>
+copyArchiveSource(const fs::path &path, std::stop_token stop, bool &cancelled,
+                  const std::shared_ptr<const SkinImportIoObserver> &observer,
+                  std::vector<SkinDiagnostic> &diagnostics) {
+  OwnedArchiveFile owned;
+  if (!owned.valid()) {
+    diagnostics.push_back(
+        diagnostic("skin_archive_owned_copy_failed",
+                   "unable to allocate private storage for the skin ZIP"));
+    return std::nullopt;
+  }
+
+  std::array<char, 64 * 1024> buffer{};
+  std::uint64_t total = 0;
+#if defined(_WIN32)
+  const HANDLE source = CreateFileW(
+      path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+      FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+  if (source == INVALID_HANDLE_VALUE) {
+    diagnostics.push_back(diagnostic(
+        "skin_archive_input_invalid",
+        "skin archive is missing or cannot be opened without following links"));
+    return std::nullopt;
+  }
+  FILE_ATTRIBUTE_TAG_INFO tag{};
+  BY_HANDLE_FILE_INFORMATION before{};
+  LARGE_INTEGER size{};
+  const bool regular =
+      GetFileInformationByHandleEx(source, FileAttributeTagInfo, &tag,
+                                   sizeof(tag)) &&
+      (tag.FileAttributes &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0 &&
+      GetFileInformationByHandle(source, &before) &&
+      GetFileSizeEx(source, &size) && size.QuadPart >= 0;
+  if (!regular || static_cast<std::uint64_t>(size.QuadPart) >
+                      SkinPackagePolicy::maxArchiveBytes) {
+    CloseHandle(source);
+    diagnostics.push_back(diagnostic(
+        "skin_archive_input_invalid",
+        "skin archive is not a regular no-follow file or exceeds its limit"));
+    return std::nullopt;
+  }
+  while (true) {
+    if (stop.stop_requested()) {
+      CloseHandle(source);
+      cancelled = true;
+      return std::nullopt;
+    }
+    DWORD read = 0;
+    if (!ReadFile(source, buffer.data(), static_cast<DWORD>(buffer.size()),
+                  &read, nullptr)) {
+      CloseHandle(source);
+      diagnostics.push_back(diagnostic("skin_archive_input_read_failed",
+                                       "unable to copy the opened skin ZIP"));
+      return std::nullopt;
+    }
+    if (read == 0) {
+      break;
+    }
+    if (total > SkinPackagePolicy::maxArchiveBytes - read ||
+        !owned.write(std::span(buffer.data(), read))) {
+      CloseHandle(source);
+      diagnostics.push_back(diagnostic("skin_archive_owned_copy_failed",
+                                       "unable to copy the opened skin ZIP"));
+      return std::nullopt;
+    }
+    total += read;
+    observe(observer, SkinImportIoOperation::OwnedArchiveCopyChunk, path);
+    if (stop.stop_requested()) {
+      CloseHandle(source);
+      cancelled = true;
+      return std::nullopt;
+    }
+  }
+  BY_HANDLE_FILE_INFORMATION after{};
+  const bool stable =
+      GetFileInformationByHandle(source, &after) &&
+      before.dwVolumeSerialNumber == after.dwVolumeSerialNumber &&
+      before.nFileIndexHigh == after.nFileIndexHigh &&
+      before.nFileIndexLow == after.nFileIndexLow &&
+      before.nFileSizeHigh == after.nFileSizeHigh &&
+      before.nFileSizeLow == after.nFileSizeLow &&
+      before.ftLastWriteTime.dwHighDateTime ==
+          after.ftLastWriteTime.dwHighDateTime &&
+      before.ftLastWriteTime.dwLowDateTime ==
+          after.ftLastWriteTime.dwLowDateTime &&
+      total == static_cast<std::uint64_t>(size.QuadPart);
+  CloseHandle(source);
+  if (!stable) {
+    diagnostics.push_back(diagnostic("skin_archive_source_changed",
+                                     "skin archive changed while copying"));
+    return std::nullopt;
+  }
+#else
+  const int source =
+      ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+  struct stat before{};
+  if (source < 0 || ::fstat(source, &before) != 0 || !S_ISREG(before.st_mode) ||
+      before.st_size < 0 ||
+      static_cast<std::uint64_t>(before.st_size) >
+          SkinPackagePolicy::maxArchiveBytes) {
+    if (source >= 0) {
+      ::close(source);
+    }
+    diagnostics.push_back(diagnostic(
+        "skin_archive_input_invalid",
+        "skin archive is not a regular no-follow file or exceeds its limit"));
+    return std::nullopt;
+  }
+  while (true) {
+    if (stop.stop_requested()) {
+      ::close(source);
+      cancelled = true;
+      return std::nullopt;
+    }
+    const ssize_t count = ::read(source, buffer.data(), buffer.size());
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count < 0) {
+      ::close(source);
+      diagnostics.push_back(diagnostic("skin_archive_input_read_failed",
+                                       "unable to copy the opened skin ZIP"));
+      return std::nullopt;
+    }
+    if (count == 0) {
+      break;
+    }
+    const auto chunk = static_cast<std::uint64_t>(count);
+    if (total > SkinPackagePolicy::maxArchiveBytes - chunk ||
+        !owned.write(
+            std::span(buffer.data(), static_cast<std::size_t>(count)))) {
+      ::close(source);
+      diagnostics.push_back(diagnostic("skin_archive_owned_copy_failed",
+                                       "unable to copy the opened skin ZIP"));
+      return std::nullopt;
+    }
+    total += chunk;
+    observe(observer, SkinImportIoOperation::OwnedArchiveCopyChunk, path);
+    if (stop.stop_requested()) {
+      ::close(source);
+      cancelled = true;
+      return std::nullopt;
+    }
+  }
+  struct stat after{};
+  bool stable =
+      ::fstat(source, &after) == 0 && before.st_dev == after.st_dev &&
+      before.st_ino == after.st_ino && before.st_size == after.st_size &&
+      before.st_nlink == after.st_nlink && before.st_mode == after.st_mode &&
+      total == static_cast<std::uint64_t>(before.st_size);
+#if defined(__APPLE__)
+  stable = stable && before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec &&
+           before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec &&
+           before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec &&
+           before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec;
+#else
+  stable = stable && before.st_mtim.tv_sec == after.st_mtim.tv_sec &&
+           before.st_mtim.tv_nsec == after.st_mtim.tv_nsec &&
+           before.st_ctim.tv_sec == after.st_ctim.tv_sec &&
+           before.st_ctim.tv_nsec == after.st_ctim.tv_nsec;
+#endif
+  ::close(source);
+  if (!stable) {
+    diagnostics.push_back(diagnostic("skin_archive_source_changed",
+                                     "skin archive changed while copying"));
+    return std::nullopt;
+  }
+#endif
+  if (!owned.finishCopy()) {
+    diagnostics.push_back(diagnostic("skin_archive_owned_copy_failed",
+                                     "unable to finalize the owned skin ZIP"));
+    return std::nullopt;
+  }
+  owned.setBytes(total);
+  return owned;
 }
 
 struct ArchiveDeleter {
@@ -81,7 +357,7 @@ struct ArchiveDeleter {
 using ArchiveHandle = std::unique_ptr<archive, ArchiveDeleter>;
 
 SkinDiagnostic diagnostic(std::string code, std::string message,
-                          std::string virtualPath = {}) {
+                          std::string virtualPath) {
   return {.code = std::move(code),
           .message = std::move(message),
           .virtualPath = std::move(virtualPath),
@@ -93,21 +369,14 @@ std::string archiveError(archive *reader, std::string_view fallback) {
   return message == nullptr ? std::string(fallback) : std::string(message);
 }
 
-int openArchive(archive *reader, const fs::path &path) {
-#if defined(_WIN32)
-  return archive_read_open_filename_w(reader, path.c_str(), 64 * 1024);
-#else
-  return archive_read_open_filename(reader, path.c_str(), 64 * 1024);
-#endif
-}
-
-bool configureArchiveReader(archive *reader, const fs::path &path,
+bool configureArchiveReader(archive *reader, OwnedArchiveFile &owned,
                             std::vector<SkinDiagnostic> &diagnostics) {
   if (archive_read_support_filter_none(reader) != ARCHIVE_OK ||
       archive_read_support_format_zip(reader) != ARCHIVE_OK ||
       archive_read_set_format_option(reader, "zip", "mac-ext", nullptr) !=
           ARCHIVE_OK ||
-      openArchive(reader, path) != ARCHIVE_OK) {
+      !owned.rewind() ||
+      archive_read_open_FILE(reader, owned.get()) != ARCHIVE_OK) {
     diagnostics.push_back(diagnostic(
         "skin_archive_open_failed",
         archiveError(reader, "unable to open the skin ZIP archive")));
@@ -129,6 +398,13 @@ bool report(const SkinProgressCallback &callback, SkinProgress progress,
         diagnostic("skin_import_progress_callback_failed",
                    "skin package progress callback raised an exception"));
     return false;
+  }
+}
+
+void observe(const std::shared_ptr<const SkinImportIoObserver> &observer,
+             SkinImportIoOperation operation, const fs::path &path) {
+  if (observer) {
+    observer->reached(operation, path);
   }
 }
 
@@ -183,9 +459,38 @@ bool addWithoutOverflow(std::uint64_t left, std::uint64_t right,
   return true;
 }
 
-bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
-                            const SkinPackageId &package,
-                            std::vector<SkinDiagnostic> &diagnostics) {
+std::optional<std::string>
+hashOwnedArchive(OwnedArchiveFile &owned, std::stop_token stop, bool &cancelled,
+                 const std::shared_ptr<const SkinImportIoObserver> &observer) {
+  file_checksum::Sha256 hash;
+  std::array<unsigned char, 64 * 1024> buffer{};
+  std::uint64_t offset = 0;
+  while (offset < owned.bytes()) {
+    if (stop.stop_requested()) {
+      cancelled = true;
+      return std::nullopt;
+    }
+    const std::size_t count = static_cast<std::size_t>(
+        std::min<std::uint64_t>(buffer.size(), owned.bytes() - offset));
+    if (!owned.readAt(offset, std::span(buffer.data(), count))) {
+      return std::nullopt;
+    }
+    hash.update(std::as_bytes(std::span(buffer.data(), count)));
+    offset += count;
+    observe(observer, SkinImportIoOperation::OwnedArchiveHashChunk, {});
+    if (stop.stop_requested()) {
+      cancelled = true;
+      return std::nullopt;
+    }
+  }
+  return hash.finalHex();
+}
+
+bool validateRawZipEnvelope(
+    OwnedArchiveFile &owned, std::uint64_t archiveBytes,
+    const SkinPackageId &package, std::stop_token stop, bool &cancelled,
+    const std::shared_ptr<const SkinImportIoObserver> &observer,
+    RawZipMembers &rawMembers, std::vector<SkinDiagnostic> &diagnostics) {
   constexpr std::uint64_t maximumTail = 65'557;
   const std::uint64_t tailSize = std::min(archiveBytes, maximumTail);
   if (tailSize < 22) {
@@ -193,15 +498,18 @@ bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
                                      "skin ZIP has no complete end record"));
     return false;
   }
-  std::ifstream input(path, std::ios::binary);
   std::vector<unsigned char> tail(static_cast<std::size_t>(tailSize));
-  if (!input || !readAt(input, archiveBytes - tailSize, tail)) {
+  if (!owned.readAt(archiveBytes - tailSize, tail)) {
     diagnostics.push_back(diagnostic("skin_archive_input_read_failed",
                                      "unable to read skin ZIP metadata"));
     return false;
   }
   std::optional<std::size_t> eocd;
   for (std::size_t index = tail.size() - 22;; --index) {
+    if ((index & 0x3ffU) == 0 && stop.stop_requested()) {
+      cancelled = true;
+      return false;
+    }
     if (tail[index] == 0x50 && tail[index + 1] == 0x4b &&
         tail[index + 2] == 0x05 && tail[index + 3] == 0x06) {
       const std::uint16_t comment = little16(tail.data() + index + 20);
@@ -227,12 +535,14 @@ bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
   const std::uint16_t totalRecords = little16(end + 10);
   const std::uint32_t directoryBytes = little32(end + 12);
   const std::uint32_t directoryOffset = little32(end + 16);
+  const std::uint64_t eocdOffset = archiveBytes - tailSize + *eocd;
   if (disk != 0 || directoryDisk != 0 || diskRecords != totalRecords ||
-      totalRecords == 0xffffU || directoryBytes == 0xffffffffU ||
-      directoryOffset == 0xffffffffU ||
-      totalRecords > SkinPackagePolicy::maxFiles ||
+      directoryBytes == 0xffffffffU || directoryOffset == 0xffffffffU ||
+      totalRecords > SkinPackagePolicy::maxArchiveMembers ||
       static_cast<std::uint64_t>(directoryOffset) + directoryBytes >
-          archiveBytes) {
+          archiveBytes ||
+      static_cast<std::uint64_t>(directoryOffset) + directoryBytes !=
+          eocdOffset) {
     diagnostics.push_back(diagnostic(
         "skin_archive_directory_invalid",
         "skin ZIP uses multi-disk/ZIP64 metadata or exceeds the member limit"));
@@ -240,9 +550,20 @@ bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
   }
 
   std::uint64_t cursor = directoryOffset;
-  for (std::uint16_t index = 0; index < totalRecords; ++index) {
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> localRanges;
+  localRanges.reserve(totalRecords);
+  for (std::uint32_t index = 0; index < totalRecords; ++index) {
+    if (stop.stop_requested()) {
+      cancelled = true;
+      return false;
+    }
+    observe(observer, SkinImportIoOperation::RawZipRecord, {});
+    if (stop.stop_requested()) {
+      cancelled = true;
+      return false;
+    }
     std::array<unsigned char, 46> central{};
-    if (!readAt(input, cursor, central) ||
+    if (!owned.readAt(cursor, central) ||
         little32(central.data()) != 0x02014b50U) {
       diagnostics.push_back(
           diagnostic("skin_archive_directory_invalid",
@@ -251,6 +572,9 @@ bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
     }
     const std::uint16_t flags = little16(central.data() + 8);
     const std::uint16_t method = little16(central.data() + 10);
+    const std::uint32_t crc = little32(central.data() + 16);
+    const std::uint32_t compressedBytes = little32(central.data() + 20);
+    const std::uint32_t uncompressedBytes = little32(central.data() + 24);
     const std::uint16_t nameBytes = little16(central.data() + 28);
     const std::uint16_t extraBytes = little16(central.data() + 30);
     const std::uint16_t commentBytes = little16(central.data() + 32);
@@ -271,7 +595,7 @@ bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
       return false;
     }
     std::vector<unsigned char> name(nameBytes);
-    if (!readAt(input, cursor + 46, name)) {
+    if (!owned.readAt(cursor + 46, name)) {
       diagnostics.push_back(diagnostic("skin_archive_directory_invalid",
                                        "skin ZIP member name is truncated"));
       return false;
@@ -319,7 +643,7 @@ bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
     }
 
     std::array<unsigned char, 30> local{};
-    if (!readAt(input, localOffset, local) ||
+    if (!owned.readAt(localOffset, local) ||
         little32(local.data()) != 0x04034b50U ||
         little16(local.data() + 6) != flags ||
         little16(local.data() + 8) != method ||
@@ -329,13 +653,50 @@ bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
           "skin ZIP local and central headers disagree", structuralName));
       return false;
     }
+    const std::uint32_t localCrc = little32(local.data() + 14);
+    const std::uint32_t localCompressed = little32(local.data() + 18);
+    const std::uint32_t localUncompressed = little32(local.data() + 22);
+    const std::uint16_t localExtraBytes = little16(local.data() + 28);
+    const bool descriptor = (flags & 0x0008U) != 0;
+    const bool localValuesValid =
+        !descriptor ? localCrc == crc && localCompressed == compressedBytes &&
+                          localUncompressed == uncompressedBytes
+                    : (localCrc == 0 || localCrc == crc) &&
+                          (localCompressed == 0 ||
+                           localCompressed == compressedBytes) &&
+                          (localUncompressed == 0 ||
+                           localUncompressed == uncompressedBytes);
+    const std::uint64_t dataOffset = static_cast<std::uint64_t>(localOffset) +
+                                     30U + nameBytes + localExtraBytes;
+    const std::uint64_t dataEnd = dataOffset + compressedBytes;
+    if (!localValuesValid || dataOffset > directoryOffset ||
+        dataEnd < dataOffset || dataEnd > directoryOffset) {
+      diagnostics.push_back(diagnostic(
+          "skin_archive_local_header_mismatch",
+          "skin ZIP local data extent or size metadata is inconsistent",
+          structuralName));
+      return false;
+    }
     std::vector<unsigned char> localName(nameBytes);
-    if (!readAt(input, static_cast<std::uint64_t>(localOffset) + 30,
-                localName) ||
+    if (!owned.readAt(static_cast<std::uint64_t>(localOffset) + 30,
+                      localName) ||
         localName != name) {
       diagnostics.push_back(diagnostic(
           "skin_archive_local_header_mismatch",
           "skin ZIP local and central member names disagree", structuralName));
+      return false;
+    }
+    localRanges.emplace_back(localOffset, dataEnd);
+    if (!rawMembers
+             .emplace(rawName,
+                      RawZipMember{.uncompressedBytes = uncompressedBytes,
+                                   .compressedBytes = compressedBytes,
+                                   .crc32 = crc,
+                                   .compressionMethod = method})
+             .second) {
+      diagnostics.push_back(diagnostic(
+          "skin_archive_path_collision",
+          "skin ZIP repeats the same raw member name", structuralName));
       return false;
     }
     cursor += recordBytes;
@@ -345,6 +706,15 @@ bool validateRawZipEnvelope(const fs::path &path, std::uint64_t archiveBytes,
         "skin_archive_directory_invalid",
         "skin ZIP central directory record count or size is inconsistent"));
     return false;
+  }
+  std::ranges::sort(localRanges);
+  for (std::size_t index = 1; index < localRanges.size(); ++index) {
+    if (localRanges[index].first < localRanges[index - 1].second) {
+      diagnostics.push_back(
+          diagnostic("skin_archive_local_header_mismatch",
+                     "skin ZIP local members overlap or reuse storage"));
+      return false;
+    }
   }
   return true;
 }
@@ -435,11 +805,12 @@ bool validateInstalledStructure(ArchiveInventory &inventory,
 }
 
 std::optional<ArchiveInventory>
-inventoryArchive(const fs::path &path, const SkinPackageId &package,
-                 std::stop_token stop, const SkinProgressCallback &callback,
+inventoryArchive(OwnedArchiveFile &owned, const SkinPackageId &package,
+                 const RawZipMembers &rawMembers, std::stop_token stop,
+                 const SkinProgressCallback &callback,
                  std::vector<SkinDiagnostic> &diagnostics) {
   ArchiveHandle reader(archive_read_new());
-  if (!reader || !configureArchiveReader(reader.get(), path, diagnostics)) {
+  if (!reader || !configureArchiveReader(reader.get(), owned, diagnostics)) {
     return std::nullopt;
   }
 
@@ -464,7 +835,7 @@ inventoryArchive(const fs::path &path, const SkinPackageId &package,
       return std::nullopt;
     }
     ++memberCount;
-    if (memberCount > SkinPackagePolicy::maxFiles) {
+    if (memberCount > SkinPackagePolicy::maxArchiveMembers) {
       diagnostics.push_back(
           diagnostic("skin_archive_member_limit_exceeded",
                      "archive exceeds the package member-count limit"));
@@ -486,6 +857,14 @@ inventoryArchive(const fs::path &path, const SkinPackageId &package,
       return std::nullopt;
     }
     std::string authoredPath(rawName);
+    const auto rawMetadata = rawMembers.find(authoredPath);
+    if (rawMetadata == rawMembers.end()) {
+      diagnostics.push_back(diagnostic(
+          "skin_archive_inventory_failed",
+          "archive reader exposed a member absent from raw inventory",
+          authoredPath));
+      return std::nullopt;
+    }
     const mode_t fileType = archive_entry_filetype(entry);
     const bool directory = fileType == AE_IFDIR;
     const bool regular = fileType == AE_IFREG;
@@ -546,6 +925,13 @@ inventoryArchive(const fs::path &path, const SkinPackageId &package,
         return std::nullopt;
       }
       declaredSize = static_cast<std::uint64_t>(archive_entry_size(entry));
+      if (declaredSize != rawMetadata->second.uncompressedBytes) {
+        diagnostics.push_back(
+            diagnostic("skin_archive_member_metadata_invalid",
+                       "raw and decoded ZIP sizes disagree",
+                       normalized.entry->packageRelativePath));
+        return std::nullopt;
+      }
       if (declaredSize > SkinPackagePolicy::maxRegularFileBytes) {
         diagnostics.push_back(
             diagnostic("skin_archive_file_too_large",
@@ -577,7 +963,9 @@ inventoryArchive(const fs::path &path, const SkinPackageId &package,
          .normalizedPath = normalized.entry->packageRelativePath,
          .collisionKey = normalized.entry->collisionKey,
          .kind = kind,
-         .declaredSize = declaredSize});
+         .declaredSize = declaredSize,
+         .expectedCrc32 = rawMetadata->second.crc32,
+         .compressionMethod = rawMetadata->second.compressionMethod});
     if (archive_read_data_skip(reader.get()) != ARCHIVE_OK) {
       diagnostics.push_back(diagnostic(
           "skin_archive_inventory_failed",
@@ -646,48 +1034,589 @@ std::string uniqueStagingName() {
   return "import-" + std::to_string(++serial);
 }
 
-bool makeVisibleStagingRoot(const SkinStorageRoots &roots, fs::path &root,
-                            std::vector<SkinDiagnostic> &diagnostics) {
-  if (roots.visiblePackages.empty() || !roots.visiblePackages.is_absolute()) {
-    diagnostics.push_back(
-        diagnostic("skin_import_visible_root_invalid",
-                   "visible skin package storage is unavailable"));
-    return false;
-  }
-  std::error_code error;
-  const fs::path parent =
-      roots.visiblePackages.parent_path() / ".skin-import-staging";
-  fs::create_directories(parent, error);
-  if (!error) {
-    root = parent / uniqueStagingName();
-    fs::create_directory(root, error);
-  }
-  if (error) {
-    diagnostics.push_back(
-        diagnostic("skin_import_staging_create_failed",
-                   "unable to create unpublished visible package staging"));
-    root.clear();
-    return false;
-  }
-  return true;
-}
+class SecureStagingTree {
+public:
+  SecureStagingTree(const SecureStagingTree &) = delete;
+  SecureStagingTree &operator=(const SecureStagingTree &) = delete;
+  ~SecureStagingTree() { cleanup(); }
 
-struct MutableTreeCleanup {
-  fs::path path;
-  ~MutableTreeCleanup() {
-    if (path.empty()) {
+  static std::shared_ptr<SecureStagingTree>
+  create(const SkinStorageRoots &roots,
+         const std::shared_ptr<const SkinImportIoObserver> &observer,
+         std::vector<SkinDiagnostic> &diagnostics) {
+    if (roots.visiblePackages.empty() || !roots.visiblePackages.is_absolute()) {
+      diagnostics.push_back(
+          diagnostic("skin_import_visible_root_invalid",
+                     "visible skin package storage is unavailable"));
+      return {};
+    }
+    auto tree = std::shared_ptr<SecureStagingTree>(new SecureStagingTree());
+    if (!tree->allocate(roots.visiblePackages.parent_path() /
+                            ".skin-import-staging",
+                        diagnostics)) {
+      return {};
+    }
+    observe(observer, SkinImportIoOperation::VisibleRootIssued, tree->path_);
+    return tree;
+  }
+
+  [[nodiscard]] const fs::path &path() const noexcept { return path_; }
+
+  bool verifyIdentity(std::vector<SkinDiagnostic> &diagnostics) const {
+#if defined(_WIN32)
+    const HANDLE current = CreateFileW(
+        path_.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (current == INVALID_HANDLE_VALUE) {
+      diagnostics.push_back(
+          diagnostic("skin_import_staging_identity_changed",
+                     "visible staging root disappeared or was replaced"));
+      return false;
+    }
+    BY_HANDLE_FILE_INFORMATION expected{};
+    BY_HANDLE_FILE_INFORMATION actual{};
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    const bool same =
+        GetFileInformationByHandle(rootHandle(), &expected) &&
+        GetFileInformationByHandle(current, &actual) &&
+        GetFileInformationByHandleEx(current, FileAttributeTagInfo, &tag,
+                                     sizeof(tag)) &&
+        (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 &&
+        expected.dwVolumeSerialNumber == actual.dwVolumeSerialNumber &&
+        expected.nFileIndexHigh == actual.nFileIndexHigh &&
+        expected.nFileIndexLow == actual.nFileIndexLow;
+    CloseHandle(current);
+#else
+    struct stat expected{};
+    struct stat actual{};
+    const bool same = ::fstat(rootFd_, &expected) == 0 &&
+                      ::fstatat(parentFd_, name_.c_str(), &actual,
+                                AT_SYMLINK_NOFOLLOW) == 0 &&
+                      S_ISDIR(actual.st_mode) &&
+                      expected.st_dev == actual.st_dev &&
+                      expected.st_ino == actual.st_ino;
+#endif
+    if (!same) {
+      diagnostics.push_back(diagnostic(
+          "skin_import_staging_identity_changed",
+          "visible staging root changed while it was being prepared"));
+    }
+    return same;
+  }
+
+  bool
+  createDirectory(std::string_view relative,
+                  const std::shared_ptr<const SkinImportIoObserver> &observer,
+                  std::vector<SkinDiagnostic> &diagnostics) {
+    observe(observer, SkinImportIoOperation::BeforeVisibleDirectory,
+            path_ / pathFromUtf8(relative));
+#if defined(_WIN32)
+    std::vector<HANDLE> opened;
+    if (openWindowsDirectories(relative, true, opened)) {
+      closeWindowsHandles(opened);
+      return true;
+    }
+#else
+    const int directory = openDirectory(relative, true);
+    if (directory >= 0) {
+      ::close(directory);
+      return true;
+    }
+#endif
+    diagnostics.push_back(
+        diagnostic("skin_import_visible_copy_failed",
+                   "unable to create a safe visible staging directory",
+                   std::string(relative)));
+    return false;
+  }
+
+#if defined(_WIN32)
+  HANDLE createFile(std::string_view relative,
+                    const std::shared_ptr<const SkinImportIoObserver> &observer,
+                    std::vector<SkinDiagnostic> &diagnostics) {
+    const fs::path target = path_ / pathFromUtf8(relative);
+    const std::size_t separator = relative.rfind('/');
+    const std::string_view parent = separator == std::string_view::npos
+                                        ? std::string_view{}
+                                        : relative.substr(0, separator);
+    std::vector<HANDLE> opened;
+    if (!openWindowsDirectories(parent, true, opened)) {
+      closeWindowsHandles(opened);
+      diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
+                                       "unable to create a safe staging parent",
+                                       std::string(relative)));
+      return INVALID_HANDLE_VALUE;
+    }
+    observe(observer, SkinImportIoOperation::BeforeVisibleFile, target);
+    const HANDLE file = CreateFileW(
+        target.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr);
+    closeWindowsHandles(opened);
+    if (file == INVALID_HANDLE_VALUE) {
+      diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
+                                       "unable to exclusively create a safe "
+                                       "visible staging file",
+                                       std::string(relative)));
+    }
+    return file;
+  }
+#else
+  int createFile(std::string_view relative,
+                 const std::shared_ptr<const SkinImportIoObserver> &observer,
+                 std::vector<SkinDiagnostic> &diagnostics) {
+    const std::size_t separator = relative.rfind('/');
+    const std::string_view parentPath = separator == std::string_view::npos
+                                            ? std::string_view{}
+                                            : relative.substr(0, separator);
+    const std::string leaf(relative.substr(
+        separator == std::string_view::npos ? 0 : separator + 1));
+    const int parent = openDirectory(parentPath, true);
+    if (parent < 0) {
+      diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
+                                       "unable to create a safe staging parent",
+                                       std::string(relative)));
+      return -1;
+    }
+    observe(observer, SkinImportIoOperation::BeforeVisibleFile,
+            path_ / pathFromUtf8(relative));
+    const int file =
+        ::openat(parent, leaf.c_str(),
+                 O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    ::close(parent);
+    if (file < 0) {
+      diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
+                                       "unable to exclusively create a safe "
+                                       "visible staging file",
+                                       std::string(relative)));
+    }
+    return file;
+  }
+#endif
+
+#if defined(_WIN32)
+  HANDLE openFileForRead(std::string_view relative) const {
+    const fs::path target = path_ / pathFromUtf8(relative);
+    return CreateFileW(
+        target.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+  }
+#else
+  int openFileForRead(std::string_view relative) const {
+    const std::size_t separator = relative.rfind('/');
+    const std::string_view parentPath = separator == std::string_view::npos
+                                            ? std::string_view{}
+                                            : relative.substr(0, separator);
+    const std::string leaf(relative.substr(
+        separator == std::string_view::npos ? 0 : separator + 1));
+    const int parent = openDirectory(parentPath, false);
+    if (parent < 0) {
+      return -1;
+    }
+    const int file =
+        ::openat(parent, leaf.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    ::close(parent);
+    return file;
+  }
+#endif
+
+private:
+  SecureStagingTree() = default;
+
+#if defined(_WIN32)
+  static void closeWindowsHandles(std::vector<HANDLE> &handles) noexcept {
+    for (const HANDLE handle : handles) {
+      if (handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(handle);
+      }
+    }
+    handles.clear();
+  }
+
+  static bool safeWindowsDirectory(HANDLE handle) {
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    return handle != INVALID_HANDLE_VALUE &&
+           GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag,
+                                        sizeof(tag)) &&
+           (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+           (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
+  }
+
+  static bool openAbsoluteWindowsDirectoryChain(const fs::path &path,
+                                                bool create,
+                                                std::vector<HANDLE> &handles,
+                                                fs::path &canonicalPath) {
+    std::error_code error;
+    const fs::path absolute = fs::absolute(path, error).lexically_normal();
+    if (error || !absolute.is_absolute()) {
+      return false;
+    }
+    fs::path current = absolute.root_path();
+    HANDLE root = CreateFileW(
+        current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (!safeWindowsDirectory(root)) {
+      if (root != INVALID_HANDLE_VALUE) {
+        CloseHandle(root);
+      }
+      return false;
+    }
+    handles.push_back(root);
+    const fs::path relative = absolute.lexically_relative(current);
+    for (const fs::path &component : relative) {
+      current /= component;
+      if (create && !CreateDirectoryW(current.c_str(), nullptr) &&
+          GetLastError() != ERROR_ALREADY_EXISTS) {
+        return false;
+      }
+      HANDLE next = CreateFileW(
+          current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (!safeWindowsDirectory(next)) {
+        if (next != INVALID_HANDLE_VALUE) {
+          CloseHandle(next);
+        }
+        return false;
+      }
+      handles.push_back(next);
+    }
+    canonicalPath = absolute;
+    return true;
+  }
+
+  bool openWindowsDirectories(std::string_view relative, bool create,
+                              std::vector<HANDLE> &handles) const {
+    fs::path current = path_;
+    std::size_t start = 0;
+    while (start < relative.size()) {
+      const std::size_t separator = relative.find('/', start);
+      current /= pathFromUtf8(relative.substr(
+          start, separator == std::string_view::npos ? std::string_view::npos
+                                                     : separator - start));
+      if (create && !CreateDirectoryW(current.c_str(), nullptr) &&
+          GetLastError() != ERROR_ALREADY_EXISTS) {
+        return false;
+      }
+      HANDLE next = CreateFileW(
+          current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (!safeWindowsDirectory(next)) {
+        if (next != INVALID_HANDLE_VALUE) {
+          CloseHandle(next);
+        }
+        return false;
+      }
+      handles.push_back(next);
+      if (separator == std::string_view::npos) {
+        break;
+      }
+      start = separator + 1;
+    }
+    return true;
+  }
+
+  HANDLE rootHandle() const noexcept {
+    return ancestryHandles_.empty() ? INVALID_HANDLE_VALUE
+                                    : ancestryHandles_.back();
+  }
+
+  static bool markWindowsDeletion(HANDLE handle) noexcept {
+    FILE_DISPOSITION_INFO disposition{};
+    disposition.DeleteFile = TRUE;
+    return SetFileInformationByHandle(handle, FileDispositionInfo, &disposition,
+                                      sizeof(disposition)) != 0;
+  }
+
+  static bool clearWindowsDirectory(const fs::path &directory) noexcept {
+    WIN32_FIND_DATAW data{};
+    const fs::path pattern = directory / L"*";
+    HANDLE find = FindFirstFileW(pattern.c_str(), &data);
+    if (find == INVALID_HANDLE_VALUE) {
+      return GetLastError() == ERROR_FILE_NOT_FOUND;
+    }
+    bool ok = true;
+    do {
+      const std::wstring_view name(data.cFileName);
+      if (name == L"." || name == L"..") {
+        continue;
+      }
+      const fs::path childPath = directory / data.cFileName;
+      const bool directoryEntry =
+          (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+      HANDLE child = CreateFileW(
+          childPath.c_str(),
+          DELETE | FILE_READ_ATTRIBUTES |
+              (directoryEntry ? FILE_LIST_DIRECTORY : 0),
+          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_OPEN_REPARSE_POINT |
+              (directoryEntry ? FILE_FLAG_BACKUP_SEMANTICS : 0),
+          nullptr);
+      if (child == INVALID_HANDLE_VALUE) {
+        ok = false;
+        break;
+      }
+      FILE_ATTRIBUTE_TAG_INFO tag{};
+      const bool metadata =
+          GetFileInformationByHandleEx(child, FileAttributeTagInfo, &tag,
+                                       sizeof(tag)) != 0;
+      const bool reparse =
+          metadata && (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+      if (!metadata ||
+          (directoryEntry && !reparse && !clearWindowsDirectory(childPath)) ||
+          !markWindowsDeletion(child)) {
+        ok = false;
+      }
+      CloseHandle(child);
+      if (!ok) {
+        break;
+      }
+    } while (FindNextFileW(find, &data));
+    const DWORD endError = GetLastError();
+    FindClose(find);
+    return ok && endError == ERROR_NO_MORE_FILES;
+  }
+#endif
+
+#if !defined(_WIN32)
+  static int openAbsoluteDirectory(const fs::path &path, bool create) {
+    std::error_code error;
+    const fs::path absolute = fs::absolute(path, error).lexically_normal();
+    if (error || !absolute.is_absolute()) {
+      return -1;
+    }
+    int current = ::open(absolute.root_path().c_str(),
+                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (current < 0) {
+      return -1;
+    }
+    const fs::path relative = absolute.lexically_relative(absolute.root_path());
+    for (const fs::path &componentPath : relative) {
+      const std::string component = componentPath.string();
+      int next = ::openat(current, component.c_str(),
+                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      if (next < 0 && create && errno == ENOENT &&
+          ::mkdirat(current, component.c_str(), 0700) == 0) {
+        next = ::openat(current, component.c_str(),
+                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      }
+      ::close(current);
+      if (next < 0) {
+        return -1;
+      }
+      current = next;
+    }
+    return current;
+  }
+
+  int openDirectory(std::string_view relative, bool create) const {
+    const int duplicate = ::dup(rootFd_);
+    if (duplicate < 0) {
+      return -1;
+    }
+    int current = duplicate;
+    std::size_t start = 0;
+    while (start < relative.size()) {
+      const std::size_t separator = relative.find('/', start);
+      const std::string component(relative.substr(
+          start, separator == std::string_view::npos ? std::string_view::npos
+                                                     : separator - start));
+      int next = ::openat(current, component.c_str(),
+                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      if (next < 0 && create && errno == ENOENT &&
+          ::mkdirat(current, component.c_str(), 0700) == 0) {
+        next = ::openat(current, component.c_str(),
+                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      }
+      ::close(current);
+      if (next < 0) {
+        return -1;
+      }
+      current = next;
+      if (separator == std::string_view::npos) {
+        break;
+      }
+      start = separator + 1;
+    }
+    return current;
+  }
+
+  static bool clearDirectory(int directory) {
+    const int duplicate = ::dup(directory);
+    DIR *stream = duplicate >= 0 ? ::fdopendir(duplicate) : nullptr;
+    if (stream == nullptr) {
+      if (duplicate >= 0) {
+        ::close(duplicate);
+      }
+      return false;
+    }
+    bool ok = true;
+    while (const dirent *entry = ::readdir(stream)) {
+      const std::string_view name(entry->d_name);
+      if (name == "." || name == "..") {
+        continue;
+      }
+      struct stat status{};
+      if (::fstatat(directory, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) !=
+          0) {
+        ok = false;
+        continue;
+      }
+      if (S_ISDIR(status.st_mode)) {
+        const int child =
+            ::openat(directory, entry->d_name,
+                     O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (child < 0 || !clearDirectory(child) ||
+            ::unlinkat(directory, entry->d_name, AT_REMOVEDIR) != 0) {
+          ok = false;
+        }
+        if (child >= 0) {
+          ::close(child);
+        }
+      } else if (::unlinkat(directory, entry->d_name, 0) != 0) {
+        ok = false;
+      }
+    }
+    ::closedir(stream);
+    return ok;
+  }
+#endif
+
+  bool allocate(const fs::path &parentPath,
+                std::vector<SkinDiagnostic> &diagnostics) {
+#if defined(_WIN32)
+    if (!openAbsoluteWindowsDirectoryChain(parentPath, true, ancestryHandles_,
+                                           parentPath_)) {
+      diagnostics.push_back(
+          diagnostic("skin_import_staging_create_failed",
+                     "unable to create private visible staging storage"));
+      return false;
+    }
+    for (int attempt = 0; attempt < 128; ++attempt) {
+      name_ = uniqueStagingName();
+      path_ = parentPath_ / name_;
+      if (!CreateDirectoryW(path_.c_str(), nullptr)) {
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+          continue;
+        }
+        break;
+      }
+      HANDLE issued = CreateFileW(
+          path_.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | DELETE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      if (safeWindowsDirectory(issued)) {
+        ancestryHandles_.push_back(issued);
+        return true;
+      }
+      if (issued != INVALID_HANDLE_VALUE) {
+        CloseHandle(issued);
+      }
+      RemoveDirectoryW(path_.c_str());
+      break;
+    }
+#else
+    parentFd_ = openAbsoluteDirectory(parentPath, true);
+    if (parentFd_ >= 0) {
+      struct stat parentStatus{};
+      if (::fchmod(parentFd_, 0700) != 0 ||
+          ::fstat(parentFd_, &parentStatus) != 0 ||
+          !S_ISDIR(parentStatus.st_mode) || parentStatus.st_uid != geteuid() ||
+          (parentStatus.st_mode & 0777) != 0700) {
+        ::close(parentFd_);
+        parentFd_ = -1;
+      }
+    }
+    if (parentFd_ >= 0) {
+      for (int attempt = 0; attempt < 128; ++attempt) {
+        name_ = uniqueStagingName();
+        if (::mkdirat(parentFd_, name_.c_str(), 0700) != 0) {
+          if (errno == EEXIST) {
+            continue;
+          }
+          break;
+        }
+        rootFd_ = ::openat(parentFd_, name_.c_str(),
+                           O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (rootFd_ >= 0 && ::fchmod(rootFd_, 0700) == 0) {
+          path_ = parentPath / name_;
+          return true;
+        }
+        if (rootFd_ >= 0) {
+          ::close(rootFd_);
+          rootFd_ = -1;
+        }
+        ::unlinkat(parentFd_, name_.c_str(), AT_REMOVEDIR);
+        break;
+      }
+    }
+#endif
+    diagnostics.push_back(diagnostic(
+        "skin_import_staging_create_failed",
+        "unable to create owner-only issued visible package staging: " +
+            std::string(std::strerror(errno))));
+    return false;
+  }
+
+  void cleanup() noexcept {
+#if defined(_WIN32)
+    if (rootHandle() == INVALID_HANDLE_VALUE) {
       return;
     }
-    std::error_code ignored;
-    fs::permissions(path, fs::perms::owner_all, fs::perm_options::add, ignored);
-    for (fs::recursive_directory_iterator iterator(path, ignored), end;
-         !ignored && iterator != end; ++iterator) {
-      fs::permissions(iterator->path(), fs::perms::owner_all,
-                      fs::perm_options::add, ignored);
+    clearWindowsDirectory(path_);
+    markWindowsDeletion(rootHandle());
+    closeWindowsHandles(ancestryHandles_);
+#else
+    if (rootFd_ < 0) {
+      if (parentFd_ >= 0) {
+        ::close(parentFd_);
+        parentFd_ = -1;
+      }
+      return;
     }
-    ignored.clear();
-    fs::remove_all(path, ignored);
+    clearDirectory(rootFd_);
+    struct stat expected{};
+    ::fstat(rootFd_, &expected);
+    ::close(rootFd_);
+    rootFd_ = -1;
+    const int duplicate = ::dup(parentFd_);
+    DIR *stream = duplicate >= 0 ? ::fdopendir(duplicate) : nullptr;
+    if (stream != nullptr) {
+      while (const dirent *entry = ::readdir(stream)) {
+        const std::string_view candidate(entry->d_name);
+        if (candidate == "." || candidate == "..") {
+          continue;
+        }
+        struct stat actual{};
+        if (::fstatat(parentFd_, entry->d_name, &actual, AT_SYMLINK_NOFOLLOW) ==
+                0 &&
+            S_ISDIR(actual.st_mode) && actual.st_dev == expected.st_dev &&
+            actual.st_ino == expected.st_ino) {
+          ::unlinkat(parentFd_, entry->d_name, AT_REMOVEDIR);
+          break;
+        }
+      }
+      ::closedir(stream);
+    } else if (duplicate >= 0) {
+      ::close(duplicate);
+    }
+    ::close(parentFd_);
+    parentFd_ = -1;
+#endif
   }
+
+  fs::path path_;
+  fs::path parentPath_;
+  std::string name_;
+#if defined(_WIN32)
+  std::vector<HANDLE> ancestryHandles_;
+#else
+  int parentFd_ = -1;
+  int rootFd_ = -1;
+#endif
 };
 
 bool archiveMemberMatches(const ArchiveMember &expected, archive_entry *entry,
@@ -713,14 +1642,31 @@ bool archiveMemberMatches(const ArchiveMember &expected, archive_entry *entry,
              static_cast<la_int64_t>(expected.declaredSize);
 }
 
-bool extractArchive(const fs::path &archivePath,
-                    const ArchiveInventory &inventory,
-                    const fs::path &destination, std::stop_token stop,
+std::uint32_t updateCrc32(std::uint32_t crc, std::span<const char> bytes) {
+  static const std::array<std::uint32_t, 256> table = [] {
+    std::array<std::uint32_t, 256> values{};
+    for (std::uint32_t index = 0; index < values.size(); ++index) {
+      std::uint32_t value = index;
+      for (int bit = 0; bit < 8; ++bit) {
+        value = (value & 1U) != 0 ? 0xedb88320U ^ (value >> 1U) : value >> 1U;
+      }
+      values[index] = value;
+    }
+    return values;
+  }();
+  for (const unsigned char byte : bytes) {
+    crc = table[(crc ^ byte) & 0xffU] ^ (crc >> 8U);
+  }
+  return crc;
+}
+
+bool extractArchive(OwnedArchiveFile &owned, const ArchiveInventory &inventory,
+                    SecureStagingTree &staging, std::stop_token stop,
                     const SkinProgressCallback &callback,
+                    const std::shared_ptr<const SkinImportIoObserver> &observer,
                     std::vector<SkinDiagnostic> &diagnostics, bool &cancelled) {
   ArchiveHandle reader(archive_read_new());
-  if (!reader ||
-      !configureArchiveReader(reader.get(), archivePath, diagnostics)) {
+  if (!reader || !configureArchiveReader(reader.get(), owned, diagnostics)) {
     return false;
   }
   std::array<char, 64 * 1024> buffer{};
@@ -756,11 +1702,10 @@ bool extractArchive(const fs::path &archivePath,
       }
       continue;
     }
-    const fs::path output = destination / pathFromUtf8(member.installedPath);
-    std::error_code error;
     if (member.kind == MemberKind::Directory) {
-      fs::create_directories(output, error);
-      if (error || archive_read_data_skip(reader.get()) != ARCHIVE_OK) {
+      if (!staging.createDirectory(member.installedPath, observer,
+                                   diagnostics) ||
+          archive_read_data_skip(reader.get()) != ARCHIVE_OK) {
         diagnostics.push_back(
             diagnostic("skin_archive_extract_failed",
                        "unable to create explicit package directory",
@@ -770,17 +1715,29 @@ bool extractArchive(const fs::path &archivePath,
       continue;
     }
 
-    fs::create_directories(output.parent_path(), error);
-    std::ofstream stream(output, std::ios::binary | std::ios::trunc);
-    if (error || !stream) {
+#if defined(_WIN32)
+    HANDLE output =
+        staging.createFile(member.installedPath, observer, diagnostics);
+    if (output == INVALID_HANDLE_VALUE) {
+#else
+    int output =
+        staging.createFile(member.installedPath, observer, diagnostics);
+    if (output < 0) {
+#endif
       diagnostics.push_back(diagnostic(
           "skin_archive_extract_failed",
           "unable to create extracted package file", member.installedPath));
       return false;
     }
     std::uint64_t fileBytes = 0;
+    std::uint32_t crc32 = 0xffffffffU;
     while (true) {
       if (stop.stop_requested()) {
+#if defined(_WIN32)
+        CloseHandle(output);
+#else
+        ::close(output);
+#endif
         cancelled = true;
         return false;
       }
@@ -790,6 +1747,11 @@ bool extractArchive(const fs::path &archivePath,
         break;
       }
       if (count < 0) {
+#if defined(_WIN32)
+        CloseHandle(output);
+#else
+        ::close(output);
+#endif
         diagnostics.push_back(
             diagnostic("skin_archive_crc_or_read_failed",
                        archiveError(reader.get(),
@@ -804,13 +1766,45 @@ bool extractArchive(const fs::path &archivePath,
                               nextFile) ||
           !addWithoutOverflow(completedBytes, chunk,
                               SkinPackagePolicy::maxExpandedBytes, nextTotal)) {
+#if defined(_WIN32)
+        CloseHandle(output);
+#else
+        ::close(output);
+#endif
         diagnostics.push_back(diagnostic(
             "skin_archive_stream_limit_exceeded",
             "archive data exceeds its inventoried size", member.installedPath));
         return false;
       }
-      stream.write(buffer.data(), count);
-      if (!stream) {
+#if defined(_WIN32)
+      DWORD written = 0;
+      const bool wrote =
+          WriteFile(output, buffer.data(), static_cast<DWORD>(count), &written,
+                    nullptr) &&
+          written == static_cast<DWORD>(count);
+#else
+      std::size_t written = 0;
+      bool wrote = true;
+      while (written < static_cast<std::size_t>(count)) {
+        const ssize_t amount =
+            ::write(output, buffer.data() + written,
+                    static_cast<std::size_t>(count) - written);
+        if (amount < 0 && errno == EINTR) {
+          continue;
+        }
+        if (amount <= 0) {
+          wrote = false;
+          break;
+        }
+        written += static_cast<std::size_t>(amount);
+      }
+#endif
+      if (!wrote) {
+#if defined(_WIN32)
+        CloseHandle(output);
+#else
+        ::close(output);
+#endif
         diagnostics.push_back(diagnostic(
             "skin_archive_extract_failed",
             "unable to write extracted package data", member.installedPath));
@@ -818,20 +1812,32 @@ bool extractArchive(const fs::path &archivePath,
       }
       fileBytes = nextFile;
       completedBytes = nextTotal;
+      crc32 = updateCrc32(
+          crc32, std::span(buffer.data(), static_cast<std::size_t>(count)));
       if (!report(callback,
                   {.phase = SkinProgressPhase::Copying,
                    .completedBytes = completedBytes,
                    .totalBytes = inventory.totalBytes,
                    .completedFiles = completedFiles},
                   diagnostics)) {
+#if defined(_WIN32)
+        CloseHandle(output);
+#else
+        ::close(output);
+#endif
         return false;
       }
     }
-    stream.close();
-    if (!stream || fileBytes != member.declaredSize) {
+#if defined(_WIN32)
+    const bool closed = FlushFileBuffers(output) && CloseHandle(output);
+#else
+    const bool closed = ::fsync(output) == 0 && ::close(output) == 0;
+#endif
+    if (!closed || fileBytes != member.declaredSize ||
+        (crc32 ^ 0xffffffffU) != member.expectedCrc32) {
       diagnostics.push_back(
-          diagnostic("skin_archive_size_mismatch",
-                     "extracted package data does not match its declared size",
+          diagnostic("skin_archive_crc_or_read_failed",
+                     "extracted package data does not match its size or CRC",
                      member.installedPath));
       return false;
     }
@@ -850,10 +1856,133 @@ bool extractArchive(const fs::path &archivePath,
   return true;
 }
 
-bool copyStableCandidate(const fs::path &source, const fs::path &destination,
-                         std::stop_token stop,
-                         std::vector<SkinDiagnostic> &diagnostics,
-                         bool &cancelled) {
+template <typename Integer>
+void hashBigEndian(file_checksum::Sha256 &hash, Integer value) {
+  std::array<std::byte, sizeof(Integer)> bytes{};
+  for (std::size_t index = 0; index < bytes.size(); ++index) {
+    bytes[bytes.size() - index - 1] =
+        static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+  }
+  hash.update(bytes);
+}
+
+void hashText(file_checksum::Sha256 &hash, std::string_view text) {
+  hash.update(std::as_bytes(std::span(text.data(), text.size())));
+}
+
+std::optional<std::string>
+digestArchivePayload(const ArchiveInventory &inventory,
+                     const SecureStagingTree &staging, std::stop_token stop,
+                     bool &cancelled,
+                     std::vector<SkinDiagnostic> &diagnostics) {
+  std::vector<const ArchiveMember *> files;
+  files.reserve(static_cast<std::size_t>(inventory.fileCount));
+  for (const ArchiveMember &member : inventory.members) {
+    if (member.kind == MemberKind::Regular) {
+      files.push_back(&member);
+    }
+  }
+  std::ranges::sort(files, {}, [](const ArchiveMember *member) {
+    return member->installedPath;
+  });
+
+  file_checksum::Sha256 hash;
+  hashText(hash, "ASOBMSKIN-TREE-V1");
+  const std::array<std::byte, 1> terminator{std::byte{0}};
+  hash.update(terminator);
+  hashBigEndian(hash, static_cast<std::uint64_t>(files.size()));
+  std::array<char, 64 * 1024> buffer{};
+  for (const ArchiveMember *member : files) {
+    if (stop.stop_requested()) {
+      cancelled = true;
+      return std::nullopt;
+    }
+    hashBigEndian(hash,
+                  static_cast<std::uint32_t>(member->installedPath.size()));
+    hashText(hash, member->installedPath);
+    hashBigEndian(hash, member->declaredSize);
+#if defined(_WIN32)
+    HANDLE input = staging.openFileForRead(member->installedPath);
+    if (input == INVALID_HANDLE_VALUE) {
+#else
+    int input = staging.openFileForRead(member->installedPath);
+    struct stat inputStatus{};
+    if (input < 0 || ::fstat(input, &inputStatus) != 0 ||
+        !S_ISREG(inputStatus.st_mode) || inputStatus.st_nlink != 1) {
+      if (input >= 0) {
+        ::close(input);
+      }
+#endif
+      diagnostics.push_back(
+          diagnostic("skin_archive_payload_digest_failed",
+                     "unable to reopen a safely extracted archive payload",
+                     member->installedPath));
+      return std::nullopt;
+    }
+    std::uint64_t readTotal = 0;
+    bool readOk = true;
+    while (readTotal < member->declaredSize) {
+      if (stop.stop_requested()) {
+#if defined(_WIN32)
+        CloseHandle(input);
+#else
+        ::close(input);
+#endif
+        cancelled = true;
+        return std::nullopt;
+      }
+      const std::size_t requested =
+          static_cast<std::size_t>(std::min<std::uint64_t>(
+              buffer.size(), member->declaredSize - readTotal));
+#if defined(_WIN32)
+      DWORD count = 0;
+      readOk = ReadFile(input, buffer.data(), static_cast<DWORD>(requested),
+                        &count, nullptr) != 0;
+#else
+      ssize_t count = ::read(input, buffer.data(), requested);
+      if (count < 0 && errno == EINTR) {
+        continue;
+      }
+      readOk = count >= 0;
+#endif
+      if (!readOk || count == 0) {
+        break;
+      }
+      hash.update(std::as_bytes(
+          std::span(buffer.data(), static_cast<std::size_t>(count))));
+      readTotal += static_cast<std::uint64_t>(count);
+    }
+    char extra = 0;
+#if defined(_WIN32)
+    DWORD extraCount = 0;
+    const bool exact = readOk && readTotal == member->declaredSize &&
+                       ReadFile(input, &extra, 1, &extraCount, nullptr) &&
+                       extraCount == 0;
+    CloseHandle(input);
+#else
+    ssize_t extraCount = -1;
+    do {
+      extraCount = ::read(input, &extra, 1);
+    } while (extraCount < 0 && errno == EINTR);
+    const bool exact =
+        readOk && readTotal == member->declaredSize && extraCount == 0;
+    ::close(input);
+#endif
+    if (!exact) {
+      diagnostics.push_back(
+          diagnostic("skin_archive_payload_digest_failed",
+                     "extracted archive payload changed size while hashing",
+                     member->installedPath));
+      return std::nullopt;
+    }
+  }
+  return hash.finalHex();
+}
+
+bool copyStableCandidate(
+    const fs::path &source, SecureStagingTree &staging, std::stop_token stop,
+    const std::shared_ptr<const SkinImportIoObserver> &observer,
+    std::vector<SkinDiagnostic> &diagnostics, bool &cancelled) {
   std::error_code error;
   for (fs::recursive_directory_iterator iterator(source, error), end;
        !error && iterator != end; ++iterator) {
@@ -862,18 +1991,31 @@ bool copyStableCandidate(const fs::path &source, const fs::path &destination,
       return false;
     }
     const fs::path relative = iterator->path().lexically_relative(source);
-    const fs::path output = destination / relative;
+    const std::string relativeUtf8 = utf8Path(relative);
     if (iterator->is_directory(error)) {
-      fs::create_directories(output, error);
+      if (!staging.createDirectory(relativeUtf8, observer, diagnostics)) {
+        error = std::make_error_code(std::errc::io_error);
+      }
     } else if (iterator->is_regular_file(error)) {
-      fs::create_directories(output.parent_path(), error);
-      if (!error) {
-        std::ifstream input(iterator->path(), std::ios::binary);
-        std::ofstream copied(output, std::ios::binary | std::ios::trunc);
+      std::ifstream input(iterator->path(), std::ios::binary);
+#if defined(_WIN32)
+      HANDLE output = staging.createFile(relativeUtf8, observer, diagnostics);
+      const bool outputValid = output != INVALID_HANDLE_VALUE;
+#else
+      int output = staging.createFile(relativeUtf8, observer, diagnostics);
+      const bool outputValid = output >= 0;
+#endif
+      if (input && outputValid) {
         file_checksum::Sha256 sourceHash;
         std::array<char, 64 * 1024> buffer{};
-        while (input && copied) {
+        bool writeOk = true;
+        while (input && writeOk) {
           if (stop.stop_requested()) {
+#if defined(_WIN32)
+            CloseHandle(output);
+#else
+            ::close(output);
+#endif
             cancelled = true;
             return false;
           }
@@ -883,37 +2025,95 @@ bool copyStableCandidate(const fs::path &source, const fs::path &destination,
           if (count > 0) {
             sourceHash.update(std::as_bytes(
                 std::span(buffer.data(), static_cast<std::size_t>(count))));
-            copied.write(buffer.data(), count);
+#if defined(_WIN32)
+            DWORD written = 0;
+            writeOk = WriteFile(output, buffer.data(),
+                                static_cast<DWORD>(count), &written, nullptr) &&
+                      written == static_cast<DWORD>(count);
+#else
+            std::size_t written = 0;
+            while (written < static_cast<std::size_t>(count)) {
+              const ssize_t amount =
+                  ::write(output, buffer.data() + written,
+                          static_cast<std::size_t>(count) - written);
+              if (amount < 0 && errno == EINTR) {
+                continue;
+              }
+              if (amount <= 0) {
+                writeOk = false;
+                break;
+              }
+              written += static_cast<std::size_t>(amount);
+            }
+#endif
           }
         }
-        copied.close();
-        if (!input.eof() || !copied) {
+        if (!input.eof() || !writeOk) {
           error = std::make_error_code(std::errc::io_error);
         } else {
-          std::ifstream verification(output, std::ios::binary);
           file_checksum::Sha256 copiedHash;
-          while (verification) {
+#if defined(_WIN32)
+          LARGE_INTEGER beginning{};
+          bool verificationOk =
+              SetFilePointerEx(output, beginning, nullptr, FILE_BEGIN) != 0;
+#else
+          bool verificationOk = ::lseek(output, 0, SEEK_SET) == 0;
+#endif
+          while (verificationOk) {
             if (stop.stop_requested()) {
+#if defined(_WIN32)
+              CloseHandle(output);
+#else
+              ::close(output);
+#endif
               cancelled = true;
               return false;
             }
-            verification.read(buffer.data(),
-                              static_cast<std::streamsize>(buffer.size()));
-            const std::streamsize count = verification.gcount();
+#if defined(_WIN32)
+            DWORD count = 0;
+            verificationOk = ReadFile(output, buffer.data(),
+                                      static_cast<DWORD>(buffer.size()), &count,
+                                      nullptr) != 0;
+#else
+            ssize_t count = ::read(output, buffer.data(), buffer.size());
+            if (count < 0 && errno == EINTR) {
+              continue;
+            }
+            verificationOk = count >= 0;
+#endif
+            if (!verificationOk || count == 0) {
+              break;
+            }
             if (count > 0) {
               copiedHash.update(std::as_bytes(
                   std::span(buffer.data(), static_cast<std::size_t>(count))));
             }
           }
-          if (!verification.eof() ||
+          if (!verificationOk ||
               sourceHash.finalHex() != copiedHash.finalHex()) {
             error = std::make_error_code(std::errc::io_error);
           }
         }
-      }
-      if (!error) {
-        fs::permissions(output, fs::perms::owner_read | fs::perms::owner_write,
-                        fs::perm_options::add, error);
+#if defined(_WIN32)
+        if (!FlushFileBuffers(output)) {
+          error = std::make_error_code(std::errc::io_error);
+        }
+        CloseHandle(output);
+#else
+        if (::fsync(output) != 0) {
+          error = std::error_code(errno, std::generic_category());
+        }
+        ::close(output);
+#endif
+      } else {
+        if (outputValid) {
+#if defined(_WIN32)
+          CloseHandle(output);
+#else
+          ::close(output);
+#endif
+        }
+        error = std::make_error_code(std::errc::io_error);
       }
     } else {
       error = std::make_error_code(std::errc::invalid_argument);
@@ -989,22 +2189,25 @@ void appendSnapshotFailure(SnapshotTreeResult &snapshot,
 
 struct PreparedPackage::State {
   State(PreparedSkinRevision revisionValue,
-        std::vector<SkinEntryId> entriesValue, fs::path visibleValue)
+        std::vector<SkinEntryId> entriesValue, fs::path visibleValue,
+        std::shared_ptr<void> visibleOwnerValue)
       : revision(std::move(revisionValue)), entries(std::move(entriesValue)),
-        visibleStagingRoot(std::move(visibleValue)) {}
+        visibleStagingRoot(std::move(visibleValue)),
+        visibleOwner(std::move(visibleOwnerValue)) {}
 
   PreparedSkinRevision revision;
   std::vector<SkinEntryId> entries;
   fs::path visibleStagingRoot;
-
-  ~State() { MutableTreeCleanup cleanup{visibleStagingRoot}; }
+  std::shared_ptr<void> visibleOwner;
 };
 
 PreparedPackage::PreparedPackage(PreparedSkinRevision revision,
                                  std::vector<SkinEntryId> entries,
-                                 fs::path visibleStagingRoot)
+                                 fs::path visibleStagingRoot,
+                                 std::shared_ptr<void> visibleOwner)
     : state_(std::make_unique<State>(std::move(revision), std::move(entries),
-                                     std::move(visibleStagingRoot))) {}
+                                     std::move(visibleStagingRoot),
+                                     std::move(visibleOwner))) {}
 
 PreparedPackage::PreparedPackage(PreparedPackage &&) noexcept = default;
 PreparedPackage &
@@ -1036,9 +2239,11 @@ SkinRevisionReadView PreparedPackage::readView() const noexcept {
   return state_->revision.readView();
 }
 
-SkinArchiveImporter::SkinArchiveImporter(SkinStorageRoots roots,
-                                         const SkinAliasDetector &aliases)
-    : roots_(std::move(roots)), aliases_(aliases) {}
+SkinArchiveImporter::SkinArchiveImporter(
+    SkinStorageRoots roots, const SkinAliasDetector &aliases,
+    std::shared_ptr<const SkinImportIoObserver> observer)
+    : roots_(std::move(roots)), aliases_(aliases),
+      observer_(std::move(observer)) {}
 
 PreparePackageResult SkinArchiveImporter::prepareArchive(
     const fs::path &archivePath, const SkinPackageId &package,
@@ -1055,35 +2260,29 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
     result.cancelled = true;
     return result;
   }
-  std::error_code error;
-  const fs::file_status status = fs::symlink_status(archivePath, error);
-  if (error || !fs::is_regular_file(status)) {
-    result.diagnostics.push_back(
-        diagnostic("skin_archive_input_invalid",
-                   "skin archive is missing or is not a regular file"));
+  auto owned = copyArchiveSource(archivePath, stop, result.cancelled, observer_,
+                                 result.diagnostics);
+  if (!owned) {
     return result;
   }
-  const std::uint64_t archiveBytes = fs::file_size(archivePath, error);
-  if (error || archiveBytes > SkinPackagePolicy::maxArchiveBytes) {
-    result.diagnostics.push_back(
-        diagnostic("skin_archive_input_too_large",
-                   "skin archive exceeds the package archive-byte limit"));
+  RawZipMembers rawMembers;
+  if (!validateRawZipEnvelope(
+          *owned, owned->bytes(), *normalizedPackage.package, stop,
+          result.cancelled, observer_, rawMembers, result.diagnostics)) {
     return result;
   }
-  if (!validateRawZipEnvelope(archivePath, archiveBytes,
-                              *normalizedPackage.package, result.diagnostics)) {
-    return result;
-  }
-  std::string digestError;
-  const auto beforeDigest = file_checksum::sha256File(
-      archivePath, digestError, SkinPackagePolicy::maxArchiveBytes);
+  const auto beforeDigest =
+      hashOwnedArchive(*owned, stop, result.cancelled, observer_);
   if (!beforeDigest) {
-    result.diagnostics.push_back(
-        diagnostic("skin_archive_input_read_failed", std::move(digestError)));
+    if (!result.cancelled) {
+      result.diagnostics.push_back(diagnostic("skin_archive_input_read_failed",
+                                              "unable to hash owned skin ZIP"));
+    }
     return result;
   }
-  auto inventory = inventoryArchive(archivePath, *normalizedPackage.package,
-                                    stop, callback, result.diagnostics);
+  auto inventory =
+      inventoryArchive(*owned, *normalizedPackage.package, rawMembers, stop,
+                       callback, result.diagnostics);
   if (!inventory) {
     result.cancelled = stop.stop_requested();
     return result;
@@ -1101,29 +2300,48 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
     return result;
   }
 
-  fs::path visibleStaging;
-  if (!makeVisibleStagingRoot(roots_, visibleStaging, result.diagnostics)) {
+  auto visibleStaging =
+      SecureStagingTree::create(roots_, observer_, result.diagnostics);
+  if (!visibleStaging) {
     return result;
   }
-  MutableTreeCleanup cleanup{visibleStaging};
-  if (!extractArchive(archivePath, *inventory, visibleStaging, stop, callback,
-                      result.diagnostics, result.cancelled)) {
+  if (!extractArchive(*owned, *inventory, *visibleStaging, stop, callback,
+                      observer_, result.diagnostics, result.cancelled)) {
     return result;
   }
-  const auto afterDigest = file_checksum::sha256File(
-      archivePath, digestError, SkinPackagePolicy::maxArchiveBytes);
+  const auto afterDigest =
+      hashOwnedArchive(*owned, stop, result.cancelled, observer_);
   if (!afterDigest || *afterDigest != *beforeDigest) {
-    result.diagnostics.push_back(
-        diagnostic("skin_archive_source_changed",
-                   "skin archive changed between inventory and extraction"));
+    if (!result.cancelled) {
+      result.diagnostics.push_back(diagnostic(
+          "skin_archive_source_changed",
+          "owned skin archive changed between inventory and extraction"));
+    }
     return result;
   }
+  const auto payloadDigest = digestArchivePayload(
+      *inventory, *visibleStaging, stop, result.cancelled, result.diagnostics);
+  if (!payloadDigest) {
+    return result;
+  }
+  if (!visibleStaging->verifyIdentity(result.diagnostics)) {
+    return result;
+  }
+  observe(observer_, SkinImportIoOperation::BeforeVisibleSnapshot,
+          visibleStaging->path());
 
   SkinTreeSnapshotter snapshotter(roots_, aliases_);
-  auto snapshot = snapshotter.snapshot(
-      visibleStaging, *normalizedPackage.package, stop, std::move(callback));
+  auto snapshot =
+      snapshotter.snapshot(visibleStaging->path(), *normalizedPackage.package,
+                           stop, std::move(callback));
   if (!snapshot.prepared) {
     appendSnapshotFailure(snapshot, result);
+    return result;
+  }
+  if (snapshot.prepared->revision().lowercaseSha256 != *payloadDigest) {
+    result.diagnostics.push_back(diagnostic(
+        "skin_archive_payload_digest_mismatch",
+        "Task5 candidate does not match the streamed archive payload digest"));
     return result;
   }
   auto entries = discoverEntries(snapshot.prepared->readView(), stop,
@@ -1131,9 +2349,10 @@ PreparePackageResult SkinArchiveImporter::prepareArchive(
   if (!entries) {
     return result;
   }
-  result.prepared = PreparedPackage(std::move(*snapshot.prepared),
-                                    std::move(*entries), visibleStaging);
-  cleanup.path.clear();
+  const fs::path visibleStagingPath = visibleStaging->path();
+  result.prepared =
+      PreparedPackage(std::move(*snapshot.prepared), std::move(*entries),
+                      visibleStagingPath, std::move(visibleStaging));
   return result;
 }
 
@@ -1188,18 +2407,23 @@ PreparePackageResult SkinArchiveImporter::prepareFolder(
   if (!entries) {
     return result;
   }
-  fs::path visibleStaging;
-  if (!makeVisibleStagingRoot(roots_, visibleStaging, result.diagnostics)) {
+  auto visibleStaging =
+      SecureStagingTree::create(roots_, observer_, result.diagnostics);
+  if (!visibleStaging) {
     return result;
   }
-  MutableTreeCleanup cleanup{visibleStaging};
-  if (!copyStableCandidate(snapshot.prepared->stagingRoot(), visibleStaging,
-                           stop, result.diagnostics, result.cancelled)) {
+  if (!copyStableCandidate(snapshot.prepared->stagingRoot(), *visibleStaging,
+                           stop, observer_, result.diagnostics,
+                           result.cancelled)) {
     return result;
   }
-  result.prepared = PreparedPackage(std::move(*snapshot.prepared),
-                                    std::move(*entries), visibleStaging);
-  cleanup.path.clear();
+  if (!visibleStaging->verifyIdentity(result.diagnostics)) {
+    return result;
+  }
+  const fs::path visibleStagingPath = visibleStaging->path();
+  result.prepared =
+      PreparedPackage(std::move(*snapshot.prepared), std::move(*entries),
+                      visibleStagingPath, std::move(visibleStaging));
   return result;
 }
 

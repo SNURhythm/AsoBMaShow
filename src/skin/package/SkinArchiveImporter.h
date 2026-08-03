@@ -11,6 +11,25 @@
 
 namespace skin {
 
+enum class SkinImportIoOperation : std::uint8_t {
+  VisibleRootIssued,
+  BeforeVisibleDirectory,
+  BeforeVisibleFile,
+  BeforeVisibleSnapshot,
+  OwnedArchiveCopyChunk,
+  RawZipRecord,
+  OwnedArchiveHashChunk,
+};
+
+// Narrow observer seam for deterministic cancellation and path-race tests.
+// Production leaves this unset.
+class SkinImportIoObserver {
+public:
+  virtual ~SkinImportIoObserver() = default;
+  virtual void reached(SkinImportIoOperation,
+                       const std::filesystem::path &) const = 0;
+};
+
 class PreparedPackage {
 public:
   PreparedPackage(PreparedPackage &&) noexcept;
@@ -27,7 +46,7 @@ public:
 
 private:
   PreparedPackage(PreparedSkinRevision, std::vector<SkinEntryId>,
-                  std::filesystem::path);
+                  std::filesystem::path, std::shared_ptr<void>);
   struct State;
   std::unique_ptr<State> state_;
   friend class SkinArchiveImporter;
@@ -41,7 +60,9 @@ struct PreparePackageResult {
 
 class SkinArchiveImporter {
 public:
-  SkinArchiveImporter(SkinStorageRoots, const SkinAliasDetector &);
+  SkinArchiveImporter(
+      SkinStorageRoots, const SkinAliasDetector &,
+      std::shared_ptr<const SkinImportIoObserver> observer = {});
 
   PreparePackageResult prepareArchive(const std::filesystem::path &,
                                       const SkinPackageId &, std::stop_token,
@@ -53,6 +74,7 @@ public:
 private:
   SkinStorageRoots roots_;
   const SkinAliasDetector &aliases_;
+  std::shared_ptr<const SkinImportIoObserver> observer_;
 };
 
 } // namespace skin
