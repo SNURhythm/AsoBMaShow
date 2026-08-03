@@ -10,6 +10,11 @@ SkinPackageStore::SkinPackageStore(
     : roots_(std::move(roots)), catalog_(catalog), aliases_(aliases),
       profileSnapshots_(profileSnapshots) {}
 
+void SkinPackageStore::recover() {
+  // Deliberate Task 7 RED scaffold. Cross-root journal replay requires this
+  // store-owned root set and is specified by skin_package_store_red_tests.
+}
+
 PreparePackageResult SkinPackageStore::prepareArchive(
     const std::filesystem::path &zip, const SkinPackageId &package,
     std::stop_token stop, SkinProgressCallback progress) {

@@ -114,6 +114,7 @@ public:
   SkinPackageStore(SkinStorageRoots, SkinPackageCatalog &, SkinAliasDetector &,
                    ISkinProfileSnapshotProvider &);
 
+  void recover();
   PreparePackageResult prepareArchive(const std::filesystem::path &zip,
                                       const SkinPackageId &package,
                                       std::stop_token stop,
