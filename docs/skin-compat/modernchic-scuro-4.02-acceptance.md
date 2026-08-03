@@ -73,9 +73,11 @@ requirements before renderer work:
   load/render reachability, and configuration guard without external paths or
   option labels;
 - a frozen session-critical negative render-I/O scenario with exact
-  diagnostic/fallback, asynchronously captured before/after overlay digests,
-  the selected denied-operation kind, and expected/observed canonical opaque
-  guard-vector digests for both negative and passing configurations;
+  diagnostic/fallback, a before overlay digest completed asynchronously before
+  chart/session binding, an after digest computed only after session teardown,
+  required digest equality, memory-only timed-path polling, the selected
+  denied-operation kind, and expected/observed canonical opaque guard-vector
+  digests for both negative and passing configurations;
 - all six 16:9 and 4:3 Fit/Stretch/Custom layout cases;
 - a 30-second warm-up followed by three complete 180-second repetitions for
   every scenario/layout; and
@@ -90,21 +92,25 @@ probe still requires every performed counter to remain zero and only its frozen
 denied-operation counter to become nonzero.
 
 The passing audit vector is
-`7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33`;
+`eb52ec905a507efe50273b2ff09d91d10f025d5019c7bf3d4330ee31e3445e13`;
 both opaque render-I/O guards are `not-reachable`. The negative audit vector is
-`c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb`;
+`e4f5da4b24ae219320023f32820569fb442ceb0b6ad0a4823de74325ddc07552`;
 exactly one guard is `reachable`, its first post-transition attempt is the
 frozen `filesystemRead` kind, and the other guard remains `not-reachable`.
-These values are static, domain-separated audit evidence. They do not replace
-the still-pending physical `SkinConfigurationDigestV1` value.
+These values are static, domain-separated evidence over the selected revision,
+entry, effective opaque runtime option/choice selections, and guard outcomes.
+They do not replace the still-pending physical `SkinConfigurationDigestV1`
+value.
 
 The negative run must deny the read before effect, emit
 `skin_file_render_phase_denied`, discard that frame, disable the skin session,
 and present the initialized built-in renderer in the same frame. Its performed
 read/write/directory-scan/resource-upload counters remain zero; only the denied
-read counter becomes positive. Before/after overlay digests are captured
-asynchronously after session teardown and remain pending until the physical
-run is recorded, avoiding digest work in the timed render path.
+read counter becomes positive. The before overlay digest must complete
+asynchronously before chart/session binding; the after digest is computed only
+after session teardown, and the two digests must be equal. Timed-path polling
+is memory-only over precomputed status. Both digest values remain pending until
+the physical run is recorded.
 
 Task 1 permits `pending`. Final acceptance permits only `pass`.
 

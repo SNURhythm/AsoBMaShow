@@ -15,8 +15,9 @@ the audit must never copy the former into the latter.
 
 The passing and negative guard vectors use deterministic UTF-8 byte ordering.
 The negative scenario denies its frozen render-phase operation before effect,
-keeps performed and denied counters separate, and defers before/after overlay
-digest capture until after session teardown.
+keeps performed and denied counters separate, completes the before overlay
+digest before chart/session binding, computes the after digest only after
+session teardown, requires equality, and keeps timed-path polling memory-only.
 
 No third-party payload belongs in this directory. Lua, images, fonts, audio,
 video, or archives added by later tasks must be small, purpose-built,

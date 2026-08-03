@@ -113,12 +113,14 @@ overlay parent directories.
 
 Configured loading may perform the audited reads, writes, and directory scan.
 Two selected option guards can instead retain filesystem-reading/writing
-callbacks into render phase. Their source identities and labels are never
-serialized: the manifest contains only stable opaque guard IDs and two
-deterministically ordered vectors. The passing vector makes both callbacks
-unreachable. The negative vector makes exactly the callback whose first
-post-transition operation is a filesystem read reachable and leaves the other
-callback unreachable.
+callbacks into render phase. The audit reconstructs their effective runtime
+option keys, choice labels, and numeric `op` values from the selected header,
+then serializes only opaque option, choice, and guard IDs. Each guard records
+the ordered operation kinds derived from its retained callback's scoped,
+transitive call graph. The passing vector makes both callbacks unreachable.
+The negative vector makes exactly one callback reachable, takes the denied
+kind from that callback's first operation, and leaves the other callback
+unreachable.
 
 At the configured-load-to-render transition, read buffers are released, all
 handles are invalidated, and unclosed write buffers are discarded. A dirty
@@ -128,12 +130,13 @@ must be denied before effect. Performed filesystem/resource-upload counters and
 denied-attempt counters are separate.
 
 `auditedGuardConfigurationSha256` is domain-separated static audit evidence
-over the selected entry plus source guard/value pairs. It is not
-`SkinConfigurationDigestV1`, does not attest to physical configuration bytes,
-and must never populate the acceptance record's pending
-`externalDigests.configurationSha256`. The public guard-vector digest is a
-second domain-separated hash over that audit digest and the ordered opaque
-guard/value pairs.
+over the selected revision, selected entry, and effective opaque runtime
+option/choice selections. The public guard-vector digest is a second
+domain-separated hash over that audit digest and the ordered opaque
+guard/option/choice/outcome tuples. Neither digest is
+`SkinConfigurationDigestV1`; neither attests to physical configuration bytes
+or may populate the acceptance record's pending
+`externalDigests.configurationSha256`.
 
 Any post-transition filesystem or resource-upload attempt is a
 session-critical sandbox-integrity violation even when its caller belongs to
@@ -141,6 +144,12 @@ an otherwise optional object. The operation is denied before I/O, that skin
 frame is discarded, and the initialized built-in presentation takes over in
 the same frame. Performed and denied counters remain distinct in acceptance
 evidence.
+
+For the negative overlay-integrity probe, the before digest is computed
+asynchronously to completion before chart/session binding. The after digest is
+computed only after session teardown, and the two digests must be equal.
+Timed-path polling is memory-only: it may read precomputed status but may not
+hash or enumerate overlay storage during rendering.
 
 ## Audited closed legacy facade and sandbox divergence
 

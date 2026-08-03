@@ -204,7 +204,7 @@
     },
     "negativeScenarios": [
       {
-        "auditedGuardConfigurationSha256": "031dbe40093326911ce9e724bfa7c5613fef90a8380668ea2c68c79e6eb10761",
+        "auditedGuardConfigurationSha256": "dd6c3fcf4ffdc4e72882e47294a29c2f845c599f624d0948f72988c9be330b74",
         "criticality": "session-critical-sandbox-integrity",
         "deniedCountersExpected": {
           "filesystemDirectoryScans": 0,
@@ -215,12 +215,15 @@
         "expectedAction": "discard_frame_disable_session_same_frame_builtin",
         "expectedDeniedOperation": "filesystemRead",
         "expectedDiagnostic": "skin_file_render_phase_denied",
-        "expectedGuardVectorSha256": "c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb",
-        "guardConfigurationId": "configuration-51f549ae554ff70239c324eb",
+        "expectedGuardVectorSha256": "e4f5da4b24ae219320023f32820569fb442ceb0b6ad0a4823de74325ddc07552",
+        "guardConfigurationId": "configuration-b1b2944d536e73ad930ac77e",
         "id": "scenario-f7395bddf2b0f715a900b5cd",
         "overlayDigestAfter": "pending",
+        "overlayDigestAfterCapture": "asynchronous-after-session-teardown",
         "overlayDigestBefore": "pending",
-        "overlayDigestCapture": "asynchronous-after-session-teardown",
+        "overlayDigestBeforeCapture": "complete-before-chart-session-bind",
+        "overlayDigestComparison": "equal",
+        "overlayDigestPolling": "memory-only-precomputed-status",
         "performedCountersExpected": {
           "filesystemDirectoryScans": 0,
           "filesystemReads": 0,
@@ -230,7 +233,7 @@
       }
     ],
     "passingGuardVectorSha256": [
-      "7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33"
+      "eb52ec905a507efe50273b2ff09d91d10f025d5019c7bf3d4330ee31e3445e13"
     ],
     "protocol": {
       "measurementSeconds": 180,
@@ -3703,39 +3706,128 @@
     },
     "auditedGuardConfigurations": [
       {
-        "auditedGuardConfigurationSha256": "95515ea717f93471dcbf5255a89d27d455865a7cf2121e21fa9bf042371f4f4e",
+        "auditedGuardConfigurationSha256": "4d5d525e5f44acd7498f1382ee0e74944156d266768decc54b8243e98dc17f21",
         "guardVector": [
           {
-            "guardId": "guard-2f076b2588a5528dc738eaa6",
+            "choiceId": "choice-9aae8d1a7118c18c8f42f448",
+            "guardId": "guard-4a28bd2c8dd8d75699f74226",
+            "optionId": "option-22176b776259ec8351966491",
             "value": "not-reachable"
           },
           {
-            "guardId": "guard-81067ade3e053e6cea868e0b",
+            "choiceId": "choice-af57e7636e12433ae5b68456",
+            "guardId": "guard-7e6c5e677c804c731b4cfe14",
+            "optionId": "option-52e710a632d6cc8911e9e890",
             "value": "not-reachable"
           }
         ],
-        "guardVectorSha256": "7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33",
-        "id": "configuration-aa5abad1b4239c645a388601",
+        "guardVectorSha256": "eb52ec905a507efe50273b2ff09d91d10f025d5019c7bf3d4330ee31e3445e13",
+        "id": "configuration-567caba6ccfd1b47b897cc03",
+        "optionSelections": [
+          {
+            "choiceId": "choice-9aae8d1a7118c18c8f42f448",
+            "optionId": "option-22176b776259ec8351966491"
+          },
+          {
+            "choiceId": "choice-af57e7636e12433ae5b68456",
+            "optionId": "option-52e710a632d6cc8911e9e890"
+          }
+        ],
         "role": "passing"
       },
       {
-        "auditedGuardConfigurationSha256": "031dbe40093326911ce9e724bfa7c5613fef90a8380668ea2c68c79e6eb10761",
+        "auditedGuardConfigurationSha256": "dd6c3fcf4ffdc4e72882e47294a29c2f845c599f624d0948f72988c9be330b74",
         "guardVector": [
           {
-            "guardId": "guard-2f076b2588a5528dc738eaa6",
+            "choiceId": "choice-1849467b7df203f302951bd5",
+            "guardId": "guard-4a28bd2c8dd8d75699f74226",
+            "optionId": "option-22176b776259ec8351966491",
             "value": "reachable"
           },
           {
-            "guardId": "guard-81067ade3e053e6cea868e0b",
+            "choiceId": "choice-af57e7636e12433ae5b68456",
+            "guardId": "guard-7e6c5e677c804c731b4cfe14",
+            "optionId": "option-52e710a632d6cc8911e9e890",
             "value": "not-reachable"
           }
         ],
-        "guardVectorSha256": "c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb",
-        "id": "configuration-51f549ae554ff70239c324eb",
+        "guardVectorSha256": "e4f5da4b24ae219320023f32820569fb442ceb0b6ad0a4823de74325ddc07552",
+        "id": "configuration-b1b2944d536e73ad930ac77e",
+        "optionSelections": [
+          {
+            "choiceId": "choice-1849467b7df203f302951bd5",
+            "optionId": "option-22176b776259ec8351966491"
+          },
+          {
+            "choiceId": "choice-af57e7636e12433ae5b68456",
+            "optionId": "option-52e710a632d6cc8911e9e890"
+          }
+        ],
         "role": "negative"
       }
     ],
     "authority": "audited-upstream-selected-closure",
+    "configuredModelEvidence": {
+      "conversion": "LuaSkinLoader.fromLuaValue",
+      "customObjectMaps": {
+        "customEvents": 0,
+        "customTimers": 0
+      },
+      "evaluator": "bounded-return-model-v1"
+    },
+    "negativeExpectedDeniedOperation": "filesystemRead",
+    "runtimeConfigurationBinding": {
+      "algorithm": "opaque-header-option-choice-v1",
+      "entrySha256": "aac73c59526e74f159731608b3b54e58a7e534537503acb88565a4c175cf8f13",
+      "guardBindings": [
+        {
+          "defaultChoiceId": "choice-9aae8d1a7118c18c8f42f448",
+          "guardId": "guard-4a28bd2c8dd8d75699f74226",
+          "nonReachableChoiceIds": [
+            "choice-9aae8d1a7118c18c8f42f448"
+          ],
+          "optionId": "option-22176b776259ec8351966491",
+          "orderedOperationKinds": [
+            "filesystemRead"
+          ],
+          "reachableChoiceId": "choice-1849467b7df203f302951bd5"
+        },
+        {
+          "defaultChoiceId": "choice-af57e7636e12433ae5b68456",
+          "guardId": "guard-7e6c5e677c804c731b4cfe14",
+          "nonReachableChoiceIds": [
+            "choice-af57e7636e12433ae5b68456"
+          ],
+          "optionId": "option-52e710a632d6cc8911e9e890",
+          "orderedOperationKinds": [
+            "filesystemRead",
+            "filesystemWrite",
+            "filesystemRead",
+            "filesystemRead",
+            "filesystemWrite",
+            "filesystemRead",
+            "filesystemRead",
+            "filesystemWrite",
+            "filesystemRead",
+            "filesystemRead",
+            "filesystemWrite",
+            "filesystemRead",
+            "filesystemWrite",
+            "filesystemWrite",
+            "filesystemWrite",
+            "filesystemWrite",
+            "filesystemRead",
+            "filesystemWrite",
+            "filesystemRead",
+            "filesystemWrite",
+            "filesystemWrite"
+          ],
+          "reachableChoiceId": "choice-0ec5f327685eda325e47177b"
+        }
+      ],
+      "schemaVersion": 1,
+      "selectedRevisionSha256": "448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d"
+    },
     "schemaVersion": 1,
     "upstreamFacts": {
       "dofile": {

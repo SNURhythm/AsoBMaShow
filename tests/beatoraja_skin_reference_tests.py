@@ -19,6 +19,8 @@ PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
 MANIFEST_PATH = ROOT / "tests/fixtures/beatoraja_skin/reference_manifest.json"
 CHECKER_PATH = ROOT / "scripts/check_beatoraja_reference.py"
 AUDIT_PATH = ROOT / "scripts/audit_beatoraja_skin.py"
+GAMEPLAY_CONTRACT_PATH = ROOT / "docs/skin-compat/beatoraja-lua-gameplay-contract.md"
+ACCEPTANCE_PATH = ROOT / "docs/skin-compat/modernchic-scuro-4.02-acceptance.md"
 LOWER_SHA256 = __import__("re").compile(r"^[0-9a-f]{64}$")
 
 
@@ -44,12 +46,31 @@ def sha256(path: Path) -> str:
 
 def opaque_guard_vector_sha256(configuration_sha256: str, guard_vector: list[dict]) -> str:
     digest = hashlib.sha256()
-    digest.update(b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V1\0")
+    digest.update(b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V2\0")
     digest.update(bytes.fromhex(configuration_sha256))
     digest.update(struct.pack(">I", len(guard_vector)))
     for guard in sorted(guard_vector, key=lambda item: item["guardId"].encode("utf-8")):
-        for field in ("guardId", "value"):
+        for field in ("guardId", "optionId", "choiceId", "value"):
             encoded = guard[field].encode("utf-8")
+            digest.update(struct.pack(">I", len(encoded)))
+            digest.update(encoded)
+    return digest.hexdigest()
+
+
+def effective_configuration_sha256(
+    selected_revision_sha256: str,
+    entry_sha256: str,
+    option_selections: list[dict],
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"ASOBMSKIN-AUDITED-EFFECTIVE-CONFIG-V2\0")
+    digest.update(bytes.fromhex(selected_revision_sha256))
+    digest.update(bytes.fromhex(entry_sha256))
+    ordered = sorted(option_selections, key=lambda item: item["optionId"].encode("utf-8"))
+    digest.update(struct.pack(">I", len(ordered)))
+    for selection in ordered:
+        for field in ("optionId", "choiceId"):
+            encoded = selection[field].encode("utf-8")
             digest.update(struct.pack(">I", len(encoded)))
             digest.update(encoded)
     return digest.hexdigest()
@@ -344,30 +365,48 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
             ],
         )
 
-        expected_configurations = [
-            {
-                "id": "configuration-aa5abad1b4239c645a388601",
-                "role": "passing",
-                "auditedGuardConfigurationSha256": "95515ea717f93471dcbf5255a89d27d455865a7cf2121e21fa9bf042371f4f4e",
-                "guardVectorSha256": "7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33",
-                "guardVector": [
-                    {"guardId": "guard-2f076b2588a5528dc738eaa6", "value": "not-reachable"},
-                    {"guardId": "guard-81067ade3e053e6cea868e0b", "value": "not-reachable"},
-                ],
-            },
-            {
-                "id": "configuration-51f549ae554ff70239c324eb",
-                "role": "negative",
-                "auditedGuardConfigurationSha256": "031dbe40093326911ce9e724bfa7c5613fef90a8380668ea2c68c79e6eb10761",
-                "guardVectorSha256": "c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb",
-                "guardVector": [
-                    {"guardId": "guard-2f076b2588a5528dc738eaa6", "value": "reachable"},
-                    {"guardId": "guard-81067ade3e053e6cea868e0b", "value": "not-reachable"},
-                ],
-            },
-        ]
-        self.assertEqual(selected["auditedGuardConfigurations"], expected_configurations)
+        self.assertIn("runtimeConfigurationBinding", selected)
+        runtime_binding = selected["runtimeConfigurationBinding"]
+        self.assertEqual(runtime_binding["schemaVersion"], 1)
+        self.assertEqual(
+            runtime_binding["algorithm"],
+            "opaque-header-option-choice-v1",
+        )
+        self.assertEqual(
+            runtime_binding["selectedRevisionSha256"],
+            manifest["archivePayloadTreeSha256"],
+        )
+        self.assertEqual(runtime_binding["entrySha256"], manifest["entries"][0]["sha256"])
+        self.assertEqual(len(runtime_binding["guardBindings"]), 2)
+        for binding in runtime_binding["guardBindings"]:
+            self.assertRegex(binding["guardId"], r"^guard-[0-9a-f]{24}$")
+            self.assertRegex(binding["optionId"], r"^option-[0-9a-f]{24}$")
+            self.assertRegex(binding["reachableChoiceId"], r"^choice-[0-9a-f]{24}$")
+            self.assertRegex(binding["defaultChoiceId"], r"^choice-[0-9a-f]{24}$")
+            self.assertTrue(binding["nonReachableChoiceIds"])
+            self.assertTrue(binding["orderedOperationKinds"])
+            self.assertIn(
+                binding["orderedOperationKinds"][0],
+                {"filesystemRead", "filesystemWrite", "filesystemDirectoryScan"},
+            )
+
+        self.assertIn("configuredModelEvidence", selected)
+        configured_model = selected["configuredModelEvidence"]
+        self.assertEqual(configured_model["evaluator"], "bounded-return-model-v1")
+        self.assertEqual(configured_model["conversion"], "LuaSkinLoader.fromLuaValue")
+        self.assertEqual(configured_model["customObjectMaps"], manifest["selectedCustomObjectMaps"])
+
+        configurations = selected["auditedGuardConfigurations"]
+        self.assertEqual([item["role"] for item in configurations], ["passing", "negative"])
         for configuration in selected["auditedGuardConfigurations"]:
+            self.assertEqual(
+                configuration["auditedGuardConfigurationSha256"],
+                effective_configuration_sha256(
+                    runtime_binding["selectedRevisionSha256"],
+                    runtime_binding["entrySha256"],
+                    configuration["optionSelections"],
+                ),
+            )
             self.assertEqual(
                 configuration["guardVectorSha256"],
                 opaque_guard_vector_sha256(
@@ -375,6 +414,22 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
                     configuration["guardVector"],
                 ),
             )
+            selected_choices = {
+                item["optionId"]: item["choiceId"]
+                for item in configuration["optionSelections"]
+            }
+            for guard in configuration["guardVector"]:
+                self.assertEqual(guard["choiceId"], selected_choices[guard["optionId"]])
+                binding = next(
+                    item for item in runtime_binding["guardBindings"]
+                    if item["guardId"] == guard["guardId"]
+                )
+                self.assertEqual(
+                    guard["value"],
+                    "reachable"
+                    if guard["choiceId"] == binding["reachableChoiceId"]
+                    else "not-reachable",
+                )
 
         policy = selected["asoBMaShowPolicy"]
         self.assertEqual(policy["authority"], "AsoBMaShow")
@@ -399,46 +454,78 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertNotRegex(serialized, r"\.lua(?:skin)?")
 
     def test_render_io_negative_policy_is_frozen(self):
-        contract = self.require_manifest()["acceptanceContract"]
+        manifest = self.require_manifest()
+        contract = manifest["acceptanceContract"]
         scenarios = contract["negativeScenarios"]
         self.assertEqual(len(scenarios), 1)
+        scenario = scenarios[0]
+        negative = next(
+            item for item in manifest["selectedFileIoSurface"]["auditedGuardConfigurations"]
+            if item["role"] == "negative"
+        )
+        self.assertEqual(scenario["guardConfigurationId"], negative["id"])
         self.assertEqual(
-            scenarios[0],
+            scenario["auditedGuardConfigurationSha256"],
+            negative["auditedGuardConfigurationSha256"],
+        )
+        self.assertEqual(scenario["expectedGuardVectorSha256"], negative["guardVectorSha256"])
+        reachable = [item for item in negative["guardVector"] if item["value"] == "reachable"]
+        self.assertEqual(len(reachable), 1)
+        self.assertTrue(all(
+            item["value"] == "not-reachable"
+            for item in negative["guardVector"]
+            if item["guardId"] != reachable[0]["guardId"]
+        ))
+        self.assertIn(
+            "runtimeConfigurationBinding",
+            manifest["selectedFileIoSurface"],
+        )
+        binding = next(
+            item for item in manifest["selectedFileIoSurface"]["runtimeConfigurationBinding"]["guardBindings"]
+            if item["guardId"] == reachable[0]["guardId"]
+        )
+        self.assertEqual(scenario["expectedDeniedOperation"], binding["orderedOperationKinds"][0])
+        self.assertEqual(scenario["expectedDiagnostic"], "skin_file_render_phase_denied")
+        self.assertEqual(
+            scenario["expectedAction"],
+            "discard_frame_disable_session_same_frame_builtin",
+        )
+        self.assertEqual(scenario["criticality"], "session-critical-sandbox-integrity")
+        self.assertEqual(
+            scenario["performedCountersExpected"],
             {
-                "id": "scenario-f7395bddf2b0f715a900b5cd",
-                "guardConfigurationId": "configuration-51f549ae554ff70239c324eb",
-                "auditedGuardConfigurationSha256": "031dbe40093326911ce9e724bfa7c5613fef90a8380668ea2c68c79e6eb10761",
-                "expectedGuardVectorSha256": "c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb",
-                "expectedDeniedOperation": "filesystemRead",
-                "expectedDiagnostic": "skin_file_render_phase_denied",
-                "expectedAction": "discard_frame_disable_session_same_frame_builtin",
-                "criticality": "session-critical-sandbox-integrity",
-                "performedCountersExpected": {
-                    "filesystemReads": 0,
-                    "filesystemWrites": 0,
-                    "filesystemDirectoryScans": 0,
-                    "resourceUploads": 0,
-                },
-                "deniedCountersExpected": {
-                    "filesystemReads": "positive",
-                    "filesystemWrites": 0,
-                    "filesystemDirectoryScans": 0,
-                    "resourceUploads": 0,
-                },
-                "overlayDigestCapture": "asynchronous-after-session-teardown",
-                "overlayDigestBefore": "pending",
-                "overlayDigestAfter": "pending",
+                "filesystemReads": 0,
+                "filesystemWrites": 0,
+                "filesystemDirectoryScans": 0,
+                "resourceUploads": 0,
             },
         )
-        self.assertEqual(
-            contract["passingGuardVectorSha256"],
-            ["7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33"],
-        )
+        denied = scenario["deniedCountersExpected"]
+        self.assertEqual(sum(value == "positive" for value in denied.values()), 1)
+        self.assertEqual(scenario["overlayDigestBeforeCapture"], "complete-before-chart-session-bind")
+        self.assertEqual(scenario["overlayDigestAfterCapture"], "asynchronous-after-session-teardown")
+        self.assertEqual(scenario["overlayDigestComparison"], "equal")
+        self.assertEqual(scenario["overlayDigestPolling"], "memory-only-precomputed-status")
+        self.assertEqual(scenario["overlayDigestBefore"], "pending")
+        self.assertEqual(scenario["overlayDigestAfter"], "pending")
+        passing = [
+            item["guardVectorSha256"]
+            for item in manifest["selectedFileIoSurface"]["auditedGuardConfigurations"]
+            if item["role"] == "passing"
+        ]
+        self.assertEqual(contract["passingGuardVectorSha256"], passing)
         self.assertEqual(
             contract["externalDigests"]["configurationSha256"],
             {"status": "pending", "value": None},
             "static guard evidence must not populate physical SkinConfigurationDigestV1",
         )
+        for document in (GAMEPLAY_CONTRACT_PATH, ACCEPTANCE_PATH):
+            text = document.read_text(encoding="utf-8")
+            with self.subTest(document=document.name):
+                self.assertIn("before chart/session binding", text)
+                self.assertIn("only after session teardown", text)
+                self.assertIn("must be equal", text)
+                self.assertIn("memory-only", text)
 
     def test_external_payload_digest_set_covers_every_sensitive_file_kind(self):
         payloads = self.require_manifest()["externalPayloadDigests"]
@@ -615,6 +702,287 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             "--expected-archive-sha256", sha256(archive),
             mode, manifest_path,
         )
+
+    def make_render_policy_closure(
+        self,
+        operations=("read",),
+        *,
+        option_keys=None,
+        choice_labels=None,
+        extra_choice_for_first=False,
+        direct_callbacks=False,
+        computed_custom_key=None,
+        indirect_computed_custom_key=None,
+        explicit_custom_counts=None,
+        duplicate_first_callback=False,
+    ):
+        option_keys = option_keys or [f"Synthetic option {index}" for index in range(len(operations))]
+        choice_labels = choice_labels or [("disabled", "enabled") for _ in operations]
+        property_lines = [
+            "local module = {}",
+            "local customoptionNumber = 899",
+            "local customoption = {}",
+            "customoption.parent = function(name) return {name = name} end",
+            "customoption.chiled = function(cName, pName)",
+            "  customoptionNumber = customoptionNumber + 1",
+            "  local num = customoptionNumber",
+            "  return {name = cName, num = num}, function() return skin_config.option[pName] == num end",
+            "end",
+            "local function load()",
+        ]
+        property_records = []
+        for index, option_key in enumerate(option_keys):
+            disabled, enabled = choice_labels[index]
+            parent = f"option{index}"
+            property_lines.append(f"  local {parent} = customoption.parent({json.dumps(option_key)})")
+            property_lines.append(
+                f"  {parent}.off, module.guard{index}Off = "
+                f"customoption.chiled({json.dumps(disabled)}, {parent}.name)"
+            )
+            if index == 0 and extra_choice_for_first:
+                property_lines.append(
+                    f"  {parent}.middle, module.guard{index}Middle = "
+                    f"customoption.chiled(\"middle\", {parent}.name)"
+                )
+            property_lines.append(
+                f"  {parent}.on, module.guard{index} = "
+                f"customoption.chiled({json.dumps(enabled)}, {parent}.name)"
+            )
+            items = [
+                f"{{name = {parent}.off.name, op = {parent}.off.num}}",
+                *(
+                    [f"{{name = {parent}.middle.name, op = {parent}.middle.num}}"]
+                    if index == 0 and extra_choice_for_first else []
+                ),
+                f"{{name = {parent}.on.name, op = {parent}.on.num}}",
+            ]
+            property_records.append(
+                "{name = " + parent + ".name, def = " + parent + ".off.name, item = {"
+                + ",".join(items) + "}}"
+            )
+        property_lines.extend(
+            [
+                "  module.property = {" + ",".join(property_records) + "}",
+                "  return module",
+                "end",
+                "return {load = load}",
+            ]
+        )
+
+        helper_lines = ["local module = {}"]
+        callback_lines = []
+        for index, operation in enumerate(operations):
+            if operation == "read":
+                direct_body = 'local f = io.open("state.txt", "r"); f:close()'
+            elif operation == "write":
+                direct_body = 'local f = io.open("state.txt", "w"); f:write("x"); f:close()'
+            elif operation == "read-write":
+                direct_body = (
+                    'local f = io.open("state.txt", "r"); f:close(); '
+                    'local w = io.open("state.txt", "a"); w:write("x"); w:close()'
+                )
+            else:
+                raise AssertionError(operation)
+            helper_lines.extend(
+                [
+                    f"local function operation{index}Leaf() {direct_body} end",
+                    f"module.operation{index} = function() operation{index}Leaf() end",
+                ]
+            )
+            callback_body = direct_body if direct_callbacks else f"HELPER.operation{index}()"
+            callback_lines.extend(
+                [
+                    f"  if PROPERTY.guard{index}() then",
+                    "    table.insert(skin.destination, {timer = function()",
+                    f"      {callback_body}",
+                    "    end})",
+                    "  end",
+                ]
+            )
+            if index == 0 and duplicate_first_callback:
+                callback_lines.extend(
+                    [
+                        f"  if PROPERTY.guard{index}() then",
+                        "    table.insert(skin.destination, {timer = function()",
+                        '      local f = io.open("second.txt", "w"); f:close()',
+                        "    end})",
+                        "  end",
+                    ]
+                )
+        helper_lines.append("return module")
+
+        model_lines = [
+            'local PROPERTY = require("fixture.property").load()',
+            'local HELPER = require("fixture.helper")',
+            "local function main()",
+            "  local skin = {}",
+            "  skin.destination = {}",
+            *callback_lines,
+        ]
+        if indirect_computed_custom_key is not None:
+            suffix = "Timers" if indirect_computed_custom_key == "customTimers" else "Events"
+            model_lines.extend(
+                [
+                    "  local function mutate_model(model)",
+                    f'    local computed = "custom" .. "{suffix}"',
+                    "    model[computed] = {{id = 1}}",
+                    "  end",
+                    "  mutate_model(skin)",
+                ]
+            )
+        if computed_custom_key is not None:
+            suffix = "Timers" if computed_custom_key == "customTimers" else "Events"
+            model_lines.extend(
+                [
+                    f'  local computed = "custom" .. "{suffix}"',
+                    "  skin[computed] = {{id = 1}}",
+                ]
+            )
+        if explicit_custom_counts is not None:
+            timer_count, event_count = explicit_custom_counts
+            model_lines.append(
+                "  skin.customTimers = {"
+                + ",".join(f"{{id = {index}}}" for index in range(timer_count)) + "}"
+            )
+            model_lines.append(
+                "  skin.customEvents = {"
+                + ",".join(f"{{id = {index}}}" for index in range(event_count)) + "}"
+            )
+        model_lines.extend(["  return skin", "end", "return {main = main}"])
+        return {
+            "play7_fixture.luaskin": 'local t = require("fixture.model"); return t.main()\n',
+            "fixture/model.lua": "\n".join(model_lines) + "\n",
+            "fixture/property.lua": "\n".join(property_lines) + "\n",
+            "fixture/helper.lua": "\n".join(helper_lines) + "\n",
+        }
+
+    def analyze_render_policy(self, closure):
+        audit = load_audit_module()
+        try:
+            return audit.analyze_selected_file_io_surface(
+                closure,
+                "22" * 32,
+                "11" * 32,
+            )
+        except TypeError as error:
+            self.fail(f"selected revision must be an explicit audit input: {error}")
+
+    def test_runtime_guard_bindings_change_with_actual_option_key_choice_and_value(self):
+        baseline, _ = self.analyze_render_policy(self.make_render_policy_closure())
+        key_drift, _ = self.analyze_render_policy(
+            self.make_render_policy_closure(option_keys=["Renamed synthetic option"])
+        )
+        choice_drift, _ = self.analyze_render_policy(
+            self.make_render_policy_closure(choice_labels=[("disabled", "renamed enabled")])
+        )
+        value_drift, _ = self.analyze_render_policy(
+            self.make_render_policy_closure(extra_choice_for_first=True)
+        )
+
+        def configuration_digests(selected):
+            return [
+                item["auditedGuardConfigurationSha256"]
+                for item in selected["auditedGuardConfigurations"]
+            ]
+
+        self.assertNotEqual(configuration_digests(baseline), configuration_digests(key_drift))
+        self.assertNotEqual(configuration_digests(baseline), configuration_digests(choice_drift))
+        self.assertNotEqual(configuration_digests(baseline), configuration_digests(value_drift))
+        binding = baseline["runtimeConfigurationBinding"]
+        self.assertEqual(binding["selectedRevisionSha256"], "11" * 32)
+        self.assertEqual(binding["entrySha256"], "22" * 32)
+
+    def test_render_operation_graph_covers_direct_and_transitive_callbacks(self):
+        direct, _ = self.analyze_render_policy(
+            self.make_render_policy_closure(direct_callbacks=True)
+        )
+        transitive, _ = self.analyze_render_policy(
+            self.make_render_policy_closure(operations=("read-write",))
+        )
+        self.assertEqual(
+            direct["runtimeConfigurationBinding"]["guardBindings"][0]["orderedOperationKinds"],
+            ["filesystemRead"],
+        )
+        self.assertEqual(
+            transitive["runtimeConfigurationBinding"]["guardBindings"][0]["orderedOperationKinds"],
+            ["filesystemRead", "filesystemWrite"],
+        )
+
+    def test_negative_kind_comes_from_selected_first_operation_and_is_order_independent(self):
+        read_then_write = self.make_render_policy_closure(operations=("read", "write"))
+        selected, _ = self.analyze_render_policy(read_then_write)
+        reordered, _ = self.analyze_render_policy(dict(reversed(list(read_then_write.items()))))
+        self.assertEqual(selected, reordered)
+
+        negative = next(
+            item for item in selected["auditedGuardConfigurations"]
+            if item["role"] == "negative"
+        )
+        reachable = [item for item in negative["guardVector"] if item["value"] == "reachable"]
+        self.assertEqual(len(reachable), 1)
+        self.assertTrue(all(
+            item["value"] == "not-reachable"
+            for item in negative["guardVector"]
+            if item["guardId"] != reachable[0]["guardId"]
+        ))
+        binding = next(
+            item for item in selected["runtimeConfigurationBinding"]["guardBindings"]
+            if item["guardId"] == reachable[0]["guardId"]
+        )
+        self.assertEqual(selected["negativeExpectedDeniedOperation"], binding["orderedOperationKinds"][0])
+
+        swapped, _ = self.analyze_render_policy(
+            self.make_render_policy_closure(operations=("write", "read"))
+        )
+        swapped_negative = next(
+            item for item in swapped["auditedGuardConfigurations"]
+            if item["role"] == "negative"
+        )
+        swapped_reachable = next(
+            item for item in swapped_negative["guardVector"] if item["value"] == "reachable"
+        )
+        self.assertEqual(reachable[0]["guardId"], swapped_reachable["guardId"])
+        self.assertNotEqual(
+            selected["negativeExpectedDeniedOperation"],
+            swapped["negativeExpectedDeniedOperation"],
+        )
+
+    def test_configured_model_counts_literal_custom_maps_and_rejects_computed_keys(self):
+        _, counts = self.analyze_render_policy(
+            self.make_render_policy_closure(explicit_custom_counts=(2, 1))
+        )
+        self.assertEqual(counts, {"customTimers": 2, "customEvents": 1})
+
+        audit = load_audit_module()
+        for field in ("customTimers", "customEvents"):
+            with self.subTest(field=field):
+                try:
+                    with self.assertRaisesRegex(audit.AuditError, "configured return model"):
+                        audit.analyze_selected_file_io_surface(
+                            self.make_render_policy_closure(computed_custom_key=field),
+                            "22" * 32,
+                            "11" * 32,
+                        )
+                except TypeError as error:
+                    self.fail(f"selected revision must be an explicit audit input: {error}")
+                with self.assertRaisesRegex(audit.AuditError, "configured return model"):
+                    audit.analyze_selected_file_io_surface(
+                        self.make_render_policy_closure(indirect_computed_custom_key=field),
+                        "22" * 32,
+                        "11" * 32,
+                    )
+
+    def test_ambiguous_multiple_retained_io_callbacks_fail_closed(self):
+        audit = load_audit_module()
+        try:
+            with self.assertRaisesRegex(audit.AuditError, "ambiguous render-I/O operation graph"):
+                audit.analyze_selected_file_io_surface(
+                    self.make_render_policy_closure(duplicate_first_callback=True),
+                    "22" * 32,
+                    "11" * 32,
+                )
+        except TypeError as error:
+            self.fail(f"selected revision must be an explicit audit input: {error}")
 
     def test_checker_accepts_only_the_exact_commit_and_optional_clean_tree(self):
         self.assertTrue(CHECKER_PATH.is_file(), str(CHECKER_PATH))

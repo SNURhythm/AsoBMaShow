@@ -25,8 +25,8 @@ OFFICIAL_SOURCE_URL = "https://www.kasacontent.com/musicgame/beatoraja/4226/"
 TERMS_URL = "https://www.kasacontent.com/musicgame/beatoraja/4635/"
 ACQUISITION_DATE = "2026-08-03"
 TREE_DOMAIN = b"ASOBMSKIN-TREE-V1\0"
-AUDITED_GUARD_CONFIGURATION_DOMAIN = b"ASOBMSKIN-AUDITED-GUARD-CONFIG-V1\0"
-OPAQUE_GUARD_VECTOR_DOMAIN = b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V1\0"
+AUDITED_EFFECTIVE_CONFIGURATION_DOMAIN = b"ASOBMSKIN-AUDITED-EFFECTIVE-CONFIG-V2\0"
+OPAQUE_GUARD_VECTOR_DOMAIN = b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V2\0"
 RENDER_IO_NEGATIVE_SCENARIO_ID = "scenario-f7395bddf2b0f715a900b5cd"
 
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
@@ -558,19 +558,21 @@ def _update_length_prefixed(digest, value: str) -> None:
     digest.update(encoded)
 
 
-def audited_guard_configuration_sha256(
+def audited_effective_configuration_sha256(
+    selected_revision_sha256: str,
     entry_sha256: str,
-    source_values: list[tuple[str, str]],
+    option_selections: list[dict],
 ) -> str:
-    """Hash source identities for audit evidence, never physical configuration bytes."""
+    """Hash the runtime option/choice bindings selected for an audited revision."""
     digest = hashlib.sha256()
-    digest.update(AUDITED_GUARD_CONFIGURATION_DOMAIN)
+    digest.update(AUDITED_EFFECTIVE_CONFIGURATION_DOMAIN)
+    digest.update(bytes.fromhex(selected_revision_sha256))
     digest.update(bytes.fromhex(entry_sha256))
-    ordered = sorted(source_values, key=lambda item: item[0].encode("utf-8"))
+    ordered = sorted(option_selections, key=lambda item: item["optionId"].encode("utf-8"))
     digest.update(struct.pack(">I", len(ordered)))
-    for source_identity, value in ordered:
-        _update_length_prefixed(digest, source_identity)
-        _update_length_prefixed(digest, value)
+    for selection in ordered:
+        _update_length_prefixed(digest, selection["optionId"])
+        _update_length_prefixed(digest, selection["choiceId"])
     return digest.hexdigest()
 
 
@@ -585,6 +587,8 @@ def opaque_guard_vector_sha256(
     digest.update(struct.pack(">I", len(ordered)))
     for item in ordered:
         _update_length_prefixed(digest, item["guardId"])
+        _update_length_prefixed(digest, item["optionId"])
+        _update_length_prefixed(digest, item["choiceId"])
         _update_length_prefixed(digest, item["value"])
     return digest.hexdigest()
 
@@ -1020,60 +1024,6 @@ def _function_ranges(tokens: list[LuaToken]) -> list[tuple[int, int, str | None]
     return ranges
 
 
-def _direct_function_facts(
-    tokens: list[LuaToken],
-    start: int,
-    end: int,
-) -> tuple[bool, set[str]]:
-    _, function_depths = _lua_context_flags(tokens)
-    direct_depth = function_depths[start] + 1
-    direct_io = False
-    calls = set()
-    for index in range(start + 1, end):
-        if function_depths[index] != direct_depth:
-            continue
-        if (
-            index + 2 < end
-            and function_depths[index + 1] == direct_depth
-            and function_depths[index + 2] == direct_depth
-            and [token.value for token in tokens[index:index + 3]] == ["io", ".", "open"]
-        ):
-            direct_io = True
-        if (
-            tokens[index].kind == "identifier"
-            and index + 1 < end
-            and function_depths[index + 1] == direct_depth
-            and tokens[index + 1].value == "("
-            and not (
-                index > start
-                and tokens[index - 1].value in {"function", "if", "elseif", "while", "for"}
-            )
-        ):
-            calls.add(tokens[index].value)
-    return direct_io, calls
-
-
-def _io_bearing_function_names(loaded: dict[str, str]) -> set[str]:
-    functions: dict[str, tuple[bool, set[str]]] = {}
-    for text in loaded.values():
-        tokens = tokenize_lua(text)
-        for start, end, name in _function_ranges(tokens):
-            if name is None:
-                continue
-            direct_io, calls = _direct_function_facts(tokens, start, end)
-            previous_direct, previous_calls = functions.get(name, (False, set()))
-            functions[name] = (previous_direct or direct_io, previous_calls | calls)
-    io_bearing = {name for name, (direct, _) in functions.items() if direct}
-    changed = True
-    while changed:
-        changed = False
-        for name, (_, calls) in functions.items():
-            if name not in io_bearing and calls & io_bearing:
-                io_bearing.add(name)
-                changed = True
-    return io_bearing
-
-
 def _condition_property_guards(tokens: list[LuaToken], start: int) -> set[str]:
     guards = set()
     for index in range(start + 1, len(tokens) - 3):
@@ -1165,66 +1115,742 @@ def _dofile_targets(tokens: list[LuaToken]) -> dict[int, str]:
     return targets
 
 
-def _has_retained_io_callback(tokens: list[LuaToken], io_functions: set[str]) -> bool:
-    retained_fields = {"act", "draw", "event", "timer", "value"}
-    for start, end, _ in _function_ranges(tokens):
+def _matching_token(
+    tokens: list[LuaToken],
+    open_index: int,
+    opening: str,
+    closing: str,
+) -> int:
+    depth = 0
+    for index in range(open_index, len(tokens)):
+        if tokens[index].value == opening:
+            depth += 1
+        elif tokens[index].value == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+    raise AuditError(f"unterminated Lua {opening!r} expression in selected closure")
+
+
+def _lua_module_path(module_name: str, loaded: dict[str, str]) -> str | None:
+    path = module_name.replace(".", "/") + ".lua"
+    return path if path in loaded else None
+
+
+def _require_bindings(
+    path: str,
+    tokens: list[LuaToken],
+    loaded: dict[str, str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    aliases: dict[str, str] = {}
+    exports: dict[str, str] = {}
+    for index in range(len(tokens) - 5):
         if (
-            start < 2
-            or tokens[start - 1].value != "="
-            or tokens[start - 2].value not in retained_fields
+            tokens[index].kind == "identifier"
+            and tokens[index + 1].value == "="
+            and tokens[index + 2].value == "require"
+            and tokens[index + 3].value == "("
+            and tokens[index + 4].kind == "string"
+            and tokens[index + 5].value == ")"
+        ):
+            target = _lua_module_path(tokens[index + 4].value, loaded)
+            if target is not None:
+                previous = aliases.get(tokens[index].value)
+                if previous is not None and previous != target:
+                    raise AuditError(
+                        f"ambiguous Lua require alias {tokens[index].value!r} in {path!r}"
+                    )
+                aliases[tokens[index].value] = target
+        if (
+            tokens[index].kind == "identifier"
+            and tokens[index + 1].value == "."
+            and tokens[index + 2].kind == "identifier"
+            and tokens[index + 3].value == "="
+            and tokens[index + 4].value == "require"
+            and index + 7 < len(tokens)
+            and tokens[index + 5].value == "("
+            and tokens[index + 6].kind == "string"
+            and tokens[index + 7].value == ")"
+        ):
+            target = _lua_module_path(tokens[index + 6].value, loaded)
+            if target is not None:
+                member = tokens[index + 2].value
+                previous = exports.get(member)
+                if previous is not None and previous != target:
+                    raise AuditError(f"ambiguous exported require member {member!r} in {path!r}")
+                exports[member] = target
+    return aliases, exports
+
+
+def _call_chain_at(tokens: list[LuaToken], index: int, end: int) -> tuple[str, ...] | None:
+    if tokens[index].kind != "identifier":
+        return None
+    chain = [tokens[index].value]
+    cursor = index + 1
+    while cursor + 1 < end and tokens[cursor].value == "." and tokens[cursor + 1].kind == "identifier":
+        chain.append(tokens[cursor + 1].value)
+        cursor += 2
+    if cursor >= end or tokens[cursor].value != "(":
+        return None
+    if index > 0 and tokens[index - 1].value in {"function", ".", ":"}:
+        return None
+    return tuple(chain)
+
+
+def _static_io_open_kind(tokens: list[LuaToken], open_index: int) -> str:
+    close_index = _matching_token(tokens, open_index, "(", ")")
+    parentheses = braces = brackets = 0
+    mode_token = None
+    for index in range(open_index + 1, close_index):
+        value = tokens[index].value
+        if value == "(":
+            parentheses += 1
+        elif value == ")":
+            parentheses -= 1
+        elif value == "{":
+            braces += 1
+        elif value == "}":
+            braces -= 1
+        elif value == "[":
+            brackets += 1
+        elif value == "]":
+            brackets -= 1
+        elif value == "," and parentheses == braces == brackets == 0:
+            mode_token = tokens[index + 1] if index + 1 < close_index else None
+            break
+    if mode_token is None:
+        return "filesystemRead"
+    if mode_token.kind != "string":
+        raise AuditError("render-I/O io.open mode is not a static string")
+    if mode_token.value in {"r"}:
+        return "filesystemRead"
+    if mode_token.value in {"w", "a"}:
+        return "filesystemWrite"
+    raise AuditError(f"render-I/O io.open mode is outside the audited host surface: {mode_token.value!r}")
+
+
+def _function_operation_events(
+    tokens: list[LuaToken],
+    start: int,
+    end: int,
+) -> list[tuple[str, object]]:
+    _, function_depths = _lua_context_flags(tokens)
+    direct_depth = function_depths[start] + 1
+    events: list[tuple[str, object]] = []
+    for index in range(start + 1, end):
+        if function_depths[index] != direct_depth:
+            continue
+        chain = _call_chain_at(tokens, index, end)
+        if chain is None:
+            continue
+        open_index = index + (2 * len(chain) - 1)
+        if chain == ("io", "open"):
+            events.append(("operation", _static_io_open_kind(tokens, open_index)))
+        elif chain[-1] == "listFiles":
+            events.append(("operation", "filesystemDirectoryScan"))
+        else:
+            events.append(("call", chain))
+    return events
+
+
+def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
+    token_by_path = {
+        path: tokenize_lua(loaded[path])
+        for path in sorted(loaded, key=lambda value: value.encode("utf-8"))
+    }
+    aliases: dict[str, dict[str, str]] = {}
+    exports: dict[str, dict[str, str]] = {}
+    functions: dict[tuple[str, str], list[tuple[int, int]]] = {}
+    callbacks: list[tuple[str, int, int]] = []
+    retained_fields = {"act", "draw", "event", "timer", "value"}
+    for path, tokens in token_by_path.items():
+        aliases[path], exports[path] = _require_bindings(path, tokens, loaded)
+        for start, end, name in _function_ranges(tokens):
+            if name is not None:
+                functions.setdefault((path, name), []).append((start, end))
+            if (
+                start >= 2
+                and tokens[start - 1].value == "="
+                and tokens[start - 2].value in retained_fields
+            ):
+                callbacks.append((path, start, end))
+
+    global_alias_candidates: dict[str, set[str]] = {}
+    for path_aliases in aliases.values():
+        for alias, target in path_aliases.items():
+            global_alias_candidates.setdefault(alias, set()).add(target)
+    global_aliases = {
+        alias: next(iter(targets))
+        for alias, targets in global_alias_candidates.items()
+        if len(targets) == 1
+    }
+
+    def resolve(path: str, chain: tuple[str, ...]) -> tuple[str, int, int] | None:
+        target_path = path
+        remaining = list(chain)
+        if len(remaining) == 1:
+            key = (path, remaining[0])
+        else:
+            root_alias = remaining.pop(0)
+            target_path = aliases[path].get(root_alias) or global_aliases.get(root_alias, "")
+            if not target_path:
+                return None
+            while len(remaining) > 1 and remaining[0] in exports[target_path]:
+                target_path = exports[target_path][remaining.pop(0)]
+            if len(remaining) != 1:
+                return None
+            key = (target_path, remaining[0])
+        ranges = functions.get(key, [])
+        if not ranges:
+            return None
+        if len(ranges) != 1:
+            raise AuditError(
+                f"ambiguous render-I/O operation graph function {key[1]!r} in {key[0]!r}"
+            )
+        return key[0], ranges[0][0], ranges[0][1]
+
+    def expand(path: str, start: int, end: int, stack: tuple[tuple[str, int], ...]) -> list[str]:
+        identity = (path, start)
+        if identity in stack:
+            raise AuditError("ambiguous render-I/O operation graph recursion")
+        operations: list[str] = []
+        for kind, value in _function_operation_events(token_by_path[path], start, end):
+            if kind == "operation":
+                operations.append(str(value))
+                continue
+            target = resolve(path, value)
+            if target is not None:
+                operations.extend(expand(*target, stack + (identity,)))
+        return operations
+
+    inherited_guards: dict[str, set[str]] = {}
+    for path, tokens in token_by_path.items():
+        active = _active_property_guards(tokens)
+        for index, target in _dofile_targets(tokens).items():
+            if active[index]:
+                inherited_guards.setdefault(target, set()).update(active[index])
+
+    callback_sequences: dict[str, list[list[str]]] = {}
+    for path, start, end in callbacks:
+        operations = expand(path, start, end, ())
+        if not operations:
+            continue
+        active = _active_property_guards(token_by_path[path])[start]
+        guards = set(active) or set(inherited_guards.get(path, set()))
+        if len(guards) != 1:
+            raise AuditError(
+                "ambiguous render-I/O operation graph: retained callback must have exactly one guard"
+            )
+        guard = next(iter(guards))
+        callback_sequences.setdefault(guard, []).append(operations)
+
+    result = []
+    for guard, sequences in sorted(callback_sequences.items(), key=lambda item: item[0].encode("utf-8")):
+        if len(sequences) != 1:
+            raise AuditError(
+                f"ambiguous render-I/O operation graph for guard {guard!r}: "
+                f"found {len(sequences)} retained callbacks"
+            )
+        result.append({"guardName": guard, "orderedOperationKinds": sequences[0]})
+    return result
+
+
+def _runtime_guard_bindings(loaded: dict[str, str], operation_graph: list[dict]) -> list[dict]:
+    guard_operations = {
+        item["guardName"]: item["orderedOperationKinds"]
+        for item in operation_graph
+    }
+    definitions: dict[str, list[dict]] = {}
+    for path in sorted(loaded, key=lambda value: value.encode("utf-8")):
+        tokens = tokenize_lua(loaded[path])
+        initial_number = None
+        for index in range(len(tokens) - 2):
+            if (
+                tokens[index].value == "customoptionNumber"
+                and tokens[index + 1].value == "="
+                and tokens[index + 2].kind == "number"
+            ):
+                initial_number = int(tokens[index + 2].value, 0)
+                break
+        parents: dict[str, str] = {}
+        for index in range(len(tokens) - 6):
+            if (
+                tokens[index].kind == "identifier"
+                and tokens[index + 1].value == "="
+                and [token.value for token in tokens[index + 2:index + 6]]
+                == ["customoption", ".", "parent", "("]
+                and tokens[index + 6].kind == "string"
+            ):
+                parents[tokens[index].value] = tokens[index + 6].value
+
+        children: list[dict] = []
+        next_number = initial_number
+        for index in range(8, len(tokens) - 9):
+            if [token.value for token in tokens[index:index + 4]] != [
+                "customoption", ".", "chiled", "("
+            ]:
+                continue
+            if next_number is None:
+                raise AuditError(f"custom option sequence has no static initial value in {path!r}")
+            lhs = [token.value for token in tokens[index - 8:index]]
+            if not (
+                tokens[index - 8].kind == "identifier"
+                and lhs[1] == "."
+                and tokens[index - 6].kind == "identifier"
+                and lhs[3:6] == [",", "module", "."]
+                and tokens[index - 2].kind == "identifier"
+                and lhs[7] == "="
+                and tokens[index + 4].kind == "string"
+                and tokens[index + 5].value == ","
+                and tokens[index + 6].kind == "identifier"
+                and tokens[index + 7].value == "."
+                and tokens[index + 8].value == "name"
+                and tokens[index + 9].value == ")"
+            ):
+                raise AuditError(f"custom option child binding is outside the bounded evaluator in {path!r}")
+            parent = tokens[index - 8].value
+            if parent != tokens[index + 6].value or parent not in parents:
+                raise AuditError(f"custom option child has an unresolved parent in {path!r}")
+            next_number += 1
+            children.append(
+                {
+                    "path": path,
+                    "parent": parent,
+                    "field": tokens[index - 6].value,
+                    "guardName": tokens[index - 2].value,
+                    "optionName": parents[parent],
+                    "choiceName": tokens[index + 4].value,
+                    "number": next_number,
+                }
+            )
+
+        defaults: dict[str, str] = {}
+        values = [token.value for token in tokens]
+        for index in range(len(tokens) - 13):
+            if (
+                values[index:index + 2] == ["name", "="]
+                and tokens[index + 2].kind == "identifier"
+                and values[index + 3:index + 6] == [".", "name", ","]
+                and values[index + 6:index + 8] == ["def", "="]
+                and tokens[index + 8].value == tokens[index + 2].value
+                and values[index + 9] == "."
+                and tokens[index + 10].kind == "identifier"
+                and values[index + 11:index + 13] == [".", "name"]
+            ):
+                parent = tokens[index + 2].value
+                choice_field = tokens[index + 10].value
+                previous = defaults.get(parent)
+                if previous is not None and previous != choice_field:
+                    raise AuditError(f"custom option has ambiguous defaults in {path!r}")
+                defaults[parent] = choice_field
+        for child in children:
+            definitions.setdefault(child["guardName"], []).append(child)
+        for child in children:
+            child["defaultField"] = defaults.get(child["parent"])
+
+    bindings = []
+    for guard_name, operations in sorted(guard_operations.items(), key=lambda item: item[0].encode("utf-8")):
+        records = definitions.get(guard_name, [])
+        if len(records) != 1:
+            raise AuditError(
+                f"render-I/O guard must have exactly one runtime option binding: {guard_name!r}"
+            )
+        reachable = records[0]
+        choices = sorted(
+            (
+                record for records_for_guard in definitions.values() for record in records_for_guard
+                if record["path"] == reachable["path"] and record["parent"] == reachable["parent"]
+            ),
+            key=lambda record: record["number"],
+        )
+        default_field = reachable["defaultField"]
+        if default_field is None:
+            raise AuditError(f"render-I/O option has no configured header default: {guard_name!r}")
+        default = next((item for item in choices if item["field"] == default_field), None)
+        if default is None:
+            raise AuditError(f"render-I/O option default is not one of its choices: {guard_name!r}")
+        option_id = opaque_id("option", reachable["optionName"])
+
+        def choice_id(item: dict) -> str:
+            return opaque_id(
+                "choice",
+                item["optionName"] + "\0" + str(item["number"]) + "\0" + item["choiceName"],
+            )
+
+        reachable_choice_id = choice_id(reachable)
+        non_reachable = [choice_id(item) for item in choices if item is not reachable]
+        if not non_reachable:
+            raise AuditError(f"render-I/O guard has no non-reachable configuration: {guard_name!r}")
+        guard_id = opaque_id("guard", option_id + "\0" + reachable_choice_id)
+        bindings.append(
+            {
+                "guardId": guard_id,
+                "optionId": option_id,
+                "defaultChoiceId": choice_id(default),
+                "reachableChoiceId": reachable_choice_id,
+                "nonReachableChoiceIds": non_reachable,
+                "orderedOperationKinds": operations,
+            }
+        )
+    return sorted(bindings, key=lambda item: item["guardId"].encode("utf-8"))
+
+
+def _table_item_count(tokens: list[LuaToken], open_index: int) -> int:
+    close_index = _matching_token(tokens, open_index, "{", "}")
+    braces = parentheses = brackets = 0
+    count = 0
+    has_item = False
+    for index in range(open_index + 1, close_index):
+        value = tokens[index].value
+        if value == "{":
+            braces += 1
+        elif value == "}":
+            braces -= 1
+        elif value == "(":
+            parentheses += 1
+        elif value == ")":
+            parentheses -= 1
+        elif value == "[":
+            brackets += 1
+        elif value == "]":
+            brackets -= 1
+        elif value == "," and braces == parentheses == brackets == 0:
+            if has_item:
+                count += 1
+                has_item = False
+            continue
+        if braces == parentheses == brackets == 0:
+            has_item = True
+    return count + int(has_item)
+
+
+def _function_first_parameter(tokens: list[LuaToken], start: int, end: int) -> tuple[str, int]:
+    open_index = next(
+        (index for index in range(start + 1, min(end, start + 8)) if tokens[index].value == "("),
+        None,
+    )
+    if (
+        open_index is None
+        or open_index + 1 >= end
+        or tokens[open_index + 1].kind != "identifier"
+    ):
+        raise AuditError("configured return model mutator has no static first parameter")
+    return tokens[open_index + 1].value, open_index + 1
+
+
+def _validate_literal_field_mutator(
+    tokens: list[LuaToken],
+    start: int,
+    end: int,
+) -> None:
+    parameter, declaration_index = _function_first_parameter(tokens, start, end)
+    for index in range(start + 1, end):
+        if index == declaration_index or tokens[index].value != parameter:
+            continue
+        if (
+            index + 2 < end
+            and tokens[index + 1].value == "."
+            and tokens[index + 2].kind == "identifier"
+        ):
+            if tokens[index + 2].value in {"customTimers", "customEvents"}:
+                raise AuditError("configured return model mutator reaches a custom object map")
+            continue
+        raise AuditError("configured return model mutator uses a computed or whole-model access")
+
+
+def _validate_header_copy(
+    loaded: dict[str, str],
+    model_path: str,
+    model_tokens: list[LuaToken],
+    header_variable: str,
+    function_target: tuple[str, list[LuaToken], int, int],
+) -> None:
+    _, function_tokens, start, end = function_target
+    parameter, declaration_index = _function_first_parameter(function_tokens, start, end)
+    for index in range(start + 1, end):
+        if index == declaration_index or function_tokens[index].value != parameter:
+            continue
+        if not (
+            index + 5 < end
+            and function_tokens[index + 1].value == "["
+            and function_tokens[index + 2].kind == "identifier"
+            and function_tokens[index + 3].value == "]"
+            and function_tokens[index + 4].value == "="
+            and function_tokens[index + 5].kind == "identifier"
+        ):
+            raise AuditError("configured return model header copier is outside the bounded evaluator")
+
+    header_path = None
+    for index in range(len(model_tokens) - 7):
+        if (
+            model_tokens[index].value == header_variable
+            and model_tokens[index + 1].value == "="
+            and model_tokens[index + 2].value == "require"
+            and model_tokens[index + 3].value == "("
+            and model_tokens[index + 4].kind == "string"
+            and model_tokens[index + 5].value == ")"
+            and model_tokens[index + 6].value == "."
+            and model_tokens[index + 7].value == "load"
+        ):
+            candidate = _lua_module_path(model_tokens[index + 4].value, loaded)
+            if candidate is not None:
+                if header_path is not None and header_path != candidate:
+                    raise AuditError("configured return model header source is ambiguous")
+                header_path = candidate
+    if header_path is None:
+        raise AuditError(f"configured return model header source is unresolved in {model_path!r}")
+    header_tokens = tokenize_lua(loaded[header_path])
+    header_candidates = []
+    _, header_depths = _lua_context_flags(header_tokens)
+    for header_start, header_end, name in _function_ranges(header_tokens):
+        if name != "load":
+            continue
+        direct_depth = header_depths[header_start] + 1
+        table_variables = {
+            header_tokens[index].value: index + 2
+            for index in range(header_start + 1, header_end - 2)
+            if header_depths[index] == direct_depth
+            and header_tokens[index].kind == "identifier"
+            and header_tokens[index + 1].value == "="
+            and header_tokens[index + 2].value == "{"
+        }
+        returned = {
+            header_tokens[index + 1].value
+            for index in range(header_start + 1, header_end - 1)
+            if header_depths[index] == direct_depth
+            and header_tokens[index].value == "return"
+            and header_tokens[index + 1].kind == "identifier"
+        }
+        for variable in table_variables.keys() & returned:
+            header_candidates.append(table_variables[variable])
+    if len(header_candidates) != 1:
+        raise AuditError("configured return model header is not one literal returned table")
+    open_index = header_candidates[0]
+    close_index = _matching_token(header_tokens, open_index, "{", "}")
+    braces = 0
+    for index in range(open_index + 1, close_index):
+        value = header_tokens[index].value
+        if value == "{":
+            braces += 1
+        elif value == "}":
+            braces -= 1
+        elif braces == 0 and value == "[":
+            key_close = _matching_token(header_tokens, index, "[", "]")
+            if key_close + 1 < close_index and header_tokens[key_close + 1].value == "=":
+                raise AuditError("configured return model header uses a computed top-level key")
+        elif (
+            braces == 0
+            and header_tokens[index].kind == "identifier"
+            and index + 1 < close_index
+            and header_tokens[index + 1].value == "="
+            and value in {"customTimers", "customEvents"}
+        ):
+            raise AuditError("configured return model header supplies a custom object map")
+
+
+def _validate_configured_model_mutations(
+    loaded: dict[str, str],
+    path: str,
+    tokens: list[LuaToken],
+    start: int,
+    end: int,
+    model: str,
+) -> None:
+    _, depths = _lua_context_flags(tokens)
+    direct_depth = depths[start] + 1
+    function_ranges: dict[str, list[tuple[str, list[LuaToken], int, int]]] = {}
+    aliases_by_path = {}
+    global_alias_candidates: dict[str, set[str]] = {}
+    tokens_by_path = {}
+    for candidate_path in sorted(loaded, key=lambda value: value.encode("utf-8")):
+        candidate_tokens = tokenize_lua(loaded[candidate_path])
+        tokens_by_path[candidate_path] = candidate_tokens
+        aliases_by_path[candidate_path], _ = _require_bindings(candidate_path, candidate_tokens, loaded)
+        for alias, target in aliases_by_path[candidate_path].items():
+            global_alias_candidates.setdefault(alias, set()).add(target)
+        for function_start, function_end, name in _function_ranges(candidate_tokens):
+            if name is not None:
+                function_ranges.setdefault(candidate_path + "\0" + name, []).append(
+                    (candidate_path, candidate_tokens, function_start, function_end)
+                )
+    global_aliases = {
+        alias: next(iter(targets))
+        for alias, targets in global_alias_candidates.items()
+        if len(targets) == 1
+    }
+
+    def resolve(chain: tuple[str, ...]) -> tuple[str, list[LuaToken], int, int] | None:
+        if len(chain) == 1:
+            key = path + "\0" + chain[0]
+        else:
+            target_path = aliases_by_path[path].get(chain[0]) or global_aliases.get(chain[0])
+            if target_path is None or len(chain) != 2:
+                return None
+            key = target_path + "\0" + chain[1]
+        ranges = function_ranges.get(key, [])
+        if len(ranges) > 1:
+            raise AuditError("configured return model mutator target is ambiguous")
+        return ranges[0] if ranges else None
+
+    checked_targets: set[tuple[str, int]] = set()
+    for index in range(start + 1, end):
+        if depths[index] != direct_depth:
+            continue
+        chain = _call_chain_at(tokens, index, end)
+        if chain is None:
+            continue
+        open_index = index + (2 * len(chain) - 1)
+        if (
+            open_index + 1 >= end
+            or tokens[open_index + 1].value != model
+            or (open_index + 2 < end and tokens[open_index + 2].value not in {",", ")"})
         ):
             continue
-        direct_io, calls = _direct_function_facts(tokens, start, end)
-        if direct_io or calls & io_functions:
-            return True
-    return False
-
-
-def _render_io_guard_sources(loaded: dict[str, str]) -> list[str]:
-    io_functions = _io_bearing_function_names(loaded)
-    retained_io_files = {
-        path for path, text in loaded.items()
-        if _has_retained_io_callback(tokenize_lua(text), io_functions)
-    }
-    guard_names = set()
-    for text in loaded.values():
-        tokens = tokenize_lua(text)
-        active = _active_property_guards(tokens)
-        dofile_targets = _dofile_targets(tokens)
-        for index, token in enumerate(tokens):
-            if (
-                token.kind == "identifier"
-                and token.value in io_functions
-                and index >= 4
-                and [candidate.value for candidate in tokens[index - 4:index]]
-                == ["CUSTOM", ".", "FUNC", "."]
-                and index + 1 < len(tokens)
-                and tokens[index + 1].value == "("
-            ):
-                guard_names.update(active[index])
-            target = dofile_targets.get(index)
-            if target in retained_io_files:
-                guard_names.update(active[index])
-
-    sources = []
-    for guard_name in sorted(guard_names, key=lambda value: value.encode("utf-8")):
-        definitions = []
-        for path, text in loaded.items():
-            tokens = tokenize_lua(text)
-            values = [token.value for token in tokens]
-            for index in range(len(tokens) - 7):
-                if (
-                    values[index:index + 4] == ["module", ".", guard_name, "="]
-                    and values[index + 4:index + 7] == ["customoption", ".", "chiled"]
-                    and values[index + 7] == "("
-                ):
-                    definitions.append(path + "\0" + guard_name)
-        if len(definitions) != 1:
-            raise AuditError(
-                f"render-I/O guard must have exactly one selected-closure definition: {guard_name!r}"
+        target = resolve(chain)
+        if target is None:
+            raise AuditError("configured return model is passed to an unresolved mutator")
+        identity = (target[0], target[2])
+        if identity in checked_targets:
+            continue
+        checked_targets.add(identity)
+        if chain[-1] == "LOAD_HEADER":
+            if open_index + 3 >= end or tokens[open_index + 2].value != ",":
+                raise AuditError("configured return model header call has an unsupported shape")
+            _validate_header_copy(
+                loaded,
+                path,
+                tokens,
+                tokens[open_index + 3].value,
+                target,
             )
-        sources.append(definitions[0])
-    return sources
+        else:
+            _validate_literal_field_mutator(target[1], target[2], target[3])
+
+    for index in range(start + 1, end - 1):
+        if (
+            depths[index] == direct_depth
+            and tokens[index].value == "addSourceSP"
+            and tokens[index + 1].value == "("
+            and tokens[index + 2].value == model
+        ):
+            candidates = function_ranges.get("Play/lua/base.lua\0addSourceSP", [])
+            if len(candidates) != 1:
+                raise AuditError("configured return model addSourceSP target is unresolved")
+            _validate_literal_field_mutator(candidates[0][1], candidates[0][2], candidates[0][3])
+
+
+def _configured_return_model_counts(loaded: dict[str, str]) -> dict[str, int]:
+    candidates: list[tuple[str, list[LuaToken], int, int, str | None, int | None]] = []
+    for path in sorted(loaded, key=lambda value: value.encode("utf-8")):
+        tokens = tokenize_lua(loaded[path])
+        _, depths = _lua_context_flags(tokens)
+        for start, end, name in _function_ranges(tokens):
+            if name != "main":
+                continue
+            direct_depth = depths[start] + 1
+            table_variables = {
+                tokens[index].value
+                for index in range(start + 1, end - 2)
+                if depths[index] == direct_depth
+                and tokens[index].kind == "identifier"
+                and tokens[index + 1].value == "="
+                and tokens[index + 2].value == "{"
+            }
+            returned = {
+                tokens[index + 1].value
+                for index in range(start + 1, end - 1)
+                if depths[index] == direct_depth
+                and tokens[index].value == "return"
+                and tokens[index + 1].kind == "identifier"
+            }
+            model_variables = table_variables & returned
+            if len(model_variables) == 1:
+                candidates.append((path, tokens, start, end, next(iter(model_variables)), None))
+            else:
+                literal_returns = [
+                    index + 1
+                    for index in range(start + 1, end - 1)
+                    if depths[index] == direct_depth
+                    and tokens[index].value == "return"
+                    and tokens[index + 1].value == "{"
+                ]
+                if len(literal_returns) == 1:
+                    candidates.append((path, tokens, start, end, None, literal_returns[0]))
+    if len(candidates) != 1:
+        raise AuditError("configured return model must resolve to exactly one locally-created table")
+    path, tokens, start, end, model, literal_open = candidates[0]
+    _, depths = _lua_context_flags(tokens)
+    direct_depth = depths[start] + 1
+    counts = {"customTimers": 0, "customEvents": 0}
+    seen: set[str] = set()
+    if literal_open is not None:
+        close_index = _matching_token(tokens, literal_open, "{", "}")
+        brace_depth = 0
+        index = literal_open + 1
+        while index < close_index:
+            value = tokens[index].value
+            if value == "{":
+                brace_depth += 1
+            elif value == "}":
+                brace_depth -= 1
+            elif brace_depth == 0 and value == "[":
+                key_close = _matching_token(tokens, index, "[", "]")
+                if key_close + 1 < close_index and tokens[key_close + 1].value == "=":
+                    if key_close != index + 2 or tokens[index + 1].kind != "string":
+                        raise AuditError("configured return model uses a computed top-level key")
+                    field = tokens[index + 1].value
+                    value_index = key_close + 2
+                    if field in counts:
+                        if value_index >= close_index or tokens[value_index].value != "{":
+                            raise AuditError(f"configured return model field {field!r} is not one literal table")
+                        counts[field] = _table_item_count(tokens, value_index)
+                    index = key_close
+            elif (
+                brace_depth == 0
+                and tokens[index].kind == "identifier"
+                and index + 1 < close_index
+                and tokens[index + 1].value == "="
+                and tokens[index].value in counts
+            ):
+                field = tokens[index].value
+                value_index = index + 2
+                if value_index >= close_index or tokens[value_index].value != "{":
+                    raise AuditError(f"configured return model field {field!r} is not one literal table")
+                counts[field] = _table_item_count(tokens, value_index)
+            index += 1
+        return counts
+
+    assert model is not None
+    _validate_configured_model_mutations(loaded, path, tokens, start, end, model)
+    for index in range(start + 1, end):
+        if depths[index] != direct_depth or tokens[index].value != model:
+            continue
+        if index + 1 < end and tokens[index + 1].value == "[":
+            close_index = _matching_token(tokens, index + 1, "[", "]")
+            if close_index + 1 < end and tokens[close_index + 1].value == "=":
+                if close_index != index + 3 or tokens[index + 2].kind != "string":
+                    raise AuditError("configured return model uses a computed top-level key")
+                field = tokens[index + 2].value
+                value_index = close_index + 2
+            else:
+                continue
+        elif (
+            index + 3 < end
+            and tokens[index + 1].value == "."
+            and tokens[index + 2].kind == "identifier"
+            and tokens[index + 3].value == "="
+        ):
+            field = tokens[index + 2].value
+            value_index = index + 4
+        else:
+            continue
+        if field not in counts:
+            continue
+        if field in seen or value_index >= end or tokens[value_index].value != "{":
+            raise AuditError(f"configured return model field {field!r} is not one literal table")
+        seen.add(field)
+        counts[field] = _table_item_count(tokens, value_index)
+    return counts
 
 
 def _call_argument_count(tokens: list[LuaToken], open_index: int) -> int:
@@ -1255,21 +1881,51 @@ def _call_argument_count(tokens: list[LuaToken], open_index: int) -> int:
     raise AuditError("unterminated Lua call in selected closure")
 
 
-def _audited_guard_configurations(entry_sha: str, guard_sources: list[str]) -> list[dict]:
-    guard_pairs = [(source, opaque_id("guard", source)) for source in guard_sources]
-
+def _audited_guard_configurations(
+    selected_revision_sha: str,
+    entry_sha: str,
+    guard_bindings: list[dict],
+) -> list[dict]:
     def configuration(role: str, reachable_guard_id: str | None = None) -> dict:
-        source_values = [
-            (source, "reachable" if guard_id == reachable_guard_id else "not-reachable")
-            for source, guard_id in guard_pairs
+        option_selections = []
+        guard_vector = []
+        selected_by_option: dict[str, str] = {}
+        for binding in guard_bindings:
+            if binding["guardId"] == reachable_guard_id:
+                choice_id = binding["reachableChoiceId"]
+            elif binding["defaultChoiceId"] != binding["reachableChoiceId"]:
+                choice_id = binding["defaultChoiceId"]
+            else:
+                choice_id = binding["nonReachableChoiceIds"][0]
+            previous = selected_by_option.get(binding["optionId"])
+            if previous is not None and previous != choice_id:
+                raise AuditError("audited guard configuration assigns one option multiple choices")
+            selected_by_option[binding["optionId"]] = choice_id
+        option_selections = [
+            {"optionId": option_id, "choiceId": choice_id}
+            for option_id, choice_id in sorted(
+                selected_by_option.items(), key=lambda item: item[0].encode("utf-8")
+            )
         ]
-        audited_sha = audited_guard_configuration_sha256(entry_sha, source_values)
-        guard_vector = sorted(
-            [
-                {"guardId": guard_id, "value": value}
-                for (source, guard_id), (_, value) in zip(guard_pairs, source_values)
-            ],
-            key=lambda item: item["guardId"].encode("utf-8"),
+        for binding in guard_bindings:
+            choice_id = selected_by_option[binding["optionId"]]
+            guard_vector.append(
+                {
+                    "guardId": binding["guardId"],
+                    "optionId": binding["optionId"],
+                    "choiceId": choice_id,
+                    "value": (
+                        "reachable"
+                        if choice_id == binding["reachableChoiceId"]
+                        else "not-reachable"
+                    ),
+                }
+            )
+        guard_vector.sort(key=lambda item: item["guardId"].encode("utf-8"))
+        audited_sha = audited_effective_configuration_sha256(
+            selected_revision_sha,
+            entry_sha,
+            option_selections,
         )
         vector_sha = opaque_guard_vector_sha256(audited_sha, guard_vector)
         return {
@@ -1277,27 +1933,30 @@ def _audited_guard_configurations(entry_sha: str, guard_sources: list[str]) -> l
             "role": role,
             "auditedGuardConfigurationSha256": audited_sha,
             "guardVectorSha256": vector_sha,
+            "optionSelections": option_selections,
             "guardVector": guard_vector,
         }
 
     passing = configuration("passing")
-    if not guard_pairs:
+    if not guard_bindings:
         return [passing]
-    first_guard_id = min((guard_id for _, guard_id in guard_pairs), key=lambda value: value.encode("utf-8"))
+    first_guard_id = min(
+        (binding["guardId"] for binding in guard_bindings),
+        key=lambda value: value.encode("utf-8"),
+    )
     return [passing, configuration("negative", first_guard_id)]
 
 
 def analyze_selected_file_io_surface(
     loaded: dict[str, str],
     entry_sha: str,
+    selected_revision_sha: str,
 ) -> tuple[dict, dict[str, int]]:
-    token_sets = [tokenize_lua(text) for text in loaded.values()]
-    all_tokens = [token for tokens in token_sets for token in tokens]
-    for object_name in ("customTimers", "customEvents"):
-        if any(token.value == object_name for token in all_tokens):
-            raise AuditError(
-                f"selected custom object map {object_name!r} is not statically proven empty"
-            )
+    token_sets = [
+        tokenize_lua(loaded[path])
+        for path in sorted(loaded, key=lambda value: value.encode("utf-8"))
+    ]
+    custom_object_maps = _configured_return_model_counts(loaded)
 
     dofile_count = 0
     io_modes = {"default": 0, "r": 0, "w": 0, "a": 0}
@@ -1355,9 +2014,24 @@ def analyze_selected_file_io_surface(
                     if _call_argument_count(tokens, index + 2) != 0:
                         raise AuditError("selected listFiles site is not zero-argument")
 
-    guard_sources = _render_io_guard_sources(loaded)
-    configurations = _audited_guard_configurations(entry_sha, guard_sources)
-    render_phases = bool(guard_sources)
+    operation_graph = _render_operation_graph(loaded)
+    guard_bindings = _runtime_guard_bindings(loaded, operation_graph)
+    configurations = _audited_guard_configurations(
+        selected_revision_sha,
+        entry_sha,
+        guard_bindings,
+    )
+    render_phases = bool(guard_bindings)
+    negative = next((item for item in configurations if item["role"] == "negative"), None)
+    negative_operation = None
+    if negative is not None:
+        reachable = [item for item in negative["guardVector"] if item["value"] == "reachable"]
+        if len(reachable) != 1:
+            raise AuditError("negative render-I/O configuration must reach exactly one guard")
+        negative_binding = next(
+            item for item in guard_bindings if item["guardId"] == reachable[0]["guardId"]
+        )
+        negative_operation = negative_binding["orderedOperationKinds"][0]
     selected = {
         "schemaVersion": 1,
         "authority": "audited-upstream-selected-closure",
@@ -1416,13 +2090,30 @@ def analyze_selected_file_io_surface(
                 *([
                     {
                         "phase": "render-callback",
-                        "operationKinds": ["filesystemRead", "filesystemWrite"],
-                        "guardCount": len(guard_sources),
+                        "operationKinds": sorted({
+                            operation
+                            for binding in guard_bindings
+                            for operation in binding["orderedOperationKinds"]
+                        }),
+                        "guardCount": len(guard_bindings),
                     }
                 ] if render_phases else []),
             ],
         },
+        "runtimeConfigurationBinding": {
+            "schemaVersion": 1,
+            "algorithm": "opaque-header-option-choice-v1",
+            "selectedRevisionSha256": selected_revision_sha,
+            "entrySha256": entry_sha,
+            "guardBindings": guard_bindings,
+        },
+        "configuredModelEvidence": {
+            "evaluator": "bounded-return-model-v1",
+            "conversion": "LuaSkinLoader.fromLuaValue",
+            "customObjectMaps": custom_object_maps,
+        },
         "auditedGuardConfigurations": configurations,
+        "negativeExpectedDeniedOperation": negative_operation,
         "asoBMaShowPolicy": {
             "authority": "AsoBMaShow",
             "nestedWriteParentCreation": "safe-automatic-overlay-parents",
@@ -1435,7 +2126,7 @@ def analyze_selected_file_io_surface(
             "serializationOrder": "deterministic",
         },
     }
-    return selected, {"customTimers": 0, "customEvents": 0}
+    return selected, custom_object_maps
 
 
 def read_constant_definitions(loaded: dict[str, str]):
@@ -1764,13 +2455,28 @@ def acceptance_contract(
     negative_scenarios = []
     if negative_configurations:
         negative = negative_configurations[0]
+        denied_operation = selected_file_io_surface["negativeExpectedDeniedOperation"]
+        denied_counter = {
+            "filesystemRead": "filesystemReads",
+            "filesystemWrite": "filesystemWrites",
+            "filesystemDirectoryScan": "filesystemDirectoryScans",
+        }.get(denied_operation)
+        if denied_counter is None:
+            raise AuditError("negative render-I/O scenario has no supported denied counter")
+        denied_counters = {
+            "filesystemReads": 0,
+            "filesystemWrites": 0,
+            "filesystemDirectoryScans": 0,
+            "resourceUploads": 0,
+        }
+        denied_counters[denied_counter] = "positive"
         negative_scenarios.append(
             {
                 "id": RENDER_IO_NEGATIVE_SCENARIO_ID,
                 "guardConfigurationId": negative["id"],
                 "auditedGuardConfigurationSha256": negative["auditedGuardConfigurationSha256"],
                 "expectedGuardVectorSha256": negative["guardVectorSha256"],
-                "expectedDeniedOperation": "filesystemRead",
+                "expectedDeniedOperation": denied_operation,
                 "expectedDiagnostic": "skin_file_render_phase_denied",
                 "expectedAction": "discard_frame_disable_session_same_frame_builtin",
                 "criticality": "session-critical-sandbox-integrity",
@@ -1780,13 +2486,11 @@ def acceptance_contract(
                     "filesystemDirectoryScans": 0,
                     "resourceUploads": 0,
                 },
-                "deniedCountersExpected": {
-                    "filesystemReads": "positive",
-                    "filesystemWrites": 0,
-                    "filesystemDirectoryScans": 0,
-                    "resourceUploads": 0,
-                },
-                "overlayDigestCapture": "asynchronous-after-session-teardown",
+                "deniedCountersExpected": denied_counters,
+                "overlayDigestBeforeCapture": "complete-before-chart-session-bind",
+                "overlayDigestAfterCapture": "asynchronous-after-session-teardown",
+                "overlayDigestComparison": "equal",
+                "overlayDigestPolling": "memory-only-precomputed-status",
                 "overlayDigestBefore": "pending",
                 "overlayDigestAfter": "pending",
             }
@@ -1863,6 +2567,7 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
     selected_file_io_surface, selected_custom_object_maps = analyze_selected_file_io_surface(
         loaded,
         entry_sha,
+        disk_tree_sha,
     )
     archive_payload = {
         "id": opaque_id("payload", "archive:" + archive_data["archiveSha256"]),
