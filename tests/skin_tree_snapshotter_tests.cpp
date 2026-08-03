@@ -17,8 +17,10 @@
 #include <type_traits>
 
 #if !defined(_WIN32)
+#include <csignal>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/un.h>
 #include <unistd.h>
 #endif
@@ -49,6 +51,14 @@ public:
     std::error_code ignored;
     fs::permissions(root_, fs::perms::owner_all, fs::perm_options::add,
                     ignored);
+    for (fs::recursive_directory_iterator iterator(root_, ignored), end;
+         !ignored && iterator != end; ++iterator) {
+      if (iterator->is_directory(ignored)) {
+        fs::permissions(iterator->path(), fs::perms::owner_all,
+                        fs::perm_options::add, ignored);
+      }
+    }
+    ignored.clear();
     fs::remove_all(root_, ignored);
   }
   const fs::path &root() const { return root_; }
@@ -61,6 +71,12 @@ void writeBytes(const fs::path &path, std::string_view bytes) {
   fs::create_directories(path.parent_path());
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+
+std::string readBytes(const fs::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
 }
 
 SkinStorageRoots rootsBelow(const fs::path &root) {
@@ -130,6 +146,31 @@ void testDigestUsesExactTreeV1FramingAndStableSorting() {
     expect(fs::exists(result.prepared->stagingRoot() / "dir/b.bin"),
            "snapshot copies nested files");
   }
+}
+
+void testEmptyTreeIsRejectedForDigestParity() {
+  TempDirectory temp;
+  const fs::path source = temp.root() / "source";
+  fs::create_directories(source);
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
+  const auto result = snapshotter.snapshot(source, packageId(), {}, {});
+  expect(!result.prepared,
+         "an empty tree is rejected rather than hashing a non-package");
+}
+
+void testRevisionStoresTheNormalizedCanonicalPackageIdentity() {
+  TempDirectory temp;
+  const fs::path source = temp.root() / "source";
+  writeBytes(source / "main.luaskin", "return {}\n");
+  const auto canonical = *normalizePackageId("Caf\xC3\xA9").package;
+  SkinPackageId authoredAlias = canonical;
+  authoredAlias.directoryName = "Cafe\xCC\x81";
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(rootsBelow(temp.root()), aliases);
+  const auto result = snapshotter.snapshot(source, authoredAlias, {}, {});
+  expect(result.prepared && result.prepared->revision().package == canonical,
+         "revision stores the normalized package ID, not caller spelling");
 }
 
 void testFramingSeparatesDifferentFileBoundaries() {
@@ -363,6 +404,28 @@ void testSourceRootReplacementWithTheSameFilesIsRejected() {
          "changing the source root identity invalidates the stable snapshot");
 }
 
+void testPublishingCallbackMutationCannotEscapeFinalValidation() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path source = temp.root() / "source";
+  writeBytes(source / "a", "original");
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  bool mutated = false;
+  const auto result = snapshotter.snapshot(
+      source, packageId(), {}, [&](const SkinProgress &progress) {
+        if (!mutated && progress.phase == SkinProgressPhase::Publishing) {
+          writeBytes(source / "a", "changed-after-validation");
+          mutated = true;
+        }
+      });
+  expect(mutated, "publishing callback mutation fixture ran");
+  expect(!result.prepared,
+         "source mutation in the publishing callback is rejected");
+  expect(stagingEntryCount(roots) == 0,
+         "publishing callback mutation leaves no staging orphan");
+}
+
 void testTransientParentSymlinkCannotBeFollowedDuringCopy() {
 #if !defined(_WIN32)
   TempDirectory temp;
@@ -403,6 +466,45 @@ void testTransientParentSymlinkCannotBeFollowedDuringCopy() {
   if (!restoredDirectory) {
     fs::remove(nested);
     fs::rename(displaced, nested);
+  }
+#endif
+}
+
+void testTransientFifoReplacementCannotBlockOpen() {
+#if !defined(_WIN32)
+  TempDirectory temp;
+  const pid_t child = ::fork();
+  expect(child >= 0, "FIFO replacement test process starts");
+  if (child == 0) {
+    ::alarm(2);
+    const auto roots = rootsBelow(temp.root());
+    const fs::path source = temp.root() / "source";
+    writeBytes(source / "a", "first");
+    writeBytes(source / "b", "second");
+    const auto sourceTime = fs::last_write_time(source);
+    FakeAliasDetector aliases;
+    SkinTreeSnapshotter snapshotter(roots, aliases);
+    bool replaced = false;
+    const auto result = snapshotter.snapshot(
+        source, packageId(), {}, [&](const SkinProgress &progress) {
+          if (!replaced && progress.phase == SkinProgressPhase::Copying &&
+              progress.completedFiles == 1) {
+            fs::remove(source / "b");
+            if (::mkfifo((source / "b").c_str(), 0600) != 0) {
+              ::_exit(3);
+            }
+            fs::last_write_time(source, sourceTime);
+            replaced = true;
+          }
+        });
+    ::_exit(replaced && !result.prepared ? 0 : 4);
+  }
+  if (child > 0) {
+    int status = 0;
+    expect(::waitpid(child, &status, 0) == child,
+           "FIFO replacement test process completes");
+    expect(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+           "a FIFO leaf replacement is rejected without blocking open");
   }
 #endif
 }
@@ -475,6 +577,128 @@ void testPublishedRevisionIsImmutableAndLeaseClonesShareThePin() {
   lease.reset();
   expect(fs::exists(second.readView().root() / "a"),
          "clone remains valid after the original lease is released");
+}
+
+void testPreparedRevisionIsFrozenAndPublishRevalidatesItsDigest() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path source = temp.root() / "source";
+  writeBytes(source / "a", "original");
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  fs::path stagingRoot;
+  {
+    auto result = snapshotter.snapshot(source, packageId(), {}, {});
+    expect(result.prepared.has_value(), "tamper fixture prepares");
+    if (!result.prepared) {
+      return;
+    }
+    stagingRoot = result.prepared->stagingRoot();
+    const auto permissions = fs::status(stagingRoot / "a").permissions();
+    expect((permissions & fs::perms::owner_write) == fs::perms::none,
+           "prepared files are frozen before their digest is exposed");
+
+    std::error_code permissionError;
+    fs::permissions(stagingRoot / "a", fs::perms::owner_write,
+                    fs::perm_options::add, permissionError);
+    writeBytes(stagingRoot / "a", "tampered-after-prepare");
+    expect(readBytes(stagingRoot / "a") == "tampered-after-prepare",
+           "adversarial owner can alter permissions for the tamper fixture");
+    std::string error;
+    const auto lease = std::move(*result.prepared).publish(error);
+    expect(!lease && !error.empty(),
+           "publish revalidates and rejects altered staging content");
+  }
+  expect(!fs::exists(stagingRoot),
+         "failed tampered publication leaves no staging orphan");
+}
+
+void testPublishRejectsPoisonedExistingDigestDestinations() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path source = temp.root() / "source";
+  writeBytes(source / "a", "original");
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+
+  auto initial = snapshotter.snapshot(source, packageId(), {}, {});
+  expect(initial.prepared.has_value(), "poison fixture prepares");
+  if (!initial.prepared) {
+    return;
+  }
+  const fs::path destination =
+      roots.privateRevisions / initial.prepared->revision().lowercaseSha256;
+  initial.prepared.reset();
+  writeBytes(destination / "a", "poison");
+
+  fs::path stagingRoot;
+  {
+    auto poisoned = snapshotter.snapshot(source, packageId(), {}, {});
+    expect(poisoned.prepared.has_value(), "poisoned publication prepares");
+    if (!poisoned.prepared) {
+      return;
+    }
+    stagingRoot = poisoned.prepared->stagingRoot();
+    std::string error;
+    const auto lease = std::move(*poisoned.prepared).publish(error);
+    expect(!lease && !error.empty(),
+           "publish rejects a mismatched pre-existing digest directory");
+  }
+  expect(readBytes(destination / "a") == "poison",
+         "verification never trusts or rewrites poisoned existing content");
+  expect(!fs::exists(stagingRoot),
+         "poisoned destination failure leaves no staging orphan");
+}
+
+void testPublishRejectsMutableExistingRevisionAndSymlinkDestination() {
+#if !defined(_WIN32)
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path source = temp.root() / "source";
+  writeBytes(source / "a", "original");
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+
+  auto first = snapshotter.snapshot(source, packageId(), {}, {});
+  std::string firstError;
+  auto firstLease = std::move(*first.prepared).publish(firstError);
+  expect(firstLease.has_value(),
+         "existing-revision fixture publishes: " + firstError);
+  if (!firstLease) {
+    return;
+  }
+  const fs::path destination = firstLease->root();
+  std::error_code permissionError;
+  fs::permissions(destination / "a", fs::perms::owner_write,
+                  fs::perm_options::add, permissionError);
+  auto mutableExisting = snapshotter.snapshot(source, packageId(), {}, {});
+  std::string mutableError;
+  const auto mutableLease =
+      std::move(*mutableExisting.prepared).publish(mutableError);
+  expect(!mutableLease && !mutableError.empty(),
+         "publish rejects an existing revision that became mutable");
+
+  fs::permissions(destination, fs::perms::owner_all, fs::perm_options::add,
+                  permissionError);
+  fs::remove_all(destination, permissionError);
+  const fs::path outside = temp.root() / "outside";
+  writeBytes(outside / "sentinel", "untouched");
+  fs::create_directory_symlink(outside, destination);
+  fs::path stagingRoot;
+  {
+    auto symlinkExisting = snapshotter.snapshot(source, packageId(), {}, {});
+    stagingRoot = symlinkExisting.prepared->stagingRoot();
+    std::string symlinkError;
+    const auto symlinkLease =
+        std::move(*symlinkExisting.prepared).publish(symlinkError);
+    expect(!symlinkLease && !symlinkError.empty(),
+           "publish rejects a symlink at the digest destination");
+  }
+  expect(readBytes(outside / "sentinel") == "untouched",
+         "digest-destination verification never follows a symlink");
+  expect(!fs::exists(stagingRoot),
+         "symlink destination failure leaves no staging orphan");
+#endif
 }
 
 void testOverlayIdentityIsPrivateContainedAndCanonical() {
@@ -605,6 +829,8 @@ int main() {
   static_assert(!std::is_copy_assignable_v<SkinRevisionLease>);
   static_assert(std::is_move_constructible_v<SkinRevisionLease>);
   testDigestUsesExactTreeV1FramingAndStableSorting();
+  testEmptyTreeIsRejectedForDigestParity();
+  testRevisionStoresTheNormalizedCanonicalPackageIdentity();
   testFramingSeparatesDifferentFileBoundaries();
   testInjectedFinderAliasAndWindowsReparsePointAreRejected();
   testPlatformDetectorClassifiesNoFollowNodes();
@@ -612,9 +838,14 @@ int main() {
   testUnicodeAndCaseFoldCollisionsAreRejected();
   testMutationAtEveryStableCopyBoundaryIsRejected();
   testSourceRootReplacementWithTheSameFilesIsRejected();
+  testPublishingCallbackMutationCannotEscapeFinalValidation();
   testTransientParentSymlinkCannotBeFollowedDuringCopy();
+  testTransientFifoReplacementCannotBlockOpen();
   testCancellationAndPreparedDestructionCleanStaging();
   testPublishedRevisionIsImmutableAndLeaseClonesShareThePin();
+  testPreparedRevisionIsFrozenAndPublishRevalidatesItsDigest();
+  testPublishRejectsPoisonedExistingDigestDestinations();
+  testPublishRejectsMutableExistingRevisionAndSymlinkDestination();
   testOverlayIdentityIsPrivateContainedAndCanonical();
   testOverlayIdentityRejectsUnsafeInputsAndFramesFields();
   testSnapshotRejectsRelativePrivateRevisionRoot();

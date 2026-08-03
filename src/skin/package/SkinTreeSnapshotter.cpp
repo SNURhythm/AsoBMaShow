@@ -18,9 +18,15 @@
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <dirent.h>
 #include <fcntl.h>
+#include <cstdio>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#endif
 #endif
 
 namespace skin {
@@ -35,6 +41,7 @@ struct FileMetadata {
   std::uint64_t links = 0;
   std::int64_t modifiedSeconds = 0;
   std::int64_t modifiedNanoseconds = 0;
+  std::uint32_t permissions = 0;
   bool directory = false;
 
   auto operator<=>(const FileMetadata &) const = default;
@@ -143,6 +150,7 @@ bool readMetadata(const fs::path &path, FileMetadata &metadata,
   metadata.size =
       S_ISREG(status.st_mode) ? static_cast<std::uint64_t>(status.st_size) : 0;
   metadata.links = static_cast<std::uint64_t>(status.st_nlink);
+  metadata.permissions = static_cast<std::uint32_t>(status.st_mode & 07777);
   metadata.directory = S_ISDIR(status.st_mode);
 #if defined(__APPLE__)
   metadata.modifiedSeconds = status.st_mtimespec.tv_sec;
@@ -318,6 +326,7 @@ bool metadataMatchesOpenFile(
   actual.size =
       S_ISREG(status.st_mode) ? static_cast<std::uint64_t>(status.st_size) : 0;
   actual.links = static_cast<std::uint64_t>(status.st_nlink);
+  actual.permissions = static_cast<std::uint32_t>(status.st_mode & 07777);
   actual.directory = S_ISDIR(status.st_mode);
 #if defined(__APPLE__)
   actual.modifiedSeconds = status.st_mtimespec.tv_sec;
@@ -332,7 +341,8 @@ bool metadataMatchesOpenFile(
 
 #if !defined(_WIN32)
 bool fsyncDirectory(const fs::path &directory) {
-  const int descriptor = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY);
+  const int descriptor =
+      ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
   if (descriptor < 0) {
     return false;
   }
@@ -381,8 +391,8 @@ int openInventoryFileNoFollow(const Inventory &inventory,
                                                 ? std::string_view::npos
                                                 : separator - componentStart));
     if (separator == std::string_view::npos) {
-      const int file =
-          ::openat(parent, component.c_str(), O_RDONLY | O_NOFOLLOW);
+      const int file = ::openat(parent, component.c_str(),
+                                O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
       ::close(parent);
       return file;
     }
@@ -396,9 +406,238 @@ int openInventoryFileNoFollow(const Inventory &inventory,
     componentStart = separator + 1;
   }
 }
+
+bool freezeDirectoryDescriptor(int descriptor, std::error_code &error) {
+  const int duplicate = ::dup(descriptor);
+  if (duplicate < 0) {
+    error = std::error_code(errno, std::generic_category());
+    return false;
+  }
+  DIR *stream = ::fdopendir(duplicate);
+  if (stream == nullptr) {
+    ::close(duplicate);
+    error = std::error_code(errno, std::generic_category());
+    return false;
+  }
+  errno = 0;
+  while (const dirent *entry = ::readdir(stream)) {
+    const std::string_view name(entry->d_name);
+    if (name == "." || name == "..") {
+      continue;
+    }
+    struct stat status{};
+    if (::fstatat(descriptor, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) !=
+        0) {
+      error = std::error_code(errno, std::generic_category());
+      ::closedir(stream);
+      return false;
+    }
+    if (S_ISDIR(status.st_mode)) {
+      const int child = ::openat(descriptor, entry->d_name,
+                                 O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+      if (child < 0 || !freezeDirectoryDescriptor(child, error)) {
+        if (child >= 0) {
+          ::close(child);
+        }
+        if (!error) {
+          error = std::error_code(errno, std::generic_category());
+        }
+        ::closedir(stream);
+        return false;
+      }
+      ::close(child);
+      continue;
+    }
+    if (!S_ISREG(status.st_mode) || status.st_nlink != 1) {
+      error = std::make_error_code(std::errc::operation_not_permitted);
+      ::closedir(stream);
+      return false;
+    }
+    const int file =
+        ::openat(descriptor, entry->d_name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    struct stat openedStatus{};
+    if (file < 0 || ::fstat(file, &openedStatus) != 0 ||
+        !S_ISREG(openedStatus.st_mode) || openedStatus.st_nlink != 1 ||
+        openedStatus.st_dev != status.st_dev ||
+        openedStatus.st_ino != status.st_ino || ::fchmod(file, 0400) != 0 ||
+        ::fsync(file) != 0) {
+      if (file >= 0) {
+        ::close(file);
+      }
+      error =
+          std::error_code(errno == 0 ? EIO : errno, std::generic_category());
+      ::closedir(stream);
+      return false;
+    }
+    ::close(file);
+  }
+  if (errno != 0) {
+    error = std::error_code(errno, std::generic_category());
+    ::closedir(stream);
+    return false;
+  }
+  ::closedir(stream);
+  if (::fchmod(descriptor, 0500) != 0 || ::fsync(descriptor) != 0) {
+    error = std::error_code(errno, std::generic_category());
+    return false;
+  }
+  return true;
+}
+
+bool makeTreeImmutableNoFollow(const fs::path &root, std::error_code &error) {
+  const int descriptor =
+      ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  if (descriptor < 0) {
+    error = std::error_code(errno, std::generic_category());
+    return false;
+  }
+  const bool frozen = freezeDirectoryDescriptor(descriptor, error);
+  ::close(descriptor);
+  return frozen;
+}
+
+bool makeDirectoryWritableDescriptor(int descriptor) {
+  if (::fchmod(descriptor, 0700) != 0) {
+    return false;
+  }
+  const int duplicate = ::dup(descriptor);
+  DIR *stream = duplicate >= 0 ? ::fdopendir(duplicate) : nullptr;
+  if (stream == nullptr) {
+    if (duplicate >= 0) {
+      ::close(duplicate);
+    }
+    return false;
+  }
+  bool writable = true;
+  while (const dirent *entry = ::readdir(stream)) {
+    const std::string_view name(entry->d_name);
+    if (name == "." || name == "..") {
+      continue;
+    }
+    struct stat status{};
+    if (::fstatat(descriptor, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) !=
+        0) {
+      writable = false;
+      break;
+    }
+    if (S_ISDIR(status.st_mode)) {
+      const int child = ::openat(descriptor, entry->d_name,
+                                 O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+      if (child < 0 || ::fchmod(child, 0700) != 0) {
+        if (child >= 0) {
+          ::close(child);
+        }
+        writable = false;
+        break;
+      }
+      if (!makeDirectoryWritableDescriptor(child)) {
+        ::close(child);
+        writable = false;
+        break;
+      }
+      ::close(child);
+    } else if (S_ISREG(status.st_mode)) {
+      const int file = ::openat(descriptor, entry->d_name,
+                                O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+      if (file < 0 || ::fchmod(file, 0600) != 0) {
+        if (file >= 0) {
+          ::close(file);
+        }
+        writable = false;
+        break;
+      }
+      ::close(file);
+    }
+  }
+  ::closedir(stream);
+  return writable;
+}
+
+bool makeTreeWritableForCleanup(const fs::path &root) {
+  const int descriptor =
+      ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  if (descriptor < 0) {
+    return false;
+  }
+  const bool writable = makeDirectoryWritableDescriptor(descriptor);
+  ::close(descriptor);
+  return writable;
+}
+
+bool setRootPermissionsNoFollow(const fs::path &root, mode_t permissions,
+                                std::error_code &error) {
+  const int descriptor =
+      ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  if (descriptor < 0 || ::fchmod(descriptor, permissions) != 0) {
+    if (descriptor >= 0) {
+      ::close(descriptor);
+    }
+    error = std::error_code(errno, std::generic_category());
+    return false;
+  }
+  ::close(descriptor);
+  return true;
+}
+
+bool renameNoReplace(const fs::path &source, const fs::path &destination,
+                     std::error_code &error) {
+#if defined(__APPLE__)
+  if (::renameatx_np(AT_FDCWD, source.c_str(), AT_FDCWD, destination.c_str(),
+                     RENAME_EXCL) == 0) {
+    return true;
+  }
+#elif defined(__linux__)
+  if (::syscall(SYS_renameat2, AT_FDCWD, source.c_str(), AT_FDCWD,
+                destination.c_str(), RENAME_NOREPLACE) == 0) {
+    return true;
+  }
+#else
+  fs::rename(source, destination, error);
+  return !error;
+#endif
+  error = std::error_code(errno, std::generic_category());
+  return false;
+}
 #else
 bool fsyncDirectory(const fs::path &) { return true; }
 bool fsyncDirectoryTree(const fs::path &) { return true; }
+
+bool makeTreeImmutableNoFollow(const fs::path &root, std::error_code &error) {
+  for (fs::recursive_directory_iterator iterator(root, error), end;
+       !error && iterator != end; ++iterator) {
+    const bool directory = iterator->is_directory(error);
+    if (error) {
+      return false;
+    }
+    fs::permissions(iterator->path(),
+                    directory ? fs::perms::owner_read | fs::perms::owner_exec
+                              : fs::perms::owner_read,
+                    fs::perm_options::replace, error);
+  }
+  if (!error) {
+    fs::permissions(root, fs::perms::owner_read | fs::perms::owner_exec,
+                    fs::perm_options::replace, error);
+  }
+  return !error;
+}
+
+bool makeTreeWritableForCleanup(const fs::path &root) {
+  std::error_code ignored;
+  fs::permissions(root, fs::perms::owner_all, fs::perm_options::add, ignored);
+  return !ignored;
+}
+
+bool setRootPermissionsNoFollow(const fs::path &root, fs::perms permissions,
+                                std::error_code &error) {
+  fs::permissions(root, permissions, fs::perm_options::replace, error);
+  return !error;
+}
+
+bool renameNoReplace(const fs::path &source, const fs::path &destination,
+                     std::error_code &error) {
+  fs::rename(source, destination, error);
+  return !error;
+}
 #endif
 
 std::optional<std::string>
@@ -603,23 +842,38 @@ digestAndMaybeCopy(const Inventory &inventory,
   return hash.finalHex();
 }
 
-void makeImmutable(const fs::path &root, std::error_code &error) {
-  for (fs::recursive_directory_iterator iterator(root, error), end;
-       !error && iterator != end; ++iterator) {
-    const bool directory = iterator->is_directory(error);
-    if (error) {
-      return;
-    }
-    fs::permissions(iterator->path(),
-                    directory ? fs::perms::owner_read | fs::perms::owner_exec
-                              : fs::perms::owner_read,
-                    fs::perm_options::replace, error);
-    if (error) {
-      return;
-    }
+bool inventoryIsImmutable(const Inventory &inventory) {
+  constexpr std::uint32_t writePermissions = 0222;
+  if ((inventory.rootMetadata.permissions & writePermissions) != 0) {
+    return false;
   }
-  fs::permissions(root, fs::perms::owner_read | fs::perms::owner_exec,
-                  fs::perm_options::replace, error);
+  return std::ranges::all_of(
+      inventory.entries, [](const InventoryEntry &entry) {
+        return (entry.metadata.permissions & writePermissions) == 0;
+      });
+}
+
+bool verifyPrivateRevisionRoot(const fs::path &root,
+                               const SkinRevision &expected,
+                               bool requireImmutable, std::string &error) {
+  auto detector = createPlatformSkinAliasDetector();
+  std::vector<SkinDiagnostic> diagnostics;
+  const auto inventory =
+      inventoryTree(root, expected.package, *detector, {}, diagnostics);
+  if (!inventory || inventory->fileCount != expected.fileCount ||
+      inventory->totalBytes != expected.totalBytes ||
+      (requireImmutable && !inventoryIsImmutable(*inventory))) {
+    error = "private skin revision tree failed no-follow verification";
+    return false;
+  }
+  const auto digest =
+      digestAndMaybeCopy(*inventory, std::nullopt,
+                         SkinProgressPhase::Validating, {}, {}, diagnostics);
+  if (!digest || *digest != expected.lowercaseSha256) {
+    error = "private skin revision digest verification failed";
+    return false;
+  }
+  return true;
 }
 
 std::string uniqueStagingName() {
@@ -650,8 +904,7 @@ struct PreparedSkinRevision::State {
       return;
     }
     std::error_code ignored;
-    fs::permissions(stagingRoot, fs::perms::owner_all, fs::perm_options::add,
-                    ignored);
+    makeTreeWritableForCleanup(stagingRoot);
     fs::remove_all(stagingRoot, ignored);
   }
 };
@@ -726,35 +979,101 @@ PreparedSkinRevision::publish(std::string &error) && {
     error = "prepared skin revision is no longer publishable";
     return std::nullopt;
   }
+  if (!verifyPrivateRevisionRoot(state_->stagingRoot, state_->revision, true,
+                                 error)) {
+    return std::nullopt;
+  }
   std::error_code filesystemError;
-  fs::create_directories(state_->publishedRoot.parent_path(), filesystemError);
+  if (!makeTreeImmutableNoFollow(state_->stagingRoot, filesystemError)) {
+    error =
+        "unable to freeze prepared skin revision: " + filesystemError.message();
+    return std::nullopt;
+  }
+  if (!verifyPrivateRevisionRoot(state_->stagingRoot, state_->revision, true,
+                                 error)) {
+    return std::nullopt;
+  }
+
+  const fs::path stagingParent = state_->stagingRoot.parent_path();
+  const fs::path publishedParent = state_->publishedRoot.parent_path();
+  fs::create_directories(publishedParent, filesystemError);
   if (filesystemError) {
     error =
         "unable to create private revision root: " + filesystemError.message();
     return std::nullopt;
   }
-  if (fs::exists(state_->publishedRoot, filesystemError)) {
+
+  filesystemError.clear();
+  const fs::file_status destinationStatus =
+      fs::symlink_status(state_->publishedRoot, filesystemError);
+  if (filesystemError &&
+      filesystemError != std::errc::no_such_file_or_directory) {
+    error = "unable to inspect private revision destination: " +
+            filesystemError.message();
+    return std::nullopt;
+  }
+  const bool destinationExists =
+      destinationStatus.type() != fs::file_type::not_found;
+  if (destinationExists) {
+    if (!fs::is_directory(destinationStatus) ||
+        !verifyPrivateRevisionRoot(state_->publishedRoot, state_->revision,
+                                   true, error)) {
+      if (error.empty()) {
+        error = "private skin revision destination has an unsafe type";
+      }
+      return std::nullopt;
+    }
+    makeTreeWritableForCleanup(state_->stagingRoot);
     fs::remove_all(state_->stagingRoot, filesystemError);
+    if (filesystemError) {
+      error = "unable to remove duplicate prepared revision: " +
+              filesystemError.message();
+      return std::nullopt;
+    }
+    if (!fsyncDirectory(stagingParent) || !fsyncDirectory(publishedParent)) {
+      error = "unable to synchronize duplicate revision publication";
+      return std::nullopt;
+    }
+    state_->stagingRoot.clear();
   } else {
     filesystemError.clear();
-    fs::rename(state_->stagingRoot, state_->publishedRoot, filesystemError);
+    if (!setRootPermissionsNoFollow(state_->stagingRoot,
+#if defined(_WIN32)
+                                    fs::perms::owner_all,
+#else
+                                    0700,
+#endif
+                                    filesystemError)) {
+      error = "unable to prepare immutable revision root for publication: " +
+              filesystemError.message();
+      return std::nullopt;
+    }
+    if (!renameNoReplace(state_->stagingRoot, state_->publishedRoot,
+                         filesystemError)) {
+      std::error_code ignored;
+      makeTreeImmutableNoFollow(state_->stagingRoot, ignored);
+      error = "unable to publish private skin revision: " +
+              filesystemError.message();
+      return std::nullopt;
+    }
+    state_->stagingRoot = state_->publishedRoot;
+    filesystemError.clear();
+    if (!makeTreeImmutableNoFollow(state_->publishedRoot, filesystemError)) {
+      error = "unable to refreeze published skin revision: " +
+              filesystemError.message();
+      return std::nullopt;
+    }
+    if (!verifyPrivateRevisionRoot(state_->publishedRoot, state_->revision,
+                                   true, error)) {
+      return std::nullopt;
+    }
+    if (!fsyncDirectory(stagingParent) || !fsyncDirectory(publishedParent)) {
+      error = "unable to synchronize private revision publication";
+      return std::nullopt;
+    }
+    state_->stagingRoot.clear();
   }
-  if (filesystemError) {
-    error =
-        "unable to publish private skin revision: " + filesystemError.message();
-    return std::nullopt;
-  }
-  state_->stagingRoot.clear();
-  makeImmutable(state_->publishedRoot, filesystemError);
-  if (filesystemError) {
-    error =
-        "unable to make skin revision immutable: " + filesystemError.message();
-    return std::nullopt;
-  }
-  if (!fsyncDirectory(state_->publishedRoot.parent_path())) {
-    error = "unable to synchronize private revision publication";
-    return std::nullopt;
-  }
+
   auto pin = std::make_shared<SkinRevisionPin>(SkinRevisionPin{
       .revision = state_->revision, .root = state_->publishedRoot});
   return SkinRevisionLease(std::move(pin));
@@ -787,10 +1106,16 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     return result;
   }
 
-  auto first =
-      inventoryTree(sourceRoot, package, aliases_, stop, result.diagnostics);
+  const SkinPackageId &canonicalPackage = *normalizedPackage.package;
+  auto first = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
+                             result.diagnostics);
   if (!first) {
     result.cancelled = stop.stop_requested();
+    return result;
+  }
+  if (first->fileCount == 0) {
+    result.diagnostics.push_back(diagnostic(
+        "skin_snapshot_empty_tree", "skin source contains no regular files"));
     return result;
   }
   if (!report(callback,
@@ -826,8 +1151,7 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
         return;
       }
       std::error_code ignored;
-      fs::permissions(path, fs::perms::owner_all, fs::perm_options::add,
-                      ignored);
+      makeTreeWritableForCleanup(path);
       fs::remove_all(path, ignored);
     }
   } cleanup{stagingRoot};
@@ -851,8 +1175,8 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     result.cancelled = true;
     return result;
   }
-  auto second =
-      inventoryTree(sourceRoot, package, aliases_, stop, result.diagnostics);
+  auto second = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
+                              result.diagnostics);
   if (!second) {
     result.cancelled = stop.stop_requested();
     return result;
@@ -892,10 +1216,63 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     result.cancelled = true;
     return result;
   }
-  SkinRevision revision{.package = package,
+  auto finalSource = inventoryTree(sourceRoot, canonicalPackage, aliases_, stop,
+                                   result.diagnostics);
+  if (!finalSource) {
+    result.cancelled = stop.stop_requested();
+    return result;
+  }
+  if (first->rootMetadata != finalSource->rootMetadata ||
+      first->entries != finalSource->entries ||
+      first->fileCount != finalSource->fileCount ||
+      first->totalBytes != finalSource->totalBytes) {
+    result.diagnostics.push_back(diagnostic(
+        "skin_snapshot_source_changed",
+        "skin source changed before the snapshot could be prepared"));
+    return result;
+  }
+  const auto finalSourceDigest = digestAndMaybeCopy(
+      *finalSource, std::nullopt, SkinProgressPhase::Validating, stop, {},
+      result.diagnostics);
+  if (!finalSourceDigest || *finalSourceDigest != *verifiedDigest) {
+    result.cancelled = stop.stop_requested();
+    if (!result.cancelled) {
+      result.diagnostics.push_back(diagnostic(
+          "skin_snapshot_source_changed",
+          "skin source content changed before preparation completed"));
+    }
+    return result;
+  }
+  SkinRevision revision{.package = canonicalPackage,
                         .lowercaseSha256 = *verifiedDigest,
-                        .fileCount = second->fileCount,
-                        .totalBytes = second->totalBytes};
+                        .fileCount = finalSource->fileCount,
+                        .totalBytes = finalSource->totalBytes};
+  std::string privateVerificationError;
+  if (!verifyPrivateRevisionRoot(stagingRoot, revision, false,
+                                 privateVerificationError)) {
+    result.diagnostics.push_back(diagnostic(
+        "skin_snapshot_staging_integrity_failed", privateVerificationError));
+    return result;
+  }
+  std::error_code freezeError;
+  if (!makeTreeImmutableNoFollow(stagingRoot, freezeError)) {
+    result.diagnostics.push_back(
+        diagnostic("skin_snapshot_staging_freeze_failed",
+                   "unable to freeze the prepared skin revision"));
+    return result;
+  }
+  if (!verifyPrivateRevisionRoot(stagingRoot, revision, true,
+                                 privateVerificationError)) {
+    result.diagnostics.push_back(diagnostic(
+        "skin_snapshot_staging_integrity_failed", privateVerificationError));
+    return result;
+  }
+  if (!fsyncDirectory(stagingParent)) {
+    result.diagnostics.push_back(
+        diagnostic("skin_snapshot_fsync_failed",
+                   "unable to synchronize prepared skin revision staging"));
+    return result;
+  }
   const fs::path publishedRoot =
       roots_.privateRevisions / revision.lowercaseSha256;
   result.prepared =
