@@ -2,6 +2,8 @@
 
 #include <map>
 #include <memory>
+#include <stdexcept>
+#include <utility>
 
 namespace skin {
 namespace {
@@ -11,6 +13,7 @@ struct StubStoreState {
   ActivationCommitDisposition nextDisposition =
       ActivationCommitDisposition::ActivatedRequested;
   std::size_t removedProfiles = 0;
+  bool throwOnRemove = false;
 };
 
 std::map<const SkinPackageStore *, StubStoreState> &stubStates() {
@@ -88,14 +91,24 @@ CommitActivationResult SkinPackageStore::pollPreparedActivationCommit(
 }
 
 void SkinPackageStore::removeProfileActivations(const SkinProfileId &) {
-  ++stubStates()[this].removedProfiles;
+  auto &state = stubStates()[this];
+  if (std::exchange(state.throwOnRemove, false)) {
+    throw std::runtime_error("Synthetic profile removal failure");
+  }
+  ++state.removedProfiles;
 }
 
 namespace test_support {
 
+void resetStore(SkinPackageStore &store) { stubStates()[&store] = {}; }
+
 void setNextActivationDisposition(SkinPackageStore &store,
                                   ActivationCommitDisposition disposition) {
   stubStates()[&store].nextDisposition = disposition;
+}
+
+void throwOnNextProfileRemoval(SkinPackageStore &store) {
+  stubStates()[&store].throwOnRemove = true;
 }
 
 std::size_t removedProfileCount(const SkinPackageStore &store) {

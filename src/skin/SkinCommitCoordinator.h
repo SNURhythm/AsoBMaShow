@@ -89,6 +89,9 @@ public:
   void finishProfileMutation(SkinProfileMutationBarrier &&barrier,
                              bool mutationSucceeded,
                              bool profileStillExists) noexcept;
+  // Accepted Store/owner tickets are required to become terminal. Shutdown
+  // drains them synchronously with bounded backoff; it never times out by
+  // dropping an unacknowledged ticket or retained revision lease.
   void shutdown() noexcept;
 
 private:

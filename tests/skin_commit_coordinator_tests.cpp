@@ -210,7 +210,9 @@ struct Fixture {
   explicit Fixture(std::vector<SkinProfileId> profiles = {{"A"}, {"B"}})
       : roots(rootsBelow(temp.root())), catalog(roots.privateCatalog),
         owner(std::move(profiles)), store(roots, catalog, aliases, owner),
-        coordinator(store, owner) {}
+        coordinator(store, owner) {
+    test_support::resetStore(store);
+  }
 
   TempDirectory temp;
   SkinStorageRoots roots;
@@ -407,6 +409,22 @@ void testProfileMutationBarrierCannotBeFinishedByAnotherCoordinator() {
       "rejecting a foreign finish leaves barrier abandonment able to resume");
 }
 
+void testFailedActivationRemovalResumesProfileGate() {
+  Fixture fixture;
+  const auto client = fixture.coordinator.createClient();
+  auto barrier = fixture.coordinator.beginProfileMutation({"A"});
+  test_support::throwOnNextProfileRemoval(fixture.store);
+  fixture.coordinator.finishProfileMutation(std::move(*barrier.barrier), true,
+                                            false);
+  expect(test_support::removedProfileCount(fixture.store) == 0 &&
+             fixture.coordinator
+                 .submitProfileSettings(client, fixture.owner.snapshot({"A"}),
+                                        changedSettings(1))
+                 .accepted,
+         "failed activation-key removal preserves activation and resumes the "
+         "gate");
+}
+
 void testActivationPollingRevalidationDetachAndLeaseRelease() {
   Fixture fixture;
   const auto client = fixture.coordinator.createClient();
@@ -453,6 +471,40 @@ void testActivationPollingRevalidationDetachAndLeaseRelease() {
          "released");
 }
 
+void testRevalidationRequestsCoalesceLatestSnapshotPerProfile() {
+  Fixture fixture;
+  const auto client = fixture.coordinator.createClient();
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    auto prepared = makePreparedActivation(fixture, {"A"});
+    test_support::setNextActivationDisposition(
+        fixture.store,
+        ActivationCommitDisposition::ProfileCommittedNeedsRevalidation);
+    expect(fixture.coordinator.submitActivation(client, std::move(prepared))
+               .accepted,
+           "revalidation fixture activation is accepted");
+    fixture.coordinator.poll();
+    fixture.coordinator.takeCompletions(client);
+  }
+  auto otherProfile = makePreparedActivation(fixture, {"B"});
+  test_support::setNextActivationDisposition(
+      fixture.store,
+      ActivationCommitDisposition::ProfileCommittedNeedsRevalidation);
+  expect(fixture.coordinator.submitActivation(client, std::move(otherProfile))
+             .accepted,
+         "a second profile can retain independent revalidation work");
+  fixture.coordinator.poll();
+  fixture.coordinator.takeCompletions(client);
+
+  const auto expectedGeneration = fixture.owner.snapshot({"A"}).generation;
+  const auto requests = fixture.coordinator.takeRevalidationRequests();
+  expect(
+      requests.size() == 2 && requests.front().profileId.opaque == "A" &&
+          requests.front().generation == expectedGeneration &&
+          requests.back().profileId.opaque == "B",
+      "revalidation delivery coalesces the latest snapshot independently per "
+      "profile");
+}
+
 void testPausedPollingAndShutdownResolveAcceptedOwnerWorkExactlyOnce() {
   Fixture fixture;
   fixture.owner.defaultTerminalAfterPolls = 1;
@@ -497,6 +549,20 @@ void testPausedPollingAndShutdownResolveAcceptedOwnerWorkExactlyOnce() {
                                      changedSettings(0))
               .accepted,
          "shutdown permanently stops new submissions");
+
+  Fixture longPending;
+  longPending.owner.defaultTerminalAfterPolls = 96;
+  const auto longClient = longPending.coordinator.createClient();
+  auto longPrepared = makePreparedActivation(longPending, {"A"});
+  auto longPin = longPrepared.activation.revision.weakPin();
+  expect(longPending.coordinator
+             .submitActivation(longClient, std::move(longPrepared))
+             .accepted,
+         "long-pending activation is admitted before shutdown");
+  longPending.coordinator.shutdown();
+  expect(longPending.owner.acknowledgements == 1 && !longPin.hasLiveLease(),
+         "bounded shutdown backoff still waits for the liveness-guaranteed "
+         "terminal result");
 }
 
 void testCompletionDeliveryIsBounded() {
@@ -530,7 +596,9 @@ int main() {
   testDetachCannotRetargetLateProfileCompletion();
   testProfileMutationBarrierDrainsAndResumesByOutcome();
   testProfileMutationBarrierCannotBeFinishedByAnotherCoordinator();
+  testFailedActivationRemovalResumesProfileGate();
   testActivationPollingRevalidationDetachAndLeaseRelease();
+  testRevalidationRequestsCoalesceLatestSnapshotPerProfile();
   testPausedPollingAndShutdownResolveAcceptedOwnerWorkExactlyOnce();
   testCompletionDeliveryIsBounded();
 
