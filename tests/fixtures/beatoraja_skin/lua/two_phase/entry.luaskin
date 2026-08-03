@@ -10,8 +10,9 @@ if skin_config then
     observed_global_mutation = __trace_two_phase_global
   }
 else
-  shared.mutation = "header-mutated"
-  __trace_two_phase_global = "header-mutated"
+  local mutation = __trace_header_mutation or "header-mutated"
+  shared.mutation = mutation
+  __trace_two_phase_global = mutation
   return {
     phase = "header",
     package_loaded = package.loaded.shared ~= nil,

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import base64
+import copy
 import hashlib
 import importlib.util
 import json
@@ -132,6 +134,42 @@ def load_audit_module():
     return module
 
 
+def load_capture_module():
+    module_name = "asobmashow_beatoraja_skin_trace_capture_test"
+    spec = importlib.util.spec_from_file_location(module_name, TRACE_CAPTURE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def mutate_first_scalar(value: object) -> object:
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 1
+    if isinstance(value, float):
+        return value + 0.125
+    if isinstance(value, str):
+        return value + "-mutation"
+    if value is None:
+        return "mutation"
+    if isinstance(value, list):
+        if not value:
+            return ["mutation"]
+        result = copy.deepcopy(value)
+        result[0] = mutate_first_scalar(result[0])
+        return result
+    if isinstance(value, dict):
+        if not value:
+            return {"mutation": True}
+        result = copy.deepcopy(value)
+        first_key = next(iter(result))
+        result[first_key] = mutate_first_scalar(result[first_key])
+        return result
+    raise AssertionError(f"unsupported mutation value: {value!r}")
+
+
 class BeatorajaSkinCommittedContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -262,7 +300,7 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertEqual(timer_off["input"]["timerStartMicros"], -9223372036854775808)
         self.assertEqual(timer_off["expected"], {"draw": False})
         loop = self.trace_case("destination", "loop-and-easing-vectors")
-        self.assertEqual(loop["expected"]["stopAtEndTimeMillis"], -1)
+        self.assertFalse(loop["expected"]["stopDraw"])
         self.assertEqual(loop["expected"]["wrappedTimeMillis"], 650)
         self.assertEqual(
             loop["expected"]["easingRates"],
@@ -305,7 +343,7 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
                 "event_exec": "MainState.executeEvent",
             },
         )
-        self.assertEqual(direct["expected"]["unknownDirectLookup"], "dereference-error")
+        self.assertEqual(direct["expected"]["unknownDirectLookup"], "NullPointerException")
 
     def test_timer_event_trace_freezes_off_sentinel_calls_and_order(self):
         sentinel = self.trace_case("timers-events", "timer-off-sentinel")
@@ -318,22 +356,27 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         ordered = self.trace_case("timers-events", "timer-phase-before-event-phase")
         self.assertEqual(
             ordered["callOrder"],
-            ["timer:17", "timer:3", "event:9", "event:4"],
+            ["timer:3", "timer:17", "event:4", "event:9"],
         )
         self.assertEqual(ordered["expected"]["eventObservedTimerValue"], 7000)
         events = self.trace_case("timers-events", "zero-one-two-argument-events")
-        self.assertEqual(events["expected"]["observedArguments"], [[], [11], [11, 22]])
+        self.assertEqual(events["expected"]["observedArguments"], [[], [11], [11, 0]])
         self.assertEqual(events["callCount"], {"zeroArg": 1, "oneArg": 1, "twoArg": 1})
 
     def test_intmap_trace_records_complete_trace_specific_rng_setup(self):
         case = self.trace_case("timers-events", "libgdx-intmap-backing-order")
         setup = case["input"]["traceSetup"]
-        self.assertEqual(setup["initialCapacity"], 4)
+        self.assertEqual(setup["requestedCapacity"], 4)
+        self.assertEqual(setup["initialBackingCapacity"], 8)
         self.assertEqual(setup["loadFactor"], 0.8)
-        self.assertEqual(setup["randomImplementation"], "java.util.Random")
+        self.assertEqual(setup["randomImplementation"], "java.util.Random-compatible-lcg48")
         self.assertIsInstance(setup["randomSeed"], int)
-        self.assertEqual(setup["randomStateBefore"], "setSeed-before-first-put")
-        self.assertEqual(setup["randomStateAfter"], "captured-after-final-put")
+        self.assertRegex(setup["randomStateBeforeSha256"], LOWER_SHA256)
+        self.assertRegex(setup["randomStateAfterSha256"], LOWER_SHA256)
+        self.assertNotEqual(
+            setup["randomStateBeforeSha256"],
+            setup["randomStateAfterSha256"],
+        )
         self.assertEqual(
             setup["operations"],
             [
@@ -386,7 +429,15 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
             case["callCount"],
             {"uniqueInsertions": 12, "replacements": 1, "rngDraws": 88},
         )
-        self.assertEqual(case["expected"]["selectedConfiguredMaps"], {"customTimers": 0, "customEvents": 0})
+        manifest = self.require_manifest()
+        self.assertEqual(
+            manifest["selectedCustomObjectMaps"],
+            manifest["selectedFileIoSurface"]["configuredModelEvidence"]["customObjectMaps"],
+        )
+        self.assertEqual(
+            case["expected"]["selectedConfiguredMaps"],
+            manifest["selectedCustomObjectMaps"],
+        )
         self.assertEqual(case["expected"]["scope"], "trace-specific-not-universal-order")
 
     def test_legacy_trace_contains_only_normalized_upstream_facts(self):
@@ -429,37 +480,157 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertTrue(SANDBOX_POLICY_PATH.is_file(), "sandbox policy must be committed separately")
         policy = json.loads(SANDBOX_POLICY_PATH.read_text(encoding="utf-8"))
         manifest = self.require_manifest()
-        self.assertEqual(policy["schemaVersion"], 1)
-        self.assertEqual(policy["authority"], "AsoBMaShow")
+        self.assertEqual(
+            set(policy),
+            {
+                "schemaVersion",
+                "authority",
+                "selectedSurfaceDigest",
+                "policyBodyDigest",
+                "allowed",
+                "denied",
+                "phaseRules",
+                "handlePolicy",
+                "serialization",
+                "closedLegacyFacade",
+            },
+        )
         self.assertEqual(
             policy["selectedSurfaceDigest"],
             canonical_json_sha256(manifest["selectedFileIoSurface"]),
         )
         self.assertRegex(policy["selectedSurfaceDigest"], LOWER_SHA256)
-        self.assertTrue(policy["allowed"])
-        self.assertTrue(policy["denied"])
-        self.assertTrue(policy["phaseRules"])
-        allowed = {entry["capability"] for entry in policy["allowed"]}
-        denied = {entry["capability"] for entry in policy["denied"]}
-        self.assertTrue({
-            "package-text-dofile",
-            "restricted-io-open",
-            "legacy-file-list",
-            "legacy-overlay-mkdir",
-        }.issubset(allowed))
-        self.assertTrue({
-            "network",
-            "arbitrary-class-member",
-            "reflection",
-            "native-access",
-            "process-execution",
-        }.issubset(denied))
-        render = next(rule for rule in policy["phaseRules"] if rule["phase"] == "render")
+        body = {key: value for key, value in policy.items() if key != "policyBodyDigest"}
+        self.assertRegex(policy["policyBodyDigest"], LOWER_SHA256)
+        self.assertEqual(policy["policyBodyDigest"], canonical_json_sha256(body))
+        self.assertNotEqual(policy["policyBodyDigest"], policy["selectedSurfaceDigest"])
         self.assertEqual(
-            render["deniedOperations"],
-            ["filesystem-read", "filesystem-write", "directory-scan", "resource-upload"],
+            body,
+            {
+                "schemaVersion": 1,
+                "authority": "AsoBMaShow",
+                "selectedSurfaceDigest": canonical_json_sha256(
+                    manifest["selectedFileIoSurface"]
+                ),
+                "allowed": [
+                    {
+                        "capability": "package-text-dofile",
+                        "constraints": [
+                            "activated-revision-text-only",
+                            "load-phase-only",
+                            "virtual-path-enforcement",
+                        ],
+                    },
+                    {
+                        "capability": "restricted-io-open",
+                        "constraints": [
+                            "modes-default-r-w-a",
+                            "handle-members-lines-write-close",
+                            "overlay-first-read",
+                            "overlay-only-writes",
+                            "automatic-overlay-parents",
+                        ],
+                    },
+                    {
+                        "capability": "legacy-file-list",
+                        "constraints": [
+                            "load-phase-only",
+                            "package-local-bounded-scan",
+                            "normalized-virtual-results",
+                        ],
+                    },
+                    {
+                        "capability": "legacy-overlay-mkdir",
+                        "constraints": [
+                            "load-phase-only",
+                            "overlay-only-writes",
+                            "automatic-overlay-parents",
+                        ],
+                    },
+                ],
+                "denied": [
+                    {"capability": "network", "effect": "deny-before-effect"},
+                    {
+                        "capability": "arbitrary-class-member",
+                        "effect": "class-member-denial",
+                    },
+                    {"capability": "reflection", "effect": "deny-before-effect"},
+                    {"capability": "native-access", "effect": "deny-before-effect"},
+                    {
+                        "capability": "process-execution",
+                        "effect": "deny-before-effect",
+                    },
+                    {
+                        "capability": "unaudited-legacy-surface",
+                        "effect": "compatibility-error",
+                    },
+                ],
+                "phaseRules": [
+                    {
+                        "phase": "load",
+                        "allowedOperations": [
+                            "filesystem-read",
+                            "filesystem-write",
+                            "directory-scan",
+                            "resource-upload",
+                        ],
+                        "effect": "audited-bounded-execution",
+                    },
+                    {
+                        "phase": "render",
+                        "deniedOperations": [
+                            "filesystem-read",
+                            "filesystem-write",
+                            "directory-scan",
+                            "resource-upload",
+                        ],
+                        "effect": "deny-before-effect",
+                    },
+                ],
+                "handlePolicy": {
+                    "configuredToRenderTransition": "handle-invalidation",
+                    "dirtyHandleTransition": "validation-failure",
+                    "readBuffers": "release",
+                    "unclosedWriteBuffers": "discard",
+                },
+                "serialization": {
+                    "externalIdentity": "opaque-ids-and-digests-only",
+                    "order": "deterministic",
+                },
+                "closedLegacyFacade": {
+                    "tableKind": "ordinary-lua-closed-host-table",
+                    "module": "luajava",
+                    "exports": ["bindClass", "new"],
+                    "classes": [
+                        {
+                            "class": "java.io.File",
+                            "token": "unforgeable-lua-class-token",
+                            "constructorArguments": ["virtual-path"],
+                            "members": ["listFiles", "mkdir"],
+                        },
+                        {
+                            "class": "com.badlogic.gdx.Gdx",
+                            "members": [],
+                            "absentMembers": ["app"],
+                        },
+                    ],
+                    "rejected": [
+                        "all-other-classes",
+                        "all-other-constructors",
+                        "all-other-members",
+                        "all-other-argument-shapes",
+                        "newInstance",
+                        "url-http-reader",
+                        "controller-input",
+                        "reflection",
+                        "java-objects",
+                        "native-handles",
+                        "debug",
+                        "class-loaders",
+                    ],
+                },
+            },
         )
-        self.assertEqual(render["effect"], "deny-before-effect")
         for trace_path in TRACE_ROOT.glob("*.json"):
             self.assertNotEqual(trace_path.resolve(), SANDBOX_POLICY_PATH.resolve())
 
@@ -938,6 +1109,170 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
             if path.is_file() and sha256(path) in external_hashes:
                 collisions.append(os.fsdecode(raw_path))
         self.assertEqual(collisions, [])
+
+
+class BeatorajaTraceHarnessBehaviorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.capture = load_capture_module()
+        cls.manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        cls.committed = {
+            kind: json.loads((TRACE_ROOT / filename).read_text(encoding="utf-8"))
+            for kind, filename in TRACE_FILES.items()
+        }
+
+    def committed_case_payloads(self) -> dict[str, dict]:
+        return {
+            f"{kind}/{case['name']}": copy.deepcopy(case)
+            for kind, trace in self.committed.items()
+            for case in trace["cases"]
+        }
+
+    @staticmethod
+    def assembled_case_payloads(traces: dict[str, dict]) -> dict[str, dict]:
+        return {
+            f"{kind}/{case['name']}": case
+            for kind, trace in traces.items()
+            for case in trace["cases"]
+        }
+
+    def test_every_case_field_is_driver_owned_and_mutation_coupled(self):
+        payloads = self.committed_case_payloads()
+        baseline = self.capture.assemble_traces(payloads, self.manifest)
+        self.assertEqual(self.assembled_case_payloads(baseline), payloads)
+
+        for case_key, payload in payloads.items():
+            for field in ("input", "expected", "callOrder", "callCount", "precision"):
+                if field not in payload:
+                    continue
+                with self.subTest(case=case_key, field=field):
+                    mutated_payloads = copy.deepcopy(payloads)
+                    mutated_payloads[case_key][field] = mutate_first_scalar(payload[field])
+                    mutated = self.capture.assemble_traces(
+                        mutated_payloads,
+                        self.manifest,
+                    )
+                    mutated_cases = self.assembled_case_payloads(mutated)
+                    changed = [
+                        key
+                        for key, baseline_case in payloads.items()
+                        if mutated_cases[key] != baseline_case
+                    ]
+                    self.assertEqual(changed, [case_key])
+                    self.assertEqual(
+                        mutated_cases[case_key][field],
+                        mutated_payloads[case_key][field],
+                    )
+
+    def test_manifest_custom_map_evidence_is_relational_and_fail_closed(self):
+        payloads = self.committed_case_payloads()
+        selected = self.manifest["selectedCustomObjectMaps"]
+        surface = self.manifest["selectedFileIoSurface"]["configuredModelEvidence"][
+            "customObjectMaps"
+        ]
+        self.assertEqual(selected, surface)
+        assembled = self.capture.assemble_traces(payloads, self.manifest)
+        timer_case = self.assembled_case_payloads(assembled)[
+            "timers-events/libgdx-intmap-backing-order"
+        ]
+        self.assertEqual(timer_case["expected"]["selectedConfiguredMaps"], selected)
+
+        mismatched = copy.deepcopy(self.manifest)
+        first_key = next(iter(mismatched["selectedCustomObjectMaps"]))
+        mismatched["selectedCustomObjectMaps"][first_key] += 1
+        with self.assertRaisesRegex(ValueError, "selected custom object maps"):
+            self.capture.assemble_traces(payloads, mismatched)
+
+    def test_strict_driver_fact_parser_rejects_duplicates_noise_and_missing_cases(self):
+        encoded = base64.b64encode(b'{"input":{},"expected":{},"precision":0}').decode(
+            "ascii"
+        )
+        one_line = f"FACT\tlua-language/example\t{encoded}\n"
+        self.assertEqual(
+            self.capture.parse_driver_output(
+                one_line.encode("ascii"),
+                {"lua-language/example"},
+            ),
+            {
+                "lua-language/example": {
+                    "input": {},
+                    "expected": {},
+                    "precision": 0,
+                }
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate driver fact"):
+            self.capture.parse_driver_output(
+                (one_line + one_line).encode("ascii"),
+                {"lua-language/example"},
+            )
+        duplicate_field = base64.b64encode(
+            b'{"input":{},"input":{},"expected":{},"precision":0}'
+        ).decode("ascii")
+        with self.assertRaisesRegex(ValueError, "duplicate JSON field"):
+            self.capture.parse_driver_output(
+                f"FACT\tlua-language/example\t{duplicate_field}\n".encode("ascii"),
+                {"lua-language/example"},
+            )
+        with self.assertRaisesRegex(ValueError, "unexpected driver output"):
+            self.capture.parse_driver_output(
+                ("noise\n" + one_line).encode("ascii"),
+                {"lua-language/example"},
+            )
+        with self.assertRaisesRegex(ValueError, "missing driver facts"):
+            self.capture.parse_driver_output(b"", {"lua-language/example"})
+
+    def test_bounded_subprocess_enforces_timeout_and_output_limit(self):
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            self.capture.run_bounded(
+                sys.executable,
+                "-c",
+                "import time; time.sleep(2)",
+                timeout_seconds=0.05,
+                max_output_bytes=1024,
+            )
+        with self.assertRaisesRegex(RuntimeError, "output limit"):
+            self.capture.run_bounded(
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write('x' * 4096)",
+                timeout_seconds=2,
+                max_output_bytes=64,
+            )
+
+    def test_reference_manifest_loader_rejects_wrong_commit_and_map_relation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            wrong_commit = copy.deepcopy(self.manifest)
+            wrong_commit["beatorajaCommit"] = "0" * 40
+            path.write_text(json.dumps(wrong_commit), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "manifest Beatoraja commit"):
+                self.capture.load_reference_manifest(path)
+
+            wrong_map = copy.deepcopy(self.manifest)
+            first_key = next(iter(wrong_map["selectedCustomObjectMaps"]))
+            wrong_map["selectedFileIoSurface"]["configuredModelEvidence"][
+                "customObjectMaps"
+            ][first_key] += 1
+            path.write_text(json.dumps(wrong_map), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "selected custom object maps"):
+                self.capture.load_reference_manifest(path)
+
+    @unittest.skipUnless(
+        os.environ.get("ASOBMASHOW_BEATORAJA_ROOT"),
+        "live pinned Beatoraja coupling probe requires an explicit reference root",
+    )
+    def test_live_pinned_methods_are_case_coupled_under_input_mutation(self):
+        reference_root = Path(os.environ["ASOBMASHOW_BEATORAJA_ROOT"])
+        changed_by_probe = self.capture.verify_live_case_coupling(
+            reference_root,
+            self.manifest,
+        )
+        expected_keys = set(self.committed_case_payloads())
+        self.assertEqual(set(changed_by_probe), expected_keys)
+        for case_key in sorted(expected_keys):
+            with self.subTest(case=case_key):
+                self.assertEqual(changed_by_probe[case_key], [case_key])
 
 
 class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):

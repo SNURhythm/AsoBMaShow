@@ -3,6 +3,8 @@
     {
       "expected": {
         "eventAtZeroIsOn": true,
+        "isOff": true,
+        "isOn": false,
         "offElapsedMicros": 0,
         "offValue": -9223372036854775808
       },
@@ -42,16 +44,15 @@
     },
     {
       "callCount": {
-        "event:4": 1,
-        "event:9": 1,
-        "timer:17": 1,
-        "timer:3": 1
+        "eventActions": 2,
+        "eventConditions": 2,
+        "timerCallbacks": 2
       },
       "callOrder": [
-        "timer:17",
         "timer:3",
-        "event:9",
-        "event:4"
+        "timer:17",
+        "event:4",
+        "event:9"
       ],
       "expected": {
         "eventObservedTimerValue": 7000,
@@ -61,14 +62,10 @@
         ]
       },
       "input": {
-        "eventIdsInBackingOrder": [
-          9,
-          4
-        ],
-        "timerIdsInBackingOrder": [
-          17,
-          3
-        ],
+        "configuredMaps": {
+          "customEvents": 2,
+          "customTimers": 2
+        },
         "updatedValue": 7000
       },
       "name": "timer-phase-before-event-phase",
@@ -93,10 +90,10 @@
           ],
           [
             11,
-            22
+            0
           ]
         ],
-        "threeArgumentFunction": "unsupported-null"
+        "threeArgumentFunction": "supported"
       },
       "input": {
         "one": [
@@ -178,7 +175,7 @@
             16
           ],
           "collisionAndResizeExercised": true,
-          "initialCapacity": 4,
+          "initialBackingCapacity": 8,
           "loadFactor": 0.8,
           "operations": [
             {
@@ -601,10 +598,11 @@
               "result": 1
             }
           ],
-          "randomImplementation": "java.util.Random",
+          "randomImplementation": "java.util.Random-compatible-lcg48",
           "randomSeed": 1592594996,
-          "randomStateAfter": "captured-after-final-put",
-          "randomStateBefore": "setSeed-before-first-put"
+          "randomStateAfterSha256": "ffab7541acb11ed3810c449a3fae85f32f4d2f6905f1e5ab4be1eb7a655c6bfe",
+          "randomStateBeforeSha256": "d3994b718a31134c3b1df77196a4c0962736b3555b57889cf4a84b2734d37993",
+          "requestedCapacity": 4
         }
       },
       "name": "libgdx-intmap-backing-order",
@@ -614,31 +612,31 @@
   "kind": "timers-events",
   "provenance": [
     {
-      "behavior": "active timer callback values are cached by the once-per-frame update",
+      "behavior": "actual pinned custom timer caches one callback result per update",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/CustomTimer.java",
       "symbol": "CustomTimer.update/getMicroTimer"
     },
     {
-      "behavior": "automatic conditions observe current timers and enforce minimum intervals",
+      "behavior": "actual pinned custom event evaluates conditions and action arguments",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/CustomEvent.java",
-      "symbol": "CustomEvent.execute/update"
+      "symbol": "CustomEvent.update/execute"
     },
     {
-      "behavior": "all custom timers update before all automatic custom events",
+      "behavior": "actual pinned skin updates timer map before event map",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/Skin.java",
       "symbol": "Skin.updateCustomObjects"
     },
     {
-      "behavior": "Lua event functions support exactly zero, one, or two declared arguments",
+      "behavior": "actual pinned accessor adapts zero, one, and two argument Lua functions",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
       "symbol": "SkinLuaAccessor.loadEvent"
     },
     {
-      "behavior": "synthetic nonempty maps iterate backing-table order and collision eviction uses MathUtils.random",
+      "behavior": "actual pinned IntMap records requested/backing capacities, collision RNG state, replacement sequence, and resulting backing order",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "lib/gdx.jar",
       "symbol": "com.badlogic.gdx.utils.IntMap.put/Entries"

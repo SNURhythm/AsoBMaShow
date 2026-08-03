@@ -19,7 +19,7 @@
           "linear": 0.25,
           "step": 0.0
         },
-        "stopAtEndTimeMillis": -1,
+        "stopDraw": false,
         "wrappedTimeMillis": 650
       },
       "input": {
@@ -84,8 +84,8 @@
           "x": 14,
           "y": 7
         },
-        "rate": 0.5,
         "relative": false,
+        "sampleMillis": 500,
         "to": {
           "angle": 60,
           "clip": {
@@ -115,13 +115,13 @@
   "kind": "destination",
   "provenance": [
     {
-      "behavior": "timer, loop, easing, geometry, color, angle, clip, and offset evaluation",
+      "behavior": "actual pinned object evaluates timer, loop, easing, geometry, normalized color, angle, clip, and offset behavior",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/SkinObject.java",
-      "symbol": "SkinObject.prepareRegion/getRate/prepareColor/prepareAngle/prepareClip"
+      "symbol": "SkinObject.prepare/prepareRegion/getRate/prepareColor/prepareAngle/prepareClip"
     },
     {
-      "behavior": "Long.MIN_VALUE distinguishes an off destination timer",
+      "behavior": "actual pinned timer sentinel suppresses destination drawing",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/property/TimerProperty.java",
       "symbol": "TimerProperty.isOff"

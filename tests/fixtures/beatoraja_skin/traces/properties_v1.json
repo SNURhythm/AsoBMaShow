@@ -9,6 +9,15 @@
           "recognizedString": "built-in-name",
           "unrecognizedString": "runtime-script"
         },
+        "observed": {
+          "function": true,
+          "numeric": true,
+          "numericOrigin": "boolean-id:7",
+          "otherIsNull": true,
+          "recognizedOrigin": "boolean-name:recognized-name",
+          "recognizedString": true,
+          "unrecognizedString": true
+        },
         "timerNegativeId": "unsupported-null",
         "timerZeroId": "built-in-id"
       },
@@ -21,7 +30,7 @@
           "lua-function",
           7,
           "recognized-name",
-          "return function() return 9 end",
+          "function() return false end",
           true
         ]
       },
@@ -39,7 +48,20 @@
           "text": "StringPropertyFactory.getStringProperty",
           "timer": "MainState.timer.getMicroTimer"
         },
-        "unknownDirectLookup": "dereference-error"
+        "observed": {
+          "event": [
+            7,
+            11,
+            22
+          ],
+          "event_index": 3007,
+          "float_number": 4007.0,
+          "number": 1007,
+          "option": true,
+          "text": "string:7",
+          "timer": 777007
+        },
+        "unknownDirectLookup": "NullPointerException"
       },
       "input": {
         "functions": [
@@ -51,28 +73,29 @@
           "timer",
           "event_exec"
         ],
+        "id": 7,
         "unknownId": 2147483647
       },
       "name": "direct-main-state-dispatch",
-      "precision": 0
+      "precision": 1e-06
     }
   ],
   "kind": "properties",
   "provenance": [
     {
-      "behavior": "model properties dispatch functions, numeric IDs, recognized names, and script strings distinctly",
+      "behavior": "actual pinned model property dispatch distinguishes functions, IDs, names, scripts, and unsupported values",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-      "symbol": "LuaSkinLoader.serializeLuaScript"
+      "symbol": "LuaSkinLoader.fromLuaValue/serializeLuaScript"
     },
     {
-      "behavior": "direct main_state calls use their named factories or direct state APIs",
+      "behavior": "actual pinned direct host functions call their matching factories and state methods",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
-      "symbol": "OptionFunction/NumberFunction/FloatNumberFunction/TextFunction/TimerFunction/EventExecFunction/EventIndexFunction"
+      "symbol": "MainStatePropertyLuaApiExporter.export"
     },
     {
-      "behavior": "negative timer IDs are unsupported",
+      "behavior": "actual pinned factory rejects negative timer IDs",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/property/TimerPropertyFactory.java",
       "symbol": "TimerPropertyFactory.getTimerProperty"

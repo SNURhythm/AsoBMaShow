@@ -1,36 +1,44 @@
 {
+  "schemaVersion": 1,
+  "authority": "AsoBMaShow",
+  "selectedSurfaceDigest": "2e902cccd276ea97f6b9ba192f2d19432f975d218d4510355d3e59a8e266c2ca",
+  "policyBodyDigest": "6f4cbf4198b13e43b85c0bba2467d213c68a1b5a774fe0562aefcfcfe2c5ffb6",
   "allowed": [
     {
       "capability": "package-text-dofile",
       "constraints": [
-        "virtual-path-enforcement",
-        "audited-selected-closure"
+        "activated-revision-text-only",
+        "load-phase-only",
+        "virtual-path-enforcement"
       ]
     },
     {
       "capability": "restricted-io-open",
       "constraints": [
-        "read-selected-revision-or-overlay",
+        "modes-default-r-w-a",
+        "handle-members-lines-write-close",
+        "overlay-first-read",
         "overlay-only-writes",
-        "modes-default-r-w-a"
+        "automatic-overlay-parents"
       ]
     },
     {
       "capability": "legacy-file-list",
       "constraints": [
-        "selected-revision-or-overlay-directories",
+        "load-phase-only",
+        "package-local-bounded-scan",
         "normalized-virtual-results"
       ]
     },
     {
       "capability": "legacy-overlay-mkdir",
       "constraints": [
+        "load-phase-only",
         "overlay-only-writes",
         "automatic-overlay-parents"
       ]
     }
   ],
-  "authority": "AsoBMaShow",
   "denied": [
     {
       "capability": "network",
@@ -51,6 +59,32 @@
     {
       "capability": "process-execution",
       "effect": "deny-before-effect"
+    },
+    {
+      "capability": "unaudited-legacy-surface",
+      "effect": "compatibility-error"
+    }
+  ],
+  "phaseRules": [
+    {
+      "phase": "load",
+      "allowedOperations": [
+        "filesystem-read",
+        "filesystem-write",
+        "directory-scan",
+        "resource-upload"
+      ],
+      "effect": "audited-bounded-execution"
+    },
+    {
+      "phase": "render",
+      "deniedOperations": [
+        "filesystem-read",
+        "filesystem-write",
+        "directory-scan",
+        "resource-upload"
+      ],
+      "effect": "deny-before-effect"
     }
   ],
   "handlePolicy": {
@@ -59,32 +93,50 @@
     "readBuffers": "release",
     "unclosedWriteBuffers": "discard"
   },
-  "phaseRules": [
-    {
-      "allowedOperations": [
-        "filesystem-read",
-        "filesystem-write",
-        "directory-scan",
-        "resource-upload"
-      ],
-      "effect": "audited-bounded-execution",
-      "phase": "configured-load"
-    },
-    {
-      "deniedOperations": [
-        "filesystem-read",
-        "filesystem-write",
-        "directory-scan",
-        "resource-upload"
-      ],
-      "effect": "deny-before-effect",
-      "phase": "render"
-    }
-  ],
-  "schemaVersion": 1,
-  "selectedSurfaceDigest": "2e902cccd276ea97f6b9ba192f2d19432f975d218d4510355d3e59a8e266c2ca",
   "serialization": {
     "externalIdentity": "opaque-ids-and-digests-only",
     "order": "deterministic"
+  },
+  "closedLegacyFacade": {
+    "tableKind": "ordinary-lua-closed-host-table",
+    "module": "luajava",
+    "exports": [
+      "bindClass",
+      "new"
+    ],
+    "classes": [
+      {
+        "class": "java.io.File",
+        "token": "unforgeable-lua-class-token",
+        "constructorArguments": [
+          "virtual-path"
+        ],
+        "members": [
+          "listFiles",
+          "mkdir"
+        ]
+      },
+      {
+        "class": "com.badlogic.gdx.Gdx",
+        "members": [],
+        "absentMembers": [
+          "app"
+        ]
+      }
+    ],
+    "rejected": [
+      "all-other-classes",
+      "all-other-constructors",
+      "all-other-members",
+      "all-other-argument-shapes",
+      "newInstance",
+      "url-http-reader",
+      "controller-input",
+      "reflection",
+      "java-objects",
+      "native-handles",
+      "debug",
+      "class-loaders"
+    ]
   }
 }

@@ -31,6 +31,7 @@
       },
       "input": {
         "entry": "lua/two_phase/entry.luaskin",
+        "headerMutation": "header-mutated",
         "requirePrecedesSkinConfigBranch": true,
         "requiredModule": "shared"
       },
@@ -52,7 +53,7 @@
       },
       "input": {
         "arraySource": "not-a-table",
-        "boolean": 1,
+        "boolean": true,
         "float": 12.5,
         "integerFromNumber": 17.9,
         "orderedTable": {
@@ -122,22 +123,16 @@
   "kind": "lua-language",
   "provenance": [
     {
-      "behavior": "header execution and configured execution reuse one SkinLuaAccessor state",
-      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-      "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
-      "symbol": "LuaSkinLoader.loadHeader/load"
-    },
-    {
-      "behavior": "package.loaded and globals persist within one accessor and start fresh in a new accessor",
-      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-      "symbol": "SkinLuaAccessor.initializeModules/execFile"
-    },
-    {
-      "behavior": "Lua values coerce to model primitive and table shapes",
+      "behavior": "actual pinned loader converts Lua values and dispatches model properties",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
       "symbol": "LuaSkinLoader.fromLuaValue/serializeLuaScript"
+    },
+    {
+      "behavior": "actual pinned accessor retains package and global state across two-phase execution",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.createStandardGlobals/execFile"
     }
   ],
   "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",

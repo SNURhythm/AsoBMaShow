@@ -57,6 +57,10 @@
           "r",
           "w",
           "a"
+        ],
+        "returnFixture": [
+          "alpha",
+          7
         ]
       },
       "name": "standard-file-call-shapes",
@@ -90,7 +94,14 @@
           "relative-path"
         ],
         "gdxAppPresent": false,
+        "gdxFacadeMembers": [
+          "graphics",
+          "input"
+        ],
         "listShape": "normalized-relative-path-array-or-nil",
+        "normalizedList": [
+          "one.txt"
+        ],
         "repeatedRequireSameTable": true,
         "requireUsesInstalledTable": true,
         "upstreamBroaderBranches": [
@@ -112,7 +123,8 @@
         "requires": [
           "luajava",
           "luajava"
-        ]
+        ],
+        "syntheticListEntryCount": 1
       },
       "name": "legacy-luajava-selected-facts",
       "precision": 0
@@ -121,13 +133,13 @@
   "kind": "legacy-lua-upstream",
   "provenance": [
     {
-      "behavior": "standard LuaJ dofile and io handle shapes are available in the pinned accessor",
+      "behavior": "actual pinned accessor supplies standard dofile and restricted io handle shapes",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-      "symbol": "SkinLuaAccessor.createStandardGlobals/RestrictedIoLib/execFile"
+      "symbol": "SkinLuaAccessor.RestrictedIoLib/execFile"
     },
     {
-      "behavior": "the pinned upstream facade preloads luajava and exposes selected File and Gdx shapes among broader branches",
+      "behavior": "actual pinned legacy facade supplies repeated require identity, File construction/listing, and a Gdx table without app",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
       "symbol": "LegacySkinLuaApi.install/BindClassFunction/NewFunction/fileFacade/gdxFacade"
