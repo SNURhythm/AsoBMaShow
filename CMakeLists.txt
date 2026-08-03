@@ -3988,6 +3988,34 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(midi_input_tests PRIVATE cxx_std_23)
 
+    add_executable(skin_tree_snapshotter_tests
+        tests/skin_tree_snapshotter_tests.cpp
+        src/FileChecksum.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/SkinStoragePaths.cpp
+        src/skin/package/SkinAliasDetector.cpp
+        src/skin/package/SkinPathPolicy.cpp
+        src/skin/package/SkinTreeSnapshotter.cpp
+    )
+    target_include_directories(skin_tree_snapshotter_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(skin_tree_snapshotter_tests PRIVATE cxx_std_23)
+    target_compile_definitions(skin_tree_snapshotter_tests PRIVATE
+        ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+    )
+    target_link_libraries(skin_tree_snapshotter_tests PRIVATE
+        utf8proc::utf8proc
+    )
+    if(APPLE)
+        target_sources(skin_tree_snapshotter_tests PRIVATE
+            src/skin/package/SkinAliasDetectorApple.mm
+        )
+        target_link_libraries(skin_tree_snapshotter_tests PRIVATE
+            "-framework Foundation"
+        )
+    endif()
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
@@ -4033,6 +4061,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(skin_path_policy_tests)
+    asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(video_frame_layout_tests)

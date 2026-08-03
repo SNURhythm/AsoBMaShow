@@ -30,6 +30,8 @@ AGENT_GUIDANCE = ROOT / "AGENTS.md"
 SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
 MAIN_SOURCE = ROOT / "src/main.cpp"
 IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
+IOS_NATIVES_HEADER = ROOT / "src/iOSNatives.hpp"
+SKIN_ALIAS_DETECTOR_APPLE = ROOT / "src/skin/package/SkinAliasDetectorApple.mm"
 VCPKG_MANIFEST = ROOT / "vcpkg.json"
 IOS_LIB_SCRIPT = ROOT / "scripts/get_ios_libs.py"
 IOS_UTF8PROC_PREPARE = ROOT / "scripts/ios_utf8proc.py"
@@ -178,6 +180,23 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertLess(key_window_validation, visible_window_validation)
         self.assertLess(visible_window_validation, scene_enumeration)
         self.assertIn("cachedActiveWindow = window;", lookup)
+
+    def test_ios_private_skin_storage_uses_application_support_and_excludes_backup(self):
+        header = IOS_NATIVES_HEADER.read_text(encoding="utf-8")
+        source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("std::string GetIOSApplicationSupportPath();", header)
+        implementation = source[source.index("GetIOSApplicationSupportPath()") :]
+        self.assertIn("NSApplicationSupportDirectory", implementation)
+        self.assertIn("createDirectoryAtURL", implementation)
+        self.assertIn("NSURLIsExcludedFromBackupKey", implementation)
+        self.assertIn("setResourceValue", implementation)
+
+    def test_apple_skin_alias_detection_is_no_follow(self):
+        source = SKIN_ALIAS_DETECTOR_APPLE.read_text(encoding="utf-8")
+        self.assertIn("lstat", source)
+        self.assertIn("NSURLIsAliasFileKey", source)
+        self.assertIn("getResourceValue", source)
+        self.assertNotIn("URLByResolvingAliasFile", source)
 
     def test_workspace_has_one_relative_pods_project(self):
         tree = ET.parse(WORKSPACE)

@@ -3345,6 +3345,35 @@ std::string GetIOSDocumentsPath() {
       NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0] UTF8String]);
 }
 
+std::string GetIOSApplicationSupportPath() {
+  @autoreleasepool {
+    NSFileManager *manager = NSFileManager.defaultManager;
+    NSURL *base = [manager URLForDirectory:NSApplicationSupportDirectory
+                                  inDomain:NSUserDomainMask
+                         appropriateForURL:nil
+                                    create:YES
+                                     error:nil];
+    if (base == nil) {
+      return {};
+    }
+    NSURL *directory = [base URLByAppendingPathComponent:@"AsoBMaShow"
+                                             isDirectory:YES];
+    NSError *error = nil;
+    if (![manager createDirectoryAtURL:directory
+            withIntermediateDirectories:YES
+                             attributes:nil
+                                  error:&error]) {
+      return {};
+    }
+    if (![directory setResourceValue:@YES
+                              forKey:NSURLIsExcludedFromBackupKey
+                               error:&error]) {
+      return {};
+    }
+    return std::string(directory.fileSystemRepresentation);
+  }
+}
+
 // get nwh
 void *GetIOSWindowHandle(void *uiwindow) {
   // get rootviewcontroller.view.layer;
