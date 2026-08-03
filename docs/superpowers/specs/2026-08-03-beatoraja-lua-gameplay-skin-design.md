@@ -57,6 +57,9 @@ needed to support it cleanly:
   clipping, filtering, blending, center, offset, and stretch behavior used by
   the target; and
 - retained Lua callbacks for dynamic properties, writers, timers, and events.
+- the selected entry's audited, closed legacy-Lua compatibility facade for
+  package-local `java.io.File` listing plus the nonfunctional guarded
+  `com.badlogic.gdx.Gdx.app` probe described below.
 
 The compatibility matrix is evidence-driven. Every object type, property ID,
 timer ID, event ID, Lua module, and file API used by the pinned target is
@@ -265,15 +268,64 @@ remaining inside the package snapshot.
 - Process execution, native libraries, and unrestricted temporary-file APIs
   are unavailable.
 
+The standard LuaJIT `io`, `dofile`, and `loadfile` implementations are never
+opened. The selected SCURO surface instead receives two virtual-filesystem
+wrappers. `dofile` loads only a bounded text chunk from the activated revision,
+executes it in the retained skin state, and is available only before render
+phase. `io` contains only `open`; accepted modes are the audited default/`r`,
+`w`, and `a` shapes, and returned Lua-side handles contain only bounded
+`lines`, `write`, and `close`. Reads are overlay-first generic-data reads;
+writes buffer into the private overlay, safely create missing overlay parents,
+and commit atomically on close. Zero-argument `write()` and chained
+`write(...):close()` return the handle. Entering render phase invalidates every
+handle, releases read buffers and handle quota, discards unclosed write buffers,
+and leaves the overlay digest unchanged; a dirty live handle makes the phase
+transition fail validation. All other modes/members, host paths, standard
+streams, seeks, temporary files, and post-render calls are rejected.
+
+### Audited legacy-Lua facade
+
+The Task 1 audit established that the selected SCURO closure cannot reach its
+configured return table without two top-level `require("luajava")` calls. This
+is not a request for Java interoperability: the selected surface is two class
+names, one constructor shape, `listFiles`, a latent `mkdir`, and a guarded GDX
+audio probe that already fails under pinned Beatoraja because its restricted
+GDX facade has no `app` member.
+
+V1 therefore installs one closed, ordinary-Lua host table as both global
+`luajava` and `package.loaded["luajava"]`. It exposes exactly `bindClass` and
+`new`:
+
+- `bindClass("java.io.File")` returns an unforgeable Lua-side class token.
+  `new` accepts only that token and one virtual path, returning an object with
+  `listFiles` and `mkdir`. `listFiles` delegates to the bounded package-local
+  virtual filesystem during loading/preparation and returns virtual paths
+  only. `mkdir` delegates to the quota-limited private overlay and cannot
+  modify the immutable package.
+- `bindClass("com.badlogic.gdx.Gdx")` returns a closed table with no `app`
+  member. The target's `pcall`-guarded audio initialization consequently fails
+  exactly as it does with pinned Beatoraja's current `gdxFacade`; no audio
+  processor or application listener is exposed.
+- every other class, constructor, member, or argument shape is rejected with
+  a compatibility diagnostic. There is no `newInstance`, URL/HTTP/reader,
+  controller/input, reflection, Java object, native handle, `debug` helper, or
+  class loader.
+
+The facade is phase checked on every call. Directory scans and mutations are
+denied after render phase begins, even through a captured closure. Its output
+and failures count against the same file, byte, host-call, and wall-time limits
+as the native file module. A script cannot extend this Lua table into new host
+authority.
+
 ### Networking
 
 The initial runtime exposes no HTTP or socket API. If a future compatibility
 target needs networking, it requires a separate design with visible user
 permission, domain disclosure, response limits, and failure behavior. It is
 not enabled implicitly by AsoBMaShow's own networking capabilities.
-Beatoraja's restricted legacy `luajava`/HTTP facade is an intentional v1
-divergence: any use by the pinned target is a diagnosed compatibility failure,
-not a silently stubbed success.
+Beatoraja's URL/HTTP portion of `LegacySkinLuaApi` remains an intentional v1
+divergence. Any `newInstance`, URL, HTTP, socket, or other unaudited legacy
+request is a diagnosed compatibility failure, not a silently stubbed success.
 
 ### Execution limits
 
@@ -431,16 +483,26 @@ from the immutable revision and pinned for the session.
 
 Snapshot-backed host properties proven pure are memoized by ID, arguments, and
 frame. Custom timers are updated and cached once per frame before custom events,
-matching Beatoraja. Other Lua callbacks retain the call order and frequency
-observed in pinned Beatoraja traces and are not coalesced merely for
+matching Beatoraja's phase guarantee. Task 1 established that pinned libGDX
+`IntMap` backing-table order is neither sorted nor an ID-only deterministic
+contract because collision eviction consumes global RNG state. The selected
+SCURO configured model contains no `customTimers` or `customEvents`; acceptance
+must prove those maps remain empty. For a future nonempty v1 model,
+AsoBMaShow uses deterministic authored declaration order within each phase and
+emits one compatibility-divergence diagnostic instead of pretending to match
+an unknowable upstream RNG state. Other Lua callbacks retain the call order and
+frequency observed in pinned Beatoraja traces and are not coalesced merely for
 performance; only explicitly classified pure callbacks may be once-per-frame.
 Draw-command storage and temporary evaluation buffers are reused. Every Lua
 callback remains constrained by the session instruction and resource budgets.
 
 Acceptance is relative to the app's configured refresh rate on the target
 iPad. The compatibility path must sustain that rate on representative charts
-without recurring filesystem work, unbounded Lua execution, or resource growth
-across repeated chart entries.
+with zero performed and zero denied render-phase filesystem reads, writes,
+directory scans, or resource uploads in passing runs, without unbounded Lua
+execution, and without resource growth across repeated chart entries. The
+separate negative probe requires all performed counters to remain zero while
+only its frozen denied-operation counter becomes nonzero.
 
 ## Failure Handling
 
@@ -458,6 +520,13 @@ across repeated chart entries.
   a critical callback schedules that same frame-boundary fallback and discards
   pending skin events or writes, then closes the failed skin session; an
   optional callback disables only its dependent optional objects.
+- A filesystem read, write, directory scan, or resource upload attempted after
+  render phase begins is a sandbox-integrity violation and is session-critical
+  regardless of the requesting callback or object's ordinary criticality. The
+  operation is denied before I/O, the current skin frame is discarded, and the
+  initialized built-in presentation takes over in that same frame while the
+  failed skin session closes. Acceptance records performed and denied counters
+  separately so a denied negative probe cannot mask an actual operation.
 - Lua errors and events cannot change authoritative gameplay state or stored
   records.
 - The compatibility report includes entry path, Lua file and line where
@@ -475,6 +544,9 @@ Desktop tests cover:
 - stable-copy detection, immutable-revision activation, retention, and cleanup;
 - header/main Lua phases and package-local module behavior;
 - sandbox denial for sibling files, app data, native APIs, and networking;
+- exact success/denial behavior for the audited legacy module, including
+  virtual-only `File.listFiles`, overlay-only `File.mkdir`, absent `Gdx.app`,
+  and rejection of every unaudited class/constructor/member;
 - overlay write/read behavior and quotas;
 - instruction-budget interruption for load and callback loops;
 - typed-model validation and source/destination reference resolution;
@@ -531,7 +603,13 @@ Physical-iPad acceptance verifies:
 - the manifest-pinned normal-note and long-note 7-key chart scenarios;
 - BGA, notes, judgments, gauge, combo, and HUD behavior;
 - Fit, Stretch, and Custom layout behavior;
-- fallback from malformed and runtime-failing skins; and
+- fallback from malformed and runtime-failing skins;
+- a frozen negative render-I/O scenario whose exact diagnostic and same-frame
+  built-in fallback match policy while before/after overlay digests remain
+  equal;
+- the loaded model's canonical opaque guard-vector digest matching the frozen
+  passing-configuration digest needed to eliminate every selected option-gated
+  render-time read, write, or directory scan; and
 - stable configured refresh rate and resource use across repeated sessions.
 
 ## Delivery Slices

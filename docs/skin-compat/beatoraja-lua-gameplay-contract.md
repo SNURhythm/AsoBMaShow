@@ -49,11 +49,15 @@ provenance.
   `Skin.updateCustomObjects`, then `Skin.drawAllObjects`. Within
   `Skin.updateCustomObjects`, all `CustomTimer.update` calls occur before all
   `CustomEvent.update` calls. Within either phase, traversal follows libGDX
-  `IntMap` backing-hash iteration; it is not an ascending-ID contract. A custom
-  timer caches one value for that frame. A conditional custom event observes
-  the updated timers and enforces `minInterval` in `CustomEvent.update`.
-  Acceptance therefore records the observed order for selected timer/event IDs
-  instead of assuming a sort that `Skin.updateCustomObjects` does not perform.
+  `IntMap` backing-hash iteration; it is not an ascending-ID contract, and the
+  pinned implementation's collision eviction consumes global RNG state. A
+  custom timer caches one value for that frame. A conditional custom event
+  observes the updated timers and enforces `minInterval` in
+  `CustomEvent.update`. Task 1a records that the selected configured SCURO model
+  has empty custom-timer and custom-event maps. V1 therefore preserves the
+  timer-before-event phase rule and uses deterministic authored order for any
+  future nonempty map with an explicit compatibility-divergence diagnostic;
+  it does not claim to reproduce unknown upstream RNG state.
 - Skin-triggered timer writes and event execution are constrained by
   `MainStatePropertyLuaApiExporter.SetTimerFunction` and
   `MainStatePropertyLuaApiExporter.EventExecFunction`; non-writable/non-runnable
@@ -88,13 +92,31 @@ remaining object array in authored order.
   draws the base BGA (or blank) and then the layer. Image/video renderer type
   and the configured BGA stretch are selected before submission.
 
-## Intentional sandbox divergence and current compatibility gap
+The selected closure also uses package-local `dofile` and `io.open`. V1 does
+not expose the LuaJIT standard filesystem implementations. It replaces them
+with text-only activated-revision `dofile` and a virtual `io.open` supporting
+only the audited default/`r`/`w`/`a`, `lines`, `write`, and `close` shapes.
+Reads are bounded overlay-first data reads, writes commit atomically to the
+quota-limited private overlay, and every captured function/handle is denied
+after render phase begins. No wrapper returns or accepts an unrestricted host
+path.
 
-AsoBMaShow v1 exposes no network API and no module named `luajava`. This is an
-intentional security divergence from Beatoraja's restricted
-`LegacySkinLuaApi.install` facade, which can provide bounded `java.io.File`,
-GDX/audio, controller, and legacy HTTP access. A use is a compatibility error,
-not a successful no-op.
+Any post-transition filesystem or resource-upload attempt is a
+session-critical sandbox-integrity violation even when its caller belongs to
+an otherwise optional object. The operation is denied before I/O, that skin
+frame is discarded, and the initialized built-in presentation takes over in
+the same frame. Performed and denied counters remain distinct in acceptance
+evidence.
+
+## Audited closed legacy facade and sandbox divergence
+
+AsoBMaShow v1 exposes no network API, Java interoperability, reflection,
+controller/input access, or native object. It resolves the selected target's
+load-blocking evidence by installing a closed ordinary-Lua compatibility table
+under the historical name `luajava`; this table is not a Java bridge. It
+contains only the audited File/Gdx class-token behavior below. Every other
+`LegacySkinLuaApi` class, constructor, member, URL/HTTP/reader branch, and
+`newInstance` request is a compatibility error rather than a successful no-op.
 
 The pinned SCURO 4.02 7-key closure has two unguarded, top-level
 `require("luajava")` sites in two always-loaded opaque helpers. Opaque helper A
@@ -112,13 +134,15 @@ is optional. Pinned `LegacySkinLuaApi.BindClassFunction`,
 facade exposes `graphics` and `input`, not `app`.
 
 The guarded audio calls do not make the module optional: either unguarded
-`require` fails immediately when AsoBMaShow exposes no `luajava`. The committed
+`require` would fail immediately without the closed table. The committed
 `legacyLuaApiSurface` records the site counts, load-time reachability, deferred
 file reachability, and guarded audio disposition without storing either helper
-path. Consequently physical acceptance remains `pending`: the unmodified entry
-cannot pass while the approved no-`luajava` policy remains in force. Resolving
-this requires an explicit reviewed design decision; this contract neither adds
-network access nor hides the incompatibility.
+path. The reviewed design decision maps File construction/listing to the
+package virtual filesystem, maps latent `mkdir` to the private overlay, and
+returns a GDX table with no `app`, matching the pinned optional-audio failure.
+It exposes neither a Java value nor a host path and it adds no network access.
+Physical acceptance remains `pending` until that exact facade and every other
+runtime/renderer criterion are implemented and measured.
 
 ## Evidence and redistribution boundary
 

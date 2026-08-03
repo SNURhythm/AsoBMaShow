@@ -13,7 +13,7 @@
 - The approved design at `docs/superpowers/specs/2026-08-03-beatoraja-lua-gameplay-skin-design.md` is authoritative. If implementation evidence conflicts with it, stop and amend the design with user approval before changing product behavior.
 - Do not edit generated `src/bms_parser.hpp` or `src/bms_parser.cpp` directly. Parser behavior changes must be made and tested in `../bms-parser-cpp`, amalgamated there, committed/pushed in that sibling repository, and only then copied into this repository exactly as required by `AGENTS.md`.
 - Do not distribute or commit ModernChic/SCURO files. Commit only manifests, hashes, provenance, synthetic fixtures, traces, and screenshots whose contents are AsoBMaShow-generated and redistributable.
-- Do not add a network API, `luajava`, `ffi`, `jit`, unrestricted `io`/`os`, process execution, native loading, or filesystem access outside an activated package revision and its private data overlay.
+- Do not add a network API, arbitrary/reflective Java access, `ffi`, `jit`, unrestricted `io`/`os`, process execution, native loading, or filesystem access outside an activated package revision and its private data overlay. The only module named `luajava` permitted by v1 is the Task 1-audited closed Lua table implemented in Task 9: exact `bindClass` support for `java.io.File` and `com.badlogic.gdx.Gdx`, exact `new(File, virtualPath)`, virtual-only load-time `listFiles`, overlay-only `mkdir`, and no `Gdx.app`; every other class, constructor, member, Java object, URL/HTTP/controller/input/reflection/native capability is rejected.
 - Keep LuaJIT disabled for every skin state on desktop and iOS. A passing desktop test may not depend on a LuaJIT-only extension hidden on iOS.
 - Keep the built-in renderer initialized throughout gameplay. A critical skin failure must discard the unsubmitted skin command buffer and render the built-in presentation in that same frame.
 - Never read package files, scan directories, decode images, rasterize new glyphs, or create textures in the active render path. Do those operations during revision validation or session preparation.
@@ -204,7 +204,7 @@ def test_committed_contract_is_clone_independent(self):
 - [ ] **Step 4: Implement `scripts/check_beatoraja_reference.py` and `scripts/audit_beatoraja_skin.py`**. The checker accepts `--root` and `--require-clean`, verifies the exact pinned commit, and never mutates Git. The opt-in audit accepts `--beatoraja-root`, `--archive-path`, required `--archive-package-prefix`, `--skin-root`, optional `--expected-archive-sha256`, `--output`, and `--verify`; it parses Lua source conservatively, inventories modules/resources and numeric/string callback identifiers, computes the archive SHA-256, applies the canonical deterministic wrapper rule and requires the CLI prefix to match it, computes exact `SkinTreeDigestV1` streams directly from safe regular ZIP entries after the inferred strip and from the extracted root, and fails on a digest mismatch or a dependency without a critical/optional disposition. Allow safe explicit directories only under the canonical structural-directory rule (including an ignored wrapper-root directory); reject links/special nodes, payload outside the prefix, empty regular-file post-strip paths, duplicate/colliding normalized paths, file/directory collisions, traversal, encrypted entries, unsupported compression, or policy-limit violations while reading the archive. Neither tool downloads nor copies the package.
 - [ ] **Step 5: Obtain SCURO 4.02 from the official KasaBlog Google Drive folder linked at `https://www.kasacontent.com/musicgame/beatoraja/4226/`, store it outside the repository, compute the archive and payload-tree SHA-256 values, and record the exact archive filename, byte count, digests, acquisition date, official source URL, exact archive package prefix, corresponding extracted package root identity, and selected 7-key `.luaskin` entry identity/path in the acceptance document and manifest**. Also record the author's published license/usage/screenshot terms URL, access date, and whether local testing plus private screenshots are permitted; unresolved or prohibitive terms block physical screenshot capture. Source/terms URLs and the selected entry path are allowed provenance; other proprietary resource/module paths remain opaque. Digests are evidence, not bundled dependencies.
 - [ ] **Step 6: Freeze acceptance schema version 1 before renderer work**. Require fields for non-unique iPad hardware model, exact iPadOS, drawable size, safe insets, configured Hz, measurement build/commit, external archive/entry/configuration digests, synthetic chart hashes, fixed autoplay scripts, screenshot timestamps, 30-second warm-up, three 180-second repetitions per scenario/layout, all six 16:9 and 4:3 Fit/Stretch/Custom layout cases, p99/missed-presentation/memory/resource limits from this plan, and a `pending|pass|fail` status plus evidence reference for every completion criterion. Task 1 accepts `pending`; Task 25 requires only `pass`.
-- [ ] **Step 7: Fill the source contract with observed two-phase loading, table conversion, missing property behavior, timer/event ordering, destination interpolation, note/LN phases, BGA ordering, and the deliberate no-network/no-`luajava` divergence**. Every claim must name a pinned Java method or Lua symbol.
+- [ ] **Step 7: Fill the source contract with observed two-phase loading, table conversion, missing property behavior, actual libGDX `IntMap` timer/event ordering, destination interpolation, note/LN phases, BGA ordering, the no-network boundary, and the exact audited legacy-module surface that must be resolved before runtime acceptance**. Every claim must name a pinned Java method or Lua symbol.
 - [ ] **Step 8: Run the audit against the external package and commit its machine-readable surface in `reference_manifest.json`**. Preserve only the selected entry identity/path plus allowed official source/terms provenance URLs; represent all other proprietary modules/resources as opaque stable IDs, kind, byte count, and digest, with their real package-relative names solely in the external audit report/evidence root. Do not commit extracted source, assets, absolute local paths, account/device names, or public physical-evidence URLs.
 
   ```sh
@@ -237,9 +237,71 @@ def test_committed_contract_is_clone_independent(self):
   git commit -m "test: pin Beatoraja gameplay skin contract"
   ```
 
+### Task 1a: Freeze audited file-I/O and render-I/O acceptance policy
+
+**Reference refresh:** Task 1's selected external closure plus pinned `SkinLuaAccessor.execFile`, LuaJ `JseIoLib` call/handle behavior, `LegacySkinLuaApi.fileFacade`, and `Skin.updateCustomObjects`.
+
+**Files:**
+
+- Modify: `scripts/audit_beatoraja_skin.py`
+- Modify: `tests/beatoraja_skin_reference_tests.py`
+- Modify: `tests/fixtures/beatoraja_skin/reference_manifest.json`
+- Modify: `tests/fixtures/beatoraja_skin/README.md`
+- Modify: `docs/skin-compat/beatoraja-lua-gameplay-contract.md`
+- Modify: `docs/skin-compat/modernchic-scuro-4.02-acceptance.md`
+
+**Interfaces:**
+
+- Extends `ReferenceManifestV1` with opaque `SelectedFileIoSurfaceV1`, explicit empty selected custom-object map counts, four zero render-I/O limits, canonical opaque passing/negative guard-vector digests bound to the audited configuration, and a frozen negative render-I/O scenario. The tracked aggregate contains counts, call shapes, reachability/guard disposition, opaque guard IDs/canonical values, expected diagnostics/actions, the session-critical sandbox-integrity policy, and digests only—never non-selected external paths, module names, option labels, or source text.
+
+- [ ] **Step 1: Refresh the pinned and external references** — Run the checker, reopen every reference above, and rerun the opt-in audit from explicit external inputs before writing tests. Do not copy package data into the repository.
+
+**RED test anchor:**
+
+```python
+def test_render_io_policy_is_frozen(self):
+    self.assertEqual(self.contract["limits"]["activeRenderFilesystemWrites"], 0)
+    self.assertEqual(self.contract["limits"]["activeRenderFilesystemDirectoryScans"], 0)
+    self.assertEqual(self.contract["limits"]["activeRenderResourceUploads"], 0)
+    self.assertEqual(self.contract["negativeScenarios"][0]["overlayDigestBefore"], "pending")
+    self.assertEqual(self.contract["negativeScenarios"][0]["overlayDigestAfter"], "pending")
+```
+
+- [ ] **Step 2: Extend the clone/package-independent test first**. Require an opaque aggregate for package `dofile`, `io.open` default/`r`/`w`/`a`, `lines`, zero-or-more-argument chainable `write`, `close`, call counts, nested-write parent creation, load/configured/render-callback reachability, and every selected option guard affecting render-time reads/writes/scans. Require `selectedCustomObjectMaps == {customTimers: 0, customEvents: 0}`. Extend `acceptanceContract.limits`—do not add a competing threshold object—with `activeRenderFilesystemReads`, `activeRenderFilesystemWrites`, `activeRenderFilesystemDirectoryScans`, and `activeRenderResourceUploads`, all zero; migrate the old `activeRenderUploads` key to `activeRenderResourceUploads` and reject the legacy key so both cannot coexist. Freeze canonical opaque guard-vector digests for every passing configuration and the negative scenario, each bound to the audited configuration digest. Freeze the negative scenario as a session-critical sandbox-integrity probe regardless of the triggering object's ordinary criticality, with opaque scenario/guard IDs and canonical values, diagnostic `skin_file_render_phase_denied`, action `discard_frame_disable_session_same_frame_builtin`, and pending before/after overlay digests that must become equal at Task 25. Reject external names/paths in all new fields.
+- [ ] **Step 3: Run the RED check**
+
+  ```sh
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/beatoraja_skin_reference_tests.py -v
+  ```
+
+  Expected RED: the aggregate, empty-map proof, thresholds, guards, and negative scenario do not exist.
+- [ ] **Step 4: Extend the bounded token-aware audit**. Derive the selected file-I/O call shapes and phase/guard graph from the explicit external closure, then replace every proprietary identity with a stable opaque ID before serialization. Record all render-I/O guards, not just lane-cover rotation; record configured-load listing separately from render callbacks. Canonicalize sorted opaque `(guardId, value)` vectors and bind their SHA-256 digests to the audited configuration digest. Record the AsoBMaShow rule that every post-transition filesystem/upload attempt is session-critical as a policy field, not as an upstream Beatoraja observation. Preserve all upstream facts separately from AsoBMaShow policy fields. Emit the selected custom-map counts from configured-model evidence or fail closed if they cannot be proven empty. Never download, copy, extract, or retain source in the tracked output.
+- [ ] **Step 5: Extend schema documentation and acceptance policy**. Document safe automatic overlay-parent creation for nested writes, handle invalidation/discard at render transition, zero render read/write/scan/upload limits, separate performed/denied evidence, the session-critical post-transition I/O rule, exact negative diagnostic/fallback, asynchronously measured unchanged overlay digest, and the canonical opaque guard-vector digest required by each passing configuration.
+- [ ] **Step 6: Regenerate and verify the real manifest, then run GREEN**
+
+  ```sh
+  aso_root="$(git rev-parse --show-toplevel)"
+  beatoraja_ref_root="${ASOBMASHOW_BEATORAJA_ROOT:-$(cd "$aso_root/.." && pwd)/beatoraja}"
+  python3 scripts/check_beatoraja_reference.py --root "$beatoraja_ref_root" --require-clean
+  : "${SCURO_ARCHIVE_PATH:?set external SCURO archive path}"
+  : "${SCURO_ARCHIVE_PACKAGE_PREFIX:?set . or the inferred wrapper}"
+  : "${SCURO_ARCHIVE_SHA256:?set pinned SCURO archive digest}"
+  : "${SCURO_SKIN_ROOT:?set corresponding extracted package root}"
+  python3 scripts/audit_beatoraja_skin.py --beatoraja-root "$beatoraja_ref_root" --archive-path "$SCURO_ARCHIVE_PATH" --archive-package-prefix "$SCURO_ARCHIVE_PACKAGE_PREFIX" --skin-root "$SCURO_SKIN_ROOT" --expected-archive-sha256 "$SCURO_ARCHIVE_SHA256" --verify tests/fixtures/beatoraja_skin/reference_manifest.json
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/beatoraja_skin_reference_tests.py -v
+  ```
+
+  Expected GREEN: real audit verification and all clone-independent schema/opacity tests pass.
+- [ ] **Step 7: Commit the task**
+
+  ```sh
+  git add docs/skin-compat scripts/audit_beatoraja_skin.py tests/beatoraja_skin_reference_tests.py tests/fixtures/beatoraja_skin
+  git commit -m "test: freeze gameplay skin render I/O policy"
+  ```
+
 ### Task 2: Capture differential Lua, destination, property, timer, and event traces
 
-**Reference refresh:** `LuaSkinLoader.java`, `SkinLuaAccessor.java`, `MainStateAccessor.java`, `MainStatePropertyLuaApiExporter.java`, `SkinFileLuaApiExporter.java`, `TimerUtility.java`, `EventUtility.java`, `CustomTimer.java`, `CustomEvent.java`, `SkinObject.java`, `Skin.java`, `TimerProperty.java`, and `TimerPropertyFactory.java`.
+**Reference refresh:** `LuaSkinLoader.java`, `SkinLuaAccessor.java`, `LegacySkinLuaApi.java`, `SkinLuaPathResolver.java`, `MainStateAccessor.java`, `MainStatePropertyLuaApiExporter.java`, `SkinFileLuaApiExporter.java`, `TimerUtility.java`, `EventUtility.java`, `CustomTimer.java`, `CustomEvent.java`, `SkinObject.java`, `Skin.java`, `TimerProperty.java`, `TimerPropertyFactory.java`, and `com.badlogic.gdx.utils.IntMap` from the pinned clone's `lib/gdx.jar`.
 
 **Files:**
 
@@ -251,12 +313,14 @@ def test_committed_contract_is_clone_independent(self):
 - Create: `tests/fixtures/beatoraja_skin/traces/destination_v1.json`
 - Create: `tests/fixtures/beatoraja_skin/traces/properties_v1.json`
 - Create: `tests/fixtures/beatoraja_skin/traces/timers_events_v1.json`
+- Create: `tests/fixtures/beatoraja_skin/traces/legacy_lua_upstream_v1.json`
+- Create: `tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json`
 - Modify: `tests/beatoraja_skin_reference_tests.py`
 
 **Interfaces:**
 
-- Consumes: `ReferenceManifestV1`, redistributable synthetic Lua fixtures, and an explicit live reference root only when refreshing evidence.
-- Produces: `capture_beatoraja_skin_traces.py --beatoraja-root PATH --output-dir PATH [--verify] -> exit 0|nonzero` and four `TraceEnvelopeV1 {schemaVersion, kind, referenceCommit, provenance[], cases[]}` files whose `TraceCase` records contain `name`, `input`, `expected`, optional `callOrder`/`callCount`, and numeric `precision`.
+- Consumes: `ReferenceManifestV1`, redistributable synthetic Lua fixtures, and an explicit live reference root only when refreshing upstream evidence.
+- Produces: `capture_beatoraja_skin_traces.py --beatoraja-root PATH --output-dir PATH [--verify] -> exit 0|nonzero`; five upstream `TraceEnvelopeV1 {schemaVersion, kind, referenceCommit, provenance[], cases[]}` files whose `TraceCase` records contain `name`, `input`, `expected`, optional `callOrder`/`callCount`, and numeric `precision`; and one separately authored `SandboxPolicyV1 {schemaVersion, authority: "AsoBMaShow", selectedSurfaceDigest, allowed[], denied[], phaseRules[]}` fixture. The capture tool never creates or rewrites the policy fixture.
 
 - [ ] **Step 1: Refresh the pinned Beatoraja reference** — Run the mandatory checker (or Task 1 bootstrap), reopen every file in this task's **Reference refresh** from `beatoraja_ref_root`, and record the pinned path/symbol/behavior before writing the test or editing production code.
 
@@ -268,7 +332,7 @@ def test_two_phase_trace_is_stable(self):
     self.assertEqual(self.trace["cases"][0]["expected"]["packageLoaded"], True)
 ```
 
-- [ ] **Step 2: Extend the reference test first to require deterministic trace schemas, pinned source provenance, input vectors, expected output values, callback call counts/order, numeric precision, timer OFF sentinel behavior, zero/one/two-argument events, and same-state header/configured `package.loaded` persistence.**
+- [ ] **Step 2: Extend the reference test first to require deterministic upstream trace schemas, pinned source provenance, input vectors, expected output values, callback call counts/order, numeric precision, timer OFF sentinel behavior, zero/one/two-argument events, and same-state header/configured `package.loaded` persistence. Require the AsoBMaShow sandbox policy as a distinct schema/authority whose allowed surface digest equals Task 1a's audit; reject any claim that virtual paths, overlay writes, denied upstream legacy branches, or render-phase denial were captured from Beatoraja.**
 - [ ] **Step 3: Run the Python test**
 
   ```sh
@@ -277,7 +341,7 @@ def test_two_phase_trace_is_stable(self):
 
   Expected RED: the trace files and capture tool are missing.
 - [ ] **Step 4: Implement the capture tool as a developer-only harness with required `--beatoraja-root`**. It may compile/run a small Java driver against that root's `lib` and pinned source tree, but must write only normalized JSON traces under `tests/fixtures`; production targets and default CI consume committed traces without Java or a reference clone.
-- [ ] **Step 5: Capture exact vectors for Lua table/number/string conversions used by SCURO, `bit32`, destination timer/loop/easing/color/angle/clip behavior, supported property dispatch, custom timer once-per-frame caching, and ascending timer-before-event updates.**
+- [ ] **Step 5: Capture exact upstream vectors for Lua table/number/string conversions used by SCURO, `bit32`, destination timer/loop/easing/color/angle/clip behavior, supported property dispatch, custom timer once-per-frame caching, and timer-before-event updates. For synthetic nonempty `IntMap` vectors, record initial capacity, load factor, complete insertion/replacement sequence, controlled `MathUtils.random` seed/state, and resulting order; label that seed as trace setup, not a universal Beatoraja order. Record that Task 1a proves the selected configured custom timer/event maps empty. Capture only upstream file/legacy facts: standard `dofile`/`io.open` return and handle-call shapes, repeated `require("luajava")` table identity, File/Gdx binds, File construction/list shape normalized without host paths, and absent `Gdx.app`. Keep Beatoraja's broader allowed legacy branches as upstream provenance facts, not AsoBMaShow requirements. Put virtual paths, overlay-only writes, class/member denial, automatic overlay parents, handle invalidation, and render-phase denial only in `lua_sandbox_v1.json` and Tasks 8–9 local tests.**
 - [ ] **Step 6: Make the synthetic two-phase entry `require("shared")` before its `if skin_config then` branch, mutate module/global state during header evaluation, and assert configured evaluation sees the mutation in the same state while a new catalog state does not.**
 - [ ] **Step 7: Run the GREEN check**
 
@@ -285,15 +349,15 @@ def test_two_phase_trace_is_stable(self):
   aso_root="$(git rev-parse --show-toplevel)"
   beatoraja_ref_root="${ASOBMASHOW_BEATORAJA_ROOT:-$(cd "$aso_root/.." && pwd)/beatoraja}"
   python3 scripts/check_beatoraja_reference.py --root "$beatoraja_ref_root" --require-clean
-  trace_before="$(find tests/fixtures/beatoraja_skin/traces -type f -print0 | sort -z | xargs -0 shasum -a 256)"
+  fixture_before="$(find tests/fixtures/beatoraja_skin/traces tests/fixtures/beatoraja_skin/policies -type f -print0 | sort -z | xargs -0 shasum -a 256)"
   python3 scripts/capture_beatoraja_skin_traces.py \
     --beatoraja-root "$beatoraja_ref_root" \
     --output-dir tests/fixtures/beatoraja_skin/traces \
     --verify
   python3 -m unittest tests/beatoraja_skin_reference_tests.py -v
   python3 -m unittest tests/beatoraja_skin_reference_tests.py -v
-  trace_after="$(find tests/fixtures/beatoraja_skin/traces -type f -print0 | sort -z | xargs -0 shasum -a 256)"
-  test "$trace_before" = "$trace_after"
+  fixture_after="$(find tests/fixtures/beatoraja_skin/traces tests/fixtures/beatoraja_skin/policies -type f -print0 | sort -z | xargs -0 shasum -a 256)"
+  test "$fixture_before" = "$fixture_after"
   ```
 
   Expected GREEN: the live pinned-reference verifier and both default test runs pass, and committed trace output is byte-identical.
@@ -1395,7 +1459,7 @@ TEST_CASE("invalid requested configuration retains activation") {
 
 ### Task 8: Build the package-local Lua filesystem and private data overlay
 
-**Reference refresh:** `SkinLuaAccessor.createSandboxGlobals`, `SkinLuaAccessor.restrictPackageLoaders`, `SkinLuaAccessor.setDirectory`, `SkinLuaAccessor.execFile`, `SkinFileLuaApiExporter`, and `SkinLuaPathResolver`.
+**Reference refresh:** `SkinLuaAccessor.createSandboxGlobals`, `SkinLuaAccessor.restrictPackageLoaders`, `SkinLuaAccessor.setDirectory`, `SkinLuaAccessor.execFile`, `SkinFileLuaApiExporter`, `SkinLuaPathResolver`, `LegacySkinLuaApi.NewFunction`, and `LegacySkinLuaApi.fileFacade`.
 
 **Files:**
 
@@ -1477,6 +1541,20 @@ TEST_CASE("captured closure cannot read after render phase") {
     std::optional<SkinFileFailure> failure;
   };
 
+  struct SkinFileActivityCounters {
+    std::uint64_t renderReadsPerformed = 0;
+    std::uint64_t renderReadsDenied = 0;
+    std::uint64_t renderWritesPerformed = 0;
+    std::uint64_t renderWritesDenied = 0;
+    std::uint64_t renderDirectoryScansPerformed = 0;
+    std::uint64_t renderDirectoryScansDenied = 0;
+  };
+
+  struct SkinFileRenderTransitionResult {
+    bool ok = false;
+    std::optional<SkinFileFailure> failure;
+  };
+
   class LuaSkinFileSystem {
   public:
     SkinFileResolveResult resolve(std::string_view virtualPath,
@@ -1489,7 +1567,8 @@ TEST_CASE("captured closure cannot read after render phase") {
     SkinFileWriteResult writeData(std::string_view virtualPath,
                                   std::span<const std::byte>,
                                   bool append);
-    void enterRenderPhase() noexcept;
+    SkinFileRenderTransitionResult enterRenderPhase();
+    SkinFileActivityCounters activityCounters() const noexcept;
   };
 
   struct LuaSkinFileSystemOptions {
@@ -1501,7 +1580,7 @@ TEST_CASE("captured closure cannot read after render phase") {
   };
   ```
 
-- [ ] **Step 3: Write filesystem tests first for package ceiling versus entry-parent working directory, `?.lua` and `?/init.lua`, shared-parent modules inside one package, sibling-package denial, absolute/parent/symlink escape denial, regular-file only reads, binary Lua rejection, overlay-first data reads, resource/module bypass of overlay, atomic append/truncate/clear semantics, line/list limits and Lua-pattern traces, quota exhaustion, and denial of every operation after `enterRenderPhase()`, including through a previously captured closure.** Exercise two profiles and two entries and prove no overlay read/list/write crosses any of the four Task 5-derived roots. A missing profile with data writes enabled is construction failure; read-only catalog/default validation gets no overlay at all. Exercise both a prepared-package view whose owner encloses the entire synchronous validation call and a published lease view whose owning session outlives the filesystem; no view may be captured by an asynchronous job.
+- [ ] **Step 3: Write filesystem tests first for package ceiling versus entry-parent working directory, `?.lua` and `?/init.lua`, shared-parent modules inside one package, sibling-package denial, absolute/parent/symlink escape denial, regular-file only reads, binary Lua rejection, overlay-first data reads, resource/module bypass of overlay, atomic append/truncate/clear semantics, safe automatic parent creation for a nested write in a fresh overlay, line/list limits and Lua-pattern traces, quota exhaustion, and denial of every operation after `enterRenderPhase()`, including through a previously captured closure. Add the exact primitives needed by Task 9's closed legacy File object: bounded deterministic direct-child listing that returns virtual paths only, overlay-only single-directory `mkdir`, false/nil-compatible failure shapes, and denial through a captured legacy object after render phase. Prove the phase transition itself performs no overlay mutation and the before/after overlay digest is identical. Assert denied render attempts increment their exact read/write/scan `Denied` counters while all matching `Performed` counters remain zero.** Exercise two profiles and two entries and prove no overlay read/list/write crosses any of the four Task 5-derived roots. A missing profile with data writes enabled is construction failure; read-only catalog/default validation gets no overlay at all. Exercise both a prepared-package view whose owner encloses the entire synchronous validation call and a published lease view whose owning session outlives the filesystem; no view may be captured by an asynchronous job.
 - [ ] **Step 4: Run the RED check**
 
   ```sh
@@ -1511,7 +1590,7 @@ TEST_CASE("captured closure cannot read after render phase") {
 
   Expected RED: the virtual filesystem and overlay do not exist.
 - [ ] **Step 5: Implement the Task 8 failure/result/filesystem interfaces from a `SkinRevisionReadView`**. For pre-publication validation the `PreparedPackage` owner encloses construction, Lua execution, and destruction synchronously. For a chart session, `PlaySkinSession` first retains the owning activation lease and constructs the filesystem from that lease's `readView()` plus roots/profile/entry; member/destruction order keeps the lease alive until after the filesystem closes. Assert `entry.package == revision.revision().package`, use the view root as the security ceiling, derive the working directory internally from only `entry.packageRelativePath`'s parent, and obtain data storage only from `deriveSkinPrivateOverlayRoot`. Return virtual normalized paths only; never disclose host paths.
-- [ ] **Step 6: Recheck the current phase and normalized/opened target in every host call**. Use no-follow reads and `AtomicFile` for overlay replacement. Implement `file_mkdir` as overlay-only directory creation and prohibit package modification.
+- [ ] **Step 6: Recheck the current phase and normalized/opened target in every host call**. Use no-follow reads and `AtomicFile` for overlay replacement, create missing overlay parents component-by-component under the already validated root without following links, and never mutate the package. Implement both `file_mkdir` and the legacy File object's `mkdir` as overlay-only directory creation. The legacy object's `listFiles` uses the same bounded direct-child listing, returns normalized virtual path strings rather than host paths, and never consults the overlay for resource/module replacement. Count every render-phase read, write, and directory-scan attempt in its `Denied` field before returning `RenderPhase`; increment a `Performed` field only at the corresponding operation boundary, which the render-phase guard must make unreachable. The transition itself performs no filesystem I/O.
 - [ ] **Step 7: Run the GREEN check**
 
   ```sh
@@ -1529,7 +1608,7 @@ TEST_CASE("captured closure cannot read after render phase") {
 
 ### Task 9: Create quota-enforced, JIT-disabled, two-phase Lua states
 
-**Reference refresh:** `LuaSkinLoader.loadHeader`, `LuaSkinLoader.load`, `SkinLuaAccessor` constructors, `createStandardGlobals`, `createSandboxGlobals`, `initializeModules`, `execFile`, `setDirectory`, and default `play7.luaskin`'s require-before-branch behavior.
+**Reference refresh:** `LuaSkinLoader.loadHeader`, `LuaSkinLoader.load`, `SkinLuaAccessor` constructors, `createStandardGlobals`, `createSandboxGlobals`, `initializeModules`, `execFile`, `setDirectory`, `LegacySkinLuaApi.install`, `BindClassFunction`, `NewFunction`, `fileFacade`, `gdxFacade`, and default `play7.luaskin`'s require-before-branch behavior.
 
 **Files:**
 
@@ -1654,9 +1733,9 @@ TEST_CASE("coroutine loops share the frame budget") {
   };
   ```
 
-- [ ] **Step 3: Make the RED tests reference canonical `BeatorajaSkinConfiguration`, runtime-owned callbacks/values, and create/value/operation/callback results**. The expected digest excludes `get_path`; the test host exposes empty `main_state`, `timer_util`, and `event_util` modules during header execution. Add `tests/lua_skin_feature_gate_tests.py` first to require `ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=ON` for desktop/iOS, `OFF` by default on Android, all Lua/model/renderer/integration sources behind that gate, and an always-available `skin::luaGameplaySkinsAvailable()` compile-time query. The test must inspect source guards as well as CMake: Xcode auto-discovers supported files under `src`, so enabled-only and unavailable-only translation units must compile to complementary empty/nonempty units and never define the same symbol together.
+- [ ] **Step 3: Make the RED tests reference canonical `BeatorajaSkinConfiguration`, runtime-owned callbacks/values, and create/value/operation/callback results**. The expected digest excludes `get_path`; the test host exposes empty `main_state`, `timer_util`, and `event_util` modules during header execution. Load Task 2's `legacy_lua_upstream_v1.json` only for selected upstream return/call-shape parity and `lua_sandbox_v1.json` as the AsoBMaShow authority for allowed/denied capabilities and phase rules; assert the policy's selected-surface digest equals Task 1a's manifest. Production and default tests must not inspect the external skin. Add `tests/lua_skin_feature_gate_tests.py` first to require `ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=ON` for desktop/iOS, `OFF` by default on Android, all Lua/model/renderer/integration sources behind that gate, and an always-available `skin::luaGameplaySkinsAvailable()` compile-time query. The test must inspect source guards as well as CMake: Xcode auto-discovers supported files under `src`, so enabled-only and unavailable-only translation units must compile to complementary empty/nonempty units and never define the same symbol together.
 
-- [ ] **Step 4: Add runtime tests first for nil `skin_config` header execution, configured execution in the identical `lua_State`, persistent globals/closures/`package.loaded`, fresh catalog/validation/gameplay isolation, text-only chunks, exact visible standard-library subset, `bit32` trace parity, no `ffi`/`jit`/`debug`/`luajava`/network/process/native loaders, deterministic stack/table limits, allocator exhaustion, instruction and wall-time interruption for header/configured/callback loops, per-frame callback totals, host-call byte/time limits, and infinite loops created through both `coroutine.create` and `coroutine.wrap`.**
+- [ ] **Step 4: Add runtime tests first for nil `skin_config` header execution, configured execution in the identical `lua_State`, persistent globals/closures/`package.loaded`, fresh catalog/validation/gameplay isolation, text-only chunks, exact visible standard-library subset, `bit32` trace parity, no `ffi`/`jit`/`debug`/network/process/native loaders, deterministic stack/table limits, allocator exhaustion, instruction and wall-time interruption for header/configured/callback loops, per-frame callback totals, host-call byte/time limits, and infinite loops created through both `coroutine.create` and `coroutine.wrap`. Replace, never expose, the standard filesystem functions: test bounded package-local text `dofile`; an `io` table containing only `open`; Task 1a-audited default/`r`/`w`/`a` modes; bounded `lines`; zero-or-more-argument chainable `write`; idempotent `close`; atomic overlay commit with safe automatic parents in a fresh overlay; missing/wrong-mode results; handle quota; and no host paths/standard streams/seek/temp members. Before render transition, leave both read and dirty write handles open; `enterRenderPhase` must invalidate all handles, release read buffers/quota, discard dirty buffers, return `skin_file_render_phase_denied`, and preserve the overlay digest. Captured functions/handles then fail, increment the exact read/write/scan `Denied` counters, and leave all matching `Performed` counters zero. Test the closed legacy table exhaustively from the Aso policy: it is installed as the global and the already-loaded module; repeated `require("luajava")` returns the same table; only `bindClass` and `new` exist; File/Gdx are identity-checked Lua-side tokens/tables, no host pointer or Java userdata escapes, `new` accepts only the File token, `listFiles` is bounded/virtual/load-phase-only, `mkdir` is overlay-only, `Gdx.app` is nil, and every other class/constructor/member plus `newInstance`, URL/HTTP, controllers/input, reflection, native access, and post-render file call fails with one deduplicated diagnostic.**
 - [ ] **Step 5: Run the RED check**
 
   ```sh
@@ -1666,9 +1745,9 @@ TEST_CASE("coroutine loops share the frame budget") {
   ```
 
   Expected RED: unrestricted existing LuaJIT setup and unconditional sources cannot satisfy the sandbox/budget/platform-gate assertions.
-- [ ] **Step 6: Implement the Task 9 configuration/callback/result/runtime interfaces and the explicit platform feature gate**. In `LuaGameplaySkinFeature.h`, define `ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS` only when the build did not: `0` on `__ANDROID__`, `1` elsewhere, then expose `skin::luaGameplaySkinsAvailable()`. CMake explicitly sets the same value. Default ON therefore covers Xcode's independently discovered desktop/iOS sources, while Android remains OFF because this repository does not package/link LuaJIT there. Put every enabled-only implementation behind `#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS`, give unavailable adapters the complementary `#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS`, keep package/profile core compilable either way, and make Settings report unavailable without referring to Lua types. Do not add normal source files to the Xcode synchronized group's membership exceptions. On enabled platforms, create each state with `lua_newstate` plus a quota allocator. Disable JIT before user code, install hooks, and use `sol::state_view` only internally. Open controlled base/package/table/string/math plus `bit32`; wrapped coroutine create/wrap/resume installs the shared accounting/deadline/count hook on every child before user bytecode runs.
-- [ ] **Step 7: Replace LuaJIT 5.1's `package.loaders` table with `LuaSkinFileSystem` loaders only and do not create a permissive `package.searchers` alias**. Remove `dofile`, `loadfile`, `string.dump`, `package.loadlib`, `package.cpath`, native loaders, unrestricted `io` and `os`; replace both `load` and `loadstring` with text-only wrappers and reject the binary-chunk signature in entries, modules, and dynamic chunks.
-- [ ] **Step 8: Enforce `Created -> HeaderLoaded -> Configured -> Render`; `loadConfigured` must fail if called on a fresh/different state, and a catalog state must not expose event or overlay-write APIs.**
+- [ ] **Step 6: Implement the Task 9 configuration/callback/result/runtime interfaces, the exact closed legacy table in `LuaSkinHostModules`, and the explicit platform feature gate**. In `LuaGameplaySkinFeature.h`, define `ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS` only when the build did not: `0` on `__ANDROID__`, `1` elsewhere, then expose `skin::luaGameplaySkinsAvailable()`. CMake explicitly sets the same value. Default ON therefore covers Xcode's independently discovered desktop/iOS sources, while Android remains OFF because this repository does not package/link LuaJIT there. Put every enabled-only implementation behind `#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS`, give unavailable adapters the complementary `#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS`, keep package/profile core compilable either way, and make Settings report unavailable without referring to Lua types. Do not add normal source files to the Xcode synchronized group's membership exceptions. On enabled platforms, create each state with `lua_newstate` plus a quota allocator. Disable JIT before user code, install hooks, and use `sol::state_view` only internally. Open controlled base/package/table/string/math plus `bit32`; wrapped coroutine create/wrap/resume installs the shared accounting/deadline/count hook on every child before user bytecode runs. Install the legacy table before any entry/module code, route its File object only through the move-owned `LuaSkinFileSystem`, return no host path, and model absent `Gdx.app` without a no-op audio success.
+- [ ] **Step 7: Replace LuaJIT 5.1's `package.loaders` table with `LuaSkinFileSystem` loaders only and do not create a permissive `package.searchers` alias**. Prepopulate `package.loaded["luajava"]` with the exact host table so package files cannot shadow or replace its authority. Remove the standard `dofile`, `loadfile`, `io`, `string.dump`, `package.loadlib`, `package.cpath`, native loaders, and `os`; reinstall only the Task 2-traced text-only VFS `dofile` plus restricted `io.open`/handle wrappers described above. Replace both `load` and `loadstring` with text-only wrappers and reject the binary-chunk signature in entries, modules, `dofile`, and dynamic chunks. Do not implement Beatoraja's `newInstance`, URL/HTTP/reader, controller/input, `debug.getmetatable`, or any other unaudited `LegacySkinLuaApi` branch.
+- [ ] **Step 8: Enforce `Created -> HeaderLoaded -> Configured -> Render`; `loadConfigured` must fail if called on a fresh/different state, and a catalog state must not expose event or overlay-write APIs. Before delegating phase transition to the filesystem, invalidate every runtime-owned Lua file handle; any live dirty handle discards its buffer, releases all handle quota, preserves the overlay digest, and makes `enterRenderPhase` fail with the frozen diagnostic so validation cannot start gameplay with ambiguous persistence.**
 - [ ] **Step 9: Run the GREEN check**
 
   ```sh
@@ -1677,7 +1756,7 @@ TEST_CASE("coroutine loops share the frame budget") {
   python3 -m unittest tests/lua_skin_feature_gate_tests.py -v
   ```
 
-  Expected GREEN: trace-compatible Lua executes under budgets, all prohibited capabilities are absent, and Android remains LuaJIT-free and compilable.
+  Expected GREEN: trace-compatible Lua and the exact audited legacy table execute under budgets, all prohibited capabilities remain absent, and Android remains LuaJIT-free and compilable.
 - [ ] **Step 10: Commit the task**
 
   ```sh
@@ -2172,8 +2251,8 @@ TEST_CASE("critical note dependency rejects the model") {
 }
 ```
 
-- [ ] **Step 2: Make the RED model fixture reference source-neutral variants for every v1 target surface**. Require stable binding/resource/object IDs and authored ordinals; exact custom-timer/event ID, typed action/timer/condition binding, and interval; and explicit unsupported-field diagnostics. Exercise every Boolean/Integer/Float/String/Timer/FloatWriter/StringWriter/Event input spelling accepted by pinned `LuaSkinLoader`: numeric built-in ID, recognized built-in name where that factory permits it, Lua function, and Lua script string. A script string must remain a runtime callback rather than silently becoming built-in ID zero.
-- [ ] **Step 3: Write model tests first for defaults, sprite divisions/regions, negative dimensions, destination references, duplicate IDs, missing sources/images/fonts, plain single-state images, `Image.len > 1` row-major state partitioning selected by `ref`, and ordered `ImageSet.images[]` choices whose resource/crop/timer/cycle may each differ; note-array lane counts and authored lane order; all normal/mine/hidden/processed and LN/CN/HCN visual phases; per-lane `dst`/`size`/`dst2`; expansion rate; group/BPM/stop/time line presentations; hidden/lift cover timer/cycle/disappear-line/link-lift semantics; gauge node/parts/range; judge indices; BGA identity; destination numeric-sign versus Boolean-binding conditions; draw bindings; center/pivot; mouse rectangle; timer/event/property callback variants; slider directions 0–3, `changeable`, custom float writers, numeric rate properties, and `isRefNum` integer min/max mapping; regular graph numeric/custom/`isRefNum` rate sources and direction; authored ordinals; conversion limits; critical/optional dependency propagation; and malformed critical note paths.** Preserve `Image.act/click` and `Text.event/editable` as typed model fields so the validator can issue exact diagnostics; v1 deliberately rejects a critical use or disables an optional use because Task 20 implements only audited gameplay float sliders/lane cover. The SCURO manifest must prove those direct click/text-input fields absent or Task 25 opens a gap-remediation plan. Decode the pinned Beatoraja `StretchType` IDs 0 through 10 to the exact enum values above and reject any other value with the audited critical/optional disposition; do not collapse trimmed and non-trimmed modes.
+- [ ] **Step 2: Make the RED model fixture reference source-neutral variants for every v1 target surface**. Require stable binding/resource/object IDs and authored ordinals; exact custom-timer/event ID, typed action/timer/condition binding, interval, and authored declaration order; and explicit unsupported-field diagnostics. Exercise every Boolean/Integer/Float/String/Timer/FloatWriter/StringWriter/Event input spelling accepted by pinned `LuaSkinLoader`: numeric built-in ID, recognized built-in name where that factory permits it, Lua function, and Lua script string. A script string must remain a runtime callback rather than silently becoming built-in ID zero.
+- [ ] **Step 3: Write model tests first for defaults, sprite divisions/regions, negative dimensions, destination references, duplicate IDs, missing sources/images/fonts, plain single-state images, `Image.len > 1` row-major state partitioning selected by `ref`, and ordered `ImageSet.images[]` choices whose resource/crop/timer/cycle may each differ; note-array lane counts and authored lane order; all normal/mine/hidden/processed and LN/CN/HCN visual phases; per-lane `dst`/`size`/`dst2`; expansion rate; group/BPM/stop/time line presentations; hidden/lift cover timer/cycle/disappear-line/link-lift semantics; gauge node/parts/range; judge indices; BGA identity; destination numeric-sign versus Boolean-binding conditions; draw bindings; center/pivot; mouse rectangle; timer/event/property callback variants; slider directions 0–3, `changeable`, custom float writers, numeric rate properties, and `isRefNum` integer min/max mapping; regular graph numeric/custom/`isRefNum` rate sources and direction; authored ordinals; conversion limits; critical/optional dependency propagation; and malformed critical note paths. Add nonempty synthetic custom timer/event vectors and assert deterministic authored order plus one compatibility-divergence diagnostic; Task 2's seeded `IntMap` collision/resize cases remain upstream evidence only. Assert Task 1a's selected SCURO map counts are both zero and the decoded external acceptance model must match or fail closed.** Preserve `Image.act/click` and `Text.event/editable` as typed model fields so the validator can issue exact diagnostics; v1 deliberately rejects a critical use or disables an optional use because Task 20 implements only audited gameplay float sliders/lane cover. The SCURO manifest must prove those direct click/text-input fields absent or Task 25 opens a gap-remediation plan. Decode the pinned Beatoraja `StretchType` IDs 0 through 10 to the exact enum values above and reject any other value with the audited critical/optional disposition; do not collapse trimmed and non-trimmed modes.
 - [ ] **Step 3a: Add lossless HUD model regressions from the pinned loader**. Cover positive/negative number and float sprite-set partitioning, three-state zero padding, per-digit x/y/w/h offsets, float gain/sign visibility, sparse judge grades with independently optional image/detail nested full destinations and half-detail-width shift, and gauge ordered node roles/parts/animation type/range/cycle/result interval. Task 14 reads current gauge value/type/min/max/border only through `SkinGaugeStateView`; the model must not fake gauge state as a generic float property.
 - [ ] **Step 4: Run the RED check**
 
@@ -2183,7 +2262,7 @@ TEST_CASE("critical note dependency rejects the model") {
   ```
 
   Expected RED: only header records exist.
-- [ ] **Step 5: Implement every Task 11 source-neutral model/result type and extend `LuaSkinTableDecoder`**. Intern every typed binding once in its model registry, retain Lua functions/scripts by runtime-owned `LuaCallbackId`, dispatch traced numeric/name/function/script forms exactly like pinned `serializeLuaScript`, preserve authored order, and attach available Lua file/line information. Decode note line destinations and covers into their typed nested presentations; synthesize Beatoraja's cover offset lists (`Lift+Hidden Cover` for hidden and `Lift` for lift) without conflating either with the separate interactive lane-cover slider.
+- [ ] **Step 5: Implement every Task 11 source-neutral model/result type and extend `LuaSkinTableDecoder`**. Intern every typed binding once in its model registry, retain Lua functions/scripts by runtime-owned `LuaCallbackId`, dispatch traced numeric/name/function/script forms exactly like pinned `serializeLuaScript`, preserve authored order, and attach available Lua file/line information. Preserve custom timer/event declaration vectors exactly and attach one deduplicated `custom_object_order_authored_divergence` diagnostic when either is nonempty; do not claim or simulate pinned `IntMap` RNG state. Decode note line destinations and covers into their typed nested presentations; synthesize Beatoraja's cover offset lists (`Lift+Hidden Cover` for hidden and `Lift` for lift) without conflating either with the separate interactive lane-cover slider.
 - [ ] **Step 6: Implement `SkinModelValidator` as a separate pass**. Reject the entry when canvas/type, note presentation, required lane geometry, binding kind/reference, slider direction, cover, or another critical dependency is invalid; disable only optional objects with one deduplicated diagnostic. Require exactly the audited v1 surface and report every unimplemented object/property/timer/writer/event identifier. Validate each typed binding against the corresponding built-in host registry or live runtime callback; never reinterpret a missing or wrong-kind binding as ID zero.
 - [ ] **Step 7: Run the GREEN check**
 
@@ -3393,13 +3472,13 @@ TEST_CASE("projection expires invisible notes without mutation") {
 ```cpp
 TEST_CASE("custom timers precede automatic events") {
   const auto calls = updateCustomObjectsFixture();
-  CHECK(calls == std::vector<std::string>{"timer:3", "timer:8", "event:2"});
+  CHECK(calls == expectedAuthoredTimersThenAuthoredEvents());
 }
 ```
 
 - [ ] **Step 2: Make the RED bridge tests reference the complete `PlaySkinStateBridgeContext`, `beginFrame`, built-in selector lookups for every typed property/timer kind, all three note/long-note/line spans, and the rollbackable commit API**. Exercise equivalent recognized ID/name selectors and require caching only for classified pure host properties, never arbitrary Lua callbacks. Construct with a validated model/runtime/configuration/frozen mutation table and prove custom timers/events are reachable without global state.
 - [ ] **Step 3: Write bridge tests first for every SCURO manifest property/timer/event ID or recognized name, the complete version-1 mutation table and argument bounds, missing-selector type-specific semantics, timer start/OFF values, lane press/release/bomb/judge timers, score/combo/gauge/pacemaker/title/subtitle/artist/subartist/genre/audited-string/option fields, normal/invisible/mine notes, complete LN/CN/HCN endpoints/mode/state, group/BPM/stop/time line descriptors, and one deduplicated diagnostic per unsupported lookup.** Judge timer lookup must return Task 16's stored `lastJudgeVisualMicros` verbatim, including a valid event at zero and `INT64_MIN` before any event; it never substitutes the current frame clock. Construct the bridge from the same immutable `PlayfieldChartVisualModel` whose deduplicated strings were supplied to Task 13 resource preparation, and assert exact equality. Unknown/mismatched mutation rules stage nothing; the table is value-owned by `PlaySkinSession` and cannot be replaced by skin code.
-- [ ] **Step 4: Add custom-object tests proving custom timers evaluate and cache once per frame in ascending ID, automatic custom events follow in ascending ID, manual events accept zero/one/two integers, minimum interval uses the captured clock, and frame/callback instruction totals stop further skin work deterministically.**
+- [ ] **Step 4: Add custom-object tests proving custom timers evaluate and cache once per frame in deterministic authored order, automatic custom events follow in authored order, the entire timer phase precedes the event phase, nonempty maps carry the frozen divergence diagnostic, the selected SCURO maps are empty, manual events accept zero/one/two integers, minimum interval uses the captured clock, and frame/callback instruction totals stop further skin work deterministically. Never sort custom objects by ID or claim to reconstruct upstream RNG state.**
 - [ ] **Step 5: Freeze `event_mutation_table_v1.json`**. Permit only bounded session-local presentation changes and explicitly declared skin-configuration writes. During evaluation, presentation writes update a staged in-frame view visible to later skin callbacks/objects; a critical failure discards it. After a successful frame, queue persistence off the render thread. Option/file/resource/model-affecting changes must pass Task 7's worker `prepareActivation`, `SkinCommitCoordinator::submitActivation`, and app-lifetime main-thread polling, and affect only a future session; they never rebuild the current session. Reject score, gauge authority, note state, judgment, filesystem path, general profile, audio, replay, and scene-transition mutation.
 - [ ] **Step 6: Run the RED check**
 
@@ -4573,6 +4652,8 @@ TEST_CASE("profile switch affects only the next chart") {
 - Create: `src/skin/beatoraja/SkinPerformanceTelemetry.cpp`
 - Create: `src/skin/beatoraja/SkinAcceptanceRecorder.h`
 - Create: `src/skin/beatoraja/SkinAcceptanceRecorder.cpp`
+- Create: `src/skin/beatoraja/SkinOverlayDigestProvider.h`
+- Create: `src/skin/beatoraja/SkinOverlayDigestProvider.cpp`
 - Create: `src/BuildIdentity.h`
 - Create: `src/BuildIdentity.cpp`
 - Modify: `src/skin/beatoraja/LuaSkinFileSystem.h`
@@ -4620,6 +4701,24 @@ TEST_CASE("profile switch affects only the next chart") {
 - Produces: bounded `SkinPerformanceTelemetry`, `SkinPerformanceSummary`, and `scripts/run_skin_acceptance.py verify --contract PATH --evidence-root EXTERNAL_PATH --expected-app-commit HEX40`. The verifier rejects an evidence root inside the repository and verifies hashes/metadata without copying third-party images.
 
   ```cpp
+  struct SkinRenderIoCounters {
+    std::uint64_t filesystemReadsPerformed = 0;
+    std::uint64_t filesystemReadsDenied = 0;
+    std::uint64_t filesystemWritesPerformed = 0;
+    std::uint64_t filesystemWritesDenied = 0;
+    std::uint64_t filesystemDirectoryScansPerformed = 0;
+    std::uint64_t filesystemDirectoryScansDenied = 0;
+    std::uint64_t resourceUploadsPerformed = 0;
+    std::uint64_t resourceUploadsDenied = 0;
+  };
+
+  enum class SkinRenderIoOperation : std::uint8_t {
+    FilesystemRead,
+    FilesystemWrite,
+    FilesystemDirectoryScan,
+    ResourceUpload
+  };
+
   struct SkinFrameTelemetrySample {
     std::uint64_t frameSerial = 0;
     std::int64_t visualTimeMicros = 0;
@@ -4629,8 +4728,7 @@ TEST_CASE("profile switch affects only the next chart") {
     std::uint64_t callbackMicros = 0;
     std::uint32_t commandCount = 0;
     std::uint32_t batchCount = 0;
-    std::uint64_t filesystemReads = 0;
-    std::uint64_t textureUploads = 0;
+    SkinRenderIoCounters renderIo;
     std::uint64_t liveTextures = 0;
     std::uint64_t liveResources = 0;
     std::uint64_t luaAllocatorBytes = 0;
@@ -4665,8 +4763,7 @@ TEST_CASE("profile switch affects only the next chart") {
     std::uint64_t peakLuaAllocatorBytes = 0;
     std::uint64_t peakResidentBytes = 0;
     std::int64_t residentDriftBytes = 0;
-    std::uint64_t renderPhaseFilesystemReads = 0;
-    std::uint64_t renderPhaseTextureUploads = 0;
+    SkinRenderIoCounters renderIo;
     std::int64_t liveTextureDrift = 0;
     std::int64_t liveResourceDrift = 0;
     std::uint64_t fallbackCount = 0;
@@ -4687,7 +4784,8 @@ TEST_CASE("profile switch affects only the next chart") {
   };
   enum class SkinAcceptanceRunKind : std::uint8_t {
     Performance,
-    ResourceLifecycle
+    ResourceLifecycle,
+    RenderIoNegative
   };
   struct SkinAcceptanceScenarioContract {
     std::string scenarioId;
@@ -4698,12 +4796,19 @@ TEST_CASE("profile switch affects only the next chart") {
     std::int64_t measurementMicros = 180'000'000;
     std::uint32_t requiredExitCycles = 10;
     std::uint32_t maximumRefreshHz = 240;
+    std::string expectedOpaqueGuardVectorSha256;
+    std::optional<std::string> expectedDiagnosticCode;
+    std::optional<std::string> expectedFallbackAction;
+    std::optional<SkinRenderIoOperation> expectedDeniedOperation;
   };
   struct SkinAcceptanceSessionFacts {
     PlaySkinSessionIdentity identity;
     std::string chartSha256;
     std::string layoutId;
     std::uint32_t actualRefreshHz = 0;
+    // Derived from the loaded, validated model's canonical sorted opaque
+    // (guard ID, value) vector; never supplied by Settings or editable UI.
+    std::string observedOpaqueGuardVectorSha256;
   };
   enum class SkinResourceLifecyclePhase : std::uint8_t {
     BeforeFirstEntry,
@@ -4741,6 +4846,12 @@ TEST_CASE("profile switch affects only the next chart") {
     std::uint32_t configuredRefreshHz = 0;
     std::int64_t warmupMicros = 30'000'000;
     std::int64_t measurementMicros = 180'000'000;
+    std::optional<std::string> overlayDigestBefore;
+    std::optional<std::string> overlayDigestAfter;
+    std::string expectedOpaqueGuardVectorSha256;
+    std::string observedOpaqueGuardVectorSha256;
+    std::vector<std::string> observedDiagnosticCodes;
+    std::optional<std::string> observedFallbackAction;
   };
   struct SkinAcceptanceExportResult {
     bool exported = false;
@@ -4774,11 +4885,42 @@ TEST_CASE("profile switch affects only the next chart") {
     std::optional<SkinAcceptanceExportResult> result;
   };
 
+  struct SkinOverlayDigestTicket {
+    std::uint64_t value = 0;
+    explicit operator bool() const noexcept { return value != 0; }
+    auto operator<=>(const SkinOverlayDigestTicket &) const = default;
+  };
+  enum class SkinOverlayDigestPollState : std::uint8_t {
+    Unknown,
+    Pending,
+    Ready
+  };
+  struct SkinOverlayDigestPollResult {
+    SkinOverlayDigestPollState state = SkinOverlayDigestPollState::Unknown;
+    std::string lowercaseSha256;
+    std::optional<SkinDiagnostic> failure;
+  };
+  class IAsyncSkinOverlayDigestProvider {
+  public:
+    virtual ~IAsyncSkinOverlayDigestProvider() = default;
+    // Queues a bounded no-follow digest of the private overlay. The work runs
+    // outside render; polling is memory-only and performs no filesystem I/O.
+    virtual SkinOverlayDigestTicket
+    beginDigest(const SkinAcceptanceActivationKey &) = 0;
+    virtual SkinOverlayDigestPollResult
+    pollDigest(SkinOverlayDigestTicket) const noexcept = 0;
+    virtual void cancelDigest(SkinOverlayDigestTicket) noexcept = 0;
+    virtual void shutdown() noexcept = 0; // cancel, drain, join; idempotent
+  };
+
   struct SkinAcceptanceRecorderDependencies {
     std::filesystem::path documentsRoot;
     SkinBuildIdentity buildIdentity;
     std::function<std::optional<SkinAcceptanceScenarioContract>(
         std::string_view)> resolveScenario;
+    // Non-owning; ApplicationContext owns this provider after the recorder and
+    // drains it during shutdown. It never executes filesystem work on render.
+    IAsyncSkinOverlayDigestProvider *overlayDigests = nullptr;
     std::function<bool(const std::filesystem::path &,
                        std::span<const std::byte>, std::string &)>
         writeAtomic;
@@ -4797,6 +4939,12 @@ TEST_CASE("profile switch affects only the next chart") {
     void record(SkinFrameTelemetryEnvelope &&) noexcept;
     void recordResourceLifecycle(SkinResourceLifecycleSample) noexcept;
     void sessionEnded(const PlaySkinSessionIdentity &) noexcept;
+    // Called only after the session catalog/resources have been destroyed.
+    // For the negative scenario this queues the after-overlay digest.
+    void sessionTeardownComplete(const PlaySkinSessionIdentity &) noexcept;
+    // Polls provider-owned completion state only; safe from the main loop but
+    // never performs hashing or filesystem access itself.
+    void pollAsyncDependencies() noexcept;
     SkinAcceptanceExportTicket beginStopAndExport();
     SkinAcceptanceExportPollResult
     pollExport(SkinAcceptanceExportTicket) const;
@@ -4836,11 +4984,11 @@ TEST_CASE("profile switch affects only the next chart") {
   };
   ```
 
-  `ApplicationContext` owns one `SkinLiveResourceCounters` and one recorder constructed with the Documents root, `compiledSkinBuildIdentity()`, the frozen Task 1 scenario resolver, an atomic worker writer, and a bounded sanitized diagnostic-history snapshot callback. Pressing Start in Settings does not claim that a gameplay session already exists: the controller obtains a validated four-field `SkinAcceptanceActivationKey`, calls `arm`, and may then be destroyed when the user leaves Settings. The matching `GamePlayScene` derives chart SHA-256, effective layout, actual display refresh, and the new nonzero session serial from real chart/session/display state and calls `bindSession`; none of those threshold-critical facts is editable UI input. Refresh must be in `1..240` and match the frozen scenario. A performance scenario binds exactly one five-field identity, discards the first 30 seconds by the bound session's visual clock, retains the next exact 180 seconds, records trusted first/last timestamps and duration, and automatically begins export; any identity/session change, incomplete frame, early chart end, clock reversal, sample overflow, or wrong chart/layout/refresh makes the evidence fail. A resource-lifecycle scenario takes one baseline before the first entry, permits exactly ten explicitly bound sequential session serials whose other four fields match the armed key, and takes each post-exit sample only after the session catalog/textures have been destroyed; the tenth completed teardown triggers export.
+  `ApplicationContext` owns one `SkinLiveResourceCounters`, one worker-backed `IAsyncSkinOverlayDigestProvider`, and one recorder constructed with the Documents root, `compiledSkinBuildIdentity()`, the frozen Task 1a scenario resolver, the provider, an atomic worker writer, and a bounded sanitized diagnostic-history snapshot callback. The provider outlives the recorder and is drained during context shutdown. Pressing Start in Settings does not claim that a gameplay session already exists: the controller obtains a validated four-field `SkinAcceptanceActivationKey`, calls `arm`, and may then be destroyed when the user leaves Settings. For a negative run, `arm` immediately queues the before-overlay digest; `bindSession` is rejected until a memory-only poll has produced that digest, ensuring it precedes chart startup. The matching `GamePlayScene` derives chart SHA-256, effective layout, actual display refresh, the canonical opaque guard-vector SHA-256 from the loaded validated model, and the new nonzero session serial from real chart/session/display state and calls `bindSession`; none of those threshold-critical facts is editable UI input. The observed guard-vector digest must exactly equal the scenario's expected digest and both are retained in metadata. Refresh must be in `1..240` and match the frozen scenario. A performance scenario binds exactly one five-field identity, discards the first 30 seconds by the bound session's visual clock, retains the next exact 180 seconds, records trusted first/last timestamps and duration, and automatically begins export; any identity/session change, incomplete frame, early chart end, clock reversal, sample overflow, wrong chart/layout/refresh/guard vector, or nonzero performed or denied render read/write/scan/upload counter makes the evidence fail. A resource-lifecycle scenario takes one baseline before the first entry, permits exactly ten explicitly bound sequential session serials whose other four fields match the armed key, and takes each post-exit sample only after the session catalog/textures have been destroyed; the tenth completed teardown triggers export. A render-I/O-negative scenario binds the frozen guard-vector digest, snapshots the overlay asynchronously before chart start, requires the exact `skin_file_render_phase_denied` diagnostic and `discard_frame_disable_session_same_frame_builtin` action, and treats the attempt as session-critical regardless of the caller's ordinary object criticality. After the matching session catalog/resources are destroyed, `sessionTeardownComplete` queues the after-overlay digest. Export is invalid unless memory-only polling obtains equal before/after digests, every performed counter is zero, the contract-selected denied-operation counter is nonzero, and no unrelated denied counter is nonzero.
 
-  Enabled frame components receive a nullable pointer to one value-owned, allocation-reusing `SkinFrameTelemetryEnvelope`: `LuaSkinRuntime`, `LuaSkinFileSystem`, `SkinResourceCatalog`, `Skin2DRenderer`, `PlaySkinSession`, and `PlayfieldPresentationCoordinator` fill their distinct contribution bits against one frame serial/identity. `PresentationFrameResult` carries the optional envelope to `GamePlayScene`; `SceneManager` resets the context's optional pending envelope before every render, and gameplay installs it once. The post-scene main loop adds missed-presentation/process-resident facts and the final bit, verifies the complete mask, then moves it into `record` exactly once. Disabled recording constructs no envelope and does no sample allocation or merging. The app-owned live counters are incremented/decremented at actual catalog texture/resource creation/destruction and are independently sampled after teardown; per-frame counts are not used to fake the ten-cycle leak result. No instrumentation path performs file I/O while recording a frame.
+  Enabled frame components receive a nullable pointer to one value-owned, allocation-reusing `SkinFrameTelemetryEnvelope`: `LuaSkinRuntime`, `LuaSkinFileSystem`, `SkinResourceCatalog`, `Skin2DRenderer`, `PlaySkinSession`, and `PlayfieldPresentationCoordinator` fill their distinct contribution bits against one frame serial/identity. `LuaSkinFileSystem` contributes separate denied/performed render read, write, and directory-scan deltas; the resource/renderer layers contribute separate denied/performed upload deltas. `PresentationFrameResult` carries the optional envelope to `GamePlayScene`; `SceneManager` resets the context's optional pending envelope before every render, and gameplay installs it once. The post-scene main loop adds missed-presentation/process-resident facts and the final bit, verifies the complete mask, then moves it into `record` exactly once. The main loop also calls `pollAsyncDependencies`, which only consumes provider-owned memory results and never hashes or touches the filesystem. Disabled recording constructs no envelope and does no sample allocation or merging. The app-owned live counters are incremented/decremented at actual catalog texture/resource creation/destruction and are independently sampled after teardown; per-frame counts are not used to fake the ten-cycle leak result. No instrumentation path performs file I/O while recording a frame.
 
-  The recorder rejects an invalid/non-clean/placeholder build identity and injects its trusted compile-time commit/configuration into output. It retains at most 65,536 samples, treats any additional received sample as acceptance-fatal overflow, and owns at most one export work item plus one terminal result. Tickets are nonzero process-monotonic and never reused; polling distinguishes unknown/pending/ready and is idempotent until explicit acknowledgement. A new arm is rejected while an export or unacknowledged result exists, while a reopened Settings scene recovers the retained ticket through `currentExportTicket()`. At stop linearization, the main thread snapshots samples, lifecycle facts, and a bounded sanitized value-owned diagnostic vector before queuing the sole worker write to `Documents/SkinAcceptance/<opaqueRunId>.json`; the worker retains no service reference. The destructor calls `shutdown`, which closes arm/bind/record, resolves the accepted export, joins the worker, and performs no render-thread I/O. Exports contain no pixels, third-party resource names, raw profile ID, or unique device identifier.
+  The recorder rejects an invalid/non-clean/placeholder build identity and injects its trusted compile-time commit/configuration into output. It retains at most 65,536 samples, treats any additional received sample as acceptance-fatal overflow, and owns at most one export work item plus one terminal result. Tickets are nonzero process-monotonic and never reused; polling distinguishes unknown/pending/ready and is idempotent until explicit acknowledgement. A new arm is rejected while an export or unacknowledged result exists, while a reopened Settings scene recovers the retained ticket through `currentExportTicket()`. At stop linearization, the main thread snapshots samples, lifecycle facts, resolved overlay digests, expected/observed guard-vector digests, and a bounded sanitized value-owned diagnostic vector before queuing the sole worker write to `Documents/SkinAcceptance/<opaqueRunId>.json`; the worker retains no service reference. The recorder cancels any outstanding digest ticket before shutdown; then the context drains the longer-lived digest provider. The destructor calls `shutdown`, which closes arm/bind/record, resolves the accepted export, joins the writer, and performs no render-thread I/O. Exports contain no pixels, third-party resource names, raw profile ID, or unique device identifier.
 
 - [ ] **Step 1: Refresh the pinned Beatoraja reference** — Run the mandatory checker (or Task 1 bootstrap), reopen every file in this task's **Reference refresh** from `beatoraja_ref_root`, and record the pinned path/symbol/behavior before writing the test or editing production code.
 
@@ -4852,7 +5000,7 @@ def test_physical_evidence_stays_external(self):
     self.assertEqual(self.contract["criteriaStatus"], "pass")
 ```
 
-- [ ] **Step 2: Write the telemetry, recorder, controller, build-identity, and acceptance-verifier tests first.** `skin_performance_telemetry_tests` requires the exact bounded summary fields/threshold math above and drives fakes through runtime → filesystem/resource → renderer → session → coordinator → post-scene main-loop finalization, proving one real frame has one full five-field identity/frame serial, every contribution bit exactly once, and disabled recording does negligible/no allocation work. Test the fixed 65,536 capacity, received/retained/overflow counts, acceptance-fatal overflow rather than silent eviction, `1..240` refresh validation, trusted first/last visual timestamps and exact duration, incomplete/duplicate/out-of-order envelopes, wrong-session/profile/revision/configuration frames, and an early session end. Test Idle→Armed→WarmingUp→Recording→Exporting→Exported/Failed, actual session binding from chart/layout/display facts, one-session performance rules, and the separate baseline plus exactly ten post-destruction lifecycle samples with app-global counters returning to baseline. Exercise injected Documents root/build identity/scenario resolver/diagnostic snapshot, safe opaque filenames, a single in-flight plus single terminal export, never-reused typed tickets, unknown/pending/ready polling, explicit acknowledgement before a repeat, worker-only export, Settings close/reopen recovery, and shutdown/destructor draining. Reject arm without a validated activation key, and derive profile/entry/revision/configuration only from the callback; derive chart/layout/refresh/session serial only from `GamePlayScene`, never the start request. Extend iOS build/artifact tests first to require `AsoBMaShowBuildCommit`, `AsoBMaShowBuildConfiguration`, and `AsoBMaShowSourceClean` in the app Info.plist, matching compile definitions, plus a direct-install script that rejects dirty/wrong-commit checkouts and contains no Firebase/TestFlight/upload lane. The default clone/device-independent Python test validates every schema-v1 field, proves `verify` rejects `pending` criteria or missing external evidence, and checks every screenshot reference is a SHA-256/dimensions/timestamp record with no image payload in Git; it does not require a physical evidence root during default CTest. Final `verify` requires every criterion to be `pass`, the non-unique iPad hardware model identifier, exact iPadOS version, drawable resolution/safe area, actual configured Hz, app measurement commit/build configuration, SCURO archive/entry/configuration and payload-tree/activated-revision digests, chart hashes, autoplay scripts, trusted warm-up/measurement timestamps for three complete 180-second runs per layout/scenario, and the exact ten-cycle teardown samples. Reject an evidence root inside the repository and any public URL/absolute path/account name/device name/UDID in physical-evidence records; Task 1's official source and terms URLs remain allowed only in the dedicated provenance fields. Reject any tracked file whose digest matches Task 1's audited SCURO payload digest set regardless of extension. Require an access-controlled local evidence identifier, redaction status, retention-until date, and deletion procedure; never record a unique device identifier.
+- [ ] **Step 2: Write the telemetry, recorder, controller, build-identity, and acceptance-verifier tests first.** `skin_performance_telemetry_tests` requires the exact bounded summary fields/limit math above and drives fakes through runtime → filesystem/resource → renderer → session → coordinator → post-scene main-loop finalization, proving one real frame has one full five-field identity/frame serial, every contribution bit exactly once, and disabled recording does negligible/no allocation work. Test the fixed 65,536 capacity, received/retained/overflow counts, acceptance-fatal overflow rather than silent eviction, `1..240` refresh validation, trusted first/last visual timestamps and exact duration, incomplete/duplicate/out-of-order envelopes, wrong-session/profile/revision/configuration frames, an early session end, and separate performed/denied render read/write/directory-scan/upload counters. Passing runs require all eight counters zero. Test Idle→Armed→WarmingUp→Recording→Exporting→Exported/Failed, actual session binding from chart/layout/display facts, one-session performance rules, the separate baseline plus exactly ten post-destruction lifecycle samples with app-global counters returning to baseline, and Task 1a's session-critical negative scenario with exact expected/observed opaque guard-vector digests, diagnostic, fallback action, all performed counters zero, exactly the selected denied-operation counter nonzero, and equal before/after overlay digests. Use a fake asynchronous overlay provider to prove `arm` requests the before digest, binding is impossible while pending/failed, polling is memory-only, `sessionTeardownComplete` requests the after digest only after destruction, export waits for it, mismatch/failure is fatal, and shutdown cancels/drains safely. Exercise injected Documents root/build identity/scenario resolver/overlay provider/diagnostic snapshot, safe opaque filenames, a single in-flight plus single terminal export, never-reused typed tickets, unknown/pending/ready polling, explicit acknowledgement before a repeat, worker-only export, Settings close/reopen recovery, and shutdown/destructor draining. Reject arm without a validated activation key, and derive profile/entry/revision/configuration only from the callback; derive chart/layout/refresh/guard-vector digest/session serial only from `GamePlayScene`, never the start request. Extend iOS build/artifact tests first to require `AsoBMaShowBuildCommit`, `AsoBMaShowBuildConfiguration`, and `AsoBMaShowSourceClean` in the app Info.plist, matching compile definitions, plus a direct-install script that rejects dirty/wrong-commit checkouts and contains no Firebase/TestFlight/upload lane. The default clone/device-independent Python test validates every schema-v1 field, proves `verify` rejects `pending` criteria or missing external evidence, and checks every screenshot reference is a SHA-256/dimensions/timestamp record with no image payload in Git; it does not require a physical evidence root during default CTest. Final `verify` requires every criterion to be `pass`, the non-unique iPad hardware model identifier, exact iPadOS version, drawable resolution/safe area, actual configured Hz, app measurement commit/build configuration, SCURO archive/entry/configuration and payload-tree/activated-revision digests, chart hashes, autoplay scripts, trusted warm-up/measurement timestamps for three complete 180-second runs per layout/scenario, the exact negative render-I/O record, every expected/observed passing guard-vector digest, and the exact ten-cycle teardown samples. Reject an evidence root inside the repository and any public URL/absolute path/account name/device name/UDID in physical-evidence records; Task 1's official source and terms URLs remain allowed only in the dedicated provenance fields. Reject any tracked file whose digest matches Task 1's audited SCURO payload digest set regardless of extension. Require an access-controlled local evidence identifier, redaction status, retention-until date, and deletion procedure; never record a unique device identifier.
 - [ ] **Step 3: Run the RED check**
 
   ```sh
@@ -4863,7 +5011,7 @@ def test_physical_evidence_stays_external(self):
 
   Expected RED: telemetry/runner/schema enforcement is absent; the committed acceptance record remains `pending` until physical evidence exists.
 - [ ] **Step 4: Use redistributable synthetic 7-key charts/assets to cover normal notes, every supported LN/CN/HCN phase, mines/invisible notes when audited, BPM, stops, scroll/speed changes, chords, every judgment grade, combo breaks, gauge thresholds/failure, lane cover, BGA base/layer/image/video plus channel-06 miss-sequence transitions/gaps, retry, and song end**. Record their hashes in the acceptance document. The poor/combo-break scenario must exercise Task 19's separate BGA clock and blank miss frame.
-- [ ] **Step 5: Implement and wire build identity plus telemetry/recording end to end, then add native `Arm Next Gameplay Capture`, `Stop & Export Metrics`, and terminal-result acknowledgement controls to the gameplay-skins tab**. CMake obtains HEAD/configuration/clean status at configure time and supplies the three fixed `ASOBMASHOW_BUILD_*` definitions to `BuildIdentity.cpp`; tests inject their own values. Xcode defines the same values from `ASOBMASHOW_BUILD_COMMIT`, `CONFIGURATION`, and `ASOBMASHOW_SOURCE_CLEAN`, and mirrors them into the three Info.plist keys. `scripts/ios_artifact_audit.sh` requires the compiled/plist identity to equal its expected environment. No editable UI field supplies build identity, chart hash, layout, refresh rate, or session serial. Construct the narrow Settings controller with the app-owned recorder and Task 23 selection callback returning only the current validated four-field `SkinAcceptanceActivationKey`; `start` arms that key and resolves the chosen scenario ID through the frozen contract. Settings polls/shows Idle/Armed/WarmingUp/Recording/Exporting/Exported/Failed and displays the Files-visible relative path/digest; closing it never cancels an arm or accepted export, and reopening reconstructs state from the recorder's retained ticket. `GamePlayScene` binds actual `SkinAcceptanceSessionFacts`, reports explicit post-destruction lifecycle samples, and moves the coordinator's identity-bearing envelope into the context. `SceneManager` resets that slot every frame and post-scene `main.cpp` alone finalizes/records it. The runtime/filesystem/resource/renderer/session/coordinator hooks fill their distinct bits, while the app-global catalog counters measure actual teardown. The Python verifier consumes those JSON reports from the external evidence root and cross-checks their metadata/hashes against the manifest. Acceptance requires p99 total skin CPU time at or below 90% of the actual configured refresh interval, missed presentations at or below 0.5%, zero active-render filesystem reads/uploads, no overflow/incomplete/mismatched samples, no growth in live skin textures/resources after the tenth completed exit, and no more than 32 MiB resident-memory drift after warm-up.
+- [ ] **Step 5: Implement and wire build identity plus telemetry/recording end to end, then add native `Arm Next Gameplay Capture`, `Stop & Export Metrics`, and terminal-result acknowledgement controls to the gameplay-skins tab**. CMake obtains HEAD/configuration/clean status at configure time and supplies the three fixed `ASOBMASHOW_BUILD_*` definitions to `BuildIdentity.cpp`; tests inject their own values. Xcode defines the same values from `ASOBMASHOW_BUILD_COMMIT`, `CONFIGURATION`, and `ASOBMASHOW_SOURCE_CLEAN`, and mirrors them into the three Info.plist keys. `scripts/ios_artifact_audit.sh` requires the compiled/plist identity to equal its expected environment. No editable UI field supplies build identity, chart hash, layout, refresh rate, guard values, or session serial. Construct the narrow Settings controller with the app-owned recorder and Task 23 selection callback returning only the current validated four-field `SkinAcceptanceActivationKey`; `start` arms that key and resolves the chosen scenario ID through the frozen contract. Settings polls/shows Idle/Armed/WarmingUp/Recording/Exporting/Exported/Failed and displays the Files-visible relative path/digest; closing it never cancels an arm or accepted export, and reopening reconstructs state from the recorder's retained ticket. Implement the bounded no-follow overlay digest provider on its own worker; it derives the private overlay from the typed activation, accepts no host path, returns only a digest/failure, and is never invoked synchronously by a render call. `GamePlayScene` binds actual `SkinAcceptanceSessionFacts` including the loaded model's canonical opaque guard-vector digest, reports explicit post-destruction lifecycle/teardown samples, and moves the coordinator's identity-bearing envelope into the context. `SceneManager` resets that slot every frame and post-scene `main.cpp` alone finalizes/records it and polls only provider-owned memory completion. The runtime/filesystem/resource/renderer/session/coordinator hooks fill their distinct bits, while the app-global catalog counters measure actual teardown. The Python verifier consumes those JSON reports from the external evidence root and cross-checks their metadata/hashes against the manifest. Passing acceptance requires p99 total skin CPU time at or below 90% of the actual configured refresh interval, missed presentations at or below 0.5%, all performed and denied active-render filesystem read/write/directory-scan/resource-upload counters zero, matching expected/observed guard-vector digests, no overflow/incomplete/mismatched samples, no growth in live skin textures/resources after the tenth completed exit, and no more than 32 MiB resident-memory drift after warm-up. The negative scenario alone requires every performed counter zero and exactly its frozen denied-operation counter nonzero while proving the exact session-critical diagnostic/action, matching guard-vector digest, and asynchronously captured equal pre/post overlay digests; it is not a passing performance run.
 - [ ] **Step 6: Run the opt-in source/package audit against the external SCURO package and pinned Beatoraja root**:
 
   ```sh
@@ -4883,7 +5031,7 @@ def test_physical_evidence_stays_external(self):
     --verify tests/fixtures/beatoraja_skin/reference_manifest.json
   ```
 
-  Require archive SHA-256, archive payload-tree SHA-256, audited source-tree SHA-256, and inferred wrapper to match the frozen manifest. Confirm Task 1's recorded usage/private-screenshot terms still permit this acceptance work. Any remaining compatibility or permission gap blocks Task 25: create `docs/superpowers/plans/2026-08-03-beatoraja-lua-gameplay-skin-gap-remediation.md` with exact failing fixtures/files/interfaces via `superpowers:writing-plans`, implement it separately with RED/GREEN commits, then restart this task. Do not modify an unspecified production file or add an unaudited API inside acceptance work.
+  Require archive SHA-256, archive payload-tree SHA-256, audited source-tree SHA-256, and inferred wrapper to match the frozen manifest. Confirm Task 1's recorded usage/private-screenshot terms still permit this acceptance work. Reconfirm the package's `legacyLuaApiSurface` is exactly the Task 9 closed facade: the two imports, File/Gdx class binds, configured-load `listFiles`, latent `mkdir`, and guarded absent-`Gdx.app` audio path are present, while `newInstance`, URL/HTTP, controllers/input, reflection, native access, or another class/member remain absent. Any remaining compatibility or permission gap blocks Task 25: create `docs/superpowers/plans/2026-08-03-beatoraja-lua-gameplay-skin-gap-remediation.md` with exact failing fixtures/files/interfaces via `superpowers:writing-plans`, implement it separately with RED/GREEN commits, then restart this task. Do not modify an unspecified production file or add an unaudited API inside acceptance work.
 - [ ] **Step 7: Run the automation GREEN check before device measurement**
 
   ```sh
@@ -4900,7 +5048,7 @@ def test_physical_evidence_stays_external(self):
 - [ ] **Step 8: Commit the clean measurement candidate, then set `MEASUREMENT_COMMIT="$(git rev-parse HEAD)"`**. This commit contains every executable/native/script/test/fixture change used by the measured app; no production or acceptance-runner file may change after it without discarding evidence and restarting Task 25.
 
   ```sh
-  git add CMakeLists.txt src/skin/CMakeLists.txt docs/skin-compat/beatoraja-lua-gameplay-contract.md docs/skin-compat/modernchic-scuro-4.02-acceptance.md tests/fixtures/beatoraja_skin/reference_manifest.json tests/fixtures/beatoraja_skin/charts src/BuildIdentity.h src/BuildIdentity.cpp src/skin/beatoraja/SkinPerformanceTelemetry.h src/skin/beatoraja/SkinPerformanceTelemetry.cpp src/skin/beatoraja/SkinAcceptanceRecorder.h src/skin/beatoraja/SkinAcceptanceRecorder.cpp src/skin/beatoraja/LuaSkinFileSystem.h src/skin/beatoraja/LuaSkinFileSystem.cpp src/skin/beatoraja/LuaSkinRuntime.h src/skin/beatoraja/LuaSkinRuntime.cpp src/skin/beatoraja/SkinResourceCatalog.h src/skin/beatoraja/SkinResourceCatalog.cpp src/skin/beatoraja/Skin2DRenderer.h src/skin/beatoraja/Skin2DRenderer.cpp src/skin/beatoraja/PlaySkinSession.h src/skin/beatoraja/PlaySkinSession.cpp src/scene/play/PlayfieldPresentation.h src/scene/play/PlayfieldPresentationCoordinator.h src/scene/play/PlayfieldPresentationCoordinator.cpp src/scene/play/GamePlayScene.h src/scene/play/GamePlayScene.cpp src/scene/GameplaySkinSettingsController.h src/scene/GameplaySkinSettingsController.cpp src/scene/SettingsScene.h src/scene/SettingsSceneSkins.cpp src/context.h src/main.cpp ios/Xcode/AsoBMaShow/AsoBMaShow/Info.plist ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj scripts/ios_artifact_audit.sh scripts/ios_build_install_for_skin_acceptance.sh scripts/run_skin_acceptance.py tests/skin_acceptance_contract_tests.py tests/ios_artifact_audit_tests.py tests/ios_build_setup_tests.py tests/skin_performance_telemetry_tests.cpp
+  git add CMakeLists.txt src/skin/CMakeLists.txt docs/skin-compat/beatoraja-lua-gameplay-contract.md docs/skin-compat/modernchic-scuro-4.02-acceptance.md tests/fixtures/beatoraja_skin/reference_manifest.json tests/fixtures/beatoraja_skin/charts src/BuildIdentity.h src/BuildIdentity.cpp src/skin/beatoraja/SkinPerformanceTelemetry.h src/skin/beatoraja/SkinPerformanceTelemetry.cpp src/skin/beatoraja/SkinAcceptanceRecorder.h src/skin/beatoraja/SkinAcceptanceRecorder.cpp src/skin/beatoraja/SkinOverlayDigestProvider.h src/skin/beatoraja/SkinOverlayDigestProvider.cpp src/skin/beatoraja/LuaSkinFileSystem.h src/skin/beatoraja/LuaSkinFileSystem.cpp src/skin/beatoraja/LuaSkinRuntime.h src/skin/beatoraja/LuaSkinRuntime.cpp src/skin/beatoraja/SkinResourceCatalog.h src/skin/beatoraja/SkinResourceCatalog.cpp src/skin/beatoraja/Skin2DRenderer.h src/skin/beatoraja/Skin2DRenderer.cpp src/skin/beatoraja/PlaySkinSession.h src/skin/beatoraja/PlaySkinSession.cpp src/scene/play/PlayfieldPresentation.h src/scene/play/PlayfieldPresentationCoordinator.h src/scene/play/PlayfieldPresentationCoordinator.cpp src/scene/play/GamePlayScene.h src/scene/play/GamePlayScene.cpp src/scene/GameplaySkinSettingsController.h src/scene/GameplaySkinSettingsController.cpp src/scene/SettingsScene.h src/scene/SettingsSceneSkins.cpp src/context.h src/main.cpp ios/Xcode/AsoBMaShow/AsoBMaShow/Info.plist ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj scripts/ios_artifact_audit.sh scripts/ios_build_install_for_skin_acceptance.sh scripts/run_skin_acceptance.py tests/skin_acceptance_contract_tests.py tests/ios_artifact_audit_tests.py tests/ios_build_setup_tests.py tests/skin_performance_telemetry_tests.cpp
   git commit -m "feat: add gameplay skin acceptance telemetry"
   MEASUREMENT_COMMIT="$(git rev-parse HEAD)"
   test -z "$(git status --porcelain)"
@@ -4919,7 +5067,7 @@ def test_physical_evidence_stays_external(self):
   ```
 
   The script requires `HEAD == --commit`, a clean checkout, runs `scripts/ios_init.sh`, builds scheme `AsoBMaShow` with `xcodebuild -project ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj -scheme AsoBMaShow -configuration Release -destination id=... -derivedDataPath <checkout-specific path> ASOBMASHOW_BUILD_COMMIT=... ASOBMASHOW_SOURCE_CLEAN=1 DEVELOPMENT_TEAM=... CODE_SIGN_STYLE=Automatic build`, verifies the resulting app's three Info.plist identity keys and artifact audit, then installs only with `xcrun devicectl device install app --device ...`. It prints no device ID and performs no distribution/upload. Verify all three install paths for the same unmodified package: ZIP picker, folder picker, and manual unarchived copy into `Files > On My iPad > AsoBMaShow > Skins/ModernChic`. For each path, record the activated revision digest and require it to equal the frozen archive payload-tree digest before any manual edit; confirm app-imported packages are visible/editable there.
-- [ ] **Step 10: Verify startup/tab/manual rescans; option/file/offset/layout persistence across restart, profile switch, reimport, and valid edit; whole-package collision behavior; manual partial/invalid edit preserving the active revision; no mid-chart hot reload; package deletion allowing the active chart to finish but forcing built-in fallback next chart; and malformed/runtime-failing same-frame fallback.**
+- [ ] **Step 10: Verify startup/tab/manual rescans; option/file/offset/layout persistence across restart, profile switch, reimport, and valid edit; whole-package collision behavior; manual partial/invalid edit preserving the active revision; no mid-chart hot reload; package deletion allowing the active chart to finish but forcing built-in fallback next chart; and malformed/runtime-failing same-frame fallback. In a validation-only load/configuration run, exercise every Task 1a audited file-I/O shape—including the configured-load legacy `File.listFiles` path—and prove only virtual package paths and overlay effects are observable. In the separate frozen negative gameplay run, apply the configuration whose canonical opaque guard-vector digest matches the scenario and reach the audited render-time operation: regardless of ordinary object criticality, require diagnostic `skin_file_render_phase_denied`, action `discard_frame_disable_session_same_frame_builtin`, every performed counter zero, exactly the frozen denied-operation counter nonzero, no render-time filesystem mutation, and asynchronously captured identical before/after overlay digests. Every passing performance/layout run must derive the loaded model's canonical guard-vector digest and match Task 1a's expected passing digest so no selected render-I/O branch is reachable. Do not rely on a named option as the complete guard set.**
 - [ ] **Step 11: Capture 4:3 Fit, Stretch, and Custom screenshots at the manifest timestamps and compare object placement, BGA, notes/LNs, judge, combo, gauge, HUD, lane cover, and touch regions to the six synthetic renderer goldens/expected-command evidence**. Keep every physical SCURO screenshot in the access-controlled external evidence root because it contains third-party assets; redact Files/account/device UI before retention, never publish it, and commit only its SHA-256, pixel dimensions, timestamp, measured landmarks/deltas, opaque evidence identifier, redaction status, retention-until date, and deletion procedure. Exercise native Reset Layout and verify it remains reachable.
 - [ ] **Step 12: Fill only the tracked acceptance document/manifest evidence records, then run the final GREEN check against `MEASUREMENT_COMMIT`**:
 

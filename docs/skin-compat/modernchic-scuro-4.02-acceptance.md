@@ -65,27 +65,41 @@ requirements before renderer work:
   and song end;
 - screenshot timestamps and a per-layout external evidence reference, without
   image bytes in Git;
-- a selected-ID timer/event trace that records the observed `IntMap`
-  backing-hash order while still requiring the timer phase before the event
-  phase;
+- an explicit proof that the selected configured model has zero custom-timer
+  and custom-event map entries, while synthetic evidence documents the pinned
+  `IntMap` RNG-dependent order and AsoBMaShow's deterministic authored-order
+  divergence for future nonempty maps;
+- an opaque aggregate of every selected `dofile`/`io.open` mode, handle method,
+  load/render reachability, and configuration guard without external paths or
+  option labels;
+- a frozen session-critical negative render-I/O scenario with exact
+  diagnostic/fallback, asynchronously captured before/after overlay digests,
+  the selected denied-operation kind, and expected/observed canonical opaque
+  guard-vector digests for both negative and passing configurations;
 - all six 16:9 and 4:3 Fit/Stretch/Custom layout cases;
 - a 30-second warm-up followed by three complete 180-second repetitions for
   every scenario/layout; and
 - `pending|pass|fail` plus an evidence reference for every completion criterion.
 
-The thresholds are p99 skin CPU time at or below 90% of the actual refresh
-interval, missed presentations at or below 0.5%, no active-render filesystem
-reads or uploads, no live texture/resource growth after ten completed exits,
-and no more than 32 MiB resident-memory drift after warm-up.
+The limits are p99 skin CPU time at or below 90% of the actual refresh interval,
+missed presentations at or below 0.5%, zero performed and zero denied
+active-render filesystem reads, writes, directory scans, or resource uploads
+for every passing run, no live texture/resource growth after ten completed
+exits, and no more than 32 MiB resident-memory drift after warm-up. The negative
+probe still requires every performed counter to remain zero and only its frozen
+denied-operation counter to become nonzero.
 
 Task 1 permits `pending`. Final acceptance permits only `pass`.
 
-## Current blocker recorded by the audit
+## Audited compatibility decision and remaining work
 
 The selected 7-key entry's loaded closure critically imports Beatoraja's
-restricted legacy `luajava` facade for package file/audio behavior. The approved
-AsoBMaShow v1 sandbox intentionally exposes no `luajava` and no network. This is
-recorded as a critical compatibility gap rather than a silent stub. Physical
-screenshots remain permitted by the author terms, but a screenshot cannot count
-as passing unmodified-skin evidence until the design conflict is explicitly
-resolved and all criteria pass.
+restricted legacy `luajava` facade for package file behavior and a guarded
+audio probe. The reviewed v1 design now resolves only that exact surface with a
+closed non-Java Lua table: virtual File listing, overlay-only latent `mkdir`,
+and a GDX table whose absent `app` preserves pinned Beatoraja's optional audio
+failure. URL/HTTP, Java/reflection, controllers/input, native access, host paths,
+and every unaudited class/member remain denied. Physical screenshots remain
+permitted by the author terms, but no screenshot counts as passing evidence
+until the exact facade, restricted `dofile`/`io.open`, renderer, sandbox, and all
+other schema-v1 criteria are implemented and pass.
