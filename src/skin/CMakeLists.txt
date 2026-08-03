@@ -3,6 +3,7 @@ target_sources(main PRIVATE
     SkinProfileSettings.cpp
     SkinStoragePaths.cpp
     package/SkinAliasDetector.cpp
+    package/SkinArchiveImporter.cpp
     package/SkinPathPolicy.cpp
     package/SkinTreeSnapshotter.cpp
 )

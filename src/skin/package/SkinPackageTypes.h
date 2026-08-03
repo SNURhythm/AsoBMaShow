@@ -22,6 +22,11 @@ struct SkinPackagePolicy {
   static constexpr std::uint32_t maxPackageNameBytes = 128;
 };
 
+enum class PackageCollisionPolicy : std::uint8_t {
+  Reject,
+  Replace,
+};
+
 struct SkinPackageId {
   std::string directoryName;
   std::string collisionKey;
