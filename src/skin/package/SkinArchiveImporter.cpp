@@ -1399,8 +1399,8 @@ public:
     if (parent < 0) {
       return -1;
     }
-    const int file =
-        ::openat(parent, leaf.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    const int file = ::openat(parent, leaf.c_str(),
+                              O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
     ::close(parent);
     return file;
   }
@@ -1767,15 +1767,22 @@ private:
           FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE,
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-      if (safeWindowsDirectory(issuedRootHandle_) &&
-          security_.verify(issuedRootHandle_)) {
+      const bool safeIssuedDirectory = safeWindowsDirectory(issuedRootHandle_);
+      if (safeIssuedDirectory && security_.verify(issuedRootHandle_)) {
         return true;
       }
       if (issuedRootHandle_ != INVALID_HANDLE_VALUE) {
+        // A safe no-share-delete handle pins the exact directory identity. ACL
+        // verification failure forbids recursive cleanup, but delete-pending
+        // through this handle can safely dispose of the still-empty directory.
+        // Invalid or non-directory handles leave a protected orphan for later
+        // identity-aware recovery; pathname deletion is never a fallback.
+        if (safeIssuedDirectory) {
+          markWindowsDeletion(issuedRootHandle_);
+        }
         CloseHandle(issuedRootHandle_);
         issuedRootHandle_ = INVALID_HANDLE_VALUE;
       }
-      RemoveDirectoryW(path_.c_str());
       break;
     }
 #else

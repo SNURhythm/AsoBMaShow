@@ -22,6 +22,13 @@
 #include <utility>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <thread>
+#include <unistd.h>
+#endif
+
 #if defined(_WIN32)
 #include <Aclapi.h>
 #include <Windows.h>
@@ -793,6 +800,47 @@ void testStreamedPayloadDigestRejectsLastChunkStagingMutation() {
          "streamed member mismatch has a stable diagnostic code");
 }
 
+void testStagedFifoRaceRejectsWithoutBlockingOpen() {
+#if !defined(_WIN32)
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  std::atomic_bool writerAttempted{false};
+  std::optional<std::jthread> delayedWriter;
+  bool fifoInstalled = false;
+  auto observer = std::make_shared<ImportIoObserver>(
+      [&](SkinImportIoOperation operation, const fs::path &path) {
+        if (operation != SkinImportIoOperation::AfterVisibleFileWritten ||
+            path.filename() != "play.luaskin") {
+          return;
+        }
+        fs::remove(path);
+        fifoInstalled = ::mkfifo(path.c_str(), 0600) == 0;
+        delayedWriter.emplace([path, &writerAttempted] {
+          std::this_thread::sleep_for(std::chrono::milliseconds(250));
+          writerAttempted.store(true);
+          const int writer =
+              ::open(path.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+          if (writer >= 0) {
+            ::close(writer);
+          }
+        });
+      });
+  auto result = prepareZip(makeZip(temp.root() / "staged-fifo-race.zip",
+                                   {{"play.luaskin", "return {}\n"}}),
+                           roots, {}, {}, observer);
+  const bool returnedBeforeWriter = !writerAttempted.load();
+  delayedWriter.reset();
+  expect(fifoInstalled, "staged FIFO race fixture replaced the regular file");
+  expect(returnedBeforeWriter,
+         "secure staged-file reopen rejects a FIFO without waiting for a "
+         "writer");
+  expectRejectedAndClean(result, roots,
+                         "a raced staged FIFO rejects package preparation");
+  expect(hasDiagnosticCode(result, "skin_archive_payload_digest_failed"),
+         "staged FIFO rejection has a stable diagnostic code");
+#endif
+}
+
 void testVisibleStagingRejectsParentAndLeafSymlinkRaces() {
 #if !defined(_WIN32)
   {
@@ -1415,6 +1463,7 @@ int main() {
   testProgressCallbackFailureRejectsAndCleans();
   testArchivePayloadDigestMustMatchTask5Snapshot();
   testStreamedPayloadDigestRejectsLastChunkStagingMutation();
+  testStagedFifoRaceRejectsWithoutBlockingOpen();
   testVisibleStagingRejectsParentAndLeafSymlinkRaces();
   testDisplacedNestedParentCleanupRemovesImportedBytes();
   testWindowsVisibleStagingUsesProtectedOwnerOnlyDacls();

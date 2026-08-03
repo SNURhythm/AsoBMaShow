@@ -93,6 +93,31 @@ class WindowsSkinArchiveImporterContractTests(unittest.TestCase):
         ]
         self.assertNotIn("FILE_SHARE_DELETE", recursive_cleanup)
 
+    def test_failed_issued_root_allocation_never_falls_back_to_path_deletion(self):
+        source = self.source
+        allocate = source[
+            source.index("bool allocate(const fs::path &parentPath") :
+            source.index("void cleanup() noexcept")
+        ]
+        self.assertNotIn("RemoveDirectoryW(", allocate)
+        self.assertNotRegex(
+            allocate,
+            r"CloseHandle\(issuedRootHandle_\).*RemoveDirectoryW",
+        )
+        self.assertIn("safeIssuedDirectory", allocate)
+        self.assertIn("markWindowsDeletion(issuedRootHandle_)", allocate)
+        self.assertLess(
+            allocate.index("markWindowsDeletion(issuedRootHandle_)"),
+            allocate.index("CloseHandle(issuedRootHandle_)"),
+        )
+        cleanup = source[
+            source.index("void cleanup() noexcept") :
+            source.index("fs::path path_", source.index("void cleanup() noexcept"))
+        ]
+        guard = cleanup.index("issuedRootHandle_ == INVALID_HANDLE_VALUE")
+        path_cleanup = cleanup.index("clearWindowsDirectory(path_)")
+        self.assertLess(guard, path_cleanup)
+
     def test_windows_reopened_payload_is_regular_nofollow_single_link(self):
         source = self.source
         branch = source[
@@ -108,6 +133,12 @@ class WindowsSkinArchiveImporterContractTests(unittest.TestCase):
             "nNumberOfLinks == 1",
         ):
             self.assertIn(token, branch)
+
+        posix_branch = source[
+            source.index("int openFileForRead") :
+            source.index("#endif", source.index("int openFileForRead"))
+        ]
+        self.assertIn("O_NONBLOCK", posix_branch)
 
     def test_flush_failure_does_not_skip_handle_close(self):
         source = self.source
