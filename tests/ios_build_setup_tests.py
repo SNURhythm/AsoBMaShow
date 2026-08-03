@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import json
 import os
 import plistlib
 import re
@@ -262,8 +263,95 @@ class IOSUtf8procSetupTests(unittest.TestCase):
                 "utf8proc artifact tests require " + ", ".join(missing)
             )
 
-    def make_vcpkg_fixture(self, root: Path) -> tuple[Path, Path]:
+    @staticmethod
+    def write_repository_manifest(repository: Path, baseline: str) -> None:
+        (repository / "vcpkg.json").write_text(
+            json.dumps(
+                {
+                    "name": "asobmashow-ios-utf8proc-test",
+                    "version-string": "1",
+                    "builtin-baseline": baseline,
+                    "dependencies": ["utf8proc"],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def commit_registry_version(
+        vcpkg: Path, version: str, port_tree: str
+    ) -> str:
+        baseline_path = vcpkg / "versions/baseline.json"
+        version_path = vcpkg / "versions/u-/utf8proc.json"
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        version_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_text(
+            json.dumps(
+                {
+                    "default": {
+                        "utf8proc": {"baseline": version, "port-version": 0}
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        version_path.write_text(
+            json.dumps(
+                {
+                    "versions": [
+                        {
+                            "git-tree": port_tree,
+                            "version": version,
+                            "port-version": 0,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        if not (vcpkg / ".git").exists():
+            subprocess.run(["git", "init", "-q"], cwd=vcpkg, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "tests@example.invalid"],
+                cwd=vcpkg,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "AsoBMaShow Tests"],
+                cwd=vcpkg,
+                check=True,
+            )
+        subprocess.run(["git", "add", "versions"], cwd=vcpkg, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", f"registry {version}"],
+            cwd=vcpkg,
+            check=True,
+        )
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=vcpkg,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+    def make_vcpkg_fixture(self, root: Path) -> tuple[Path, Path, Path]:
         vcpkg = root / "vcpkg"
+        repository = root / "repository"
+        for triplet in ("arm64-ios", "arm64-ios-simulator"):
+            triplet_source = ROOT / "vcpkg-triplets" / f"{triplet}.cmake"
+            triplet_target = repository / "vcpkg-triplets" / triplet_source.name
+            triplet_target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(triplet_source, triplet_target)
+        fixture_license = repository / "assets/legal/utf8proc.txt"
+        fixture_license.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(UTF8PROC_LICENSE, fixture_license)
         installed = vcpkg / "fixture-installed"
         source = root / "utf8proc.c"
         source.write_text(
@@ -339,21 +427,31 @@ class IOSUtf8procSetupTests(unittest.TestCase):
             "#!/bin/sh\n"
             "set -eu\n"
             ': "${FAKE_VCPKG_COUNT_FILE:?}"\n'
-            '[ "$PWD" = "$(dirname "$0")" ] || { echo "wrong vcpkg cwd" >&2; exit 83; }\n'
+            'case " $* " in *" --classic "*) echo "classic mode forbidden" >&2; exit 84 ;; esac\n'
+            '[ -f "$PWD/vcpkg.json" ] || { echo "missing private manifest" >&2; exit 83; }\n'
+            'grep -q \"builtin-baseline\" "$PWD/vcpkg.json" || exit 85\n'
+            'grep -q \"utf8proc\" "$PWD/vcpkg.json" || exit 86\n'
             'install_root=""\n'
+            'triplet=""\n'
+            'previous=""\n'
             'for argument in "$@"; do\n'
+            '  if [ "$previous" = "--triplet" ]; then triplet="$argument"; fi\n'
             '  case "$argument" in\n'
             '    --x-install-root=*) install_root="${argument#*=}" ;;\n'
             '  esac\n'
+            '  previous="$argument"\n'
             'done\n'
             '[ -n "$install_root" ] || { echo "missing private install root" >&2; exit 82; }\n'
+            '[ -n "$triplet" ] || { echo "missing manifest triplet" >&2; exit 81; }\n'
             'mkdir -p "$install_root"\n'
-            'cp -R "$(dirname "$0")/fixture-installed/." "$install_root/"\n'
-            'printf "called\\n" >> "${FAKE_VCPKG_COUNT_FILE}"\n',
+            'cp -R "$(dirname "$0")/fixture-installed/$triplet" "$install_root/"\n'
+            'printf "called:%s\\n" "$triplet" >> "${FAKE_VCPKG_COUNT_FILE}"\n',
             encoding="utf-8",
         )
         executable.chmod(0o755)
-        return vcpkg, count_file
+        baseline = self.commit_registry_version(vcpkg, "2.11.3", "1" * 40)
+        self.write_repository_manifest(repository, baseline)
+        return repository, vcpkg, count_file
 
     def run_prepare(
         self,
@@ -383,15 +481,15 @@ class IOSUtf8procSetupTests(unittest.TestCase):
 
     def ensure_fixture(
         self, root: Path
-    ) -> tuple[Path, Path, Path, Path, dict[str, str]]:
-        vcpkg, count_file = self.make_vcpkg_fixture(root)
+    ) -> tuple[Path, Path, Path, Path, Path, dict[str, str]]:
+        repository, vcpkg, count_file = self.make_vcpkg_fixture(root)
         output = root / "output"
         cache = root / "cache"
         environment = {"FAKE_VCPKG_COUNT_FILE": str(count_file)}
         result = self.run_prepare(
             "ensure",
             "--repository-root",
-            ROOT,
+            repository,
             "--vcpkg-root",
             vcpkg,
             "--cache-root",
@@ -401,7 +499,7 @@ class IOSUtf8procSetupTests(unittest.TestCase):
             environment=environment,
         )
         self.assertEqual(0, result.returncode, result.stderr)
-        return vcpkg, count_file, output, cache, environment
+        return repository, vcpkg, count_file, output, cache, environment
 
     @staticmethod
     def archive_build_version(archive: Path) -> tuple[str, str]:
@@ -467,7 +565,7 @@ class IOSUtf8procSetupTests(unittest.TestCase):
 
     def test_clean_checkout_generates_two_ios14_slices_and_compilable_header(self):
         with tempfile.TemporaryDirectory() as temp:
-            _, count_file, output, _, _ = self.ensure_fixture(Path(temp))
+            _, _, count_file, output, _, _ = self.ensure_fixture(Path(temp))
             framework = output / "lib/libutf8proc.xcframework"
             header = output / "include/utf8proc.h"
             self.assertTrue(header.is_file())
@@ -505,12 +603,17 @@ class IOSUtf8procSetupTests(unittest.TestCase):
                 "iphonesimulator",
                 "arm64-apple-ios14.0-simulator",
             )
-            self.assertEqual("called", count_file.read_text().strip())
+            self.assertEqual(
+                ["called:arm64-ios", "called:arm64-ios-simulator"],
+                count_file.read_text().splitlines(),
+            )
 
     def test_cache_restores_missing_outputs_without_rebuilding_and_prunes_stale_key(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            vcpkg, count_file, output, cache, environment = self.ensure_fixture(root)
+            repository, vcpkg, count_file, output, cache, environment = (
+                self.ensure_fixture(root)
+            )
             stale = cache / "utf8proc/stale-key"
             stale.mkdir(parents=True)
             abandoned_staging = cache / "utf8proc/.staging-abandoned"
@@ -521,7 +624,7 @@ class IOSUtf8procSetupTests(unittest.TestCase):
             result = self.run_prepare(
                 "ensure",
                 "--repository-root",
-                ROOT,
+                repository,
                 "--vcpkg-root",
                 vcpkg,
                 "--cache-root",
@@ -532,7 +635,10 @@ class IOSUtf8procSetupTests(unittest.TestCase):
             )
 
             self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual(["called"], count_file.read_text().splitlines())
+            self.assertEqual(
+                ["called:arm64-ios", "called:arm64-ios-simulator"],
+                count_file.read_text().splitlines(),
+            )
             self.assertFalse(stale.exists())
             self.assertFalse(abandoned_staging.exists())
             self.assertTrue((output / "include/utf8proc.h").is_file())
@@ -543,7 +649,7 @@ class IOSUtf8procSetupTests(unittest.TestCase):
     def test_verifier_rejects_one_slice_missing_header_and_tampered_archive(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            _, _, output, cache, _ = self.ensure_fixture(root)
+            _, _, _, output, cache, _ = self.ensure_fixture(root)
             framework = output / "lib/libutf8proc.xcframework"
             header = output / "include/utf8proc.h"
             manifest = next((cache / "utf8proc").glob("*/manifest.json"))
@@ -593,6 +699,142 @@ class IOSUtf8procSetupTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("artifact error", result.stderr.lower())
 
+    def test_registry_change_rekeys_rebuilds_and_prunes_without_tool_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repository, vcpkg, count_file, output, cache, environment = (
+                self.ensure_fixture(root)
+            )
+            executable_digest = hashlib.sha256(
+                (vcpkg / "vcpkg").read_bytes()
+            ).hexdigest()
+            first_entry = next(
+                path
+                for path in (cache / "utf8proc").iterdir()
+                if path.is_dir()
+            )
+            first_manifest = json.loads(
+                (first_entry / "manifest.json").read_text(encoding="utf-8")
+            )
+
+            baseline = self.commit_registry_version(
+                vcpkg, "2.11.4", "2" * 40
+            )
+            self.write_repository_manifest(repository, baseline)
+            result = self.run_prepare(
+                "ensure",
+                "--repository-root",
+                repository,
+                "--vcpkg-root",
+                vcpkg,
+                "--cache-root",
+                cache,
+                "--output-root",
+                output,
+                environment=environment,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(
+                executable_digest,
+                hashlib.sha256((vcpkg / "vcpkg").read_bytes()).hexdigest(),
+            )
+            self.assertEqual(4, len(count_file.read_text().splitlines()))
+            entries = [
+                path
+                for path in (cache / "utf8proc").iterdir()
+                if path.is_dir()
+            ]
+            self.assertEqual(1, len(entries))
+            second_manifest = json.loads(
+                (entries[0] / "manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertNotEqual(
+                first_manifest["cacheKey"], second_manifest["cacheKey"]
+            )
+            self.assertEqual(
+                {
+                    "builtinBaseline": baseline,
+                    "gitTree": "2" * 40,
+                    "name": "utf8proc",
+                    "portVersion": 0,
+                    "version": "2.11.4",
+                },
+                second_manifest["cacheIdentity"]["dependency"],
+            )
+
+    def test_verifier_and_reuse_reject_tampered_manifest_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repository, vcpkg, count_file, _, cache, environment = (
+                self.ensure_fixture(root)
+            )
+            entry = next(
+                path
+                for path in (cache / "utf8proc").iterdir()
+                if path.is_dir()
+            )
+            manifest_path = entry / "manifest.json"
+            original = json.loads(manifest_path.read_text(encoding="utf-8"))
+            framework = entry / "lib/libutf8proc.xcframework"
+            header = entry / "include/utf8proc.h"
+            license_path = repository / "assets/legal/utf8proc.txt"
+
+            tampered_key = json.loads(json.dumps(original))
+            tampered_key["cacheKey"] = "0" * 24
+            manifest_path.write_text(
+                json.dumps(tampered_key, indent=2) + "\n", encoding="utf-8"
+            )
+            result = self.run_prepare(
+                "verify",
+                "--framework",
+                framework,
+                "--header",
+                header,
+                "--license",
+                license_path,
+                "--manifest",
+                manifest_path,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("cache key", result.stderr.lower())
+
+            tampered_version = json.loads(json.dumps(original))
+            tampered_version["cacheIdentity"]["dependency"]["version"] = "9.9.9"
+            manifest_path.write_text(
+                json.dumps(tampered_version, indent=2) + "\n", encoding="utf-8"
+            )
+            result = self.run_prepare(
+                "verify",
+                "--framework",
+                framework,
+                "--header",
+                header,
+                "--license",
+                license_path,
+                "--manifest",
+                manifest_path,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("cache key", result.stderr.lower())
+
+            result = self.run_prepare(
+                "ensure",
+                "--repository-root",
+                repository,
+                "--vcpkg-root",
+                vcpkg,
+                "--cache-root",
+                cache,
+                "--output-root",
+                root / "restored-output",
+                environment=environment,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(4, len(count_file.read_text().splitlines()))
+            restored = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual("2.11.3", restored["cacheIdentity"]["dependency"]["version"])
+
     def test_committed_utf8proc_license_is_complete_and_tamper_checked(self):
         license_bytes = UTF8PROC_LICENSE.read_bytes()
         text = license_bytes.decode("utf-8")
@@ -607,7 +849,7 @@ class IOSUtf8procSetupTests(unittest.TestCase):
     def test_ios_init_can_prepare_native_dependency_from_a_clean_checkout(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            vcpkg, count_file = self.make_vcpkg_fixture(root)
+            repository, vcpkg, count_file = self.make_vcpkg_fixture(root)
             output = root / "output"
             cache = root / "cache"
             fake_bin = root / "bin"
@@ -622,6 +864,7 @@ class IOSUtf8procSetupTests(unittest.TestCase):
                     "VCPKG_ROOT": str(vcpkg),
                     "IOS_DEPLOY_CACHE_ROOT": str(cache),
                     "IOS_UTF8PROC_OUTPUT_ROOT": str(output),
+                    "IOS_UTF8PROC_REPOSITORY_ROOT": str(repository),
                     "PATH": f"{fake_bin}:{env['PATH']}",
                 }
             )
@@ -639,7 +882,10 @@ class IOSUtf8procSetupTests(unittest.TestCase):
             self.assertTrue(
                 (output / "lib/libutf8proc.xcframework/Info.plist").is_file()
             )
-            self.assertEqual("called", count_file.read_text().strip())
+            self.assertEqual(
+                ["called:arm64-ios", "called:arm64-ios-simulator"],
+                count_file.read_text().splitlines(),
+            )
 
 
 class DerivedDataPathTests(unittest.TestCase):

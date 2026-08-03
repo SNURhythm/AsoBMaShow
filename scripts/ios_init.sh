@@ -10,7 +10,7 @@ source "${ROOT_DIR}/scripts/ios_pods_cache.sh"
 
 prepare_utf8proc() {
   python3 "${ROOT_DIR}/scripts/ios_utf8proc.py" ensure \
-    --repository-root "${ROOT_DIR}" \
+    --repository-root "${IOS_UTF8PROC_REPOSITORY_ROOT:-${ROOT_DIR}}" \
     --cache-root "${CACHE_ROOT}/native" \
     --output-root "${IOS_UTF8PROC_OUTPUT_ROOT:-${IOS_DIR}}"
 }

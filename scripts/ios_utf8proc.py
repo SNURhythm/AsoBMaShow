@@ -25,6 +25,7 @@ from pathlib import Path
 
 CACHE_SCHEMA = 1
 DEPLOYMENT_TARGET = "14.0"
+DEPENDENCY_NAME = "utf8proc"
 LICENSE_SHA256 = "3b510150d34f248a221bb88e1d811238d6c6c18b51231822c42974c39bb07256"
 TRIPLETS = ("arm64-ios", "arm64-ios-simulator")
 LIBRARY_IDENTIFIERS = {
@@ -60,6 +61,136 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def canonical_json(value: object) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def load_json_text(text: str, description: str) -> object:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ArtifactError(f"{description} is not valid JSON") from error
+
+
+def resolve_dependency_identity(
+    repository_root: Path, vcpkg_root: Path
+) -> dict[str, object]:
+    manifest_path = repository_root / "vcpkg.json"
+    if not manifest_path.is_file():
+        raise ArtifactError(f"repository vcpkg manifest is missing: {manifest_path}")
+    manifest = load_json_text(
+        manifest_path.read_text(encoding="utf-8"), "repository vcpkg manifest"
+    )
+    if not isinstance(manifest, dict):
+        raise ArtifactError("repository vcpkg manifest must be an object")
+    baseline = manifest.get("builtin-baseline")
+    if not isinstance(baseline, str) or re.fullmatch(r"[0-9a-f]{40}", baseline) is None:
+        raise ArtifactError("repository vcpkg manifest has no exact builtin-baseline")
+
+    baseline_data = load_json_text(
+        run(
+            [
+                "git",
+                "-C",
+                str(vcpkg_root),
+                "show",
+                f"{baseline}:versions/baseline.json",
+            ]
+        ),
+        "vcpkg baseline registry",
+    )
+    try:
+        baseline_entry = baseline_data["default"][DEPENDENCY_NAME]
+        version = baseline_entry["baseline"]
+        port_version = baseline_entry.get("port-version", 0)
+    except (KeyError, TypeError) as error:
+        raise ArtifactError(
+            f"{DEPENDENCY_NAME} is missing from builtin baseline {baseline}"
+        ) from error
+    if not isinstance(version, str) or not isinstance(port_version, int):
+        raise ArtifactError(f"{DEPENDENCY_NAME} baseline identity is invalid")
+
+    version_data = load_json_text(
+        run(
+            [
+                "git",
+                "-C",
+                str(vcpkg_root),
+                "show",
+                f"{baseline}:versions/u-/{DEPENDENCY_NAME}.json",
+            ]
+        ),
+        f"{DEPENDENCY_NAME} version registry",
+    )
+    candidates = []
+    if isinstance(version_data, dict) and isinstance(version_data.get("versions"), list):
+        for candidate in version_data["versions"]:
+            if not isinstance(candidate, dict):
+                continue
+            declared_versions = [
+                candidate.get(field)
+                for field in ("version", "version-semver", "version-date", "version-string")
+                if field in candidate
+            ]
+            if declared_versions == [version] and candidate.get("port-version", 0) == port_version:
+                candidates.append(candidate)
+    if len(candidates) != 1:
+        raise ArtifactError(
+            f"cannot resolve exact {DEPENDENCY_NAME} port tree for "
+            f"{version}#{port_version} at {baseline}"
+        )
+    git_tree = candidates[0].get("git-tree")
+    if not isinstance(git_tree, str) or re.fullmatch(r"[0-9a-f]{40}", git_tree) is None:
+        raise ArtifactError(f"{DEPENDENCY_NAME} registry git-tree is invalid")
+    return {
+        "builtinBaseline": baseline,
+        "gitTree": git_tree,
+        "name": DEPENDENCY_NAME,
+        "portVersion": port_version,
+        "version": version,
+    }
+
+
+def minimal_manifest(dependency: dict[str, object]) -> dict[str, object]:
+    return {
+        "name": "asobmashow-ios-utf8proc",
+        "version-string": "1",
+        "builtin-baseline": dependency["builtinBaseline"],
+        "dependencies": [DEPENDENCY_NAME],
+    }
+
+
+def build_cache_identity(
+    repository_root: Path,
+    vcpkg_root: Path,
+    dependency: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "dependency": dependency,
+        "deploymentTarget": DEPLOYMENT_TARGET,
+        "generatorSha256": sha256(Path(__file__).resolve()),
+        "manifestSha256": sha256_bytes(canonical_json(minimal_manifest(dependency))),
+        "triplets": {
+            triplet: sha256(
+                repository_root / "vcpkg-triplets" / f"{triplet}.cmake"
+            )
+            for triplet in TRIPLETS
+        },
+        "toolchain": {
+            "vcpkgSha256": sha256(vcpkg_root / "vcpkg"),
+            "xcodebuildVersion": run(["xcodebuild", "-version"]),
+        },
+    }
+
+
+def cache_key_for_identity(identity: dict[str, object]) -> str:
+    return sha256_bytes(canonical_json(identity))[:24]
 
 
 def version_tuple(version: str) -> tuple[int, ...]:
@@ -111,7 +242,13 @@ def artifact_files(framework: Path, header: Path) -> dict[str, Path]:
     return files
 
 
-def verify_manifest(manifest_path: Path, framework: Path, header: Path) -> None:
+def verify_manifest(
+    manifest_path: Path,
+    framework: Path,
+    header: Path,
+    expected_key: str | None = None,
+    expected_identity: dict[str, object] | None = None,
+) -> None:
     if not manifest_path.is_file():
         raise ArtifactError(f"utf8proc cache manifest is missing: {manifest_path}")
     try:
@@ -120,6 +257,16 @@ def verify_manifest(manifest_path: Path, framework: Path, header: Path) -> None:
         raise ArtifactError("utf8proc cache manifest is invalid") from error
     if manifest.get("schemaVersion") != CACHE_SCHEMA:
         raise ArtifactError("utf8proc cache manifest schema is unsupported")
+    recorded_identity = manifest.get("cacheIdentity")
+    recorded_key = manifest.get("cacheKey")
+    if not isinstance(recorded_identity, dict) or not isinstance(recorded_key, str):
+        raise ArtifactError("utf8proc cache manifest has no cache identity")
+    if cache_key_for_identity(recorded_identity) != recorded_key:
+        raise ArtifactError("utf8proc cache key does not match its recorded identity")
+    if expected_key is not None and recorded_key != expected_key:
+        raise ArtifactError("utf8proc cache key does not match the resolved dependency")
+    if expected_identity is not None and recorded_identity != expected_identity:
+        raise ArtifactError("utf8proc cache dependency identity does not match the registry")
     expected = manifest.get("files")
     if not isinstance(expected, dict) or not expected:
         raise ArtifactError("utf8proc cache manifest has no file digests")
@@ -249,32 +396,15 @@ def verify_artifacts(
         verify_manifest(manifest, framework, header)
 
 
-def cache_key(repository_root: Path, vcpkg_root: Path) -> str:
-    digest = hashlib.sha256()
-    inputs = (
-        Path(__file__).resolve(),
-        repository_root / "vcpkg.json",
-        *(repository_root / "vcpkg-triplets" / f"{triplet}.cmake" for triplet in TRIPLETS),
-        vcpkg_root / "vcpkg",
-    )
-    for path in inputs:
-        if not path.is_file():
-            raise ArtifactError(f"utf8proc cache-key input is missing: {path}")
-        digest.update(str(path.name).encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    digest.update(run(["xcodebuild", "-version"]).encode("utf-8"))
-    return digest.hexdigest()[:24]
-
-
-def write_manifest(root: Path, key: str) -> Path:
+def write_manifest(
+    root: Path, key: str, identity: dict[str, object]
+) -> Path:
     framework = root / "lib/libutf8proc.xcframework"
     header = root / "include/utf8proc.h"
     manifest = {
         "schemaVersion": CACHE_SCHEMA,
         "cacheKey": key,
-        "deploymentTarget": DEPLOYMENT_TARGET,
+        "cacheIdentity": identity,
         "files": {
             relative: sha256(path)
             for relative, path in artifact_files(framework, header).items()
@@ -290,26 +420,40 @@ def build_cache_entry(
     vcpkg_root: Path,
     cache_parent: Path,
     key: str,
+    identity: dict[str, object],
     license_path: Path,
 ) -> Path:
     vcpkg = vcpkg_root / "vcpkg"
     staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=cache_parent))
     try:
-        installed = staging / "installed"
-        run(
-            [
-                str(vcpkg),
-                "install",
-                "--classic",
-                "--recurse",
-                *(f"utf8proc:{triplet}" for triplet in TRIPLETS),
-                "--overlay-triplets",
-                str(repository_root / "vcpkg-triplets"),
-                f"--x-install-root={installed}",
-            ],
-            cwd=vcpkg_root,
+        manifest_root = staging / "manifest"
+        manifest_root.mkdir()
+        (manifest_root / "vcpkg.json").write_text(
+            json.dumps(minimal_manifest(identity["dependency"]), indent=2)
+            + "\n",
+            encoding="utf-8",
         )
-        installed_license = installed / "arm64-ios/share/utf8proc/copyright"
+        installed_roots = {}
+        for triplet in TRIPLETS:
+            installed = staging / f"installed-{triplet}"
+            run(
+                [
+                    str(vcpkg),
+                    "install",
+                    "--triplet",
+                    triplet,
+                    "--overlay-triplets",
+                    str(repository_root / "vcpkg-triplets"),
+                    f"--x-install-root={installed}",
+                    "--no-print-usage",
+                ],
+                cwd=manifest_root,
+            )
+            installed_roots[triplet] = installed
+
+        device_root = installed_roots["arm64-ios"]
+        simulator_root = installed_roots["arm64-ios-simulator"]
+        installed_license = device_root / "arm64-ios/share/utf8proc/copyright"
         verify_license(installed_license)
         if installed_license.read_bytes() != license_path.read_bytes():
             raise ArtifactError(
@@ -323,20 +467,25 @@ def build_cache_entry(
                 "xcodebuild",
                 "-create-xcframework",
                 "-library",
-                str(installed / "arm64-ios/lib/libutf8proc.a"),
+                str(device_root / "arm64-ios/lib/libutf8proc.a"),
                 "-library",
-                str(installed / "arm64-ios-simulator/lib/libutf8proc.a"),
+                str(
+                    simulator_root
+                    / "arm64-ios-simulator/lib/libutf8proc.a"
+                ),
                 "-output",
                 str(framework),
             ]
         )
         header = staging / "include/utf8proc.h"
         header.parent.mkdir(parents=True)
-        shutil.copy2(installed / "arm64-ios/include/utf8proc.h", header)
+        shutil.copy2(device_root / "arm64-ios/include/utf8proc.h", header)
         verify_artifacts(framework, header, license_path)
-        shutil.rmtree(installed)
-        manifest = write_manifest(staging, key)
-        verify_manifest(manifest, framework, header)
+        shutil.rmtree(manifest_root)
+        for installed in installed_roots.values():
+            shutil.rmtree(installed)
+        manifest = write_manifest(staging, key, identity)
+        verify_manifest(manifest, framework, header, key, identity)
 
         destination = cache_parent / key
         if destination.exists():
@@ -348,7 +497,13 @@ def build_cache_entry(
         raise
 
 
-def publish_output(cache_entry: Path, output_root: Path, license_path: Path) -> None:
+def publish_output(
+    cache_entry: Path,
+    output_root: Path,
+    license_path: Path,
+    key: str,
+    identity: dict[str, object],
+) -> None:
     cached_framework = cache_entry / "lib/libutf8proc.xcframework"
     cached_header = cache_entry / "include/utf8proc.h"
     manifest = cache_entry / "manifest.json"
@@ -356,8 +511,9 @@ def publish_output(cache_entry: Path, output_root: Path, license_path: Path) -> 
     target_header = output_root / "include/utf8proc.h"
 
     try:
-        verify_artifacts(
-            target_framework, target_header, license_path, manifest
+        verify_artifacts(target_framework, target_header, license_path)
+        verify_manifest(
+            manifest, target_framework, target_header, key, identity
         )
         return
     except ArtifactError:
@@ -381,7 +537,10 @@ def publish_output(cache_entry: Path, output_root: Path, license_path: Path) -> 
             os.replace(target_framework, backup_framework)
         os.replace(staged_framework, target_framework)
         os.replace(staged_header, target_header)
-        verify_artifacts(target_framework, target_header, license_path, manifest)
+        verify_artifacts(target_framework, target_header, license_path)
+        verify_manifest(
+            manifest, target_framework, target_header, key, identity
+        )
         shutil.rmtree(backup_framework, ignore_errors=True)
     except Exception:
         if target_framework.exists():
@@ -412,7 +571,9 @@ def ensure(args: argparse.Namespace) -> None:
     license_path = repository_root / "assets/legal/utf8proc.txt"
     verify_license(license_path)
     verify_triplets(repository_root)
-    key = cache_key(repository_root, vcpkg_root)
+    dependency = resolve_dependency_identity(repository_root, vcpkg_root)
+    identity = build_cache_identity(repository_root, vcpkg_root, dependency)
+    key = cache_key_for_identity(identity)
     cache_parent = cache_root / "utf8proc"
     cache_parent.mkdir(parents=True, exist_ok=True)
     lock_path = cache_parent / ".lock"
@@ -420,19 +581,25 @@ def ensure(args: argparse.Namespace) -> None:
         fcntl.flock(lock, fcntl.LOCK_EX)
         entry = cache_parent / key
         try:
-            verify_artifacts(
-                entry / "lib/libutf8proc.xcframework",
-                entry / "include/utf8proc.h",
-                license_path,
-                entry / "manifest.json",
+            framework = entry / "lib/libutf8proc.xcframework"
+            header = entry / "include/utf8proc.h"
+            manifest = entry / "manifest.json"
+            verify_artifacts(framework, header, license_path)
+            verify_manifest(
+                manifest, framework, header, key, identity
             )
         except ArtifactError:
             if entry.exists():
                 shutil.rmtree(entry)
             entry = build_cache_entry(
-                repository_root, vcpkg_root, cache_parent, key, license_path
+                repository_root,
+                vcpkg_root,
+                cache_parent,
+                key,
+                identity,
+                license_path,
             )
-        publish_output(entry, output_root, license_path)
+        publish_output(entry, output_root, license_path, key, identity)
         prune_cache(cache_parent, entry)
     print(f"Verified iOS utf8proc artifacts: {output_root}")
 
