@@ -49,6 +49,13 @@ SOURCE_PROVENANCE = (
     ("src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java", "SkinLuaAccessor.exportSkinProperty", "publishes selected file, option, enabled-option, and offset configuration"),
     ("src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java", "LegacySkinLuaApi.install", "installs the restricted legacy luajava class, constructor, file, GDX, controller, and HTTP facades"),
     ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.export", "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state"),
+    ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.OptionFunction", "implements direct main_state.option calls through BooleanPropertyFactory and immediately reads the result"),
+    ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.NumberFunction", "implements direct main_state.number calls through IntegerPropertyFactory and immediately reads the result"),
+    ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.FloatNumberFunction", "implements direct main_state.float_number calls through FloatPropertyFactory and immediately reads the result"),
+    ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.TextFunction", "implements direct main_state.text calls through StringPropertyFactory and immediately reads the result"),
+    ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.TimerFunction", "implements direct main_state.timer calls by reading the requested microtimer from MainState"),
+    ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.EventExecFunction", "implements direct main_state.event_exec calls by validating and executing the requested event on MainState"),
+    ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.EventIndexFunction", "implements direct main_state.event_index calls through the image-index property factory and immediately reads the result"),
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.loadJsonSkinHeader", "converts header properties, files, offsets, and categories"),
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.loadJsonSkin", "constructs play objects in authored destination order"),
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.setDestination", "inherits omitted destination fields and binds conditions, timer, clip, offsets, and stretch"),
@@ -64,6 +71,7 @@ SOURCE_PROVENANCE = (
     ("src/bms/player/beatoraja/play/bga/BGAProcessor.java", "BGAProcessor.drawBGA", "draws an active miss sequence exclusively, otherwise base then layer"),
     ("src/bms/player/beatoraja/skin/property/BooleanPropertyFactory.java", "BooleanPropertyFactory.getBooleanProperty", "maps supported boolean IDs or names and returns null for an unknown mapping"),
     ("src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java", "IntegerPropertyFactory.getIntegerProperty", "maps supported integer IDs or names and returns null for an unknown mapping"),
+    ("src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java", "IntegerPropertyFactory.getImageIndexProperty", "maps supported image-index IDs or names and returns null for an unknown mapping"),
     ("src/bms/player/beatoraja/skin/property/FloatPropertyFactory.java", "FloatPropertyFactory.getRateProperty", "maps supported float IDs or names and returns null for an unknown mapping"),
     ("src/bms/player/beatoraja/skin/property/StringPropertyFactory.java", "StringPropertyFactory.getStringProperty", "maps supported string IDs or names and returns null for an unknown mapping"),
     ("src/bms/player/beatoraja/skin/property/TimerPropertyFactory.java", "TimerPropertyFactory.getTimerProperty", "maps nonnegative timer IDs and rejects negative IDs"),
@@ -134,6 +142,19 @@ def copy_to_digest(stream: BinaryIO, digest, maximum: int) -> int:
         if count > maximum:
             raise AuditError("input exceeded its policy limit while being read")
         digest.update(chunk)
+
+
+def read_lua_source(stream: BinaryIO) -> str:
+    encoded = bytearray()
+    sentinel_limit = MAX_LUA_SOURCE_BYTES + 1
+    while len(encoded) < sentinel_limit:
+        chunk = stream.read(min(1024 * 1024, sentinel_limit - len(encoded)))
+        if not chunk:
+            break
+        encoded.extend(chunk)
+    if len(encoded) > MAX_LUA_SOURCE_BYTES:
+        raise AuditError("Lua source exceeds the 16 MiB scanner limit")
+    return bytes(encoded).decode("utf-8")
 
 
 def normalize_relative_path(raw_path: str, *, directory: bool = False) -> str:
@@ -388,7 +409,7 @@ def inspect_archive(archive_path: Path, declared_prefix: str):
             if item.path.lower().endswith((".lua", ".luaskin")):
                 try:
                     with archive.open(item.info, "r") as stream:
-                        extracted_text[item.path] = stream.read(MAX_REGULAR_FILE_BYTES + 1).decode("utf-8")
+                        extracted_text[item.path] = read_lua_source(stream)
                 except (UnicodeDecodeError, OSError, RuntimeError, zipfile.BadZipFile) as error:
                     raise AuditError(f"Lua source is not readable UTF-8 text: {item.path!r}: {error}") from error
 
@@ -1002,9 +1023,31 @@ def build_surface(entry: str, loaded: dict[str, str], module_criticality, host_m
             )
 
     definitions = read_constant_definitions(loaded)
-    property_ids: set[tuple[str, str]] = set()
-    timer_ids: set[str] = set()
-    event_ids: set[str] = set()
+    property_origins: dict[tuple[str, str], dict[str, list[str]]] = {}
+    timer_origins: dict[str, dict[str, list[str]]] = {}
+    event_origins: dict[str, dict[str, list[str]]] = {}
+
+    def add_origin(collection, key, origin: str, *symbols: str) -> None:
+        origin_symbols = collection.setdefault(key, {}).setdefault(origin, [])
+        for symbol in symbols:
+            if symbol not in origin_symbols:
+                origin_symbols.append(symbol)
+
+    def evidence_for(origins: dict[str, list[str]]) -> list[dict]:
+        symbols = []
+        for origin in ("direct", "model"):
+            for symbol in origins.get(origin, []):
+                if symbol not in symbols:
+                    symbols.append(symbol)
+        return [provenance_for(symbol)[0] for symbol in symbols]
+
+    model_property_provenance = {
+        "boolean": "BooleanPropertyFactory.getBooleanProperty",
+        "integer": "IntegerPropertyFactory.getIntegerProperty",
+        "float": "FloatPropertyFactory.getRateProperty",
+        "string": "StringPropertyFactory.getStringProperty",
+        "offset": "SkinLuaAccessor.exportSkinProperty",
+    }
     for index in range(len(tokens) - 4):
         if (
             tokens[index].value != "MAIN"
@@ -1019,17 +1062,53 @@ def build_surface(entry: str, loaded: dict[str, str], module_criticality, host_m
         value = definitions.get((category, name))
         stable_value = str(value) if value is not None else f"name:{name}"
         if category == "TIMER":
-            timer_ids.add(stable_value)
+            add_origin(
+                timer_origins,
+                stable_value,
+                "model",
+                "TimerPropertyFactory.getTimerProperty",
+            )
         elif category == "BUTTON":
-            event_ids.add(stable_value)
+            add_origin(
+                event_origins,
+                stable_value,
+                "model",
+                "EventFactory.getEvent",
+            )
         else:
-            property_ids.add((PROPERTY_CATEGORIES[category], stable_value))
+            property_type = PROPERTY_CATEGORIES[category]
+            add_origin(
+                property_origins,
+                (property_type, stable_value),
+                "model",
+                model_property_provenance[property_type],
+            )
     direct_calls = {
-        "option": "boolean",
-        "number": "integer",
-        "float_number": "float",
-        "text": "string",
-        "event_index": "integer",
+        "option": (
+            "boolean",
+            "MainStatePropertyLuaApiExporter.OptionFunction",
+            "BooleanPropertyFactory.getBooleanProperty",
+        ),
+        "number": (
+            "integer",
+            "MainStatePropertyLuaApiExporter.NumberFunction",
+            "IntegerPropertyFactory.getIntegerProperty",
+        ),
+        "float_number": (
+            "float",
+            "MainStatePropertyLuaApiExporter.FloatNumberFunction",
+            "FloatPropertyFactory.getRateProperty",
+        ),
+        "text": (
+            "string",
+            "MainStatePropertyLuaApiExporter.TextFunction",
+            "StringPropertyFactory.getStringProperty",
+        ),
+        "event_index": (
+            "integer",
+            "MainStatePropertyLuaApiExporter.EventIndexFunction",
+            "IntegerPropertyFactory.getImageIndexProperty",
+        ),
     }
     for index in range(len(tokens) - 4):
         if (
@@ -1048,32 +1127,55 @@ def build_surface(entry: str, loaded: dict[str, str], module_criticality, host_m
             continue
         raw_id = sign + tokens[argument].value
         if api in direct_calls:
-            property_ids.add((direct_calls[api], raw_id))
+            property_type, *symbols = direct_calls[api]
+            add_origin(
+                property_origins,
+                (property_type, raw_id),
+                "direct",
+                *symbols,
+            )
         elif api == "timer":
-            timer_ids.add(raw_id)
+            add_origin(
+                timer_origins,
+                raw_id,
+                "direct",
+                "MainStatePropertyLuaApiExporter.TimerFunction",
+            )
         elif api == "event_exec":
-            event_ids.add(raw_id)
+            add_origin(
+                event_origins,
+                raw_id,
+                "direct",
+                "MainStatePropertyLuaApiExporter.EventExecFunction",
+            )
 
-    property_provenance = {
-        "boolean": "BooleanPropertyFactory.getBooleanProperty",
-        "integer": "IntegerPropertyFactory.getIntegerProperty",
-        "float": "FloatPropertyFactory.getRateProperty",
-        "string": "StringPropertyFactory.getStringProperty",
-        "offset": "SkinLuaAccessor.exportSkinProperty",
-    }
-    for property_type, item_id in sorted(property_ids):
+    for property_type, item_id in sorted(property_origins):
         surface.append(
             surface_evidence(
                 "property",
                 f"{property_type}:{item_id}",
                 "critical",
-                provenance_for(property_provenance[property_type]),
+                evidence_for(property_origins[(property_type, item_id)]),
             )
         )
-    for item_id in sorted(timer_ids, key=lambda value: value.encode("utf-8")):
-        surface.append(surface_evidence("timer", item_id, "critical", provenance_for("TimerPropertyFactory.getTimerProperty")))
-    for item_id in sorted(event_ids, key=lambda value: value.encode("utf-8")):
-        surface.append(surface_evidence("event", item_id, "optional", provenance_for("EventFactory.getEvent")))
+    for item_id in sorted(timer_origins, key=lambda value: value.encode("utf-8")):
+        surface.append(
+            surface_evidence(
+                "timer",
+                item_id,
+                "critical",
+                evidence_for(timer_origins[item_id]),
+            )
+        )
+    for item_id in sorted(event_origins, key=lambda value: value.encode("utf-8")):
+        surface.append(
+            surface_evidence(
+                "event",
+                item_id,
+                "optional",
+                evidence_for(event_origins[item_id]),
+            )
+        )
 
     for path, disposition in sorted(module_criticality.items(), key=lambda item: item[0].encode("utf-8")):
         surface.append(

@@ -3727,6 +3727,48 @@
       "symbol": "MainStatePropertyLuaApiExporter.export"
     },
     {
+      "behavior": "implements direct main_state.option calls through BooleanPropertyFactory and immediately reads the result",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "MainStatePropertyLuaApiExporter.OptionFunction"
+    },
+    {
+      "behavior": "implements direct main_state.number calls through IntegerPropertyFactory and immediately reads the result",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "MainStatePropertyLuaApiExporter.NumberFunction"
+    },
+    {
+      "behavior": "implements direct main_state.float_number calls through FloatPropertyFactory and immediately reads the result",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "MainStatePropertyLuaApiExporter.FloatNumberFunction"
+    },
+    {
+      "behavior": "implements direct main_state.text calls through StringPropertyFactory and immediately reads the result",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "MainStatePropertyLuaApiExporter.TextFunction"
+    },
+    {
+      "behavior": "implements direct main_state.timer calls by reading the requested microtimer from MainState",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "MainStatePropertyLuaApiExporter.TimerFunction"
+    },
+    {
+      "behavior": "implements direct main_state.event_exec calls by validating and executing the requested event on MainState",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "MainStatePropertyLuaApiExporter.EventExecFunction"
+    },
+    {
+      "behavior": "implements direct main_state.event_index calls through the image-index property factory and immediately reads the result",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "MainStatePropertyLuaApiExporter.EventIndexFunction"
+    },
+    {
       "behavior": "converts header properties, files, offsets, and categories",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/json/JSONSkinLoader.java",
@@ -3815,6 +3857,12 @@
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
       "symbol": "IntegerPropertyFactory.getIntegerProperty"
+    },
+    {
+      "behavior": "maps supported image-index IDs or names and returns null for an unknown mapping",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+      "symbol": "IntegerPropertyFactory.getImageIndexProperty"
     },
     {
       "behavior": "maps supported float IDs or names and returns null for an unknown mapping",
@@ -7020,6 +7068,12 @@
       "kind": "property",
       "provenance": [
         {
+          "behavior": "implements direct main_state.number calls through IntegerPropertyFactory and immediately reads the result",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.NumberFunction"
+        },
+        {
           "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
           "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
@@ -7436,6 +7490,12 @@
       "kind": "property",
       "provenance": [
         {
+          "behavior": "implements direct main_state.text calls through StringPropertyFactory and immediately reads the result",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.TextFunction"
+        },
+        {
           "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
           "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
@@ -7448,6 +7508,12 @@
       "id": "string:12",
       "kind": "property",
       "provenance": [
+        {
+          "behavior": "implements direct main_state.text calls through StringPropertyFactory and immediately reads the result",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.TextFunction"
+        },
         {
           "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",

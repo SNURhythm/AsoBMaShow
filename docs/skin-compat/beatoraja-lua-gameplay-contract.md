@@ -24,18 +24,24 @@ The audited surface records every resolved property, timer, event, module, file
 API, and object with a `critical` or `optional` disposition and pinned source
 provenance.
 
-- The Boolean, Integer, Float, String, Timer, and Event factory methods return
-  the matching built-in binding or `null` for an unsupported mapping. Timer IDs
-  below zero also map to `null`. The direct `main_state.option`, `number`,
-  `float_number`, `text`, and `event_index` functions immediately dereference
-  their factory result, so an unknown direct lookup is an error; it is not
-  silently false, zero, or empty. These behaviors are defined by
-  `BooleanPropertyFactory.getBooleanProperty`,
-  `IntegerPropertyFactory.getIntegerProperty`,
-  `FloatPropertyFactory.getRateProperty`,
-  `StringPropertyFactory.getStringProperty`,
-  `TimerPropertyFactory.getTimerProperty`, `EventFactory.getEvent`, and
-  `MainStatePropertyLuaApiExporter.OptionFunction/NumberFunction/FloatNumberFunction/TextFunction/EventIndexFunction`.
+- The `MAIN` Boolean, Integer, Float, String, Timer, and Button bindings use
+  their matching property factories. Unsupported mappings return `null`, and
+  timer IDs below zero also map to `null`. The direct `main_state.option`,
+  `number`, `float_number`, and `text` functions are distinct host APIs: their
+  defining `MainStatePropertyLuaApiExporter` functions call the matching
+  Boolean, Integer, Float, or String factory and immediately dereference its
+  result. `main_state.event_index` instead calls
+  `IntegerPropertyFactory.getImageIndexProperty` through
+  `MainStatePropertyLuaApiExporter.EventIndexFunction`; it does not call
+  `getIntegerProperty`. An unknown direct lookup is therefore an error, not a
+  silent false, zero, or empty result.
+- Direct `main_state.timer` reads the requested microtimer through
+  `MainStatePropertyLuaApiExporter.TimerFunction`, without using
+  `TimerPropertyFactory`. Direct `main_state.event_exec` validates and executes
+  the requested event through
+  `MainStatePropertyLuaApiExporter.EventExecFunction`, without using
+  `EventFactory`. The audit retains these direct-host origins separately from
+  model binding IDs even when their numeric IDs coincide.
 - A timer is off at `Long.MIN_VALUE`. `TimerProperty.isOff` and
   `TimerPropertyFactory.getTimerProperty` preserve that distinction; an event
   at timestamp zero is therefore not confused with an off timer.

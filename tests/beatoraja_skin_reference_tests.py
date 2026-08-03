@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -312,7 +313,11 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java":
                 "class LegacySkinLuaApi { install(){} }",
             "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java":
-                "class MainStatePropertyLuaApiExporter { export(){} }",
+                "class MainStatePropertyLuaApiExporter { export(){} "
+                "class OptionFunction {} class NumberFunction {} "
+                "class FloatNumberFunction {} class TextFunction {} "
+                "class TimerFunction {} class EventExecFunction {} "
+                "class EventIndexFunction {} }",
             "src/bms/player/beatoraja/skin/json/JSONSkinLoader.java":
                 "class JSONSkinLoader { loadJsonSkinHeader(){} loadJsonSkin(){} setDestination(){} }",
             "src/bms/player/beatoraja/skin/json/JsonSkin.java":
@@ -370,6 +375,9 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 b'local m = {}\n'
                 b'm.main = function()\n'
                 b' local f = io.open("state.txt", "r")\n'
+                b' local event_index = main_state.event_index(8123)\n'
+                b' local timer = main_state.timer(8124)\n'
+                b' main_state.event_exec(8125)\n'
                 b' return { image = {{id="i", src="image.png"}}, '
                 b'note = {id="notes"}, bga={id="bga"}, '
                 b'destination={{id="i", timer=3, draw=function() '
@@ -478,6 +486,27 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             surface_by_key[("file-api", "main_state.option")]["provenance"][0]["symbol"],
             "MainStatePropertyLuaApiExporter.export",
         )
+        direct_host_provenance = {
+            ("property", "integer:8123"): [
+                "MainStatePropertyLuaApiExporter.EventIndexFunction",
+                "IntegerPropertyFactory.getImageIndexProperty",
+            ],
+            ("timer", "8124"): [
+                "MainStatePropertyLuaApiExporter.TimerFunction",
+            ],
+            ("event", "8125"): [
+                "MainStatePropertyLuaApiExporter.EventExecFunction",
+            ],
+        }
+        for key, expected_symbols in direct_host_provenance.items():
+            with self.subTest(direct_host_surface=key):
+                self.assertEqual(
+                    [
+                        provenance["symbol"]
+                        for provenance in surface_by_key[key]["provenance"]
+                    ],
+                    expected_symbols,
+                )
 
         verified = run_python(
             AUDIT_PATH,
@@ -697,6 +726,57 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 [],
                 label="extracted tree",
             )
+
+        oversized_archive = self.temp_path / "oversized-lua.zip"
+        scanner_limit = 16 * 1024 * 1024
+        with zipfile.ZipFile(oversized_archive, "w", zipfile.ZIP_STORED) as output:
+            output.writestr("Bundle/oversized.lua", b"x" * (scanner_limit + 2))
+
+        original_open = audit.zipfile.ZipFile.open
+        source_open_count = 0
+        source_read_requests = []
+        source_bytes_consumed = 0
+
+        class ObservedLuaStream:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def __enter__(self):
+                self.stream.__enter__()
+                return self
+
+            def __exit__(self, *arguments):
+                return self.stream.__exit__(*arguments)
+
+            def read(self, size=-1):
+                nonlocal source_bytes_consumed
+                source_read_requests.append(size)
+                chunk = self.stream.read(size)
+                source_bytes_consumed += len(chunk)
+                return chunk
+
+        def observed_open(zip_file, name, *arguments, **keywords):
+            nonlocal source_open_count
+            stream = original_open(zip_file, name, *arguments, **keywords)
+            filename = name.filename if isinstance(name, zipfile.ZipInfo) else name
+            if filename == "Bundle/oversized.lua":
+                source_open_count += 1
+                if source_open_count == 2:
+                    return ObservedLuaStream(stream)
+            return stream
+
+        scanner_error = None
+        with mock.patch.object(audit.zipfile.ZipFile, "open", observed_open):
+            try:
+                audit.inspect_archive(oversized_archive, "Bundle")
+            except audit.AuditError as error:
+                scanner_error = str(error)
+
+        self.assertLessEqual(source_bytes_consumed, scanner_limit + 1)
+        self.assertTrue(source_read_requests)
+        self.assertLessEqual(max(source_read_requests), scanner_limit + 1)
+        self.assertIsNotNone(scanner_error)
+        self.assertIn("Lua source exceeds the 16 MiB scanner limit", scanner_error)
 
 
 if __name__ == "__main__":
