@@ -5,6 +5,19 @@ opt-in external audit. It pins the Beatoraja commit, SCURO 4.02 archive and tree
 digests, the selected 7-key entry, the opaque audited surface, source-symbol
 provenance, and acceptance schema version 1.
 
+The manifest's `selectedFileIoSurface` is generated from the selected Lua
+closure, not maintained by hand. It freezes aggregate `dofile`, `io.open`,
+handle-method, directory-scan, and configured-load/render-callback evidence.
+External option names and source paths are converted to opaque guard IDs before
+serialization. `auditedGuardConfigurationSha256` is deliberately distinct from
+the pending physical `acceptanceContract.externalDigests.configurationSha256`;
+the audit must never copy the former into the latter.
+
+The passing and negative guard vectors use deterministic UTF-8 byte ordering.
+The negative scenario denies its frozen render-phase operation before effect,
+keeps performed and denied counters separate, and defers before/after overlay
+digest capture until after session teardown.
+
 No third-party payload belongs in this directory. Lua, images, fonts, audio,
 video, or archives added by later tasks must be small, purpose-built,
 redistributable synthetic fixtures. The default test hashes every Git-tracked
@@ -27,4 +40,7 @@ python3 scripts/audit_beatoraja_skin.py \
 ```
 
 The real paths above are examples only. Never record an absolute local path in
-the manifest, docs, reports, or committed evidence.
+the manifest, docs, reports, or committed evidence. Extract with a method that
+preserves the ZIP's decoded filenames exactly; independently computed
+`SkinTreeDigestV1` values for the archive and extracted tree must match before
+regenerating or verifying the manifest.

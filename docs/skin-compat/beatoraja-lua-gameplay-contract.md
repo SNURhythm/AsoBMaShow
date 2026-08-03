@@ -101,6 +101,40 @@ quota-limited private overlay, and every captured function/handle is denied
 after render phase begins. No wrapper returns or accepts an unrestricted host
 path.
 
+The selected-closure audit freezes 20 one-virtual-path `dofile` calls and 17
+`io.open` calls: four default reads, three explicit `r` reads, seven `w`
+writes, and three `a` appends. It also freezes six zero-argument `lines`
+calls, sixteen `write` calls (one zero-argument and fifteen one-argument),
+fourteen zero-argument `close` calls, and one configured-load `listFiles`
+directory scan. `write` accepts zero or more string arguments and returns its
+same handle so the selected chained call remains valid; `close` returns true
+on success. Nested overlay writes create only validated, package-relative
+overlay parent directories.
+
+Configured loading may perform the audited reads, writes, and directory scan.
+Two selected option guards can instead retain filesystem-reading/writing
+callbacks into render phase. Their source identities and labels are never
+serialized: the manifest contains only stable opaque guard IDs and two
+deterministically ordered vectors. The passing vector makes both callbacks
+unreachable. The negative vector makes exactly the callback whose first
+post-transition operation is a filesystem read reachable and leaves the other
+callback unreachable.
+
+At the configured-load-to-render transition, read buffers are released, all
+handles are invalidated, and unclosed write buffers are discarded. A dirty
+handle at that boundary is a validation failure. Every later operation through
+an invalidated handle or captured filesystem function is session-critical and
+must be denied before effect. Performed filesystem/resource-upload counters and
+denied-attempt counters are separate.
+
+`auditedGuardConfigurationSha256` is domain-separated static audit evidence
+over the selected entry plus source guard/value pairs. It is not
+`SkinConfigurationDigestV1`, does not attest to physical configuration bytes,
+and must never populate the acceptance record's pending
+`externalDigests.configurationSha256`. The public guard-vector digest is a
+second domain-separated hash over that audit digest and the ordered opaque
+guard/value pairs.
+
 Any post-transition filesystem or resource-upload attempt is a
 session-critical sandbox-integrity violation even when its caller belongs to
 an otherwise optional object. The operation is denied before I/O, that skin

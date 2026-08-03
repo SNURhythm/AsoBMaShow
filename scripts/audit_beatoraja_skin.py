@@ -25,6 +25,9 @@ OFFICIAL_SOURCE_URL = "https://www.kasacontent.com/musicgame/beatoraja/4226/"
 TERMS_URL = "https://www.kasacontent.com/musicgame/beatoraja/4635/"
 ACQUISITION_DATE = "2026-08-03"
 TREE_DOMAIN = b"ASOBMSKIN-TREE-V1\0"
+AUDITED_GUARD_CONFIGURATION_DOMAIN = b"ASOBMSKIN-AUDITED-GUARD-CONFIG-V1\0"
+OPAQUE_GUARD_VECTOR_DOMAIN = b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V1\0"
+RENDER_IO_NEGATIVE_SCENARIO_ID = "scenario-f7395bddf2b0f715a900b5cd"
 
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REGULAR_FILE_BYTES = 512 * 1024 * 1024
@@ -59,6 +62,7 @@ SOURCE_PROVENANCE = (
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.loadJsonSkinHeader", "converts header properties, files, offsets, and categories"),
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.loadJsonSkin", "constructs play objects in authored destination order"),
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.setDestination", "inherits omitted destination fields and binds conditions, timer, clip, offsets, and stretch"),
+    ("src/bms/player/beatoraja/skin/json/JsonSkin.java", "JsonSkin.Skin", "defaults absent custom-event and custom-timer model arrays to empty"),
     ("src/bms/player/beatoraja/skin/SkinHeader.java", "SkinHeader.setSkinConfigProperty", "reconciles configured custom options, files, and offsets"),
     ("src/bms/player/beatoraja/skin/Skin.java", "Skin.prepare", "removes invalid and statically disabled objects before resource load"),
     ("src/bms/player/beatoraja/skin/Skin.java", "Skin.drawAllObjects", "prepares then draws surviving objects in authored array order"),
@@ -512,6 +516,17 @@ def validate_reference_root(root: Path, require_clean: bool = True):
         symbol_name = symbol.rsplit(".", 1)[-1]
         if symbol_name not in text:
             raise AuditError(f"required pinned symbol is missing: {relative_path}:{symbol}")
+        if symbol == "JsonSkin.Skin" and not all(
+            re.search(
+                rf"public\s+{model_type}\[\]\s+{field}\s*=\s*new\s+{model_type}\s*\[\s*0\s*\]",
+                text,
+            )
+            for model_type, field in (
+                ("CustomEvent", "customEvents"),
+                ("CustomTimer", "customTimers"),
+            )
+        ):
+            raise AuditError("pinned JsonSkin custom-object defaults are not empty arrays")
         provenance.append(source_provenance(relative_path, symbol, behavior))
     return provenance
 
@@ -535,6 +550,43 @@ def provenance_for(symbol_name: str) -> list[dict]:
 def opaque_id(domain: str, value: str) -> str:
     digest = hashlib.sha256((domain + "\0" + value).encode("utf-8")).hexdigest()
     return f"{domain}-{digest[:24]}"
+
+
+def _update_length_prefixed(digest, value: str) -> None:
+    encoded = value.encode("utf-8")
+    digest.update(struct.pack(">I", len(encoded)))
+    digest.update(encoded)
+
+
+def audited_guard_configuration_sha256(
+    entry_sha256: str,
+    source_values: list[tuple[str, str]],
+) -> str:
+    """Hash source identities for audit evidence, never physical configuration bytes."""
+    digest = hashlib.sha256()
+    digest.update(AUDITED_GUARD_CONFIGURATION_DOMAIN)
+    digest.update(bytes.fromhex(entry_sha256))
+    ordered = sorted(source_values, key=lambda item: item[0].encode("utf-8"))
+    digest.update(struct.pack(">I", len(ordered)))
+    for source_identity, value in ordered:
+        _update_length_prefixed(digest, source_identity)
+        _update_length_prefixed(digest, value)
+    return digest.hexdigest()
+
+
+def opaque_guard_vector_sha256(
+    audited_configuration_sha256: str,
+    guard_vector: list[dict],
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(OPAQUE_GUARD_VECTOR_DOMAIN)
+    digest.update(bytes.fromhex(audited_configuration_sha256))
+    ordered = sorted(guard_vector, key=lambda item: item["guardId"].encode("utf-8"))
+    digest.update(struct.pack(">I", len(ordered)))
+    for item in ordered:
+        _update_length_prefixed(digest, item["guardId"])
+        _update_length_prefixed(digest, item["value"])
+    return digest.hexdigest()
 
 
 def file_kind(path: str) -> str:
@@ -944,6 +996,448 @@ def loaded_lua_closure(entry: str, lua_text: dict[str, str]):
     return loaded, criticality, host_modules
 
 
+def _function_ranges(tokens: list[LuaToken]) -> list[tuple[int, int, str | None]]:
+    _, function_depths = _lua_context_flags(tokens)
+    ranges = []
+    for start, token in enumerate(tokens):
+        if token.value != "function":
+            continue
+        name = None
+        if (
+            start >= 3
+            and tokens[start - 1].value == "="
+            and tokens[start - 2].kind == "identifier"
+            and tokens[start - 3].value in {".", ":"}
+        ):
+            name = tokens[start - 2].value
+        elif start + 1 < len(tokens) and tokens[start + 1].kind == "identifier":
+            name = tokens[start + 1].value
+        depth = function_depths[start]
+        end = start + 1
+        while end < len(tokens) and function_depths[end] > depth:
+            end += 1
+        ranges.append((start, end, name))
+    return ranges
+
+
+def _direct_function_facts(
+    tokens: list[LuaToken],
+    start: int,
+    end: int,
+) -> tuple[bool, set[str]]:
+    _, function_depths = _lua_context_flags(tokens)
+    direct_depth = function_depths[start] + 1
+    direct_io = False
+    calls = set()
+    for index in range(start + 1, end):
+        if function_depths[index] != direct_depth:
+            continue
+        if (
+            index + 2 < end
+            and function_depths[index + 1] == direct_depth
+            and function_depths[index + 2] == direct_depth
+            and [token.value for token in tokens[index:index + 3]] == ["io", ".", "open"]
+        ):
+            direct_io = True
+        if (
+            tokens[index].kind == "identifier"
+            and index + 1 < end
+            and function_depths[index + 1] == direct_depth
+            and tokens[index + 1].value == "("
+            and not (
+                index > start
+                and tokens[index - 1].value in {"function", "if", "elseif", "while", "for"}
+            )
+        ):
+            calls.add(tokens[index].value)
+    return direct_io, calls
+
+
+def _io_bearing_function_names(loaded: dict[str, str]) -> set[str]:
+    functions: dict[str, tuple[bool, set[str]]] = {}
+    for text in loaded.values():
+        tokens = tokenize_lua(text)
+        for start, end, name in _function_ranges(tokens):
+            if name is None:
+                continue
+            direct_io, calls = _direct_function_facts(tokens, start, end)
+            previous_direct, previous_calls = functions.get(name, (False, set()))
+            functions[name] = (previous_direct or direct_io, previous_calls | calls)
+    io_bearing = {name for name, (direct, _) in functions.items() if direct}
+    changed = True
+    while changed:
+        changed = False
+        for name, (_, calls) in functions.items():
+            if name not in io_bearing and calls & io_bearing:
+                io_bearing.add(name)
+                changed = True
+    return io_bearing
+
+
+def _condition_property_guards(tokens: list[LuaToken], start: int) -> set[str]:
+    guards = set()
+    for index in range(start + 1, len(tokens) - 3):
+        if tokens[index].value == "then":
+            break
+        if (
+            tokens[index].value == "PROPERTY"
+            and tokens[index + 1].value == "."
+            and tokens[index + 2].kind == "identifier"
+            and tokens[index + 3].value == "("
+        ):
+            guards.add(tokens[index + 2].value)
+    return guards
+
+
+def _active_property_guards(tokens: list[LuaToken]) -> list[set[str]]:
+    blocks: list[dict] = []
+    result = []
+    for index, token in enumerate(tokens):
+        result.append(set().union(*(block["guards"] for block in blocks)) if blocks else set())
+        value = token.value
+        if value == "function":
+            blocks.append({"kind": "function", "guards": set()})
+        elif value == "if":
+            blocks.append({"kind": "if", "guards": _condition_property_guards(tokens, index)})
+        elif value == "elseif":
+            for block in reversed(blocks):
+                if block["kind"] == "if":
+                    block["guards"] = _condition_property_guards(tokens, index)
+                    break
+        elif value == "else":
+            for block in reversed(blocks):
+                if block["kind"] == "if":
+                    block["guards"] = set()
+                    break
+        elif value in {"for", "while"}:
+            blocks.append({"kind": "loop-wait-do", "guards": set()})
+        elif value == "repeat":
+            blocks.append({"kind": "repeat", "guards": set()})
+        elif value == "do":
+            if blocks and blocks[-1]["kind"] == "loop-wait-do":
+                blocks[-1]["kind"] = "loop"
+            else:
+                blocks.append({"kind": "do", "guards": set()})
+        elif value == "end" and blocks:
+            blocks.pop()
+        elif value == "until" and blocks and blocks[-1]["kind"] == "repeat":
+            blocks.pop()
+    return result
+
+
+def _path_variables(tokens: list[LuaToken]) -> dict[str, str]:
+    paths: dict[str, str] = {}
+    ambiguous = set()
+    for index in range(len(tokens) - 7):
+        if (
+            tokens[index].kind == "identifier"
+            and [token.value for token in tokens[index + 1:index + 6]]
+            == ["=", "skin_config", ".", "get_path", "("]
+            and tokens[index + 6].kind == "string"
+            and tokens[index + 7].value == ")"
+        ):
+            variable = tokens[index].value
+            path = tokens[index + 6].value
+            if variable in paths and paths[variable] != path:
+                ambiguous.add(variable)
+            paths[variable] = path
+    for variable in ambiguous:
+        paths.pop(variable, None)
+    return paths
+
+
+def _dofile_targets(tokens: list[LuaToken]) -> dict[int, str]:
+    variables = _path_variables(tokens)
+    targets = {}
+    for index, token in enumerate(tokens):
+        if token.value != "dofile":
+            continue
+        argument = index + 1
+        if argument < len(tokens) and tokens[argument].value == "(":
+            argument += 1
+        target = None
+        if argument < len(tokens) and tokens[argument].kind == "string":
+            target = tokens[argument].value
+        elif argument < len(tokens) and tokens[argument].kind == "identifier":
+            target = variables.get(tokens[argument].value)
+        if target is not None:
+            targets[index] = normalize_relative_path(target)
+    return targets
+
+
+def _has_retained_io_callback(tokens: list[LuaToken], io_functions: set[str]) -> bool:
+    retained_fields = {"act", "draw", "event", "timer", "value"}
+    for start, end, _ in _function_ranges(tokens):
+        if (
+            start < 2
+            or tokens[start - 1].value != "="
+            or tokens[start - 2].value not in retained_fields
+        ):
+            continue
+        direct_io, calls = _direct_function_facts(tokens, start, end)
+        if direct_io or calls & io_functions:
+            return True
+    return False
+
+
+def _render_io_guard_sources(loaded: dict[str, str]) -> list[str]:
+    io_functions = _io_bearing_function_names(loaded)
+    retained_io_files = {
+        path for path, text in loaded.items()
+        if _has_retained_io_callback(tokenize_lua(text), io_functions)
+    }
+    guard_names = set()
+    for text in loaded.values():
+        tokens = tokenize_lua(text)
+        active = _active_property_guards(tokens)
+        dofile_targets = _dofile_targets(tokens)
+        for index, token in enumerate(tokens):
+            if (
+                token.kind == "identifier"
+                and token.value in io_functions
+                and index >= 4
+                and [candidate.value for candidate in tokens[index - 4:index]]
+                == ["CUSTOM", ".", "FUNC", "."]
+                and index + 1 < len(tokens)
+                and tokens[index + 1].value == "("
+            ):
+                guard_names.update(active[index])
+            target = dofile_targets.get(index)
+            if target in retained_io_files:
+                guard_names.update(active[index])
+
+    sources = []
+    for guard_name in sorted(guard_names, key=lambda value: value.encode("utf-8")):
+        definitions = []
+        for path, text in loaded.items():
+            tokens = tokenize_lua(text)
+            values = [token.value for token in tokens]
+            for index in range(len(tokens) - 7):
+                if (
+                    values[index:index + 4] == ["module", ".", guard_name, "="]
+                    and values[index + 4:index + 7] == ["customoption", ".", "chiled"]
+                    and values[index + 7] == "("
+                ):
+                    definitions.append(path + "\0" + guard_name)
+        if len(definitions) != 1:
+            raise AuditError(
+                f"render-I/O guard must have exactly one selected-closure definition: {guard_name!r}"
+            )
+        sources.append(definitions[0])
+    return sources
+
+
+def _call_argument_count(tokens: list[LuaToken], open_index: int) -> int:
+    if open_index >= len(tokens) or tokens[open_index].value != "(":
+        raise AuditError("internal Lua call scanner lost its opening parenthesis")
+    if open_index + 1 < len(tokens) and tokens[open_index + 1].value == ")":
+        return 0
+    parentheses = braces = brackets = 0
+    commas = 0
+    for index in range(open_index, len(tokens)):
+        value = tokens[index].value
+        if value == "(":
+            parentheses += 1
+        elif value == ")":
+            parentheses -= 1
+            if parentheses == 0:
+                return commas + 1
+        elif value == "{":
+            braces += 1
+        elif value == "}":
+            braces -= 1
+        elif value == "[":
+            brackets += 1
+        elif value == "]":
+            brackets -= 1
+        elif value == "," and parentheses == 1 and braces == 0 and brackets == 0:
+            commas += 1
+    raise AuditError("unterminated Lua call in selected closure")
+
+
+def _audited_guard_configurations(entry_sha: str, guard_sources: list[str]) -> list[dict]:
+    guard_pairs = [(source, opaque_id("guard", source)) for source in guard_sources]
+
+    def configuration(role: str, reachable_guard_id: str | None = None) -> dict:
+        source_values = [
+            (source, "reachable" if guard_id == reachable_guard_id else "not-reachable")
+            for source, guard_id in guard_pairs
+        ]
+        audited_sha = audited_guard_configuration_sha256(entry_sha, source_values)
+        guard_vector = sorted(
+            [
+                {"guardId": guard_id, "value": value}
+                for (source, guard_id), (_, value) in zip(guard_pairs, source_values)
+            ],
+            key=lambda item: item["guardId"].encode("utf-8"),
+        )
+        vector_sha = opaque_guard_vector_sha256(audited_sha, guard_vector)
+        return {
+            "id": opaque_id("configuration", role + "\0" + audited_sha),
+            "role": role,
+            "auditedGuardConfigurationSha256": audited_sha,
+            "guardVectorSha256": vector_sha,
+            "guardVector": guard_vector,
+        }
+
+    passing = configuration("passing")
+    if not guard_pairs:
+        return [passing]
+    first_guard_id = min((guard_id for _, guard_id in guard_pairs), key=lambda value: value.encode("utf-8"))
+    return [passing, configuration("negative", first_guard_id)]
+
+
+def analyze_selected_file_io_surface(
+    loaded: dict[str, str],
+    entry_sha: str,
+) -> tuple[dict, dict[str, int]]:
+    token_sets = [tokenize_lua(text) for text in loaded.values()]
+    all_tokens = [token for tokens in token_sets for token in tokens]
+    for object_name in ("customTimers", "customEvents"):
+        if any(token.value == object_name for token in all_tokens):
+            raise AuditError(
+                f"selected custom object map {object_name!r} is not statically proven empty"
+            )
+
+    dofile_count = 0
+    io_modes = {"default": 0, "r": 0, "w": 0, "a": 0}
+    method_counts = {"lines": 0, "write": 0, "close": 0}
+    write_argument_counts = {"zero": 0, "one": 0, "multiple": 0}
+    list_files_count = 0
+    for tokens in token_sets:
+        values = [token.value for token in tokens]
+        targets = _dofile_targets(tokens)
+        for index, token in enumerate(tokens):
+            if token.value == "dofile":
+                dofile_count += 1
+                if index not in targets:
+                    raise AuditError("selected dofile site is not a statically resolved virtual path")
+                open_index = index + 1
+                if open_index >= len(tokens) or tokens[open_index].value != "(":
+                    raise AuditError("selected dofile site does not use the one-argument call shape")
+                if _call_argument_count(tokens, open_index) != 1:
+                    raise AuditError("selected dofile site does not use exactly one argument")
+            if values[index:index + 3] == ["io", ".", "open"]:
+                open_index = index + 3
+                argument_count = _call_argument_count(tokens, open_index)
+                mode = "default"
+                if argument_count >= 2:
+                    depth = 0
+                    mode_token = None
+                    for candidate in range(open_index + 1, len(tokens)):
+                        if tokens[candidate].value == "(":
+                            depth += 1
+                        elif tokens[candidate].value == ")":
+                            if depth == 0:
+                                break
+                            depth -= 1
+                        elif tokens[candidate].value == "," and depth == 0:
+                            mode_token = tokens[candidate + 1]
+                            break
+                    if mode_token is None or mode_token.kind != "string":
+                        raise AuditError("selected io.open mode is not a static string")
+                    mode = mode_token.value
+                if mode not in io_modes:
+                    raise AuditError(f"selected io.open mode is outside the audited host surface: {mode!r}")
+                io_modes[mode] += 1
+            if token.value == ":" and index + 2 < len(tokens) and tokens[index + 2].value == "(":
+                method = tokens[index + 1].value
+                if method in method_counts:
+                    method_counts[method] += 1
+                    argument_count = _call_argument_count(tokens, index + 2)
+                    if method in {"lines", "close"} and argument_count != 0:
+                        raise AuditError(f"selected file handle {method} site is not zero-argument")
+                    if method == "write":
+                        category = "zero" if argument_count == 0 else "one" if argument_count == 1 else "multiple"
+                        write_argument_counts[category] += 1
+                elif method == "listFiles":
+                    list_files_count += 1
+                    if _call_argument_count(tokens, index + 2) != 0:
+                        raise AuditError("selected listFiles site is not zero-argument")
+
+    guard_sources = _render_io_guard_sources(loaded)
+    configurations = _audited_guard_configurations(entry_sha, guard_sources)
+    render_phases = bool(guard_sources)
+    selected = {
+        "schemaVersion": 1,
+        "authority": "audited-upstream-selected-closure",
+        "upstreamFacts": {
+            "dofile": {
+                "siteCount": dofile_count,
+                "argumentShape": "one-virtual-path",
+                "returnShape": "callee-return-values",
+                "phases": ["configured-load"],
+            },
+            "ioOpen": {
+                "siteCount": sum(io_modes.values()),
+                "modes": [
+                    {"mode": mode, "siteCount": io_modes[mode]}
+                    for mode in ("default", "r", "w", "a")
+                ],
+                "phases": ["configured-load", "render-callback"] if render_phases else ["configured-load"],
+            },
+            "handleMethods": [
+                {
+                    "method": "lines",
+                    "siteCount": method_counts["lines"],
+                    "argumentShape": "zero",
+                    "returnShape": "iterator",
+                },
+                {
+                    "method": "write",
+                    "siteCount": method_counts["write"],
+                    "argumentSiteCounts": write_argument_counts,
+                    "acceptedArgumentShape": "zero-or-more",
+                    "returnShape": "same-handle",
+                    "chainable": True,
+                },
+                {
+                    "method": "close",
+                    "siteCount": method_counts["close"],
+                    "argumentShape": "zero",
+                    "returnShape": "true-on-success",
+                },
+            ],
+            "legacyDirectoryScan": {
+                "siteCount": list_files_count,
+                "method": "listFiles",
+                "phases": ["configured-load"],
+                "returnShape": "virtual-path-array-or-nil",
+            },
+            "phaseEvidence": [
+                {
+                    "phase": "configured-load",
+                    "operationKinds": [
+                        "filesystemRead",
+                        "filesystemWrite",
+                        "filesystemDirectoryScan",
+                    ],
+                },
+                *([
+                    {
+                        "phase": "render-callback",
+                        "operationKinds": ["filesystemRead", "filesystemWrite"],
+                        "guardCount": len(guard_sources),
+                    }
+                ] if render_phases else []),
+            ],
+        },
+        "auditedGuardConfigurations": configurations,
+        "asoBMaShowPolicy": {
+            "authority": "AsoBMaShow",
+            "nestedWriteParentCreation": "safe-automatic-overlay-parents",
+            "renderTransitionHandles": "invalidate-release-read-buffers-discard-unclosed-write-buffers",
+            "dirtyHandleTransition": "validation-failure",
+            "postTransitionOperationCriticality": "session-critical",
+            "denyBeforeEffect": True,
+            "performedAndDeniedCountersSeparate": True,
+            "externalIdentitySerialization": "opaque-ids-and-digests-only",
+            "serializationOrder": "deterministic",
+        },
+    }
+    return selected, {"customTimers": 0, "customEvents": 0}
+
+
 def read_constant_definitions(loaded: dict[str, str]):
     definitions: dict[tuple[str, str], int] = {}
     categories = set(PROPERTY_CATEGORIES) | {"TIMER", "BUTTON"}
@@ -1244,7 +1738,12 @@ def pending_field(value=None) -> dict:
     return {"status": "pending", "value": value}
 
 
-def acceptance_contract(archive_sha: str, tree_sha: str, entry_sha: str) -> dict:
+def acceptance_contract(
+    archive_sha: str,
+    tree_sha: str,
+    entry_sha: str,
+    selected_file_io_surface: dict,
+) -> dict:
     layouts = [
         {"aspect": aspect, "mode": mode, "status": "pending", "evidenceReference": None}
         for aspect in ("16:9", "4:3")
@@ -1257,6 +1756,41 @@ def acceptance_contract(archive_sha: str, tree_sha: str, entry_sha: str) -> dict
         "fit-layout", "stretch-layout", "custom-layout", "compatibility-diagnostics",
         "sandbox", "same-frame-fallback", "built-in-renderer-regression", "performance",
     )
+    configurations = selected_file_io_surface["auditedGuardConfigurations"]
+    passing_vectors = [
+        item["guardVectorSha256"] for item in configurations if item["role"] == "passing"
+    ]
+    negative_configurations = [item for item in configurations if item["role"] == "negative"]
+    negative_scenarios = []
+    if negative_configurations:
+        negative = negative_configurations[0]
+        negative_scenarios.append(
+            {
+                "id": RENDER_IO_NEGATIVE_SCENARIO_ID,
+                "guardConfigurationId": negative["id"],
+                "auditedGuardConfigurationSha256": negative["auditedGuardConfigurationSha256"],
+                "expectedGuardVectorSha256": negative["guardVectorSha256"],
+                "expectedDeniedOperation": "filesystemRead",
+                "expectedDiagnostic": "skin_file_render_phase_denied",
+                "expectedAction": "discard_frame_disable_session_same_frame_builtin",
+                "criticality": "session-critical-sandbox-integrity",
+                "performedCountersExpected": {
+                    "filesystemReads": 0,
+                    "filesystemWrites": 0,
+                    "filesystemDirectoryScans": 0,
+                    "resourceUploads": 0,
+                },
+                "deniedCountersExpected": {
+                    "filesystemReads": "positive",
+                    "filesystemWrites": 0,
+                    "filesystemDirectoryScans": 0,
+                    "resourceUploads": 0,
+                },
+                "overlayDigestCapture": "asynchronous-after-session-teardown",
+                "overlayDigestBefore": "pending",
+                "overlayDigestAfter": "pending",
+            }
+        )
     return {
         "schemaVersion": 1,
         "hardwareModel": pending_field("non-unique model identifier required"),
@@ -1296,6 +1830,8 @@ def acceptance_contract(archive_sha: str, tree_sha: str, entry_sha: str) -> dict
             "observedOrder": [],
             "evidenceReference": None,
         },
+        "passingGuardVectorSha256": passing_vectors,
+        "negativeScenarios": negative_scenarios,
         "protocol": {"warmupSeconds": 30, "measurementSeconds": 180, "repetitions": 3},
         "layouts": layouts,
         "limits": {
@@ -1303,7 +1839,9 @@ def acceptance_contract(archive_sha: str, tree_sha: str, entry_sha: str) -> dict
             "missedPresentationPercent": 0.5,
             "residentMemoryDriftMiB": 32,
             "activeRenderFilesystemReads": 0,
-            "activeRenderUploads": 0,
+            "activeRenderFilesystemWrites": 0,
+            "activeRenderFilesystemDirectoryScans": 0,
+            "activeRenderResourceUploads": 0,
             "liveResourceGrowthAfterTenExits": 0,
         },
         "completionCriteria": [
@@ -1322,6 +1860,10 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
     payload_by_id = {record["id"]: record for record in archive_data["payloads"]}
     entry_payload_id = opaque_id("payload", entry)
     entry_sha = payload_by_id[entry_payload_id]["sha256"]
+    selected_file_io_surface, selected_custom_object_maps = analyze_selected_file_io_surface(
+        loaded,
+        entry_sha,
+    )
     archive_payload = {
         "id": opaque_id("payload", "archive:" + archive_data["archiveSha256"]),
         "kind": "archive",
@@ -1351,7 +1893,12 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
             "privateScreenshotsPermitted": True,
             "redistributionPermitted": False,
         },
-        "acceptanceContract": acceptance_contract(archive_data["archiveSha256"], disk_tree_sha, entry_sha),
+        "acceptanceContract": acceptance_contract(
+            archive_data["archiveSha256"],
+            disk_tree_sha,
+            entry_sha,
+            selected_file_io_surface,
+        ),
         "entries": [
             {
                 "identity": "entry-" + hashlib.sha256(entry.encode("utf-8")).hexdigest()[:24],
@@ -1364,6 +1911,8 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
         ],
         "surface": surface,
         "legacyLuaApiSurface": legacy_surface,
+        "selectedFileIoSurface": selected_file_io_surface,
+        "selectedCustomObjectMaps": selected_custom_object_maps,
         "timerEventOrdering": {
             "phaseOrder": ["customTimers", "customEvents"],
             "withinPhase": "IntMap-backing-hash-iteration",

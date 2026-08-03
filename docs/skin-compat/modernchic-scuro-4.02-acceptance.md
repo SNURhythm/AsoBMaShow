@@ -89,6 +89,23 @@ exits, and no more than 32 MiB resident-memory drift after warm-up. The negative
 probe still requires every performed counter to remain zero and only its frozen
 denied-operation counter to become nonzero.
 
+The passing audit vector is
+`7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33`;
+both opaque render-I/O guards are `not-reachable`. The negative audit vector is
+`c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb`;
+exactly one guard is `reachable`, its first post-transition attempt is the
+frozen `filesystemRead` kind, and the other guard remains `not-reachable`.
+These values are static, domain-separated audit evidence. They do not replace
+the still-pending physical `SkinConfigurationDigestV1` value.
+
+The negative run must deny the read before effect, emit
+`skin_file_render_phase_denied`, discard that frame, disable the skin session,
+and present the initialized built-in renderer in the same frame. Its performed
+read/write/directory-scan/resource-upload counters remain zero; only the denied
+read counter becomes positive. Before/after overlay digests are captured
+asynchronously after session teardown and remain pending until the physical
+run is recorded, avoiding digest work in the timed render path.
+
 Task 1 permits `pending`. Final acceptance permits only `pass`.
 
 ## Audited compatibility decision and remaining work

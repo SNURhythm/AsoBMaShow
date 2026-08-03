@@ -185,8 +185,10 @@
       }
     ],
     "limits": {
+      "activeRenderFilesystemDirectoryScans": 0,
       "activeRenderFilesystemReads": 0,
-      "activeRenderUploads": 0,
+      "activeRenderFilesystemWrites": 0,
+      "activeRenderResourceUploads": 0,
       "liveResourceGrowthAfterTenExits": 0,
       "missedPresentationPercent": 0.5,
       "p99SkinCpuFrameFraction": 0.9,
@@ -200,6 +202,36 @@
         "sourceClean": null
       }
     },
+    "negativeScenarios": [
+      {
+        "auditedGuardConfigurationSha256": "031dbe40093326911ce9e724bfa7c5613fef90a8380668ea2c68c79e6eb10761",
+        "criticality": "session-critical-sandbox-integrity",
+        "deniedCountersExpected": {
+          "filesystemDirectoryScans": 0,
+          "filesystemReads": "positive",
+          "filesystemWrites": 0,
+          "resourceUploads": 0
+        },
+        "expectedAction": "discard_frame_disable_session_same_frame_builtin",
+        "expectedDeniedOperation": "filesystemRead",
+        "expectedDiagnostic": "skin_file_render_phase_denied",
+        "expectedGuardVectorSha256": "c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb",
+        "guardConfigurationId": "configuration-51f549ae554ff70239c324eb",
+        "id": "scenario-f7395bddf2b0f715a900b5cd",
+        "overlayDigestAfter": "pending",
+        "overlayDigestBefore": "pending",
+        "overlayDigestCapture": "asynchronous-after-session-teardown",
+        "performedCountersExpected": {
+          "filesystemDirectoryScans": 0,
+          "filesystemReads": 0,
+          "filesystemWrites": 0,
+          "resourceUploads": 0
+        }
+      }
+    ],
+    "passingGuardVectorSha256": [
+      "7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33"
+    ],
     "protocol": {
       "measurementSeconds": 180,
       "repetitions": 3,
@@ -3653,6 +3685,146 @@
     "url": "https://www.kasacontent.com/musicgame/beatoraja/4226/"
   },
   "schemaVersion": 1,
+  "selectedCustomObjectMaps": {
+    "customEvents": 0,
+    "customTimers": 0
+  },
+  "selectedFileIoSurface": {
+    "asoBMaShowPolicy": {
+      "authority": "AsoBMaShow",
+      "denyBeforeEffect": true,
+      "dirtyHandleTransition": "validation-failure",
+      "externalIdentitySerialization": "opaque-ids-and-digests-only",
+      "nestedWriteParentCreation": "safe-automatic-overlay-parents",
+      "performedAndDeniedCountersSeparate": true,
+      "postTransitionOperationCriticality": "session-critical",
+      "renderTransitionHandles": "invalidate-release-read-buffers-discard-unclosed-write-buffers",
+      "serializationOrder": "deterministic"
+    },
+    "auditedGuardConfigurations": [
+      {
+        "auditedGuardConfigurationSha256": "95515ea717f93471dcbf5255a89d27d455865a7cf2121e21fa9bf042371f4f4e",
+        "guardVector": [
+          {
+            "guardId": "guard-2f076b2588a5528dc738eaa6",
+            "value": "not-reachable"
+          },
+          {
+            "guardId": "guard-81067ade3e053e6cea868e0b",
+            "value": "not-reachable"
+          }
+        ],
+        "guardVectorSha256": "7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33",
+        "id": "configuration-aa5abad1b4239c645a388601",
+        "role": "passing"
+      },
+      {
+        "auditedGuardConfigurationSha256": "031dbe40093326911ce9e724bfa7c5613fef90a8380668ea2c68c79e6eb10761",
+        "guardVector": [
+          {
+            "guardId": "guard-2f076b2588a5528dc738eaa6",
+            "value": "reachable"
+          },
+          {
+            "guardId": "guard-81067ade3e053e6cea868e0b",
+            "value": "not-reachable"
+          }
+        ],
+        "guardVectorSha256": "c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb",
+        "id": "configuration-51f549ae554ff70239c324eb",
+        "role": "negative"
+      }
+    ],
+    "authority": "audited-upstream-selected-closure",
+    "schemaVersion": 1,
+    "upstreamFacts": {
+      "dofile": {
+        "argumentShape": "one-virtual-path",
+        "phases": [
+          "configured-load"
+        ],
+        "returnShape": "callee-return-values",
+        "siteCount": 20
+      },
+      "handleMethods": [
+        {
+          "argumentShape": "zero",
+          "method": "lines",
+          "returnShape": "iterator",
+          "siteCount": 6
+        },
+        {
+          "acceptedArgumentShape": "zero-or-more",
+          "argumentSiteCounts": {
+            "multiple": 0,
+            "one": 15,
+            "zero": 1
+          },
+          "chainable": true,
+          "method": "write",
+          "returnShape": "same-handle",
+          "siteCount": 16
+        },
+        {
+          "argumentShape": "zero",
+          "method": "close",
+          "returnShape": "true-on-success",
+          "siteCount": 14
+        }
+      ],
+      "ioOpen": {
+        "modes": [
+          {
+            "mode": "default",
+            "siteCount": 4
+          },
+          {
+            "mode": "r",
+            "siteCount": 3
+          },
+          {
+            "mode": "w",
+            "siteCount": 7
+          },
+          {
+            "mode": "a",
+            "siteCount": 3
+          }
+        ],
+        "phases": [
+          "configured-load",
+          "render-callback"
+        ],
+        "siteCount": 17
+      },
+      "legacyDirectoryScan": {
+        "method": "listFiles",
+        "phases": [
+          "configured-load"
+        ],
+        "returnShape": "virtual-path-array-or-nil",
+        "siteCount": 1
+      },
+      "phaseEvidence": [
+        {
+          "operationKinds": [
+            "filesystemRead",
+            "filesystemWrite",
+            "filesystemDirectoryScan"
+          ],
+          "phase": "configured-load"
+        },
+        {
+          "guardCount": 2,
+          "operationKinds": [
+            "filesystemRead",
+            "filesystemWrite"
+          ],
+          "phase": "render-callback"
+        }
+      ]
+    }
+  },
   "sourceProvenance": [
     {
       "behavior": "selects .luaskin entries and delegates them to LuaSkinLoader",
@@ -3785,6 +3957,12 @@
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/json/JSONSkinLoader.java",
       "symbol": "JSONSkinLoader.setDestination"
+    },
+    {
+      "behavior": "defaults absent custom-event and custom-timer model arrays to empty",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/json/JsonSkin.java",
+      "symbol": "JsonSkin.Skin"
     },
     {
       "behavior": "reconciles configured custom options, files, and offsets",

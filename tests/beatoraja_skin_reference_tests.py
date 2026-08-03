@@ -42,6 +42,19 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def opaque_guard_vector_sha256(configuration_sha256: str, guard_vector: list[dict]) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"ASOBMSKIN-OPAQUE-GUARD-VECTOR-V1\0")
+    digest.update(bytes.fromhex(configuration_sha256))
+    digest.update(struct.pack(">I", len(guard_vector)))
+    for guard in sorted(guard_vector, key=lambda item: item["guardId"].encode("utf-8")):
+        for field in ("guardId", "value"):
+            encoded = guard[field].encode("utf-8")
+            digest.update(struct.pack(">I", len(encoded)))
+            digest.update(encoded)
+    return digest.hexdigest()
+
+
 def load_audit_module():
     module_name = "asobmashow_beatoraja_skin_audit_test"
     spec = importlib.util.spec_from_file_location(module_name, AUDIT_PATH)
@@ -197,7 +210,10 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertEqual(contract["limits"]["missedPresentationPercent"], 0.5)
         self.assertEqual(contract["limits"]["residentMemoryDriftMiB"], 32)
         self.assertEqual(contract["limits"]["activeRenderFilesystemReads"], 0)
-        self.assertEqual(contract["limits"]["activeRenderUploads"], 0)
+        self.assertEqual(contract["limits"]["activeRenderFilesystemWrites"], 0)
+        self.assertEqual(contract["limits"]["activeRenderFilesystemDirectoryScans"], 0)
+        self.assertEqual(contract["limits"]["activeRenderResourceUploads"], 0)
+        self.assertNotIn("activeRenderUploads", contract["limits"])
         self.assertEqual(contract["limits"]["liveResourceGrowthAfterTenExits"], 0)
         external_digests = contract["externalDigests"]
         self.assertIn("activatedRevisionSha256", external_digests)
@@ -240,6 +256,189 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         for criterion in contract["completionCriteria"]:
             self.assertIn(criterion["status"], {"pending", "pass", "fail"})
             self.assertIn("evidenceReference", criterion)
+
+    def test_selected_file_io_surface_is_complete_opaque_and_deterministic(self):
+        manifest = self.require_manifest()
+        selected = manifest["selectedFileIoSurface"]
+        self.assertEqual(selected["schemaVersion"], 1)
+        self.assertEqual(selected["authority"], "audited-upstream-selected-closure")
+        self.assertEqual(
+            manifest["selectedCustomObjectMaps"],
+            {"customTimers": 0, "customEvents": 0},
+        )
+
+        upstream = selected["upstreamFacts"]
+        self.assertEqual(
+            upstream["dofile"],
+            {
+                "siteCount": 20,
+                "argumentShape": "one-virtual-path",
+                "returnShape": "callee-return-values",
+                "phases": ["configured-load"],
+            },
+        )
+        self.assertEqual(upstream["ioOpen"]["siteCount"], 17)
+        self.assertEqual(
+            upstream["ioOpen"]["modes"],
+            [
+                {"mode": "default", "siteCount": 4},
+                {"mode": "r", "siteCount": 3},
+                {"mode": "w", "siteCount": 7},
+                {"mode": "a", "siteCount": 3},
+            ],
+        )
+        self.assertEqual(
+            upstream["ioOpen"]["phases"],
+            ["configured-load", "render-callback"],
+        )
+        self.assertEqual(
+            upstream["handleMethods"],
+            [
+                {
+                    "method": "lines",
+                    "siteCount": 6,
+                    "argumentShape": "zero",
+                    "returnShape": "iterator",
+                },
+                {
+                    "method": "write",
+                    "siteCount": 16,
+                    "argumentSiteCounts": {"zero": 1, "one": 15, "multiple": 0},
+                    "acceptedArgumentShape": "zero-or-more",
+                    "returnShape": "same-handle",
+                    "chainable": True,
+                },
+                {
+                    "method": "close",
+                    "siteCount": 14,
+                    "argumentShape": "zero",
+                    "returnShape": "true-on-success",
+                },
+            ],
+        )
+        self.assertEqual(
+            upstream["legacyDirectoryScan"],
+            {
+                "siteCount": 1,
+                "method": "listFiles",
+                "phases": ["configured-load"],
+                "returnShape": "virtual-path-array-or-nil",
+            },
+        )
+        self.assertEqual(
+            upstream["phaseEvidence"],
+            [
+                {
+                    "phase": "configured-load",
+                    "operationKinds": [
+                        "filesystemRead",
+                        "filesystemWrite",
+                        "filesystemDirectoryScan",
+                    ],
+                },
+                {
+                    "phase": "render-callback",
+                    "operationKinds": ["filesystemRead", "filesystemWrite"],
+                    "guardCount": 2,
+                },
+            ],
+        )
+
+        expected_configurations = [
+            {
+                "id": "configuration-aa5abad1b4239c645a388601",
+                "role": "passing",
+                "auditedGuardConfigurationSha256": "95515ea717f93471dcbf5255a89d27d455865a7cf2121e21fa9bf042371f4f4e",
+                "guardVectorSha256": "7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33",
+                "guardVector": [
+                    {"guardId": "guard-2f076b2588a5528dc738eaa6", "value": "not-reachable"},
+                    {"guardId": "guard-81067ade3e053e6cea868e0b", "value": "not-reachable"},
+                ],
+            },
+            {
+                "id": "configuration-51f549ae554ff70239c324eb",
+                "role": "negative",
+                "auditedGuardConfigurationSha256": "031dbe40093326911ce9e724bfa7c5613fef90a8380668ea2c68c79e6eb10761",
+                "guardVectorSha256": "c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb",
+                "guardVector": [
+                    {"guardId": "guard-2f076b2588a5528dc738eaa6", "value": "reachable"},
+                    {"guardId": "guard-81067ade3e053e6cea868e0b", "value": "not-reachable"},
+                ],
+            },
+        ]
+        self.assertEqual(selected["auditedGuardConfigurations"], expected_configurations)
+        for configuration in selected["auditedGuardConfigurations"]:
+            self.assertEqual(
+                configuration["guardVectorSha256"],
+                opaque_guard_vector_sha256(
+                    configuration["auditedGuardConfigurationSha256"],
+                    configuration["guardVector"],
+                ),
+            )
+
+        policy = selected["asoBMaShowPolicy"]
+        self.assertEqual(policy["authority"], "AsoBMaShow")
+        self.assertEqual(
+            policy["nestedWriteParentCreation"],
+            "safe-automatic-overlay-parents",
+        )
+        self.assertEqual(
+            policy["renderTransitionHandles"],
+            "invalidate-release-read-buffers-discard-unclosed-write-buffers",
+        )
+        self.assertEqual(policy["dirtyHandleTransition"], "validation-failure")
+        self.assertEqual(policy["postTransitionOperationCriticality"], "session-critical")
+        self.assertTrue(policy["denyBeforeEffect"])
+        self.assertTrue(policy["performedAndDeniedCountersSeparate"])
+        self.assertEqual(policy["externalIdentitySerialization"], "opaque-ids-and-digests-only")
+        self.assertEqual(policy["serializationOrder"], "deterministic")
+
+        serialized = json.dumps(selected, ensure_ascii=False, sort_keys=True)
+        self.assertNotIn(manifest["entries"][0]["path"], serialized)
+        self.assertNotRegex(serialized, r"(?:^|[\"/])(?:Play|Root)/")
+        self.assertNotRegex(serialized, r"\.lua(?:skin)?")
+
+    def test_render_io_negative_policy_is_frozen(self):
+        contract = self.require_manifest()["acceptanceContract"]
+        scenarios = contract["negativeScenarios"]
+        self.assertEqual(len(scenarios), 1)
+        self.assertEqual(
+            scenarios[0],
+            {
+                "id": "scenario-f7395bddf2b0f715a900b5cd",
+                "guardConfigurationId": "configuration-51f549ae554ff70239c324eb",
+                "auditedGuardConfigurationSha256": "031dbe40093326911ce9e724bfa7c5613fef90a8380668ea2c68c79e6eb10761",
+                "expectedGuardVectorSha256": "c0ce75286dbc3b0b76559e5f03b9eff0a30a154f3ffa95d6266b6aa326b776bb",
+                "expectedDeniedOperation": "filesystemRead",
+                "expectedDiagnostic": "skin_file_render_phase_denied",
+                "expectedAction": "discard_frame_disable_session_same_frame_builtin",
+                "criticality": "session-critical-sandbox-integrity",
+                "performedCountersExpected": {
+                    "filesystemReads": 0,
+                    "filesystemWrites": 0,
+                    "filesystemDirectoryScans": 0,
+                    "resourceUploads": 0,
+                },
+                "deniedCountersExpected": {
+                    "filesystemReads": "positive",
+                    "filesystemWrites": 0,
+                    "filesystemDirectoryScans": 0,
+                    "resourceUploads": 0,
+                },
+                "overlayDigestCapture": "asynchronous-after-session-teardown",
+                "overlayDigestBefore": "pending",
+                "overlayDigestAfter": "pending",
+            },
+        )
+        self.assertEqual(
+            contract["passingGuardVectorSha256"],
+            ["7d9bd2e9ea2925f354135113fc7d7f5efe9688837f16c334f8cde88b381edd33"],
+        )
+        self.assertEqual(
+            contract["externalDigests"]["configurationSha256"],
+            {"status": "pending", "value": None},
+            "static guard evidence must not populate physical SkinConfigurationDigestV1",
+        )
 
     def test_external_payload_digest_set_covers_every_sensitive_file_kind(self):
         payloads = self.require_manifest()["externalPayloadDigests"]
@@ -321,7 +520,10 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             "src/bms/player/beatoraja/skin/json/JSONSkinLoader.java":
                 "class JSONSkinLoader { loadJsonSkinHeader(){} loadJsonSkin(){} setDestination(){} }",
             "src/bms/player/beatoraja/skin/json/JsonSkin.java":
-                "class JsonSkin { class Skin {} class Destination {} class NoteSet {} }",
+                "class JsonSkin { class Skin { "
+                "public CustomEvent[] customEvents = new CustomEvent[0]; "
+                "public CustomTimer[] customTimers = new CustomTimer[0]; } "
+                "class Destination {} class NoteSet {} }",
             "src/bms/player/beatoraja/skin/SkinLoader.java":
                 "class SkinLoader { load(){} }",
             "src/bms/player/beatoraja/skin/SkinHeader.java":
