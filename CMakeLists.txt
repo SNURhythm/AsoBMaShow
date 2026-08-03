@@ -4076,9 +4076,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(skin_archive_importer_tests PRIVATE advapi32)
     endif()
 
-    # The operation-service target owns only queue/worker semantics. Its test
-    # provides a narrow public-contract Store harness while Store/catalog
-    # transactional integration remains in skin_package_store_tests.
+    # The operation-service target owns queue/worker semantics around the
+    # independently usable prepare operations. Store/catalog transactional
+    # integration remains in skin_package_store_tests.
     add_executable(skin_package_operation_service_tests
         tests/skin_package_operation_service_tests.cpp
         src/FileChecksum.cpp
