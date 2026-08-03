@@ -299,7 +299,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
         inventory.profiles.push_back(snapshotLocked(input.id));
         continue;
       }
-      const auto loaded = AppSettingsStore::Load(input.path);
+      const auto loaded = dependencies.loadSettings(input.path);
       if (loaded.status != AppSettingsLoadStatus::Loaded) {
         result.diagnostics.push_back(failureDiagnostic(
             "skin_profile_snapshot_load_failed",
@@ -327,6 +327,39 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
     pendingSnapshots.erase(job.ticket);
     cancelledSnapshots.erase(job.ticket);
     snapshots[job.ticket] = std::move(result);
+  }
+
+  void terminalizeWorkerFailure(Job &job, std::string message) {
+    switch (job.kind) {
+    case JobKind::SkinCommit: {
+      std::lock_guard lock(mutex);
+      auto state = profiles.find(job.profileId.opaque);
+      if (state != profiles.end()) {
+        state->second.settings = std::move(job.previousSkin);
+      }
+      commits[job.ticket] = {
+          .status = skin::SkinProfileCommitResult::Status::RetryableFailure,
+          .ticket = job.ticket,
+          .snapshot = snapshotLocked(job.profileId),
+          .failure = failureDiagnostic("skin_profile_worker_failure",
+                                       std::move(message)),
+      };
+      return;
+    }
+    case JobKind::SnapshotAll: {
+      std::lock_guard lock(mutex);
+      pendingSnapshots.erase(job.ticket);
+      cancelledSnapshots.erase(job.ticket);
+      snapshots[job.ticket] = {
+          .diagnostics = {failureDiagnostic("skin_snapshot_worker_failure",
+                                            std::move(message))}};
+      return;
+    }
+    case JobKind::FullSave:
+    case JobKind::Flush:
+      completeWaiter(job.waiter, false, {}, std::move(message));
+      return;
+    }
   }
 
   void run() noexcept {
@@ -360,28 +393,9 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
           break;
         }
       } catch (const std::exception &error) {
-        if (job.kind == JobKind::SkinCommit) {
-          std::lock_guard lock(mutex);
-          auto &state = profiles[job.profileId.opaque];
-          state.settings = std::move(job.previousSkin);
-          commits[job.ticket] = {
-              .status = skin::SkinProfileCommitResult::Status::RetryableFailure,
-              .ticket = job.ticket,
-              .snapshot = snapshotLocked(job.profileId),
-              .failure = failureDiagnostic("skin_profile_worker_failure",
-                                           error.what()),
-          };
-        } else if (job.kind == JobKind::SnapshotAll) {
-          std::lock_guard lock(mutex);
-          pendingSnapshots.erase(job.ticket);
-          snapshots[job.ticket] = {
-              .diagnostics = {failureDiagnostic("skin_snapshot_worker_failure",
-                                                error.what())}};
-        } else {
-          completeWaiter(job.waiter, false, {}, error.what());
-        }
+        terminalizeWorkerFailure(job, error.what());
       } catch (...) {
-        completeWaiter(job.waiter, false, {}, "Unknown persistence failure");
+        terminalizeWorkerFailure(job, "Unknown persistence failure");
       }
     }
   }
@@ -545,6 +559,12 @@ ProfileSettingsPersistenceCoordinator::beginSnapshotAllProfiles() {
                       .path = impl_->manager.pathsFor(profile.id).settingsJson,
                       .active = profile.id == activeProfileId});
   }
+  try {
+    if (impl_->dependencies.afterSnapshotInputsCaptured) {
+      impl_->dependencies.afterSnapshotInputsCaptured();
+    }
+  } catch (...) {
+  }
   gateLock.lock();
   lock.lock();
   if (gate->stopping || impl_->stopping) {
@@ -660,6 +680,12 @@ bool ProfileSettingsPersistenceCoordinator::saveActiveSettingsAndWait(
          .settings = settings,
          .skinGeneration = impl_->profiles.at(profileId.opaque).generation,
          .waiter = waiter});
+  }
+  try {
+    if (impl_->dependencies.afterFullSaveAdmitted) {
+      impl_->dependencies.afterFullSaveAdmitted();
+    }
+  } catch (...) {
   }
   std::unique_lock waitLock(waiter->mutex);
   waiter->cv.wait(waitLock, [&] { return waiter->done; });

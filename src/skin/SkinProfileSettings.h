@@ -65,6 +65,9 @@ struct SkinProfileId {
 std::optional<SkinProfileId>
 makeSkinProfileId(std::string_view existingPlayerProfileId);
 
+std::optional<std::string>
+normalizeSkinConfigurationKey(std::string_view value);
+
 struct SkinProfileSettings {
   bool gameplayCompatibilityEnabled = false;
   std::optional<SkinEntryId> selected7KeyEntry;

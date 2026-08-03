@@ -114,6 +114,10 @@ struct ProfileSettingsPersistenceDependencies {
   std::function<bool(const std::filesystem::path &, const AppSettings &,
                      std::string &)>
       saveAtomic = AppSettingsStore::Save;
+  std::function<AppSettingsLoadResult(const std::filesystem::path &)>
+      loadSettings = AppSettingsStore::Load;
+  std::function<void()> afterFullSaveAdmitted;
+  std::function<void()> afterSnapshotInputsCaptured;
 };
 
 class ProfileSettingsPersistenceCoordinator final

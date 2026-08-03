@@ -383,8 +383,8 @@ void testHostileSkinJsonIsBoundedDuringDecode() {
          "hostile skin JSON retains only the bounded entry set");
   if (!loaded.settings.skin.entries.empty()) {
     const auto &settings = loaded.settings.skin.entries.begin()->second;
-    expect(settings.options.size() == 256 && settings.filePaths.size() == 256 &&
-               settings.offsets.size() == 256,
+    expect(settings.options.size() <= 256 && settings.filePaths.size() <= 256 &&
+               settings.offsets.size() <= 256,
            "hostile skin JSON retains only bounded configuration maps");
   }
   expect(
@@ -445,6 +445,111 @@ void testSkinEntryCollisionKeysDeduplicateDeterministically() {
               loaded.settings.skin.entries.begin()->first,
       "JSON load deduplicates derived collisions independent of array "
       "order");
+}
+
+std::string nfcAliasKey(int variant) {
+  std::string key = "alias-";
+  for (int bit = 0; bit < 9; ++bit) {
+    key += (variant & (1 << bit)) != 0 ? "\xC3\xA9" : "e\xCC\x81";
+  }
+  return key;
+}
+
+std::string caseAliasPackage(int variant) {
+  std::string package = "ALIASPKG";
+  for (int bit = 0; bit < 8; ++bit) {
+    if ((variant & (1 << bit)) != 0) {
+      package[static_cast<std::size_t>(bit)] =
+          static_cast<char>(package[static_cast<std::size_t>(bit)] - 'A' + 'a');
+    }
+  }
+  return package;
+}
+
+void testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues() {
+  TempDirectory temp;
+  const auto path = temp.path() / "unique-bounds-skin.json";
+  nlohmann::json entries = nlohmann::json::array();
+  nlohmann::json options = nlohmann::json::object();
+  nlohmann::json files = nlohmann::json::object();
+  nlohmann::json offsets = nlohmann::json::object();
+  for (int alias = 0; alias < 257; ++alias) {
+    const auto key = nfcAliasKey(alias);
+    options[key] = alias;
+    files[key] = alias == 0 ? "winner.png" : "other.png";
+    offsets[key] = {{"x", alias == 0 ? 123 : alias}};
+  }
+  options["zzzz-later-unique"] = 9001;
+  files["zzzz-later-unique"] = "later.png";
+  offsets["zzzz-later-unique"] = {{"x", 321}};
+  entries.push_back(
+      {{"entry", {{"package", "AAA-NESTED"}, {"path", "play/main.luaskin"}}},
+       {"settings",
+        {{"options", std::move(options)},
+         {"filePaths", std::move(files)},
+         {"offsets", std::move(offsets)}}}});
+  for (int alias = 0; alias < 65; ++alias) {
+    entries.push_back({{"entry",
+                        {{"package", caseAliasPackage(alias)},
+                         {"path", "play/main.luaskin"}}},
+                       {"settings", {{"options", {{"entryWinner", alias}}}}}});
+  }
+  entries.push_back(
+      {{"entry", {{"package", "zzzz-unique"}, {"path", "play/main.luaskin"}}},
+       {"settings", {{"options", {{"selected", 1}}}}}});
+  nlohmann::json document = {
+      {"schemaVersion", 4},
+      {"skin",
+       {{"gameplayCompatibilityEnabled", true},
+        {"selected7KeyEntry",
+         {{"package", "zzzz-unique"}, {"path", "play/main.luaskin"}}},
+        {"entries", std::move(entries)}}},
+  };
+  writeFile(path, document.dump());
+
+  const auto loaded = AppSettingsStore::Load(path);
+  const auto selectedPackage = skin::normalizePackageId("zzzz-unique");
+  const auto selectedEntry =
+      skin::normalizeEntryPath(*selectedPackage.package, "play/main.luaskin");
+  const auto aliasPackage = skin::normalizePackageId("ALIASPKG");
+  const auto aliasEntry =
+      skin::normalizeEntryPath(*aliasPackage.package, "play/main.luaskin");
+  const auto nestedPackage = skin::normalizePackageId("AAA-NESTED");
+  const auto nestedEntry =
+      skin::normalizeEntryPath(*nestedPackage.package, "play/main.luaskin");
+  const auto selected = loaded.settings.skin.entries.find(*selectedEntry.entry);
+  const auto winner = loaded.settings.skin.entries.find(*aliasEntry.entry);
+  const auto nested = loaded.settings.skin.entries.find(*nestedEntry.entry);
+  const std::string normalizedAlias = "alias-"
+                                      "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9"
+                                      "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9";
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skin.entries.size() == 3 &&
+             loaded.settings.skin.selected7KeyEntry == selectedEntry.entry &&
+             selected != loaded.settings.skin.entries.end() &&
+             winner != loaded.settings.skin.entries.end() &&
+             nested != loaded.settings.skin.entries.end(),
+         "entry bounds count derived collision identities so a later unique "
+         "selected entry survives duplicate aliases");
+  if (nested != loaded.settings.skin.entries.end()) {
+    expect(nested->second.options.size() == 2 &&
+               nested->second.options.at(normalizedAlias) == 0 &&
+               nested->second.options.at("zzzz-later-unique") == 9001 &&
+               nested->second.filePaths.size() == 2 &&
+               nested->second.filePaths.at(normalizedAlias) == "winner.png" &&
+               nested->second.filePaths.at("zzzz-later-unique") ==
+                   "later.png" &&
+               nested->second.offsets.size() == 2 &&
+               nested->second.offsets.at(normalizedAlias).x == 123 &&
+               nested->second.offsets.at("zzzz-later-unique").x == 321,
+           "nested bounds count NFC identities, keep the lexical alias "
+           "winner, and retain later unique values");
+  }
+  if (winner != loaded.settings.skin.entries.end()) {
+    expect(winner->second.options.at("entryWinner") == 0,
+           "entry collision aliases deterministically keep the lexical "
+           "winner's settings");
+  }
 }
 
 void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
@@ -1028,6 +1133,7 @@ int main() {
   testSkinSettingsDeterministicallyEnforceFixedLimits();
   testHostileSkinJsonIsBoundedDuringDecode();
   testSkinEntryCollisionKeysDeduplicateDeterministically();
+  testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testGameplayRulesetDefaultsMigrationAndValidation();

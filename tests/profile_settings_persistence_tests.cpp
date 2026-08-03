@@ -107,6 +107,52 @@ struct BlockingStore {
   }
 };
 
+class TestSignal {
+public:
+  void arrive() {
+    std::lock_guard lock(mutex_);
+    arrived_ = true;
+    cv_.notify_all();
+  }
+
+  void wait() {
+    std::unique_lock lock(mutex_);
+    cv_.wait(lock, [&] { return arrived_; });
+  }
+
+private:
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool arrived_ = false;
+};
+
+class TestBlockingPoint {
+public:
+  void arriveAndWait() {
+    std::unique_lock lock(mutex_);
+    arrived_ = true;
+    cv_.notify_all();
+    cv_.wait(lock, [&] { return released_; });
+  }
+
+  void waitUntilArrived() {
+    std::unique_lock lock(mutex_);
+    cv_.wait(lock, [&] { return arrived_; });
+  }
+
+  void release() {
+    std::lock_guard lock(mutex_);
+    released_ = true;
+    cv_.notify_all();
+  }
+
+private:
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool arrived_ = false;
+  bool released_ = false;
+};
+
 skin::SkinProfileCommitResult
 waitForCommit(ProfileSettingsPersistenceCoordinator &coordinator,
               std::uint64_t ticket) {
@@ -133,12 +179,14 @@ void testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable() {
   active.irProviders["tachi"].enabled = false;
   BlockingStore store;
   store.failCall = 3;
+  TestSignal ordinarySaveAdmitted;
   ProfileSettingsPersistenceCoordinator coordinator(
       manager, active,
-      {.saveAtomic = [&](const auto &path, const auto &settings,
-                         std::string &error) {
-        return store.save(path, settings, error);
-      }});
+      {.saveAtomic =
+           [&](const auto &path, const auto &settings, std::string &error) {
+             return store.save(path, settings, error);
+           },
+       .afterFullSaveAdmitted = [&] { ordinarySaveAdmitted.arrive(); }});
   const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
   const auto snapshotTicket = coordinator.beginSnapshotAllProfiles();
   std::optional<skin::AllSkinProfileSnapshotsResult> inventory;
@@ -163,7 +211,7 @@ void testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable() {
         coordinator.saveActiveSettingsAndWait(profile, ordinary, ordinaryError),
         "ordinary predecessor save succeeds: " + ordinaryError);
   });
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  ordinarySaveAdmitted.wait();
 
   const auto pending = coordinator.beginCommit(
       profile, coordinator.snapshot(profile).generation, selectedSettings(2));
@@ -368,14 +416,97 @@ void testSnapshotAdmissionAfterShutdownIsTerminallyCancelled() {
   expect(manager.Initialize().ok(),
          "profile manager initializes for snapshot shutdown race");
   AppSettings active;
-  ProfileSettingsPersistenceCoordinator coordinator(manager, active);
+  TestBlockingPoint inventoryCaptured;
+  ProfileSettingsPersistenceCoordinator coordinator(
+      manager, active, {.afterSnapshotInputsCaptured = [&] {
+        inventoryCaptured.arriveAndWait();
+      }});
 
+  std::uint64_t ticket = 0;
+  std::thread admission(
+      [&] { ticket = coordinator.beginSnapshotAllProfiles(); });
+  inventoryCaptured.waitUntilArrived();
   coordinator.shutdown();
-  const auto ticket = coordinator.beginSnapshotAllProfiles();
+  inventoryCaptured.release();
+  admission.join();
   const auto result = coordinator.pollSnapshotAllProfiles(ticket);
   expect(ticket != 0 && result && result->cancelled && !result->complete,
          "snapshot admission losing the shutdown race returns a terminal "
          "cancellation");
+}
+
+void testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for non-standard skin failure");
+  AppSettings active;
+  TestSignal workerEntered;
+  std::atomic<int> saveCalls = 0;
+  ProfileSettingsPersistenceCoordinator coordinator(
+      manager, active,
+      {.saveAtomic = [&](const auto &path, const auto &settings,
+                         std::string &error) -> bool {
+        if (++saveCalls == 1) {
+          workerEntered.arrive();
+          throw 17;
+        }
+        return AppSettingsStore::Save(path, settings, error);
+      }});
+  const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
+  const auto base = coordinator.snapshot(profile);
+  const auto pending =
+      coordinator.beginCommit(profile, base.generation, selectedSettings(71));
+  workerEntered.wait();
+  AppSettings ordinary = active;
+  ordinary.irProviders["tachi"].enabled = true;
+  std::string saveError;
+  expect(coordinator.saveActiveSettingsAndWait(profile, ordinary, saveError),
+         "ordinary save continues after non-standard skin failure: " +
+             saveError);
+  coordinator.shutdown();
+
+  const auto failed = coordinator.pollCommit(pending.ticket);
+  expect(failed.status ==
+                 skin::SkinProfileCommitResult::Status::RetryableFailure &&
+             failed.failure &&
+             failed.failure->code == "skin_profile_worker_failure" &&
+             failed.snapshot && failed.snapshot->settings == base.settings &&
+             coordinator.snapshot(profile).settings == base.settings &&
+             active.skin == base.settings && ordinary.skin == base.settings,
+         "non-standard skin worker failure rolls back optimistic state and "
+         "cannot leak its candidate into a later ordinary save");
+}
+
+void testNonStandardSnapshotWorkerFailureTerminatesTicket() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for non-standard snapshot failure");
+  expect(manager.createProfile("Snapshot Failure").ok(),
+         "non-standard snapshot fixture creates an inactive profile");
+  AppSettings active;
+  TestSignal workerEntered;
+  ProfileSettingsPersistenceCoordinator coordinator(
+      manager, active,
+      {.loadSettings = [&](const auto &) -> AppSettingsLoadResult {
+        workerEntered.arrive();
+        throw 29;
+      }});
+  const auto ticket = coordinator.beginSnapshotAllProfiles();
+  workerEntered.wait();
+  std::string flushError;
+  const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
+  expect(coordinator.flushProfileAndWait(profile, flushError),
+         "worker continues after non-standard snapshot failure: " + flushError);
+  coordinator.shutdown();
+
+  const auto failed = coordinator.pollSnapshotAllProfiles(ticket);
+  expect(failed && !failed->complete && !failed->cancelled &&
+             !failed->inventory && failed->diagnostics.size() == 1 &&
+             failed->diagnostics.front().code == "skin_snapshot_worker_failure",
+         "non-standard snapshot worker failure clears pending admission and "
+         "publishes a terminal result after shutdown");
 }
 
 void testInventoryRaiiTokensCanOutliveCoordinatorShutdown() {
@@ -452,6 +583,8 @@ int main() {
   testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable();
   testSnapshotTicketsAndInventoryFenceRejectAba();
   testSnapshotAdmissionAfterShutdownIsTerminallyCancelled();
+  testNonStandardSkinWorkerFailureRollsBackAndTerminatesTicket();
+  testNonStandardSnapshotWorkerFailureTerminatesTicket();
   testInventoryRaiiTokensCanOutliveCoordinatorShutdown();
   if (failures != 0) {
     std::cerr << failures

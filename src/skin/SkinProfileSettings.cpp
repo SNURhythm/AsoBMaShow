@@ -152,6 +152,11 @@ void sanitizeEntry(EntryProfileSettings &entry) {
 
 } // namespace
 
+std::optional<std::string>
+normalizeSkinConfigurationKey(std::string_view value) {
+  return configurationKey(value);
+}
+
 std::optional<SkinProfileId>
 makeSkinProfileId(std::string_view existingPlayerProfileId) {
   if (existingPlayerProfileId.size() != 36) {
