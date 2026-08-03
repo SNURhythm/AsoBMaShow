@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -43,6 +44,18 @@ void appendField(std::string &framed, std::string_view value) {
 
 } // namespace
 
+SkinStorageRoots deriveSkinStorageRoots(std::filesystem::path visiblePackages,
+                                        std::filesystem::path privateRoot) {
+  privateRoot = privateRoot.lexically_normal();
+  if (privateRoot.empty() || !privateRoot.is_absolute()) {
+    return {.visiblePackages = std::move(visiblePackages)};
+  }
+  return {.visiblePackages = std::move(visiblePackages),
+          .privateRevisions = privateRoot / "revisions",
+          .privateCatalog = privateRoot / "catalog",
+          .profileOverlays = privateRoot / "profileOverlays"};
+}
+
 #if !defined(ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS)
 SkinStorageRoots defaultSkinStorageRoots() {
   const std::filesystem::path visible = Utils::GetDocumentsPath("Skins");
@@ -54,18 +67,17 @@ SkinStorageRoots defaultSkinStorageRoots() {
     privateRoot = applicationSupport / "Skins";
   }
 #elif TARGET_OS_ANDROID
-  privateRoot = std::filesystem::path(GetAndroidInternalFilesDir()) /
-                ".asobmashow-private" / "Skins";
-#else
-  privateRoot = Utils::GetDocumentsPath() / ".asobmashow-private" / "Skins";
-#endif
-  if (privateRoot.empty()) {
-    return {.visiblePackages = visible};
+  const std::filesystem::path internalFiles = GetAndroidInternalFilesDir();
+  if (!internalFiles.empty()) {
+    privateRoot = internalFiles / ".asobmashow-private" / "Skins";
   }
-  return {.visiblePackages = visible,
-          .privateRevisions = privateRoot / "revisions",
-          .privateCatalog = privateRoot / "catalog",
-          .profileOverlays = privateRoot / "profileOverlays"};
+#else
+  const std::filesystem::path applicationRoot = Utils::GetDocumentsPath();
+  if (!applicationRoot.empty()) {
+    privateRoot = applicationRoot / ".asobmashow-private" / "Skins";
+  }
+#endif
+  return deriveSkinStorageRoots(visible, privateRoot);
 }
 #endif
 

@@ -16,6 +16,9 @@ struct SkinStorageRoots {
   std::filesystem::path profileOverlays;
 };
 
+SkinStorageRoots deriveSkinStorageRoots(std::filesystem::path visiblePackages,
+                                        std::filesystem::path privateRoot);
+
 SkinStorageRoots defaultSkinStorageRoots();
 
 struct SkinPrivateOverlayPathResult {

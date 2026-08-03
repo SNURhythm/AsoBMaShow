@@ -862,6 +862,30 @@ void testOverlayIdentityRejectsUnsafeInputsAndFramesFields() {
          "length framing separates identities with the same naive text join");
 }
 
+void testPrivateStorageRootDerivationFailsClosed() {
+  const fs::path visible = "/visible/Skins";
+
+  for (const fs::path &invalidPrivateRoot :
+       {fs::path{}, fs::path{"relative/private/Skins"}}) {
+    const auto roots = deriveSkinStorageRoots(visible, invalidPrivateRoot);
+    expect(roots.visiblePackages == visible,
+           "invalid private storage does not change the visible root");
+    expect(roots.privateRevisions.empty() && roots.privateCatalog.empty() &&
+               roots.profileOverlays.empty(),
+           "empty and relative private bases fail closed for every consumer");
+  }
+
+  const auto roots = deriveSkinStorageRoots(
+      visible, "/protected/application/../application/Skins");
+  expect(roots.visiblePackages == visible,
+         "valid private storage does not change the visible root");
+  expect(roots.privateRevisions == "/protected/application/Skins/revisions" &&
+             roots.privateCatalog == "/protected/application/Skins/catalog" &&
+             roots.profileOverlays ==
+                 "/protected/application/Skins/profileOverlays",
+         "an absolute private base derives normalized private children");
+}
+
 void testSnapshotRejectsRelativePrivateRevisionRoot() {
   TempDirectory temp;
   auto roots = rootsBelow(temp.root());
@@ -955,6 +979,7 @@ int main() {
   testPublishRejectsMutableExistingRevisionAndSymlinkDestination();
   testOverlayIdentityIsPrivateContainedAndCanonical();
   testOverlayIdentityRejectsUnsafeInputsAndFramesFields();
+  testPrivateStorageRootDerivationFailsClosed();
   testSnapshotRejectsRelativePrivateRevisionRoot();
   testInjectedFileAndPreparedDirectoryFsyncFailuresCleanStaging();
   testInjectedPublicationFailuresRetainCleanupOwnership();
