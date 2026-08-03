@@ -1,0 +1,119 @@
+import pathlib
+import re
+import unittest
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+IMPORTER = ROOT / "src/skin/package/SkinArchiveImporter.cpp"
+
+
+class WindowsSkinArchiveImporterContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = IMPORTER.read_text(encoding="utf-8")
+
+    def test_issued_root_handle_is_never_inferred_from_ancestry(self):
+        source = self.source
+        self.assertIn("HANDLE issuedRootHandle_ = INVALID_HANDLE_VALUE;", source)
+        self.assertNotRegex(source, r"rootHandle\(\).*?ancestryHandles_\.back\(\)")
+        self.assertNotIn("ancestryHandles_.push_back(issued", source)
+        cleanup = source[source.index("void cleanup() noexcept") :]
+        self.assertIn("issuedRootHandle_ == INVALID_HANDLE_VALUE", cleanup)
+        self.assertIn("closeWindowsHandles(ancestryHandles_);", cleanup)
+        self.assertIn("markWindowsDeletion(issuedRootHandle_)", cleanup)
+
+    def test_partial_windows_handle_chains_close_on_every_failure(self):
+        source = self.source
+        chain = source[
+            source.index("openExistingAbsoluteWindowsDirectoryChain") :
+            source.index("bool openWindowsDirectories")
+        ]
+        self.assertIn("closeWindowsHandles(handles);", chain)
+        self.assertGreaterEqual(chain.count("return false;"), 3)
+        create_directory = source[
+            source.index("createDirectory(std::string_view relative") :
+            source.index("HANDLE createFile(std::string_view relative")
+        ]
+        failure_tail = create_directory[create_directory.index("#if defined(_WIN32)") :]
+        self.assertGreaterEqual(failure_tail.count("closeWindowsHandles(opened);"), 2)
+
+    def test_windows_staging_objects_use_and_validate_private_security(self):
+        source = self.source
+        for token in (
+            "class PrivateWindowsSecurity",
+            "OpenProcessToken(",
+            "GetTokenInformation(",
+            "SetEntriesInAclW(",
+            "SetSecurityDescriptorDacl(",
+            "SetSecurityDescriptorControl(",
+            "SE_DACL_PROTECTED",
+            "OWNER_SECURITY_INFORMATION",
+            "GetSecurityInfo(",
+            "GetSecurityDescriptorControl(",
+            "GetAce(",
+            "EqualSid(",
+            "security_.attributes()",
+            "security_.verify(",
+            "READ_CONTROL",
+        ):
+            self.assertIn(token, source)
+        self.assertRegex(
+            source,
+            r"CreateDirectoryW\([^;]+security_\.attributes\(\)\)",
+        )
+        self.assertRegex(
+            source,
+            r"CreateFileW\([^;]+security_\.attributes\(\)[^;]+CREATE_NEW",
+        )
+        allocate = source[
+            source.index("bool allocate(const fs::path &parentPath") :
+            source.index("void cleanup() noexcept")
+        ]
+        self.assertIn("parentPath.parent_path(),", allocate)
+        self.assertIn("CreateDirectoryW(parentPath_.c_str(),", allocate)
+        self.assertIn("security_.verify(stagingParent)", allocate)
+        ancestry_chain = source[
+            source.index("openExistingAbsoluteWindowsDirectoryChain") :
+            source.index("bool openWindowsDirectories")
+        ]
+        self.assertNotIn("CreateDirectoryW(", ancestry_chain)
+
+    def test_windows_root_and_recursive_cleanup_handles_pin_names(self):
+        source = self.source
+        issued_open = re.search(
+            r"issuedRootHandle_\s*=\s*CreateFileW\((.*?)\);",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(issued_open)
+        self.assertNotIn("FILE_SHARE_DELETE", issued_open.group(1))
+        recursive_cleanup = source[
+            source.index("clearWindowsDirectory") :
+            source.index("#endif", source.index("clearWindowsDirectory"))
+        ]
+        self.assertNotIn("FILE_SHARE_DELETE", recursive_cleanup)
+
+    def test_windows_reopened_payload_is_regular_nofollow_single_link(self):
+        source = self.source
+        branch = source[
+            source.index("HANDLE openFileForRead") :
+            source.index("#else", source.index("HANDLE openFileForRead"))
+        ]
+        for token in (
+            "FILE_FLAG_OPEN_REPARSE_POINT",
+            "FileAttributeTagInfo",
+            "FILE_ATTRIBUTE_REPARSE_POINT",
+            "FILE_ATTRIBUTE_DIRECTORY",
+            "GetFileInformationByHandle(",
+            "nNumberOfLinks == 1",
+        ):
+            self.assertIn(token, branch)
+
+    def test_flush_failure_does_not_skip_handle_close(self):
+        source = self.source
+        self.assertNotIn("FlushFileBuffers(output) && CloseHandle(output)", source)
+        self.assertNotIn("::fsync(output) == 0 && ::close(output) == 0", source)
+
+
+if __name__ == "__main__":
+    unittest.main()

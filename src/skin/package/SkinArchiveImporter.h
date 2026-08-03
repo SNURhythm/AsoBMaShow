@@ -15,6 +15,7 @@ enum class SkinImportIoOperation : std::uint8_t {
   VisibleRootIssued,
   BeforeVisibleDirectory,
   BeforeVisibleFile,
+  AfterVisibleFileWritten,
   BeforeVisibleSnapshot,
   OwnedArchiveCopyChunk,
   RawZipRecord,

@@ -22,6 +22,11 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#include <Aclapi.h>
+#include <Windows.h>
+#endif
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -96,6 +101,7 @@ struct ZipMember {
 };
 
 SkinStorageRoots rootsBelow(const fs::path &root) {
+  fs::create_directories(root / "Documents");
   return {.visiblePackages = root / "Documents/Skins",
           .privateRevisions = root / "ApplicationSupport/revisions",
           .privateCatalog = root / "ApplicationSupport/catalog",
@@ -760,6 +766,33 @@ void testArchivePayloadDigestMustMatchTask5Snapshot() {
          "archive payload mismatch has a stable diagnostic code");
 }
 
+void testStreamedPayloadDigestRejectsLastChunkStagingMutation() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const std::string archived = "return {marker = 'archive'}\n";
+  const std::string replaced = "return {marker = 'changed'}\n";
+  expect(archived.size() == replaced.size(),
+         "last-chunk mutation fixture preserves the declared file size");
+  const fs::path zip = makeZip(temp.root() / "streamed-payload-race.zip",
+                               {{"play.luaskin", archived}});
+  bool mutated = false;
+  auto observer = std::make_shared<ImportIoObserver>(
+      [&](SkinImportIoOperation operation, const fs::path &path) {
+        if (operation == SkinImportIoOperation::AfterVisibleFileWritten &&
+            path.filename() == "play.luaskin") {
+          writeBytes(path, replaced);
+          mutated = readText(path) == replaced;
+        }
+      });
+  auto result = prepareZip(zip, roots, {}, {}, observer);
+  expect(mutated, "last-chunk mutation runs after the streamed archive write");
+  expectRejectedAndClean(
+      result, roots,
+      "staged bytes must remain cryptographically bound to streamed ZIP bytes");
+  expect(hasDiagnosticCode(result, "skin_archive_payload_digest_mismatch"),
+         "streamed member mismatch has a stable diagnostic code");
+}
+
 void testVisibleStagingRejectsParentAndLeafSymlinkRaces() {
 #if !defined(_WIN32)
   {
@@ -812,6 +845,147 @@ void testVisibleStagingRejectsParentAndLeafSymlinkRaces() {
            "exclusive no-follow leaf creation cannot truncate a symlink "
            "target");
   }
+#endif
+}
+
+void testDisplacedNestedParentCleanupRemovesImportedBytes() {
+#if !defined(_WIN32)
+  {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const fs::path displaced = temp.root() / "displaced-open-parent";
+    bool displacedBeforeOpen = false;
+    auto observer = std::make_shared<ImportIoObserver>(
+        [&](SkinImportIoOperation operation, const fs::path &path) {
+          if (!displacedBeforeOpen &&
+              operation == SkinImportIoOperation::BeforeVisibleFile &&
+              path.filename() == "nested.bin") {
+            fs::rename(path.parent_path(), displaced);
+            displacedBeforeOpen = true;
+          }
+        });
+    auto result = prepareZip(makeZip(temp.root() / "open-parent-race.zip",
+                                     {{"play.luaskin", "return {}\n"},
+                                      {"assets/nested.bin", "payload"}}),
+                             roots, {}, {}, observer);
+    expect(displacedBeforeOpen,
+           "nested parent is displaced between parent open and leaf open");
+    expectRejectedAndClean(result, roots,
+                           "pre-write nested-parent displacement rejects");
+    expect(!fs::exists(displaced / "nested.bin"),
+           "pre-write identity check prevents bytes escaping through the "
+           "opened parent capability");
+  }
+  {
+    TempDirectory temp;
+    const auto roots = rootsBelow(temp.root());
+    const std::string entry = "return {type = 0}\n";
+    const std::string asset(96 * 1024, 'a');
+    const fs::path zip =
+        makeZip(temp.root() / "nested-parent-race.zip",
+                {{"play.luaskin", entry}, {"assets/nested.bin", asset}});
+    fs::path issuedRoot;
+    const fs::path displaced = temp.root() / "displaced-nested-parent";
+    auto observer = std::make_shared<ImportIoObserver>(
+        [&](SkinImportIoOperation operation, const fs::path &path) {
+          if (operation == SkinImportIoOperation::VisibleRootIssued) {
+            issuedRoot = path;
+          }
+        });
+    bool displacedAfterWrite = false;
+    auto result = prepareZip(
+        zip, roots, {},
+        [&](const SkinProgress &progress) {
+          if (!displacedAfterWrite && !issuedRoot.empty() &&
+              progress.phase == SkinProgressPhase::Copying &&
+              progress.totalBytes != 0 &&
+              progress.completedBytes == progress.totalBytes) {
+            fs::rename(issuedRoot / "assets", displaced);
+            displacedAfterWrite = true;
+          }
+        },
+        observer);
+    expect(displacedAfterWrite,
+           "nested staging parent is displaced after its final write");
+    expectRejectedAndClean(result, roots,
+                           "nested-parent displacement rejects preparation");
+    expect(!fs::exists(displaced / "nested.bin"),
+           "identity-bound cleanup removes imported bytes from a displaced "
+           "nested parent");
+  }
+#endif
+}
+
+#if defined(_WIN32)
+bool hasProtectedCurrentUserOnlyDacl(const fs::path &path) {
+  PSID owner = nullptr;
+  PACL dacl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  const DWORD result = GetNamedSecurityInfoW(
+      const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT,
+      OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr,
+      &dacl, nullptr, &descriptor);
+  HANDLE token = nullptr;
+  DWORD tokenBytes = 0;
+  std::vector<std::byte> tokenUser;
+  SECURITY_DESCRIPTOR_CONTROL control = 0;
+  DWORD revision = 0;
+  void *rawAce = nullptr;
+  bool privateAcl =
+      result == ERROR_SUCCESS && descriptor != nullptr && owner != nullptr &&
+      dacl != nullptr && dacl->AceCount == 1 &&
+      GetSecurityDescriptorControl(descriptor, &control, &revision) &&
+      (control & SE_DACL_PROTECTED) != 0 && GetAce(dacl, 0, &rawAce) &&
+      rawAce != nullptr &&
+      static_cast<ACE_HEADER *>(rawAce)->AceType == ACCESS_ALLOWED_ACE_TYPE &&
+      OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token);
+  if (privateAcl) {
+    GetTokenInformation(token, TokenUser, nullptr, 0, &tokenBytes);
+    tokenUser.resize(tokenBytes);
+    privateAcl = tokenBytes > 0 &&
+                 GetTokenInformation(token, TokenUser, tokenUser.data(),
+                                     tokenBytes, &tokenBytes);
+  }
+  if (privateAcl) {
+    const auto *user = reinterpret_cast<const TOKEN_USER *>(tokenUser.data());
+    const auto *ace = static_cast<const ACCESS_ALLOWED_ACE *>(rawAce);
+    privateAcl =
+        EqualSid(owner, user->User.Sid) &&
+        EqualSid(const_cast<DWORD *>(&ace->SidStart), user->User.Sid) &&
+        ace->Header.AceFlags == 0 && ace->Mask == FILE_ALL_ACCESS;
+  }
+  if (token != nullptr) {
+    CloseHandle(token);
+  }
+  if (descriptor != nullptr) {
+    LocalFree(descriptor);
+  }
+  return privateAcl;
+}
+#endif
+
+void testWindowsVisibleStagingUsesProtectedOwnerOnlyDacls() {
+#if defined(_WIN32)
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  auto result = prepareZip(
+      makeZip(temp.root() / "private-dacl.zip",
+              {{"play.luaskin", "return {}\n"}, {"assets/data.bin", "x"}}),
+      roots);
+  expect(result.prepared.has_value(),
+         "Windows DACL fixture prepares for permission inspection");
+  if (!result.prepared) {
+    return;
+  }
+  const fs::path staging = result.prepared->visibleStagingRoot();
+  expect(hasProtectedCurrentUserOnlyDacl(staging.parent_path()),
+         "shared staging parent has a protected current-user-only DACL");
+  expect(hasProtectedCurrentUserOnlyDacl(staging),
+         "issued staging root has a protected current-user-only DACL");
+  expect(hasProtectedCurrentUserOnlyDacl(staging / "assets"),
+         "nested staging directory has a protected current-user-only DACL");
+  expect(hasProtectedCurrentUserOnlyDacl(staging / "assets/data.bin"),
+         "staged file has a protected current-user-only DACL");
 #endif
 }
 
@@ -1240,7 +1414,10 @@ int main() {
   testEncryptedTruncatedCrcAndUnsupportedCompressionReject();
   testProgressCallbackFailureRejectsAndCleans();
   testArchivePayloadDigestMustMatchTask5Snapshot();
+  testStreamedPayloadDigestRejectsLastChunkStagingMutation();
   testVisibleStagingRejectsParentAndLeafSymlinkRaces();
+  testDisplacedNestedParentCleanupRemovesImportedBytes();
+  testWindowsVisibleStagingUsesProtectedOwnerOnlyDacls();
   testEmptyAndDirectoryOnlyArchivesReject();
   testZipDeclaredAndAggregateLimitsRejectBeforeExtraction();
   testFixedPathDepthCountAndArchiveLimitsReject();

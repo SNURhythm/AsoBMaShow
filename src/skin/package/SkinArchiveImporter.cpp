@@ -21,6 +21,7 @@
 #include <utility>
 
 #if defined(_WIN32)
+#include <Aclapi.h>
 #include <io.h>
 #include <windows.h>
 #else
@@ -50,6 +51,7 @@ struct ArchiveMember {
   std::uint64_t declaredSize = 0;
   std::uint32_t expectedCrc32 = 0;
   std::uint16_t compressionMethod = 0;
+  std::string streamedSha256;
 
   auto operator<=>(const ArchiveMember &) const = default;
 };
@@ -1034,6 +1036,108 @@ std::string uniqueStagingName() {
   return "import-" + std::to_string(++serial);
 }
 
+#if defined(_WIN32)
+class PrivateWindowsSecurity {
+public:
+  PrivateWindowsSecurity() = default;
+  PrivateWindowsSecurity(const PrivateWindowsSecurity &) = delete;
+  PrivateWindowsSecurity &operator=(const PrivateWindowsSecurity &) = delete;
+  ~PrivateWindowsSecurity() {
+    if (accessControlList_ != nullptr) {
+      LocalFree(accessControlList_);
+    }
+    if (token_ != nullptr) {
+      CloseHandle(token_);
+    }
+  }
+
+  bool initialize() {
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token_)) {
+      return false;
+    }
+    DWORD bytes = 0;
+    GetTokenInformation(token_, TokenUser, nullptr, 0, &bytes);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes == 0) {
+      return false;
+    }
+    tokenUser_.resize(bytes);
+    if (!GetTokenInformation(token_, TokenUser, tokenUser_.data(), bytes,
+                             &bytes)) {
+      return false;
+    }
+    EXPLICIT_ACCESSW access{};
+    access.grfAccessPermissions = FILE_ALL_ACCESS;
+    access.grfAccessMode = SET_ACCESS;
+    access.grfInheritance = NO_INHERITANCE;
+    access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    access.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    access.Trustee.ptstrName = static_cast<LPWSTR>(userSid());
+    if (SetEntriesInAclW(1, &access, nullptr, &accessControlList_) !=
+            ERROR_SUCCESS ||
+        !InitializeSecurityDescriptor(&descriptor_,
+                                      SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorOwner(&descriptor_, userSid(), FALSE) ||
+        !SetSecurityDescriptorDacl(&descriptor_, TRUE, accessControlList_,
+                                   FALSE) ||
+        !SetSecurityDescriptorControl(&descriptor_, SE_DACL_PROTECTED,
+                                      SE_DACL_PROTECTED)) {
+      return false;
+    }
+    attributes_.nLength = sizeof(attributes_);
+    attributes_.lpSecurityDescriptor = &descriptor_;
+    attributes_.bInheritHandle = FALSE;
+    return true;
+  }
+
+  SECURITY_ATTRIBUTES *attributes() noexcept { return &attributes_; }
+
+  bool verify(HANDLE handle) const {
+    PSID owner = nullptr;
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD result =
+        GetSecurityInfo(handle, SE_FILE_OBJECT,
+                        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                        &owner, nullptr, &dacl, nullptr, &descriptor);
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    void *rawAce = nullptr;
+    bool valid =
+        result == ERROR_SUCCESS && descriptor != nullptr && owner != nullptr &&
+        EqualSid(owner, userSid()) != FALSE && dacl != nullptr &&
+        dacl->AceCount == 1 &&
+        GetSecurityDescriptorControl(descriptor, &control, &revision) &&
+        (control & SE_DACL_PROTECTED) != 0 && GetAce(dacl, 0, &rawAce) &&
+        rawAce != nullptr;
+    if (valid) {
+      const auto *header = static_cast<const ACE_HEADER *>(rawAce);
+      const auto *ace = static_cast<const ACCESS_ALLOWED_ACE *>(rawAce);
+      valid = header->AceType == ACCESS_ALLOWED_ACE_TYPE &&
+              header->AceFlags == 0 && ace->Mask == FILE_ALL_ACCESS &&
+              EqualSid(const_cast<DWORD *>(&ace->SidStart), userSid()) != FALSE;
+    }
+    if (descriptor != nullptr) {
+      LocalFree(descriptor);
+    }
+    return valid;
+  }
+
+private:
+  PSID userSid() const noexcept {
+    if (tokenUser_.empty()) {
+      return nullptr;
+    }
+    return reinterpret_cast<const TOKEN_USER *>(tokenUser_.data())->User.Sid;
+  }
+
+  HANDLE token_ = nullptr;
+  std::vector<std::byte> tokenUser_;
+  PACL accessControlList_ = nullptr;
+  SECURITY_DESCRIPTOR descriptor_{};
+  SECURITY_ATTRIBUTES attributes_{};
+};
+#endif
+
 class SecureStagingTree {
 public:
   SecureStagingTree(const SecureStagingTree &) = delete;
@@ -1078,7 +1182,7 @@ public:
     BY_HANDLE_FILE_INFORMATION actual{};
     FILE_ATTRIBUTE_TAG_INFO tag{};
     const bool same =
-        GetFileInformationByHandle(rootHandle(), &expected) &&
+        GetFileInformationByHandle(issuedRootHandle_, &expected) &&
         GetFileInformationByHandle(current, &actual) &&
         GetFileInformationByHandleEx(current, FileAttributeTagInfo, &tag,
                                      sizeof(tag)) &&
@@ -1117,6 +1221,7 @@ public:
       closeWindowsHandles(opened);
       return true;
     }
+    closeWindowsHandles(opened);
 #else
     const int directory = openDirectory(relative, true);
     if (directory >= 0) {
@@ -1150,10 +1255,18 @@ public:
     }
     observe(observer, SkinImportIoOperation::BeforeVisibleFile, target);
     const HANDLE file = CreateFileW(
-        target.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-        CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
-        nullptr);
+        target.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+        security_.attributes(), CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     closeWindowsHandles(opened);
+    if (file != INVALID_HANDLE_VALUE && !security_.verify(file)) {
+      CloseHandle(file);
+      diagnostics.push_back(diagnostic(
+          "skin_import_visible_copy_failed",
+          "created visible staging file does not have private ownership",
+          std::string(relative)));
+      return INVALID_HANDLE_VALUE;
+    }
     if (file == INVALID_HANDLE_VALUE) {
       diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
                                        "unable to exclusively create a safe "
@@ -1172,20 +1285,47 @@ public:
                                             : relative.substr(0, separator);
     const std::string leaf(relative.substr(
         separator == std::string_view::npos ? 0 : separator + 1));
-    const int parent = openDirectory(parentPath, true);
-    if (parent < 0) {
+    int parent = openDirectory(parentPath, true);
+    if (parent < 0 || activeParentFd_ >= 0) {
+      if (parent >= 0) {
+        ::close(parent);
+      }
       diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
                                        "unable to create a safe staging parent",
                                        std::string(relative)));
       return -1;
     }
+    const std::size_t parentDepth =
+        parentPath.empty()
+            ? 0
+            : 1 + static_cast<std::size_t>(std::ranges::count(parentPath, '/'));
+    parent = retainDirectoryForCleanup(parent, parentDepth);
+    if (parent < 0) {
+      diagnostics.push_back(
+          diagnostic("skin_import_visible_copy_failed",
+                     "unable to retain a safe staging-parent capability",
+                     std::string(relative)));
+      return -1;
+    }
     observe(observer, SkinImportIoOperation::BeforeVisibleFile,
             path_ / pathFromUtf8(relative));
+    if (!directoryMatchesRelative(parentPath, parent)) {
+      diagnostics.push_back(
+          diagnostic("skin_import_staging_identity_changed",
+                     "visible staging parent moved before file creation",
+                     std::string(relative)));
+      return -1;
+    }
+    activeParentFd_ = parent;
+    activeParentPath_ = std::string(parentPath);
+    activeLeaf_ = leaf;
     const int file =
         ::openat(parent, leaf.c_str(),
                  O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-    ::close(parent);
     if (file < 0) {
+      activeParentFd_ = -1;
+      activeParentPath_.clear();
+      activeLeaf_.clear();
       diagnostics.push_back(diagnostic("skin_import_visible_copy_failed",
                                        "unable to exclusively create a safe "
                                        "visible staging file",
@@ -1195,12 +1335,57 @@ public:
   }
 #endif
 
+  bool finishFile(std::string_view relative,
+                  std::vector<SkinDiagnostic> &diagnostics) {
+#if defined(_WIN32)
+    return true;
+#else
+    const std::size_t separator = relative.rfind('/');
+    const std::string_view parentPath = separator == std::string_view::npos
+                                            ? std::string_view{}
+                                            : relative.substr(0, separator);
+    const std::string_view leaf = relative.substr(
+        separator == std::string_view::npos ? 0 : separator + 1);
+    const int parent = activeParentFd_;
+    activeParentFd_ = -1;
+    const bool expected =
+        parent >= 0 && activeParentPath_ == parentPath && activeLeaf_ == leaf;
+    activeParentPath_.clear();
+    activeLeaf_.clear();
+    if (expected && directoryMatchesRelative(parentPath, parent)) {
+      return true;
+    }
+    if (parent >= 0) {
+      ::unlinkat(parent, std::string(leaf).c_str(), 0);
+    }
+    diagnostics.push_back(
+        diagnostic("skin_import_staging_identity_changed",
+                   "visible staging parent moved while writing a file",
+                   std::string(relative)));
+    return false;
+#endif
+  }
+
 #if defined(_WIN32)
   HANDLE openFileForRead(std::string_view relative) const {
     const fs::path target = path_ / pathFromUtf8(relative);
-    return CreateFileW(
+    HANDLE file = CreateFileW(
         target.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    BY_HANDLE_FILE_INFORMATION information{};
+    const bool safe = file != INVALID_HANDLE_VALUE &&
+                      GetFileInformationByHandleEx(file, FileAttributeTagInfo,
+                                                   &tag, sizeof(tag)) &&
+                      (tag.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT |
+                                             FILE_ATTRIBUTE_DIRECTORY)) == 0 &&
+                      GetFileInformationByHandle(file, &information) &&
+                      information.nNumberOfLinks == 1 && security_.verify(file);
+    if (!safe && file != INVALID_HANDLE_VALUE) {
+      CloseHandle(file);
+      file = INVALID_HANDLE_VALUE;
+    }
+    return file;
   }
 #else
   int openFileForRead(std::string_view relative) const {
@@ -1243,10 +1428,10 @@ private:
            (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
   }
 
-  static bool openAbsoluteWindowsDirectoryChain(const fs::path &path,
-                                                bool create,
-                                                std::vector<HANDLE> &handles,
-                                                fs::path &canonicalPath) {
+  static bool
+  openExistingAbsoluteWindowsDirectoryChain(const fs::path &path,
+                                            std::vector<HANDLE> &handles,
+                                            fs::path &canonicalPath) {
     std::error_code error;
     const fs::path absolute = fs::absolute(path, error).lexically_normal();
     if (error || !absolute.is_absolute()) {
@@ -1267,18 +1452,16 @@ private:
     const fs::path relative = absolute.lexically_relative(current);
     for (const fs::path &component : relative) {
       current /= component;
-      if (create && !CreateDirectoryW(current.c_str(), nullptr) &&
-          GetLastError() != ERROR_ALREADY_EXISTS) {
-        return false;
-      }
       HANDLE next = CreateFileW(
-          current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+          current.c_str(),
+          FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
       if (!safeWindowsDirectory(next)) {
         if (next != INVALID_HANDLE_VALUE) {
           CloseHandle(next);
         }
+        closeWindowsHandles(handles);
         return false;
       }
       handles.push_back(next);
@@ -1296,15 +1479,17 @@ private:
       current /= pathFromUtf8(relative.substr(
           start, separator == std::string_view::npos ? std::string_view::npos
                                                      : separator - start));
-      if (create && !CreateDirectoryW(current.c_str(), nullptr) &&
+      if (create &&
+          !CreateDirectoryW(current.c_str(), security_.attributes()) &&
           GetLastError() != ERROR_ALREADY_EXISTS) {
         return false;
       }
       HANDLE next = CreateFileW(
-          current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+          current.c_str(),
+          FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-      if (!safeWindowsDirectory(next)) {
+      if (!safeWindowsDirectory(next) || !security_.verify(next)) {
         if (next != INVALID_HANDLE_VALUE) {
           CloseHandle(next);
         }
@@ -1317,11 +1502,6 @@ private:
       start = separator + 1;
     }
     return true;
-  }
-
-  HANDLE rootHandle() const noexcept {
-    return ancestryHandles_.empty() ? INVALID_HANDLE_VALUE
-                                    : ancestryHandles_.back();
   }
 
   static bool markWindowsDeletion(HANDLE handle) noexcept {
@@ -1382,6 +1562,55 @@ private:
 #endif
 
 #if !defined(_WIN32)
+  struct RetainedDirectory {
+    int fd = -1;
+    dev_t device = 0;
+    ino_t inode = 0;
+    std::size_t depth = 0;
+  };
+
+  int retainDirectoryForCleanup(int directory, std::size_t depth) {
+    struct stat status{};
+    struct stat rootStatus{};
+    if (::fstat(directory, &status) != 0 || !S_ISDIR(status.st_mode) ||
+        ::fstat(rootFd_, &rootStatus) != 0) {
+      ::close(directory);
+      return -1;
+    }
+    if (status.st_dev == rootStatus.st_dev &&
+        status.st_ino == rootStatus.st_ino) {
+      ::close(directory);
+      return rootFd_;
+    }
+    for (RetainedDirectory &retained : retainedDirectories_) {
+      if (status.st_dev == retained.device && status.st_ino == retained.inode) {
+        retained.depth = std::max(retained.depth, depth);
+        ::close(directory);
+        return retained.fd;
+      }
+    }
+    retainedDirectories_.push_back({.fd = directory,
+                                    .device = status.st_dev,
+                                    .inode = status.st_ino,
+                                    .depth = depth});
+    return directory;
+  }
+
+  bool directoryMatchesRelative(std::string_view relative,
+                                int expectedDirectory) const {
+    const int current = openDirectory(relative, false);
+    struct stat expected{};
+    struct stat actual{};
+    const bool same =
+        current >= 0 && ::fstat(expectedDirectory, &expected) == 0 &&
+        ::fstat(current, &actual) == 0 && expected.st_dev == actual.st_dev &&
+        expected.st_ino == actual.st_ino;
+    if (current >= 0) {
+      ::close(current);
+    }
+    return same;
+  }
+
   static int openAbsoluteDirectory(const fs::path &path, bool create) {
     std::error_code error;
     const fs::path absolute = fs::absolute(path, error).lexically_normal();
@@ -1488,32 +1717,63 @@ private:
   bool allocate(const fs::path &parentPath,
                 std::vector<SkinDiagnostic> &diagnostics) {
 #if defined(_WIN32)
-    if (!openAbsoluteWindowsDirectoryChain(parentPath, true, ancestryHandles_,
-                                           parentPath_)) {
+    fs::path ancestryPath;
+    if (!security_.initialize() ||
+        !openExistingAbsoluteWindowsDirectoryChain(
+            parentPath.parent_path(), ancestryHandles_, ancestryPath)) {
+      closeWindowsHandles(ancestryHandles_);
       diagnostics.push_back(
           diagnostic("skin_import_staging_create_failed",
                      "unable to create private visible staging storage"));
       return false;
     }
+    parentPath_ = ancestryPath / parentPath.filename();
+    if (!CreateDirectoryW(parentPath_.c_str(), security_.attributes()) &&
+        GetLastError() != ERROR_ALREADY_EXISTS) {
+      closeWindowsHandles(ancestryHandles_);
+      diagnostics.push_back(
+          diagnostic("skin_import_staging_create_failed",
+                     "unable to create private visible staging storage"));
+      return false;
+    }
+    HANDLE stagingParent = CreateFileW(
+        parentPath_.c_str(),
+        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (!safeWindowsDirectory(stagingParent) ||
+        !security_.verify(stagingParent)) {
+      if (stagingParent != INVALID_HANDLE_VALUE) {
+        CloseHandle(stagingParent);
+      }
+      closeWindowsHandles(ancestryHandles_);
+      diagnostics.push_back(
+          diagnostic("skin_import_staging_create_failed",
+                     "visible staging parent is not owner-private"));
+      return false;
+    }
+    ancestryHandles_.push_back(stagingParent);
     for (int attempt = 0; attempt < 128; ++attempt) {
       name_ = uniqueStagingName();
       path_ = parentPath_ / name_;
-      if (!CreateDirectoryW(path_.c_str(), nullptr)) {
+      if (!CreateDirectoryW(path_.c_str(), security_.attributes())) {
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
           continue;
         }
         break;
       }
-      HANDLE issued = CreateFileW(
-          path_.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | DELETE,
+      issuedRootHandle_ = CreateFileW(
+          path_.c_str(),
+          FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE,
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-      if (safeWindowsDirectory(issued)) {
-        ancestryHandles_.push_back(issued);
+      if (safeWindowsDirectory(issuedRootHandle_) &&
+          security_.verify(issuedRootHandle_)) {
         return true;
       }
-      if (issued != INVALID_HANDLE_VALUE) {
-        CloseHandle(issued);
+      if (issuedRootHandle_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(issuedRootHandle_);
+        issuedRootHandle_ = INVALID_HANDLE_VALUE;
       }
       RemoveDirectoryW(path_.c_str());
       break;
@@ -1563,13 +1823,28 @@ private:
 
   void cleanup() noexcept {
 #if defined(_WIN32)
-    if (rootHandle() == INVALID_HANDLE_VALUE) {
+    if (issuedRootHandle_ == INVALID_HANDLE_VALUE) {
+      closeWindowsHandles(ancestryHandles_);
       return;
     }
     clearWindowsDirectory(path_);
-    markWindowsDeletion(rootHandle());
+    markWindowsDeletion(issuedRootHandle_);
+    CloseHandle(issuedRootHandle_);
+    issuedRootHandle_ = INVALID_HANDLE_VALUE;
     closeWindowsHandles(ancestryHandles_);
 #else
+    std::ranges::sort(retainedDirectories_,
+                      [](const auto &left, const auto &right) {
+                        return left.depth > right.depth;
+                      });
+    for (const RetainedDirectory &retained : retainedDirectories_) {
+      clearDirectory(retained.fd);
+      ::close(retained.fd);
+    }
+    retainedDirectories_.clear();
+    activeParentFd_ = -1;
+    activeParentPath_.clear();
+    activeLeaf_.clear();
     if (rootFd_ < 0) {
       if (parentFd_ >= 0) {
         ::close(parentFd_);
@@ -1612,10 +1887,16 @@ private:
   fs::path parentPath_;
   std::string name_;
 #if defined(_WIN32)
+  PrivateWindowsSecurity security_;
   std::vector<HANDLE> ancestryHandles_;
+  HANDLE issuedRootHandle_ = INVALID_HANDLE_VALUE;
 #else
   int parentFd_ = -1;
   int rootFd_ = -1;
+  std::vector<RetainedDirectory> retainedDirectories_;
+  int activeParentFd_ = -1;
+  std::string activeParentPath_;
+  std::string activeLeaf_;
 #endif
 };
 
@@ -1660,7 +1941,7 @@ std::uint32_t updateCrc32(std::uint32_t crc, std::span<const char> bytes) {
   return crc;
 }
 
-bool extractArchive(OwnedArchiveFile &owned, const ArchiveInventory &inventory,
+bool extractArchive(OwnedArchiveFile &owned, ArchiveInventory &inventory,
                     SecureStagingTree &staging, std::stop_token stop,
                     const SkinProgressCallback &callback,
                     const std::shared_ptr<const SkinImportIoObserver> &observer,
@@ -1692,7 +1973,7 @@ bool extractArchive(OwnedArchiveFile &owned, const ArchiveInventory &inventory,
                        "skin ZIP changed after inventory or is corrupt")));
       return false;
     }
-    const ArchiveMember &member = inventory.members[index++];
+    ArchiveMember &member = inventory.members[index++];
     if (member.installedPath.empty()) {
       if (archive_read_data_skip(reader.get()) != ARCHIVE_OK) {
         diagnostics.push_back(diagnostic(
@@ -1731,6 +2012,7 @@ bool extractArchive(OwnedArchiveFile &owned, const ArchiveInventory &inventory,
     }
     std::uint64_t fileBytes = 0;
     std::uint32_t crc32 = 0xffffffffU;
+    file_checksum::Sha256 streamedHash;
     while (true) {
       if (stop.stop_requested()) {
 #if defined(_WIN32)
@@ -1814,6 +2096,8 @@ bool extractArchive(OwnedArchiveFile &owned, const ArchiveInventory &inventory,
       completedBytes = nextTotal;
       crc32 = updateCrc32(
           crc32, std::span(buffer.data(), static_cast<std::size_t>(count)));
+      streamedHash.update(std::as_bytes(
+          std::span(buffer.data(), static_cast<std::size_t>(count))));
       if (!report(callback,
                   {.phase = SkinProgressPhase::Copying,
                    .completedBytes = completedBytes,
@@ -1829,11 +2113,16 @@ bool extractArchive(OwnedArchiveFile &owned, const ArchiveInventory &inventory,
       }
     }
 #if defined(_WIN32)
-    const bool closed = FlushFileBuffers(output) && CloseHandle(output);
+    const bool flushed = FlushFileBuffers(output) != 0;
+    const bool handleClosed = CloseHandle(output) != 0;
 #else
-    const bool closed = ::fsync(output) == 0 && ::close(output) == 0;
+    const bool flushed = ::fsync(output) == 0;
+    const bool handleClosed = ::close(output) == 0;
 #endif
-    if (!closed || fileBytes != member.declaredSize ||
+    if (!staging.finishFile(member.installedPath, diagnostics)) {
+      return false;
+    }
+    if (!flushed || !handleClosed || fileBytes != member.declaredSize ||
         (crc32 ^ 0xffffffffU) != member.expectedCrc32) {
       diagnostics.push_back(
           diagnostic("skin_archive_crc_or_read_failed",
@@ -1841,6 +2130,9 @@ bool extractArchive(OwnedArchiveFile &owned, const ArchiveInventory &inventory,
                      member.installedPath));
       return false;
     }
+    member.streamedSha256 = streamedHash.finalHex();
+    observe(observer, SkinImportIoOperation::AfterVisibleFileWritten,
+            staging.path() / pathFromUtf8(member.installedPath));
     ++completedFiles;
   }
   if (index != inventory.members.size() ||
@@ -1921,6 +2213,7 @@ digestArchivePayload(const ArchiveInventory &inventory,
     }
     std::uint64_t readTotal = 0;
     bool readOk = true;
+    file_checksum::Sha256 stagedFileHash;
     while (readTotal < member->declaredSize) {
       if (stop.stop_requested()) {
 #if defined(_WIN32)
@@ -1950,6 +2243,8 @@ digestArchivePayload(const ArchiveInventory &inventory,
       }
       hash.update(std::as_bytes(
           std::span(buffer.data(), static_cast<std::size_t>(count))));
+      stagedFileHash.update(std::as_bytes(
+          std::span(buffer.data(), static_cast<std::size_t>(count))));
       readTotal += static_cast<std::uint64_t>(count);
     }
     char extra = 0;
@@ -1972,6 +2267,14 @@ digestArchivePayload(const ArchiveInventory &inventory,
       diagnostics.push_back(
           diagnostic("skin_archive_payload_digest_failed",
                      "extracted archive payload changed size while hashing",
+                     member->installedPath));
+      return std::nullopt;
+    }
+    if (member->streamedSha256.empty() ||
+        stagedFileHash.finalHex() != member->streamedSha256) {
+      diagnostics.push_back(
+          diagnostic("skin_archive_payload_digest_mismatch",
+                     "staged archive member does not match streamed ZIP bytes",
                      member->installedPath));
       return std::nullopt;
     }
@@ -2098,13 +2401,18 @@ bool copyStableCandidate(
         if (!FlushFileBuffers(output)) {
           error = std::make_error_code(std::errc::io_error);
         }
-        CloseHandle(output);
+        if (!CloseHandle(output)) {
+          error = std::make_error_code(std::errc::io_error);
+        }
 #else
         if (::fsync(output) != 0) {
           error = std::error_code(errno, std::generic_category());
         }
         ::close(output);
 #endif
+        if (!staging.finishFile(relativeUtf8, diagnostics)) {
+          error = std::make_error_code(std::errc::io_error);
+        }
       } else {
         if (outputValid) {
 #if defined(_WIN32)
