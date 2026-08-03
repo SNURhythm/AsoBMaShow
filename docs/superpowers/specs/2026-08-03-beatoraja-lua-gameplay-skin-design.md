@@ -1,7 +1,7 @@
 # Beatoraja Lua Gameplay Skin Compatibility Design
 
 **Date:** August 3, 2026
-**Status:** Design approved; awaiting written-spec review
+**Status:** Approved for implementation
 
 ## Objective
 
