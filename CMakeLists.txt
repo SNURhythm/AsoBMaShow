@@ -4180,6 +4180,67 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endif()
 
+    add_executable(skin_commit_coordinator_tests EXCLUDE_FROM_ALL
+        tests/skin_commit_coordinator_tests.cpp
+        tests/support/SkinPackageStoreCommitStub.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/VersionedJson.cpp
+        src/skin/SkinCommitCoordinator.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/SkinStoragePaths.cpp
+        src/skin/package/SkinAliasDetector.cpp
+        src/skin/package/SkinArchiveImporter.cpp
+        src/skin/package/SkinPackageCatalog.cpp
+        src/skin/package/SkinPackageStore.cpp
+        src/skin/package/SkinPathPolicy.cpp
+        src/skin/package/SkinTreeSnapshotter.cpp
+    )
+    target_include_directories(skin_commit_coordinator_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/tests
+    )
+    target_compile_features(skin_commit_coordinator_tests PRIVATE cxx_std_23)
+    target_compile_definitions(skin_commit_coordinator_tests PRIVATE
+        ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+    )
+    target_link_libraries(skin_commit_coordinator_tests PRIVATE
+        BZip2::BZip2
+        LibLZMA::LibLZMA
+        ZLIB::ZLIB
+        utf8proc::utf8proc
+    )
+    if(TARGET zstd::libzstd_static)
+        target_link_libraries(skin_commit_coordinator_tests PRIVATE
+            zstd::libzstd_static
+        )
+    endif()
+    if(TARGET LibArchive::LibArchive)
+        target_link_libraries(skin_commit_coordinator_tests PRIVATE
+            LibArchive::LibArchive
+        )
+    else()
+        target_include_directories(skin_commit_coordinator_tests PRIVATE
+            ${LibArchive_INCLUDE_DIRS}
+        )
+        target_link_libraries(skin_commit_coordinator_tests PRIVATE
+            ${LibArchive_LIBRARIES}
+        )
+    endif()
+    if(APPLE)
+        target_sources(skin_commit_coordinator_tests PRIVATE
+            src/skin/package/SkinAliasDetectorApple.mm
+        )
+        target_link_libraries(skin_commit_coordinator_tests PRIVATE
+            "-framework Foundation"
+        )
+    endif()
+    if(WIN32)
+        target_link_libraries(skin_commit_coordinator_tests PRIVATE advapi32)
+    endif()
+    add_test(NAME skin_commit_coordinator_tests
+             COMMAND skin_commit_coordinator_tests)
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
