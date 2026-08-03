@@ -74,6 +74,7 @@ struct BlockingStore {
   bool entered = false;
   bool release = false;
   bool failFirst = false;
+  std::size_t failCall = 0;
   std::vector<std::filesystem::path> paths;
   std::vector<AppSettings> candidates;
 
@@ -83,9 +84,10 @@ struct BlockingStore {
     entered = true;
     paths.push_back(path);
     candidates.push_back(candidate);
+    const std::size_t call = candidates.size();
     cv.notify_all();
     cv.wait(lock, [&] { return release; });
-    if (failFirst) {
+    if (failFirst || failCall == call) {
       failFirst = false;
       error = "injected failure";
       return false;
@@ -116,6 +118,81 @@ waitForCommit(ProfileSettingsPersistenceCoordinator &coordinator,
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   return {};
+}
+
+void testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for reverse-order merge");
+  const auto second = manager.createProfile("Transaction Blocker");
+  expect(second.ok() && second.profile,
+         "reverse-order merge creates an inactive blocker profile");
+  AppSettings active;
+  active.skin = selectedSettings(1);
+  active.irProviders["tachi"].enabled = false;
+  BlockingStore store;
+  store.failCall = 3;
+  ProfileSettingsPersistenceCoordinator coordinator(
+      manager, active,
+      {.saveAtomic = [&](const auto &path, const auto &settings,
+                         std::string &error) {
+        return store.save(path, settings, error);
+      }});
+  const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
+  const auto snapshotTicket = coordinator.beginSnapshotAllProfiles();
+  std::optional<skin::AllSkinProfileSnapshotsResult> inventory;
+  for (int attempt = 0; attempt < 500 && !inventory; ++attempt) {
+    inventory = coordinator.pollSnapshotAllProfiles(snapshotTicket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  expect(inventory && inventory->complete,
+         "reverse-order merge discovers the inactive blocker profile");
+  const auto blockerProfile =
+      *skin::makeSkinProfileId(second.profile ? second.profile->id : "");
+  const auto blocker = coordinator.beginCommit(
+      blockerProfile, coordinator.snapshot(blockerProfile).generation,
+      selectedSettings(99));
+  store.waitUntilEntered();
+
+  AppSettings ordinary = active;
+  ordinary.irProviders["tachi"].enabled = true;
+  std::string ordinaryError;
+  std::thread ordinarySave([&] {
+    expect(
+        coordinator.saveActiveSettingsAndWait(profile, ordinary, ordinaryError),
+        "ordinary predecessor save succeeds: " + ordinaryError);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  const auto pending = coordinator.beginCommit(
+      profile, coordinator.snapshot(profile).generation, selectedSettings(2));
+  expect(pending.status == skin::SkinProfileCommitResult::Status::Pending,
+         "skin successor is accepted behind the ordinary save");
+  store.unblock();
+  ordinarySave.join();
+
+  const auto blockerResult = waitForCommit(coordinator, blocker.ticket);
+  const auto failed = waitForCommit(coordinator, pending.ticket);
+  const auto loaded =
+      AppSettingsStore::Load(manager.activePaths().settingsJson);
+  expect(failed.status ==
+                 skin::SkinProfileCommitResult::Status::RetryableFailure &&
+             loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.irProviders.at("tachi").enabled &&
+             loaded.settings.skin.entries.at(sampleEntry())
+                     .options.at("variant") == 1,
+         "failed skin successor leaves the ordinary edit and prior skin "
+         "durable");
+  expect(blockerResult.status ==
+                 skin::SkinProfileCommitResult::Status::Persisted &&
+             store.candidates.size() == 3 &&
+             !store.candidates[1].skin.entries.empty() &&
+             store.candidates[1]
+                     .skin.entries.at(sampleEntry())
+                     .options.at("variant") == 1 &&
+             store.candidates.back().irProviders.at("tachi").enabled,
+         "FIFO writes merge at their own execution sequence point");
 }
 
 void testCommitIsAsyncCasAndTerminalResultIsAcknowledgedExplicitly() {
@@ -284,13 +361,98 @@ void testSnapshotTicketsAndInventoryFenceRejectAba() {
     coordinator.finishInventoryMutation(std::move(barrier));
   }
 }
+
+void testSnapshotAdmissionAfterShutdownIsTerminallyCancelled() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for snapshot shutdown race");
+  AppSettings active;
+  ProfileSettingsPersistenceCoordinator coordinator(manager, active);
+
+  coordinator.shutdown();
+  const auto ticket = coordinator.beginSnapshotAllProfiles();
+  const auto result = coordinator.pollSnapshotAllProfiles(ticket);
+  expect(ticket != 0 && result && result->cancelled && !result->complete,
+         "snapshot admission losing the shutdown race returns a terminal "
+         "cancellation");
+}
+
+void testInventoryRaiiTokensCanOutliveCoordinatorShutdown() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for inventory token lifetime");
+  AppSettings active;
+  std::optional<skin::ProfileInventoryCommitFence> fence;
+  {
+    auto coordinator = std::make_unique<ProfileSettingsPersistenceCoordinator>(
+        manager, active);
+    const auto ticket = coordinator->beginSnapshotAllProfiles();
+    std::optional<skin::AllSkinProfileSnapshotsResult> snapshot;
+    for (int attempt = 0; attempt < 500 && !snapshot; ++attempt) {
+      snapshot = coordinator->pollSnapshotAllProfiles(ticket);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    expect(snapshot && snapshot->inventory,
+           "inventory token fixture captures a complete snapshot");
+    if (snapshot && snapshot->inventory) {
+      fence = coordinator->tryAcquireInventoryCommitFence(*snapshot->inventory);
+    }
+    expect(fence.has_value(), "inventory token fixture acquires a fence");
+    coordinator->shutdown();
+  }
+  auto replacement =
+      std::make_unique<ProfileSettingsPersistenceCoordinator>(manager, active);
+  const auto replacementTicket = replacement->beginSnapshotAllProfiles();
+  std::optional<skin::AllSkinProfileSnapshotsResult> replacementSnapshot;
+  for (int attempt = 0; attempt < 500 && !replacementSnapshot; ++attempt) {
+    replacementSnapshot =
+        replacement->pollSnapshotAllProfiles(replacementTicket);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  auto replacementFence = replacementSnapshot && replacementSnapshot->inventory
+                              ? replacement->tryAcquireInventoryCommitFence(
+                                    *replacementSnapshot->inventory)
+                              : std::nullopt;
+  expect(replacementFence.has_value(),
+         "replacement coordinator acquires its own fence");
+  fence.reset();
+  std::atomic<bool> replacementCommitReturned = false;
+  std::thread replacementCommit([&] {
+    const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
+    replacement->beginCommit(profile, replacement->snapshot(profile).generation,
+                             selectedSettings(17));
+    replacementCommitReturned = true;
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  expect(!replacementCommitReturned.load(),
+         "releasing an old fence cannot release a replacement owner's fence");
+  replacementFence.reset();
+  replacementCommit.join();
+  replacement->shutdown();
+  replacement.reset();
+
+  std::optional<skin::ProfileInventoryMutationBarrier> barrier;
+  {
+    auto coordinator = std::make_unique<ProfileSettingsPersistenceCoordinator>(
+        manager, active);
+    barrier.emplace(coordinator->beginInventoryMutation());
+    coordinator->shutdown();
+  }
+  barrier.reset();
+  expect(true, "fences and barriers release safely after owner destruction");
+}
 } // namespace
 
 int main() {
   testCommitIsAsyncCasAndTerminalResultIsAcknowledgedExplicitly();
   testFailureRollsBackWithoutReusingGenerationAndPathIsCaptured();
   testOrdinarySaveMergesPendingSkinAndLatestIrCandidate();
+  testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable();
   testSnapshotTicketsAndInventoryFenceRejectAba();
+  testSnapshotAdmissionAfterShutdownIsTerminallyCancelled();
+  testInventoryRaiiTokensCanOutliveCoordinatorShutdown();
   if (failures != 0) {
     std::cerr << failures
               << " profile settings persistence assertion(s) failed\n";

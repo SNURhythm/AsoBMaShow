@@ -3,6 +3,7 @@
 #include "../src/VersionedJson.h"
 #include "../src/skin/SkinProfileSettings.h"
 #include "../src/skin/package/SkinPathPolicy.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -337,6 +338,113 @@ void testSkinSettingsDeterministicallyEnforceFixedLimits() {
     expect(!remembered.filePaths.contains("absolute"),
            "host filesystem paths are never retained in profile settings");
   }
+}
+
+void testHostileSkinJsonIsBoundedDuringDecode() {
+  TempDirectory temp;
+  const auto path = temp.path() / "hostile-skin.json";
+  nlohmann::json entries = nlohmann::json::array();
+  for (int entryIndex = 0; entryIndex < 70; ++entryIndex) {
+    nlohmann::json options = nlohmann::json::object();
+    nlohmann::json files = nlohmann::json::object();
+    nlohmann::json offsets = nlohmann::json::object();
+    for (int keyIndex = 0; keyIndex < 270; ++keyIndex) {
+      const std::string key = "key-" + std::to_string(keyIndex + 1000);
+      options[key] = keyIndex;
+      files[key] = "parts/" + std::to_string(keyIndex) + ".png";
+      offsets[key] = {{"x", keyIndex}};
+    }
+    options[std::string(129, 'k')] = 1;
+    files["000-oversized-value"] = std::string(1025, 'v');
+    entries.push_back({{"entry",
+                        {{"package", "Package-" + std::to_string(entryIndex)},
+                         {"path", "play/main.luaskin"}}},
+                       {"settings",
+                        {{"options", std::move(options)},
+                         {"filePaths", std::move(files)},
+                         {"offsets", std::move(offsets)}}}});
+  }
+  entries.push_back(
+      {{"entry",
+        {{"package", std::string(129, 'p')}, {"path", "main.luaskin"}}},
+       {"settings", nlohmann::json::object()}});
+  nlohmann::json document = {
+      {"schemaVersion", 4},
+      {"skin",
+       {{"gameplayCompatibilityEnabled", false},
+        {"selected7KeyEntry", nullptr},
+        {"entries", std::move(entries)}}},
+  };
+  writeFile(path, document.dump());
+
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skin.entries.size() == 64,
+         "hostile skin JSON retains only the bounded entry set");
+  if (!loaded.settings.skin.entries.empty()) {
+    const auto &settings = loaded.settings.skin.entries.begin()->second;
+    expect(settings.options.size() == 256 && settings.filePaths.size() == 256 &&
+               settings.offsets.size() == 256,
+           "hostile skin JSON retains only bounded configuration maps");
+  }
+  expect(
+      hasDiagnostic(loaded.diagnostics, "skin.entries", "limit") &&
+          hasDiagnostic(loaded.diagnostics, "options", "limit") &&
+          hasDiagnostic(loaded.diagnostics, "filePaths", "limit") &&
+          hasDiagnostic(loaded.diagnostics, "offsets", "limit") &&
+          hasDiagnostic(loaded.diagnostics, "filePaths", "byte limit") &&
+          hasDiagnostic(loaded.diagnostics, "skin.entries.entry", "byte limit"),
+      "decode-time limits emit field-specific diagnostics");
+}
+
+void testSkinEntryCollisionKeysDeduplicateDeterministically() {
+  const auto upperPackage = skin::normalizePackageId("Pack");
+  const auto lowerPackage = skin::normalizePackageId("pack");
+  const auto upperEntry =
+      skin::normalizeEntryPath(*upperPackage.package, "play/main.luaskin");
+  const auto lowerEntry =
+      skin::normalizeEntryPath(*lowerPackage.package, "play/main.luaskin");
+  expect(upperEntry.entry->collisionKey == lowerEntry.entry->collisionKey,
+         "collision fixture has one derived case-fold identity");
+
+  skin::SkinProfileSettings direct;
+  direct.entries[*lowerEntry.entry].options["variant"] = 2;
+  direct.entries[*upperEntry.entry].options["variant"] = 1;
+  direct.selected7KeyEntry = *lowerEntry.entry;
+  direct.gameplayCompatibilityEnabled = true;
+  direct.sanitize();
+  expect(direct.entries.size() == 1 &&
+             direct.entries.begin()->first.package.directoryName == "Pack" &&
+             direct.entries.begin()->second.options.at("variant") == 1 &&
+             direct.selected7KeyEntry == direct.entries.begin()->first,
+         "sanitize keeps the lexically first derived collision and remaps "
+         "selection");
+
+  TempDirectory temp;
+  const auto path = temp.path() / "collision-skin.json";
+  writeFile(path, R"JSON({
+    "schemaVersion":4,
+    "skin":{
+      "gameplayCompatibilityEnabled":true,
+      "selected7KeyEntry":{"package":"pack","path":"play/main.luaskin"},
+      "entries":[
+        {"entry":{"package":"pack","path":"play/main.luaskin"},"settings":{"options":{"variant":2}}},
+        {"entry":{"package":"Pack","path":"play/main.luaskin"},"settings":{"options":{"variant":1}}}
+      ]
+    }
+  })JSON");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(
+      loaded.status == AppSettingsLoadStatus::Loaded &&
+          loaded.settings.skin.entries.size() == 1 &&
+          loaded.settings.skin.entries.begin()->first.package.directoryName ==
+              "Pack" &&
+          loaded.settings.skin.entries.begin()->second.options.at("variant") ==
+              1 &&
+          loaded.settings.skin.selected7KeyEntry ==
+              loaded.settings.skin.entries.begin()->first,
+      "JSON load deduplicates derived collisions independent of array "
+      "order");
 }
 
 void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
@@ -918,6 +1026,8 @@ int main() {
   testSchemaThreeMigrationDisablesCompatibility();
   testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds();
   testSkinSettingsDeterministicallyEnforceFixedLimits();
+  testHostileSkinJsonIsBoundedDuringDecode();
+  testSkinEntryCollisionKeysDeduplicateDeterministically();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testGameplayRulesetDefaultsMigrationAndValidation();

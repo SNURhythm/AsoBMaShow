@@ -100,11 +100,23 @@ void ProfileInventoryMutationBarrier::release() noexcept {
 
 } // namespace skin
 
+namespace {
+struct InventoryGateState {
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::uint64_t generation = 1;
+  std::size_t activeFences = 0;
+  bool mutationActive = false;
+  bool stopping = false;
+};
+} // namespace
+
 struct ProfileSettingsPersistenceCoordinator::Impl {
   struct ProfileState {
     std::uint64_t generation = 1;
     std::uint64_t highWaterGeneration = 1;
     skin::SkinProfileSettings settings;
+    AppSettings durableSettings;
     std::optional<std::uint64_t> unresolvedTicket;
   };
 
@@ -134,6 +146,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
     skin::SkinProfileSettings previousSkin;
     std::shared_ptr<WaitResult> waiter;
     std::uint64_t inventoryGeneration = 0;
+    std::uint64_t skinGeneration = 0;
     std::vector<SnapshotInput> snapshotInputs;
   };
 
@@ -142,7 +155,6 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
   ProfileSettingsPersistenceDependencies dependencies;
   mutable std::mutex mutex;
   std::condition_variable cv;
-  std::condition_variable fenceCv;
   std::deque<Job> jobs;
   std::map<std::string, ProfileState, std::less<>> profiles;
   std::map<std::uint64_t, skin::SkinProfileCommitResult> commits;
@@ -151,9 +163,8 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
   std::set<std::uint64_t> pendingSnapshots;
   std::string activeProfileId;
   std::uint64_t nextTicket = 1;
-  std::uint64_t inventoryGeneration = 1;
-  std::size_t activeFences = 0;
-  bool inventoryMutationActive = false;
+  std::shared_ptr<InventoryGateState> inventoryGate =
+      std::make_shared<InventoryGateState>();
   bool stopping = false;
   bool stopped = false;
   // Deliberately last: reverse destruction cannot tear down borrowed state
@@ -166,6 +177,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
         dependencies(std::move(dependencyValue)),
         activeProfileId(manager.activeProfile().id) {
     profiles[activeProfileId].settings = activeSettings.skin;
+    profiles[activeProfileId].durableSettings = activeSettings;
     worker = std::thread([this] { run(); });
   }
 
@@ -208,8 +220,19 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
   }
 
   void processSkinCommit(Job &job) {
+    AppSettings merged;
+    {
+      std::lock_guard lock(mutex);
+      const auto state = profiles.find(job.profileId.opaque);
+      if (state == profiles.end()) {
+        return;
+      }
+      merged = state->second.durableSettings;
+      merged.skin = job.settings.skin;
+    }
+    merged.sanitize();
     std::string error;
-    const bool saved = dependencies.saveAtomic(job.path, job.settings, error);
+    const bool saved = dependencies.saveAtomic(job.path, merged, error);
     std::lock_guard lock(mutex);
     auto &state = profiles[job.profileId.opaque];
     skin::SkinProfileCommitResult result{
@@ -225,6 +248,8 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       result.failure = failureDiagnostic(
           "skin_profile_save_failed",
           error.empty() ? "Skin profile settings could not be saved" : error);
+    } else {
+      state.durableSettings = std::move(merged);
     }
     commits[job.ticket] = std::move(result);
   }
@@ -237,11 +262,20 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
         completeWaiter(job.waiter, false, {}, "Skin profile is not bound");
         return;
       }
-      job.settings.skin = state->second.settings;
+      if (state->second.generation == job.skinGeneration) {
+        job.settings.skin = state->second.settings;
+      }
     }
     job.settings.sanitize();
     std::string error;
     const bool saved = dependencies.saveAtomic(job.path, job.settings, error);
+    if (saved) {
+      std::lock_guard lock(mutex);
+      const auto state = profiles.find(job.profileId.opaque);
+      if (state != profiles.end()) {
+        state->second.durableSettings = job.settings;
+      }
+    }
     completeWaiter(job.waiter, saved, std::move(job.settings),
                    saved ? std::string() : std::move(error));
   }
@@ -276,6 +310,7 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
       auto [state, inserted] = profiles.try_emplace(input.id.opaque);
       if (inserted) {
         state->second.settings = loaded.settings.skin;
+        state->second.durableSettings = loaded.settings;
       }
       inventory.profiles.push_back(snapshotLocked(input.id));
     }
@@ -353,6 +388,11 @@ struct ProfileSettingsPersistenceCoordinator::Impl {
 
   void shutdown() noexcept {
     {
+      std::lock_guard gateLock(inventoryGate->mutex);
+      inventoryGate->stopping = true;
+      inventoryGate->cv.notify_all();
+    }
+    {
       std::lock_guard lock(mutex);
       if (stopped || stopping) {
         return;
@@ -393,12 +433,14 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
     const skin::SkinProfileId &profileId, std::uint64_t expectedGeneration,
     skin::SkinProfileSettings candidate) {
   candidate.sanitize();
-  std::unique_lock lock(impl_->mutex);
-  impl_->fenceCv.wait(lock, [&] {
-    return impl_->activeFences == 0 && !impl_->inventoryMutationActive;
+  const auto gate = impl_->inventoryGate;
+  std::unique_lock gateLock(gate->mutex);
+  gate->cv.wait(gateLock, [&] {
+    return gate->stopping || (gate->activeFences == 0 && !gate->mutationActive);
   });
+  std::lock_guard lock(impl_->mutex);
   auto found = impl_->profiles.find(profileId.opaque);
-  if (impl_->stopping || found == impl_->profiles.end()) {
+  if (gate->stopping || impl_->stopping || found == impl_->profiles.end()) {
     return {.status = skin::SkinProfileCommitResult::Status::RetryableFailure,
             .failure = failureDiagnostic("skin_profile_not_bound",
                                          "Skin profile is not bound")};
@@ -480,10 +522,18 @@ void ProfileSettingsPersistenceCoordinator::acknowledgeCommit(
 
 std::uint64_t
 ProfileSettingsPersistenceCoordinator::beginSnapshotAllProfiles() {
+  const auto gate = impl_->inventoryGate;
+  std::unique_lock gateLock(gate->mutex);
   std::unique_lock lock(impl_->mutex);
   const std::uint64_t ticket = impl_->allocateTicket();
-  const std::uint64_t generation = impl_->inventoryGeneration;
+  if (gate->stopping || impl_->stopping) {
+    impl_->snapshots[ticket] = {.cancelled = true};
+    return ticket;
+  }
+  const std::uint64_t generation = gate->generation;
+  const std::string activeProfileId = impl_->activeProfileId;
   lock.unlock();
+  gateLock.unlock();
 
   std::vector<Impl::SnapshotInput> inputs;
   for (const auto &profile : impl_->manager.listProfiles()) {
@@ -493,9 +543,14 @@ ProfileSettingsPersistenceCoordinator::beginSnapshotAllProfiles() {
     }
     inputs.push_back({.id = *id,
                       .path = impl_->manager.pathsFor(profile.id).settingsJson,
-                      .active = profile.id == impl_->activeProfileId});
+                      .active = profile.id == activeProfileId});
   }
+  gateLock.lock();
   lock.lock();
+  if (gate->stopping || impl_->stopping) {
+    impl_->snapshots[ticket] = {.cancelled = true};
+    return ticket;
+  }
   impl_->pendingSnapshots.insert(ticket);
   impl_->enqueue({.kind = Impl::JobKind::SnapshotAll,
                   .ticket = ticket,
@@ -529,9 +584,11 @@ void ProfileSettingsPersistenceCoordinator::cancelSnapshotAllProfiles(
 std::optional<skin::ProfileInventoryCommitFence>
 ProfileSettingsPersistenceCoordinator::tryAcquireInventoryCommitFence(
     const skin::ProfileInventorySnapshot &inventory) {
+  const auto gate = impl_->inventoryGate;
+  std::lock_guard gateLock(gate->mutex);
   std::lock_guard lock(impl_->mutex);
-  if (impl_->stopping || impl_->inventoryMutationActive ||
-      inventory.inventoryGeneration != impl_->inventoryGeneration ||
+  if (gate->stopping || impl_->stopping || gate->mutationActive ||
+      inventory.inventoryGeneration != gate->generation ||
       inventory.profiles.size() != impl_->profiles.size()) {
     return std::nullopt;
   }
@@ -542,35 +599,35 @@ ProfileSettingsPersistenceCoordinator::tryAcquireInventoryCommitFence(
       return std::nullopt;
     }
   }
-  ++impl_->activeFences;
-  std::weak_ptr<int> lifetime;
-  // impl_ outlives every in-scope fence by API ownership; shutdown waits for
-  // callers to release publication fences before destroying the coordinator.
-  Impl *owner = impl_.get();
-  return skin::ProfileInventoryCommitFence([owner] {
-    std::lock_guard lock(owner->mutex);
-    if (owner->activeFences != 0) {
-      --owner->activeFences;
+  ++gate->activeFences;
+  return skin::ProfileInventoryCommitFence([gate] {
+    std::lock_guard lock(gate->mutex);
+    if (gate->activeFences != 0) {
+      --gate->activeFences;
     }
-    owner->fenceCv.notify_all();
+    gate->cv.notify_all();
   });
 }
 
 skin::ProfileInventoryMutationBarrier
 ProfileSettingsPersistenceCoordinator::beginInventoryMutation() {
-  std::unique_lock lock(impl_->mutex);
-  impl_->fenceCv.wait(lock, [&] { return !impl_->inventoryMutationActive; });
-  impl_->inventoryMutationActive = true;
-  ++impl_->inventoryGeneration;
-  impl_->fenceCv.wait(lock, [&] { return impl_->activeFences == 0; });
-  Impl *owner = impl_.get();
-  return skin::ProfileInventoryMutationBarrier([owner] {
-    std::lock_guard lock(owner->mutex);
-    if (owner->inventoryMutationActive) {
-      owner->inventoryMutationActive = false;
-      ++owner->inventoryGeneration;
+  const auto gate = impl_->inventoryGate;
+  std::unique_lock lock(gate->mutex);
+  gate->cv.wait(lock, [&] { return gate->stopping || !gate->mutationActive; });
+  if (gate->stopping) {
+    return skin::ProfileInventoryMutationBarrier([] {});
+  }
+  gate->mutationActive = true;
+  ++gate->generation;
+  gate->cv.wait(lock,
+                [&] { return gate->stopping || gate->activeFences == 0; });
+  return skin::ProfileInventoryMutationBarrier([gate] {
+    std::lock_guard lock(gate->mutex);
+    if (gate->mutationActive) {
+      gate->mutationActive = false;
+      ++gate->generation;
     }
-    owner->fenceCv.notify_all();
+    gate->cv.notify_all();
   });
 }
 
@@ -584,11 +641,15 @@ bool ProfileSettingsPersistenceCoordinator::saveActiveSettingsAndWait(
     std::string &error) {
   auto waiter = std::make_shared<Impl::WaitResult>();
   {
-    std::unique_lock lock(impl_->mutex);
-    impl_->fenceCv.wait(lock, [&] {
-      return impl_->activeFences == 0 && !impl_->inventoryMutationActive;
+    const auto gate = impl_->inventoryGate;
+    std::unique_lock gateLock(gate->mutex);
+    gate->cv.wait(gateLock, [&] {
+      return gate->stopping ||
+             (gate->activeFences == 0 && !gate->mutationActive);
     });
-    if (impl_->stopping || profileId.opaque != impl_->activeProfileId) {
+    std::lock_guard lock(impl_->mutex);
+    if (gate->stopping || impl_->stopping ||
+        profileId.opaque != impl_->activeProfileId) {
       error = "The requested profile is not the bound active profile";
       return false;
     }
@@ -597,6 +658,7 @@ bool ProfileSettingsPersistenceCoordinator::saveActiveSettingsAndWait(
          .profileId = profileId,
          .path = impl_->manager.pathsFor(profileId.opaque).settingsJson,
          .settings = settings,
+         .skinGeneration = impl_->profiles.at(profileId.opaque).generation,
          .waiter = waiter});
   }
   std::unique_lock waitLock(waiter->mutex);
@@ -632,18 +694,24 @@ bool ProfileSettingsPersistenceCoordinator::flushProfileAndWait(
 void ProfileSettingsPersistenceCoordinator::bindCommittedActiveProfile(
     skin::SkinProfileId profileId, AppSettings &settings) {
   settings.sanitize();
-  std::unique_lock lock(impl_->mutex);
-  impl_->fenceCv.wait(lock, [&] {
-    return impl_->activeFences == 0 && !impl_->inventoryMutationActive;
+  const auto gate = impl_->inventoryGate;
+  std::unique_lock gateLock(gate->mutex);
+  gate->cv.wait(gateLock, [&] {
+    return gate->stopping || (gate->activeFences == 0 && !gate->mutationActive);
   });
+  if (gate->stopping) {
+    return;
+  }
+  std::lock_guard lock(impl_->mutex);
   auto &state = impl_->profiles[profileId.opaque];
   state.highWaterGeneration =
       std::max(state.highWaterGeneration, state.generation);
   state.generation = ++state.highWaterGeneration;
   state.settings = settings.skin;
+  state.durableSettings = settings;
   impl_->activeProfileId = profileId.opaque;
   impl_->activeSettings = settings;
-  ++impl_->inventoryGeneration;
+  ++gate->generation;
 }
 
 void ProfileSettingsPersistenceCoordinator::shutdown() noexcept {

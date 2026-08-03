@@ -9,9 +9,47 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 class ReplayRepository;
 class ScoreRepository;
+
+class NoThrowActiveProfileCommitted {
+public:
+  NoThrowActiveProfileCommitted() = default;
+
+  template <typename Callback>
+    requires(!std::is_same_v<std::remove_cvref_t<Callback>,
+                             NoThrowActiveProfileCommitted>)
+  NoThrowActiveProfileCommitted(Callback &&callback)
+      : callback_(std::forward<Callback>(callback)) {}
+
+  template <typename Callback>
+    requires(!std::is_same_v<std::remove_cvref_t<Callback>,
+                             NoThrowActiveProfileCommitted>)
+  NoThrowActiveProfileCommitted &operator=(Callback &&callback) {
+    callback_ = std::forward<Callback>(callback);
+    return *this;
+  }
+
+  void operator()(std::string_view profileId,
+                  AppSettings &settings) const noexcept {
+    try {
+      if (callback_) {
+        callback_(profileId, settings);
+      }
+    } catch (...) {
+    }
+  }
+
+  explicit operator bool() const noexcept {
+    return static_cast<bool>(callback_);
+  }
+
+private:
+  std::function<void(std::string_view, AppSettings &)> callback_;
+};
 
 struct ProfileSwitchResult {
   ProfileError error = ProfileError::None;
@@ -53,7 +91,7 @@ struct ProfileSessionDependencies {
       activateProfileServices;
   std::function<bool(std::string_view, const AppSettings &, std::string &)>
       restoreProfileServices;
-  std::function<void(std::string_view, AppSettings &)> activeProfileCommitted;
+  NoThrowActiveProfileCommitted activeProfileCommitted;
 };
 
 class ProfileSessionCoordinator {

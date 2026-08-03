@@ -180,11 +180,18 @@ readSkinEntryId(const json &encoded, std::string_view key,
     invalidValue(key, "expected package/path object", diagnostics);
     return std::nullopt;
   }
-  std::string packageName;
-  std::string relativePath;
-  if (!readValue(encoded, "package", packageName, diagnostics) ||
-      !readValue(encoded, "path", relativePath, diagnostics)) {
+  const auto packageValue = encoded.find("package");
+  const auto pathValue = encoded.find("path");
+  if (packageValue == encoded.end() || !packageValue->is_string() ||
+      pathValue == encoded.end() || !pathValue->is_string()) {
     invalidValue(key, "expected package and path strings", diagnostics);
+    return std::nullopt;
+  }
+  const auto &packageName = packageValue->get_ref<const std::string &>();
+  const auto &relativePath = pathValue->get_ref<const std::string &>();
+  if (packageName.size() > skin::SkinPackagePolicy::maxPackageNameBytes ||
+      relativePath.size() > skin::SkinPackagePolicy::maxPathBytes) {
+    invalidValue(key, "package or path exceeds its byte limit", diagnostics);
     return std::nullopt;
   }
   const auto package = skin::normalizePackageId(packageName);
@@ -266,6 +273,9 @@ void readSkinProfileSettings(const json &document,
     invalidValue("skin.entries", "expected array", diagnostics);
     return;
   }
+  if (entries->size() > skin::SkinProfileSettingsPolicy::maxEntries) {
+    invalidValue("skin.entries", "entry count exceeds limit", diagnostics);
+  }
   for (const auto &record : *entries) {
     if (!record.is_object() || !record.contains("entry") ||
         !record.contains("settings") || !record["settings"].is_object()) {
@@ -280,7 +290,8 @@ void readSkinProfileSettings(const json &document,
     }
     skin::EntryProfileSettings settings;
     const auto &encoded = record["settings"];
-    const auto readStringIntMap = [&](std::string_view name, auto &target) {
+    const auto readBoundedMap = [&](std::string_view name, auto &target,
+                                    std::size_t limit) {
       const auto map = encoded.find(std::string(name));
       if (map == encoded.end()) {
         return;
@@ -290,25 +301,66 @@ void readSkinProfileSettings(const json &document,
                      "expected object", diagnostics);
         return;
       }
+      if (map->size() > limit) {
+        invalidValue("skin.entries.settings." + std::string(name),
+                     "entry count exceeds limit", diagnostics);
+      }
       for (const auto &[key, value] : map->items()) {
+        if (key.size() >
+            skin::SkinProfileSettingsPolicy::maxConfigurationKeyBytes) {
+          invalidValue("skin.entries.settings." + std::string(name),
+                       "key exceeds byte limit", diagnostics);
+          continue;
+        }
+        if (target.size() >= limit) {
+          continue;
+        }
         try {
-          target[key] = value.template get<
-              typename std::decay_t<decltype(target)>::mapped_type>();
+          using Mapped = typename std::decay_t<decltype(target)>::mapped_type;
+          if constexpr (std::is_same_v<Mapped, std::string>) {
+            if (!value.is_string() ||
+                value.get_ref<const std::string &>().size() >
+                    skin::SkinProfileSettingsPolicy::
+                        maxConfigurationValueBytes) {
+              invalidValue("skin.entries.settings." + std::string(name),
+                           "value exceeds byte limit or is not a string",
+                           diagnostics);
+              continue;
+            }
+          }
+          target.try_emplace(key, value.template get<Mapped>());
         } catch (const std::exception &) {
           invalidValue("skin.entries.settings." + std::string(name),
                        "invalid mapped value", diagnostics);
         }
       }
     };
-    readStringIntMap("options", settings.options);
-    readStringIntMap("filePaths", settings.filePaths);
+    readBoundedMap("options", settings.options,
+                   skin::SkinProfileSettingsPolicy::maxOptionsPerEntry);
+    readBoundedMap("filePaths", settings.filePaths,
+                   skin::SkinProfileSettingsPolicy::maxFilesPerEntry);
     if (const auto offsets = encoded.find("offsets");
         offsets != encoded.end()) {
       if (!offsets->is_object()) {
         invalidValue("skin.entries.settings.offsets", "expected object",
                      diagnostics);
       } else {
+        if (offsets->size() >
+            skin::SkinProfileSettingsPolicy::maxOffsetsPerEntry) {
+          invalidValue("skin.entries.settings.offsets",
+                       "entry count exceeds limit", diagnostics);
+        }
         for (const auto &[name, value] : offsets->items()) {
+          if (name.size() >
+              skin::SkinProfileSettingsPolicy::maxConfigurationKeyBytes) {
+            invalidValue("skin.entries.settings.offsets",
+                         "key exceeds byte limit", diagnostics);
+            continue;
+          }
+          if (settings.offsets.size() >=
+              skin::SkinProfileSettingsPolicy::maxOffsetsPerEntry) {
+            continue;
+          }
           if (!value.is_object()) {
             invalidValue("skin.entries.settings.offsets." + name,
                          "expected object", diagnostics);
@@ -330,6 +382,10 @@ void readSkinProfileSettings(const json &document,
       readViewport(*viewport, settings.viewport, diagnostics);
     }
     destination.entries.try_emplace(std::move(*entry), std::move(settings));
+    if (destination.entries.size() >
+        skin::SkinProfileSettingsPolicy::maxEntries) {
+      destination.entries.erase(std::prev(destination.entries.end()));
+    }
   }
 }
 

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <set>
 #include <utility>
 
 namespace skin {
@@ -175,7 +176,23 @@ makeSkinProfileId(std::string_view existingPlayerProfileId) {
 }
 
 void SkinProfileSettings::sanitize() {
+  std::optional<std::string> selectedCollisionKey;
+  if (selected7KeyEntry) {
+    const auto selectedPackage =
+        normalizePackageId(selected7KeyEntry->package.directoryName);
+    const auto selectedEntry =
+        selectedPackage.package
+            ? normalizeEntryPath(*selectedPackage.package,
+                                 selected7KeyEntry->packageRelativePath)
+            : SkinEntryIdResult{};
+    if (selectedEntry.entry &&
+        selectedEntry.entry->collisionKey == selected7KeyEntry->collisionKey) {
+      selectedCollisionKey = selectedEntry.entry->collisionKey;
+    }
+  }
+
   std::map<SkinEntryId, EntryProfileSettings> sanitized;
+  std::set<std::string, std::less<>> retainedCollisionKeys;
   for (auto &[rawEntry, settings] : entries) {
     const auto package = normalizePackageId(rawEntry.package.directoryName);
     if (!package.package ||
@@ -187,20 +204,26 @@ void SkinProfileSettings::sanitize() {
     if (!entry.entry || entry.entry->collisionKey != rawEntry.collisionKey) {
       continue;
     }
+    if (retainedCollisionKeys.contains(entry.entry->collisionKey)) {
+      continue;
+    }
     sanitizeEntry(settings);
+    retainedCollisionKeys.insert(entry.entry->collisionKey);
     sanitized.try_emplace(*entry.entry, std::move(settings));
-  }
-  while (sanitized.size() > SkinProfileSettingsPolicy::maxEntries) {
-    sanitized.erase(std::prev(sanitized.end()));
+    if (sanitized.size() == SkinProfileSettingsPolicy::maxEntries) {
+      break;
+    }
   }
   entries = std::move(sanitized);
 
-  if (selected7KeyEntry) {
-    const auto selected = entries.find(*selected7KeyEntry);
-    if (selected == entries.end()) {
-      selected7KeyEntry.reset();
-    } else {
-      selected7KeyEntry = selected->first;
+  selected7KeyEntry.reset();
+  if (selectedCollisionKey) {
+    for (const auto &[entry, settings] : entries) {
+      (void)settings;
+      if (entry.collisionKey == *selectedCollisionKey) {
+        selected7KeyEntry = entry;
+        break;
+      }
     }
   }
   if (!selected7KeyEntry) {

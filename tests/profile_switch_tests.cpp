@@ -438,6 +438,7 @@ struct SwitchFixture {
   bool failRefreshOnce = false;
   bool failServicePause = false;
   bool failServiceActivate = false;
+  bool throwActiveProfileCommitted = false;
   bool throwRecoveryStd = false;
   bool throwRecoveryNonStd = false;
   std::optional<std::string> blocker;
@@ -719,15 +720,17 @@ struct SwitchFixture {
                                     activeSettings.audioOffsetMs == -17;
           return true;
         };
-    dependencies.activeProfileCommitted =
-        [this](std::string_view profileId,
-               AppSettings &activeSettings) noexcept {
-          ++activeProfileCommittedCalls;
-          switchEvents.emplace_back("owner-bind");
-          activeProfileCommitObservedTargetState =
-              profileId == secondId && manager.activeProfile().id == secondId &&
-              activeSettings.audioOffsetMs == 42;
-        };
+    dependencies.activeProfileCommitted = [this](std::string_view profileId,
+                                                 AppSettings &activeSettings) {
+      ++activeProfileCommittedCalls;
+      switchEvents.emplace_back("owner-bind");
+      if (throwActiveProfileCommitted) {
+        throw std::runtime_error("injected owner notification failure");
+      }
+      activeProfileCommitObservedTargetState =
+          profileId == secondId && manager.activeProfile().id == secondId &&
+          activeSettings.audioOffsetMs == 42;
+    };
     return dependencies;
   }
 
@@ -933,6 +936,25 @@ void testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh() {
              fixture.serviceRestoreCalls == 0,
          "profile services pause on the source before rebinding and activate "
          "only after the target is committed");
+}
+
+void testPostActivationOwnerNotificationCannotRollbackCommittedProfile() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  fixture.throwActiveProfileCommitted = true;
+
+  const auto result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(result.ok() &&
+             fixture.manager.activeProfile().id == fixture.secondId &&
+             fixture.serviceActivateCalls == 1 &&
+             fixture.activeProfileCommittedCalls == 1 &&
+             fixture.serviceRestoreCalls == 0,
+         "post-activation owner notification is no-throw and cannot reopen "
+         "switch rollback");
 }
 
 void testTargetReplayFilesAreReconciledAfterProfileSwitch() {
@@ -2516,6 +2538,7 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
 int main() {
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
   testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh();
+  testPostActivationOwnerNotificationCannotRollbackCommittedProfile();
   testTargetReplayFilesAreReconciledAfterProfileSwitch();
   testServicePauseFailureAndActivationRollback();
   testRecoveryWarningDoesNotRollbackSuccessfulSwitch();

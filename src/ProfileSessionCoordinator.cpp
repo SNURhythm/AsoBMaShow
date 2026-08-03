@@ -372,11 +372,6 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
                     "Unable to activate target profile services: unknown "
                     "failure");
   }
-  try {
-    dependencies_.activeProfileCommitted(profileId, currentSettings);
-  } catch (...) {
-    return rollback(ProfileError::IoFailure,
-                    "Unable to bind committed profile settings owner.");
-  }
+  dependencies_.activeProfileCommitted(profileId, currentSettings);
   return switchSuccess(std::move(recoveryWarning));
 }
