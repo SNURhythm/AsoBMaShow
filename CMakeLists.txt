@@ -532,6 +532,12 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME beatoraja_skin_reference_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/beatoraja_skin_reference_tests.py -v)
+    set_tests_properties(beatoraja_skin_reference_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_library(ir_submission_eligibility_test_support STATIC
         src/ir/tachi/TachiEligibility.cpp
         src/ir/IrOutboxModels.cpp
