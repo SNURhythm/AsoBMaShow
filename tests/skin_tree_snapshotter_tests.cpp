@@ -549,6 +549,14 @@ void testOverlayIdentityRejectsUnsafeInputsAndFramesFields() {
       *makeSkinProfileId("11111111-1111-4111-8111-111111111111");
   const auto entry = entryId("Fixture", "main.luaskin");
 
+  auto relativeRoots = roots;
+  relativeRoots.profileOverlays =
+      fs::relative(temp.root() / "relative-overlays", fs::current_path());
+  const auto relativeOverlay =
+      deriveSkinPrivateOverlayRoot(relativeRoots, profile, entry);
+  expect(!relativeOverlay.root && relativeOverlay.failure,
+         "a relative private overlay root is rejected fail-closed");
+
   for (const SkinProfileId invalidProfile :
        {SkinProfileId{.opaque = "../profile"},
         SkinProfileId{.opaque = std::string("\xff", 1)}}) {
@@ -576,6 +584,20 @@ void testOverlayIdentityRejectsUnsafeInputsAndFramesFields() {
          "length framing separates identities with the same naive text join");
 }
 
+void testSnapshotRejectsRelativePrivateRevisionRoot() {
+  TempDirectory temp;
+  auto roots = rootsBelow(temp.root());
+  roots.privateRevisions =
+      fs::relative(temp.root() / "relative-revisions", fs::current_path());
+  const fs::path source = temp.root() / "source";
+  writeBytes(source / "main.luaskin", "return {}\n");
+  FakeAliasDetector aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  const auto result = snapshotter.snapshot(source, packageId(), {}, {});
+  expect(!result.prepared,
+         "snapshot rejects a relative private revision root fail-closed");
+}
+
 } // namespace
 
 int main() {
@@ -595,6 +617,7 @@ int main() {
   testPublishedRevisionIsImmutableAndLeaseClonesShareThePin();
   testOverlayIdentityIsPrivateContainedAndCanonical();
   testOverlayIdentityRejectsUnsafeInputsAndFramesFields();
+  testSnapshotRejectsRelativePrivateRevisionRoot();
   if (failures != 0) {
     std::cerr << failures << " test assertion(s) failed\n";
     return 1;

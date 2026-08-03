@@ -48,13 +48,20 @@ SkinStorageRoots defaultSkinStorageRoots() {
   const std::filesystem::path visible = Utils::GetDocumentsPath("Skins");
   std::filesystem::path privateRoot;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  privateRoot = std::filesystem::path(GetIOSApplicationSupportPath()) / "Skins";
+  const std::filesystem::path applicationSupport =
+      GetIOSApplicationSupportPath();
+  if (!applicationSupport.empty()) {
+    privateRoot = applicationSupport / "Skins";
+  }
 #elif TARGET_OS_ANDROID
   privateRoot = std::filesystem::path(GetAndroidInternalFilesDir()) /
                 ".asobmashow-private" / "Skins";
 #else
   privateRoot = Utils::GetDocumentsPath() / ".asobmashow-private" / "Skins";
 #endif
+  if (privateRoot.empty()) {
+    return {.visiblePackages = visible};
+  }
   return {.visiblePackages = visible,
           .privateRevisions = privateRoot / "revisions",
           .privateCatalog = privateRoot / "catalog",
@@ -92,7 +99,7 @@ deriveSkinPrivateOverlayRoot(const SkinStorageRoots &roots,
   }
 
   const std::filesystem::path base = roots.profileOverlays.lexically_normal();
-  if (base.empty()) {
+  if (base.empty() || !base.is_absolute()) {
     return invalidOverlayIdentity();
   }
 

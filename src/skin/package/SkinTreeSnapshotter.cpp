@@ -768,6 +768,13 @@ SnapshotTreeResult SkinTreeSnapshotter::snapshot(
     const fs::path &sourceRoot, const SkinPackageId &package,
     std::stop_token stop, SkinProgressCallback callback) {
   SnapshotTreeResult result;
+  if (roots_.privateRevisions.empty() ||
+      !roots_.privateRevisions.is_absolute()) {
+    result.diagnostics.push_back(
+        diagnostic("skin_snapshot_private_root_invalid",
+                   "private skin revision storage is unavailable"));
+    return result;
+  }
   const auto normalizedPackage = normalizePackageId(package.directoryName);
   if (!normalizedPackage.package ||
       normalizedPackage.package->collisionKey != package.collisionKey) {
