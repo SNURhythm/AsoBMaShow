@@ -9,11 +9,11 @@
 #include <cassert>
 #include <cerrno>
 #include <cstring>
-#include <fstream>
 #include <map>
 #include <set>
 #include <span>
 #include <system_error>
+#include <utility>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -113,31 +113,197 @@ bool injectedFailure(
 }
 
 #if defined(_WIN32)
-bool readMetadata(const fs::path &path, FileMetadata &metadata,
-                  std::error_code &error) {
-  const fs::file_status status = fs::symlink_status(path, error);
-  if (error) {
+class UniqueHandle {
+public:
+  UniqueHandle() = default;
+  explicit UniqueHandle(HANDLE value) noexcept : value_(value) {}
+  UniqueHandle(const UniqueHandle &) = delete;
+  UniqueHandle &operator=(const UniqueHandle &) = delete;
+  UniqueHandle(UniqueHandle &&other) noexcept
+      : value_(std::exchange(other.value_, INVALID_HANDLE_VALUE)) {}
+  UniqueHandle &operator=(UniqueHandle &&other) noexcept {
+    if (this != &other) {
+      reset(std::exchange(other.value_, INVALID_HANDLE_VALUE));
+    }
+    return *this;
+  }
+  ~UniqueHandle() { reset(); }
+
+  [[nodiscard]] HANDLE get() const noexcept { return value_; }
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return value_ != INVALID_HANDLE_VALUE && value_ != nullptr;
+  }
+
+private:
+  void reset(HANDLE value = INVALID_HANDLE_VALUE) noexcept {
+    if (*this) {
+      CloseHandle(value_);
+    }
+    value_ = value;
+  }
+
+  HANDLE value_ = INVALID_HANDLE_VALUE;
+};
+
+bool metadataFromHandle(HANDLE handle, FileMetadata &metadata,
+                        std::error_code &error) {
+  FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+  BY_HANDLE_FILE_INFORMATION information{};
+  if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tagInfo,
+                                    sizeof(tagInfo)) ||
+      !GetFileInformationByHandle(handle, &information)) {
+    error = std::error_code(static_cast<int>(GetLastError()),
+                            std::system_category());
     return false;
   }
-  metadata.directory = fs::is_directory(status);
-  if (!metadata.directory && !fs::is_regular_file(status)) {
+  if ((tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+      GetFileType(handle) != FILE_TYPE_DISK) {
     error = std::make_error_code(std::errc::invalid_argument);
     return false;
   }
-  metadata.size = metadata.directory ? 0 : fs::file_size(path, error);
-  if (error) {
-    return false;
-  }
-  metadata.links = fs::hard_link_count(path, error);
-  if (error) {
-    return false;
-  }
-  const auto modified = fs::last_write_time(path, error);
-  if (error) {
-    return false;
-  }
-  metadata.modifiedNanoseconds = modified.time_since_epoch().count();
+
+  metadata.device = information.dwVolumeSerialNumber;
+  metadata.inode =
+      (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32U) |
+      static_cast<std::uint64_t>(information.nFileIndexLow);
+  metadata.links = information.nNumberOfLinks;
+  metadata.directory = (tagInfo.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  metadata.size =
+      metadata.directory
+          ? 0
+          : (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32U) |
+                static_cast<std::uint64_t>(information.nFileSizeLow);
+  metadata.modifiedSeconds = information.ftLastWriteTime.dwHighDateTime;
+  metadata.modifiedNanoseconds = information.ftLastWriteTime.dwLowDateTime;
+  metadata.permissions =
+      (tagInfo.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0 ? 0 : 0222;
+  error.clear();
   return true;
+}
+
+struct WindowsHandleWalk {
+  fs::path currentPath;
+  std::vector<UniqueHandle> handles;
+
+  [[nodiscard]] HANDLE leaf() const noexcept {
+    return handles.empty() ? INVALID_HANDLE_VALUE : handles.back().get();
+  }
+};
+
+bool appendWindowsPathComponent(WindowsHandleWalk &walk,
+                                const fs::path &component, DWORD desiredAccess,
+                                std::optional<bool> expectedDirectory,
+                                DWORD disposition, std::error_code &error) {
+  if (component.empty() || component == fs::path(L".") ||
+      component == fs::path(L"..")) {
+    error = std::make_error_code(std::errc::invalid_argument);
+    return false;
+  }
+  // CreateFileW has no documented root-handle-relative form. Keep every
+  // already-opened component alive without delete sharing so its name
+  // cannot be replaced by a reparse point before the child handle is opened.
+  walk.currentPath /= component;
+  DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT;
+  if (!expectedDirectory || *expectedDirectory) {
+    flags |= FILE_FLAG_BACKUP_SEMANTICS;
+  }
+  if (expectedDirectory && !*expectedDirectory &&
+      disposition == OPEN_EXISTING) {
+    flags |= FILE_FLAG_SEQUENTIAL_SCAN;
+  }
+  if (disposition != OPEN_EXISTING) {
+    flags |= FILE_ATTRIBUTE_NORMAL;
+  }
+  UniqueHandle handle(CreateFileW(walk.currentPath.c_str(),
+                                  desiredAccess | FILE_READ_ATTRIBUTES,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                  disposition, flags, nullptr));
+  if (!handle) {
+    error = std::error_code(static_cast<int>(GetLastError()),
+                            std::system_category());
+    return false;
+  }
+  FileMetadata metadata;
+  if (!metadataFromHandle(handle.get(), metadata, error) ||
+      (expectedDirectory && metadata.directory != *expectedDirectory)) {
+    if (!error) {
+      error = std::make_error_code(std::errc::invalid_argument);
+    }
+    return false;
+  }
+  walk.handles.push_back(std::move(handle));
+  return true;
+}
+
+std::optional<WindowsHandleWalk>
+openWindowsPathNoFollow(const fs::path &path, DWORD desiredAccess,
+                        std::optional<bool> expectedDirectory,
+                        DWORD disposition, std::error_code &error) {
+  fs::path absolute = fs::absolute(path, error);
+  if (error) {
+    return std::nullopt;
+  }
+  absolute = absolute.lexically_normal();
+  const fs::path root = absolute.root_path();
+  if (root.empty()) {
+    error = std::make_error_code(std::errc::invalid_argument);
+    return std::nullopt;
+  }
+
+  WindowsHandleWalk walk{.currentPath = root};
+  UniqueHandle rootHandle(CreateFileW(
+      root.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (!rootHandle) {
+    error = std::error_code(static_cast<int>(GetLastError()),
+                            std::system_category());
+    return std::nullopt;
+  }
+  FileMetadata rootMetadata;
+  if (!metadataFromHandle(rootHandle.get(), rootMetadata, error)) {
+    return std::nullopt;
+  }
+  if (!rootMetadata.directory) {
+    error = std::make_error_code(std::errc::invalid_argument);
+    return std::nullopt;
+  }
+  walk.handles.push_back(std::move(rootHandle));
+
+  const fs::path relative = absolute.lexically_relative(root);
+  auto iterator = relative.begin();
+  while (iterator != relative.end()) {
+    const fs::path component = *iterator;
+    ++iterator;
+    const bool final = iterator == relative.end();
+    if (!appendWindowsPathComponent(
+            walk, component,
+            final ? desiredAccess : FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+            final ? expectedDirectory : std::optional<bool>(true),
+            final ? disposition : OPEN_EXISTING, error)) {
+      return std::nullopt;
+    }
+  }
+  if (relative.empty()) {
+    if (expectedDirectory && !*expectedDirectory) {
+      error = std::make_error_code(std::errc::invalid_argument);
+      return std::nullopt;
+    }
+  } else if (!expectedDirectory) {
+    FileMetadata metadata;
+    if (!metadataFromHandle(walk.leaf(), metadata, error)) {
+      return std::nullopt;
+    }
+  }
+  error.clear();
+  return walk;
+}
+
+bool readMetadata(const fs::path &path, FileMetadata &metadata,
+                  std::error_code &error) {
+  auto walk = openWindowsPathNoFollow(path, FILE_READ_ATTRIBUTES, std::nullopt,
+                                      OPEN_EXISTING, error);
+  return walk && metadataFromHandle(walk->leaf(), metadata, error);
 }
 #else
 bool readMetadata(const fs::path &path, FileMetadata &metadata,
@@ -174,6 +340,18 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
                  Inventory &inventory, std::map<std::string, bool> &identities,
                  std::stop_token stop,
                  std::vector<SkinDiagnostic> &diagnostics) {
+#if defined(_WIN32)
+  std::error_code directoryHandleError;
+  auto directoryHandle = openWindowsPathNoFollow(
+      directory, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true,
+      OPEN_EXISTING, directoryHandleError);
+  if (!directoryHandle) {
+    diagnostics.push_back(diagnostic(
+        "skin_snapshot_directory_read_failed",
+        "unable to open the skin source directory without following links"));
+    return false;
+  }
+#endif
   std::error_code iteratorError;
   fs::directory_iterator iterator(directory, iteratorError);
   if (iteratorError) {
@@ -312,7 +490,7 @@ void hashText(file_checksum::Sha256 &hash, std::string_view text) {
 
 bool metadataMatchesOpenFile(
 #if defined(_WIN32)
-    const fs::path &path,
+    HANDLE handle,
 #else
     int descriptor,
 #endif
@@ -320,7 +498,7 @@ bool metadataMatchesOpenFile(
 #if defined(_WIN32)
   FileMetadata actual;
   std::error_code error;
-  return readMetadata(path, actual, error) && actual == expected;
+  return metadataFromHandle(handle, actual, error) && actual == expected;
 #else
   struct stat status{};
   if (::fstat(descriptor, &status) != 0) {
@@ -345,7 +523,189 @@ bool metadataMatchesOpenFile(
 #endif
 }
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+std::optional<WindowsHandleWalk>
+openInventoryFileNoFollow(const Inventory &inventory,
+                          const InventoryEntry &entry) {
+  std::error_code error;
+  auto walk = openWindowsPathNoFollow(
+      inventory.rootPath, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true,
+      OPEN_EXISTING, error);
+  if (!walk || !metadataMatchesOpenFile(walk->leaf(), inventory.rootMetadata)) {
+    return std::nullopt;
+  }
+
+  const fs::path relative =
+      entry.sourcePath.lexically_relative(inventory.rootPath);
+  if (relative.empty()) {
+    return std::nullopt;
+  }
+  auto iterator = relative.begin();
+  while (iterator != relative.end()) {
+    const fs::path component = *iterator;
+    ++iterator;
+    const bool final = iterator == relative.end();
+    if (!appendWindowsPathComponent(*walk, component,
+                                    final ? GENERIC_READ | FILE_READ_ATTRIBUTES
+                                          : FILE_LIST_DIRECTORY |
+                                                FILE_READ_ATTRIBUTES,
+                                    !final, OPEN_EXISTING, error)) {
+      return std::nullopt;
+    }
+  }
+  return walk;
+}
+
+bool directoryFlushUnsupported(DWORD error) {
+  return error == ERROR_ACCESS_DENIED || error == ERROR_INVALID_FUNCTION ||
+         error == ERROR_INVALID_HANDLE || error == ERROR_NOT_SUPPORTED;
+}
+
+bool fsyncDirectory(const fs::path &directory) {
+  std::error_code error;
+  auto walk = openWindowsPathNoFollow(
+      directory, GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES, true,
+      OPEN_EXISTING, error);
+  if (!walk && error.value() == ERROR_ACCESS_DENIED) {
+    error.clear();
+    walk = openWindowsPathNoFollow(directory, FILE_READ_ATTRIBUTES, true,
+                                   OPEN_EXISTING, error);
+  }
+  if (!walk) {
+    return false;
+  }
+  if (FlushFileBuffers(walk->leaf())) {
+    return true;
+  }
+  return directoryFlushUnsupported(GetLastError());
+}
+
+bool fsyncDirectoryTree(const fs::path &root) {
+  std::vector<fs::path> directories{root};
+  std::error_code error;
+  for (fs::recursive_directory_iterator iterator(root, error), end;
+       !error && iterator != end; ++iterator) {
+    if (iterator->is_directory(error)) {
+      directories.push_back(iterator->path());
+    }
+  }
+  if (error) {
+    return false;
+  }
+  for (auto iterator = directories.rbegin(); iterator != directories.rend();
+       ++iterator) {
+    if (!fsyncDirectory(*iterator)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool publishDirectoryAtomically(const fs::path &from, const fs::path &to,
+                                std::error_code &error) {
+  if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH)) {
+    error.clear();
+    return true;
+  }
+  error =
+      std::error_code(static_cast<int>(GetLastError()), std::system_category());
+  return false;
+}
+
+bool setWindowsReadOnlyNoFollow(const fs::path &path, bool readOnly,
+                                std::error_code &error) {
+  auto walk = openWindowsPathNoFollow(
+      path, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES, std::nullopt,
+      OPEN_EXISTING, error);
+  if (!walk) {
+    return false;
+  }
+  FILE_BASIC_INFO information{};
+  if (!GetFileInformationByHandleEx(walk->leaf(), FileBasicInfo, &information,
+                                    sizeof(information))) {
+    error = std::error_code(static_cast<int>(GetLastError()),
+                            std::system_category());
+    return false;
+  }
+  if (readOnly) {
+    information.FileAttributes |= FILE_ATTRIBUTE_READONLY;
+  } else {
+    information.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
+  }
+  if (!SetFileInformationByHandle(walk->leaf(), FileBasicInfo, &information,
+                                  sizeof(information))) {
+    error = std::error_code(static_cast<int>(GetLastError()),
+                            std::system_category());
+    return false;
+  }
+  error.clear();
+  return true;
+}
+
+bool makeTreeImmutableNoFollow(const fs::path &root, std::error_code &error) {
+  std::vector<fs::path> paths;
+  for (fs::recursive_directory_iterator iterator(root, error), end;
+       !error && iterator != end; ++iterator) {
+    paths.push_back(iterator->path());
+  }
+  if (error) {
+    return false;
+  }
+  for (const fs::path &path : paths) {
+    if (!setWindowsReadOnlyNoFollow(path, true, error)) {
+      return false;
+    }
+  }
+  return setWindowsReadOnlyNoFollow(root, true, error) &&
+         fsyncDirectoryTree(root);
+}
+
+bool makeTreeWritableForCleanup(const fs::path &root) {
+  std::error_code error;
+  if (!setWindowsReadOnlyNoFollow(root, false, error)) {
+    return false;
+  }
+  for (fs::recursive_directory_iterator iterator(root, error), end;
+       !error && iterator != end; ++iterator) {
+    if (!setWindowsReadOnlyNoFollow(iterator->path(), false, error)) {
+      return false;
+    }
+  }
+  return !error;
+}
+
+bool setRootPermissionsNoFollow(const fs::path &root, fs::perms permissions,
+                                std::error_code &error) {
+  const bool writable =
+      (permissions & fs::perms::owner_write) != fs::perms::none;
+  return setWindowsReadOnlyNoFollow(root, !writable, error);
+}
+
+bool renameNoReplace(const fs::path &source, const fs::path &destination,
+                     std::error_code &error) {
+  return publishDirectoryAtomically(source, destination, error);
+}
+
+bool inspectDestinationNoFollow(const fs::path &path, bool &exists,
+                                bool &directory, std::error_code &error) {
+  auto walk = openWindowsPathNoFollow(path, FILE_READ_ATTRIBUTES, std::nullopt,
+                                      OPEN_EXISTING, error);
+  if (!walk && (error.value() == ERROR_FILE_NOT_FOUND ||
+                error.value() == ERROR_PATH_NOT_FOUND)) {
+    exists = false;
+    directory = false;
+    error.clear();
+    return true;
+  }
+  FileMetadata metadata;
+  if (!walk || !metadataFromHandle(walk->leaf(), metadata, error)) {
+    return false;
+  }
+  exists = true;
+  directory = metadata.directory;
+  return true;
+}
+#else
 bool fsyncDirectory(const fs::path &directory) {
   const int descriptor =
       ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
@@ -412,7 +772,6 @@ int openInventoryFileNoFollow(const Inventory &inventory,
     componentStart = separator + 1;
   }
 }
-
 bool freezeDirectoryDescriptor(int descriptor, std::error_code &error) {
   const int duplicate = ::dup(descriptor);
   if (duplicate < 0) {
@@ -604,45 +963,24 @@ bool renameNoReplace(const fs::path &source, const fs::path &destination,
   error = std::error_code(errno, std::generic_category());
   return false;
 }
-#else
-bool fsyncDirectory(const fs::path &) { return true; }
-bool fsyncDirectoryTree(const fs::path &) { return true; }
 
-bool makeTreeImmutableNoFollow(const fs::path &root, std::error_code &error) {
-  for (fs::recursive_directory_iterator iterator(root, error), end;
-       !error && iterator != end; ++iterator) {
-    const bool directory = iterator->is_directory(error);
-    if (error) {
-      return false;
-    }
-    fs::permissions(iterator->path(),
-                    directory ? fs::perms::owner_read | fs::perms::owner_exec
-                              : fs::perms::owner_read,
-                    fs::perm_options::replace, error);
+bool inspectDestinationNoFollow(const fs::path &path, bool &exists,
+                                bool &directory, std::error_code &error) {
+  struct stat status{};
+  if (::lstat(path.c_str(), &status) == 0) {
+    exists = true;
+    directory = S_ISDIR(status.st_mode);
+    error.clear();
+    return true;
   }
-  if (!error) {
-    fs::permissions(root, fs::perms::owner_read | fs::perms::owner_exec,
-                    fs::perm_options::replace, error);
+  if (errno == ENOENT) {
+    exists = false;
+    directory = false;
+    error.clear();
+    return true;
   }
-  return !error;
-}
-
-bool makeTreeWritableForCleanup(const fs::path &root) {
-  std::error_code ignored;
-  fs::permissions(root, fs::perms::owner_all, fs::perm_options::add, ignored);
-  return !ignored;
-}
-
-bool setRootPermissionsNoFollow(const fs::path &root, fs::perms permissions,
-                                std::error_code &error) {
-  fs::permissions(root, permissions, fs::perm_options::replace, error);
-  return !error;
-}
-
-bool renameNoReplace(const fs::path &source, const fs::path &destination,
-                     std::error_code &error) {
-  fs::rename(source, destination, error);
-  return !error;
+  error = std::error_code(errno, std::generic_category());
+  return false;
 }
 #endif
 
@@ -686,40 +1024,77 @@ std::optional<std::string> digestAndMaybeCopy(
     hashBigEndian(hash, entry.metadata.size);
 
 #if defined(_WIN32)
-    std::ifstream input(entry.sourcePath, std::ios::binary);
-    if (!input || !metadataMatchesOpenFile(entry.sourcePath, entry.metadata)) {
+    auto input = openInventoryFileNoFollow(inventory, entry);
+    if (!input || !metadataMatchesOpenFile(input->leaf(), entry.metadata)) {
       diagnostics.push_back(diagnostic("skin_snapshot_source_changed",
                                        "skin source changed before copying",
                                        entry.normalizedPath));
       return std::nullopt;
     }
-    std::ofstream output;
+    std::optional<WindowsHandleWalk> output;
     if (destination) {
       const fs::path target = *destination / pathFromUtf8(entry.normalizedPath);
-      fs::create_directories(target.parent_path());
-      output.open(target, std::ios::binary | std::ios::trunc);
+      std::error_code createError;
+      fs::create_directories(target.parent_path(), createError);
+      if (!createError) {
+        output = openWindowsPathNoFollow(target,
+                                         GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+                                         false, CREATE_NEW, createError);
+      }
       if (!output) {
         diagnostics.push_back(diagnostic("skin_snapshot_copy_failed",
-                                         "unable to create staging file",
+                                         "unable to create a safe staging file",
                                          entry.normalizedPath));
         return std::nullopt;
       }
     }
     std::uint64_t readTotal = 0;
-    while (input) {
-      input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-      const std::streamsize count = input.gcount();
-      if (count > 0) {
-        hash.update(std::as_bytes(
-            std::span(buffer.data(), static_cast<std::size_t>(count))));
-        if (destination) {
-          output.write(buffer.data(), count);
-        }
-        readTotal += static_cast<std::uint64_t>(count);
+    while (true) {
+      if (stop.stop_requested()) {
+        return std::nullopt;
       }
+      DWORD read = 0;
+      if (!ReadFile(input->leaf(), buffer.data(),
+                    static_cast<DWORD>(buffer.size()), &read, nullptr)) {
+        diagnostics.push_back(diagnostic("skin_snapshot_copy_failed",
+                                         "unable to read skin source file",
+                                         entry.normalizedPath));
+        return std::nullopt;
+      }
+      if (read == 0) {
+        break;
+      }
+      const auto readSize = static_cast<std::size_t>(read);
+      hash.update(std::as_bytes(std::span(buffer.data(), readSize)));
+      if (output) {
+        if (stop.stop_requested()) {
+          return std::nullopt;
+        }
+        DWORD written = 0;
+        if (!WriteFile(output->leaf(), buffer.data(), read, &written,
+                       nullptr) ||
+            written != read) {
+          diagnostics.push_back(
+              diagnostic("skin_snapshot_copy_failed",
+                         "unable to write complete staging file chunk",
+                         entry.normalizedPath));
+          return std::nullopt;
+        }
+      }
+      readTotal += read;
     }
-    if (!input.eof() || readTotal != entry.metadata.size ||
-        !metadataMatchesOpenFile(entry.sourcePath, entry.metadata)) {
+    const bool stable = readTotal == entry.metadata.size &&
+                        metadataMatchesOpenFile(input->leaf(), entry.metadata);
+    if (output &&
+        (injectedFailure(failures, SkinSnapshotIoOperation::CopiedFileFsync,
+                         entry.sourcePath) ||
+         !FlushFileBuffers(output->leaf()))) {
+      diagnostics.push_back(diagnostic("skin_snapshot_fsync_failed",
+                                       "unable to synchronize staging file",
+                                       entry.normalizedPath));
+      return std::nullopt;
+    }
+    if (!stable) {
       diagnostics.push_back(diagnostic("skin_snapshot_source_changed",
                                        "skin source changed while copying",
                                        entry.normalizedPath));
@@ -1026,19 +1401,17 @@ PreparedSkinRevision::publish(std::string &error) && {
     return std::nullopt;
   }
 
+  bool destinationExists = false;
+  bool destinationIsDirectory = false;
   filesystemError.clear();
-  const fs::file_status destinationStatus =
-      fs::symlink_status(state_->publishedRoot, filesystemError);
-  if (filesystemError &&
-      filesystemError != std::errc::no_such_file_or_directory) {
+  if (!inspectDestinationNoFollow(state_->publishedRoot, destinationExists,
+                                  destinationIsDirectory, filesystemError)) {
     error = "unable to inspect private revision destination: " +
             filesystemError.message();
     return std::nullopt;
   }
-  const bool destinationExists =
-      destinationStatus.type() != fs::file_type::not_found;
   if (destinationExists) {
-    if (!fs::is_directory(destinationStatus) ||
+    if (!destinationIsDirectory ||
         !verifyPrivateRevisionRoot(state_->publishedRoot, state_->revision,
                                    true, error)) {
       if (error.empty()) {

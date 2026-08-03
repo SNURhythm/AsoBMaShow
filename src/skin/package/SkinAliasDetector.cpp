@@ -13,15 +13,32 @@ namespace {
 
 SkinRejectedLinkKind inspectPortable(const std::filesystem::path &path) {
 #if defined(_WIN32)
-  const DWORD attributes = GetFileAttributesW(path.c_str());
-  if (attributes == INVALID_FILE_ATTRIBUTES) {
+  const HANDLE handle = CreateFileW(
+      path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
     return SkinRejectedLinkKind::NonRegular;
   }
-  if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+  FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+  BY_HANDLE_FILE_INFORMATION information{};
+  const bool inspected =
+      GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tagInfo,
+                                   sizeof(tagInfo)) &&
+      GetFileInformationByHandle(handle, &information);
+  const DWORD fileType = GetFileType(handle);
+  CloseHandle(handle);
+  if (!inspected || fileType != FILE_TYPE_DISK) {
+    return SkinRejectedLinkKind::NonRegular;
+  }
+  if ((tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
     return SkinRejectedLinkKind::WindowsReparsePoint;
   }
-  if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+  if ((tagInfo.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
     return SkinRejectedLinkKind::None;
+  }
+  if (information.nNumberOfLinks != 1) {
+    return SkinRejectedLinkKind::HardLink;
   }
   return SkinRejectedLinkKind::None;
 #else
