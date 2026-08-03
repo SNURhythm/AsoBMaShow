@@ -1185,6 +1185,12 @@ def _require_bindings(
 def _call_chain_at(tokens: list[LuaToken], index: int, end: int) -> tuple[str, ...] | None:
     if tokens[index].kind != "identifier":
         return None
+    if tokens[index].value in {
+        "and", "break", "do", "else", "elseif", "end", "false", "for",
+        "function", "goto", "if", "in", "local", "nil", "not", "or",
+        "repeat", "return", "then", "true", "until", "while",
+    }:
+        return None
     chain = [tokens[index].value]
     cursor = index + 1
     while cursor + 1 < end and tokens[cursor].value == "." and tokens[cursor + 1].kind == "identifier":
@@ -1240,14 +1246,25 @@ def _function_operation_events(
     for index in range(start + 1, end):
         if function_depths[index] != direct_depth:
             continue
+        if (
+            tokens[index].kind == "identifier"
+            and index + 3 < end
+            and tokens[index + 1].value == ":"
+            and tokens[index + 2].kind == "identifier"
+            and tokens[index + 3].value == "("
+        ):
+            events.append(
+                ("method", (tokens[index].value, tokens[index + 2].value, index))
+            )
+            continue
         chain = _call_chain_at(tokens, index, end)
         if chain is None:
             continue
         open_index = index + (2 * len(chain) - 1)
         if chain == ("io", "open"):
             events.append(("operation", _static_io_open_kind(tokens, open_index)))
-        elif chain[-1] == "listFiles":
-            events.append(("operation", "filesystemDirectoryScan"))
+        elif chain == ("dofile",):
+            events.append(("operation", "filesystemRead"))
         else:
             events.append(("call", chain))
     return events
@@ -1261,11 +1278,13 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
     aliases: dict[str, dict[str, str]] = {}
     exports: dict[str, dict[str, str]] = {}
     functions: dict[tuple[str, str], list[tuple[int, int]]] = {}
+    ranges_by_path: dict[str, list[tuple[int, int]]] = {}
     callbacks: list[tuple[str, int, int]] = []
     retained_fields = {"act", "draw", "event", "timer", "value"}
     for path, tokens in token_by_path.items():
         aliases[path], exports[path] = _require_bindings(path, tokens, loaded)
         for start, end, name in _function_ranges(tokens):
+            ranges_by_path.setdefault(path, []).append((start, end))
             if name is not None:
                 functions.setdefault((path, name), []).append((start, end))
             if (
@@ -1285,11 +1304,174 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
         if len(targets) == 1
     }
 
+    def lexical_scope(path: str, index: int) -> tuple[int, int] | None:
+        containing = [
+            item for item in ranges_by_path.get(path, [])
+            if item[0] < index < item[1]
+        ]
+        return max(containing, key=lambda item: item[0]) if containing else None
+
+    handle_origins: dict[
+        str,
+        dict[str, list[tuple[str, bool, int, tuple[int, int] | None]]],
+    ] = {}
+    guarded_by_path = {
+        path: _lua_guarded_flags(tokens) for path, tokens in token_by_path.items()
+    }
+    legacy_file_origins: dict[str, dict[str, list[tuple[int, tuple[int, int] | None]]]] = {}
+    for path, tokens in token_by_path.items():
+        path_handles: dict[
+            str,
+            list[tuple[str, bool, int, tuple[int, int] | None]],
+        ] = {}
+        file_classes: set[str] = set()
+        path_legacy: dict[str, list[tuple[int, tuple[int, int] | None]]] = {}
+        for index in range(len(tokens) - 6):
+            if (
+                tokens[index].kind == "identifier"
+                and tokens[index + 1].value == "="
+                and [token.value for token in tokens[index + 2:index + 6]]
+                == ["io", ".", "open", "("]
+            ):
+                path_handles.setdefault(tokens[index].value, []).append(
+                    (
+                        _static_io_open_kind(tokens, index + 5),
+                        guarded_by_path[path][index],
+                        index,
+                        lexical_scope(path, index),
+                    )
+                )
+            if (
+                tokens[index].kind == "identifier"
+                and tokens[index + 1].value == "="
+                and [token.value for token in tokens[index + 2:index + 6]]
+                == ["luajava", ".", "bindClass", "("]
+                and tokens[index + 6].kind == "string"
+                and tokens[index + 6].value == "java.io.File"
+            ):
+                file_classes.add(tokens[index].value)
+        for index in range(len(tokens) - 7):
+            if (
+                tokens[index].kind == "identifier"
+                and tokens[index + 1].value == "="
+                and [token.value for token in tokens[index + 2:index + 6]]
+                == ["luajava", ".", "new", "("]
+                and tokens[index + 6].value in file_classes
+            ):
+                path_legacy.setdefault(tokens[index].value, []).append(
+                    (index, lexical_scope(path, index))
+                )
+        handle_origins[path] = path_handles
+        legacy_file_origins[path] = path_legacy
+
+    def visible_records(records: list[tuple], start: int, end: int, index: int) -> list[tuple]:
+        visible = []
+        for record in records:
+            record_index = record[-2]
+            scope = record[-1]
+            if record_index >= index:
+                continue
+            if scope is None or (scope[0] <= start and end <= scope[1]):
+                visible.append(record)
+        if not visible:
+            return []
+        nearest_scope_start = max(record[-1][0] if record[-1] is not None else -1 for record in visible)
+        return [
+            record for record in visible
+            if (record[-1][0] if record[-1] is not None else -1) == nearest_scope_start
+        ]
+
+    def classify_method(
+        path: str,
+        start: int,
+        end: int,
+        receiver: str,
+        method: str,
+        index: int,
+    ) -> str | None:
+        if method in {"mkdir", "listFiles"}:
+            origins = visible_records(
+                legacy_file_origins[path].get(receiver, []), start, end, index
+            )
+            if not origins:
+                raise AuditError(
+                    f"ambiguous render-I/O operation graph legacy File origin for {receiver!r}"
+                )
+            return "filesystemWrite" if method == "mkdir" else "filesystemDirectoryScan"
+        if method not in {"lines", "write", "close"}:
+            return None
+        origins = visible_records(handle_origins[path].get(receiver, []), start, end, index)
+        if not origins:
+            raise AuditError(
+                f"ambiguous render-I/O operation graph captured handle origin for {receiver!r}"
+            )
+        same_scope_origins = [
+            record for record in origins
+            if record[-1] == (start, end)
+        ]
+        if guarded_by_path[path][index] and same_scope_origins:
+            origins = [max(same_scope_origins, key=lambda record: record[-2])]
+        else:
+            unguarded = [record for record in origins if not record[1]]
+            last_unguarded = max(
+                (record[-2] for record in unguarded),
+                default=-1,
+            )
+            trailing_guarded = [
+                record for record in origins
+                if record[1] and record[-2] > last_unguarded
+            ]
+            if len(trailing_guarded) >= 2 or (trailing_guarded and not unguarded):
+                origins = trailing_guarded
+            elif trailing_guarded:
+                origins = [max(unguarded, key=lambda record: record[-2]), *trailing_guarded]
+            elif unguarded:
+                origins = [max(unguarded, key=lambda record: record[-2])]
+        operation_kinds = {record[0] for record in origins}
+        if len(operation_kinds) != 1:
+            raise AuditError(
+                f"ambiguous render-I/O operation graph captured handle modes for {receiver!r}"
+            )
+        operation_kind = next(iter(operation_kinds))
+        if method == "lines" and operation_kind != "filesystemRead":
+            raise AuditError("ambiguous render-I/O operation graph lines mode mismatch")
+        if method == "write" and operation_kind != "filesystemWrite":
+            raise AuditError("ambiguous render-I/O operation graph write mode mismatch")
+        if all(start < record[-2] < end for record in origins):
+            return None
+        return operation_kind
+
+    def known_non_io_call(chain: tuple[str, ...]) -> bool:
+        if chain in {
+            ("print",),
+            ("luajava", "bindClass"),
+            ("luajava", "new"),
+        }:
+            return True
+        if chain[0] in {"main_state", "math", "string", "table", "PROPERTY"}:
+            return True
+        if chain[0] == "skin_config" and chain[1:] == ("get_path",):
+            return True
+        if chain in {
+            ("sound", "play"),
+            ("trend", "getdata"),
+            ("trend", "insert"),
+            ("trend2", "getavg"),
+            ("trend2", "getdata"),
+            ("trend2", "getmax"),
+            ("trend2", "getmaxupdateflg"),
+            ("trend2", "insert"),
+        }:
+            return True
+        return False
+
     def resolve(path: str, chain: tuple[str, ...]) -> tuple[str, int, int] | None:
         target_path = path
         remaining = list(chain)
         if len(remaining) == 1:
             key = (path, remaining[0])
+        elif len(remaining) == 2 and remaining[0] in {"m", "module"}:
+            key = (path, remaining[1])
         else:
             root_alias = remaining.pop(0)
             target_path = aliases[path].get(root_alias) or global_aliases.get(root_alias, "")
@@ -1318,9 +1500,19 @@ def _render_operation_graph(loaded: dict[str, str]) -> list[dict]:
             if kind == "operation":
                 operations.append(str(value))
                 continue
+            if kind == "method":
+                operation = classify_method(path, start, end, *value)
+                if operation is not None:
+                    operations.append(operation)
+                continue
             target = resolve(path, value)
             if target is not None:
                 operations.extend(expand(*target, stack + (identity,)))
+            elif not known_non_io_call(value):
+                raise AuditError(
+                    "unresolved render-I/O operation graph retained call: "
+                    + ".".join(value)
+                )
         return operations
 
     inherited_guards: dict[str, set[str]] = {}
@@ -1833,6 +2025,10 @@ def _configured_return_model_counts(loaded: dict[str, str]) -> dict[str, int]:
                 field = tokens[index + 2].value
                 value_index = close_index + 2
             else:
+                if close_index == index + 3 and tokens[index + 2].value in counts:
+                    raise AuditError(
+                        "configured return model custom object map has an unclassified reference"
+                    )
                 continue
         elif (
             index + 3 < end
@@ -1842,6 +2038,14 @@ def _configured_return_model_counts(loaded: dict[str, str]) -> dict[str, int]:
         ):
             field = tokens[index + 2].value
             value_index = index + 4
+        elif (
+            index + 2 < end
+            and tokens[index + 1].value == "."
+            and tokens[index + 2].value in counts
+        ):
+            raise AuditError(
+                "configured return model custom object map has an unclassified reference"
+            )
         else:
             continue
         if field not in counts:

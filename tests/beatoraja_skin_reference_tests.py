@@ -713,6 +713,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         direct_callbacks=False,
         computed_custom_key=None,
         indirect_computed_custom_key=None,
+        custom_map_mutation=None,
         explicit_custom_counts=None,
         duplicate_first_callback=False,
     ):
@@ -770,6 +771,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         )
 
         helper_lines = ["local module = {}"]
+        model_prelude = []
         callback_lines = []
         for index, operation in enumerate(operations):
             if operation == "read":
@@ -781,6 +783,48 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                     'local f = io.open("state.txt", "r"); f:close(); '
                     'local w = io.open("state.txt", "a"); w:write("x"); w:close()'
                 )
+            elif operation == "dofile":
+                direct_body = 'dofile("state.lua")'
+            elif operation == "unresolved-call":
+                direct_body = "UNKNOWN.perform()"
+            elif operation == "mkdir":
+                direct_body = (
+                    'local File = luajava.bindClass("java.io.File"); '
+                    'local dir = luajava.new(File, "state"); dir:mkdir()'
+                )
+            elif operation == "list-files":
+                direct_body = (
+                    'local File = luajava.bindClass("java.io.File"); '
+                    'local dir = luajava.new(File, "state"); dir:listFiles()'
+                )
+            elif operation in {"captured-lines", "captured-close-read"}:
+                model_prelude.append(
+                    f'local captured{index} = io.open("captured{index}.txt", "r")'
+                )
+                direct_body = (
+                    f'for line in captured{index}:lines() do break end'
+                    if operation == "captured-lines"
+                    else f'captured{index}:close()'
+                )
+            elif operation in {"captured-write", "captured-close-write"}:
+                model_prelude.append(
+                    f'local captured{index} = io.open("captured{index}.txt", "w")'
+                )
+                direct_body = (
+                    f'captured{index}:write("x")'
+                    if operation == "captured-write"
+                    else f'captured{index}:close()'
+                )
+            elif operation == "captured-close-ambiguous":
+                model_prelude.extend(
+                    [
+                        f"local captured{index}",
+                        f"if skin_config.option.synthetic then captured{index} = "
+                        f'io.open("captured{index}.txt", "r") else captured{index} = '
+                        f'io.open("captured{index}.txt", "w") end',
+                    ]
+                )
+                direct_body = f'captured{index}:close()'
             else:
                 raise AssertionError(operation)
             helper_lines.extend(
@@ -814,6 +858,7 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         model_lines = [
             'local PROPERTY = require("fixture.property").load()',
             'local HELPER = require("fixture.helper")',
+            *model_prelude,
             "local function main()",
             "  local skin = {}",
             "  skin.destination = {}",
@@ -848,6 +893,31 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 "  skin.customEvents = {"
                 + ",".join(f"{{id = {index}}}" for index in range(event_count)) + "}"
             )
+        if custom_map_mutation is not None:
+            field, mutation = custom_map_mutation
+            model_lines.append(f"  skin.{field} = {{}}")
+            if mutation == "direct":
+                model_lines.append(f"  table.insert(skin.{field}, {{id = 1}})")
+            elif mutation == "alias":
+                model_lines.extend(
+                    [
+                        f"  local custom_map_alias = skin.{field}",
+                        "  table.insert(custom_map_alias, {id = 1})",
+                    ]
+                )
+            elif mutation == "rawset":
+                model_lines.append(f"  rawset(skin.{field}, 1, {{id = 1}})")
+            elif mutation == "helper":
+                model_lines.extend(
+                    [
+                        "  local function append_custom_map(custom_map)",
+                        "    table.insert(custom_map, {id = 1})",
+                        "  end",
+                        f"  append_custom_map(skin.{field})",
+                    ]
+                )
+            else:
+                raise AssertionError(mutation)
         model_lines.extend(["  return skin", "end", "return {main = main}"])
         return {
             "play7_fixture.luaskin": 'local t = require("fixture.model"); return t.main()\n',
@@ -907,6 +977,85 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             transitive["runtimeConfigurationBinding"]["guardBindings"][0]["orderedOperationKinds"],
             ["filesystemRead", "filesystemWrite"],
         )
+
+    def test_render_operation_graph_classifies_direct_and_transitive_dofile(self):
+        for direct_callbacks in (True, False):
+            with self.subTest(direct_callbacks=direct_callbacks):
+                selected, _ = self.analyze_render_policy(
+                    self.make_render_policy_closure(
+                        operations=("dofile",),
+                        direct_callbacks=direct_callbacks,
+                    )
+                )
+                operations = [
+                    binding["orderedOperationKinds"]
+                    for binding in selected["runtimeConfigurationBinding"]["guardBindings"]
+                ]
+                self.assertEqual(operations, [["filesystemRead"]])
+
+    def test_render_operation_graph_classifies_closed_legacy_file_methods(self):
+        cases = {
+            "mkdir": "filesystemWrite",
+            "list-files": "filesystemDirectoryScan",
+        }
+        for operation, expected in cases.items():
+            with self.subTest(operation=operation):
+                selected, _ = self.analyze_render_policy(
+                    self.make_render_policy_closure(
+                        operations=(operation,),
+                        direct_callbacks=True,
+                    )
+                )
+                operations = [
+                    binding["orderedOperationKinds"]
+                    for binding in selected["runtimeConfigurationBinding"]["guardBindings"]
+                ]
+                self.assertEqual(operations, [[expected]])
+
+    def test_render_operation_graph_classifies_captured_handle_methods_by_origin(self):
+        cases = {
+            "captured-lines": "filesystemRead",
+            "captured-write": "filesystemWrite",
+            "captured-close-read": "filesystemRead",
+            "captured-close-write": "filesystemWrite",
+        }
+        for operation, expected in cases.items():
+            with self.subTest(operation=operation):
+                selected, _ = self.analyze_render_policy(
+                    self.make_render_policy_closure(
+                        operations=(operation,),
+                        direct_callbacks=True,
+                    )
+                )
+                operations = [
+                    binding["orderedOperationKinds"]
+                    for binding in selected["runtimeConfigurationBinding"]["guardBindings"]
+                ]
+                self.assertEqual(operations, [[expected]])
+
+    def test_render_operation_graph_rejects_ambiguous_captured_handle_origin(self):
+        audit = load_audit_module()
+        with self.assertRaisesRegex(audit.AuditError, "ambiguous render-I/O operation graph"):
+            audit.analyze_selected_file_io_surface(
+                self.make_render_policy_closure(
+                    operations=("captured-close-ambiguous",),
+                    direct_callbacks=True,
+                ),
+                "22" * 32,
+                "11" * 32,
+            )
+
+    def test_render_operation_graph_rejects_unresolved_retained_calls(self):
+        audit = load_audit_module()
+        with self.assertRaisesRegex(audit.AuditError, "unresolved render-I/O operation graph"):
+            audit.analyze_selected_file_io_surface(
+                self.make_render_policy_closure(
+                    operations=("unresolved-call",),
+                    direct_callbacks=True,
+                ),
+                "22" * 32,
+                "11" * 32,
+            )
 
     def test_negative_kind_comes_from_selected_first_operation_and_is_order_independent(self):
         read_then_write = self.make_render_policy_closure(operations=("read", "write"))
@@ -971,6 +1120,20 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                         "22" * 32,
                         "11" * 32,
                     )
+
+    def test_configured_model_rejects_unbounded_custom_map_mutations(self):
+        audit = load_audit_module()
+        for field in ("customTimers", "customEvents"):
+            for mutation in ("direct", "alias", "rawset", "helper"):
+                with self.subTest(field=field, mutation=mutation):
+                    with self.assertRaisesRegex(audit.AuditError, "configured return model"):
+                        audit.analyze_selected_file_io_surface(
+                            self.make_render_policy_closure(
+                                custom_map_mutation=(field, mutation)
+                            ),
+                            "22" * 32,
+                            "11" * 32,
+                        )
 
     def test_ambiguous_multiple_retained_io_callbacks_fail_closed(self):
         audit = load_audit_module()
