@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import importlib.util
 import json
 import os
 import stat
@@ -38,6 +39,15 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def load_audit_module():
+    module_name = "asobmashow_beatoraja_skin_audit_test"
+    spec = importlib.util.spec_from_file_location(module_name, AUDIT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class BeatorajaSkinCommittedContractTests(unittest.TestCase):
@@ -103,6 +113,67 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
                     self.assertTrue(provenance["path"])
                     self.assertTrue(provenance["symbol"])
                     self.assertTrue(provenance["behavior"])
+        legacy = manifest.get("legacyLuaApiSurface")
+        self.assertIsNotNone(legacy, "the exact selected-closure legacy API surface is required")
+        self.assertEqual(legacy["module"], "luajava")
+        self.assertEqual(legacy["helperCount"], 2)
+        self.assertEqual(
+            legacy["imports"],
+            {
+                "siteCount": 2,
+                "criticality": "critical",
+                "reachability": "unguarded-top-level",
+            },
+        )
+        self.assertEqual(
+            legacy["bindClass"],
+            [
+                {
+                    "className": "com.badlogic.gdx.Gdx",
+                    "siteCount": 1,
+                    "criticality": "critical",
+                    "reachability": "unguarded-top-level",
+                },
+                {
+                    "className": "java.io.File",
+                    "siteCount": 1,
+                    "criticality": "critical",
+                    "reachability": "unguarded-top-level",
+                },
+            ],
+        )
+        self.assertEqual(
+            legacy["fileFacade"],
+            {
+                "constructorSiteCount": 2,
+                "reachableConstructorSiteCount": 1,
+                "mkdirSiteCount": 1,
+                "mkdirReachableFromSelectedEntry": False,
+                "listFilesSiteCount": 1,
+                "listFilesReachableFromSelectedEntry": True,
+                "criticality": "critical",
+                "reachability": "configured-load-listFiles-deferred-mkdir",
+            },
+        )
+        self.assertEqual(
+            legacy["audioFacade"],
+            {
+                "initializationSiteCount": 1,
+                "playSiteCount": 1,
+                "disposeSiteCount": 1,
+                "criticality": "optional",
+                "reachability": "pcall-guarded",
+            },
+        )
+        self.assertEqual(
+            manifest.get("timerEventOrdering"),
+            {
+                "phaseOrder": ["customTimers", "customEvents"],
+                "withinPhase": "IntMap-backing-hash-iteration",
+                "sortedById": False,
+                "selectedIdTraceRequired": True,
+            },
+        )
 
     def test_acceptance_schema_freezes_device_protocol_and_completion_evidence(self):
         contract = self.require_manifest()["acceptanceContract"]
@@ -127,6 +198,30 @@ class BeatorajaSkinCommittedContractTests(unittest.TestCase):
         self.assertEqual(contract["limits"]["activeRenderFilesystemReads"], 0)
         self.assertEqual(contract["limits"]["activeRenderUploads"], 0)
         self.assertEqual(contract["limits"]["liveResourceGrowthAfterTenExits"], 0)
+        external_digests = contract["externalDigests"]
+        self.assertIn("activatedRevisionSha256", external_digests)
+        self.assertEqual(
+            external_digests["activatedRevisionSha256"],
+            {"status": "pending", "value": None},
+        )
+        self.assertEqual(
+            external_digests["configurationSha256"],
+            {"status": "pending", "value": None},
+        )
+        for screenshot in contract["screenshotTimestamps"]:
+            self.assertEqual(screenshot["status"], "pending")
+            self.assertEqual(screenshot["timestampsMicros"], [])
+            self.assertIsNone(screenshot["evidenceReference"])
+        self.assertIn("timerEventTrace", contract)
+        self.assertEqual(
+            contract["timerEventTrace"],
+            {
+                "status": "pending",
+                "selectedIds": [],
+                "observedOrder": [],
+                "evidenceReference": None,
+            },
+        )
         for key in (
             "hardwareModel",
             "iPadOS",
@@ -213,9 +308,11 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java":
                 "class LuaSkinLoader { loadHeader(){} load(){} fromLuaValue(){} serializeLuaScript(){} }",
             "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java":
-                "class SkinLuaAccessor { execFile(){} setDirectory(){} exportSkinProperty(){} }",
+                "class SkinLuaAccessor { execFile(){} setDirectory(){} exportMainStateAccessor(){} exportSkinProperty(){} class RestrictedIoLib { openFile(){} } }",
             "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java":
                 "class LegacySkinLuaApi { install(){} }",
+            "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java":
+                "class MainStatePropertyLuaApiExporter { export(){} }",
             "src/bms/player/beatoraja/skin/json/JSONSkinLoader.java":
                 "class JSONSkinLoader { loadJsonSkinHeader(){} loadJsonSkin(){} setDestination(){} }",
             "src/bms/player/beatoraja/skin/json/JsonSkin.java":
@@ -260,13 +357,14 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
     def make_skin_archive(self):
         skin_root = self.temp_path / "skin"
         files = {
-            "play7_hw.luaskin": b'local t = require("play7_hw")\nreturn t\n',
-            "play7_hw.lua": (
+            "play7_hw.luaskin": b'local t = require("fixture.entry")\nreturn t\n',
+            "fixture/entry.lua": (
                 b'local state = require("main_state")\n'
-                b'local module = require("module")\n'
-                b'return { header = { type = 0 }, main = module.main }\n'
+                b'local helper = require("fixture.helper")\n'
+                b'MAIN = { OP = require("fixture.options") }\n'
+                b'return { header = { type = 0 }, main = helper.main }\n'
             ),
-            "module.lua": (
+            "fixture/helper.lua": (
                 b'local luajava = require("luajava")\n'
                 b'local File = luajava.bindClass("java.io.File")\n'
                 b'local m = {}\n'
@@ -275,9 +373,11 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 b' return { image = {{id="i", src="image.png"}}, '
                 b'note = {id="notes"}, bga={id="bga"}, '
                 b'destination={{id="i", timer=3, draw=function() '
-                b'return main_state.option(42) end, dst={{x=0,y=0,w=1,h=1}}}} }\n'
+                b'return main_state.option(MAIN.OP.SYNTHETIC_ENABLED) end, '
+                b'dst={{x=0,y=0,w=1,h=1}}}} }\n'
                 b'end\nreturn m\n'
             ),
+            "fixture/options.lua": b'return { SYNTHETIC_ENABLED = 777 }\n',
             "image.png": b"synthetic-image",
             "font.ttf": b"synthetic-font",
             "sound.ogg": b"synthetic-audio",
@@ -359,8 +459,25 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
         )
         serialized = json.dumps(manifest, ensure_ascii=False)
         self.assertNotIn(str(self.temp_path), serialized)
-        self.assertNotIn("module.lua", serialized)
+        self.assertNotIn("fixture/helper.lua", serialized)
         self.assertNotIn("image.png", serialized)
+        surface_by_key = {
+            (item["kind"], item["id"]): item
+            for item in manifest["surface"]
+        }
+        self.assertIn(("property", "boolean:777"), surface_by_key)
+        self.assertEqual(
+            surface_by_key[("object", "note")]["provenance"][0]["symbol"],
+            "SkinNote.prepare",
+        )
+        self.assertEqual(
+            surface_by_key[("module", "host-main-state")]["provenance"][0]["symbol"],
+            "SkinLuaAccessor.exportMainStateAccessor",
+        )
+        self.assertEqual(
+            surface_by_key[("file-api", "main_state.option")]["provenance"][0]["symbol"],
+            "MainStatePropertyLuaApiExporter.export",
+        )
 
         verified = run_python(
             AUDIT_PATH,
@@ -368,6 +485,83 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             env=self.tool_env,
         )
         self.assertEqual(verified.returncode, 0, verified.stdout)
+
+        audit = load_audit_module()
+        optional_closure = {
+            "play7_hw.luaskin": (
+                "-- require('comment_only_host')\n"
+                "--[[ io.File require('long_comment_host') ]]\n"
+                "local text = \"io.File require('string_only_host')\"\n"
+                "local critical = require('critical_host')\n"
+                "local path = skin_config.get_path('fixture/optional.lua')\n"
+                "pcall(function() return dofile(path) end)\n"
+                "if enabled then require('conditional_host') end\n"
+                "local ok = pcall(require, 'protected_host')\n"
+                "return {}\n"
+            ),
+            "fixture/optional.lua": "return require('fixture.shared')\n",
+            "fixture/shared.lua": (
+                "local file = io.open('synthetic-state.txt', 'r')\n"
+                "return require('optional_descendant_host')\n"
+            ),
+        }
+        loaded, criticality, host_modules = audit.loaded_lua_closure(
+            "play7_hw.luaskin",
+            optional_closure,
+        )
+        self.assertEqual(criticality["fixture/optional.lua"], "optional")
+        self.assertEqual(criticality["fixture/shared.lua"], "optional")
+        self.assertEqual(host_modules["critical_host"], "critical")
+        self.assertEqual(host_modules["conditional_host"], "optional")
+        self.assertEqual(host_modules["protected_host"], "optional")
+        self.assertEqual(host_modules["optional_descendant_host"], "optional")
+        self.assertNotIn("comment_only_host", host_modules)
+        self.assertNotIn("long_comment_host", host_modules)
+        self.assertNotIn("string_only_host", host_modules)
+        surface = audit.build_surface(
+            "play7_hw.luaskin",
+            loaded,
+            criticality,
+            host_modules,
+        )
+        self.assertNotIn(
+            "io.File",
+            {item["id"] for item in surface if item["kind"] == "file-api"},
+        )
+        optional_io = next(
+            item for item in surface
+            if item["kind"] == "file-api" and item["id"] == "io.open"
+        )
+        self.assertEqual(optional_io["criticality"], "optional")
+
+        promoted_closure = dict(optional_closure)
+        promoted_closure["play7_hw.luaskin"] = (
+            optional_closure["play7_hw.luaskin"]
+            + "local bridge = require('fixture.bridge_one')\n"
+        )
+        promoted_closure["fixture/bridge_one.lua"] = (
+            "return require('fixture.bridge_two')\n"
+        )
+        promoted_closure["fixture/bridge_two.lua"] = (
+            "return require('fixture.shared')\n"
+        )
+        _, promoted_criticality, promoted_hosts = audit.loaded_lua_closure(
+            "play7_hw.luaskin",
+            promoted_closure,
+        )
+        self.assertEqual(promoted_criticality["fixture/shared.lua"], "critical")
+        self.assertEqual(promoted_hosts["optional_descendant_host"], "critical")
+        promoted_surface = audit.build_surface(
+            "play7_hw.luaskin",
+            {path: promoted_closure[path] for path in promoted_criticality},
+            promoted_criticality,
+            promoted_hosts,
+        )
+        promoted_io = next(
+            item for item in promoted_surface
+            if item["kind"] == "file-api" and item["id"] == "io.open"
+        )
+        self.assertEqual(promoted_io["criticality"], "critical")
 
     def test_audit_rejects_prefix_tree_digest_and_archive_digest_mismatches(self):
         self.assertTrue(AUDIT_PATH.is_file(), str(AUDIT_PATH))
@@ -442,6 +636,42 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
             output.writestr("Bundle/a/b.lua", b"child")
         cases["file/directory collision"] = (collision, "file/directory collision")
 
+        implicit_case_collision = self.temp_path / "implicit-case-collision.zip"
+        with zipfile.ZipFile(implicit_case_collision, "w") as output:
+            output.writestr("Bundle/Foo/a.lua", b"return {}")
+            output.writestr("Bundle/foo/b.lua", b"return {}")
+        cases["implicit directory case collision"] = (
+            implicit_case_collision,
+            "structural path spelling conflict",
+        )
+
+        explicit_implicit_collision = self.temp_path / "explicit-implicit-collision.zip"
+        with zipfile.ZipFile(explicit_implicit_collision, "w") as output:
+            output.writestr("Bundle/Foo/", b"")
+            output.writestr("Bundle/foo/a.lua", b"return {}")
+        cases["explicit/implicit directory collision"] = (
+            explicit_implicit_collision,
+            "structural path spelling conflict",
+        )
+
+        implicit_nfc_collision = self.temp_path / "implicit-nfc-collision.zip"
+        with zipfile.ZipFile(implicit_nfc_collision, "w") as output:
+            output.writestr("Bundle/Cafe\u0301/a.lua", b"return {}")
+            output.writestr("Bundle/Caf\u00e9/b.lua", b"return {}")
+        cases["implicit directory NFC collision"] = (
+            implicit_nfc_collision,
+            "structural path spelling conflict",
+        )
+
+        explicit_nfc_collision = self.temp_path / "explicit-nfc-collision.zip"
+        with zipfile.ZipFile(explicit_nfc_collision, "w") as output:
+            output.writestr("Bundle/Cafe\u0301/", b"")
+            output.writestr("Bundle/Caf\u00e9/a.lua", b"return {}")
+        cases["explicit/implicit directory NFC collision"] = (
+            explicit_nfc_collision,
+            "structural path spelling conflict",
+        )
+
         for label, (archive, expected_error) in cases.items():
             with self.subTest(label=label):
                 result = run_python(
@@ -455,6 +685,18 @@ class BeatorajaReferenceToolBehaviorTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(expected_error, result.stdout)
+
+        audit = load_audit_module()
+        self.assertTrue(
+            hasattr(audit, "validate_structural_nodes"),
+            "disk and ZIP validation need one shared structural-node table",
+        )
+        with self.assertRaisesRegex(audit.AuditError, "structural path spelling conflict"):
+            audit.validate_structural_nodes(
+                ["Foo/a.lua", "foo/b.lua"],
+                [],
+                label="extracted tree",
+            )
 
 
 if __name__ == "__main__":

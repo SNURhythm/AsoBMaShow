@@ -42,10 +42,12 @@ provenance.
 - `MainController.render` updates the main clock and state, then invokes
   `Skin.updateCustomObjects`, then `Skin.drawAllObjects`. Within
   `Skin.updateCustomObjects`, all `CustomTimer.update` calls occur before all
-  `CustomEvent.update` calls and each `IntMap` is traversed in ascending ID
-  order. A custom timer caches one value for that frame. A conditional custom
-  event observes the updated timers and enforces `minInterval` in
-  `CustomEvent.update`.
+  `CustomEvent.update` calls. Within either phase, traversal follows libGDX
+  `IntMap` backing-hash iteration; it is not an ascending-ID contract. A custom
+  timer caches one value for that frame. A conditional custom event observes
+  the updated timers and enforces `minInterval` in `CustomEvent.update`.
+  Acceptance therefore records the observed order for selected timer/event IDs
+  instead of assuming a sort that `Skin.updateCustomObjects` does not perform.
 - Skin-triggered timer writes and event execution are constrained by
   `MainStatePropertyLuaApiExporter.SetTimerFunction` and
   `MainStatePropertyLuaApiExporter.EventExecFunction`; non-writable/non-runnable
@@ -88,13 +90,29 @@ intentional security divergence from Beatoraja's restricted
 GDX/audio, controller, and legacy HTTP access. A use is a compatibility error,
 not a successful no-op.
 
-The pinned SCURO 4.02 7-key closure critically imports `luajava` through an
-always-loaded helper and uses its restricted file/audio facades. The committed
-surface records that dependency as critical. Consequently physical acceptance
-remains `pending`: the unmodified entry cannot pass while the approved
-no-`luajava` policy remains in force. Resolving this requires an explicit
-reviewed design decision; this contract neither adds network access nor hides
-the incompatibility.
+The pinned SCURO 4.02 7-key closure has two unguarded, top-level
+`require("luajava")` sites in two always-loaded opaque helpers. Opaque helper A
+then performs one top-level `luajava.bindClass("java.io.File")`; its two
+`luajava.new(File, path)` constructor sites back single `mkdir` and `listFiles`
+facade sites. The selected configured-load path reaches `listFiles` through its
+rotation wrapper; `mkdir` remains deferred with no selected-entry caller.
+Opaque helper B
+performs one top-level `luajava.bindClass("com.badlogic.gdx.Gdx")`. Its one
+application-listener/audio-processor initialization site, one `play` site, and
+one `dispose` site are all guarded by `pcall`, so loss of that audio behavior
+is optional. Pinned `LegacySkinLuaApi.BindClassFunction`,
+`LegacySkinLuaApi.NewFunction`, `LegacySkinLuaApi.fileFacade`, and
+`LegacySkinLuaApi.gdxFacade` define the corresponding Beatoraja facade; the GDX
+facade exposes `graphics` and `input`, not `app`.
+
+The guarded audio calls do not make the module optional: either unguarded
+`require` fails immediately when AsoBMaShow exposes no `luajava`. The committed
+`legacyLuaApiSurface` records the site counts, load-time reachability, deferred
+file reachability, and guarded audio disposition without storing either helper
+path. Consequently physical acceptance remains `pending`: the unmodified entry
+cannot pass while the approved no-`luajava` policy remains in force. Resolving
+this requires an explicit reviewed design decision; this contract neither adds
+network access nor hides the incompatibility.
 
 ## Evidence and redistribution boundary
 

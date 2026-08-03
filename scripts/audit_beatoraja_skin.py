@@ -32,6 +32,8 @@ MAX_EXPANDED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_FILES = 20_000
 MAX_PATH_BYTES = 1_024
 MAX_PATH_COMPONENTS = 64
+MAX_LUA_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_LUA_TOKENS = 1_000_000
 SUPPORTED_COMPRESSION = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 
 SOURCE_PROVENANCE = (
@@ -42,15 +44,18 @@ SOURCE_PROVENANCE = (
     ("src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java", "LuaSkinLoader.serializeLuaScript", "dispatches callback values as function, number, recognized name, or script string"),
     ("src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java", "SkinLuaAccessor.setDirectory", "sets the package-local Lua module search directory"),
     ("src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java", "SkinLuaAccessor.execFile", "executes a Lua file in the retained Globals instance"),
+    ("src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java", "SkinLuaAccessor.exportMainStateAccessor", "publishes the main_state module for the configured main-state phase"),
+    ("src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java", "SkinLuaAccessor.RestrictedIoLib.openFile", "opens only files accepted by the package-rooted restricted Lua IO facade"),
     ("src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java", "SkinLuaAccessor.exportSkinProperty", "publishes selected file, option, enabled-option, and offset configuration"),
     ("src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java", "LegacySkinLuaApi.install", "installs the restricted legacy luajava class, constructor, file, GDX, controller, and HTTP facades"),
+    ("src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java", "MainStatePropertyLuaApiExporter.export", "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state"),
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.loadJsonSkinHeader", "converts header properties, files, offsets, and categories"),
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.loadJsonSkin", "constructs play objects in authored destination order"),
     ("src/bms/player/beatoraja/skin/json/JSONSkinLoader.java", "JSONSkinLoader.setDestination", "inherits omitted destination fields and binds conditions, timer, clip, offsets, and stretch"),
     ("src/bms/player/beatoraja/skin/SkinHeader.java", "SkinHeader.setSkinConfigProperty", "reconciles configured custom options, files, and offsets"),
     ("src/bms/player/beatoraja/skin/Skin.java", "Skin.prepare", "removes invalid and statically disabled objects before resource load"),
     ("src/bms/player/beatoraja/skin/Skin.java", "Skin.drawAllObjects", "prepares then draws surviving objects in authored array order"),
-    ("src/bms/player/beatoraja/skin/Skin.java", "Skin.updateCustomObjects", "updates custom timers before custom events, each in ascending ID order"),
+    ("src/bms/player/beatoraja/skin/Skin.java", "Skin.updateCustomObjects", "updates the custom-timer phase before the custom-event phase using IntMap backing-hash iteration within each phase"),
     ("src/bms/player/beatoraja/skin/SkinObject.java", "SkinObject.prepareRegion", "applies destination timer, loop, interpolation, and configured offsets"),
     ("src/bms/player/beatoraja/play/PlaySkin.java", "PlaySkin", "stores play-lane line, BPM, stop, time, cover, judge, and timing configuration"),
     ("src/bms/player/beatoraja/play/SkinNote.java", "SkinNote.prepare", "samples normal, mine, hidden, processed, and ten long-note image phases"),
@@ -97,6 +102,19 @@ class DiskRegularFile:
     path: str
     disk_path: Path
     byte_count: int
+
+
+@dataclass(frozen=True)
+class LuaToken:
+    kind: str
+    value: str
+
+
+@dataclass(frozen=True)
+class LuaDependency:
+    target: str
+    kind: str
+    criticality: str
 
 
 def sha256_file(path: Path) -> str:
@@ -162,6 +180,46 @@ def parents(path: str) -> Iterator[str]:
         yield "/".join(components[:length])
 
 
+def validate_structural_nodes(
+    file_paths: Iterable[str],
+    explicit_directories: Iterable[str],
+    *,
+    label: str,
+) -> None:
+    nodes: dict[str, tuple[str, str, str]] = {}
+
+    def add(raw_path: str, kind: str) -> None:
+        raw_components = raw_path.split("/")
+        normalized = normalize_relative_path(raw_path, directory=kind == "directory")
+        normalized_components = normalized.split("/")
+        for length in range(1, len(normalized_components) + 1):
+            node_kind = kind if length == len(normalized_components) else "directory"
+            normalized_node = "/".join(normalized_components[:length])
+            raw_node = "/".join(raw_components[:length])
+            key = collision_key(normalized_node)
+            previous = nodes.get(key)
+            if previous is None:
+                nodes[key] = (normalized_node, raw_node, node_kind)
+                continue
+            previous_normalized, previous_raw, previous_kind = previous
+            if previous_normalized != normalized_node or previous_raw != raw_node:
+                raise AuditError(
+                    f"{label} structural path spelling conflict: "
+                    f"{previous_raw!r} and {raw_node!r}"
+                )
+            if previous_kind != node_kind:
+                raise AuditError(
+                    f"{label} structural file/directory collision at {normalized_node!r}"
+                )
+            if node_kind == "file":
+                raise AuditError(f"{label} duplicate structural file: {normalized_node!r}")
+
+    for path in file_paths:
+        add(path, "file")
+    for path in explicit_directories:
+        add(path, "directory")
+
+
 def inspect_archive(archive_path: Path, declared_prefix: str):
     if not archive_path.is_file() or archive_path.is_symlink():
         raise AuditError(f"archive is not a regular file: {archive_path}")
@@ -171,6 +229,7 @@ def inspect_archive(archive_path: Path, declared_prefix: str):
     archive_digest = sha256_file(archive_path)
     regular: list[tuple[str, zipfile.ZipInfo]] = []
     explicit_directories: list[str] = []
+    explicit_directory_spellings: dict[str, str] = {}
     seen: dict[str, tuple[str, str]] = {}
     total_expanded = 0
     try:
@@ -196,6 +255,7 @@ def inspect_archive(archive_path: Path, declared_prefix: str):
             seen[key] = (normalized, kind)
             if kind == "directory":
                 explicit_directories.append(normalized)
+                explicit_directory_spellings[normalized] = info.filename[:-1]
                 continue
             if info.file_size > MAX_REGULAR_FILE_BYTES:
                 raise AuditError(f"regular ZIP entry exceeds the 512 MiB limit: {normalized!r}")
@@ -268,6 +328,27 @@ def inspect_archive(archive_path: Path, declared_prefix: str):
             if collision_key(stripped_directory) in stripped_seen:
                 raise AuditError(f"post-strip ZIP file/directory collision: {stripped_directory!r}")
 
+        raw_stripped_files = []
+        for item in stripped_files:
+            raw_components = item.info.filename.split("/")
+            raw_stripped_files.append(
+                "/".join(raw_components[1:]) if prefix_text else item.info.filename
+            )
+        raw_stripped_directories = []
+        for directory in explicit_directories:
+            raw_directory = explicit_directory_spellings[directory]
+            if prefix_text:
+                if directory == inferred_prefix:
+                    continue
+                raw_components = raw_directory.split("/")
+                raw_directory = "/".join(raw_components[1:])
+            raw_stripped_directories.append(raw_directory)
+        validate_structural_nodes(
+            raw_stripped_files,
+            raw_stripped_directories,
+            label="ZIP",
+        )
+
         stripped_files.sort(key=lambda item: item.path.encode("utf-8"))
         tree_digest = hashlib.sha256()
         tree_digest.update(TREE_DOMAIN)
@@ -328,6 +409,8 @@ def inspect_disk_tree(root: Path):
     regular: list[DiskRegularFile] = []
     seen: dict[str, str] = {}
     total_size = 0
+    raw_directories: list[str] = []
+    raw_files: list[str] = []
     for current_root, directory_names, file_names in os.walk(root, topdown=True, followlinks=False):
         current = Path(current_root)
         for name in list(directory_names):
@@ -337,12 +420,14 @@ def inspect_disk_tree(root: Path):
             mode = path.stat(follow_symlinks=False).st_mode
             if not stat.S_ISDIR(mode):
                 raise AuditError(f"special node in extracted skin tree: {path.relative_to(root)}")
+            raw_directories.append(path.relative_to(root).as_posix())
         for name in file_names:
             path = current / name
             mode = path.stat(follow_symlinks=False).st_mode
             if not stat.S_ISREG(mode):
                 raise AuditError(f"link or special node in extracted skin tree: {path.relative_to(root)}")
             relative = normalize_relative_path(path.relative_to(root).as_posix())
+            raw_files.append(path.relative_to(root).as_posix())
             key = collision_key(relative)
             if key in seen:
                 raise AuditError(f"colliding path in extracted skin tree: {seen[key]!r} and {relative!r}")
@@ -358,6 +443,7 @@ def inspect_disk_tree(root: Path):
                 raise AuditError("extracted tree exceeds the 4 GiB expanded limit")
     if not regular:
         raise AuditError("extracted skin tree contains no regular files")
+    validate_structural_nodes(raw_files, raw_directories, label="extracted tree")
     regular.sort(key=lambda item: item.path.encode("utf-8"))
     digest = hashlib.sha256()
     digest.update(TREE_DOMAIN)
@@ -418,11 +504,11 @@ def source_provenance(path: str, symbol: str, behavior: str) -> dict:
     }
 
 
-def provenance_for(symbol_suffix: str) -> list[dict]:
+def provenance_for(symbol_name: str) -> list[dict]:
     for path, symbol, behavior in SOURCE_PROVENANCE:
-        if symbol.endswith(symbol_suffix):
+        if symbol == symbol_name:
             return [source_provenance(path, symbol, behavior)]
-    raise AuditError(f"internal provenance mapping is missing: {symbol_suffix}")
+    raise AuditError(f"internal provenance mapping is missing: {symbol_name}")
 
 
 def opaque_id(domain: str, value: str) -> str:
@@ -447,6 +533,336 @@ def file_kind(path: str) -> str:
     return "other"
 
 
+def _long_bracket_end(text: str, start: int) -> tuple[int, int] | None:
+    if start >= len(text) or text[start] != "[":
+        return None
+    position = start + 1
+    while position < len(text) and text[position] == "=":
+        position += 1
+    if position >= len(text) or text[position] != "[":
+        return None
+    equals = position - start - 1
+    closing = "]" + ("=" * equals) + "]"
+    end = text.find(closing, position + 1)
+    return (len(text), position + 1) if end < 0 else (end + len(closing), position + 1)
+
+
+def tokenize_lua(text: str) -> list[LuaToken]:
+    if len(text.encode("utf-8")) > MAX_LUA_SOURCE_BYTES:
+        raise AuditError("Lua source exceeds the 16 MiB scanner limit")
+    tokens: list[LuaToken] = []
+    position = 0
+    while position < len(text):
+        character = text[position]
+        if character.isspace():
+            position += 1
+            continue
+        if text.startswith("--", position):
+            long_comment = _long_bracket_end(text, position + 2)
+            if long_comment is not None:
+                position = long_comment[0]
+            else:
+                newline = text.find("\n", position + 2)
+                position = len(text) if newline < 0 else newline + 1
+            continue
+        long_string = _long_bracket_end(text, position)
+        if long_string is not None:
+            end, content_start = long_string
+            closing_length = 2 + (content_start - position - 2)
+            tokens.append(LuaToken("string", text[content_start:end - closing_length]))
+            position = end
+            continue
+        if character in {'"', "'"}:
+            quote = character
+            position += 1
+            value: list[str] = []
+            while position < len(text):
+                character = text[position]
+                if character == quote:
+                    position += 1
+                    break
+                if character == "\\" and position + 1 < len(text):
+                    escaped = text[position + 1]
+                    value.append({"n": "\n", "r": "\r", "t": "\t"}.get(escaped, escaped))
+                    position += 2
+                    continue
+                value.append(character)
+                position += 1
+            tokens.append(LuaToken("string", "".join(value)))
+        elif character.isalpha() or character == "_":
+            end = position + 1
+            while end < len(text) and (text[end].isalnum() or text[end] == "_"):
+                end += 1
+            tokens.append(LuaToken("identifier", text[position:end]))
+            position = end
+        elif character.isdigit():
+            end = position + 1
+            while end < len(text) and (text[end].isalnum() or text[end] in ".xX+-"):
+                end += 1
+            tokens.append(LuaToken("number", text[position:end]))
+            position = end
+        else:
+            symbol = next(
+                (candidate for candidate in ("...", "==", "~=", "<=", ">=", "..", "::") if text.startswith(candidate, position)),
+                character,
+            )
+            tokens.append(LuaToken("symbol", symbol))
+            position += len(symbol)
+        if len(tokens) > MAX_LUA_TOKENS:
+            raise AuditError("Lua source exceeds the 1,000,000-token scanner limit")
+    return tokens
+
+
+def _lua_context_flags(tokens: list[LuaToken]) -> tuple[list[bool], list[int]]:
+    blocks: list[str] = []
+    calls: list[str | None] = []
+    guarded: list[bool] = []
+    function_depths: list[int] = []
+    for index, token in enumerate(tokens):
+        guarded.append(
+            any(block in {"conditional", "repeat"} for block in blocks)
+            or any(call in {"pcall", "xpcall"} for call in calls)
+        )
+        function_depths.append(sum(block == "function" for block in blocks))
+        value = token.value
+        if value == "function":
+            blocks.append("function")
+        elif value == "if":
+            blocks.append("conditional")
+        elif value in {"for", "while"}:
+            blocks.append("conditional-wait-do")
+        elif value == "repeat":
+            blocks.append("repeat")
+        elif value == "do":
+            if blocks and blocks[-1] == "conditional-wait-do":
+                blocks[-1] = "conditional"
+            else:
+                blocks.append("do")
+        elif value == "end" and blocks:
+            blocks.pop()
+        elif value == "until" and blocks and blocks[-1] == "repeat":
+            blocks.pop()
+        if value == "(":
+            previous = tokens[index - 1].value if index else None
+            calls.append(previous if previous in {"pcall", "xpcall"} else None)
+        elif value == ")" and calls:
+            calls.pop()
+    return guarded, function_depths
+
+
+def _lua_guarded_flags(tokens: list[LuaToken]) -> list[bool]:
+    return _lua_context_flags(tokens)[0]
+
+
+def _call_string_argument(tokens: list[LuaToken], index: int) -> str | None:
+    if index + 1 >= len(tokens):
+        return None
+    argument = index + 1
+    if tokens[argument].value == "(":
+        argument += 1
+    if argument < len(tokens) and tokens[argument].kind == "string":
+        return tokens[argument].value
+    return None
+
+
+def scan_lua_dependencies(text: str) -> list[LuaDependency]:
+    tokens = tokenize_lua(text)
+    guarded = _lua_guarded_flags(tokens)
+    path_variables: dict[str, str] = {}
+    ambiguous_variables: set[str] = set()
+    for index in range(len(tokens) - 7):
+        values = [token.value for token in tokens[index:index + 8]]
+        if (
+            tokens[index].kind == "identifier"
+            and values[1:7] == ["=", "skin_config", ".", "get_path", "(", values[6]]
+            and tokens[index + 6].kind == "string"
+            and values[7] == ")"
+            and values[6].lower().endswith(".lua")
+        ):
+            variable = values[0]
+            path = values[6]
+            if variable in path_variables and path_variables[variable] != path:
+                ambiguous_variables.add(variable)
+            path_variables[variable] = path
+    for variable in ambiguous_variables:
+        path_variables.pop(variable, None)
+
+    dependencies: list[LuaDependency] = []
+    for index, token in enumerate(tokens):
+        if token.value == "require":
+            module_name = _call_string_argument(tokens, index)
+            if module_name is not None:
+                dependencies.append(
+                    LuaDependency(
+                        module_name,
+                        "require",
+                        "optional" if guarded[index] else "critical",
+                    )
+                )
+        if token.value in {"pcall", "xpcall"} and index + 4 < len(tokens):
+            if (
+                tokens[index + 1].value == "("
+                and tokens[index + 2].value == "require"
+                and tokens[index + 3].value == ","
+                and tokens[index + 4].kind == "string"
+            ):
+                dependencies.append(LuaDependency(tokens[index + 4].value, "require", "optional"))
+        if token.value not in {"dofile", "loadfile"}:
+            continue
+        argument = index + 1
+        if argument < len(tokens) and tokens[argument].value == "(":
+            argument += 1
+        path = None
+        if argument < len(tokens) and tokens[argument].kind == "string":
+            path = tokens[argument].value
+        elif argument < len(tokens) and tokens[argument].kind == "identifier":
+            path = path_variables.get(tokens[argument].value)
+        elif argument + 5 < len(tokens):
+            values = [candidate.value for candidate in tokens[argument:argument + 6]]
+            if (
+                values[:5] == ["skin_config", ".", "get_path", "(", values[4]]
+                and tokens[argument + 4].kind == "string"
+                and values[5] == ")"
+            ):
+                path = values[4]
+        if path is not None and path.lower().endswith(".lua"):
+            dependencies.append(
+                LuaDependency(
+                    path,
+                    "file",
+                    "optional" if guarded[index] else "critical",
+                )
+            )
+    return dependencies
+
+
+def analyze_legacy_lua_api(
+    loaded: dict[str, str],
+    module_criticality: dict[str, str],
+) -> dict:
+    import_count = 0
+    import_helpers: set[str] = set()
+    critical_top_level_imports = 0
+    bind_classes: dict[str, dict[str, int]] = {}
+    constructor_sites = 0
+    mkdir_sites = 0
+    list_files_sites = 0
+    selected_dot_calls: set[str] = set()
+    audio_initialization_sites = 0
+    audio_play_sites = 0
+    audio_dispose_sites = 0
+    guarded_audio_sites = 0
+
+    for path, text in loaded.items():
+        tokens = tokenize_lua(text)
+        guarded, function_depths = _lua_context_flags(tokens)
+        for index, token in enumerate(tokens):
+            if token.value == "require" and _call_string_argument(tokens, index) == "luajava":
+                import_count += 1
+                import_helpers.add(path)
+                if (
+                    module_criticality.get(path) == "critical"
+                    and not guarded[index]
+                    and function_depths[index] == 0
+                ):
+                    critical_top_level_imports += 1
+            if index + 5 < len(tokens) and [candidate.value for candidate in tokens[index:index + 4]] == [
+                "luajava", ".", "bindClass", "("
+            ] and tokens[index + 4].kind == "string" and tokens[index + 5].value == ")":
+                class_name = tokens[index + 4].value
+                record = bind_classes.setdefault(class_name, {"count": 0, "criticalTopLevel": 0})
+                record["count"] += 1
+                if (
+                    module_criticality.get(path) == "critical"
+                    and not guarded[index]
+                    and function_depths[index] == 0
+                ):
+                    record["criticalTopLevel"] += 1
+            if index + 3 < len(tokens) and [candidate.value for candidate in tokens[index:index + 4]] == [
+                "luajava", ".", "new", "("
+            ]:
+                constructor_sites += 1
+            if index + 2 < len(tokens) and tokens[index].value == ":" and tokens[index + 2].value == "(":
+                if tokens[index + 1].value == "mkdir":
+                    mkdir_sites += 1
+                elif tokens[index + 1].value == "listFiles":
+                    list_files_sites += 1
+                elif tokens[index - 1].value == "audio" and tokens[index + 1].value == "play":
+                    audio_play_sites += 1
+                    guarded_audio_sites += int(guarded[index - 1])
+                elif tokens[index - 1].value == "audio" and tokens[index + 1].value == "dispose":
+                    audio_dispose_sites += 1
+                    guarded_audio_sites += int(guarded[index - 1])
+            if (
+                token.kind == "identifier"
+                and index > 0
+                and index + 1 < len(tokens)
+                and tokens[index - 1].value == "."
+                and tokens[index + 1].value == "("
+            ):
+                selected_dot_calls.add(token.value)
+            if token.value == "gdx" and index + 9 < len(tokens):
+                window = [candidate.value for candidate in tokens[index:index + 10]]
+                if window == [
+                    "gdx", ".", "app", ":", "getApplicationListener", "(", ")",
+                    ":", "getAudioProcessor", "(",
+                ]:
+                    audio_initialization_sites += 1
+                    guarded_audio_sites += int(guarded[index])
+
+    bind_surface = []
+    for class_name, record in sorted(bind_classes.items()):
+        critical = record["count"] == record["criticalTopLevel"]
+        bind_surface.append(
+            {
+                "className": class_name,
+                "siteCount": record["count"],
+                "criticality": "critical" if critical else "optional",
+                "reachability": "unguarded-top-level" if critical else "guarded-or-deferred",
+            }
+        )
+    audio_site_count = audio_initialization_sites + audio_play_sites + audio_dispose_sites
+    mkdir_reachable = "mkdir" in selected_dot_calls
+    list_files_reachable = (
+        "addSourceSP" in selected_dot_calls
+        and "randomChoiceStep1" in selected_dot_calls
+    )
+    reachable_constructor_sites = int(mkdir_reachable) + int(list_files_reachable)
+    return {
+        "module": "luajava",
+        "helperCount": len(import_helpers),
+        "imports": {
+            "siteCount": import_count,
+            "criticality": "critical" if import_count == critical_top_level_imports else "optional",
+            "reachability": "unguarded-top-level" if import_count == critical_top_level_imports else "guarded-or-deferred",
+        },
+        "bindClass": bind_surface,
+        "fileFacade": {
+            "constructorSiteCount": constructor_sites,
+            "reachableConstructorSiteCount": reachable_constructor_sites,
+            "mkdirSiteCount": mkdir_sites,
+            "mkdirReachableFromSelectedEntry": mkdir_reachable,
+            "listFilesSiteCount": list_files_sites,
+            "listFilesReachableFromSelectedEntry": list_files_reachable,
+            "criticality": "critical" if reachable_constructor_sites else "optional",
+            "reachability": (
+                "configured-load-listFiles-deferred-mkdir"
+                if list_files_reachable and not mkdir_reachable
+                else "selected-and-deferred-sites"
+                if reachable_constructor_sites
+                else "deferred-no-selected-callers"
+            ),
+        },
+        "audioFacade": {
+            "initializationSiteCount": audio_initialization_sites,
+            "playSiteCount": audio_play_sites,
+            "disposeSiteCount": audio_dispose_sites,
+            "criticality": "optional" if audio_site_count == guarded_audio_sites else "critical",
+            "reachability": "pcall-guarded" if audio_site_count == guarded_audio_sites else "unguarded-sites-present",
+        },
+    }
+
+
 def choose_entry(lua_text: dict[str, str]) -> str:
     candidates = sorted(
         (
@@ -469,51 +885,82 @@ def loaded_lua_closure(entry: str, lua_text: dict[str, str]):
     loaded: dict[str, str] = {}
     criticality: dict[str, str] = {entry: "critical"}
     host_modules: dict[str, str] = {}
+    dependency_edges: dict[str, list[LuaDependency]] = {}
     queue = [entry]
     while queue:
         path = queue.pop(0)
-        if path in loaded:
-            continue
-        text = lua_text.get(path)
+        text = loaded.get(path)
         if text is None:
-            raise AuditError(f"selected Lua dependency is missing from the archive: {path!r}")
-        loaded[path] = text
-        for module_name in re.findall(r'''\brequire\s*\(?\s*["']([^"']+)["']''', text):
-            module_path = module_name.replace(".", "/") + ".lua"
-            if module_path in lua_text:
-                if module_path not in criticality:
-                    criticality[module_path] = "critical"
-                    queue.append(module_path)
+            text = lua_text.get(path)
+            if text is None:
+                raise AuditError(f"selected Lua dependency is missing from the archive: {path!r}")
+            loaded[path] = text
+            dependency_edges[path] = scan_lua_dependencies(text)
+        parent_disposition = criticality[path]
+        for dependency in dependency_edges[path]:
+            disposition = (
+                "critical"
+                if parent_disposition == "critical" and dependency.criticality == "critical"
+                else "optional"
+            )
+            if dependency.kind == "require":
+                module_path = dependency.target.replace(".", "/") + ".lua"
+                if module_path not in lua_text:
+                    previous = host_modules.get(dependency.target)
+                    if previous is None or (previous == "optional" and disposition == "critical"):
+                        host_modules[dependency.target] = disposition
+                    continue
             else:
-                host_modules[module_name] = "critical"
-        for module_path in re.findall(
-            r'''skin_config\.get_path\s*\(\s*["']([^"']+\.lua)["']''', text
-        ):
-            normalized = normalize_relative_path(module_path)
-            if normalized not in lua_text:
-                raise AuditError(f"selected Lua dependency is missing from the archive: {normalized!r}")
-            if normalized not in criticality:
-                criticality[normalized] = "optional"
-                queue.append(normalized)
+                module_path = normalize_relative_path(dependency.target)
+                if module_path not in lua_text:
+                    raise AuditError(
+                        f"selected Lua dependency is missing from the archive: {module_path!r}"
+                    )
+            previous = criticality.get(module_path)
+            if previous is None or (previous == "optional" and disposition == "critical"):
+                criticality[module_path] = disposition
+                queue.append(module_path)
     return loaded, criticality, host_modules
 
 
 def read_constant_definitions(loaded: dict[str, str]):
     definitions: dict[tuple[str, str], int] = {}
-    definition_files = {
-        "OP": "Root/mainoption.lua",
-        "NUM": "Root/mainnumber.lua",
-        "TIMER": "Root/maintimer.lua",
-        "STRING": "Root/mainstring.lua",
-        "BUTTON": "Root/mainbutton.lua",
-        "GRAPH": "Root/maingraph.lua",
-        "SLIDER": "Root/mainslider.lua",
-        "OFFSET": "Root/mainoffset.lua",
-    }
-    for category, path in definition_files.items():
-        text = loaded.get(path, "")
-        for name, value in re.findall(r"(?m)^\s*([A-Z][A-Z0-9_]*)\s*=\s*(-?\d+)\s*,?", text):
-            definitions[(category, name)] = int(value)
+    categories = set(PROPERTY_CATEGORIES) | {"TIMER", "BUTTON"}
+    category_modules: dict[str, set[str]] = {category: set() for category in categories}
+    for text in loaded.values():
+        tokens = tokenize_lua(text)
+        for index in range(len(tokens) - 3):
+            if (
+                tokens[index].value in categories
+                and tokens[index + 1].value == "="
+                and tokens[index + 2].value == "require"
+            ):
+                module_name = _call_string_argument(tokens, index + 2)
+                if module_name is not None:
+                    category_modules[tokens[index].value].add(
+                        module_name.replace(".", "/") + ".lua"
+                    )
+    for category, paths in category_modules.items():
+        for path in paths:
+            text = loaded.get(path)
+            if text is None:
+                continue
+            tokens = tokenize_lua(text)
+            for index in range(len(tokens) - 2):
+                if (
+                    tokens[index].kind != "identifier"
+                    or not re.fullmatch(r"[A-Z][A-Z0-9_]*", tokens[index].value)
+                    or tokens[index + 1].value != "="
+                ):
+                    continue
+                value_index = index + 2
+                sign = 1
+                if tokens[value_index].value == "-" and value_index + 1 < len(tokens):
+                    sign = -1
+                    value_index += 1
+                if tokens[value_index].kind != "number" or not tokens[value_index].value.isdigit():
+                    continue
+                definitions[(category, tokens[index].value)] = sign * int(tokens[value_index].value)
     return definitions
 
 
@@ -531,21 +978,26 @@ def surface_evidence(kind: str, item_id: str, criticality: str, provenance: list
 
 
 def build_surface(entry: str, loaded: dict[str, str], module_criticality, host_modules):
-    combined = "\n".join(loaded.values())
+    tokens = [token for text in loaded.values() for token in tokenize_lua(text)]
     surface = []
     for name in OBJECT_NAMES:
-        if re.search(rf"(?:\.|\b){re.escape(name)}\s*=", combined):
-            suffix = {
-                "note": "prepare",
-                "bga": "drawBGA",
-                "destination": "setDestination",
-            }.get(name, "loadJsonSkin")
+        if any(
+            token.value == name
+            and index + 1 < len(tokens)
+            and tokens[index + 1].value == "="
+            for index, token in enumerate(tokens)
+        ):
+            symbol = {
+                "note": "SkinNote.prepare",
+                "bga": "BGAProcessor.drawBGA",
+                "destination": "JSONSkinLoader.setDestination",
+            }.get(name, "JSONSkinLoader.loadJsonSkin")
             surface.append(
                 surface_evidence(
                     "object",
                     name,
                     "critical" if name in {"note", "destination"} else "optional",
-                    provenance_for(suffix),
+                    provenance_for(symbol),
                 )
             )
 
@@ -553,7 +1005,17 @@ def build_surface(entry: str, loaded: dict[str, str], module_criticality, host_m
     property_ids: set[tuple[str, str]] = set()
     timer_ids: set[str] = set()
     event_ids: set[str] = set()
-    for category, name in re.findall(r"\bMAIN\.(OP|NUM|GRAPH|STRING|SLIDER|OFFSET|TIMER|BUTTON)\.([A-Z][A-Z0-9_]*)", combined):
+    for index in range(len(tokens) - 4):
+        if (
+            tokens[index].value != "MAIN"
+            or tokens[index + 1].value != "."
+            or tokens[index + 2].value not in set(PROPERTY_CATEGORIES) | {"TIMER", "BUTTON"}
+            or tokens[index + 3].value != "."
+            or tokens[index + 4].kind != "identifier"
+        ):
+            continue
+        category = tokens[index + 2].value
+        name = tokens[index + 4].value
         value = definitions.get((category, name))
         stable_value = str(value) if value is not None else f"name:{name}"
         if category == "TIMER":
@@ -569,20 +1031,35 @@ def build_surface(entry: str, loaded: dict[str, str], module_criticality, host_m
         "text": "string",
         "event_index": "integer",
     }
-    for api, property_type in direct_calls.items():
-        for raw_id in re.findall(rf"\bmain_state\.{api}\s*\(\s*(-?\d+|[\"'][^\"']+[\"'])", combined):
-            property_ids.add((property_type, raw_id.strip("\"'")))
-    for raw_id in re.findall(r"\bmain_state\.timer\s*\(\s*(-?\d+|[\"'][^\"']+[\"'])", combined):
-        timer_ids.add(raw_id.strip("\"'"))
-    for raw_id in re.findall(r"\bmain_state\.event_exec\s*\(\s*(-?\d+|[\"'][^\"']+[\"'])", combined):
-        event_ids.add(raw_id.strip("\"'"))
+    for index in range(len(tokens) - 4):
+        if (
+            tokens[index].value != "main_state"
+            or tokens[index + 1].value != "."
+            or tokens[index + 3].value != "("
+        ):
+            continue
+        api = tokens[index + 2].value
+        argument = index + 4
+        sign = ""
+        if tokens[argument].value == "-" and argument + 1 < len(tokens):
+            sign = "-"
+            argument += 1
+        if tokens[argument].kind not in {"number", "string"}:
+            continue
+        raw_id = sign + tokens[argument].value
+        if api in direct_calls:
+            property_ids.add((direct_calls[api], raw_id))
+        elif api == "timer":
+            timer_ids.add(raw_id)
+        elif api == "event_exec":
+            event_ids.add(raw_id)
 
     property_provenance = {
-        "boolean": "getBooleanProperty",
-        "integer": "getIntegerProperty",
-        "float": "getRateProperty",
-        "string": "getStringProperty",
-        "offset": "exportSkinProperty",
+        "boolean": "BooleanPropertyFactory.getBooleanProperty",
+        "integer": "IntegerPropertyFactory.getIntegerProperty",
+        "float": "FloatPropertyFactory.getRateProperty",
+        "string": "StringPropertyFactory.getStringProperty",
+        "offset": "SkinLuaAccessor.exportSkinProperty",
     }
     for property_type, item_id in sorted(property_ids):
         surface.append(
@@ -594,9 +1071,9 @@ def build_surface(entry: str, loaded: dict[str, str], module_criticality, host_m
             )
         )
     for item_id in sorted(timer_ids, key=lambda value: value.encode("utf-8")):
-        surface.append(surface_evidence("timer", item_id, "critical", provenance_for("getTimerProperty")))
+        surface.append(surface_evidence("timer", item_id, "critical", provenance_for("TimerPropertyFactory.getTimerProperty")))
     for item_id in sorted(event_ids, key=lambda value: value.encode("utf-8")):
-        surface.append(surface_evidence("event", item_id, "optional", provenance_for("getEvent")))
+        surface.append(surface_evidence("event", item_id, "optional", provenance_for("EventFactory.getEvent")))
 
     for path, disposition in sorted(module_criticality.items(), key=lambda item: item[0].encode("utf-8")):
         surface.append(
@@ -604,28 +1081,59 @@ def build_surface(entry: str, loaded: dict[str, str], module_criticality, host_m
                 "module",
                 opaque_id("module", path),
                 disposition,
-                provenance_for("setDirectory"),
+                provenance_for("SkinLuaAccessor.setDirectory"),
             )
         )
     for module_name, disposition in sorted(host_modules.items()):
         module_id = "host-main-state" if module_name == "main_state" else opaque_id("module", "host:" + module_name)
-        behavior = "install" if module_name == "luajava" else "setDirectory"
-        surface.append(surface_evidence("module", module_id, disposition, provenance_for(behavior)))
+        if module_name == "luajava":
+            symbol = "LegacySkinLuaApi.install"
+        elif module_name == "main_state":
+            symbol = "SkinLuaAccessor.exportMainStateAccessor"
+        else:
+            symbol = "SkinLuaAccessor.setDirectory"
+        surface.append(surface_evidence("module", module_id, disposition, provenance_for(symbol)))
 
-    file_apis = set(re.findall(
-        r"\b(?:main_state|skin_config|io|luajava)\.[A-Za-z_][A-Za-z0-9_]*|\b(?:require|dofile|loadfile)\b",
-        combined,
-    ))
-    for api in sorted(file_apis):
+    file_apis: dict[str, str] = {}
+    for path, text in loaded.items():
+        module_tokens = tokenize_lua(text)
+        guarded = _lua_guarded_flags(module_tokens)
+        parent_disposition = module_criticality[path]
+        for index, token in enumerate(module_tokens):
+            api = None
+            if token.kind == "identifier" and token.value in {"require", "dofile", "loadfile"}:
+                api = token.value
+            elif (
+                token.value in {"main_state", "skin_config", "io", "luajava"}
+                and index + 2 < len(module_tokens)
+                and module_tokens[index + 1].value == "."
+                and module_tokens[index + 2].kind == "identifier"
+            ):
+                api = token.value + "." + module_tokens[index + 2].value
+            if api is None:
+                continue
+            disposition = (
+                "critical"
+                if parent_disposition == "critical" and not guarded[index]
+                else "optional"
+            )
+            previous = file_apis.get(api)
+            if previous is None or (previous == "optional" and disposition == "critical"):
+                file_apis[api] = disposition
+    for api, disposition in sorted(file_apis.items()):
         if api.startswith("main_state."):
-            provenance = provenance_for("execFile")
+            provenance = provenance_for("MainStatePropertyLuaApiExporter.export")
         elif api.startswith("skin_config."):
-            provenance = provenance_for("exportSkinProperty")
+            provenance = provenance_for("SkinLuaAccessor.exportSkinProperty")
         elif api.startswith("luajava."):
             provenance = provenance_for("LegacySkinLuaApi.install")
+        elif api.startswith("io."):
+            provenance = provenance_for("SkinLuaAccessor.RestrictedIoLib.openFile")
+        elif api == "require":
+            provenance = provenance_for("SkinLuaAccessor.setDirectory")
         else:
-            provenance = provenance_for("setDirectory")
-        surface.append(surface_evidence("file-api", api, "critical", provenance))
+            provenance = provenance_for("SkinLuaAccessor.execFile")
+        surface.append(surface_evidence("file-api", api, disposition, provenance))
     surface.sort(key=lambda item: (item["kind"], item["id"]))
     return surface
 
@@ -660,6 +1168,7 @@ def acceptance_contract(archive_sha: str, tree_sha: str, entry_sha: str) -> dict
             "payloadTreeSha256": tree_sha,
             "entrySha256": entry_sha,
             "configurationSha256": pending_field(),
+            "activatedRevisionSha256": pending_field(),
         },
         "syntheticChartHashes": [
             {"scenario": scenario, "sha256": None, "status": "pending"}
@@ -670,9 +1179,21 @@ def acceptance_contract(archive_sha: str, tree_sha: str, entry_sha: str) -> dict
             for scenario in ("normal-notes", "long-note-variants", "timing-gimmicks", "failure-and-song-end")
         ],
         "screenshotTimestamps": [
-            {"aspect": layout["aspect"], "mode": layout["mode"], "timestampsMicros": [], "status": "pending"}
+            {
+                "aspect": layout["aspect"],
+                "mode": layout["mode"],
+                "timestampsMicros": [],
+                "status": "pending",
+                "evidenceReference": None,
+            }
             for layout in layouts
         ],
+        "timerEventTrace": {
+            "status": "pending",
+            "selectedIds": [],
+            "observedOrder": [],
+            "evidenceReference": None,
+        },
         "protocol": {"warmupSeconds": 30, "measurementSeconds": 180, "repetitions": 3},
         "layouts": layouts,
         "limits": {
@@ -695,6 +1216,7 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
     entry = choose_entry(lua_text)
     loaded, module_criticality, host_modules = loaded_lua_closure(entry, lua_text)
     surface = build_surface(entry, loaded, module_criticality, host_modules)
+    legacy_surface = analyze_legacy_lua_api(loaded, module_criticality)
     payload_by_id = {record["id"]: record for record in archive_data["payloads"]}
     entry_payload_id = opaque_id("payload", entry)
     entry_sha = payload_by_id[entry_payload_id]["sha256"]
@@ -739,6 +1261,13 @@ def build_manifest(arguments, archive_data, disk_tree_sha, provenance):
             }
         ],
         "surface": surface,
+        "legacyLuaApiSurface": legacy_surface,
+        "timerEventOrdering": {
+            "phaseOrder": ["customTimers", "customEvents"],
+            "withinPhase": "IntMap-backing-hash-iteration",
+            "sortedById": False,
+            "selectedIdTraceRequired": True,
+        },
         "externalPayloadDigests": payloads,
         "traceVersions": {
             "luaLanguage": 1,

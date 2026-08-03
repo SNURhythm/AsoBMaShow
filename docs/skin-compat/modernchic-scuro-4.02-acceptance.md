@@ -57,13 +57,17 @@ requirements before renderer work:
   width/height, safe insets, and actual configured refresh rate;
 - a clean measurement build commit/configuration;
 - exact external archive, payload-tree, selected-entry, configuration, and
-  activated-revision digests;
+  activated-revision digests, with configuration and activated-revision values
+  explicitly pending until physical evidence exists;
 - synthetic chart hashes and fixed autoplay-script hashes for normal notes,
   every supported LN/CN/HCN phase, BPM/stop/scroll changes, chords, all judgment
   grades, combo breaks, gauge thresholds/failure, lane cover, BGA transitions,
   and song end;
-- screenshot timestamps and external evidence references, without image bytes
-  in Git;
+- screenshot timestamps and a per-layout external evidence reference, without
+  image bytes in Git;
+- a selected-ID timer/event trace that records the observed `IntMap`
+  backing-hash order while still requiring the timer phase before the event
+  phase;
 - all six 16:9 and 4:3 Fit/Stretch/Custom layout cases;
 - a 30-second warm-up followed by three complete 180-second repetitions for
   every scenario/layout; and

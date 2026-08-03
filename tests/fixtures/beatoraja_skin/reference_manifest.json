@@ -126,6 +126,10 @@
       }
     },
     "externalDigests": {
+      "activatedRevisionSha256": {
+        "status": "pending",
+        "value": null
+      },
       "archiveSha256": "06ad5a4c5a1b6d0ece08b79475cbe2b4a5187ce07e490752e141518ee4fcc41c",
       "configurationSha256": {
         "status": "pending",
@@ -214,36 +218,42 @@
     "screenshotTimestamps": [
       {
         "aspect": "16:9",
+        "evidenceReference": null,
         "mode": "fit",
         "status": "pending",
         "timestampsMicros": []
       },
       {
         "aspect": "16:9",
+        "evidenceReference": null,
         "mode": "stretch",
         "status": "pending",
         "timestampsMicros": []
       },
       {
         "aspect": "16:9",
+        "evidenceReference": null,
         "mode": "custom",
         "status": "pending",
         "timestampsMicros": []
       },
       {
         "aspect": "4:3",
+        "evidenceReference": null,
         "mode": "fit",
         "status": "pending",
         "timestampsMicros": []
       },
       {
         "aspect": "4:3",
+        "evidenceReference": null,
         "mode": "stretch",
         "status": "pending",
         "timestampsMicros": []
       },
       {
         "aspect": "4:3",
+        "evidenceReference": null,
         "mode": "custom",
         "status": "pending",
         "timestampsMicros": []
@@ -270,7 +280,13 @@
         "sha256": null,
         "status": "pending"
       }
-    ]
+    ],
+    "timerEventTrace": {
+      "evidenceReference": null,
+      "observedOrder": [],
+      "selectedIds": [],
+      "status": "pending"
+    }
   },
   "archiveByteCount": 445591453,
   "archiveFilename": "ModernChic402.zip",
@@ -3592,6 +3608,46 @@
     }
   ],
   "extractedPackageRootIdentity": "skin-tree:448a5b031b153c3424e5d5ca6b07ab1fe832dabbe18c0faf6f72bc17bc4af18d",
+  "legacyLuaApiSurface": {
+    "audioFacade": {
+      "criticality": "optional",
+      "disposeSiteCount": 1,
+      "initializationSiteCount": 1,
+      "playSiteCount": 1,
+      "reachability": "pcall-guarded"
+    },
+    "bindClass": [
+      {
+        "className": "com.badlogic.gdx.Gdx",
+        "criticality": "critical",
+        "reachability": "unguarded-top-level",
+        "siteCount": 1
+      },
+      {
+        "className": "java.io.File",
+        "criticality": "critical",
+        "reachability": "unguarded-top-level",
+        "siteCount": 1
+      }
+    ],
+    "fileFacade": {
+      "constructorSiteCount": 2,
+      "criticality": "critical",
+      "listFilesReachableFromSelectedEntry": true,
+      "listFilesSiteCount": 1,
+      "mkdirReachableFromSelectedEntry": false,
+      "mkdirSiteCount": 1,
+      "reachability": "configured-load-listFiles-deferred-mkdir",
+      "reachableConstructorSiteCount": 1
+    },
+    "helperCount": 2,
+    "imports": {
+      "criticality": "critical",
+      "reachability": "unguarded-top-level",
+      "siteCount": 2
+    },
+    "module": "luajava"
+  },
   "officialSource": {
     "accessed": "2026-08-03",
     "url": "https://www.kasacontent.com/musicgame/beatoraja/4226/"
@@ -3641,6 +3697,18 @@
       "symbol": "SkinLuaAccessor.execFile"
     },
     {
+      "behavior": "publishes the main_state module for the configured main-state phase",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.exportMainStateAccessor"
+    },
+    {
+      "behavior": "opens only files accepted by the package-rooted restricted Lua IO facade",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.RestrictedIoLib.openFile"
+    },
+    {
       "behavior": "publishes selected file, option, enabled-option, and offset configuration",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
@@ -3651,6 +3719,12 @@
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
       "symbol": "LegacySkinLuaApi.install"
+    },
+    {
+      "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
+      "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+      "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+      "symbol": "MainStatePropertyLuaApiExporter.export"
     },
     {
       "behavior": "converts header properties, files, offsets, and categories",
@@ -3689,7 +3763,7 @@
       "symbol": "Skin.drawAllObjects"
     },
     {
-      "behavior": "updates custom timers before custom events, each in ascending ID order",
+      "behavior": "updates the custom-timer phase before the custom-event phase using IntMap backing-hash iteration within each phase",
       "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
       "path": "src/bms/player/beatoraja/skin/Skin.java",
       "symbol": "Skin.updateCustomObjects"
@@ -3770,7 +3844,7 @@
   "surface": [
     {
       "criticality": "optional",
-      "id": "name:ASSIST_BPMGUIDE",
+      "id": "301",
       "kind": "event",
       "provenance": [
         {
@@ -3783,7 +3857,7 @@
     },
     {
       "criticality": "optional",
-      "id": "name:ASSIST_CONSTANT",
+      "id": "302",
       "kind": "event",
       "provenance": [
         {
@@ -3796,7 +3870,7 @@
     },
     {
       "criticality": "optional",
-      "id": "name:ASSIST_EXJUDGE",
+      "id": "303",
       "kind": "event",
       "provenance": [
         {
@@ -3809,7 +3883,7 @@
     },
     {
       "criticality": "optional",
-      "id": "name:ASSIST_JUDGEAREA",
+      "id": "304",
       "kind": "event",
       "provenance": [
         {
@@ -3822,7 +3896,7 @@
     },
     {
       "criticality": "optional",
-      "id": "name:ASSIST_LEGACY",
+      "id": "305",
       "kind": "event",
       "provenance": [
         {
@@ -3835,7 +3909,7 @@
     },
     {
       "criticality": "optional",
-      "id": "name:ASSIST_MARKNOTE",
+      "id": "306",
       "kind": "event",
       "provenance": [
         {
@@ -3848,7 +3922,7 @@
     },
     {
       "criticality": "optional",
-      "id": "name:ASSIST_NOMINE",
+      "id": "307",
       "kind": "event",
       "provenance": [
         {
@@ -3861,7 +3935,7 @@
     },
     {
       "criticality": "optional",
-      "id": "name:JUDGE_TIMING",
+      "id": "308",
       "kind": "event",
       "provenance": [
         {
@@ -3874,7 +3948,7 @@
     },
     {
       "criticality": "optional",
-      "id": "name:LNMODE",
+      "id": "74",
       "kind": "event",
       "provenance": [
         {
@@ -3887,40 +3961,14 @@
     },
     {
       "criticality": "optional",
-      "id": "name:TARGET",
-      "kind": "event",
-      "provenance": [
-        {
-          "behavior": "maps supported event IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/EventFactory.java",
-          "symbol": "EventFactory.getEvent"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
       "id": "dofile",
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "sets the package-local Lua module search directory",
+          "behavior": "executes a Lua file in the retained Globals instance",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
           "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.setDirectory"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "io.File",
-      "kind": "file-api",
-      "provenance": [
-        {
-          "behavior": "sets the package-local Lua module search directory",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.setDirectory"
+          "symbol": "SkinLuaAccessor.execFile"
         }
       ]
     },
@@ -3930,10 +3978,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "sets the package-local Lua module search directory",
+          "behavior": "opens only files accepted by the package-rooted restricted Lua IO facade",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
           "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.setDirectory"
+          "symbol": "SkinLuaAccessor.RestrictedIoLib.openFile"
         }
       ]
     },
@@ -3969,10 +4017,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -3982,10 +4030,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -3995,10 +4043,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4008,10 +4056,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4021,10 +4069,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4034,10 +4082,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4047,10 +4095,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4060,10 +4108,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4073,10 +4121,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4086,10 +4134,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4099,10 +4147,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4112,10 +4160,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4125,10 +4173,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4138,10 +4186,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4151,10 +4199,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4164,10 +4212,10 @@
       "kind": "file-api",
       "provenance": [
         {
-          "behavior": "executes a Lua file in the retained Globals instance",
+          "behavior": "publishes property, timer, event, score, gauge, volume, and judgment functions on main_state",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.execFile"
+          "path": "src/bms/player/beatoraja/skin/lua/MainStatePropertyLuaApiExporter.java",
+          "symbol": "MainStatePropertyLuaApiExporter.export"
         }
       ]
     },
@@ -4229,10 +4277,10 @@
       "kind": "module",
       "provenance": [
         {
-          "behavior": "sets the package-local Lua module search directory",
+          "behavior": "publishes the main_state module for the configured main-state phase",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
           "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
-          "symbol": "SkinLuaAccessor.setDirectory"
+          "symbol": "SkinLuaAccessor.exportMainStateAccessor"
         }
       ]
     },
@@ -4380,7 +4428,7 @@
       ]
     },
     {
-      "criticality": "critical",
+      "criticality": "optional",
       "id": "module-318ec12c2ad68d4eac7fa222",
       "kind": "module",
       "provenance": [
@@ -4458,7 +4506,7 @@
       ]
     },
     {
-      "criticality": "critical",
+      "criticality": "optional",
       "id": "module-6561e2b2e9093c4684c8e8d8",
       "kind": "module",
       "provenance": [
@@ -4523,7 +4571,7 @@
       ]
     },
     {
-      "criticality": "critical",
+      "criticality": "optional",
       "id": "module-70fd53f8a4af8114b7571198",
       "kind": "module",
       "provenance": [
@@ -4536,7 +4584,7 @@
       ]
     },
     {
-      "criticality": "critical",
+      "criticality": "optional",
       "id": "module-76856c89451d42a4a5b1c989",
       "kind": "module",
       "provenance": [
@@ -4705,7 +4753,7 @@
       ]
     },
     {
-      "criticality": "critical",
+      "criticality": "optional",
       "id": "module-95b6708b0fec7e00d70445cf",
       "kind": "module",
       "provenance": [
@@ -5113,10 +5161,10 @@
       "kind": "object",
       "provenance": [
         {
-          "behavior": "removes invalid and statically disabled objects before resource load",
+          "behavior": "samples normal, mine, hidden, processed, and ten long-note image phases",
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/Skin.java",
-          "symbol": "Skin.prepare"
+          "path": "src/bms/player/beatoraja/play/SkinNote.java",
+          "symbol": "SkinNote.prepare"
         }
       ]
     },
@@ -5187,7 +5235,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:A",
+      "id": "boolean:1080",
       "kind": "property",
       "provenance": [
         {
@@ -5200,7 +5248,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:AA",
+      "id": "boolean:1242",
       "kind": "property",
       "provenance": [
         {
@@ -5213,7 +5261,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:AAA",
+      "id": "boolean:1243",
       "kind": "property",
       "provenance": [
         {
@@ -5226,7 +5274,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:AAA_1P",
+      "id": "boolean:150",
       "kind": "property",
       "provenance": [
         {
@@ -5239,7 +5287,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:AA_1P",
+      "id": "boolean:151",
       "kind": "property",
       "provenance": [
         {
@@ -5252,7 +5300,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:AUTOPLAYOFF",
+      "id": "boolean:152",
       "kind": "property",
       "provenance": [
         {
@@ -5265,7 +5313,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:AUTOPLAYON",
+      "id": "boolean:153",
       "kind": "property",
       "provenance": [
         {
@@ -5278,7 +5326,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:A_1P",
+      "id": "boolean:154",
       "kind": "property",
       "provenance": [
         {
@@ -5291,7 +5339,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BACKBMP",
+      "id": "boolean:155",
       "kind": "property",
       "provenance": [
         {
@@ -5304,7 +5352,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BAD_EXIST",
+      "id": "boolean:170",
       "kind": "property",
       "provenance": [
         {
@@ -5317,7 +5365,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BEST_AAA_1P",
+      "id": "boolean:171",
       "kind": "property",
       "provenance": [
         {
@@ -5330,7 +5378,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BEST_AA_1P",
+      "id": "boolean:172",
       "kind": "property",
       "provenance": [
         {
@@ -5343,7 +5391,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BEST_A_1P",
+      "id": "boolean:173",
       "kind": "property",
       "provenance": [
         {
@@ -5356,7 +5404,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BEST_B_1P",
+      "id": "boolean:176",
       "kind": "property",
       "provenance": [
         {
@@ -5369,7 +5417,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BEST_C_1P",
+      "id": "boolean:177",
       "kind": "property",
       "provenance": [
         {
@@ -5382,7 +5430,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BEST_D_1P",
+      "id": "boolean:180",
       "kind": "property",
       "provenance": [
         {
@@ -5395,7 +5443,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BEST_E_1P",
+      "id": "boolean:181",
       "kind": "property",
       "provenance": [
         {
@@ -5408,7 +5456,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BEST_F_1P",
+      "id": "boolean:182",
       "kind": "property",
       "provenance": [
         {
@@ -5421,7 +5469,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BGA",
+      "id": "boolean:183",
       "kind": "property",
       "provenance": [
         {
@@ -5434,7 +5482,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:BPMCHANGE",
+      "id": "boolean:184",
       "kind": "property",
       "provenance": [
         {
@@ -5447,7 +5495,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:B_1P",
+      "id": "boolean:191",
       "kind": "property",
       "provenance": [
         {
@@ -5460,7 +5508,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:COMPARE_RIVAL",
+      "id": "boolean:194",
       "kind": "property",
       "provenance": [
         {
@@ -5473,7 +5521,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:C_1P",
+      "id": "boolean:195",
       "kind": "property",
       "provenance": [
         {
@@ -5486,7 +5534,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:DIFFICULTY0",
+      "id": "boolean:200",
       "kind": "property",
       "provenance": [
         {
@@ -5499,7 +5547,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:DIFFICULTY1",
+      "id": "boolean:201",
       "kind": "property",
       "provenance": [
         {
@@ -5512,7 +5560,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:DIFFICULTY2",
+      "id": "boolean:202",
       "kind": "property",
       "provenance": [
         {
@@ -5525,7 +5573,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:DIFFICULTY3",
+      "id": "boolean:203",
       "kind": "property",
       "provenance": [
         {
@@ -5538,7 +5586,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:DIFFICULTY4",
+      "id": "boolean:204",
       "kind": "property",
       "provenance": [
         {
@@ -5551,7 +5599,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:DIFFICULTY5",
+      "id": "boolean:205",
       "kind": "property",
       "provenance": [
         {
@@ -5564,7 +5612,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:D_1P",
+      "id": "boolean:206",
       "kind": "property",
       "provenance": [
         {
@@ -5577,7 +5625,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:EARLY_1P",
+      "id": "boolean:207",
       "kind": "property",
       "provenance": [
         {
@@ -5590,7 +5638,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:E_1P",
+      "id": "boolean:220",
       "kind": "property",
       "provenance": [
         {
@@ -5603,7 +5651,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:F_1P",
+      "id": "boolean:221",
       "kind": "property",
       "provenance": [
         {
@@ -5616,7 +5664,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:GAUGE_1P_0_9",
+      "id": "boolean:222",
       "kind": "property",
       "provenance": [
         {
@@ -5629,7 +5677,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:GAUGE_1P_100",
+      "id": "boolean:2243",
       "kind": "property",
       "provenance": [
         {
@@ -5642,7 +5690,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:GAUGE_1P_10_19",
+      "id": "boolean:2244",
       "kind": "property",
       "provenance": [
         {
@@ -5655,7 +5703,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:GAUGE_1P_20_29",
+      "id": "boolean:2245",
       "kind": "property",
       "provenance": [
         {
@@ -5668,7 +5716,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:GAUGE_HARD",
+      "id": "boolean:230",
       "kind": "property",
       "provenance": [
         {
@@ -5681,7 +5729,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:GOOD_EXIST",
+      "id": "boolean:231",
       "kind": "property",
       "provenance": [
         {
@@ -5694,7 +5742,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:GRADEBAR",
+      "id": "boolean:232",
       "kind": "property",
       "provenance": [
         {
@@ -5707,7 +5755,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:JUDGE_EASY",
+      "id": "boolean:240",
       "kind": "property",
       "provenance": [
         {
@@ -5720,7 +5768,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:JUDGE_HARD",
+      "id": "boolean:241",
       "kind": "property",
       "provenance": [
         {
@@ -5733,7 +5781,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:JUDGE_NORMAL",
+      "id": "boolean:270",
       "kind": "property",
       "provenance": [
         {
@@ -5746,7 +5794,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:JUDGE_VERYEASY",
+      "id": "boolean:290",
       "kind": "property",
       "provenance": [
         {
@@ -5759,7 +5807,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:JUDGE_VERYHARD",
+      "id": "boolean:3",
       "kind": "property",
       "provenance": [
         {
@@ -5772,7 +5820,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:LANECOVER1_CHANGING",
+      "id": "boolean:300",
       "kind": "property",
       "provenance": [
         {
@@ -5785,7 +5833,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:LATE_1P",
+      "id": "boolean:301",
       "kind": "property",
       "provenance": [
         {
@@ -5798,7 +5846,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:LN",
+      "id": "boolean:302",
       "kind": "property",
       "provenance": [
         {
@@ -5811,7 +5859,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:LOADED",
+      "id": "boolean:303",
       "kind": "property",
       "provenance": [
         {
@@ -5824,7 +5872,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:MODE_COURSE",
+      "id": "boolean:304",
       "kind": "property",
       "provenance": [
         {
@@ -5837,7 +5885,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:NOW_LOADING",
+      "id": "boolean:305",
       "kind": "property",
       "provenance": [
         {
@@ -5850,7 +5898,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:NO_BACKBMP",
+      "id": "boolean:306",
       "kind": "property",
       "provenance": [
         {
@@ -5863,7 +5911,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:NO_BGA",
+      "id": "boolean:307",
       "kind": "property",
       "provenance": [
         {
@@ -5876,7 +5924,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:NO_BPMCHANGE",
+      "id": "boolean:32",
       "kind": "property",
       "provenance": [
         {
@@ -5889,7 +5937,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:NO_LN",
+      "id": "boolean:320",
       "kind": "property",
       "provenance": [
         {
@@ -5902,7 +5950,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:PERFECT_1P",
+      "id": "boolean:321",
       "kind": "property",
       "provenance": [
         {
@@ -5915,7 +5963,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:POOR_EXIST",
+      "id": "boolean:322",
       "kind": "property",
       "provenance": [
         {
@@ -5928,7 +5976,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:REPLAYDATA",
+      "id": "boolean:323",
       "kind": "property",
       "provenance": [
         {
@@ -5941,7 +5989,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:REPLAYDATA2",
+      "id": "boolean:324",
       "kind": "property",
       "provenance": [
         {
@@ -5954,7 +6002,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:REPLAYDATA3",
+      "id": "boolean:325",
       "kind": "property",
       "provenance": [
         {
@@ -5967,7 +6015,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:REPLAYDATA4",
+      "id": "boolean:326",
       "kind": "property",
       "provenance": [
         {
@@ -5980,7 +6028,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:REPLAY_PLAYING",
+      "id": "boolean:327",
       "kind": "property",
       "provenance": [
         {
@@ -5993,7 +6041,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_AAA_1P",
+      "id": "boolean:33",
       "kind": "property",
       "provenance": [
         {
@@ -6006,7 +6054,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_AA_1P",
+      "id": "boolean:330",
       "kind": "property",
       "provenance": [
         {
@@ -6019,7 +6067,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_A_1P",
+      "id": "boolean:43",
       "kind": "property",
       "provenance": [
         {
@@ -6032,7 +6080,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_B_1P",
+      "id": "boolean:625",
       "kind": "property",
       "provenance": [
         {
@@ -6045,7 +6093,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_C_1P",
+      "id": "boolean:80",
       "kind": "property",
       "provenance": [
         {
@@ -6058,7 +6106,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_D_1P",
+      "id": "boolean:81",
       "kind": "property",
       "provenance": [
         {
@@ -6071,7 +6119,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_E_1P",
+      "id": "boolean:84",
       "kind": "property",
       "provenance": [
         {
@@ -6084,7 +6132,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_FAIL",
+      "id": "boolean:91",
       "kind": "property",
       "provenance": [
         {
@@ -6097,59 +6145,7 @@
     },
     {
       "criticality": "critical",
-      "id": "boolean:name:RESULT_F_1P",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported boolean IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/BooleanPropertyFactory.java",
-          "symbol": "BooleanPropertyFactory.getBooleanProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "boolean:name:STAGEFILE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported boolean IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/BooleanPropertyFactory.java",
-          "symbol": "BooleanPropertyFactory.getBooleanProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "boolean:name:STATE_PRACTICE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported boolean IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/BooleanPropertyFactory.java",
-          "symbol": "BooleanPropertyFactory.getBooleanProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "boolean:name:UPDATE_SCORE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported boolean IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/BooleanPropertyFactory.java",
-          "symbol": "BooleanPropertyFactory.getBooleanProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "float:name:BESTSCORERATE",
+      "id": "float:102",
       "kind": "property",
       "provenance": [
         {
@@ -6162,7 +6158,7 @@
     },
     {
       "criticality": "critical",
-      "id": "float:name:BESTSCORERATE_NOW",
+      "id": "float:110",
       "kind": "property",
       "provenance": [
         {
@@ -6175,7 +6171,7 @@
     },
     {
       "criticality": "critical",
-      "id": "float:name:LANECOVER",
+      "id": "float:111",
       "kind": "property",
       "provenance": [
         {
@@ -6188,7 +6184,7 @@
     },
     {
       "criticality": "critical",
-      "id": "float:name:LOAD_PROGRESS",
+      "id": "float:112",
       "kind": "property",
       "provenance": [
         {
@@ -6201,7 +6197,7 @@
     },
     {
       "criticality": "critical",
-      "id": "float:name:MUSIC_PROGRESS",
+      "id": "float:113",
       "kind": "property",
       "provenance": [
         {
@@ -6214,7 +6210,7 @@
     },
     {
       "criticality": "critical",
-      "id": "float:name:SCORERATE",
+      "id": "float:114",
       "kind": "property",
       "provenance": [
         {
@@ -6227,7 +6223,7 @@
     },
     {
       "criticality": "critical",
-      "id": "float:name:SCORERATE_FINAL",
+      "id": "float:115",
       "kind": "property",
       "provenance": [
         {
@@ -6240,7 +6236,7 @@
     },
     {
       "criticality": "critical",
-      "id": "float:name:TARGETSCORERATE",
+      "id": "float:4",
       "kind": "property",
       "provenance": [
         {
@@ -6253,7 +6249,7 @@
     },
     {
       "criticality": "critical",
-      "id": "float:name:TARGETSCORERATE_NOW",
+      "id": "float:6",
       "kind": "property",
       "provenance": [
         {
@@ -6261,6 +6257,760 @@
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
           "path": "src/bms/player/beatoraja/skin/property/FloatPropertyFactory.java",
           "symbol": "FloatPropertyFactory.getRateProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:100",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:101",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:105",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:107",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:110",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:111",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:112",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:113",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:114",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1163",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1164",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:12",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:121",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1312",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1313",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1314",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1315",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1316",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1317",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1318",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1319",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1320",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1322",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1324",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:1326",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:14",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:152",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:153",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:160",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:161",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:162",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:163",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:164",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:165",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:170",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:171",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:179",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:182",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:21",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:22",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:23",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:24",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:25",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:26",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:271",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:312",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:313",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:314",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:350",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:351",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:352",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:353",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:360",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:361",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:364",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:365",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:370",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "integer:371",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
+          "symbol": "IntegerPropertyFactory.getIntegerProperty"
         }
       ]
     },
@@ -6279,7 +7029,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:BAD",
+      "id": "integer:407",
       "kind": "property",
       "provenance": [
         {
@@ -6292,7 +7042,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:BAD_PLUS_POOR_PLUS_MISS",
+      "id": "integer:410",
       "kind": "property",
       "provenance": [
         {
@@ -6305,7 +7055,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:CLEAR",
+      "id": "integer:411",
       "kind": "property",
       "provenance": [
         {
@@ -6318,7 +7068,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DENSITY_AVERAGE",
+      "id": "integer:412",
       "kind": "property",
       "provenance": [
         {
@@ -6331,7 +7081,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DENSITY_AVERAGE_AFTERDOT",
+      "id": "integer:413",
       "kind": "property",
       "provenance": [
         {
@@ -6344,7 +7094,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DENSITY_PEAK",
+      "id": "integer:414",
       "kind": "property",
       "provenance": [
         {
@@ -6357,7 +7107,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DENSITY_PEAK_AFTERDOT",
+      "id": "integer:415",
       "kind": "property",
       "provenance": [
         {
@@ -6370,7 +7120,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DIFF_HIGHSCORE",
+      "id": "integer:416",
       "kind": "property",
       "provenance": [
         {
@@ -6383,7 +7133,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DIFF_TARGETSCORE",
+      "id": "integer:417",
       "kind": "property",
       "provenance": [
         {
@@ -6396,7 +7146,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DURATION",
+      "id": "integer:418",
       "kind": "property",
       "provenance": [
         {
@@ -6409,7 +7159,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DURATION_GREEN",
+      "id": "integer:419",
       "kind": "property",
       "provenance": [
         {
@@ -6422,7 +7172,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DURATION_GREEN_LANECOVER_OFF",
+      "id": "integer:423",
       "kind": "property",
       "provenance": [
         {
@@ -6435,7 +7185,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DURATION_GREEN_LANECOVER_ON",
+      "id": "integer:424",
       "kind": "property",
       "provenance": [
         {
@@ -6448,7 +7198,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DURATION_LANECOVER_OFF",
+      "id": "integer:427",
       "kind": "property",
       "provenance": [
         {
@@ -6461,7 +7211,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:DURATION_LANECOVER_ON",
+      "id": "integer:525",
       "kind": "property",
       "provenance": [
         {
@@ -6474,7 +7224,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:EARLY_BAD",
+      "id": "integer:71",
       "kind": "property",
       "provenance": [
         {
@@ -6487,7 +7237,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:EARLY_GOOD",
+      "id": "integer:74",
       "kind": "property",
       "provenance": [
         {
@@ -6500,7 +7250,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:EARLY_GREAT",
+      "id": "integer:75",
       "kind": "property",
       "provenance": [
         {
@@ -6513,7 +7263,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:EARLY_PERFECT",
+      "id": "integer:90",
       "kind": "property",
       "provenance": [
         {
@@ -6526,7 +7276,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:EARLY_POOR",
+      "id": "integer:91",
       "kind": "property",
       "provenance": [
         {
@@ -6539,7 +7289,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:GOOD",
+      "id": "integer:92",
       "kind": "property",
       "provenance": [
         {
@@ -6552,7 +7302,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:GREAT",
+      "id": "integer:96",
       "kind": "property",
       "provenance": [
         {
@@ -6565,761 +7315,7 @@
     },
     {
       "criticality": "critical",
-      "id": "integer:name:GROOVEGAUGE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:GROOVEGAUGE_AFTERDOT",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:HIGHSCORE2",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:IR_PREVRANK",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:IR_RANK",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:JUDGETIMING",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:JUDGE_1P_DURATION",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:LANECOVER1",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:LATE_BAD",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:LATE_GOOD",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:LATE_GREAT",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:LATE_PERFECT",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:LATE_POOR",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:LIFT1",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:LOADING_PROGRESS",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAINBPM",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAINBPM_DURATION_GREEN_LANECOVER_OFF",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAINBPM_DURATION_GREEN_LANECOVER_ON",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAINBPM_DURATION_LANECOVER_OFF",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAINBPM_DURATION_LANECOVER_ON",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAXBPM",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAXBPM_DURATION_LANECOVER_OFF",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAXBPM_DURATION_LANECOVER_ON",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAXCOMBO",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MAXCOMBO2",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MINBPM",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MINBPM_DURATION_LANECOVER_OFF",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:MINBPM_DURATION_LANECOVER_ON",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:NOWBPM",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:PERFECT",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:PLAYLEVEL",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:PLAYTIME_MINUTE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:PLAYTIME_SECOND",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:POINT",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:POOR",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:RIVAL_SCORE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:SCORE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:SCORE2",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:SCORE3",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:SONGLENGTH_MINUTE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:SONGLENGTH_SECOND",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TARGET_CLEAR",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TARGET_SCORE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TIMELEFT_MINUTE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TIMELEFT_SECOND",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TIME_DAY",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TIME_HOUR",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TIME_MINUTE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TIME_MONTH",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TIME_SECOND",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TIME_YEAR",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TOTALEARLY",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TOTALLATE",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TOTALNOTES",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TOTALNOTE_BSS",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TOTALNOTE_LN",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TOTALNOTE_NORMAL",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "integer:name:TOTALNOTE_SCRATCH",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported integer IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/IntegerPropertyFactory.java",
-          "symbol": "IntegerPropertyFactory.getIntegerProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "offset:name:JUDGE_1P",
+      "id": "offset:1",
       "kind": "property",
       "provenance": [
         {
@@ -7332,7 +7328,7 @@
     },
     {
       "criticality": "critical",
-      "id": "offset:name:LANECOVER",
+      "id": "offset:3",
       "kind": "property",
       "provenance": [
         {
@@ -7345,7 +7341,7 @@
     },
     {
       "criticality": "critical",
-      "id": "offset:name:LIFT",
+      "id": "offset:30",
       "kind": "property",
       "provenance": [
         {
@@ -7358,7 +7354,7 @@
     },
     {
       "criticality": "critical",
-      "id": "offset:name:NOTES_1P",
+      "id": "offset:32",
       "kind": "property",
       "provenance": [
         {
@@ -7371,7 +7367,7 @@
     },
     {
       "criticality": "critical",
-      "id": "offset:name:SCRATCHANGLE_1P",
+      "id": "offset:4",
       "kind": "property",
       "provenance": [
         {
@@ -7379,6 +7375,58 @@
           "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
           "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
           "symbol": "SkinLuaAccessor.exportSkinProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "string:1",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
+          "symbol": "StringPropertyFactory.getStringProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "string:1003",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
+          "symbol": "StringPropertyFactory.getStringProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "string:1010",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
+          "symbol": "StringPropertyFactory.getStringProperty"
+        }
+      ]
+    },
+    {
+      "criticality": "critical",
+      "id": "string:1020",
+      "kind": "property",
+      "provenance": [
+        {
+          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
+          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
+          "symbol": "StringPropertyFactory.getStringProperty"
         }
       ]
     },
@@ -7410,7 +7458,7 @@
     },
     {
       "criticality": "critical",
-      "id": "string:name:ARTIST",
+      "id": "string:13",
       "kind": "property",
       "provenance": [
         {
@@ -7423,7 +7471,7 @@
     },
     {
       "criticality": "critical",
-      "id": "string:name:COURSE1_TITLE",
+      "id": "string:14",
       "kind": "property",
       "provenance": [
         {
@@ -7436,7 +7484,7 @@
     },
     {
       "criticality": "critical",
-      "id": "string:name:COURSE6_TITLE",
+      "id": "string:15",
       "kind": "property",
       "provenance": [
         {
@@ -7449,7 +7497,7 @@
     },
     {
       "criticality": "critical",
-      "id": "string:name:FULLTITLE",
+      "id": "string:150",
       "kind": "property",
       "provenance": [
         {
@@ -7462,7 +7510,7 @@
     },
     {
       "criticality": "critical",
-      "id": "string:name:GENRE",
+      "id": "string:155",
       "kind": "property",
       "provenance": [
         {
@@ -7475,72 +7523,7 @@
     },
     {
       "criticality": "critical",
-      "id": "string:name:IR_NAME",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
-          "symbol": "StringPropertyFactory.getStringProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "string:name:RIVAL",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
-          "symbol": "StringPropertyFactory.getStringProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "string:name:SUBARTIST",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
-          "symbol": "StringPropertyFactory.getStringProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "string:name:TABLE_FULL",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
-          "symbol": "StringPropertyFactory.getStringProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "string:name:VERSION",
-      "kind": "property",
-      "provenance": [
-        {
-          "behavior": "maps supported string IDs or names and returns null for an unknown mapping",
-          "commit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
-          "path": "src/bms/player/beatoraja/skin/property/StringPropertyFactory.java",
-          "symbol": "StringPropertyFactory.getStringProperty"
-        }
-      ]
-    },
-    {
-      "criticality": "critical",
-      "id": "name:BOMB_1P_KEY1",
+      "id": "100",
       "kind": "timer",
       "provenance": [
         {
@@ -7553,7 +7536,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:BOMB_1P_KEY2",
+      "id": "101",
       "kind": "timer",
       "provenance": [
         {
@@ -7566,7 +7549,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:BOMB_1P_KEY3",
+      "id": "102",
       "kind": "timer",
       "provenance": [
         {
@@ -7579,7 +7562,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:BOMB_1P_KEY4",
+      "id": "103",
       "kind": "timer",
       "provenance": [
         {
@@ -7592,7 +7575,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:BOMB_1P_KEY5",
+      "id": "104",
       "kind": "timer",
       "provenance": [
         {
@@ -7605,7 +7588,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:BOMB_1P_KEY6",
+      "id": "105",
       "kind": "timer",
       "provenance": [
         {
@@ -7618,7 +7601,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:BOMB_1P_KEY7",
+      "id": "106",
       "kind": "timer",
       "provenance": [
         {
@@ -7631,7 +7614,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:BOMB_1P_SCRATCH",
+      "id": "107",
       "kind": "timer",
       "provenance": [
         {
@@ -7644,7 +7627,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:ENDOFNOTE_1P",
+      "id": "11",
       "kind": "timer",
       "provenance": [
         {
@@ -7657,7 +7640,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:FADEOUT",
+      "id": "120",
       "kind": "timer",
       "provenance": [
         {
@@ -7670,7 +7653,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:FAILED",
+      "id": "121",
       "kind": "timer",
       "provenance": [
         {
@@ -7683,7 +7666,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:FULLCOMBO_1P",
+      "id": "122",
       "kind": "timer",
       "provenance": [
         {
@@ -7696,7 +7679,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:GAUGE_INCLEASE_1P",
+      "id": "123",
       "kind": "timer",
       "provenance": [
         {
@@ -7709,7 +7692,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:GAUGE_MAX_1P",
+      "id": "124",
       "kind": "timer",
       "provenance": [
         {
@@ -7722,7 +7705,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:HOLD_1P_KEY1",
+      "id": "125",
       "kind": "timer",
       "provenance": [
         {
@@ -7735,7 +7718,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:HOLD_1P_KEY2",
+      "id": "126",
       "kind": "timer",
       "provenance": [
         {
@@ -7748,7 +7731,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:HOLD_1P_KEY3",
+      "id": "127",
       "kind": "timer",
       "provenance": [
         {
@@ -7761,7 +7744,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:HOLD_1P_KEY4",
+      "id": "140",
       "kind": "timer",
       "provenance": [
         {
@@ -7774,7 +7757,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:HOLD_1P_KEY5",
+      "id": "143",
       "kind": "timer",
       "provenance": [
         {
@@ -7787,7 +7770,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:HOLD_1P_KEY6",
+      "id": "172",
       "kind": "timer",
       "provenance": [
         {
@@ -7800,7 +7783,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:HOLD_1P_KEY7",
+      "id": "173",
       "kind": "timer",
       "provenance": [
         {
@@ -7813,7 +7796,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:HOLD_1P_SCRATCH",
+      "id": "2",
       "kind": "timer",
       "provenance": [
         {
@@ -7826,7 +7809,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:IR_CONNECT_BEGIN",
+      "id": "3",
       "kind": "timer",
       "provenance": [
         {
@@ -7839,7 +7822,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:IR_CONNECT_SUCCESS",
+      "id": "351",
       "kind": "timer",
       "provenance": [
         {
@@ -7852,7 +7835,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:JUDGE_1P",
+      "id": "352",
       "kind": "timer",
       "provenance": [
         {
@@ -7865,7 +7848,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYOFF_1P_KEY1",
+      "id": "40",
       "kind": "timer",
       "provenance": [
         {
@@ -7878,7 +7861,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYOFF_1P_KEY2",
+      "id": "41",
       "kind": "timer",
       "provenance": [
         {
@@ -7891,7 +7874,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYOFF_1P_KEY3",
+      "id": "42",
       "kind": "timer",
       "provenance": [
         {
@@ -7904,7 +7887,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYOFF_1P_KEY4",
+      "id": "44",
       "kind": "timer",
       "provenance": [
         {
@@ -7917,7 +7900,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYOFF_1P_KEY5",
+      "id": "46",
       "kind": "timer",
       "provenance": [
         {
@@ -7930,7 +7913,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYOFF_1P_KEY6",
+      "id": "48",
       "kind": "timer",
       "provenance": [
         {
@@ -7943,7 +7926,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYOFF_1P_KEY7",
+      "id": "50",
       "kind": "timer",
       "provenance": [
         {
@@ -7956,7 +7939,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYOFF_1P_SCRATCH",
+      "id": "51",
       "kind": "timer",
       "provenance": [
         {
@@ -7969,7 +7952,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYON_1P_KEY1",
+      "id": "52",
       "kind": "timer",
       "provenance": [
         {
@@ -7982,7 +7965,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYON_1P_KEY2",
+      "id": "53",
       "kind": "timer",
       "provenance": [
         {
@@ -7995,7 +7978,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYON_1P_KEY3",
+      "id": "54",
       "kind": "timer",
       "provenance": [
         {
@@ -8008,7 +7991,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYON_1P_KEY4",
+      "id": "55",
       "kind": "timer",
       "provenance": [
         {
@@ -8021,7 +8004,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYON_1P_KEY5",
+      "id": "56",
       "kind": "timer",
       "provenance": [
         {
@@ -8034,7 +8017,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYON_1P_KEY6",
+      "id": "57",
       "kind": "timer",
       "provenance": [
         {
@@ -8047,7 +8030,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYON_1P_KEY7",
+      "id": "70",
       "kind": "timer",
       "provenance": [
         {
@@ -8060,7 +8043,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:KEYON_1P_SCRATCH",
+      "id": "71",
       "kind": "timer",
       "provenance": [
         {
@@ -8073,7 +8056,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:PLAY",
+      "id": "72",
       "kind": "timer",
       "provenance": [
         {
@@ -8086,7 +8069,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:READY",
+      "id": "73",
       "kind": "timer",
       "provenance": [
         {
@@ -8099,7 +8082,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:RHYTHM",
+      "id": "74",
       "kind": "timer",
       "provenance": [
         {
@@ -8112,7 +8095,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:SCORE_BEST",
+      "id": "75",
       "kind": "timer",
       "provenance": [
         {
@@ -8125,7 +8108,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:SCORE_TARGET",
+      "id": "76",
       "kind": "timer",
       "provenance": [
         {
@@ -8138,7 +8121,7 @@
     },
     {
       "criticality": "critical",
-      "id": "name:SONGBAR_CHANGE",
+      "id": "77",
       "kind": "timer",
       "provenance": [
         {
@@ -8151,6 +8134,15 @@
     }
   ],
   "targetVersion": "4.02",
+  "timerEventOrdering": {
+    "phaseOrder": [
+      "customTimers",
+      "customEvents"
+    ],
+    "selectedIdTraceRequired": true,
+    "sortedById": false,
+    "withinPhase": "IntMap-backing-hash-iteration"
+  },
   "traceVersions": {
     "destination": 1,
     "luaLanguage": 1,
