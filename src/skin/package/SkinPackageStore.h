@@ -47,6 +47,18 @@ struct GarbageCollectionResult {
   std::vector<SkinDiagnostic> diagnostics;
 };
 
+enum class SkinRecoveryDisposition : std::uint8_t {
+  Recovered,
+  AlreadyRecovered,
+  ConcurrentCallRejected,
+  Failed,
+};
+
+struct SkinRecoveryResult {
+  SkinRecoveryDisposition disposition = SkinRecoveryDisposition::Failed;
+  std::vector<SkinDiagnostic> diagnostics;
+};
+
 struct RemovePackageResult {
   bool removed = false;
   bool cancelled = false;
@@ -114,7 +126,10 @@ public:
   SkinPackageStore(SkinStorageRoots, SkinPackageCatalog &, SkinAliasDetector &,
                    ISkinProfileSnapshotProvider &);
 
-  void recover();
+  // Synchronous, exclusive bootstrap. The first call must finish before the
+  // operation service is constructed. A later call returns AlreadyRecovered;
+  // an overlapping call returns ConcurrentCallRejected. Neither replays files.
+  SkinRecoveryResult recoverBeforeServiceStart();
   PreparePackageResult prepareArchive(const std::filesystem::path &zip,
                                       const SkinPackageId &package,
                                       std::stop_token stop,

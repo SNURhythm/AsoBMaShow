@@ -13,6 +13,7 @@
 namespace skin {
 
 struct SkinDiagnosticHistoryRecord;
+class SkinPackageStore;
 
 struct SkinCatalogEntrySnapshot {
   SkinEntryId entry;
@@ -38,7 +39,6 @@ public:
   SkinPackageCatalog(const SkinPackageCatalog &) = delete;
   SkinPackageCatalog &operator=(const SkinPackageCatalog &) = delete;
 
-  void recover();
   std::shared_ptr<const SkinPackageCatalogSnapshot> snapshot() const noexcept;
   std::vector<SkinDiagnosticHistoryRecord> loadDiagnosticHistory() const;
   bool replaceDiagnosticHistory(
@@ -47,6 +47,9 @@ public:
   void shutdown() noexcept;
 
 private:
+  friend class SkinPackageStore;
+  void recover();
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

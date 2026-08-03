@@ -6,9 +6,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <stop_token>
@@ -92,6 +95,34 @@ public:
   }
 };
 
+class BlockingAliases final : public SkinAliasDetector {
+public:
+  SkinRejectedLinkKind inspectNoFollow(const fs::path &) const override {
+    std::unique_lock lock(mutex_);
+    entered_ = true;
+    condition_.notify_all();
+    condition_.wait(lock, [this] { return released_; });
+    return SkinRejectedLinkKind::None;
+  }
+
+  bool waitUntilEntered(std::chrono::milliseconds timeout) const {
+    std::unique_lock lock(mutex_);
+    return condition_.wait_for(lock, timeout, [this] { return entered_; });
+  }
+
+  void release() const {
+    std::scoped_lock lock(mutex_);
+    released_ = true;
+    condition_.notify_all();
+  }
+
+private:
+  mutable std::mutex mutex_;
+  mutable std::condition_variable condition_;
+  mutable bool entered_ = false;
+  mutable bool released_ = false;
+};
+
 class FakeProfileSnapshots final : public ISkinProfileSnapshotProvider {
 public:
   std::optional<ProfileInventoryCommitFence> issueFence() {
@@ -148,6 +179,8 @@ constexpr std::string_view kOldTreeDigest =
     "e2a1d82523f74a9ac8c8a500848fb173055c60d2430b3a8d0f67d6a6e0052ee1";
 constexpr std::string_view kNewTreeDigest =
     "9ec86e2e753614c8b0667f1aa0a67784c1a97337eb348c3984f5fd492abd9fd5";
+constexpr std::string_view kUnreferencedTreeDigest =
+    "d07465eeb4d8f2ef47c8c17cfaa7cbae798ac9a246dd0230e5b5503dfbc65647";
 constexpr std::string_view kOldCatalogDigest =
     "49deb5306b817e688d1085a9f56ac2461664b7650e5673294619882ecd700510";
 constexpr std::string_view kNewCatalogDigest =
@@ -199,6 +232,10 @@ void writeNewTree(const fs::path &root) {
   writeText(root / "new-only.txt", "new");
   writeText(root / "play/play7.luaskin",
             "return { type = 0, generation = 'new' }");
+}
+
+void writeUnreferencedTree(const fs::path &root) {
+  writeText(root / "unreferenced.txt", "keep");
 }
 
 bool treeIsOld(const fs::path &root) {
@@ -260,18 +297,26 @@ void testRecoveryFixtureDigestsBindPhysicalBytes() {
   }
   const fs::path oldSource = temp.root() / "digest-old";
   const fs::path newSource = temp.root() / "digest-new";
+  const fs::path unreferencedSource = temp.root() / "digest-unreferenced";
   writeOldTree(oldSource);
   writeNewTree(newSource);
+  writeUnreferencedTree(unreferencedSource);
   NoAliases aliases;
   SkinTreeSnapshotter snapshotter(roots, aliases);
   auto oldSnapshot = snapshotter.snapshot(oldSource, *package.package, {}, {});
   auto newSnapshot = snapshotter.snapshot(newSource, *package.package, {}, {});
+  auto unreferencedSnapshot =
+      snapshotter.snapshot(unreferencedSource, *package.package, {}, {});
   expect(oldSnapshot.prepared.has_value() &&
              oldSnapshot.prepared->revision().lowercaseSha256 == kOldTreeDigest,
          "old tree fixture digest binds its exact files");
   expect(newSnapshot.prepared.has_value() &&
              newSnapshot.prepared->revision().lowercaseSha256 == kNewTreeDigest,
          "new tree fixture digest binds its exact files");
+  expect(unreferencedSnapshot.prepared.has_value() &&
+             unreferencedSnapshot.prepared->revision().lowercaseSha256 ==
+                 kUnreferencedTreeDigest,
+         "unreferenced tree fixture digest binds its exact files");
 }
 
 void testFakeProviderFenceReleasesExactlyOnce() {
@@ -343,6 +388,8 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
         roots.privateRevisions / std::string(kOldTreeDigest);
     const fs::path newRevision =
         roots.privateRevisions / std::string(kNewTreeDigest);
+    const fs::path unreferencedRevision =
+        roots.privateRevisions / std::string(kUnreferencedTreeDigest);
     const fs::path newRevisionStaging =
         roots.privateRevisions / ".staging/revision-op-17";
     const fs::path catalogFile = roots.privateCatalog / "catalog.json";
@@ -363,6 +410,8 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
     }
     writeOldTree(oldRevision);
     freezeRevisionTree(oldRevision);
+    writeUnreferencedTree(unreferencedRevision);
+    freezeRevisionTree(unreferencedRevision);
     if (boundary.newRevision) {
       writeNewTree(newRevision);
       if (boundary.corruptNewRevision) {
@@ -386,7 +435,9 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
     FakeProfileSnapshots profiles;
     NoAliases aliases;
     SkinPackageStore store(roots, catalog, aliases, profiles);
-    store.recover();
+    const auto recovery = store.recoverBeforeServiceStart();
+    expect(recovery.disposition == SkinRecoveryDisposition::Recovered,
+           "the exclusive pre-service recovery call completes");
     const auto recovered = catalog.snapshot();
     const bool expectNew = boundary.required == RequiredGeneration::New;
     expect(expectNew ? snapshotIsExactly(*recovered, 8, kNewTreeDigest)
@@ -398,6 +449,14 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
            "recovery repairs the visible tree to the selected generation");
     expect(expectNew ? treeIsNew(newRevision) : treeIsOld(oldRevision),
            "recovery retains a digest-matched revision for the selection");
+    if (boundary.corruptNewRevision) {
+      expect(!fs::exists(newRevision),
+             "recovery removes or quarantines the journal-owned corrupt final "
+             "revision");
+    }
+    expect(fs::exists(unreferencedRevision) &&
+               readText(unreferencedRevision / "unreferenced.txt") == "keep",
+           "recovery preserves a valid revision not owned by the journal");
     expect(readText(catalogFile) == (expectNew
                                          ? catalogDocument(8, kNewTreeDigest)
                                          : catalogDocument(7, kOldTreeDigest)),
@@ -406,6 +465,82 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
                !fs::exists(newRevisionStaging) && !fs::exists(journalFile),
            "recovery cleans journal-owned staging and backup capabilities");
   }
+}
+
+void testRecoveryRejectsRepeatedBootstrapOwnership() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+
+  const auto first = store.recoverBeforeServiceStart();
+  const fs::path lateJournal =
+      roots.privateCatalog / "publication-journal.json";
+  writeText(lateJournal, "must-not-be-replayed");
+  const auto repeated = store.recoverBeforeServiceStart();
+  expect(first.disposition == SkinRecoveryDisposition::Recovered,
+         "the first bootstrap caller exclusively owns recovery");
+  expect(repeated.disposition == SkinRecoveryDisposition::AlreadyRecovered,
+         "a repeated bootstrap call is reported without replaying recovery");
+  expect(readText(lateJournal) == "must-not-be-replayed",
+         "a repeated bootstrap call performs no filesystem replay");
+}
+
+void testRecoveryRejectsOverlappingBootstrapOwnership() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const fs::path visible = roots.visiblePackages / "FixtureSkin";
+  const fs::path visibleStaging =
+      roots.visiblePackages.parent_path() / ".skin-import-staging/import-op-17";
+  const fs::path oldRevision =
+      roots.privateRevisions / std::string(kOldTreeDigest);
+  const fs::path newRevisionStaging =
+      roots.privateRevisions / ".staging/revision-op-17";
+  const fs::path catalogFile = roots.privateCatalog / "catalog.json";
+  const fs::path journalFile =
+      roots.privateCatalog / "publication-journal.json";
+  writeOldTree(visible);
+  writeNewTree(visibleStaging);
+  writeOldTree(oldRevision);
+  writeNewTree(newRevisionStaging);
+  writeText(catalogFile, catalogDocument(7, kOldTreeDigest));
+  const std::string journal = journalDocument("intent-written");
+  writeText(journalFile, journal);
+
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  BlockingAliases aliases;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  auto owner = std::async(std::launch::async, [&store] {
+    return store.recoverBeforeServiceStart();
+  });
+  const bool ownerReachedPhysicalInspection =
+      aliases.waitUntilEntered(std::chrono::seconds(1));
+  auto overlapping = std::async(std::launch::async, [&store] {
+    return store.recoverBeforeServiceStart();
+  });
+  const bool overlapReturnedWhileOwnerBlocked =
+      overlapping.wait_for(std::chrono::milliseconds(250)) ==
+      std::future_status::ready;
+  const bool journalUnchangedWhileOwnerBlocked =
+      readText(journalFile) == journal;
+  aliases.release();
+  const auto ownerResult = owner.get();
+  const auto overlappingResult = overlapping.get();
+
+  expect(ownerReachedPhysicalInspection,
+         "the first recovery call remains in physical verification");
+  expect(overlapReturnedWhileOwnerBlocked,
+         "an overlapping recovery call is rejected without waiting");
+  expect(ownerResult.disposition == SkinRecoveryDisposition::Recovered,
+         "the exclusive recovery owner completes after inspection resumes");
+  expect(overlappingResult.disposition ==
+             SkinRecoveryDisposition::ConcurrentCallRejected,
+         "an overlapping caller receives the typed rejection");
+  expect(journalUnchangedWhileOwnerBlocked,
+         "an overlapping caller performs no filesystem replay");
 }
 
 void testReplacementPublishesExactlyTheNewWholePackage() {
@@ -459,7 +594,6 @@ static_assert(!std::is_copy_constructible_v<SkinDeferredCleanup>);
 static_assert(!std::is_copy_constructible_v<SkinProfileMutationBarrier>);
 static_assert(std::is_move_constructible_v<SkinDeferredCleanup>);
 static_assert(std::is_move_constructible_v<SkinProfileMutationBarrier>);
-
 } // namespace
 
 int main(int argc, char **argv) {
@@ -469,6 +603,8 @@ int main(int argc, char **argv) {
   }
   testRecoveryFixtureDigestsBindPhysicalBytes();
   testCatalogJournalReplayAtEveryDurabilityBoundary();
+  testRecoveryRejectsRepeatedBootstrapOwnership();
+  testRecoveryRejectsOverlappingBootstrapOwnership();
   testReplacementPublishesExactlyTheNewWholePackage();
 
   if (failures != 0) {

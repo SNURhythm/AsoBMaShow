@@ -62,6 +62,8 @@ struct SkinPackageOperationHandle {
 
 class SkinPackageOperationService {
 public:
+  // The store's exclusive recoverBeforeServiceStart() bootstrap must have
+  // completed before this serialized filesystem service is constructed.
   SkinPackageOperationService(SkinPackageStore &, SkinEntryValidator &);
   ~SkinPackageOperationService();
 
