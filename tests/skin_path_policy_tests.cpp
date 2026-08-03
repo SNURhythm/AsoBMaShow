@@ -66,6 +66,25 @@ void testPackageNameRejectsPathAndSizeViolations() {
          "package byte limit is enforced");
 }
 
+void testPackageNameCountsPostNfcBytesAtTheExactBoundary() {
+  using namespace skin;
+  const std::string exactly128(128, 'x');
+  expect(normalizePackageId(exactly128).package.has_value(),
+         "128-byte package name is accepted");
+
+  std::string decomposedExactly128;
+  for (int character = 0; character < 64; ++character) {
+    decomposedExactly128 += "e\xCC\x81";
+  }
+  const auto normalized = normalizePackageId(decomposedExactly128);
+  expect(normalized.package.has_value(),
+         "package byte limit is measured after NFC composition");
+  if (normalized.package) {
+    expect(normalized.package->directoryName.size() == 128,
+           "post-NFC package spelling is exactly 128 bytes");
+  }
+}
+
 void testEntryIdentityStaysPackageRelative() {
   using namespace skin;
   const auto package = normalizePackageId("ModernChic").package;
@@ -115,6 +134,39 @@ void testEntryRejectsUnsafeAndOversizedPaths() {
          "entry byte limit is enforced");
 }
 
+void testEntryAcceptsExactDepthAndPostNfcByteBoundaries() {
+  using namespace skin;
+  const auto package = normalizePackageId("ModernChic").package;
+  if (!package) {
+    ++failures;
+    return;
+  }
+
+  std::string exactly64Components;
+  for (int component = 0; component < 64; ++component) {
+    if (!exactly64Components.empty()) {
+      exactly64Components += '/';
+    }
+    exactly64Components += 'x';
+  }
+  expect(normalizeEntryPath(*package, exactly64Components).entry.has_value(),
+         "64 entry components are accepted");
+  expect(normalizeEntryPath(*package, std::string(1024, 'x')).entry.has_value(),
+         "1024-byte entry path is accepted");
+
+  std::string decomposedExactly1024;
+  for (int character = 0; character < 512; ++character) {
+    decomposedExactly1024 += "e\xCC\x81";
+  }
+  const auto normalized = normalizeEntryPath(*package, decomposedExactly1024);
+  expect(normalized.entry.has_value(),
+         "entry byte limit is measured after NFC composition");
+  if (normalized.entry) {
+    expect(normalized.entry->packageRelativePath.size() == 1024,
+           "post-NFC entry spelling is exactly 1024 bytes");
+  }
+}
+
 void testRevisionContainmentUsesOnlyTheEntryRelativePath() {
   using namespace skin;
   const auto package = normalizePackageId("ModernChic").package;
@@ -158,6 +210,61 @@ void testEntryNormalizesNfcWithoutChangingAuthoredPathShape() {
   }
 }
 
+void testEntryCollisionUsesFullUnicodeCaseFold() {
+  using namespace skin;
+  const auto package = normalizePackageId("ModernChic").package;
+  if (!package) {
+    ++failures;
+    return;
+  }
+  const auto mixed = normalizeEntryPath(
+      *package, "play/Stra\xC3\x9F" "e.luaskin");
+  const auto uppercase =
+      normalizeEntryPath(*package, "PLAY/STRASSE.LUASKIN");
+  expect(mixed.entry.has_value() && uppercase.entry.has_value(),
+         "casefold fixtures are valid entries");
+  if (mixed.entry && uppercase.entry) {
+    expect(mixed.entry->collisionKey == uppercase.entry->collisionKey,
+           "entry collision key uses full Unicode casefold");
+    expect(mixed.entry->packageRelativePath ==
+               "play/Stra\xC3\x9F" "e.luaskin",
+           "entry retains authored NFC spelling");
+  }
+}
+
+void testTamperedAndAbsoluteTypedIdsAreRejected() {
+  using namespace skin;
+  const auto package = normalizePackageId("ModernChic").package;
+  if (!package) {
+    ++failures;
+    return;
+  }
+
+  auto tamperedPackage = *package;
+  tamperedPackage.collisionKey = "forged";
+  expect(!normalizeEntryPath(tamperedPackage, "play/play7.luaskin")
+              .entry.has_value(),
+         "entry normalization rejects a tampered package token");
+
+  auto entry = normalizeEntryPath(*package, "play/play7.luaskin").entry;
+  if (!entry) {
+    ++failures;
+    return;
+  }
+  entry->collisionKey = "forged";
+  expect(installedRelativePath(*entry).empty(),
+         "installed identity rejects a tampered entry token");
+
+  SkinEntryId absoluteRoot{
+      .package = SkinPackageId{.directoryName = "/private/revision",
+                               .collisionKey = "/private/revision"},
+      .packageRelativePath = "play/play7.luaskin",
+      .collisionKey = "/private/revision/play/play7.luaskin",
+  };
+  expect(installedRelativePath(absoluteRoot).empty(),
+         "installed identity rejects an absolute root masquerading as a package");
+}
+
 void testFloatWriterIdIsAStrongTruthyToken() {
   using namespace skin;
   const SkinFloatWriterId empty{};
@@ -173,9 +280,13 @@ int main() {
   testFilenameNormalizationRejectsInvalidText();
   testPackageIdentityPreservesNfcAndUsesFullCaseFold();
   testPackageNameRejectsPathAndSizeViolations();
+  testPackageNameCountsPostNfcBytesAtTheExactBoundary();
   testEntryIdentityStaysPackageRelative();
   testEntryRejectsUnsafeAndOversizedPaths();
+  testEntryAcceptsExactDepthAndPostNfcByteBoundaries();
   testEntryNormalizesNfcWithoutChangingAuthoredPathShape();
+  testEntryCollisionUsesFullUnicodeCaseFold();
+  testTamperedAndAbsoluteTypedIdsAreRejected();
   testRevisionContainmentUsesOnlyTheEntryRelativePath();
   testFloatWriterIdIsAStrongTruthyToken();
   return failures == 0 ? 0 : 1;

@@ -6,6 +6,7 @@
 import os
 import subprocess
 import shutil
+import sys
 
 # 0. detect vcpkg path (priority: env var VCPKG_ROOT, then default location)
 vcpkg_root = os.getenv("VCPKG_ROOT")
@@ -109,10 +110,17 @@ copy_xcframework("lib7zip")
 copy_includes("7zip", True)
 copy_license("7zip", "7zip.txt")
 
-install_package("utf8proc")
-generate_xcframework("utf8proc", False, "libutf8proc", "libutf8proc")
-copy_xcframework("utf8proc", "libutf8proc")
-copy_includes("utf8proc.h")
-copy_license("utf8proc", "utf8proc.txt")
+subprocess.run(
+    [
+        sys.executable,
+        f"{current_path}/scripts/ios_utf8proc.py",
+        "ensure",
+        "--repository-root",
+        current_path,
+        "--vcpkg-root",
+        vcpkg_root,
+    ],
+    check=True,
+)
 # remove tmp
 shutil.rmtree(tmp_path)

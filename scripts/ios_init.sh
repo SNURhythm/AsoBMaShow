@@ -8,6 +8,13 @@ CACHE_ROOT="${IOS_DEPLOY_CACHE_ROOT:-${HOME}/Library/Caches/AsoBMaShow/ios-deplo
 # shellcheck source=scripts/ios_pods_cache.sh
 source "${ROOT_DIR}/scripts/ios_pods_cache.sh"
 
+prepare_utf8proc() {
+  python3 "${ROOT_DIR}/scripts/ios_utf8proc.py" ensure \
+    --repository-root "${ROOT_DIR}" \
+    --cache-root "${CACHE_ROOT}/native" \
+    --output-root "${IOS_UTF8PROC_OUTPUT_ROOT:-${IOS_DIR}}"
+}
+
 link_cache_dir() {
   local link_path="$1"
   local cache_dir="$2"
@@ -90,6 +97,16 @@ install_pods() {
     return 1
   fi
 }
+
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--native-deps-only" ]; }; then
+  echo "Usage: scripts/ios_init.sh [--native-deps-only]" >&2
+  exit 2
+fi
+
+prepare_utf8proc
+if [ "${1:-}" = "--native-deps-only" ]; then
+  exit 0
+fi
 
 prepare_bgfx_project
 install_gems

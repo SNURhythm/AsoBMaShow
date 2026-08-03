@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+import hashlib
 import os
+import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -28,7 +31,11 @@ MAIN_SOURCE = ROOT / "src/main.cpp"
 IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
 VCPKG_MANIFEST = ROOT / "vcpkg.json"
 IOS_LIB_SCRIPT = ROOT / "scripts/get_ios_libs.py"
+IOS_UTF8PROC_PREPARE = ROOT / "scripts/ios_utf8proc.py"
 UTF8PROC_LICENSE = ROOT / "assets/legal/utf8proc.txt"
+UTF8PROC_LICENSE_SHA256 = (
+    "3b510150d34f248a221bb88e1d811238d6c6c18b51231822c42974c39bb07256"
+)
 
 
 def object_block(project: str, object_id: str, next_section: str) -> str:
@@ -238,17 +245,401 @@ class IOSBuildSetupTests(unittest.TestCase):
         manifest = VCPKG_MANIFEST.read_text(encoding="utf-8")
         script = IOS_LIB_SCRIPT.read_text(encoding="utf-8")
         self.assertIn('"utf8proc"', manifest)
-        self.assertIn('install_package("utf8proc")', script)
-        self.assertIn(
-            'generate_xcframework("utf8proc", False, "libutf8proc", "libutf8proc")',
-            script,
-        )
-        self.assertIn('copy_xcframework("utf8proc", "libutf8proc")', script)
-        self.assertIn('copy_includes("utf8proc.h")', script)
-        self.assertIn('copy_license("utf8proc", "utf8proc.txt")', script)
+        self.assertIn("ios_utf8proc.py", script)
+        self.assertIn('"ensure"', script)
         self.assertTrue(UTF8PROC_LICENSE.is_file())
         self.assertIn("libutf8proc.xcframework", self.project)
         self.assertIn("libutf8proc.xcframework in Frameworks", self.project)
+
+
+class IOSUtf8procSetupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        required = ("xcodebuild", "xcrun", "ar")
+        missing = [tool for tool in required if shutil.which(tool) is None]
+        if missing:
+            raise unittest.SkipTest(
+                "utf8proc artifact tests require " + ", ".join(missing)
+            )
+
+    def make_vcpkg_fixture(self, root: Path) -> tuple[Path, Path]:
+        vcpkg = root / "vcpkg"
+        installed = vcpkg / "fixture-installed"
+        source = root / "utf8proc.c"
+        source.write_text(
+            'const char *utf8proc_version(void) { return "fixture"; }\n',
+            encoding="utf-8",
+        )
+        header = installed / "arm64-ios/include/utf8proc.h"
+        header.parent.mkdir(parents=True)
+        header.write_text(
+            "#ifndef UTF8PROC_H\n"
+            "#define UTF8PROC_H\n"
+            "#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
+            "const char *utf8proc_version(void);\n"
+            "#ifdef __cplusplus\n}\n#endif\n"
+            "#endif\n",
+            encoding="utf-8",
+        )
+        license_path = installed / "arm64-ios/share/utf8proc/copyright"
+        license_path.parent.mkdir(parents=True)
+        shutil.copy2(UTF8PROC_LICENSE, license_path)
+
+        for triplet, sdk, target in (
+            ("arm64-ios", "iphoneos", "arm64-apple-ios14.0"),
+            (
+                "arm64-ios-simulator",
+                "iphonesimulator",
+                "arm64-apple-ios14.0-simulator",
+            ),
+        ):
+            library_dir = installed / triplet / "lib"
+            library_dir.mkdir(parents=True)
+            sdk_path = subprocess.run(
+                ["xcrun", "--sdk", sdk, "--show-sdk-path"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            object_path = root / f"utf8proc-{triplet}.o"
+            subprocess.run(
+                [
+                    "xcrun",
+                    "--sdk",
+                    sdk,
+                    "clang",
+                    "-target",
+                    target,
+                    "-isysroot",
+                    sdk_path,
+                    "-c",
+                    str(source),
+                    "-o",
+                    str(object_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "ar",
+                    "rcs",
+                    str(library_dir / "libutf8proc.a"),
+                    str(object_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        count_file = root / "vcpkg-invocations.txt"
+        executable = vcpkg / "vcpkg"
+        executable.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            ': "${FAKE_VCPKG_COUNT_FILE:?}"\n'
+            '[ "$PWD" = "$(dirname "$0")" ] || { echo "wrong vcpkg cwd" >&2; exit 83; }\n'
+            'install_root=""\n'
+            'for argument in "$@"; do\n'
+            '  case "$argument" in\n'
+            '    --x-install-root=*) install_root="${argument#*=}" ;;\n'
+            '  esac\n'
+            'done\n'
+            '[ -n "$install_root" ] || { echo "missing private install root" >&2; exit 82; }\n'
+            'mkdir -p "$install_root"\n'
+            'cp -R "$(dirname "$0")/fixture-installed/." "$install_root/"\n'
+            'printf "called\\n" >> "${FAKE_VCPKG_COUNT_FILE}"\n',
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        return vcpkg, count_file
+
+    def run_prepare(
+        self,
+        command: str,
+        *arguments: str | Path,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        self.assertTrue(
+            IOS_UTF8PROC_PREPARE.is_file(),
+            "scripts/ios_utf8proc.py must prepare clean iOS checkouts",
+        )
+        env = os.environ.copy()
+        if environment:
+            env.update(environment)
+        return subprocess.run(
+            [
+                "python3",
+                str(IOS_UTF8PROC_PREPARE),
+                command,
+                *map(str, arguments),
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+    def ensure_fixture(
+        self, root: Path
+    ) -> tuple[Path, Path, Path, Path, dict[str, str]]:
+        vcpkg, count_file = self.make_vcpkg_fixture(root)
+        output = root / "output"
+        cache = root / "cache"
+        environment = {"FAKE_VCPKG_COUNT_FILE": str(count_file)}
+        result = self.run_prepare(
+            "ensure",
+            "--repository-root",
+            ROOT,
+            "--vcpkg-root",
+            vcpkg,
+            "--cache-root",
+            cache,
+            "--output-root",
+            output,
+            environment=environment,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return vcpkg, count_file, output, cache, environment
+
+    @staticmethod
+    def archive_build_version(archive: Path) -> tuple[str, str]:
+        with tempfile.TemporaryDirectory() as temp:
+            extracted = Path(temp)
+            subprocess.run(
+                ["ar", "-x", str(archive)],
+                cwd=extracted,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            objects = sorted(
+                path
+                for path in extracted.iterdir()
+                if not path.name.startswith("__.SYMDEF")
+            )
+            if not objects:
+                raise AssertionError(f"empty static archive: {archive}")
+            details = subprocess.run(
+                ["xcrun", "vtool", "-show-build", str(objects[0])],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout
+        platform = re.search(r"^\s*platform (\S+)$", details, re.MULTILINE)
+        minimum = re.search(r"^\s*minos (\S+)$", details, re.MULTILINE)
+        if platform is None or minimum is None:
+            raise AssertionError(f"missing build version in {archive}: {details}")
+        return platform.group(1), minimum.group(1)
+
+    def compile_header(self, header: Path, sdk: str, target: str) -> None:
+        sdk_path = subprocess.run(
+            ["xcrun", "--sdk", sdk, "--show-sdk-path"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        subprocess.run(
+            [
+                "xcrun",
+                "--sdk",
+                sdk,
+                "clang++",
+                "-target",
+                target,
+                "-isysroot",
+                sdk_path,
+                "-std=c++20",
+                "-fsyntax-only",
+                "-x",
+                "c++",
+                "-I",
+                str(header.parent),
+                "-include",
+                header.name,
+                "/dev/null",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_clean_checkout_generates_two_ios14_slices_and_compilable_header(self):
+        with tempfile.TemporaryDirectory() as temp:
+            _, count_file, output, _, _ = self.ensure_fixture(Path(temp))
+            framework = output / "lib/libutf8proc.xcframework"
+            header = output / "include/utf8proc.h"
+            self.assertTrue(header.is_file())
+            with (framework / "Info.plist").open("rb") as stream:
+                info = plistlib.load(stream)
+            libraries = {
+                item["LibraryIdentifier"]: item
+                for item in info["AvailableLibraries"]
+            }
+            self.assertEqual(
+                {"ios-arm64", "ios-arm64-simulator"}, set(libraries)
+            )
+            self.assertNotIn("SupportedPlatformVariant", libraries["ios-arm64"])
+            self.assertEqual(
+                "simulator",
+                libraries["ios-arm64-simulator"]["SupportedPlatformVariant"],
+            )
+            self.assertEqual(
+                ("IOS", "14.0"),
+                self.archive_build_version(
+                    framework / "ios-arm64/libutf8proc.a"
+                ),
+            )
+            self.assertEqual(
+                ("IOSSIMULATOR", "14.0"),
+                self.archive_build_version(
+                    framework / "ios-arm64-simulator/libutf8proc.a"
+                ),
+            )
+            self.compile_header(
+                header, "iphoneos", "arm64-apple-ios14.0"
+            )
+            self.compile_header(
+                header,
+                "iphonesimulator",
+                "arm64-apple-ios14.0-simulator",
+            )
+            self.assertEqual("called", count_file.read_text().strip())
+
+    def test_cache_restores_missing_outputs_without_rebuilding_and_prunes_stale_key(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vcpkg, count_file, output, cache, environment = self.ensure_fixture(root)
+            stale = cache / "utf8proc/stale-key"
+            stale.mkdir(parents=True)
+            abandoned_staging = cache / "utf8proc/.staging-abandoned"
+            abandoned_staging.mkdir()
+            shutil.rmtree(output / "lib/libutf8proc.xcframework")
+            (output / "include/utf8proc.h").unlink()
+
+            result = self.run_prepare(
+                "ensure",
+                "--repository-root",
+                ROOT,
+                "--vcpkg-root",
+                vcpkg,
+                "--cache-root",
+                cache,
+                "--output-root",
+                output,
+                environment=environment,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(["called"], count_file.read_text().splitlines())
+            self.assertFalse(stale.exists())
+            self.assertFalse(abandoned_staging.exists())
+            self.assertTrue((output / "include/utf8proc.h").is_file())
+            self.assertTrue(
+                (output / "lib/libutf8proc.xcframework/Info.plist").is_file()
+            )
+
+    def test_verifier_rejects_one_slice_missing_header_and_tampered_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _, _, output, cache, _ = self.ensure_fixture(root)
+            framework = output / "lib/libutf8proc.xcframework"
+            header = output / "include/utf8proc.h"
+            manifest = next((cache / "utf8proc").glob("*/manifest.json"))
+
+            one_slice = root / "one-slice.xcframework"
+            shutil.copytree(framework, one_slice)
+            shutil.rmtree(one_slice / "ios-arm64-simulator")
+            result = self.run_prepare(
+                "verify",
+                "--framework",
+                one_slice,
+                "--header",
+                header,
+                "--license",
+                UTF8PROC_LICENSE,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("ios-arm64-simulator", result.stderr)
+
+            result = self.run_prepare(
+                "verify",
+                "--framework",
+                framework,
+                "--header",
+                root / "missing-utf8proc.h",
+                "--license",
+                UTF8PROC_LICENSE,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("header", result.stderr.lower())
+
+            tampered = root / "tampered.xcframework"
+            shutil.copytree(framework, tampered)
+            with (tampered / "ios-arm64/libutf8proc.a").open("ab") as stream:
+                stream.write(b"tampered")
+            result = self.run_prepare(
+                "verify",
+                "--framework",
+                tampered,
+                "--header",
+                header,
+                "--license",
+                UTF8PROC_LICENSE,
+                "--manifest",
+                manifest,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("artifact error", result.stderr.lower())
+
+    def test_committed_utf8proc_license_is_complete_and_tamper_checked(self):
+        license_bytes = UTF8PROC_LICENSE.read_bytes()
+        text = license_bytes.decode("utf-8")
+        self.assertEqual(
+            UTF8PROC_LICENSE_SHA256, hashlib.sha256(license_bytes).hexdigest()
+        )
+        self.assertIn("Original utf8proc license", text)
+        self.assertIn("Unicode data license", text)
+        self.assertGreaterEqual(text.count("Permission is hereby granted"), 3)
+        self.assertIn("THE DATA FILES AND SOFTWARE ARE PROVIDED", text)
+
+    def test_ios_init_can_prepare_native_dependency_from_a_clean_checkout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vcpkg, count_file = self.make_vcpkg_fixture(root)
+            output = root / "output"
+            cache = root / "cache"
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_cmake = fake_bin / "cmake"
+            fake_cmake.write_text("#!/bin/sh\nexit 43\n", encoding="utf-8")
+            fake_cmake.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "FAKE_VCPKG_COUNT_FILE": str(count_file),
+                    "VCPKG_ROOT": str(vcpkg),
+                    "IOS_DEPLOY_CACHE_ROOT": str(cache),
+                    "IOS_UTF8PROC_OUTPUT_ROOT": str(output),
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                }
+            )
+
+            result = subprocess.run(
+                [str(IOS_INIT), "--native-deps-only"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue((output / "include/utf8proc.h").is_file())
+            self.assertTrue(
+                (output / "lib/libutf8proc.xcframework/Info.plist").is_file()
+            )
+            self.assertEqual("called", count_file.read_text().strip())
 
 
 class DerivedDataPathTests(unittest.TestCase):
