@@ -29,7 +29,13 @@ struct ResourceUse {
 struct CollectedResourceUses {
   std::map<SkinResourceId, ResourceUse> images;
   std::map<SkinResourceId, bool> fonts;
-  struct TextUse { SkinTextAtlasKey key; std::string literal; bool receivesRuntimeStrings = false; bool critical = false; };
+  struct TextUse {
+    SkinObjectId object = 0;
+    SkinTextAtlasKey key;
+    std::string literal;
+    bool receivesRuntimeStrings = false;
+    bool critical = false;
+  };
   std::vector<TextUse> texts;
 };
 
@@ -97,7 +103,8 @@ CollectedResourceUses collectResourceUses(const ValidatedBeatorajaSkinModel &mod
       else if constexpr (std::is_same_v<T, SkinNumberObject> || std::is_same_v<T, SkinFloatObject>) { addSprite(object.digits.positive, critical); if (object.digits.negative) addSprite(*object.digits.negative, critical); }
       else if constexpr (std::is_same_v<T, SkinTextObject>) {
         result.fonts[object.font] = result.fonts[object.font] || critical;
-        result.texts.push_back({.key={.font=object.font, .pointSize=object.pointSize,
+        result.texts.push_back({.object=found->second->id,
+                                .key={.font=object.font, .pointSize=object.pointSize,
                                      .outlineRgba=object.outlineRgba, .outlineWidth=object.outlineWidth,
                                      .shadowRgba=object.shadowRgba, .shadowOffsetX=object.shadowOffsetX,
                                      .shadowOffsetY=object.shadowOffsetY, .shadowSmoothness=object.shadowSmoothness},
@@ -131,15 +138,21 @@ bool sameRect(const SkinSourceRect &left, const SkinSourceRect &right) noexcept 
 }
 
 void recordRegionIdentityCheck() noexcept;
+void recordRegionLookupComparison() noexcept;
+
+bool lessRect(const SkinSourceRect &left,
+              const SkinSourceRect &right) noexcept {
+  return std::tie(left.x, left.y, left.w, left.h, left.gridColumn,
+                  left.gridRow, left.gridColumns, left.gridRows) <
+         std::tie(right.x, right.y, right.w, right.h, right.gridColumn,
+                  right.gridRow, right.gridColumns, right.gridRows);
+}
 
 struct SkinSourceRectLess {
   bool operator()(const SkinSourceRect &left,
                   const SkinSourceRect &right) const noexcept {
     recordRegionIdentityCheck();
-    return std::tie(left.x, left.y, left.w, left.h, left.gridColumn,
-                    left.gridRow, left.gridColumns, left.gridRows) <
-           std::tie(right.x, right.y, right.w, right.h, right.gridColumn,
-                    right.gridRow, right.gridColumns, right.gridRows);
+    return lessRect(left, right);
   }
 };
 
@@ -148,10 +161,15 @@ using RegionIdentityMap = std::map<SkinSourceRect, SkinSourceRect,
 
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
 std::atomic_size_t regionIdentityChecksForTesting{0};
+std::atomic_size_t regionLookupComparisonsForTesting{0};
 std::atomic_size_t fontAtlasRequestHighWaterForTesting{0};
 
 void recordRegionIdentityCheck() noexcept {
   regionIdentityChecksForTesting.fetch_add(1, std::memory_order_relaxed);
+}
+
+void recordRegionLookupComparison() noexcept {
+  regionLookupComparisonsForTesting.fetch_add(1, std::memory_order_relaxed);
 }
 
 void recordFontAtlasRequestCount(std::size_t count) noexcept {
@@ -164,6 +182,7 @@ void recordFontAtlasRequestCount(std::size_t count) noexcept {
 }
 #else
 void recordRegionIdentityCheck() noexcept {}
+void recordRegionLookupComparison() noexcept {}
 void recordFontAtlasRequestCount(std::size_t) noexcept {}
 #endif
 
@@ -294,6 +313,7 @@ struct FontAtlasRequest {
   SkinTextAtlasKey key;
   const SkinFontResource *font = nullptr;
   std::vector<std::string> resolvedFacePaths;
+  std::vector<SkinObjectId> objects;
   bool critical = false;
   std::set<char32_t> codepoints;
   std::set<std::pair<char32_t, char32_t>> pairs;
@@ -369,6 +389,7 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
                                 .critical=text.critical}).first;
       recordFontAtlasRequestCount(requests.size());
     }
+    request->second.objects.push_back(text.object);
     request->second.critical = request->second.critical || text.critical;
     if (!appendUtf8(text.literal, request->second.codepoints, request->second.pairs))
       diagnostics.push_back(fontDiagnostic(*found->second, request->second.critical, "skin.resource.atlas_limit", "font glyph or kerning limit exceeds policy"));
@@ -439,6 +460,14 @@ void resetSkinResourceRegionIdentityChecksForTesting() noexcept {
 
 std::size_t skinResourceRegionIdentityChecksForTesting() noexcept {
   return regionIdentityChecksForTesting.load(std::memory_order_relaxed);
+}
+
+void resetSkinResourceRegionLookupComparisonsForTesting() noexcept {
+  regionLookupComparisonsForTesting.store(0, std::memory_order_relaxed);
+}
+
+std::size_t skinResourceRegionLookupComparisonsForTesting() noexcept {
+  return regionLookupComparisonsForTesting.load(std::memory_order_relaxed);
 }
 
 void resetSkinResourceFontAtlasRequestHighWaterForTesting() noexcept {
@@ -668,6 +697,21 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
       result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan exceeds fixed aggregate limits")); return result;
     }
   }
+  if (plan.textAtlasesByObject.size() >
+      SkinResourcePolicy::maximumTextAtlasUses) {
+    result.diagnostics.push_back(diagnostic(
+        "skin.resource.atlas_limit",
+        "resource upload plan has too many text-atlas uses"));
+    return result;
+  }
+  for (const auto &[object, atlas] : plan.textAtlasesByObject) {
+    if (object == 0 || atlas == 0 || !atlasIds.contains(atlas)) {
+      result.diagnostics.push_back(diagnostic(
+          "skin.resource.atlas_limit",
+          "resource upload plan has an invalid text-atlas mapping"));
+      return result;
+    }
+  }
   if (session.decodedBytes() != plan.decodedBytes) {
     result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan decoded byte total is inconsistent")); return result;
   }
@@ -676,8 +720,58 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
   catalog->owned_.reserve(plan.images.size() + plan.atlases.size());
   auto rollback=[&]{ catalog.reset(); };
   struct PendingHandle { SkinTextureDevice &device; bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; ~PendingHandle() { if (bgfx::isValid(handle)) device.destroy(handle); } void release() noexcept { handle = BGFX_INVALID_HANDLE; } };
-  for (const auto &image : plan.images) { const auto handle=catalog->device_->create(image.pixels); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; const PreparedSkinResource prepared{.id=image.id,.texture=handle,.width=image.pixels.width,.height=image.pixels.height,.regions=image.regions,.regionMappings=image.regionMappings}; catalog->resources_.emplace(image.id, prepared); for (SkinResourceId alias : image.aliases) { const auto found=image.aliasRegions.find(alias); const auto &regions=found==image.aliasRegions.end()?image.regions:found->second; const auto mappings=image.aliasRegionMappings.find(alias); catalog->resources_.emplace(alias, PreparedSkinResource{.id=alias,.texture=handle,.width=image.pixels.width,.height=image.pixels.height,.regions=regions,.regionMappings=mappings->second}); } catalog->owned_.push_back({handle}); pending.release(); }
+  const auto prepareResource = [](SkinResourceId id,
+                                  bgfx::TextureHandle texture, int width,
+                                  int height,
+                                  const std::vector<SkinSourceRect> &regions,
+                                  const std::vector<SkinResolvedRegion> &mappings) {
+    PreparedSkinResource prepared{.id = id,
+                                  .texture = texture,
+                                  .width = width,
+                                  .height = height,
+                                  .regions = regions,
+                                  .regionMappings = mappings};
+    prepared.regionLookupOrder.resize(mappings.size());
+    for (std::size_t index = 0; index < mappings.size(); ++index) {
+      prepared.regionLookupOrder[index] = static_cast<std::uint32_t>(index);
+    }
+    std::sort(prepared.regionLookupOrder.begin(),
+              prepared.regionLookupOrder.end(),
+              [&prepared](std::uint32_t left, std::uint32_t right) {
+                return lessRect(prepared.regionMappings[left].authored,
+                                prepared.regionMappings[right].authored);
+              });
+    return prepared;
+  };
+  for (const auto &image : plan.images) {
+    const auto handle = catalog->device_->create(image.pixels);
+    if (!bgfx::isValid(handle)) {
+      result.diagnostics.push_back(diagnostic(
+          "skin.resource.texture_create_failed", "texture creation failed"));
+      rollback();
+      return result;
+    }
+    PendingHandle pending{*catalog->device_, handle};
+    catalog->resources_.emplace(
+        image.id,
+        prepareResource(image.id, handle, image.pixels.width,
+                        image.pixels.height, image.regions,
+                        image.regionMappings));
+    for (SkinResourceId alias : image.aliases) {
+      const auto found = image.aliasRegions.find(alias);
+      const auto &regions =
+          found == image.aliasRegions.end() ? image.regions : found->second;
+      const auto mappings = image.aliasRegionMappings.find(alias);
+      catalog->resources_.emplace(
+          alias,
+          prepareResource(alias, handle, image.pixels.width,
+                          image.pixels.height, regions, mappings->second));
+    }
+    catalog->owned_.push_back({handle});
+    pending.release();
+  }
   for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.descent=atlas.descent,.lineHeight=atlas.lineHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); pending.release(); }
+  catalog->textAtlasesByObject_ = std::move(plan.textAtlasesByObject);
   result.catalog=std::move(catalog); return result;
   } catch (...) {
     result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload allocation failed"));
@@ -688,11 +782,24 @@ const PreparedSkinResource *SkinResourceCatalog::find(SkinResourceId id) const n
 const SkinResolvedRegion *SkinResourceCatalog::findResolvedRegion(SkinResourceId id, const SkinSourceRect &authored) const noexcept {
   const auto *resource = find(id);
   if (!resource) return nullptr;
-  const auto found = std::ranges::find_if(resource->regionMappings, [&authored](const SkinResolvedRegion &mapping) { return sameRect(mapping.authored, authored); });
-  return found == resource->regionMappings.end() ? nullptr : &*found;
+  const auto found = std::lower_bound(
+      resource->regionLookupOrder.begin(), resource->regionLookupOrder.end(),
+      authored, [resource](std::uint32_t index, const SkinSourceRect &value) {
+        recordRegionLookupComparison();
+        return lessRect(resource->regionMappings[index].authored, value);
+      });
+  if (found == resource->regionLookupOrder.end()) return nullptr;
+  const SkinResolvedRegion &mapping = resource->regionMappings[*found];
+  return sameRect(mapping.authored, authored) ? &mapping : nullptr;
 }
 const PreparedSkinTextAtlas *SkinResourceCatalog::findTextAtlas(SkinTextAtlasId id) const noexcept { const auto it=atlases_.find(id); return it==atlases_.end()?nullptr:&it->second; }
 const PreparedSkinTextAtlas *SkinResourceCatalog::findTextAtlas(const SkinTextAtlasKey &key) const noexcept { const auto it=atlasKeys_.find(key); return it==atlasKeys_.end()?nullptr:findTextAtlas(it->second); }
+const PreparedSkinTextAtlas *SkinResourceCatalog::findTextAtlasForObject(
+    SkinObjectId object) const noexcept {
+  const auto found = textAtlasesByObject_.find(object);
+  return found == textAtlasesByObject_.end() ? nullptr
+                                             : findTextAtlas(found->second);
+}
 
 SkinResourcePreparationService::SkinResourcePreparationService()
     : SkinResourcePreparationService(
@@ -1006,6 +1113,9 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     session = fontSession;
     plan.decodedBytes = session.decodedBytes();
     plan.atlases.push_back(*built.atlas);
+    for (const SkinObjectId object : request.objects) {
+      plan.textAtlasesByObject.emplace(object, atlasId);
+    }
     ++atlasId;
   }
   if (std::ranges::any_of(result.diagnostics, [](const SkinDiagnostic &d) { return d.severity == DiagnosticSeverity::Error; })) return result;

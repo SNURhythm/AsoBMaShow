@@ -578,8 +578,13 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   compactAtlasPlan.plan.reset();
   auto planned = service.decodeAndPlan({.revision=std::move(*lease), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(planned.plan && planned.plan->images.size() == 2 && planned.plan->atlases.size() == 4 &&
+             planned.plan->textAtlasesByObject.size() == 4 &&
+             planned.plan->textAtlasesByObject.contains(6) &&
+             planned.plan->textAtlasesByObject.contains(7) &&
+             planned.plan->textAtlasesByObject.contains(8) &&
+             planned.plan->textAtlasesByObject.contains(9) &&
              planned.plan->images.front().aliases == std::vector<skin::SkinResourceId>{2},
-         "duplicate image locators reuse one texture while live text styles produce distinct atlases");
+         "duplicate image locators reuse one texture while every live text object publishes its prepared atlas identity");
   std::optional<skin::SkinTextAtlasKey> firstAtlasKey;
   if (planned.plan && planned.plan->atlases.size() == 4) {
     const auto &firstAtlas = planned.plan->atlases[0];
@@ -605,6 +610,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
         .revision = planned.plan->revision.clone(),
         .images = planned.plan->images,
         .atlases = planned.plan->atlases,
+        .textAtlasesByObject = planned.plan->textAtlasesByObject,
         .decodedBytes = planned.plan->decodedBytes};
   };
   const auto rejectBeforeUpload = [&](std::string_view message,
@@ -733,6 +739,16 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                      });
   rejectBeforeUpload("duplicate atlas IDs fail before upload",
                      [](auto &plan, auto &) { plan.atlases.back().id = plan.atlases.front().id; });
+  rejectBeforeUpload("text-atlas mappings must reference an uploaded atlas",
+                     [](auto &plan, auto &) {
+                       plan.textAtlasesByObject.begin()->second =
+                           skin::SkinResourcePolicy::maximumAtlases + 1;
+                     });
+  rejectBeforeUpload("text-atlas mappings require nonzero object IDs",
+                     [](auto &plan, auto &) {
+                       const auto atlas = plan.textAtlasesByObject.begin()->second;
+                       plan.textAtlasesByObject.emplace(0, atlas);
+                     });
   rejectBeforeUpload("atlas styles must retain canonical finite keys",
                      [](auto &plan, auto &) { plan.atlases.front().key.outlineWidth = -1.0; });
   rejectBeforeUpload("oversized atlas fallback-chain keys fail before upload",
@@ -937,14 +953,20 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
           std::move(*uniquePlan.plan), uniqueDevice);
       const std::size_t uploadComparisons =
           skin::skinResourceRegionIdentityChecksForTesting();
-      expect(uniqueUpload.catalog &&
+      skin::resetSkinResourceRegionLookupComparisonsForTesting();
+      const auto *lastMapping = uniqueUpload.catalog
+          ? uniqueUpload.catalog->findResolvedRegion(1,
+                                                     uniqueFrames.frames.back())
+          : nullptr;
+      const std::size_t lookupComparisons =
+          skin::skinResourceRegionLookupComparisonsForTesting();
+      expect(uniqueUpload.catalog && lastMapping != nullptr &&
                  uniqueUpload.catalog->find(1)->regions.size() == uniqueCount &&
                  uniqueUpload.catalog->find(2)->regions.size() == uniqueCount &&
-                 uniqueUpload.catalog->findResolvedRegion(
-                     1, uniqueFrames.frames.back()) != nullptr &&
                  uploadComparisons > uniqueCount * 2 &&
-                 uploadComparisons <= uniqueCount * 80,
-             "primary and alias preflight preserve unique mapping order with measured logarithmic map comparisons");
+                 uploadComparisons <= uniqueCount * 80 &&
+                 lookupComparisons > 0 && lookupComparisons <= 40,
+             "primary and alias preflight preserve authored order while immutable lookup uses measured logarithmic comparisons");
     }
   }
   {
@@ -1005,6 +1027,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
          "the service-owned stop state rejects synchronous validation after shutdown begins");
   skin::SkinResourceUploadPlan rollbackPlan{
       .revision = planned.plan->revision.clone(), .images = planned.plan->images, .atlases = planned.plan->atlases,
+      .textAtlasesByObject = planned.plan->textAtlasesByObject,
       .decodedBytes = planned.plan->decodedBytes};
   auto failingDevice = std::make_shared<FakeTextureDevice>();
   failingDevice->failAt = 2;
@@ -1024,6 +1047,11 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   expect(uploaded.catalog && device->creates == 6 && device->live == 6 &&
              uploaded.catalog->find(1) && uploaded.catalog->find(2) && uploaded.catalog->find(3) &&
              uploaded.catalog->findTextAtlas(1) && uploaded.catalog->findTextAtlas(2) && uploaded.catalog->findTextAtlas(3) && uploaded.catalog->findTextAtlas(4) &&
+             uploaded.catalog->findTextAtlasForObject(6) &&
+             uploaded.catalog->findTextAtlasForObject(7) &&
+             uploaded.catalog->findTextAtlasForObject(8) &&
+             uploaded.catalog->findTextAtlasForObject(9) &&
+             !uploaded.catalog->findTextAtlasForObject(5) &&
              firstAtlasKey && uploaded.catalog->findTextAtlas(*firstAtlasKey) &&
              uploaded.catalog->find(1)->regions.front().x == 0 &&
              uploaded.catalog->find(2)->regions.front().x == 2,
@@ -1043,6 +1071,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
     (void)uploaded.catalog->find(2);
     (void)uploaded.catalog->find(9999);
     (void)uploaded.catalog->findTextAtlas(1);
+    (void)uploaded.catalog->findTextAtlasForObject(6);
   }
   expect(device->creates == readsBefore,
          "render-phase ID lookups do not upload or access resource files");

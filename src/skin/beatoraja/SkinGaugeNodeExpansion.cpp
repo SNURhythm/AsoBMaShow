@@ -70,6 +70,28 @@ expandSkinGaugeNodes(const SkinGaugeNodeExpansionInput &input) {
       input.animationType > static_cast<int>(SkinGaugeAnimationType::Flicker)) {
     return failure(SkinGaugeNodeExpansionError::InvalidAnimationType);
   }
+  if (input.parts < 1 ||
+      input.parts > static_cast<int>(SkinGaugeNodeExpansionPolicy::maxParts) ||
+      input.animationRange < 0 ||
+      input.animationRange >
+          static_cast<int>(SkinGaugeNodeExpansionPolicy::maxAnimationRange) ||
+      input.animationCycleMillis < 0 ||
+      input.animationCycleMillis >
+          SkinGaugeNodeExpansionPolicy::maxAnimationCycleMillis ||
+      (input.animationType == static_cast<int>(SkinGaugeAnimationType::Flicker) &&
+       input.animationCycleMillis <
+           SkinGaugeNodeExpansionPolicy::minFlickerCycleMillis) ||
+      input.resultStartMillis <
+          SkinGaugeNodeExpansionPolicy::minResultTimeMillis ||
+      input.resultStartMillis >
+          SkinGaugeNodeExpansionPolicy::maxResultTimeMillis ||
+      input.resultEndMillis <
+          SkinGaugeNodeExpansionPolicy::minResultTimeMillis ||
+      input.resultEndMillis >
+          SkinGaugeNodeExpansionPolicy::maxResultTimeMillis ||
+      input.resultStartMillis >= input.resultEndMillis) {
+    return failure(SkinGaugeNodeExpansionError::InvalidAnimationParameters);
+  }
 
   // JsonSkinObjectLoader walks the image list and would use its first match.
   // A source-neutral model must instead fail closed rather than preserve an

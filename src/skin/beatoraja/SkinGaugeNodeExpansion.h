@@ -32,6 +32,12 @@ struct SkinGaugeNodeExpansionInput {
 struct SkinGaugeNodeExpansionPolicy {
   static constexpr std::size_t roleCount = 36;
   static constexpr std::size_t maxSourceImages = 2'048;
+  static constexpr std::size_t maxParts = 512;
+  static constexpr std::size_t maxAnimationRange = 1'024;
+  static constexpr int maxAnimationCycleMillis = 60'000;
+  static constexpr int minFlickerCycleMillis = 4;
+  static constexpr int minResultTimeMillis = -600'000;
+  static constexpr int maxResultTimeMillis = 600'000;
   // The limit counts every copied frame after the fixed 36-role expansion.
   static constexpr std::size_t maxExpandedSpriteFrames = 200'000;
 };
@@ -46,6 +52,7 @@ enum class SkinGaugeNodeExpansionError : std::uint8_t {
   UnequalAnimationFrameCount,
   FrameLimitExceeded,
   InvalidAnimationType,
+  InvalidAnimationParameters,
 };
 
 struct SkinGaugeNodeExpansionResult {

@@ -312,7 +312,9 @@ struct SkinDestinationFrame {
 
 struct SkinDestinationBody {
   std::optional<SkinTimerPropertyId> timer;
-  int loop = -1;
+  // Java JsonSkin.Destination leaves an omitted primitive int at zero.
+  // Explicit -1 is the one-shot/suppress-after-end mode.
+  int loop = 0;
   std::vector<std::variant<int, SkinBooleanPropertyId>> conditions;
   std::vector<int> offsetIds;
   std::optional<SkinBooleanPropertyId> drawCondition;

@@ -164,7 +164,10 @@ std::string gaugeFixture(std::size_t nodeCount, int animationType) {
   }
   lua << "},parts=" << 40 + animationType << ",type=" << animationType
       << ",range=" << 10 + animationType
-      << ",cycle=" << 20 + animationType
+      << ",cycle="
+      << (animationType == static_cast<int>(SkinGaugeAnimationType::Flicker)
+              ? 20 + animationType
+              : 0)
       << ",starttime=" << -10 - animationType
       << ",endtime=" << 700 + animationType
       << "},destination={{id='gauge',dst={{}}}}}";
@@ -213,7 +216,11 @@ void testLiveGaugeUsesEveryPinnedNodeLayout() {
     expect(gauge->parts == 40 + entry.animationType &&
                static_cast<int>(gauge->animation) == entry.animationType &&
                gauge->animationRange == 10 + entry.animationType &&
-               gauge->animationCycleMillis == 20 + entry.animationType &&
+               gauge->animationCycleMillis ==
+                   (entry.animationType ==
+                            static_cast<int>(SkinGaugeAnimationType::Flicker)
+                        ? 20 + entry.animationType
+                        : 0) &&
                gauge->resultStartMillis == -10 - entry.animationType &&
                gauge->resultEndMillis == 700 + entry.animationType,
            "live Gauge preserves parts, type, range, cycle, and result interval");

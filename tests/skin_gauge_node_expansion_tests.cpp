@@ -159,7 +159,9 @@ void testGaugeConstructionFields() {
     input.parts = 40 + type;
     input.animationType = type;
     input.animationRange = 10 + type;
-    input.animationCycleMillis = 20 + type;
+    input.animationCycleMillis =
+        type == static_cast<int>(SkinGaugeAnimationType::Flicker) ? 20 + type
+                                                                  : 0;
     input.resultStartMillis = -10 - type;
     input.resultEndMillis = 700 + type;
     const auto result = expandSkinGaugeNodes(input);
@@ -179,6 +181,55 @@ void testGaugeConstructionFields() {
                result.gauge->resultEndMillis == input.resultEndMillis,
            "result start and end normalize directly to the source-neutral gauge");
   }
+}
+
+void testUnsafeAnimationArithmeticFailsClosed() {
+  const auto expectInvalid = [](SkinGaugeNodeExpansionInput input,
+                                std::string_view message) {
+    const auto result = expandSkinGaugeNodes(input);
+    expect(!result.gauge &&
+               result.error ==
+                   SkinGaugeNodeExpansionError::InvalidAnimationParameters,
+           message);
+  };
+
+  auto invalid = inputFor(4);
+  invalid.parts = 0;
+  expectInvalid(invalid, "zero gauge parts cannot reach division");
+  invalid = inputFor(4);
+  invalid.parts =
+      static_cast<int>(SkinGaugeNodeExpansionPolicy::maxParts) + 1;
+  expectInvalid(invalid, "gauge parts are bounded before command expansion");
+  invalid = inputFor(4);
+  invalid.animationRange = -1;
+  expectInvalid(invalid, "negative animation range cannot reach modulo");
+  invalid = inputFor(4);
+  invalid.animationRange =
+      static_cast<int>(SkinGaugeNodeExpansionPolicy::maxAnimationRange) + 1;
+  expectInvalid(invalid, "animation range is bounded before evaluation");
+  invalid = inputFor(4);
+  invalid.animationCycleMillis = -1;
+  expectInvalid(invalid, "negative animation cycle cannot reach evaluation");
+  invalid = inputFor(4);
+  invalid.animationCycleMillis =
+      SkinGaugeNodeExpansionPolicy::maxAnimationCycleMillis + 1;
+  expectInvalid(invalid, "animation cycle has a fixed upper bound");
+  invalid = inputFor(4);
+  invalid.animationType = static_cast<int>(SkinGaugeAnimationType::Flicker);
+  invalid.animationCycleMillis = 3;
+  expectInvalid(invalid,
+                "flicker cycle keeps both alpha-ramp denominators positive");
+  invalid = inputFor(4);
+  invalid.resultStartMillis =
+      SkinGaugeNodeExpansionPolicy::minResultTimeMillis - 1;
+  expectInvalid(invalid, "result animation has a fixed signed lower bound");
+  invalid = inputFor(4);
+  invalid.resultStartMillis = invalid.resultEndMillis;
+  expectInvalid(invalid, "result animation requires a nonzero interval");
+  invalid = inputFor(4);
+  invalid.resultEndMillis =
+      SkinGaugeNodeExpansionPolicy::maxResultTimeMillis + 1;
+  expectInvalid(invalid, "result animation has a fixed signed upper bound");
 }
 
 void testInvalidInputsFailClosed() {
@@ -270,6 +321,7 @@ int main() {
   testPinnedMappingsAndOutputTimingPolicy();
   testGaugeConstructionFields();
   testInvalidInputsFailClosed();
+  testUnsafeAnimationArithmeticFailsClosed();
   testHardFrameBoundPreventsExpansionOverflow();
   return failures == 0 ? 0 : 1;
 }

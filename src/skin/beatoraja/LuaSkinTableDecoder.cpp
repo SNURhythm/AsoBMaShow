@@ -898,7 +898,7 @@ struct RawDestination {
   };
   std::uint32_t authoredIndex = 0;
   std::optional<SkinTimerPropertyId> timer;
-  int loop = -1;
+  int loop = 0;
   int center = 0;
   int blend = 0;
   int filter = 0;

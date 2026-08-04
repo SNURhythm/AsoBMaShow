@@ -95,6 +95,23 @@ void testLoopRateAndIndependentMicrosecondTruncation() {
   }
 }
 
+void testOmittedLoopUsesPinnedZeroDefaultAndWrapsExactEnd() {
+  SkinDestinationBody body;
+  body.frames = {
+      {.timeMillis = 0, .x = 10.0, .y = 0.0, .width = 1.0, .height = 1.0},
+      {.timeMillis = 100, .x = 110.0, .y = 0.0, .width = 1.0,
+       .height = 1.0},
+  };
+  const auto beforeEnd =
+      evaluateSkinDestinationAuthored(body, inputs(99'000, 0));
+  const auto exactEnd =
+      evaluateSkinDestinationAuthored(body, inputs(100'000, 0));
+  expect(body.loop == 0 && beforeEnd.geometry && exactEnd.geometry &&
+             near(beforeEnd.geometry->rect.x, 109.0) &&
+             near(exactEnd.geometry->rect.x, 10.0),
+         "omitted Java Destination loop defaults to zero and exact end wraps to the first frame");
+}
+
 void testConditionsAndOrderedOffsets() {
   auto body = animated();
   body.conditions = {1, SkinBooleanPropertyId{2}};
@@ -259,6 +276,7 @@ void testSourceRegionStretchAndProjection() {
 int main() {
   testTimerConditionAndFrameSelection();
   testLoopRateAndIndependentMicrosecondTruncation();
+  testOmittedLoopUsesPinnedZeroDefaultAndWrapsExactEnd();
   testConditionsAndOrderedOffsets();
   testObjectAccelerationAndPinnedOffsetAlphaBranches();
   testFractionalOffsetAndClipSuppression();

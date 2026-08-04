@@ -32,6 +32,7 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumImageBytes = 128U * 1024U * 1024U;
   static constexpr std::size_t maximumSessionDecodedBytes = 256U * 1024U * 1024U;
   static constexpr std::size_t maximumAtlases = 64;
+  static constexpr std::size_t maximumTextAtlasUses = 8'192;
   static constexpr std::size_t maximumAtlasBytes = 32U * 1024U * 1024U;
   static constexpr std::size_t maximumAtlasSessionBytes = 128U * 1024U * 1024U;
   static constexpr std::size_t maximumRuntimeStrings = 64;
@@ -86,6 +87,9 @@ private:
 // time, which keeps the maximum-region test deterministic across machines.
 void resetSkinResourceRegionIdentityChecksForTesting() noexcept;
 [[nodiscard]] std::size_t skinResourceRegionIdentityChecksForTesting() noexcept;
+void resetSkinResourceRegionLookupComparisonsForTesting() noexcept;
+[[nodiscard]] std::size_t
+skinResourceRegionLookupComparisonsForTesting() noexcept;
 void resetSkinResourceFontAtlasRequestHighWaterForTesting() noexcept;
 [[nodiscard]] std::size_t
 skinResourceFontAtlasRequestHighWaterForTesting() noexcept;
@@ -130,7 +134,15 @@ struct SkinPreparedGlyphAtlas {
   std::map<std::pair<char32_t,char32_t>, int> kerning;
   int ascent = 0; int descent = 0; int lineHeight = 0;
 };
-struct SkinResourceUploadPlan { SkinRevisionLease revision; std::vector<SkinDecodedImage> images; std::vector<SkinPreparedGlyphAtlas> atlases; std::size_t decodedBytes = 0; };
+struct SkinResourceUploadPlan {
+  SkinRevisionLease revision;
+  std::vector<SkinDecodedImage> images;
+  std::vector<SkinPreparedGlyphAtlas> atlases;
+  // Render-time text lookup must not reconstruct the configured and securely
+  // resolved fallback-chain identity used to key an atlas.
+  std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject;
+  std::size_t decodedBytes = 0;
+};
 
 struct SkinResourceValidationInputs {
   SkinRevisionReadView revision;
@@ -181,7 +193,18 @@ private:
   std::size_t activeCalls_ = 0;
   bool shutdownComplete_ = false;
 };
-struct PreparedSkinResource { SkinResourceId id = 0; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::vector<SkinSourceRect> regions; std::vector<SkinResolvedRegion> regionMappings; };
+struct PreparedSkinResource {
+  SkinResourceId id = 0;
+  bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  int width = 0;
+  int height = 0;
+  std::vector<SkinSourceRect> regions;
+  std::vector<SkinResolvedRegion> regionMappings;
+  // Compact immutable index into regionMappings, ordered by authored rect.
+  // This preserves authored-use order in regionMappings while making every
+  // render-time lookup logarithmic.
+  std::vector<std::uint32_t> regionLookupOrder;
+};
 struct PreparedSkinTextAtlas { SkinTextAtlasId id = 0; SkinTextAtlasKey key; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::map<char32_t,SkinPreparedGlyphMetrics> glyphs; std::map<std::pair<char32_t,char32_t>,int> kerning; int ascent = 0; int descent = 0; int lineHeight = 0; };
 
 class SkinTextureDevice {
@@ -211,6 +234,8 @@ public:
                                                 const SkinSourceRect &authored) const noexcept;
   const PreparedSkinTextAtlas *findTextAtlas(SkinTextAtlasId) const noexcept;
   const PreparedSkinTextAtlas *findTextAtlas(const SkinTextAtlasKey &) const noexcept;
+  const PreparedSkinTextAtlas *
+  findTextAtlasForObject(SkinObjectId) const noexcept;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };
@@ -225,6 +250,7 @@ private:
   std::map<SkinResourceId, PreparedSkinResource> resources_;
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;
   std::map<SkinTextAtlasKey, SkinTextAtlasId> atlasKeys_;
+  std::map<SkinObjectId, SkinTextAtlasId> textAtlasesByObject_;
 };
 
 } // namespace skin
