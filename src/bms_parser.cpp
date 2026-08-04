@@ -3172,6 +3172,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
 
     // NOTE: this should be an ordered map
     auto timelines = std::map<double, TimeLine *>();
+    double bgaPoorTimingExtent = 0.0;
 
     for (auto &pair : measures[measureIdx]) {
       if (bCancelled) {
@@ -3244,6 +3245,57 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       }
 
       const auto dataCount = data.length() / 2;
+      if (channel == PoorPlay) {
+        bool hasActiveCell = false;
+        for (size_t j = 0; j < dataCount; ++j) {
+          if (bCancelled) {
+            break;
+          }
+          if (data.substr(j * 2, 2) != "00") {
+            hasActiveCell = true;
+            break;
+          }
+        }
+        if (bCancelled) {
+          break;
+        }
+        if (!hasActiveCell) {
+          continue;
+        }
+        BgaPoorSequence sequence;
+        sequence.Frames.reserve(dataCount);
+        for (size_t j = 0; j < dataCount; ++j) {
+          if (bCancelled) {
+            break;
+          }
+          const std::string value = data.substr(j * 2, 2);
+          if (value != "00") {
+            const auto g = Gcd(j, dataCount);
+            const auto positionNumerator = j / g;
+            const auto positionDenominator = dataCount / g;
+            const auto position =
+                static_cast<double>(positionNumerator) /
+                static_cast<double>(positionDenominator);
+            bgaPoorTimingExtent = std::max(bgaPoorTimingExtent, position);
+          }
+          const int bmpId = ParseInt(value);
+          if (CheckResourceIdRange(bmpId) &&
+              new_chart->BmpTable.find(bmpId) != new_chart->BmpTable.end()) {
+            RegisterReferencedBmpId(new_chart, bmpId, metaOnly);
+            sequence.Frames.push_back(bmpId);
+          } else {
+            sequence.Frames.push_back(BgaSequenceBlank);
+          }
+        }
+        if (bCancelled) {
+          break;
+        }
+        if (timelines.find(0.0) == timelines.end()) {
+          timelines[0.0] = new TimeLine(TempKey, metaOnly);
+        }
+        timelines[0.0]->BgaPoor = std::move(sequence);
+        continue;
+      }
       const bool channelCanAnchorPrepTiming =
           channel == LaneAutoplay || channel == BpmChange ||
           channel == BpmChangeExtend || channel == Stop || channel == Scroll ||
@@ -3320,12 +3372,6 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           const int bmpId = ParseInt(val);
           RegisterReferencedBmpId(new_chart, bmpId, metaOnly);
           timeline->BgaBase = bmpId;
-          break;
-        }
-        case PoorPlay: {
-          const int bmpId = ParseInt(val);
-          RegisterReferencedBmpId(new_chart, bmpId, metaOnly);
-          timeline->BgaPoor = bmpId;
           break;
         }
         case LayerPlay: {
@@ -3478,6 +3524,17 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       }
     }
 
+    if (bCancelled) {
+      for (const auto &[position, timeline] : timelines) {
+        (void)position;
+        delete timeline;
+      }
+      delete measure;
+      delete new_chart;
+      *chart = nullptr;
+      return;
+    }
+
     new_chart->Meta.TotalNotes = totalNotes;
     new_chart->Meta.TotalLongNotes = totalLongNotes;
     new_chart->Meta.TotalScratchNotes = totalScratchNotes;
@@ -3532,6 +3589,16 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       }
 
       lastPosition = position;
+    }
+
+    if (bgaPoorTimingExtent > lastPosition) {
+      const auto interval = 240000000.0 *
+                            (bgaPoorTimingExtent - lastPosition) *
+                            measure->Scale / currentBpm;
+      addDuration(bpmDurations, bpmOrder, currentBpm,
+                  static_cast<long long>(std::llround(interval)));
+      timePassed += interval;
+      lastPosition = bgaPoorTimingExtent;
     }
 
     if (metaOnly) {

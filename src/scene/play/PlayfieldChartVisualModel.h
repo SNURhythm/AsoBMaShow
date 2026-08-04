@@ -65,6 +65,14 @@ struct PlayfieldChartTextMetadata {
   bool operator==(const PlayfieldChartTextMetadata &) const = default;
 };
 
+struct ChartVisualBgaPoorSequence {
+  long long startBgaMicros = 0;
+  std::uint32_t authoredOrdinal = 0;
+  std::vector<int> frames;
+
+  bool operator==(const ChartVisualBgaPoorSequence &) const = default;
+};
+
 struct PlayfieldChartVisualModel {
   std::string chartSha256;
   int keyCount = 0;
@@ -73,6 +81,7 @@ struct PlayfieldChartVisualModel {
   std::vector<ChartVisualTimeline> timelines;
   std::vector<ChartVisualNote> notes;
   std::vector<double> scrollPrefix;
+  std::vector<ChartVisualBgaPoorSequence> bgaPoorSequences;
 
   [[nodiscard]] std::vector<std::string> runtimeStrings() const;
 

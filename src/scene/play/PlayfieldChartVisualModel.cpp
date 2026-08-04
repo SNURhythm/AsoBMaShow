@@ -130,7 +130,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                             hasAny(timeline->InvisibleNotes) ||
                             hasAny(timeline->LandmineNotes);
       const bool hasBga = timeline->BgaBase >= 0 || timeline->BgaLayer >= 0 ||
-                          timeline->BgaPoor >= 0;
+                          timeline->BgaPoor.has_value();
       const double previousBpm = previous != nullptr ? previous->Bpm : timeline->Bpm;
       const double previousScroll = previous != nullptr ? previous->Scroll : timeline->Scroll;
       ChartVisualTimeline value{
@@ -152,6 +152,12 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           .authoredOrdinal = timelineOrdinal++,
       };
       timelineIds.emplace(timeline, value.id);
+      if (timeline->BgaPoor) {
+        result.bgaPoorSequences.push_back(
+            {.startBgaMicros = timeline->Timing,
+             .authoredOrdinal = value.authoredOrdinal,
+             .frames = timeline->BgaPoor->Frames});
+      }
       result.scrollPrefix.push_back(value.scrollPosition);
       result.timelines.push_back(value);
       previous = timeline;
