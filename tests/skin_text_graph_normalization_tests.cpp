@@ -48,7 +48,8 @@ SkinTextNormalizationInput validTextInput() {
           .shadowOffsetX = -3.5,
           .shadowOffsetY = 4.5,
           .shadowSmoothness = 0.75,
-          .editable = true};
+          .writerWasExplicit = false,
+          .authoredEditable = true};
 }
 
 SkinSpriteFrames sprite() {
@@ -84,6 +85,7 @@ SkinGraphNormalizationInput validGraphInput() {
                       .minimum = -50,
                       .maximum = 150}},
           .isRefNum = false,
+          .type = 0,
           .direction = 1};
 }
 
@@ -120,6 +122,43 @@ void testTextRetainsPinnedFieldsAndResolvesFontIdentity() {
              text.shadowOffsetY == input.shadowOffsetY &&
              text.shadowSmoothness == input.shadowSmoothness && text.editable,
          "text preserves outline, shadow, and editability fields");
+}
+
+void testTextComputesPinnedEffectiveEditability() {
+  const auto fonts = oneFont();
+
+  auto explicitWriter = validTextInput();
+  explicitWriter.writerWasExplicit = true;
+  explicitWriter.authoredEditable = false;
+  const auto explicitResult = normalizeSkinText(explicitWriter, fonts);
+  expect(explicitResult.text && !explicitResult.text->editable,
+         "explicit event writer does not implicitly make text editable");
+
+  auto fallbackWriter = validTextInput();
+  fallbackWriter.writerWasExplicit = false;
+  fallbackWriter.authoredEditable = false;
+  const auto fallbackResult = normalizeSkinText(fallbackWriter, fonts);
+  expect(fallbackResult.text && fallbackResult.text->editable,
+         "ref fallback writer makes text editable when authored flag is false");
+
+  auto authoredEditable = validTextInput();
+  authoredEditable.writerWasExplicit = true;
+  authoredEditable.authoredEditable = true;
+  const auto authoredResult = normalizeSkinText(authoredEditable, fonts);
+  expect(authoredResult.text && authoredResult.text->editable,
+         "authored editable true remains effective with an explicit writer");
+}
+
+void testTextAcceptsPinnedNullFallbackPlaceholders() {
+  auto withPlaceholder = font(7);
+  withPlaceholder.fallbacks.insert(withPlaceholder.fallbacks.begin(),
+                                   SkinFontFallbackResource{});
+  const std::vector<SkinFontResource> fonts{withPlaceholder};
+  const auto result = normalizeSkinText(validTextInput(), fonts);
+  expect(result.text.has_value(),
+         "empty fallback metadata mirrors pinned null fallback placeholder");
+  expect(withPlaceholder.fallbacks.front().virtualPath.empty(),
+         "normalization does not mutate font fallback metadata authority");
 }
 
 void testTextRejectsAmbiguousOrUnsafeInputs() {
@@ -250,12 +289,30 @@ void testGraphRejectsInvalidDependencies() {
          "missing implicit float graph source fails closed");
 }
 
+void testDistributionGraphsAreExplicitlyUnsupported() {
+  for (const int type : {-1, -2, -28}) {
+    auto input = validGraphInput();
+    input.type = type;
+    input.fill.frames.clear();
+    input.explicitRate = SkinFloatPropertyId{};
+    const auto result = normalizeSkinGraph(input);
+    expect(
+        !result.graph &&
+            result.error ==
+                SkinTextGraphNormalizationError::UnsupportedDistributionGraph,
+        "negative graph type is diagnosed before regular graph precedence");
+  }
+}
+
 } // namespace
 
 int main() {
   testTextRetainsPinnedFieldsAndResolvesFontIdentity();
+  testTextComputesPinnedEffectiveEditability();
+  testTextAcceptsPinnedNullFallbackPlaceholders();
   testTextRejectsAmbiguousOrUnsafeInputs();
   testGraphUsesPinnedSourcePrecedenceAndNormalizesDirection();
   testGraphRejectsInvalidDependencies();
+  testDistributionGraphsAreExplicitlyUnsupported();
   return failures == 0 ? 0 : 1;
 }

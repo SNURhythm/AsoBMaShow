@@ -31,7 +31,10 @@ struct SkinTextNormalizationInput {
   double shadowOffsetX = 0.0;
   double shadowOffsetY = 0.0;
   double shadowSmoothness = 0.0;
-  bool editable = false;
+  // JsonSkinObjectLoader only infers editability for a writer obtained from
+  // the numeric ref fallback. An explicitly authored Text.event does not.
+  bool writerWasExplicit = false;
+  bool authoredEditable = false;
 };
 
 // The fields mirror JsonSkin.Graph's loader precedence: value is selected
@@ -43,6 +46,7 @@ struct SkinGraphNormalizationInput {
   SkinFloatPropertyId implicitRate{};
   std::optional<SkinSliderObject::IntegerRangeSource> integerRange;
   bool isRefNum = false;
+  int type = 0;
   int direction = 1;
 };
 
@@ -59,6 +63,7 @@ enum class SkinTextGraphNormalizationError : std::uint8_t {
   InvalidGraphSprite,
   InvalidGraphBinding,
   InvalidGraphRange,
+  UnsupportedDistributionGraph,
 };
 
 struct SkinTextNormalizationResult {

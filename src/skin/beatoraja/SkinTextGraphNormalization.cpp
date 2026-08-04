@@ -143,7 +143,14 @@ normalizeSkinText(const SkinTextNormalizationInput &input,
     return textFailure(SkinTextGraphNormalizationError::InvalidFont);
   }
   for (const auto &fallback : font->fallbacks) {
-    if (fallback.virtualPath.empty() || !boundedUtf8(fallback.virtualPath)) {
+    // Pinned JsonSkinObjectLoader leaves null fallback array slots when an
+    // entry has no path, and both text implementations skip those slots.
+    // Keep resource ownership outside this helper and accept the equivalent
+    // empty source-neutral placeholder without mutating the font definition.
+    if (fallback.virtualPath.empty()) {
+      continue;
+    }
+    if (!boundedUtf8(fallback.virtualPath)) {
       return textFailure(SkinTextGraphNormalizationError::InvalidFont);
     }
   }
@@ -162,12 +169,21 @@ normalizeSkinText(const SkinTextNormalizationInput &input,
                                  .shadowOffsetX = input.shadowOffsetX,
                                  .shadowOffsetY = input.shadowOffsetY,
                                  .shadowSmoothness = input.shadowSmoothness,
-                                 .editable = input.editable},
+                                 .editable = input.authoredEditable ||
+                                             (!input.writerWasExplicit &&
+                                              input.writer.has_value())},
           .error = SkinTextGraphNormalizationError::None};
 }
 
 SkinGraphNormalizationResult
 normalizeSkinGraph(const SkinGraphNormalizationInput &input) {
+  if (input.type < 0) {
+    // Pinned JsonSkinObjectLoader reserves negative types for 11/28-row
+    // SkinDistributionGraph layouts. The v1 model has no representation for
+    // those objects, so regular Graph normalization must never absorb them.
+    return graphFailure(
+        SkinTextGraphNormalizationError::UnsupportedDistributionGraph);
+  }
   if (!validSprite(input.fill)) {
     return graphFailure(SkinTextGraphNormalizationError::InvalidGraphSprite);
   }
