@@ -4463,8 +4463,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/Utils.cpp
             src/bms_parser.cpp
             src/path.cpp
+            src/rendering/SkinQuadBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
+            src/skin/SkinConfigurationWriteQueue.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
@@ -4482,6 +4485,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCoverNormalization.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/Skin2DRendererSubmit.cpp
             src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
             src/skin/beatoraja/SkinJudgeNormalization.cpp
             src/skin/beatoraja/SkinJudgeNumberNormalization.cpp

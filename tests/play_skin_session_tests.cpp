@@ -1,6 +1,9 @@
 #include "skin/beatoraja/PlaySkinSession.h"
 
+#include "rendering/SkinQuadBatchRenderer.h"
+#include "scene/play/PlayfieldPresentation.h"
 #include "skin/SkinStoragePaths.h"
+#include "skin/SkinConfigurationWriteQueue.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
@@ -8,21 +11,65 @@
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
+#include "view/View.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
+
+namespace session_test_allocation_fault {
+thread_local bool failNext = false;
+}
+
+void *operator new(std::size_t size) {
+  if (session_test_allocation_fault::failNext) {
+    session_test_allocation_fault::failNext = false;
+    throw std::bad_alloc();
+  }
+  if (void *memory = std::malloc(size == 0 ? 1 : size)) {
+    return memory;
+  }
+  throw std::bad_alloc();
+}
+
+void *operator new[](std::size_t size) { return ::operator new(size); }
+
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete[](void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void *memory, std::size_t) noexcept {
+  std::free(memory);
+}
+
+namespace rendering {
+int window_width = design_width;
+int window_height = design_height;
+int render_width = design_width;
+int render_height = design_height;
+float widthScale = 1.0F;
+float heightScale = 1.0F;
+float ui_scale_x = 1.0F;
+float ui_scale_y = 1.0F;
+int ui_offset_x = 0;
+int ui_offset_y = 0;
+int ui_view_width = design_width;
+int ui_view_height = design_height;
+} // namespace rendering
 
 namespace {
 
@@ -72,15 +119,38 @@ public:
   }
 };
 
-class EmptyResources final : public SkinPreparedResourceView {
+class SessionResources final : public SkinPreparedResourceView {
 public:
-  const PreparedSkinResource *find(SkinResourceId) const noexcept override {
-    return nullptr;
+  void addImage(SkinResourceId id) {
+    const SkinSourceRect region{.x = 0, .y = 0, .w = 10, .h = 10};
+    PreparedSkinResource resource;
+    resource.id = id;
+    resource.texture = bgfx::TextureHandle{
+        static_cast<std::uint16_t>(id == 0 ? 1 : id)};
+    resource.width = 10;
+    resource.height = 10;
+    resource.regions = {region};
+    resource.regionMappings = {{.authored = region, .resolved = region}};
+    resources_.emplace(id, std::move(resource));
+  }
+
+  const PreparedSkinResource *find(SkinResourceId id) const noexcept override {
+    const auto found = resources_.find(id);
+    return found == resources_.end() ? nullptr : &found->second;
   }
   const SkinResolvedRegion *
-  findResolvedRegion(SkinResourceId,
-                     const SkinSourceRect &) const noexcept override {
-    return nullptr;
+  findResolvedRegion(SkinResourceId id,
+                     const SkinSourceRect &region) const noexcept override {
+    const auto *resource = find(id);
+    if (resource == nullptr || resource->regionMappings.empty()) {
+      return nullptr;
+    }
+    const auto &resolved = resource->regionMappings.front();
+    return resolved.authored.x == region.x && resolved.authored.y == region.y &&
+                   resolved.authored.w == region.w &&
+                   resolved.authored.h == region.h
+               ? &resolved
+               : nullptr;
   }
   const PreparedSkinTextAtlas *
   findTextAtlas(SkinTextAtlasId) const noexcept override {
@@ -90,6 +160,134 @@ public:
   findTextAtlasForObject(SkinObjectId) const noexcept override {
     return nullptr;
   }
+
+private:
+  std::map<SkinResourceId, PreparedSkinResource> resources_;
+};
+
+class SessionQuadBackend final : public rendering::SkinQuadBatchBackend {
+public:
+  bool preflightVertexLayouts(
+      std::span<const bgfx::VertexLayout *const> layouts) override {
+    ++layoutPreflightCalls;
+    layoutCount = layouts.size();
+    return preflightReady;
+  }
+
+  bool preflightSamplers(std::span<const SkinFilterMode> samplers) override {
+    ++samplerPreflightCalls;
+    samplerCount = samplers.size();
+    return preflightReady;
+  }
+
+  bool reserve(std::size_t vertexCount, std::size_t indexCount,
+               std::size_t, const GameplayBgaTransientRequirements &) override {
+    ++reserveCalls;
+    reservedVertices = vertexCount;
+    reservedIndices = indexCount;
+    return preflightReady;
+  }
+
+  void submit(const rendering::SkinQuadBackendBatch &) override {
+    ++submitCalls;
+    if (failNextAllocationAfterSubmit) {
+      session_test_allocation_fault::failNext = true;
+    }
+  }
+
+  bool preflightReady = true;
+  bool failNextAllocationAfterSubmit = false;
+  std::size_t layoutPreflightCalls = 0;
+  std::size_t samplerPreflightCalls = 0;
+  std::size_t reserveCalls = 0;
+  std::size_t submitCalls = 0;
+  std::size_t layoutCount = 0;
+  std::size_t samplerCount = 0;
+  std::size_t reservedVertices = 0;
+  std::size_t reservedIndices = 0;
+};
+
+bool sameBgaFrame(const PreparedGameplayBgaFrame &left,
+                  const PreparedGameplayBgaFrame &right) {
+  const auto sameSurface = [](const auto &first, const auto &second) {
+    if (first.has_value() != second.has_value()) {
+      return false;
+    }
+    return !first ||
+           (first->role == second->role &&
+            first->mediaKind == second->mediaKind &&
+            first->surfaceToken == second->surfaceToken &&
+            first->sourceWidth == second->sourceWidth &&
+            first->sourceHeight == second->sourceHeight);
+  };
+  return left.sequence == right.sequence &&
+         left.composition == right.composition &&
+         sameSurface(left.base, right.base) &&
+         sameSurface(left.layer, right.layer) &&
+         sameSurface(left.miss, right.miss);
+}
+
+class SessionBgaSubmitter final : public IGameplayBgaSubmitter {
+public:
+  PreparedGameplayBgaFrame prepareVisualFrameAt(
+      std::uint64_t, std::int64_t,
+      const GameplayBgaMissState &) override {
+    return {};
+  }
+
+  BgaPreflightResult
+  preflight(const PreparedGameplayBgaFrame &frame,
+            std::span<const BgaDrawTarget> targets) override {
+    ++preflightCalls;
+    preflightFrame = frame;
+    targetCount = targets.size();
+    return {.ready = preflightReady,
+            .failure = preflightReady
+                           ? std::nullopt
+                           : std::optional<SkinDiagnostic>{SkinDiagnostic{
+                                 .code = "session.bga.preflight",
+                                 .message = "forced preflight failure"}},
+            .requirements = preflightReady
+                                ? GameplayBgaTransientRequirements{
+                                      .vertexBytes = 64,
+                                      .vertexAlignmentPadding = 8,
+                                      .indexCount = 6}
+                                : GameplayBgaTransientRequirements{}};
+  }
+
+  void commitPrepared(const PreparedGameplayBgaFrame &frame) noexcept override {
+    ++commitCalls;
+    committedFrame = frame;
+  }
+
+  void submitPrepared(const PreparedGameplayBgaFrame &frame,
+                      const BgaDrawTarget &) noexcept override {
+    ++submitCalls;
+    submittedFrame = frame;
+  }
+
+  void finalizePrepared(
+      const PreparedGameplayBgaFrame &frame) noexcept override {
+    ++finalizeCalls;
+    finalizedFrame = frame;
+  }
+
+  void submitFullscreen(
+      const PreparedGameplayBgaFrame &) noexcept override {
+    ++fullscreenCalls;
+  }
+
+  bool preflightReady = true;
+  std::size_t preflightCalls = 0;
+  std::size_t commitCalls = 0;
+  std::size_t submitCalls = 0;
+  std::size_t finalizeCalls = 0;
+  std::size_t fullscreenCalls = 0;
+  std::size_t targetCount = 0;
+  PreparedGameplayBgaFrame preflightFrame;
+  PreparedGameplayBgaFrame committedFrame;
+  PreparedGameplayBgaFrame submittedFrame;
+  PreparedGameplayBgaFrame finalizedFrame;
 };
 
 class SerialOnlyState final : public ISkinFrameState {
@@ -164,6 +362,21 @@ bool hasDiagnostic(const PlaySkinFrameTransactionResult &result,
                    std::string_view code) {
   return hasDiagnostic(result.diagnostics, code) ||
          hasDiagnostic(result.evaluation.diagnostics, code);
+}
+
+PreparedGameplayBgaFrame bgaFrame(std::uint64_t sequence) {
+  return {.sequence = sequence,
+          .composition = GameplayBgaComposition::BaseThenLayer,
+          .base = PreparedGameplayBgaSurface{
+              .role = GameplayBgaRole::Base,
+              .mediaKind = GameplayBgaMediaKind::Image,
+              .surfaceToken = 1000 + sequence,
+              .sourceWidth = 640,
+              .sourceHeight = 360}};
+}
+
+SkinFrameMutation persisted(PersistedSkinConfigurationWrite write) {
+  return SkinFrameMutation{std::move(write)};
 }
 
 class SessionTextureDevice final : public SkinTextureDevice {
@@ -338,6 +551,7 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
             .storageRoots = roots_,
             .resourcePreparation = resources_,
             .textureDevice = device_,
+            .configurationWrites = configurationWrites_,
             .stop = stop};
   }
 
@@ -366,6 +580,7 @@ private:
   EntryProfileSettings desired_;
   SkinResourcePreparationService resources_;
   std::shared_ptr<SessionTextureDevice> device_;
+  SkinConfigurationWriteQueue configurationWrites_;
   std::optional<SkinRevisionLease> lease_;
   SkinValidationResult validation_;
 };
@@ -569,16 +784,24 @@ const SessionPresentationWrite *presentationMutation(
 
 class SessionFixture final {
 public:
-  explicit SessionFixture(std::uint64_t sessionSerial = 37)
+  explicit SessionFixture(
+      std::uint64_t sessionSerial = 37,
+      UiLogicalRect safeUiBounds =
+          {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0})
       : roots_{.visiblePackages = temp_.root() / "visible",
                .privateRevisions = temp_.root() / "revisions",
                .privateCatalog = temp_.root() / "catalog",
                .profileOverlays = temp_.root() / "overlays"},
         package_(*normalizePackageId("SessionContract").package),
         entry_(*normalizeEntryPath(package_, "skin/main.luaskin").entry),
+        profile_(*makeSkinProfileId(
+            "55555555-5555-4555-8555-555555555555")),
         viewport_(evaluatePlaySkinViewport(
             {.width = 1280.0, .height = 720.0},
-            {.x = 0.0, .y = 0.0, .width = 1280.0, .height = 720.0}, {})) {
+            safeUiBounds, {})),
+        quadRenderer_(quadBackend_) {
+    chart_.keyCount = 7;
+    chart_.laneOrder = {7, 0};
     const fs::path source = temp_.root() / "source";
     writeText(source / "skin/main.luaskin", R"lua(
 local captured_main_state = require("main_state")
@@ -594,6 +817,23 @@ return {
     captured_main_state.event_exec(900, 99)
     error("forced writer failure")
   end,
+  writer_once = function(value)
+    _G.session_writer_once_count =
+      (rawget(_G, "session_writer_once_count") or 0) + 1
+    if _G.session_writer_once_count ~= 1 then
+      error("writer queued more than once for one Down")
+    end
+    captured_main_state.event_exec(900, math.floor(value * 100 + 0.5))
+  end,
+  writer_once_verify = function()
+    _G.session_writer_verify_count =
+      (rawget(_G, "session_writer_verify_count") or 0) + 1
+    if _G.session_writer_verify_count >= 2 and
+       (rawget(_G, "session_writer_once_count") or 0) ~= 1 then
+      error("one Down did not queue exactly one writer")
+    end
+    return 0.5
+  end,
 }
 )lua");
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
@@ -607,8 +847,7 @@ return {
         {.revision = prepared_->readView(),
          .entry = entry_,
          .storageRoots = roots_,
-         .profileId =
-             *makeSkinProfileId("55555555-5555-4555-8555-555555555555")});
+         .profileId = profile_});
     expect(fileSystem.fileSystem != nullptr,
            "session runtime filesystem creates");
     if (!fileSystem.fileSystem) {
@@ -630,7 +869,10 @@ return {
     writerA_ = header.value->callbackNamed("writer_a");
     writerB_ = header.value->callbackNamed("writer_b");
     writerFail_ = header.value->callbackNamed("writer_fail");
-    expect(writerA_ && writerB_ && writerFail_,
+    writerOnce_ = header.value->callbackNamed("writer_once");
+    writerOnceVerify_ = header.value->callbackNamed("writer_once_verify");
+    expect(writerA_ && writerB_ && writerFail_ && writerOnce_ &&
+               writerOnceVerify_,
            "session writer callbacks are retained");
     header.value.reset();
     expect(runtime_->loadConfigured({}).value.has_value(),
@@ -642,7 +884,10 @@ return {
         {.id = SkinFloatWriterId{1}, .source = *writerA_},
         {.id = SkinFloatWriterId{2}, .source = *writerB_},
         {.id = SkinFloatWriterId{3}, .source = *writerFail_},
+        {.id = SkinFloatWriterId{4}, .source = *writerOnce_},
     };
+    model_.model.header.width = 1280;
+    model_.model.header.height = 720;
     auto pinned = makePinnedSkinEventMutationTableV1();
     std::vector<SkinEventMutationRule> rules(pinned.rules().begin(),
                                               pinned.rules().end());
@@ -661,13 +906,22 @@ return {
         .mutationTable = mutations_});
     session_ = std::make_unique<PlaySkinSession>(PlaySkinSessionFrameContext{
         .sessionSerial = sessionSerial,
+        .identity = {.sessionSerial = sessionSerial,
+                     .profileId = profile_,
+                     .entry = entry_,
+                     .revisionDigest = "session-revision",
+                     .configurationDigest = "session-configuration"},
+        .chartModel = chart_,
         .model = model_,
         .configuration = configuration_,
         .resources = resources_,
+        .viewportSettings = {},
         .viewport = viewport_,
         .runtime = *runtime_,
         .bridge = *bridge_,
-        .renderer = renderer_});
+        .renderer = renderer_,
+        .quadRenderer = quadRenderer_,
+        .configurationWrites = configurationWrites_});
   }
 
   bool ready() const noexcept { return session_ != nullptr; }
@@ -679,27 +933,117 @@ return {
   const BeatorajaSkinConfiguration &configuration() const {
     return configuration_;
   }
-  const EmptyResources &resources() const { return resources_; }
+  const SessionResources &resources() const { return resources_; }
   const PlaySkinViewport &viewport() const { return viewport_; }
+  SessionQuadBackend &quadBackend() { return quadBackend_; }
+  SkinConfigurationWriteQueue &configurationWrites() {
+    return configurationWrites_;
+  }
+
+  void addBgaMarker(std::uint32_t ordinal = 90) {
+    model_.model.objects.push_back(
+        {.id = 90,
+         .authoredName = "session-bga",
+         .payload = SkinBgaObject{},
+         .authoredOrdinal = ordinal,
+         .critical = true});
+    model_.model.destinations.push_back(
+        {.object = 90,
+         .presentation =
+             {.loop = 0,
+              .frames = {{.timeMillis = 0,
+                          .x = 100.0,
+                          .y = 100.0,
+                          .width = 640.0,
+                          .height = 360.0}},
+              .authoredOrdinal = ordinal}});
+  }
+
+  void addTouchGeometry(SkinFloatWriterId writer = SkinFloatWriterId{1}) {
+    resources_.addImage(80);
+    const SkinFloatPropertyId valueProperty{
+        writer == SkinFloatWriterId{4} ? 2U : 1U};
+    model_.model.floatProperties.push_back(
+        {.id = valueProperty,
+         .domain = SkinFloatPropertyDomain::Rate,
+         .source = writer == SkinFloatWriterId{4}
+                       ? std::variant<SkinBuiltinPropertySelector,
+                                      LuaCallbackId>{*writerOnceVerify_}
+                       : std::variant<SkinBuiltinPropertySelector,
+                                      LuaCallbackId>{
+                             SkinBuiltinPropertySelector{.value = 4}},
+         .authoredOrdinal = 1});
+    SkinSliderObject slider;
+    slider.knob = {.resource = 80,
+                   .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}};
+    slider.value = valueProperty;
+    slider.writer = writer;
+    slider.direction = 1;
+    slider.range = 100.0;
+    slider.changeable = true;
+    SkinNoteObject notes;
+    notes.lanes = {
+        {.authoredLane = 7,
+         .laneDestination = {.x = 100.0,
+                             .y = 20.0,
+                             .width = 80.0,
+                             .height = 500.0}},
+        {.authoredLane = 0,
+         .laneDestination = {.x = 200.0,
+                             .y = 20.0,
+                             .width = 100.0,
+                             .height = 500.0}},
+    };
+    model_.model.objects.push_back(
+        {.id = 80,
+         .authoredName = "session-slider",
+         .payload = std::move(slider),
+         .authoredOrdinal = 80,
+         .critical = true});
+    model_.model.objects.push_back(
+        {.id = 81,
+         .authoredName = "session-notes",
+         .payload = std::move(notes),
+         .authoredOrdinal = 81,
+         .critical = true});
+    model_.model.destinations.push_back(
+        {.object = 80,
+         .presentation =
+             {.loop = 0,
+              .frames = {{.timeMillis = 0,
+                          .x = 100.0,
+                          .y = 100.0,
+                          .width = 20.0,
+                          .height = 20.0}},
+              .authoredOrdinal = 800}});
+  }
+
+  void destroySession() { session_.reset(); }
 
 private:
   TempDirectory temp_;
   SkinStorageRoots roots_;
   SkinPackageId package_;
   SkinEntryId entry_;
+  SkinProfileId profile_;
   AcceptFiles aliases_;
   std::optional<PreparedSkinRevision> prepared_;
   std::unique_ptr<LuaSkinRuntime> runtime_;
   std::optional<LuaCallbackId> writerA_;
   std::optional<LuaCallbackId> writerB_;
   std::optional<LuaCallbackId> writerFail_;
+  std::optional<LuaCallbackId> writerOnce_;
+  std::optional<LuaCallbackId> writerOnceVerify_;
   PlayfieldChartVisualModel chart_;
   ValidatedBeatorajaSkinModel model_;
   BeatorajaSkinConfiguration configuration_;
   SkinEventMutationTable mutations_;
-  EmptyResources resources_;
+  SessionResources resources_;
   PlaySkinViewport viewport_;
   Skin2DRenderer renderer_;
+  SessionQuadBackend quadBackend_;
+  rendering::SkinQuadBatchRenderer quadRenderer_;
+  SkinConfigurationWriteQueue configurationWrites_;
   std::unique_ptr<PlaySkinStateBridge> bridge_;
   std::unique_ptr<PlaySkinSession> session_;
 };
@@ -865,6 +1209,705 @@ void testPassiveCustomTimerUsesTheSharedSessionFrame() {
          "nonempty passive custom timers execute within the shared session frame");
 }
 
+void testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry();
+  SessionBgaSubmitter bga;
+
+  const auto prepared =
+      fixture.session().prepareFrame(stateAt(1), projectionAt(1));
+  const auto doublePrepare =
+      fixture.session().prepareFrame(stateAt(2), projectionAt(2));
+  expect(prepared == PresentationFrameOutcome::Ready &&
+             doublePrepare == PresentationFrameOutcome::CriticalFailure &&
+             bga.preflightCalls == 0 && bga.submitCalls == 0 &&
+             fixture.quadBackend().submitCalls == 0 &&
+             fixture.session().touchLayout().laneRegions.empty() &&
+             fixture.session().touchHitRegions().empty() &&
+             fixture.configurationWrites().drain().empty(),
+         "prepare retains one value-owned transaction without submission, "
+         "layout publication, persistence, or replacement by a second frame");
+
+  RenderContext context;
+  const auto exactBga = bgaFrame(1);
+  const auto rendered = fixture.session().render(context, exactBga, bga);
+  expect(rendered.frameSerial == 1 &&
+             rendered.outcome == PresentationFrameOutcome::Ready &&
+             rendered.submittedMode == PresentationMode::Skin &&
+             rendered.bgaCompositeMode ==
+                 GameplayBgaCompositeMode::EmbeddedSkin &&
+             rendered.preparedBga &&
+             sameBgaFrame(*rendered.preparedBga, exactBga),
+         "the first pending frame remains renderable after double-prepare "
+         "rejection");
+}
+
+void testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry();
+  SessionBgaSubmitter bga;
+  const auto exactBga = bgaFrame(44);
+
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "successful frame prepares");
+  RenderContext context;
+  const auto result = fixture.session().render(context, exactBga, bga);
+  const auto layout = fixture.session().touchLayout();
+  expect(result.frameSerial == 1 &&
+             result.outcome == PresentationFrameOutcome::Ready &&
+             result.submittedMode == PresentationMode::Skin &&
+             result.bgaCompositeMode ==
+                 GameplayBgaCompositeMode::EmbeddedSkin &&
+             result.preparedBga &&
+             sameBgaFrame(*result.preparedBga, exactBga) &&
+             bga.preflightCalls == 1 && bga.commitCalls == 1 &&
+             bga.submitCalls == 1 && bga.finalizeCalls == 1 &&
+             sameBgaFrame(bga.preflightFrame, exactBga) &&
+             sameBgaFrame(bga.committedFrame, exactBga) &&
+             sameBgaFrame(bga.submittedFrame, exactBga) &&
+             sameBgaFrame(bga.finalizedFrame, exactBga) &&
+             fixture.quadBackend().submitCalls == 1,
+         "successful render emits one complete skin frame with the exact "
+         "prepared BGA value");
+  expect(layout.revision == fixture.session().touchLayoutRevision() &&
+             layout.keyMode == 7 && layout.laneCount == 2 &&
+             layout.laneRegions.size() == 2 &&
+             layout.laneRegions[0].lane == 7 &&
+             layout.laneRegions[0].scratch &&
+             layout.laneRegions[1].lane == 0 &&
+             !layout.laneRegions[1].scratch &&
+             std::abs(layout.laneRegions[0].bottomLeft.x - 0.0520833F) <
+                 0.0001F &&
+             std::abs(layout.laneRegions[0].bottomLeft.y -
+                      0.6481481F) < 0.0001F &&
+             std::abs(layout.laneRegions[1].topRight.x - 0.15625F) <
+                 0.0001F &&
+             std::abs(layout.laneRegions[1].topRight.y - 0.1851852F) <
+                 0.0001F &&
+             fixture.session().touchHitRegions().size() == 1,
+         "successful submission publishes normalized authored lane and "
+         "control geometry");
+
+  const auto repeated = fixture.session().render(context, exactBga, bga);
+  expect(repeated.outcome == PresentationFrameOutcome::CriticalFailure &&
+             bga.preflightCalls == 1 && bga.commitCalls == 1 &&
+             bga.submitCalls == 1 && bga.finalizeCalls == 1 &&
+             fixture.quadBackend().submitCalls == 1 &&
+             fixture.configurationWrites().drain().empty(),
+         "repeat render cannot resubmit the consumed frame or enqueue writes");
+}
+
+void testCriticalEvaluationAndPreflightFailuresPublishNoFrameState() {
+  {
+    SessionFixture fixture;
+    if (fixture.ready()) {
+      fixture.addBgaMarker();
+      fixture.addTouchGeometry();
+      SessionBgaSubmitter bga;
+      RenderContext context;
+      expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready &&
+                 fixture.session().render(context, bgaFrame(70), bga).outcome ==
+                     PresentationFrameOutcome::Ready,
+             "evaluation-failure fixture first publishes valid geometry");
+      const UiLogicalPoint oldPoint{.x = 150.0F, .y = 610.0F};
+      const auto oldHit = fixture.session().hitTestUiControl(oldPoint);
+      expect(fixture.session().beginPresentationTouch(
+                 {.pointerId = 1,
+                  .uiPoint = oldPoint,
+                  .eventMicros = 1,
+                  .hit = oldHit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true},
+             "evaluation-failure fixture captures the published control");
+      fixture.model().model.destinations.push_back(
+          {.object = 999, .presentation = {.authoredOrdinal = 1}});
+      const auto outcome =
+          fixture.session().prepareFrame(stateAt(2), projectionAt(2));
+      const auto exactBga = bgaFrame(71);
+      const auto result = fixture.session().render(context, exactBga, bga);
+      expect(outcome == PresentationFrameOutcome::CriticalFailure &&
+                 result.outcome == PresentationFrameOutcome::CriticalFailure &&
+                 result.frameSerial == 2 && result.failure &&
+                 result.preparedBga &&
+                 sameBgaFrame(*result.preparedBga, exactBga) &&
+                 result.failure->frameSerial == 2 &&
+                 result.failure->entry == fixture.session().identity().entry &&
+                 result.failure->revisionDigest ==
+                     fixture.session().identity().revisionDigest &&
+                 result.failure->configurationDigest ==
+                     fixture.session().identity().configurationDigest &&
+                 result.submittedMode == PresentationMode::BuiltIn &&
+                 result.bgaCompositeMode ==
+                     GameplayBgaCompositeMode::FullscreenBuiltIn &&
+                 bga.preflightCalls == 1 && bga.commitCalls == 1 &&
+                 bga.submitCalls == 1 && bga.finalizeCalls == 1 &&
+                 bga.fullscreenCalls == 0 &&
+                 fixture.session().touchLayout().laneRegions.empty() &&
+                 fixture.session().touchHitRegions().empty() &&
+                 fixture.session().updatePresentationTouch(
+                     {.pointerId = 1,
+                      .uiPoint = oldPoint,
+                      .eventMicros = 2,
+                      .hit = oldHit}) == PresentationTouchResult{} &&
+                 fixture.configurationWrites().drain().empty(),
+             "critical evaluation failure carries exact identity and frame, "
+             "performs no additional BGA work, and clears prior geometry, "
+             "capture, and writes");
+    }
+  }
+  {
+    SessionFixture fixture;
+    if (fixture.ready()) {
+      fixture.addBgaMarker();
+      fixture.addTouchGeometry();
+      SessionBgaSubmitter bga;
+      expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+                 PresentationFrameOutcome::Ready,
+             "preflight fixture first evaluates");
+      RenderContext context;
+      expect(fixture.session().render(context, bgaFrame(70), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+             "preflight fixture first publishes valid geometry");
+      const UiLogicalPoint oldPoint{.x = 150.0F, .y = 610.0F};
+      const auto oldHit = fixture.session().hitTestUiControl(oldPoint);
+      expect(fixture.session().beginPresentationTouch(
+                 {.pointerId = 1,
+                  .uiPoint = oldPoint,
+                  .eventMicros = 1,
+                  .hit = oldHit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true},
+             "preflight fixture captures the published control");
+      bga.preflightReady = false;
+      expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+                 PresentationFrameOutcome::Ready,
+             "preflight failure frame evaluates before submission");
+      const auto exactBga = bgaFrame(72);
+      const auto result = fixture.session().render(context, exactBga, bga);
+      expect(result.outcome == PresentationFrameOutcome::CriticalFailure &&
+                 result.frameSerial == 2 && result.failure &&
+                 result.preparedBga &&
+                 sameBgaFrame(*result.preparedBga, exactBga) &&
+                 result.submittedMode == PresentationMode::BuiltIn &&
+                 result.bgaCompositeMode ==
+                     GameplayBgaCompositeMode::FullscreenBuiltIn &&
+                 bga.preflightCalls == 2 && bga.commitCalls == 1 &&
+                 bga.submitCalls == 1 && bga.finalizeCalls == 1 &&
+                 bga.fullscreenCalls == 0 &&
+                 fixture.quadBackend().submitCalls == 1 &&
+                 fixture.session().touchLayout().laneRegions.empty() &&
+                 fixture.session().touchHitRegions().empty() &&
+                 fixture.session().updatePresentationTouch(
+                     {.pointerId = 1,
+                      .uiPoint = oldPoint,
+                      .eventMicros = 2,
+                      .hit = oldHit}) == PresentationTouchResult{} &&
+                 fixture.configurationWrites().drain().empty(),
+             "BGA preflight failure performs no additional commit, draw, or "
+             "finalize and clears prior layout, capture, and mutations");
+    }
+  }
+}
+
+void testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  // Pinned v1 exposes no persisted mutation selector. These value-owned
+  // variants exercise only the forward-compatible post-submit session
+  // plumbing, through the same pending evaluation and renderer path.
+  std::vector<SkinFrameMutation> extraMutations{
+      SessionPresentationWrite{.eventId = 900,
+                               .arguments = {1, 0},
+                               .argumentCount = 1},
+      persisted(SetSkinOption{.key = "gauge", .value = 3}),
+      SessionPresentationWrite{.eventId = 901,
+                               .arguments = {2, 0},
+                               .argumentCount = 1},
+      persisted(SetSkinFilePath{.key = "background",
+                                .declaredValue = "blue.png"}),
+      persisted(SetSkinOffset{.key = "lane",
+                              .value = {.x = 1,
+                                        .y = 2,
+                                        .w = 3,
+                                        .h = 4,
+                                        .r = 5,
+                                        .a = 6}}),
+  };
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, extraMutations) ==
+             PresentationFrameOutcome::Ready,
+         "test-only forward-compatible mutations enter the regular pending "
+         "frame");
+  std::get<SetSkinOption>(
+      std::get<PersistedSkinConfigurationWrite>(extraMutations[1])).key =
+      "mutated-gauge";
+  std::get<SetSkinFilePath>(
+      std::get<PersistedSkinConfigurationWrite>(extraMutations[3]))
+      .declaredValue = "mutated.png";
+  extraMutations.clear();
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto result = fixture.session().render(context, bgaFrame(81), bga);
+  const auto requests = fixture.configurationWrites().drain();
+  expect(result.outcome == PresentationFrameOutcome::Ready &&
+             requests.size() == 1 && requests[0].sessionSerial == 37 &&
+             requests[0].profileId == fixture.session().identity().profileId &&
+             requests[0].entry == fixture.session().identity().entry &&
+             requests[0].expectedRevisionDigest == "session-revision" &&
+             requests[0].expectedConfigurationDigest ==
+                 "session-configuration" &&
+             requests[0].frameSerial == 1 &&
+             requests[0].orderedWrites.size() == 3 &&
+             std::get<SetSkinOption>(requests[0].orderedWrites[0]).key ==
+                 "gauge" &&
+             std::get<SetSkinOption>(requests[0].orderedWrites[0]).value == 3 &&
+             std::get<SetSkinFilePath>(requests[0].orderedWrites[1])
+                     .declaredValue == "blue.png" &&
+             std::get<SetSkinOffset>(requests[0].orderedWrites[2]).value.r == 5,
+         "successful skin draw consumes session-local mutations and enqueues "
+         "one exact deep-owned persisted batch in authored order");
+}
+
+void testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry();
+  const std::vector<SkinFrameMutation> writes{
+      persisted(SetSkinFilePath{.key = "background",
+                                .declaredValue = "preallocated.png"})};
+  expect(fixture.session().prepareFrameForTesting(
+             stateAt(1), projectionAt(1), {}, writes) ==
+             PresentationFrameOutcome::Ready,
+         "allocation-boundary fixture prepares a persisted write");
+  fixture.quadBackend().failNextAllocationAfterSubmit = true;
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const auto exactBga = bgaFrame(85);
+  PresentationFrameResult result;
+  bool exceptionEscaped = false;
+  try {
+    result = fixture.session().render(context, exactBga, bga);
+  } catch (...) {
+    exceptionEscaped = true;
+  }
+  // A correct implementation performs no allocation after backend submit, so
+  // the one-shot fault can remain armed until the observation phase.
+  session_test_allocation_fault::failNext = false;
+  const auto requests = fixture.configurationWrites().drain();
+  expect(!exceptionEscaped && result.outcome == PresentationFrameOutcome::Ready &&
+             result.submittedMode == PresentationMode::Skin &&
+             result.bgaCompositeMode ==
+                 GameplayBgaCompositeMode::EmbeddedSkin &&
+             result.preparedBga &&
+             sameBgaFrame(*result.preparedBga, exactBga) &&
+             bga.commitCalls == 1 && bga.submitCalls == 1 &&
+             bga.finalizeCalls == 1 && bga.fullscreenCalls == 0 &&
+             fixture.quadBackend().submitCalls == 1 &&
+             requests.size() == 1 && requests[0].frameSerial == 1 &&
+             requests[0].orderedWrites.size() == 1 &&
+             std::get<SetSkinFilePath>(requests[0].orderedWrites.front())
+                     .declaredValue == "preallocated.png",
+         "persistence ownership and diagnostics allocate before drawing, with "
+         "no post-submit exception or hybrid fallback boundary");
+}
+
+void testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw() {
+  const auto exercise = [](bool closeQueue) {
+    SessionFixture fixture;
+    if (!fixture.ready()) {
+      return;
+    }
+    fixture.addBgaMarker();
+    if (closeQueue) {
+      fixture.configurationWrites().close();
+    } else {
+      for (std::size_t index = 0;
+           index < SkinConfigurationWriteQueue::maxPending; ++index) {
+        SkinConfigurationWriteRequest request;
+        request.frameSerial = index + 1;
+        expect(fixture.configurationWrites().enqueue(std::move(request)) ==
+                   SkinConfigurationEnqueueResult::Enqueued,
+               "queue-full fixture fills every slot");
+      }
+    }
+    const std::vector<SkinFrameMutation> writes{
+        persisted(SetSkinOption{.key = "lane-cover", .value = 1})};
+    expect(fixture.session().prepareFrameForTesting(
+               stateAt(1), projectionAt(1), {}, writes) ==
+               PresentationFrameOutcome::Ready,
+           "recoverable queue fixture prepares normally");
+    SessionBgaSubmitter bga;
+    RenderContext context;
+    const auto exactBga = bgaFrame(closeQueue ? 83 : 82);
+    const auto result = fixture.session().render(context, exactBga, bga);
+    expect(result.outcome == PresentationFrameOutcome::RecoverableFailure &&
+               result.frameSerial == 1 && result.failure &&
+               result.failure->frameSerial == 1 &&
+               result.failure->diagnostic.code ==
+                   (closeQueue
+                        ? "skin.session.configuration_write_queue_closed"
+                        : "skin.session.configuration_write_queue_full") &&
+               result.submittedMode == PresentationMode::Skin &&
+               result.bgaCompositeMode ==
+                   GameplayBgaCompositeMode::EmbeddedSkin &&
+               result.preparedBga &&
+               sameBgaFrame(*result.preparedBga, exactBga) &&
+               bga.preflightCalls == 1 && bga.commitCalls == 1 &&
+               bga.submitCalls == 1 && bga.finalizeCalls == 1 &&
+               bga.fullscreenCalls == 0,
+           closeQueue
+               ? "closed persistence queue reports recoverable failure after "
+                 "the complete skin draw"
+               : "full persistence queue reports recoverable failure after "
+                 "the complete skin draw");
+  };
+  exercise(false);
+  exercise(true);
+}
+
+void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry(SkinFloatWriterId{4});
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "touch fixture prepares");
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().render(context, bgaFrame(91), bga).outcome ==
+             PresentationFrameOutcome::Ready,
+         "touch fixture publishes geometry after draw");
+  const UiLogicalPoint point{.x = 150.0F, .y = 610.0F};
+  const auto hit = fixture.session().hitTestUiControl(point);
+  const PresentationTouchEvent down{
+      .pointerId = 1, .uiPoint = point, .eventMicros = 1'000, .hit = hit};
+  expect(hit.kind == PresentationUiControlKind::Slider && hit.writer &&
+             fixture.session().beginPresentationTouch(down) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true} &&
+             fixture.session().beginPresentationTouch(down) ==
+                 PresentationTouchResult{} &&
+             fixture.session().updatePresentationTouch(
+                 {.pointerId = 1,
+                  .uiPoint = {.x = 180.0F, .y = 610.0F},
+                  .eventMicros = 1'001,
+                  .hit = hit}) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true} &&
+             fixture.session().endPresentationTouch(
+                 {.pointerId = 1,
+                  .uiPoint = point,
+                  .eventMicros = 1'002,
+                  .hit = hit},
+                 false) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true} &&
+             fixture.session().updatePresentationTouch(down) ==
+                 PresentationTouchResult{},
+         "Down captures once, Move stays consumed without writing, and Up "
+         "clears the capture");
+
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(92), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "one valid Down queues exactly one writer for the next frame while "
+         "Move and Up queue none");
+
+  auto stale = hit;
+  ++stale.layoutRevision;
+  auto forged = hit;
+  ++forged.sourceObject;
+  expect(fixture.session().beginPresentationTouch(
+             {.pointerId = 2,
+              .uiPoint = point,
+              .eventMicros = 2'000,
+              .hit = stale}) == PresentationTouchResult{} &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 3,
+                  .uiPoint = point,
+                  .eventMicros = 2'001,
+                  .hit = forged}) == PresentationTouchResult{} &&
+             fixture.session().beginPresentationTouch(
+                 {.pointerId = 4,
+                  .uiPoint = {.x = std::numeric_limits<float>::quiet_NaN(),
+                              .y = point.y},
+                  .eventMicros = 2'002,
+                  .hit = hit}) == PresentationTouchResult{},
+         "stale, forged, and nonfinite Down events fail closed");
+
+  for (long long pointer = 10; pointer < 42; ++pointer) {
+    expect(fixture.session().beginPresentationTouch(
+               {.pointerId = pointer,
+                .uiPoint = point,
+                .eventMicros = pointer,
+                .hit = hit}) ==
+               PresentationTouchResult{.consumed = true,
+                                       .excludeFromGameplay = true},
+           "each of the first 32 distinct pointers captures");
+  }
+  expect(fixture.session().beginPresentationTouch(
+             {.pointerId = 42,
+              .uiPoint = point,
+              .eventMicros = 42,
+              .hit = hit}) == PresentationTouchResult{},
+         "the 33rd simultaneous pointer fails closed");
+  fixture.session().cancelPresentationTouches(3'000);
+  expect(fixture.session().updatePresentationTouch(
+             {.pointerId = 10,
+              .uiPoint = point,
+              .eventMicros = 3'001,
+              .hit = hit}) == PresentationTouchResult{},
+         "cancel-all clears every capture without a writer invocation");
+
+  expect(fixture.session().beginPresentationTouch(
+             {.pointerId = 50,
+              .uiPoint = point,
+              .eventMicros = 50,
+              .hit = hit}) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true} &&
+             fixture.session().endPresentationTouch(
+                 {.pointerId = 50,
+                  .uiPoint = point,
+                  .eventMicros = 51,
+                  .hit = forged},
+                 false) == PresentationTouchResult{} &&
+             fixture.session().updatePresentationTouch(
+                 {.pointerId = 50,
+                  .uiPoint = point,
+                  .eventMicros = 52,
+                  .hit = hit}) == PresentationTouchResult{},
+         "a mismatched End fails closed but still releases its capture");
+  expect(fixture.session().beginPresentationTouch(
+             {.pointerId = 51,
+              .uiPoint = point,
+              .eventMicros = 53,
+              .hit = hit}) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true} &&
+             fixture.session().endPresentationTouch(
+                 {.pointerId = 51,
+                  .uiPoint = point,
+                  .eventMicros = 54,
+                  .hit = hit},
+                 true) ==
+                 PresentationTouchResult{.consumed = true,
+                                         .excludeFromGameplay = true} &&
+             fixture.session().updatePresentationTouch(
+                 {.pointerId = 51,
+                  .uiPoint = point,
+                  .eventMicros = 55,
+                  .hit = hit}) == PresentationTouchResult{},
+         "a cancelled matching End consumes and releases without a writer");
+}
+
+void testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry(SkinFloatWriterId{3});
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready,
+         "viewport fixture prepares");
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().render(context, bgaFrame(101), bga).outcome ==
+             PresentationFrameOutcome::Ready,
+         "viewport fixture publishes geometry");
+  const UiLogicalPoint point{.x = 150.0F, .y = 610.0F};
+  const auto hit = fixture.session().hitTestUiControl(point);
+  expect(fixture.session().beginPresentationTouch(
+             {.pointerId = 1,
+              .uiPoint = point,
+              .eventMicros = 1,
+              .hit = hit}) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true},
+         "viewport fixture captures the failing writer before reset");
+  const auto oldLayoutRevision = fixture.session().touchLayoutRevision();
+  const auto oldHitRevision = fixture.session().touchHitRegionsRevision();
+  const auto originalIdentity = fixture.session().identity();
+  const ViewportSettings customViewport{
+      .mode = ViewportMode::Custom,
+      .customBase = CustomViewportBase::Fit,
+      .scaleX = 0.75F,
+      .scaleY = 0.75F,
+      .translateX = 15.0F,
+      .translateY = -10.0F};
+  fixture.session().setViewport(customViewport);
+  expect(fixture.session().touchLayoutRevision() != oldLayoutRevision &&
+             fixture.session().touchHitRegionsRevision() != oldHitRevision &&
+             fixture.session().touchLayout().laneRegions.empty() &&
+             fixture.session().touchHitRegions().empty() &&
+             fixture.session().updatePresentationTouch(
+                 {.pointerId = 1,
+                  .uiPoint = point,
+                  .eventMicros = 2,
+                  .hit = hit}) == PresentationTouchResult{} &&
+             fixture.configurationWrites().drain().empty(),
+         "setViewport cancels captures, clears geometry, advances revisions, "
+         "and never persists directly");
+  // The captured writer throws if invoked. Ready proves the viewport change
+  // discarded its queued old-layout Down before the next transaction.
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready,
+         "viewport reset discards the captured old-layout writer");
+
+  const auto submitsBeforePendingReset = bga.submitCalls;
+  fixture.session().setViewport(customViewport);
+  const auto discarded =
+      fixture.session().render(context, bgaFrame(102), bga);
+  expect(discarded.outcome == PresentationFrameOutcome::CriticalFailure &&
+             !discarded.preparedBga &&
+             bga.preflightCalls == submitsBeforePendingReset &&
+             bga.commitCalls == submitsBeforePendingReset &&
+             bga.submitCalls == submitsBeforePendingReset &&
+             bga.finalizeCalls == submitsBeforePendingReset &&
+             bga.fullscreenCalls == 0 &&
+             fixture.configurationWrites().drain().empty(),
+         "setViewport discards an already prepared old-viewport frame before "
+         "any BGA, skin, fullscreen, or persistence submission");
+
+  expect(fixture.session().prepareFrame(stateAt(3), projectionAt(3)) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(103), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "the next frame republishes with the custom viewport");
+  const auto customLayout = fixture.session().touchLayout();
+  const auto customRegions = fixture.session().touchHitRegions();
+  UiLogicalPoint customControlPoint;
+  if (!customRegions.empty()) {
+    customControlPoint = {
+        .x = (customRegions.front().boundary[0].x +
+              customRegions.front().boundary[2].x) /
+             2.0F,
+        .y = (customRegions.front().boundary[0].y +
+              customRegions.front().boundary[2].y) /
+             2.0F};
+  }
+  const auto customHit =
+      fixture.session().hitTestUiControl(customControlPoint);
+  const auto &identityAfter = fixture.session().identity();
+  expect(customLayout.laneRegions.size() == 2 &&
+             std::abs(customLayout.laneRegions[0].bottomLeft.x -
+                      0.1302083F) < 0.0001F &&
+             std::abs(customLayout.laneRegions[0].bottomLeft.y -
+                      0.5601852F) < 0.0001F &&
+             std::abs(customLayout.laneRegions[1].topRight.x -
+                      0.2083333F) < 0.0001F &&
+             std::abs(customLayout.laneRegions[1].topRight.y -
+                      0.2129630F) < 0.0001F,
+         "custom viewport republishes window-normalized touch coordinates");
+  expect(customRegions.size() == 1 &&
+             customHit.kind == PresentationUiControlKind::LaneCover &&
+             customHit.writer == SkinFloatWriterId{3},
+         "custom viewport republishes the transformed lane-cover hit region");
+  expect(identityAfter.sessionSerial == originalIdentity.sessionSerial &&
+             identityAfter.profileId == originalIdentity.profileId &&
+             identityAfter.entry == originalIdentity.entry &&
+             identityAfter.revisionDigest == originalIdentity.revisionDigest &&
+             identityAfter.configurationDigest ==
+                 originalIdentity.configurationDigest,
+         "viewport changes do not alter the five-field session identity");
+}
+
+void testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin() {
+  SessionFixture fixture(
+      37, {.x = 100.0, .y = 50.0, .width = 1280.0, .height = 720.0});
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry();
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(104), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "safe-origin fixture publishes geometry");
+  const auto layout = fixture.session().touchLayout();
+  expect(layout.laneRegions.size() == 2 &&
+             std::abs(layout.laneRegions[0].bottomLeft.x - 0.1041667F) <
+                 0.0001F &&
+             std::abs(layout.laneRegions[0].bottomLeft.y - 0.6944444F) <
+                 0.0001F &&
+             std::abs(layout.laneRegions[1].topRight.x - 0.2083333F) <
+                 0.0001F &&
+             std::abs(layout.laneRegions[1].topRight.y - 0.2314815F) <
+                 0.0001F,
+         "nonzero safe origin is retained in UI coordinates before whole-"
+         "window normalization");
+}
+
+void testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry();
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(111), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "first geometry frame succeeds");
+  const auto layoutRevision = fixture.session().touchLayoutRevision();
+  const auto hitRevision = fixture.session().touchHitRegionsRevision();
+  fixture.model().model.destinations.back().presentation.frames.front().x =
+      300.0;
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(112), bga).outcome ==
+                 PresentationFrameOutcome::Ready &&
+             fixture.session().touchLayoutRevision() == layoutRevision &&
+             fixture.session().touchHitRegionsRevision() != hitRevision,
+         "successful animated control geometry advances hit publication while "
+         "lane topology remains stable");
+  const UiLogicalPoint point{.x = 350.0F, .y = 610.0F};
+  const auto hit = fixture.session().hitTestUiControl(point);
+  expect(fixture.session().beginPresentationTouch(
+             {.pointerId = 9,
+              .uiPoint = point,
+              .eventMicros = 9,
+              .hit = hit}) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true} &&
+             fixture.session().prepareFrame(stateAt(3), projectionAt(3)) ==
+                 PresentationFrameOutcome::Ready,
+         "teardown fixture owns both a capture and pending frame");
+  const auto submitsBeforeTeardown = bga.submitCalls;
+  fixture.destroySession();
+  expect(bga.submitCalls == submitsBeforeTeardown &&
+             fixture.configurationWrites().drain().empty(),
+         "session destruction discards pending frame, captures, and writes "
+         "without submission or enqueue");
+}
+
 void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -910,6 +1953,16 @@ int main() {
   testSerialMismatchDoesNotConsumeRuntimeFrame();
   testInvalidSessionSerialDoesNotConsumeFrameOwners();
   testPassiveCustomTimerUsesTheSharedSessionFrame();
+  testProductionPrepareIsExternallySideEffectFreeAndRejectsDoublePrepare();
+  testSuccessfulRenderConsumesOnceSubmitsExactBgaAndPublishesLayout();
+  testCriticalEvaluationAndPreflightFailuresPublishNoFrameState();
+  testForwardCompatiblePersistedMutationsEnqueueOneExactOrderedBatch();
+  testPersistenceRequestIsFullyAllocatedBeforeSkinSubmission();
+  testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
+  testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();
+  testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
+  testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();
+  testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";

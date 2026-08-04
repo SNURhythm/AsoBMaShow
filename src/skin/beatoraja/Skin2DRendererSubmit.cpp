@@ -130,7 +130,7 @@ bool Skin2DRenderer::submit(
     const SkinPreparedResourceView &resources, RenderContext &context,
     rendering::SkinQuadBatchRenderer &renderer,
     const PreparedGameplayBgaFrame &bgaFrame,
-    IGameplayBgaSubmitter &bgaSubmitter) const {
+    IGameplayBgaSubmitter &bgaSubmitter) const noexcept {
   std::vector<std::span<const SkinDrawCommand>> quadSegments;
   std::vector<BgaDrawTarget> bgaTargets;
   std::vector<SubmissionStep> steps;
@@ -232,9 +232,10 @@ bool Skin2DRenderer::submit(
       bgaSubmitter.submitPrepared(bgaFrame, bgaTargets[step.index]);
     }
   }
-  // Every fallible check ends above commitPrepared. Submission methods are
-  // deliberately void/noexcept, so this phase can never select fullscreen
-  // fallback after any authored draw has already been emitted.
+  // Every fallible check ends above commitPrepared. Production submission
+  // operations are contractually nonthrowing, and this overload's noexcept
+  // boundary prevents any contract violation from unwinding into fullscreen
+  // fallback after an authored draw has already been emitted.
   bgaSubmitter.finalizePrepared(bgaFrame);
   return true;
 }

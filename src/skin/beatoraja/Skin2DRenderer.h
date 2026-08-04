@@ -257,10 +257,13 @@ public:
   [[nodiscard]] bool submit(const SkinCommandBuffer &,
                             const SkinResourceCatalog &, RenderContext &,
                             rendering::SkinQuadBatchRenderer &) const;
+  // False is a pre-commit fallback decision. Once the BGA/quad commit point
+  // is crossed, this boundary cannot unwind into coordinator fallback.
   [[nodiscard]] bool submit(
       const SkinCommandBuffer &, const SkinPreparedResourceView &,
       RenderContext &, rendering::SkinQuadBatchRenderer &,
-      const PreparedGameplayBgaFrame &, IGameplayBgaSubmitter &) const;
+      const PreparedGameplayBgaFrame &, IGameplayBgaSubmitter &) const
+      noexcept;
 
 private:
   SkinFrameEvaluationResult evaluateFrameImpl(const SkinFrameInputs &,

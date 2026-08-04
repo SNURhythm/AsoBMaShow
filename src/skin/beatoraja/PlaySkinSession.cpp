@@ -4,12 +4,20 @@
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinTableDecoder.h"
 #include "SkinModelValidator.h"
+#include "../../rendering/SkinQuadBatchRenderer.h"
+#include "../../rendering/common.h"
+#include "../../replay/ReplayKeyMode.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
+#include <limits>
 #include <memory>
+#include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace skin {
@@ -125,6 +133,51 @@ bool cancelled(std::stop_token stop, PlaySkinSessionCreateResult &result) {
   return true;
 }
 
+void advanceRevision(std::uint64_t &revision) noexcept {
+  revision = revision == std::numeric_limits<std::uint64_t>::max()
+                 ? 1
+                 : revision + 1;
+}
+
+SkinDiagnostic firstFailureDiagnostic(
+    const PlaySkinFrameTransactionResult &transaction,
+    std::string fallbackCode, std::string fallbackMessage) {
+  const auto firstError = [](const auto &diagnostics)
+      -> std::optional<SkinDiagnostic> {
+    const auto found = std::ranges::find_if(
+        diagnostics, [](const SkinDiagnostic &diagnostic) {
+          return diagnostic.severity == DiagnosticSeverity::Error;
+        });
+    return found == diagnostics.end()
+               ? std::nullopt
+               : std::optional<SkinDiagnostic>{*found};
+  };
+  if (auto diagnostic = firstError(transaction.diagnostics)) {
+    return std::move(*diagnostic);
+  }
+  if (auto diagnostic = firstError(transaction.evaluation.diagnostics)) {
+    return std::move(*diagnostic);
+  }
+  return transactionDiagnostic(std::move(fallbackCode),
+                               std::move(fallbackMessage));
+}
+
+PresentationFailure presentationFailure(
+    const PlaySkinSessionIdentity &identity, std::uint64_t frameSerial,
+    SkinDiagnostic diagnostic) {
+  return {.entry = identity.entry,
+          .revisionDigest = identity.revisionDigest,
+          .configurationDigest = identity.configurationDigest,
+          .diagnostic = std::move(diagnostic),
+          .frameSerial = frameSerial};
+}
+
+bool finiteRect(const AuthoredRect &rect) noexcept {
+  return std::isfinite(rect.x) && std::isfinite(rect.y) &&
+         std::isfinite(rect.width) && std::isfinite(rect.height) &&
+         rect.width > 0.0 && rect.height > 0.0;
+}
+
 } // namespace
 
 struct PlaySkinSession::OwnedActivation final {
@@ -136,6 +189,7 @@ struct PlaySkinSession::OwnedActivation final {
                   BeatorajaSkinConfiguration configurationValue,
                   std::unique_ptr<LuaSkinRuntime> runtimeValue,
                   std::unique_ptr<SkinResourceCatalog> resourcesValue,
+                  SkinConfigurationWriteQueue &configurationWritesValue,
                   ViewportSettings viewportSettingsValue,
                   UiLogicalRect safeUiBoundsValue,
                   PlaySkinViewport viewportValue)
@@ -146,6 +200,7 @@ struct PlaySkinSession::OwnedActivation final {
         configuration(std::move(configurationValue)),
         mutationTable(makePinnedSkinEventMutationTableV1()),
         runtime(std::move(runtimeValue)), resources(std::move(resourcesValue)),
+        configurationWrites(&configurationWritesValue),
         viewportSettings(viewportSettingsValue),
         safeUiBounds(safeUiBoundsValue), viewport(viewportValue),
         gaugeRandom(std::make_unique<DeterministicGaugeRandomSource>(
@@ -171,31 +226,50 @@ struct PlaySkinSession::OwnedActivation final {
   SkinEventMutationTable mutationTable;
   std::unique_ptr<LuaSkinRuntime> runtime;
   std::unique_ptr<SkinResourceCatalog> resources;
+  SkinConfigurationWriteQueue *configurationWrites = nullptr;
   ViewportSettings viewportSettings;
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
   Skin2DRenderer renderer;
+  rendering::SkinQuadBatchRenderer quadRenderer;
   std::unique_ptr<ISkinGaugeRandomSource> gaugeRandom;
   std::unique_ptr<PlaySkinStateBridge> bridge;
 };
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
 PlaySkinSession::PlaySkinSession(PlaySkinSessionFrameContext context) noexcept
-    : owned_(), context_(context) {}
+    : owned_(), context_(std::move(context)),
+      touchLayoutRevision_(context_.sessionSerial == 0
+                               ? 1
+                               : context_.sessionSerial),
+      touchHitRegionsRevision_(touchLayoutRevision_) {
+  context_.identity.sessionSerial = context_.sessionSerial;
+}
 #endif
 
 PlaySkinSession::PlaySkinSession(
-    std::unique_ptr<OwnedActivation> owned) noexcept
+    std::unique_ptr<OwnedActivation> owned)
     : owned_(std::move(owned)),
       context_{.sessionSerial = owned_->identity.sessionSerial,
+               .identity = owned_->identity,
+               .chartModel = *owned_->chartModel,
                .model = owned_->model,
                .configuration = owned_->configuration,
                .resources = *owned_->resources,
+               .viewportSettings = owned_->viewportSettings,
                .viewport = owned_->viewport,
                .runtime = *owned_->runtime,
                .bridge = *owned_->bridge,
                .renderer = owned_->renderer,
-               .gaugeRandomSource = owned_->gaugeRandom.get()} {}
+               .quadRenderer = owned_->quadRenderer,
+               .configurationWrites = *owned_->configurationWrites,
+               .gaugeRandomSource = owned_->gaugeRandom.get()},
+      touchLayoutRevision_(context_.sessionSerial == 0
+                               ? 1
+                               : context_.sessionSerial),
+      touchHitRegionsRevision_(touchLayoutRevision_) {
+  context_.identity.sessionSerial = context_.sessionSerial;
+}
 
 PlaySkinSession::~PlaySkinSession() = default;
 
@@ -413,6 +487,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         context.chartModel, result.reconciledSettings,
         std::move(*validatedModel.model), std::move(configuration),
         std::move(runtime.runtime), std::move(uploaded.catalog),
+        context.configurationWrites,
         context.viewport, context.safeUiBounds, viewport);
     result.session.reset(new PlaySkinSession(std::move(owned)));
     return result;
@@ -426,11 +501,10 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
 }
 
 const PlaySkinSessionIdentity &PlaySkinSession::identity() const noexcept {
-  static const PlaySkinSessionIdentity empty;
-  return owned_ ? owned_->identity : empty;
+  return context_.identity;
 }
 
-PlaySkinFrameTransactionResult PlaySkinSession::prepareFrame(
+PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
     const PlayfieldVisualState &state,
     const PlayfieldProjectionResult &projection,
     std::span<const SkinWriterInvocation> queuedWriters) {
@@ -508,6 +582,469 @@ PlaySkinFrameTransactionResult PlaySkinSession::prepareFrame(
   }
   result.outcome = PlaySkinFrameTransactionOutcome::Ready;
   return result;
+}
+
+PresentationFrameOutcome PlaySkinSession::preparePendingFrame(
+    const PlayfieldVisualState &state,
+    const PlayfieldProjectionResult &projection,
+    std::span<const SkinWriterInvocation> queuedWriters,
+    std::span<const SkinFrameMutation> extraMutations) {
+  if (pendingFrame_) {
+    return PresentationFrameOutcome::CriticalFailure;
+  }
+
+  auto transaction = runFrameTransaction(state, projection, queuedWriters);
+  if (transaction.ready() && !extraMutations.empty()) {
+    try {
+      transaction.committed.orderedMutations.insert(
+          transaction.committed.orderedMutations.end(),
+          extraMutations.begin(), extraMutations.end());
+    } catch (...) {
+      transaction.outcome = PlaySkinFrameTransactionOutcome::Rejected;
+      transaction.evaluation.submitReady.reset();
+      transaction.evaluation.interactionLayout.reset();
+      transaction.committed = {};
+      transaction.diagnostics.push_back(transactionDiagnostic(
+          "skin.session.frame.test_mutation_copy",
+          "Test mutation values could not be retained by the pending frame."));
+    }
+  }
+  const bool ready = transaction.ready();
+  pendingFrame_.emplace(PendingFrame{.transaction = std::move(transaction)});
+  return ready ? PresentationFrameOutcome::Ready
+               : PresentationFrameOutcome::CriticalFailure;
+}
+
+PresentationFrameOutcome PlaySkinSession::prepareFrame(
+    const PlayfieldVisualState &state,
+    const PlayfieldProjectionResult &projection) {
+  if (pendingFrame_) {
+    return PresentationFrameOutcome::CriticalFailure;
+  }
+  const std::size_t writerCount = queuedWriterCount_;
+  queuedWriterCount_ = 0;
+  return preparePendingFrame(
+      state, projection,
+      std::span<const SkinWriterInvocation>{queuedWriters_.data(),
+                                            writerCount});
+}
+
+#if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+PlaySkinFrameTransactionResult PlaySkinSession::prepareFrame(
+    const PlayfieldVisualState &state,
+    const PlayfieldProjectionResult &projection,
+    std::span<const SkinWriterInvocation> queuedWriters) {
+  return runFrameTransaction(state, projection, queuedWriters);
+}
+
+PresentationFrameOutcome PlaySkinSession::prepareFrameForTesting(
+    const PlayfieldVisualState &state,
+    const PlayfieldProjectionResult &projection,
+    std::span<const SkinWriterInvocation> queuedWriters,
+    std::span<const SkinFrameMutation> extraMutations) {
+  return preparePendingFrame(state, projection, queuedWriters,
+                             extraMutations);
+}
+#endif
+
+PresentationFrameResult PlaySkinSession::render(
+    RenderContext &renderContext, const PreparedGameplayBgaFrame &preparedBga,
+    IGameplayBgaSubmitter &bgaSubmitter) {
+  if (!pendingFrame_) {
+    const auto diagnostic = transactionDiagnostic(
+        "skin.session.frame.not_prepared",
+        "Gameplay skin render requires one pending prepared frame.");
+    return {.outcome = PresentationFrameOutcome::CriticalFailure,
+            .submittedMode = PresentationMode::BuiltIn,
+            .bgaCompositeMode =
+                GameplayBgaCompositeMode::FullscreenBuiltIn,
+            .failure = presentationFailure(identity(), 0, diagnostic)};
+  }
+
+  // Consume before any fallible preflight/submit work. Re-entry and repeat
+  // render can therefore never submit or enqueue this frame again.
+  PendingFrame pending = std::move(*pendingFrame_);
+  pendingFrame_.reset();
+  auto &transaction = pending.transaction;
+  PresentationFrameResult result{
+      .frameSerial = transaction.frameSerial,
+      .outcome = PresentationFrameOutcome::CriticalFailure,
+      .submittedMode = PresentationMode::BuiltIn,
+      .bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn,
+      .preparedBga = preparedBga};
+
+  if (!transaction.ready()) {
+    clearPublishedGeometry(true);
+    result.failure = presentationFailure(
+        identity(), transaction.frameSerial,
+        firstFailureDiagnostic(transaction,
+                               "skin.session.frame.evaluation_failed",
+                               "Gameplay skin frame evaluation failed."));
+    return result;
+  }
+
+  static_assert(
+      std::is_nothrow_move_constructible_v<PresentationFrameResult>);
+  static_assert(std::is_nothrow_move_assignable_v<
+                std::optional<SkinInteractionLayout>>);
+
+  enum class PersistencePreparationFailure : std::uint8_t {
+    None,
+    Copy,
+    Request,
+  };
+  PersistencePreparationFailure persistenceFailure =
+      PersistencePreparationFailure::None;
+  std::optional<SkinConfigurationWriteRequest> configurationRequest;
+  std::optional<PresentationFrameResult> copyFailureResult;
+  std::optional<PresentationFrameResult> requestFailureResult;
+  std::optional<PresentationFrameResult> queueFullResult;
+  std::optional<PresentationFrameResult> queueClosedResult;
+
+  const bool hasPersistedWrites = std::ranges::any_of(
+      transaction.committed.orderedMutations, [](const auto &mutation) {
+        return std::holds_alternative<PersistedSkinConfigurationWrite>(
+            mutation);
+      });
+  if (hasPersistedWrites) {
+    const auto recoverablePersistenceResult =
+        [&](std::string code, std::string message) {
+          return PresentationFrameResult{
+              .frameSerial = transaction.frameSerial,
+              .outcome = PresentationFrameOutcome::RecoverableFailure,
+              .submittedMode = PresentationMode::Skin,
+              .bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin,
+              .preparedBga = preparedBga,
+              .failure = presentationFailure(
+                  identity(), transaction.frameSerial,
+                  transactionDiagnostic(std::move(code),
+                                        std::move(message)))};
+        };
+
+    // The first payload is the allocation-free escape hatch for every later
+    // preparation failure. If even it cannot be retained, fail before any
+    // renderer commit and return the already value-owned built-in result.
+    try {
+      copyFailureResult.emplace(recoverablePersistenceResult(
+          "skin.session.configuration_write_copy_failed",
+          "Persisted skin writes could not be retained before drawing."));
+    } catch (...) {
+      clearPublishedGeometry(true);
+      return result;
+    }
+
+    try {
+      requestFailureResult.emplace(recoverablePersistenceResult(
+          "skin.session.configuration_write_request_failed",
+          "Persisted skin write identity could not be retained before "
+          "drawing."));
+      queueFullResult.emplace(recoverablePersistenceResult(
+          "skin.session.configuration_write_queue_full",
+          "Persisted skin write queue is full after drawing."));
+      queueClosedResult.emplace(recoverablePersistenceResult(
+          "skin.session.configuration_write_queue_closed",
+          "Persisted skin write queue is closed after drawing."));
+    } catch (...) {
+      persistenceFailure = PersistencePreparationFailure::Copy;
+    }
+
+    std::vector<PersistedSkinConfigurationWrite> persistedWrites;
+    if (persistenceFailure == PersistencePreparationFailure::None) {
+      try {
+        persistedWrites.reserve(
+            transaction.committed.orderedMutations.size());
+        for (auto &mutation : transaction.committed.orderedMutations) {
+          if (auto *persistedWrite =
+                  std::get_if<PersistedSkinConfigurationWrite>(&mutation)) {
+            persistedWrites.emplace_back(std::move(*persistedWrite));
+          }
+          // SessionPresentationWrite is consumed by this one-shot
+          // publication and has no independent durable authority.
+        }
+      } catch (...) {
+        persistenceFailure = PersistencePreparationFailure::Copy;
+      }
+    }
+
+    if (persistenceFailure == PersistencePreparationFailure::None) {
+      try {
+        configurationRequest.emplace(SkinConfigurationWriteRequest{
+            .sessionSerial = identity().sessionSerial,
+            .profileId = identity().profileId,
+            .entry = identity().entry,
+            .expectedRevisionDigest = identity().revisionDigest,
+            .expectedConfigurationDigest = identity().configurationDigest,
+            .frameSerial = transaction.frameSerial,
+            .orderedWrites = std::move(persistedWrites)});
+      } catch (...) {
+        persistenceFailure = PersistencePreparationFailure::Request;
+      }
+    }
+  }
+
+  // The prepared-BGA overload is noexcept and returns false only before its
+  // atomic commit point. Session code must not turn a post-commit exception
+  // into built-in fallback; the renderer boundary prevents one escaping.
+  const bool submitted = context_.renderer.submit(
+      *transaction.evaluation.submitReady, context_.resources,
+      renderContext, context_.quadRenderer, preparedBga, bgaSubmitter);
+  if (!submitted) {
+    clearPublishedGeometry(true);
+    result.failure = presentationFailure(
+        identity(), transaction.frameSerial,
+        transactionDiagnostic(
+            "skin.session.frame.submit_failed",
+            "Gameplay skin frame preflight or submission failed."));
+    return result;
+  }
+
+  if (transaction.evaluation.interactionLayout) {
+    transaction.evaluation.interactionLayout->revision =
+        touchLayoutRevision_;
+    publishedLayout_ =
+        std::move(transaction.evaluation.interactionLayout);
+  } else {
+    publishedLayout_.reset();
+    captures_.fill({});
+  }
+  advanceRevision(touchHitRegionsRevision_);
+
+  result.outcome = PresentationFrameOutcome::Ready;
+  result.submittedMode = PresentationMode::Skin;
+  result.bgaCompositeMode = GameplayBgaCompositeMode::EmbeddedSkin;
+
+  if (persistenceFailure == PersistencePreparationFailure::Copy) {
+    return std::move(*copyFailureResult);
+  }
+  if (persistenceFailure == PersistencePreparationFailure::Request) {
+    return std::move(*requestFailureResult);
+  }
+  if (!configurationRequest) {
+    return result;
+  }
+
+  const auto enqueued = context_.configurationWrites.enqueue(
+      std::move(*configurationRequest));
+  if (enqueued == SkinConfigurationEnqueueResult::Enqueued) {
+    return result;
+  }
+  return enqueued == SkinConfigurationEnqueueResult::QueueFull
+             ? std::move(*queueFullResult)
+             : std::move(*queueClosedResult);
+}
+
+void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {
+  captures_.fill({});
+  publishedLayout_.reset();
+  queuedWriterCount_ = 0;
+  if (advanceTopology) {
+    advanceRevision(touchLayoutRevision_);
+  }
+  advanceRevision(touchHitRegionsRevision_);
+}
+
+void PlaySkinSession::setViewport(ViewportSettings settings) {
+  pendingFrame_.reset();
+  context_.viewportSettings = settings;
+  const auto &header = context_.model.model.header;
+  context_.viewport = evaluatePlaySkinViewport(
+      {.width = static_cast<double>(header.width),
+       .height = static_cast<double>(header.height)},
+      context_.viewport.safeUiBounds, settings);
+  clearPublishedGeometry(true);
+}
+
+gameplay::RealtimeTouchLayout PlaySkinSession::touchLayout() const {
+  gameplay::RealtimeTouchLayout result;
+  result.revision = touchLayoutRevision_;
+  result.keyMode = context_.chartModel.keyCount;
+  if (!publishedLayout_ || !context_.viewport.valid ||
+      context_.chartModel.laneOrder.empty() || rendering::window_width <= 0 ||
+      rendering::window_height <= 0) {
+    return result;
+  }
+  const auto &safe = context_.viewport.safeUiBounds;
+  if (!std::isfinite(safe.x) || !std::isfinite(safe.y) ||
+      !std::isfinite(safe.width) || !std::isfinite(safe.height) ||
+      safe.width <= 0.0 || safe.height <= 0.0) {
+    return result;
+  }
+  const auto normalizedPoint = [&](double authoredX,
+                                   double authoredY)
+      -> std::optional<gameplay::RealtimeTouchPoint> {
+    const auto &affine = context_.viewport.authoredToUi;
+    const double uiX = affine.m00 * authoredX + affine.m01 * authoredY +
+                       affine.tx;
+    const double uiY = affine.m10 * authoredX + affine.m11 * authoredY +
+                       affine.ty;
+    const double x = uiX / static_cast<double>(rendering::window_width);
+    const double y = uiY / static_cast<double>(rendering::window_height);
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+      return std::nullopt;
+    }
+    return gameplay::RealtimeTouchPoint{.x = static_cast<float>(x),
+                                        .y = static_cast<float>(y)};
+  };
+
+  const auto keyLayout = replay::replayKeyModeLayout(result.keyMode);
+  try {
+    result.lanes.reserve(context_.chartModel.laneOrder.size());
+    result.scratch.reserve(context_.chartModel.laneOrder.size());
+    result.laneRegions.reserve(context_.chartModel.laneOrder.size());
+    for (const int chartLane : context_.chartModel.laneOrder) {
+      const auto found = std::ranges::find_if(
+          publishedLayout_->laneRegions,
+          [chartLane](const SkinLaneInteractionRegion &region) {
+            return region.authoredLane == chartLane;
+          });
+      if (found == publishedLayout_->laneRegions.end() ||
+          !finiteRect(found->authoredRegion)) {
+        return gameplay::RealtimeTouchLayout{
+            .revision = touchLayoutRevision_, .keyMode = result.keyMode};
+      }
+      const auto &rect = found->authoredRegion;
+      const auto bottomLeft = normalizedPoint(rect.x, rect.y);
+      const auto bottomRight = normalizedPoint(rect.x + rect.width, rect.y);
+      const auto topLeft = normalizedPoint(rect.x, rect.y + rect.height);
+      const auto topRight =
+          normalizedPoint(rect.x + rect.width, rect.y + rect.height);
+      if (!bottomLeft || !bottomRight || !topLeft || !topRight) {
+        return gameplay::RealtimeTouchLayout{
+            .revision = touchLayoutRevision_, .keyMode = result.keyMode};
+      }
+      const bool scratch =
+          keyLayout && keyLayout->hasDirectionalScratch &&
+          (chartLane == 7 || chartLane == 15);
+      result.lanes.push_back(chartLane);
+      result.scratch.push_back(scratch);
+      result.laneRegions.push_back({.bottomLeft = *bottomLeft,
+                                    .bottomRight = *bottomRight,
+                                    .topLeft = *topLeft,
+                                    .topRight = *topRight,
+                                    .lane = chartLane,
+                                    .scratch = scratch});
+    }
+  } catch (...) {
+    return gameplay::RealtimeTouchLayout{
+        .revision = touchLayoutRevision_, .keyMode = result.keyMode};
+  }
+  result.laneCount = result.laneRegions.size();
+  if (!result.laneRegions.empty()) {
+    result.bottomLeft = result.laneRegions.front().bottomLeft;
+    result.topLeft = result.laneRegions.front().topLeft;
+    result.bottomRight = result.laneRegions.back().bottomRight;
+    result.topRight = result.laneRegions.back().topRight;
+  }
+  return result;
+}
+
+std::uint64_t PlaySkinSession::touchLayoutRevision() const noexcept {
+  return touchLayoutRevision_;
+}
+
+std::uint64_t PlaySkinSession::touchHitRegionsRevision() const noexcept {
+  return touchHitRegionsRevision_;
+}
+
+std::vector<PresentationUiHitRegion>
+PlaySkinSession::touchHitRegions() const {
+  return publishedLayout_ ? publishedLayout_->uiHitRegions()
+                          : std::vector<PresentationUiHitRegion>{};
+}
+
+PresentationUiHit
+PlaySkinSession::hitTestUiControl(UiLogicalPoint point) const {
+  return publishedLayout_ ? publishedLayout_->hitTestUiControl(point)
+                          : PresentationUiHit{};
+}
+
+PresentationTouchResult PlaySkinSession::beginPresentationTouch(
+    const PresentationTouchEvent &event) {
+  if (!publishedLayout_ || queuedWriterCount_ == queuedWriters_.size() ||
+      std::ranges::any_of(captures_, [&](const TouchCapture &capture) {
+        return capture.active && capture.pointerId == event.pointerId;
+      })) {
+    return {};
+  }
+  auto capture = std::ranges::find_if(
+      captures_, [](const TouchCapture &candidate) {
+        return !candidate.active;
+      });
+  if (capture == captures_.end() ||
+      publishedLayout_->hitTestUiControl(event.uiPoint) != event.hit) {
+    return {};
+  }
+  const auto invocation = publishedLayout_->writerInvocationFor(
+      event.hit, event.uiPoint, event.eventMicros);
+  if (!invocation) {
+    return {};
+  }
+  queuedWriters_[queuedWriterCount_++] = *invocation;
+  *capture = {.pointerId = event.pointerId,
+              .active = true,
+              .hit = event.hit};
+  return {.consumed = true, .excludeFromGameplay = true};
+}
+
+PresentationTouchResult PlaySkinSession::updatePresentationTouch(
+    const PresentationTouchEvent &event) {
+  if (!std::isfinite(event.uiPoint.x) || !std::isfinite(event.uiPoint.y)) {
+    return {};
+  }
+  const auto capture = std::ranges::find_if(
+      captures_, [&](const TouchCapture &candidate) {
+        return candidate.active && candidate.pointerId == event.pointerId;
+      });
+  return capture != captures_.end() && capture->hit == event.hit
+             ? PresentationTouchResult{.consumed = true,
+                                       .excludeFromGameplay = true}
+             : PresentationTouchResult{};
+}
+
+PresentationTouchResult PlaySkinSession::endPresentationTouch(
+    const PresentationTouchEvent &event, bool cancelled) {
+  (void)cancelled;
+  const auto capture = std::ranges::find_if(
+      captures_, [&](const TouchCapture &candidate) {
+        return candidate.active && candidate.pointerId == event.pointerId;
+      });
+  if (capture == captures_.end()) {
+    return {};
+  }
+  const bool matched = capture->hit == event.hit &&
+                       std::isfinite(event.uiPoint.x) &&
+                       std::isfinite(event.uiPoint.y);
+  *capture = {};
+  return matched ? PresentationTouchResult{.consumed = true,
+                                           .excludeFromGameplay = true}
+                 : PresentationTouchResult{};
+}
+
+void PlaySkinSession::cancelPresentationTouches(long long eventMicros) {
+  (void)eventMicros;
+  captures_.fill({});
+}
+
+void PlaySkinSession::onLanePressed(int lane, JudgeResult judge,
+                                    long long eventMicros) {
+  (void)lane;
+  (void)judge;
+  (void)eventMicros;
+}
+
+void PlaySkinSession::onLaneReleased(int lane, long long eventMicros) {
+  (void)lane;
+  (void)eventMicros;
+}
+
+void PlaySkinSession::onJudge(JudgeResult judge, int combo, int score,
+                              PlayfieldJudgeEventClock clock,
+                              bool recordTimingSample) {
+  (void)judge;
+  (void)combo;
+  (void)score;
+  (void)clock;
+  (void)recordTimingSample;
 }
 
 } // namespace skin
