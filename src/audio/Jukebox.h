@@ -31,11 +31,18 @@ class BgfxVertexLayoutRegistration;
 }
 
 struct ImageData {
-  bgfx::TextureHandle texture;
-  int width;
-  int height;
-  int channels;
+  bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  int width = 0;
+  int height = 0;
+  int channels = 0;
+  bgfx::TextureHandle layerTexture = BGFX_INVALID_HANDLE;
 };
+
+// Creates the pinned TYPE_LAYER representation without relying on a runtime
+// layer shader: exact black becomes transparent and every other RGBA pixel is
+// retained verbatim.
+[[nodiscard]] std::vector<std::uint8_t>
+MakeGameplayBgaLayerRgba(std::span<const std::uint8_t> rgba);
 
 // Transfers a loader-guarded texture into the shared frame/image table owner.
 // On failure before transfer, image remains owning; after transfer, image is
@@ -214,6 +221,14 @@ public:
   void handleMemoryPressure();
   void setBgaOffsetMs(int offsetMs);
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
+  void setEmbeddedBgaBrightnessPercent(int percent) noexcept;
+  [[nodiscard]] float embeddedBgaBrightnessMultiplier() const noexcept;
+  [[nodiscard]] std::array<float, 4>
+  embeddedBgaTint(const std::array<float, 4> &authoredTint) const noexcept;
+  [[nodiscard]] std::uint64_t
+  gameplayBgaProgramLookupCount() const noexcept {
+    return bgaProgramLookupCount;
+  }
   [[nodiscard]] PreparedGameplayBgaFrame prepareVisualFrameAt(
       std::uint64_t frameSerial, std::int64_t bgaTimeMicros,
       const GameplayBgaMissState &missState) override;
@@ -258,7 +273,15 @@ public:
   void leavePlaybackStopped() override;
 
 private:
+  [[nodiscard]] bgfx::ProgramHandle
+  prepareGameplayBgaProgram(const char *vertexShader,
+                            const char *fragmentShader) noexcept;
   bgfx::UniformHandle s_texColor;
+  bgfx::ProgramHandle bgaPlaceholderProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle bgaEmbeddedImageProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle bgaFullscreenImageProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle bgaFullscreenLayerProgram = BGFX_INVALID_HANDLE;
+  std::uint64_t bgaProgramLookupCount = 0;
   // seek lock
   std::mutex seekLock;
   // playthread lock
@@ -398,6 +421,7 @@ private:
   std::atomic<int> bgaOffsetMs{0};
   std::atomic<int> bgaDisplayMode{
       static_cast<int>(AppSettings::BgaDisplayMode::Fit)};
+  std::atomic<float> embeddedBgaBrightness{1.0F};
   const std::string videoExtensions[9] = {"mp4",  "wmv", "m4v", "webm", "mpg",
                                           "mpeg", "m1v", "m2v", "avi"};
   const std::string imageExtensions[6] = {"jpg", "jpeg", "gif",
@@ -426,6 +450,9 @@ private:
     std::optional<VideoPlayer::PreparedEmbeddedSubmission> videoSubmission;
     bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle imageTexture = BGFX_INVALID_HANDLE;
+    std::uint32_t imageSamplerFlags = BGFX_SAMPLER_UVW_CLAMP;
+    GameplayBgaMaterial material;
+    std::array<float, 4> embeddedTint{1.0F, 1.0F, 1.0F, 1.0F};
     bgfx::TransientVertexBuffer vertexBuffer{};
     bgfx::TransientIndexBuffer indexBuffer{};
     bool reserved = false;

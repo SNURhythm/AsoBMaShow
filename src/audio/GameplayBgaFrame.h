@@ -139,6 +139,62 @@ struct BgaDrawTarget {
 
 enum class GameplayBgaMediaKind : std::uint8_t { Image, Video };
 
+// Mirrors Beatoraja's renderer selection for BGAProcessor.drawBGA. Role wins
+// for miss because poor/miss media is always drawn through TYPE_LINEAR,
+// including when the selected resource is a movie.
+enum class GameplayBgaReferenceRendererType : std::uint8_t {
+  Linear,
+  Layer,
+  Ffmpeg,
+};
+
+struct GameplayBgaMaterial {
+  // Beatoraja's selected SkinObjectRenderer type. This is reference metadata,
+  // not a claim that planar YUV can bypass this backend's conversion shader.
+  GameplayBgaReferenceRendererType referenceRendererType =
+      GameplayBgaReferenceRendererType::Linear;
+  bool linearSampling = true;
+  bool blackTransparent = false;
+};
+
+[[nodiscard]] constexpr GameplayBgaMaterial
+SelectGameplayBgaMaterial(GameplayBgaRole role,
+                          GameplayBgaMediaKind mediaKind) noexcept {
+  if (role == GameplayBgaRole::Miss) {
+    return {};
+  }
+  if (mediaKind == GameplayBgaMediaKind::Video) {
+    return {.referenceRendererType = GameplayBgaReferenceRendererType::Ffmpeg,
+            .linearSampling = true,
+            .blackTransparent = false};
+  }
+  if (role == GameplayBgaRole::Layer) {
+    return {.referenceRendererType = GameplayBgaReferenceRendererType::Layer,
+            .linearSampling = false,
+            .blackTransparent = true};
+  }
+  return {};
+}
+
+[[nodiscard]] constexpr std::array<float, 4>
+ApplyGameplayBgaBrightness(const std::array<float, 4> &authoredTint,
+                           float multiplier) noexcept {
+  return {authoredTint[0] * multiplier, authoredTint[1] * multiplier,
+          authoredTint[2] * multiplier, authoredTint[3]};
+}
+
+// Audit-friendly scalar equivalent of fs_skin_yuvrgb.sc: YUV conversion is
+// performed first, then one uniform authored RGBA tint multiplies the result.
+[[nodiscard]] constexpr std::array<float, 4>
+EvaluateGameplayBgaYuvTint(float y, float u, float v,
+                           const std::array<float, 4> &tint) noexcept {
+  const float centeredU = u - 0.5F;
+  const float centeredV = v - 0.5F;
+  return {(y + 1.402F * centeredV) * tint[0],
+          (y - 0.344F * centeredU - 0.714F * centeredV) * tint[1],
+          (y + 1.772F * centeredU) * tint[2], tint[3]};
+}
+
 struct PreparedGameplayBgaSurface {
   GameplayBgaRole role = GameplayBgaRole::Base;
   GameplayBgaMediaKind mediaKind = GameplayBgaMediaKind::Image;

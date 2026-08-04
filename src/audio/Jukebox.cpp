@@ -987,6 +987,10 @@ void destroyImageTexture(ImageData &image) {
     bgfx::destroy(image.texture);
     image.texture = BGFX_INVALID_HANDLE;
   }
+  if (bgfx::isValid(image.layerTexture)) {
+    bgfx::destroy(image.layerTexture);
+    image.layerTexture = BGFX_INVALID_HANDLE;
+  }
 }
 
 void replaceImageLocked(
@@ -1003,6 +1007,21 @@ void replaceImageLocked(
 
 } // namespace
 
+std::vector<std::uint8_t>
+MakeGameplayBgaLayerRgba(std::span<const std::uint8_t> rgba) {
+  if (rgba.size() % 4U != 0U) {
+    return {};
+  }
+  std::vector<std::uint8_t> layer(rgba.begin(), rgba.end());
+  for (std::size_t offset = 0; offset < layer.size(); offset += 4U) {
+    if (layer[offset] == 0U && layer[offset + 1U] == 0U &&
+        layer[offset + 2U] == 0U) {
+      layer[offset + 3U] = 0U;
+    }
+  }
+  return layer;
+}
+
 std::shared_ptr<ImageData>
 AdoptImageTextureToSharedOwner(ImageData &image) {
   // Allocate the object while the loader guard still owns the texture. Once
@@ -1011,6 +1030,7 @@ AdoptImageTextureToSharedOwner(ImageData &image) {
   // throws, so ownership is singular on every edge.
   auto *transferred = new ImageData(image);
   image.texture = BGFX_INVALID_HANDLE;
+  image.layerTexture = BGFX_INVALID_HANDLE;
   return std::shared_ptr<ImageData>(transferred, [](ImageData *owned) {
     destroyImageTexture(*owned);
     delete owned;
@@ -1082,6 +1102,25 @@ Jukebox::Jukebox(Stopwatch *stopwatch,
                  std::unique_ptr<audio::IBackendFactory> backendFactory)
     : audio(stopwatch, std::move(backendFactory)), stopwatch(stopwatch) {
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
+  bgaPlaceholderProgram = prepareGameplayBgaProgram(SHADER_SIMPLE);
+  bgaEmbeddedImageProgram =
+      prepareGameplayBgaProgram("vs_skin_quad.bin", "fs_skin_quad.bin");
+  bgaFullscreenImageProgram =
+      prepareGameplayBgaProgram("vs_text.bin", "fs_text.bin");
+  bgaFullscreenLayerProgram =
+      prepareGameplayBgaProgram("vs_text.bin", "fs_bgalayer.bin");
+}
+
+bgfx::ProgramHandle
+Jukebox::prepareGameplayBgaProgram(const char *vertexShader,
+                                   const char *fragmentShader) noexcept {
+  ++bgaProgramLookupCount;
+  try {
+    return rendering::ShaderManager::getInstance().getProgram(vertexShader,
+                                                               fragmentShader);
+  } catch (...) {
+    return BGFX_INVALID_HANDLE;
+  }
 }
 
 Jukebox::~Jukebox() {
@@ -1280,6 +1319,7 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
       PreparedBgaTargetPlan plan{
           .frameSequence = frame.sequence,
           .target = target,
+          .embeddedTint = embeddedBgaTint(target.tint),
           .scissor = bgaTargetScissor(target),
           .placeholder =
               resolution.kind == PreparedBgaTargetKind::Placeholder,
@@ -1298,6 +1338,8 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
                        "BGA target cannot be stretched with this source size.");
       }
       plan.surface = surface;
+      plan.material =
+          SelectGameplayBgaMaterial(target.role, surface.mediaKind);
       plan.destination = stretched->destination;
       plan.uvs = stretched->uvs;
 
@@ -1360,8 +1402,7 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
         continue;
       }
       if (plan.placeholder) {
-        plan.program =
-            rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+        plan.program = bgaPlaceholderProgram;
         if ((!placeholderLayoutRegistered &&
              !vertexLayouts->registerLayout(gameplayBgaColorVertexLayout())) ||
             !bgfx::isValid(plan.program) ||
@@ -1377,6 +1418,11 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
                        "Prepared BGA target lost its surface descriptor.");
       }
       if (plan.surface->mediaKind == GameplayBgaMediaKind::Video) {
+        // Unlike Beatoraja's RGB movie texture, our movie surface is three
+        // planar YUV textures. Both reference LINEAR (miss) and FFMPEG
+        // (base/layer) therefore require the same conversion program; their
+        // shared observable semantics here are linear sampling and uniform
+        // authored tint.
         if (!plan.video) {
           return failure("gameplay_bga.surface.stale",
                          "Prepared BGA video lease is unavailable.");
@@ -1390,8 +1436,8 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
         }
         const auto quad = video::makeEmbeddedYuvQuadLayout(
             destination, uvs,
-            {.r = plan.target.tint[0], .g = plan.target.tint[1],
-             .b = plan.target.tint[2], .a = plan.target.tint[3]});
+            {.r = plan.embeddedTint[0], .g = plan.embeddedTint[1],
+             .b = plan.embeddedTint[2], .a = plan.embeddedTint[3]});
         if (!quad) {
           return failure("gameplay_bga.target.quad",
                          "BGA target produced an invalid video quad.");
@@ -1408,21 +1454,22 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
         videoLayoutRegistered = true;
         continue;
       }
-      if (!plan.image || !bgfx::isValid(plan.image->texture) ||
-          !bgfx::isValid(s_texColor)) {
+      if (!plan.image || !bgfx::isValid(s_texColor)) {
         return failure("gameplay_bga.image.preflight",
                        "BGA image sampler or texture is unavailable.");
       }
-      plan.program =
-          plan.surface->role == GameplayBgaRole::Layer
-              ? rendering::ShaderManager::getInstance().getProgram(
-                    "vs_text.bin", "fs_bgalayer.bin")
-              : rendering::ShaderManager::getInstance().getProgram(
-                    "vs_skin_quad.bin", "fs_skin_quad.bin");
-      plan.imageTexture = plan.image->texture;
+      plan.program = bgaEmbeddedImageProgram;
+      plan.imageTexture = plan.material.blackTransparent
+                              ? plan.image->layerTexture
+                              : plan.image->texture;
+      plan.imageSamplerFlags =
+          BGFX_SAMPLER_UVW_CLAMP |
+          (plan.material.linearSampling
+               ? 0U
+               : BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
       if ((!imageLayoutRegistered &&
            !vertexLayouts->registerLayout(gameplayBgaImageVertexLayout())) ||
-          !bgfx::isValid(plan.program) ||
+          !bgfx::isValid(plan.program) || !bgfx::isValid(plan.imageTexture) ||
           !addRequirement(gameplayBgaImageVertexLayout())) {
         return failure("gameplay_bga.image.preflight",
                        "BGA image GPU resources are unavailable.");
@@ -1467,7 +1514,7 @@ void Jukebox::commitPrepared(
     std::memcpy(plan.indexBuffer.data, indices.data(), sizeof(indices));
     if (plan.placeholder) {
       const std::array<float, 4> black{0.0F, 0.0F, 0.0F,
-                                       plan.target.tint[3]};
+                                       plan.embeddedTint[3]};
       auto *vertices = reinterpret_cast<rendering::PosColorVertex *>(
           plan.vertexBuffer.data);
       for (std::size_t index = 0; index < 4; ++index) {
@@ -1484,7 +1531,7 @@ void Jukebox::commitPrepared(
                            .z = 0.0F,
                            .u = plan.uvs[index].x,
                            .v = plan.uvs[index].y,
-                           .abgr = packBgaAbgr(plan.target.tint)};
+                           .abgr = packBgaAbgr(plan.embeddedTint)};
       }
     }
     plan.reserved = true;
@@ -1527,7 +1574,7 @@ void Jukebox::submitPrepared(const PreparedGameplayBgaFrame &frame,
   }
   if (!plan.placeholder) {
     bgfx::setTexture(0, s_texColor, plan.imageTexture,
-                     BGFX_SAMPLER_UVW_CLAMP);
+                     plan.imageSamplerFlags);
   }
   bgfx::submit(target.viewId, plan.program);
 }
@@ -1860,6 +1907,22 @@ void Jukebox::setBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   bgaDisplayMode.store(static_cast<int>(mode), std::memory_order_relaxed);
 }
 
+void Jukebox::setEmbeddedBgaBrightnessPercent(int percent) noexcept {
+  embeddedBgaBrightness.store(
+      static_cast<float>(std::clamp(percent, 0, 100)) / 100.0F,
+      std::memory_order_relaxed);
+}
+
+float Jukebox::embeddedBgaBrightnessMultiplier() const noexcept {
+  return embeddedBgaBrightness.load(std::memory_order_relaxed);
+}
+
+std::array<float, 4> Jukebox::embeddedBgaTint(
+    const std::array<float, 4> &authoredTint) const noexcept {
+  return ApplyGameplayBgaBrightness(authoredTint,
+                                    embeddedBgaBrightnessMultiplier());
+}
+
 bool Jukebox::loadMaterializedVideoPath(
     int id, const std::filesystem::path &materializedPath,
     const std::filesystem::path &displayPath, std::atomic_bool &isCancelled) {
@@ -1975,6 +2038,18 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
+  const auto layerPixels = MakeGameplayBgaLayerRgba(
+      std::span<const std::uint8_t>(data.get(),
+                                    static_cast<std::size_t>(width) *
+                                        static_cast<std::size_t>(height) * 4U));
+  image.layerTexture = bgfx::createTexture2D(
+      width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+      bgfx::copy(layerPixels.data(),
+                 static_cast<std::uint32_t>(layerPixels.size())));
+  if (!bgfx::isValid(image.layerTexture)) {
+    SDL_Log("Failed to create layer image texture: %s", utf8Path.c_str());
+    return false;
+  }
   if (isCancelled) {
     return false;
   }
@@ -2030,6 +2105,18 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path,
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
+  const auto layerPixels = MakeGameplayBgaLayerRgba(
+      std::span<const std::uint8_t>(data.get(),
+                                    static_cast<std::size_t>(width) *
+                                        static_cast<std::size_t>(height) * 4U));
+  image.layerTexture = bgfx::createTexture2D(
+      width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
+      bgfx::copy(layerPixels.data(),
+                 static_cast<std::uint32_t>(layerPixels.size())));
+  if (!bgfx::isValid(image.layerTexture)) {
+    SDL_Log("Failed to create layer image texture: %s", utf8Path.c_str());
+    return false;
+  }
   if (isCancelled) {
     return false;
   }
@@ -4263,14 +4350,12 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   bgfx::setTexture(0, s_texColor, image.texture);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                  BGFX_STATE_BLEND_ALPHA);
-  static const bgfx::ProgramHandle kBgaProgram =
-      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
-                                                         "fs_text.bin");
-  static const bgfx::ProgramHandle kBgaLayerProgram =
-      rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
-                                                         "fs_bgalayer.bin");
-  bgfx::submit(viewId,
-               viewId == rendering::bga_view ? kBgaProgram : kBgaLayerProgram);
+  const auto program = viewId == rendering::bga_view
+                           ? bgaFullscreenImageProgram
+                           : bgaFullscreenLayerProgram;
+  if (bgfx::isValid(program)) {
+    bgfx::submit(viewId, program);
+  }
 }
 
 long long Jukebox::getTimeMicros() {

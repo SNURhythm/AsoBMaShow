@@ -126,6 +126,8 @@ private:
   bgfx::UniformHandle s_texY = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texU = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texV = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle fullscreenProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle embeddedProgram = BGFX_INVALID_HANDLE;
 
   int64_t startPTS = 0;
   unsigned int getPrecisePosition();

@@ -4,6 +4,7 @@
 #include "audio/GameplayBgaFrame.h"
 #include "audio/GameplayBgaMissStateTracker.h"
 #include "audio/Jukebox.h"
+#include "RAII.h"
 #include "rendering/ShaderManager.h"
 #include "rendering/UniformCache.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.cpp"
@@ -11,6 +12,7 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
@@ -268,6 +270,121 @@ void testBgaDrawTargetRoleIsIndependentOfViewId() {
           "BGA draw targets carry an explicit role independently of view ID");
 }
 
+void testPinnedRoleAndMediaSelectExactBgaMaterials() {
+  const auto baseImage = SelectGameplayBgaMaterial(
+      GameplayBgaRole::Base, GameplayBgaMediaKind::Image);
+  const auto layerImage = SelectGameplayBgaMaterial(
+      GameplayBgaRole::Layer, GameplayBgaMediaKind::Image);
+  const auto baseVideo = SelectGameplayBgaMaterial(
+      GameplayBgaRole::Base, GameplayBgaMediaKind::Video);
+  const auto layerVideo = SelectGameplayBgaMaterial(
+      GameplayBgaRole::Layer, GameplayBgaMediaKind::Video);
+  const auto missImage = SelectGameplayBgaMaterial(
+      GameplayBgaRole::Miss, GameplayBgaMediaKind::Image);
+  const auto missVideo = SelectGameplayBgaMaterial(
+      GameplayBgaRole::Miss, GameplayBgaMediaKind::Video);
+
+  require(baseImage.referenceRendererType ==
+                  GameplayBgaReferenceRendererType::Linear &&
+              baseImage.linearSampling && !baseImage.blackTransparent,
+          "base images use pinned LINEAR material semantics");
+  require(layerImage.referenceRendererType ==
+                  GameplayBgaReferenceRendererType::Layer &&
+              !layerImage.linearSampling && layerImage.blackTransparent,
+          "layer images use pinned LAYER black-transparent material semantics");
+  require(baseVideo.referenceRendererType ==
+                  GameplayBgaReferenceRendererType::Ffmpeg &&
+              baseVideo.linearSampling && !baseVideo.blackTransparent &&
+              layerVideo.referenceRendererType ==
+                  GameplayBgaReferenceRendererType::Ffmpeg &&
+              layerVideo.linearSampling && !layerVideo.blackTransparent,
+          "base and layer videos use pinned FFMPEG material semantics");
+  require(missImage.referenceRendererType ==
+                  GameplayBgaReferenceRendererType::Linear &&
+              missImage.linearSampling && !missImage.blackTransparent &&
+              missVideo.referenceRendererType ==
+                  GameplayBgaReferenceRendererType::Linear &&
+              missVideo.linearSampling && !missVideo.blackTransparent,
+          "miss uses pinned LINEAR semantics even when its resource is a movie");
+
+  constexpr std::uint32_t linearFlags = BGFX_SAMPLER_UVW_CLAMP;
+  constexpr std::uint32_t pointFlags =
+      BGFX_SAMPLER_UVW_CLAMP | BGFX_SAMPLER_MIN_POINT |
+      BGFX_SAMPLER_MAG_POINT;
+  require((linearFlags &
+           (BGFX_SAMPLER_MIN_MASK | BGFX_SAMPLER_MAG_MASK)) == 0U &&
+              (pointFlags & BGFX_SAMPLER_MIN_MASK) ==
+                  BGFX_SAMPLER_MIN_POINT &&
+              (pointFlags & BGFX_SAMPLER_MAG_MASK) ==
+                  BGFX_SAMPLER_MAG_POINT,
+          "bgfx encodes true Linear with no point bits and LAYER with explicit Point bits");
+}
+
+void testLayerMaterialMakesOnlyExactBlackTransparent() {
+  const std::array<std::uint8_t, 16> rgba{
+      0, 0, 0, 255, 0, 0, 1, 127, 12, 34, 56, 78, 0, 0, 0, 0};
+  const auto layer = MakeGameplayBgaLayerRgba(rgba);
+  require(layer == std::vector<std::uint8_t>{
+                       0, 0, 0, 0, 0, 0, 1, 127,
+                       12, 34, 56, 78, 0, 0, 0, 0},
+          "LAYER preprocessing clears alpha only for exact black pixels");
+  require(MakeGameplayBgaLayerRgba(std::span(rgba).first(15)).empty(),
+          "LAYER preprocessing rejects incomplete RGBA pixels");
+}
+
+void testEmbeddedBrightnessMultipliesAuthoredRgbAndPreservesAlpha() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  const std::array<float, 4> authored{0.8F, 0.6F, 0.4F, 0.25F};
+
+  require(jukebox.embeddedBgaBrightnessMultiplier() == 1.0F &&
+              jukebox.embeddedBgaTint(authored) == authored,
+          "embedded BGA brightness defaults to 100 percent");
+  jukebox.setEmbeddedBgaBrightnessPercent(50);
+  require(jukebox.embeddedBgaBrightnessMultiplier() == 0.5F &&
+              jukebox.embeddedBgaTint(authored) ==
+                  std::array<float, 4>{0.4F, 0.3F, 0.2F, 0.25F},
+          "embedded brightness multiplies authored RGB while preserving alpha");
+  jukebox.setEmbeddedBgaBrightnessPercent(-10);
+  require(jukebox.embeddedBgaBrightnessMultiplier() == 0.0F,
+          "embedded BGA brightness clamps below the setting range");
+  jukebox.setEmbeddedBgaBrightnessPercent(130);
+  require(jukebox.embeddedBgaBrightnessMultiplier() == 1.0F,
+          "embedded BGA brightness clamps above the setting range");
+}
+
+void testEmbeddedYuvUsesOneBrightnessAdjustedTintOnEveryVertex() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  jukebox.setEmbeddedBgaBrightnessPercent(25);
+  const auto tint = jukebox.embeddedBgaTint({0.8F, 0.4F, 1.0F, 0.6F});
+  const std::array<video::VideoQuadPoint, 4> destination{{
+      {3.0F, 20.0F}, {30.0F, 17.0F}, {26.0F, -1.0F}, {-2.0F, 4.0F}}};
+  const std::array<video::VideoQuadPoint, 4> uvs{{
+      {0.1F, 0.9F}, {0.8F, 0.9F}, {0.8F, 0.2F}, {0.1F, 0.2F}}};
+  const auto quad = video::makeEmbeddedYuvQuadLayout(
+      destination, uvs,
+      {.r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3]});
+  require(quad.has_value(), "brightness-adjusted embedded YUV quad is valid");
+  for (const auto &vertex : quad->vertices) {
+    require(vertex.r == 0.2F && vertex.g == 0.1F && vertex.b == 0.25F &&
+                vertex.a == 0.6F,
+            "one brightness-adjusted authored RGBA tint is replicated to every YUV vertex");
+  }
+
+  const auto converted = EvaluateGameplayBgaYuvTint(
+      0.5F, 0.6F, 0.4F, {0.5F, 0.25F, 0.75F, 0.4F});
+  require(std::abs(converted[0] - 0.1799F) < 0.00001F &&
+              std::abs(converted[1] - 0.13425F) < 0.00001F &&
+              std::abs(converted[2] - 0.5079F) < 0.00001F &&
+              converted[3] == 0.4F,
+          "known YUV conversion is multiplied by the uniform authored tint");
+}
+
 void testBgaSubmitterPreflightsExactMultipleTargets() {
   FakeGameplayBgaSubmitter submitter;
   const PreparedGameplayBgaFrame frame{
@@ -396,6 +513,41 @@ void testJukeboxPreparesOneValueFrameAndNeverUpdatesOnSubmission() {
               after.fullscreenSubmissions == before.fullscreenSubmissions + 1,
           "finalizing a prepared frame invalidates its same-key cache entry "
           "before a fresh sequence is prepared");
+}
+
+void testJukeboxPreflightPerformsNoShaderLookupOrFilesystemIo() {
+  const auto originalDirectory = std::filesystem::current_path();
+  const auto restoreDirectory = makeScopeExit([&originalDirectory] {
+    std::error_code ignored;
+    std::filesystem::current_path(originalDirectory, ignored);
+  });
+  const auto sourceDirectory =
+      std::filesystem::path(__FILE__).parent_path().parent_path();
+  std::filesystem::current_path(sourceDirectory);
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  const auto sessionLookupCount = jukebox.gameplayBgaProgramLookupCount();
+  const PreparedGameplayBgaFrame frame{
+      .sequence = 79, .composition = GameplayBgaComposition::Blank};
+  const BgaDrawTarget target{
+      .role = GameplayBgaRole::Base,
+      .viewId = rendering::ui_view,
+      .destination = {{{.x = 0.0F, .y = 64.0F},
+                       {.x = 64.0F, .y = 64.0F},
+                       {.x = 64.0F, .y = 0.0F},
+                       {.x = 0.0F, .y = 0.0F}}}};
+
+  const auto shaderlessDirectory =
+      std::filesystem::path(__FILE__).parent_path() /
+      "fixtures/beatoraja_skin/resources";
+  std::filesystem::current_path(shaderlessDirectory);
+  const auto result = jukebox.preflight(frame, std::span(&target, 1));
+
+  require(result.ready && !result.failure.has_value() &&
+              jukebox.gameplayBgaProgramLookupCount() == sessionLookupCount,
+          "BGA preflight uses session-prepared shader handles without lookup or filesystem I/O");
 }
 
 void testJukeboxBgaTargetStretchAndTrimmedUvs() {
@@ -725,13 +877,18 @@ void testImageTextureOwnershipTransferIsSingleAndExceptionSafe() {
   ImageData successful{.texture = makeOwnershipTestTexture(),
                        .width = 1,
                        .height = 1,
-                       .channels = 4};
-  require(bgfx::isValid(successful.texture),
-          "ownership test texture is created");
+                       .channels = 4,
+                       .layerTexture = makeOwnershipTestTexture()};
+  require(bgfx::isValid(successful.texture) &&
+              bgfx::isValid(successful.layerTexture),
+          "ownership test image textures are created");
   const auto successfulHandle = successful.texture;
+  const auto successfulLayerHandle = successful.layerTexture;
   auto owner = AdoptImageTextureToSharedOwner(successful);
   require(owner && owner->texture.idx == successfulHandle.idx &&
-              !bgfx::isValid(successful.texture),
+              owner->layerTexture.idx == successfulLayerHandle.idx &&
+              !bgfx::isValid(successful.texture) &&
+              !bgfx::isValid(successful.layerTexture),
           "successful adoption invalidates the loader guard at the exact "
           "shared-owner transfer");
   owner.reset();
@@ -739,9 +896,11 @@ void testImageTextureOwnershipTransferIsSingleAndExceptionSafe() {
   ImageData controlBlockFailure{.texture = makeOwnershipTestTexture(),
                                 .width = 1,
                                 .height = 1,
-                                .channels = 4};
-  require(bgfx::isValid(controlBlockFailure.texture),
-          "control-block failure texture is created");
+                                .channels = 4,
+                                .layerTexture = makeOwnershipTestTexture()};
+  require(bgfx::isValid(controlBlockFailure.texture) &&
+              bgfx::isValid(controlBlockFailure.layerTexture),
+          "control-block failure image textures are created");
   allocationFailureCountdown = 1;
   bool threw = false;
   try {
@@ -750,16 +909,19 @@ void testImageTextureOwnershipTransferIsSingleAndExceptionSafe() {
     threw = true;
   }
   allocationFailureCountdown = -1;
-  require(threw && !bgfx::isValid(controlBlockFailure.texture),
+  require(threw && !bgfx::isValid(controlBlockFailure.texture) &&
+              !bgfx::isValid(controlBlockFailure.layerTexture),
           "a throwing shared control-block allocation leaves only its deleter "
-          "owning the transferred texture, never the loader guard");
+          "owning the transferred textures, never the loader guard");
 
   ImageData rawAllocationFailure{.texture = makeOwnershipTestTexture(),
                                  .width = 1,
                                  .height = 1,
-                                 .channels = 4};
-  require(bgfx::isValid(rawAllocationFailure.texture),
-          "raw-owner failure texture is created");
+                                 .channels = 4,
+                                 .layerTexture = makeOwnershipTestTexture()};
+  require(bgfx::isValid(rawAllocationFailure.texture) &&
+              bgfx::isValid(rawAllocationFailure.layerTexture),
+          "raw-owner failure image textures are created");
   allocationFailureCountdown = 0;
   threw = false;
   try {
@@ -768,11 +930,14 @@ void testImageTextureOwnershipTransferIsSingleAndExceptionSafe() {
     threw = true;
   }
   allocationFailureCountdown = -1;
-  require(threw && bgfx::isValid(rawAllocationFailure.texture),
+  require(threw && bgfx::isValid(rawAllocationFailure.texture) &&
+              bgfx::isValid(rawAllocationFailure.layerTexture),
           "failure before the transfer leaves the loader guard as the sole "
-          "texture owner");
+          "texture owner for both image representations");
   bgfx::destroy(rawAllocationFailure.texture);
+  bgfx::destroy(rawAllocationFailure.layerTexture);
   rawAllocationFailure.texture = BGFX_INVALID_HANDLE;
+  rawAllocationFailure.layerTexture = BGFX_INVALID_HANDLE;
 }
 
 void testPreparedFrameRetainsExplicitSurfaceRoles() {
@@ -930,9 +1095,14 @@ int main() {
   rendering::PosColorVertex::init();
   rendering::PosTexVertex::init();
   testBgaDrawTargetRoleIsIndependentOfViewId();
+  testPinnedRoleAndMediaSelectExactBgaMaterials();
+  testLayerMaterialMakesOnlyExactBlackTransparent();
+  testEmbeddedBrightnessMultipliesAuthoredRgbAndPreservesAlpha();
+  testEmbeddedYuvUsesOneBrightnessAdjustedTintOnEveryVertex();
   testBgaSubmitterPreflightsExactMultipleTargets();
   testBgaSubmitterPreparedFrameIsAnImmutableValue();
   testBgaSubmitterHasVirtualDestruction();
+  testJukeboxPreflightPerformsNoShaderLookupOrFilesystemIo();
   testJukeboxPreparesOneValueFrameAndNeverUpdatesOnSubmission();
   testJukeboxBgaTargetStretchAndTrimmedUvs();
   testBgaStretchPrecedesNonuniformViewportProjection();
