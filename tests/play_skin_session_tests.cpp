@@ -452,7 +452,7 @@ void testInvalidSessionSerialDoesNotConsumeFrameOwners() {
          "zero session serial does not consume the Lua frame serial");
 }
 
-void testNonemptyCustomMapsRemainExplicitlyUnsupported() {
+void testPassiveCustomTimerUsesTheSharedSessionFrame() {
   SessionFixture fixture;
   if (!fixture.ready()) {
     return;
@@ -461,10 +461,9 @@ void testNonemptyCustomMapsRemainExplicitlyUnsupported() {
       {.id = 10'001, .timer = std::nullopt});
   const auto result = fixture.session().prepareFrame(
       stateAt(1), projectionAt(1), {});
-  expect(!result.ready() && result.committed.frameSerial == 0 &&
-             !result.evaluation.submitReady &&
-             hasDiagnostic(result, "skin.play_state.custom_objects_unavailable"),
-         "nonempty custom maps fail rather than claiming false execution");
+  expect(result.ready() && result.committed.frameSerial == 1 &&
+             result.committed.orderedMutations.empty(),
+         "nonempty passive custom timers execute within the shared session frame");
 }
 
 void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
@@ -505,7 +504,7 @@ int main() {
   testEvaluatorFailureDiscardsWriterTransaction();
   testSerialMismatchDoesNotConsumeRuntimeFrame();
   testInvalidSessionSerialDoesNotConsumeFrameOwners();
-  testNonemptyCustomMapsRemainExplicitlyUnsupported();
+  testPassiveCustomTimerUsesTheSharedSessionFrame();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";

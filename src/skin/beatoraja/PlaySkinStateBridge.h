@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -159,6 +160,18 @@ private:
   void reportUnsupported(std::string_view kind,
                          const SkinBuiltinPropertySelector &);
   void reportUnsupportedEvent(int);
+  [[nodiscard]] SkinHostCallResult updateCustomTimer(const SkinCustomTimer &);
+  [[nodiscard]] SkinHostCallResult updateCustomEvent(const SkinCustomEvent &);
+  [[nodiscard]] SkinHostCallResult invokeCustomEvent(
+      const SkinCustomEvent &, std::span<const int> arguments);
+  [[nodiscard]] SkinHostCallResult invokeEventBinding(
+      SkinEventBindingId, std::span<const int> arguments);
+  [[nodiscard]] SkinHostCallResult evaluateCustomCondition(
+      SkinBooleanPropertyId, bool &condition);
+  [[nodiscard]] SkinHostCallResult evaluateCustomTimer(
+      SkinTimerPropertyId, std::int64_t &value);
+  [[nodiscard]] SkinHostCallResult callbackFailure(SkinDiagnostic);
+  void rollbackFrameWrites() noexcept;
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
   [[nodiscard]] const PlayfieldVisualState *state() const noexcept;
@@ -175,6 +188,8 @@ private:
   std::uint64_t lastAcceptedFrameSerial_ = 0;
   PlayfieldSkinProjectionViews projection_;
   PlaySkinFrameCommit staged_;
+  std::unordered_map<int, std::int64_t> customTimerValues_;
+  std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
   std::vector<SkinDiagnostic> diagnostics_;
 };
 

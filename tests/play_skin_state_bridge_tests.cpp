@@ -115,6 +115,42 @@ return {
     captured_main_state.event_exec(900, 77)
     error("rollback staged event")
   end,
+  custom_timer_high=function()
+    _G.custom_trace = (_G.custom_trace or "") .. "timer-high,"
+    return 222
+  end,
+  custom_timer_low=function()
+    _G.custom_trace = (_G.custom_trace or "") .. "timer-low,"
+    return 111
+  end,
+  custom_event=function()
+    captured_main_state.event_exec(900, 10)
+    _G.custom_trace = (_G.custom_trace or "") .. "event,"
+    return true
+  end,
+  custom_event_second=function()
+    captured_main_state.event_exec(900, 20)
+    _G.custom_trace = (_G.custom_trace or "") .. "event-second,"
+    return true
+  end,
+  custom_manual=function(...)
+    _G.custom_trace = (_G.custom_trace or "") .. "manual:" .. select("#", ...) .. ","
+    return true
+  end,
+  custom_stage_then_fail=function()
+    captured_main_state.event_exec(900, 77)
+    error("rollback custom event")
+  end,
+  custom_stage=function()
+    captured_main_state.event_exec(900, 1)
+    return true
+  end,
+  custom_budget=function() while true do end end,
+  custom_after_budget=function()
+    _G.custom_trace = (_G.custom_trace or "") .. "after-budget,"
+    return true
+  end,
+  custom_trace=function() return _G.custom_trace or "" end,
 }
 )lua");
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
@@ -169,7 +205,11 @@ private:
     for (const std::string_view name : {
              "normalized_writer", "readonly_writer", "forbidden_writer",
              "unknown_writer", "excessive_arity_writer",
-             "stage_then_fail_writer"}) {
+             "stage_then_fail_writer", "custom_timer_high",
+             "custom_timer_low", "custom_event", "custom_manual",
+             "custom_stage_then_fail", "custom_budget",
+             "custom_stage", "custom_after_budget", "custom_event_second",
+             "custom_trace"}) {
       if (const auto callback = value.callbackNamed(name)) {
         callbacks_.insert_or_assign(std::string{name}, *callback);
       }
@@ -563,17 +603,13 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   unaudited.discardFrame();
 }
 
-void testCustomObjectsRemainExplicitlyPendingSharedFrameOwnership() {
+void testEmptyCustomObjectsStayZeroCost() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
     return;
   }
   PlayfieldChartVisualModel chart;
   ValidatedBeatorajaSkinModel model;
-  model.model.customTimers = {{.id = 10'001, .timer = std::nullopt}};
-  model.model.customEvents = {{.id = 1'001,
-                               .action = SkinEventBindingId{1},
-                               .condition = std::nullopt}};
   BeatorajaSkinConfiguration configuration;
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
@@ -583,16 +619,239 @@ void testCustomObjectsRemainExplicitlyPendingSharedFrameOwnership() {
                               .mutationTable = mutations});
   bridge.beginFrame(stateAt(91), projectionAt(91));
   const auto update = bridge.updateCustomObjects();
-  expect(
-      update.status == SkinHostCallStatus::Unsupported &&
-          update.callbacksInvoked == 0 &&
-          hasDiagnostic(bridge, "skin.play_state.custom_objects_unavailable"),
-      "custom maps never claim false support while renderer owns Lua frame "
-      "begin");
-  expect(bridge.executeEvent(1'001, {}).status ==
-             SkinHostCallStatus::Unsupported,
-         "manual custom events stay pending under the same frame-owner gap");
+  expect(update.status == SkinHostCallStatus::Completed &&
+             update.callbacksInvoked == 0 && bridge.diagnostics().empty(),
+         "selected SCURO empty custom maps perform no per-frame work");
   (void)bridge.commitFrame();
+}
+
+void testCustomTimersPrecedeAutomaticEventsInAuthoredOrder() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  model.model.timerProperties = {
+      {.id = SkinTimerPropertyId{1}, .source = runtime.callback("custom_timer_high")},
+      {.id = SkinTimerPropertyId{2}, .source = runtime.callback("custom_timer_low")},
+  };
+  model.model.booleanProperties = {
+      {.id = SkinBooleanPropertyId{1}, .source = SkinBuiltinPropertySelector{.value = 42}},
+  };
+  model.model.events = {
+      {.id = SkinEventBindingId{1}, .source = runtime.callback("custom_event")},
+      {.id = SkinEventBindingId{2},
+       .source = runtime.callback("custom_event_second")},
+  };
+  // Deliberately non-sorted IDs: declaration order is the contract.
+  model.model.customTimers = {
+      {.id = 10'002, .timer = SkinTimerPropertyId{1}},
+      {.id = 10'001, .timer = SkinTimerPropertyId{2}},
+  };
+  model.model.customEvents = {
+      {.id = 1'002,
+       .action = SkinEventBindingId{1},
+       .condition = SkinBooleanPropertyId{1}},
+      {.id = 1'001,
+       .action = SkinEventBindingId{2},
+       .condition = SkinBooleanPropertyId{1}},
+  };
+  BeatorajaSkinConfiguration configuration;
+  auto pinned = makePinnedSkinEventMutationTableV1();
+  std::vector<SkinEventMutationRule> rules(pinned.rules().begin(),
+                                            pinned.rules().end());
+  rules.push_back({.builtInEventId = 900,
+                   .kind = SkinEventMutationKind::SessionPresentation,
+                   .maximumArguments = 2});
+  const SkinEventMutationTable mutations(std::move(rules));
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(111), projectionAt(111));
+  expect(runtime.runtime().beginFrame(111).ok,
+         "custom-object update uses the already-owned Lua frame");
+  const auto update = bridge.updateCustomObjects();
+  const auto trace = runtime.runtime().invoke(runtime.callback("custom_trace"), {});
+  expect(update.status == SkinHostCallStatus::Completed &&
+             update.callbacksInvoked == 4 && trace.value &&
+             std::get<std::string>(*trace.value) ==
+                 "timer-high,timer-low,event,event-second,",
+         "custom timers precede automatic events in authored declaration order");
+  expect(hasDiagnostic(bridge, "custom_object_order_authored_divergence"),
+         "nonempty custom maps retain the frozen authored-order divergence diagnostic");
+  expect(bridge.timerProperty({10'002}) == 222 &&
+             bridge.timerProperty({10'001}) == 111,
+         "custom timer values are cached for the frame");
+  const auto committed = bridge.commitFrame();
+  expect(committed.orderedMutations.size() == 2 &&
+             std::get<SessionPresentationWrite>(committed.orderedMutations[0])
+                     .arguments[0] == 10 &&
+             std::get<SessionPresentationWrite>(committed.orderedMutations[1])
+                     .arguments[0] == 20,
+         "later automatic callbacks retain earlier staged writes in authored order");
+}
+
+void testCustomEventsAcceptManualAritiesAndRollbackCriticalFrames() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  model.model.events = {
+      {.id = SkinEventBindingId{1}, .source = runtime.callback("custom_manual")},
+      {.id = SkinEventBindingId{2},
+       .source = runtime.callback("custom_stage_then_fail")},
+  };
+  model.model.customEvents = {
+      {.id = 1'001, .action = SkinEventBindingId{1}, .condition = std::nullopt},
+      {.id = 1'002, .action = SkinEventBindingId{2}, .condition = std::nullopt},
+  };
+  auto pinned = makePinnedSkinEventMutationTableV1();
+  std::vector<SkinEventMutationRule> rules(pinned.rules().begin(),
+                                            pinned.rules().end());
+  rules.push_back({.builtInEventId = 900,
+                   .kind = SkinEventMutationKind::SessionPresentation,
+                   .maximumArguments = 2});
+  const SkinEventMutationTable mutations(std::move(rules));
+  BeatorajaSkinConfiguration configuration;
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(112), projectionAt(112));
+  expect(runtime.runtime().beginFrame(112).ok,
+         "manual custom events share the owner frame budget");
+  expect(bridge.executeEvent(1'001, {}).status == SkinHostCallStatus::Completed &&
+             bridge.executeEvent(1'001, std::array{7}).status ==
+                 SkinHostCallStatus::Completed &&
+             bridge.executeEvent(1'001, std::array{7, 8}).status ==
+                 SkinHostCallStatus::Completed,
+         "manual custom events accept exactly zero, one, and two integers");
+  const auto trace = runtime.runtime().invoke(runtime.callback("custom_trace"), {});
+  expect(trace.value && std::get<std::string>(*trace.value) ==
+                            "manual:0,manual:1,manual:2,",
+         "manual custom callbacks receive the exact supplied arity");
+  expect(bridge.executeEvent(900, std::array{9}).status ==
+             SkinHostCallStatus::Completed &&
+             bridge.executeEvent(1'002, {}).status ==
+                 SkinHostCallStatus::CriticalFailure,
+         "a critical custom event failure rejects the whole frame");
+  expect(bridge.commitFrame().orderedMutations.empty(),
+         "critical custom-event failure rolls back every staged write");
+}
+
+void testAutomaticCustomEventUsesTheCapturedFrameClockForMinimumInterval() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  model.model.booleanProperties = {
+      {.id = SkinBooleanPropertyId{1}, .source = SkinBuiltinPropertySelector{.value = 42}},
+  };
+  model.model.events = {
+      {.id = SkinEventBindingId{1}, .source = runtime.callback("custom_event")},
+  };
+  model.model.customEvents = {
+      {.id = 1'010,
+       .action = SkinEventBindingId{1},
+       .condition = SkinBooleanPropertyId{1},
+       .minimumIntervalMillis = 100},
+  };
+  BeatorajaSkinConfiguration configuration;
+  auto pinned = makePinnedSkinEventMutationTableV1();
+  std::vector<SkinEventMutationRule> rules(pinned.rules().begin(),
+                                            pinned.rules().end());
+  rules.push_back({.builtInEventId = 900,
+                   .kind = SkinEventMutationKind::SessionPresentation,
+                   .maximumArguments = 2});
+  const SkinEventMutationTable mutations(std::move(rules));
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  auto runFrame = [&](std::uint64_t serial, std::int64_t visualMicros) {
+    auto state = stateAt(serial);
+    state.clock.visualTimeMicros = visualMicros;
+    bridge.beginFrame(state, projectionAt(serial));
+    expect(runtime.runtime().beginFrame(serial).ok,
+           "automatic custom event starts each owner frame once");
+    const auto update = bridge.updateCustomObjects();
+    expect(update.status == SkinHostCallStatus::Completed,
+           "automatic custom event completes below its frame budget");
+    return bridge.commitFrame().orderedMutations.size();
+  };
+  auto manualState = stateAt(114);
+  manualState.clock.visualTimeMicros = 1'000'000;
+  bridge.beginFrame(manualState, projectionAt(114));
+  expect(runtime.runtime().beginFrame(114).ok,
+         "manual interval probe begins the owner frame once");
+  expect(bridge.executeEvent(1'010, {}).status ==
+             SkinHostCallStatus::Completed,
+         "manual custom event completes below its frame budget");
+  (void)bridge.commitFrame();
+  const auto suppressedWrites = runFrame(115, 1'099'999);
+  const auto thresholdWrites = runFrame(116, 1'100'000);
+  bridge.beginFrame(stateAt(117), projectionAt(117));
+  expect(runtime.runtime().beginFrame(117).ok,
+         "trace probe has a fresh owner frame");
+  const auto trace = runtime.runtime().invoke(runtime.callback("custom_trace"), {});
+  expect(suppressedWrites == 0 && thresholdWrites == 1 && trace.value &&
+             std::get<std::string>(*trace.value) == "event,event,",
+         "manual and automatic executions share the captured visual-clock interval");
+  bridge.discardFrame();
+}
+
+void testCustomObjectBudgetStopsLaterEventsAndRollsBackWrites() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  model.model.booleanProperties = {
+      {.id = SkinBooleanPropertyId{1}, .source = SkinBuiltinPropertySelector{.value = 42}},
+  };
+  model.model.events = {
+      {.id = SkinEventBindingId{1}, .source = runtime.callback("custom_stage")},
+      {.id = SkinEventBindingId{2}, .source = runtime.callback("custom_budget")},
+      {.id = SkinEventBindingId{3},
+       .source = runtime.callback("custom_after_budget")},
+  };
+  model.model.customEvents = {
+      {.id = 1'003, .action = SkinEventBindingId{1}, .condition = SkinBooleanPropertyId{1}},
+      {.id = 1'004, .action = SkinEventBindingId{2}, .condition = SkinBooleanPropertyId{1}},
+      {.id = 1'005, .action = SkinEventBindingId{3}, .condition = SkinBooleanPropertyId{1}},
+  };
+  auto pinned = makePinnedSkinEventMutationTableV1();
+  std::vector<SkinEventMutationRule> rules(pinned.rules().begin(),
+                                            pinned.rules().end());
+  rules.push_back({.builtInEventId = 900,
+                   .kind = SkinEventMutationKind::SessionPresentation,
+                   .maximumArguments = 2});
+  const SkinEventMutationTable mutations(std::move(rules));
+  BeatorajaSkinConfiguration configuration;
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(113), projectionAt(113));
+  expect(runtime.runtime().beginFrame(113).ok,
+         "budgeted custom-object update begins the owner frame once");
+  const auto update = bridge.updateCustomObjects();
+  expect(update.status == SkinHostCallStatus::BudgetExceeded &&
+             update.callbacksInvoked == 2,
+         "budget exhaustion stops automatic custom events deterministically");
+  expect(bridge.commitFrame().orderedMutations.empty(),
+         "budget exhaustion rolls back writes staged by earlier callbacks");
 }
 
 void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
@@ -699,7 +958,11 @@ int main() {
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
-  testCustomObjectsRemainExplicitlyPendingSharedFrameOwnership();
+  testEmptyCustomObjectsStayZeroCost();
+  testCustomTimersPrecedeAutomaticEventsInAuthoredOrder();
+  testCustomEventsAcceptManualAritiesAndRollbackCriticalFrames();
+  testAutomaticCustomEventUsesTheCapturedFrameClockForMinimumInterval();
+  testCustomObjectBudgetStopsLaterEventsAndRollsBackWrites();
   testFloatWritersResolveLocallyAndRollbackCallbackMutations();
   return failures == 0 ? 0 : 1;
 }

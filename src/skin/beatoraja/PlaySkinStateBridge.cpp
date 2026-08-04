@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 namespace skin {
@@ -92,6 +93,7 @@ void PlaySkinStateBridge::beginFrame(
   staged_ = {.frameSerial = frameSerial_};
   phase_ = FramePhase::Active;
   customObjectsUpdated_ = false;
+  customTimerValues_.clear();
 
   context_.runtime.setFrameState(this);
   context_.runtime.setEventExecutor(
@@ -116,14 +118,41 @@ SkinHostCallResult PlaySkinStateBridge::updateCustomObjects() {
     customObjectsUpdated_ = true;
     return {.diagnostics = diagnostics_};
   }
+
   reportDiagnostic(
-      {.code = "skin.play_state.custom_objects_unavailable",
-       .message = "Custom object callbacks need one shared Lua frame owner; "
-                  "the current renderer owns beginFrame and cannot be "
-                  "coordinated from the state bridge alone.",
+      {.code = "custom_object_order_authored_divergence",
+       .message = "Pinned custom object construction order differs from "
+                  "runtime timer/event phase order",
        .severity = DiagnosticSeverity::Warning});
-  return {.status = SkinHostCallStatus::Unsupported,
-          .diagnostics = diagnostics_};
+
+  SkinHostCallResult result;
+  // IntMap iteration in the pinned target is not reproducible from IDs alone.
+  // The validated model preserves declaration order, so use it directly.
+  for (const auto &timer : context_.model.model.customTimers) {
+    const auto updated = updateCustomTimer(timer);
+    result.callbacksInvoked += updated.callbacksInvoked;
+    if (updated.status != SkinHostCallStatus::Completed) {
+      rollbackFrameWrites();
+      customObjectsUpdated_ = true;
+      result.status = updated.status;
+      result.diagnostics = diagnostics_;
+      return result;
+    }
+  }
+  for (const auto &event : context_.model.model.customEvents) {
+    const auto updated = updateCustomEvent(event);
+    result.callbacksInvoked += updated.callbacksInvoked;
+    if (updated.status != SkinHostCallStatus::Completed) {
+      rollbackFrameWrites();
+      customObjectsUpdated_ = true;
+      result.status = updated.status;
+      result.diagnostics = diagnostics_;
+      return result;
+    }
+  }
+  customObjectsUpdated_ = true;
+  result.diagnostics = diagnostics_;
+  return result;
 }
 
 SkinHostCallResult
@@ -140,15 +169,30 @@ PlaySkinStateBridge::executeEvent(int eventId, std::span<const int> arguments) {
             .diagnostics = diagnostics_};
   }
 
-  if (std::ranges::any_of(context_.model.model.customEvents,
-                          [eventId](const SkinCustomEvent &event) {
-                            return event.id == eventId;
-                          })) {
-    reportDiagnostic(
-        {.code = "skin.play_state.custom_objects_unavailable",
-         .message =
-             "Manual custom events require the shared Lua frame owner."});
-    return {.status = SkinHostCallStatus::Unsupported,
+  if (const auto event = std::ranges::find_if(
+          context_.model.model.customEvents,
+          [eventId](const SkinCustomEvent &candidate) {
+            return candidate.id == eventId;
+          }); event != context_.model.model.customEvents.end()) {
+    auto invoked = invokeCustomEvent(*event, arguments);
+    if (invoked.status == SkinHostCallStatus::Completed) {
+      try {
+        // Pinned CustomEvent.execute shares this clock with automatic update,
+        // so a manual invocation suppresses the same event until minInterval.
+        customEventLastExecutionMicros_.insert_or_assign(
+            event->id, state_->clock.visualTimeMicros);
+      } catch (...) {
+        reportDiagnostic({.code = "skin.play_state.custom_event_clock_failed",
+                          .message =
+                              "Custom event clock could not be recorded."});
+        invoked.status = SkinHostCallStatus::CriticalFailure;
+      }
+    }
+    if (invoked.status != SkinHostCallStatus::Completed) {
+      rollbackFrameWrites();
+    }
+    return {.status = invoked.status,
+            .callbacksInvoked = invoked.callbacksInvoked,
             .diagnostics = diagnostics_};
   }
 
@@ -184,6 +228,245 @@ PlaySkinStateBridge::executeEvent(int eventId, std::span<const int> arguments) {
   reportUnsupportedEvent(eventId);
   return {.status = SkinHostCallStatus::Unsupported,
           .diagnostics = diagnostics_};
+}
+
+SkinHostCallResult
+PlaySkinStateBridge::updateCustomTimer(const SkinCustomTimer &timer) {
+  std::int64_t value = INT64_MIN;
+  if (timer.timer) {
+    const auto resolved = evaluateCustomTimer(*timer.timer, value);
+    if (resolved.status != SkinHostCallStatus::Completed) {
+      return resolved;
+    }
+    try {
+      customTimerValues_.insert_or_assign(timer.id, value);
+    } catch (...) {
+      reportDiagnostic({.code = "skin.play_state.custom_timer_cache_failed",
+                        .message = "Custom timer value could not be cached."});
+      return {.status = SkinHostCallStatus::CriticalFailure,
+              .callbacksInvoked = resolved.callbacksInvoked,
+              .diagnostics = diagnostics_};
+    }
+    return {.callbacksInvoked = resolved.callbacksInvoked,
+            .diagnostics = diagnostics_};
+  }
+  try {
+    customTimerValues_.insert_or_assign(timer.id, INT64_MIN);
+  } catch (...) {
+    reportDiagnostic({.code = "skin.play_state.custom_timer_cache_failed",
+                      .message = "Passive custom timer value could not be cached."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+  return {.diagnostics = diagnostics_};
+}
+
+SkinHostCallResult
+PlaySkinStateBridge::updateCustomEvent(const SkinCustomEvent &event) {
+  if (!event.condition) {
+    return {.diagnostics = diagnostics_};
+  }
+  bool condition = false;
+  const auto evaluated = evaluateCustomCondition(*event.condition, condition);
+  if (evaluated.status != SkinHostCallStatus::Completed || !condition) {
+    return evaluated;
+  }
+  const std::int64_t now = state_->clock.visualTimeMicros;
+  if (const auto previous = customEventLastExecutionMicros_.find(event.id);
+      previous != customEventLastExecutionMicros_.end()) {
+    const __int128 elapsed = static_cast<__int128>(now) - previous->second;
+    if (elapsed / 1000 < event.minimumIntervalMillis) {
+      return evaluated;
+    }
+  }
+  const auto invoked = invokeCustomEvent(event, {});
+  SkinHostCallResult result{
+      .status = invoked.status,
+      .callbacksInvoked = evaluated.callbacksInvoked + invoked.callbacksInvoked,
+      .diagnostics = diagnostics_};
+  if (invoked.status != SkinHostCallStatus::Completed) {
+    return result;
+  }
+  try {
+    customEventLastExecutionMicros_.insert_or_assign(event.id, now);
+  } catch (...) {
+    reportDiagnostic({.code = "skin.play_state.custom_event_clock_failed",
+                      .message = "Custom event clock could not be recorded."});
+    result.status = SkinHostCallStatus::CriticalFailure;
+  }
+  result.diagnostics = diagnostics_;
+  return result;
+}
+
+SkinHostCallResult PlaySkinStateBridge::invokeCustomEvent(
+    const SkinCustomEvent &event, std::span<const int> arguments) {
+  return invokeEventBinding(event.action, arguments);
+}
+
+SkinHostCallResult PlaySkinStateBridge::invokeEventBinding(
+    SkinEventBindingId id, std::span<const int> arguments) {
+  const auto binding = std::ranges::find_if(
+      context_.model.model.events, [id](const SkinEventBinding &candidate) {
+        return candidate.id == id;
+      });
+  if (binding == context_.model.model.events.end()) {
+    reportDiagnostic({.code = "skin.play_state.custom_event_binding_missing",
+                      .message = "Custom event action binding is absent."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+  if (const auto *builtin =
+          std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
+    const auto target = numericSelector(*builtin);
+    if (!target) {
+      reportUnsupportedEvent(0);
+      return {.status = SkinHostCallStatus::Unsupported,
+              .diagnostics = diagnostics_};
+    }
+    return executeEvent(*target, arguments);
+  }
+
+  std::array<LuaScalar, 2> luaArguments{};
+  for (std::size_t index = 0; index < arguments.size(); ++index) {
+    luaArguments[index] = static_cast<std::int64_t>(arguments[index]);
+  }
+  LuaCallbackResult callback;
+  try {
+    callback = context_.runtime.invoke(
+        std::get<LuaCallbackId>(binding->source),
+        std::span<const LuaScalar>{luaArguments.data(), arguments.size()});
+  } catch (...) {
+    reportDiagnostic({.code = "skin.play_state.custom_event_callback_failed",
+                      .message = "Custom event callback failed within host limits."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  if (callback.failure) {
+    return callbackFailure(std::move(*callback.failure));
+  }
+  return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
+}
+
+SkinHostCallResult PlaySkinStateBridge::evaluateCustomCondition(
+    SkinBooleanPropertyId id, bool &condition) {
+  const auto binding = std::ranges::find_if(
+      context_.model.model.booleanProperties,
+      [id](const SkinBooleanPropertyBinding &candidate) {
+        return candidate.id == id;
+      });
+  if (binding == context_.model.model.booleanProperties.end()) {
+    reportDiagnostic({.code = "skin.play_state.custom_event_condition_missing",
+                      .message = "Custom event condition binding is absent."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+  if (const auto *builtin =
+          std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
+    const auto value = booleanProperty(*builtin);
+    if (!value.supported) {
+      return {.status = SkinHostCallStatus::CriticalFailure,
+              .diagnostics = diagnostics_};
+    }
+    condition = value.value;
+    return {.diagnostics = diagnostics_};
+  }
+  LuaCallbackResult callback;
+  try {
+    callback = context_.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+  } catch (...) {
+    reportDiagnostic({.code = "skin.play_state.custom_event_condition_failed",
+                      .message = "Custom event condition failed within host limits."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  if (callback.failure) {
+    return callbackFailure(std::move(*callback.failure));
+  }
+  if (!callback.value || !std::holds_alternative<bool>(*callback.value)) {
+    reportDiagnostic({.code = "skin.play_state.custom_event_condition_type",
+                      .message = "Custom event condition did not return a boolean."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  condition = std::get<bool>(*callback.value);
+  return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
+}
+
+SkinHostCallResult PlaySkinStateBridge::evaluateCustomTimer(
+    SkinTimerPropertyId id, std::int64_t &value) {
+  const auto binding = std::ranges::find_if(
+      context_.model.model.timerProperties,
+      [id](const SkinTimerPropertyBinding &candidate) { return candidate.id == id; });
+  if (binding == context_.model.model.timerProperties.end()) {
+    reportDiagnostic({.code = "skin.play_state.custom_timer_binding_missing",
+                      .message = "Custom timer binding is absent."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+  if (const auto *builtin =
+          std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
+    value = timerProperty(*builtin);
+    return {.diagnostics = diagnostics_};
+  }
+  LuaCallbackResult callback;
+  try {
+    callback = context_.runtime.invoke(std::get<LuaCallbackId>(binding->source), {});
+  } catch (...) {
+    reportDiagnostic({.code = "skin.play_state.custom_timer_callback_failed",
+                      .message = "Custom timer callback failed within host limits."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  if (callback.failure) {
+    return callbackFailure(std::move(*callback.failure));
+  }
+  const auto numeric = callback.value
+                           ? std::visit(
+                                 [](const auto &candidate) -> std::optional<std::int64_t> {
+                                   using Candidate = std::decay_t<decltype(candidate)>;
+                                   if constexpr (std::is_same_v<Candidate, std::int64_t>) {
+                                     return candidate;
+                                   } else if constexpr (std::is_same_v<Candidate, double>) {
+                                     if (std::isfinite(candidate) &&
+                                         candidate >= static_cast<double>(INT64_MIN) &&
+                                         candidate <= static_cast<double>(INT64_MAX)) {
+                                       return static_cast<std::int64_t>(candidate);
+                                     }
+                                   }
+                                   return std::nullopt;
+                                 },
+                                 *callback.value)
+                           : std::nullopt;
+  if (!numeric) {
+    reportDiagnostic({.code = "skin.play_state.custom_timer_type",
+                      .message = "Custom timer callback did not return an integer."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  value = *numeric;
+  return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
+}
+
+SkinHostCallResult PlaySkinStateBridge::callbackFailure(SkinDiagnostic failure) {
+  const std::string code = failure.code;
+  reportDiagnostic(std::move(failure));
+  const bool budgetExceeded =
+      code == "skin_lua_frame_budget_exceeded" ||
+      code == "skin_lua_instruction_limit_exceeded" ||
+      code == "skin_lua_wall_time_limit_exceeded";
+  return {.status = budgetExceeded ? SkinHostCallStatus::BudgetExceeded
+                                   : SkinHostCallStatus::CriticalFailure,
+          .callbacksInvoked = 1,
+          .diagnostics = diagnostics_};
+}
+
+void PlaySkinStateBridge::rollbackFrameWrites() noexcept {
+  staged_.orderedMutations.clear();
 }
 
 SkinHostCallResult PlaySkinStateBridge::invokeWriter(
@@ -430,6 +713,10 @@ std::int64_t PlaySkinStateBridge::timerProperty(
     reportUnsupported("timer", selector);
     return INT64_MIN;
   }
+  if (const auto custom = customTimerValues_.find(*id);
+      custom != customTimerValues_.end()) {
+    return custom->second;
+  }
   const auto laneTimer =
       [snapshot](int firstId, int count,
                  long long LanePresentationState::*field,
@@ -546,6 +833,7 @@ void PlaySkinStateBridge::closeFrame() noexcept {
   frameSerial_ = 0;
   projection_ = {};
   staged_ = {};
+  customTimerValues_.clear();
 }
 
 LuaSkinEventExecutionResult PlaySkinStateBridge::executeHostEvent(
