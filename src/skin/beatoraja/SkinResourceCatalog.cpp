@@ -130,9 +130,12 @@ bool sameRect(const SkinSourceRect &left, const SkinSourceRect &right) noexcept 
          left.gridColumns == right.gridColumns && left.gridRows == right.gridRows;
 }
 
+void recordRegionIdentityCheck() noexcept;
+
 struct SkinSourceRectLess {
   bool operator()(const SkinSourceRect &left,
                   const SkinSourceRect &right) const noexcept {
+    recordRegionIdentityCheck();
     return std::tie(left.x, left.y, left.w, left.h, left.gridColumn,
                     left.gridRow, left.gridColumns, left.gridRows) <
            std::tie(right.x, right.y, right.w, right.h, right.gridColumn,
@@ -145,12 +148,23 @@ using RegionIdentityMap = std::map<SkinSourceRect, SkinSourceRect,
 
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
 std::atomic_size_t regionIdentityChecksForTesting{0};
+std::atomic_size_t fontAtlasRequestHighWaterForTesting{0};
 
 void recordRegionIdentityCheck() noexcept {
   regionIdentityChecksForTesting.fetch_add(1, std::memory_order_relaxed);
 }
+
+void recordFontAtlasRequestCount(std::size_t count) noexcept {
+  std::size_t observed =
+      fontAtlasRequestHighWaterForTesting.load(std::memory_order_relaxed);
+  while (observed < count &&
+         !fontAtlasRequestHighWaterForTesting.compare_exchange_weak(
+             observed, count, std::memory_order_relaxed)) {
+  }
+}
 #else
 void recordRegionIdentityCheck() noexcept {}
+void recordFontAtlasRequestCount(std::size_t) noexcept {}
 #endif
 
 bool resolveRegions(const ResourceUse &use, int width, int height,
@@ -165,7 +179,6 @@ bool resolveRegions(const ResourceUse &use, int width, int height,
   RegionIdentityMap identities;
   if (mappings != nullptr) {
     for (const SkinResolvedRegion &mapping : *mappings) {
-      recordRegionIdentityCheck();
       const auto [existing, inserted] = identities.emplace(
           mapping.authored, mapping.resolved);
       if (!inserted && !sameRect(existing->second, mapping.resolved)) {
@@ -181,7 +194,6 @@ bool resolveRegions(const ResourceUse &use, int width, int height,
       return false;
     }
     if (mappings) {
-      recordRegionIdentityCheck();
       const auto [existing, inserted] = identities.emplace(authored, resolved);
       if (!inserted && !sameRect(existing->second, resolved)) {
         diagnostics.push_back(useDiagnostic("skin.resource.region_identity", "skin.resource.region_identity", "authored sprite rectangle resolves inconsistently", use.critical));
@@ -343,10 +355,20 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
       diagnostics.push_back(fontDiagnostic(*found->second, text.critical, "skin.resource.font_style_invalid", "font atlas style is invalid"));
       continue;
     }
-    auto [request, inserted] = requests.try_emplace(
-        key, FontAtlasRequest{.key=key, .font=found->second,
-                              .resolvedFacePaths=std::move(resolvedFacePaths),
-                              .critical=text.critical});
+    auto request = requests.find(key);
+    if (request == requests.end()) {
+      if (requests.size() >= SkinResourcePolicy::maximumAtlases) {
+        diagnostics.push_back(fontDiagnostic(
+            *found->second, text.critical, "skin.resource.atlas_limit",
+            "font atlas request count exceeds policy"));
+        continue;
+      }
+      request = requests.emplace(
+          key, FontAtlasRequest{.key=key, .font=found->second,
+                                .resolvedFacePaths=std::move(resolvedFacePaths),
+                                .critical=text.critical}).first;
+      recordFontAtlasRequestCount(requests.size());
+    }
     request->second.critical = request->second.critical || text.critical;
     if (!appendUtf8(text.literal, request->second.codepoints, request->second.pairs))
       diagnostics.push_back(fontDiagnostic(*found->second, request->second.critical, "skin.resource.atlas_limit", "font glyph or kerning limit exceeds policy"));
@@ -417,6 +439,14 @@ void resetSkinResourceRegionIdentityChecksForTesting() noexcept {
 
 std::size_t skinResourceRegionIdentityChecksForTesting() noexcept {
   return regionIdentityChecksForTesting.load(std::memory_order_relaxed);
+}
+
+void resetSkinResourceFontAtlasRequestHighWaterForTesting() noexcept {
+  fontAtlasRequestHighWaterForTesting.store(0, std::memory_order_relaxed);
+}
+
+std::size_t skinResourceFontAtlasRequestHighWaterForTesting() noexcept {
+  return fontAtlasRequestHighWaterForTesting.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -542,7 +572,6 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     for (std::size_t index = 0; index < image.regionMappings.size(); ++index) {
       SkinSourceRect resolvedAuthored;
       const SkinResolvedRegion &mapping = image.regionMappings[index];
-      recordRegionIdentityCheck();
       const auto [existing, inserted] = identities.emplace(mapping.authored,
                                                             mapping.resolved);
       if (!skinResourceResolveRect(image.regionMappings[index].authored,
@@ -572,7 +601,6 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
       for (std::size_t index = 0; index < aliasMappings->second.size(); ++index) {
         SkinSourceRect resolvedAuthored;
         const SkinResolvedRegion &mapping = aliasMappings->second[index];
-        recordRegionIdentityCheck();
         const auto [existing, inserted] = identities.emplace(mapping.authored,
                                                               mapping.resolved);
         if (!skinResourceResolveRect(aliasMappings->second[index].authored,

@@ -82,10 +82,13 @@ private:
                                            SkinSourceRect &resolved) noexcept;
 
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
-// The regression suite observes indexed identity lookups rather than wall
+// The regression suite observes ordered-map comparisons rather than wall
 // time, which keeps the maximum-region test deterministic across machines.
 void resetSkinResourceRegionIdentityChecksForTesting() noexcept;
 [[nodiscard]] std::size_t skinResourceRegionIdentityChecksForTesting() noexcept;
+void resetSkinResourceFontAtlasRequestHighWaterForTesting() noexcept;
+[[nodiscard]] std::size_t
+skinResourceFontAtlasRequestHighWaterForTesting() noexcept;
 #endif
 
 // The authored rectangle is the stable command-side identity. Resolution is

@@ -34,6 +34,7 @@ std::string stableFallbackChainDigest(SkinResourceId primary, int primaryType,
   std::string result = std::to_string(primary) + ':' +
                        std::to_string(primaryType);
   for (const auto &fallback : fallbacks) {
+    if (fallback.virtualPath.empty()) continue;
     if (!appendStableFallbackChainEntry(result, fallback.virtualPath,
                                         fallback.type)) {
       return {};

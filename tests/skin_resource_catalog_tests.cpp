@@ -97,6 +97,14 @@ void testTextAtlasKeyRejectsNegativePaintExtents() {
   expect(skin::stableFallbackChainDigest(1, 0, forward) !=
              skin::stableFallbackChainDigest(1, 0, reverse),
          "fallback-chain identity preserves exact ordered path and type data");
+  const std::vector<skin::SkinFontFallbackResource> withEmpty = {
+      {.virtualPath="", .type=9},
+      {.virtualPath="font/a.ttf", .type=0}};
+  const std::vector<skin::SkinFontFallbackResource> withoutEmpty = {
+      {.virtualPath="font/a.ttf", .type=0}};
+  expect(skin::stableFallbackChainDigest(1, 0, withEmpty) ==
+             skin::stableFallbackChainDigest(1, 0, withoutEmpty),
+         "empty fallback placeholders do not change public atlas identity");
   std::vector<skin::SkinFontFallbackResource> oversizedChain(
       8192, {.virtualPath="font/fallback.ttf", .type=0});
   expect(skin::stableFallbackChainDigest(1, 0, oversizedChain).empty(),
@@ -551,6 +559,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                                         .pointSize=16 + index},
          .critical=index < static_cast<int>(skin::SkinResourcePolicy::maximumAtlases)});
   }
+  skin::resetSkinResourceFontAtlasRequestHighWaterForTesting();
   auto compactAtlasPlan = service.decodeAndPlan(
       {.revision=lease->clone(), .entry=entry,
        .fileSystem=*leasedFs.fileSystem, .model=atlasRequestCapacity,
@@ -561,9 +570,11 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              compactAtlasPlan.plan->atlases.front().id == 1 &&
              compactAtlasPlan.plan->atlases.back().id ==
                  skin::SkinResourcePolicy::maximumAtlases &&
+             skin::skinResourceFontAtlasRequestHighWaterForTesting() <=
+                 skin::SkinResourcePolicy::maximumAtlases &&
              hasDiagnostic(compactAtlasPlan.diagnostics,
                            "skin.resource.atlas_limit"),
-         "the optional rejected atlas request performs no ID allocation, preserving compact key-order atlas IDs");
+         "the optional rejected atlas request is not retained and performs no ID allocation, preserving compact key-order atlas IDs");
   compactAtlasPlan.plan.reset();
   auto planned = service.decodeAndPlan({.revision=std::move(*lease), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(planned.plan && planned.plan->images.size() == 2 && planned.plan->atlases.size() == 4 &&
@@ -872,74 +883,69 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
            "noncanonical authored mapping fails before upload or lease move");
   }
   {
-    skin::ValidatedBeatorajaSkinModel repeatedPlanningModel;
-    repeatedPlanningModel.model.resources.emplace_back(skin::SkinImageResource{
-        .id=1, .authoredName="repeated", .virtualPath="resources/fixture.png"});
-    skin::SkinSpriteFrames repeatedFrames{.resource=1};
-    constexpr std::size_t repeatedCount = 100000;
-    repeatedFrames.frames.reserve(repeatedCount);
-    for (std::size_t index = 0; index < repeatedCount; ++index) {
-      repeatedFrames.frames.push_back(
-          {.x=0, .y=0, .w=40, .h=20, .gridColumn=static_cast<int>(index % 2),
-           .gridColumns=4, .gridRows=2});
+    skin::ValidatedBeatorajaSkinModel uniquePlanningModel;
+    uniquePlanningModel.model.resources.emplace_back(skin::SkinImageResource{
+        .id=1, .authoredName="unique", .virtualPath="resources/fixture.png"});
+    skin::SkinSpriteFrames uniqueFrames{.resource=1};
+    constexpr std::size_t uniqueCount = 100000;
+    uniqueFrames.frames.reserve(uniqueCount);
+    for (int columns = 1;
+         columns <= 40 && uniqueFrames.frames.size() < uniqueCount;
+         ++columns) {
+      for (int rows = 1;
+           rows <= 20 && uniqueFrames.frames.size() < uniqueCount; ++rows) {
+        for (int column = 0;
+             column < columns && uniqueFrames.frames.size() < uniqueCount;
+             ++column) {
+          for (int row = 0;
+               row < rows && uniqueFrames.frames.size() < uniqueCount; ++row) {
+            uniqueFrames.frames.push_back(
+                {.x=0, .y=0, .w=40, .h=20, .gridColumn=column,
+                 .gridRow=row, .gridColumns=columns, .gridRows=rows});
+          }
+        }
+      }
     }
-    repeatedPlanningModel.model.objects.push_back(
-        {.id=1, .authoredName="repeated-image",
-         .payload=skin::SkinImageObject{.orderedStates={repeatedFrames}},
+    expect(uniqueFrames.frames.size() == uniqueCount,
+           "the deterministic grid fixture contains 100000 unique authored rectangles");
+    uniquePlanningModel.model.objects.push_back(
+        {.id=1, .authoredName="unique-image",
+         .payload=skin::SkinImageObject{.orderedStates={uniqueFrames}},
          .critical=true});
     skin::resetSkinResourceRegionIdentityChecksForTesting();
-    const auto repeatedPlan = service.decodeAndPlan(
+    auto uniquePlan = service.decodeAndPlan(
         {.revision=planned.plan->revision.clone(), .entry=entry,
-         .fileSystem=*leasedFs.fileSystem, .model=repeatedPlanningModel,
+         .fileSystem=*leasedFs.fileSystem, .model=uniquePlanningModel,
          .configuration=configuration});
-    expect(repeatedPlan.plan && repeatedPlan.plan->images.size() == 1 &&
-               repeatedPlan.plan->images.front().regions.size() == repeatedCount &&
-               repeatedPlan.plan->images.front().regions[0].x == 0 &&
-               repeatedPlan.plan->images.front().regions[1].x == 10 &&
-               skin::skinResourceRegionIdentityChecksForTesting() <= repeatedCount,
-           "planning preserves repeated authored mapping order and count with indexed identity checks");
-  }
-  {
-    auto repeatedMappingPlan = copyUploadPlan();
-    repeatedMappingPlan.images.resize(1);
-    repeatedMappingPlan.atlases.clear();
-    auto &image = repeatedMappingPlan.images.front();
-    image.aliases = {2};
-    image.aliasRegions.clear();
-    image.aliasRegionMappings.clear();
-    constexpr std::size_t repeatedCount = 100000;
-    const auto firstMapping = image.regionMappings.front();
-    auto secondMapping = firstMapping;
-    secondMapping.authored.gridColumn = 1;
-    secondMapping.resolved = {.x=10, .y=0, .w=10, .h=10,
-                              .gridColumn=0, .gridRow=0,
-                              .gridColumns=1, .gridRows=1};
-    image.regions.clear();
-    image.regionMappings.clear();
-    image.regions.reserve(repeatedCount);
-    image.regionMappings.reserve(repeatedCount);
-    for (std::size_t index = 0; index < repeatedCount; ++index) {
-      const auto &mapping = index % 2 == 0 ? firstMapping : secondMapping;
-      image.regions.push_back(mapping.resolved);
-      image.regionMappings.push_back(mapping);
+    const std::size_t planningComparisons =
+        skin::skinResourceRegionIdentityChecksForTesting();
+    expect(uniquePlan.plan && uniquePlan.plan->images.size() == 1 &&
+               uniquePlan.plan->images.front().regions.size() == uniqueCount &&
+               uniquePlan.plan->images.front().regions[0].w == 40 &&
+               uniquePlan.plan->images.front().regions[1].h == 10 &&
+               planningComparisons > uniqueCount &&
+               planningComparisons <= uniqueCount * 40,
+           "planning preserves unique authored mapping order with measured logarithmic map comparisons");
+    if (uniquePlan.plan) {
+      auto &image = uniquePlan.plan->images.front();
+      image.aliases = {2};
+      image.aliasRegions.emplace(2, image.regions);
+      image.aliasRegionMappings.emplace(2, image.regionMappings);
+      skin::resetSkinResourceRegionIdentityChecksForTesting();
+      auto uniqueDevice = std::make_shared<FakeTextureDevice>();
+      const auto uniqueUpload = skin::SkinResourceCatalog::upload(
+          std::move(*uniquePlan.plan), uniqueDevice);
+      const std::size_t uploadComparisons =
+          skin::skinResourceRegionIdentityChecksForTesting();
+      expect(uniqueUpload.catalog &&
+                 uniqueUpload.catalog->find(1)->regions.size() == uniqueCount &&
+                 uniqueUpload.catalog->find(2)->regions.size() == uniqueCount &&
+                 uniqueUpload.catalog->findResolvedRegion(
+                     1, uniqueFrames.frames.back()) != nullptr &&
+                 uploadComparisons > uniqueCount * 2 &&
+                 uploadComparisons <= uniqueCount * 80,
+             "primary and alias preflight preserve unique mapping order with measured logarithmic map comparisons");
     }
-    image.aliasRegions.emplace(2, image.regions);
-    image.aliasRegionMappings.emplace(2, image.regionMappings);
-    repeatedMappingPlan.decodedBytes = image.pixels.byteSize();
-    skin::resetSkinResourceRegionIdentityChecksForTesting();
-    auto repeatedDevice = std::make_shared<FakeTextureDevice>();
-    const auto repeatedUpload = skin::SkinResourceCatalog::upload(
-        std::move(repeatedMappingPlan), repeatedDevice);
-    expect(repeatedUpload.catalog &&
-               repeatedUpload.catalog->find(1)->regions.size() == repeatedCount &&
-               repeatedUpload.catalog->find(2)->regions.size() == repeatedCount &&
-               repeatedUpload.catalog->find(1)->regions[0].x == 0 &&
-               repeatedUpload.catalog->find(1)->regions[1].x == 10 &&
-               repeatedUpload.catalog->findResolvedRegion(
-                   1, firstMapping.authored) != nullptr &&
-               skin::skinResourceRegionIdentityChecksForTesting() <=
-                   repeatedCount * 2,
-           "primary and alias preflight preserve repeated mapping order and count with indexed identity checks");
   }
   {
     auto conflictingMappingPlan = copyUploadPlan();
