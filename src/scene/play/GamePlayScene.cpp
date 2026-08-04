@@ -3490,7 +3490,9 @@ void GamePlayScene::capturePlayfieldVisualState(
   capturedPlayfieldProjection = playfieldProjection.project(
       playfieldChartVisualModel, capturedPlayfieldVisualState,
       {.includeInvisibleNotes =
-           capturedPlayfieldVisualState.configuration.showInvisibleNotes});
+           capturedPlayfieldVisualState.configuration.showInvisibleNotes,
+       .latePoorTimingMicros = renderer->projectionLatePoorTimingMicros(),
+       .builtInTraversal = renderer->builtInProjectionTraversal()});
   playfieldLaneCoverResetPending = false;
 }
 

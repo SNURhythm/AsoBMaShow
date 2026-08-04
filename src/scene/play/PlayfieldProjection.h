@@ -5,6 +5,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <vector>
 
 enum class ProjectedLineKind : std::uint8_t {
@@ -12,6 +14,23 @@ enum class ProjectedLineKind : std::uint8_t {
   BpmChange,
   Stop,
   Time,
+};
+
+// The built-in renderer follows Beatoraja's incremental forward walk rather
+// than the generic skin viewport filter.  These values make that walk a
+// value-only projection concern: no parser object crosses the frame boundary.
+struct BuiltInRendererTraversal {
+  float lowerBound = -1.0F;
+  float judgeY = 0.0F;
+  float upperBound = 0.0F;
+  float rxhs = 0.0F;
+  float hispeed = 0.0F;
+  float noteVisibleUpperBound = 0.0F;
+  // Raw parser lane IDs in the exact white, blue, scratch traversal order.
+  std::vector<int> playableLaneOrder;
+  // BMSRendererState::currentTimelineIndex, expressed in the stable retained
+  // model order. This is presentation state, not parser/gameplay state.
+  std::uint32_t startRetainedOrdinal = 0;
 };
 
 struct PlayfieldProjectionRequest {
@@ -24,6 +43,7 @@ struct PlayfieldProjectionRequest {
   // that only has an immutable visual snapshot must opt in explicitly rather
   // than projection guessing a ruleset-dependent value.
   std::int64_t latePoorTimingMicros = 0;
+  std::optional<BuiltInRendererTraversal> builtInTraversal;
 };
 
 struct ProjectedTimelineDescriptor {
@@ -101,6 +121,40 @@ struct ProjectedLineDescriptor {
   std::uint32_t submissionOrdinal = 0;
 };
 
+enum class BuiltInRendererPlanEntryKind : std::uint8_t {
+  SectionLine,
+  Note,
+  LongNote,
+};
+
+// `descriptorIndex` addresses the matching owned vector in
+// BuiltInRendererPlan. Long-note entries carry the exact result of legacy
+// lookahead: a tail outside the bounded walk is rendered at upperBound.
+struct BuiltInRendererPlanEntry {
+  BuiltInRendererPlanEntryKind kind = BuiltInRendererPlanEntryKind::Note;
+  std::uint32_t descriptorIndex = 0;
+  bool tailAtUpperBound = false;
+  float renderY = std::numeric_limits<float>::quiet_NaN();
+  float tailRenderY = std::numeric_limits<float>::quiet_NaN();
+};
+
+struct BuiltInRendererPlanTimeline {
+  std::uint32_t retainedOrdinal = kNoRetainedTimelineOrdinal;
+  long long timeMicros = 0;
+  float renderY = std::numeric_limits<float>::quiet_NaN();
+  bool future = false;
+};
+
+struct BuiltInRendererPlan {
+  std::vector<std::uint32_t> traversedTimelineOrdinals;
+  std::vector<BuiltInRendererPlanTimeline> timelines;
+  std::uint32_t nextStartRetainedOrdinal = 0;
+  std::vector<ProjectedPlayfieldNote> notes;
+  std::vector<ProjectedLongNoteDescriptor> longNotes;
+  std::vector<ProjectedLineDescriptor> lines;
+  std::vector<BuiltInRendererPlanEntry> entries;
+};
+
 struct PlayfieldProjectionResult {
   std::uint64_t frameSerial = 0;
   double currentScrollPosition = 0.0;
@@ -108,6 +162,9 @@ struct PlayfieldProjectionResult {
   std::vector<ProjectedPlayfieldNote> notes;
   std::vector<ProjectedLongNoteDescriptor> longNotes;
   std::vector<ProjectedLineDescriptor> lines;
+  // Deliberately separate from the bounded generic skin DTOs above. This is
+  // the immutable execution plan for BMSRenderer's compatibility path.
+  BuiltInRendererPlan builtInPlan;
   bool budgetExceeded = false;
 };
 

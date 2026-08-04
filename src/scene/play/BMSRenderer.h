@@ -45,6 +45,7 @@ class TexBatchRenderer;
 
 class SpriteLoader;
 struct PlayfieldProjectionResult;
+struct BuiltInRendererTraversal;
 struct LaneState {
   long long lastStateTime = -1;
   long long lastPressedTime = -1;
@@ -423,6 +424,12 @@ private:
                          uint32_t submitDepth);
   void drawLandmineNote(float y, bms_parser::LandmineNote *const &note,
                         uint32_t submitDepth);
+  // The captured route deliberately receives no mutable parser state.  The
+  // legacy overload supplies nullptr and retains the historical traversal for
+  // preview/export callers.
+  void renderFrame(RenderContext &context, long long micro,
+                   long long replayTouchTimeMicros,
+                   const PlayfieldProjectionResult *projection);
   void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
@@ -528,6 +535,13 @@ public:
               long long replayTouchTimeMicros);
   void render(RenderContext &context, const PlayfieldVisualState &state,
               const PlayfieldProjectionResult &projection);
+  // Projection capture must use the identical late-poor boundary as the
+  // legacy renderer so its immutable row/depth plan has the same eligibility.
+  [[nodiscard]] long long projectionLatePoorTimingMicros() const noexcept {
+    return latePoorTiming;
+  }
+  [[nodiscard]] BuiltInRendererTraversal
+  builtInProjectionTraversal() const;
   void reset() override;
   void refreshGeometry() override;
   void setVisibleTimeGreenNumber(int greenNumber);

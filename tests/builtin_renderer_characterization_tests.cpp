@@ -667,7 +667,8 @@ ScenarioResult renderScenario(
     ScenarioRenderPath renderPath = ScenarioRenderPath::Legacy,
     long long visualTimeMicros = kRenderMicros,
     std::uint64_t frameSerial = 0,
-    bool seedPastInvisibleProbe = false) {
+    bool seedPastInvisibleProbe = false,
+    bool primeRendererTraversal = false) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
@@ -718,8 +719,39 @@ ScenarioResult renderScenario(
     }
     store.setLiveTouchPoint(42, ReplayTouchAction::Down, 0.33F, 0.72F,
                             1'600'000);
-    store.setNoteStates(
-        captureNoteStates(*fixture.chart, model, visualTimeMicros));
+    if (primeRendererTraversal) {
+      const PlayfieldFrameClock warmupClock{
+          .serial = 1,
+          .visualTimeMicros = kRenderMicros,
+          .gameplayTimeMicros = kGameplayMicros,
+          .replayTouchTimeMicros = kRenderMicros,
+          .bgaTimeMicros = kBgaMicros,
+      };
+      RenderContext warmupContext;
+      if (renderPath == ScenarioRenderPath::Captured) {
+        store.setNoteStates(
+            captureNoteStates(*fixture.chart, model, kRenderMicros));
+        const PlayfieldVisualState warmupState = store.capture(warmupClock);
+        renderer.configure(warmupState.configuration);
+        PlayfieldProjection projector;
+        const PlayfieldProjectionResult warmupProjection = projector.project(
+            model, warmupState,
+            {.includeInvisibleNotes =
+                 warmupState.configuration.showInvisibleNotes,
+             .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+             .builtInTraversal = renderer.builtInProjectionTraversal()});
+        renderer.render(warmupContext, warmupState, warmupProjection);
+      } else {
+        renderer.render(warmupContext, warmupClock.visualTimeMicros,
+                        warmupClock.replayTouchTimeMicros);
+      }
+      bgfx::frame();
+      result.recorder = {};
+      bgfx::touch(rendering::clear_view);
+    }
+
+    store.setNoteStates(captureNoteStates(*fixture.chart, model,
+                                          visualTimeMicros));
 
     const PlayfieldFrameClock frameClock{
         .serial = frameSerial != 0
@@ -737,11 +769,16 @@ ScenarioResult renderScenario(
 
     RenderContext context;
     if (renderPath == ScenarioRenderPath::Captured) {
+      // Projection freezes the renderer's own cutoff and incremental forward
+      // geometry; GamePlayScene uses this same value-returning API.
+      renderer.configure(capturedState.configuration);
       PlayfieldProjection projector;
       const PlayfieldProjectionResult capturedProjection = projector.project(
           model, capturedState,
           {.includeInvisibleNotes =
-               capturedState.configuration.showInvisibleNotes});
+               capturedState.configuration.showInvisibleNotes,
+           .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+           .builtInTraversal = renderer.builtInProjectionTraversal()});
       result.projection = capturedProjection;
       renderer.render(context, capturedState, capturedProjection);
     } else {
@@ -1288,6 +1325,25 @@ int main() {
           kPastInvisibleRenderMicros, kCapturedEquivalenceFrameSerial, true);
       verifyCapturedOverloadEquivalence(legacyPastInvisible,
                                         capturedPastInvisible);
+
+      const auto legacyCursorAdvanced = renderScenario(
+          target, kAfterCoverPercent, true, ScenarioRenderPath::Legacy,
+          kPastInvisibleRenderMicros, kCapturedEquivalenceFrameSerial, true,
+          true);
+      const auto capturedCursorAdvanced = renderScenario(
+          target, kAfterCoverPercent, true, ScenarioRenderPath::Captured,
+          kPastInvisibleRenderMicros, kCapturedEquivalenceFrameSerial, true,
+          true);
+      expect(std::ranges::any_of(
+                 capturedCursorAdvanced.projection.builtInPlan.longNotes,
+                 [](const auto &longNote) {
+                   return longNote.headTimeMicros == 1'100'000 &&
+                          longNote.tailTimeMicros == 3'600'000;
+                 }),
+             "cursor-advanced capture retains the LN spanning the renderer "
+             "start cursor");
+      verifyCapturedOverloadEquivalence(legacyCursorAdvanced,
+                                        capturedCursorAdvanced);
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;

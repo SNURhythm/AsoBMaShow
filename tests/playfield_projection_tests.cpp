@@ -711,5 +711,157 @@ int main() {
         << "reverse scroll, stop, and equal-row traversal contract failed\n";
     return EXIT_FAILURE;
   }
+
+  // The built-in path must retain its own unbounded traversal plan even when
+  // generic skin DTO limits would drop the same rows.  The forward stop tests
+  // the previous future row, so the first row beyond the upper boundary is
+  // still visited; the next is not.
+  PlayfieldChartVisualModel builtInPlanModel;
+  builtInPlanModel.laneOrder = {1};
+  builtInPlanModel.timelines = {
+      {.id = 1000, .timeMicros = 0, .beat = 0.0, .scrollPosition = 0.0,
+       .retainedForProjection = true, .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 1001, .timeMicros = 100, .beat = 1.0, .scrollPosition = 1.0,
+       .retainedForProjection = true, .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 1002, .timeMicros = 300, .beat = 2.0, .scrollPosition = 2.0,
+       .sectionLine = true, .retainedForProjection = true,
+       .authoredOrdinal = 2, .retainedOrdinal = 2},
+      {.id = 1003, .timeMicros = 400, .beat = 3.0, .scrollPosition = 3.0,
+       .retainedForProjection = true, .authoredOrdinal = 3,
+       .retainedOrdinal = 3},
+      {.id = 1004, .timeMicros = 500, .beat = 4.0, .scrollPosition = 4.0,
+       .retainedForProjection = true, .authoredOrdinal = 4,
+       .retainedOrdinal = 4},
+      {.id = 1005, .timeMicros = 600, .beat = 5.0, .scrollPosition = 5.0,
+       .retainedForProjection = true, .authoredOrdinal = 5,
+       .retainedOrdinal = 5},
+  };
+  builtInPlanModel.notes = {
+      {.id = 1110, .timelineId = 1001, .pairId = 1111, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .authoredOrdinal = 0},
+      {.id = 1102, .timelineId = 1002, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 1},
+      {.id = 1103, .timelineId = 1003, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 2},
+      {.id = 1104, .timelineId = 1004, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 3},
+      {.id = 1105, .timelineId = 1005, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 4},
+      {.id = 1111, .timelineId = 1005, .pairId = 1110, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .authoredOrdinal = 5},
+  };
+  PlayfieldVisualState builtInPlanState;
+  builtInPlanState.clock.visualTimeMicros = 200;
+  const auto builtInPlanResult = projection.project(
+      builtInPlanModel, builtInPlanState,
+      {.maxTimelines = 1,
+       .maxNotes = 1,
+       .builtInTraversal = BuiltInRendererTraversal{.judgeY = 0.0F,
+                                                     .upperBound = 1.5F,
+                                                     .rxhs = 1.0F}});
+  if (builtInPlanResult.builtInPlan.traversedTimelineOrdinals !=
+          std::vector<std::uint32_t>({0, 1, 2, 3, 4}) ||
+      builtInPlanResult.builtInPlan.nextStartRetainedOrdinal != 1U ||
+      builtInPlanResult.builtInPlan.entries.size() != 5U ||
+      builtInPlanResult.builtInPlan.entries[0].kind !=
+          BuiltInRendererPlanEntryKind::SectionLine ||
+      builtInPlanResult.builtInPlan.entries[1].kind !=
+          BuiltInRendererPlanEntryKind::Note ||
+      builtInPlanResult.builtInPlan.entries[3].descriptorIndex != 2U ||
+      builtInPlanResult.builtInPlan.entries[4].kind !=
+          BuiltInRendererPlanEntryKind::LongNote ||
+      !builtInPlanResult.builtInPlan.entries[4].tailAtUpperBound ||
+      builtInPlanResult.builtInPlan.entries[4].renderY != -1.0F ||
+      builtInPlanResult.builtInPlan.entries[4].tailRenderY != 1.5F) {
+    std::cerr << "built-in plan must preserve bounded traversal independently "
+                 "of skin DTO limits\n";
+    return EXIT_FAILURE;
+  }
+  const auto repeatedBuiltInPlanResult = projection.project(
+      builtInPlanModel, builtInPlanState,
+      {.builtInTraversal = BuiltInRendererTraversal{
+           .judgeY = 0.0F,
+           .upperBound = 1.5F,
+           .rxhs = 1.0F,
+           .startRetainedOrdinal =
+               builtInPlanResult.builtInPlan.nextStartRetainedOrdinal}});
+  if (repeatedBuiltInPlanResult.builtInPlan.traversedTimelineOrdinals !=
+          std::vector<std::uint32_t>({1, 2, 3, 4}) ||
+      repeatedBuiltInPlanResult.builtInPlan.nextStartRetainedOrdinal != 1U) {
+    std::cerr << "built-in plan must preserve the renderer-owned cursor "
+                 "across frames\n";
+    return EXIT_FAILURE;
+  }
+
+  // A later immutable frame starts from the renderer-owned cursor.  Its LN
+  // head is deliberately before that cursor while the tail remains ahead of
+  // the visual clock, so the plan must retain the spanning body with a
+  // lower-bound head.  BMSRenderer consumes the resulting entry directly;
+  // this guards against reintroducing a head-traversed-only draw condition.
+  PlayfieldVisualState laterBuiltInPlanState = builtInPlanState;
+  laterBuiltInPlanState.clock.visualTimeMicros = 300;
+  const auto laterBuiltInPlanResult = projection.project(
+      builtInPlanModel, laterBuiltInPlanState,
+      {.latePoorTimingMicros = 0,
+       .builtInTraversal = BuiltInRendererTraversal{
+           .lowerBound = -1.0F,
+           .judgeY = 0.0F,
+           .upperBound = 1.5F,
+           .rxhs = 1.0F,
+           .startRetainedOrdinal =
+               builtInPlanResult.builtInPlan.nextStartRetainedOrdinal}});
+  if (laterBuiltInPlanResult.builtInPlan.traversedTimelineOrdinals.empty() ||
+      laterBuiltInPlanResult.builtInPlan.traversedTimelineOrdinals.front() !=
+          1U ||
+      laterBuiltInPlanResult.builtInPlan.longNotes.size() != 1U ||
+      laterBuiltInPlanResult.builtInPlan.longNotes.front().headId != 1110U ||
+      laterBuiltInPlanResult.builtInPlan.entries.empty() ||
+      laterBuiltInPlanResult.builtInPlan.entries.back().kind !=
+          BuiltInRendererPlanEntryKind::LongNote ||
+      laterBuiltInPlanResult.builtInPlan.entries.back().renderY != -1.0F) {
+    std::cerr << "cursor-advanced built-in plan must retain a spanning "
+                 "long-note body\n";
+    return EXIT_FAILURE;
+  }
+
+  // Equal-time future rows make the legacy incremental denominator zero. The
+  // NaN row itself is visited, then the prior-row comparison halts before the
+  // next row; the plan must retain that nonfinite Y rather than recomputing an
+  // absolute scroll delta in BMSRenderer.
+  PlayfieldChartVisualModel nonfinitePlanModel;
+  nonfinitePlanModel.laneOrder = {1};
+  nonfinitePlanModel.timelines = {
+      {.id = 1200, .timeMicros = 0, .beat = 0.0, .scrollPosition = 0.0,
+       .retainedForProjection = true, .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 1201, .timeMicros = 100, .beat = 1.0, .scrollPosition = 1.0,
+       .retainedForProjection = true, .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 1202, .timeMicros = 100, .beat = 2.0, .scrollPosition = 2.0,
+       .retainedForProjection = true, .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+      {.id = 1203, .timeMicros = 200, .beat = 3.0, .scrollPosition = 3.0,
+       .retainedForProjection = true, .authoredOrdinal = 3,
+       .retainedOrdinal = 3},
+  };
+  nonfinitePlanModel.notes = {
+      {.id = 1210, .timelineId = 1202, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 0},
+  };
+  PlayfieldVisualState nonfinitePlanState;
+  nonfinitePlanState.clock.visualTimeMicros = 100;
+  const auto nonfinitePlanResult = projection.project(
+      nonfinitePlanModel, nonfinitePlanState,
+      {.builtInTraversal = BuiltInRendererTraversal{
+           .judgeY = 0.0F, .upperBound = 10.0F, .rxhs = 1.0F}});
+  if (nonfinitePlanResult.builtInPlan.traversedTimelineOrdinals !=
+          std::vector<std::uint32_t>({0, 1, 2}) ||
+      nonfinitePlanResult.builtInPlan.entries.size() != 1U ||
+      std::isfinite(nonfinitePlanResult.builtInPlan.entries[0].renderY)) {
+    std::cerr << "built-in plan must freeze equal-time nonfinite traversal\n";
+    return EXIT_FAILURE;
+  }
   return EXIT_SUCCESS;
 }
