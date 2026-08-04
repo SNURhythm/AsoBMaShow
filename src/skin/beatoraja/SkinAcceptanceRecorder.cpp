@@ -23,6 +23,41 @@ constexpr std::int64_t kWarmupMicros = 30'000'000;
 constexpr std::int64_t kMeasurementMicros = 180'000'000;
 constexpr std::uint32_t kLifecycleCycles = 10;
 constexpr std::uint32_t kMaximumRefreshHz = 240;
+constexpr std::size_t kMaximumDiagnosticHistoryEntries = 256;
+// Acceptance exports intentionally expose only app-authored, stable gameplay
+// diagnostic identifiers. Adding a value requires a source and privacy audit;
+// namespace-shaped input is not proof that a code is internal.
+constexpr std::array<std::string_view, 28>
+    kAcceptanceDiagnosticHistoryCodeAllowlist{
+        "custom_object_order_authored_divergence",
+        "skin.play_state.custom_event_binding_missing",
+        "skin.play_state.custom_event_callback_failed",
+        "skin.play_state.custom_event_clock_failed",
+        "skin.play_state.custom_event_condition_failed",
+        "skin.play_state.custom_event_condition_missing",
+        "skin.play_state.custom_event_condition_type",
+        "skin.play_state.custom_timer_binding_missing",
+        "skin.play_state.custom_timer_cache_failed",
+        "skin.play_state.custom_timer_callback_failed",
+        "skin.play_state.custom_timer_type",
+        "skin.play_state.diagnostics_truncated",
+        "skin.play_state.frame_already_closed",
+        "skin.play_state.frame_inactive",
+        "skin.play_state.frame_serial_invalid",
+        "skin.play_state.frame_serial_not_increasing",
+        "skin.play_state.mutation_limit_exceeded",
+        "skin.play_state.unsupported",
+        "skin.play_state.writer_builtin_unsupported",
+        "skin.play_state.writer_callback_failed",
+        "skin.play_state.writer_missing",
+        "skin.play_state.writer_reentrant",
+        "skin.play_state.writer_value_nonfinite",
+        "skin_file_render_phase_denied",
+        "skin_lua_event_execution_failed",
+        "skin_lua_event_executor_unavailable",
+        "skin_lua_model_authored_note_visual_ignored",
+        "skin_overlay_identity_invalid",
+    };
 
 enum class FatalReason : std::uint8_t {
   None,
@@ -107,6 +142,11 @@ bool isSafeToken(std::string_view value, std::size_t maximum = 128) noexcept {
   });
 }
 
+bool isAllowedDiagnosticHistoryCode(std::string_view value) noexcept {
+  return std::ranges::find(kAcceptanceDiagnosticHistoryCodeAllowlist, value) !=
+         kAcceptanceDiagnosticHistoryCodeAllowlist.end();
+}
+
 bool validEntry(const SkinEntryId &entry) noexcept {
   return !entry.package.directoryName.empty() &&
          !entry.package.collisionKey.empty() &&
@@ -152,6 +192,8 @@ bool validContract(const SkinAcceptanceScenarioContract &contract,
       contract.warmupMicros != kWarmupMicros ||
       contract.measurementMicros != kMeasurementMicros ||
       contract.requiredExitCycles != kLifecycleCycles ||
+      contract.expectedRefreshHz == 0 ||
+      contract.expectedRefreshHz > kMaximumRefreshHz ||
       contract.maximumRefreshHz != kMaximumRefreshHz) {
     return false;
   }
@@ -185,6 +227,33 @@ std::uint64_t nextExportTicketValue() noexcept {
   }
   return 0;
 }
+
+std::uint64_t nextBoundScopeSerial() noexcept {
+  static std::atomic<std::uint64_t> next{1};
+  auto candidate = next.load(std::memory_order_relaxed);
+  while (candidate != std::numeric_limits<std::uint64_t>::max()) {
+    if (next.compare_exchange_weak(candidate, candidate + 1,
+                                   std::memory_order_relaxed,
+                                   std::memory_order_relaxed)) {
+      return candidate;
+    }
+  }
+  return 0;
+}
+
+struct AcceptanceBoundScopeKey {
+  std::uint64_t recorderSerial = 0;
+  std::uint64_t runSerial = 0;
+  std::uint64_t bindingSerial = 0;
+  PlaySkinSessionIdentity identity;
+};
+
+struct AcceptanceBoundScopeView {
+  std::uint64_t recorderSerial = 0;
+  std::uint64_t runSerial = 0;
+  std::uint64_t bindingSerial = 0;
+  const PlaySkinSessionIdentity &identity;
+};
 
 void appendUnsigned(std::string &output, std::uint64_t value) {
   std::array<char, 32> buffer{};
@@ -298,7 +367,8 @@ void appendGroupedIo(std::string &output, const SkinRenderIoCounters &counters,
 class SkinAcceptanceRecorder::Impl {
 public:
   explicit Impl(SkinAcceptanceRecorderDependencies dependencies)
-      : dependencies_(std::move(dependencies)) {}
+      : dependencies_(std::move(dependencies)),
+        recorderScopeSerial_(nextBoundScopeSerial()) {}
 
   ~Impl() { shutdown(); }
 
@@ -307,7 +377,8 @@ public:
     if (closed_ ||
         state_.load(std::memory_order_acquire) !=
             SkinAcceptanceCaptureState::Idle ||
-        currentExportTicket().has_value() || !isOpaque(opaqueRunId) ||
+        currentExportTicket().has_value() || recorderScopeSerial_ == 0 ||
+        !isOpaque(opaqueRunId) ||
         !validActivation(activation) ||
         !dependencies_.buildIdentity.validForAcceptance() ||
         !isSafeToken(dependencies_.buildIdentity.configuration, 64) ||
@@ -328,7 +399,13 @@ public:
       return false;
     }
 
+    const auto runScopeSerial = nextBoundScopeSerial();
+    if (runScopeSerial == 0) {
+      return false;
+    }
+
     resetRun();
+    currentRunScopeSerial_ = runScopeSerial;
     runId_ = std::move(opaqueRunId);
     contract_ = std::move(*resolved);
     activation_ = std::move(activation);
@@ -351,44 +428,51 @@ public:
     return true;
   }
 
-  bool bindSession(const SkinAcceptanceSessionFacts &facts) {
+  std::optional<AcceptanceBoundScopeKey>
+  bindSession(const SkinAcceptanceSessionFacts &facts) {
     if (closed_ || !contract_ || !activation_) {
-      return false;
+      return std::nullopt;
     }
     const auto currentState = state_.load(std::memory_order_acquire);
     if (contract_->kind == SkinAcceptanceRunKind::RenderIoNegative &&
         !beforeDigest_.has_value()) {
-      return false;
+      return std::nullopt;
     }
     if (currentState != SkinAcceptanceCaptureState::Armed) {
       if (currentState != SkinAcceptanceCaptureState::Failed) {
         fail(FatalReason::InvalidSession);
       }
-      return false;
+      return std::nullopt;
     }
     if (!sameActivation(facts.identity, *activation_) ||
         facts.chartSha256 != contract_->expectedChartSha256 ||
         facts.layoutId != contract_->expectedLayoutId ||
-        facts.actualRefreshHz == 0 ||
-        facts.actualRefreshHz > contract_->maximumRefreshHz ||
+        facts.actualRefreshHz != contract_->expectedRefreshHz ||
         facts.observedOpaqueGuardVectorSha256 !=
             contract_->expectedOpaqueGuardVectorSha256) {
       fail(FatalReason::InvalidSession);
-      return false;
+      return std::nullopt;
     }
 
     if (contract_->kind == SkinAcceptanceRunKind::ResourceLifecycle) {
       if (!lifecycleBaseline_ || currentSession_ ||
           facts.identity.sessionSerial <= lastLifecycleSessionSerial_) {
         fail(FatalReason::InvalidLifecycle);
-        return false;
+        return std::nullopt;
       }
     } else if (boundOnce_) {
       fail(FatalReason::InvalidSession);
-      return false;
+      return std::nullopt;
+    }
+
+    const auto bindingSerial = nextBoundScopeSerial();
+    if (bindingSerial == 0) {
+      fail(FatalReason::InvalidSession);
+      return std::nullopt;
     }
 
     currentSession_ = facts.identity;
+    currentBoundScopeSerial_ = bindingSerial;
     sessionFacts_ = facts;
     sessionEnded_ = false;
     pendingLifecycleSample_.reset();
@@ -401,14 +485,22 @@ public:
         telemetry_ = SkinPerformanceTelemetry(true);
       } catch (...) {
         fail(FatalReason::SampleOverflow);
-        return false;
+        return std::nullopt;
       }
     }
     state_.store(contract_->kind == SkinAcceptanceRunKind::Performance
                      ? SkinAcceptanceCaptureState::WarmingUp
                      : SkinAcceptanceCaptureState::Recording,
                  std::memory_order_release);
-    return true;
+    try {
+      return AcceptanceBoundScopeKey{.recorderSerial = recorderScopeSerial_,
+                                     .runSerial = currentRunScopeSerial_,
+                                     .bindingSerial = bindingSerial,
+                                     .identity = facts.identity};
+    } catch (...) {
+      fail(FatalReason::InvalidSession);
+      return std::nullopt;
+    }
   }
 
   void record(SkinFrameTelemetryEnvelope &&envelope) noexcept {
@@ -509,10 +601,10 @@ public:
     }
   }
 
-  void
-  recordDiagnosticEvidence(SkinAcceptanceObservedDiagnostic observed) noexcept {
-    if (!acceptsNegativeEvidence(observed.opaqueRunId, observed.identity) ||
-        observedDiagnostic_ || !isSafeToken(observed.diagnostic.code)) {
+  void recordDiagnosticEvidence(const AcceptanceBoundScopeView &boundScope,
+                                SkinDiagnostic diagnostic) noexcept {
+    if (!acceptsNegativeEvidence(boundScope) || observedDiagnostic_ ||
+        !isSafeToken(diagnostic.code)) {
       fail(FatalReason::InvalidNegativeEvidence);
       return;
     }
@@ -520,24 +612,24 @@ public:
       // Messages and source paths may contain private package data. The typed
       // run/identity/code evidence is sufficient and is the only retained
       // value that may later cross into the export worker.
-      observed.diagnostic.message.clear();
-      observed.diagnostic.virtualPath.clear();
-      observed.diagnostic.source.reset();
-      observedDiagnostic_ = std::move(observed);
+      diagnostic.message.clear();
+      diagnostic.virtualPath.clear();
+      diagnostic.source.reset();
+      observedDiagnostic_ = std::move(diagnostic);
     } catch (...) {
       fail(FatalReason::InvalidNegativeEvidence);
     }
   }
 
-  void
-  recordFallbackAction(SkinAcceptanceObservedFallbackAction observed) noexcept {
-    if (!acceptsNegativeEvidence(observed.opaqueRunId, observed.identity) ||
-        observedFallbackAction_ || !isSafeToken(observed.action)) {
+  void recordFallbackAction(const AcceptanceBoundScopeView &boundScope,
+                            std::string action) noexcept {
+    if (!acceptsNegativeEvidence(boundScope) || observedFallbackAction_ ||
+        !isSafeToken(action)) {
       fail(FatalReason::InvalidNegativeEvidence);
       return;
     }
     try {
-      observedFallbackAction_ = std::move(observed);
+      observedFallbackAction_ = std::move(action);
     } catch (...) {
       fail(FatalReason::InvalidNegativeEvidence);
     }
@@ -700,12 +792,6 @@ public:
       if (exportTicket_) {
         return *exportTicket_;
       }
-      const auto value = nextExportTicketValue();
-      if (value == 0) {
-        fail(FatalReason::ExportFailed);
-        return {};
-      }
-      exportTicket_ = SkinAcceptanceExportTicket{value};
     }
 
     if (closed_) {
@@ -714,66 +800,101 @@ public:
     if (fatalReason_ == FatalReason::None && !validateReadyForExport()) {
       // validateReadyForExport records the precise failure.
     }
-    if (fatalReason_ != FatalReason::None) {
-      publishTerminalFailure(fatalReason_);
-      return *exportTicket_;
+
+    // The terminal failure must be fully value-owned before a ticket becomes
+    // observable. Every later failure path can then publish it with only
+    // atomic state changes, even when allocation or thread construction has
+    // already failed.
+    SkinAcceptanceExportResult terminalFailure;
+    terminalFailure.failure = failureDiagnostic(
+        fatalReason_ == FatalReason::None ? FatalReason::ExportFailed
+                                          : fatalReason_);
+    const auto ticket = SkinAcceptanceExportTicket{nextExportTicketValue()};
+    if (!ticket) {
+      fail(FatalReason::ExportFailed);
+      return {};
+    }
+    {
+      std::lock_guard lock(exportMutex_);
+      if (exportTicket_) {
+        return *exportTicket_;
+      }
+      terminalResult_ = std::move(terminalFailure);
+      terminalResultReady_.store(false, std::memory_order_release);
+      exportTicket_ = ticket;
     }
 
-    std::string payload;
+    if (fatalReason_ != FatalReason::None) {
+      publishTerminalFailure();
+      return ticket;
+    }
+
+    std::vector<std::string> diagnosticHistoryCodes;
     try {
-      payload = serialize();
+      if (dependencies_.snapshotDiagnostics) {
+        auto diagnostics = dependencies_.snapshotDiagnostics();
+        if (diagnostics.size() > kMaximumDiagnosticHistoryEntries) {
+          fail(FatalReason::ExportFailed);
+          publishTerminalFailure();
+          return ticket;
+        }
+        diagnosticHistoryCodes.reserve(diagnostics.size());
+        for (const auto &diagnostic : diagnostics) {
+          if (isAllowedDiagnosticHistoryCode(diagnostic.code)) {
+            diagnosticHistoryCodes.push_back(diagnostic.code);
+          }
+        }
+      }
     } catch (...) {
       fail(FatalReason::ExportFailed);
-      publishTerminalFailure(fatalReason_);
-      return *exportTicket_;
+      publishTerminalFailure();
+      return ticket;
     }
-    const auto relativePath =
-        std::filesystem::path("SkinAcceptance") / (runId_ + ".json");
-    const auto absolutePath = dependencies_.documentsRoot / relativePath;
-    const auto digest = file_checksum::sha256(payload);
-    auto writer = dependencies_.writeAtomic;
-    state_.store(SkinAcceptanceCaptureState::Exporting,
-                 std::memory_order_release);
 
-    if (writerThread_.joinable()) {
-      writerThread_.join();
-    }
     try {
-      SkinAcceptanceExportResult writeFailure;
-      writeFailure.failure = failureDiagnostic(FatalReason::ExportFailed);
+      auto payload = serialize(diagnosticHistoryCodes);
+      const auto relativePath =
+          std::filesystem::path("SkinAcceptance") / (runId_ + ".json");
+      const auto absolutePath = dependencies_.documentsRoot / relativePath;
+      const auto digest = file_checksum::sha256(payload);
+      auto writer = dependencies_.writeAtomic;
+      state_.store(SkinAcceptanceCaptureState::Exporting,
+                   std::memory_order_release);
+
+      if (writerThread_.joinable()) {
+        writerThread_.join();
+      }
       writerThread_ = std::thread(
           [this, writer = std::move(writer), payload = std::move(payload),
-           relativePath, absolutePath, digest,
-           writeFailure = std::move(writeFailure)]() mutable {
-            SkinAcceptanceExportResult result;
+           relativePath, absolutePath, digest]() mutable {
+            bool exported = false;
             try {
               std::string ignoredError;
               const auto bytes =
                   std::as_bytes(std::span(payload.data(), payload.size()));
-              result.exported = writer(absolutePath, bytes, ignoredError);
-              if (result.exported) {
-                result.documentsRelativePath = relativePath;
-                result.lowercaseSha256 = digest;
-              } else {
-                result = std::move(writeFailure);
+              if (writer(absolutePath, bytes, ignoredError)) {
+                SkinAcceptanceExportResult result;
+                result.exported = true;
+                result.documentsRelativePath = std::move(relativePath);
+                result.lowercaseSha256 = std::move(digest);
+                {
+                  std::lock_guard lock(exportMutex_);
+                  terminalResult_ = std::move(result);
+                }
+                exported = true;
               }
             } catch (...) {
-              result = std::move(writeFailure);
-            }
-            const bool exported = result.exported;
-            {
-              std::lock_guard lock(exportMutex_);
-              terminalResult_ = std::move(result);
             }
             state_.store(exported ? SkinAcceptanceCaptureState::Exported
                                   : SkinAcceptanceCaptureState::Failed,
                          std::memory_order_release);
+            terminalResultReady_.store(true, std::memory_order_release);
           });
     } catch (...) {
       fail(FatalReason::ExportFailed);
-      publishTerminalFailure(fatalReason_);
+      publishTerminalFailure();
     }
-    return *exportTicket_;
+    return ticket;
   }
 
   SkinAcceptanceExportPollResult
@@ -782,7 +903,7 @@ public:
     if (!ticket || !exportTicket_ || ticket != *exportTicket_) {
       return {};
     }
-    if (!terminalResult_) {
+    if (!terminalResultReady_.load(std::memory_order_acquire)) {
       return {.state = SkinAcceptanceExportPollState::Pending};
     }
     return {.state = SkinAcceptanceExportPollState::Ready,
@@ -794,7 +915,7 @@ public:
       {
         std::lock_guard lock(exportMutex_);
         if (!ticket || !exportTicket_ || ticket != *exportTicket_ ||
-            !terminalResult_) {
+            !terminalResultReady_.load(std::memory_order_acquire)) {
           return false;
         }
       }
@@ -804,6 +925,7 @@ public:
       {
         std::lock_guard lock(exportMutex_);
         terminalResult_.reset();
+        terminalResultReady_.store(false, std::memory_order_release);
         exportTicket_.reset();
       }
       resetRun();
@@ -864,14 +986,16 @@ public:
 
 private:
   bool acceptsNegativeEvidence(
-      std::string_view opaqueRunId,
-      const PlaySkinSessionIdentity &identity) const noexcept {
+      const AcceptanceBoundScopeView &boundScope) const noexcept {
     return !closed_ && contract_ &&
            contract_->kind == SkinAcceptanceRunKind::RenderIoNegative &&
            state_.load(std::memory_order_acquire) ==
                SkinAcceptanceCaptureState::Recording &&
-           currentSession_ && !sessionEnded_ && opaqueRunId == runId_ &&
-           sameIdentity(identity, *currentSession_);
+           currentSession_ && !sessionEnded_ &&
+           boundScope.recorderSerial == recorderScopeSerial_ &&
+           boundScope.runSerial == currentRunScopeSerial_ &&
+           boundScope.bindingSerial == currentBoundScopeSerial_ &&
+           sameIdentity(boundScope.identity, *currentSession_);
   }
 
   void fail(FatalReason reason) noexcept {
@@ -927,10 +1051,9 @@ private:
         !sessionEnded_ || currentSession_ || !fallbackObserved_ ||
         !observedDiagnostic_ || !observedFallbackAction_ ||
         !contract_->expectedDiagnosticCode ||
-        observedDiagnostic_->diagnostic.code !=
-            *contract_->expectedDiagnosticCode ||
+        observedDiagnostic_->code != *contract_->expectedDiagnosticCode ||
         !contract_->expectedFallbackAction ||
-        observedFallbackAction_->action != *contract_->expectedFallbackAction ||
+        *observedFallbackAction_ != *contract_->expectedFallbackAction ||
         !contract_->expectedDeniedOperation ||
         !validateNegativeSkinRenderIo(summary.renderIo,
                                       *contract_->expectedDeniedOperation)) {
@@ -940,7 +1063,8 @@ private:
     return true;
   }
 
-  std::string serialize() const {
+  std::string
+  serialize(std::span<const std::string> diagnosticHistoryCodes) const {
     const auto summary = telemetry_.summarize();
     std::string output;
     output.reserve(4096);
@@ -1046,9 +1170,9 @@ private:
       output += ",\"guardVectorSha256\":";
       appendQuoted(output, sessionFacts_->observedOpaqueGuardVectorSha256);
       output += ",\"diagnostic\":";
-      appendQuoted(output, observedDiagnostic_->diagnostic.code);
+      appendQuoted(output, observedDiagnostic_->code);
       output += ",\"action\":";
-      appendQuoted(output, observedFallbackAction_->action);
+      appendQuoted(output, *observedFallbackAction_);
       output += ",\"overlayDigestBefore\":";
       appendQuoted(output, *beforeDigest_);
       output += ",\"overlayDigestAfter\":";
@@ -1058,21 +1182,24 @@ private:
       output += ",\"deniedCounters\":";
       appendGroupedIo(output, summary.renderIo, true);
       output += ",\"observedDiagnosticCodes\":[";
-      appendQuoted(output, observedDiagnostic_->diagnostic.code);
+      appendQuoted(output, observedDiagnostic_->code);
       output += "]}";
     }
-    output.push_back('}');
+    output += ",\"diagnosticHistoryCodes\":[";
+    for (std::size_t index = 0; index < diagnosticHistoryCodes.size();
+         ++index) {
+      if (index != 0) {
+        output.push_back(',');
+      }
+      appendQuoted(output, diagnosticHistoryCodes[index]);
+    }
+    output += "]}";
     return output;
   }
 
-  void publishTerminalFailure(FatalReason reason) {
-    SkinAcceptanceExportResult result;
-    result.failure = failureDiagnostic(reason);
-    {
-      std::lock_guard lock(exportMutex_);
-      terminalResult_ = std::move(result);
-    }
+  void publishTerminalFailure() noexcept {
     state_.store(SkinAcceptanceCaptureState::Failed, std::memory_order_release);
+    terminalResultReady_.store(true, std::memory_order_release);
   }
 
   void resetRun() noexcept {
@@ -1080,6 +1207,8 @@ private:
     activation_.reset();
     sessionFacts_.reset();
     currentSession_.reset();
+    currentRunScopeSerial_ = 0;
+    currentBoundScopeSerial_ = 0;
     runId_.clear();
     telemetry_ = SkinPerformanceTelemetry{};
     retainedFrameCount_ = 0;
@@ -1120,6 +1249,9 @@ private:
   std::optional<PlaySkinSessionIdentity> currentSession_;
   bool boundOnce_ = false;
   bool sessionEnded_ = false;
+  const std::uint64_t recorderScopeSerial_ = 0;
+  std::uint64_t currentRunScopeSerial_ = 0;
+  std::uint64_t currentBoundScopeSerial_ = 0;
 
   SkinPerformanceTelemetry telemetry_;
   std::size_t retainedFrameCount_ = 0;
@@ -1131,8 +1263,8 @@ private:
   std::optional<std::int64_t> firstRetainedVisualTime_;
   std::optional<std::int64_t> lastRetainedVisualTime_;
   bool fallbackObserved_ = false;
-  std::optional<SkinAcceptanceObservedDiagnostic> observedDiagnostic_;
-  std::optional<SkinAcceptanceObservedFallbackAction> observedFallbackAction_;
+  std::optional<SkinDiagnostic> observedDiagnostic_;
+  std::optional<std::string> observedFallbackAction_;
 
   std::optional<SkinResourceLifecycleSample> lifecycleBaseline_;
   std::array<SkinResourceLifecycleSample, kLifecycleCycles> lifecycleSamples_{};
@@ -1148,6 +1280,7 @@ private:
   mutable std::mutex exportMutex_;
   std::optional<SkinAcceptanceExportTicket> exportTicket_;
   std::optional<SkinAcceptanceExportResult> terminalResult_;
+  std::atomic<bool> terminalResultReady_{false};
   std::thread writerThread_;
 };
 
@@ -1164,9 +1297,15 @@ bool SkinAcceptanceRecorder::arm(std::string opaqueRunId,
                     std::move(activation));
 }
 
-bool SkinAcceptanceRecorder::bindSession(
-    const SkinAcceptanceSessionFacts &facts) {
-  return impl_->bindSession(facts);
+std::optional<SkinAcceptanceBoundScope>
+SkinAcceptanceRecorder::bindSession(const SkinAcceptanceSessionFacts &facts) {
+  auto boundScope = impl_->bindSession(facts);
+  if (!boundScope) {
+    return std::nullopt;
+  }
+  return SkinAcceptanceBoundScope(
+      boundScope->recorderSerial, boundScope->runSerial,
+      boundScope->bindingSerial, std::move(boundScope->identity));
 }
 
 void SkinAcceptanceRecorder::record(
@@ -1175,13 +1314,24 @@ void SkinAcceptanceRecorder::record(
 }
 
 void SkinAcceptanceRecorder::recordDiagnosticEvidence(
-    SkinAcceptanceObservedDiagnostic observed) noexcept {
-  impl_->recordDiagnosticEvidence(std::move(observed));
+    const SkinAcceptanceBoundScope &boundScope,
+    SkinDiagnostic diagnostic) noexcept {
+  impl_->recordDiagnosticEvidence(
+      {.recorderSerial = boundScope.recorderSerial_,
+       .runSerial = boundScope.runSerial_,
+       .bindingSerial = boundScope.bindingSerial_,
+       .identity = boundScope.identity_},
+      std::move(diagnostic));
 }
 
 void SkinAcceptanceRecorder::recordFallbackAction(
-    SkinAcceptanceObservedFallbackAction observed) noexcept {
-  impl_->recordFallbackAction(std::move(observed));
+    const SkinAcceptanceBoundScope &boundScope, std::string action) noexcept {
+  impl_->recordFallbackAction(
+      {.recorderSerial = boundScope.recorderSerial_,
+       .runSerial = boundScope.runSerial_,
+       .bindingSerial = boundScope.bindingSerial_,
+       .identity = boundScope.identity_},
+      std::move(action));
 }
 
 void SkinAcceptanceRecorder::recordResourceLifecycle(

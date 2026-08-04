@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace skin {
@@ -39,6 +40,7 @@ struct SkinAcceptanceScenarioContract {
   std::int64_t warmupMicros = 30'000'000;
   std::int64_t measurementMicros = 180'000'000;
   std::uint32_t requiredExitCycles = 10;
+  std::uint32_t expectedRefreshHz = 60;
   std::uint32_t maximumRefreshHz = 240;
   std::string expectedOpaqueGuardVectorSha256;
   std::optional<std::string> expectedDiagnosticCode;
@@ -54,16 +56,29 @@ struct SkinAcceptanceSessionFacts {
   std::string observedOpaqueGuardVectorSha256;
 };
 
-struct SkinAcceptanceObservedDiagnostic {
-  std::string opaqueRunId;
-  PlaySkinSessionIdentity identity;
-  SkinDiagnostic diagnostic;
-};
+class SkinAcceptanceBoundScope final {
+public:
+  SkinAcceptanceBoundScope(const SkinAcceptanceBoundScope &) = default;
+  SkinAcceptanceBoundScope &operator=(const SkinAcceptanceBoundScope &) =
+      default;
+  SkinAcceptanceBoundScope(SkinAcceptanceBoundScope &&) noexcept = default;
+  SkinAcceptanceBoundScope &operator=(SkinAcceptanceBoundScope &&) noexcept =
+      default;
 
-struct SkinAcceptanceObservedFallbackAction {
-  std::string opaqueRunId;
-  PlaySkinSessionIdentity identity;
-  std::string action;
+private:
+  SkinAcceptanceBoundScope(std::uint64_t recorderSerial,
+                           std::uint64_t runSerial,
+                           std::uint64_t bindingSerial,
+                           PlaySkinSessionIdentity identity) noexcept
+      : recorderSerial_(recorderSerial), runSerial_(runSerial),
+        bindingSerial_(bindingSerial), identity_(std::move(identity)) {}
+
+  std::uint64_t recorderSerial_ = 0;
+  std::uint64_t runSerial_ = 0;
+  std::uint64_t bindingSerial_ = 0;
+  PlaySkinSessionIdentity identity_;
+
+  friend class SkinAcceptanceRecorder;
 };
 
 enum class SkinResourceLifecyclePhase : std::uint8_t {
@@ -141,6 +156,10 @@ struct SkinAcceptanceRecorderDependencies {
       resolveScenario;
   // Non-owning. ApplicationContext drains this after recorder shutdown.
   IAsyncSkinOverlayDigestProvider *overlayDigests = nullptr;
+  // Called synchronously at export linearization. The recorder retains only a
+  // bounded value copy of safe diagnostic codes; messages and paths never
+  // cross to the export worker.
+  std::function<std::vector<SkinDiagnostic>()> snapshotDiagnostics;
   std::function<bool(const std::filesystem::path &, std::span<const std::byte>,
                      std::string &)>
       writeAtomic;
@@ -158,10 +177,13 @@ public:
 
   bool arm(std::string opaqueRunId, std::string scenarioId,
            SkinAcceptanceActivationKey);
-  bool bindSession(const SkinAcceptanceSessionFacts &);
+  [[nodiscard]] std::optional<SkinAcceptanceBoundScope>
+  bindSession(const SkinAcceptanceSessionFacts &);
   void record(SkinFrameTelemetryEnvelope &&) noexcept;
-  void recordDiagnosticEvidence(SkinAcceptanceObservedDiagnostic) noexcept;
-  void recordFallbackAction(SkinAcceptanceObservedFallbackAction) noexcept;
+  void recordDiagnosticEvidence(const SkinAcceptanceBoundScope &,
+                                SkinDiagnostic) noexcept;
+  void recordFallbackAction(const SkinAcceptanceBoundScope &,
+                            std::string action) noexcept;
   void recordResourceLifecycle(SkinResourceLifecycleSample) noexcept;
   void sessionEnded(const PlaySkinSessionIdentity &) noexcept;
   void sessionTeardownComplete(const PlaySkinSessionIdentity &) noexcept;

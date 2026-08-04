@@ -10,13 +10,36 @@
 #include <limits>
 #include <locale>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <new>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
+
+namespace {
+std::atomic<bool> rejectNextAllocation{false};
+}
+
+void *operator new(std::size_t size) {
+  if (rejectNextAllocation.exchange(false, std::memory_order_relaxed)) {
+    throw std::bad_alloc();
+  }
+  if (void *allocation = std::malloc(size)) {
+    return allocation;
+  }
+  throw std::bad_alloc();
+}
+
+void operator delete(void *allocation) noexcept { std::free(allocation); }
+
+void operator delete(void *allocation, std::size_t) noexcept {
+  std::free(allocation);
+}
 
 namespace {
 
@@ -195,6 +218,33 @@ struct WriterProbe {
   std::string payload;
 };
 
+struct InjectedWriterCopyFailure {};
+
+struct ThrowOnCopyAndNextAllocationWriter {
+  explicit ThrowOnCopyAndNextAllocationWriter(WriterProbe &probe)
+      : writer(&probe) {}
+
+  ThrowOnCopyAndNextAllocationWriter(
+      const ThrowOnCopyAndNextAllocationWriter &other)
+      : writer(other.writer) {
+    rejectNextAllocation.store(true, std::memory_order_relaxed);
+    throw InjectedWriterCopyFailure{};
+  }
+  ThrowOnCopyAndNextAllocationWriter &
+  operator=(const ThrowOnCopyAndNextAllocationWriter &) = delete;
+  ThrowOnCopyAndNextAllocationWriter(
+      ThrowOnCopyAndNextAllocationWriter &&) noexcept = default;
+  ThrowOnCopyAndNextAllocationWriter &
+  operator=(ThrowOnCopyAndNextAllocationWriter &&) noexcept = default;
+
+  bool operator()(const std::filesystem::path &path,
+                  std::span<const std::byte> bytes, std::string &error) const {
+    return writer->write(path, bytes, error);
+  }
+
+  WriterProbe *writer = nullptr;
+};
+
 SkinAcceptanceRecorderDependencies dependencies(SkinAcceptanceRunKind kind,
                                                 FakeOverlayProvider *provider,
                                                 WriterProbe *writer) {
@@ -218,20 +268,17 @@ SkinAcceptanceRecorderDependencies dependencies(SkinAcceptanceRunKind kind,
   };
 }
 
-void recordExpectedNegativeEvidence(SkinAcceptanceRecorder &recorder,
-                                    std::string opaqueRunId,
-                                    std::uint64_t sessionSerial = 41) {
+void recordExpectedNegativeEvidence(
+    SkinAcceptanceRecorder &recorder,
+    const SkinAcceptanceBoundScope &boundScope) {
   recorder.recordDiagnosticEvidence(
-      {.opaqueRunId = opaqueRunId,
-       .identity = identity(sessionSerial),
-       .diagnostic = SkinDiagnostic{
-           .code = "skin_file_render_phase_denied",
-           .message = "private resource path and device name are stripped",
-           .virtualPath = "private/resources/secret.png"}});
+      boundScope,
+      SkinDiagnostic{
+          .code = "skin_file_render_phase_denied",
+          .message = "private resource path and device name are stripped",
+          .virtualPath = "private/resources/secret.png"});
   recorder.recordFallbackAction(
-      {.opaqueRunId = std::move(opaqueRunId),
-       .identity = identity(sessionSerial),
-       .action = "discard_frame_disable_session_same_frame_builtin"});
+      boundScope, "discard_frame_disable_session_same_frame_builtin");
 }
 
 SkinAcceptanceExportPollResult
@@ -247,6 +294,16 @@ waitForExport(SkinAcceptanceRecorder &recorder,
   return {};
 }
 
+std::size_t countOccurrences(std::string_view value, std::string_view needle) {
+  std::size_t count = 0;
+  std::size_t position = 0;
+  while ((position = value.find(needle, position)) != std::string_view::npos) {
+    ++count;
+    position += needle.size();
+  }
+  return count;
+}
+
 void completePerformanceRun(SkinAcceptanceRecorder &recorder,
                             std::uint64_t firstFrame = 1) {
   recorder.record(envelope(firstFrame, 1'000'000));
@@ -257,8 +314,25 @@ void completePerformanceRun(SkinAcceptanceRecorder &recorder,
 void testPerformanceStateMachineWorkerTicketAndSanitizedPayload() {
   FakeOverlayProvider provider;
   WriterProbe writer;
-  SkinAcceptanceRecorder recorder(
-      dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer));
+  std::mutex diagnosticMutex;
+  std::uint64_t diagnosticSnapshotCalls = 0;
+  std::thread::id diagnosticSnapshotThread;
+  std::vector<SkinDiagnostic> diagnosticHistory{
+      {.code = "skin_lua_event_execution_failed",
+       .message = "private-profile raw-device-label third-party-module-label",
+       .virtualPath = "private/resources/third-party-file.png"},
+      {.code = "scuro_private_module_label",
+       .message = "raw-device-label"}};
+  auto recorderDependencies =
+      dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer);
+  recorderDependencies.snapshotDiagnostics = [&] {
+    std::lock_guard lock(diagnosticMutex);
+    ++diagnosticSnapshotCalls;
+    diagnosticSnapshotThread = std::this_thread::get_id();
+    return diagnosticHistory;
+  };
+  SkinAcceptanceRecorder recorder(std::move(recorderDependencies));
+  const auto stoppingThread = std::this_thread::get_id();
 
   expect(recorder.state() == SkinAcceptanceCaptureState::Idle,
          "recorder starts idle");
@@ -267,7 +341,8 @@ void testPerformanceStateMachineWorkerTicketAndSanitizedPayload() {
       "a clean typed activation arms");
   expect(recorder.state() == SkinAcceptanceCaptureState::Armed,
          "arm changes state");
-  expect(recorder.bindSession(facts()), "matching scene facts bind");
+  expect(recorder.bindSession(facts()).has_value(),
+         "matching scene facts bind with an opaque recorder-issued scope");
   expect(recorder.state() == SkinAcceptanceCaptureState::WarmingUp,
          "performance binding starts warmup");
   const auto previousLocale = std::locale::global(
@@ -279,6 +354,14 @@ void testPerformanceStateMachineWorkerTicketAndSanitizedPayload() {
   expect(ticket.has_value() && ticket->value != 0,
          "exact measurement completion creates a typed export ticket");
   writer.waitUntilEntered();
+  {
+    std::lock_guard lock(diagnosticMutex);
+    expect(diagnosticSnapshotCalls == 1 &&
+               diagnosticSnapshotThread == stoppingThread,
+           "diagnostic history is snapshotted synchronously at export "
+           "linearization");
+    diagnosticHistory.clear();
+  }
   expect(recorder.pollExport(*ticket).state ==
              SkinAcceptanceExportPollState::Pending,
          "accepted worker work polls pending without doing the write");
@@ -317,9 +400,14 @@ void testPerformanceStateMachineWorkerTicketAndSanitizedPayload() {
       writer.payload.find("private-profile") == std::string::npos &&
           writer.payload.find("private-package") == std::string::npos &&
           writer.payload.find("secret.png") == std::string::npos &&
-          writer.payload.find("device") == std::string::npos &&
+          writer.payload.find("raw-device-label") == std::string::npos &&
+          writer.payload.find("third-party") == std::string::npos &&
+          writer.payload.find("scuro") == std::string::npos &&
           writer.payload.find("pixel") == std::string::npos,
       "value-owned output leaks no raw profile, resource, device, or pixels");
+  expect(writer.payload.find("\"diagnosticHistoryCodes\":[\"skin_lua_event_execution_failed\"]") !=
+             std::string::npos,
+         "the worker payload owns only sanitized diagnostic-history codes");
   expect(
       !recorder.arm("blocked-0123456789", "performance-normal", activation()),
       "an unacknowledged terminal result blocks a second arm");
@@ -337,7 +425,7 @@ void testPerformanceStateMachineWorkerTicketAndSanitizedPayload() {
   }
   expect(
       recorder.arm("repeat-0123456789", "performance-normal", activation()) &&
-          recorder.bindSession(facts()),
+          recorder.bindSession(facts()).has_value(),
       "acknowledgement permits a later capture");
   completePerformanceRun(recorder, 10);
   const auto laterTicket = recorder.currentExportTicket();
@@ -348,6 +436,38 @@ void testPerformanceStateMachineWorkerTicketAndSanitizedPayload() {
          "the sole worker slot can be reused after acknowledgement");
   expect(recorder.acknowledgeExport(*laterTicket),
          "later terminal result can also be acknowledged");
+}
+
+void testDiagnosticHistoryRejectsInternalNamespaceLookalikes() {
+  FakeOverlayProvider provider;
+  WriterProbe writer;
+  writer.released = true;
+  auto recorderDependencies =
+      dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer);
+  recorderDependencies.snapshotDiagnostics = [] {
+    return std::vector<SkinDiagnostic>{
+        {.code = "skin_file_render_phase_denied"},
+        {.code = "skin_private-profile_device-007_third-party-module",
+         .message = "private-profile device-007 third-party-module",
+         .virtualPath = "private/resources/third-party-module.lua"}};
+  };
+  SkinAcceptanceRecorder recorder(std::move(recorderDependencies));
+  expect(recorder.arm("history-bypass-01234", "performance-normal",
+                      activation()) &&
+             recorder.bindSession(facts()).has_value(),
+         "diagnostic allowlist bypass fixture binds");
+  completePerformanceRun(recorder);
+  const auto ticket = recorder.currentExportTicket();
+  const auto result = ticket ? waitForExport(recorder, *ticket)
+                             : SkinAcceptanceExportPollResult{};
+  expect(result.result && result.result->exported &&
+             writer.payload.find(
+                 "\"diagnosticHistoryCodes\":[\"skin_file_render_phase_denied\"]") !=
+                 std::string::npos &&
+             writer.payload.find("private-profile") == std::string::npos &&
+             writer.payload.find("device-007") == std::string::npos &&
+             writer.payload.find("third-party-module") == std::string::npos,
+         "namespace-shaped unknown codes cannot bypass diagnostic sanitization");
 }
 
 void testStrictBindingAndPerformanceFailures() {
@@ -374,6 +494,8 @@ void testStrictBindingAndPerformanceFailures() {
              "zero refresh is acceptance-fatal");
   runBadBind([](auto &value) { value.actualRefreshHz = 241; },
              "refresh above frozen maximum is acceptance-fatal");
+  runBadBind([](auto &value) { value.actualRefreshHz = 59; },
+             "refresh below the scenario's exact expected rate is acceptance-fatal");
   runBadBind(
       [](auto &value) { value.observedOpaqueGuardVectorSha256 = digest('e'); },
       "wrong guard vector is acceptance-fatal");
@@ -394,8 +516,37 @@ void testStrictBindingAndPerformanceFailures() {
   expect(!dirty.arm("clean-0123456789", "performance-normal", activation()),
          "dirty build identity cannot arm evidence");
 
+  auto invalidRefreshContract =
+      dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer);
+  invalidRefreshContract.resolveScenario = [](std::string_view scenarioId)
+      -> std::optional<SkinAcceptanceScenarioContract> {
+    auto value = contract(SkinAcceptanceRunKind::Performance);
+    value.expectedRefreshHz = 0;
+    return value.scenarioId == scenarioId ? std::optional(value)
+                                          : std::nullopt;
+  };
+  SkinAcceptanceRecorder invalidRefresh(std::move(invalidRefreshContract));
+  expect(!invalidRefresh.arm("invalid-hz-01234567", "performance-normal",
+                             activation()),
+         "a scenario cannot freeze a refresh rate outside 1 through 240 Hz");
+
+  auto excessiveRefreshContract =
+      dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer);
+  excessiveRefreshContract.resolveScenario = [](std::string_view scenarioId)
+      -> std::optional<SkinAcceptanceScenarioContract> {
+    auto value = contract(SkinAcceptanceRunKind::Performance);
+    value.expectedRefreshHz = 241;
+    return value.scenarioId == scenarioId ? std::optional(value)
+                                          : std::nullopt;
+  };
+  SkinAcceptanceRecorder excessiveRefresh(
+      std::move(excessiveRefreshContract));
+  expect(!excessiveRefresh.arm("excessive-hz-012345", "performance-normal",
+                               activation()),
+         "a scenario cannot freeze a refresh rate above 240 Hz");
+
   expect(recorder.arm("clock-0123456789", "performance-normal", activation()) &&
-             recorder.bindSession(facts()),
+             recorder.bindSession(facts()).has_value(),
          "clock failure fixture binds");
   recorder.record(envelope(1, 5'000'000));
   recorder.record(envelope(2, 4'999'999));
@@ -406,12 +557,137 @@ void testStrictBindingAndPerformanceFailures() {
   SkinAcceptanceRecorder early(
       dependencies(SkinAcceptanceRunKind::Performance, &provider2, &writer));
   expect(early.arm("early-0123456789", "performance-normal", activation()) &&
-             early.bindSession(facts()),
+             early.bindSession(facts()).has_value(),
          "early end fixture binds");
   early.record(envelope(1, 1'000'000));
   early.sessionEnded(identity());
   expect(early.state() == SkinAcceptanceCaptureState::Failed,
          "session end before exact measurement is fatal");
+}
+
+void testExactRefreshContractAcceptsInclusiveBoundaries() {
+  for (const std::uint32_t refreshHz : {1U, 240U}) {
+    FakeOverlayProvider provider;
+    WriterProbe writer;
+    writer.released = true;
+    auto recorderDependencies =
+        dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer);
+    recorderDependencies.resolveScenario = [refreshHz](std::string_view scenarioId)
+        -> std::optional<SkinAcceptanceScenarioContract> {
+      auto value = contract(SkinAcceptanceRunKind::Performance);
+      value.expectedRefreshHz = refreshHz;
+      return value.scenarioId == scenarioId ? std::optional(value)
+                                            : std::nullopt;
+    };
+    SkinAcceptanceRecorder recorder(std::move(recorderDependencies));
+    auto sessionFacts = facts();
+    sessionFacts.actualRefreshHz = refreshHz;
+    expect(recorder.arm("refresh-boundary-" + std::to_string(refreshHz),
+                        "performance-normal", activation()) &&
+               recorder.bindSession(sessionFacts).has_value(),
+           "inclusive refresh boundary arms and binds exactly");
+    completePerformanceRun(recorder);
+    const auto ticket = recorder.currentExportTicket();
+    const auto result = ticket ? waitForExport(recorder, *ticket)
+                               : SkinAcceptanceExportPollResult{};
+    expect(result.result && result.result->exported,
+           "inclusive refresh boundary produces accepted evidence");
+  }
+}
+
+void testDiagnosticHistorySnapshotCapacityBoundary() {
+  {
+    FakeOverlayProvider provider;
+    WriterProbe writer;
+    writer.released = true;
+    auto recorderDependencies =
+        dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer);
+    recorderDependencies.snapshotDiagnostics = [] {
+      std::vector<SkinDiagnostic> diagnostics(
+          255, SkinDiagnostic{.code = "skin_file_render_phase_denied"});
+      diagnostics.push_back(
+          SkinDiagnostic{.code = "skin_lua_event_execution_failed"});
+      return diagnostics;
+    };
+    SkinAcceptanceRecorder recorder(std::move(recorderDependencies));
+    expect(recorder.arm("history-limit-0123456", "performance-normal",
+                        activation()) &&
+               recorder.bindSession(facts()).has_value(),
+           "diagnostic-history capacity fixture binds");
+    completePerformanceRun(recorder);
+    const auto ticket = recorder.currentExportTicket();
+    const auto result = ticket ? waitForExport(recorder, *ticket)
+                               : SkinAcceptanceExportPollResult{};
+    const auto lastRepeated =
+        writer.payload.rfind("skin_file_render_phase_denied");
+    const auto finalDistinct =
+        writer.payload.find("skin_lua_event_execution_failed");
+    expect(result.result && result.result->exported &&
+               countOccurrences(writer.payload,
+                                "skin_file_render_phase_denied") == 255 &&
+               countOccurrences(writer.payload,
+                                "skin_lua_event_execution_failed") == 1 &&
+               lastRepeated != std::string::npos &&
+               finalDistinct != std::string::npos &&
+               lastRepeated < finalDistinct,
+           "exactly 256 allowed diagnostic codes export in source chronology");
+  }
+
+  FakeOverlayProvider provider;
+  WriterProbe writer;
+  writer.released = true;
+  auto recorderDependencies =
+      dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer);
+  recorderDependencies.snapshotDiagnostics = [] {
+    return std::vector<SkinDiagnostic>(
+        257, SkinDiagnostic{.code = "skin_runtime_callback_failed"});
+  };
+  SkinAcceptanceRecorder recorder(std::move(recorderDependencies));
+  expect(recorder.arm("history-overflow-0123", "performance-normal",
+                      activation()) &&
+             recorder.bindSession(facts()).has_value(),
+         "diagnostic-history overflow fixture binds");
+  completePerformanceRun(recorder);
+  const auto ticket = recorder.currentExportTicket();
+  const auto result = ticket ? recorder.pollExport(*ticket)
+                             : SkinAcceptanceExportPollResult{};
+  expect(ticket && recorder.state() == SkinAcceptanceCaptureState::Failed &&
+             result.state == SkinAcceptanceExportPollState::Ready &&
+             result.result && !result.result->exported && writer.writes == 0,
+         "more than 256 diagnostic-history values fail before worker export");
+}
+
+void testPostTicketTerminalConstructionExceptionPublishesRecoverableFailure() {
+  FakeOverlayProvider provider;
+  WriterProbe writer;
+  writer.released = true;
+  auto recorderDependencies =
+      dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer);
+  recorderDependencies.writeAtomic =
+      ThrowOnCopyAndNextAllocationWriter(writer);
+  SkinAcceptanceRecorder recorder(std::move(recorderDependencies));
+  expect(recorder.arm("prepare-throw-012345", "performance-normal",
+                      activation()) &&
+             recorder.bindSession(facts()).has_value(),
+         "post-ticket terminal-construction failure fixture binds");
+  completePerformanceRun(recorder);
+  const auto ticket = recorder.currentExportTicket();
+  expect(rejectNextAllocation.exchange(false, std::memory_order_relaxed),
+         "terminal failure publication performs no allocation after the "
+         "ticket becomes observable");
+  const auto result = ticket ? recorder.pollExport(*ticket)
+                             : SkinAcceptanceExportPollResult{};
+  expect(ticket && result.state == SkinAcceptanceExportPollState::Ready &&
+             result.result && !result.result->exported &&
+             result.result->failure.has_value() && writer.writes == 0,
+         "a post-ticket allocation failure still publishes one ready failure");
+  expect(ticket && recorder.acknowledgeExport(*ticket) &&
+             recorder.state() == SkinAcceptanceCaptureState::Idle &&
+             recorder.arm("prepare-rearm-012345", "performance-normal",
+                          activation()) &&
+             recorder.bindSession(facts()).has_value(),
+         "a terminal-publication failure can be acknowledged before a fresh "
+         "arm");
 }
 
 void testPerformanceUsesActualContiguousBoundaryFrames() {
@@ -423,7 +699,7 @@ void testPerformanceUsesActualContiguousBoundaryFrames() {
       dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer));
   expect(
       lateStart.arm("late-start-012345", "performance-normal", activation()) &&
-          lateStart.bindSession(facts()),
+          lateStart.bindSession(facts()).has_value(),
       "late-start fixture binds");
   lateStart.record(envelope(1, 1'000'000));
   lateStart.record(envelope(2, 31'000'001));
@@ -434,7 +710,7 @@ void testPerformanceUsesActualContiguousBoundaryFrames() {
   SkinAcceptanceRecorder lateEnd(
       dependencies(SkinAcceptanceRunKind::Performance, &provider2, &writer));
   expect(lateEnd.arm("late-end-01234567", "performance-normal", activation()) &&
-             lateEnd.bindSession(facts()),
+             lateEnd.bindSession(facts()).has_value(),
          "late-end fixture binds");
   lateEnd.record(envelope(1, 1'000'000));
   lateEnd.record(envelope(2, 31'000'000));
@@ -449,7 +725,7 @@ void testPerformanceUsesActualContiguousBoundaryFrames() {
       dependencies(SkinAcceptanceRunKind::Performance, &provider3, &writer));
   expect(
       frameGap.arm("frame-gap-0123456", "performance-normal", activation()) &&
-          frameGap.bindSession(facts()),
+          frameGap.bindSession(facts()).has_value(),
       "frame-gap fixture binds");
   frameGap.record(envelope(8, 1'000'000));
   frameGap.record(envelope(10, 31'000'000));
@@ -465,7 +741,7 @@ void testTimestampArithmeticOverflowFailsClosed() {
       dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer));
   expect(recorder.arm("timestamp-overflow-01", "performance-normal",
                       activation()) &&
-             recorder.bindSession(facts()),
+             recorder.bindSession(facts()).has_value(),
          "timestamp-overflow fixture binds");
   recorder.record(envelope(1, std::numeric_limits<std::int64_t>::max() - 10));
   expect(recorder.state() == SkinAcceptanceCaptureState::Failed,
@@ -480,7 +756,7 @@ void testCapacityIncompleteAndMismatchAreFatal() {
       dependencies(SkinAcceptanceRunKind::Performance, &provider, &writer));
   expect(
       recorder.arm("overflow-0123456789", "performance-normal", activation()) &&
-          recorder.bindSession(facts()),
+          recorder.bindSession(facts()).has_value(),
       "overflow fixture binds");
   recorder.record(envelope(1, 1));
   for (std::uint64_t index = 0; index <= SkinPerformanceTelemetry::maxSamples;
@@ -496,7 +772,7 @@ void testCapacityIncompleteAndMismatchAreFatal() {
       dependencies(SkinAcceptanceRunKind::Performance, &provider2, &writer));
   expect(incomplete.arm("partial-0123456789", "performance-normal",
                         activation()) &&
-             incomplete.bindSession(facts()),
+             incomplete.bindSession(facts()).has_value(),
          "partial fixture binds");
   auto partial = envelope(1, 1);
   partial.contributions &=
@@ -510,7 +786,7 @@ void testCapacityIncompleteAndMismatchAreFatal() {
       dependencies(SkinAcceptanceRunKind::Performance, &provider3, &writer));
   expect(
       mismatch.arm("mismatch-0123456789", "performance-normal", activation()) &&
-          mismatch.bindSession(facts()),
+          mismatch.bindSession(facts()).has_value(),
       "mismatch fixture binds");
   mismatch.record(envelope(1, 1, {}, false, 42));
   expect(mismatch.state() == SkinAcceptanceCaptureState::Failed,
@@ -534,7 +810,7 @@ void testLifecycleRequiresBaselineAndTenSequentialDestroyedSessions() {
        .residentBytes = 10'000});
   for (std::uint32_t cycle = 1; cycle <= 10; ++cycle) {
     const std::uint64_t serial = 100 + cycle;
-    expect(recorder.bindSession(facts(serial)),
+    expect(recorder.bindSession(facts(serial)).has_value(),
            "each lifecycle session binds with a fresh serial");
     recorder.sessionEnded(identity(serial));
     recorder.recordResourceLifecycle(
@@ -575,13 +851,14 @@ void testNegativeOverlayOrderingCountersAndProviderShutdown() {
          "polling consumes provider memory without starting digest work");
   provider.ready(before, digest('e'));
   recorder.pollAsyncDependencies();
-  expect(recorder.bindSession(facts()) &&
+  const auto boundScope = recorder.bindSession(facts());
+  expect(boundScope.has_value() &&
              recorder.state() == SkinAcceptanceCaptureState::Recording,
          "ready before digest permits the matching real session");
   SkinRenderIoCounters counters;
   counters.filesystemReadsDenied = 1;
   recorder.record(envelope(1, 1, counters, true));
-  recordExpectedNegativeEvidence(recorder, "negative-0123456789");
+  recordExpectedNegativeEvidence(recorder, *boundScope);
   recorder.sessionEnded(identity());
   expect(provider.beginCalls == 1,
          "session end alone cannot queue the after digest");
@@ -631,59 +908,67 @@ void testNegativeOverlayOrderingCountersAndProviderShutdown() {
 void testObservedNegativeEvidenceIsScopedAndCompared() {
   auto readyNegative = [](SkinAcceptanceRecorder &recorder,
                           FakeOverlayProvider &provider,
-                          std::string opaqueRunId) {
+                          std::string opaqueRunId)
+      -> std::optional<SkinAcceptanceBoundScope> {
     expect(recorder.arm(std::move(opaqueRunId), "render-io-negative",
                         activation()),
            "negative evidence fixture arms");
     provider.ready(provider.latest(), digest('e'));
     recorder.pollAsyncDependencies();
-    expect(recorder.bindSession(facts()),
+    auto boundScope = recorder.bindSession(facts());
+    expect(boundScope.has_value(),
            "negative evidence fixture binds after the before digest");
     SkinRenderIoCounters counters;
     counters.filesystemReadsDenied = 1;
     recorder.record(envelope(1, 1, counters, true));
+    return boundScope;
   };
 
   WriterProbe writer;
   writer.released = true;
-  FakeOverlayProvider wrongScopeProvider;
-  SkinAcceptanceRecorder wrongScope(dependencies(
-      SkinAcceptanceRunKind::RenderIoNegative, &wrongScopeProvider, &writer));
-  readyNegative(wrongScope, wrongScopeProvider, "scope-0123456789");
-  wrongScope.recordDiagnosticEvidence(
-      {.opaqueRunId = "different-0123456789",
-       .identity = identity(),
-       .diagnostic = SkinDiagnostic{.code = "skin_file_render_phase_denied"}});
-  expect(wrongScope.state() == SkinAcceptanceCaptureState::Failed,
-         "an expected diagnostic from another recorder run is rejected");
+  FakeOverlayProvider sourceProvider;
+  SkinAcceptanceRecorder source(dependencies(
+      SkinAcceptanceRunKind::RenderIoNegative, &sourceProvider, &writer));
+  const auto sourceScope =
+      readyNegative(source, sourceProvider, "shared-scope-012345");
 
-  FakeOverlayProvider wrongDiagnosticIdentityProvider;
-  SkinAcceptanceRecorder wrongDiagnosticIdentity(
-      dependencies(SkinAcceptanceRunKind::RenderIoNegative,
-                   &wrongDiagnosticIdentityProvider, &writer));
-  readyNegative(wrongDiagnosticIdentity, wrongDiagnosticIdentityProvider,
-                "diag-identity-012345");
-  wrongDiagnosticIdentity.recordDiagnosticEvidence(
-      {.opaqueRunId = "diag-identity-012345",
-       .identity = identity(999),
-       .diagnostic = SkinDiagnostic{.code = "skin_file_render_phase_denied"}});
-  expect(wrongDiagnosticIdentity.state() == SkinAcceptanceCaptureState::Failed,
-         "a diagnostic for another exact session identity is rejected");
+  FakeOverlayProvider foreignProvider;
+  SkinAcceptanceRecorder foreign(dependencies(
+      SkinAcceptanceRunKind::RenderIoNegative, &foreignProvider, &writer));
+  const auto foreignScope =
+      readyNegative(foreign, foreignProvider, "shared-scope-012345");
+  expect(sourceScope && foreignScope,
+         "two recorders issue scopes for identical run and session facts");
+  foreign.recordDiagnosticEvidence(
+      *sourceScope,
+      SkinDiagnostic{.code = "skin_file_render_phase_denied"});
+  expect(foreign.state() == SkinAcceptanceCaptureState::Failed,
+         "a valid scope from another recorder is nonforgeable and rejected");
+
+  FakeOverlayProvider staleProvider;
+  SkinAcceptanceRecorder stale(dependencies(
+      SkinAcceptanceRunKind::RenderIoNegative, &staleProvider, &writer));
+  const auto staleScope =
+      readyNegative(stale, staleProvider, "stale-scope-0123456");
+  stale.sessionEnded(identity());
+  stale.recordFallbackAction(
+      *staleScope, "discard_frame_disable_session_same_frame_builtin");
+  expect(stale.state() == SkinAcceptanceCaptureState::Failed,
+         "a bound scope is rejected after its exact session has ended");
 
   FakeOverlayProvider wrongDiagnosticCodeProvider;
   SkinAcceptanceRecorder wrongDiagnosticCode(
       dependencies(SkinAcceptanceRunKind::RenderIoNegative,
                    &wrongDiagnosticCodeProvider, &writer));
-  readyNegative(wrongDiagnosticCode, wrongDiagnosticCodeProvider,
-                "diag-code-0123456789");
+  const auto wrongDiagnosticCodeScope =
+      readyNegative(wrongDiagnosticCode, wrongDiagnosticCodeProvider,
+                    "diag-code-0123456789");
   wrongDiagnosticCode.recordDiagnosticEvidence(
-      {.opaqueRunId = "diag-code-0123456789",
-       .identity = identity(),
-       .diagnostic = SkinDiagnostic{.code = "different_observed_code"}});
+      *wrongDiagnosticCodeScope,
+      SkinDiagnostic{.code = "different_observed_code"});
   wrongDiagnosticCode.recordFallbackAction(
-      {.opaqueRunId = "diag-code-0123456789",
-       .identity = identity(),
-       .action = "discard_frame_disable_session_same_frame_builtin"});
+      *wrongDiagnosticCodeScope,
+      "discard_frame_disable_session_same_frame_builtin");
   wrongDiagnosticCode.sessionEnded(identity());
   wrongDiagnosticCode.sessionTeardownComplete(identity());
   wrongDiagnosticCodeProvider.ready(wrongDiagnosticCodeProvider.latest(),
@@ -692,36 +977,65 @@ void testObservedNegativeEvidenceIsScopedAndCompared() {
   expect(wrongDiagnosticCode.state() == SkinAcceptanceCaptureState::Failed,
          "the observed diagnostic code must exactly match the contract");
 
-  FakeOverlayProvider wrongIdentityProvider;
-  SkinAcceptanceRecorder wrongIdentity(
-      dependencies(SkinAcceptanceRunKind::RenderIoNegative,
-                   &wrongIdentityProvider, &writer));
-  readyNegative(wrongIdentity, wrongIdentityProvider, "identity-0123456789");
-  wrongIdentity.recordFallbackAction(
-      {.opaqueRunId = "identity-0123456789",
-       .identity = identity(999),
-       .action = "discard_frame_disable_session_same_frame_builtin"});
-  expect(wrongIdentity.state() == SkinAcceptanceCaptureState::Failed,
-         "a fallback event for another exact identity is rejected");
-
   FakeOverlayProvider wrongActionProvider;
   SkinAcceptanceRecorder wrongAction(dependencies(
       SkinAcceptanceRunKind::RenderIoNegative, &wrongActionProvider, &writer));
-  readyNegative(wrongAction, wrongActionProvider, "action-0123456789");
+  const auto wrongActionScope =
+      readyNegative(wrongAction, wrongActionProvider, "action-0123456789");
   wrongAction.recordDiagnosticEvidence(
-      {.opaqueRunId = "action-0123456789",
-       .identity = identity(),
-       .diagnostic = SkinDiagnostic{.code = "skin_file_render_phase_denied"}});
+      *wrongActionScope,
+      SkinDiagnostic{.code = "skin_file_render_phase_denied"});
   wrongAction.recordFallbackAction(
-      {.opaqueRunId = "action-0123456789",
-       .identity = identity(),
-       .action = "different_observed_fallback_action"});
+      *wrongActionScope, "different_observed_fallback_action");
   wrongAction.sessionEnded(identity());
   wrongAction.sessionTeardownComplete(identity());
   wrongActionProvider.ready(wrongActionProvider.latest(), digest('e'));
   wrongAction.pollAsyncDependencies();
   expect(wrongAction.state() == SkinAcceptanceCaptureState::Failed,
          "the observed fallback action must exactly match the contract");
+}
+
+void testAcknowledgedRunInvalidatesItsBoundScopeGeneration() {
+  FakeOverlayProvider provider;
+  WriterProbe writer;
+  writer.released = true;
+  SkinAcceptanceRecorder recorder(dependencies(
+      SkinAcceptanceRunKind::RenderIoNegative, &provider, &writer));
+
+  expect(recorder.arm("scope-generation-0123", "render-io-negative",
+                      activation()),
+         "first scope-generation run arms");
+  provider.ready(provider.latest(), digest('e'));
+  recorder.pollAsyncDependencies();
+  const auto oldScope = recorder.bindSession(facts());
+  expect(oldScope.has_value(), "first run issues a bound scope");
+  SkinRenderIoCounters counters;
+  counters.filesystemReadsDenied = 1;
+  recorder.record(envelope(1, 1, counters, true));
+  recordExpectedNegativeEvidence(recorder, *oldScope);
+  recorder.sessionEnded(identity());
+  recorder.sessionTeardownComplete(identity());
+  provider.ready(provider.latest(), digest('e'));
+  recorder.pollAsyncDependencies();
+  const auto ticket = recorder.currentExportTicket();
+  const auto exported = ticket ? waitForExport(recorder, *ticket)
+                               : SkinAcceptanceExportPollResult{};
+  expect(ticket && exported.result && exported.result->exported &&
+             recorder.acknowledgeExport(*ticket),
+         "first scope-generation run exports and acknowledges");
+
+  expect(recorder.arm("scope-generation-0123", "render-io-negative",
+                      activation()),
+         "the same recorder and record ID can arm a later run");
+  provider.ready(provider.latest(), digest('e'));
+  recorder.pollAsyncDependencies();
+  const auto newScope = recorder.bindSession(facts());
+  expect(newScope.has_value(),
+         "later run binds the same five-field session facts");
+  recorder.recordDiagnosticEvidence(
+      *oldScope, SkinDiagnostic{.code = "skin_file_render_phase_denied"});
+  expect(recorder.state() == SkinAcceptanceCaptureState::Failed,
+         "an acknowledged run's scope is stale across identical re-arm facts");
 }
 
 void testNegativeFramesAfterSessionEndFailClosed() {
@@ -735,7 +1049,7 @@ void testNegativeFramesAfterSessionEndFailClosed() {
       "post-end fixture arms");
   provider.ready(provider.latest(), digest('e'));
   recorder.pollAsyncDependencies();
-  expect(recorder.bindSession(facts()), "post-end fixture binds");
+  expect(recorder.bindSession(facts()).has_value(), "post-end fixture binds");
   recorder.sessionEnded(identity());
   SkinRenderIoCounters counters;
   counters.filesystemReadsDenied = 1;
@@ -752,7 +1066,7 @@ void testNegativeFramesAfterSessionEndFailClosed() {
          "post-teardown fixture arms");
   afterTeardownProvider.ready(afterTeardownProvider.latest(), digest('e'));
   afterTeardown.pollAsyncDependencies();
-  expect(afterTeardown.bindSession(facts()),
+  expect(afterTeardown.bindSession(facts()).has_value(),
          "post-teardown fixture binds");
   afterTeardown.record(envelope(1, 1, counters, true));
   afterTeardown.sessionEnded(identity());
@@ -791,11 +1105,12 @@ void testDigestFailureAndMismatchBecomeTerminalFailures() {
       "mismatch fixture arms");
   mismatchProvider.ready(mismatchProvider.latest(), digest('e'));
   mismatch.pollAsyncDependencies();
-  expect(mismatch.bindSession(facts()), "mismatch fixture binds");
+  const auto mismatchScope = mismatch.bindSession(facts());
+  expect(mismatchScope.has_value(), "mismatch fixture binds");
   SkinRenderIoCounters counters;
   counters.filesystemReadsDenied = 1;
   mismatch.record(envelope(1, 1, counters, true));
-  recordExpectedNegativeEvidence(mismatch, "digestdiff-0123456789");
+  recordExpectedNegativeEvidence(mismatch, *mismatchScope);
   mismatch.sessionEnded(identity());
   mismatch.sessionTeardownComplete(identity());
   mismatchProvider.ready(mismatchProvider.latest(), digest('f'));
@@ -808,13 +1123,18 @@ void testDigestFailureAndMismatchBecomeTerminalFailures() {
 
 int main() {
   testPerformanceStateMachineWorkerTicketAndSanitizedPayload();
+  testDiagnosticHistoryRejectsInternalNamespaceLookalikes();
   testStrictBindingAndPerformanceFailures();
+  testExactRefreshContractAcceptsInclusiveBoundaries();
+  testDiagnosticHistorySnapshotCapacityBoundary();
+  testPostTicketTerminalConstructionExceptionPublishesRecoverableFailure();
   testPerformanceUsesActualContiguousBoundaryFrames();
   testTimestampArithmeticOverflowFailsClosed();
   testCapacityIncompleteAndMismatchAreFatal();
   testLifecycleRequiresBaselineAndTenSequentialDestroyedSessions();
   testNegativeOverlayOrderingCountersAndProviderShutdown();
   testObservedNegativeEvidenceIsScopedAndCompared();
+  testAcknowledgedRunInvalidatesItsBoundScopeGeneration();
   testNegativeFramesAfterSessionEndFailClosed();
   testDigestFailureAndMismatchBecomeTerminalFailures();
   return failures == 0 ? 0 : 1;
