@@ -3678,6 +3678,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(skin_live_resource_counters_tests PRIVATE cxx_std_23)
+
+        add_executable(skin_process_resident_memory_tests
+            tests/skin_process_resident_memory_tests.cpp
+            src/skin/beatoraja/SkinProcessResidentMemory.cpp
+        )
+        target_include_directories(skin_process_resident_memory_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(skin_process_resident_memory_tests PRIVATE cxx_std_23)
     endif()
 
     add_executable(mobile_memory_pressure_tests
@@ -5968,6 +5977,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET skin_live_resource_counters_tests)
         asobmashow_register_test(skin_live_resource_counters_tests)
+    endif()
+    if (TARGET skin_process_resident_memory_tests)
+        asobmashow_register_test(skin_process_resident_memory_tests)
     endif()
     if (TARGET gameplay_skin_validator_tests)
         asobmashow_register_test(gameplay_skin_validator_tests)
