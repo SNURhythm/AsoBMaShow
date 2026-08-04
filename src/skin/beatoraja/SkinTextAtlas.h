@@ -5,6 +5,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 
 namespace skin {
 
@@ -14,6 +15,8 @@ namespace skin {
 [[nodiscard]] std::string stableFallbackChainDigest(
     SkinResourceId primary, int primaryType,
     const std::vector<SkinFontFallbackResource> &fallbacks);
+[[nodiscard]] bool appendStableFallbackChainEntry(
+    std::string &digest, std::string_view normalizedVirtualPath, int type);
 
 struct SkinTextAtlasFontBytes {
   std::vector<std::byte> encoded;

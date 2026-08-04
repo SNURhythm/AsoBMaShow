@@ -11,7 +11,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <sstream>
 
 namespace skin {
 namespace {
@@ -23,17 +22,41 @@ bool quantize(double &value) noexcept {
 }
 bool canonicalizeSkinTextAtlasKey(SkinTextAtlasKey &key) noexcept {
   return key.font != 0 && key.pointSize > 0 && key.pointSize <= 512 &&
+         !key.fallbackChainDigest.empty() &&
+         key.fallbackChainDigest.size() <=
+             SkinResourcePolicy::maximumFallbackChainDigestBytes &&
          key.outlineWidth >= 0.0 && key.shadowSmoothness >= 0.0 &&
          quantize(key.outlineWidth) && quantize(key.shadowOffsetX) &&
          quantize(key.shadowOffsetY) && quantize(key.shadowSmoothness);
 }
 std::string stableFallbackChainDigest(SkinResourceId primary, int primaryType,
                                       const std::vector<SkinFontFallbackResource> &fallbacks) {
-  std::ostringstream result;
-  result << primary << ':' << primaryType;
-  for (const auto &fallback : fallbacks)
-    result << '|' << fallback.virtualPath.size() << ':' << fallback.virtualPath << ':' << fallback.type;
-  return result.str();
+  std::string result = std::to_string(primary) + ':' +
+                       std::to_string(primaryType);
+  for (const auto &fallback : fallbacks) {
+    if (!appendStableFallbackChainEntry(result, fallback.virtualPath,
+                                        fallback.type)) {
+      return {};
+    }
+  }
+  return result;
+}
+
+bool appendStableFallbackChainEntry(
+    std::string &digest, std::string_view normalizedVirtualPath, int type) {
+  const std::string pathSize = std::to_string(normalizedVirtualPath.size());
+  const std::string typeText = std::to_string(type);
+  const auto append = [&](std::string_view value) {
+    if (digest.size() > SkinResourcePolicy::maximumFallbackChainDigestBytes ||
+        value.size() > SkinResourcePolicy::maximumFallbackChainDigestBytes -
+                           digest.size()) {
+      return false;
+    }
+    digest.append(value);
+    return true;
+  };
+  return append("|") && append(pathSize) && append(":") &&
+         append(normalizedVirtualPath) && append(":") && append(typeText);
 }
 
 namespace {

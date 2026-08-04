@@ -1,6 +1,7 @@
 #include "SkinResourceCatalog.h"
 #include "SkinTextAtlas.h"
 #include "../LuaGameplaySkinFeature.h"
+#include "../package/SkinPackageTypes.h"
 #include "view/ImageFileDecoder.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -12,7 +13,6 @@
 #include <functional>
 #include <filesystem>
 #include <set>
-#include <sstream>
 #include <type_traits>
 
 namespace skin {
@@ -30,6 +30,49 @@ struct CollectedResourceUses {
   struct TextUse { SkinTextAtlasKey key; std::string literal; bool receivesRuntimeStrings = false; bool critical = false; };
   std::vector<TextUse> texts;
 };
+
+struct ConfiguredResourcePath {
+  std::optional<std::string> path;
+  std::string error;
+};
+
+ConfiguredResourcePath applyConfiguredFileSelection(
+    std::string_view authored,
+    const BeatorajaSkinConfiguration &configuration) {
+  const ConfiguredFile *match = nullptr;
+  for (const auto &file : configuration.orderedFiles) {
+    if (!authored.starts_with(file.pattern)) continue;
+    if (match != nullptr) {
+      return {.error="resource path matches multiple configured files"};
+    }
+    match = &file;
+  }
+  if (match == nullptr) {
+    if (authored.find('*') != std::string_view::npos) {
+      return {.error="resource wildcard has no configured file selection"};
+    }
+    return {.path=std::string(authored)};
+  }
+  const std::size_t wildcard = authored.rfind('*');
+  if (wildcard == std::string::npos ||
+      authored.size() < match->pattern.size()) {
+    return {.error="configured resource pattern is invalid"};
+  }
+  const std::size_t suffixSize = authored.size() - match->pattern.size();
+  if (wildcard > SkinPackagePolicy::maxPathBytes ||
+      match->selectedValue.size() >
+          SkinPackagePolicy::maxPathBytes - wildcard ||
+      suffixSize > SkinPackagePolicy::maxPathBytes - wildcard -
+                       match->selectedValue.size()) {
+    return {.error="configured resource path exceeds host limits"};
+  }
+  std::string selected;
+  selected.reserve(wildcard + match->selectedValue.size() + suffixSize);
+  selected.append(authored, 0, wildcard);
+  selected.append(match->selectedValue);
+  selected.append(authored, match->pattern.size(), suffixSize);
+  return {.path=std::move(selected)};
+}
 
 CollectedResourceUses collectResourceUses(const ValidatedBeatorajaSkinModel &model) {
   CollectedResourceUses result;
@@ -204,6 +247,7 @@ bool appendUtf8(std::string_view value, std::set<char32_t> &codepoints,
 struct FontAtlasRequest {
   SkinTextAtlasKey key;
   const SkinFontResource *font = nullptr;
+  std::vector<std::string> resolvedFacePaths;
   bool critical = false;
   std::set<char32_t> codepoints;
   std::set<std::pair<char32_t, char32_t>> pairs;
@@ -211,7 +255,9 @@ struct FontAtlasRequest {
 
 std::vector<FontAtlasRequest> collectFontAtlasRequests(
     const ValidatedBeatorajaSkinModel &model, const CollectedResourceUses &uses,
-    const LuaSkinFileSystem &files, std::span<const std::string> runtimeStrings,
+    const LuaSkinFileSystem &files,
+    const BeatorajaSkinConfiguration &configuration,
+    std::span<const std::string> runtimeStrings,
     std::vector<SkinDiagnostic> &diagnostics) {
   std::map<SkinResourceId, const SkinFontResource *> resources;
   for (const auto &definition : model.model.resources)
@@ -224,26 +270,49 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
       continue;
     }
     SkinTextAtlasKey key = text.key;
-    std::ostringstream digest;
-    digest << found->second->id << ':' << found->second->type;
+    std::string digest = std::to_string(found->second->id) + ':' +
+                         std::to_string(found->second->type);
     bool resolved = true;
+    bool digestWithinPolicy = true;
+    std::vector<std::string> resolvedFacePaths;
     const auto addResolved = [&](std::string_view path, int type) {
-      const auto candidate = files.resolveResourceCandidates(path, path);
+      if (!digestWithinPolicy) return;
+      const auto configured = applyConfiguredFileSelection(path, configuration);
+      if (!configured.path) { resolved = false; return; }
+      const auto candidate = files.resolveResourceCandidates(
+          *configured.path, *configured.path);
       if (!candidate.normalizedVirtualPath) { resolved = false; return; }
-      digest << '|' << candidate.normalizedVirtualPath->size() << ':' << *candidate.normalizedVirtualPath << ':' << type;
+      digestWithinPolicy = appendStableFallbackChainEntry(
+          digest, *candidate.normalizedVirtualPath, type);
+      if (digestWithinPolicy) {
+        resolvedFacePaths.push_back(*candidate.normalizedVirtualPath);
+      }
     };
     addResolved(found->second->virtualPath, found->second->type);
-    for (const auto &fallback : found->second->fallbacks) addResolved(fallback.virtualPath, fallback.type);
+    for (const auto &fallback : found->second->fallbacks) {
+      if (!fallback.virtualPath.empty()) {
+        addResolved(fallback.virtualPath, fallback.type);
+      }
+    }
     if (!resolved) {
       diagnostics.push_back(fontDiagnostic(*found->second, text.critical, "skin.resource.font_path_ambiguous", "font primary or fallback path is invalid or ambiguous"));
       continue;
     }
-    key.fallbackChainDigest = std::move(digest).str();
+    if (!digestWithinPolicy) {
+      diagnostics.push_back(fontDiagnostic(*found->second, text.critical,
+          "skin.resource.font_style_invalid",
+          "font fallback-chain identity exceeds atlas key policy"));
+      continue;
+    }
+    key.fallbackChainDigest = std::move(digest);
     if (!canonicalizeSkinTextAtlasKey(key)) {
       diagnostics.push_back(fontDiagnostic(*found->second, text.critical, "skin.resource.font_style_invalid", "font atlas style is invalid"));
       continue;
     }
-    auto [request, inserted] = requests.try_emplace(key, FontAtlasRequest{.key=key, .font=found->second, .critical=text.critical});
+    auto [request, inserted] = requests.try_emplace(
+        key, FontAtlasRequest{.key=key, .font=found->second,
+                              .resolvedFacePaths=std::move(resolvedFacePaths),
+                              .critical=text.critical});
     request->second.critical = request->second.critical || text.critical;
     if (!appendUtf8(text.literal, request->second.codepoints, request->second.pairs))
       diagnostics.push_back(fontDiagnostic(*found->second, request->second.critical, "skin.resource.atlas_limit", "font glyph or kerning limit exceeds policy"));
@@ -262,9 +331,7 @@ std::optional<std::vector<SkinTextAtlasFontBytes>> readFontFaces(
     std::size_t &sessionEncodedBytes, std::vector<SkinDiagnostic> &diagnostics,
     const std::function<bool()> &cancellationRequested) {
   std::vector<SkinTextAtlasFontBytes> faces;
-  std::vector<std::string_view> paths{request.font->virtualPath};
-  for (const auto &fallback : request.font->fallbacks) paths.push_back(fallback.virtualPath);
-  for (const std::string_view path : paths) {
+  for (const std::string &path : request.resolvedFacePaths) {
     if (cancellationRequested()) return std::nullopt;
     const std::string extension = std::filesystem::path(path).extension().string();
     std::string lowerExtension;
@@ -278,13 +345,9 @@ std::optional<std::vector<SkinTextAtlasFontBytes>> readFontFaces(
       diagnostics.push_back(fontDiagnostic(*request.font, request.critical, "skin.resource.font_format_unsupported", "font extension must be TTF or OTF"));
       return std::nullopt;
     }
-    const auto candidate = files.resolveResourceCandidates(path, path);
-    if (!candidate.normalizedVirtualPath) {
-      diagnostics.push_back(fontDiagnostic(*request.font, request.critical, "skin.resource.font_missing", "font path cannot be resolved"));
-      return std::nullopt;
-    }
     if (cancellationRequested()) return std::nullopt;
-    const auto read = files.readResolvedResource(*candidate.normalizedVirtualPath, SkinResourcePolicy::maximumEncodedBytes);
+    const auto read = files.readResolvedResource(
+        path, SkinResourcePolicy::maximumEncodedBytes);
     if (cancellationRequested()) return std::nullopt;
     if (read.failure) {
       diagnostics.push_back(fontDiagnostic(*request.font, request.critical, "skin.resource.font_missing", "font bytes are unavailable"));
@@ -358,6 +421,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
   };
   for (const auto &image : plan.images) {
     if (image.id == 0 || !imageIds.insert(image.id).second ||
+        imageIds.size() > SkinResourcePolicy::maximumResources ||
         image.aliases.size() > SkinResourcePolicy::maximumResources - imageIds.size()) {
       result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has duplicate image IDs")); return result;
     }
@@ -452,8 +516,8 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
           std::llabs(static_cast<long long>(metric.advance)) > SkinResourcePolicy::maximumDimension) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid glyph region")); return result; }
     }
     for (const auto &[pair, amount] : atlas.kerning) {
-      (void)amount;
-      if (!atlas.glyphs.contains(pair.first) || !atlas.glyphs.contains(pair.second)) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid kerning pair")); return result; }
+      if (!atlas.glyphs.contains(pair.first) || !atlas.glyphs.contains(pair.second) ||
+          std::llabs(static_cast<long long>(amount)) > SkinResourcePolicy::maximumDimension) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid kerning pair")); return result; }
     }
     glyphCount += atlas.glyphs.size();
     pairCount += atlas.kerning.size();
@@ -573,7 +637,17 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
     if (!resource) continue; // Font rasterization is intentionally a later slice.
     const auto use = uses.images.find(resource->id);
     if (use == uses.images.end()) continue;
-    const auto candidate = input.fileSystem.resolveResourceCandidates(resource->virtualPath, resource->virtualPath);
+    const auto configured = applyConfiguredFileSelection(
+        resource->virtualPath, input.configuration);
+    if (!configured.path) {
+      result.diagnostics.push_back(useDiagnostic(
+          "skin.resource.configuration_ambiguous",
+          "skin.resource.configuration_ambiguous", configured.error,
+          use->second.critical));
+      continue;
+    }
+    const auto candidate = input.fileSystem.resolveResourceCandidates(
+        *configured.path, *configured.path);
     if (!candidate.normalizedVirtualPath) {
       result.diagnostics.push_back(fileDiagnostic(*resource, candidate.failure ? &*candidate.failure : nullptr, use->second.critical));
       continue;
@@ -609,7 +683,9 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
     std::vector<SkinSourceRect> ignored;
     (void)resolveRegions(use->second, decoded->second.width, decoded->second.height, ignored, nullptr, result.diagnostics);
   }
-  const auto fontRequests = collectFontAtlasRequests(input.model, uses, input.fileSystem, input.requiredRuntimeStrings, result.diagnostics);
+  const auto fontRequests = collectFontAtlasRequests(
+      input.model, uses, input.fileSystem, input.configuration,
+      input.requiredRuntimeStrings, result.diagnostics);
   SkinTextAtlasId atlasId = 1;
   std::size_t fontEncodedBytes = sessionBytes;
   std::size_t atlasBytes = 0;
@@ -632,7 +708,8 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
   }
   {
     std::lock_guard lock(serviceMutex_);
-    if (state_ != State::Running || stop_.stop_requested()) { result.cancelled = true; return result; }
+    if (state_ != State::Running || stop_.stop_requested() ||
+        input.stop.stop_requested()) { result.cancelled = true; return result; }
     result.valid = std::ranges::none_of(result.diagnostics, [](const SkinDiagnostic &d) { return d.severity == DiagnosticSeverity::Error; });
   }
   return result;
@@ -655,7 +732,17 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     if (!resource) continue;
     const auto use = uses.images.find(resource->id);
     if (use == uses.images.end()) continue;
-    const auto candidate = input.fileSystem.resolveResourceCandidates(resource->virtualPath, resource->virtualPath);
+    const auto configured = applyConfiguredFileSelection(
+        resource->virtualPath, input.configuration);
+    if (!configured.path) {
+      result.diagnostics.push_back(useDiagnostic(
+          "skin.resource.configuration_ambiguous",
+          "skin.resource.configuration_ambiguous", configured.error,
+          use->second.critical));
+      continue;
+    }
+    const auto candidate = input.fileSystem.resolveResourceCandidates(
+        *configured.path, *configured.path);
     if (!candidate.normalizedVirtualPath) { result.diagnostics.push_back(fileDiagnostic(*resource, candidate.failure ? &*candidate.failure : nullptr, use->second.critical)); continue; }
     if (const auto found = unique.find(*candidate.normalizedVirtualPath); found != unique.end()) { auto &image=plan.images[found->second]; std::vector<SkinSourceRect> regions; std::vector<SkinResolvedRegion> mappings; if (resolveRegions(use->second,image.pixels.width,image.pixels.height,regions,&mappings,result.diagnostics)) { image.aliases.push_back(resource->id); image.aliasRegions.emplace(resource->id,std::move(regions)); image.aliasRegionMappings.emplace(resource->id,std::move(mappings)); } continue; }
     if (unique.size() == SkinResourcePolicy::maximumResources) { result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource count exceeds the session policy")); break; }
@@ -689,7 +776,9 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     unique.emplace(*candidate.normalizedVirtualPath, plan.images.size());
     plan.images.push_back({.id=resource->id, .pixels=*decoded, .regions=std::move(regions), .regionMappings=std::move(mappings)});
   }
-  const auto fontRequests = collectFontAtlasRequests(input.model, uses, input.fileSystem, input.requiredRuntimeStrings, result.diagnostics);
+  const auto fontRequests = collectFontAtlasRequests(
+      input.model, uses, input.fileSystem, input.configuration,
+      input.requiredRuntimeStrings, result.diagnostics);
   SkinTextAtlasId atlasId = 1;
   std::size_t fontEncodedBytes = encodedBytes;
   std::size_t atlasBytes = 0;
@@ -725,7 +814,8 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
   if (std::ranges::any_of(result.diagnostics, [](const SkinDiagnostic &d) { return d.severity == DiagnosticSeverity::Error; })) return result;
   {
     std::lock_guard lock(serviceMutex_);
-    if (state_ != State::Running || stop_.stop_requested()) { result.cancelled = true; return result; }
+    if (state_ != State::Running || stop_.stop_requested() ||
+        input.stop.stop_requested()) { result.cancelled = true; return result; }
     result.plan = std::move(plan);
   }
   return result;

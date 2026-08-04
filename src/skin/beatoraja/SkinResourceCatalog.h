@@ -38,6 +38,10 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumRuntimeStringBytes = 64U * 1024U;
   static constexpr std::size_t maximumGlyphs = 8192;
   static constexpr std::size_t maximumKerningPairs = 16384;
+  // Atlas keys retain exact ordered primary/fallback identity, but must stay
+  // small enough to duplicate safely across bounded style variants.
+  static constexpr std::size_t maximumFallbackChainDigestBytes =
+      64U * 1024U;
   static constexpr std::size_t cacheByteBudget = 128U * 1024U * 1024U;
   static constexpr std::size_t workerCount = 2;
 };

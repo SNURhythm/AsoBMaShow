@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <memory>
 #include <optional>
@@ -71,7 +72,8 @@ void testSpriteBoundsAndNormalizedGridCells() {
 }
 
 void testTextAtlasKeyRejectsNegativePaintExtents() {
-  skin::SkinTextAtlasKey key{.font=1, .pointSize=16};
+  skin::SkinTextAtlasKey key{
+      .font=1, .pointSize=16, .fallbackChainDigest="1:0|8:font.ttf:0"};
   key.outlineWidth = -0.25;
   expect(!skin::canonicalizeSkinTextAtlasKey(key),
          "negative outline extent cannot become a canonical atlas key");
@@ -79,6 +81,26 @@ void testTextAtlasKeyRejectsNegativePaintExtents() {
   key.shadowSmoothness = -0.25;
   expect(!skin::canonicalizeSkinTextAtlasKey(key),
          "negative shadow smoothing cannot become a canonical atlas key");
+  key.shadowSmoothness = 0.0;
+  key.fallbackChainDigest.clear();
+  expect(!skin::canonicalizeSkinTextAtlasKey(key),
+         "an empty fallback-chain identity cannot become an atlas key");
+  key.fallbackChainDigest.assign(65537, 'x');
+  expect(!skin::canonicalizeSkinTextAtlasKey(key),
+         "an oversized fallback-chain identity cannot become an atlas key");
+
+  const std::vector<skin::SkinFontFallbackResource> forward = {
+      {.virtualPath="font/a.ttf", .type=0},
+      {.virtualPath="font/b.ttf", .type=1}};
+  const std::vector<skin::SkinFontFallbackResource> reverse(
+      forward.rbegin(), forward.rend());
+  expect(skin::stableFallbackChainDigest(1, 0, forward) !=
+             skin::stableFallbackChainDigest(1, 0, reverse),
+         "fallback-chain identity preserves exact ordered path and type data");
+  std::vector<skin::SkinFontFallbackResource> oversizedChain(
+      8192, {.virtualPath="font/fallback.ttf", .type=0});
+  expect(skin::stableFallbackChainDigest(1, 0, oversizedChain).empty(),
+         "the public fallback-chain builder refuses an oversized identity");
 }
 
 struct TemporaryDirectory {
@@ -127,6 +149,24 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                     "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                 source / "entry/resources/fixture.ttf");
+  const auto writePpm = [](const fs::path &path, int width) {
+    std::ofstream stream(path, std::ios::binary);
+    stream << "P6\n" << width << " 1\n255\n";
+    for (int pixel = 0; pixel < width; ++pixel) {
+      stream.put(static_cast<char>(pixel == 0 ? 255 : 0));
+      stream.put(static_cast<char>(pixel == 1 ? 255 : 0));
+      stream.put(0);
+    }
+  };
+  writePpm(source / "entry/resources/image-default.ppm", 1);
+  writePpm(source / "entry/resources/image-selected.ppm", 2);
+  for (const std::string_view name : {
+           "font-primary-selected.ttf", "font-fallback-selected.ttf",
+           "font-secondary-selected.otf"}) {
+    fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                      "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
+                  source / "entry/resources" / name);
+  }
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                     "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
                 source / "entry/resources/unsupported.fnt");
@@ -229,6 +269,137 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   auto leasedFs = skin::LuaSkinFileSystem::create({.revision=lease->readView(), .entry=entry, .storageRoots=roots});
   expect(leasedFs.fileSystem != nullptr, "published resource filesystem is available");
   if (!leasedFs.fileSystem) return;
+  skin::ValidatedBeatorajaSkinModel emptyModel;
+  std::stop_source preStoppedCaller;
+  preStoppedCaller.request_stop();
+  const auto preStoppedValidation = service.validateResources(
+      {.revision = lease->readView(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = emptyModel,
+       .configuration = configuration,
+       .stop = preStoppedCaller.get_token()});
+  expect(preStoppedValidation.cancelled && !preStoppedValidation.valid,
+         "a caller stop observed only at the final validation boundary prevents publication");
+  const auto preStoppedPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = emptyModel,
+       .configuration = configuration,
+       .stop = preStoppedCaller.get_token()});
+  expect(preStoppedPlan.cancelled && !preStoppedPlan.plan,
+         "a caller stop observed only at the final plan boundary prevents publication");
+  {
+  const auto configuredImageModel = [](std::string explicitPath) {
+    skin::ValidatedBeatorajaSkinModel configured;
+    configured.model.resources.emplace_back(skin::SkinImageResource{
+        .id=1, .authoredName="configured", .virtualPath="resources/image-*"});
+    configured.model.resources.emplace_back(skin::SkinImageResource{
+        .id=2, .authoredName="explicit", .virtualPath=std::move(explicitPath)});
+    configured.model.objects.push_back(
+        {.id=1, .authoredName="configured-image",
+         .payload=skin::SkinImageObject{.orderedStates={{.resource=1, .frames={{.x=0,.y=0,.w=-1,.h=-1}}}}},
+         .critical=true});
+    configured.model.objects.push_back(
+        {.id=2, .authoredName="explicit-image",
+         .payload=skin::SkinImageObject{.orderedStates={{.resource=2, .frames={{.x=0,.y=0,.w=-1,.h=-1}}}}},
+         .critical=true});
+    return configured;
+  };
+  skin::BeatorajaSkinConfiguration defaultFileConfiguration;
+  defaultFileConfiguration.orderedFiles.push_back(
+      {.name="Image", .pattern="resources/image-*",
+       .selectedValue="default.ppm"});
+  const auto defaultConfiguredPlan = service.decodeAndPlan(
+      {.revision=lease->clone(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem,
+       .model=configuredImageModel("resources/image-default.ppm"),
+       .configuration=defaultFileConfiguration});
+  expect(defaultConfiguredPlan.plan &&
+             defaultConfiguredPlan.plan->images.size() == 1 &&
+             defaultConfiguredPlan.plan->images.front().pixels.width == 1 &&
+             defaultConfiguredPlan.plan->images.front().aliases ==
+                 std::vector<skin::SkinResourceId>{2},
+         "configured default image substitution deduplicates against an explicit resolved path");
+  skin::BeatorajaSkinConfiguration selectedFileConfiguration;
+  selectedFileConfiguration.orderedFiles.push_back(
+      {.name="Image", .pattern="resources/image-*",
+       .selectedValue="selected.ppm"});
+  const auto selectedConfiguredPlan = service.decodeAndPlan(
+      {.revision=lease->clone(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem,
+       .model=configuredImageModel("resources/image-selected.ppm"),
+       .configuration=selectedFileConfiguration});
+  expect(selectedConfiguredPlan.plan &&
+             selectedConfiguredPlan.plan->images.size() == 1 &&
+             selectedConfiguredPlan.plan->images.front().pixels.width == 2 &&
+             selectedConfiguredPlan.plan->images.front().aliases ==
+                 std::vector<skin::SkinResourceId>{2},
+         "configured selected image substitution changes the physical cache key without remapping an explicit path");
+  skin::ValidatedBeatorajaSkinModel configuredFontModel;
+  configuredFontModel.model.resources.emplace_back(skin::SkinFontResource{
+      .id=1, .authoredName="configured-font",
+      .virtualPath="resources/font-primary-*", .type=0,
+      .fallbacks={{.virtualPath="", .type=0},
+                  {.virtualPath="resources/font-fallback-*", .type=0},
+                  {.virtualPath="", .type=0},
+                  {.virtualPath="resources/font-secondary-*", .type=0},
+                  {.virtualPath="", .type=0}}});
+  configuredFontModel.model.objects.push_back(
+      {.id=1, .authoredName="configured-font-text",
+       .payload=skin::SkinTextObject{.font=1, .literal="A", .pointSize=16},
+       .critical=true});
+  skin::BeatorajaSkinConfiguration configuredFonts;
+  configuredFonts.orderedFiles = {
+      {.name="Primary", .pattern="resources/font-primary-*",
+       .selectedValue="selected.ttf"},
+      {.name="Fallback", .pattern="resources/font-fallback-*",
+       .selectedValue="selected.ttf"},
+      {.name="Secondary", .pattern="resources/font-secondary-*",
+       .selectedValue="selected.otf"}};
+  const auto configuredFontPlan = service.decodeAndPlan(
+      {.revision=lease->clone(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem, .model=configuredFontModel,
+       .configuration=configuredFonts});
+  const auto configuredDigest = configuredFontPlan.plan &&
+          configuredFontPlan.plan->atlases.size() == 1
+      ? configuredFontPlan.plan->atlases.front().key.fallbackChainDigest
+      : std::string{};
+  const auto primaryPosition = configuredDigest.find("font-primary-selected.ttf");
+  const auto fallbackPosition = configuredDigest.find("font-fallback-selected.ttf");
+  const auto secondaryPosition = configuredDigest.find("font-secondary-selected.otf");
+  expect(configuredFontPlan.plan && configuredFontPlan.plan->atlases.size() == 1 &&
+             primaryPosition != std::string::npos &&
+             fallbackPosition > primaryPosition &&
+             secondaryPosition > fallbackPosition,
+         "configured primary and nonempty fallback font slots resolve once in authored order while empty placeholders are skipped");
+  skin::BeatorajaSkinConfiguration ambiguousFiles = defaultFileConfiguration;
+  ambiguousFiles.orderedFiles.push_back(
+      {.name="Image duplicate", .pattern="resources/image-*",
+       .selectedValue="selected.ppm"});
+  const auto ambiguousConfiguration = service.validateResources(
+      {.revision=lease->readView(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem,
+       .model=configuredImageModel("resources/image-default.ppm"),
+       .configuration=ambiguousFiles});
+  expect(!ambiguousConfiguration.valid &&
+             hasDiagnostic(ambiguousConfiguration.diagnostics,
+                           "skin.resource.configuration_ambiguous"),
+         "overlapping configured file matches fail closed without runtime reselection");
+  skin::BeatorajaSkinConfiguration oversizedSelection =
+      defaultFileConfiguration;
+  oversizedSelection.orderedFiles.front().selectedValue.assign(1025, 'x');
+  const auto oversizedConfiguredPath = service.validateResources(
+      {.revision=lease->readView(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem,
+       .model=configuredImageModel("resources/image-default.ppm"),
+       .configuration=oversizedSelection});
+  expect(!oversizedConfiguredPath.valid &&
+             hasDiagnostic(oversizedConfiguredPath.diagnostics,
+                           "skin.resource.configuration_ambiguous"),
+         "configured file substitution enforces the host package-path bound before allocation");
+  }
   auto planned = service.decodeAndPlan({.revision=std::move(*lease), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(planned.plan && planned.plan->images.size() == 2 && planned.plan->atlases.size() == 4 &&
              planned.plan->images.front().aliases == std::vector<skin::SkinResourceId>{2},
@@ -315,6 +486,25 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                          image.aliases.push_back(id);
                        }
                      });
+  rejectBeforeUpload("logical resource cap cannot underflow after aliases fill the ID set",
+                     [](auto &plan, auto &) {
+                       auto &first = plan.images.front();
+                       first.aliases.clear();
+                       first.aliasRegions.clear();
+                       first.aliasRegionMappings.clear();
+                       for (skin::SkinResourceId id = 2;
+                            id <= skin::SkinResourcePolicy::maximumResources;
+                            ++id) {
+                         first.aliases.push_back(id);
+                         first.aliasRegionMappings.emplace(id,
+                                                           first.regionMappings);
+                       }
+                       auto &next = plan.images.back();
+                       next.id = skin::SkinResourcePolicy::maximumResources + 1;
+                       next.aliases.clear();
+                       next.aliasRegions.clear();
+                       next.aliasRegionMappings.clear();
+                     });
   rejectBeforeUpload("duplicate image aliases fail complete preflight before upload",
                      [](auto &plan, auto &) {
                        plan.images.front().aliases.push_back(plan.images.back().id);
@@ -369,6 +559,11 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                      [](auto &plan, auto &) { plan.atlases.back().id = plan.atlases.front().id; });
   rejectBeforeUpload("atlas styles must retain canonical finite keys",
                      [](auto &plan, auto &) { plan.atlases.front().key.outlineWidth = -1.0; });
+  rejectBeforeUpload("oversized atlas fallback-chain keys fail before upload",
+                     [](auto &plan, auto &) {
+                       plan.atlases.front().key.fallbackChainDigest.assign(
+                           65537, 'x');
+                     });
   rejectBeforeUpload("atlas dimensions and shared RGBA byte counts must agree",
                      [](auto &plan, auto &) { ++plan.atlases.front().pixels.width; });
   rejectBeforeUpload("aggregate atlas decoded-byte accounting rejects shared pixels before upload",
@@ -388,6 +583,40 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                      [](auto &plan, auto &) { plan.atlases.front().glyphs.begin()->second.region.x = -1; });
   rejectBeforeUpload("atlas kerning pairs must reference prepared glyphs",
                      [](auto &plan, auto &) { plan.atlases.front().kerning[{U'\U0010ffff', U'\U0010ffff'}] = 1; });
+  rejectBeforeUpload("INT_MIN kerning is rejected before upload",
+                     [](auto &plan, auto &) {
+                       const auto atlas = std::find_if(
+                           plan.atlases.begin(), plan.atlases.end(),
+                           [](const auto &item) { return !item.kerning.empty(); });
+                       atlas->kerning.begin()->second =
+                           std::numeric_limits<int>::min();
+                     });
+  rejectBeforeUpload("INT_MAX kerning is rejected before upload",
+                     [](auto &plan, auto &) {
+                       const auto atlas = std::find_if(
+                           plan.atlases.begin(), plan.atlases.end(),
+                           [](const auto &item) { return !item.kerning.empty(); });
+                       atlas->kerning.begin()->second =
+                           std::numeric_limits<int>::max();
+                     });
+  {
+    auto signedKerningPlan = copyUploadPlan();
+    const auto preparedAtlas = std::find_if(
+        signedKerningPlan.atlases.begin(), signedKerningPlan.atlases.end(),
+        [](const auto &item) { return !item.kerning.empty(); });
+    const auto atlasId = preparedAtlas->id;
+    const auto pair = preparedAtlas->kerning.begin()->first;
+    const int signedAmount = -skin::SkinResourcePolicy::maximumDimension;
+    preparedAtlas->kerning.begin()->second = signedAmount;
+    auto signedDevice = std::make_shared<FakeTextureDevice>();
+    const auto signedUpload = skin::SkinResourceCatalog::upload(
+        std::move(signedKerningPlan), signedDevice);
+    const auto *uploadedAtlas = signedUpload.catalog
+        ? signedUpload.catalog->findTextAtlas(atlasId)
+        : nullptr;
+    expect(uploadedAtlas && uploadedAtlas->kerning.at(pair) == signedAmount,
+           "valid signed kerning is preserved through catalog upload");
+  }
   rejectBeforeUpload("atlas metrics stay within fixed policy bounds",
                      [](auto &plan, auto &) { plan.atlases.front().lineHeight = skin::SkinResourcePolicy::maximumDimension + 1; });
   rejectBeforeUpload("atlas glyph-count cap rejects before upload",
