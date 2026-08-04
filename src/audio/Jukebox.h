@@ -330,6 +330,10 @@ private:
     path_t key;
     bool video = false;
   };
+  bool prepareGameplayBgaLayerImageIds(
+      const bms_parser::Chart &chart,
+      const std::vector<ResolvedVisualAsset> &assets,
+      std::atomic_bool &isCancelled) noexcept;
   std::vector<ResolvedSoundAsset>
   resolveSoundAssets(bms_parser::Chart &chart,
                      const ChartResourceTable &wavTable,
@@ -401,6 +405,7 @@ private:
   size_t audioCursor = 0;
   std::vector<std::pair<long long, int>> bmpList;
   std::vector<std::pair<long long, int>> bmpLayerList;
+  std::unordered_set<int> gameplayBgaLayerImageIds;
   BgaPoorSequenceSchedule poorBgaSequences;
   size_t bmpCursor = 0;
   size_t bmpLayerCursor = 0;

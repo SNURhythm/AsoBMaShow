@@ -1454,14 +1454,26 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
         videoLayoutRegistered = true;
         continue;
       }
-      if (!plan.image || !bgfx::isValid(s_texColor)) {
+      if (!plan.image) {
         return failure("gameplay_bga.image.preflight",
-                       "BGA image sampler or texture is unavailable.");
+                       "BGA image lease is unavailable.");
       }
       plan.program = bgaEmbeddedImageProgram;
       plan.imageTexture = plan.material.blackTransparent
                               ? plan.image->layerTexture
                               : plan.image->texture;
+      if (!bgfx::isValid(plan.imageTexture)) {
+        return failure(plan.material.blackTransparent
+                           ? "gameplay_bga.image.layer_texture"
+                           : "gameplay_bga.image.texture",
+                       plan.material.blackTransparent
+                           ? "BGA layer image companion is unavailable."
+                           : "BGA image texture is unavailable.");
+      }
+      if (!bgfx::isValid(s_texColor)) {
+        return failure("gameplay_bga.image.preflight",
+                       "BGA image sampler is unavailable.");
+      }
       plan.imageSamplerFlags =
           BGFX_SAMPLER_UVW_CLAMP |
           (plan.material.linearSampling
@@ -2038,17 +2050,20 @@ bool Jukebox::loadImageBytes(int id, const std::filesystem::path &path,
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
-  const auto layerPixels = MakeGameplayBgaLayerRgba(
-      std::span<const std::uint8_t>(data.get(),
-                                    static_cast<std::size_t>(width) *
-                                        static_cast<std::size_t>(height) * 4U));
-  image.layerTexture = bgfx::createTexture2D(
-      width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
-      bgfx::copy(layerPixels.data(),
-                 static_cast<std::uint32_t>(layerPixels.size())));
-  if (!bgfx::isValid(image.layerTexture)) {
-    SDL_Log("Failed to create layer image texture: %s", utf8Path.c_str());
-    return false;
+  if (gameplayBgaLayerImageIds.contains(id)) {
+    const auto layerPixels = MakeGameplayBgaLayerRgba(
+        std::span<const std::uint8_t>(
+            data.get(), static_cast<std::size_t>(width) *
+                            static_cast<std::size_t>(height) * 4U));
+    image.layerTexture = bgfx::createTexture2D(
+        width, height, false, 1, bgfx::TextureFormat::RGBA8,
+        BGFX_TEXTURE_NONE,
+        bgfx::copy(layerPixels.data(),
+                   static_cast<std::uint32_t>(layerPixels.size())));
+    if (!bgfx::isValid(image.layerTexture)) {
+      SDL_Log("Failed to create layer image texture: %s", utf8Path.c_str());
+      return false;
+    }
   }
   if (isCancelled) {
     return false;
@@ -2105,17 +2120,20 @@ bool Jukebox::loadImagePath(int id, const std::filesystem::path &path,
       .channels = channels,
   };
   auto textureGuard = makeScopeExit([&image] { destroyImageTexture(image); });
-  const auto layerPixels = MakeGameplayBgaLayerRgba(
-      std::span<const std::uint8_t>(data.get(),
-                                    static_cast<std::size_t>(width) *
-                                        static_cast<std::size_t>(height) * 4U));
-  image.layerTexture = bgfx::createTexture2D(
-      width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE,
-      bgfx::copy(layerPixels.data(),
-                 static_cast<std::uint32_t>(layerPixels.size())));
-  if (!bgfx::isValid(image.layerTexture)) {
-    SDL_Log("Failed to create layer image texture: %s", utf8Path.c_str());
-    return false;
+  if (gameplayBgaLayerImageIds.contains(id)) {
+    const auto layerPixels = MakeGameplayBgaLayerRgba(
+        std::span<const std::uint8_t>(
+            data.get(), static_cast<std::size_t>(width) *
+                            static_cast<std::size_t>(height) * 4U));
+    image.layerTexture = bgfx::createTexture2D(
+        width, height, false, 1, bgfx::TextureFormat::RGBA8,
+        BGFX_TEXTURE_NONE,
+        bgfx::copy(layerPixels.data(),
+                   static_cast<std::uint32_t>(layerPixels.size())));
+    if (!bgfx::isValid(image.layerTexture)) {
+      SDL_Log("Failed to create layer image texture: %s", utf8Path.c_str());
+      return false;
+    }
   }
   if (isCancelled) {
     return false;
@@ -3323,7 +3341,8 @@ void Jukebox::reconcileVisualResources(
     bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
     std::atomic_bool &isCancelled) {
   clearVisualResources();
-  if (isCancelled) {
+  if (isCancelled ||
+      !prepareGameplayBgaLayerImageIds(chart, assets, isCancelled)) {
     return;
   }
 
@@ -3513,6 +3532,50 @@ void Jukebox::clearVisualResources() {
   }
   visualPathTable.clear();
   visualDescriptors.clear();
+  gameplayBgaLayerImageIds.clear();
+}
+
+bool Jukebox::prepareGameplayBgaLayerImageIds(
+    const bms_parser::Chart &chart,
+    const std::vector<ResolvedVisualAsset> &assets,
+    std::atomic_bool &isCancelled) noexcept {
+  gameplayBgaLayerImageIds.clear();
+  try {
+    std::unordered_set<int> resolvedImageIds;
+    resolvedImageIds.reserve(assets.size());
+    for (const auto &asset : assets) {
+      if (isCancelled) {
+        return false;
+      }
+      if (!asset.video) {
+        resolvedImageIds.insert(asset.id);
+      }
+    }
+    gameplayBgaLayerImageIds.reserve(resolvedImageIds.size());
+    for (const auto *measure : chart.Measures) {
+      if (isCancelled) {
+        gameplayBgaLayerImageIds.clear();
+        return false;
+      }
+      if (measure == nullptr) {
+        continue;
+      }
+      for (const auto *timeline : measure->TimeLines) {
+        if (isCancelled) {
+          gameplayBgaLayerImageIds.clear();
+          return false;
+        }
+        if (timeline != nullptr && timeline->BgaLayer != -1 &&
+            resolvedImageIds.contains(timeline->BgaLayer)) {
+          gameplayBgaLayerImageIds.insert(timeline->BgaLayer);
+        }
+      }
+    }
+  } catch (...) {
+    gameplayBgaLayerImageIds.clear();
+    return false;
+  }
+  return true;
 }
 
 void Jukebox::scheduleVisuals(bms_parser::Chart &chart,

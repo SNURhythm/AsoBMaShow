@@ -548,6 +548,15 @@ void testJukeboxPreflightPerformsNoShaderLookupOrFilesystemIo() {
   require(result.ready && !result.failure.has_value() &&
               jukebox.gameplayBgaProgramLookupCount() == sessionLookupCount,
           "BGA preflight uses session-prepared shader handles without lookup or filesystem I/O");
+  const auto beforeSubmit = jukebox.gameplayBgaSubmissionStats();
+  jukebox.commitPrepared(frame);
+  jukebox.submitPrepared(frame, target);
+  jukebox.finalizePrepared(frame);
+  bgfx::frame();
+  require(jukebox.gameplayBgaSubmissionStats().embeddedSubmissions ==
+                  beforeSubmit.embeddedSubmissions + 1 &&
+              jukebox.gameplayBgaProgramLookupCount() == sessionLookupCount,
+          "the live placeholder program remains cached through preflight and submission");
 }
 
 void testJukeboxBgaTargetStretchAndTrimmedUvs() {
@@ -823,6 +832,190 @@ void testAuthoredProjectionParticipatesInPreparedTargetIdentity() {
               before.embeddedSubmissions + 2,
           "each distinct authored projection consumes its own prepared entry");
   jukebox.finalizePrepared(frame);
+}
+
+bms_parser::TimeLine *appendBgaTimeline(bms_parser::Chart &chart,
+                                        long long timingMicros, int base,
+                                        int layer) {
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(1, false);
+  timeline->Timing = timingMicros;
+  timeline->BgaBase = base;
+  timeline->BgaLayer = layer;
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  return timeline;
+}
+
+void appendBgaPoorTimeline(bms_parser::Chart &chart, long long timingMicros,
+                           std::vector<int> frames) {
+  auto *timeline = appendBgaTimeline(chart, timingMicros, -1, -1);
+  timeline->BgaPoor =
+      bms_parser::BgaPoorSequence{.Frames = std::move(frames)};
+}
+
+std::uint16_t settledBgfxTextureCount() {
+  bgfx::frame();
+  bgfx::frame();
+  return bgfx::getStats()->numTextures;
+}
+
+BgaDrawTarget makeLoadedImageTarget(GameplayBgaRole role,
+                                    std::uint32_t authoredOrdinal) {
+  return {.role = role,
+          .viewId = rendering::ui_view,
+          .destination = {{{.x = 0.0F, .y = 64.0F},
+                           {.x = 64.0F, .y = 64.0F},
+                           {.x = 64.0F, .y = 0.0F},
+                           {.x = 0.0F, .y = 0.0F}}},
+          .authoredOrdinal = authoredOrdinal};
+}
+
+void testOnlyScheduledLayerImageIdsReceiveCompanionTextures() {
+  const auto originalDirectory = std::filesystem::current_path();
+  const auto restoreDirectory = makeScopeExit([&originalDirectory] {
+    std::error_code ignored;
+    std::filesystem::current_path(originalDirectory, ignored);
+  });
+  const auto sourceDirectory =
+      std::filesystem::path(__FILE__).parent_path().parent_path();
+  std::filesystem::current_path(sourceDirectory);
+
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  const auto baselineTextures = settledBgfxTextureCount();
+  const auto imagePath = std::filesystem::path(__FILE__).parent_path() /
+                         "fixtures/beatoraja_skin/resources/fixture.png";
+  bms_parser::Chart chart;
+  chart.Meta.Folder = imagePath.parent_path();
+  for (int id = 1; id <= 4; ++id) {
+    chart.ReferencedBmpTable.emplace(id, imagePath.filename().string());
+  }
+  appendBgaTimeline(chart, 0, 2, 2);
+  appendBgaTimeline(chart, 100, 1, -1);
+  appendBgaPoorTimeline(chart, 1, {3});
+
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  require(settledBgfxTextureCount() == baselineTextures + 5,
+          "only the one scheduled layer image ID receives a companion texture");
+
+  const auto sessionLookupCount = jukebox.gameplayBgaProgramLookupCount();
+  const auto shaderlessDirectory = imagePath.parent_path();
+  std::filesystem::current_path(shaderlessDirectory);
+  const auto baseTarget = makeLoadedImageTarget(GameplayBgaRole::Base, 1);
+  const auto layerTarget = makeLoadedImageTarget(GameplayBgaRole::Layer, 2);
+  const auto baseAndLayerFrame = jukebox.prepareVisualFrameAt(801, 0, {});
+  const auto basePreflight =
+      jukebox.preflight(baseAndLayerFrame, std::span(&baseTarget, 1));
+  const auto layerPreflight =
+      jukebox.preflight(baseAndLayerFrame, std::span(&layerTarget, 1));
+  require(baseAndLayerFrame.base.has_value() &&
+              baseAndLayerFrame.layer.has_value() && !basePreflight.ready &&
+              basePreflight.failure &&
+              basePreflight.failure->code == "gameplay_bga.image.preflight" &&
+              !layerPreflight.ready && layerPreflight.failure &&
+              layerPreflight.failure->code == "gameplay_bga.image.preflight",
+          "one image ID reused as base and layer retains both textures and reaches the known embedded-program readiness boundary");
+  jukebox.finalizePrepared(baseAndLayerFrame);
+
+  const GameplayBgaMissState missState{
+      .active = true, .startedBgaMicros = 1};
+  const auto missFrame = jukebox.prepareVisualFrameAt(802, 1, missState);
+  const auto missTarget = makeLoadedImageTarget(GameplayBgaRole::Miss, 3);
+  const auto missPreflight =
+      jukebox.preflight(missFrame, std::span(&missTarget, 1));
+  require(missFrame.miss.has_value() && !missPreflight.ready &&
+              missPreflight.failure &&
+              missPreflight.failure->code == "gameplay_bga.image.preflight",
+          "a poor-only image uses its single linear texture and reaches the embedded-program readiness boundary");
+  jukebox.finalizePrepared(missFrame);
+
+  const auto fullscreenFrame = jukebox.prepareVisualFrameAt(803, 0, {});
+  const auto beforeFullscreen = jukebox.gameplayBgaSubmissionStats();
+  jukebox.submitFullscreen(fullscreenFrame);
+  bgfx::frame();
+  const auto afterFullscreen = jukebox.gameplayBgaSubmissionStats();
+  require(afterFullscreen.fullscreenSubmissions ==
+                  beforeFullscreen.fullscreenSubmissions + 1 &&
+              jukebox.gameplayBgaProgramLookupCount() == sessionLookupCount,
+          "fullscreen base/layer paths use live session-prepared programs without lookup");
+
+  const auto requireMissingCompanion = [&](int visualId,
+                                           std::uint64_t frameSerial) {
+    bms_parser::Chart layerProbe;
+    appendBgaTimeline(layerProbe, 0, -1, visualId);
+    jukebox.schedule(layerProbe, false, cancelled);
+    const auto frame = jukebox.prepareVisualFrameAt(frameSerial, 0, {});
+    const auto target =
+        makeLoadedImageTarget(GameplayBgaRole::Layer, visualId + 10U);
+    const auto result = jukebox.preflight(frame, std::span(&target, 1));
+    require(frame.layer.has_value() && !result.ready && result.failure &&
+                result.failure->code ==
+                    "gameplay_bga.image.layer_texture",
+            "a non-layer-preloaded image fails closed when later forced into a layer role");
+    jukebox.finalizePrepared(frame);
+  };
+  requireMissingCompanion(1, 804);
+  requireMissingCompanion(3, 805);
+  requireMissingCompanion(4, 806);
+
+  jukebox.unloadVisuals();
+  require(settledBgfxTextureCount() == baselineTextures,
+          "teardown releases the primary and selective companion image textures");
+}
+
+void testCancelledLayerScanDoesNotLeakRoleIntoReusedBaseId() {
+  const auto originalDirectory = std::filesystem::current_path();
+  const auto restoreDirectory = makeScopeExit([&originalDirectory] {
+    std::error_code ignored;
+    std::filesystem::current_path(originalDirectory, ignored);
+  });
+  std::filesystem::current_path(
+      std::filesystem::path(__FILE__).parent_path().parent_path());
+
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  const auto baselineTextures = settledBgfxTextureCount();
+  const auto imagePath = std::filesystem::path(__FILE__).parent_path() /
+                         "fixtures/beatoraja_skin/resources/fixture.png";
+
+  bms_parser::Chart cancelledLayerChart;
+  cancelledLayerChart.Meta.Folder = imagePath.parent_path();
+  cancelledLayerChart.ReferencedBmpTable.emplace(
+      7, imagePath.filename().string());
+  appendBgaTimeline(cancelledLayerChart, 0, -1, 7);
+  std::atomic_bool cancelled = true;
+  jukebox.loadVisuals(cancelledLayerChart, cancelled);
+  require(settledBgfxTextureCount() == baselineTextures,
+          "a cancelled layer chart owns no image textures");
+
+  bms_parser::Chart baseChart;
+  baseChart.Meta.Folder = imagePath.parent_path();
+  baseChart.ReferencedBmpTable.emplace(7, imagePath.filename().string());
+  appendBgaTimeline(baseChart, 0, 7, -1);
+  cancelled = false;
+  jukebox.loadVisuals(baseChart, cancelled);
+  require(settledBgfxTextureCount() == baselineTextures + 1,
+          "a reused base-only ID does not inherit a cancelled chart's layer role");
+
+  bms_parser::Chart layerProbe;
+  appendBgaTimeline(layerProbe, 0, -1, 7);
+  jukebox.schedule(layerProbe, false, cancelled);
+  const auto frame = jukebox.prepareVisualFrameAt(807, 0, {});
+  const auto target = makeLoadedImageTarget(GameplayBgaRole::Layer, 17);
+  const auto result = jukebox.preflight(frame, std::span(&target, 1));
+  require(frame.layer.has_value() && !result.ready && result.failure &&
+              result.failure->code == "gameplay_bga.image.layer_texture",
+          "a reused base-only ID retains no lazily materialized layer companion");
+  jukebox.finalizePrepared(frame);
+  jukebox.unloadVisuals();
+  require(settledBgfxTextureCount() == baselineTextures,
+          "reused image ownership is released after cancellation recovery");
 }
 
 void testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback() {
@@ -1110,6 +1303,8 @@ int main() {
   testLaterBgaValidationFailureLeavesTransientCapacityUntouched();
   testDuplicateTargetsConsumeDistinctPreparedEntriesExactlyOnce();
   testAuthoredProjectionParticipatesInPreparedTargetIdentity();
+  testOnlyScheduledLayerImageIdsReceiveCompanionTextures();
+  testCancelledLayerScanDoesNotLeakRoleIntoReusedBaseId();
   testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback();
   testImageTextureOwnershipTransferIsSingleAndExceptionSafe();
   testPreparedFrameRetainsExplicitSurfaceRoles();
