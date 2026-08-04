@@ -380,6 +380,21 @@ void testCourseContinuationAndConsumerBoundaries() {
   rejectTokens(root / "src/ReplayVideoExporter.cpp", forbidden);
 }
 
+void testReplayExportUsesPreparedGameplayBgaFrames() {
+  const std::filesystem::path exporter =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "src/ReplayVideoExporter.cpp";
+  requireToken(exporter, "GameplayBgaMissStateTracker",
+               "replay-export BGA miss-state authority");
+  requireToken(exporter, "prepareVisualFrameAt",
+               "prepared replay-export BGA frame authority");
+  requireToken(exporter, "submitFullscreen",
+               "replay-export fullscreen BGA submission authority");
+  constexpr std::array<std::string_view, 1> legacyRenderer{
+      "renderVisualsAt"};
+  rejectTokens(exporter, legacyRenderer);
+}
+
 void requireToken(const std::filesystem::path &path, std::string_view token,
                   std::string_view authority) {
   if (!readText(path).contains(token)) {
@@ -603,6 +618,7 @@ int main() {
   testSharedMaximumScoreAuthority();
   testActivatedChartConsumersUseTheSharedPipeline();
   testCourseContinuationAndConsumerBoundaries();
+  testReplayExportUsesPreparedGameplayBgaFrames();
   if (failures != 0) {
     std::cerr << failures << " replay contract boundary test(s) failed\n";
     return 1;

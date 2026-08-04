@@ -10,6 +10,7 @@
 #include "ResultPresentationUtils.h"
 #include "Utils.h"
 #include "audio/ChartAudioRenderer.h"
+#include "audio/GameplayBgaMissStateTracker.h"
 #include "audio/SoundFileIO.h"
 #include "main.h"
 #include "path.h"
@@ -1050,7 +1051,8 @@ bool applyReplayEventForVideo(
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const ReplayEvent &event, long long visualOffsetMicros,
     GaugeAutoShiftMode gaugeAutoShift,
-    const GameplayGaugeRules &gaugeRules) {
+    const GameplayGaugeRules &gaugeRules,
+    GameplayBgaMissStateTracker &bgaMissTracker) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
   const PlayfieldJudgeEventClock eventClock =
       makePlayfieldJudgeEventClock(event.songTimeMicros,
@@ -1062,6 +1064,7 @@ bool applyReplayEventForVideo(
     renderer.onJudge(recordedJudge, event.combo, event.score,
                      eventClock,
                      event.action != ReplayEventAction::Miss);
+    bgaMissTracker.onJudge(recordedJudge, event.combo, eventClock);
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
                             gaugeRules);
     return true;
@@ -2971,6 +2974,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                   frameBufferMemoryMiB, frameBufferBudgetMiB);
   RenderContext renderContext;
   size_t replayCursor = 0;
+  GameplayBgaMissStateTracker bgaMissTracker;
+  std::uint64_t bgaFrameSerial = 1;
   std::map<Judgement, int> replayJudgeCounts;
   for (int i = 0; i < JudgementCount; i++) {
     replayJudgeCounts[static_cast<Judgement>(i)] = 0;
@@ -3118,7 +3123,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           applyReplayEventForVideo(renderer, chart, replayNotes, event,
                                    visualOffsetMicros,
                                    replay.gaugeAutoShift,
-                                   initialGaugeState.gaugeRules());
+                                   initialGaugeState.gaugeRules(),
+                                   bgaMissTracker);
       if (appliedHud && event.judgement != None) {
         applyReplayEventToPacemakerState(pacemakerState, event);
         renderer.setPacemakerStatus(pacemaker::snapshotForState(
@@ -3143,7 +3149,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
-          context.jukebox.renderVisualsAt(frameTiming.bgaTimeMicros);
+          const auto bgaFrame = context.jukebox.prepareVisualFrameAt(
+              bgaFrameSerial++, frameTiming.bgaTimeMicros,
+              bgaMissTracker.snapshot());
+          context.jukebox.submitFullscreen(bgaFrame);
           bgaBlurPass->execute();
           rendering::renderFullscreenTextureTint(
               bgaBlurPass->outputTexture(), rendering::final_view,
@@ -3187,7 +3196,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
-          context.jukebox.renderVisualsAt(bgaTimeMicros);
+          const auto bgaFrame = context.jukebox.prepareVisualFrameAt(
+              bgaFrameSerial++, bgaTimeMicros, bgaMissTracker.snapshot());
+          context.jukebox.submitFullscreen(bgaFrame);
           bgaBlurPass->execute();
           rendering::renderFullscreenTextureTint(
               bgaBlurPass->outputTexture(), rendering::final_view,
@@ -3622,12 +3633,15 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   size_t globalFrameIndex = 0;
   long long globalVideoTimeMicros = 0;
   long long finalStageVisualBaseMicros = 0;
+  GameplayBgaMissStateTracker bgaMissTracker;
+  std::uint64_t bgaFrameSerial = 1;
 
   for (size_t stageIndex = 0; stageIndex < stages.size(); ++stageIndex) {
     auto &stage = stages[stageIndex];
     if (stage.chart == nullptr) {
       continue;
     }
+    bgaMissTracker.reset();
     bms_parser::Chart &chart = *stage.chart;
     const ReplayData &stageReplay = stage.replay;
 
@@ -3762,7 +3776,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             applyReplayEventForVideo(renderer, chart, replayNotes, event,
                                      visualOffsetMicros,
                                      replay.gaugeAutoShift,
-                                     stage.resultState.gaugeRules());
+                                     stage.resultState.gaugeRules(),
+                                     bgaMissTracker);
         if (appliedHud && event.judgement != None) {
           replayJudgeCounts[event.judgement]++;
           if (JudgeResult(event.judgement, event.diffMicros).isComboBreak()) {
@@ -3785,8 +3800,12 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                  bgfx::touch(rendering::clear_view);
                                  bgfx::touch(rendering::bga_view);
                                  bgfx::touch(rendering::bga_layer_view);
-                                 context.jukebox.renderVisualsAt(
-                                     frameTiming.bgaTimeMicros);
+                                 const auto bgaFrame =
+                                     context.jukebox.prepareVisualFrameAt(
+                                         bgaFrameSerial++,
+                                         frameTiming.bgaTimeMicros,
+                                         bgaMissTracker.snapshot());
+                                 context.jukebox.submitFullscreen(bgaFrame);
                                  bgaBlurPass->execute();
                                  rendering::renderFullscreenTextureTint(
                                      bgaBlurPass->outputTexture(),
@@ -3832,8 +3851,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                  bgfx::touch(rendering::clear_view);
                                  bgfx::touch(rendering::bga_view);
                                  bgfx::touch(rendering::bga_layer_view);
-                                 context.jukebox.renderVisualsAt(
-                                     stageBgaTimeMicros);
+                                 const auto bgaFrame =
+                                     context.jukebox.prepareVisualFrameAt(
+                                         bgaFrameSerial++, stageBgaTimeMicros,
+                                         bgaMissTracker.snapshot());
+                                 context.jukebox.submitFullscreen(bgaFrame);
                                  bgaBlurPass->execute();
                                  rendering::renderFullscreenTextureTint(
                                      bgaBlurPass->outputTexture(),
@@ -3886,8 +3908,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                bgfx::touch(rendering::clear_view);
                                bgfx::touch(rendering::bga_view);
                                bgfx::touch(rendering::bga_layer_view);
-                               context.jukebox.renderVisualsAt(
-                                   stageBgaTimeMicros);
+                               const auto bgaFrame =
+                                   context.jukebox.prepareVisualFrameAt(
+                                       bgaFrameSerial++, stageBgaTimeMicros,
+                                       bgaMissTracker.snapshot());
+                               context.jukebox.submitFullscreen(bgaFrame);
                                bgaBlurPass->execute();
                                rendering::renderFullscreenTextureTint(
                                    bgaBlurPass->outputTexture(),
