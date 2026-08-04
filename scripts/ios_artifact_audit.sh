@@ -120,6 +120,14 @@ EXECUTABLE_NAME="$(plist_raw CFBundleExecutable)"
 MAIN_EXECUTABLE="${APP_PATH}/${EXECUTABLE_NAME}"
 [ -f "${MAIN_EXECUTABLE}" ] || fail "main executable is missing"
 
+for stage in vs fs; do
+  SKIN_SHADER="${APP_PATH}/shaders/metal/${stage}_skin_quad.bin"
+  [ -f "${SKIN_SHADER}" ] || \
+    fail "Metal skin shader is missing: shaders/metal/${stage}_skin_quad.bin"
+  [ -s "${SKIN_SHADER}" ] || \
+    fail "Metal skin shader is empty: shaders/metal/${stage}_skin_quad.bin"
+done
+
 BINARY_DESCRIPTION="$(file "${MAIN_EXECUTABLE}")"
 [[ "${BINARY_DESCRIPTION}" == *"Mach-O"* ]] || fail "main executable is not Mach-O"
 ARCHITECTURES="$(lipo -archs "${MAIN_EXECUTABLE}" 2>/dev/null || true)"

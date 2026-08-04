@@ -616,6 +616,52 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 ${LUAJIT_LIBRARIES}
             )
         endif()
+
+        if(NOT IOS)
+            add_executable(skin_quad_batch_renderer_tests
+                tests/skin_quad_batch_renderer_tests.cpp
+                src/rendering/SkinQuadBatchRenderer.cpp
+                src/rendering/UniformCache.cpp
+            )
+            target_include_directories(skin_quad_batch_renderer_tests PRIVATE
+                ${CMAKE_SOURCE_DIR}/src
+            )
+            target_compile_features(skin_quad_batch_renderer_tests PRIVATE cxx_std_23)
+            target_compile_definitions(skin_quad_batch_renderer_tests PRIVATE
+                ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            )
+            target_link_libraries(skin_quad_batch_renderer_tests PRIVATE
+                ${COMMON_LIBS}
+                bgfx
+            )
+
+            # The committed pixels are produced by an actual headless Metal
+            # device. Other desktop backends keep the backend-state suite but
+            # do not silently replace this acceptance gate with Noop/CPU output.
+            if(APPLE)
+                add_executable(skin_renderer_golden_tests
+                    tests/skin_renderer_golden_tests.cpp
+                    src/rendering/SkinQuadBatchRenderer.cpp
+                    src/rendering/UniformCache.cpp
+                    src/skin/beatoraja/PlaySkinViewport.cpp
+                    src/skin/beatoraja/SkinDestinationEvaluator.cpp
+                    bgfx/bimg/3rdparty/lodepng/lodepng.cpp
+                )
+                target_include_directories(skin_renderer_golden_tests PRIVATE
+                    ${CMAKE_SOURCE_DIR}/src
+                    ${CMAKE_SOURCE_DIR}/bgfx/bimg/3rdparty/lodepng
+                )
+                target_compile_features(skin_renderer_golden_tests PRIVATE cxx_std_23)
+                target_compile_definitions(skin_renderer_golden_tests PRIVATE
+                    ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+                    ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+                )
+                target_link_libraries(skin_renderer_golden_tests PRIVATE
+                    ${COMMON_LIBS}
+                    bgfx
+                )
+            endif()
+        endif()
         if(APPLE)
             target_sources(skin_draw_command_tests PRIVATE
                 src/skin/package/SkinAliasDetectorApple.mm
@@ -5303,6 +5349,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET skin_draw_command_tests)
         asobmashow_register_test(skin_draw_command_tests)
+    endif()
+    if (TARGET skin_quad_batch_renderer_tests)
+        asobmashow_register_test(skin_quad_batch_renderer_tests)
+    endif()
+    if (TARGET skin_renderer_golden_tests)
+        asobmashow_register_test(skin_renderer_golden_tests)
+        set_tests_properties(skin_renderer_golden_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
     endif()
     if (TARGET skin_gauge_node_expansion_tests)
         asobmashow_register_test(skin_gauge_node_expansion_tests)

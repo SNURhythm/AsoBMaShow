@@ -123,46 +123,65 @@ inline void normalizedToUiNormalized(float normX, float normY, float &outX,
                        normY * static_cast<float>(render_height), outX, outY);
 }
 
-// Set scissor using UI logical units; converts to drawable pixels internally.
-inline void setScissorUI(int x, int y, int width, int height) {
+struct DrawableScissor {
+  bool enabled = false;
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+};
+
+// Convert edge coordinates instead of truncating x/y/width/height
+// independently. Skin destinations can land on fractional UI-logical edges.
+inline DrawableScissor toDrawableScissor(double x, double y, double width,
+                                         double height) {
   if (width < 0 || height < 0) {
+    return {};
+  }
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
+      !std::isfinite(height) || !std::isfinite(ui_scale_x) ||
+      !std::isfinite(ui_scale_y) || render_width <= 0 || render_height <= 0) {
+    return {.enabled = true};
+  }
+  const double sx0 = static_cast<double>(ui_offset_x) +
+                     std::floor(x * static_cast<double>(ui_scale_x));
+  const double sy0 = static_cast<double>(ui_offset_y) +
+                     std::floor(y * static_cast<double>(ui_scale_y));
+  const double sx1 = static_cast<double>(ui_offset_x) +
+                     std::ceil((x + width) * static_cast<double>(ui_scale_x));
+  const double sy1 = static_cast<double>(ui_offset_y) +
+                     std::ceil((y + height) * static_cast<double>(ui_scale_y));
+  if (!std::isfinite(sx0) || !std::isfinite(sy0) || !std::isfinite(sx1) ||
+      !std::isfinite(sy1)) {
+    return {.enabled = true};
+  }
+  const int sx =
+      static_cast<int>(std::clamp(sx0, 0.0, static_cast<double>(render_width)));
+  const int sy = static_cast<int>(
+      std::clamp(sy0, 0.0, static_cast<double>(render_height)));
+  const int right =
+      static_cast<int>(std::clamp(sx1, 0.0, static_cast<double>(render_width)));
+  const int bottom = static_cast<int>(
+      std::clamp(sy1, 0.0, static_cast<double>(render_height)));
+  const int sw = right - sx;
+  const int sh = bottom - sy;
+  if (sw <= 0 || sh <= 0) {
+    return {.enabled = true};
+  }
+  return {.enabled = true, .x = sx, .y = sy, .width = sw, .height = sh};
+}
+
+// Set scissor using UI logical units; converts to drawable pixels internally.
+inline void setScissorUI(double x, double y, double width, double height) {
+  const auto scissor = toDrawableScissor(x, y, width, height);
+  if (!scissor.enabled) {
     bgfx::setScissor();
     return;
   }
-  const int sx0 =
-      ui_offset_x + static_cast<int>(std::floor(x * ui_scale_x));
-  const int sy0 =
-      ui_offset_y + static_cast<int>(std::floor(y * ui_scale_y));
-  const int sx1 = ui_offset_x +
-                  static_cast<int>(std::ceil((x + width) * ui_scale_x));
-  const int sy1 = ui_offset_y +
-                  static_cast<int>(std::ceil((y + height) * ui_scale_y));
-  int sx = sx0;
-  int sy = sy0;
-  int sw = sx1 - sx0;
-  int sh = sy1 - sy0;
-  if (sw <= 0 || sh <= 0) {
-    bgfx::setScissor(0, 0, 0, 0);
-    return;
-  }
-  if (sx < 0) {
-    sw += sx;
-    sx = 0;
-  }
-  if (sy < 0) {
-    sh += sy;
-    sy = 0;
-  }
-  int maxW = render_width - sx;
-  int maxH = render_height - sy;
-  sw = std::min(sw, maxW);
-  sh = std::min(sh, maxH);
-  if (sw <= 0 || sh <= 0) {
-    bgfx::setScissor(0, 0, 0, 0);
-    return;
-  }
-  bgfx::setScissor(static_cast<uint16_t>(sx), static_cast<uint16_t>(sy),
-                   static_cast<uint16_t>(sw), static_cast<uint16_t>(sh));
+  bgfx::setScissor(static_cast<uint16_t>(scissor.x),
+                   static_cast<uint16_t>(scissor.y),
+                   static_cast<uint16_t>(scissor.width),
+                   static_cast<uint16_t>(scissor.height));
 }
 
 bgfx::TextureHandle sdlSurfaceToBgfxTexture(SDL_Surface *surface);

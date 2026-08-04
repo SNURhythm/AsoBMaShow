@@ -4,6 +4,7 @@
 
 #include "Skin2DRenderer.h"
 #include "SkinCoverNormalization.h"
+#include "../../rendering/SkinQuadBatchRenderer.h"
 
 #include <algorithm>
 #include <array>
@@ -3482,6 +3483,19 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         "Skin frame evaluation could not allocate bounded command storage."));
     return result;
   }
+}
+
+bool Skin2DRenderer::submit(
+    const SkinCommandBuffer &buffer, const SkinResourceCatalog &resources,
+    RenderContext &context,
+    rendering::SkinQuadBatchRenderer &renderer) const {
+  renderer.begin(context, resources);
+  if (!renderer.submit(buffer.commands)) {
+    renderer.flush();
+    return false;
+  }
+  renderer.flush();
+  return true;
 }
 
 } // namespace skin

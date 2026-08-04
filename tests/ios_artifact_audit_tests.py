@@ -10,6 +10,162 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "scripts/ios_artifact_audit.sh"
+SKIN_SHADER_AUDIT = ROOT / "scripts/verify_skin_shader_outputs.py"
+
+
+class SkinShaderOutputVerifierTests(unittest.TestCase):
+    def make_shader_tree(self, root: Path) -> Path:
+        (root / "shader_src").mkdir(parents=True)
+        (root / "shader_src/vs_skin_quad.sc").write_text(
+            "void main() { /* synthetic vertex */ }\n", encoding="utf-8"
+        )
+        (root / "shader_src/fs_skin_quad.sc").write_text(
+            "void main() { /* synthetic fragment */ }\n", encoding="utf-8"
+        )
+        for backend in ("metal", "spirv", "essl", "dx11"):
+            output = root / "shaders" / backend
+            output.mkdir(parents=True)
+            (output / "vs_skin_quad.bin").write_bytes(
+                f"{backend}-vertex".encode("ascii")
+            )
+            (output / "fs_skin_quad.bin").write_bytes(
+                f"{backend}-fragment".encode("ascii")
+            )
+        return root / "tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json"
+
+    def run_shader_audit(self, root: Path, *arguments: str):
+        return subprocess.run(
+            [
+                "python3",
+                str(SKIN_SHADER_AUDIT),
+                "--root",
+                str(root),
+                "--shader",
+                "skin_quad",
+                *arguments,
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+
+    def test_manifest_write_and_read_verification_are_deterministic(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = self.make_shader_tree(root)
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--write-manifest",
+                str(manifest),
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            first = manifest.read_bytes()
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--write-manifest",
+                str(manifest),
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(first, manifest.read_bytes())
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--manifest",
+                str(manifest),
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_missing_empty_and_hash_mismatched_outputs_fail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = self.make_shader_tree(root)
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--write-manifest",
+                str(manifest),
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+
+            output = root / "shaders/dx11/fs_skin_quad.bin"
+            output.unlink()
+            result = self.run_shader_audit(
+                root, "--require-backends", "metal,spirv,essl,dx11"
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("missing", result.stderr.lower())
+
+            output.write_bytes(b"")
+            result = self.run_shader_audit(
+                root, "--require-backends", "metal,spirv,essl,dx11"
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("empty", result.stderr.lower())
+
+            output.write_bytes(b"tampered")
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl,dx11",
+                "--manifest",
+                str(manifest),
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("manifest", result.stderr.lower())
+
+    def test_unexpected_shader_tree_change_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_shader_tree(root)
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl",
+                "--changed-path",
+                "shader_src/unrelated.sc",
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("unexpected shader-tree change", result.stderr.lower())
+
+    def test_explicit_changed_path_cannot_hide_dirty_git_shader_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_shader_tree(root)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "fixture@example.invalid"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Shader Fixture"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "fixture baseline"],
+                cwd=root,
+                check=True,
+            )
+            (root / "shader_src/unrelated.sc").write_text(
+                "unexpected\n", encoding="utf-8"
+            )
+            result = self.run_shader_audit(
+                root,
+                "--require-backends",
+                "metal,spirv,essl",
+                "--changed-path",
+                "shader_src/vs_skin_quad.sc",
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("shader_src/unrelated.sc", result.stderr)
 
 
 class IOSArtifactAuditTests(unittest.TestCase):
@@ -65,6 +221,10 @@ class IOSArtifactAuditTests(unittest.TestCase):
         with (app / "Info.plist").open("wb") as handle:
             plistlib.dump(info, handle)
         (app / "FixtureIcon60x60@2x.png").write_bytes(b"fixture-icon")
+        shader_directory = app / "shaders/metal"
+        shader_directory.mkdir(parents=True)
+        (shader_directory / "vs_skin_quad.bin").write_bytes(b"metal-vertex")
+        (shader_directory / "fs_skin_quad.bin").write_bytes(b"metal-fragment")
         return app
 
     def run_audit(self, artifact: Path, *arguments: str):
@@ -106,6 +266,24 @@ class IOSArtifactAuditTests(unittest.TestCase):
                         )
             result = self.run_audit(ipa)
             self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_missing_or_empty_metal_skin_shader_fails(self):
+        for name in ("vs_skin_quad.bin", "fs_skin_quad.bin"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                app = self.make_app(Path(temp))
+                (app / "shaders/metal" / name).unlink()
+                result = self.run_audit(app)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("Metal skin shader is missing", result.stderr)
+                self.assertIn(name, result.stderr)
+
+        with tempfile.TemporaryDirectory() as temp:
+            app = self.make_app(Path(temp))
+            (app / "shaders/metal/fs_skin_quad.bin").write_bytes(b"")
+            result = self.run_audit(app)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Metal skin shader is empty", result.stderr)
+            self.assertIn("fs_skin_quad.bin", result.stderr)
 
     def test_release_metadata_failures_are_specific(self):
         cases = (

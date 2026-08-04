@@ -13,6 +13,11 @@
 #include <string_view>
 #include <vector>
 
+struct RenderContext;
+namespace rendering {
+class SkinQuadBatchRenderer;
+}
+
 namespace skin {
 
 template <typename T> struct SkinPropertyLookup {
@@ -157,6 +162,9 @@ struct SkinFrameEvaluationResult {
 class Skin2DRenderer final {
 public:
   SkinFrameEvaluationResult evaluateFrame(const SkinFrameInputs &);
+  [[nodiscard]] bool submit(const SkinCommandBuffer &,
+                            const SkinResourceCatalog &, RenderContext &,
+                            rendering::SkinQuadBatchRenderer &) const;
 
 private:
   struct GaugeAnimationState {
