@@ -660,7 +660,7 @@ void testConfigurationDigestUsesTheFrozenBigEndianGrammar() {
   expect(skinConfigurationDigest(configuration) ==
              "70c9d314aceda1a42e87492ff250c9765aaaee58e1583a3fe79badf83d1f1515",
          "configuration digest matches the literal signed big-endian vector");
-  expect(skinConfigurationDigest({}) ==
+  expect(skinConfigurationDigest(BeatorajaSkinConfiguration{}) ==
              "f3c2c52f1de34a366df4f5bad4eb6a5bc080153949ea6422cb81aebfc84bc4b3",
          "empty configuration digest matches the frozen vector");
 }
