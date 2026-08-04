@@ -154,8 +154,52 @@ struct SkinFrameInputs {
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
 };
 
+struct SkinSliderInteractionGeometry {
+  SkinObjectId sourceObject = 0;
+  std::uint32_t authoredOrdinal = 0;
+  // SkinSlider.mousePressed tests the prepared destination region, not the
+  // rate-displaced knob rectangle.  Keep that base region and its directional
+  // hit strip in authored coordinates so input routing remains render-free.
+  AuthoredRect authoredDestination;
+  AuthoredRect authoredHitRegion;
+  AuthoredPoint valueZero;
+  AuthoredPoint valueOne;
+  std::uint8_t direction = 0;
+  double range = 0.0;
+  bool changeable = false;
+  std::optional<SkinFloatWriterId> writer;
+};
+
+struct SkinLaneInteractionRegion {
+  SkinObjectId sourceObject = 0;
+  int authoredLane = -1;
+  AuthoredRect authoredRegion;
+};
+
+struct SkinLaneGroupInteractionRegion {
+  SkinObjectId sourceObject = 0;
+  std::size_t authoredGroup = 0;
+  AuthoredRect authoredRegion;
+};
+
+// Immutable-by-publication frame snapshot.  Consumers receive this only after
+// the matching command buffer has evaluated successfully; no callback or
+// writer is retained or invoked by the geometry queue.
+struct SkinInteractionLayout {
+  std::uint64_t frameSerial = 0;
+  Affine2D uiToAuthored;
+  UiLogicalRect safeUiBounds;
+  std::vector<SkinSliderInteractionGeometry> slidersTopmostFirst;
+  std::vector<SkinLaneInteractionRegion> laneRegions;
+  std::vector<SkinLaneGroupInteractionRegion> laneGroupRegions;
+
+  [[nodiscard]] std::optional<AuthoredPoint>
+  authoredPointForUi(double x, double y) const noexcept;
+};
+
 struct SkinFrameEvaluationResult {
   std::optional<SkinCommandBuffer> submitReady;
+  std::optional<SkinInteractionLayout> interactionLayout;
   std::vector<SkinDiagnostic> diagnostics;
 };
 

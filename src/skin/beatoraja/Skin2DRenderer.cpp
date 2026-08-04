@@ -4,7 +4,6 @@
 
 #include "Skin2DRenderer.h"
 #include "SkinCoverNormalization.h"
-#include "../../rendering/SkinQuadBatchRenderer.h"
 
 #include <algorithm>
 #include <array>
@@ -67,6 +66,96 @@ coerceLuaNumericInteger(const LuaScalar &value, std::int64_t minimum,
 bool sameRect(const UiLogicalRect &left, const UiLogicalRect &right) noexcept {
   return left.x == right.x && left.y == right.y && left.width == right.width &&
          left.height == right.height;
+}
+
+bool finiteAffine(const Affine2D &value) noexcept {
+  return std::isfinite(value.m00) && std::isfinite(value.m01) &&
+         std::isfinite(value.tx) && std::isfinite(value.m10) &&
+         std::isfinite(value.m11) && std::isfinite(value.ty);
+}
+
+bool closeTransformValue(double actual, double expected) noexcept {
+  const double scale =
+      std::max({1.0, std::abs(actual), std::abs(expected)});
+  return std::abs(actual - expected) <= scale * 1e-9;
+}
+
+bool invertibleViewport(const PlaySkinViewport &viewport) noexcept {
+  if (!viewport.valid || !finiteAffine(viewport.authoredToUi) ||
+      !finiteAffine(viewport.uiToAuthored) ||
+      !std::isfinite(viewport.safeUiBounds.x) ||
+      !std::isfinite(viewport.safeUiBounds.y) ||
+      !std::isfinite(viewport.safeUiBounds.width) ||
+      !std::isfinite(viewport.safeUiBounds.height) ||
+      viewport.safeUiBounds.width <= 0.0 ||
+      viewport.safeUiBounds.height <= 0.0) {
+    return false;
+  }
+  const double determinant = viewport.authoredToUi.m00 *
+                                 viewport.authoredToUi.m11 -
+                             viewport.authoredToUi.m01 *
+                                 viewport.authoredToUi.m10;
+  if (!std::isfinite(determinant) || determinant == 0.0) {
+    return false;
+  }
+  const auto &forward = viewport.authoredToUi;
+  const auto &inverse = viewport.uiToAuthored;
+  return closeTransformValue(inverse.m00 * forward.m00 +
+                                 inverse.m01 * forward.m10,
+                             1.0) &&
+         closeTransformValue(inverse.m00 * forward.m01 +
+                                 inverse.m01 * forward.m11,
+                             0.0) &&
+         closeTransformValue(inverse.m10 * forward.m00 +
+                                 inverse.m11 * forward.m10,
+                             0.0) &&
+         closeTransformValue(inverse.m10 * forward.m01 +
+                                 inverse.m11 * forward.m11,
+                             1.0) &&
+         closeTransformValue(inverse.m00 * forward.tx +
+                                 inverse.m01 * forward.ty + inverse.tx,
+                             0.0) &&
+         closeTransformValue(inverse.m10 * forward.tx +
+                                 inverse.m11 * forward.ty + inverse.ty,
+                             0.0);
+}
+
+SkinSliderInteractionGeometry sliderInteraction(
+    SkinObjectId sourceObject, std::uint32_t authoredOrdinal,
+    const AuthoredDestinationGeometry &geometry,
+    const SkinSliderObject &slider) {
+  SkinSliderInteractionGeometry result{
+      .sourceObject = sourceObject,
+      .authoredOrdinal = authoredOrdinal,
+      .authoredDestination = geometry.rect,
+      .authoredHitRegion = geometry.rect,
+      .valueZero = {.x = geometry.rect.x, .y = geometry.rect.y},
+      .valueOne = {.x = geometry.rect.x, .y = geometry.rect.y},
+      .direction = slider.direction,
+      .range = slider.range,
+      .changeable = slider.changeable,
+      .writer = slider.writer};
+  switch (slider.direction) {
+  case 0:
+    result.authoredHitRegion.height = slider.range;
+    result.valueOne.y += slider.range;
+    break;
+  case 1:
+    result.authoredHitRegion.width = slider.range;
+    result.valueOne.x += slider.range;
+    break;
+  case 2:
+    result.authoredHitRegion.y -= slider.range;
+    result.authoredHitRegion.height = slider.range;
+    result.valueOne.y -= slider.range;
+    break;
+  case 3:
+    result.authoredHitRegion.x -= slider.range;
+    result.authoredHitRegion.width = slider.range;
+    result.valueOne.x -= slider.range;
+    break;
+  }
+  return result;
 }
 
 bool sameState(const SkinRenderState &left,
@@ -2417,6 +2506,19 @@ bool reportObjectFailure(SkinFrameEvaluationResult &result,
 
 } // namespace
 
+std::optional<AuthoredPoint>
+SkinInteractionLayout::authoredPointForUi(double x, double y) const noexcept {
+  if (!std::isfinite(x) || !std::isfinite(y) || !finiteAffine(uiToAuthored)) {
+    return std::nullopt;
+  }
+  const AuthoredPoint result{
+      .x = uiToAuthored.m00 * x + uiToAuthored.m01 * y + uiToAuthored.tx,
+      .y = uiToAuthored.m10 * x + uiToAuthored.m11 * y + uiToAuthored.ty};
+  return std::isfinite(result.x) && std::isfinite(result.y)
+             ? std::optional<AuthoredPoint>{result}
+             : std::nullopt;
+}
+
 #if defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
 void resetSkinRendererLookupComparisonsForTesting() noexcept {
   lookupComparisonsForTesting.store(0, std::memory_order_relaxed);
@@ -2450,7 +2552,7 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
                      "Lua runtime rejected the render-frame serial.")));
       return result;
     }
-    if (!inputs.viewport.valid) {
+    if (!invertibleViewport(inputs.viewport)) {
       result.diagnostics.push_back(
           diagnostic("skin.renderer.viewport.invalid",
                      "Gameplay skin viewport is not projectable."));
@@ -2493,6 +2595,42 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
 
     SkinCommandBuffer buffer;
     buffer.frameSerial = inputs.frameSerial;
+    SkinInteractionLayout interactionLayout{
+        .frameSerial = inputs.frameSerial,
+        .uiToAuthored = inputs.viewport.uiToAuthored,
+        .safeUiBounds = inputs.viewport.safeUiBounds};
+    // PlaySkin owns one static lane-region array. Each later authored Note
+    // replaces that array during loading, independent of destination visibility.
+    const SkinObjectDefinition *noteLayoutSource = nullptr;
+    for (const auto &object : inputs.model.model.objects) {
+      if (!disabledOptionalObject(lookupIndex, object.id) &&
+          std::holds_alternative<SkinNoteObject>(object.payload)) {
+        noteLayoutSource = &object;
+      }
+    }
+    if (noteLayoutSource != nullptr) {
+      const auto &note = std::get<SkinNoteObject>(noteLayoutSource->payload);
+      for (const auto &lane : note.lanes) {
+        if (lane.authoredLane >= 0) {
+          interactionLayout.laneRegions.push_back(
+              {.sourceObject = noteLayoutSource->id,
+               .authoredLane = lane.authoredLane,
+               .authoredRegion = lane.laneDestination});
+        }
+      }
+      if (note.lines.size() % 4 == 0) {
+        const std::size_t groupCount = note.lines.size() / 4;
+        for (std::size_t group = 0; group < groupCount; ++group) {
+          const auto &line = note.lines[group];
+          if (line.kind == SkinNoteLineKind::Group) {
+            interactionLayout.laneGroupRegions.push_back(
+                {.sourceObject = noteLayoutSource->id,
+                 .authoredGroup = group,
+                 .authoredRegion = line.laneGroupDestination});
+          }
+        }
+      }
+    }
     std::size_t glyphInstances = 0;
     std::size_t primitiveVertices = 0;
     buffer.commands.reserve(std::min(inputs.model.model.destinations.size(),
@@ -3139,6 +3277,12 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
             continue;
           }
           buffer.commands.push_back(std::move(*lowered.command));
+          if (slider) {
+            interactionLayout.slidersTopmostFirst.push_back(
+                sliderInteraction(object->id,
+                                  destination.presentation.authoredOrdinal,
+                                  *evaluated.geometry, *slider));
+          }
         }
         continue;
       }
@@ -3474,7 +3618,9 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
     }
 
     buildAdjacentBatches(buffer);
+    std::ranges::reverse(interactionLayout.slidersTopmostFirst);
     result.submitReady = std::move(buffer);
+    result.interactionLayout = std::move(interactionLayout);
     return result;
   } catch (...) {
     result.submitReady.reset();
@@ -3483,19 +3629,6 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         "Skin frame evaluation could not allocate bounded command storage."));
     return result;
   }
-}
-
-bool Skin2DRenderer::submit(
-    const SkinCommandBuffer &buffer, const SkinResourceCatalog &resources,
-    RenderContext &context,
-    rendering::SkinQuadBatchRenderer &renderer) const {
-  renderer.begin(context, resources);
-  if (!renderer.submit(buffer.commands)) {
-    renderer.flush();
-    return false;
-  }
-  renderer.flush();
-  return true;
 }
 
 } // namespace skin

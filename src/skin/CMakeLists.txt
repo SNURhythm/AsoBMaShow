@@ -25,6 +25,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/NumericGlyphAtlas.cpp
         beatoraja/PlaySkinViewport.cpp
         beatoraja/Skin2DRenderer.cpp
+        beatoraja/Skin2DRendererSubmit.cpp
         beatoraja/SkinDestinationEvaluator.cpp
         beatoraja/SkinGaugeNodeExpansion.cpp
         beatoraja/SkinJudgeNormalization.cpp

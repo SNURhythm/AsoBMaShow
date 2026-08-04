@@ -665,6 +665,50 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             )
         endif()
 
+        add_executable(play_skin_touch_geometry_tests
+            tests/play_skin_touch_geometry_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinRuntime.cpp
+            src/skin/beatoraja/PlaySkinViewport.cpp
+            src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+            src/skin/beatoraja/SkinDestinationEvaluator.cpp
+            src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+        )
+        target_include_directories(play_skin_touch_geometry_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(play_skin_touch_geometry_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_compile_definitions(play_skin_touch_geometry_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SKIN_RENDERER_TESTING=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(play_skin_touch_geometry_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(play_skin_touch_geometry_tests PRIVATE
+                ${LUAJIT_LIB}
+                advapi32
+            )
+        else()
+            target_link_libraries(play_skin_touch_geometry_tests PRIVATE
+                ${LUAJIT_LIBRARIES}
+            )
+        endif()
+
         if(NOT IOS)
             add_executable(skin_quad_batch_renderer_tests
                 tests/skin_quad_batch_renderer_tests.cpp
@@ -714,7 +758,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             target_sources(skin_draw_command_tests PRIVATE
                 src/skin/package/SkinAliasDetectorApple.mm
             )
+            target_sources(play_skin_touch_geometry_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
             target_link_libraries(skin_draw_command_tests PRIVATE
+                "-framework Foundation"
+            )
+            target_link_libraries(play_skin_touch_geometry_tests PRIVATE
                 "-framework Foundation"
             )
         endif()
@@ -5488,6 +5538,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET skin_draw_command_tests)
         asobmashow_register_test(skin_draw_command_tests)
+    endif()
+    if (TARGET play_skin_touch_geometry_tests)
+        asobmashow_register_test(play_skin_touch_geometry_tests)
     endif()
     if (TARGET skin_quad_batch_renderer_tests)
         asobmashow_register_test(skin_quad_batch_renderer_tests)
