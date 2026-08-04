@@ -1,0 +1,7 @@
+local shared = require("../shared")
+
+return {
+  type = 0,
+  name = "Task 8 virtual filesystem fixture",
+  shared = shared,
+}

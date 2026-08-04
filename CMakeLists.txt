@@ -4249,6 +4249,38 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME skin_commit_coordinator_tests
              COMMAND skin_commit_coordinator_tests)
 
+    add_executable(lua_skin_file_system_tests
+        tests/lua_skin_file_system_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/LuaSkinFileSystem.cpp
+        src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+        src/skin/package/SkinAliasDetector.cpp
+        src/skin/package/SkinPathPolicy.cpp
+        src/skin/package/SkinTreeSnapshotter.cpp
+    )
+    target_include_directories(lua_skin_file_system_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(lua_skin_file_system_tests PRIVATE cxx_std_23)
+    target_compile_definitions(lua_skin_file_system_tests PRIVATE
+        ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(lua_skin_file_system_tests PRIVATE
+        utf8proc::utf8proc
+    )
+    if(APPLE)
+        target_sources(lua_skin_file_system_tests PRIVATE
+            src/skin/package/SkinAliasDetectorApple.mm
+        )
+        target_link_libraries(lua_skin_file_system_tests PRIVATE
+            "-framework Foundation"
+        )
+    endif()
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         if(ARGC GREATER 1)
@@ -4298,6 +4330,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(skin_path_policy_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(skin_archive_importer_tests)
+    asobmashow_register_test(lua_skin_file_system_tests)
     asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(video_frame_layout_tests)

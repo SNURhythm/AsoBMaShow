@@ -3,6 +3,8 @@ target_sources(main PRIVATE
     SkinProfileSettings.cpp
     SkinCommitCoordinator.cpp
     SkinStoragePaths.cpp
+    beatoraja/LuaSkinFileSystem.cpp
+    beatoraja/SkinCompatibilityDiagnostics.cpp
     package/SkinAliasDetector.cpp
     package/SkinArchiveImporter.cpp
     package/SkinPackageCatalog.cpp
