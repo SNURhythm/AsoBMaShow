@@ -373,12 +373,26 @@ bool LuaSkinHostModulesImpl::resolveConfiguredPath(
       match = &file;
     }
     if (match == nullptr) {
+      if (request.find('*') == std::string_view::npos) {
+        auto resolved = fileSystem->resolve(request, SkinFileUse::Resource);
+        if (resolved.failure) {
+          storeFileError(*resolved.failure);
+          return false;
+        }
+        if (!resolved.normalizedVirtualPath) {
+          storeError("skin_lua_file_operation_failed",
+                     "skin_config.get_path did not resolve a resource");
+          return false;
+        }
+        resolvedConfigurationPath = std::move(*resolved.normalizedVirtualPath);
+        return true;
+      }
       storeError("skin_lua_file_operation_failed",
                  "skin_config.get_path has no configured file match");
       return false;
     }
 
-    const std::size_t wildcard = match->pattern.rfind('*');
+    const std::size_t wildcard = request.rfind('*');
     if (wildcard == std::string::npos ||
         request.size() < match->pattern.size()) {
       storeError("skin_lua_file_operation_failed",
@@ -400,7 +414,7 @@ bool LuaSkinHostModulesImpl::resolveConfiguredPath(
     std::string candidate;
     candidate.reserve(wildcard + match->selectedValue.size() +
                       requestSuffixSize);
-    candidate.append(match->pattern, 0, wildcard);
+    candidate.append(request, 0, wildcard);
     candidate.append(match->selectedValue);
     candidate.append(request, match->pattern.size(), requestSuffixSize);
 

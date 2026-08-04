@@ -125,6 +125,8 @@ assert(path == "skin/parts/frame/red/panel.png")
 assert(not path:find("HOST_ROOT_MUST_NOT_LEAK", 1, true))
 local full_filename = skin_config.get_path("parts/background/*.png")
 assert(full_filename == "skin/parts/background/bg.png")
+local ordinary = skin_config.get_path("parts/static/logo.png")
+assert(ordinary == "skin/parts/static/logo.png")
 return {}
 )lua");
     writeText(source / "skin/get_path_denied.luaskin", R"lua(
@@ -132,7 +134,7 @@ if not skin_config then return {type = 0} end
 local requests = {
   "parts/random/*.png",
   "parts/frame/*/panel.png",
-  "parts/frame/*/still-*.png",
+  "parts/frame/*/variant-*.png",
   "/etc/*",
   "../../outside/*",
   "parts/frame/*/panel.png",
@@ -144,6 +146,10 @@ assert(not ok, "unsafe get_path request unexpectedly succeeded")
 message = tostring(message)
 assert(message:find("@ASOBMSKIN:skin_lua_file_operation_failed:", 1, true) == 1,
        "get_path denial must be a protected host error")
+if skin_config.option.Case == 3 then
+  assert(message:find("[parts/frame/*/variant-red/variant-*.png]", 1, true),
+         "get_path must substitute at the complete request's last wildcard")
+end
 assert(not message:find("HOST_ROOT_MUST_NOT_LEAK", 1, true),
        "get_path denial leaked the host revision root")
 return {}
@@ -163,6 +169,7 @@ return {
     writeText(source / "skin/parts/frame/folder/placeholder.txt",
               "directory-is-not-a-resource");
     writeText(source / "skin/parts/background/bg.png", "selected-filename");
+    writeText(source / "skin/parts/static/logo.png", "ordinary-resource");
     writeText(source / "skin/parts/random/fallback.png",
               "random-fallback-must-not-win");
 
@@ -270,7 +277,8 @@ void testGetPathSubstitutesAtWildcardAndKeepsTheSuffixVirtual() {
       harness->runtime->loadConfigured(happyConfiguration());
   expect(configured.value.has_value() && !configured.failure,
          "get_path substitutes the selected value at '*' while preserving "
-         "the authored suffix and returns only a normalized package path");
+         "the authored suffix, Resource-resolves an ordinary unmatched path, "
+         "and returns only normalized package paths");
 }
 
 BeatorajaSkinConfiguration deniedConfiguration(int caseId) {
