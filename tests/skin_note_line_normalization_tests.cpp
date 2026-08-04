@@ -256,7 +256,7 @@ void testUnsafeInputBudgetsAndGeometryFailClosed() {
          "over-bound sprite frames fail closed");
 
   auto overCumulative = completeInput();
-  overCumulative.group.assign(25, slot(500, 130));
+  overCumulative.group.assign(49, slot(500, 130));
   for (auto &group : overCumulative.group) {
     const auto imageFrame = group->image->frames.front();
     group->image->frames.assign(
@@ -270,7 +270,7 @@ void testUnsafeInputBudgetsAndGeometryFailClosed() {
   expect(!cumulativeResult.lines.has_value() &&
              cumulativeResult.error ==
                  SkinNoteLineNormalizationError::FrameLimitExceeded,
-         "cumulative output frame budget fails closed");
+         "cumulative materialized sprite frame budget fails closed");
 
   auto oversizedBindings = completeInput();
   oversizedBindings.group[0]->destination->conditions.assign(

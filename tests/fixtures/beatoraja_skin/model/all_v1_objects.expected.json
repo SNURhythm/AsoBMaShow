@@ -98,7 +98,7 @@
   "note": {
     "objectId": 6,
     "authoredLane": 0,
-    "authoredNoteHeight": null,
+    "authoredNoteHeight": 10,
     "hiddenPolicy": "Synthesized",
     "processedPolicy": "Synthesized",
     "ignoredAuthoredDiagnosticCode": "skin_lua_model_authored_note_visual_ignored"

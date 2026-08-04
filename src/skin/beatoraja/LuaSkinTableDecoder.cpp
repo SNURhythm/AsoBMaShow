@@ -14,6 +14,9 @@
 #include "SkinJudgeNormalization.h"
 #include "SkinJudgeNumberNormalization.h"
 #include "SkinObjectResolutionPrecedence.h"
+#include "SkinNoteLaneGeometryNormalization.h"
+#include "SkinNoteLineNormalization.h"
+#include "SkinNoteNormalization.h"
 #include "SkinTextGraphNormalization.h"
 #include "../package/SkinPackageTypes.h"
 
@@ -846,20 +849,6 @@ struct RawSkinNoteLaneRect {
   int height = 0;
 };
 
-struct RawSkinNote {
-  std::string id;
-  std::map<SkinNoteVisualKind, std::vector<std::string>> visualIds;
-  std::vector<std::string> hidden;
-  std::vector<std::string> processed;
-  std::vector<RawSkinNoteLaneRect> laneRects;
-  std::vector<double> noteHeights;
-  std::vector<double> expansionRate;
-  std::optional<double> secondaryDestinationY;
-  std::array<int, 2> expansionRatePercent{100, 100};
-  bool authoredHiddenOrProcessed = false;
-  SkinNoteObject object;
-};
-
 struct RawSkinCover {
   RawSkinImage image;
   SkinCoverKind kind = SkinCoverKind::Hidden;
@@ -915,6 +904,38 @@ struct RawSkinJudge {
 
 struct RawSkinIdentity {
   std::string id;
+};
+
+struct RawSkinNote {
+  std::string id;
+  std::vector<std::string> note;
+  std::vector<std::string> mine;
+  std::vector<std::string> lnEnd;
+  std::vector<std::string> lnStart;
+  std::vector<std::string> lnBody;
+  std::vector<std::string> lnActive;
+  std::optional<std::vector<std::string>> lnBodyActive;
+  std::vector<std::string> hcnEnd;
+  std::vector<std::string> hcnStart;
+  std::vector<std::string> hcnBody;
+  std::vector<std::string> hcnActive;
+  std::vector<std::string> hcnDamage;
+  std::vector<std::string> hcnReactive;
+  std::optional<std::vector<std::string>> hcnBodyActive;
+  std::vector<std::string> hcnBodyReactive;
+  std::vector<std::string> hcnBodyMiss;
+  std::vector<std::string> hidden;
+  std::vector<std::string> processed;
+  std::vector<RawSkinNoteLaneRect> laneRects;
+  std::vector<double> noteHeights;
+  std::optional<int> secondaryDestinationY;
+  std::array<int, 2> expansionRatePercent{100, 100};
+  std::vector<RawDestination> group;
+  std::vector<RawDestination> bpm;
+  std::vector<RawDestination> stop;
+  std::vector<RawDestination> time;
+  bool authoredHiddenOrProcessed = false;
+  SkinNoteObject object;
 };
 
 struct GameplayDecodeRequest {
@@ -1111,6 +1132,30 @@ bool stringArrayField(lua_State *state, int index, std::string_view name,
   return ok;
 }
 
+bool optionalStringArrayField(lua_State *state, int index,
+                              std::string_view name,
+                              std::optional<std::vector<std::string>> &output,
+                              DecodeRequest &request) {
+  if (!rawGetField(state, index, name, request)) {
+    return false;
+  }
+  if (lua_isnil(state, -1)) {
+    lua_pop(state, 1);
+    return true;
+  }
+  if (!lua_istable(state, -1)) {
+    lua_pop(state, 1);
+    return fail(request, "skin_lua_model_invalid",
+                "Lua skin optional string array field is not a table");
+  }
+  output.emplace();
+  const bool ok = decodeStringArray(
+      state, -1, 2, LuaSkinTableDecoderPolicy::maxDecodedObjects, *output,
+      request);
+  lua_pop(state, 1);
+  return ok;
+}
+
 bool decodeRawImageSet(lua_State *state, int index, std::size_t depth,
                        RawSkinImageSet &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
@@ -1285,30 +1330,48 @@ bool numberArrayField(lua_State *state, int index, std::string_view name,
   return true;
 }
 
-bool optionalNumberField(lua_State *state, int index, std::string_view name,
-                         std::optional<double> &output,
-                         DecodeRequest &request) {
-  if (!rawGetField(state, index, name, request)) {
+bool exactExpansionRateField(lua_State *state, int index,
+                             std::array<int, 2> &output,
+                             DecodeRequest &request) {
+  if (!rawGetField(state, index, "expansionrate", request)) {
     return false;
   }
   if (lua_isnil(state, -1)) {
     lua_pop(state, 1);
     return true;
   }
-  if (lua_isnumber(state, -1) == 0) {
+  std::size_t length = 0;
+  if (!strictArrayLength(state, -1, output.size(), length, request)) {
+    return false;
+  }
+  if (length != output.size()) {
     lua_pop(state, 1);
     return fail(request, "skin_lua_model_invalid",
-                "Lua skin optional numeric field has an invalid type");
+                "Lua skin note expansion rate must contain two integers");
   }
-  const double value = static_cast<double>(lua_tonumber(state, -1));
+  const int tableIndex = absoluteIndex(state, -1);
+  for (std::size_t position = 0; position < output.size(); ++position) {
+    lua_rawgeti(state, tableIndex, static_cast<int>(position + 1));
+    if (lua_isnumber(state, -1) == 0) {
+      return fail(request, "skin_lua_model_invalid",
+                  "Lua skin note expansion rate contains a non-number");
+    }
+    const double value = static_cast<double>(lua_tonumber(state, -1));
+    if (!std::isfinite(value) || std::trunc(value) != value ||
+        value < static_cast<double>(std::numeric_limits<int>::min()) ||
+        value > static_cast<double>(std::numeric_limits<int>::max())) {
+      return fail(request, "skin_lua_model_invalid",
+                  "Lua skin note expansion rate must contain two integers");
+    }
+    output[position] = static_cast<int>(value);
+    lua_pop(state, 1);
+  }
   lua_pop(state, 1);
-  if (!std::isfinite(value)) {
-    return fail(request, "skin_lua_model_invalid",
-                "Lua skin optional numeric field is not finite");
-  }
-  output = value;
   return true;
 }
+
+bool decodeRawDestination(lua_State *, int, std::size_t, RawDestination &,
+                          DecodeRequest &);
 
 bool decodeRawNote(lua_State *state, int index, std::size_t depth,
                    RawSkinNote &output, DecodeRequest &request) {
@@ -1319,58 +1382,62 @@ bool decodeRawNote(lua_State *state, int index, std::size_t depth,
     return false;
   }
 
-  constexpr std::array visualFields{
-      std::pair{"note", SkinNoteVisualKind::Normal},
-      std::pair{"mine", SkinNoteVisualKind::Mine},
-      std::pair{"lnend", SkinNoteVisualKind::LnEnd},
-      std::pair{"lnstart", SkinNoteVisualKind::LnStart},
-      std::pair{"lnbodyActive", SkinNoteVisualKind::LnBodyActive},
-      std::pair{"lnbody", SkinNoteVisualKind::LnBodyInactive},
-      std::pair{"hcnend", SkinNoteVisualKind::HcnEnd},
-      std::pair{"hcnstart", SkinNoteVisualKind::HcnStart},
-      std::pair{"hcnbodyActive", SkinNoteVisualKind::HcnBodyActive},
-      std::pair{"hcnbody", SkinNoteVisualKind::HcnBodyInactive},
-      std::pair{"hcnbodyMiss", SkinNoteVisualKind::HcnDamage},
-      std::pair{"hcnbodyReactive", SkinNoteVisualKind::HcnReactive},
-  };
-  for (const auto &[field, kind] : visualFields) {
-    auto &ids = output.visualIds[kind];
-    if (!stringArrayField(state, index, field, ids, request)) {
-      return false;
-    }
-  }
-
-  if (!stringArrayField(state, index, "hidden", output.hidden, request) ||
+  if (!stringArrayField(state, index, "note", output.note, request) ||
+      !stringArrayField(state, index, "mine", output.mine, request) ||
+      !stringArrayField(state, index, "lnend", output.lnEnd, request) ||
+      !stringArrayField(state, index, "lnstart", output.lnStart, request) ||
+      !stringArrayField(state, index, "lnbody", output.lnBody, request) ||
+      !stringArrayField(state, index, "lnactive", output.lnActive, request) ||
+      !optionalStringArrayField(state, index, "lnbodyActive",
+                                output.lnBodyActive, request) ||
+      !stringArrayField(state, index, "hcnend", output.hcnEnd, request) ||
+      !stringArrayField(state, index, "hcnstart", output.hcnStart, request) ||
+      !stringArrayField(state, index, "hcnbody", output.hcnBody, request) ||
+      !stringArrayField(state, index, "hcnactive", output.hcnActive, request) ||
+      !stringArrayField(state, index, "hcndamage", output.hcnDamage, request) ||
+      !stringArrayField(state, index, "hcnreactive", output.hcnReactive,
+                        request) ||
+      !optionalStringArrayField(state, index, "hcnbodyActive",
+                                output.hcnBodyActive, request) ||
+      !stringArrayField(state, index, "hcnbodyReactive", output.hcnBodyReactive,
+                        request) ||
+      !stringArrayField(state, index, "hcnbodyMiss", output.hcnBodyMiss,
+                        request) ||
+      !stringArrayField(state, index, "hidden", output.hidden, request) ||
       !stringArrayField(state, index, "processed", output.processed, request) ||
       !decodeObjectArrayField(state, index, "dst", depth,
                               LuaSkinTableDecoderPolicy::maxDecodedObjects,
                               output.laneRects, request,
                               decodeRawNoteLaneRect) ||
       !numberArrayField(state, index, "size", output.noteHeights, request) ||
-      !optionalNumberField(state, index, "dst2", output.secondaryDestinationY,
-                           request)) {
+      !optionalIntegerField(state, index, "dst2", output.secondaryDestinationY,
+                            request) ||
+      !exactExpansionRateField(state, index, output.expansionRatePercent,
+                               request) ||
+      !decodeObjectArrayField(state, index, "group", depth,
+                              SkinNoteLineNormalizationPolicy::maxGroups,
+                              output.group, request, decodeRawDestination) ||
+      !decodeObjectArrayField(
+          state, index, "bpm", depth,
+          SkinNoteLineNormalizationPolicy::maxAuxiliarySlots, output.bpm,
+          request, decodeRawDestination) ||
+      !decodeObjectArrayField(
+          state, index, "stop", depth,
+          SkinNoteLineNormalizationPolicy::maxAuxiliarySlots, output.stop,
+          request, decodeRawDestination) ||
+      !decodeObjectArrayField(
+          state, index, "time", depth,
+          SkinNoteLineNormalizationPolicy::maxAuxiliarySlots, output.time,
+          request, decodeRawDestination)) {
     return false;
   }
   output.authoredHiddenOrProcessed =
       !output.hidden.empty() || !output.processed.empty();
-
-  if (!numberArrayField(state, index, "expansionrate", output.expansionRate,
-                        request)) {
-    return false;
-  }
-  if (!output.expansionRate.empty()) {
-    if (output.expansionRate.size() != 2 ||
-        output.expansionRate[0] < std::numeric_limits<int>::min() ||
-        output.expansionRate[0] > std::numeric_limits<int>::max() ||
-        output.expansionRate[1] < std::numeric_limits<int>::min() ||
-        output.expansionRate[1] > std::numeric_limits<int>::max()) {
-      return fail(request, "skin_lua_model_invalid",
-                  "Lua skin note expansion rate must contain two integers");
+  for (auto *lines : {&output.group, &output.bpm, &output.stop, &output.time}) {
+    for (std::size_t position = 0; position < lines->size(); ++position) {
+      (*lines)[position].authoredIndex =
+          static_cast<std::uint32_t>(position + 1);
     }
-    output.expansionRatePercent = {
-        static_cast<int>(output.expansionRate[0]),
-        static_cast<int>(output.expansionRate[1]),
-    };
   }
   return true;
 }
@@ -1627,48 +1694,203 @@ bool consumeMaterializedSpriteFrames(GameplayDecodeRequest &request,
 const SkinSpriteFrames *noteSprite(const GameplayDecodeRequest &request,
                                    std::string_view imageId) {
   const auto image = request.images.find(imageId);
-  return image != request.images.end() ? &image->second.sprite : nullptr;
+  if (image == request.images.end() || image->second.sprite.resource == 0 ||
+      image->second.sprite.frames.empty()) {
+    return nullptr;
+  }
+  return &image->second.sprite;
+}
+
+SkinAuthoredNoteVisualSlots
+resolveNoteVisuals(const GameplayDecodeRequest &request,
+                   const std::vector<std::string> &imageIds) {
+  SkinAuthoredNoteVisualSlots result;
+  result.reserve(imageIds.size());
+  for (const auto &imageId : imageIds) {
+    const auto *sprite = noteSprite(request, imageId);
+    if (sprite != nullptr) {
+      result.emplace_back(*sprite);
+    } else {
+      result.emplace_back(std::nullopt);
+    }
+  }
+  return result;
+}
+
+std::optional<SkinAuthoredNoteVisualSlots> resolveOptionalNoteVisuals(
+    const GameplayDecodeRequest &request,
+    const std::optional<std::vector<std::string>> &imageIds) {
+  return imageIds
+             ? std::optional<SkinAuthoredNoteVisualSlots>{resolveNoteVisuals(
+                   request, *imageIds)}
+             : std::nullopt;
+}
+
+bool failNoteNormalization(GameplayDecodeRequest &request, bool limit,
+                           std::string message) {
+  return fail(request.decoding,
+              limit ? "skin_lua_model_limit_exceeded"
+                    : "skin_lua_model_invalid",
+              std::move(message));
+}
+
+bool normalizeDestination(GameplayDecodeRequest &, const RawDestination &,
+                          std::uint32_t, SkinDestinationBody &, bool);
+
+bool buildNoteLineSlots(GameplayDecodeRequest &request,
+                        const std::vector<RawDestination> &raw,
+                        std::size_t selectedCount,
+                        SkinAuthoredNoteLineSlots &output) {
+  output.resize(raw.size());
+  for (std::size_t index = 0; index < selectedCount; ++index) {
+    SkinAuthoredNoteLineSlot slot;
+    if (const auto *sprite = noteSprite(request, raw[index].id)) {
+      slot.image = *sprite;
+    }
+    slot.destination.emplace();
+    if (!normalizeDestination(request, raw[index],
+                              static_cast<std::uint32_t>(index),
+                              *slot.destination, false)) {
+      return false;
+    }
+    output[index] = std::move(slot);
+  }
+  return true;
 }
 
 bool buildNoteObject(GameplayDecodeRequest &request, RawSkinNote &note) {
-  note.object.expansionRatePercent = note.expansionRatePercent;
-  const auto normal = note.visualIds.find(SkinNoteVisualKind::Normal);
-  const std::size_t laneCount =
-      normal != note.visualIds.end() ? normal->second.size() : 0;
-  note.object.lanes.reserve(laneCount);
-  for (std::size_t laneIndex = 0; laneIndex < laneCount; ++laneIndex) {
-    SkinLaneNotePresentation lane;
-    lane.authoredLane = static_cast<int>(laneIndex);
-    if (laneIndex < note.laneRects.size()) {
-      const auto &rect = note.laneRects[laneIndex];
-      lane.laneDestination = {.x = static_cast<double>(rect.x),
-                              .y = static_cast<double>(rect.y),
-                              .width = static_cast<double>(rect.width),
-                              .height = static_cast<double>(rect.height)};
+  SkinNoteNormalizationInput visualInput{
+      .note = resolveNoteVisuals(request, note.note),
+      .mine = resolveNoteVisuals(request, note.mine),
+      .lnEnd = resolveNoteVisuals(request, note.lnEnd),
+      .lnStart = resolveNoteVisuals(request, note.lnStart),
+      .lnBody = resolveNoteVisuals(request, note.lnBody),
+      .lnActive = resolveNoteVisuals(request, note.lnActive),
+      .lnBodyActive = resolveOptionalNoteVisuals(request, note.lnBodyActive),
+      .hcnEnd = resolveNoteVisuals(request, note.hcnEnd),
+      .hcnStart = resolveNoteVisuals(request, note.hcnStart),
+      .hcnBody = resolveNoteVisuals(request, note.hcnBody),
+      .hcnActive = resolveNoteVisuals(request, note.hcnActive),
+      .hcnDamage = resolveNoteVisuals(request, note.hcnDamage),
+      .hcnReactive = resolveNoteVisuals(request, note.hcnReactive),
+      .hcnBodyActive = resolveOptionalNoteVisuals(request, note.hcnBodyActive),
+      .hcnBodyReactive = resolveNoteVisuals(request, note.hcnBodyReactive),
+      .hcnBodyMiss = resolveNoteVisuals(request, note.hcnBodyMiss),
+  };
+  auto normalizedVisuals = normalizeSkinNote(visualInput);
+  if (!normalizedVisuals.note) {
+    const bool limit = normalizedVisuals.error ==
+                           SkinNoteNormalizationError::LaneLimitExceeded ||
+                       normalizedVisuals.error ==
+                           SkinNoteNormalizationError::FrameLimitExceeded;
+    return failNoteNormalization(
+        request, limit,
+        "Lua skin Note visual arrays cannot be normalized safely");
+  }
+
+  SkinNoteLaneGeometryNormalizationInput geometryInput;
+  geometryInput.normalFirstFrameHeights.reserve(visualInput.note.size());
+  for (const auto &normal : visualInput.note) {
+    if (normal && !normal->frames.empty() && normal->frames.front().h >= 0) {
+      geometryInput.normalFirstFrameHeights.emplace_back(
+          static_cast<double>(normal->frames.front().h));
+    } else {
+      geometryInput.normalFirstFrameHeights.emplace_back(std::nullopt);
     }
-    if (laneIndex < note.noteHeights.size()) {
-      lane.authoredNoteHeight = note.noteHeights[laneIndex];
-    }
-    lane.secondaryDestinationY = note.secondaryDestinationY;
-    for (const auto &[kind, imageIds] : note.visualIds) {
-      if (laneIndex < imageIds.size()) {
-        const auto *sprite = noteSprite(request, imageIds[laneIndex]);
-        const std::size_t frameCount =
-            sprite != nullptr ? sprite->frames.size() : 0;
-        if (!consumeMaterializedSpriteFrames(request, frameCount)) {
+  }
+  geometryInput.laneDestinations.reserve(note.laneRects.size());
+  for (const auto &rect : note.laneRects) {
+    geometryInput.laneDestinations.push_back(
+        {.x = static_cast<double>(rect.x),
+         .y = static_cast<double>(rect.y),
+         .width = static_cast<double>(rect.width),
+         .height = static_cast<double>(rect.height)});
+  }
+  geometryInput.authoredNoteHeights = note.noteHeights;
+  geometryInput.secondaryDestinationY = note.secondaryDestinationY;
+  geometryInput.expansionRatePercent = note.expansionRatePercent;
+  auto normalizedGeometry = normalizeSkinNoteLaneGeometry(geometryInput);
+  if (!normalizedGeometry.geometry) {
+    const bool limit =
+        normalizedGeometry.error ==
+        SkinNoteLaneGeometryNormalizationError::LaneLimitExceeded;
+    return failNoteNormalization(
+        request, limit,
+        "Lua skin Note lane geometry cannot be normalized safely");
+  }
+
+  SkinNoteLineNormalizationInput lineInput;
+  const std::size_t groupCount = note.group.size();
+  if (!buildNoteLineSlots(request, note.group, groupCount, lineInput.group) ||
+      !buildNoteLineSlots(request, note.bpm,
+                          std::min(groupCount, note.bpm.size()),
+                          lineInput.bpm) ||
+      !buildNoteLineSlots(request, note.stop,
+                          std::min(groupCount, note.stop.size()),
+                          lineInput.stop) ||
+      !buildNoteLineSlots(request, note.time,
+                          std::min(groupCount, note.time.size()),
+                          lineInput.time)) {
+    return false;
+  }
+  auto normalizedLines = normalizeSkinNoteLines(lineInput);
+  if (!normalizedLines.lines) {
+    const bool limit =
+        normalizedLines.error ==
+            SkinNoteLineNormalizationError::GroupLimitExceeded ||
+        normalizedLines.error ==
+            SkinNoteLineNormalizationError::AuxiliaryLimitExceeded ||
+        normalizedLines.error ==
+            SkinNoteLineNormalizationError::OutputLimitExceeded ||
+        normalizedLines.error ==
+            SkinNoteLineNormalizationError::FrameLimitExceeded;
+    return failNoteNormalization(
+        request, limit,
+        "Lua skin Note line presentations cannot be normalized safely");
+  }
+
+  note.object.expansionRatePercent =
+      normalizedGeometry.geometry->expansionRatePercent;
+  note.object.lanes.reserve(normalizedVisuals.note->lanes.size());
+  for (std::size_t laneIndex = 0;
+       laneIndex < normalizedVisuals.note->lanes.size(); ++laneIndex) {
+    const auto &normalizedLane = normalizedVisuals.note->lanes[laneIndex];
+    const auto &geometry = normalizedGeometry.geometry->lanes[laneIndex];
+    SkinLaneNotePresentation lane{
+        .authoredLane = static_cast<int>(normalizedLane.authoredLane),
+        .laneDestination = geometry.laneDestination,
+        .authoredNoteHeight = geometry.authoredNoteHeight,
+        .secondaryDestinationY = geometry.secondaryDestinationY,
+    };
+    for (std::size_t visualIndex = 0;
+         visualIndex < normalizedLane.visuals.size(); ++visualIndex) {
+      const auto kind = static_cast<SkinNoteVisualKind>(visualIndex);
+      if (const auto *sprite = std::get_if<SkinSpriteFrames>(
+              &normalizedLane.visuals[visualIndex])) {
+        if (!consumeMaterializedSpriteFrames(request, sprite->frames.size())) {
           return false;
         }
-        lane.visuals.emplace(kind,
-                             sprite != nullptr ? *sprite : SkinSpriteFrames{});
+        lane.visuals.emplace(kind, *sprite);
+      } else {
+        lane.visuals.emplace(kind, SkinSynthesizedNoteVisual{.kind = kind});
       }
     }
-    lane.visuals.emplace(
-        SkinNoteVisualKind::Hidden,
-        SkinSynthesizedNoteVisual{.kind = SkinNoteVisualKind::Hidden});
-    lane.visuals.emplace(
-        SkinNoteVisualKind::Processed,
-        SkinSynthesizedNoteVisual{.kind = SkinNoteVisualKind::Processed});
     note.object.lanes.push_back(std::move(lane));
+  }
+
+  note.object.lines.reserve(normalizedLines.lines->lines.size());
+  for (const auto &normalizedLine : normalizedLines.lines->lines) {
+    const std::size_t imageFrames =
+        normalizedLine.image ? normalizedLine.image->frames.size() : 0;
+    if (!consumeMaterializedSpriteFrames(request, imageFrames)) {
+      return false;
+    }
+    note.object.lines.push_back(
+        {.kind = normalizedLine.kind,
+         .sprite = normalizedLine.image,
+         .laneGroupDestination =
+             normalizedLines.lines->groups[normalizedLine.laneGroup].laneRect,
+         .destination = normalizedLine.destination});
   }
 
   if (note.authoredHiddenOrProcessed) {
@@ -1929,7 +2151,8 @@ std::optional<SkinBlendMode> blendMode(int value) {
 bool normalizeDestination(GameplayDecodeRequest &request,
                           const RawDestination &raw,
                           std::uint32_t authoredOrdinal,
-                          SkinDestinationBody &output);
+                          SkinDestinationBody &output,
+                          bool sortFrames = true);
 
 bool makeCoverObject(GameplayDecodeRequest &request,
                      const RawSkinCover &definition,
@@ -2187,7 +2410,7 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
 bool normalizeDestination(GameplayDecodeRequest &request,
                           const RawDestination &raw,
                           std::uint32_t authoredOrdinal,
-                          SkinDestinationBody &output) {
+                          SkinDestinationBody &output, bool sortFrames) {
   const auto mappedBlend = blendMode(raw.blend);
   if (!mappedBlend || raw.filter < 0 || raw.filter > 1 || raw.stretch < -1 ||
       raw.stretch > 10) {
@@ -2283,10 +2506,12 @@ bool normalizeDestination(GameplayDecodeRequest &request,
     }
     output.frames.push_back(current);
   }
-  std::stable_sort(output.frames.begin(), output.frames.end(),
-                   [](const auto &left, const auto &right) {
-                     return left.timeMillis < right.timeMillis;
-                   });
+  if (sortFrames) {
+    std::stable_sort(output.frames.begin(), output.frames.end(),
+                     [](const auto &left, const auto &right) {
+                       return left.timeMillis < right.timeMillis;
+                     });
+  }
   return true;
 }
 
@@ -2771,6 +2996,37 @@ std::string bindingPathText(std::string_view array, std::uint32_t index,
   return result;
 }
 
+LuaValuePath
+noteLineBindingPath(std::string_view array, std::uint32_t index,
+                    std::string_view field,
+                    std::optional<std::uint32_t> nestedIndex = {}) {
+  LuaValuePath result{
+      LuaValuePathElement::field("note"), LuaValuePathElement::field(array),
+      LuaValuePathElement::index(index), LuaValuePathElement::field(field)};
+  if (nestedIndex) {
+    result.push_back(LuaValuePathElement::index(*nestedIndex));
+  }
+  return result;
+}
+
+std::string
+noteLineBindingPathText(std::string_view array, std::uint32_t index,
+                        std::string_view field,
+                        std::optional<std::uint32_t> nestedIndex = {}) {
+  std::string result("note.");
+  result.append(array);
+  result.push_back('[');
+  result.append(std::to_string(index));
+  result.append("].");
+  result.append(field);
+  if (nestedIndex) {
+    result.push_back('[');
+    result.append(std::to_string(*nestedIndex));
+    result.push_back(']');
+  }
+  return result;
+}
+
 bool retainBindingFailure(GameplayDecodeRequest &request,
                           LuaSkinBindingDecodeResult decoded,
                           std::string path) {
@@ -2871,6 +3127,57 @@ bool bindImageTimer(GameplayDecodeRequest &request,
     return false;
   }
   image.sprite.timer = image.timer;
+  return true;
+}
+
+bool bindNoteLineDestination(GameplayDecodeRequest &request,
+                             LuaSkinBindingDecoder &decoder,
+                             const LuaValueHandle &value,
+                             std::string_view array,
+                             RawDestination &destination) {
+  if (!decodeOptionalBinding(
+          request, decoder, value, {.kind = SkinBindingKind::TimerProperty},
+          noteLineBindingPath(array, destination.authoredIndex, "timer"),
+          noteLineBindingPathText(array, destination.authoredIndex, "timer"),
+          destination.authoredIndex - 1, destination.timer)) {
+    return false;
+  }
+  for (std::size_t index = 0; index < destination.conditions.size(); ++index) {
+    auto &condition = destination.conditions[index];
+    if (condition.optionId) {
+      continue;
+    }
+    SkinBooleanPropertyId id;
+    const auto oneBased = static_cast<std::uint32_t>(index + 1);
+    if (!decodeRequiredBinding(
+            request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
+            noteLineBindingPath(array, destination.authoredIndex, "op",
+                                oneBased),
+            noteLineBindingPathText(array, destination.authoredIndex, "op",
+                                    oneBased),
+            destination.authoredIndex - 1, std::nullopt, id)) {
+      return false;
+    }
+    condition.property = id;
+  }
+  return decodeOptionalBinding(
+      request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
+      noteLineBindingPath(array, destination.authoredIndex, "draw"),
+      noteLineBindingPathText(array, destination.authoredIndex, "draw"),
+      destination.authoredIndex - 1, destination.drawCondition);
+}
+
+bool bindNoteLinePrefix(GameplayDecodeRequest &request,
+                        LuaSkinBindingDecoder &decoder,
+                        const LuaValueHandle &value, std::string_view array,
+                        std::vector<RawDestination> &destinations,
+                        std::size_t selectedCount) {
+  for (std::size_t index = 0; index < selectedCount; ++index) {
+    if (!bindNoteLineDestination(request, decoder, value, array,
+                                 destinations[index])) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -3063,6 +3370,20 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
         return false;
       }
       graph.implicitValue = id;
+    }
+  }
+
+  if (request.note) {
+    const std::size_t groupCount = request.note->group.size();
+    if (!bindNoteLinePrefix(request, decoder, value, "group",
+                            request.note->group, groupCount) ||
+        !bindNoteLinePrefix(request, decoder, value, "bpm", request.note->bpm,
+                            std::min(groupCount, request.note->bpm.size())) ||
+        !bindNoteLinePrefix(request, decoder, value, "stop", request.note->stop,
+                            std::min(groupCount, request.note->stop.size())) ||
+        !bindNoteLinePrefix(request, decoder, value, "time", request.note->time,
+                            std::min(groupCount, request.note->time.size()))) {
+      return false;
     }
   }
 
@@ -3306,8 +3627,8 @@ bool materializeGameplay(GameplayDecodeRequest &request,
     SkinDestinationBody presentation;
     if (!makeObjectPayload(request, destination.id, model, payload, critical) ||
         !normalizeDestination(request, destination,
-                              static_cast<std::uint32_t>(ordinal),
-                              presentation)) {
+                              static_cast<std::uint32_t>(ordinal), presentation,
+                              true)) {
       transferDecodeDiagnostics(request);
       return false;
     }

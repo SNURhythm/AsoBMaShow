@@ -28,10 +28,8 @@ struct SkinNoteLineNormalizationInput {
   SkinAuthoredNoteLineSlots time;
 };
 
-// A pending model representation that deliberately preserves sparse lines.
-// The current SkinNoteLinePresentation cannot express a source that failed to
-// resolve while its nested destination remained valid, so this helper owns the
-// richer output until decoder/model integration can consume it.
+// A source-neutral intermediate that preserves sparse lines before they are
+// copied into SkinNoteLinePresentation's optional image/destination fields.
 struct SkinNormalizedNoteLine {
   std::size_t laneGroup = 0;
   SkinNoteLineKind kind = SkinNoteLineKind::Group;

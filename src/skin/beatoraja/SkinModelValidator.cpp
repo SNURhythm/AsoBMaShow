@@ -3,10 +3,15 @@
 #include "../LuaGameplaySkinFeature.h"
 #include "LuaSkinTableDecoder.h"
 #include "NumericGlyphAtlas.h"
+#include "SkinNoteLaneGeometryNormalization.h"
+#include "SkinNoteLineNormalization.h"
+#include "SkinNoteNormalization.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 #include <string>
@@ -121,6 +126,162 @@ bool validDestination(const SkinDestinationBody &destination,
   });
 }
 
+SkinAuthoredNoteVisualSlots noteVisualSlots(const SkinNoteObject &object,
+                                            SkinNoteVisualKind kind,
+                                            bool &complete) {
+  SkinAuthoredNoteVisualSlots slots;
+  slots.reserve(object.lanes.size());
+  for (const auto &lane : object.lanes) {
+    const auto found = lane.visuals.find(kind);
+    if (found == lane.visuals.end()) {
+      complete = false;
+      slots.emplace_back(std::nullopt);
+      continue;
+    }
+    if (const auto *sprite = std::get_if<SkinSpriteFrames>(&found->second)) {
+      slots.emplace_back(*sprite);
+      continue;
+    }
+    const auto &synthesized =
+        std::get<SkinSynthesizedNoteVisual>(found->second);
+    if (synthesized.kind != kind) {
+      complete = false;
+    }
+    slots.emplace_back(std::nullopt);
+  }
+  return slots;
+}
+
+bool equalRect(const SkinAuthoredRect &left, const SkinAuthoredRect &right) {
+  return left.x == right.x && left.y == right.y && left.width == right.width &&
+         left.height == right.height;
+}
+
+bool validNoteObject(const SkinNoteObject &object,
+                     const ValidationContext &context) {
+  if (object.lanes.empty()) {
+    return false;
+  }
+  bool complete = true;
+  for (std::size_t index = 0; index < object.lanes.size(); ++index) {
+    if (object.lanes[index].authoredLane != static_cast<int>(index)) {
+      complete = false;
+    }
+  }
+
+  SkinNoteNormalizationInput visualInput;
+  visualInput.note =
+      noteVisualSlots(object, SkinNoteVisualKind::Normal, complete);
+  visualInput.mine =
+      noteVisualSlots(object, SkinNoteVisualKind::Mine, complete);
+  visualInput.lnEnd =
+      noteVisualSlots(object, SkinNoteVisualKind::LnEnd, complete);
+  visualInput.lnStart =
+      noteVisualSlots(object, SkinNoteVisualKind::LnStart, complete);
+  visualInput.lnBody =
+      noteVisualSlots(object, SkinNoteVisualKind::LnBodyInactive, complete);
+  visualInput.lnBodyActive =
+      noteVisualSlots(object, SkinNoteVisualKind::LnBodyActive, complete);
+  visualInput.hcnEnd =
+      noteVisualSlots(object, SkinNoteVisualKind::HcnEnd, complete);
+  visualInput.hcnStart =
+      noteVisualSlots(object, SkinNoteVisualKind::HcnStart, complete);
+  visualInput.hcnBody =
+      noteVisualSlots(object, SkinNoteVisualKind::HcnBodyInactive, complete);
+  visualInput.hcnBodyActive =
+      noteVisualSlots(object, SkinNoteVisualKind::HcnBodyActive, complete);
+  visualInput.hcnBodyMiss =
+      noteVisualSlots(object, SkinNoteVisualKind::HcnDamage, complete);
+  visualInput.hcnBodyReactive =
+      noteVisualSlots(object, SkinNoteVisualKind::HcnReactive, complete);
+  (void)noteVisualSlots(object, SkinNoteVisualKind::Hidden, complete);
+  (void)noteVisualSlots(object, SkinNoteVisualKind::Processed, complete);
+  if (!complete || !normalizeSkinNote(visualInput).note) {
+    return false;
+  }
+
+  SkinNoteLaneGeometryNormalizationInput geometryInput;
+  geometryInput.expansionRatePercent = object.expansionRatePercent;
+  geometryInput.normalFirstFrameHeights.reserve(object.lanes.size());
+  geometryInput.laneDestinations.reserve(object.lanes.size());
+  const std::optional<double> authoredSecondaryDestinationY =
+      object.lanes.front().secondaryDestinationY;
+  for (std::size_t index = 0; index < object.lanes.size(); ++index) {
+    const auto &lane = object.lanes[index];
+    geometryInput.normalFirstFrameHeights.push_back(lane.authoredNoteHeight);
+    geometryInput.laneDestinations.push_back(lane.laneDestination);
+    if (lane.secondaryDestinationY != authoredSecondaryDestinationY) {
+      return false;
+    }
+  }
+  std::optional<int> secondaryDestinationY;
+  if (authoredSecondaryDestinationY) {
+    const double value = *authoredSecondaryDestinationY;
+    if (!std::isfinite(value) || std::trunc(value) != value ||
+        value < static_cast<double>(std::numeric_limits<int>::min()) ||
+        value > static_cast<double>(std::numeric_limits<int>::max())) {
+      return false;
+    }
+    secondaryDestinationY = static_cast<int>(value);
+  }
+  geometryInput.secondaryDestinationY = secondaryDestinationY;
+  if (!normalizeSkinNoteLaneGeometry(geometryInput).geometry) {
+    return false;
+  }
+
+  if (object.lines.size() % 4 != 0) {
+    return false;
+  }
+  const std::size_t groupCount = object.lines.size() / 4;
+  SkinNoteLineNormalizationInput lineInput;
+  lineInput.group.resize(groupCount);
+  lineInput.bpm.resize(groupCount);
+  lineInput.stop.resize(groupCount);
+  lineInput.time.resize(groupCount);
+  std::array<SkinAuthoredNoteLineSlots *, 4> arrays{
+      &lineInput.group, &lineInput.bpm, &lineInput.stop, &lineInput.time};
+  constexpr std::array kinds{SkinNoteLineKind::Group, SkinNoteLineKind::Bpm,
+                             SkinNoteLineKind::Stop, SkinNoteLineKind::Time};
+  for (std::size_t kindIndex = 0; kindIndex < kinds.size(); ++kindIndex) {
+    for (std::size_t group = 0; group < groupCount; ++group) {
+      const auto &line = object.lines[kindIndex * groupCount + group];
+      if (line.kind != kinds[kindIndex]) {
+        return false;
+      }
+      (*arrays[kindIndex])[group] = SkinAuthoredNoteLineSlot{
+          .image = line.sprite,
+          .destination = line.destination,
+      };
+    }
+  }
+  auto normalizedLines = normalizeSkinNoteLines(lineInput);
+  if (!normalizedLines.lines ||
+      normalizedLines.lines->lines.size() != object.lines.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < object.lines.size(); ++index) {
+    const auto &line = object.lines[index];
+    const std::size_t group = groupCount == 0 ? 0 : index % groupCount;
+    if (groupCount != 0 &&
+        !equalRect(line.laneGroupDestination,
+                   normalizedLines.lines->groups[group].laneRect)) {
+      return false;
+    }
+    if ((line.sprite &&
+         !validSprite(*line.sprite, context.imageResources, context.timers)) ||
+        (line.destination && !validDestination(*line.destination, context))) {
+      return false;
+    }
+  }
+
+  return std::ranges::all_of(object.lanes, [&](const auto &lane) {
+    return std::ranges::all_of(lane.visuals, [&](const auto &entry) {
+      return validNoteVisual(entry.second, context.imageResources,
+                             context.timers);
+    });
+  });
+}
+
 bool validPayload(const SkinObjectPayload &payload,
                   const ValidationContext &context) {
   return std::visit(
@@ -221,30 +382,7 @@ bool validPayload(const SkinObjectPayload &payload,
                                           context.timers);
                      });
         } else if constexpr (std::is_same_v<T, SkinNoteObject>) {
-          if (object.lanes.empty()) {
-            return false;
-          }
-          return std::ranges::all_of(
-                     object.lanes,
-                     [&](const auto &lane) {
-                       const auto normal =
-                           lane.visuals.find(SkinNoteVisualKind::Normal);
-                       return normal != lane.visuals.end() &&
-                              validNoteVisual(normal->second,
-                                              context.imageResources,
-                                              context.timers) &&
-                              std::ranges::all_of(
-                                  lane.visuals, [&](const auto &entry) {
-                                    return validNoteVisual(
-                                        entry.second, context.imageResources,
-                                        context.timers);
-                                  });
-                     }) &&
-                 std::ranges::all_of(object.lines, [&](const auto &line) {
-                   return validSprite(line.sprite, context.imageResources,
-                                      context.timers) &&
-                          validDestination(line.destination, context);
-                 });
+          return validNoteObject(object, context);
         } else if constexpr (std::is_same_v<T, SkinCoverObject>) {
           return validSprite(object.sprite, context.imageResources,
                              context.timers);

@@ -361,9 +361,9 @@ enum class SkinNoteLineKind : std::uint8_t { Group, Bpm, Stop, Time };
 
 struct SkinNoteLinePresentation {
   SkinNoteLineKind kind = SkinNoteLineKind::Group;
-  SkinSpriteFrames sprite;
+  std::optional<SkinSpriteFrames> sprite;
   SkinAuthoredRect laneGroupDestination;
-  SkinDestinationBody destination;
+  std::optional<SkinDestinationBody> destination;
 };
 
 struct SkinNoteObject {

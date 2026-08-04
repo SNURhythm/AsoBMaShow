@@ -79,11 +79,6 @@ validateSlot(const SkinAuthoredNoteLineSlot &slot, std::size_t &frameCount) {
     if (!finiteDestination(*slot.destination)) {
       return SkinNoteLineNormalizationError::NonFiniteGeometry;
     }
-    if (slot.destination->frames.size() >
-        SkinNoteLineNormalizationPolicy::maxMaterializedFrames - frameCount) {
-      return SkinNoteLineNormalizationError::FrameLimitExceeded;
-    }
-    frameCount += slot.destination->frames.size();
   }
   return SkinNoteLineNormalizationError::None;
 }

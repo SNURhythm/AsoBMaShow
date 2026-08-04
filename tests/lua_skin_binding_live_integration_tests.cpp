@@ -195,7 +195,16 @@ return {
   },
   graph={{id='graph',src='atlas',w=10,h=10,type=302,
           value='known_rate',timer=7,angle=1}},
-  note={id='note',note={'state-image'}},
+  note={
+    id='note',
+    note={'state-image'},mine={'state-image'},
+    lnend={'state-image'},lnstart={'state-image'},
+    lnbodyActive={'state-image'},lnbody={'state-image'},
+    hcnend={'state-image'},hcnstart={'state-image'},
+    hcnbodyActive={'state-image'},hcnbody={'state-image'},
+    hcnbodyMiss={'state-image'},hcnbodyReactive={'state-image'},
+    dst={{x=0,y=0,w=20,h=10}}
+  },
   destination={
     {id='state-image',timer=7,op={9,'known_bool',function() return true end},
      draw='known_bool',offsets={2,3},offset=4,dst={{}}},
@@ -489,7 +498,7 @@ return {type=0,w=1280,h=720,
       !decoded.model && decoded.diagnostics.size() == 1 &&
       decoded.diagnostics.front().code ==
           "skin_lua_binding_work_limit_exceeded" &&
-      decoded.diagnostics.front().virtualPath == "image[128].timer";
+      decoded.diagnostics.front().virtualPath == "image[129].timer";
   if (!rejected) {
     for (const auto &item : decoded.diagnostics) {
       std::cerr << "budget diagnostic: " << item.code << " @ "

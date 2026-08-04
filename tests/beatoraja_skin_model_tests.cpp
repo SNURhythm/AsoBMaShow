@@ -784,9 +784,13 @@ void testLuaProtectedDecodeOwnsEveryRawParseTemporaryInTheRequest() {
   expect(source.find("std::vector<std::string> hidden;") != std::string::npos &&
              source.find("std::vector<std::string> processed;") !=
                  std::string::npos &&
-             source.find("std::vector<double> expansionRate;") !=
+             source.find("std::array<int, 2> expansionRatePercent") !=
+                 std::string::npos &&
+             source.find("std::vector<RawDestination> group;") !=
+                 std::string::npos &&
+             source.find("std::vector<RawDestination> time;") !=
                  std::string::npos,
-         "raw note owns hidden, processed, and expansion parse vectors");
+         "raw note owns visual and nested line parse storage");
   expect(protectedBody.find("std::vector<Raw") == std::string_view::npos &&
              protectedBody.find("RawSkinNote note") == std::string_view::npos,
          "lua_cpcall callback has no owning raw parse automatic locals");
@@ -814,8 +818,9 @@ void testNoteHeightAndIgnoredAuthoredVisualsRemainExplicitPolicies() {
   const auto &note = std::get<SkinNoteObject>(definition->payload);
   expect(note.lanes.size() == 1 &&
              note.lanes.front().authoredLane == expected.at("authoredLane") &&
-             !note.lanes.front().authoredNoteHeight.has_value(),
-         "missing note size remains unresolved until resource preparation");
+             note.lanes.front().authoredNoteHeight ==
+                 expected.at("authoredNoteHeight").get<double>(),
+         "missing note size uses the known normal first-frame height");
   if (note.lanes.empty()) {
     return;
   }
