@@ -124,6 +124,76 @@ return {type=19}
 return {type=0, category=42, property="none", filepath=false,
         offset=function() end}
 )lua");
+    writeText(source / "skin/dimension-zero.luaskin", R"lua(
+return {type=5, w=0, h=720}
+)lua");
+    writeText(source / "skin/dimension-negative.luaskin", R"lua(
+return {type=5, w=1280, h=-1}
+)lua");
+    writeText(source / "skin/dimension-too-wide.luaskin", R"lua(
+return {type=5, w=8193, h=720}
+)lua");
+    writeText(source / "skin/dimension-too-tall.luaskin", R"lua(
+return {type=5, w=1280, h=8193}
+)lua");
+    writeText(source / "skin/dimension-boundaries.luaskin", R"lua(
+return {type=5, w=1, h=8192}
+)lua");
+    writeText(source / "skin/missing-category-item.luaskin", R"lua(
+return {type=5, category={{name="Category", item={[1]="A", [3]="B"}}}}
+)lua");
+    writeText(source / "skin/empty-category-item.luaskin", R"lua(
+return {type=5, category={{name="Category", item={""}}}}
+)lua");
+    writeText(source / "skin/missing-option-name.luaskin", R"lua(
+return {type=5, property={{item={{name="Value", op=1}}}}}
+)lua");
+    writeText(source / "skin/empty-option-name.luaskin", R"lua(
+return {type=5, property={{name="", item={{name="Value", op=1}}}}}
+)lua");
+    writeText(source / "skin/missing-choice-label.luaskin", R"lua(
+return {type=5, property={{name="Option", item={{op=1}}}}}
+)lua");
+    writeText(source / "skin/empty-choice-label.luaskin", R"lua(
+return {type=5, property={{name="Option", item={{name="", op=1}}}}}
+)lua");
+    writeText(source / "skin/missing-file-name.luaskin", R"lua(
+return {type=5, filepath={{path="ordinary/*.png"}}}
+)lua");
+    writeText(source / "skin/empty-file-name.luaskin", R"lua(
+return {type=5, filepath={{name="", path="ordinary/*.png"}}}
+)lua");
+    writeText(source / "skin/missing-file-path.luaskin", R"lua(
+return {type=5, filepath={{name="File"}}}
+)lua");
+    writeText(source / "skin/empty-file-path.luaskin", R"lua(
+return {type=5, filepath={{name="File", path=""}}}
+)lua");
+    writeText(source / "skin/missing-offset-name.luaskin", R"lua(
+return {type=5, offset={{id=100, x=true}}}
+)lua");
+    writeText(source / "skin/empty-offset-name.luaskin", R"lua(
+return {type=5, offset={{name="", id=100, x=true}}}
+)lua");
+    writeText(source / "skin/optional-text.luaskin", R"lua(
+return {
+  type=5,
+  property={{name="Option", item={{name="Value", op=1}}}},
+  filepath={{name="File", path="ordinary/*.png"}},
+  offset={{name="Offset", id=100}}
+}
+)lua");
+    writeText(source / "skin/patterns.luaskin", R"lua(
+return {type=5, filepath={
+  {name="Ordinary", path="ordinary/*.png"},
+  {name="Uppercase", path="uppercase/*.png"},
+  {name="Player 1", path="characters/*|1P|"},
+  {name="Player suffix", path="portraits/*|1P|.png"}
+}}
+)lua");
+    writeText(source / "skin/crowded.luaskin", R"lua(
+return {type=5, filepath={{name="Crowded", path="crowded/*.png"}}}
+)lua");
     writeText(source / "skin/duplicates.luaskin", R"lua(
 return {type=0, property={
   {name="A",item={{name="One",op=1}},def="One"},
@@ -143,6 +213,19 @@ for i=1,257 do p[i]={name="P"..i,item={{name="V",op=1000+i}},def="V"} end
 return {type=0, property=p}
 )lua");
     writeText(source / "skin/images/bg.png", "fixture");
+    writeText(source / "skin/ordinary/plain.png", "fixture");
+    writeText(source / "skin/ordinary/ignored.txt", "fixture");
+    writeText(source / "skin/uppercase/Cover.PNG", "fixture");
+    writeText(source / "skin/characters/Alpha.webp", "fixture");
+    writeText(source / "skin/characters/Zulu.png", "fixture");
+    writeText(source / "skin/portraits/Portrait.PNG", "fixture");
+    writeText(source / "skin/portraits/ignored.txt", "fixture");
+    for (int index = 0; index < 300; ++index) {
+      writeText(source / "skin/crowded" /
+                    ("unrelated-" + std::to_string(index) + ".txt"),
+                "fixture");
+    }
+    writeText(source / "skin/crowded/match.png", "fixture");
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -276,6 +359,44 @@ void testStrictArraysAndHeaderBoundsFailClosed() {
          "present non-table authored vectors convert to empty arrays");
 }
 
+void testAuthoredDimensionsStayWithinTheDecoderBoundary() {
+  for (const std::string_view invalid :
+       {"dimension-zero.luaskin", "dimension-negative.luaskin",
+        "dimension-too-wide.luaskin", "dimension-too-tall.luaskin"}) {
+    const auto result = fixture().decode(invalid);
+    expect(!result.header && !result.diagnostics.empty(),
+           "non-positive or oversized authored dimension is rejected");
+  }
+  const auto boundaries = fixture().decode("dimension-boundaries.luaskin");
+  expect(boundaries.header && boundaries.header->width == 1 &&
+             boundaries.header->height ==
+                 LuaSkinTableDecoderPolicy::maxAuthoredDimension,
+         "inclusive authored dimension boundaries remain valid");
+}
+
+void testRequiredHeaderTextCannotBeMissingOrEmpty() {
+  for (const std::string_view invalid :
+       {"missing-category-item.luaskin", "empty-category-item.luaskin",
+        "missing-option-name.luaskin", "empty-option-name.luaskin",
+        "missing-choice-label.luaskin", "empty-choice-label.luaskin",
+        "missing-file-name.luaskin", "empty-file-name.luaskin",
+        "missing-file-path.luaskin", "empty-file-path.luaskin",
+        "missing-offset-name.luaskin", "empty-offset-name.luaskin"}) {
+    const auto result = fixture().decode(invalid);
+    expect(!result.header && !result.diagnostics.empty(),
+           "required header text cannot be missing or empty");
+  }
+
+  const auto optional = fixture().decode("optional-text.luaskin");
+  expect(optional.header && optional.header->name.empty() &&
+             optional.header->author.empty() &&
+             optional.header->options.front().category.empty() &&
+             optional.header->options.front().defaultLabel.empty() &&
+             optional.header->files.front().category.empty() &&
+             optional.header->files.front().defaultValue.empty(),
+         "root metadata, categories, and authored defaults remain optional");
+}
+
 void testSemanticAndSynthesizedCollisionsFailClosed() {
   for (const std::string_view invalid :
        {"duplicates.luaskin", "id-collision.luaskin",
@@ -333,6 +454,80 @@ void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
          "sanitized offsets are indexed by unambiguous declared IDs");
 }
 
+void testReconciliationRejectsEmptyConfigurationKeys() {
+  auto fileSystem = fixture().fileSystem("optional-text.luaskin");
+  expect(fileSystem != nullptr, "empty-key reconciliation filesystem exists");
+  if (!fileSystem) {
+    return;
+  }
+
+  BeatorajaSkinHeader header;
+  header.type = 5;
+  header.options = {{.name = "", .choices = {{.label = "Value", .value = 1}}}};
+  auto option = reconcileSkinConfiguration(header, nullptr, *fileSystem);
+  expect(!option.configuration && !option.diagnostics.empty(),
+         "empty option names never become configuration keys");
+
+  header.options.clear();
+  header.files = {{.name = "", .pattern = "ordinary/*.png"}};
+  auto file = reconcileSkinConfiguration(header, nullptr, *fileSystem);
+  expect(!file.configuration && !file.diagnostics.empty(),
+         "empty file names never become configuration keys");
+
+  header.files.clear();
+  header.offsets = {{.name = "", .id = 100}};
+  auto offset = reconcileSkinConfiguration(header, nullptr, *fileSystem);
+  expect(!offset.configuration && !offset.diagnostics.empty(),
+         "empty offset names never become configuration keys");
+}
+
+void testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive() {
+  const auto decoded = fixture().decode("patterns.luaskin");
+  auto fileSystem = fixture().fileSystem("patterns.luaskin");
+  expect(decoded.header && fileSystem,
+         "file-pattern reconciliation fixture is available");
+  if (!decoded.header || !fileSystem) {
+    return;
+  }
+
+  const struct {
+    std::size_t index;
+    std::string_view expected;
+  } cases[] = {
+      {0, "plain.png"},
+      {1, "Cover.PNG"},
+      {2, "Alpha.webp"},
+      {3, "Portrait.PNG"},
+  };
+  for (const auto &[index, expected] : cases) {
+    BeatorajaSkinHeader header = *decoded.header;
+    header.files = {decoded.header->files.at(index)};
+    const auto reconciled =
+        reconcileSkinConfiguration(header, nullptr, *fileSystem);
+    expect(reconciled.configuration && reconciled.diagnostics.empty() &&
+               reconciled.configuration->filePaths ==
+                   std::map<std::string, std::string>{
+                       {header.files[0].name, std::string(expected)}},
+           "ordinary, uppercase, and pinned alternative patterns reconcile");
+  }
+}
+
+void testUnrelatedDirectoryEntriesDoNotConsumeTheChoiceLimit() {
+  const auto decoded = fixture().decode("crowded.luaskin");
+  auto fileSystem = fixture().fileSystem("crowded.luaskin");
+  expect(decoded.header && fileSystem,
+         "crowded-directory reconciliation fixture is available");
+  if (!decoded.header || !fileSystem) {
+    return;
+  }
+  const auto reconciled =
+      reconcileSkinConfiguration(*decoded.header, nullptr, *fileSystem);
+  expect(reconciled.configuration && reconciled.diagnostics.empty() &&
+             reconciled.configuration->filePaths ==
+                 std::map<std::string, std::string>{{"Crowded", "match.png"}},
+         "unrelated directory entries do not consume the matching choice cap");
+}
+
 void testConfigurationDigestUsesTheFrozenBigEndianGrammar() {
   BeatorajaSkinConfiguration configuration;
   configuration.options = {{"A", -1}};
@@ -352,8 +547,13 @@ void testConfigurationDigestUsesTheFrozenBigEndianGrammar() {
 int main() {
   testTypedHeaderPreservesAuthoredNumericOrderAndCoercions();
   testStrictArraysAndHeaderBoundsFailClosed();
+  testAuthoredDimensionsStayWithinTheDecoderBoundary();
+  testRequiredHeaderTextCannotBeMissingOrEmpty();
   testSemanticAndSynthesizedCollisionsFailClosed();
   testReconciliationDefaultsSanitizesAndIndexesConfiguration();
+  testReconciliationRejectsEmptyConfigurationKeys();
+  testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive();
+  testUnrelatedDirectoryEntriesDoNotConsumeTheChoiceLimit();
   testConfigurationDigestUsesTheFrozenBigEndianGrammar();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";

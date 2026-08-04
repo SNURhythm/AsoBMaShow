@@ -7,6 +7,7 @@
 #include "../../FileChecksum.h"
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinRuntime.h"
+#include "../package/SkinPackageTypes.h"
 
 extern "C" {
 #include <lua.h>
@@ -80,6 +81,32 @@ bool asciiCaseEqual(std::string_view left, std::string_view right) {
   return true;
 }
 
+std::optional<std::string>
+normalizedFilePatternComponent(std::string_view pattern) {
+  const std::size_t slash = pattern.rfind('/');
+  const std::string_view component =
+      slash == std::string_view::npos ? pattern : pattern.substr(slash + 1);
+  const std::size_t star = component.find('*');
+  if (star == std::string_view::npos ||
+      component.find('*', star + 1) != std::string_view::npos) {
+    return std::nullopt;
+  }
+
+  const std::size_t firstAlternative = component.find('|');
+  if (firstAlternative == std::string_view::npos) {
+    return std::string(component);
+  }
+  const std::size_t lastAlternative = component.rfind('|');
+  if (firstAlternative <= star || lastAlternative == firstAlternative ||
+      lastAlternative == firstAlternative + 1 ||
+      component.find('|', firstAlternative + 1) != lastAlternative) {
+    return std::nullopt;
+  }
+  std::string normalized(component.substr(0, firstAlternative));
+  normalized.append(component.substr(lastAlternative + 1));
+  return normalized;
+}
+
 bool validPattern(std::string_view pattern) {
   if (pattern.empty() ||
       pattern.size() > SkinProfileSettingsPolicy::maxConfigurationValueBytes ||
@@ -90,7 +117,8 @@ bool validPattern(std::string_view pattern) {
   const std::size_t star = pattern.find('*');
   if (star == std::string_view::npos ||
       pattern.find('*', star + 1) != std::string_view::npos ||
-      pattern.find('/', star) != std::string_view::npos) {
+      pattern.find('/', star) != std::string_view::npos ||
+      !normalizedFilePatternComponent(pattern)) {
     return false;
   }
   std::size_t start = 0;
@@ -179,7 +207,9 @@ bool copyString(lua_State *state, int index, std::string &output,
                 std::size_t maximumBytes, bool allowEmpty,
                 DecodeRequest &request) {
   if (lua_isnil(state, index)) {
-    return true;
+    return allowEmpty ||
+           fail(request, "skin_lua_header_invalid",
+                "Lua skin header required string field is missing");
   }
   if (lua_type(state, index) != LUA_TSTRING &&
       lua_type(state, index) != LUA_TNUMBER) {
@@ -480,6 +510,13 @@ bool validateSemantics(BeatorajaSkinHeader &header, DecodeRequest &request) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header does not declare a valid type");
   }
+  if (header.width < 1 ||
+      header.width > LuaSkinTableDecoderPolicy::maxAuthoredDimension ||
+      header.height < 1 ||
+      header.height > LuaSkinTableDecoderPolicy::maxAuthoredDimension) {
+    return fail(request, "skin_lua_header_invalid",
+                "Lua skin header dimensions are outside the fixed range");
+  }
 
   std::set<std::string> categoryNames;
   for (const auto &category : header.categories) {
@@ -626,14 +663,18 @@ ConfigOffset sanitizeOffset(ConfigOffset value,
 }
 
 bool matchesFilePattern(std::string_view pattern, std::string_view filename) {
-  const std::size_t slash = pattern.rfind('/');
-  const std::string_view component =
-      slash == std::string_view::npos ? pattern : pattern.substr(slash + 1);
-  const std::size_t star = component.find('*');
-  const std::string_view prefix = component.substr(0, star);
-  const std::string_view suffix = component.substr(star + 1);
+  const auto normalized = normalizedFilePatternComponent(pattern);
+  if (!normalized) {
+    return false;
+  }
+  const std::size_t star = normalized->find('*');
+  const std::string_view prefix(normalized->data(), star);
+  const std::string_view suffix(normalized->data() + star + 1,
+                                normalized->size() - star - 1);
   return filename.size() >= prefix.size() + suffix.size() &&
-         filename.starts_with(prefix) && filename.ends_with(suffix);
+         asciiCaseEqual(filename.substr(0, prefix.size()), prefix) &&
+         asciiCaseEqual(filename.substr(filename.size() - suffix.size()),
+                        suffix);
 }
 
 std::string filenameOf(std::string_view path) {
@@ -730,7 +771,8 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
   std::set<std::string> optionNames;
   std::set<int> optionIds;
   for (const auto &option : header.options) {
-    if (!optionNames.insert(option.name).second || option.choices.empty()) {
+    if (option.name.empty() || !optionNames.insert(option.name).second ||
+        option.choices.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
                      "Lua skin options are ambiguous or empty"));
@@ -769,7 +811,8 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
   std::set<std::string> fileNames;
   std::vector<std::string> patterns;
   for (const auto &file : header.files) {
-    if (!fileNames.insert(file.name).second || !validPattern(file.pattern)) {
+    if (file.name.empty() || !fileNames.insert(file.name).second ||
+        !validPattern(file.pattern)) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
                      "Lua skin file declaration is invalid or duplicated"));
@@ -789,7 +832,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
     const std::string directory =
         slash == std::string::npos ? "." : file.pattern.substr(0, slash);
     auto listed = fileSystem.list(
-        directory, "", LuaSkinTableDecoderPolicy::maxOptionChoices + 1);
+        directory, "", static_cast<std::size_t>(SkinPackagePolicy::maxFiles));
     if (listed.failure) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
@@ -846,7 +889,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
   std::set<std::string> offsetNames;
   std::set<int> offsetIds;
   for (const auto &offset : header.offsets) {
-    if (!offsetNames.insert(offset.name).second ||
+    if (offset.name.empty() || !offsetNames.insert(offset.name).second ||
         !offsetIds.insert(offset.id).second) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
