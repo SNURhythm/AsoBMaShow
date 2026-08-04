@@ -123,6 +123,33 @@ the physical run is recorded.
 
 Task 1 permits `pending`. Final acceptance permits only `pass`.
 
+### External physical-evidence metadata
+
+The committed contract's `physicalEvidence` record intentionally remains
+`pending` until a real device run. Its only external input is the bounded,
+metadata-only `acceptance-evidence.json` directly beneath an access-controlled
+evidence root outside this repository. The record binds an opaque local record
+ID, completed redaction status, retention-until date, and an opaque
+deletion-procedure identifier with no path syntax.
+For each of the six layouts, it stores only an opaque evidence ID, SHA-256,
+pixel dimensions, and captured timestamp; no screenshot path or image bytes is
+read or copied by the verifier. `scripts/run_skin_acceptance.py validate`
+checks the clone-independent schema and payload boundary without a device.
+`verify` additionally requires every status to be `pass`, the expected clean
+measurement commit, matching external metadata, and an evidence root that is
+not contained by the repository. The external JSON has a fixed top-level
+schema: completion IDs, six screenshot metadata records, all three complete
+180-second repetitions for every frozen scenario/layout after its 30-second
+warm-up, the bounded per-run telemetry/CPU/missed-presentation/memory/render-I/O
+facts, a baseline plus exactly ten post-destruction resource samples, and the
+single frozen negative-sandbox result. It carries no provenance URL, host path,
+account, device name, UDID, image payload, or unrecognized field. Each run is
+bound to the manifest's chart/autoplay, activation/configuration, and expected
+guard-vector digests; the verifier rejects overflows, incomplete/mismatched
+samples, nonzero passing render-I/O counters, threshold violations, resource
+growth, or a negative result that differs from its exact diagnostic, action,
+counter, or equal-overlay-digest contract.
+
 ## Audited compatibility decision and remaining work
 
 The selected 7-key entry's loaded closure critically imports Beatoraja's

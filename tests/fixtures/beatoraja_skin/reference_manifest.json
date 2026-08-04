@@ -203,6 +203,15 @@
         "sourceClean": null
       }
     },
+    "physicalEvidence": {
+      "accessControlledLocalEvidenceId": null,
+      "deletionProcedure": null,
+      "metadataFile": "acceptance-evidence.json",
+      "recordId": null,
+      "redactionStatus": "pending",
+      "retentionUntil": null,
+      "status": "pending"
+    },
     "negativeScenarios": [
       {
         "auditedGuardConfigurationSha256": "dd6c3fcf4ffdc4e72882e47294a29c2f845c599f624d0948f72988c9be330b74",

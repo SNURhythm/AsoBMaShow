@@ -212,3 +212,15 @@ The manifest retains the selected entry path and official provenance URLs.
 Other external module/resource names are replaced by stable opaque IDs. No
 SCURO source, image, font, audio, video, archive, absolute local path, account
 identifier, device name, or physical screenshot is stored in this repository.
+Physical-iPad acceptance metadata is consequently a bounded external JSON
+record only: screenshot references carry an opaque ID, SHA-256, dimensions,
+and timestamp, never a path or payload. The record must remain outside the
+repository with completed redaction, retention, and an opaque
+deletion-procedure identifier containing no path syntax. Its
+fixed metadata-only schema also binds every frozen scenario/layout/repetition
+run to its chart/autoplay, activation/configuration, and guard-vector digests;
+records trusted 30-second warm-up plus 180-second measurement timestamps and
+the bounded telemetry thresholds; contains a baseline and exactly ten
+post-destruction resource samples; and records the one frozen sandbox-negative
+operation. No URL, file URI/path, account/device identifier, UDID, screenshot
+payload, or unrecognized field is permitted in that physical-evidence record.
