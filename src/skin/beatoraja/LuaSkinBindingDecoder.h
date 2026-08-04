@@ -37,32 +37,56 @@ struct SkinBuiltinBindingCatalogEntry {
   SkinBuiltinPropertySelector selector;
 };
 
+// Some audited factories have a contiguous numeric selector contract. Ranges
+// keep those contracts finite and typed without materializing billions of
+// catalog entries. Empty/default catalog views remain exact-entry-only.
+struct SkinBuiltinBindingCatalogRange {
+  SkinBindingType type;
+  int first = 0;
+  int last = -1;
+};
+
 class SkinBuiltinBindingCatalogView final {
 public:
   SkinBuiltinBindingCatalogView() noexcept = default;
   explicit SkinBuiltinBindingCatalogView(
-      std::span<const SkinBuiltinBindingCatalogEntry> entries) noexcept
-      : entries_(entries) {}
+      std::span<const SkinBuiltinBindingCatalogEntry> entries,
+      std::span<const SkinBuiltinBindingCatalogRange> ranges = {}) noexcept
+      : entries_(entries), ranges_(ranges) {}
 
   [[nodiscard]] bool
   contains(SkinBindingType type,
            const SkinBuiltinPropertySelector &selector) const noexcept {
     for (const auto &entry : entries_) {
-      const bool sameDomain =
-          (type.kind != SkinBindingKind::IntegerProperty ||
-           type.integerDomain == entry.type.integerDomain) &&
-          (type.kind != SkinBindingKind::FloatProperty ||
-           type.floatDomain == entry.type.floatDomain);
-      if (type.kind == entry.type.kind && sameDomain &&
+      if (sameType(type, entry.type) &&
           entry.selector.value == selector.value) {
         return true;
+      }
+    }
+    const auto *numeric = std::get_if<int>(&selector.value);
+    if (numeric != nullptr) {
+      for (const auto &range : ranges_) {
+        if (sameType(type, range.type) && *numeric >= range.first &&
+            *numeric <= range.last) {
+          return true;
+        }
       }
     }
     return false;
   }
 
 private:
+  [[nodiscard]] static bool sameType(SkinBindingType left,
+                                     SkinBindingType right) noexcept {
+    return left.kind == right.kind &&
+           (left.kind != SkinBindingKind::IntegerProperty ||
+            left.integerDomain == right.integerDomain) &&
+           (left.kind != SkinBindingKind::FloatProperty ||
+            left.floatDomain == right.floatDomain);
+  }
+
   std::span<const SkinBuiltinBindingCatalogEntry> entries_;
+  std::span<const SkinBuiltinBindingCatalogRange> ranges_;
 };
 
 struct SkinBindingCatalogView {
