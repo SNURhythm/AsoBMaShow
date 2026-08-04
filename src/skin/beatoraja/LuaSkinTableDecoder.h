@@ -1,0 +1,37 @@
+#pragma once
+
+#include "BeatorajaSkinModel.h"
+
+#include <cstddef>
+
+namespace skin {
+
+class LuaSkinFileSystem;
+class LuaValueHandle;
+
+struct LuaSkinTableDecoderPolicy {
+  static constexpr std::size_t maxDepth = 64;
+  static constexpr std::size_t maxEntries = 200'000;
+  static constexpr std::size_t maxDecodedObjects = 8'192;
+  static constexpr std::size_t maxCopiedTextBytes = 8 * 1024 * 1024;
+  static constexpr std::size_t maxCategories = 256;
+  static constexpr std::size_t maxOptions = 256;
+  static constexpr std::size_t maxFiles = 256;
+  static constexpr std::size_t maxOffsets = 256;
+  static constexpr std::size_t maxCategoryItems = 256;
+  static constexpr std::size_t maxOptionChoices = 256;
+  static constexpr std::size_t maxHeaderTextBytes = 1'024;
+  static constexpr int maxAuthoredDimension = 8'192;
+};
+
+class LuaSkinTableDecoder final {
+public:
+  HeaderDecodeResult decodeHeader(const LuaValueHandle &) const;
+  BeatorajaSkinModelDecodeResult decodeGameplay(const LuaValueHandle &) const;
+};
+
+ConfigurationReconcileResult
+reconcileSkinConfiguration(const BeatorajaSkinHeader &,
+                           const EntryProfileSettings *, LuaSkinFileSystem &);
+
+} // namespace skin

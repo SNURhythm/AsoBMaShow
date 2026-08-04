@@ -15,6 +15,12 @@ struct ConfiguredOption {
   int value = 0;
 };
 
+struct ConfiguredFile {
+  std::string name;
+  std::string pattern;
+  std::string selectedValue;
+};
+
 using OffsetPermissionMask = std::uint8_t;
 inline constexpr OffsetPermissionMask kOffsetPermissionX = 1U << 0U;
 inline constexpr OffsetPermissionMask kOffsetPermissionY = 1U << 1U;
@@ -27,11 +33,15 @@ struct BeatorajaSkinConfiguration {
   std::vector<ConfiguredOption> orderedOptions;
   std::map<std::string, int> options;
   std::set<int> enabledOptionIds;
+  std::vector<ConfiguredFile> orderedFiles;
   std::map<std::string, std::string> filePaths;
   std::map<std::string, ConfigOffset> offsets;
   std::map<std::string, OffsetPermissionMask> offsetPermissions;
   std::map<int, ConfigOffset> offsetsById;
   std::string lowercaseSha256;
 };
+
+[[nodiscard]] std::string
+skinConfigurationDigest(const BeatorajaSkinConfiguration &configuration);
 
 } // namespace skin

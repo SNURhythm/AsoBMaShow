@@ -15,10 +15,13 @@
 #include <string_view>
 #include <variant>
 
+struct lua_State;
+
 namespace skin {
 
 class LuaSkinFileSystem;
 class LuaSkinRuntime;
+class LuaSkinTableDecoder;
 
 enum class LuaRuntimePurpose : std::uint8_t {
   Catalog,
@@ -99,10 +102,15 @@ public:
   lookupCallbackNamed(std::string_view name) const;
 
 private:
+  using ProtectedValueOperation = void (*)(lua_State *, int, void *) noexcept;
+  [[nodiscard]] std::optional<SkinDiagnostic>
+  withValueProtected(void *, ProtectedValueOperation) const;
+
   struct Impl;
   explicit LuaValueHandle(std::unique_ptr<Impl>) noexcept;
   std::unique_ptr<Impl> impl_;
   friend class LuaSkinRuntime;
+  friend class LuaSkinTableDecoder;
 };
 
 struct LuaRuntimeCreateResult {

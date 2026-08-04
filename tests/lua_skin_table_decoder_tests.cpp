@@ -91,7 +91,7 @@ return {
   filepath = {{category = "Play", name = "Background",
                path = "images/*.png", def = "bg.png"}},
   offset = {{category = "Play", name = "Authored offset", id = 120,
-             x = true, y = false, w = true, h = false, r = true, a = false}},
+             x = 0, y = false, w = true, h = false, r = true, a = false}},
   unknown = {ignored = true}
 }
 )lua");
@@ -107,6 +107,22 @@ return {type=0, property={["1"]={name="A",item={{name="A",op=1}},def="A"}}}
 )lua");
     writeText(source / "skin/aliases.luaskin", R"lua(
 return {type=0, width=999, height=888, options={{name="ignored"}}}
+)lua");
+    writeText(source / "skin/other-type.luaskin", R"lua(
+return {type=5, name="catalog header", offset={{name="Authored",id=100,x=true}}}
+)lua");
+    writeText(source / "skin/fractional.luaskin", R"lua(
+return {type=0.9, w=17.9, h="720.8"}
+)lua");
+    writeText(source / "skin/nonnumeric.luaskin", R"lua(
+return {type="not-a-number"}
+)lua");
+    writeText(source / "skin/unknown-type.luaskin", R"lua(
+return {type=19}
+)lua");
+    writeText(source / "skin/non-table-arrays.luaskin", R"lua(
+return {type=0, category=42, property="none", filepath=false,
+        offset=function() end}
 )lua");
     writeText(source / "skin/duplicates.luaskin", R"lua(
 return {type=0, property={
@@ -140,13 +156,12 @@ return {type=0, property=p}
     if (!prepared) {
       return {};
     }
-    const auto entry = *normalizeEntryPath(
-                            package, "skin/" + std::string(filename))
-                            .entry;
-    auto fileSystem = LuaSkinFileSystem::create(
-        {.revision = prepared->readView(),
-         .entry = entry,
-         .storageRoots = roots});
+    const auto entry =
+        *normalizeEntryPath(package, "skin/" + std::string(filename)).entry;
+    auto fileSystem =
+        LuaSkinFileSystem::create({.revision = prepared->readView(),
+                                   .entry = entry,
+                                   .storageRoots = roots});
     expect(fileSystem.fileSystem != nullptr, "decoder filesystem creates");
     if (!fileSystem.fileSystem) {
       return {};
@@ -171,12 +186,11 @@ return {type=0, property=p}
     if (!prepared) {
       return {};
     }
-    const auto entry = *normalizeEntryPath(
-                            package, "skin/" + std::string(filename))
-                            .entry;
+    const auto entry =
+        *normalizeEntryPath(package, "skin/" + std::string(filename)).entry;
     return LuaSkinFileSystem::create({.revision = prepared->readView(),
-                                     .entry = entry,
-                                     .storageRoots = roots})
+                                      .entry = entry,
+                                      .storageRoots = roots})
         .fileSystem;
   }
 
@@ -205,8 +219,7 @@ void testTypedHeaderPreservesAuthoredNumericOrderAndCoercions() {
          "root numeric fields use traced integer coercions");
   expect(header.name == "42" && header.author == "fixture",
          "root text fields use traced string coercions");
-  expect(header.options.size() == 2 &&
-             header.options[0].name == "Lane type" &&
+  expect(header.options.size() == 2 && header.options[0].name == "Lane type" &&
              header.options[1].name == "Gauge",
          "authored arrays preserve numeric 1..n order, not insertion order");
   expect(header.options[0].choices.size() == 2 &&
@@ -215,20 +228,17 @@ void testTypedHeaderPreservesAuthoredNumericOrderAndCoercions() {
   expect(header.offsets.size() == 5 &&
              header.offsets[0].name == "Authored offset" &&
              header.offsets[0].permissions ==
-                 (kOffsetPermissionX | kOffsetPermissionW |
-                  kOffsetPermissionR),
+                 (kOffsetPermissionX | kOffsetPermissionW | kOffsetPermissionR),
          "authored offset and permission mask are preserved");
-  expect(header.offsets[1].name == "All offset(%)" &&
-             header.offsets[1].id == 10 &&
-             header.offsets[1].permissions == 0x0f &&
-             header.offsets[2].name == "Notes offset" &&
-             header.offsets[2].id == 30 &&
-             header.offsets[2].permissions == kOffsetPermissionH &&
-             header.offsets[3].id == 32 &&
-             header.offsets[3].permissions == 0x2f &&
-             header.offsets[4].id == 33 &&
-             header.offsets[4].permissions == 0x2f,
-         "7-key headers append the four exact Beatoraja offsets");
+  expect(
+      header.offsets[1].name == "All offset(%)" && header.offsets[1].id == 10 &&
+          header.offsets[1].permissions == 0x0f &&
+          header.offsets[2].name == "Notes offset" &&
+          header.offsets[2].id == 30 &&
+          header.offsets[2].permissions == kOffsetPermissionH &&
+          header.offsets[3].id == 32 && header.offsets[3].permissions == 0x2f &&
+          header.offsets[4].id == 33 && header.offsets[4].permissions == 0x2f,
+      "7-key headers append the four exact Beatoraja offsets");
 }
 
 void testStrictArraysAndHeaderBoundsFailClosed() {
@@ -243,6 +253,27 @@ void testStrictArraysAndHeaderBoundsFailClosed() {
   expect(aliases.header && aliases.header->width == 1280 &&
              aliases.header->height == 720 && aliases.header->options.empty(),
          "unknown aliases are ignored and canonical field defaults remain");
+  const auto otherType = fixture().decode("other-type.luaskin");
+  expect(otherType.header && otherType.header->type == 5 &&
+             otherType.header->offsets.size() == 1 &&
+             otherType.header->offsets.front().name == "Authored",
+         "catalog headers preserve non-7K type without synthesized offsets");
+  const auto fractional = fixture().decode("fractional.luaskin");
+  expect(fractional.header && fractional.header->type == 0 &&
+             fractional.header->width == 17 && fractional.header->height == 720,
+         "integer conversion truncates numeric values like pinned LuaValue");
+  const auto nonnumeric = fixture().decode("nonnumeric.luaskin");
+  expect(!nonnumeric.header && !nonnumeric.diagnostics.empty(),
+         "nonnumeric strings do not silently coerce to zero");
+  const auto unknownType = fixture().decode("unknown-type.luaskin");
+  expect(!unknownType.header && !unknownType.diagnostics.empty(),
+         "unknown Beatoraja skin type IDs are rejected");
+  const auto nonTables = fixture().decode("non-table-arrays.luaskin");
+  expect(nonTables.header && nonTables.header->categories.empty() &&
+             nonTables.header->options.empty() &&
+             nonTables.header->files.empty() &&
+             nonTables.header->offsets.size() == 4,
+         "present non-table authored vectors convert to empty arrays");
 }
 
 void testSemanticAndSynthesizedCollisionsFailClosed() {
@@ -279,14 +310,15 @@ void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
     return;
   }
   const auto &configuration = *reconciled.configuration;
-  expect(reconciled.reconciledSettings.options ==
-             std::map<std::string, int>{{"Gauge", 11}, {"Lane type", 928}} &&
-             configuration.orderedOptions.size() == 2 &&
-             configuration.orderedOptions[0].value == 928 &&
-             configuration.enabledOptionIds == std::set<int>{11, 928},
-         "declared saved option survives and invalid/removed values reset");
+  expect(
+      reconciled.reconciledSettings.options ==
+              std::map<std::string, int>{{"Gauge", 11}, {"Lane type", 928}} &&
+          configuration.orderedOptions.size() == 2 &&
+          configuration.orderedOptions[0].value == 928 &&
+          configuration.enabledOptionIds == std::set<int>{11, 928},
+      "declared saved option survives and invalid/removed values reset");
   expect(reconciled.reconciledSettings.filePaths ==
-             std::map<std::string, std::string>{{"Background", "bg.png"}} &&
+                 std::map<std::string, std::string>{{"Background", "bg.png"}} &&
              configuration.filePaths.at("Background") == "bg.png",
          "invalid file choice resets to the deterministic declared default");
   expect(reconciled.reconciledSettings.viewport.mode == ViewportMode::Stretch,

@@ -445,6 +445,23 @@ struct CallbackLookupRequest {
   int reference = LUA_NOREF;
 };
 
+struct ProtectedValueRequest {
+  int valueReference = LUA_NOREF;
+  void *context = nullptr;
+  void (*operation)(lua_State *, int, void *) noexcept = nullptr;
+};
+
+int accessProtectedValue(lua_State *state) {
+  auto *request =
+      static_cast<ProtectedValueRequest *>(lua_touserdata(state, 1));
+  if (request == nullptr || request->operation == nullptr) {
+    return 0;
+  }
+  lua_rawgeti(state, LUA_REGISTRYINDEX, request->valueReference);
+  request->operation(state, lua_gettop(state), request->context);
+  return 0;
+}
+
 int lookupCallbackArgument(lua_State *state) {
   auto *request = static_cast<CallbackLookupRequest *>(lua_touserdata(state, 1));
   if (request == nullptr || request->shared == nullptr) {
@@ -643,6 +660,29 @@ LuaValueHandle::LuaValueHandle(LuaValueHandle &&) noexcept = default;
 LuaValueHandle &LuaValueHandle::operator=(LuaValueHandle &&) noexcept = default;
 
 LuaValueHandle::~LuaValueHandle() = default;
+
+std::optional<SkinDiagnostic>
+LuaValueHandle::withValueProtected(void *context,
+                                   ProtectedValueOperation operation) const {
+  if (!impl_ || !impl_->shared || impl_->shared->state == nullptr ||
+      impl_->reference == LUA_NOREF || operation == nullptr) {
+    return makeDiagnostic("skin_lua_value_invalid",
+                          "Lua value handle is no longer valid");
+  }
+  lua_State *state = impl_->shared->state;
+  const int savedTop = lua_gettop(state);
+  ProtectedValueRequest request{.valueReference = impl_->reference,
+                                .context = context,
+                                .operation = operation};
+  const int status = lua_cpcall(state, accessProtectedValue, &request);
+  if (status != 0) {
+    auto failure = luaFailure(state, status, *impl_->shared);
+    lua_settop(state, savedTop);
+    return failure;
+  }
+  lua_settop(state, savedTop);
+  return std::nullopt;
+}
 
 std::optional<LuaCallbackId>
 LuaValueHandle::callbackNamed(std::string_view name) const {

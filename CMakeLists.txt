@@ -610,6 +610,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
+            src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/package/SkinAliasDetector.cpp
             src/skin/package/SkinPathPolicy.cpp

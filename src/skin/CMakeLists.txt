@@ -19,6 +19,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         LuaGameplaySkinFeatureEnabled.cpp
         beatoraja/LuaSkinHostModules.cpp
         beatoraja/LuaSkinRuntime.cpp
+        beatoraja/LuaSkinTableDecoder.cpp
     )
 else()
     target_sources(main PRIVATE LuaGameplaySkinFeatureUnavailable.cpp)
