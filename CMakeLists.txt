@@ -569,9 +569,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             CXX_STANDARD_REQUIRED YES
             CXX_EXTENSIONS NO
         )
-    endif()
 
-    if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         add_executable(skin_text_graph_normalization_tests
             tests/skin_text_graph_normalization_tests.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
@@ -580,6 +578,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         set_target_properties(skin_text_graph_normalization_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+
+        add_executable(numeric_glyph_atlas_tests
+            tests/numeric_glyph_atlas_tests.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
+        )
+        target_include_directories(numeric_glyph_atlas_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(numeric_glyph_atlas_tests PROPERTIES
             CXX_STANDARD 20
             CXX_STANDARD_REQUIRED YES
             CXX_EXTENSIONS NO
@@ -4719,6 +4730,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET skin_text_graph_normalization_tests)
         asobmashow_register_test(skin_text_graph_normalization_tests)
+    endif()
+    if (TARGET numeric_glyph_atlas_tests)
+        asobmashow_register_test(numeric_glyph_atlas_tests)
     endif()
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10

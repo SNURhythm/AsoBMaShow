@@ -19,6 +19,7 @@ RUNTIME_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinRuntime.cpp"
 HOST_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinHostModules.cpp"
 DECODER_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinTableDecoder.cpp"
 VALIDATOR_SOURCE = ROOT / "src/skin/beatoraja/SkinModelValidator.cpp"
+NUMERIC_GLYPH_ATLAS_SOURCE = ROOT / "src/skin/beatoraja/NumericGlyphAtlas.cpp"
 GAUGE_NODE_EXPANSION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinGaugeNodeExpansion.cpp"
 )
@@ -130,6 +131,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/LuaSkinRuntime.cpp", enabled_block)
         self.assertIn("beatoraja/LuaSkinHostModules.cpp", enabled_block)
         self.assertIn("beatoraja/LuaSkinTableDecoder.cpp", enabled_block)
+        self.assertIn("beatoraja/NumericGlyphAtlas.cpp", enabled_block)
         self.assertIn("beatoraja/SkinModelValidator.cpp", enabled_block)
         self.assertIn("beatoraja/SkinGaugeNodeExpansion.cpp", enabled_block)
         self.assertIn("beatoraja/SkinTextGraphNormalization.cpp", enabled_block)
@@ -139,6 +141,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
             RUNTIME_SOURCE,
             HOST_SOURCE,
             DECODER_SOURCE,
+            NUMERIC_GLYPH_ATLAS_SOURCE,
             VALIDATOR_SOURCE,
             GAUGE_NODE_EXPANSION_SOURCE,
             TEXT_GRAPH_NORMALIZATION_SOURCE,
@@ -157,6 +160,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                 RUNTIME_SOURCE,
                 HOST_SOURCE,
                 DECODER_SOURCE,
+                NUMERIC_GLYPH_ATLAS_SOURCE,
                 VALIDATOR_SOURCE,
                 GAUGE_NODE_EXPANSION_SOURCE,
                 TEXT_GRAPH_NORMALIZATION_SOURCE,

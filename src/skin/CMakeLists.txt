@@ -20,6 +20,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/LuaSkinHostModules.cpp
         beatoraja/LuaSkinRuntime.cpp
         beatoraja/LuaSkinTableDecoder.cpp
+        beatoraja/NumericGlyphAtlas.cpp
         beatoraja/SkinGaugeNodeExpansion.cpp
         beatoraja/SkinTextGraphNormalization.cpp
         beatoraja/SkinModelValidator.cpp
