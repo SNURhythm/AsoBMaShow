@@ -51,39 +51,59 @@ bool hasDomain(const std::map<std::uint32_t, Domain> &domains, std::uint32_t id,
 }
 
 bool validSprite(const SkinSpriteFrames &sprite,
-                 const std::set<SkinResourceId> &resources,
+                 const std::set<SkinResourceId> &imageResources,
                  const std::set<std::uint32_t> &timers) {
-  return sprite.resource != 0 && resources.contains(sprite.resource) &&
+  return sprite.resource != 0 && imageResources.contains(sprite.resource) &&
          !sprite.frames.empty() &&
          (!sprite.timer || timers.contains(sprite.timer->value));
 }
 
 bool validDigits(const SkinDigitSpriteSet &digits, NumericGlyphAtlasKind kind,
-                 const std::set<SkinResourceId> &resources,
+                 const std::set<SkinResourceId> &imageResources,
                  const std::set<std::uint32_t> &timers) {
-  return validSprite(digits.positive, resources, timers) &&
-         (!digits.negative || validSprite(*digits.negative, resources, timers)) &&
+  return validSprite(digits.positive, imageResources, timers) &&
+         (!digits.negative ||
+          validSprite(*digits.negative, imageResources, timers)) &&
          validateNumericGlyphAtlas(digits, kind) ==
              NumericGlyphAtlasError::None;
 }
 
 bool validNoteVisual(const SkinNoteVisual &visual,
-                     const std::set<SkinResourceId> &resources,
+                     const std::set<SkinResourceId> &imageResources,
                      const std::set<std::uint32_t> &timers) {
   if (const auto *sprite = std::get_if<SkinSpriteFrames>(&visual)) {
-    return validSprite(*sprite, resources, timers);
+    return validSprite(*sprite, imageResources, timers);
   }
   return true;
 }
 
 struct ValidationContext {
-  const std::set<SkinResourceId> &resources;
+  const std::set<SkinResourceId> &imageResources;
+  const std::set<SkinResourceId> &fontResources;
   const std::set<SkinObjectId> &objects;
+  const std::set<std::uint32_t> &booleans;
   const std::map<std::uint32_t, SkinIntegerPropertyDomain> &integers;
   const std::map<std::uint32_t, SkinFloatPropertyDomain> &floats;
   const std::set<std::uint32_t> &strings;
   const std::set<std::uint32_t> &timers;
+  const std::set<std::uint32_t> &floatWriters;
+  const std::set<std::uint32_t> &stringWriters;
+  const std::set<std::uint32_t> &events;
 };
+
+bool validDestination(const SkinDestinationBody &destination,
+                      const ValidationContext &context) {
+  if ((destination.timer &&
+       !context.timers.contains(destination.timer->value)) ||
+      (destination.drawCondition &&
+       !context.booleans.contains(destination.drawCondition->value))) {
+    return false;
+  }
+  return std::ranges::all_of(destination.conditions, [&](const auto &entry) {
+    const auto *condition = std::get_if<SkinBooleanPropertyId>(&entry);
+    return condition == nullptr || context.booleans.contains(condition->value);
+  });
+}
 
 bool validPayload(const SkinObjectPayload &payload,
                   const ValidationContext &context) {
@@ -95,12 +115,14 @@ bool validPayload(const SkinObjectPayload &payload,
                  std::ranges::all_of(object.orderedStates,
                                      [&](const auto &state) {
                                        return validSprite(state,
-                                                          context.resources,
+                                                          context.imageResources,
                                                           context.timers);
                                      }) &&
                  (!object.stateIndex ||
                   hasDomain(context.integers, object.stateIndex->value,
-                            SkinIntegerPropertyDomain::ImageIndex));
+                            SkinIntegerPropertyDomain::ImageIndex)) &&
+                 (!object.clickEvent ||
+                  context.events.contains(object.clickEvent->value));
         } else if constexpr (std::is_same_v<T, SkinNumberObject>) {
           const NumericGlyphFormat format{
               .integerDigits = object.digitCount,
@@ -108,7 +130,7 @@ bool validPayload(const SkinObjectPayload &payload,
               .perDigitOffsets = object.perDigitOffsets,
           };
           return validDigits(object.digits, NumericGlyphAtlasKind::Number,
-                             context.resources,
+                             context.imageResources,
                              context.timers) &&
                  validateNumericGlyphFormat(
                      format, NumericGlyphAtlasKind::Number,
@@ -126,7 +148,7 @@ bool validPayload(const SkinObjectPayload &payload,
               .perDigitOffsets = object.perDigitOffsets,
           };
           return validDigits(object.digits, NumericGlyphAtlasKind::Float,
-                             context.resources,
+                             context.imageResources,
                              context.timers) &&
                  validateNumericGlyphFormat(
                      format, NumericGlyphAtlasKind::Float,
@@ -135,9 +157,12 @@ bool validPayload(const SkinObjectPayload &payload,
                  hasDomain(context.floats, object.value.value,
                            SkinFloatPropertyDomain::FloatValue);
         } else if constexpr (std::is_same_v<T, SkinTextObject>) {
-          return object.font != 0 && context.resources.contains(object.font) &&
+          return object.font != 0 &&
+                 context.fontResources.contains(object.font) &&
                  (!object.value ||
-                  context.strings.contains(object.value->value));
+                  context.strings.contains(object.value->value)) &&
+                 (!object.writer ||
+                  context.stringWriters.contains(object.writer->value));
         } else if constexpr (std::is_same_v<T, SkinSliderObject>) {
           const bool valueValid = std::visit(
               [&](const auto &source) {
@@ -152,8 +177,11 @@ bool validPayload(const SkinObjectPayload &payload,
                 }
               },
               object.value);
-          return validSprite(object.knob, context.resources, context.timers) &&
-                 object.direction <= 3 && valueValid;
+          return validSprite(object.knob, context.imageResources,
+                             context.timers) &&
+                 object.direction <= 3 && valueValid &&
+                 (!object.writer ||
+                  context.floatWriters.contains(object.writer->value));
         } else if constexpr (std::is_same_v<T, SkinGraphObject>) {
           const bool valueValid = std::visit(
               [&](const auto &source) {
@@ -168,13 +196,14 @@ bool validPayload(const SkinObjectPayload &payload,
                 }
               },
               object.value);
-          return validSprite(object.fill, context.resources, context.timers) &&
-                 valueValid;
+          return validSprite(object.fill, context.imageResources,
+                             context.timers) &&
+                 object.direction >= 0 && object.direction <= 1 && valueValid;
         } else if constexpr (std::is_same_v<T, SkinGaugeObject>) {
-          return !object.orderedNodes.empty() &&
+          return object.orderedNodes.size() == 36 &&
                  std::ranges::all_of(
                      object.orderedNodes, [&](const auto &node) {
-                       return validSprite(node, context.resources,
+                       return validSprite(node, context.imageResources,
                                           context.timers);
                      });
         } else if constexpr (std::is_same_v<T, SkinNoteObject>) {
@@ -184,19 +213,28 @@ bool validPayload(const SkinObjectPayload &payload,
           return std::ranges::all_of(object.lanes, [&](const auto &lane) {
             const auto normal = lane.visuals.find(SkinNoteVisualKind::Normal);
             return normal != lane.visuals.end() &&
-                   validNoteVisual(normal->second, context.resources,
+                   validNoteVisual(normal->second, context.imageResources,
                                    context.timers) &&
                    std::ranges::all_of(lane.visuals, [&](const auto &entry) {
-                     return validNoteVisual(entry.second, context.resources,
+                     return validNoteVisual(entry.second,
+                                            context.imageResources,
                                             context.timers);
                    });
-          });
+          }) &&
+                 std::ranges::all_of(object.lines, [&](const auto &line) {
+                   return validSprite(line.sprite, context.imageResources,
+                                      context.timers) &&
+                          validDestination(line.destination, context);
+                 });
         } else if constexpr (std::is_same_v<T, SkinCoverObject>) {
-          return validSprite(object.sprite, context.resources, context.timers);
+          return validSprite(object.sprite, context.imageResources,
+                             context.timers);
         } else if constexpr (std::is_same_v<T, SkinJudgeObject>) {
           return std::ranges::all_of(object.grades, [&](const auto &grade) {
             const auto nestedValid = [&](const auto &nested) {
-              return !nested || context.objects.contains(nested->object);
+              return !nested ||
+                     (context.objects.contains(nested->object) &&
+                      validDestination(nested->destination, context));
             };
             return nestedValid(grade.image) && nestedValid(grade.detailNumber);
           });
@@ -256,6 +294,8 @@ SkinModelValidator::validate(BeatorajaSkinModel model) const {
   }
 
   std::set<SkinResourceId> resourceIds;
+  std::set<SkinResourceId> imageResourceIds;
+  std::set<SkinResourceId> fontResourceIds;
   std::set<SkinObjectId> objectIds;
   std::map<std::string, SkinResourceId, std::less<>> resourceNames;
   std::map<std::string, SkinObjectId, std::less<>> objectNames;
@@ -263,10 +303,18 @@ SkinModelValidator::validate(BeatorajaSkinModel model) const {
   for (const auto &definition : model.resources) {
     const bool valid = std::visit(
         [&](const auto &resource) {
-          return resource.id != 0 && !resource.authoredName.empty() &&
-                 resourceIds.insert(resource.id).second &&
-                 resourceNames.emplace(resource.authoredName, resource.id)
-                     .second;
+          using T = std::decay_t<decltype(resource)>;
+          if (resource.id == 0 || resource.authoredName.empty() ||
+              !resourceIds.insert(resource.id).second ||
+              !resourceNames.emplace(resource.authoredName, resource.id)
+                   .second) {
+            return false;
+          }
+          if constexpr (std::is_same_v<T, SkinImageResource>) {
+            return imageResourceIds.insert(resource.id).second;
+          } else {
+            return fontResourceIds.insert(resource.id).second;
+          }
         },
         definition);
     if (!valid) {
@@ -296,14 +344,20 @@ SkinModelValidator::validate(BeatorajaSkinModel model) const {
   const auto floats =
       bindingDomains<SkinFloatPropertyBinding, SkinFloatPropertyDomain>(
           model.floatProperties);
-  const ValidationContext context{.resources = resourceIds,
+  const ValidationContext context{.imageResources = imageResourceIds,
+                                  .fontResources = fontResourceIds,
                                   .objects = objectIds,
+                                  .booleans = booleanIds,
                                   .integers = integers,
                                   .floats = floats,
                                   .strings = stringIds,
-                                  .timers = timerIds};
+                                  .timers = timerIds,
+                                  .floatWriters = floatWriterIds,
+                                  .stringWriters = stringWriterIds,
+                                  .events = eventIds};
 
   std::vector<SkinObjectId> disabled;
+  std::set<SkinObjectId> disabledIds;
   for (const auto &object : model.objects) {
     if (validPayload(object.payload, context)) {
       continue;
@@ -316,6 +370,7 @@ SkinModelValidator::validate(BeatorajaSkinModel model) const {
       return result;
     }
     disabled.push_back(object.id);
+    disabledIds.insert(object.id);
     result.diagnostics.push_back(validationDiagnostic(
         "skin_lua_model_optional_object_disabled",
         "Lua skin optional object has an invalid dependency"));
@@ -329,6 +384,26 @@ SkinModelValidator::validate(BeatorajaSkinModel model) const {
           "Lua skin destination references an unknown object"));
       return result;
     }
+    if (validDestination(destination.presentation, context) ||
+        disabledIds.contains(destination.object)) {
+      continue;
+    }
+    const auto object = std::ranges::find_if(
+        model.objects, [&](const auto &candidate) {
+          return candidate.id == destination.object;
+        });
+    if (object != model.objects.end() && object->critical) {
+      result.criticalFailure = true;
+      result.diagnostics.push_back(validationDiagnostic(
+          "skin_lua_model_critical_dependency_invalid",
+          "Lua skin critical object has an invalid destination dependency"));
+      return result;
+    }
+    disabled.push_back(destination.object);
+    disabledIds.insert(destination.object);
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_optional_object_disabled",
+        "Lua skin optional object has an invalid destination dependency"));
   }
 
   result.model.emplace(ValidatedBeatorajaSkinModel{
