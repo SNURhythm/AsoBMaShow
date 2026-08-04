@@ -128,6 +128,35 @@ EXECUTABLE_NAME="$(plist_raw CFBundleExecutable)"
 MAIN_EXECUTABLE="${APP_PATH}/${EXECUTABLE_NAME}"
 [ -f "${MAIN_EXECUTABLE}" ] || fail "main executable is missing"
 
+BUILD_COMMIT="$(plist_raw AsoBMaShowBuildCommit)"
+BUILD_CONFIGURATION="$(plist_raw AsoBMaShowBuildConfiguration)"
+BUILD_SOURCE_CLEAN="$(plist_raw AsoBMaShowSourceClean)"
+[[ "${BUILD_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || \
+  fail "build commit must be a lowercase 40-character commit"
+[[ "${BUILD_CONFIGURATION}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || \
+  fail "build configuration is missing or invalid"
+[[ "${BUILD_SOURCE_CLEAN}" =~ ^[01]$ ]] || \
+  fail "source-clean identity must be 0 or 1"
+
+EXPECTED_COMMIT="${ASOBMASHOW_EXPECTED_BUILD_COMMIT:-}"
+EXPECTED_CONFIGURATION="${ASOBMASHOW_EXPECTED_BUILD_CONFIGURATION:-}"
+EXPECTED_SOURCE_CLEAN="${ASOBMASHOW_EXPECTED_SOURCE_CLEAN:-}"
+EXPECTED_COUNT=0
+[ -n "${EXPECTED_COMMIT}" ] && EXPECTED_COUNT=$((EXPECTED_COUNT + 1))
+[ -n "${EXPECTED_CONFIGURATION}" ] && EXPECTED_COUNT=$((EXPECTED_COUNT + 1))
+[ -n "${EXPECTED_SOURCE_CLEAN}" ] && EXPECTED_COUNT=$((EXPECTED_COUNT + 1))
+if [ "${EXPECTED_COUNT}" -ne 0 ] && [ "${EXPECTED_COUNT}" -ne 3 ]; then
+  fail "expected build identity environment must be supplied as one complete set"
+fi
+if [ "${EXPECTED_COUNT}" -eq 3 ]; then
+  [ "${BUILD_COMMIT}" = "${EXPECTED_COMMIT}" ] || \
+    fail "build commit does not match expected environment"
+  [ "${BUILD_CONFIGURATION}" = "${EXPECTED_CONFIGURATION}" ] || \
+    fail "build configuration does not match expected environment"
+  [ "${BUILD_SOURCE_CLEAN}" = "${EXPECTED_SOURCE_CLEAN}" ] || \
+    fail "source-clean identity does not match expected environment"
+fi
+
 for shader in skin_quad skin_yuvrgb; do
   for stage in vs fs; do
     SKIN_SHADER="${APP_PATH}/shaders/metal/${stage}_${shader}.bin"
@@ -156,6 +185,12 @@ BUILD_MIN_OS="$(printf '%s\n' "${LOAD_COMMANDS}" | awk '
 [ "${BUILD_PLATFORM}" = "2" ] || fail "Mach-O SDK platform is not iOS"
 [ "${BUILD_MIN_OS}" = "${EXPECTED_MIN_OS}" ] || \
   fail "Mach-O minimum OS must be ${EXPECTED_MIN_OS}, found ${BUILD_MIN_OS:-missing}"
+
+COMPILED_IDENTITY="AsoBMaShowBuildIdentityV1|${BUILD_COMMIT}|${BUILD_CONFIGURATION}|${BUILD_SOURCE_CLEAN}"
+if ! LC_ALL=C /usr/bin/strings -a "${MAIN_EXECUTABLE}" | \
+  grep -F -x -- "${COMPILED_IDENTITY}" >/dev/null; then
+  fail "compiled build identity does not match Info.plist"
+fi
 
 LOCAL_RPATH="$(printf '%s\n' "${LOAD_COMMANDS}" | awk '
   $1 == "cmd" && $2 == "LC_RPATH" { active = 1; next }

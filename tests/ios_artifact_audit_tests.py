@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import plistlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -11,6 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "scripts/ios_artifact_audit.sh"
 SKIN_SHADER_AUDIT = ROOT / "scripts/verify_skin_shader_outputs.py"
+BUILD_COMMIT = "1234567890abcdef1234567890abcdef12345678"
+BUILD_CONFIGURATION = "Release"
+BUILD_SOURCE_CLEAN = "1"
 
 
 class SkinShaderOutputVerifierTests(unittest.TestCase):
@@ -179,7 +183,13 @@ class IOSArtifactAuditTests(unittest.TestCase):
         app.mkdir()
         executable = "Fixture"
         source = root / "main.c"
-        source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        source.write_text(
+            'const char buildIdentity[] = '
+            '"AsoBMaShowBuildIdentityV1|'
+            f'{BUILD_COMMIT}|{BUILD_CONFIGURATION}|{BUILD_SOURCE_CLEAN}";\n'
+            "int main(void) { return buildIdentity[0] == 0; }\n",
+            encoding="utf-8",
+        )
         subprocess.run(
             [
                 "xcrun",
@@ -220,6 +230,9 @@ class IOSArtifactAuditTests(unittest.TestCase):
             "UIFileSharingEnabled": True,
             "LSSupportsOpeningDocumentsInPlace": True,
             "UISupportsDocumentBrowser": True,
+            "AsoBMaShowBuildCommit": BUILD_COMMIT,
+            "AsoBMaShowBuildConfiguration": BUILD_CONFIGURATION,
+            "AsoBMaShowSourceClean": BUILD_SOURCE_CLEAN,
         }
         with (app / "Info.plist").open("wb") as handle:
             plistlib.dump(info, handle)
@@ -233,12 +246,45 @@ class IOSArtifactAuditTests(unittest.TestCase):
         return app
 
     def run_audit(self, artifact: Path, *arguments: str):
+        environment = {
+            **os.environ,
+            "ASOBMASHOW_EXPECTED_BUILD_COMMIT": BUILD_COMMIT,
+            "ASOBMASHOW_EXPECTED_BUILD_CONFIGURATION": BUILD_CONFIGURATION,
+            "ASOBMASHOW_EXPECTED_SOURCE_CLEAN": BUILD_SOURCE_CLEAN,
+        }
         return subprocess.run(
             [str(AUDIT), *arguments, str(artifact)],
             cwd=ROOT,
             text=True,
             capture_output=True,
+            env=environment,
         )
+
+    def test_build_identity_must_match_plist_compiled_marker_and_expected_environment(self):
+        cases = (
+            ("AsoBMaShowBuildCommit", "f" * 40, "build commit"),
+            ("AsoBMaShowBuildConfiguration", "Debug", "build configuration"),
+            ("AsoBMaShowSourceClean", "0", "source-clean"),
+        )
+        for key, value, diagnostic in cases:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temp:
+                app = self.make_app(Path(temp))
+                self.mutate_plist(app, key, value)
+                result = self.run_audit(app)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(diagnostic, result.stderr.lower())
+
+        with tempfile.TemporaryDirectory() as temp:
+            app = self.make_app(Path(temp))
+            executable = app / "Fixture"
+            binary = executable.read_bytes().replace(
+                b"AsoBMaShowBuildIdentityV1|", b"AsoBMaShowInvalidIdentityV1|",
+                1,
+            )
+            executable.write_bytes(binary)
+            result = self.run_audit(app)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("compiled build identity", result.stderr.lower())
 
     def mutate_plist(self, app: Path, key: str, value) -> None:
         plist_path = app / "Info.plist"

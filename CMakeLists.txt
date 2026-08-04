@@ -341,6 +341,62 @@ else()
     add_executable(main)
 endif()
 
+# Freeze the source identity into every CMake-built binary at configure time.
+# Dirty or non-Git source trees remain runnable but are ineligible for physical
+# acceptance evidence.
+set(_ASOBMASHOW_BUILD_COMMIT "0000000000000000000000000000000000000000")
+set(_ASOBMASHOW_SOURCE_CLEAN 0)
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                rev-parse --show-toplevel
+        RESULT_VARIABLE _ASOBMASHOW_GIT_ROOT_RESULT
+        OUTPUT_VARIABLE _ASOBMASHOW_GIT_ROOT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    file(REAL_PATH "${CMAKE_SOURCE_DIR}" _ASOBMASHOW_SOURCE_ROOT)
+    if(_ASOBMASHOW_GIT_ROOT_RESULT EQUAL 0)
+        file(REAL_PATH "${_ASOBMASHOW_GIT_ROOT}" _ASOBMASHOW_GIT_ROOT)
+    endif()
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                rev-parse --verify HEAD
+        RESULT_VARIABLE _ASOBMASHOW_GIT_HEAD_RESULT
+        OUTPUT_VARIABLE _ASOBMASHOW_GIT_HEAD
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    string(LENGTH "${_ASOBMASHOW_GIT_HEAD}" _ASOBMASHOW_GIT_HEAD_LENGTH)
+    if(_ASOBMASHOW_GIT_ROOT_RESULT EQUAL 0 AND
+       "${_ASOBMASHOW_GIT_ROOT}" STREQUAL "${_ASOBMASHOW_SOURCE_ROOT}" AND
+       _ASOBMASHOW_GIT_HEAD_RESULT EQUAL 0 AND
+       _ASOBMASHOW_GIT_HEAD_LENGTH EQUAL 40 AND
+       _ASOBMASHOW_GIT_HEAD MATCHES "^[0-9a-f]+$")
+        set(_ASOBMASHOW_BUILD_COMMIT "${_ASOBMASHOW_GIT_HEAD}")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                    status --porcelain --untracked-files=normal
+            RESULT_VARIABLE _ASOBMASHOW_GIT_STATUS_RESULT
+            OUTPUT_VARIABLE _ASOBMASHOW_GIT_STATUS
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(_ASOBMASHOW_GIT_STATUS_RESULT EQUAL 0 AND
+           _ASOBMASHOW_GIT_STATUS STREQUAL "")
+            set(_ASOBMASHOW_SOURCE_CLEAN 1)
+        endif()
+    endif()
+endif()
+add_library(asobmashow_build_identity OBJECT "${SRC_DIR}/BuildIdentity.cpp")
+target_compile_features(asobmashow_build_identity PRIVATE cxx_std_23)
+target_compile_definitions(asobmashow_build_identity PRIVATE
+    ASOBMASHOW_BUILD_COMMIT="${_ASOBMASHOW_BUILD_COMMIT}"
+    ASOBMASHOW_BUILD_CONFIGURATION="$<CONFIG>"
+    ASOBMASHOW_SOURCE_CLEAN=${_ASOBMASHOW_SOURCE_CLEAN}
+)
+target_sources(main PRIVATE $<TARGET_OBJECTS:asobmashow_build_identity>)
 if (ANDROID)
     target_compile_definitions(main PRIVATE PLATFORM_ANDROID=1)
 endif()

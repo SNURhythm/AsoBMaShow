@@ -35,6 +35,9 @@ SKIN_ALIAS_DETECTOR_APPLE = ROOT / "src/skin/package/SkinAliasDetectorApple.mm"
 VCPKG_MANIFEST = ROOT / "vcpkg.json"
 IOS_LIB_SCRIPT = ROOT / "scripts/get_ios_libs.py"
 IOS_UTF8PROC_PREPARE = ROOT / "scripts/ios_utf8proc.py"
+BUILD_IDENTITY_HEADER = ROOT / "src/BuildIdentity.h"
+BUILD_IDENTITY_SOURCE = ROOT / "src/BuildIdentity.cpp"
+SKIN_ACCEPTANCE_INSTALL = ROOT / "scripts/ios_build_install_for_skin_acceptance.sh"
 UTF8PROC_LICENSE = ROOT / "assets/legal/utf8proc.txt"
 UTF8PROC_LICENSE_SHA256 = (
     "3b510150d34f248a221bb88e1d811238d6c6c18b51231822c42974c39bb07256"
@@ -109,6 +112,352 @@ class IOSBuildSetupTests(unittest.TestCase):
         for configuration in target_configurations:
             self.assertIn("IPHONEOS_DEPLOYMENT_TARGET = 14.0;", configuration)
             self.assertIn("MARKETING_VERSION = 0.0.1;", configuration)
+
+    def test_skin_acceptance_build_identity_is_compiled_and_mirrored_to_plist(self):
+        with INFO_PLIST.open("rb") as handle:
+            info = plistlib.load(handle)
+        self.assertEqual("$(ASOBMASHOW_BUILD_COMMIT)", info["AsoBMaShowBuildCommit"])
+        self.assertEqual("$(CONFIGURATION)", info["AsoBMaShowBuildConfiguration"])
+        self.assertEqual("$(ASOBMASHOW_SOURCE_CLEAN)", info["AsoBMaShowSourceClean"])
+
+        target_configurations = [
+            object_block(self.project, configuration_id, "\n\t\t};")
+            for configuration_id in (
+                "B700271D2BF7A8DA000DB8EC",
+                "B700271E2BF7A8DA000DB8EC",
+            )
+        ]
+        for configuration in target_configurations:
+            self.assertIn("ASOBMASHOW_BUILD_COMMIT =", configuration)
+            self.assertIn("ASOBMASHOW_SOURCE_CLEAN = 0;", configuration)
+            self.assertIn(
+                r'ASOBMASHOW_BUILD_COMMIT=\\\"$(ASOBMASHOW_BUILD_COMMIT)\\\"',
+                configuration,
+            )
+            self.assertIn(
+                r'ASOBMASHOW_BUILD_CONFIGURATION=\\\"$(CONFIGURATION)\\\"',
+                configuration,
+            )
+            self.assertIn(
+                "ASOBMASHOW_SOURCE_CLEAN=$(ASOBMASHOW_SOURCE_CLEAN)",
+                configuration,
+            )
+
+    def compile_build_identity(self, root: Path, commit: str, configuration: str, clean: int):
+        compiler = shutil.which("clang++") or shutil.which("c++")
+        if compiler is None:
+            self.skipTest("C++ compiler is required for build-identity tests")
+        driver = root / "build_identity_driver.cpp"
+        executable = root / "build_identity_driver"
+        driver.write_text(
+            '#include "BuildIdentity.h"\n'
+            "#include <iostream>\n"
+            "int main() {\n"
+            "  const auto identity = skin::compiledSkinBuildIdentity();\n"
+            "  std::cout << identity.commit << '\\n'\n"
+            "            << identity.configuration << '\\n'\n"
+            "            << identity.cleanSource << '\\n'\n"
+            "            << identity.validForAcceptance() << '\\n';\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                compiler,
+                "-std=c++20",
+                "-I",
+                str(ROOT / "src"),
+                f'-DASOBMASHOW_BUILD_COMMIT="{commit}"',
+                f'-DASOBMASHOW_BUILD_CONFIGURATION="{configuration}"',
+                f"-DASOBMASHOW_SOURCE_CLEAN={clean}",
+                str(driver),
+                str(BUILD_IDENTITY_SOURCE),
+                "-o",
+                str(executable),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return subprocess.run(
+            [str(executable)], text=True, capture_output=True, check=True
+        ).stdout.splitlines()
+
+    def test_compiled_skin_build_identity_rejects_placeholder_dirty_and_nonclean_values(self):
+        valid_commit = "1234567890abcdef1234567890abcdef12345678"
+        cases = (
+            (valid_commit, "Release", 1, [valid_commit, "Release", "1", "1"]),
+            ("0" * 40, "Release", 1, ["0" * 40, "Release", "1", "0"]),
+            (valid_commit, "dirty", 1, [valid_commit, "dirty", "1", "0"]),
+            (valid_commit, "Release", 0, [valid_commit, "Release", "0", "0"]),
+        )
+        for commit, configuration, clean, expected in cases:
+            with self.subTest(commit=commit, configuration=configuration, clean=clean):
+                with tempfile.TemporaryDirectory() as temporary:
+                    self.assertEqual(
+                        expected,
+                        self.compile_build_identity(
+                            Path(temporary), commit, configuration, clean
+                        ),
+                    )
+
+    def test_compiled_skin_build_identity_marker_survives_ios_dead_stripping(self):
+        xcrun = shutil.which("xcrun")
+        if xcrun is None:
+            self.skipTest("Xcode command-line tools are required")
+        commit = "1234567890abcdef1234567890abcdef12345678"
+        marker = f"AsoBMaShowBuildIdentityV1|{commit}|Release|1"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            driver = root / "unreferencing_main.cpp"
+            executable = root / "dead_stripped_identity"
+            driver.write_text("int main() { return 0; }\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    xcrun,
+                    "--sdk",
+                    "iphoneos",
+                    "clang++",
+                    "-std=c++20",
+                    "-arch",
+                    "arm64",
+                    "-miphoneos-version-min=14.0",
+                    "-I",
+                    str(ROOT / "src"),
+                    f'-DASOBMASHOW_BUILD_COMMIT="{commit}"',
+                    '-DASOBMASHOW_BUILD_CONFIGURATION="Release"',
+                    "-DASOBMASHOW_SOURCE_CLEAN=1",
+                    str(BUILD_IDENTITY_SOURCE),
+                    str(driver),
+                    "-Wl,-dead_strip",
+                    "-o",
+                    str(executable),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            strings = subprocess.run(
+                ["/usr/bin/strings", "-a", str(executable)],
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn(marker, strings.stdout.splitlines())
+
+    def test_skin_acceptance_direct_install_script_is_private_and_distribution_free(self):
+        script = SKIN_ACCEPTANCE_INSTALL.read_text(encoding="utf-8")
+        for argument in (
+            "--commit",
+            "--configuration",
+            "--device-id",
+            "--development-team",
+        ):
+            self.assertIn(argument, script)
+        self.assertIn('scripts/ios_init.sh', script)
+        self.assertIn('xcodebuild', script)
+        self.assertIn('-configuration "${CONFIGURATION}"', script)
+        self.assertIn('[ "${CONFIGURATION}" = "Release" ]', script)
+        self.assertIn('-derivedDataPath "${DERIVED_DATA_PATH}"', script)
+        self.assertIn('ASOBMASHOW_BUILD_COMMIT="${COMMIT}"', script)
+        self.assertIn('ASOBMASHOW_SOURCE_CLEAN=1', script)
+        self.assertIn('scripts/ios_artifact_audit.sh', script)
+        self.assertIn('xcrun devicectl device install app', script)
+        self.assertNotIn('set -x', script)
+        self.assertNotRegex(
+            script.lower(), r"firebase|testflight|fastlane|upload|distribution"
+        )
+
+    def test_skin_acceptance_direct_install_rejects_wrong_or_dirty_checkout_before_tools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            scripts = fixture / "scripts"
+            scripts.mkdir()
+            shutil.copy2(SKIN_ACCEPTANCE_INSTALL, scripts / SKIN_ACCEPTANCE_INSTALL.name)
+            subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "fixture@example.invalid"],
+                cwd=fixture,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Build Identity Fixture"],
+                cwd=fixture,
+                check=True,
+            )
+            (fixture / "tracked.txt").write_text("clean\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=fixture, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "fixture"], cwd=fixture, check=True
+            )
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=fixture,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            command = [
+                str(scripts / SKIN_ACCEPTANCE_INSTALL.name),
+                "--configuration", "Release",
+                "--device-id", "private-device",
+                "--development-team", "TEAM123",
+            ]
+            wrong = subprocess.run(
+                [*command, "--commit", "f" * 40],
+                cwd=fixture,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(0, wrong.returncode)
+            self.assertIn("HEAD", wrong.stderr)
+            self.assertNotIn("private-device", wrong.stdout + wrong.stderr)
+
+            (fixture / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+            dirty = subprocess.run(
+                [*command, "--commit", head],
+                cwd=fixture,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(0, dirty.returncode)
+            self.assertIn("clean", dirty.stderr)
+            self.assertNotIn("private-device", dirty.stdout + dirty.stderr)
+
+    def test_skin_acceptance_direct_install_rejects_nested_parent_repository(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            subprocess.run(["git", "init", "-q"], cwd=parent, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "fixture@example.invalid"],
+                cwd=parent,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Parent Repository Fixture"],
+                cwd=parent,
+                check=True,
+            )
+            (parent / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore"], cwd=parent, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "parent"], cwd=parent, check=True
+            )
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=parent,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            nested_scripts = parent / "ignored/source/scripts"
+            nested_scripts.mkdir(parents=True)
+            script = nested_scripts / SKIN_ACCEPTANCE_INSTALL.name
+            shutil.copy2(SKIN_ACCEPTANCE_INSTALL, script)
+            result = subprocess.run(
+                [
+                    str(script),
+                    "--commit", head,
+                    "--configuration", "Release",
+                    "--device-id", "private-device",
+                    "--development-team", "TEAM123",
+                ],
+                cwd=parent / "ignored/source",
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("repository root", result.stderr)
+            self.assertNotIn("private-device", result.stdout + result.stderr)
+
+    def test_skin_acceptance_direct_install_rechecks_checkout_after_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            scripts = fixture / "scripts"
+            fake_bin = fixture / "fake-bin"
+            scripts.mkdir()
+            fake_bin.mkdir()
+            shutil.copy2(SKIN_ACCEPTANCE_INSTALL, scripts / SKIN_ACCEPTANCE_INSTALL.name)
+            (scripts / "ios_init.sh").write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\n",
+                encoding="utf-8",
+            )
+            (scripts / "ios_artifact_audit.sh").write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\n"
+                'touch "${FAKE_REPO_ROOT}/audit-called"\n',
+                encoding="utf-8",
+            )
+            (fake_bin / "xcodebuild").write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\n"
+                'printf "changed during build\\n" > "${FAKE_REPO_ROOT}/tracked.txt"\n'
+                'derived=""\n'
+                'while [ "$#" -gt 0 ]; do\n'
+                '  if [ "$1" = "-derivedDataPath" ]; then derived="$2"; shift 2; else shift; fi\n'
+                'done\n'
+                'mkdir -p "${derived}/Build/Products/Release-iphoneos/AsoBMaShow.app"\n',
+                encoding="utf-8",
+            )
+            (fake_bin / "xcrun").write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\n"
+                'touch "${FAKE_REPO_ROOT}/install-called"\n',
+                encoding="utf-8",
+            )
+            for executable in (
+                scripts / SKIN_ACCEPTANCE_INSTALL.name,
+                scripts / "ios_init.sh",
+                scripts / "ios_artifact_audit.sh",
+                fake_bin / "xcodebuild",
+                fake_bin / "xcrun",
+            ):
+                executable.chmod(0o755)
+            subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "fixture@example.invalid"],
+                cwd=fixture,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Post-build Fixture"],
+                cwd=fixture,
+                check=True,
+            )
+            (fixture / "tracked.txt").write_text("clean\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=fixture, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "fixture"], cwd=fixture, check=True
+            )
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=fixture,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                "FAKE_REPO_ROOT": str(fixture),
+            }
+            result = subprocess.run(
+                [
+                    str(scripts / SKIN_ACCEPTANCE_INSTALL.name),
+                    "--commit", head,
+                    "--configuration", "Release",
+                    "--device-id", "private-device",
+                    "--development-team", "TEAM123",
+                ],
+                cwd=fixture,
+                text=True,
+                capture_output=True,
+                env=environment,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("changed during iOS build", result.stderr)
+            self.assertFalse((fixture / "audit-called").exists())
+            self.assertFalse((fixture / "install-called").exists())
+            self.assertNotIn("private-device", result.stdout + result.stderr)
 
     def test_pods_and_generated_bgfx_align_to_ios_14(self):
         podfile = PODFILE.read_text(encoding="utf-8")
