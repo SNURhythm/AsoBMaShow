@@ -215,6 +215,9 @@ struct SkinNumberObject {
   int digitCount = 0;
   int spacing = 0;
   int alignment = 0;
+  // JsonPlaySkinObjectLoader enables SkinNumber's relative mode for a Judge
+  // count, so its destination is resolved against the selected judge image.
+  bool relativeToJudgeImage = false;
   SkinZeroPaddingMode zeroPadding = SkinZeroPaddingMode::None;
   std::vector<SkinDigitOffset> perDigitOffsets;
 };
