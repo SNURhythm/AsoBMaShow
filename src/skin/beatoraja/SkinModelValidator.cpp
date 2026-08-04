@@ -424,6 +424,13 @@ SkinModelValidationResult SkinModelValidator::validate(
     BeatorajaSkinModel model,
     SkinBindingValidationContext bindingContext) const {
   SkinModelValidationResult result;
+  if (model.header.type != 0) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_type_unsupported",
+        "Lua gameplay skins require Beatoraja play type 0 (7 keys)"));
+    return result;
+  }
   if (model.header.width <= 0 || model.header.height <= 0 ||
       model.header.width > LuaSkinTableDecoderPolicy::maxAuthoredDimension ||
       model.header.height > LuaSkinTableDecoderPolicy::maxAuthoredDimension) {

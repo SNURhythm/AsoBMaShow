@@ -79,7 +79,9 @@ void writeText(const fs::path &path, std::string_view value) {
   output.write(value.data(), static_cast<std::streamsize>(value.size()));
 }
 
-BeatorajaSkinModelDecodeResult decodeInlineModel(std::string_view sourceText) {
+BeatorajaSkinModelDecodeResult
+decodeInlineModel(std::string_view sourceText,
+                  BeatorajaSkinHeader *decodedHeader = nullptr) {
   static const std::array judgeBindingBuiltins{
       SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::BooleanProperty},
@@ -140,6 +142,9 @@ BeatorajaSkinModelDecodeResult decodeInlineModel(std::string_view sourceText) {
   expect(header.header.has_value(), "inline model header decodes");
   if (!header.header) {
     return {};
+  }
+  if (decodedHeader != nullptr) {
+    *decodedHeader = *header.header;
   }
   headerValue.value.reset();
 
@@ -1096,6 +1101,150 @@ return {
          "generic Image wins same-ID Hidden/BGA/Judge specials without rejecting the model");
 }
 
+void testLiveDestinationMouseRectAndCenterNormalization() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,source={{id='atlas',path='atlas.png'}},
+  image={
+    {id='normal',src='atlas',w=10,h=10},
+    {id='negative-center',src='atlas',w=10,h=10},
+    {id='large-center',src='atlas',w=10,h=10},
+    {id='judge-image',src='atlas',w=10,h=10},
+    {id='note-image',src='atlas',w=10,h=10},
+    {id='line-image',src='atlas',w=10,h=10}
+  },
+  note={id='notes',note={'note-image'},mine={'note-image'},
+        lnend={'note-image'},lnstart={'note-image'},lnbody={'note-image'},
+        lnactive={'note-image'},hcnend={'note-image'},hcnstart={'note-image'},
+        hcnbody={'note-image'},hcnactive={'note-image'},
+        hcndamage={'note-image'},hcnreactive={'note-image'},
+        dst={{x=10,y=20,w=30,h=40}},
+        group={{id='line-image',mouseRect={x=21,y=22,w=23,h=24},
+                dst={{x=1,y=2,w=3,h=4}}}}},
+  judge={{id='judge',images={{id='judge-image',
+          mouseRect={x=11,y=12,w=13,h=14},dst={{}}}},numbers={{id='none',dst={{}}}}}},
+  destination={
+    {id='normal',center=9,mouseRect={x=1,y=2,w=3,h=4},dst={{}}},
+    {id='negative-center',center=-1,dst={{}}},
+    {id='large-center',center=10,dst={{}}},
+    {id='notes',dst={{}}},{id='judge',dst={{}}}
+  }
+}
+)lua");
+  expect(decoded.model && decoded.model->destinations.size() == 5,
+         "mouse-rectangle and center fixture decodes");
+  if (!decoded.model || decoded.model->destinations.size() != 5) {
+    return;
+  }
+  const auto &destinations = decoded.model->destinations;
+  expect(destinations[0].presentation.center == 9 &&
+             destinations[0].presentation.mouseRect &&
+             destinations[0].presentation.mouseRect->x == 1 &&
+             destinations[0].presentation.mouseRect->y == 2 &&
+             destinations[0].presentation.mouseRect->width == 3 &&
+             destinations[0].presentation.mouseRect->height == 4 &&
+             destinations[1].presentation.center == 0 &&
+             destinations[2].presentation.center == 0,
+         "destination mouseRect is preserved and center is clamped to pinned 0..9 semantics");
+  const auto *judgeDefinition = findObject(*decoded.model, "judge");
+  if (judgeDefinition != nullptr) {
+    const auto &judge = std::get<SkinJudgeObject>(judgeDefinition->payload);
+    expect(judge.grades[0].image && judge.grades[0].image->destination.mouseRect &&
+               judge.grades[0].image->destination.mouseRect->x == 11 &&
+               judge.grades[0].image->destination.mouseRect->height == 14,
+           "nested Judge destinations use shared mouseRect decoding");
+  }
+  const auto *noteDefinition = findObject(*decoded.model, "notes");
+  if (noteDefinition != nullptr) {
+    const auto &note = std::get<SkinNoteObject>(noteDefinition->payload);
+    expect(!note.lines.empty() && note.lines.front().destination &&
+               note.lines.front().destination->mouseRect &&
+               note.lines.front().destination->mouseRect->x == 21 &&
+               note.lines.front().destination->mouseRect->height == 24,
+           "nested Note-line destinations use shared mouseRect decoding");
+  }
+}
+
+void testGameplayTypeZeroIsRequiredAfterHeaderDecode() {
+  BeatorajaSkinHeader header;
+  const auto decoded = decodeInlineModel(
+      "return {type=1,w=1280,h=720,destination={}}", &header);
+  expect(header.type == 1,
+         "header-only decoding continues to accept pinned non-gameplay types");
+  expect(!decoded.model && !decoded.diagnostics.empty() &&
+             decoded.diagnostics.front().code ==
+                 "skin_lua_model_type_unsupported",
+         "gameplay decoding critically rejects every non-7-key skin type");
+
+  auto valid = decodeInlineModel(
+      "return {type=0,w=1280,h=720,destination={}}");
+  expect(valid.model.has_value(), "type-zero gameplay model decodes before validation mutation");
+  if (valid.model) {
+    valid.model->header.type = 1;
+    const auto validated = test_support::validateWithAuthoredBuiltins(
+        std::move(*valid.model));
+    expect(validated.criticalFailure && !validated.model &&
+               !validated.diagnostics.empty() &&
+               validated.diagnostics.front().code ==
+                   "skin_lua_model_type_unsupported",
+           "model validation independently enforces the type-zero critical gate");
+  }
+}
+
+void testUnsupportedOptionalIdentitySurfacesAreDiagnosedAndDisabled() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,source={{id='atlas',path='atlas.png'}},
+  image={{id='generic-wins',src='atlas',w=10,h=10}},
+  hiddenCover={{id='unsupported-wins',src='atlas',w=10,h=10}},
+  bpmgraph={{id='generic-wins'},{id='unsupported-wins'},{id='unused-bpm'}},
+  hiterrorvisualizer={{id='unused-hit'}},
+  judgegraph={{id='unused-judge'}},
+  timingvisualizer={{id='unused-timing'}},
+  destination={{id='generic-wins',dst={{}}},{id='unsupported-wins',dst={{}}}}
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 2 &&
+             std::holds_alternative<SkinImageObject>(
+                 decoded.model->objects[0].payload),
+         "generic Image precedes same-ID unsupported arrays");
+  const std::array expectedCodes{
+      std::string_view("skin_lua_model_bpmgraph_unsupported"),
+      std::string_view("skin_lua_model_hiterrorvisualizer_unsupported"),
+      std::string_view("skin_lua_model_judgegraph_unsupported"),
+      std::string_view("skin_lua_model_timingvisualizer_unsupported"),
+  };
+  for (const auto code : expectedCodes) {
+    expect(std::ranges::find_if(decoded.diagnostics, [&](const auto &entry) {
+             return entry.code == code;
+           }) != decoded.diagnostics.end(),
+           "each authored optional unsupported array emits its exact diagnostic");
+  }
+  if (decoded.model && decoded.model->objects.size() == 2) {
+    const auto unsupportedId = decoded.model->objects[1].id;
+    const auto validated = test_support::validateWithAuthoredBuiltins(
+        *decoded.model);
+    expect(validated.model && !validated.criticalFailure &&
+               std::ranges::find(validated.model->disabledOptionalObjects,
+                                 unsupportedId) !=
+                   validated.model->disabledOptionalObjects.end(),
+           "referenced unsupported identity becomes a disabled optional placeholder");
+  }
+
+  const auto oversized = decodeInlineModel(R"lua(
+local definitions = {}
+for index = 1, 8193 do
+  definitions[index] = {id = "bpm-" .. index}
+end
+return {type=0,w=1280,h=720,bpmgraph=definitions,destination={}}
+)lua");
+  expect(!oversized.model &&
+             std::ranges::find_if(oversized.diagnostics, [](const auto &entry) {
+               return entry.code == "skin_lua_header_invalid";
+             }) != oversized.diagnostics.end(),
+         "unsupported identity arrays remain bounded by the shared decoded-object limit");
+}
+
 } // namespace
 
 int main() {
@@ -1113,6 +1262,9 @@ int main() {
   testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject();
   testLiveCoverJudgeAndBgaSpecialObjects();
   testLiveGenericObjectPrecedesSameIdGameplaySpecials();
+  testLiveDestinationMouseRectAndCenterNormalization();
+  testGameplayTypeZeroIsRequiredAfterHeaderDecode();
+  testUnsupportedOptionalIdentitySurfacesAreDiagnosedAndDisabled();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

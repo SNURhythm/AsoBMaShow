@@ -13,6 +13,7 @@
 #include "SkinCoverNormalization.h"
 #include "SkinJudgeNormalization.h"
 #include "SkinJudgeNumberNormalization.h"
+#include "SkinNoteLineNormalization.h"
 #include "SkinObjectResolutionPrecedence.h"
 #include "SkinNoteLaneGeometryNormalization.h"
 #include "SkinNoteLineNormalization.h"
@@ -907,6 +908,7 @@ struct RawDestination {
   std::vector<Condition> conditions;
   std::optional<SkinBooleanPropertyId> drawCondition;
   std::vector<RawDestinationFrame> frames;
+  std::optional<SkinAuthoredRect> mouseRect;
 };
 
 struct RawSkinJudge {
@@ -967,6 +969,10 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinCover, std::less<>> hiddenCovers;
   std::map<std::string, RawSkinCover, std::less<>> liftCovers;
   std::map<std::string, RawSkinJudge, std::less<>> judges;
+  std::map<std::string, RawSkinIdentity, std::less<>> bpmGraphs;
+  std::map<std::string, RawSkinIdentity, std::less<>> hitErrorVisualizers;
+  std::map<std::string, RawSkinIdentity, std::less<>> judgeGraphs;
+  std::map<std::string, RawSkinIdentity, std::less<>> timingVisualizers;
   std::optional<RawSkinGauge> gauge;
   std::optional<RawSkinIdentity> bga;
   std::vector<RawSkinSource> rawSources;
@@ -982,6 +988,10 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinCover> rawHiddenCovers;
   std::vector<RawSkinCover> rawLiftCovers;
   std::vector<RawSkinJudge> rawJudges;
+  std::vector<RawSkinIdentity> rawBpmGraphs;
+  std::vector<RawSkinIdentity> rawHitErrorVisualizers;
+  std::vector<RawSkinIdentity> rawJudgeGraphs;
+  std::vector<RawSkinIdentity> rawTimingVisualizers;
   std::vector<RawDestination> rawDestinations;
   std::vector<RawCustomTimer> rawCustomTimers;
   std::vector<RawCustomEvent> rawCustomEvents;
@@ -1561,6 +1571,33 @@ bool destinationConditionsField(lua_State *state, int index,
   return true;
 }
 
+bool destinationMouseRectField(lua_State *state, int index,
+                               std::optional<SkinAuthoredRect> &output,
+                               DecodeRequest &request) {
+  if (!rawGetField(state, index, "mouseRect", request)) {
+    return false;
+  }
+  if (lua_isnil(state, -1)) {
+    lua_pop(state, 1);
+    return true;
+  }
+  if (!lua_istable(state, -1)) {
+    lua_pop(state, 1);
+    return fail(request, "skin_lua_model_invalid",
+                "Lua skin destination mouseRect is not an object");
+  }
+  output.emplace();
+  const int rectangleIndex = absoluteIndex(state, -1);
+  if (!numberField(state, rectangleIndex, "x", output->x, request) ||
+      !numberField(state, rectangleIndex, "y", output->y, request) ||
+      !numberField(state, rectangleIndex, "w", output->width, request) ||
+      !numberField(state, rectangleIndex, "h", output->height, request)) {
+    return false;
+  }
+  lua_pop(state, 1);
+  return true;
+}
+
 bool decodeRawDestination(lua_State *state, int index, std::size_t depth,
                           RawDestination &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
@@ -1575,6 +1612,7 @@ bool decodeRawDestination(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "offset", output.offset, request) &&
          integerArrayField(state, index, "offsets", output.offsets, request) &&
          destinationConditionsField(state, index, output.conditions, request) &&
+         destinationMouseRectField(state, index, output.mouseRect, request) &&
          decodeObjectArrayField(state, index, "dst", depth,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 output.frames, request,
@@ -2222,6 +2260,10 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   const auto slider = request.sliders.find(name);
   const auto text = request.texts.find(name);
   const auto graph = request.graphs.find(name);
+  const auto bpmGraph = request.bpmGraphs.find(name);
+  const auto hitErrorVisualizer = request.hitErrorVisualizers.find(name);
+  const auto judgeGraph = request.judgeGraphs.find(name);
+  const auto timingVisualizer = request.timingVisualizers.find(name);
   const auto hiddenCover = request.hiddenCovers.find(name);
   const auto liftCover = request.liftCovers.find(name);
   const auto judge = request.judges.find(name);
@@ -2243,6 +2285,17 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
                                     .matches = slider != request.sliders.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Graph,
                                     .matches = graph != request.graphs.end()},
+      SkinObjectResolutionCandidate{
+          .kind = SkinObjectResolutionKind::JudgeGraph,
+          .matches = judgeGraph != request.judgeGraphs.end()},
+      SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::BpmGraph,
+                                    .matches = bpmGraph != request.bpmGraphs.end()},
+      SkinObjectResolutionCandidate{
+          .kind = SkinObjectResolutionKind::HitErrorVisualizer,
+          .matches = hitErrorVisualizer != request.hitErrorVisualizers.end()},
+      SkinObjectResolutionCandidate{
+          .kind = SkinObjectResolutionKind::TimingVisualizer,
+          .matches = timingVisualizer != request.timingVisualizers.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Gauge,
                                     .matches = isGauge},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Note,
@@ -2257,6 +2310,10 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
                                     .matches = judge != request.judges.end()},
   };
   const auto resolved = resolveSkinObjectPrecedence(candidates);
+  if (resolved.status == SkinObjectResolutionStatus::Unsupported) {
+    output = SkinImageObject{};
+    return true;
+  }
   if (resolved.status != SkinObjectResolutionStatus::Found) {
     return fail(request.decoding, "skin_lua_model_unsupported_object",
                 "Lua skin destination does not resolve to an audited v1 object");
@@ -2450,7 +2507,7 @@ bool normalizeDestination(GameplayDecodeRequest &request,
                 "Lua skin destination presentation mode is unsupported");
   }
   output.loop = raw.loop;
-  output.center = raw.center;
+  output.center = raw.center >= 0 && raw.center < 10 ? raw.center : 0;
   output.blend = *mappedBlend;
   output.filter = static_cast<SkinFilterMode>(raw.filter);
   if (raw.stretch >= 0) {
@@ -2461,6 +2518,7 @@ bool normalizeDestination(GameplayDecodeRequest &request,
   output.offsetIds = raw.offsets;
   output.offsetIds.push_back(raw.offset);
   output.drawCondition = raw.drawCondition;
+  output.mouseRect = raw.mouseRect;
   output.conditions.reserve(raw.conditions.size());
   for (const auto &condition : raw.conditions) {
     if (condition.optionId && *condition.optionId != 0) {
@@ -2661,6 +2719,21 @@ void transferDecodeDiagnostics(GameplayDecodeRequest &request) {
   source.clear();
 }
 
+template <typename Definitions>
+void recordUnsupportedDefinitions(GameplayDecodeRequest &request,
+                                  const Definitions &definitions,
+                                  std::string_view code,
+                                  std::string_view surface) {
+  if (definitions.empty()) {
+    return;
+  }
+  request.result.diagnostics.push_back(
+      {.code = std::string(code),
+       .message = "Lua skin " + std::string(surface) +
+                  " definitions are unsupported in v1",
+       .severity = DiagnosticSeverity::Warning});
+}
+
 void decodeGameplayProtected(lua_State *state, int index,
                              void *opaque) noexcept {
   auto *request = static_cast<GameplayDecodeRequest *>(opaque);
@@ -2677,6 +2750,13 @@ void decodeGameplayProtected(lua_State *state, int index,
     request->result.model.emplace();
     auto &model = *request->result.model;
     model.header = std::move(*request->decoding.result.header);
+    if (model.header.type != kPlay7KeysType) {
+      fail(request->decoding, "skin_lua_model_type_unsupported",
+           "Lua gameplay skins require Beatoraja play type 0 (7 keys)");
+      transferDecodeDiagnostics(*request);
+      request->result.model.reset();
+      return;
+    }
     if (!integerField(state, index, "fadeout", model.timing.fadeoutMillis,
                       request->decoding) ||
         !integerField(state, index, "input", model.timing.inputMillis,
@@ -2890,6 +2970,42 @@ void decodeGameplayProtected(lua_State *state, int index,
         return;
       }
     }
+
+    if (!decodeObjectArrayField(
+            state, index, "bpmgraph", 1,
+            LuaSkinTableDecoderPolicy::maxDecodedObjects,
+            request->rawBpmGraphs, request->decoding, decodeRawIdentity) ||
+        !decodeObjectArrayField(
+            state, index, "hiterrorvisualizer", 1,
+            LuaSkinTableDecoderPolicy::maxDecodedObjects,
+            request->rawHitErrorVisualizers, request->decoding,
+            decodeRawIdentity) ||
+        !decodeObjectArrayField(
+            state, index, "judgegraph", 1,
+            LuaSkinTableDecoderPolicy::maxDecodedObjects,
+            request->rawJudgeGraphs, request->decoding, decodeRawIdentity) ||
+        !decodeObjectArrayField(
+            state, index, "timingvisualizer", 1,
+            LuaSkinTableDecoderPolicy::maxDecodedObjects,
+            request->rawTimingVisualizers, request->decoding,
+            decodeRawIdentity)) {
+      transferDecodeDiagnostics(*request);
+      request->result.model.reset();
+      return;
+    }
+    recordUnsupportedDefinitions(*request, request->rawBpmGraphs,
+                                 "skin_lua_model_bpmgraph_unsupported",
+                                 "bpmgraph");
+    recordUnsupportedDefinitions(
+        *request, request->rawHitErrorVisualizers,
+        "skin_lua_model_hiterrorvisualizer_unsupported",
+        "hiterrorvisualizer");
+    recordUnsupportedDefinitions(*request, request->rawJudgeGraphs,
+                                 "skin_lua_model_judgegraph_unsupported",
+                                 "judgegraph");
+    recordUnsupportedDefinitions(
+        *request, request->rawTimingVisualizers,
+        "skin_lua_model_timingvisualizer_unsupported", "timingvisualizer");
 
     if (!decodeObjectArrayField(
             state, index, "hiddenCover", 1,
@@ -3710,6 +3826,31 @@ bool materializeGameplay(GameplayDecodeRequest &request,
             return graph.image.id;
           },
           "Graph") ||
+      !moveUniqueDefinitions(
+          request, request.rawBpmGraphs, request.bpmGraphs,
+          [](const RawSkinIdentity &identity) -> const std::string & {
+            return identity.id;
+          },
+          "BPMGraph") ||
+      !moveUniqueDefinitions(
+          request, request.rawHitErrorVisualizers,
+          request.hitErrorVisualizers,
+          [](const RawSkinIdentity &identity) -> const std::string & {
+            return identity.id;
+          },
+          "HitErrorVisualizer") ||
+      !moveUniqueDefinitions(
+          request, request.rawJudgeGraphs, request.judgeGraphs,
+          [](const RawSkinIdentity &identity) -> const std::string & {
+            return identity.id;
+          },
+          "JudgeGraph") ||
+      !moveUniqueDefinitions(
+          request, request.rawTimingVisualizers, request.timingVisualizers,
+          [](const RawSkinIdentity &identity) -> const std::string & {
+            return identity.id;
+          },
+          "TimingVisualizer") ||
       !moveUniqueDefinitions(
           request, request.rawHiddenCovers, request.hiddenCovers,
           [](const RawSkinCover &cover) -> const std::string & {
