@@ -272,11 +272,35 @@ void testGraphRejectsInvalidDependencies() {
   input.explicitRate.reset();
   input.isRefNum = true;
   input.integerRange->maximum = input.integerRange->minimum - 1;
-  const auto invertedRange = normalizeSkinGraph(input);
-  expect(!invertedRange.graph &&
-             invertedRange.error ==
+  const auto descendingRange = normalizeSkinGraph(input);
+  const auto *descending =
+      descendingRange.graph ? std::get_if<SkinSliderObject::IntegerRangeSource>(
+                                  &descendingRange.graph->value)
+                            : nullptr;
+  expect(descending && descending->minimum == -50 && descending->maximum == -51,
+         "descending integer graph ranges preserve pinned RateProperty "
+         "semantics");
+
+  input = validGraphInput();
+  input.explicitRate.reset();
+  input.isRefNum = true;
+  input.integerRange->maximum = input.integerRange->minimum;
+  const auto emptyRange = normalizeSkinGraph(input);
+  expect(!emptyRange.graph &&
+             emptyRange.error ==
                  SkinTextGraphNormalizationError::InvalidGraphRange,
-         "inverted integer graph range fails closed");
+         "zero-span integer graph range fails closed before runtime");
+
+  input = validGraphInput();
+  input.explicitRate.reset();
+  input.isRefNum = true;
+  input.integerRange->minimum = std::numeric_limits<int>::min();
+  input.integerRange->maximum = std::numeric_limits<int>::max();
+  const auto oversizedRange = normalizeSkinGraph(input);
+  expect(!oversizedRange.graph &&
+             oversizedRange.error ==
+                 SkinTextGraphNormalizationError::InvalidGraphRange,
+         "integer graph spans above Java INT_MAX fail during normalization");
 
   input = validGraphInput();
   input.explicitRate.reset();

@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -67,6 +68,8 @@ struct SkinProjectedLineView {
 
 struct SkinGaugeStateView {
   bool supported = false;
+  // Render-ready value. A result-screen bridge must apply Beatoraja's
+  // start/end reveal curve before publishing this snapshot.
   double value = 0.0;
   int gaugeType = 0;
   double minimum = 0.0;
@@ -94,8 +97,7 @@ public:
   virtual SkinPropertyLookup<std::string_view>
   stringProperty(const SkinBuiltinPropertySelector &) = 0;
   virtual SkinPropertyLookup<ConfigOffset> offsetProperty(int) = 0;
-  virtual std::int64_t
-  timerProperty(const SkinBuiltinPropertySelector &) = 0;
+  virtual std::int64_t timerProperty(const SkinBuiltinPropertySelector &) = 0;
   virtual std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept = 0;
   virtual std::span<const SkinProjectedLongNoteView>
@@ -127,6 +129,7 @@ struct SkinCommandPolicy {
 
 struct SkinFrameInputs {
   std::uint64_t frameSerial = 0;
+  std::uint64_t sessionSerial = 0;
   std::int64_t visualTimeMicros = 0;
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
@@ -145,12 +148,21 @@ struct SkinFrameEvaluationResult {
 class Skin2DRenderer final {
 public:
   SkinFrameEvaluationResult evaluateFrame(const SkinFrameInputs &);
+
+private:
+  struct GaugeAnimationState {
+    int animation = 0;
+    std::int64_t deadlineMillis = 0;
+    std::uint64_t epoch = 0;
+  };
+
+  std::uint64_t gaugeAnimationSessionSerial_ = 0;
+  std::map<SkinObjectId, GaugeAnimationState> gaugeAnimationStates_;
 };
 
 #if defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
 void resetSkinRendererLookupComparisonsForTesting() noexcept;
-[[nodiscard]] std::size_t
-skinRendererLookupComparisonsForTesting() noexcept;
+[[nodiscard]] std::size_t skinRendererLookupComparisonsForTesting() noexcept;
 #endif
 
 } // namespace skin

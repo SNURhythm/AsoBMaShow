@@ -93,6 +93,9 @@ void fitHeight(AuthoredRect &rect, double height) {
 }
 
 int truncateJava(double value) {
+  if (std::isnan(value)) {
+    return 0;
+  }
   if (value >= static_cast<double>(std::numeric_limits<int>::max())) {
     return std::numeric_limits<int>::max();
   }
@@ -102,25 +105,61 @@ int truncateJava(double value) {
   return static_cast<int>(std::trunc(value));
 }
 
+double regionWidth(const SkinSourceRect &region) {
+  return std::abs(static_cast<double>(region.w));
+}
+
+double regionHeight(const SkinSourceRect &region) {
+  return std::abs(static_cast<double>(region.h));
+}
+
+void setTrimmedRegionWidth(SkinSourceRect &region, double width) {
+  const double farEdge =
+      static_cast<double>(region.x) + static_cast<double>(region.w);
+  const int newWidth = truncateJava(width);
+  const int newX = truncateJava(static_cast<double>(region.x) +
+                                regionWidth(region) * 0.5 - width * 0.5);
+  // TextureRegion.setRegionX changes only U. setRegionWidth then preserves
+  // whichever orientation remains relative to the unchanged U2 endpoint.
+  if (static_cast<double>(newX) > farEdge) {
+    region.x = truncateJava(farEdge + static_cast<double>(newWidth));
+    region.w = truncateJava(-static_cast<double>(newWidth));
+  } else {
+    region.x = newX;
+    region.w = newWidth;
+  }
+}
+
+void setTrimmedRegionHeight(SkinSourceRect &region, double height) {
+  const double farEdge =
+      static_cast<double>(region.y) + static_cast<double>(region.h);
+  const int newHeight = truncateJava(height);
+  const int newY = truncateJava(static_cast<double>(region.y) +
+                                regionHeight(region) * 0.5 - height * 0.5);
+  if (static_cast<double>(newY) > farEdge) {
+    region.y = truncateJava(farEdge + static_cast<double>(newHeight));
+    region.h = truncateJava(-static_cast<double>(newHeight));
+  } else {
+    region.y = newY;
+    region.h = newHeight;
+  }
+}
+
 void fitWidthTrimmed(AuthoredRect &rect, double scale, SkinSourceRect &region) {
-  const double target = scale * region.w;
+  const double target = scale * regionWidth(region);
   if (rect.width < target) {
-    const double center = region.x + region.w * 0.5;
     const double crop = rect.width / scale;
-    region.x = truncateJava(center - crop * 0.5);
-    region.w = truncateJava(crop);
+    setTrimmedRegionWidth(region, crop);
   } else {
     fitWidth(rect, target);
   }
 }
 
 void fitHeightTrimmed(AuthoredRect &rect, double scale, SkinSourceRect &region) {
-  const double target = scale * region.h;
+  const double target = scale * regionHeight(region);
   if (rect.height < target) {
-    const double center = region.y + region.h * 0.5;
     const double crop = rect.height / scale;
-    region.y = truncateJava(center - crop * 0.5);
-    region.h = truncateJava(crop);
+    setTrimmedRegionHeight(region, crop);
   } else {
     fitHeight(rect, target);
   }
@@ -128,8 +167,10 @@ void fitHeightTrimmed(AuthoredRect &rect, double scale, SkinSourceRect &region) 
 
 void applyStretch(AuthoredRect &rect, SkinSourceRect &region,
                   SkinStretchMode stretch) {
-  const double sourceWidth = region.w;
-  const double sourceHeight = region.h;
+  // LibGDX TextureRegion keeps signed UV endpoints for flips but reports
+  // absolute intrinsic dimensions to StretchType.
+  const double sourceWidth = regionWidth(region);
+  const double sourceHeight = regionHeight(region);
   switch (stretch) {
   case SkinStretchMode::Stretch:
     break;
@@ -359,7 +400,7 @@ UiDestinationGeometry projectSkinDestinationToUi(
   result.blend = destination.blend;
   result.filter = destination.filter;
   if (!viewport.valid || source.textureWidth <= 0 || source.textureHeight <= 0 ||
-      source.region.w <= 0 || source.region.h <= 0) {
+      source.region.w == 0 || source.region.h == 0) {
     return result;
   }
 
@@ -385,8 +426,12 @@ UiDestinationGeometry projectSkinDestinationToUi(
   }
   const double u0 = static_cast<double>(region.x) / source.textureWidth;
   const double v0 = static_cast<double>(region.y) / source.textureHeight;
-  const double u1 = static_cast<double>(region.x + region.w) / source.textureWidth;
-  const double v1 = static_cast<double>(region.y + region.h) / source.textureHeight;
+  const double u1 =
+      (static_cast<double>(region.x) + static_cast<double>(region.w)) /
+      source.textureWidth;
+  const double v1 =
+      (static_cast<double>(region.y) + static_cast<double>(region.h)) /
+      source.textureHeight;
   result.normalizedUvs = {{{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}}};
   if (destination.clip && destination.clip->width > 0.0 &&
       destination.clip->height > 0.0) {

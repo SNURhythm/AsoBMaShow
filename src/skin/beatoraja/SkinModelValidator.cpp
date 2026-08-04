@@ -79,6 +79,14 @@ bool validSprite(const SkinSpriteFrames &sprite,
          (!sprite.timer || timers.contains(sprite.timer->value));
 }
 
+bool validIntegerRateRange(
+    const SkinSliderObject::IntegerRangeSource &range) {
+  const auto span = static_cast<std::int64_t>(range.maximum) -
+                    static_cast<std::int64_t>(range.minimum);
+  return span != 0 && span >= std::numeric_limits<int>::min() &&
+         span <= std::numeric_limits<int>::max();
+}
+
 bool validDigits(const SkinDigitSpriteSet &digits, NumericGlyphAtlasKind kind,
                  const std::set<SkinResourceId> &imageResources,
                  const std::set<std::uint32_t> &timers) {
@@ -348,7 +356,7 @@ bool validPayload(const SkinObjectPayload &payload,
                 } else {
                   return hasDomain(context.integers, source.value.value,
                                    SkinIntegerPropertyDomain::IntegerValue) &&
-                         source.minimum <= source.maximum;
+                         validIntegerRateRange(source);
                 }
               },
               object.value);
@@ -367,7 +375,7 @@ bool validPayload(const SkinObjectPayload &payload,
                 } else {
                   return hasDomain(context.integers, source.value.value,
                                    SkinIntegerPropertyDomain::IntegerValue) &&
-                         source.minimum <= source.maximum;
+                         validIntegerRateRange(source);
                 }
               },
               object.value);

@@ -77,6 +77,30 @@ BeatorajaSkinModel floatModel(SkinDigitSpriteSet digits) {
   return model;
 }
 
+BeatorajaSkinModel
+graphModel(SkinSliderObject::IntegerRangeSource integerRange) {
+  BeatorajaSkinModel model;
+  model.header.type = 0;
+  model.header.width = 1280;
+  model.header.height = 720;
+  SkinBuiltinPropertySelector source;
+  source.value = 1;
+  model.integerProperties.push_back(
+      {.id = integerRange.value,
+       .domain = SkinIntegerPropertyDomain::IntegerValue,
+       .source = std::move(source)});
+  model.resources.push_back(SkinImageResource{
+      .id = 1, .authoredName = "atlas", .virtualPath = "atlas.png"});
+  SkinGraphObject graph;
+  graph.fill = sprite(1);
+  graph.value = integerRange;
+  model.objects.push_back({.id = 1,
+                           .authoredName = "graph",
+                           .payload = std::move(graph),
+                           .critical = false});
+  return model;
+}
+
 void expectDisabled(SkinModelValidationResult result,
                     std::string_view message) {
   expect(result.model.has_value() && !result.criticalFailure &&
@@ -213,9 +237,9 @@ void validatorRejectsMalformedNumberObjectFormats() {
       },
       "validator rejects excess Number per-digit offsets");
 
-  constexpr std::array offsetMembers{
-      &SkinDigitOffset::x, &SkinDigitOffset::y, &SkinDigitOffset::width,
-      &SkinDigitOffset::height};
+  constexpr std::array offsetMembers{&SkinDigitOffset::x, &SkinDigitOffset::y,
+                                     &SkinDigitOffset::width,
+                                     &SkinDigitOffset::height};
   for (const auto member : offsetMembers) {
     reject(
         [member](auto &number) {
@@ -265,9 +289,9 @@ void validatorRejectsMalformedFloatObjectFormats() {
       },
       "validator rejects excess Float per-digit offsets");
 
-  constexpr std::array offsetMembers{
-      &SkinDigitOffset::x, &SkinDigitOffset::y, &SkinDigitOffset::width,
-      &SkinDigitOffset::height};
+  constexpr std::array offsetMembers{&SkinDigitOffset::x, &SkinDigitOffset::y,
+                                     &SkinDigitOffset::width,
+                                     &SkinDigitOffset::height};
   for (const auto member : offsetMembers) {
     reject(
         [member](auto &floating) {
@@ -281,6 +305,22 @@ void validatorRejectsMalformedFloatObjectFormats() {
          "validator rejects visible Float signs without 13-glyph sets");
 }
 
+void validatorRejectsIntegerRateSpansAboveJavaIntMax() {
+  expectOptionalAndCriticalRejected(
+      graphModel({.value = SkinIntegerPropertyId{1},
+                  .minimum = std::numeric_limits<int>::min(),
+                  .maximum = std::numeric_limits<int>::max()}),
+      "validator rejects integer Graph spans above Java INT_MAX");
+}
+
+void validatorAcceptsDescendingIntegerRateRanges() {
+  const auto result = test_support::validateWithAuthoredBuiltins(graphModel(
+      {.value = SkinIntegerPropertyId{1}, .minimum = 100, .maximum = 0}));
+  expect(result.model && !result.criticalFailure &&
+             result.model->disabledOptionalObjects.empty(),
+         "validator accepts pinned descending integer Graph ranges");
+}
+
 } // namespace
 
 int main() {
@@ -288,5 +328,7 @@ int main() {
   validatorAcceptsKindSpecificGlyphBoundaries();
   validatorRejectsMalformedNumberObjectFormats();
   validatorRejectsMalformedFloatObjectFormats();
+  validatorRejectsIntegerRateSpansAboveJavaIntMax();
+  validatorAcceptsDescendingIntegerRateRanges();
   return failures == 0 ? 0 : 1;
 }

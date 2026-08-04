@@ -421,6 +421,65 @@ ResolvedValue<double> resolveFloat(const SkinFrameInputs &inputs,
                          "Float callback returned a non-numeric value.")};
 }
 
+ResolvedValue<double>
+resolveRate(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
+            const std::variant<SkinFloatPropertyId,
+                               SkinSliderObject::IntegerRangeSource> &source) {
+  if (const auto *floating = std::get_if<SkinFloatPropertyId>(&source)) {
+    const auto resolved = resolveFloat(inputs, index, *floating);
+    if (resolved.failure) {
+      return {.failure = *resolved.failure};
+    }
+    if (!std::isfinite(*resolved.value)) {
+      return {.failure =
+                  diagnostic("skin.renderer.rate.invalid",
+                             "Rate property returned a non-finite value.")};
+    }
+    return resolved;
+  }
+  const auto &integer = std::get<SkinSliderObject::IntegerRangeSource>(source);
+  const auto span = static_cast<std::int64_t>(integer.maximum) -
+                    static_cast<std::int64_t>(integer.minimum);
+  if (span == 0 || span < std::numeric_limits<int>::min() ||
+      span > std::numeric_limits<int>::max()) {
+    return {.failure = diagnostic(
+                "skin.renderer.rate.range",
+                "Integer rate needs a nonzero Java int denominator.")};
+  }
+  const auto resolved = resolveInteger(inputs, index, integer.value);
+  if (resolved.failure) {
+    return {.failure = *resolved.failure};
+  }
+  if (integer.minimum < integer.maximum) {
+    if (*resolved.value > integer.maximum) {
+      return {.value = 1.0};
+    }
+    if (*resolved.value < integer.minimum) {
+      return {.value = 0.0};
+    }
+  } else {
+    if (*resolved.value < integer.maximum) {
+      return {.value = 1.0};
+    }
+    if (*resolved.value > integer.minimum) {
+      return {.value = 0.0};
+    }
+  }
+  // Pinned RateProperty casts the selected integer value to float before
+  // subtracting min, while max-min remains Java int arithmetic.
+  const float numerator =
+      static_cast<float>(static_cast<int>(*resolved.value)) -
+      static_cast<float>(integer.minimum);
+  const float rate =
+      std::abs(numerator / static_cast<float>(static_cast<int>(span)));
+  if (!std::isfinite(rate)) {
+    return {.failure = diagnostic(
+                "skin.renderer.rate.invalid",
+                "Integer rate produced a non-finite Java float value.")};
+  }
+  return {.value = static_cast<double>(rate)};
+}
+
 ResolvedValue<std::string> resolveString(const SkinFrameInputs &inputs,
                                          const FrameLookupIndex &index,
                                          SkinStringPropertyId id) {
@@ -647,25 +706,19 @@ std::uint64_t magnitude(std::int32_t value) noexcept {
              : static_cast<std::uint64_t>(value);
 }
 
-NumericLayout prepareNumberLayout(const SkinFrameInputs &inputs,
-                                  const FrameLookupIndex &index,
-                                  const SkinNumberObject &number) {
+NumericLayout prepareNumberLayoutForValue(const SkinNumberObject &number,
+                                          std::int64_t resolvedValue) {
   NumericLayout layout;
   layout.spacing = number.spacing;
   layout.alignment = number.alignment;
   layout.offsets = &number.perDigitOffsets;
-  const auto resolved = resolveInteger(inputs, index, number.value);
-  if (resolved.failure) {
-    layout.failure = *resolved.failure;
-    return layout;
-  }
-  if (*resolved.value <= std::numeric_limits<std::int32_t>::min() ||
-      *resolved.value >= std::numeric_limits<std::int32_t>::max() ||
+  if (resolvedValue <= std::numeric_limits<std::int32_t>::min() ||
+      resolvedValue >= std::numeric_limits<std::int32_t>::max() ||
       number.digitCount <= 0) {
     layout.suppressed = true;
     return layout;
   }
-  const auto value = static_cast<std::int32_t>(*resolved.value);
+  const auto value = static_cast<std::int32_t>(resolvedValue);
   const bool hasSignedSet = number.digits.negative.has_value();
   const auto &sprite = value < 0 && hasSignedSet ? *number.digits.negative
                                                  : number.digits.positive;
@@ -705,6 +758,18 @@ NumericLayout prepareNumberLayout(const SkinFrameInputs &inputs,
   return layout;
 }
 
+NumericLayout prepareNumberLayout(const SkinFrameInputs &inputs,
+                                  const FrameLookupIndex &index,
+                                  const SkinNumberObject &number) {
+  const auto resolved = resolveInteger(inputs, index, number.value);
+  if (resolved.failure) {
+    NumericLayout layout;
+    layout.failure = *resolved.failure;
+    return layout;
+  }
+  return prepareNumberLayoutForValue(number, *resolved.value);
+}
+
 std::int64_t truncatingJavaLong(double value) noexcept {
   if (value >= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
     return std::numeric_limits<std::int64_t>::max();
@@ -713,6 +778,19 @@ std::int64_t truncatingJavaLong(double value) noexcept {
     return std::numeric_limits<std::int64_t>::min();
   }
   return static_cast<std::int64_t>(value);
+}
+
+int truncatingJavaInt(double value) noexcept {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  if (value >= static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value <= static_cast<double>(std::numeric_limits<int>::min())) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(std::trunc(value));
 }
 
 NumericLayout prepareFloatLayout(const SkinFrameInputs &inputs,
@@ -1266,6 +1344,423 @@ bool configuredCondition(const BeatorajaSkinConfiguration &configuration,
   return true;
 }
 
+struct DestinationResolution {
+  std::optional<AuthoredDestinationGeometry> geometry;
+  std::vector<SkinDiagnostic> failures;
+};
+
+DestinationResolution
+resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
+                   const SkinDestinationBody &presentation,
+                   bool relativeOffsets = false) {
+  DestinationResolution result;
+  const std::size_t conditionCount =
+      presentation.conditions.size() + (presentation.drawCondition ? 1U : 0U);
+  std::unique_ptr<bool[]> conditions;
+  if (conditionCount != 0) {
+    conditions = std::make_unique<bool[]>(conditionCount);
+  }
+  std::size_t conditionIndex = 0;
+  for (const auto &condition : presentation.conditions) {
+    if (const auto *configured = std::get_if<int>(&condition)) {
+      bool value = false;
+      if (!configuredCondition(inputs.configuration, *configured, value)) {
+        result.failures.push_back(diagnostic(
+            "skin.renderer.condition.invalid",
+            "Configured destination condition is outside its safe domain."));
+        return result;
+      }
+      conditions[conditionIndex++] = value;
+      if (!value) {
+        return result;
+      }
+      continue;
+    }
+    const auto resolved = resolveBoolean(
+        inputs, index, std::get<SkinBooleanPropertyId>(condition));
+    if (resolved.failure) {
+      result.failures.push_back(*resolved.failure);
+      return result;
+    }
+    conditions[conditionIndex++] = *resolved.value;
+    if (!*resolved.value) {
+      return result;
+    }
+  }
+  if (presentation.drawCondition) {
+    const auto resolved =
+        resolveBoolean(inputs, index, *presentation.drawCondition);
+    if (resolved.failure) {
+      result.failures.push_back(*resolved.failure);
+      return result;
+    }
+    conditions[conditionIndex++] = *resolved.value;
+    if (!*resolved.value) {
+      return result;
+    }
+  }
+
+  std::int64_t timerStartMicros = INT64_MIN;
+  if (presentation.timer) {
+    const auto timer = resolveTimer(inputs, index, *presentation.timer);
+    if (timer.failure) {
+      result.failures.push_back(*timer.failure);
+      return result;
+    }
+    timerStartMicros = *timer.value;
+  }
+  auto temporal = evaluateSkinDestinationAuthored(
+      presentation, {.nowMicros = inputs.visualTimeMicros,
+                     .timerStartMicros = timerStartMicros,
+                     .optionConditions = std::span<const bool>(conditions.get(),
+                                                               conditionCount),
+                     .orderedOffsets = {}});
+  if (!temporal.diagnostics.empty()) {
+    result.failures = std::move(temporal.diagnostics);
+    return result;
+  }
+  if (!temporal.geometry) {
+    return result;
+  }
+
+  std::vector<ConfigOffset> offsets;
+  offsets.reserve(presentation.offsetIds.size());
+  double relativeTranslationX = 0.0;
+  double relativeTranslationY = 0.0;
+  for (const int id : presentation.offsetIds) {
+    if (id <= 0 || id > SkinCommandPolicy::maximumBeatorajaOffsetId) {
+      continue;
+    }
+    const auto configured = inputs.configuration.offsetsById.find(id);
+    if (configured != inputs.configuration.offsetsById.end()) {
+      offsets.push_back(configured->second);
+    } else {
+      const auto dynamic = inputs.state.offsetProperty(id);
+      if (!dynamic.supported) {
+        result.failures.push_back(diagnostic(
+            "skin.renderer.offset.missing",
+            "Destination offset is unsupported by both configuration and "
+            "frame state."));
+        return result;
+      }
+      offsets.push_back(dynamic.value);
+    }
+    if (relativeOffsets) {
+      const auto &offset = offsets.back();
+      relativeTranslationX +=
+          static_cast<double>(offset.x) - static_cast<double>(offset.w) * 0.5;
+      relativeTranslationY +=
+          static_cast<double>(offset.y) - static_cast<double>(offset.h) * 0.5;
+    }
+  }
+
+  auto evaluated = evaluateSkinDestinationAuthored(
+      presentation, {.nowMicros = inputs.visualTimeMicros,
+                     .timerStartMicros = timerStartMicros,
+                     .optionConditions = std::span<const bool>(conditions.get(),
+                                                               conditionCount),
+                     .orderedOffsets = offsets});
+  result.geometry = std::move(evaluated.geometry);
+  result.failures = std::move(evaluated.diagnostics);
+  if (relativeOffsets && result.geometry) {
+    result.geometry->rect.x -= relativeTranslationX;
+    result.geometry->rect.y -= relativeTranslationY;
+    if (result.geometry->clip) {
+      result.geometry->clip->x -= relativeTranslationX;
+      result.geometry->clip->y -= relativeTranslationY;
+    }
+  }
+  return result;
+}
+
+struct QuadLoweringResult {
+  std::optional<SkinDrawCommand> command;
+  std::optional<SkinDiagnostic> failure;
+};
+
+bool projectedQuadFitsUpload(const UiDestinationGeometry &projected) noexcept {
+  const auto fitsFloat = [](double value) {
+    return std::isfinite(value) &&
+           std::abs(value) <=
+               static_cast<double>(std::numeric_limits<float>::max());
+  };
+  for (const auto &vertex : projected.vertices) {
+    if (!fitsFloat(vertex[0]) || !fitsFloat(vertex[1])) {
+      return false;
+    }
+  }
+  for (const auto &uv : projected.normalizedUvs) {
+    if (!fitsFloat(uv[0]) || !fitsFloat(uv[1])) {
+      return false;
+    }
+  }
+  if (projected.clip &&
+      (!fitsFloat(projected.clip->x) || !fitsFloat(projected.clip->y) ||
+       !fitsFloat(projected.clip->width) ||
+       !fitsFloat(projected.clip->height))) {
+    return false;
+  }
+  return std::ranges::all_of(projected.rgba,
+                             [](float value) { return std::isfinite(value); });
+}
+
+QuadLoweringResult
+lowerPreparedQuad(const SkinFrameInputs &inputs, SkinObjectId sourceObject,
+                  std::uint32_t authoredOrdinal,
+                  const AuthoredDestinationGeometry &geometry,
+                  SkinResourceId resourceId, int textureWidth,
+                  int textureHeight, const SkinSourceRect &region) {
+  QuadLoweringResult result;
+  if (geometry.rgba[3] <= 0.0F) {
+    return result;
+  }
+  if (resourceId == 0 || textureWidth <= 0 || textureHeight <= 0 ||
+      region.w == 0 || region.h == 0) {
+    result.failure = diagnostic("skin.renderer.resource.missing",
+                                "Prepared image resource or region is absent.");
+    return result;
+  }
+  const auto projected =
+      projectSkinDestinationToUi(geometry,
+                                 {.textureWidth = textureWidth,
+                                  .textureHeight = textureHeight,
+                                  .region = region},
+                                 inputs.viewport);
+  if (!projectedQuadFitsUpload(projected)) {
+    result.failure = diagnostic(
+        "skin.renderer.geometry.invalid",
+        "Projected image geometry is non-finite or exceeds float range.");
+    return result;
+  }
+  bool emptyClip = false;
+  const auto clip =
+      intersectClip(projected.clip, inputs.viewport.safeUiBounds, emptyClip);
+  if (emptyClip) {
+    return result;
+  }
+  SkinTexturedQuadCommand quad;
+  quad.resource = resourceId;
+  quad.state = {
+      .blend = projected.blend, .filter = projected.filter, .scissor = clip};
+  const std::uint32_t color = packAbgr(projected.rgba);
+  for (std::size_t vertex = 0; vertex < quad.vertices.size(); ++vertex) {
+    quad.vertices[vertex] = {
+        .x = static_cast<float>(projected.vertices[vertex][0]),
+        .y = static_cast<float>(projected.vertices[vertex][1]),
+        .u = static_cast<float>(projected.normalizedUvs[vertex][0]),
+        .v = static_cast<float>(projected.normalizedUvs[vertex][1]),
+        .rgba = color};
+  }
+  result.command = SkinDrawCommand{.authoredOrdinal = authoredOrdinal,
+                                   .sourceObject = sourceObject,
+                                   .payload = std::move(quad)};
+  return result;
+}
+
+QuadLoweringResult lowerSpriteQuad(const SkinFrameInputs &inputs,
+                                   SkinObjectId sourceObject,
+                                   std::uint32_t authoredOrdinal,
+                                   const AuthoredDestinationGeometry &geometry,
+                                   const SkinSpriteFrames &sprite,
+                                   const SkinSourceRect &selectedFrame) {
+  const auto *resource = inputs.resources.find(sprite.resource);
+  const auto *region =
+      inputs.resources.findResolvedRegion(sprite.resource, selectedFrame);
+  if (!resource || !region) {
+    return {.failure =
+                diagnostic("skin.renderer.resource.missing",
+                           "Prepared image resource or region is absent.")};
+  }
+  return lowerPreparedQuad(inputs, sourceObject, authoredOrdinal, geometry,
+                           sprite.resource, resource->width, resource->height,
+                           region->resolved);
+}
+
+struct JudgeLoweringResult {
+  std::vector<SkinDrawCommand> commands;
+  std::optional<SkinDiagnostic> failure;
+};
+
+JudgeLoweringResult
+lowerJudge(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
+           std::span<const SkinObjectDefinition *const> objects,
+           const SkinDestination &outerDestination,
+           const SkinJudgeObject &judge, const SkinJudgeStateView &state,
+           const AuthoredDestinationGeometry *outerGeometry) {
+  JudgeLoweringResult result;
+  if (!state.supported) {
+    result.failure =
+        diagnostic("skin.renderer.judge.state", "Judge state is unsupported.");
+    return result;
+  }
+  if (!state.optionalZeroBasedGrade) {
+    return result;
+  }
+  const int grade = *state.optionalZeroBasedGrade;
+  if (grade < 0 || grade > 5) {
+    result.failure = diagnostic("skin.renderer.judge.state",
+                                "Judge grade is outside the supported range.");
+    return result;
+  }
+
+  const SkinNestedObjectPresentation *imagePresentation = nullptr;
+  const SkinNestedObjectPresentation *detailPresentation = nullptr;
+  const auto presentationAt =
+      [&](std::size_t index) -> const SkinJudgeGradePresentation * {
+    return index < judge.grades.size() ? &judge.grades[index] : nullptr;
+  };
+  const auto *selected = presentationAt(static_cast<std::size_t>(grade));
+  if (grade == 0 && state.maximumGauge) {
+    const auto *maximum = presentationAt(6);
+    if (maximum && maximum->image) {
+      imagePresentation = &*maximum->image;
+    } else if (selected && selected->image) {
+      imagePresentation = &*selected->image;
+    }
+    if (maximum && maximum->detailNumber) {
+      detailPresentation = &*maximum->detailNumber;
+    } else if (selected && selected->detailNumber) {
+      detailPresentation = &*selected->detailNumber;
+    }
+  } else if (selected) {
+    if (selected->image) {
+      imagePresentation = &*selected->image;
+    }
+    if (grade < 3 && selected->detailNumber) {
+      detailPresentation = &*selected->detailNumber;
+    }
+  }
+  // Pinned SkinJudge simply has nothing to draw when a selected image slot is
+  // absent. A detail number never renders without its judge image.
+  if (!imagePresentation) {
+    return result;
+  }
+
+  const auto *imageObject = findObject(objects, imagePresentation->object);
+  const auto *image = imageObject
+                          ? std::get_if<SkinImageObject>(&imageObject->payload)
+                          : nullptr;
+  if (!imageObject || !image || image->orderedStates.size() != 1 ||
+      image->stateIndex) {
+    result.failure = diagnostic(
+        "skin.renderer.judge.image",
+        "Judge image presentation does not reference one inline image state.");
+    return result;
+  }
+  auto imageDestination =
+      resolveDestination(inputs, index, imagePresentation->destination);
+  if (!imageDestination.failures.empty()) {
+    result.failure = std::move(imageDestination.failures.front());
+    return result;
+  }
+  const auto &imageSprite = image->orderedStates.front();
+  const auto selectedImage = selectSpriteFrame(inputs, index, imageSprite);
+  if (selectedImage.failure) {
+    result.failure = *selectedImage.failure;
+    return result;
+  }
+  if (selectedImage.suppressed || !selectedImage.frame) {
+    return result;
+  }
+  if (!imageDestination.geometry) {
+    return result;
+  }
+  imageDestination.geometry->clip =
+      outerGeometry ? outerGeometry->clip : std::nullopt;
+  const auto *preparedImage = inputs.resources.find(imageSprite.resource);
+  const auto *preparedImageRegion = inputs.resources.findResolvedRegion(
+      imageSprite.resource, *selectedImage.frame);
+  if (!preparedImage || !preparedImageRegion || preparedImage->width <= 0 ||
+      preparedImage->height <= 0 || preparedImageRegion->resolved.w <= 0 ||
+      preparedImageRegion->resolved.h <= 0) {
+    result.failure =
+        diagnostic("skin.renderer.resource.missing",
+                   "Prepared judge image resource or region is absent.");
+    return result;
+  }
+
+  double detailLength = 0.0;
+  if (detailPresentation) {
+    const auto *detailObject = findObject(objects, detailPresentation->object);
+    const auto *number =
+        detailObject ? std::get_if<SkinNumberObject>(&detailObject->payload)
+                     : nullptr;
+    if (!detailObject || !number || !number->relativeToJudgeImage) {
+      result.failure = diagnostic(
+          "skin.renderer.judge.detail",
+          "Judge detail presentation does not reference a relative number.");
+      return result;
+    }
+    auto layout = prepareNumberLayoutForValue(*number, state.combo);
+    if (layout.failure) {
+      result.failure = *layout.failure;
+      return result;
+    }
+    if (!layout.suppressed) {
+      auto detailDestination = resolveDestination(
+          inputs, index, detailPresentation->destination, true);
+      if (!detailDestination.failures.empty()) {
+        result.failure = std::move(detailDestination.failures.front());
+        return result;
+      }
+      if (detailDestination.geometry) {
+        detailDestination.geometry->rect.x += imageDestination.geometry->rect.x;
+        detailDestination.geometry->rect.y += imageDestination.geometry->rect.y;
+        // Nested Judge children are prepared directly and are never passed
+        // through Skin.drawObject. The outer Judge owns the only active clip.
+        detailDestination.geometry->clip =
+            outerGeometry ? outerGeometry->clip : std::nullopt;
+        if (!selectNumericAnimation(inputs, index, layout)) {
+          if (layout.failure) {
+            result.failure = *layout.failure;
+          }
+          return result;
+        }
+        const std::size_t visible = static_cast<std::size_t>(
+            std::count_if(layout.glyphs.begin(), layout.glyphs.end(),
+                          [](int glyph) { return glyph >= 0; }));
+        detailLength =
+            (detailDestination.geometry->rect.width + layout.spacing) *
+            static_cast<double>(visible);
+        if (outerGeometry && detailDestination.geometry->rgba[3] > 0.0F) {
+          SkinDestination nestedDestination{
+              .object = detailObject->id,
+              .presentation = detailPresentation->destination};
+          nestedDestination.presentation.authoredOrdinal =
+              outerDestination.presentation.authoredOrdinal;
+          auto lowered = lowerNumeric(inputs, *detailObject, nestedDestination,
+                                      *detailDestination.geometry, layout);
+          if (lowered.failure) {
+            result.failure = *lowered.failure;
+            return result;
+          }
+          result.commands = std::move(lowered.commands);
+        }
+      }
+    }
+  }
+
+  if (judge.shiftImageByHalfDetailWidth) {
+    imageDestination.geometry->rect.x -= detailLength * 0.5;
+  }
+  if (!outerGeometry) {
+    return result;
+  }
+  auto loweredImage = lowerPreparedQuad(
+      inputs, imageObject->id, outerDestination.presentation.authoredOrdinal,
+      *imageDestination.geometry, imageSprite.resource, preparedImage->width,
+      preparedImage->height, preparedImageRegion->resolved);
+  if (loweredImage.failure) {
+    result.failure = *loweredImage.failure;
+    result.commands.clear();
+    return result;
+  }
+  if (loweredImage.command) {
+    result.commands.push_back(std::move(*loweredImage.command));
+  }
+  return result;
+}
+
 bool reportObjectFailure(SkinFrameEvaluationResult &result,
                          const SkinObjectDefinition &object,
                          SkinDiagnostic failure) {
@@ -1298,6 +1793,12 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
           "Frame state serial does not match the evaluation serial."));
       return result;
     }
+    if (inputs.sessionSerial == 0) {
+      result.diagnostics.push_back(
+          diagnostic("skin.renderer.session.serial",
+                     "Gameplay skin session serial must be nonzero."));
+      return result;
+    }
     const auto begun = inputs.runtime.beginFrame(inputs.frameSerial);
     if (!begun.ok) {
       result.diagnostics.push_back(begun.failure.value_or(
@@ -1310,6 +1811,10 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
           diagnostic("skin.renderer.viewport.invalid",
                      "Gameplay skin viewport is not projectable."));
       return result;
+    }
+    if (gaugeAnimationSessionSerial_ != inputs.sessionSerial) {
+      gaugeAnimationStates_.clear();
+      gaugeAnimationSessionSerial_ = inputs.sessionSerial;
     }
 
     std::vector<std::uint32_t> mergedProjectionOrdinals;
@@ -1359,11 +1864,37 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
       if (disabledOptionalObject(lookupIndex, object->id)) {
         continue;
       }
+      // Numeric option conditions are resolved by Skin.prepare's static
+      // dstop filtering before an object enters Beatoraja's frame object
+      // array. A rejected Gauge/Judge therefore performs no special state or
+      // child preparation; only runtime Boolean dstdraw rejection continues
+      // through those overrides.
+      bool rejectedByConfiguredOption = false;
+      for (const auto &condition : destination.presentation.conditions) {
+        const auto *configured = std::get_if<int>(&condition);
+        if (!configured) {
+          continue;
+        }
+        bool enabled = false;
+        if (!configuredCondition(inputs.configuration, *configured, enabled) ||
+            !enabled) {
+          rejectedByConfiguredOption = true;
+          break;
+        }
+      }
+      if (rejectedByConfiguredOption) {
+        continue;
+      }
       const auto *image = std::get_if<SkinImageObject>(&object->payload);
       const auto *number = std::get_if<SkinNumberObject>(&object->payload);
       const auto *floating = std::get_if<SkinFloatObject>(&object->payload);
       const auto *text = std::get_if<SkinTextObject>(&object->payload);
-      if (!image && !number && !floating && !text) {
+      const auto *slider = std::get_if<SkinSliderObject>(&object->payload);
+      const auto *graph = std::get_if<SkinGraphObject>(&object->payload);
+      const auto *gauge = std::get_if<SkinGaugeObject>(&object->payload);
+      const auto *judge = std::get_if<SkinJudgeObject>(&object->payload);
+      if (!image && !number && !floating && !text && !slider && !graph &&
+          !gauge && !judge) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
@@ -1371,6 +1902,34 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
           return result;
         }
         continue;
+      }
+
+      std::optional<SkinJudgeStateView> judgeState;
+      if (judge) {
+        judgeState = inputs.state.judgeState(judge->player);
+        if (!judgeState->supported) {
+          if (reportObjectFailure(result, *object,
+                                  diagnostic("skin.renderer.judge.state",
+                                             "Judge state is unsupported."))) {
+            return result;
+          }
+          continue;
+        }
+        // SkinJudge reads the current grade before calling super.prepare, so
+        // an absent grade skips the wrapper destination and all its callbacks.
+        if (!judgeState->optionalZeroBasedGrade) {
+          continue;
+        }
+        if (*judgeState->optionalZeroBasedGrade < 0 ||
+            *judgeState->optionalZeroBasedGrade > 5) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.judge.state",
+                             "Judge grade is outside the supported range."))) {
+            return result;
+          }
+          continue;
+        }
       }
 
       std::size_t stateIndex = 0;
@@ -1428,6 +1987,7 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
       }
       std::size_t conditionIndex = 0;
       bool conditionFailure = false;
+      bool destinationVisible = true;
       for (const auto &condition : destination.presentation.conditions) {
         if (const auto *configured = std::get_if<int>(&condition)) {
           bool value = false;
@@ -1436,6 +1996,10 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
             break;
           }
           conditions[conditionIndex++] = value;
+          if (!value) {
+            destinationVisible = false;
+            break;
+          }
         } else {
           const auto resolved = resolveBoolean(
               inputs, lookupIndex, std::get<SkinBooleanPropertyId>(condition));
@@ -1447,12 +2011,16 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
             break;
           }
           conditions[conditionIndex++] = *resolved.value;
+          if (!*resolved.value) {
+            destinationVisible = false;
+            break;
+          }
         }
       }
       if (conditionFailure) {
         continue;
       }
-      if (destination.presentation.drawCondition) {
+      if (destinationVisible && destination.presentation.drawCondition) {
         const auto resolved = resolveBoolean(
             inputs, lookupIndex, *destination.presentation.drawCondition);
         if (resolved.failure) {
@@ -1462,42 +2030,15 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
           continue;
         }
         conditions[conditionIndex++] = *resolved.value;
+        destinationVisible = *resolved.value;
       }
 
-      std::vector<ConfigOffset> offsets;
-      offsets.reserve(destination.presentation.offsetIds.size());
-      bool offsetFailure = false;
-      for (const int id : destination.presentation.offsetIds) {
-        // SkinObject.setOffsetID ignores the decoder's zero default and every
-        // ID outside SkinProperty's pinned 1...199 range.
-        if (id <= 0 || id > SkinCommandPolicy::maximumBeatorajaOffsetId) {
-          continue;
-        }
-        const auto found = inputs.configuration.offsetsById.find(id);
-        if (found != inputs.configuration.offsetsById.end()) {
-          offsets.push_back(found->second);
-          continue;
-        }
-        const auto dynamic = inputs.state.offsetProperty(id);
-        if (!dynamic.supported) {
-          if (reportObjectFailure(
-                  result, *object,
-                  diagnostic("skin.renderer.offset.missing",
-                             "Destination offset is unsupported by both "
-                             "configuration and frame state."))) {
-            return result;
-          }
-          offsetFailure = true;
-          break;
-        }
-        offsets.push_back(dynamic.value);
-      }
-      if (offsetFailure) {
+      if (!destinationVisible && !gauge && !judge) {
         continue;
       }
 
       std::int64_t timerStartMicros = INT64_MIN;
-      if (destination.presentation.timer) {
+      if (destinationVisible && destination.presentation.timer) {
         const auto timer =
             resolveTimer(inputs, lookupIndex, *destination.presentation.timer);
         if (timer.failure) {
@@ -1508,12 +2049,77 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         }
         timerStartMicros = *timer.value;
       }
-      auto evaluated = evaluateSkinDestinationAuthored(
-          destination.presentation, {.nowMicros = inputs.visualTimeMicros,
-                                     .timerStartMicros = timerStartMicros,
-                                     .optionConditions = std::span<const bool>(
-                                         conditions.get(), conditionCount),
-                                     .orderedOffsets = offsets});
+      SkinDestinationEvaluationResult evaluated;
+      if (destinationVisible) {
+        evaluated = evaluateSkinDestinationAuthored(
+            destination.presentation,
+            {.nowMicros = inputs.visualTimeMicros,
+             .timerStartMicros = timerStartMicros,
+             .optionConditions =
+                 std::span<const bool>(conditions.get(), conditionCount),
+             .orderedOffsets = {}});
+        if (!evaluated.diagnostics.empty()) {
+          bool critical = false;
+          for (auto &item : evaluated.diagnostics) {
+            critical = reportObjectFailure(result, *object, std::move(item)) ||
+                       critical;
+          }
+          if (critical) {
+            return result;
+          }
+          continue;
+        }
+        destinationVisible = evaluated.geometry.has_value();
+      }
+      if (!destinationVisible && !gauge && !judge) {
+        continue;
+      }
+
+      std::vector<ConfigOffset> offsets;
+      if (destinationVisible) {
+        offsets.reserve(destination.presentation.offsetIds.size());
+      }
+      bool offsetFailure = false;
+      if (destinationVisible) {
+        for (const int id : destination.presentation.offsetIds) {
+          // SkinObject.setOffsetID ignores the decoder's zero default and
+          // every ID outside SkinProperty's pinned 1...199 range.
+          if (id <= 0 || id > SkinCommandPolicy::maximumBeatorajaOffsetId) {
+            continue;
+          }
+          const auto found = inputs.configuration.offsetsById.find(id);
+          if (found != inputs.configuration.offsetsById.end()) {
+            offsets.push_back(found->second);
+            continue;
+          }
+          const auto dynamic = inputs.state.offsetProperty(id);
+          if (!dynamic.supported) {
+            if (reportObjectFailure(
+                    result, *object,
+                    diagnostic("skin.renderer.offset.missing",
+                               "Destination offset is unsupported by both "
+                               "configuration and frame state."))) {
+              return result;
+            }
+            offsetFailure = true;
+            break;
+          }
+          offsets.push_back(dynamic.value);
+        }
+      }
+      if (offsetFailure) {
+        continue;
+      }
+
+      if (destinationVisible) {
+        evaluated = evaluateSkinDestinationAuthored(
+            destination.presentation,
+            {.nowMicros = inputs.visualTimeMicros,
+             .timerStartMicros = timerStartMicros,
+             .optionConditions =
+                 std::span<const bool>(conditions.get(), conditionCount),
+             .orderedOffsets = offsets});
+      }
       if (!evaluated.diagnostics.empty()) {
         bool critical = false;
         for (auto &item : evaluated.diagnostics) {
@@ -1525,7 +2131,369 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         }
         continue;
       }
-      if (!evaluated.geometry) {
+      if (!evaluated.geometry && !gauge && !judge) {
+        continue;
+      }
+
+      if (gauge) {
+        const auto gaugeState = inputs.state.gaugeState();
+        const float gaugeValue = static_cast<float>(gaugeState.value);
+        const float gaugeMinimum = static_cast<float>(gaugeState.minimum);
+        const float gaugeMaximum = static_cast<float>(gaugeState.maximum);
+        const float gaugeBorder = static_cast<float>(gaugeState.border);
+        const bool modelValid =
+            gauge->orderedNodes.size() == 36 && gauge->parts >= 1 &&
+            gauge->parts <= 512 && gauge->animationRange >= 0 &&
+            gauge->animationRange <= 1024 && gauge->animationCycleMillis >= 1 &&
+            gauge->animationCycleMillis <= 60'000 &&
+            (gauge->animation != SkinGaugeAnimationType::Flicker ||
+             gauge->animationCycleMillis >= 4) &&
+            gauge->resultStartMillis >= 0 &&
+            gauge->resultStartMillis < gauge->resultEndMillis &&
+            gauge->resultEndMillis <= 600'000;
+        const bool stateValid =
+            gaugeState.supported && std::isfinite(gaugeState.value) &&
+            std::isfinite(gaugeState.minimum) &&
+            std::isfinite(gaugeState.maximum) &&
+            std::isfinite(gaugeState.border) && std::isfinite(gaugeValue) &&
+            std::isfinite(gaugeMinimum) && std::isfinite(gaugeMaximum) &&
+            std::isfinite(gaugeBorder) && gaugeMaximum > 0.0F &&
+            gaugeMaximum > gaugeMinimum && gaugeState.gaugeType >= 0 &&
+            gaugeState.gaugeType <= 8;
+        if (!modelValid || !stateValid) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.gauge.invalid",
+                             "Gauge model or frame state is outside its safe "
+                             "rendering domain."))) {
+            return result;
+          }
+          continue;
+        }
+
+        GaugeAnimationState animationState;
+        if (const auto found = gaugeAnimationStates_.find(object->id);
+            found != gaugeAnimationStates_.end()) {
+          animationState = found->second;
+        }
+        const std::int64_t visualMillis = inputs.visualTimeMicros / 1000;
+        if (gauge->animation != SkinGaugeAnimationType::Flicker &&
+            animationState.deadlineMillis < visualMillis) {
+          ++animationState.epoch;
+          const int modulus = gauge->animationRange + 1;
+          switch (gauge->animation) {
+          case SkinGaugeAnimationType::Random: {
+            if (!inputs.gaugeRandomSource) {
+              if (reportObjectFailure(
+                      result, *object,
+                      diagnostic("skin.renderer.gauge.random",
+                                 "Random gauge animation has no session-owned "
+                                 "random source."))) {
+                return result;
+              }
+              continue;
+            }
+            const auto random = inputs.gaugeRandomSource->next(
+                object->id, animationState.epoch,
+                static_cast<std::uint32_t>(modulus));
+            if (!random || *random >= static_cast<std::uint32_t>(modulus)) {
+              if (reportObjectFailure(
+                      result, *object,
+                      diagnostic("skin.renderer.gauge.random",
+                                 "Random gauge source returned an invalid "
+                                 "animation value."))) {
+                return result;
+              }
+              continue;
+            }
+            animationState.animation = static_cast<int>(*random);
+            break;
+          }
+          case SkinGaugeAnimationType::Increase:
+            animationState.animation =
+                (animationState.animation + gauge->animationRange) % modulus;
+            break;
+          case SkinGaugeAnimationType::Decrease:
+            animationState.animation = (animationState.animation + 1) % modulus;
+            break;
+          case SkinGaugeAnimationType::Flicker:
+            break;
+          }
+          animationState.deadlineMillis =
+              visualMillis > std::numeric_limits<std::int64_t>::max() -
+                                 gauge->animationCycleMillis
+                  ? std::numeric_limits<std::int64_t>::max()
+                  : visualMillis + gauge->animationCycleMillis;
+        }
+
+        if (!evaluated.geometry) {
+          gaugeAnimationStates_.insert_or_assign(object->id, animationState);
+          continue;
+        }
+
+        const int family = gaugeState.gaugeType >= 6 ? gaugeState.gaugeType - 3
+                                                     : gaugeState.gaugeType;
+        const int notes =
+            gaugeValue > 0.0F
+                ? std::max(1,
+                           truncatingJavaInt(gaugeValue *
+                                             static_cast<float>(gauge->parts) /
+                                             gaugeMaximum))
+                : 0;
+        std::vector<SkinDrawCommand> gaugeCommands;
+        gaugeCommands.reserve(
+            static_cast<std::size_t>(gauge->parts) *
+            (gauge->animation == SkinGaugeAnimationType::Flicker ? 2U : 1U));
+        std::optional<SkinDiagnostic> gaugeFailure;
+        auto emitRole = [&](int part, int role, float alphaMultiplier) {
+          if (gaugeFailure) {
+            return;
+          }
+          const std::size_t nodeIndex =
+              static_cast<std::size_t>(family * 6 + role);
+          if (nodeIndex >= gauge->orderedNodes.size()) {
+            gaugeFailure = diagnostic("skin.renderer.gauge.node",
+                                      "Gauge selected an absent node role.");
+            return;
+          }
+          const auto &node = gauge->orderedNodes[nodeIndex];
+          const auto selectedNode =
+              selectSpriteFrame(inputs, lookupIndex, node);
+          if (selectedNode.failure) {
+            gaugeFailure = *selectedNode.failure;
+            return;
+          }
+          if (selectedNode.suppressed || !selectedNode.frame) {
+            return;
+          }
+          auto geometry = *evaluated.geometry;
+          geometry.rect.x += geometry.rect.width *
+                             static_cast<double>(part - 1) / gauge->parts;
+          geometry.rect.width /= gauge->parts;
+          geometry.rgba[3] *= alphaMultiplier;
+          // SkinGauge draws its nodes straight through SkinObjectRenderer and
+          // forces TYPE_NORMAL. It does not use SkinObject's textured-region
+          // stretch, rotation, or destination filtering path.
+          geometry.stretch = SkinStretchMode::Stretch;
+          geometry.angleDegrees = 0.0;
+          geometry.filter = SkinFilterMode::Nearest;
+          auto lowered = lowerSpriteQuad(
+              inputs, object->id, destination.presentation.authoredOrdinal,
+              geometry, node, *selectedNode.frame);
+          if (lowered.failure) {
+            gaugeFailure = *lowered.failure;
+          } else if (lowered.command) {
+            gaugeCommands.push_back(std::move(*lowered.command));
+          }
+        };
+        for (int part = 1; part <= gauge->parts && !gaugeFailure; ++part) {
+          const float partBorder = static_cast<float>(part) * gaugeMaximum /
+                                   static_cast<float>(gauge->parts);
+          const bool lowSide = partBorder < gaugeBorder;
+          const int side = lowSide ? 1 : 0;
+          if (gauge->animation == SkinGaugeAnimationType::Flicker) {
+            emitRole(part, (notes >= part ? 0 : 2) + side, 1.0F);
+            if (part == notes) {
+              const std::int64_t cycle = gauge->animationCycleMillis;
+              const std::int64_t phase =
+                  ((visualMillis % cycle) + cycle) % cycle;
+              const double half = static_cast<double>(cycle) / 2.0;
+              const double alpha =
+                  phase < half
+                      ? static_cast<double>(phase) / (half - 1.0)
+                      : static_cast<double>(cycle - 1 - phase) / (half - 1.0);
+              emitRole(part, 4 + side, static_cast<float>(alpha));
+            }
+          } else {
+            const int role =
+                notes == part
+                    ? 4
+                    : (notes - animationState.animation > part ? 0 : 2);
+            emitRole(part, role + side, 1.0F);
+          }
+        }
+        if (gaugeFailure) {
+          if (reportObjectFailure(result, *object, *gaugeFailure)) {
+            return result;
+          }
+          continue;
+        }
+        if (gaugeCommands.size() >
+            SkinCommandPolicy::maximumCommands - buffer.commands.size()) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.command.limit",
+                             "Gauge commands exceed the fixed frame limit."))) {
+            return result;
+          }
+          continue;
+        }
+        gaugeAnimationStates_.insert_or_assign(object->id, animationState);
+        buffer.commands.insert(buffer.commands.end(),
+                               std::make_move_iterator(gaugeCommands.begin()),
+                               std::make_move_iterator(gaugeCommands.end()));
+        continue;
+      }
+
+      if (slider || graph) {
+        const SkinSpriteFrames &sprite = slider ? slider->knob : graph->fill;
+        const auto selectedSprite =
+            selectSpriteFrame(inputs, lookupIndex, sprite);
+        if (selectedSprite.failure) {
+          if (reportObjectFailure(result, *object, *selectedSprite.failure)) {
+            return result;
+          }
+          continue;
+        }
+        if (selectedSprite.suppressed || !selectedSprite.frame) {
+          continue;
+        }
+        // Pinned SkinSlider/SkinGraph obtain the source image before reading
+        // their RateProperty. Preserve that callback order and do not invoke a
+        // value callback when the prepared source is absent.
+        const auto *resource = inputs.resources.find(sprite.resource);
+        const auto *region = inputs.resources.findResolvedRegion(
+            sprite.resource, *selectedSprite.frame);
+        if (!resource || !region || resource->width <= 0 ||
+            resource->height <= 0 || region->resolved.w <= 0 ||
+            region->resolved.h <= 0) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.resource.missing",
+                             "Prepared slider/graph resource is absent."))) {
+            return result;
+          }
+          continue;
+        }
+        const auto rate = resolveRate(inputs, lookupIndex,
+                                      slider ? slider->value : graph->value);
+        if (rate.failure) {
+          if (reportObjectFailure(result, *object, *rate.failure)) {
+            return result;
+          }
+          continue;
+        }
+        // FloatProperty.get and LuaValue.tofloat both cross a Java float
+        // boundary before SkinSlider/SkinGraph perform their arithmetic.
+        const float objectRate = static_cast<float>(*rate.value);
+
+        QuadLoweringResult lowered;
+        if (slider) {
+          if (!std::isfinite(slider->range) || slider->direction > 3) {
+            lowered.failure = diagnostic(
+                "skin.renderer.slider.invalid",
+                "Slider range or direction is outside its safe domain.");
+          } else {
+            auto geometry = *evaluated.geometry;
+            const float displacement =
+                objectRate * static_cast<float>(slider->range);
+            switch (slider->direction) {
+            case 0:
+              geometry.rect.y =
+                  static_cast<float>(geometry.rect.y) + displacement;
+              break;
+            case 1:
+              geometry.rect.x =
+                  static_cast<float>(geometry.rect.x) + displacement;
+              break;
+            case 2:
+              geometry.rect.y =
+                  static_cast<float>(geometry.rect.y) - displacement;
+              break;
+            case 3:
+              geometry.rect.x =
+                  static_cast<float>(geometry.rect.x) - displacement;
+              break;
+            }
+            lowered = lowerPreparedQuad(
+                inputs, object->id, destination.presentation.authoredOrdinal,
+                geometry, sprite.resource, resource->width, resource->height,
+                region->resolved);
+          }
+        } else if (graph->direction < 0 || graph->direction > 1) {
+          lowered.failure =
+              diagnostic("skin.renderer.graph.invalid",
+                         "Graph direction is outside its validated domain.");
+        } else if (objectRate != 0.0F) {
+          auto geometry = *evaluated.geometry;
+          auto cropped = region->resolved;
+          if (graph->direction == 1) {
+            const int height =
+                truncatingJavaInt(static_cast<float>(cropped.h) * objectRate);
+            const double shiftedY = static_cast<double>(cropped.y) +
+                                    static_cast<double>(cropped.h) -
+                                    static_cast<double>(height);
+            if (shiftedY <
+                    static_cast<double>(std::numeric_limits<int>::min()) ||
+                shiftedY >
+                    static_cast<double>(std::numeric_limits<int>::max())) {
+              lowered.failure = diagnostic(
+                  "skin.renderer.graph.range",
+                  "Graph source crop exceeds its safe integer range.");
+            } else {
+              cropped.y = static_cast<int>(shiftedY);
+            }
+            cropped.h = height;
+            geometry.rect.height =
+                static_cast<float>(geometry.rect.height) * objectRate;
+          } else {
+            cropped.w =
+                truncatingJavaInt(static_cast<float>(cropped.w) * objectRate);
+            geometry.rect.width =
+                static_cast<float>(geometry.rect.width) * objectRate;
+          }
+          if (!lowered.failure && cropped.w != 0 && cropped.h != 0) {
+            lowered = lowerPreparedQuad(
+                inputs, object->id, destination.presentation.authoredOrdinal,
+                geometry, sprite.resource, resource->width, resource->height,
+                cropped);
+          }
+        }
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        if (lowered.command) {
+          if (buffer.commands.size() >= SkinCommandPolicy::maximumCommands) {
+            if (reportObjectFailure(result, *object,
+                                    diagnostic("skin.renderer.command.limit",
+                                               "Slider/graph command exceeds "
+                                               "the fixed frame limit."))) {
+              return result;
+            }
+            continue;
+          }
+          buffer.commands.push_back(std::move(*lowered.command));
+        }
+        continue;
+      }
+
+      if (judge) {
+        auto lowered = lowerJudge(
+            inputs, lookupIndex, objects, destination, *judge, *judgeState,
+            evaluated.geometry ? &*evaluated.geometry : nullptr);
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        if (lowered.commands.size() >
+            SkinCommandPolicy::maximumCommands - buffer.commands.size()) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.command.limit",
+                             "Judge commands exceed the fixed frame limit."))) {
+            return result;
+          }
+          continue;
+        }
+        buffer.commands.insert(
+            buffer.commands.end(),
+            std::make_move_iterator(lowered.commands.begin()),
+            std::make_move_iterator(lowered.commands.end()));
         continue;
       }
 

@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <string_view>
 
 namespace skin {
@@ -65,6 +66,14 @@ bool boundedUtf8(std::string_view value) {
 bool finiteAndBounded(double value) {
   return std::isfinite(value) &&
          std::abs(value) <= LuaSkinTableDecoderPolicy::maxAuthoredDimension;
+}
+
+bool validIntegerRateRange(
+    const SkinSliderObject::IntegerRangeSource &range) {
+  const auto span = static_cast<std::int64_t>(range.maximum) -
+                    static_cast<std::int64_t>(range.minimum);
+  return span != 0 && span >= std::numeric_limits<int>::min() &&
+         span <= std::numeric_limits<int>::max();
 }
 
 SkinTextNormalizationResult textFailure(SkinTextGraphNormalizationError error) {
@@ -195,8 +204,7 @@ normalizeSkinGraph(const SkinGraphNormalizationInput &input) {
   if (input.explicitRate) {
     graph.value = *input.explicitRate;
   } else if (input.isRefNum) {
-    if (!input.integerRange ||
-        input.integerRange->minimum > input.integerRange->maximum) {
+    if (!input.integerRange || !validIntegerRateRange(*input.integerRange)) {
       return graphFailure(SkinTextGraphNormalizationError::InvalidGraphRange);
     }
     graph.value = *input.integerRange;
