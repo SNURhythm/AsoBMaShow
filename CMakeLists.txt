@@ -4296,6 +4296,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(playfield_projection_tests PRIVATE cxx_std_23)
 
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
+        add_executable(skin_configuration_write_queue_tests
+            tests/skin_configuration_write_queue_tests.cpp
+            src/skin/SkinConfigurationWriteQueue.cpp
+        )
+        target_include_directories(skin_configuration_write_queue_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(skin_configuration_write_queue_tests PRIVATE cxx_std_23)
+
         add_executable(play_skin_state_bridge_tests
             tests/play_skin_state_bridge_tests.cpp
             src/FileChecksum.cpp
@@ -5599,6 +5608,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)
         asobmashow_register_test(play_skin_state_bridge_tests)
+    endif()
+    if(TARGET skin_configuration_write_queue_tests)
+        asobmashow_register_test(skin_configuration_write_queue_tests)
     endif()
     asobmashow_register_test(play_options_panel_view_tests)
     asobmashow_register_test(gameplay_judge_rules_tests)
