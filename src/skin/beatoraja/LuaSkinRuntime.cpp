@@ -36,8 +36,13 @@ constexpr std::size_t kMaximumReturnedTableDepth = 64;
 constexpr std::uint64_t kMaximumReturnedTableEntries = 200'000;
 constexpr std::size_t kMaximumReturnedStringBytes = 16ULL * 1024 * 1024;
 constexpr std::size_t kMaximumCallbacks = 20'000;
+constexpr std::size_t kMaximumDiagnosticBytes = 4ULL * 1024;
 constexpr std::string_view kHostErrorPrefix = "@ASOBMSKIN:";
 char kRuntimeRegistryKey;
+
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+std::atomic<int> gTestAllocationPoint{-1};
+#endif
 
 SkinDiagnostic makeDiagnostic(std::string code, std::string message,
                               std::string virtualPath = {}) {
@@ -45,6 +50,18 @@ SkinDiagnostic makeDiagnostic(std::string code, std::string message,
           .message = std::move(message),
           .virtualPath = std::move(virtualPath),
           .severity = DiagnosticSeverity::Error};
+}
+
+std::string boundedLuaErrorText(lua_State *state, int index) {
+  if (lua_type(state, index) != LUA_TSTRING) {
+    return "Lua execution failed without a message";
+  }
+  std::size_t size = 0;
+  const char *message = lua_tolstring(state, index, &size);
+  if (message == nullptr) {
+    return "Lua execution failed without a message";
+  }
+  return {message, std::min(size, kMaximumDiagnosticBytes)};
 }
 
 const char *runtimeFileFailureCode(SkinFileError error) noexcept {
@@ -88,11 +105,19 @@ struct LuaRuntimeShared {
   std::uint64_t frameInstructions = 0;
   std::chrono::nanoseconds frameWallUsed{0};
   Clock::time_point callbackStarted{};
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+  std::atomic_bool failNextAllocationForTest = false;
+#endif
 };
 
 void *quotaAllocator(void *userData, void *pointer, std::size_t oldSize,
                      std::size_t newSize) noexcept {
   auto *shared = static_cast<LuaRuntimeShared *>(userData);
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+  if (newSize != 0 && shared->failNextAllocationForTest.exchange(false)) {
+    return nullptr;
+  }
+#endif
   // Lua 5.1/LuaJIT passes an object type tag in osize for a fresh allocation;
   // it is an allocation size only when pointer is non-null.
   const std::size_t accountedOldSize = pointer == nullptr ? 0 : oldSize;
@@ -125,6 +150,19 @@ void *quotaAllocator(void *userData, void *pointer, std::size_t oldSize,
   }
   return replacement;
 }
+
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+void failNextAllocationAt(LuaRuntimeShared &shared,
+                          LuaRuntimeTestAllocationPoint point) noexcept {
+  int expected = static_cast<int>(point);
+  if (gTestAllocationPoint.compare_exchange_strong(expected, -1)) {
+    shared.failNextAllocationForTest.store(true);
+  }
+}
+#else
+template <typename Point>
+void failNextAllocationAt(LuaRuntimeShared &, Point) noexcept {}
+#endif
 
 LuaRuntimeShared *runtimeShared(lua_State *state) noexcept {
   lua_pushlightuserdata(state, &kRuntimeRegistryKey);
@@ -257,9 +295,7 @@ SkinDiagnostic luaFailure(lua_State *state, int status,
     return makeDiagnostic(shared.budgetViolationCode,
                           "Lua execution budget exceeded");
   }
-  const char *message = lua_tostring(state, -1);
-  const std::string text =
-      message != nullptr ? message : "Lua execution failed without a message";
+  const std::string text = boundedLuaErrorText(state, -1);
   if (text.starts_with(kHostErrorPrefix)) {
     const std::size_t codeStart = kHostErrorPrefix.size();
     const std::size_t separator = text.find(':', codeStart);
@@ -273,6 +309,23 @@ SkinDiagnostic luaFailure(lua_State *state, int status,
                           "Lua allocator quota was exhausted");
   }
   return makeDiagnostic("skin_lua_execution_failed", text);
+}
+
+SkinDiagnostic callbackFailureFromText(int status, const std::string &text) {
+  if (status == LUA_ERRMEM) {
+    return makeDiagnostic("skin_lua_allocator_limit_exceeded",
+                          "Lua allocator quota was exhausted");
+  }
+  if (text.starts_with(kHostErrorPrefix)) {
+    const std::size_t codeStart = kHostErrorPrefix.size();
+    const std::size_t separator = text.find(':', codeStart);
+    if (separator != std::string::npos) {
+      return makeDiagnostic(text.substr(codeStart, separator - codeStart),
+                            text.substr(separator + 1));
+    }
+  }
+  return makeDiagnostic("skin_lua_execution_failed",
+                        text.empty() ? "Lua callback failed" : text);
 }
 
 void beginLoadBudget(LuaRuntimeShared &shared, LuaLoadBudget budget) {
@@ -371,6 +424,101 @@ struct LuaValueHandle::Impl {
   }
 };
 
+int referenceArgument(lua_State *state) {
+  lua_pushvalue(state, 1);
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+  // Make the deterministic quota probe allocate inside this protected thunk.
+  // Production never takes this branch.
+  lua_newtable(state);
+  lua_pop(state, 1);
+#endif
+  const int reference = luaL_ref(state, LUA_REGISTRYINDEX);
+  lua_pushinteger(state, reference);
+  return 1;
+}
+
+struct CallbackLookupRequest {
+  LuaRuntimeShared *shared = nullptr;
+  int valueReference = LUA_NOREF;
+  std::string_view name;
+  bool found = false;
+  int reference = LUA_NOREF;
+};
+
+int lookupCallbackArgument(lua_State *state) {
+  auto *request = static_cast<CallbackLookupRequest *>(lua_touserdata(state, 1));
+  if (request == nullptr || request->shared == nullptr) {
+    return 0;
+  }
+  auto &shared = *request->shared;
+  lua_rawgeti(state, LUA_REGISTRYINDEX, request->valueReference);
+  if (!lua_istable(state, -1)) {
+    return 0;
+  }
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+  failNextAllocationAt(shared, LuaRuntimeTestAllocationPoint::CallbackName);
+  lua_newtable(state);
+  lua_pop(state, 1);
+#endif
+  lua_pushlstring(state, request->name.data(), request->name.size());
+  lua_rawget(state, -2);
+  if (!lua_isfunction(state, -1)) {
+    return 0;
+  }
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+  failNextAllocationAt(shared, LuaRuntimeTestAllocationPoint::CallbackReference);
+  lua_newtable(state);
+  lua_pop(state, 1);
+#endif
+  request->reference = luaL_ref(state, LUA_REGISTRYINDEX);
+  request->found = true;
+  return 0;
+}
+
+struct InvokeRequest {
+  LuaRuntimeShared *shared = nullptr;
+  int callbackReference = LUA_NOREF;
+  std::span<const LuaScalar> arguments;
+  int status = 0;
+  std::optional<LuaScalar> value;
+  std::string error;
+  bool resultInvalid = false;
+};
+
+int invokeArgument(lua_State *state) {
+  auto *request = static_cast<InvokeRequest *>(lua_touserdata(state, 1));
+  if (request == nullptr) {
+    return 0;
+  }
+  lua_rawgeti(state, LUA_REGISTRYINDEX, request->callbackReference);
+  for (const LuaScalar &argument : request->arguments) {
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+    failNextAllocationAt(*request->shared,
+                         LuaRuntimeTestAllocationPoint::InvokeArgument);
+    lua_newtable(state);
+    lua_pop(state, 1);
+#endif
+    pushScalar(state, argument);
+  }
+  request->status = lua_pcall(state, static_cast<int>(request->arguments.size()),
+                               1, 0);
+  if (request->status != 0) {
+    try {
+      request->error = boundedLuaErrorText(state, -1);
+    } catch (...) {
+      request->error = "Lua callback failed";
+    }
+    return 0;
+  }
+  try {
+    request->value = readScalar(state, -1);
+    request->resultInvalid = !request->value.has_value();
+  } catch (...) {
+    request->resultInvalid = true;
+  }
+  return 0;
+}
+
 struct LuaSkinRuntime::Impl {
   LuaRuntimePurpose purpose = LuaRuntimePurpose::Catalog;
   LuaRuntimePhase phase = LuaRuntimePhase::Created;
@@ -450,7 +598,28 @@ struct LuaSkinRuntime::Impl {
       endExecutionBudget(*shared);
       return {.failure = std::move(validation.failure)};
     }
-    int reference = luaL_ref(state, LUA_REGISTRYINDEX);
+    // luaL_ref may grow the registry table.  Keep that allocation within a
+    // Lua protected call so quota exhaustion cannot reach the panic handler.
+    if (!lua_checkstack(state, 1)) {
+      lua_settop(state, 0);
+      endExecutionBudget(*shared);
+      return {.failure = makeDiagnostic("skin_lua_allocator_limit_exceeded",
+                                        "Lua value reference stack allocation failed")};
+    }
+    lua_pushcfunction(state, referenceArgument);
+    lua_insert(state, 1);
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+    failNextAllocationAt(*shared, LuaRuntimeTestAllocationPoint::ValueReference);
+#endif
+    const int referenceStatus = lua_pcall(state, 1, 1, 0);
+    if (referenceStatus != 0) {
+      auto failure = luaFailure(state, referenceStatus, *shared);
+      lua_settop(state, 0);
+      endExecutionBudget(*shared);
+      return {.failure = std::move(failure)};
+    }
+    const int reference = static_cast<int>(lua_tointeger(state, -1));
+    lua_settop(state, 0);
     endExecutionBudget(*shared);
     std::unique_ptr<LuaValueHandle::Impl> handle;
     try {
@@ -477,34 +646,40 @@ LuaValueHandle::~LuaValueHandle() = default;
 
 std::optional<LuaCallbackId>
 LuaValueHandle::callbackNamed(std::string_view name) const {
+  return lookupCallbackNamed(name).callback;
+}
+
+LuaCallbackLookupResult
+LuaValueHandle::lookupCallbackNamed(std::string_view name) const {
   if (!impl_ || !impl_->shared || impl_->shared->state == nullptr ||
       impl_->reference == LUA_NOREF || name.empty() ||
       impl_->shared->callbackReferences.size() >= kMaximumCallbacks) {
-    return std::nullopt;
+    return {};
   }
   lua_State *state = impl_->shared->state;
-  lua_rawgeti(state, LUA_REGISTRYINDEX, impl_->reference);
-  if (!lua_istable(state, -1)) {
-    lua_pop(state, 1);
-    return std::nullopt;
+  CallbackLookupRequest request{.shared = impl_->shared.get(),
+                                .valueReference = impl_->reference,
+                                .name = name};
+  const int status = lua_cpcall(state, lookupCallbackArgument, &request);
+  if (status != 0) {
+    auto failure = luaFailure(state, status, *impl_->shared);
+    lua_settop(state, 0);
+    return {.failure = std::move(failure)};
   }
-  lua_pushlstring(state, name.data(), name.size());
-  lua_rawget(state, -2);
-  lua_remove(state, -2);
-  if (!lua_isfunction(state, -1)) {
-    lua_pop(state, 1);
-    return std::nullopt;
+  if (!request.found) {
+    return {};
   }
-  const int reference = luaL_ref(state, LUA_REGISTRYINDEX);
   try {
-    impl_->shared->callbackReferences.push_back(reference);
+    impl_->shared->callbackReferences.push_back(request.reference);
   } catch (...) {
-    luaL_unref(state, LUA_REGISTRYINDEX, reference);
-    return std::nullopt;
+    luaL_unref(state, LUA_REGISTRYINDEX, request.reference);
+    return {.failure = makeDiagnostic("skin_lua_allocator_limit_exceeded",
+                                      "Lua callback handle allocation failed")};
   }
-  return LuaCallbackId{.slot = static_cast<std::uint32_t>(
-                           impl_->shared->callbackReferences.size()),
-                       .generation = impl_->shared->generation};
+  return {.callback = LuaCallbackId{
+              .slot = static_cast<std::uint32_t>(
+                  impl_->shared->callbackReferences.size()),
+              .generation = impl_->shared->generation}};
 }
 
 LuaSkinRuntime::LuaSkinRuntime(std::unique_ptr<Impl> impl) noexcept
@@ -669,15 +844,13 @@ LuaCallbackResult LuaSkinRuntime::invoke(LuaCallbackId callback,
                                       "Lua callback handle is invalid")};
   }
 
-  lua_settop(impl_->state, 0);
-  lua_rawgeti(impl_->state, LUA_REGISTRYINDEX,
-              impl_->shared->callbackReferences[callback.slot - 1]);
-  for (const LuaScalar &argument : arguments) {
-    pushScalar(impl_->state, argument);
-  }
   beginCallbackBudget(*impl_->shared);
-  const int status =
-      lua_pcall(impl_->state, static_cast<int>(arguments.size()), 1, 0);
+  InvokeRequest request{.shared = impl_->shared.get(),
+                        .callbackReference =
+                            impl_->shared->callbackReferences[callback.slot - 1],
+                        .arguments = arguments};
+  const int protectedStatus =
+      lua_cpcall(impl_->state, invokeArgument, &request);
   if (!impl_->shared->budgetViolated &&
       Clock::now() > impl_->shared->executionDeadline) {
     impl_->shared->budgetViolated = true;
@@ -688,28 +861,41 @@ LuaCallbackResult LuaSkinRuntime::invoke(LuaCallbackId callback,
     impl_->shared->budgetViolated = true;
     impl_->shared->budgetViolationCode = "skin_lua_wall_time_limit_exceeded";
   }
-  if (status != 0 || impl_->shared->budgetViolated) {
-    auto failure = luaFailure(impl_->state, status, *impl_->shared);
+  if (protectedStatus != 0 || request.status != 0 ||
+      impl_->shared->budgetViolated) {
+    SkinDiagnostic failure = impl_->shared->budgetViolated &&
+                                     impl_->shared->budgetViolationCode != nullptr
+                                 ? makeDiagnostic(impl_->shared->budgetViolationCode,
+                                                  "Lua execution budget exceeded")
+                                 : protectedStatus != 0
+                                       ? luaFailure(impl_->state, protectedStatus,
+                                                    *impl_->shared)
+                                       : callbackFailureFromText(request.status,
+                                                                 request.error);
     lua_settop(impl_->state, 0);
     return {.failure = std::move(failure)};
   }
-  std::optional<LuaScalar> value;
-  try {
-    value = readScalar(impl_->state, -1);
-  } catch (...) {
+  if (request.resultInvalid) {
     lua_settop(impl_->state, 0);
     return {.failure = makeDiagnostic(
                 "skin_lua_callback_result_invalid",
                 "Lua callback result could not be copied within host limits")};
   }
   lua_settop(impl_->state, 0);
-  if (!value) {
+  if (!request.value) {
     return {.failure = makeDiagnostic(
                 "skin_lua_callback_result_invalid",
                 "Lua callback did not return a supported scalar")};
   }
-  return {.value = std::move(value)};
+  return {.value = std::move(request.value)};
 }
+
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+void LuaRuntimeTestHooks::failNextAllocationAt(
+    LuaRuntimeTestAllocationPoint point) noexcept {
+  gTestAllocationPoint.store(static_cast<int>(point));
+}
+#endif
 
 LuaRuntimePhase LuaSkinRuntime::phase() const noexcept {
   return impl_ ? impl_->phase : LuaRuntimePhase::Created;

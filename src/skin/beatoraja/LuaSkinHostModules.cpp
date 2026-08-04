@@ -234,6 +234,7 @@ struct LuaSkinHostModulesImpl {
   SkinCompatibilityDiagnostics diagnostics;
   std::vector<std::weak_ptr<LuaFileHandle>> handles;
   std::size_t openHandleCount = 0;
+  std::uint64_t openHandleBytes = 0;
   int fileTokenReference = LUA_NOREF;
   int gdxTokenReference = LUA_NOREF;
   const BeatorajaSkinConfiguration *pendingConfiguration = nullptr;
@@ -262,11 +263,16 @@ struct LuaSkinHostModulesImpl {
   }
 
   void reportLegacyDenial(std::string_view authority) noexcept {
+    const std::string_view diagnosticAuthority =
+        authority == "java.net.URL" || authority == "java.io.File.member" ||
+                authority == "java.io.File.constructor" || authority == "bindClass"
+            ? authority
+            : "unknown_legacy_authority";
     try {
       diagnostics.report(
           diagnostic("skin_legacy_lua_access_denied",
                      "legacy Lua authority is outside the audited facade"),
-          true, authority);
+          true, diagnosticAuthority);
     } catch (...) {
     }
     storeError("skin_legacy_lua_access_denied",
@@ -274,6 +280,11 @@ struct LuaSkinHostModulesImpl {
   }
 
   void releaseHandle(LuaFileHandle &handle) noexcept;
+  bool reserveHandleBytes(std::uint64_t bytes) noexcept {
+    return bytes <= LuaSkinHostPolicy::maxAggregateHandleBytes -
+                        std::min(openHandleBytes,
+                                 LuaSkinHostPolicy::maxAggregateHandleBytes);
+  }
 };
 
 namespace {
@@ -287,7 +298,8 @@ struct LuaFileHandle {
   bool closed = false;
   bool invalidated = false;
   bool dirty = false;
-  bool holdsQuota = true;
+  bool holdsQuota = false;
+  std::uint64_t accountedBytes = 0;
 
   ~LuaFileHandle() {
     if (owner != nullptr && holdsQuota) {
@@ -299,6 +311,10 @@ struct LuaFileHandle {
 } // namespace
 
 void LuaSkinHostModulesImpl::releaseHandle(LuaFileHandle &handle) noexcept {
+  openHandleBytes = handle.accountedBytes <= openHandleBytes
+                        ? openHandleBytes - handle.accountedBytes
+                        : 0;
+  handle.accountedBytes = 0;
   if (!handle.holdsQuota) {
     return;
   }
@@ -435,9 +451,12 @@ int fileWrite(lua_State *state) {
         addition.insert(addition.end(), begin, begin + size);
       }
       if (accepted && addition.size() <= LuaSkinHostPolicy::maxDataReadBytes -
-                                             handle->bytes.size()) {
+                                             handle->bytes.size() &&
+          handle->owner->reserveHandleBytes(addition.size())) {
         handle->bytes.insert(handle->bytes.end(), addition.begin(),
                              addition.end());
+        handle->owner->openHandleBytes += addition.size();
+        handle->accountedBytes += addition.size();
       } else {
         accepted = false;
       }
@@ -557,6 +576,9 @@ int ioOpen(lua_State *state) {
   if (!ready) {
     return expectedFailure(state, "Lua skin file could not be opened");
   }
+  if (!impl->reserveHandleBytes(bytes.size())) {
+    return expectedFailure(state, "Lua skin aggregate file buffer quota is exhausted");
+  }
 
   try {
     auto handle = std::make_shared<LuaFileHandle>();
@@ -564,13 +586,16 @@ int ioOpen(lua_State *state) {
     handle->virtualPath.assign(path, pathSize);
     handle->mode = selectedMode;
     handle->bytes = std::move(bytes);
+    handle->accountedBytes = handle->bytes.size();
     handle->dirty = selectedMode == HandleMode::Write;
     void *storage = lua_newuserdata(state, sizeof(SharedLuaFileHandle));
     new (storage) SharedLuaFileHandle(handle);
     luaL_getmetatable(state, kHandleMetatable);
     lua_setmetatable(state, -2);
     impl->handles.push_back(handle);
+    handle->holdsQuota = true;
     ++impl->openHandleCount;
+    impl->openHandleBytes += handle->accountedBytes;
   } catch (...) {
     return expectedFailure(state, "Lua skin file handle could not allocate");
   }

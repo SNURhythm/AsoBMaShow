@@ -80,6 +80,11 @@ struct LuaCallbackId {
   auto operator<=>(const LuaCallbackId &) const = default;
 };
 
+struct LuaCallbackLookupResult {
+  std::optional<LuaCallbackId> callback;
+  std::optional<SkinDiagnostic> failure;
+};
+
 class LuaValueHandle {
 public:
   LuaValueHandle(LuaValueHandle &&) noexcept;
@@ -90,6 +95,8 @@ public:
 
   [[nodiscard]] std::optional<LuaCallbackId>
   callbackNamed(std::string_view name) const;
+  [[nodiscard]] LuaCallbackLookupResult
+  lookupCallbackNamed(std::string_view name) const;
 
 private:
   struct Impl;
@@ -146,5 +153,21 @@ private:
   explicit LuaSkinRuntime(std::unique_ptr<Impl>) noexcept;
   std::unique_ptr<Impl> impl_;
 };
+
+#if defined(ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS)
+// Test-only deterministic quota failures at otherwise hard-to-reach Lua API
+// allocation boundaries.  These are unavailable from production builds.
+enum class LuaRuntimeTestAllocationPoint : std::uint8_t {
+  ValueReference,
+  CallbackName,
+  CallbackReference,
+  InvokeArgument,
+};
+
+class LuaRuntimeTestHooks final {
+public:
+  static void failNextAllocationAt(LuaRuntimeTestAllocationPoint) noexcept;
+};
+#endif
 
 } // namespace skin

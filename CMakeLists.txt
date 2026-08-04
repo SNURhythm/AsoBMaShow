@@ -576,6 +576,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(lua_skin_runtime_tests PRIVATE cxx_std_23)
         target_compile_definitions(lua_skin_runtime_tests PRIVATE
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS=1
             ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
             ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         )

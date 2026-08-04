@@ -9,6 +9,7 @@
 #include "skin/package/SkinTreeSnapshotter.h"
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -116,6 +117,10 @@ public:
     fs::copy(committed, source, fs::copy_options::recursive);
     writeText(source / "skin/oversized.txt",
               std::string(LuaSkinHostPolicy::maxDataReadBytes + 1, 'x'));
+    for (int index = 1; index <= 5; ++index) {
+      writeText(source / ("skin/aggregate-" + std::to_string(index) + ".txt"),
+                std::string(LuaSkinHostPolicy::maxDataReadBytes, 'x'));
+    }
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -237,6 +242,8 @@ void testPurposeSpecificBudgetsAreFixed() {
          "one frame gets 6 milliseconds of callback wall time");
   expect(LuaSkinHostPolicy::maxOpenHandles == 64,
          "Lua file handle quota is fixed in one host policy");
+  expect(LuaSkinHostPolicy::maxAggregateHandleBytes == 64 * mebibyte,
+         "Lua file handle buffers share a fixed aggregate budget");
 }
 
 void testRuntimeContractsUseFrozenAuthoritiesAndProvenance() {
@@ -367,6 +374,70 @@ void testValueHandlesLoseAuthorityWhenTheirRuntimeCloses() {
   escaped.reset();
 }
 
+void testProtectedLuaApiAllocationBoundaries() {
+  {
+    auto harness = makeHarness(LuaRuntimePurpose::Validation, "fresh_state.luaskin");
+    if (harness) {
+      LuaRuntimeTestHooks::failNextAllocationAt(
+          LuaRuntimeTestAllocationPoint::ValueReference);
+      const auto result = harness->runtime->loadHeader();
+      expect(!result.value && result.failure &&
+                 result.failure->code == "skin_lua_allocator_limit_exceeded",
+             "value-reference quota failure is returned rather than panicking");
+    }
+  }
+
+  {
+    auto harness = makeHarness(LuaRuntimePurpose::Validation, "callback_wall_time.luaskin");
+    if (harness) {
+      auto header = harness->runtime->loadHeader();
+      expect(header.value.has_value(), "callback allocation fixture loads");
+      if (header.value) {
+        LuaRuntimeTestHooks::failNextAllocationAt(
+            LuaRuntimeTestAllocationPoint::CallbackName);
+        const auto nameFailure = header.value->lookupCallbackNamed("host_heavy_callback");
+        expect(!nameFailure.callback && nameFailure.failure &&
+                   nameFailure.failure->code == "skin_lua_allocator_limit_exceeded",
+               "callback-name quota failure is typed and non-fatal");
+
+        LuaRuntimeTestHooks::failNextAllocationAt(
+            LuaRuntimeTestAllocationPoint::CallbackReference);
+        const auto referenceFailure = header.value->lookupCallbackNamed("host_heavy_callback");
+        expect(!referenceFailure.callback && referenceFailure.failure &&
+                   referenceFailure.failure->code == "skin_lua_allocator_limit_exceeded",
+               "callback-reference quota failure is typed without a leaked slot");
+        const auto callback = header.value->callbackNamed("host_heavy_callback");
+        expect(callback && callback->slot == 1,
+               "failed callback lookups leave no retained callback reference");
+      }
+    }
+  }
+
+  {
+    auto harness = makeHarness(LuaRuntimePurpose::Gameplay, "callback_wall_time.luaskin");
+    if (harness) {
+      auto header = harness->runtime->loadHeader();
+      expect(header.value.has_value(), "invoke allocation fixture loads");
+      if (header.value) {
+        const auto callback = header.value->callbackNamed("host_heavy_callback");
+        expect(callback.has_value(), "invoke allocation callback is retained");
+        expect(harness->runtime->loadConfigured({}).value.has_value() &&
+                   harness->runtime->enterRenderPhase().ok &&
+                   harness->runtime->beginFrame(1).ok,
+               "invoke allocation fixture reaches a callback frame");
+        LuaRuntimeTestHooks::failNextAllocationAt(
+            LuaRuntimeTestAllocationPoint::InvokeArgument);
+        const std::array<LuaScalar, 1> arguments{
+            LuaScalar{std::string(128, 'x')}};
+        const auto result = harness->runtime->invoke(*callback, arguments);
+        expect(!result.value && result.failure &&
+                   result.failure->code == "skin_lua_allocator_limit_exceeded",
+               "invoke argument quota failure is typed rather than panicking");
+      }
+    }
+  }
+}
+
 void testLanguageSurfaceBit32AndTextOnlyLoading() {
   auto harness =
       makeHarness(LuaRuntimePurpose::Validation, "language_surface.luaskin");
@@ -459,6 +530,13 @@ void testIoFacadeCallShapesHandlesAndHostByteLimit() {
   if (limitHarness) {
     expect(limitHarness->runtime->loadHeader().value.has_value(),
            "host data-read byte limit rejects oversized input without effect");
+  }
+  auto aggregateHarness =
+      makeHarness(LuaRuntimePurpose::Validation, "aggregate_handle_limit.luaskin");
+  if (aggregateHarness) {
+    const auto result = aggregateHarness->runtime->loadHeader();
+    expect(!result.value && result.failure,
+           "open read handles cannot exceed the aggregate host buffer budget");
   }
 }
 
@@ -696,6 +774,7 @@ int main() {
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
   testValueHandlesLoseAuthorityWhenTheirRuntimeCloses();
+  testProtectedLuaApiAllocationBoundaries();
   testLanguageSurfaceBit32AndTextOnlyLoading();
   testCatalogHasNoOverlayWriteOrEventAuthority();
   testLoadQuotasInterruptMemoryStackTablesAndLoops();
