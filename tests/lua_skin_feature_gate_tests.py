@@ -25,6 +25,9 @@ GAUGE_NODE_EXPANSION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinGaugeNodeExpansion.cpp"
 )
 NOTE_NORMALIZATION_SOURCE = ROOT / "src/skin/beatoraja/SkinNoteNormalization.cpp"
+NOTE_LANE_GEOMETRY_NORMALIZATION_SOURCE = (
+    ROOT / "src/skin/beatoraja/SkinNoteLaneGeometryNormalization.cpp"
+)
 NOTE_LINE_NORMALIZATION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinNoteLineNormalization.cpp"
 )
@@ -145,6 +148,9 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/SkinModelValidator.cpp", enabled_block)
         self.assertIn("beatoraja/SkinGaugeNodeExpansion.cpp", enabled_block)
         self.assertIn("beatoraja/SkinNoteNormalization.cpp", enabled_block)
+        self.assertIn(
+            "beatoraja/SkinNoteLaneGeometryNormalization.cpp", enabled_block
+        )
         self.assertIn("beatoraja/SkinNoteLineNormalization.cpp", enabled_block)
         self.assertIn("beatoraja/SkinTextGraphNormalization.cpp", enabled_block)
         self.assertIn("beatoraja/SkinCoverNormalization.cpp", enabled_block)
@@ -160,6 +166,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
              VALIDATOR_SOURCE,
             GAUGE_NODE_EXPANSION_SOURCE,
             NOTE_NORMALIZATION_SOURCE,
+            NOTE_LANE_GEOMETRY_NORMALIZATION_SOURCE,
             NOTE_LINE_NORMALIZATION_SOURCE,
             TEXT_GRAPH_NORMALIZATION_SOURCE,
             COVER_NORMALIZATION_SOURCE,
@@ -184,6 +191,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                  VALIDATOR_SOURCE,
                 GAUGE_NODE_EXPANSION_SOURCE,
                 NOTE_NORMALIZATION_SOURCE,
+                NOTE_LANE_GEOMETRY_NORMALIZATION_SOURCE,
                 NOTE_LINE_NORMALIZATION_SOURCE,
                 TEXT_GRAPH_NORMALIZATION_SOURCE,
                 COVER_NORMALIZATION_SOURCE,
