@@ -700,6 +700,67 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 "-framework Foundation"
             )
         endif()
+
+        set(beatoraja_skin_model_test_sources
+            tests/beatoraja_skin_model_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinRuntime.cpp
+            src/skin/beatoraja/LuaSkinTableDecoder.cpp
+            src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+        )
+        # Task 11A is deliberately RED before the validator implementation
+        # exists. Reconfiguration automatically adds it once Task 11 supplies
+        # the production source, while the contract currently fails at compile.
+        if(EXISTS "${CMAKE_SOURCE_DIR}/src/skin/beatoraja/SkinModelValidator.cpp")
+            list(APPEND beatoraja_skin_model_test_sources
+                src/skin/beatoraja/SkinModelValidator.cpp
+            )
+        endif()
+        add_executable(beatoraja_skin_model_tests
+            ${beatoraja_skin_model_test_sources}
+        )
+        target_include_directories(beatoraja_skin_model_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(beatoraja_skin_model_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_compile_definitions(beatoraja_skin_model_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(beatoraja_skin_model_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(beatoraja_skin_model_tests PRIVATE
+                ${LUAJIT_LIB}
+                advapi32
+            )
+        else()
+            target_link_libraries(beatoraja_skin_model_tests PRIVATE
+                ${LUAJIT_LIBRARIES}
+            )
+        endif()
+        if(APPLE)
+            target_sources(beatoraja_skin_model_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
+            target_link_libraries(beatoraja_skin_model_tests PRIVATE
+                "-framework Foundation"
+            )
+        endif()
     endif()
 
     add_test(NAME beatoraja_skin_reference_contract
@@ -4626,6 +4687,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_host_modules_tests)
         asobmashow_register_test(lua_skin_host_modules_tests)
+    endif()
+    if (TARGET beatoraja_skin_model_tests)
+        asobmashow_register_test(beatoraja_skin_model_tests)
     endif()
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10

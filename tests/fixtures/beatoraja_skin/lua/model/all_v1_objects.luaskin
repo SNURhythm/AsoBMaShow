@@ -1,0 +1,130 @@
+local shared_note_image = "note-frame"
+
+return {
+  type = 0,
+  name = "Task 11 model contract",
+  author = "AsoBMaShow tests",
+  w = 1280,
+  h = 720,
+
+  fadeout = 901,
+  input = 902,
+  scene = 903,
+  close = 904,
+  loadend = 905,
+  playstart = 906,
+  judgetimer = 907,
+  finishmargin = 908,
+
+  source = {
+    {id = "atlas", path = "assets/atlas.png"},
+    {id = "alternate", path = "assets/alternate.png"},
+  },
+
+  image = {
+    {
+      id = "strip", src = "atlas",
+      x = 0, y = 0, w = 40, h = 20, divx = 4, divy = 2,
+      len = 2, ref = 700,
+    },
+    {
+      id = "plain", src = "atlas",
+      x = 2, y = 3, w = 20, h = 10, divx = 2, divy = 1,
+      timer = 42, cycle = 100,
+    },
+    {
+      id = "alternate-image", src = "alternate",
+      x = 9, y = 8, w = -12, h = 6, divx = 3, divy = 1,
+      timer = 43, cycle = 250,
+    },
+    {
+      id = shared_note_image, src = "atlas",
+      x = 0, y = 10, w = 10, h = 10, divx = 1, divy = 1,
+    },
+    {
+      id = "authored-hidden", src = "atlas",
+      x = 10, y = 10, w = 10, h = 10,
+    },
+    {
+      id = "authored-processed", src = "atlas",
+      x = 20, y = 10, w = 10, h = 10,
+    },
+    {
+      id = "optional-missing", src = "missing-source",
+      x = 0, y = 0, w = 8, h = 8,
+    },
+  },
+
+  imageset = {
+    {
+      id = "state-set",
+      ref = 701,
+      images = {"plain", "alternate-image"},
+    },
+  },
+
+  value = {
+    {
+      id = "score", src = "atlas",
+      x = 0, y = 0, w = 100, h = 10, divx = 10, divy = 1,
+      digit = 6, ref = 700,
+    },
+  },
+
+  floatvalue = {
+    {
+      id = "ratio", src = "atlas",
+      x = 0, y = 0, w = 120, h = 10, divx = 12, divy = 1,
+      iketa = 2, fketa = 2, ref = 800,
+    },
+  },
+
+  slider = {
+    {
+      id = "rate-slider", src = "atlas",
+      x = 0, y = 0, w = 10, h = 10,
+      angle = 1, range = 90, type = 800, changeable = false,
+    },
+  },
+
+  note = {
+    id = "notes",
+    note = {shared_note_image},
+    lnend = {shared_note_image},
+    lnstart = {shared_note_image},
+    lnbody = {shared_note_image},
+    lnbodyActive = {shared_note_image},
+    hcnend = {shared_note_image},
+    hcnstart = {shared_note_image},
+    hcnbody = {shared_note_image},
+    hcnbodyActive = {shared_note_image},
+    hcnbodyReactive = {shared_note_image},
+    hcnbodyMiss = {shared_note_image},
+    mine = {shared_note_image},
+
+    -- Pinned JsonPlaySkinObjectLoader ignores these two authored arrays.
+    hidden = {"authored-hidden"},
+    processed = {"authored-processed"},
+
+    -- size is deliberately absent: exact note height is resource-dependent.
+    dst = {{x = 100, y = 50, w = 40, h = 500}},
+  },
+
+  destination = {
+    {
+      id = "strip",
+      dst = {
+        {time = 200, x = 10, y = 20, w = 40, h = 20,
+         a = 200, r = 10, g = 20, b = 30},
+        {time = 100, x = 15},
+        {time = 300, h = 25},
+      },
+    },
+    {id = "state-set", dst = {{}}},
+    {id = "score", dst = {{x = 30, y = 40, w = 8, h = 12}}},
+    {id = "ratio", dst = {{x = 50, y = 60, w = 8, h = 12}}},
+    {id = "rate-slider", dst = {{x = 70, y = 80, w = 10, h = 10}}},
+    {id = "notes", dst = {{time = 0}}},
+    {id = "optional-missing", dst = {{}}},
+  },
+}
