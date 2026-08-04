@@ -69,13 +69,15 @@ jobs:
           test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"
           python3 make.py clean
           python3 make.py
+          python3 ../scripts/verify_skin_shader_outputs.py --root .. --shader skin_quad --require-backends metal,spirv,essl,dx11 --write-manifest ../tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json
+          python3 ../scripts/verify_skin_shader_outputs.py --root .. --shader skin_quad --require-backends metal,spirv,essl,dx11 --manifest ../tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json
 
       - name: Commit generated shaders
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- shaders
+          git add -- shaders tests/fixtures/beatoraja_skin/shaders/skin_shader_manifest.json
           if git diff --cached --quiet; then
             echo "Shader binaries are already up to date."
             exit 0
