@@ -58,23 +58,45 @@ private:
 struct SkinPackageOperationHandle {
   std::uint64_t ticket = 0;
   std::shared_ptr<const SkinPackageProgressMailbox> progress;
+  // Present only when ticket is zero. Rejection returns the exact cleanup
+  // ownership without invoking it or destroying its captures in the service.
+  std::optional<SkinDeferredCleanup> rejectedCleanup;
 };
+
+struct RejectedPreparedDisposal {
+  PreparedPackage prepared;
+  SkinDeferredCleanup cleanup;
+};
+
+#if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
+class SkinPackageOperationTestObserver {
+public:
+  virtual ~SkinPackageOperationTestObserver() = default;
+  virtual void completed(std::uint64_t ticket) const noexcept = 0;
+  virtual void disposing(std::uint64_t ticket) const noexcept = 0;
+};
+#endif
 
 class SkinPackageOperationService {
 public:
   // The store's exclusive recoverBeforeServiceStart() bootstrap must have
   // completed before this serialized filesystem service is constructed.
-  SkinPackageOperationService(SkinPackageStore &, SkinEntryValidator &);
+  SkinPackageOperationService(
+      SkinPackageStore &, SkinEntryValidator &
+#if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
+      ,
+      std::shared_ptr<const SkinPackageOperationTestObserver> observer = {}
+#endif
+  );
   ~SkinPackageOperationService();
 
   SkinPackageOperationService(const SkinPackageOperationService &) = delete;
   SkinPackageOperationService &
   operator=(const SkinPackageOperationService &) = delete;
 
-  // Tickets are nonzero, process-monotonic, and never reused. A zero-ticket
-  // handle means the service is closed or at its bounded retention limit; the
-  // rejected cleanup callback is not invoked. Callers release picker
-  // capabilities before shutdown.
+  // Tickets are nonzero, process-monotonic, and never reused. Success consumes
+  // cleanup ownership. A zero-ticket handle means the service is closed or at
+  // its bounded retention limit and transfers cleanup back in rejectedCleanup.
   SkinPackageOperationHandle submitPrepareArchive(std::filesystem::path zip,
                                                   SkinPackageId package,
                                                   SkinDeferredCleanup cleanup);
@@ -101,8 +123,11 @@ public:
   catalogSnapshot() const noexcept;
   std::optional<SkinPackageOperationCompletion> poll(std::uint64_t ticket);
   void cancelAndDetach(std::uint64_t ticket) noexcept;
-  void discardPrepared(PreparedPackage prepared,
-                       SkinDeferredCleanup cleanup = {});
+  // Success returns nullopt and transfers both capabilities to the worker.
+  // Rejection returns both intact without running cleanup or destroying
+  // prepared staging on the caller's behalf.
+  std::optional<RejectedPreparedDisposal>
+  discardPrepared(PreparedPackage prepared, SkinDeferredCleanup cleanup = {});
   void shutdown() noexcept;
 
 private:

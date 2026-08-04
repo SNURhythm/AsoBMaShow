@@ -4098,6 +4098,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(skin_package_operation_service_tests PRIVATE cxx_std_23)
     target_compile_definitions(skin_package_operation_service_tests PRIVATE
         ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+        ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING
     )
     target_link_libraries(skin_package_operation_service_tests PRIVATE
         BZip2::BZip2
