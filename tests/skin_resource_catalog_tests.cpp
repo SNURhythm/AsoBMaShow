@@ -103,6 +103,73 @@ void testTextAtlasKeyRejectsNegativePaintExtents() {
          "the public fallback-chain builder refuses an oversized identity");
 }
 
+void testSharedSessionAccountingRejectsDistributedAggregateOverages() {
+  skin::SkinResourceSessionAccounting resources;
+  expect(resources.addImage(/*physical=*/1, /*logical=*/1,
+                            /*encodedBytes=*/0, /*decodedBytes=*/0,
+                            /*regions=*/0),
+         "the first physical/logical resource is within the shared session policy");
+  for (std::size_t index = 1;
+       index < skin::SkinResourcePolicy::maximumResources;
+       ++index) {
+    expect(resources.addImage(/*physical=*/0, /*logical=*/1,
+                              /*encodedBytes=*/0, /*decodedBytes=*/0,
+                              /*regions=*/0),
+           "distributed aliases remain within the shared logical-resource policy");
+  }
+  expect(!resources.addImage(/*physical=*/0, /*logical=*/1,
+                             /*encodedBytes=*/0, /*decodedBytes=*/0,
+                             /*regions=*/0),
+         "the distributed 513th logical resource is rejected by shared accounting");
+
+  skin::SkinResourceSessionAccounting regions;
+  expect(regions.addImage(/*physical=*/0, /*logical=*/0,
+                          /*encodedBytes=*/0, /*decodedBytes=*/0,
+                          skin::SkinResourcePolicy::maximumRegions),
+         "aggregate regions can exactly meet the shared session policy");
+  expect(!regions.addImage(/*physical=*/0, /*logical=*/0,
+                           /*encodedBytes=*/0, /*decodedBytes=*/0,
+                           /*regions=*/1),
+         "one aggregate alias region beyond the policy is rejected");
+
+  skin::SkinResourceSessionAccounting atlasCount;
+  for (std::size_t index = 0; index < skin::SkinResourcePolicy::maximumAtlases;
+       ++index) {
+    expect(atlasCount.addAtlas(/*decodedBytes=*/0, /*glyphs=*/0,
+                               /*kerningPairs=*/0),
+           "each allowed atlas is accepted by shared accounting");
+  }
+  expect(!atlasCount.addAtlas(/*decodedBytes=*/0, /*glyphs=*/0,
+                              /*kerningPairs=*/0),
+         "the aggregate atlas-count overage is rejected");
+
+  skin::SkinResourceSessionAccounting combinedBytes;
+  const std::size_t imageBytes =
+      skin::SkinResourcePolicy::maximumSessionDecodedBytes - 1;
+  expect(combinedBytes.addImage(/*physical=*/1, /*logical=*/1,
+                                /*encodedBytes=*/0, imageBytes,
+                                /*regions=*/0),
+         "image decoded bytes can consume all but one byte of the shared budget");
+  expect(!combinedBytes.addAtlas(/*decodedBytes=*/2, /*glyphs=*/0,
+                                 /*kerningPairs=*/0),
+         "atlas decoded bytes share the image session budget");
+
+  skin::SkinResourceSessionAccounting fontMetadata;
+  expect(fontMetadata.addAtlas(/*decodedBytes=*/0,
+                               skin::SkinResourcePolicy::maximumGlyphs,
+                               skin::SkinResourcePolicy::maximumKerningPairs),
+         "aggregate glyph and kerning totals can exactly meet the shared policy");
+  expect(!fontMetadata.addAtlas(/*decodedBytes=*/0, /*glyphs=*/1,
+                                /*kerningPairs=*/0),
+         "an aggregate glyph overage is rejected before upload");
+  skin::SkinResourceSessionAccounting pairs;
+  expect(pairs.addAtlas(/*decodedBytes=*/0, /*glyphs=*/0,
+                        skin::SkinResourcePolicy::maximumKerningPairs) &&
+             !pairs.addAtlas(/*decodedBytes=*/0, /*glyphs=*/0,
+                             /*kerningPairs=*/1),
+         "an aggregate kerning overage is rejected before upload");
+}
+
 struct TemporaryDirectory {
   TemporaryDirectory() : root(std::filesystem::temp_directory_path() /
                               ("asobmashow-task13-" + std::to_string(++serial))) {
@@ -160,6 +227,13 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   };
   writePpm(source / "entry/resources/image-default.ppm", 1);
   writePpm(source / "entry/resources/image-selected.ppm", 2);
+  for (std::size_t index = 0;
+       index <= skin::SkinResourcePolicy::maximumResources;
+       ++index) {
+    writePpm((source / "entry/resources") /
+                 ("cap-" + std::to_string(index) + ".ppm"),
+             1);
+  }
   for (const std::string_view name : {
            "font-primary-selected.ttf", "font-fallback-selected.ttf",
            "font-secondary-selected.otf"}) {
@@ -400,6 +474,97 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                            "skin.resource.configuration_ambiguous"),
          "configured file substitution enforces the host package-path bound before allocation");
   }
+  skin::ValidatedBeatorajaSkinModel distributedLogicalResources;
+  for (skin::SkinResourceId id = 1;
+       id <= skin::SkinResourcePolicy::maximumResources + 1;
+       ++id) {
+    distributedLogicalResources.model.resources.emplace_back(
+        skin::SkinImageResource{.id=id, .authoredName="distributed",
+                                .virtualPath="resources/fixture.png"});
+    distributedLogicalResources.model.objects.push_back(
+        {.id=id, .authoredName="distributed-image",
+         .payload=skin::SkinImageObject{.orderedStates={{
+             .resource=id, .frames={{.x=0,.y=0,.w=40,.h=20}}}}},
+         .critical=true});
+  }
+  const auto distributedValidation = service.validateResources(
+      {.revision=lease->readView(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem, .model=distributedLogicalResources,
+       .configuration=configuration});
+  expect(!distributedValidation.valid &&
+             hasDiagnostic(distributedValidation.diagnostics,
+                           "skin.resource.session_limit"),
+         "validation rejects a distributed 513th logical resource before upload");
+  const auto distributedPlan = service.decodeAndPlan(
+      {.revision=lease->clone(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem, .model=distributedLogicalResources,
+       .configuration=configuration});
+  expect(!distributedPlan.plan &&
+             hasDiagnostic(distributedPlan.diagnostics,
+                           "skin.resource.session_limit"),
+         "planning rejects the same distributed logical-resource overage before upload");
+  skin::ValidatedBeatorajaSkinModel physicalResourceCapacity;
+  for (skin::SkinResourceId id = 1;
+       id <= skin::SkinResourcePolicy::maximumResources + 1;
+       ++id) {
+    physicalResourceCapacity.model.resources.emplace_back(
+        skin::SkinImageResource{.id=id, .authoredName="physical-capacity",
+                                .virtualPath="resources/cap-" +
+                                             std::to_string(id - 1) + ".ppm"});
+    physicalResourceCapacity.model.objects.push_back(
+        {.id=id, .authoredName="physical-capacity-image",
+         .payload=skin::SkinImageObject{.orderedStates={{
+             .resource=id, .frames={{.x=0,.y=0,.w=1,.h=1}}}}},
+         .critical=true});
+  }
+  std::atomic_int capacityDecoderCalls = 0;
+  auto capacityPixels = std::make_shared<std::vector<unsigned char>>(4, 255);
+  skin::SkinResourcePreparationService capacityService(
+      [&](std::span<const std::byte>, std::stop_token stop)
+          -> std::optional<image_decode::DecodedImageData> {
+        if (stop.stop_requested()) return std::nullopt;
+        ++capacityDecoderCalls;
+        return image_decode::DecodedImageData{
+            .width=1, .height=1, .rgba=capacityPixels};
+      });
+  const auto physicalCapacityPlan = capacityService.decodeAndPlan(
+      {.revision=lease->clone(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem, .model=physicalResourceCapacity,
+       .configuration=configuration});
+  expect(!physicalCapacityPlan.plan &&
+             hasDiagnostic(physicalCapacityPlan.diagnostics,
+                           "skin.resource.session_limit") &&
+             capacityDecoderCalls ==
+                 static_cast<int>(skin::SkinResourcePolicy::maximumResources),
+         "the physical 513th resource is rejected after its bounded read but before decode work is queued");
+  skin::ValidatedBeatorajaSkinModel atlasRequestCapacity;
+  atlasRequestCapacity.model.resources.emplace_back(
+      skin::SkinFontResource{.id=1, .authoredName="capacity-font",
+                             .virtualPath="resources/fixture.ttf", .type=0});
+  for (int index = 0;
+       index <= static_cast<int>(skin::SkinResourcePolicy::maximumAtlases);
+       ++index) {
+    atlasRequestCapacity.model.objects.push_back(
+        {.id=static_cast<skin::SkinObjectId>(index + 1),
+         .authoredName="capacity-text",
+         .payload=skin::SkinTextObject{.font=1, .literal="A",
+                                        .pointSize=16 + index},
+         .critical=index < static_cast<int>(skin::SkinResourcePolicy::maximumAtlases)});
+  }
+  auto compactAtlasPlan = service.decodeAndPlan(
+      {.revision=lease->clone(), .entry=entry,
+       .fileSystem=*leasedFs.fileSystem, .model=atlasRequestCapacity,
+       .configuration=configuration});
+  expect(compactAtlasPlan.plan &&
+             compactAtlasPlan.plan->atlases.size() ==
+                 skin::SkinResourcePolicy::maximumAtlases &&
+             compactAtlasPlan.plan->atlases.front().id == 1 &&
+             compactAtlasPlan.plan->atlases.back().id ==
+                 skin::SkinResourcePolicy::maximumAtlases &&
+             hasDiagnostic(compactAtlasPlan.diagnostics,
+                           "skin.resource.atlas_limit"),
+         "the optional rejected atlas request performs no ID allocation, preserving compact key-order atlas IDs");
+  compactAtlasPlan.plan.reset();
   auto planned = service.decodeAndPlan({.revision=std::move(*lease), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(planned.plan && planned.plan->images.size() == 2 && planned.plan->atlases.size() == 4 &&
              planned.plan->images.front().aliases == std::vector<skin::SkinResourceId>{2},
@@ -892,6 +1057,7 @@ int main() {
   testSharedSdlTtfRuntimeFinalRelease();
   testSpriteBoundsAndNormalizedGridCells();
   testTextAtlasKeyRejectsNegativePaintExtents();
+  testSharedSessionAccountingRejectsDistributedAggregateOverages();
   testSecurePreparationLeaseAliasAndCatalogLifetime();
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";

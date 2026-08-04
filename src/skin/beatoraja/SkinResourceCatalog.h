@@ -46,6 +46,35 @@ struct SkinResourcePolicy {
   static constexpr std::size_t workerCount = 2;
 };
 
+// This is the one aggregate limit ledger shared by synchronous validation,
+// asynchronous planning, and render-thread upload preflight.  Each operation
+// is transactional: a rejected increment leaves the ledger unchanged, so an
+// optional failed resource cannot poison later accepted resources.
+class SkinResourceSessionAccounting {
+public:
+  [[nodiscard]] bool addImage(std::size_t physicalResources,
+                              std::size_t logicalResources,
+                              std::size_t encodedBytes,
+                              std::size_t decodedBytes,
+                              std::size_t regions) noexcept;
+  [[nodiscard]] bool addAtlas(std::size_t decodedBytes, std::size_t glyphs,
+                              std::size_t kerningPairs) noexcept;
+  [[nodiscard]] std::size_t decodedBytes() const noexcept {
+    return decodedBytes_;
+  }
+
+private:
+  std::size_t physicalResources_ = 0;
+  std::size_t logicalResources_ = 0;
+  std::size_t encodedBytes_ = 0;
+  std::size_t decodedBytes_ = 0;
+  std::size_t regions_ = 0;
+  std::size_t atlases_ = 0;
+  std::size_t atlasBytes_ = 0;
+  std::size_t glyphs_ = 0;
+  std::size_t kerningPairs_ = 0;
+};
+
 [[nodiscard]] bool skinResourceDimensionsAllowed(int width, int height,
                                                  std::size_t byteCount) noexcept;
 [[nodiscard]] bool skinResourceResolveRect(const SkinSourceRect &authored,
