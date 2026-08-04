@@ -649,6 +649,58 @@ void replaceImageLocked(std::unordered_map<int, ImageData> &table, int id,
 
 } // namespace
 
+BgaPoorSequenceSchedule
+BuildBgaPoorSequenceSchedule(const bms_parser::Chart &chart) {
+  BgaPoorSequenceSchedule schedule;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr || !timeline->BgaPoor.has_value()) {
+        continue;
+      }
+      schedule.push_back(
+          {.startMicros = timeline->Timing, .frames = timeline->BgaPoor->Frames});
+    }
+  }
+  std::stable_sort(schedule.begin(), schedule.end(),
+                   [](const ScheduledBgaPoorSequence &left,
+                      const ScheduledBgaPoorSequence &right) {
+                     return left.startMicros < right.startMicros;
+                   });
+  return schedule;
+}
+
+std::optional<std::size_t>
+SelectBgaPoorSequenceIndexAt(const BgaPoorSequenceSchedule &schedule,
+                             long long timelineMicros) noexcept {
+  const auto firstAfter = std::upper_bound(
+      schedule.begin(), schedule.end(), timelineMicros,
+      [](long long time, const ScheduledBgaPoorSequence &entry) {
+        return time < entry.startMicros;
+      });
+  if (firstAfter == schedule.begin()) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(
+      std::distance(schedule.begin(), std::prev(firstAfter)));
+}
+
+std::optional<long long>
+NextBgaPoorSequenceStartAfter(const BgaPoorSequenceSchedule &schedule,
+                              long long timelineMicros) noexcept {
+  const auto firstAfter = std::upper_bound(
+      schedule.begin(), schedule.end(), timelineMicros,
+      [](long long time, const ScheduledBgaPoorSequence &entry) {
+        return time < entry.startMicros;
+      });
+  if (firstAfter == schedule.end()) {
+    return std::nullopt;
+  }
+  return firstAfter->startMicros;
+}
+
 Jukebox::Jukebox(Stopwatch *stopwatch)
     : Jukebox(stopwatch, audio::CreatePlatformBackendFactory()) {}
 
@@ -2500,6 +2552,7 @@ void Jukebox::scheduleVisuals(bms_parser::Chart &chart,
   lastVisualTimelineMicros = -1;
   bmpList.clear();
   bmpLayerList.clear();
+  poorBgaSequences = BuildBgaPoorSequenceSchedule(chart);
   for (auto &measure : chart.Measures) {
     if (isCancelled)
       return;
@@ -2529,6 +2582,9 @@ void Jukebox::loadVisuals(bms_parser::Chart &chart,
   if (isCancelled || !visualsEnabled.load(std::memory_order_relaxed)) {
     return;
   }
+  // The parser publishes every defined channel-06 frame into the canonical
+  // BMP table. Preserve the existing preload contract rather than deriving a
+  // second, potentially divergent resource registry from the schedule.
   const auto visualAssets =
       resolveVisualAssets(chart, chart.ReferencedBmpTable, isCancelled);
   if (!isCancelled) {
@@ -2536,7 +2592,10 @@ void Jukebox::loadVisuals(bms_parser::Chart &chart,
   }
 }
 
-void Jukebox::unloadVisuals() { clearVisualResources(); }
+void Jukebox::unloadVisuals() {
+  clearVisualResources();
+  poorBgaSequences.clear();
+}
 
 audio::playback::BackendOperationResult
 Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,

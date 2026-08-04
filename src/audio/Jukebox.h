@@ -34,6 +34,33 @@ struct ImageData {
 
 using ChartResourceTable = std::unordered_map<int, std::string>;
 
+// One channel-06 sequence as authored at a measure's position-zero timeline.
+// The frame vector is deliberately verbatim: BgaSequenceBlank, repeated IDs,
+// and even empty sequences are significant to the compatibility layer.
+struct ScheduledBgaPoorSequence {
+  long long startMicros = 0;
+  std::vector<int> frames;
+
+  bool operator==(const ScheduledBgaPoorSequence &) const = default;
+};
+
+using BgaPoorSequenceSchedule = std::vector<ScheduledBgaPoorSequence>;
+
+[[nodiscard]] BgaPoorSequenceSchedule
+BuildBgaPoorSequenceSchedule(const bms_parser::Chart &chart);
+
+// Returns the latest sequence whose start is at or before timelineMicros.
+// Callers recompute this from the immutable schedule after every seek.
+[[nodiscard]] std::optional<std::size_t>
+SelectBgaPoorSequenceIndexAt(const BgaPoorSequenceSchedule &schedule,
+                             long long timelineMicros) noexcept;
+
+// A sequence boundary is strictly after timelineMicros. This is kept separate
+// from miss-trigger timing because chart selection must not mutate on a judge.
+[[nodiscard]] std::optional<long long>
+NextBgaPoorSequenceStartAfter(const BgaPoorSequenceSchedule &schedule,
+                              long long timelineMicros) noexcept;
+
 struct ScheduledAudioEvent {
   long long timeMicros = 0;
   int wav = bms_parser::Parser::NoWav;
@@ -158,6 +185,14 @@ public:
   void handleMemoryPressure();
   void setBgaOffsetMs(int offsetMs);
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
+  [[nodiscard]] const BgaPoorSequenceSchedule &
+  poorBgaSequenceSchedule() const noexcept {
+    return poorBgaSequences;
+  }
+  [[nodiscard]] std::optional<std::size_t>
+  poorBgaSequenceIndexAt(long long timelineMicros) const noexcept {
+    return SelectBgaPoorSequenceIndexAt(poorBgaSequences, timelineMicros);
+  }
 
   long long getTimeMicros();
   audio::playback::BackendOperationResult seek(long long micro);
@@ -282,6 +317,7 @@ private:
   size_t audioCursor = 0;
   std::vector<std::pair<long long, int>> bmpList;
   std::vector<std::pair<long long, int>> bmpLayerList;
+  BgaPoorSequenceSchedule poorBgaSequences;
   size_t bmpCursor = 0;
   size_t bmpLayerCursor = 0;
   long long lastVisualTimelineMicros = -1;
