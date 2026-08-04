@@ -3,8 +3,8 @@
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinFileSystem.h"
 #include "../package/SkinTreeSnapshotter.h"
-#include "view/DecodedImageCache.h"
-#include "view/ImageDecodeCoordinator.h"
+#include "../../view/DecodedImageCache.h"
+#include "../../view/ImageDecodeCoordinator.h"
 
 #include <array>
 #include <condition_variable>

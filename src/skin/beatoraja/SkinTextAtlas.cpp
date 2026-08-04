@@ -2,7 +2,7 @@
 #include "../LuaGameplaySkinFeature.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-#include "view/SdlTtfRuntime.h"
+#include "../../view/SdlTtfRuntime.h"
 
 #include <SDL2/SDL.h>
 #include <SDL_ttf.h>

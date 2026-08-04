@@ -2,7 +2,7 @@
 #include "SkinTextAtlas.h"
 #include "../LuaGameplaySkinFeature.h"
 #include "../package/SkinPackageTypes.h"
-#include "view/ImageFileDecoder.h"
+#include "../../view/ImageFileDecoder.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include <algorithm>
