@@ -1,5 +1,6 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
 #include "skin/beatoraja/SkinModelValidator.h"
+#include "skin/beatoraja/SkinCoverNormalization.h"
 #include "lua_skin_binding_test_support.h"
 
 #include "skin/SkinStoragePaths.h"
@@ -476,6 +477,27 @@ void testStableIdsAndPerUseFrameExpansionAreSourceNeutral() {
                  "per-use strip division expands in row-major order");
     }
   }
+
+  BeatorajaSkinModel invalidChild = *decoded.model;
+  const auto outer = std::find_if(invalidChild.objects.begin(), invalidChild.objects.end(),
+      [](const auto &object) { return object.authoredName == "judge"; });
+  if (outer != invalidChild.objects.end()) {
+    const auto &outerJudge = std::get<SkinJudgeObject>(outer->payload);
+    const SkinObjectId outerId = outer->id;
+    if (outerJudge.grades[0].image) {
+      const auto child = std::find_if(invalidChild.objects.begin(), invalidChild.objects.end(),
+          [&](const auto &object) { return object.id == outerJudge.grades[0].image->object; });
+      if (child != invalidChild.objects.end()) {
+        std::get<SkinImageObject>(child->payload).orderedStates.clear();
+        const auto validated = test_support::validateWithAuthoredBuiltins(
+            std::move(invalidChild));
+        expect(validated.model && std::ranges::find(
+                   validated.model->disabledOptionalObjects, outerId) !=
+                   validated.model->disabledOptionalObjects.end(),
+               "validator disables an outer Judge whose synthetic child is invalid");
+      }
+    }
+  }
 }
 
 void testImageSetPreservesIndependentStateResourcesCropsAndTimers() {
@@ -921,6 +943,122 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
   }
 }
 
+void testLiveCoverJudgeAndBgaSpecialObjects() {
+  constexpr std::string_view fixture = R"lua(
+return {
+  type=0,w=1280,h=720,source={{id='atlas',path='atlas.png'}},
+  image={{id='judge-image',src='atlas',x=0,y=0,w=40,h=20,divx=2,timer=41,cycle=50,
+          len=2,ref=911,act=912}},
+  value={{id='judge-number',src='atlas',x=0,y=20,w=110,h=10,divx=11,
+          ref=42,timer=43,cycle=60,digit=4,space=3}},
+  hiddenCover={{id='hidden',src='atlas',x=0,y=40,w=20,h=10,divx=2,
+                timer=51,cycle=70,disapearLine=33,isDisapearLineLinkLift=false},
+               {id='hidden-default',src='atlas',x=0,y=40,w=20,h=10}},
+  liftCover={{id='lift',src='atlas',x=0,y=50,w=20,h=10,divy=2,
+             timer=52,cycle=71,disapearLine=44,isDisapearLineLinkLift=true},
+             {id='lift-default',src='atlas',x=0,y=50,w=20,h=10}},
+  bga={id='bga'},
+  judge={{id='judge',index=2,shift=true,
+          images={{id='judge-image',dst={{time=20,x=100,y=200,w=30,h=40}}},{id='missing-image',dst={{}}}},
+          numbers={{id='judge-number',dst={{time=10,x=80,y=210,w=20,h=8}}},{id='missing-number',dst={{}}}}}},
+  destination={
+    {id='hidden',offsets={99},offset=98,dst={{x=1,y=2,w=3,h=4}}},
+    {id='lift',offsets={97},offset=96,dst={{}}},
+    {id='hidden-default',dst={{}}},
+    {id='lift-default',dst={{}}},
+    {id='bga',dst={{}}},
+    {id='judge',dst={{}}}
+  }
+})lua";
+  const auto decoded = decodeInlineModel(fixture);
+  expect(decoded.model.has_value(),
+         "live hidden/lift, sparse Judge, and BGA fixture decodes");
+  if (!decoded.model) {
+    return;
+  }
+  const auto hidden = std::find_if(decoded.model->objects.begin(), decoded.model->objects.end(),
+      [](const auto &object) { return object.authoredName == "hidden"; });
+  const auto lift = std::find_if(decoded.model->objects.begin(), decoded.model->objects.end(),
+      [](const auto &object) { return object.authoredName == "lift"; });
+  const auto bga = std::find_if(decoded.model->objects.begin(), decoded.model->objects.end(),
+      [](const auto &object) { return object.authoredName == "bga"; });
+  const auto judge = std::find_if(decoded.model->objects.begin(), decoded.model->objects.end(),
+      [](const auto &object) { return object.authoredName == "judge"; });
+  const auto hiddenDefault = std::find_if(decoded.model->objects.begin(), decoded.model->objects.end(),
+      [](const auto &object) { return object.authoredName == "hidden-default"; });
+  const auto liftDefault = std::find_if(decoded.model->objects.begin(), decoded.model->objects.end(),
+      [](const auto &object) { return object.authoredName == "lift-default"; });
+  expect(hidden != decoded.model->objects.end() && lift != decoded.model->objects.end() &&
+             bga != decoded.model->objects.end() && judge != decoded.model->objects.end(),
+         "every live special destination resolves to an object");
+  if (hidden != decoded.model->objects.end()) {
+    const auto *cover = std::get_if<SkinCoverObject>(&hidden->payload);
+    const auto &destination = decoded.model->destinations[0].presentation;
+    expect(cover && cover->kind == SkinCoverKind::Hidden &&
+               cover->sprite.frames.size() == 2 && cover->sprite.timer &&
+               cover->sprite.timer->value != 0 && cover->sprite.cycleMillis == 70 &&
+               cover->disappearLine == 33.0 && !cover->disappearLineLinksLift &&
+               destination.offsetIds == std::vector<int>{99, 98, kSkinCoverLiftOffsetId,
+                                                          kSkinCoverHiddenOffsetId},
+           "Hidden preserves sprite/timer/cycle/line/link and synthesizes offsets");
+  }
+  if (lift != decoded.model->objects.end()) {
+    const auto *cover = std::get_if<SkinCoverObject>(&lift->payload);
+    const auto &destination = decoded.model->destinations[1].presentation;
+    expect(cover && cover->kind == SkinCoverKind::Lift && cover->sprite.frames.size() == 2 &&
+               cover->sprite.timer && cover->sprite.cycleMillis == 71 &&
+               cover->disappearLine == 44.0 && cover->disappearLineLinksLift &&
+               destination.offsetIds == std::vector<int>{97, 96, kSkinCoverLiftOffsetId},
+           "Lift preserves its own cover semantics and only synthesizes Lift offset");
+  }
+  expect(hiddenDefault != decoded.model->objects.end() &&
+             liftDefault != decoded.model->objects.end() &&
+             std::get<SkinCoverObject>(hiddenDefault->payload).disappearLineLinksLift &&
+             !std::get<SkinCoverObject>(liftDefault->payload).disappearLineLinksLift,
+         "omitted Hidden and Lift link fields retain their distinct pinned defaults");
+  expect(bga != decoded.model->objects.end() && std::holds_alternative<SkinBgaObject>(bga->payload),
+         "BGA decodes as an identity-only marker");
+  if (judge != decoded.model->objects.end()) {
+    const auto *payload = std::get_if<SkinJudgeObject>(&judge->payload);
+    expect(payload && payload->grades.size() == 7 && payload->player == 2 &&
+               payload->shiftImageByHalfDetailWidth && payload->grades[0].image &&
+               payload->grades[0].detailNumber && !payload->grades[1].image &&
+               !payload->grades[1].detailNumber,
+           "Judge retains first seven sparse independently optional grade children");
+    if (payload && payload->grades[0].image) {
+      const auto child = std::find_if(decoded.model->objects.begin(), decoded.model->objects.end(),
+          [&](const auto &object) { return object.id == payload->grades[0].image->object; });
+      const auto *image = child != decoded.model->objects.end()
+                              ? std::get_if<SkinImageObject>(&child->payload)
+                              : nullptr;
+      expect(image && image->orderedStates.size() == 1 &&
+                 image->orderedStates.front().frames.size() == 2 &&
+                 !image->stateIndex && !image->clickEvent,
+             "Judge child image ignores referenced Image len/ref/act semantics");
+    }
+  }
+  BeatorajaSkinModel invalidChild = *decoded.model;
+  const auto outer = std::find_if(invalidChild.objects.begin(), invalidChild.objects.end(),
+      [](const auto &object) { return object.authoredName == "judge"; });
+  if (outer != invalidChild.objects.end()) {
+    const auto &outerJudge = std::get<SkinJudgeObject>(outer->payload);
+    const auto outerId = outer->id;
+    if (outerJudge.grades[0].image) {
+      const auto child = std::find_if(invalidChild.objects.begin(), invalidChild.objects.end(),
+          [&](const auto &object) { return object.id == outerJudge.grades[0].image->object; });
+      if (child != invalidChild.objects.end()) {
+        std::get<SkinImageObject>(child->payload).orderedStates.clear();
+        const auto validated = test_support::validateWithAuthoredBuiltins(
+            std::move(invalidChild));
+        expect(validated.model && std::ranges::find(
+                   validated.model->disabledOptionalObjects, outerId) !=
+                   validated.model->disabledOptionalObjects.end(),
+               "validator disables an outer Judge whose synthetic child is invalid");
+      }
+    }
+  }
+}
+
 } // namespace
 
 int main() {
@@ -936,6 +1074,7 @@ int main() {
   testLuaProtectedDecodeOwnsEveryRawParseTemporaryInTheRequest();
   testNoteHeightAndIgnoredAuthoredVisualsRemainExplicitPolicies();
   testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject();
+  testLiveCoverJudgeAndBgaSpecialObjects();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

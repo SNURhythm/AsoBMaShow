@@ -1084,6 +1084,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
+            src/skin/beatoraja/SkinCoverNormalization.cpp
+            src/skin/beatoraja/SkinJudgeNormalization.cpp
+            src/skin/beatoraja/SkinJudgeNumberNormalization.cpp
+            src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
             src/skin/package/SkinAliasDetector.cpp

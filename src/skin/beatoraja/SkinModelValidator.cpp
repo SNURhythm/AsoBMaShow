@@ -454,6 +454,38 @@ SkinModelValidationResult SkinModelValidator::validate(
         "Lua skin optional object has an invalid dependency"));
   }
 
+  // Judge children are materialized as source-neutral synthetic objects. A
+  // valid ID alone is not sufficient when one of those optional children was
+  // disabled above: the outer presentation must not retain a dangling live
+  // child reference.
+  for (const auto &object : model.objects) {
+    const auto *judge = std::get_if<SkinJudgeObject>(&object.payload);
+    if (judge == nullptr || disabledIds.contains(object.id)) {
+      continue;
+    }
+    const bool childDisabled = std::ranges::any_of(
+        judge->grades, [&](const auto &grade) {
+          return (grade.image && disabledIds.contains(grade.image->object)) ||
+                 (grade.detailNumber &&
+                  disabledIds.contains(grade.detailNumber->object));
+        });
+    if (!childDisabled) {
+      continue;
+    }
+    if (object.critical) {
+      result.criticalFailure = true;
+      result.diagnostics.push_back(validationDiagnostic(
+          "skin_lua_model_critical_dependency_invalid",
+          "Lua skin critical Judge references a disabled child"));
+      return result;
+    }
+    disabled.push_back(object.id);
+    disabledIds.insert(object.id);
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_optional_object_disabled",
+        "Lua skin Judge references a disabled child"));
+  }
+
   for (const auto &destination : model.destinations) {
     if (!objectIds.contains(destination.object)) {
       result.criticalFailure = true;
