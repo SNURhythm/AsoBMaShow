@@ -21,6 +21,7 @@
 #include "GameplayChartEntityRenderBudget.h"
 #include "GameplayGaugeRules.h"
 #include "GameplayNoteSubmissionOrder.h"
+#include "PlayfieldPresentation.h"
 #include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
 #include <array>
@@ -111,7 +112,7 @@ struct JudgementCounterSnapshot {
   int comboBreak = 0;
 };
 
-class BMSRenderer {
+class BMSRenderer : public PlayfieldPresentation {
 public:
   ~BMSRenderer();
 
@@ -394,10 +395,13 @@ public:
   static void layoutAutoPlayMark(TextView *text);
   static void renderAutoPlayMark(TextView *text, RenderContext &context);
 
-  void onLanePressed(int lane, const JudgeResult judge, long long time);
-  void onLaneReleased(int lane, long long time);
+  void configure(const PlayfieldPresentationConfig &configuration) override;
+  void onLanePressed(int lane, JudgeResult judge,
+                     long long time) override;
+  void onLaneReleased(int lane, long long time) override;
   void onJudge(JudgeResult judgeResult, int combo, int score,
-               long long displayTimeMicros, bool recordTimingSample = true);
+               PlayfieldJudgeEventClock clock,
+               bool recordTimingSample = true) override;
   explicit BMSRenderer(
       bms_parser::Chart *chart,
       const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
@@ -407,8 +411,8 @@ public:
   void render(RenderContext &context, long long micro);
   void render(RenderContext &context, long long micro,
               long long replayTouchTimeMicros);
-  void reset();
-  void refreshGeometry();
+  void reset() override;
+  void refreshGeometry() override;
   void setVisibleTimeGreenNumber(int greenNumber);
   void setVisibleTimeUseMilliseconds(bool enabled);
   void setCurrentBpm(double bpm);

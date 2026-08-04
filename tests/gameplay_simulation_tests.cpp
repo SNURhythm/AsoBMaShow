@@ -7,26 +7,62 @@
 #include "scene/play/GameplaySimulation.h"
 #include "scene/play/Judge.h"
 #include "scene/play/ManualKeysoundSelection.h"
+#include "scene/play/PlayfieldPresentationEvents.h"
+#include "scene/play/PlayfieldPresentation.h"
 #include "scene/play/RhythmLaneInputController.h"
 
 #include "bms_parser.hpp"
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstdlib>
 #include <iostream>
 #include <unordered_map>
 
-void BMSRenderer::onLanePressed(int, const JudgeResult, long long) {}
-void BMSRenderer::onLaneReleased(int, long long) {}
-
 namespace {
+static_assert(std::derived_from<BMSRenderer, PlayfieldPresentation>);
+static_assert(requires(BMSRenderer &renderer,
+                       const PlayfieldPresentationConfig &configuration) {
+  { renderer.configure(configuration) } -> std::same_as<void>;
+  { renderer.reset() } -> std::same_as<void>;
+  { renderer.refreshGeometry() } -> std::same_as<void>;
+  { renderer.onJudge(JudgeResult(PGreat, 0), 1, 2,
+                     PlayfieldJudgeEventClock{}, true) } ->
+      std::same_as<void>;
+});
+
 void require(bool condition, const char *message) {
   if (!condition) {
     std::cerr << message << '\n';
     std::exit(1);
   }
 }
+
+struct RecordingPresentationEvents final : IPlayfieldPresentationEvents {
+  int pressCount = 0;
+  int releaseCount = 0;
+  int judgeCount = 0;
+  int lastLane = -1;
+  long long lastEventMicros = 0;
+
+  void onLanePressed(int lane, JudgeResult, long long eventMicros) override {
+    ++pressCount;
+    lastLane = lane;
+    lastEventMicros = eventMicros;
+  }
+
+  void onLaneReleased(int lane, long long eventMicros) override {
+    ++releaseCount;
+    lastLane = lane;
+    lastEventMicros = eventMicros;
+  }
+
+  void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock,
+               bool) override {
+    ++judgeCount;
+  }
+};
 
 bool sameAttemptSnapshot(const gameplay::GameplayAttemptSnapshot &left,
                          const gameplay::GameplayAttemptSnapshot &right) {
@@ -254,7 +290,8 @@ void testEmptyValidLaneCommitsPressAndReleaseIntents() {
       {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
   const auto press = simulation.pressLane(
       3, {.songTimeMicros = 1'000'000,
-          .laneBeamTimeMicros = 2'000'000});
+          .laneBeamTimeMicros = 2'000'000,
+          .inputDelayMicros = 12'345});
 
   require(simulation.lanePressed(3),
           "empty valid lane press commits pressed state");
@@ -270,12 +307,14 @@ void testEmptyValidLaneCommitsPressAndReleaseIntents() {
   require(press.hasLaneVisual &&
               press.laneVisual.action == gameplay::LaneVisualAction::Press &&
               press.laneVisual.lane == 3 &&
+              press.laneVisual.songTimeMicros == 987'655 &&
               press.laneVisual.judge.judgement == None,
-          "empty valid lane press commits lane-only visual intent");
+          "empty valid lane press carries its compensated source time");
 
   const auto release = simulation.releaseLane(
       3, {.songTimeMicros = 1'100'000,
-          .laneBeamTimeMicros = 2'100'000});
+          .laneBeamTimeMicros = 2'100'000,
+          .inputDelayMicros = 12'345});
 
   require(!simulation.lanePressed(3),
           "empty valid lane release clears pressed state");
@@ -292,6 +331,7 @@ void testEmptyValidLaneCommitsPressAndReleaseIntents() {
   require(release.hasLaneVisual &&
               release.laneVisual.action ==
                   gameplay::LaneVisualAction::Release &&
+              release.laneVisual.songTimeMicros == 1'087'655 &&
               release.laneVisual.lane == 3 &&
               release.laneVisual.judge.judgement == None,
           "empty valid lane release commits lane-only visual intent");
@@ -984,6 +1024,7 @@ void testPreparationTransactionsOnlyChangeLaneReplayVisualAndSound() {
   const gameplay::GameplayInputContext preparation{
       .songTimeMicros = 900'000,
       .laneBeamTimeMicros = 90,
+      .inputDelayMicros = 12'345,
   };
 
   const auto preview =
@@ -995,6 +1036,7 @@ void testPreparationTransactionsOnlyChangeLaneReplayVisualAndSound() {
               press.noteId == gameplay::kInvalidNoteId && !press.hasJudge &&
               press.hasLaneVisual &&
               press.laneVisual.action == gameplay::LaneVisualAction::Press &&
+              press.laneVisual.songTimeMicros == 887'655 &&
               press.hasReplayEvent && simulation.lanePressed(1),
           "preparation press publishes sound, lane visual, replay, and held "
           "state only");
@@ -1017,10 +1059,13 @@ void testPreparationTransactionsOnlyChangeLaneReplayVisualAndSound() {
           "a key held through activation cannot judge automatically");
 
   const auto release = simulation.releaseLaneForPreparation(
-      1, {.songTimeMicros = 1'010'000, .laneBeamTimeMicros = 101});
+      1, {.songTimeMicros = 1'010'000,
+          .laneBeamTimeMicros = 101,
+          .inputDelayMicros = 12'345});
   require(release.hasLaneVisual &&
               release.laneVisual.action ==
                   gameplay::LaneVisualAction::Release &&
+              release.laneVisual.songTimeMicros == 997'655 &&
               release.hasReplayEvent && !release.hasJudge &&
               !simulation.lanePressed(1),
           "preparation release clears the held lane without judgement");
@@ -1063,6 +1108,31 @@ void testLegacyPreparationControllerCommitsSoundAndHeldStateOnly() {
               !note->IsPlayed && !note->IsDead,
           "legacy preparation release clears held state without note "
           "mutation");
+}
+
+void testLaneControllerEmitsOnlyLanePresentationEvents() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(
+      1, new bms_parser::Note(72));
+  chart.Measures.push_back(measure);
+
+  std::unordered_map<int, bool> lanes;
+  RecordingPresentationEvents events;
+  RhythmLaneInputController controller(&chart, &events, lanes, Judge(1));
+  const RhythmLaneInputController::InputContext context{
+      .songTimeMicros = 1'000'000,
+      .laneBeamTimeMicros = 321,
+  };
+
+  (void)controller.pressLane(1, context);
+  (void)controller.releaseLane(1, context);
+
+  require(events.pressCount == 1 && events.releaseCount == 1 &&
+              events.judgeCount == 0 && events.lastLane == 1 &&
+              events.lastEventMicros == 321,
+          "lane controller emits one press and release but no judge event");
 }
 
 struct NoteIdentity {
@@ -2158,6 +2228,30 @@ void testLr2AutoplayAndReplayStyleLongNoteSequences() {
                                  replayed.replayEvents()),
           "LR2 replay-applied press/release sequence matches direct input");
 }
+
+void testAutoplayNormalReleaseCarriesSourceTimeWithoutReplay() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+                   .attempt = {.autoPlay = true}});
+
+  const auto automatic = simulation.advanceTo(1'000'000, 9'000'000);
+  require(automatic.transactions.size() == 2 &&
+              automatic.transactions[1].hasLaneVisual &&
+              !automatic.transactions[1].hasReplayEvent &&
+              automatic.transactions[1].laneVisual.action ==
+                  gameplay::LaneVisualAction::Release &&
+              automatic.transactions[1].laneVisual.visualTimeMicros ==
+                  9'000'000 &&
+              automatic.transactions[1].laneVisual.songTimeMicros ==
+                  1'000'000,
+          "autoplay normal release carries source time without a replay event");
+}
 } // namespace
 
 int main() {
@@ -2190,6 +2284,7 @@ int main() {
   testLongTailIsNotAManualPressKeysound();
   testPreparationTransactionsOnlyChangeLaneReplayVisualAndSound();
   testLegacyPreparationControllerCommitsSoundAndHeldStateOnly();
+  testLaneControllerEmitsOnlyLanePresentationEvents();
   testCurrentPressParityMatrix();
   testCurrentReleaseParityMatrix();
   testSharedNoteRoleClassification();
@@ -2205,5 +2300,6 @@ int main() {
   testLr2ClassicLongNoteStoresAndUsesAcceptedHeadJudge();
   testLr2ChargeAndHellChargeCommitHeadAndTailSeparately();
   testLr2AutoplayAndReplayStyleLongNoteSequences();
+  testAutoplayNormalReleaseCarriesSourceTimeWithoutReplay();
   return 0;
 }

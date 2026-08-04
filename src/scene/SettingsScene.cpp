@@ -306,40 +306,8 @@ void SettingsScene::renderScene() {
                                       rendering::window_height);
   }
   if (previewActive && previewRenderer != nullptr) {
-    previewRenderer->setVisibleTimeGreenNumber(
-        context.settings.visibleTimeGreenNumber);
-    previewRenderer->setVisibleTimeBpmStrategy(
-        context.settings.visibleTimeBpmStrategy);
-    previewRenderer->setVisibleTimeUseMilliseconds(
-        context.settings.visibleTimeUseMilliseconds);
-    if (previewChart != nullptr) {
-      previewRenderer->setPlayAreaWidth(
-          context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
-    }
-    previewRenderer->setLaneBeamLengthPercent(
-        context.settings.laneBeamLengthPercent);
-    previewRenderer->setNoteStartPositionPercent(
-        context.settings.noteStartPositionPercent);
-    previewRenderer->setLaneCoverFloatingEnabled(
-        context.settings.floatingLaneCoverEnabled);
-    previewRenderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
-    previewRenderer->setJudgementIndicatorConfig(
-        context.settings.judgementIndicatorEnabled,
-        context.settings.judgementIndicatorY,
-        context.settings.judgementIndicatorWidthScale,
-        context.settings.judgementIndicatorRenderMode ==
-            AppSettings::JudgementIndicatorRenderMode::Hud2D,
-        context.settings.judgementIndicatorRangeMilliseconds);
-    previewRenderer->setJudgementTextY(context.settings.judgementTextY);
-    previewRenderer->setJudgementTimingFastSlowCriteria(
-        context.settings.judgementTimingFastSlowCriteria);
-    previewRenderer->setJudgementTimingMillisecondsCriteria(
-        context.settings.judgementTimingMillisecondsCriteria);
-    previewRenderer->setJudgementCounterEnabled(
-        context.settings.judgementCounterEnabled);
-    previewRenderer->setJudgementCounterPosition(
-        context.settings.judgementCounterPosition);
-    previewRenderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
+    syncPreviewPresentationConfiguration();
+    capturePreviewVisualState();
     previewRenderer->refreshGeometry();
     RenderContext renderContext;
     previewRenderer->render(renderContext, previewElapsedMicros);

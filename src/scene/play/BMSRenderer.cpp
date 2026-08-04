@@ -1792,7 +1792,7 @@ void BMSRenderer::layoutCenteredJudgementText() {
   }
 }
 
-void BMSRenderer::onLanePressed(int lane, const JudgeResult judge,
+void BMSRenderer::onLanePressed(int lane, JudgeResult judge,
                                 long long time) {
   const auto it = laneToOrderIndex.find(lane);
   if (it == laneToOrderIndex.end()) {
@@ -1817,8 +1817,9 @@ void BMSRenderer::onLaneReleased(int lane, long long time) {
   laneState.lastStateTime.store(time, std::memory_order_release);
 }
 void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
-                          long long displayTimeMicros,
+                          PlayfieldJudgeEventClock clock,
                           bool recordTimingSample) {
+  const long long displayTimeMicros = clock.visualTimeMicros;
   if (judgeResult.judgement == None) {
     return;
   }
@@ -1836,6 +1837,7 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
     hudRevision.fetch_add(1, std::memory_order_release);
   }
 }
+
 void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
     gameplay_note_submission_order::LongNoteOrder order,
@@ -3122,6 +3124,35 @@ void BMSRenderer::updateJudgementCounterText() {
           ui_theme::sdl(hudCounterValueColor(i, value, topPosition)));
     }
   }
+}
+
+void BMSRenderer::configure(
+    const PlayfieldPresentationConfig &configuration) {
+  setVisibleTimeGreenNumber(configuration.visibleTimeGreenNumber);
+  setVisibleTimeUseMilliseconds(configuration.visibleTimeUseMilliseconds);
+  setVisibleTimeBpmStrategy(configuration.visibleTimeBpmStrategy);
+  setPlayAreaWidth(configuration.playAreaWidth);
+  setLaneBeamsEnabled(configuration.laneBeamsEnabled);
+  setLaneCoverFloatingEnabled(configuration.laneCoverFloatingEnabled);
+  setLaneBeamLengthPercent(configuration.laneBeamLengthPercent);
+  setNoteStartPositionPercent(configuration.noteStartPositionPercent);
+  setLaneBeamClockUsesRenderTime(
+      configuration.laneBeamClockUsesRenderTime);
+  setShowInvisibleNotes(configuration.showInvisibleNotes);
+  setJudgementIndicatorConfig(
+      configuration.judgementIndicatorEnabled,
+      configuration.judgementIndicatorY,
+      configuration.judgementIndicatorWidthScale,
+      configuration.judgementIndicatorHudMode,
+      configuration.judgementIndicatorRangeMilliseconds);
+  setJudgementTextY(configuration.judgementTextY);
+  setJudgementCounterEnabled(configuration.judgementCounterEnabled);
+  setJudgementCounterPosition(configuration.judgementCounterPosition);
+  setJudgementTimingFastSlowCriteria(configuration.fastSlowCriteria);
+  setJudgementTimingMillisecondsCriteria(configuration.millisecondsCriteria);
+  setGaugeBarPosition(configuration.gaugeBarPosition);
+  setTouchVisualizationEnabled(configuration.touchVisualizationEnabled);
+  setReplayGhostRenderingEnabled(configuration.replayGhostRenderingEnabled);
 }
 
 void BMSRenderer::reset() {

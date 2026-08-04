@@ -255,10 +255,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
         !context.settings.visibleTimeUseMilliseconds;
     persistSettings();
     syncVisibleTimeInputText(true);
-    if (previewRenderer != nullptr) {
-      previewRenderer->setVisibleTimeUseMilliseconds(
-          context.settings.visibleTimeUseMilliseconds);
-    }
+    syncPreviewPresentationConfiguration();
   });
   View *visibleTimeModeRow = nullptr;
   if (compactAdjustments) {
@@ -284,10 +281,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
     context.settings.visibleTimeBpmStrategy =
         nextVisibleTimeBpmStrategy(context.settings.visibleTimeBpmStrategy);
     persistSettings();
-    if (previewRenderer != nullptr) {
-      previewRenderer->setVisibleTimeBpmStrategy(
-          context.settings.visibleTimeBpmStrategy);
-    }
+    syncPreviewPresentationConfiguration();
   });
   if (visibleTimeModeRow != nullptr) {
     visibleTimeModeRow->addView(visibleTimeBpmStrategyButton);
@@ -1506,10 +1500,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   showInvisibleNotesModeButton->setOnClickListener([this]() {
     context.settings.showInvisibleNotes = !context.settings.showInvisibleNotes;
     persistSettings();
-    if (previewRenderer != nullptr) {
-      previewRenderer->setShowInvisibleNotes(
-          context.settings.showInvisibleNotes);
-    }
+    syncPreviewPresentationConfiguration();
   });
   invisibleNoteControls->addView(showInvisibleNotesModeButton);
   cardsColumn->addView(makeCard(

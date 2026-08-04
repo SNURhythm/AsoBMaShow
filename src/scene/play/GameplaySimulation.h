@@ -119,6 +119,7 @@ enum class LaneVisualAction { Press, Release };
 struct LaneVisualEvent {
   LaneVisualAction action = LaneVisualAction::Press;
   int lane = -1;
+  std::int64_t songTimeMicros = 0;
   std::int64_t visualTimeMicros = 0;
   JudgeResult judge = JudgeResult(None, 0);
 };

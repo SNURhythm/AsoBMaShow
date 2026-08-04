@@ -6,13 +6,12 @@
 #include "CompiledGameplayJudge.h"
 #include "GameplayCandidateRules.h"
 #include "Judge.h"
+#include "PlayfieldPresentationEvents.h"
 
 #include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
-
-class BMSRenderer;
 
 class RhythmLaneInputController {
 public:
@@ -47,12 +46,12 @@ public:
   };
 
   RhythmLaneInputController(
-      bms_parser::Chart *chart, BMSRenderer *renderer,
+      bms_parser::Chart *chart, IPlayfieldPresentationEvents *events,
       std::unordered_map<int, bool> &lanePressed, Judge effectiveJudge,
       int longNoteModeOverride = 0,
       std::optional<NoteTimeRange> allowedNoteRange = std::nullopt);
   RhythmLaneInputController(
-      bms_parser::Chart *chart, BMSRenderer *renderer,
+      bms_parser::Chart *chart, IPlayfieldPresentationEvents *events,
       std::unordered_map<int, bool> &lanePressed,
       gameplay::CompiledGameplayJudge effectiveJudge,
       int longNoteModeOverride = 0,
@@ -75,7 +74,7 @@ private:
   };
 
   bms_parser::Chart *chart = nullptr;
-  BMSRenderer *renderer = nullptr;
+  IPlayfieldPresentationEvents *events = nullptr;
   std::unordered_map<int, bool> &lanePressed;
   int longNoteModeOverride = 0;
   gameplay::CompiledGameplayJudge judge;

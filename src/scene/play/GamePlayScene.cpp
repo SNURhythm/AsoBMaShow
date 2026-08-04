@@ -1471,9 +1471,9 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
   std::array<int, gameplay::kRealtimeGameplayTransactionHistorySize>
       lanesWithNewVisual{};
   std::size_t lanesWithNewVisualCount = 0;
-  const long long visualCatchUpMicros = nowMicros();
-  const long long judgementDisplayMicros = getVisualTimeMicros(
-      getGameplayTimeMicros(context.jukebox.getTimeMicros()));
+  const long long visualCatchUpMicros = playfieldVisualEventTimeMicros(
+      getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+      getVisualOffsetMicros());
   for (std::size_t index = 0; index < snapshot->transactionCount; ++index) {
     const auto &transaction = snapshot->transactions[index];
     if (transaction.sequence <= session.appliedTransactionSequence) {
@@ -1482,19 +1482,28 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     const auto &result = transaction.result;
     if (result.hasLaneVisual) {
       const auto &visual = result.laneVisual;
+      const long long eventVisualTimeMicros =
+          playfieldVisualEventTimeMicros(
+              visual.songTimeMicros, getVisualOffsetMicros());
       if (visual.lane >= 0 &&
           lanesWithNewVisualCount < lanesWithNewVisual.size()) {
         lanesWithNewVisual[lanesWithNewVisualCount++] = visual.lane;
       }
       if (visual.action == gameplay::LaneVisualAction::Press) {
-        renderer->onLanePressed(visual.lane, visual.judge, visualCatchUpMicros);
+        presentationEventFanout->onLanePressed(
+            visual.lane, visual.judge, eventVisualTimeMicros);
       } else {
-        renderer->onLaneReleased(visual.lane, visualCatchUpMicros);
+        presentationEventFanout->onLaneReleased(visual.lane,
+                                                eventVisualTimeMicros);
       }
     }
     if (result.hasJudge) {
-      renderer->onJudge(result.judge, state->combo, state->getScore(),
-                        judgementDisplayMicros, true);
+      const long long eventSongTimeMicros = result.replayEvent.songTimeMicros;
+      const int eventCombo = result.replayEvent.combo;
+      const int eventScore = result.replayEvent.score;
+      presentationEventFanout->onJudge(
+          result.judge, eventCombo, eventScore,
+          judgeEventClock(eventSongTimeMicros), true);
     }
     session.appliedTransactionSequence = transaction.sequence;
   }
@@ -1516,9 +1525,10 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
       continue;
     }
     if (pressed) {
-      renderer->onLanePressed(lane, JudgeResult(None, 0), nowMicros());
+      presentationEventFanout->onLanePressed(
+          lane, JudgeResult(None, 0), visualCatchUpMicros);
     } else {
-      renderer->onLaneReleased(lane, nowMicros());
+      presentationEventFanout->onLaneReleased(lane, visualCatchUpMicros);
     }
   }
   session.appliedTransactionSequence = std::max(
@@ -1681,46 +1691,66 @@ void GamePlayScene::init() {
                                                   ? replayLongNoteMode
                                                   : options.longNoteMode);
   }
+  playfieldChartVisualModel =
+      buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+  initializePlayfieldVisualNoteSources();
+  ownedPlayfieldVisualStateStore =
+      std::make_unique<PlayfieldVisualStateStore>(playfieldChartVisualModel);
+  playfieldVisualStateStore = ownedPlayfieldVisualStateStore.get();
   ownedRenderer = std::make_unique<BMSRenderer>(
       chart, judge.timingWindows, effectiveVisibleTimeGreenNumber(), true,
       options.playback);
   renderer = ownedRenderer.get();
-  renderer->setVisibleTimeBpmStrategy(
-      courseNoSpeed() ? AppSettings::VisibleTimeBpmStrategy::Chart
-                      : context.settings.visibleTimeBpmStrategy);
-  renderer->setVisibleTimeUseMilliseconds(
-      courseNoSpeed() ? false : context.settings.visibleTimeUseMilliseconds);
-  renderer->setPlayAreaWidth(
-      context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
-  renderer->setLaneBeamLengthPercent(context.settings.laneBeamLengthPercent);
-  renderer->setNoteStartPositionPercent(effectiveNoteStartPositionPercent());
-  renderer->setLaneCoverFloatingEnabled(
-      !courseNoSpeed() && context.settings.floatingLaneCoverEnabled);
-  renderer->setJudgementIndicatorConfig(
-      context.settings.judgementIndicatorEnabled,
-      context.settings.judgementIndicatorY,
-      context.settings.judgementIndicatorWidthScale,
-      context.settings.judgementIndicatorRenderMode ==
+  PlayfieldPresentationConfig presentationConfiguration{
+      .visibleTimeGreenNumber = effectiveVisibleTimeGreenNumber(),
+      .visibleTimeUseMilliseconds =
+          !courseNoSpeed() && context.settings.visibleTimeUseMilliseconds,
+      .visibleTimeBpmStrategy =
+          courseNoSpeed() ? AppSettings::VisibleTimeBpmStrategy::Chart
+                          : context.settings.visibleTimeBpmStrategy,
+      .playAreaWidth =
+          context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
+      .laneBeamsEnabled = true,
+      .laneCoverFloatingEnabled =
+          !courseNoSpeed() && context.settings.floatingLaneCoverEnabled,
+      .laneBeamLengthPercent = context.settings.laneBeamLengthPercent,
+      .noteStartPositionPercent = effectiveNoteStartPositionPercent(),
+      .laneBeamClockUsesRenderTime = true,
+      .showInvisibleNotes = context.settings.showInvisibleNotes,
+      .judgementIndicatorEnabled =
+          context.settings.judgementIndicatorEnabled,
+      .judgementIndicatorY = context.settings.judgementIndicatorY,
+      .judgementIndicatorWidthScale =
+          context.settings.judgementIndicatorWidthScale,
+      .judgementIndicatorHudMode =
+          context.settings.judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
-      context.settings.judgementIndicatorRangeMilliseconds);
-  renderer->setJudgementTextY(context.settings.judgementTextY);
-  renderer->setJudgementTimingFastSlowCriteria(
-      context.settings.judgementTimingFastSlowCriteria);
-  renderer->setJudgementTimingMillisecondsCriteria(
-      context.settings.judgementTimingMillisecondsCriteria);
-  renderer->setJudgementCounterEnabled(
-      context.settings.judgementCounterEnabled);
-  renderer->setJudgementCounterPosition(
-      context.settings.judgementCounterPosition);
-  renderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
+      .judgementIndicatorRangeMilliseconds =
+          context.settings.judgementIndicatorRangeMilliseconds,
+      .judgementTextY = context.settings.judgementTextY,
+      .judgementCounterEnabled =
+          context.settings.judgementCounterEnabled,
+      .judgementCounterPosition =
+          context.settings.judgementCounterPosition,
+      .fastSlowCriteria =
+          context.settings.judgementTimingFastSlowCriteria,
+      .millisecondsCriteria =
+          context.settings.judgementTimingMillisecondsCriteria,
+      .gaugeBarPosition = context.settings.gaugeBarPosition,
+      .touchVisualizationEnabled =
+          options.touchVisualizationEnabled.value_or(
+              context.settings.touchVisualizationEnabled),
+      .replayGhostRenderingEnabled =
+          options.replayGhostRenderingEnabled.value_or(true),
+  };
+  playfieldVisualStateStore->setConfiguration(presentationConfiguration);
+  renderer->configure(presentationConfiguration);
   renderer->setReplayData(options.replayData.get());
-  renderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
-  renderer->setTouchVisualizationEnabled(
-      options.touchVisualizationEnabled.value_or(
-          context.settings.touchVisualizationEnabled));
-  renderer->setReplayGhostRenderingEnabled(
-      options.replayGhostRenderingEnabled.value_or(true));
   renderer->setPlayOptionStatus(gameplayPlayOptionLabel(options));
+  ownedPresentationEventFanout =
+      std::make_unique<PlayfieldPresentationEventFanout>(
+          *playfieldVisualStateStore, *renderer);
+  presentationEventFanout = ownedPresentationEventFanout.get();
   std::string musicStopError;
   context.musicPlayer.Stop(musicStopError);
   context.jukebox.stop();
@@ -1767,7 +1797,8 @@ void GamePlayScene::init() {
   }
 
   ownedLaneInputController = std::make_unique<RhythmLaneInputController>(
-      chart, renderer, lanePressed, rulesetPolicyBuild.policy->judge,
+      chart, presentationEventFanout, lanePressed,
+      rulesetPolicyBuild.policy->judge,
       options.longNoteMode, practiceNoteRange());
   laneInputController = ownedLaneInputController.get();
 
@@ -2055,6 +2086,20 @@ bool GamePlayScene::reset() {
     context.jukebox.appendScheduledAudioEvents(replayKeysounds);
   }
   context.jukebox.play(preparationPlan.playbackStartTimeMicros);
+  playfieldFrameSerial = 0;
+  playfieldLaneCoverPercent = effectiveNoteStartPositionPercent();
+  playfieldLaneCoverResetPending = false;
+  if (playfieldVisualStateStore != nullptr) {
+    playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
+    if (options.replayData != nullptr) {
+      playfieldVisualStateStore->setReplayTouchSamples(
+          options.replayData->touchSamples);
+    }
+    playfieldVisualStateStore->setSceneStartMicros(
+        getGameplayTimeMicros(preparationPlan.playbackStartTimeMicros));
+    playfieldVisualStateStore->setPlayStartMicros(getStartPositionMicros());
+    playfieldVisualStateStore->clearLiveTouchPoints();
+  }
   currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   if (renderer != nullptr) {
     renderer->setCurrentBpm(currentGameplayBpm);
@@ -2246,6 +2291,9 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
   if (renderer != nullptr) {
     renderer->clearLiveTouchPoints();
   }
+  if (playfieldVisualStateStore != nullptr) {
+    playfieldVisualStateStore->clearLiveTouchPoints();
+  }
   if (pauseLayout != nullptr) {
     pauseLayout->setVisible(true);
   }
@@ -2345,6 +2393,8 @@ void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
   }
   context.settings.noteStartPositionPercent = next;
   renderer->applyLaneCoverState(next, true);
+  playfieldLaneCoverPercent = next;
+  playfieldLaneCoverResetPending = true;
   floatingLaneCoverSettingsDirty = true;
   appendReplayLaneCoverEvent(next, chartTimeMicros, true);
   persistFloatingLaneCoverSettings();
@@ -3139,7 +3189,7 @@ void GamePlayScene::finalizePracticeRangeMisses() {
         note != nullptr && note->Timeline != nullptr ? note->Timeline->Timing
                                                      : finalizationTimeMicros;
     const JudgeResult miss(Poor, finalizationTimeMicros - noteTimeMicros);
-    onJudge(miss, false);
+    onJudge(miss, judgeEventClock(finalizationTimeMicros), false);
     appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
                       finalizationTimeMicros, finalizationTimeMicros, miss);
   }
@@ -3312,6 +3362,127 @@ long long GamePlayScene::getVisualOffsetMicros() const {
 long long GamePlayScene::getVisualTimeMicros(long long songTimeMicros) const {
   return gameplay_timing::visualTimeMicros(songTimeMicros,
                                            getVisualOffsetMicros());
+}
+
+PlayfieldJudgeEventClock
+GamePlayScene::judgeEventClock(long long songTimeMicros) const {
+  return makePlayfieldJudgeEventClock(songTimeMicros,
+                                      getVisualOffsetMicros());
+}
+
+void GamePlayScene::initializePlayfieldVisualNoteSources() {
+  playfieldVisualNoteSources.clear();
+  if (chart == nullptr) {
+    return;
+  }
+  playfieldVisualNoteSources.reserve(playfieldChartVisualModel.notes.size());
+  for (const auto *measure : chart->Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (const auto *note : timeline->Notes) {
+        if (note != nullptr) {
+          playfieldVisualNoteSources.push_back(note);
+        }
+      }
+      for (const auto *note : timeline->InvisibleNotes) {
+        if (note != nullptr) {
+          playfieldVisualNoteSources.push_back(note);
+        }
+      }
+      for (const auto *note : timeline->LandmineNotes) {
+        if (note != nullptr) {
+          playfieldVisualNoteSources.push_back(note);
+        }
+      }
+    }
+  }
+  if (playfieldVisualNoteSources.size() !=
+      playfieldChartVisualModel.notes.size()) {
+    playfieldVisualNoteSources.clear();
+  }
+}
+
+void GamePlayScene::capturePlayfieldVisualState(
+    long long gameplayTimeMicros, long long visualTimeMicros,
+    bool startLaneIndicatorsVisible) {
+  if (playfieldVisualStateStore == nullptr || state == nullptr) {
+    return;
+  }
+
+  PlayfieldAuthorityUpdate authority{
+      .currentBpm = currentGameplayBpm,
+      .judgementCounters = state->judgeCount,
+      .comboBreak = state->comboBreak,
+      .gaugeType = state->gaugeType,
+      .gaugeAutoShift = state->gaugeAutoShift,
+      .currentGauge = state->currentGauge,
+      .gaugeRules = state->gaugeRules(),
+      .pacemakerTarget = activePacemakerTarget,
+      .pacemakerStatus =
+          pacemaker::snapshotForState(activePacemakerTarget, *state),
+      .playOptionLabel = gameplayPlayOptionLabel(options),
+      .autoPlayMarkVisible =
+          options.autoPlay ||
+          (options.replayData != nullptr && options.replayData->autoPlay),
+      .startLaneIndicators = preparationPlan.laneIndicator.lanes,
+      .startLaneIndicatorsVisible = startLaneIndicatorsVisible,
+      .laneCoverPercent = playfieldLaneCoverPercent,
+      .resetLaneCoverVisibleTimeReference =
+          playfieldLaneCoverResetPending,
+  };
+  playfieldVisualStateStore->applyAuthorityUpdate(authority);
+
+  const std::size_t noteCount =
+      std::min(playfieldVisualNoteSources.size(),
+               playfieldChartVisualModel.notes.size());
+  std::vector<NotePresentationState> noteStates;
+  noteStates.reserve(noteCount);
+  for (std::size_t index = 0; index < noteCount; ++index) {
+    const auto *source = playfieldVisualNoteSources[index];
+    const auto &model = playfieldChartVisualModel.notes[index];
+    NotePresentationState noteState{
+        .id = model.id,
+        .judged = source->IsPlayed,
+        .dead = source->IsDead,
+    };
+    if (const auto *longNote =
+            dynamic_cast<const bms_parser::LongNote *>(source);
+        longNote != nullptr) {
+      const auto *head = longNote->IsTail() && longNote->Head != nullptr
+                             ? longNote->Head
+                             : longNote;
+      const bool headReachedJudge =
+          head->IsPlayed || head->IsDead ||
+          (head->Timeline != nullptr &&
+           head->Timeline->Timing <= visualTimeMicros);
+      const auto laneIt = lanePressed.find(head->Lane);
+      const bool laneDown =
+          laneIt != lanePressed.end() && laneIt->second;
+      noteState.longReactive =
+          model.longNoteMode == ChartLongNoteMode::HCN &&
+          headReachedJudge && laneDown;
+      noteState.longActive = head->IsHolding || noteState.longReactive;
+      noteState.longDamaged =
+          model.longNoteMode == ChartLongNoteMode::HCN &&
+          headReachedJudge && !noteState.longActive;
+    }
+    noteStates.push_back(noteState);
+  }
+  playfieldVisualStateStore->setNoteStates(std::move(noteStates));
+
+  capturedPlayfieldVisualState = playfieldVisualStateStore->capture({
+      .serial = ++playfieldFrameSerial,
+      .visualTimeMicros = visualTimeMicros,
+      .gameplayTimeMicros = gameplayTimeMicros,
+      .replayTouchTimeMicros = gameplayTimeMicros,
+      .bgaTimeMicros = gameplayTimeMicros,
+  });
+  playfieldLaneCoverResetPending = false;
 }
 
 void GamePlayScene::scheduleResultTransition(int delayMillis) {
@@ -3726,15 +3897,18 @@ void GamePlayScene::renderScene() {
                                                98);
   }
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
-  renderer->setStartLaneIndicatorsVisible(
-      preparationIndicatorActive(rawSongTimeMicros));
+  const bool startLaneIndicatorsVisible =
+      preparationIndicatorActive(rawSongTimeMicros);
+  renderer->setStartLaneIndicatorsVisible(startLaneIndicatorsVisible);
   long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
   if (const auto range = practiceNoteRange();
       range.has_value() && gameplayTimeMicros >= range->endMicros) {
     gameplayTimeMicros = range->endMicros - 1;
   }
-  renderer->render(renderContext, getVisualTimeMicros(gameplayTimeMicros),
-                   gameplayTimeMicros);
+  const long long visualTimeMicros = getVisualTimeMicros(gameplayTimeMicros);
+  capturePlayfieldVisualState(gameplayTimeMicros, visualTimeMicros,
+                              startLaneIndicatorsVisible);
+  renderer->render(renderContext, visualTimeMicros, gameplayTimeMicros);
   renderCoursePauseHoldRing();
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
@@ -3960,9 +4134,13 @@ void GamePlayScene::cleanupScene() {
   inputHandler = nullptr;
   ownedLaneInputController.reset();
   laneInputController = nullptr;
+  ownedPresentationEventFanout.reset();
+  presentationEventFanout = nullptr;
   hellChargeGaugeBalanceMicros.clear();
   ownedRenderer.reset();
   renderer = nullptr;
+  ownedPlayfieldVisualStateStore.reset();
+  playfieldVisualStateStore = nullptr;
   ownedState.reset();
   state = nullptr;
   ownedLaneStateText.reset();
@@ -3997,9 +4175,12 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     return nullptr;
   }
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long gameplayTimeMicros =
+      getGameplayTimeMicros(rawSongTimeMicros);
   const RhythmLaneInputController::InputContext inputContext{
-      .songTimeMicros = getGameplayTimeMicros(rawSongTimeMicros),
-      .laneBeamTimeMicros = nowMicros(),
+      .songTimeMicros = gameplayTimeMicros,
+      .laneBeamTimeMicros = playfieldVisualEventTimeMicros(
+          gameplayTimeMicros, getVisualOffsetMicros()),
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
@@ -4032,7 +4213,11 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
   for (const auto &transaction : result.transactions) {
     if (transaction.hasJudge) {
-      onJudge(transaction.judge, !options.autoPlay || isReplayPlayback());
+      const long long eventSongTimeMicros =
+          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
+                                     : inputContext.songTimeMicros;
+      onJudge(transaction.judge, judgeEventClock(eventSongTimeMicros),
+              !options.autoPlay || isReplayPlayback());
     }
     if (transaction.hasReplayEvent) {
       const auto &event = transaction.replayEvent;
@@ -4059,9 +4244,12 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
     return nullptr;
   }
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long gameplayTimeMicros =
+      getGameplayTimeMicros(rawSongTimeMicros);
   const RhythmLaneInputController::InputContext inputContext{
-      .songTimeMicros = getGameplayTimeMicros(rawSongTimeMicros),
-      .laneBeamTimeMicros = nowMicros(),
+      .songTimeMicros = gameplayTimeMicros,
+      .laneBeamTimeMicros = playfieldVisualEventTimeMicros(
+          gameplayTimeMicros, getVisualOffsetMicros()),
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
@@ -4084,7 +4272,11 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
   updateLaneStateText();
   for (const auto &transaction : result.transactions) {
     if (transaction.hasJudge) {
-      onJudge(transaction.judge, !options.autoPlay || isReplayPlayback());
+      const long long eventSongTimeMicros =
+          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
+                                     : inputContext.songTimeMicros;
+      onJudge(transaction.judge, judgeEventClock(eventSongTimeMicros),
+              !options.autoPlay || isReplayPlayback());
     }
     if (transaction.hasReplayEvent) {
       const auto &event = transaction.replayEvent;
@@ -4100,7 +4292,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
   if (state == nullptr) {
     return;
   }
-  const long long visualNow = nowMicros();
+  const long long visualEventMicros = getVisualTimeMicros(time);
+  const PlayfieldJudgeEventClock eventClock = judgeEventClock(time);
   const long long judgedTime = getJudgementTimeMicros(time);
   const long long poorCutoff = judgedTime - latePoorTiming;
   const bool replayPlayback = isReplayPlayback();
@@ -4148,14 +4341,14 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                   JudgeResult(Poor, judgedTime - timeline->Timing);
               if (!longNote->IsTail()) {
                 markLongNoteMissed(longNote, judgedTime);
-                onJudge(poorResult, false);
+                onJudge(poorResult, eventClock, false);
                 appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
                                   time, judgedTime, poorResult);
                 if (longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
                   markLongNoteMissed(longNote->Tail, judgedTime,
                                      !longNoteTailJudgedBeforeTiming(
                                          longNote->Tail, judgedTime));
-                  onJudge(poorResult, false);
+                  onJudge(poorResult, eventClock, false);
                   appendReplayEvent(ReplayEventAction::Miss,
                                     longNote->Tail->Lane, longNote->Tail, time,
                                     judgedTime, poorResult);
@@ -4167,7 +4360,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               if (longNote->Head != nullptr) {
                 longNote->Head->IsHolding = false;
               }
-              onJudge(poorResult, false);
+              onJudge(poorResult, eventClock, false);
               appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
                                 judgedTime, poorResult);
               continue;
@@ -4180,7 +4373,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           const auto poorResult =
               JudgeResult(Poor, judgedTime - timeline->Timing);
-          onJudge(poorResult, false);
+          onJudge(poorResult, eventClock, false);
           appendReplayEvent(ReplayEventAction::Miss, note->Lane, note, time,
                             judgedTime, poorResult);
         }
@@ -4230,11 +4423,12 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                       : judgeClassicLongNoteRelease(
                             rulesetPolicyBuild.policy->judge, chart->Meta,
                             options.longNoteMode, longNote, judgedTime);
-              onJudge(judgeResult, false);
+              onJudge(judgeResult, eventClock, false);
               appendReplayEvent(ReplayEventAction::Release, note->Lane, note,
                                 time, judgedTime, judgeResult);
               if (options.autoPlay) {
-                renderer->onLaneReleased(note->Lane, visualNow);
+                presentationEventFanout->onLaneReleased(note->Lane,
+                                                         visualEventMicros);
               }
               continue;
             }
@@ -4246,9 +4440,11 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           {
             const JudgeResult judgeResult =
                 pressNote(note, judgedTime, nullptr, time);
-            renderer->onLanePressed(note->Lane, judgeResult, visualNow);
+            presentationEventFanout->onLanePressed(note->Lane, judgeResult,
+                                                    visualEventMicros);
             if (!note->IsLongNote()) {
-              renderer->onLaneReleased(note->Lane, visualNow);
+              presentationEventFanout->onLaneReleased(note->Lane,
+                                                       visualEventMicros);
             }
           }
         }
@@ -4316,11 +4512,12 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
   }
 
   const auto &events = options.replayData->events;
-  const long long visualNow = nowMicros();
   while (replayEventCursor < events.size() &&
          events[replayEventCursor].songTimeMicros <= gameplayTimeMicros) {
     if (practiceReplayEventAllowed(events[replayEventCursor])) {
-      applyReplayEvent(events[replayEventCursor], visualNow);
+      applyReplayEvent(events[replayEventCursor],
+                       getVisualTimeMicros(
+                           events[replayEventCursor].songTimeMicros));
     }
     replayEventCursor++;
   }
@@ -4349,6 +4546,8 @@ void GamePlayScene::applyReplayLaneCoverEvent(
   }
   renderer->applyLaneCoverState(event.noteStartPositionPercent,
                                 event.resetVisibleTimeReference);
+  playfieldLaneCoverPercent = event.noteStartPositionPercent;
+  playfieldLaneCoverResetPending = event.resetVisibleTimeReference;
 }
 
 void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
@@ -4359,6 +4558,11 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
   }
 
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
+  const PlayfieldJudgeEventClock eventClock{
+      .songTimeMicros = event.songTimeMicros,
+      .visualTimeMicros = visualTimeMicros,
+      .bgaTimeMicros = event.songTimeMicros,
+  };
   switch (event.action) {
   case ReplayEventAction::MultiBad:
     if (auto *note = findReplayNote(event);
@@ -4369,7 +4573,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
           longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
         longNote->Tail->Play(event.judgeTimeMicros);
       }
-      onJudge(recordedJudge, false);
+      onJudge(recordedJudge, eventClock, false);
       applyReplayGauge(event);
     }
     break;
@@ -4386,7 +4590,8 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
                 event.songTimeMicros, false);
       applyReplayGauge(event);
     }
-    renderer->onLanePressed(event.lane, recordedJudge, visualTimeMicros);
+    presentationEventFanout->onLanePressed(event.lane, recordedJudge,
+                                            visualTimeMicros);
     break;
   }
   case ReplayEventAction::Release: {
@@ -4395,7 +4600,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
       pressedIt->second = false;
     }
     updateLaneStateText();
-    renderer->onLaneReleased(event.lane, visualTimeMicros);
+    presentationEventFanout->onLaneReleased(event.lane, visualTimeMicros);
 
     if (auto *note = findReplayNote(event);
         note != nullptr && event.judgement != None) {
@@ -4408,7 +4613,7 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
   case ReplayEventAction::Miss:
     if (event.judgement != None) {
       markReplayMissedNote(findReplayNote(event), event.judgeTimeMicros);
-      onJudge(recordedJudge, false);
+      onJudge(recordedJudge, eventClock, false);
       applyReplayGauge(event);
     }
     break;
@@ -4587,6 +4792,7 @@ void GamePlayScene::expireGimmickNote(bms_parser::Note *note,
 }
 
 void GamePlayScene::onJudge(const JudgeResult &judgeResult,
+                            PlayfieldJudgeEventClock clock,
                             bool recordTimingSample) {
   if (state == nullptr || state->isEnding) {
     return;
@@ -4594,10 +4800,9 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   const int previousCount = state->judgeCount[judgeResult.judgement];
   state->commitJudge(judgeResult);
   const int judgementCount = previousCount + 1;
-  renderer->onJudge(judgeResult, state->combo, state->getScore(),
-                    getVisualTimeMicros(
-                        getGameplayTimeMicros(context.jukebox.getTimeMicros())),
-                    recordTimingSample);
+  presentationEventFanout->onJudge(judgeResult, state->combo,
+                                   state->getScore(), clock,
+                                   recordTimingSample);
   renderer->setJudgementCounter(judgeResult.judgement, judgementCount,
                                 state->comboBreak);
   // CurrentRhythmHUD->OnJudge(state);
@@ -4720,10 +4925,16 @@ bool GamePlayScene::handleTouchInputAtGameplayTime(
   }
 
   if (renderer != nullptr && touchVisualizerLoaded) {
+    const long long touchTimeMicros =
+        visualGameplayTimeMicros.value_or(gameplayTimeMicros);
     renderer->setLiveTouchPoint(
         static_cast<long long>(fingerIndex), action, normalizedLocation.x,
-        normalizedLocation.y,
-        visualGameplayTimeMicros.value_or(gameplayTimeMicros));
+        normalizedLocation.y, touchTimeMicros);
+    if (playfieldVisualStateStore != nullptr) {
+      playfieldVisualStateStore->setLiveTouchPoint(
+          static_cast<long long>(fingerIndex), action, normalizedLocation.x,
+          normalizedLocation.y, gameplayTimeMicros);
+    }
   }
   appendReplayTouchSample(fingerIndex, action, normalizedLocation,
                           gameplayTimeMicros);
@@ -4753,10 +4964,12 @@ bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
     const int next = renderer->dragLaneCoverHandleTo(
         renderX, renderY, floatingLaneCoverDragOffsetY);
     context.settings.noteStartPositionPercent = next;
+    playfieldLaneCoverPercent = next;
     if (next == previous) {
       return false;
     }
     renderer->applyLaneCoverState(next, true);
+    playfieldLaneCoverResetPending = true;
     floatingLaneCoverDragChanged = true;
     floatingLaneCoverSettingsDirty = true;
     appendReplayLaneCoverEvent(next, songTimeMicros, true);
@@ -4866,6 +5079,8 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
       !isReplayPlayback()) {
     context.jukebox.playKeySound(note->Wav);
   }
+  const long long eventSongTimeMicros =
+      songTimeMicros >= 0 ? songTimeMicros : pressedTime;
   const JudgeResult judgeResult =
       precomputedJudge != nullptr
                                       ? *precomputedJudge
@@ -4882,12 +5097,12 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
           const bool chargeLongNote =
               effectiveLongNoteIsCharge(longNote, chart, options.longNoteMode);
           if (chargeLongNote) {
-            onJudge(judgeResult, !options.autoPlay || isReplayPlayback());
+            onJudge(judgeResult, judgeEventClock(eventSongTimeMicros),
+                    !options.autoPlay || isReplayPlayback());
           }
           if (recordEvent) {
             appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
-                              songTimeMicros >= 0 ? songTimeMicros
-                                                  : pressedTime,
+                              eventSongTimeMicros,
                               pressedTime, judgeResult);
           }
         }
@@ -4895,10 +5110,11 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
       }
       note->Press(pressedTime);
     }
-    onJudge(judgeResult, !options.autoPlay || isReplayPlayback());
+    onJudge(judgeResult, judgeEventClock(eventSongTimeMicros),
+            !options.autoPlay || isReplayPlayback());
     if (recordEvent) {
       appendReplayEvent(ReplayEventAction::Press, note->Lane, note,
-                        songTimeMicros >= 0 ? songTimeMicros : pressedTime,
+                        eventSongTimeMicros,
                         pressedTime, judgeResult);
     }
   }
@@ -4921,6 +5137,8 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
     return JudgeResult(None, 0);
   }
   LongNote->Release(ReleasedTime);
+  const long long eventSongTimeMicros =
+      songTimeMicros >= 0 ? songTimeMicros : ReleasedTime;
   const auto judgeResult =
       precomputedJudge != nullptr
                                ? *precomputedJudge
@@ -4940,10 +5158,11 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
                   rulesetPolicyBuild.policy->judge, chart->Meta,
                   options.longNoteMode, LongNote, ReleasedTime);
   }
-  onJudge(appliedJudge, !options.autoPlay || isReplayPlayback());
+  onJudge(appliedJudge, judgeEventClock(eventSongTimeMicros),
+          !options.autoPlay || isReplayPlayback());
   if (recordEvent) {
     appendReplayEvent(ReplayEventAction::Release, Note->Lane, Note,
-                      songTimeMicros >= 0 ? songTimeMicros : ReleasedTime,
+                      eventSongTimeMicros,
                       ReleasedTime, appliedJudge);
   }
   return appliedJudge;

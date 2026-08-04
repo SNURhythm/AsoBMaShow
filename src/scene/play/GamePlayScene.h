@@ -11,6 +11,8 @@
 #include "GamePlayStartOptions.h"
 #include "NoteTimeRange.h"
 #include "Pacemaker.h"
+#include "PlayfieldChartVisualModel.h"
+#include "PlayfieldVisualState.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../../bms_parser.hpp"
@@ -89,6 +91,10 @@ private:
   void showPlaybackInitializationFailure(const std::string &message);
   void initializeStartPositionState();
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
+  void initializePlayfieldVisualNoteSources();
+  void capturePlayfieldVisualState(long long gameplayTimeMicros,
+                                   long long visualTimeMicros,
+                                   bool startLaneIndicatorsVisible);
   void showPauseMenu(bool pausePlayback);
   void closePauseMenu();
   void togglePauseMenuFromInput();
@@ -178,7 +184,10 @@ private:
   void detonateLandmine(bms_parser::LandmineNote *note,
                         long long songTimeMicros, long long judgeTimeMicros);
   void expireGimmickNote(bms_parser::Note *note, long long judgeTimeMicros);
-  void onJudge(const JudgeResult &judgeResult, bool recordTimingSample = true);
+  void onJudge(const JudgeResult &judgeResult, PlayfieldJudgeEventClock clock,
+               bool recordTimingSample = true);
+  [[nodiscard]] PlayfieldJudgeEventClock
+  judgeEventClock(long long songTimeMicros) const;
   void appendReplayEvent(ReplayEventAction action, int lane,
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
@@ -220,8 +229,14 @@ private:
       std::make_shared<std::atomic_bool>(false);
   std::mutex bestReplayLoadMutex;
   std::shared_ptr<ReplayData> pendingBestReplay;
+  PlayfieldChartVisualModel playfieldChartVisualModel;
+  std::unique_ptr<PlayfieldVisualStateStore> ownedPlayfieldVisualStateStore;
+  PlayfieldVisualStateStore *playfieldVisualStateStore = nullptr;
   std::unique_ptr<BMSRenderer> ownedRenderer;
   BMSRenderer *renderer = nullptr;
+  std::unique_ptr<PlayfieldPresentationEventFanout>
+      ownedPresentationEventFanout;
+  PlayfieldPresentationEventFanout *presentationEventFanout = nullptr;
   std::unique_ptr<RhythmLaneInputController> ownedLaneInputController;
   RhythmLaneInputController *laneInputController = nullptr;
   std::unique_ptr<RhythmInputHandler> ownedInputHandler;
@@ -256,6 +271,11 @@ private:
   bool floatingLaneCoverSettingsDirty = false;
   SDL_FingerID floatingLaneCoverFinger = -1;
   float floatingLaneCoverDragOffsetY = 0.0f;
+  std::uint64_t playfieldFrameSerial = 0;
+  PlayfieldVisualState capturedPlayfieldVisualState;
+  std::vector<const bms_parser::Note *> playfieldVisualNoteSources;
+  int playfieldLaneCoverPercent = 0;
+  bool playfieldLaneCoverResetPending = false;
   double currentGameplayBpm = 0.0;
   preparation::Plan preparationPlan;
   std::unique_ptr<TextView> ownedLaneStateText;

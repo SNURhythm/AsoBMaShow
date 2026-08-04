@@ -28,8 +28,13 @@ class ScrollView;
 class DropdownView;
 class OverlayPortal;
 class BMSRenderer;
+struct GameplayGaugeRules;
 class RhythmInputHandler;
 class RhythmLaneInputController;
+struct PlayfieldChartVisualModel;
+struct PlayfieldVisualState;
+class PlayfieldVisualStateStore;
+class PlayfieldPresentationEventFanout;
 class DropdownView;
 class InputCaptureController;
 
@@ -262,7 +267,14 @@ private:
   bool previewPanelFolded = false;
   int previewPanelPage = 0;
   std::unique_ptr<bms_parser::Chart> previewChart;
+  std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
+  std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
+  std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
+  std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
+  std::vector<const bms_parser::Note *> previewVisualNoteSources;
+  std::uint64_t previewFrameSerial = 0;
   std::unique_ptr<BMSRenderer> previewRenderer;
+  std::unique_ptr<PlayfieldPresentationEventFanout> previewPresentationEvents;
   std::unique_ptr<RhythmInputHandler> previewInputHandler;
   std::unique_ptr<RhythmLaneInputController> previewLaneController;
   std::unordered_map<int, bool> previewLanePressed;
@@ -390,6 +402,9 @@ private:
   void stopLanePreview();
   void ensurePreviewRenderer();
   void destroyPreviewRenderer();
+  void syncPreviewPresentationConfiguration();
+  void syncPreviewAuthority();
+  void capturePreviewVisualState();
   void ensurePreviewInputHandler();
   void destroyPreviewInputHandler();
   void ensureInputCaptureController();
@@ -402,7 +417,8 @@ private:
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputPlayAreaWidth();
   void resetPreviewHudSample();
-  void publishPreviewJudgement(const JudgeResult &judgeResult);
+  void publishPreviewJudgement(const JudgeResult &judgeResult,
+                               long long sourceSongTimeMicros);
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();

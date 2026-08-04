@@ -235,6 +235,15 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
               snapshot->transactions[2].result.laneVisual.action ==
                   gameplay::LaneVisualAction::Press,
           "a slow renderer can replay every rapid lane transition in order");
+  require(snapshot->transactions[0].result.hasJudge &&
+              snapshot->transactions[0].result.hasReplayEvent &&
+              snapshot->transactions[0].result.replayEvent.songTimeMicros ==
+                  1'000'000 &&
+              snapshot->transactions[2].result.hasJudge &&
+              snapshot->transactions[2].result.hasReplayEvent &&
+              snapshot->transactions[2].result.replayEvent.songTimeMicros ==
+                  1'100'000,
+          "catch-up judges retain each transaction source time instead of a frame timestamp");
   require(worker.fault() == gameplay::RealtimeGameplayFault::None,
           "normal rapid input remains valid");
   worker.stop();

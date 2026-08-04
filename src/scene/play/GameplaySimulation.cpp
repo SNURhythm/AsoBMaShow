@@ -466,8 +466,8 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
   recordReplay(result.replayEvent);
   if (config_.attempt.autoPlay) {
     result.hasLaneVisual = true;
-    result.laneVisual = {LaneVisualAction::Release, tail.lane, visualTimeMicros,
-                         JudgeResult(None, 0)};
+    result.laneVisual = {LaneVisualAction::Release, tail.lane, songTimeMicros,
+                         visualTimeMicros, JudgeResult(None, 0)};
   }
   return result;
 }
@@ -571,8 +571,8 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
                    note.longNoteRule != LongNoteRule::Classic;
   press.judge = JudgeResult(PGreat, 0);
   press.hasLaneVisual = true;
-  press.laneVisual = {LaneVisualAction::Press, note.lane, visualTimeMicros,
-                      press.judge};
+  press.laneVisual = {LaneVisualAction::Press, note.lane, songTimeMicros,
+                      visualTimeMicros, press.judge};
   if (press.hasJudge) {
     commitJudge(press.judge);
   }
@@ -596,8 +596,8 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   }
   GameplayInputResult release;
   release.hasLaneVisual = true;
-  release.laneVisual = {LaneVisualAction::Release, note.lane, visualTimeMicros,
-                        JudgeResult(None, 0)};
+  release.laneVisual = {LaneVisualAction::Release, note.lane, songTimeMicros,
+                        visualTimeMicros, JudgeResult(None, 0)};
   recordAutomaticResult(release);
   finishTransaction(songTimeMicros);
 }
@@ -1263,7 +1263,8 @@ GameplayInputResult GameplaySimulation::pressLaneForPreparation(
   }
   result.hasLaneVisual = true;
   result.laneVisual = {LaneVisualAction::Press, mainLane,
-                       context.laneBeamTimeMicros, JudgeResult(None, 0)};
+                       eventTime, context.laneBeamTimeMicros,
+                       JudgeResult(None, 0)};
   result.hasReplayEvent = true;
   result.replayEvent = {
       .action = GameplayReplayAction::Press,
@@ -1293,7 +1294,8 @@ GameplayInputResult GameplaySimulation::releaseLaneForPreparation(
   const std::int64_t eventTime = inputTime(context);
   result.hasLaneVisual = true;
   result.laneVisual = {LaneVisualAction::Release, lane,
-                       context.laneBeamTimeMicros, JudgeResult(None, 0)};
+                       eventTime, context.laneBeamTimeMicros,
+                       JudgeResult(None, 0)};
   result.hasReplayEvent = true;
   result.replayEvent = {
       .action = GameplayReplayAction::Release,
@@ -1369,7 +1371,8 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     recordReplay(result.replayEvent);
     result.hasLaneVisual = true;
     result.laneVisual = {LaneVisualAction::Press, mainLane,
-                         context.laneBeamTimeMicros, JudgeResult(None, 0)};
+                         judgedTime, context.laneBeamTimeMicros,
+                         JudgeResult(None, 0)};
     finishTransaction(judgedTime);
     inputTransactions_.push_back(result);
     return inputBatch(result);
@@ -1432,7 +1435,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
   }
   result.hasLaneVisual = true;
   result.laneVisual = {LaneVisualAction::Press, note.lane,
-                       context.laneBeamTimeMicros, judge};
+                       judgedTime, context.laneBeamTimeMicros, judge};
 
   if (judge.judgement != None) {
     if (judge.isNotePlayed()) {
@@ -1494,7 +1497,8 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   const std::int64_t judgedTime = inputTime(context);
   result.hasLaneVisual = true;
   result.laneVisual = {LaneVisualAction::Release, lane,
-                       context.laneBeamTimeMicros, JudgeResult(None, 0)};
+                       judgedTime, context.laneBeamTimeMicros,
+                       JudgeResult(None, 0)};
 
   const NoteId selected = selectReleaseCandidate(lane, judgedTime);
   if (selected == kInvalidNoteId) {

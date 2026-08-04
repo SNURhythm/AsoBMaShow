@@ -1048,15 +1048,19 @@ bool applyReplayEventForVideo(
     BMSRenderer &renderer,
     const bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
-    const ReplayEvent &event, long long visualTimeMicros, GaugeAutoShiftMode gaugeAutoShift,
+    const ReplayEvent &event, long long visualOffsetMicros,
+    GaugeAutoShiftMode gaugeAutoShift,
     const GameplayGaugeRules &gaugeRules) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
+  const PlayfieldJudgeEventClock eventClock =
+      makePlayfieldJudgeEventClock(event.songTimeMicros,
+                                   visualOffsetMicros);
   auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
       return false;
     }
     renderer.onJudge(recordedJudge, event.combo, event.score,
-                     visualTimeMicros,
+                     eventClock,
                      event.action != ReplayEventAction::Miss);
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
                             gaugeRules);
@@ -1092,10 +1096,12 @@ bool applyReplayEventForVideo(
     }
     if (!suppressHudForLongNoteHead) {
       const bool appliedHud = applyHud();
-      renderer.onLanePressed(event.lane, recordedJudge, visualTimeMicros);
+      renderer.onLanePressed(event.lane, recordedJudge,
+                             eventClock.visualTimeMicros);
       return appliedHud;
     }
-    renderer.onLanePressed(event.lane, recordedJudge, visualTimeMicros);
+    renderer.onLanePressed(event.lane, recordedJudge,
+                           eventClock.visualTimeMicros);
     return false;
   }
   case ReplayEventAction::Release: {
@@ -1107,7 +1113,7 @@ bool applyReplayEventForVideo(
       }
     }
     const bool appliedHud = applyHud();
-    renderer.onLaneReleased(event.lane, visualTimeMicros);
+    renderer.onLaneReleased(event.lane, eventClock.visualTimeMicros);
     return appliedHud;
   }
   case ReplayEventAction::Miss:
@@ -3110,7 +3116,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       const auto &event = replay.events[replayCursor];
       const bool appliedHud =
           applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                   frameTiming.visualTimeMicros,
+                                   visualOffsetMicros,
                                    replay.gaugeAutoShift,
                                    initialGaugeState.gaugeRules());
       if (appliedHud && event.judgement != None) {
@@ -3754,7 +3760,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         const auto &event = stageReplay.events[replayCursor];
         const bool appliedHud =
             applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                     frameTiming.visualTimeMicros,
+                                     visualOffsetMicros,
                                      replay.gaugeAutoShift,
                                      stage.resultState.gaugeRules());
         if (appliedHud && event.judgement != None) {
