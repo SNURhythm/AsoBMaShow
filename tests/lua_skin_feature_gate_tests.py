@@ -24,6 +24,7 @@ NUMERIC_GLYPH_ATLAS_SOURCE = ROOT / "src/skin/beatoraja/NumericGlyphAtlas.cpp"
 GAUGE_NODE_EXPANSION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinGaugeNodeExpansion.cpp"
 )
+JUDGE_NORMALIZATION_SOURCE = ROOT / "src/skin/beatoraja/SkinJudgeNormalization.cpp"
 NOTE_NORMALIZATION_SOURCE = ROOT / "src/skin/beatoraja/SkinNoteNormalization.cpp"
 NOTE_LANE_GEOMETRY_NORMALIZATION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinNoteLaneGeometryNormalization.cpp"
@@ -147,6 +148,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/NumericGlyphAtlas.cpp", enabled_block)
         self.assertIn("beatoraja/SkinModelValidator.cpp", enabled_block)
         self.assertIn("beatoraja/SkinGaugeNodeExpansion.cpp", enabled_block)
+        self.assertIn("beatoraja/SkinJudgeNormalization.cpp", enabled_block)
         self.assertIn("beatoraja/SkinNoteNormalization.cpp", enabled_block)
         self.assertIn(
             "beatoraja/SkinNoteLaneGeometryNormalization.cpp", enabled_block
@@ -165,6 +167,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
              NUMERIC_GLYPH_ATLAS_SOURCE,
              VALIDATOR_SOURCE,
             GAUGE_NODE_EXPANSION_SOURCE,
+            JUDGE_NORMALIZATION_SOURCE,
             NOTE_NORMALIZATION_SOURCE,
             NOTE_LANE_GEOMETRY_NORMALIZATION_SOURCE,
             NOTE_LINE_NORMALIZATION_SOURCE,
@@ -190,6 +193,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                  NUMERIC_GLYPH_ATLAS_SOURCE,
                  VALIDATOR_SOURCE,
                 GAUGE_NODE_EXPANSION_SOURCE,
+                JUDGE_NORMALIZATION_SOURCE,
                 NOTE_NORMALIZATION_SOURCE,
                 NOTE_LANE_GEOMETRY_NORMALIZATION_SOURCE,
                 NOTE_LINE_NORMALIZATION_SOURCE,
