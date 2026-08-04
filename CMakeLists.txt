@@ -635,6 +635,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             CXX_EXTENSIONS NO
         )
 
+        add_executable(skin_object_resolution_precedence_tests
+            tests/skin_object_resolution_precedence_tests.cpp
+            src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+        )
+        target_include_directories(skin_object_resolution_precedence_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(skin_object_resolution_precedence_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+
         add_executable(numeric_glyph_atlas_tests
             tests/numeric_glyph_atlas_tests.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -4983,6 +4996,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET skin_cover_normalization_tests)
         asobmashow_register_test(skin_cover_normalization_tests)
+    endif()
+    if (TARGET skin_object_resolution_precedence_tests)
+        asobmashow_register_test(skin_object_resolution_precedence_tests)
     endif()
     if (TARGET numeric_glyph_atlas_tests)
         asobmashow_register_test(numeric_glyph_atlas_tests)
