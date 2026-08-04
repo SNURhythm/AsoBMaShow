@@ -14,7 +14,10 @@ namespace skin {
 // not depend on Lua tables or renderer resources.
 struct SkinJudgeNumberNormalizationInput {
   SkinSpriteFrames source;
-  int ref = 0;
+  // JsonSkin.Value's raw selector is `ref`, rather than `value`. The live
+  // decoder resolves that selector to an IntegerValue-domain binding before
+  // this helper, preserving named/function/script binding support.
+  SkinIntegerPropertyId value{};
   int digitCount = 0;
   int spacing = 0;
   std::vector<SkinDigitOffset> offsets;
@@ -31,6 +34,7 @@ struct SkinJudgeNumberNormalizationPolicy {
   // keeping this source-neutral helper independent of decoder implementation.
   static constexpr std::size_t maxMaterializedFrames = 200'000;
   static constexpr std::size_t maxDigitOffsets = 256;
+  static constexpr int maxDigitCount = 256;
 };
 
 enum class SkinJudgeNumberNormalizationError : std::uint8_t {
@@ -38,8 +42,10 @@ enum class SkinJudgeNumberNormalizationError : std::uint8_t {
   EmptyFrames,
   FrameLimitExceeded,
   OffsetLimitExceeded,
-  InvalidRef,
+  MissingValueBinding,
+  InvalidDigitCount,
   NonFiniteGeometry,
+  InvalidIntegerGeometry,
 };
 
 struct SkinJudgeNumberNormalizationResult {

@@ -5,6 +5,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace skin {
@@ -38,6 +39,12 @@ bool finiteDestination(const SkinDestinationBody &destination) noexcept {
   return true;
 }
 
+bool isIntGeometry(double value) noexcept {
+  return std::isfinite(value) && std::trunc(value) == value &&
+         value >= static_cast<double>(std::numeric_limits<int>::min()) &&
+         value <= static_cast<double>(std::numeric_limits<int>::max());
+}
+
 } // namespace
 
 SkinJudgeNumberNormalizationResult
@@ -52,8 +59,12 @@ normalizeSkinJudgeNumber(const SkinJudgeNumberNormalizationInput &input) {
   if (input.offsets.size() > SkinJudgeNumberNormalizationPolicy::maxDigitOffsets) {
     return failure(SkinJudgeNumberNormalizationError::OffsetLimitExceeded);
   }
-  if (input.ref < 0) {
-    return failure(SkinJudgeNumberNormalizationError::InvalidRef);
+  if (!input.value) {
+    return failure(SkinJudgeNumberNormalizationError::MissingValueBinding);
+  }
+  if (input.digitCount < 0 ||
+      input.digitCount > SkinJudgeNumberNormalizationPolicy::maxDigitCount) {
+    return failure(SkinJudgeNumberNormalizationError::InvalidDigitCount);
   }
   if (!finiteDestination(input.destination)) {
     return failure(SkinJudgeNumberNormalizationError::NonFiniteGeometry);
@@ -76,12 +87,20 @@ normalizeSkinJudgeNumber(const SkinJudgeNumberNormalizationInput &input) {
 
   SkinDestinationBody destination = input.destination;
   for (auto &frame : destination.frames) {
-    const double shiftedX =
-        frame.x - frame.width * static_cast<double>(input.digitCount) / 2.0;
-    if (!std::isfinite(shiftedX)) {
-      return failure(SkinJudgeNumberNormalizationError::NonFiniteGeometry);
+    if (!isIntGeometry(frame.x) || !isIntGeometry(frame.width)) {
+      return failure(
+          SkinJudgeNumberNormalizationError::InvalidIntegerGeometry);
     }
-    frame.x = shiftedX;
+    const auto shiftedX =
+        static_cast<std::int64_t>(static_cast<int>(frame.x)) -
+        static_cast<std::int64_t>(static_cast<int>(frame.width)) *
+            static_cast<std::int64_t>(input.digitCount) / 2;
+    if (shiftedX < std::numeric_limits<int>::min() ||
+        shiftedX > std::numeric_limits<int>::max()) {
+      return failure(
+          SkinJudgeNumberNormalizationError::InvalidIntegerGeometry);
+    }
+    frame.x = static_cast<double>(shiftedX);
   }
 
   SkinSpriteFrames digits = input.source;
@@ -89,7 +108,7 @@ normalizeSkinJudgeNumber(const SkinJudgeNumberNormalizationInput &input) {
   SkinNumberObject number;
   number.digits.positive = std::move(digits);
   number.digits.glyphsPerAnimationFrame = glyphsPerRow;
-  number.value = SkinIntegerPropertyId{static_cast<std::uint32_t>(input.ref)};
+  number.value = input.value;
   number.digitCount = input.digitCount;
   number.spacing = input.spacing;
   number.alignment = 2;

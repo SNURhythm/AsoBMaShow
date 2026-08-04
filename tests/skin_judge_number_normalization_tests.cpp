@@ -31,7 +31,7 @@ SkinJudgeNumberNormalizationInput inputFor(std::size_t frameCount) {
         {.x = static_cast<int>(index), .y = -static_cast<int>(index),
          .w = 10, .h = 20});
   }
-  input.ref = 73;
+  input.value = SkinIntegerPropertyId{73};
   input.digitCount = 3;
   input.spacing = 8;
   input.offsets = {{.x = 1.0, .y = 2.0, .width = 3.0, .height = 4.0},
@@ -133,6 +133,19 @@ void testJudgeNumberCopiesPinnedPresentationAndShiftsEveryDestination() {
          "judge number preserves source animation timing");
 }
 
+void testJudgeShiftUsesPinnedIntegerTruncation() {
+  auto input = inputFor(11);
+  input.destination.frames = {{.timeMillis = 0,
+                               .x = 100.0,
+                               .y = 0.0,
+                               .width = 9.0,
+                               .height = 20.0}};
+  const auto normalized = mustSucceed(normalizeSkinJudgeNumber(input),
+                                      "odd judge geometry normalizes");
+  expect(normalized.destination.frames.front().x == 87.0,
+         "judge shift truncates odd width-times-digit products as Java ints");
+}
+
 void testUnsafeInputsFailClosed() {
   {
     auto input = inputFor(0);
@@ -166,6 +179,32 @@ void testUnsafeInputsFailClosed() {
                result.error == SkinJudgeNumberNormalizationError::NonFiniteGeometry,
            "non-finite judge digit offsets fail closed");
   }
+  {
+    auto input = inputFor(11);
+    input.value = {};
+    const auto result = normalizeSkinJudgeNumber(input);
+    expect(!result.number.has_value() &&
+               result.error ==
+                   SkinJudgeNumberNormalizationError::MissingValueBinding,
+           "judge number requires an already-decoded integer binding");
+  }
+  {
+    auto input = inputFor(11);
+    input.digitCount = -1;
+    const auto result = normalizeSkinJudgeNumber(input);
+    expect(!result.number.has_value() &&
+               result.error == SkinJudgeNumberNormalizationError::InvalidDigitCount,
+           "negative judge digit counts fail closed");
+  }
+  {
+    auto input = inputFor(11);
+    input.digitCount =
+        SkinJudgeNumberNormalizationPolicy::maxDigitCount + 1;
+    const auto result = normalizeSkinJudgeNumber(input);
+    expect(!result.number.has_value() &&
+               result.error == SkinJudgeNumberNormalizationError::InvalidDigitCount,
+           "over-policy judge digit counts fail closed");
+  }
 }
 
 } // namespace
@@ -174,6 +213,7 @@ int main() {
   testPinnedTenAndElevenGlyphLayouts();
   testCompleteRowsStayRowMajor();
   testJudgeNumberCopiesPinnedPresentationAndShiftsEveryDestination();
+  testJudgeShiftUsesPinnedIntegerTruncation();
   testUnsafeInputsFailClosed();
   return failures == 0 ? 0 : 1;
 }
