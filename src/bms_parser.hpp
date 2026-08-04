@@ -228,6 +228,9 @@ public:
   bool BgaPoorDefault = false;
   int Difficulty = 0;
   double PlayLevel = 3;
+  // BMSDecoder keeps the normalized header string and SongData later applies
+  // Java Integer.parseInt. The numeric field alone loses invalid/decimal input.
+  std::string PlayLevelText;
   double MinBpm = 0;
   double MaxBpm = 0;
   double MostPrevalentBpm = 0;

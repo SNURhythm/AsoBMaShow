@@ -17,6 +17,19 @@ std::int64_t capturedJudgeCount(const PlayfieldVisualState &snapshot,
                                                               : found->second;
 }
 
+std::int64_t javaDoubleToInt(double value) {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  if (value >= static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value <= static_cast<double>(std::numeric_limits<int>::min())) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
 } // namespace
 
 namespace skin {
@@ -753,13 +766,35 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 160:
     return {.value = static_cast<std::int64_t>(snapshot->authority.currentBpm),
             .supported = true};
+  case 74:
+    return {.value = context_.chartModel.staticMetadata.totalNotes,
+            .supported = true};
   case 90:
-    return {.value = static_cast<std::int64_t>(
-                context_.chartModel.staticMetadata.maximumBpm),
+    return {.value =
+                javaDoubleToInt(context_.chartModel.staticMetadata.maximumBpm),
             .supported = true};
   case 91:
-    return {.value = static_cast<std::int64_t>(
-                context_.chartModel.staticMetadata.minimumBpm),
+    return {.value =
+                javaDoubleToInt(context_.chartModel.staticMetadata.minimumBpm),
+            .supported = true};
+  case 92:
+    return {.value =
+                javaDoubleToInt(context_.chartModel.staticMetadata.mainBpm),
+            .supported = true};
+  case 96:
+    return {.value = context_.chartModel.staticMetadata.playLevel,
+            .supported = true};
+  case 350:
+    return {.value = context_.chartModel.staticMetadata.normalKeyNotes,
+            .supported = true};
+  case 351:
+    return {.value = context_.chartModel.staticMetadata.longKeyNotes,
+            .supported = true};
+  case 352:
+    return {.value = context_.chartModel.staticMetadata.normalScratchNotes,
+            .supported = true};
+  case 353:
+    return {.value = context_.chartModel.staticMetadata.longScratchNotes,
             .supported = true};
   case 1163:
     return {.value = (context_.chartModel.staticMetadata.durationMicros /
@@ -795,9 +830,15 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
   const auto *snapshot = state();
   const auto id = numericSelector(selector);
   if (snapshot != nullptr && id && *id == 4) {
-    return {.value = static_cast<double>(snapshot->authority.laneCoverPercent) /
-                     100.0,
-            .supported = true};
+    if (!snapshot->authority.laneCoverEnabled) {
+      return {.value = 0.0, .supported = true};
+    }
+    double laneCover =
+        static_cast<double>(snapshot->authority.laneCoverPercent) / 100.0;
+    if (snapshot->authority.liftEnabled) {
+      laneCover *= 1.0 - static_cast<double>(snapshot->authority.liftRatio);
+    }
+    return {.value = laneCover, .supported = true};
   }
   reportUnsupported("float", selector);
   return {};

@@ -2081,6 +2081,18 @@ Note::~Note() { Timeline = nullptr; }
 
 namespace {
 
+std::string javaTrimmedHeaderValue(std::string_view value) {
+  while (!value.empty() &&
+         static_cast<unsigned char>(value.front()) <= 0x20) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() &&
+         static_cast<unsigned char>(value.back()) <= 0x20) {
+    value.remove_suffix(1);
+  }
+  return std::string(value);
+}
+
 bool hasUtf8Bom(const std::vector<unsigned char> &bytes) {
   return bytes.size() >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb &&
          bytes[2] == 0xbf;
@@ -3815,6 +3827,7 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
     // TODO: handle this
   } else if (MatchHeader(cmd, "VIDEOFILE")) {
   } else if (MatchHeader(cmd, "PLAYLEVEL")) {
+    Chart->Meta.PlayLevelText = javaTrimmedHeaderValue(Value);
     Chart->Meta.PlayLevel =
         std::strtod(Value.c_str(), nullptr); // TODO: handle error
   } else if (MatchHeader(cmd, "RANK")) {

@@ -4,11 +4,88 @@
 #include "../../bms_parser.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace {
+
+std::optional<std::uint32_t> nextUtf8CodePoint(std::string_view value,
+                                               std::size_t &index) {
+  if (index >= value.size()) {
+    return std::nullopt;
+  }
+  const auto byte = [&](std::size_t offset) {
+    return static_cast<unsigned char>(value[index + offset]);
+  };
+  const unsigned char lead = byte(0);
+  if (lead < 0x80) {
+    ++index;
+    return lead;
+  }
+  std::size_t length = 0;
+  std::uint32_t codePoint = 0;
+  std::uint32_t minimum = 0;
+  if (lead >= 0xc2 && lead <= 0xdf) {
+    length = 2;
+    codePoint = lead & 0x1fU;
+    minimum = 0x80;
+  } else if (lead >= 0xe0 && lead <= 0xef) {
+    length = 3;
+    codePoint = lead & 0x0fU;
+    minimum = 0x800;
+  } else if (lead >= 0xf0 && lead <= 0xf4) {
+    length = 4;
+    codePoint = lead & 0x07U;
+    minimum = 0x10000;
+  } else {
+    return std::nullopt;
+  }
+  if (index + length > value.size()) {
+    return std::nullopt;
+  }
+  for (std::size_t offset = 1; offset < length; ++offset) {
+    const unsigned char continuation = byte(offset);
+    if ((continuation & 0xc0U) != 0x80U) {
+      return std::nullopt;
+    }
+    codePoint = (codePoint << 6U) | (continuation & 0x3fU);
+  }
+  if (codePoint < minimum || codePoint > 0x10ffffU ||
+      (codePoint >= 0xd800U && codePoint <= 0xdfffU)) {
+    return std::nullopt;
+  }
+  index += length;
+  return codePoint;
+}
+
+std::optional<unsigned int> javaDecimalDigit(std::uint32_t codePoint) {
+  // Integer.parseInt iterates UTF-16 chars and Character.digit(char, 10).
+  // These are the complete BMP decimal-digit blocks in pinned OpenJDK 25;
+  // supplementary mathematical digits are rejected because Java sees their
+  // surrogate halves separately in parseInt(String).
+  constexpr std::array<std::uint16_t, 37> zeroCodePoints = {
+      0x0030, 0x0660, 0x06f0, 0x07c0, 0x0966, 0x09e6, 0x0a66, 0x0ae6,
+      0x0b66, 0x0be6, 0x0c66, 0x0ce6, 0x0d66, 0x0de6, 0x0e50, 0x0ed0,
+      0x0f20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80,
+      0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900,
+      0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10,
+  };
+  if (codePoint > 0xffffU) {
+    return std::nullopt;
+  }
+  for (const std::uint16_t zero : zeroCodePoints) {
+    if (codePoint >= zero && codePoint <= zero + 9U) {
+      return static_cast<unsigned int>(codePoint - zero);
+    }
+  }
+  return std::nullopt;
+}
 
 ChartLongNoteMode longNoteMode(const bms_parser::LongNote &note,
                                const bms_parser::Chart &chart,
@@ -48,6 +125,187 @@ bool hasAny(const std::vector<bms_parser::Note *> &notes) {
 bool hasAny(const std::vector<bms_parser::LandmineNote *> &notes) {
   return std::ranges::any_of(notes,
                              [](const auto *note) { return note != nullptr; });
+}
+
+std::optional<int> javaParseInt(std::string_view value) {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  bool negative = false;
+  std::size_t index = 0;
+  if (value.front() == '+' || value.front() == '-') {
+    negative = value.front() == '-';
+    index = 1;
+  }
+  if (index == value.size()) {
+    return std::nullopt;
+  }
+  constexpr std::uint64_t positiveLimit =
+      static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+  constexpr std::uint64_t negativeLimit = positiveLimit + 1;
+  const std::uint64_t limit = negative ? negativeLimit : positiveLimit;
+  std::uint64_t magnitude = 0;
+  while (index < value.size()) {
+    const auto codePoint = nextUtf8CodePoint(value, index);
+    if (!codePoint) {
+      return std::nullopt;
+    }
+    const auto parsedDigit = javaDecimalDigit(*codePoint);
+    if (!parsedDigit) {
+      return std::nullopt;
+    }
+    const std::uint64_t digit = *parsedDigit;
+    if (magnitude > (limit - digit) / 10) {
+      return std::nullopt;
+    }
+    magnitude = magnitude * 10 + digit;
+  }
+  if (!negative) {
+    return static_cast<int>(magnitude);
+  }
+  if (magnitude == negativeLimit) {
+    return std::numeric_limits<int>::min();
+  }
+  return -static_cast<int>(magnitude);
+}
+
+std::uint64_t javaDoubleBits(double value) {
+  if (std::isnan(value)) {
+    return UINT64_C(0x7ff8000000000000);
+  }
+  return std::bit_cast<std::uint64_t>(value);
+}
+
+std::uint32_t javaHashMapHash(double value) {
+  const std::uint64_t bits = javaDoubleBits(value);
+  const std::uint32_t hashCode = static_cast<std::uint32_t>(bits) ^
+                                 static_cast<std::uint32_t>(bits >> 32U);
+  return hashCode ^ (hashCode >> 16U);
+}
+
+int songInformationTimelineNoteCount(const bms_parser::TimeLine &timeline,
+                                     const bms_parser::Chart &chart,
+                                     int longNoteModeOverride) {
+  int count = 0;
+  for (const auto *note : timeline.Notes) {
+    if (note == nullptr) {
+      continue;
+    }
+    const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+    if (longNote == nullptr) {
+      ++count;
+      continue;
+    }
+    const ChartLongNoteMode mode =
+        longNoteMode(*longNote, chart, longNoteModeOverride);
+    if (mode != ChartLongNoteMode::LN || !longNote->IsTail()) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+double beatorajaMainBpm(const bms_parser::Chart &chart,
+                        int longNoteModeOverride) {
+  struct Entry {
+    std::uint64_t keyBits = 0;
+    double bpm = 0.0;
+    int noteCount = 0;
+    std::uint32_t hash = 0;
+  };
+  std::vector<Entry> entries;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      const std::uint64_t bits = javaDoubleBits(timeline->Bpm);
+      const auto found = std::ranges::find_if(
+          entries, [bits](const Entry &entry) { return entry.keyBits == bits; });
+      const int noteCount = songInformationTimelineNoteCount(
+          *timeline, chart, longNoteModeOverride);
+      if (found != entries.end()) {
+        found->noteCount += noteCount;
+      } else {
+        entries.push_back({.keyBits = bits,
+                           .bpm = timeline->Bpm,
+                           .noteCount = noteCount,
+                           .hash = javaHashMapHash(timeline->Bpm)});
+      }
+    }
+  }
+
+  std::size_t capacity = 16;
+  while (entries.size() > capacity - capacity / 4 &&
+         capacity <= (std::numeric_limits<std::size_t>::max() / 2)) {
+    capacity *= 2;
+  }
+  // Pinned SongInformation uses HashMap<Double, Integer> and a strict `>`
+  // winner. OpenJDK visits buckets in ascending order and preserves linked-bin
+  // insertion order across resize. The [120, 180] reference vector therefore
+  // visits [180, 120] and selects 180 on a tie. Java does not specify HashMap
+  // iteration order; this makes that observed behavior deterministic here.
+  std::stable_sort(entries.begin(), entries.end(),
+                   [capacity](const Entry &left, const Entry &right) {
+                     return (left.hash & (capacity - 1)) <
+                            (right.hash & (capacity - 1));
+                   });
+  int maximumCount = 0;
+  double mainBpm = 0.0;
+  for (const auto &entry : entries) {
+    if (entry.noteCount > maximumCount) {
+      maximumCount = entry.noteCount;
+      mainBpm = entry.bpm;
+    }
+  }
+  return mainBpm;
+}
+
+struct BeatorajaNoteCounts {
+  int normalKey = 0;
+  int longKey = 0;
+  int normalScratch = 0;
+  int longScratch = 0;
+};
+
+BeatorajaNoteCounts beatorajaNoteCounts(const bms_parser::Chart &chart,
+                                        int longNoteModeOverride) {
+  BeatorajaNoteCounts result;
+  const auto scratchLanes = chart.Meta.GetScratchLaneIndices();
+  const auto isScratch = [&](int lane) {
+    return std::ranges::find(scratchLanes, lane) != scratchLanes.end();
+  };
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (const auto *note : timeline->Notes) {
+        if (note == nullptr) {
+          continue;
+        }
+        const bool scratch = isScratch(note->Lane);
+        const auto *longNote =
+            dynamic_cast<const bms_parser::LongNote *>(note);
+        if (longNote == nullptr) {
+          ++(scratch ? result.normalScratch : result.normalKey);
+          continue;
+        }
+        const ChartLongNoteMode mode =
+            longNoteMode(*longNote, chart, longNoteModeOverride);
+        if (mode != ChartLongNoteMode::LN || !longNote->IsTail()) {
+          ++(scratch ? result.longScratch : result.longKey);
+        }
+      }
+    }
+  }
+  return result;
 }
 
 } // namespace
@@ -94,16 +352,23 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       {14, chart.Meta.Artist},
       {15, chart.Meta.SubArtist},
   };
+  const BeatorajaNoteCounts noteCounts =
+      beatorajaNoteCounts(chart, longNoteModeOverride);
   result.staticMetadata = {
       .difficulty = chart.Meta.Difficulty,
       .judgeRank = chart.Meta.Rank,
       .minimumBpm = chart.Meta.MinBpm,
       .maximumBpm = chart.Meta.MaxBpm,
+      .mainBpm = beatorajaMainBpm(chart, longNoteModeOverride),
       .durationMicros = chart.Meta.TotalLength,
-      .totalNotes = chart.Meta.TotalNotes,
-      .totalLongNotes = chart.Meta.TotalLongNotes,
-      .totalScratchNotes = chart.Meta.TotalScratchNotes,
-      .totalBackSpinNotes = chart.Meta.TotalBackSpinNotes,
+      .authoredPlayLevel = chart.Meta.PlayLevelText,
+      .playLevel = javaParseInt(chart.Meta.PlayLevelText).value_or(0),
+      .normalKeyNotes = noteCounts.normalKey,
+      .longKeyNotes = noteCounts.longKey,
+      .normalScratchNotes = noteCounts.normalScratch,
+      .longScratchNotes = noteCounts.longScratch,
+      .totalNotes = noteCounts.normalKey + noteCounts.longKey +
+                    noteCounts.normalScratch + noteCounts.longScratch,
       .totalLandmineNotes = chart.Meta.TotalLandmineNotes,
       .hasBga = !chart.ReferencedBmpTable.empty(),
       .stageFilePath = chart.Meta.StageFile.generic_string(),

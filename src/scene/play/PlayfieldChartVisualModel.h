@@ -87,11 +87,15 @@ struct PlayfieldChartStaticMetadata {
   int judgeRank = 3;
   double minimumBpm = 0.0;
   double maximumBpm = 0.0;
+  double mainBpm = 0.0;
   long long durationMicros = 0;
+  std::string authoredPlayLevel;
+  int playLevel = 0;
+  int normalKeyNotes = 0;
+  int longKeyNotes = 0;
+  int normalScratchNotes = 0;
+  int longScratchNotes = 0;
   int totalNotes = 0;
-  int totalLongNotes = 0;
-  int totalScratchNotes = 0;
-  int totalBackSpinNotes = 0;
   int totalLandmineNotes = 0;
   bool hasBga = false;
   std::string stageFilePath;

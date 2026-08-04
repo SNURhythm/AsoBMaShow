@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -356,6 +357,7 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
                               .mutationTable = mutations});
 
   auto state = stateAt(71);
+  state.playStartMicros = 0;
   auto projection = projectionAt(71);
   bridge.beginFrame(state, projection);
   state.authority.currentBpm = 999.0;
@@ -481,7 +483,14 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                           .judgeRank = 70,
                           .minimumBpm = 120.9,
                           .maximumBpm = 240.5,
+                          .mainBpm = 178.9,
                           .durationMicros = 125'789'000,
+                          .playLevel = 12,
+                          .normalKeyNotes = 321,
+                          .longKeyNotes = 54,
+                          .normalScratchNotes = 32,
+                          .longScratchNotes = 10,
+                          .totalNotes = 417,
                           .hasBga = true,
                           .stageFilePath = "stage.png",
                           .backBmpPath = "back.png"};
@@ -567,15 +576,15 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            "selected live score, gauge, and judgement number is exact");
   }
   for (const auto [id, expected] : std::array{
-           std::pair{90, 240LL}, std::pair{91, 120LL},
+           std::pair{74, 417LL}, std::pair{90, 240LL},
+           std::pair{91, 120LL}, std::pair{92, 178LL},
+           std::pair{96, 12LL}, std::pair{350, 321LL},
+           std::pair{351, 54LL}, std::pair{352, 32LL},
+           std::pair{353, 10LL},
            std::pair{1163, 2LL}, std::pair{1164, 5LL}}) {
     const auto value = bridge.integerProperty({id});
     expect(value.supported && value.value == expected,
            "selected static chart number uses its exact immutable source");
-  }
-  for (const int id : {92, 350, 351, 352, 353}) {
-    expect(!bridge.integerProperty({id}).supported,
-           "main BPM and note categories stay unsupported without exact sources");
   }
   expect(bridge.stringProperty({12}).supported &&
              bridge.stringProperty({12}).value == "full title" &&
@@ -615,15 +624,19 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   expect(bridge.diagnostics().size() == diagnosticCount,
          "selected off timers do not report unsupported diagnostics");
   expect(bridge.floatProperty({4}).supported &&
-             bridge.floatProperty({4}).value == 0.45,
-         "raw lane-cover percent remains exposed while enabled/lift semantics "
-         "are pending authoritative state");
+             bridge.floatProperty({4}).value == 0.0,
+         "disabled lane cover reports zero despite a retained amount");
   bridge.discardFrame();
 
   state = stateAt(102);
+  state.authority.laneCoverEnabled = true;
+  state.authority.laneCoverPercent = 0;
   state.lastJudge = JudgeResult(Great, 20);
   state.fastSlowMicros = 20;
   bridge.beginFrame(state, projectionAt(102));
+  expect(bridge.floatProperty({4}).supported &&
+             bridge.floatProperty({4}).value == 0.0,
+         "enabled zero lane cover remains zero");
   expect(bridge.booleanProperty({1242}).supported &&
              bridge.booleanProperty({1242}).value &&
              bridge.booleanProperty({1243}).supported &&
@@ -632,9 +645,15 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   bridge.discardFrame();
 
   state = stateAt(103);
+  state.authority.laneCoverEnabled = true;
+  state.authority.liftEnabled = true;
+  state.authority.liftRatio = 0.2F;
   state.lastJudge = JudgeResult(Great, -20);
   state.fastSlowMicros = -20;
   bridge.beginFrame(state, projectionAt(103));
+  expect(bridge.floatProperty({4}).supported &&
+             std::abs(bridge.floatProperty({4}).value - 0.36) < 0.000001,
+         "enabled lift scales the lane-cover amount by one minus lift");
   expect(bridge.booleanProperty({1242}).supported &&
              !bridge.booleanProperty({1242}).value &&
              bridge.booleanProperty({1243}).supported &&
