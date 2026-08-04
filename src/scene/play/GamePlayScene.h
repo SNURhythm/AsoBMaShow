@@ -37,7 +37,7 @@
 class Button;
 class RhythmLaneInputController;
 class RhythmInputHandler;
-class BMSRenderer;
+class BuiltInPlayfieldPresentation;
 class PlayfieldPresentation;
 class GamePlayScene : public Scene, public IRhythmControl {
 private:
@@ -88,6 +88,9 @@ private:
           std::nullopt);
   void drainRealtimeInputCommands();
   void refreshRealtimeTouchLayout();
+  void refreshGameplayPresentationGeometry();
+  void updateSkinResetLayoutVisibility();
+  void acquireGameplaySkinForAttempt();
   [[nodiscard]] bool publishRealtimeTouchHitSnapshot();
   void updateRealtimeVisualTimeline(long long gameplayTimeMicros);
   void syncRealtimeGameplaySnapshot();
@@ -171,6 +174,7 @@ private:
   View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;
   Button *practiceRestartButton = nullptr;
+  Button *skinResetLayoutButton = nullptr;
   TextView *practiceHudText = nullptr;
   bool coursePauseHoldActive = false;
   bool coursePauseHoldRewinding = false;
@@ -239,8 +243,8 @@ private:
   PlayfieldProjection playfieldProjection;
   std::unique_ptr<PlayfieldVisualStateStore> ownedPlayfieldVisualStateStore;
   PlayfieldVisualStateStore *playfieldVisualStateStore = nullptr;
-  std::unique_ptr<BMSRenderer> ownedRenderer;
-  BMSRenderer *renderer = nullptr;
+  std::unique_ptr<PlayfieldPresentation> ownedPresentation;
+  BuiltInPlayfieldPresentation *builtInPresentation = nullptr;
   PlayfieldPresentation *presentation = nullptr;
   std::unique_ptr<PlayfieldPresentationEventFanout>
       ownedPresentationEventFanout;
@@ -285,6 +289,11 @@ private:
   std::vector<const bms_parser::Note *> playfieldVisualNoteSources;
   int playfieldLaneCoverPercent = 0;
   bool playfieldLaneCoverResetPending = false;
+  bool gameplaySkinSafeBoundsInitialized = false;
+  double gameplaySkinSafeBoundsX = 0.0;
+  double gameplaySkinSafeBoundsY = 0.0;
+  double gameplaySkinSafeBoundsWidth = 0.0;
+  double gameplaySkinSafeBoundsHeight = 0.0;
   double currentGameplayBpm = 0.0;
   preparation::Plan preparationPlan;
   std::unique_ptr<TextView> ownedLaneStateText;

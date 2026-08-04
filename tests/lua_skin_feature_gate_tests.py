@@ -346,6 +346,8 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                 "SkinDiagnosticHistory",
                 "SkinConfigurationWriteQueue",
                 "SkinCommitCoordinator",
+                "GameplaySkinActivationRequest",
+                "AcquireGameplaySkinForNextChart",
             ),
         )
 
@@ -470,6 +472,11 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
             "const bool compositeFullscreenBga =\n            submitPreparedFullscreen || submitLegacyFullscreen;",
             render_branch,
         )
+        legacy_decision = render_branch[
+            render_branch.index("const bool submitLegacyFullscreen =") :
+            render_branch.index("const bool compositeFullscreenBga =")
+        ]
+        self.assertIn("bgaCompositeState.frameSerial == 0", legacy_decision)
         self.assertNotIn("if (hasActiveVisuals)", render_branch[scene:])
 
 

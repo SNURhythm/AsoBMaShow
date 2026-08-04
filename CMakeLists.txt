@@ -4624,6 +4624,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             bgfx
         )
 
+        add_executable(gameplay_skin_integration_tests
+            tests/gameplay_skin_integration_tests.cpp
+        )
+        target_include_directories(gameplay_skin_integration_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(gameplay_skin_integration_tests PRIVATE
+            cxx_std_23
+        )
+        target_compile_definitions(gameplay_skin_integration_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+
         add_executable(skin_performance_telemetry_tests
             tests/skin_performance_telemetry_tests.cpp
             src/skin/beatoraja/SkinPerformanceTelemetry.cpp
@@ -5942,6 +5956,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if(TARGET builtin_playfield_presentation_tests)
         asobmashow_register_test(builtin_playfield_presentation_tests)
+    endif()
+    if(TARGET gameplay_skin_integration_tests)
+        asobmashow_register_test(gameplay_skin_integration_tests)
     endif()
     if(TARGET skin_performance_telemetry_tests)
         asobmashow_register_test(skin_performance_telemetry_tests)

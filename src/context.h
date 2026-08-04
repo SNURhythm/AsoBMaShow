@@ -53,6 +53,7 @@
 #include "view/UiTheme.h"
 #include "skin/LuaGameplaySkinFeature.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "skin/GameplaySkinActivationRequest.h"
 #include "skin/SkinCommitCoordinator.h"
 #include "skin/SkinConfigurationWriteQueue.h"
 #include "skin/SkinStoragePaths.h"
@@ -204,6 +205,9 @@ public:
   std::unique_ptr<skin::SkinConfigurationWriteQueue>
       skinConfigurationWriteQueue;
   std::unique_ptr<skin::SkinCommitCoordinator> skinCommitCoordinator;
+  // Task 24 supplies the lifecycle-owned callback. Empty means built-in-only;
+  // GamePlayScene is intentionally unable to reach package activation APIs.
+  skin::AcquireGameplaySkinForNextChart acquireGameplaySkinForNextChart;
 
   void initializeGameplaySkinServices() {
     try {

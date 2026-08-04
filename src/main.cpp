@@ -1357,6 +1357,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         const bool submitLegacyFullscreen =
             bgaCompositeState.mode ==
                 GameplayBgaCompositeMode::FullscreenBuiltIn &&
+            bgaCompositeState.frameSerial == 0 &&
             !bgaCompositeState.prepared.has_value() && hasActiveVisuals;
         const bool compositeFullscreenBga =
             submitPreparedFullscreen || submitLegacyFullscreen;
