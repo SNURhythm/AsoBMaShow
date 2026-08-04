@@ -5214,6 +5214,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(skin_archive_importer_tests PRIVATE advapi32)
     endif()
 
+    add_executable(skin_diagnostic_history_tests
+        tests/skin_diagnostic_history_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/skin/beatoraja/SkinDiagnosticHistory.cpp
+        src/skin/package/SkinPackageCatalog.cpp
+        src/skin/package/SkinPathPolicy.cpp
+    )
+    target_include_directories(skin_diagnostic_history_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(skin_diagnostic_history_tests PRIVATE cxx_std_23)
+    target_link_libraries(skin_diagnostic_history_tests PRIVATE utf8proc::utf8proc)
+
     # The operation-service target owns queue/worker semantics around the
     # independently usable prepare operations. Store/catalog transactional
     # integration remains in skin_package_store_tests.
@@ -5466,6 +5480,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(skin_path_policy_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(skin_archive_importer_tests)
+    asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)
     asobmashow_register_test(replay_contract_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)

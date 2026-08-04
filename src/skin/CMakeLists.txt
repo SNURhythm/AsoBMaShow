@@ -5,6 +5,7 @@ target_sources(main PRIVATE
     SkinStoragePaths.cpp
     beatoraja/LuaSkinFileSystem.cpp
     beatoraja/SkinCompatibilityDiagnostics.cpp
+    beatoraja/SkinDiagnosticHistory.cpp
     package/SkinAliasDetector.cpp
     package/SkinArchiveImporter.cpp
     package/SkinPackageCatalog.cpp

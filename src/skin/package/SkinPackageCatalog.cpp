@@ -2,6 +2,7 @@
 
 #include "../../AtomicFile.h"
 #include "../../FileChecksum.h"
+#include "../beatoraja/SkinDiagnosticHistory.h"
 #include "SkinPathPolicy.h"
 
 #include <nlohmann/json.hpp>
@@ -36,6 +37,8 @@ using OrderedJson = nlohmann::ordered_json;
 
 constexpr int kCatalogSchemaVersion = 1;
 constexpr std::uint64_t kMaximumCatalogBytes = 32ULL * 1024 * 1024;
+constexpr int kDiagnosticHistorySchemaVersion = 1;
+constexpr std::string_view kDiagnosticHistoryFile = "diagnostic-history.json";
 
 bool ensureDirectoryNoFollow(const fs::path &directory) {
   try {
@@ -604,6 +607,139 @@ bool decodeDiagnostic(const Json &encoded, SkinDiagnostic &diagnostic) {
   return true;
 }
 
+bool validDiagnosticHistoryRecord(const SkinDiagnosticHistoryRecord &record) {
+  const auto normalized =
+      normalizeEntryPath(record.entry.package, record.entry.packageRelativePath);
+  return record.recordSerial != 0 && normalized.entry &&
+         *normalized.entry == record.entry &&
+         lowercaseSha256(record.revisionDigest) &&
+         lowercaseSha256(record.configurationDigest) &&
+         static_cast<std::uint8_t>(record.phase) <=
+             static_cast<std::uint8_t>(SkinDiagnosticPhase::FrameFallback) &&
+         validateDiagnostic(record.diagnostic);
+}
+
+bool validDiagnosticHistoryRecords(
+    std::span<const SkinDiagnosticHistoryRecord> records) {
+  if (records.size() > SkinDiagnosticHistory::maxGlobalRecords) {
+    return false;
+  }
+  std::uint64_t previousSerial = 0;
+  std::map<SkinEntryId, std::size_t> perEntry;
+  for (const auto &record : records) {
+    if (!validDiagnosticHistoryRecord(record) ||
+        record.recordSerial <= previousSerial ||
+        ++perEntry[record.entry] > SkinDiagnosticHistory::maxRecordsPerEntry) {
+      return false;
+    }
+    previousSerial = record.recordSerial;
+  }
+  return true;
+}
+
+OrderedJson encodeDiagnosticHistory(
+    std::span<const SkinDiagnosticHistoryRecord> records) {
+  OrderedJson document = OrderedJson::object();
+  document["schemaVersion"] = kDiagnosticHistorySchemaVersion;
+  document["records"] = OrderedJson::array();
+  for (const auto &record : records) {
+    OrderedJson encoded = OrderedJson::object();
+    encoded["recordSerial"] = record.recordSerial;
+    encoded["entry"] = encodeEntryId(record.entry);
+    encoded["revisionDigest"] = record.revisionDigest;
+    encoded["configurationDigest"] = record.configurationDigest;
+    encoded["phase"] = static_cast<std::uint8_t>(record.phase);
+    encoded["diagnostic"] = encodeDiagnostic(record.diagnostic);
+    if (record.luaLine) {
+      encoded["luaLine"] = *record.luaLine;
+    }
+    if (record.frameSerial) {
+      encoded["frameSerial"] = *record.frameSerial;
+    }
+    document["records"].push_back(std::move(encoded));
+  }
+  return document;
+}
+
+bool encodedDiagnosticHistoryBytes(
+    std::span<const SkinDiagnosticHistoryRecord> records, std::string &bytes) {
+  try {
+    if (!validDiagnosticHistoryRecords(records)) {
+      return false;
+    }
+    bytes = encodeDiagnosticHistory(records).dump() + "\n";
+    return bytes.size() <= kMaximumCatalogBytes;
+  } catch (...) {
+    bytes.clear();
+    return false;
+  }
+}
+
+bool decodeDiagnosticHistory(const Json &document,
+                             std::vector<SkinDiagnosticHistoryRecord> &records) {
+  try {
+    if (!document.is_object()) {
+      return false;
+    }
+    const auto schemaVersion = document.find("schemaVersion");
+    const auto encodedRecords = document.find("records");
+    if (schemaVersion == document.end() ||
+        !schemaVersion->is_number_integer() ||
+        schemaVersion->get<int>() != kDiagnosticHistorySchemaVersion ||
+        encodedRecords == document.end() || !encodedRecords->is_array() ||
+        encodedRecords->size() > SkinDiagnosticHistory::maxGlobalRecords) {
+      return false;
+    }
+    records.clear();
+    records.reserve(encodedRecords->size());
+    for (const Json &encoded : *encodedRecords) {
+      if (!encoded.is_object()) {
+        return false;
+      }
+      SkinDiagnosticHistoryRecord record;
+      const auto serial = encoded.find("recordSerial");
+      const auto entry = encoded.find("entry");
+      const auto phase = encoded.find("phase");
+      const auto diagnostic = encoded.find("diagnostic");
+      if (serial == encoded.end() || !serial->is_number_unsigned() ||
+          entry == encoded.end() || !decodeEntryId(*entry, record.entry) ||
+          !getString(encoded, "revisionDigest", record.revisionDigest) ||
+          !getString(encoded, "configurationDigest", record.configurationDigest) ||
+          phase == encoded.end() || !phase->is_number_unsigned() ||
+          diagnostic == encoded.end() || !decodeDiagnostic(*diagnostic, record.diagnostic)) {
+        return false;
+      }
+      const auto phaseValue = phase->get<std::uint64_t>();
+      if (phaseValue > static_cast<std::uint64_t>(SkinDiagnosticPhase::FrameFallback)) {
+        return false;
+      }
+      record.recordSerial = serial->get<std::uint64_t>();
+      record.phase = static_cast<SkinDiagnosticPhase>(phaseValue);
+      const auto luaLine = encoded.find("luaLine");
+      if (luaLine != encoded.end()) {
+        if (!luaLine->is_number_unsigned() ||
+            luaLine->get<std::uint64_t>() >
+                std::numeric_limits<std::uint32_t>::max()) {
+          return false;
+        }
+        record.luaLine = luaLine->get<std::uint32_t>();
+      }
+      const auto frameSerial = encoded.find("frameSerial");
+      if (frameSerial != encoded.end()) {
+        if (!frameSerial->is_number_unsigned()) {
+          return false;
+        }
+        record.frameSerial = frameSerial->get<std::uint64_t>();
+      }
+      records.push_back(std::move(record));
+    }
+    return validDiagnosticHistoryRecords(records);
+  } catch (...) {
+    records.clear();
+    return false;
+  }
+}
+
 bool decodeMetadata(const Json &encoded, SkinEntryMetadataSnapshot &metadata) {
   if (!encoded.is_object() ||
       !getString(encoded, "displayName", metadata.displayName) ||
@@ -829,6 +965,19 @@ bool writeCatalogFile(const fs::path &path,
                                       error, &operations);
 }
 
+bool writeDiagnosticHistoryFile(
+    const fs::path &path,
+    std::span<const SkinDiagnosticHistoryRecord> records, std::string &error) {
+  std::string encoded;
+  if (!encodedDiagnosticHistoryBytes(records, encoded)) {
+    error = "private diagnostic history is invalid or exceeds its size bound";
+    return false;
+  }
+  const auto operations = atomic_file::privateFileOperations();
+  return atomic_file::writeWithBackup(path, std::as_bytes(std::span(encoded)),
+                                      error, &operations);
+}
+
 } // namespace
 
 struct SkinPackageCatalog::Impl {
@@ -844,6 +993,11 @@ struct SkinPackageCatalog::Impl {
     std::shared_ptr<WriteCompletion> completion;
   };
 
+  struct HistoryWriteWork {
+    std::vector<SkinDiagnosticHistoryRecord> records;
+    std::uint64_t sequence = 0;
+  };
+
   struct Submission {
     std::uint64_t sequence = 0;
     std::shared_ptr<WriteCompletion> completion;
@@ -851,8 +1005,23 @@ struct SkinPackageCatalog::Impl {
 
   explicit Impl(fs::path rootPath)
       : root(std::move(rootPath)),
-        current(std::make_shared<SkinPackageCatalogSnapshot>()),
-        worker([this] { run(); }) {}
+        current(std::make_shared<SkinPackageCatalogSnapshot>()) {
+    try {
+      worker = std::thread([this] { run(); });
+      historyWorker = std::thread([this] { runHistory(); });
+    } catch (...) {
+      {
+        std::scoped_lock lock(mutex);
+        closing = true;
+        changed.notify_all();
+        historyChanged.notify_all();
+      }
+      if (worker.joinable()) {
+        worker.join();
+      }
+      throw;
+    }
+  }
 
   ~Impl() { stop(); }
 
@@ -895,6 +1064,44 @@ struct SkinPackageCatalog::Impl {
         work.completion->finished = true;
       }
       completed.notify_all();
+    }
+  }
+
+  void runHistory() noexcept {
+    std::unique_lock lock(mutex);
+    while (true) {
+      historyChanged.wait(lock,
+                          [this] { return closing || historyPending.has_value(); });
+      if (!historyPending && closing) {
+        break;
+      }
+      HistoryWriteWork work = std::move(*historyPending);
+      historyPending.reset();
+      lock.unlock();
+      bool saved = false;
+      std::string error;
+      try {
+        const bool directoryReady = ensureDirectoryNoFollow(root);
+        saved = directoryReady &&
+                writeDiagnosticHistoryFile(root / kDiagnosticHistoryFile,
+                                           work.records, error);
+        if (!directoryReady) {
+          error = "private catalog directory is unavailable";
+        }
+      } catch (...) {
+        saved = false;
+        error = "private diagnostic history write raised an exception";
+      }
+      lock.lock();
+      completedHistorySequence =
+          std::max(completedHistorySequence, work.sequence);
+      lastHistoryWriteSucceeded = saved;
+      if (saved) {
+        lastHistoryWriteError.clear();
+      } else {
+        lastHistoryWriteError.swap(error);
+      }
+      historyCompleted.notify_all();
     }
   }
 
@@ -970,15 +1177,52 @@ struct SkinPackageCatalog::Impl {
     return target == 0 || lastWriteSucceeded;
   }
 
+  bool enqueueDiagnosticHistory(
+      std::vector<SkinDiagnosticHistoryRecord> records) noexcept {
+    try {
+      std::string boundedEncoding;
+      if (!encodedDiagnosticHistoryBytes(records, boundedEncoding)) {
+        return false;
+      }
+      std::scoped_lock lock(mutex);
+      if (closing) {
+        return false;
+      }
+      HistoryWriteWork work{.records = std::move(records),
+                            .sequence = submittedHistorySequence + 1};
+      historyPending = std::move(work);
+      submittedHistorySequence = historyPending->sequence;
+      historyChanged.notify_one();
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  bool waitForHistoryWrites(std::string &error) {
+    std::unique_lock lock(mutex);
+    const std::uint64_t target = submittedHistorySequence;
+    historyCompleted.wait(lock, [this, target] {
+      return completedHistorySequence >= target ||
+             (closing && !historyPending && completedHistorySequence >= target);
+    });
+    error = lastHistoryWriteError;
+    return target == 0 || lastHistoryWriteSucceeded;
+  }
+
   void stop() noexcept {
     std::call_once(stopOnce, [this] {
       {
         std::scoped_lock lock(mutex);
         closing = true;
         changed.notify_all();
+        historyChanged.notify_all();
       }
       if (worker.joinable()) {
         worker.join();
+      }
+      if (historyWorker.joinable()) {
+        historyWorker.join();
       }
     });
   }
@@ -987,15 +1231,23 @@ struct SkinPackageCatalog::Impl {
   mutable std::mutex mutex;
   std::condition_variable changed;
   std::condition_variable completed;
+  std::condition_variable historyChanged;
+  std::condition_variable historyCompleted;
   std::shared_ptr<const SkinPackageCatalogSnapshot> current;
   std::deque<WriteWork> queue;
   std::uint64_t submittedSequence = 0;
   std::uint64_t completedSequence = 0;
   bool lastWriteSucceeded = true;
   std::string lastWriteError;
+  std::optional<HistoryWriteWork> historyPending;
+  std::uint64_t submittedHistorySequence = 0;
+  std::uint64_t completedHistorySequence = 0;
+  bool lastHistoryWriteSucceeded = true;
+  std::string lastHistoryWriteError;
   bool closing = false;
   std::once_flag stopOnce;
   std::thread worker;
+  std::thread historyWorker;
 };
 
 SkinPackageCatalog::SkinPackageCatalog(fs::path privateCatalogRoot)
@@ -1137,9 +1389,40 @@ SkinPackageCatalog::snapshot() const noexcept {
   return impl_->current;
 }
 
+std::vector<SkinDiagnosticHistoryRecord>
+SkinPackageCatalog::loadDiagnosticHistory() const {
+  bool missing = false;
+  const auto bytes =
+      readBoundedCatalogFile(impl_->root / kDiagnosticHistoryFile, missing);
+  if (missing || !bytes || bytes->size() > kMaximumCatalogBytes) {
+    return {};
+  }
+  try {
+    std::vector<SkinDiagnosticHistoryRecord> records;
+    if (!decodeDiagnosticHistory(Json::parse(*bytes), records)) {
+      return {};
+    }
+    return records;
+  } catch (...) {
+    return {};
+  }
+}
+
+bool SkinPackageCatalog::replaceDiagnosticHistory(
+    std::span<const SkinDiagnosticHistoryRecord> records) {
+  try {
+    std::vector<SkinDiagnosticHistoryRecord> owned(records.begin(),
+                                                    records.end());
+    return impl_->enqueueDiagnosticHistory(std::move(owned));
+  } catch (...) {
+    return false;
+  }
+}
+
 void SkinPackageCatalog::flush() {
   std::string ignored;
   impl_->waitForWrites(ignored);
+  impl_->waitForHistoryWrites(ignored);
 }
 
 void SkinPackageCatalog::shutdown() noexcept {
