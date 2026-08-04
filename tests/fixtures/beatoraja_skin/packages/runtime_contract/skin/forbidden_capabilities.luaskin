@@ -1,0 +1,54 @@
+assert(ffi == nil)
+assert(jit == nil)
+assert(debug == nil)
+assert(os == nil)
+assert(package.loadlib == nil)
+assert(package.cpath == nil or package.cpath == "")
+assert(package.searchers == nil)
+assert(string.dump == nil)
+assert(loadfile == nil)
+
+assert(io ~= nil)
+assert(type(io.open) == "function")
+assert(io.stdin == nil)
+assert(io.stdout == nil)
+assert(io.stderr == nil)
+assert(io.popen == nil)
+assert(io.tmpfile == nil)
+
+for _, module_name in ipairs({"ffi", "jit", "socket", "http"}) do
+  assert(not pcall(require, module_name))
+end
+
+assert(next(require("main_state")) == nil)
+assert(next(require("timer_util")) == nil)
+assert(next(require("event_util")) == nil)
+
+local first_luajava = require("luajava")
+local second_luajava = require("luajava")
+assert(first_luajava == second_luajava)
+assert(first_luajava == luajava)
+assert(type(luajava.bindClass) == "function")
+assert(type(luajava.new) == "function")
+assert(luajava.newInstance == nil)
+
+local export_count = 0
+for _ in pairs(luajava) do
+  export_count = export_count + 1
+end
+assert(export_count == 2)
+
+local gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
+assert(gdx.app == nil)
+assert(next(gdx) == nil)
+assert(not pcall(luajava.bindClass, "java.net.URL"))
+assert(not pcall(luajava.bindClass, "com.badlogic.gdx.Input"))
+assert(not pcall(luajava.bindClass,
+                 "com.badlogic.gdx.controllers.Controllers"))
+
+local binary_signature = string.char(27) .. "Lua"
+assert(not pcall(loadstring, binary_signature))
+
+return {
+  phase = "header"
+}

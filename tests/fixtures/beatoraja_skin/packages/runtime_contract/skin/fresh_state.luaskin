@@ -1,0 +1,7 @@
+assert(__runtime_contract_fresh_state == nil)
+assert(package.loaded.runtime_shared == nil)
+__runtime_contract_fresh_state = true
+
+return {
+  phase = "header"
+}

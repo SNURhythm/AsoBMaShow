@@ -1,0 +1,8 @@
+if skin_config then
+  while true do
+  end
+end
+
+return {
+  phase = "header"
+}

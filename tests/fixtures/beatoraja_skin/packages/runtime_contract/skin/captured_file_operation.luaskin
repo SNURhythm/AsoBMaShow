@@ -1,0 +1,10 @@
+local reader = io.open("data.txt", "r")
+assert(reader ~= nil)
+local lines = reader:lines()
+
+return {
+  phase = skin_config and "configured" or "header",
+  captured_read = function()
+    return lines()
+  end
+}

@@ -1,0 +1,12 @@
+local function bounded_work()
+  local total = 0
+  for value = 1, 60000 do
+    total = total + value
+  end
+  return total
+end
+
+return {
+  phase = skin_config and "configured" or "header",
+  bounded_work = bounded_work
+}

@@ -1,0 +1,21 @@
+local function created_loop()
+  local thread = coroutine.create(function()
+    while true do
+    end
+  end)
+  return coroutine.resume(thread)
+end
+
+local function wrapped_loop()
+  local run = coroutine.wrap(function()
+    while true do
+    end
+  end)
+  return run()
+end
+
+return {
+  phase = skin_config and "configured" or "header",
+  created_loop = created_loop,
+  wrapped_loop = wrapped_loop
+}

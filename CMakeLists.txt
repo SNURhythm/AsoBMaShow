@@ -556,6 +556,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(skin_path_policy_tests PRIVATE cxx_std_23)
     target_link_libraries(skin_path_policy_tests PRIVATE utf8proc::utf8proc)
 
+    if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
+        add_executable(lua_skin_runtime_tests
+            tests/lua_skin_runtime_tests.cpp
+        )
+        target_include_directories(lua_skin_runtime_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_skin_runtime_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lua_skin_runtime_tests PRIVATE
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+    endif()
+
     add_test(NAME beatoraja_skin_reference_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/beatoraja_skin_reference_tests.py -v)
@@ -4468,6 +4481,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endforeach()
     if (TARGET ir_http_client_tests)
         asobmashow_register_test(ir_http_client_tests)
+    endif()
+    if (TARGET lua_skin_runtime_tests)
+        asobmashow_register_test(lua_skin_runtime_tests)
     endif()
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10
