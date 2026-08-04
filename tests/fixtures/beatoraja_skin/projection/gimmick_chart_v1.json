@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "source": "synthetic Task 17 projection characterization",
+  "speed": {
+    "value": 1.0,
+    "note": "Parser has no SPEED/hasSpeedObj; projection intentionally uses fixed neutral speed."
+  },
+  "timelines": [
+    {"id": 1, "timeMicros": 0, "scrollPosition": 0.0, "bpm": 120.0, "section": true},
+    {"id": 2, "timeMicros": 1000000, "scrollPosition": 4.0, "stopMicros": 200000},
+    {"id": 3, "timeMicros": 2000000, "scrollPosition": 7.2, "bpm": 180.0, "scroll": 0.8},
+    {"id": 4, "timeMicros": 3000000, "scrollPosition": 10.4, "section": true}
+  ],
+  "cases": {
+    "stopFreeze": {"timeMicros": 1100000, "currentScrollPosition": 4.0},
+    "invisibleExpiry": {"id": 11, "timeMicros": 1100000, "included": false},
+    "longNotes": ["LN", "CN", "HCN"],
+    "lineKinds": ["Section", "BpmChange", "Stop", "Time"],
+    "malformedPairs": ["orphan-head", "head-to-head"],
+    "budget": {"maxNotes": 1, "budgetExceeded": true}
+  }
+}

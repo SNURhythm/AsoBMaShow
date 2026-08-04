@@ -1,5 +1,6 @@
 target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             PlayfieldChartVisualModel.cpp
+                            PlayfieldProjection.cpp
                             PlayfieldVisualState.cpp
                             RhythmLaneInputController.cpp
                             JudgementIndicatorRenderer.cpp Judge.cpp

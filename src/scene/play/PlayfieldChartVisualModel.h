@@ -29,9 +29,13 @@ struct ChartVisualTimeline {
   double scrollPosition = 0.0;
   double bpm = 0.0;
   double scrollRate = 1.0;
+  // bms-parser-cpp does not expose SPEED/hasSpeedObj. Projection therefore
+  // intentionally uses a fixed neutral speed until parser support exists.
+  double speed = 1.0;
   long long stopMicros = 0;
   bool sectionLine = false;
   bool bgaOnly = false;
+  bool retainedForProjection = false;
   std::uint32_t authoredOrdinal = 0;
 
   bool operator==(const ChartVisualTimeline &) const = default;
@@ -71,6 +75,8 @@ struct PlayfieldChartVisualModel {
   std::vector<double> scrollPrefix;
 
   [[nodiscard]] std::vector<std::string> runtimeStrings() const;
+
+  bool operator==(const PlayfieldChartVisualModel &) const = default;
 };
 
 [[nodiscard]] PlayfieldChartVisualModel

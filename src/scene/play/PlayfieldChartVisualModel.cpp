@@ -1,4 +1,5 @@
 #include "PlayfieldChartVisualModel.h"
+#include "GameplayScrollGeometry.h"
 
 #include "../../bms_parser.hpp"
 
@@ -130,6 +131,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
                             hasAny(timeline->LandmineNotes);
       const bool hasBga = timeline->BgaBase >= 0 || timeline->BgaLayer >= 0 ||
                           timeline->BgaPoor >= 0;
+      const double previousBpm = previous != nullptr ? previous->Bpm : timeline->Bpm;
+      const double previousScroll = previous != nullptr ? previous->Scroll : timeline->Scroll;
       ChartVisualTimeline value{
           .id = nextId++,
           .timeMicros = timeline->Timing,
@@ -137,9 +140,15 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           .scrollPosition = scrollPosition,
           .bpm = timeline->Bpm,
           .scrollRate = timeline->Scroll,
+          .speed = 1.0,
           .stopMicros = stopMicros(*timeline),
           .sectionLine = timeline->IsFirstInMeasure,
           .bgaOnly = hasBga && !hasNotes,
+          .retainedForProjection = gameplay_scroll_geometry::shouldKeepRenderTimeline(
+              previousBpm, timeline->Bpm, stopMicros(*timeline), previousScroll,
+              timeline->Scroll, timeline->IsFirstInMeasure,
+              hasAny(timeline->Notes), hasAny(timeline->InvisibleNotes),
+              hasAny(timeline->LandmineNotes)),
           .authoredOrdinal = timelineOrdinal++,
       };
       timelineIds.emplace(timeline, value.id);
