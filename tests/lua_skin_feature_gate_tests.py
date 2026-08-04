@@ -18,6 +18,7 @@ SKIN_CMAKE = ROOT / "src/skin/CMakeLists.txt"
 RUNTIME_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinRuntime.cpp"
 HOST_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinHostModules.cpp"
 DECODER_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinTableDecoder.cpp"
+VALIDATOR_SOURCE = ROOT / "src/skin/beatoraja/SkinModelValidator.cpp"
 
 
 class LuaSkinFeatureGateTests(unittest.TestCase):
@@ -123,9 +124,15 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/LuaSkinRuntime.cpp", enabled_block)
         self.assertIn("beatoraja/LuaSkinHostModules.cpp", enabled_block)
         self.assertIn("beatoraja/LuaSkinTableDecoder.cpp", enabled_block)
+        self.assertIn("beatoraja/SkinModelValidator.cpp", enabled_block)
 
     def test_xcode_discovered_runtime_implementations_have_source_guards(self):
-        for path in (RUNTIME_SOURCE, HOST_SOURCE, DECODER_SOURCE):
+        for path in (
+            RUNTIME_SOURCE,
+            HOST_SOURCE,
+            DECODER_SOURCE,
+            VALIDATOR_SOURCE,
+        ):
             source = path.read_text(encoding="utf-8")
             self.assertIn('#include "../LuaGameplaySkinFeature.h"', source)
             self.assertIn("#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS", source)
@@ -136,7 +143,12 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIsNotNone(compiler, "a C++ compiler is required")
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary = pathlib.Path(temporary_directory)
-            for source in (RUNTIME_SOURCE, HOST_SOURCE, DECODER_SOURCE):
+            for source in (
+                RUNTIME_SOURCE,
+                HOST_SOURCE,
+                DECODER_SOURCE,
+                VALIDATOR_SOURCE,
+            ):
                 subprocess.run(
                     [
                         compiler,

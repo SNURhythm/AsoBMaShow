@@ -711,18 +711,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+            src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/package/SkinAliasDetector.cpp
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
         )
-        # Task 11A is deliberately RED before the validator implementation
-        # exists. Reconfiguration automatically adds it once Task 11 supplies
-        # the production source, while the contract currently fails at compile.
-        if(EXISTS "${CMAKE_SOURCE_DIR}/src/skin/beatoraja/SkinModelValidator.cpp")
-            list(APPEND beatoraja_skin_model_test_sources
-                src/skin/beatoraja/SkinModelValidator.cpp
-            )
-        endif()
         add_executable(beatoraja_skin_model_tests
             ${beatoraja_skin_model_test_sources}
         )

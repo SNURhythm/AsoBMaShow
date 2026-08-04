@@ -348,7 +348,8 @@ void testStableIdsAndPerUseFrameExpansionAreSourceNeutral() {
         std::get_if<SkinImageResource>(&model.resources[index]);
     const auto &entry = resourceJson.at(index);
     expect(resource != nullptr && resource->id == entry.at("id") &&
-               resource->virtualPath == entry.at("virtualPath") &&
+               resource->virtualPath ==
+                   entry.at("virtualPath").get<std::string>() &&
                resource->authoredOrdinal == entry.at("authoredOrdinal"),
            "resource IDs depend on authored source order, not host paths");
   }
@@ -362,7 +363,7 @@ void testStableIdsAndPerUseFrameExpansionAreSourceNeutral() {
     const auto &object = model.objects[index];
     const auto &entry = objectJson.at(index);
     expect(object.id == entry.at("id") &&
-               object.authoredName == entry.at("name") &&
+               object.authoredName == entry.at("name").get<std::string>() &&
                object.authoredOrdinal == entry.at("authoredOrdinal") &&
                object.critical == entry.at("critical") &&
                model.destinations[index].object == object.id,
@@ -536,6 +537,21 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
   expect(!optionalResult.criticalFailure && optionalResult.model.has_value(),
          "missing optional image source does not reject the gameplay model");
   if (optionalResult.model) {
+    const auto atlas = optionalResult.model->resourceIds.find("atlas");
+    const auto alternate = optionalResult.model->resourceIds.find("alternate");
+    const auto notes = optionalResult.model->objectIds.find("notes");
+    const auto missing =
+        optionalResult.model->objectIds.find("optional-missing");
+    expect(atlas != optionalResult.model->resourceIds.end() &&
+               atlas->second == 1 &&
+               alternate != optionalResult.model->resourceIds.end() &&
+               alternate->second == 2 &&
+               notes != optionalResult.model->objectIds.end() &&
+               notes->second == 6 &&
+               missing != optionalResult.model->objectIds.end() &&
+               missing->second == 7,
+           "validator publishes stable source-neutral resource and object "
+           "identity maps");
     const auto &expectedDisabled = expected.at("disabledOptionalObjectIds");
     expect(optionalResult.model->disabledOptionalObjects.size() ==
                    expectedDisabled.size() &&
