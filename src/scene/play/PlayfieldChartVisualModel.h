@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -10,6 +11,8 @@ class Chart;
 }
 
 using ChartVisualId = std::uint32_t;
+inline constexpr std::uint32_t kNoRetainedTimelineOrdinal =
+    std::numeric_limits<std::uint32_t>::max();
 
 enum class ChartVisualNoteKind : std::uint8_t {
   Normal,
@@ -18,6 +21,12 @@ enum class ChartVisualNoteKind : std::uint8_t {
   LongHead,
   LongBody,
   LongTail,
+};
+
+enum class ChartVisualNoteSource : std::uint8_t {
+  Playable,
+  Invisible,
+  Mine,
 };
 
 enum class ChartLongNoteMode : std::uint8_t { LN, CN, HCN };
@@ -37,6 +46,9 @@ struct ChartVisualTimeline {
   bool bgaOnly = false;
   bool retainedForProjection = false;
   std::uint32_t authoredOrdinal = 0;
+  // Index in Beatoraja-compatible retained render traversal. BGA-only and
+  // other discarded rows intentionally use the explicit no-ordinal sentinel.
+  std::uint32_t retainedOrdinal = kNoRetainedTimelineOrdinal;
 
   bool operator==(const ChartVisualTimeline &) const = default;
 };
@@ -47,6 +59,8 @@ struct ChartVisualNote {
   ChartVisualId pairId = 0;
   int lane = -1;
   ChartVisualNoteKind kind = ChartVisualNoteKind::Normal;
+  // Channel origin stays independent from LongHead/LongTail endpoint kind.
+  ChartVisualNoteSource source = ChartVisualNoteSource::Playable;
   ChartLongNoteMode longNoteMode = ChartLongNoteMode::LN;
   int mineDamage = 0;
   std::uint32_t authoredOrdinal = 0;

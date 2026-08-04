@@ -109,6 +109,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
 
   ChartVisualId nextId = 1;
   std::uint32_t timelineOrdinal = 0;
+  std::uint32_t retainedTimelineOrdinal = 0;
   double scrollPosition = 0.0;
   const bms_parser::TimeLine *previous = nullptr;
   for (const auto *measure : chart.Measures) {
@@ -122,17 +123,24 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       if (previous == nullptr) {
         scrollPosition = timeline->BeatPosition;
       } else {
-        scrollPosition +=
-            (timeline->BeatPosition - previous->BeatPosition) *
-            previous->Scroll;
+        scrollPosition += (timeline->BeatPosition - previous->BeatPosition) *
+                          previous->Scroll;
       }
       const bool hasNotes = hasAny(timeline->Notes) ||
                             hasAny(timeline->InvisibleNotes) ||
                             hasAny(timeline->LandmineNotes);
       const bool hasBga = timeline->BgaBase >= 0 || timeline->BgaLayer >= 0 ||
                           timeline->BgaPoor.has_value();
-      const double previousBpm = previous != nullptr ? previous->Bpm : timeline->Bpm;
-      const double previousScroll = previous != nullptr ? previous->Scroll : timeline->Scroll;
+      const double previousBpm =
+          previous != nullptr ? previous->Bpm : timeline->Bpm;
+      const double previousScroll =
+          previous != nullptr ? previous->Scroll : timeline->Scroll;
+      const bool retainedForProjection =
+          gameplay_scroll_geometry::shouldKeepRenderTimeline(
+              previousBpm, timeline->Bpm, stopMicros(*timeline), previousScroll,
+              timeline->Scroll, timeline->IsFirstInMeasure,
+              hasAny(timeline->Notes), hasAny(timeline->InvisibleNotes),
+              hasAny(timeline->LandmineNotes));
       ChartVisualTimeline value{
           .id = nextId++,
           .timeMicros = timeline->Timing,
@@ -144,13 +152,12 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           .stopMicros = stopMicros(*timeline),
           .sectionLine = timeline->IsFirstInMeasure,
           .bgaOnly = hasBga && !hasNotes,
-          .retainedForProjection = gameplay_scroll_geometry::shouldKeepRenderTimeline(
-              previousBpm, timeline->Bpm, stopMicros(*timeline), previousScroll,
-              timeline->Scroll, timeline->IsFirstInMeasure,
-              hasAny(timeline->Notes), hasAny(timeline->InvisibleNotes),
-              hasAny(timeline->LandmineNotes)),
+          .retainedForProjection = retainedForProjection,
           .authoredOrdinal = timelineOrdinal++,
       };
+      if (retainedForProjection) {
+        value.retainedOrdinal = retainedTimelineOrdinal++;
+      }
       timelineIds.emplace(timeline, value.id);
       if (timeline->BgaPoor) {
         result.bgaPoorSequences.push_back(
@@ -174,7 +181,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
 
   const auto appendNotes = [&](const bms_parser::TimeLine &timeline,
                                const std::vector<bms_parser::Note *> &notes,
-                               ChartVisualNoteKind defaultKind) {
+                               ChartVisualNoteSource source) {
     const auto timelineIt = timelineIds.find(&timeline);
     if (timelineIt == timelineIds.end()) {
       return;
@@ -187,7 +194,10 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           .id = nextId++,
           .timelineId = timelineIt->second,
           .lane = note->Lane,
-          .kind = defaultKind,
+          .kind = source == ChartVisualNoteSource::Invisible
+                      ? ChartVisualNoteKind::Invisible
+                      : ChartVisualNoteKind::Normal,
+          .source = source,
           .authoredOrdinal = noteOrdinal++,
       };
       if (const auto *longNote =
@@ -211,9 +221,9 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       if (timeline == nullptr) {
         continue;
       }
-      appendNotes(*timeline, timeline->Notes, ChartVisualNoteKind::Normal);
+      appendNotes(*timeline, timeline->Notes, ChartVisualNoteSource::Playable);
       appendNotes(*timeline, timeline->InvisibleNotes,
-                  ChartVisualNoteKind::Invisible);
+                  ChartVisualNoteSource::Invisible);
       const auto timelineIt = timelineIds.find(timeline);
       if (timelineIt == timelineIds.end()) {
         continue;
@@ -227,6 +237,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
             .timelineId = timelineIt->second,
             .lane = mine->Lane,
             .kind = ChartVisualNoteKind::Mine,
+            .source = ChartVisualNoteSource::Mine,
             .mineDamage = static_cast<int>(std::lround(mine->Damage)),
             .authoredOrdinal = noteOrdinal++,
         };
