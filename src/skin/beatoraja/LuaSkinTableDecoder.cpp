@@ -8,6 +8,7 @@
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinRuntime.h"
 #include "NumericGlyphAtlas.h"
+#include "SkinGaugeNodeExpansion.h"
 #include "../package/SkinPackageTypes.h"
 
 extern "C" {
@@ -758,6 +759,17 @@ struct RawSkinSlider {
   bool changeable = true;
 };
 
+struct RawSkinGauge {
+  std::string id;
+  std::vector<std::string> nodes;
+  int parts = 50;
+  int animationType = 0;
+  int animationRange = 3;
+  int animationCycleMillis = 33;
+  int resultStartMillis = 0;
+  int resultEndMillis = 500;
+};
+
 struct RawSkinNoteLaneRect {
   int x = 0;
   int y = 0;
@@ -817,6 +829,7 @@ struct GameplayDecodeRequest {
   std::map<std::string, RawSkinNumber, std::less<>> numbers;
   std::map<std::string, RawSkinFloat, std::less<>> floats;
   std::map<std::string, RawSkinSlider, std::less<>> sliders;
+  std::optional<RawSkinGauge> gauge;
   std::vector<RawSkinSource> rawSources;
   std::vector<RawSkinImage> rawImages;
   std::vector<RawSkinImageSet> rawImageSets;
@@ -1006,6 +1019,24 @@ bool decodeRawSlider(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "range", output.range, request) &&
          integerField(state, index, "type", output.valueSelector, request) &&
          booleanField(state, index, "changeable", output.changeable, request);
+}
+
+bool decodeRawGauge(lua_State *state, int index, std::size_t depth,
+                    RawSkinGauge &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         stringField(state, index, "id", output.id,
+                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     request) &&
+         stringArrayField(state, index, "nodes", output.nodes, request) &&
+         integerField(state, index, "parts", output.parts, request) &&
+         integerField(state, index, "type", output.animationType, request) &&
+         integerField(state, index, "range", output.animationRange, request) &&
+         integerField(state, index, "cycle", output.animationCycleMillis,
+                      request) &&
+         integerField(state, index, "starttime", output.resultStartMillis,
+                      request) &&
+         integerField(state, index, "endtime", output.resultEndMillis,
+                      request);
 }
 
 bool decodeRawNoteLaneRect(lua_State *state, int index, std::size_t depth,
@@ -1491,6 +1522,53 @@ bool materializeNumericGlyphAtlas(GameplayDecodeRequest &request,
   return true;
 }
 
+bool makeGaugeObject(GameplayDecodeRequest &request,
+                     const RawSkinGauge &definition,
+                     SkinGaugeObject &output) {
+  SkinGaugeNodeExpansionInput input{
+      .nodes = definition.nodes,
+      .parts = definition.parts,
+      .animationType = definition.animationType,
+      .animationRange = definition.animationRange,
+      .animationCycleMillis = definition.animationCycleMillis,
+      .resultStartMillis = definition.resultStartMillis,
+      .resultEndMillis = definition.resultEndMillis,
+  };
+  input.images.reserve(request.images.size());
+  for (const auto &[id, image] : request.images) {
+    input.images.push_back({.id = id, .sprite = image.sprite});
+  }
+
+  auto expanded = expandSkinGaugeNodes(input);
+  if (!expanded.gauge) {
+    if (expanded.error == SkinGaugeNodeExpansionError::FrameLimitExceeded) {
+      return fail(request.decoding, "skin_lua_model_limit_exceeded",
+                  "Lua skin Gauge expansion exceeds the fixed model frame "
+                  "limit");
+    }
+    request.result.diagnostics.push_back(diagnostic(
+        "skin_lua_model_gauge_invalid",
+        "Lua skin Gauge node definitions cannot be expanded"));
+    output = SkinGaugeObject{};
+    return true;
+  }
+
+  std::size_t frameCount = 0;
+  for (const auto &node : expanded.gauge->orderedNodes) {
+    if (node.frames.size() > std::numeric_limits<std::size_t>::max() -
+                                 frameCount) {
+      return fail(request.decoding, "skin_lua_model_limit_exceeded",
+                  "Lua skin Gauge frame count overflows");
+    }
+    frameCount += node.frames.size();
+  }
+  if (!consumeMaterializedSpriteFrames(request, frameCount)) {
+    return false;
+  }
+  output = std::move(*expanded.gauge);
+  return true;
+}
+
 std::optional<SkinBlendMode> blendMode(int value) {
   switch (value) {
   case 0:
@@ -1518,12 +1596,14 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   const auto floating = request.floats.find(name);
   const auto slider = request.sliders.find(name);
   const bool isNote = request.note && request.note->id == name;
+  const bool isGauge = request.gauge && request.gauge->id == name;
   matches += image != request.images.end();
   matches += imageSet != request.imageSets.end();
   matches += number != request.numbers.end();
   matches += floating != request.floats.end();
   matches += slider != request.sliders.end();
   matches += isNote;
+  matches += isGauge;
   if (matches != 1) {
     return fail(request.decoding, "skin_lua_model_invalid",
                 "Lua skin destination must resolve to exactly one supported "
@@ -1630,6 +1710,15 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     object.direction = static_cast<std::uint8_t>(slider->second.direction);
     object.range = static_cast<double>(slider->second.range);
     object.changeable = slider->second.changeable;
+    output = std::move(object);
+    return true;
+  }
+
+  if (isGauge) {
+    SkinGaugeObject object;
+    if (!makeGaugeObject(request, *request.gauge, object)) {
+      return false;
+    }
     output = std::move(object);
     return true;
   }
@@ -1917,6 +2006,24 @@ void decodeGameplayProtected(lua_State *state, int index,
         return;
       }
     }
+
+    request->gauge.emplace();
+    if (!rawGetField(state, index, "gauge", request->decoding)) {
+      transferDecodeDiagnostics(*request);
+      request->result.model.reset();
+      return;
+    }
+    if (!lua_isnil(state, -1)) {
+      if (!decodeRawGauge(state, -1, 2, *request->gauge,
+                          request->decoding)) {
+        transferDecodeDiagnostics(*request);
+        request->result.model.reset();
+        return;
+      }
+    } else {
+      request->gauge.reset();
+    }
+    lua_pop(state, 1);
 
     request->note.emplace();
     if (!rawGetField(state, index, "note", request->decoding)) {
