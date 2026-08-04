@@ -30,6 +30,7 @@ struct PlaySkinSessionContext {
   SkinStorageRoots storageRoots;
   SkinResourcePreparationService &resourcePreparation;
   std::shared_ptr<SkinTextureDevice> textureDevice;
+  std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   SkinConfigurationWriteQueue &configurationWrites;
   std::stop_token stop;
 };

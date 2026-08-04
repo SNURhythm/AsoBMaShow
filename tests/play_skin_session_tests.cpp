@@ -551,6 +551,7 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
             .storageRoots = roots_,
             .resourcePreparation = resources_,
             .textureDevice = device_,
+            .liveResourceCounters = liveResourceCounters_,
             .configurationWrites = configurationWrites_,
             .stop = stop};
   }
@@ -568,6 +569,10 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
   const std::shared_ptr<SessionTextureDevice> &device() const noexcept {
     return device_;
   }
+  const std::shared_ptr<SkinLiveResourceCounters> &liveCounters() const
+      noexcept {
+    return liveResourceCounters_;
+  }
 
 private:
   TempDirectory temp_;
@@ -580,6 +585,8 @@ private:
   EntryProfileSettings desired_;
   SkinResourcePreparationService resources_;
   std::shared_ptr<SessionTextureDevice> device_;
+  std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters_ =
+      std::make_shared<SkinLiveResourceCounters>();
   SkinConfigurationWriteQueue configurationWrites_;
   std::optional<SkinRevisionLease> lease_;
   SkinValidationResult validation_;
@@ -633,9 +640,14 @@ void testActivationCreatesAnOwningFreshStateSession() {
   }
   expect(weakRevision.hasLiveLease(),
          "session and uploaded catalog retain immutable revision pins");
+  expect(fixture.liveCounters()->snapshot() ==
+             SkinLiveResourceSnapshot{.liveTextures = 0,
+                                      .liveResources = 1},
+         "a successful resource-free session owns one published catalog graph");
   created.session.reset();
-  expect(!weakRevision.hasLiveLease(),
-         "final session and resource teardown releases every revision pin");
+  expect(!weakRevision.hasLiveLease() &&
+             fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
+         "final session teardown releases every revision pin and counter");
 }
 
 void testActivationRejectsAReconciledDigestMismatch() {
@@ -673,6 +685,10 @@ void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
              fixture.device()->wrongThreadOperations == 0 &&
              weakRevision.hasLiveLease(),
          "session owns one image and one runtime-string glyph atlas upload");
+  expect(fixture.liveCounters()->snapshot() ==
+             SkinLiveResourceSnapshot{.liveTextures = 2,
+                                      .liveResources = 1},
+         "session ownership exposes only its two unique physical textures");
   if (!created.session) {
     return;
   }
@@ -698,7 +714,8 @@ void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
   expect(fixture.device()->destroyCalls == 2 &&
              fixture.device()->wrongThreadOperations == 0 &&
              fixture.device()->revisionLiveDuringDestroy &&
-             !weakRevision.hasLiveLease(),
+             !weakRevision.hasLiveLease() &&
+             fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
          "catalog textures tear down on owner thread before the final revision "
          "pin releases");
 }
@@ -720,7 +737,8 @@ void testPostUploadCancellationRollsBackResourcesOnOwnerThread() {
              fixture.device()->destroyCalls == 2 &&
              fixture.device()->wrongThreadOperations == 0 &&
              fixture.device()->revisionLiveDuringDestroy &&
-             !weakRevision.hasLiveLease(),
+             !weakRevision.hasLiveLease() &&
+             fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
          "post-upload cancellation destroys both owner-thread textures and "
          "releases the final revision pin");
 }
@@ -745,7 +763,8 @@ void testInvalidViewportRollsBackUploadedResourcesOnOwnerThread() {
              fixture.device()->destroyCalls == 2 &&
              fixture.device()->wrongThreadOperations == 0 &&
              fixture.device()->revisionLiveDuringDestroy &&
-             !weakRevision.hasLiveLease(),
+             !weakRevision.hasLiveLease() &&
+             fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
          "post-upload viewport failure rolls back resources and releases all "
          "revision pins on the owner thread");
 }
@@ -773,6 +792,21 @@ void testActivationCancellationAndZeroSerialDoNotPublishSessions() {
                  hasDiagnostic(created.diagnostics,
                                "skin.session.serial_invalid"),
              "zero session serial is rejected before runtime publication");
+    }
+  }
+  {
+    ActivationFixture fixture({.resourceBearing = true});
+    if (fixture.ready()) {
+      auto context = fixture.context();
+      context.liveResourceCounters.reset();
+      auto created = PlaySkinSession::create(fixture.takeActivation(),
+                                              std::move(context));
+      expect(!created.session && !created.cancelled &&
+                 fixture.device()->createCalls == 0 &&
+                 hasDiagnostic(created.diagnostics,
+                               "skin.session.live_resource_counters_missing"),
+             "a missing app-owned live-resource counter fails closed before "
+             "uploads");
     }
   }
 }

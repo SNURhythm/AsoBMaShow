@@ -542,19 +542,28 @@ bool skinResourceResolveRect(const SkinSourceRect &a, int iw, int ih, SkinSource
   r = a; r.x = a.x + cw*a.gridColumn; r.y = a.y + ch*a.gridRow; r.w = cw; r.h = ch; r.gridColumn=0; r.gridRow=0; r.gridColumns=1; r.gridRows=1; return true;
 }
 SkinResourceCatalog::SkinResourceCatalog(
-    SkinRevisionLease &&revision, std::shared_ptr<SkinTextureDevice> device)
+    SkinRevisionLease &&revision, std::shared_ptr<SkinTextureDevice> device,
+    std::shared_ptr<SkinLiveResourceCounters> liveCounters)
     : revision_(std::move(revision)), device_(std::move(device)),
+      liveCounters_(std::move(liveCounters)),
       owner_(std::this_thread::get_id()) {}
 SkinResourceCatalog::~SkinResourceCatalog() {
   if (!device_) return;
   if (!device_->ownsCurrentThread() || std::this_thread::get_id() != owner_) {
     std::terminate();
   }
-  for (const auto &item : owned_)
-    if (bgfx::isValid(item.handle)) device_->destroy(item.handle);
+  for (const auto &item : owned_) {
+    if (!bgfx::isValid(item.handle)) continue;
+    device_->destroy(item.handle);
+    if (liveCounters_) liveCounters_->textureDestroyed();
+  }
+  if (liveResourceCounted_ && liveCounters_) {
+    liveCounters_->resourceDestroyed();
+  }
 }
 SkinResourceUploadResult SkinResourceCatalog::upload(
-    SkinResourceUploadPlan &&plan, std::shared_ptr<SkinTextureDevice> device) {
+    SkinResourceUploadPlan &&plan, std::shared_ptr<SkinTextureDevice> device,
+    std::shared_ptr<SkinLiveResourceCounters> liveCounters) {
   SkinResourceUploadResult result;
   if (!device || !device->ownsCurrentThread()) { result.diagnostics.push_back(diagnostic("skin.resource.render_thread_violation", "resource upload requires the render owner thread")); return result; }
   const int reportedDeviceMaximumDimension = device->maximumTextureDimension();
@@ -719,7 +728,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan decoded byte total is inconsistent")); return result;
   }
   try {
-  auto catalog=std::unique_ptr<SkinResourceCatalog>(new SkinResourceCatalog(std::move(plan.revision), std::move(device)));
+  auto catalog=std::unique_ptr<SkinResourceCatalog>(new SkinResourceCatalog(std::move(plan.revision), std::move(device), std::move(liveCounters)));
   catalog->owned_.reserve(plan.images.size() + plan.atlases.size());
   auto rollback=[&]{ catalog.reset(); };
   struct PendingHandle { SkinTextureDevice &device; bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; ~PendingHandle() { if (bgfx::isValid(handle)) device.destroy(handle); } void release() noexcept { handle = BGFX_INVALID_HANDLE; } };
@@ -771,10 +780,15 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
                           image.pixels.height, regions, mappings->second));
     }
     catalog->owned_.push_back({handle});
+    if (catalog->liveCounters_) catalog->liveCounters_->textureCreated();
     pending.release();
   }
-  for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.capHeight=atlas.capHeight,.descent=atlas.descent,.lineHeight=atlas.lineHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); pending.release(); }
+  for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.capHeight=atlas.capHeight,.descent=atlas.descent,.lineHeight=atlas.lineHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); if(catalog->liveCounters_) catalog->liveCounters_->textureCreated(); pending.release(); }
   catalog->textAtlasesByObject_ = std::move(plan.textAtlasesByObject);
+  if (catalog->liveCounters_) {
+    catalog->liveCounters_->resourceCreated();
+    catalog->liveResourceCounted_ = true;
+  }
   result.catalog=std::move(catalog); return result;
   } catch (...) {
     result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload allocation failed"));

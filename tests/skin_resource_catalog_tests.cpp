@@ -1049,12 +1049,16 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
       .revision = planned.plan->revision.clone(), .images = planned.plan->images, .atlases = planned.plan->atlases,
       .textAtlasesByObject = planned.plan->textAtlasesByObject,
       .decodedBytes = planned.plan->decodedBytes};
+  auto counters = std::make_shared<skin::SkinLiveResourceCounters>();
+  const auto baselineCounters = counters->snapshot();
   auto failingDevice = std::make_shared<FakeTextureDevice>();
   failingDevice->failAt = 2;
-  const auto failedUpload = skin::SkinResourceCatalog::upload(std::move(rollbackPlan), failingDevice);
+  const auto failedUpload = skin::SkinResourceCatalog::upload(
+      std::move(rollbackPlan), failingDevice, counters);
   expect(!failedUpload.catalog && failingDevice->creates == 2 &&
-             failingDevice->destroys == 1 && failingDevice->live == 0,
-         "a partial texture upload rolls back every prior unique handle exactly once");
+             failingDevice->destroys == 1 && failingDevice->live == 0 &&
+             counters->snapshot() == baselineCounters,
+         "a partial texture upload rolls back every prior unique handle and its counters exactly once");
   std::stop_source cancelled;
   cancelled.request_stop();
   const auto cancelledPlan = service.decodeAndPlan({.revision=planned.plan->revision.clone(), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration, .stop=cancelled.get_token()});
@@ -1062,7 +1066,8 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
          "a stop request returns cancellation without publishing a partial plan");
   leasedFs.fileSystem.reset();
   auto device = std::make_shared<FakeTextureDevice>();
-  auto uploaded = skin::SkinResourceCatalog::upload(std::move(*planned.plan), device);
+  auto uploaded = skin::SkinResourceCatalog::upload(
+      std::move(*planned.plan), device, counters);
   planned.plan.reset();
   expect(uploaded.catalog && device->creates == 6 && device->live == 6 &&
              uploaded.catalog->find(1) && uploaded.catalog->find(2) && uploaded.catalog->find(3) &&
@@ -1074,7 +1079,10 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              !uploaded.catalog->findTextAtlasForObject(5) &&
              firstAtlasKey && uploaded.catalog->findTextAtlas(*firstAtlasKey) &&
              uploaded.catalog->find(1)->regions.front().x == 0 &&
-             uploaded.catalog->find(2)->regions.front().x == 2,
+             uploaded.catalog->find(2)->regions.front().x == 2 &&
+             counters->snapshot() ==
+                 skin::SkinLiveResourceSnapshot{.liveTextures = 6,
+                                                 .liveResources = 1},
          "upload owns unique physical textures while preserving per-alias sprite regions");
   if (!uploaded.catalog) return;
   const skin::SkinSourceRect firstAuthored{.x=0,.y=0,.w=40,.h=20,.gridColumns=4,.gridRows=2};
@@ -1102,6 +1110,8 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   uploaded.catalog.reset();
   expect(backendLifetime.expired(),
          "catalog teardown releases the backend after once-only destruction");
+  expect(counters->snapshot() == baselineCounters,
+         "catalog teardown returns global ownership counters to the baseline");
   expect(!weak.hasLiveLease(),
          "catalog teardown releases the revision lease");
 }

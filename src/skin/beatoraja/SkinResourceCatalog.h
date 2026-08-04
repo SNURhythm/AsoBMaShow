@@ -2,6 +2,7 @@
 
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinFileSystem.h"
+#include "SkinLiveResourceCounters.h"
 #include "../package/SkinTreeSnapshotter.h"
 #include "../../view/DecodedImageCache.h"
 #include "../../view/ImageDecodeCoordinator.h"
@@ -260,7 +261,8 @@ struct SkinResourceUploadResult { std::unique_ptr<SkinResourceCatalog> catalog; 
 class SkinResourceCatalog final : public SkinPreparedResourceView {
 public:
   static SkinResourceUploadResult upload(SkinResourceUploadPlan &&,
-                                         std::shared_ptr<SkinTextureDevice>);
+                                         std::shared_ptr<SkinTextureDevice>,
+                                         std::shared_ptr<SkinLiveResourceCounters> = {});
   // The catalog must be destroyed on the upload owner thread. Violations
   // fail fast rather than silently leaking GPU resources.
   ~SkinResourceCatalog();
@@ -278,12 +280,17 @@ public:
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };
   explicit SkinResourceCatalog(SkinRevisionLease &&,
-                               std::shared_ptr<SkinTextureDevice>);
+                               std::shared_ptr<SkinTextureDevice>,
+                               std::shared_ptr<SkinLiveResourceCounters>);
   SkinRevisionLease revision_; // declared first: destroyed last
   // Structural ownership prevents backend destruction before catalog teardown.
   std::shared_ptr<SkinTextureDevice> device_;
+  // Retained independently from ApplicationContext so a catalog teardown
+  // cannot outlive the app-global ownership accounting it must release.
+  std::shared_ptr<SkinLiveResourceCounters> liveCounters_;
   std::thread::id owner_;
   bool renderPhase_ = false;
+  bool liveResourceCounted_ = false;
   std::vector<OwnedTexture> owned_;
   std::map<SkinResourceId, PreparedSkinResource> resources_;
   std::map<SkinTextAtlasId, PreparedSkinTextAtlas> atlases_;

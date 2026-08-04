@@ -44,6 +44,7 @@ GAMEPLAY_SKIN_LIFECYCLE_SOURCE = ROOT / "src/skin/GameplaySkinLifecycle.cpp"
 APPLICATION_CONTEXT_HEADER = ROOT / "src/context.h"
 MAIN_SOURCE = ROOT / "src/main.cpp"
 SCENE_MANAGER_SOURCE = ROOT / "src/scene/SceneManager.cpp"
+GAMEPLAY_SCENE_SOURCE = ROOT / "src/scene/play/GamePlayScene.cpp"
 PROFILE_SETTINGS_CONTROLLER_HEADER = ROOT / "src/scene/ProfileSettingsController.h"
 PROFILE_SETTINGS_CONTROLLER_SOURCE = ROOT / "src/scene/ProfileSettingsController.cpp"
 PROFILE_SETTINGS_CONTROLLER_CONTEXT_SOURCE = (
@@ -377,6 +378,25 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertLess(
             lifecycle_shutdown.index("acquireGameplaySkinForNextChart = {};"),
             lifecycle_shutdown.index("gameplaySkinLifecycle->shutdown();"),
+        )
+
+    def test_application_owned_live_resource_counters_reach_every_session(self):
+        context = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        initialization = braced_body(context, "void initializeGameplaySkinServices()")
+        self.assertIn(
+            "skinLiveResourceCounters =\n            std::make_shared<skin::SkinLiveResourceCounters>();",
+            initialization,
+        )
+        destruction = braced_body(context, "void destroyGameplaySkinServices() noexcept")
+        self.assertIn("skinLiveResourceCounters.reset();", destruction)
+
+        gameplay = GAMEPLAY_SCENE_SOURCE.read_text(encoding="utf-8")
+        attempt = braced_body(
+            gameplay, "void GamePlayScene::acquireGameplaySkinForAttempt()"
+        )
+        self.assertIn("!context.skinLiveResourceCounters", attempt)
+        self.assertIn(
+            ".liveResourceCounters = context.skinLiveResourceCounters", attempt
         )
 
     def test_skin_service_startup_failure_unwinds_to_sanitized_unavailable_state(self):

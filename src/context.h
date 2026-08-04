@@ -62,6 +62,7 @@
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/beatoraja/SkinDiagnosticHistory.h"
+#include "skin/beatoraja/SkinLiveResourceCounters.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPackageCatalog.h"
@@ -214,6 +215,7 @@ public:
   std::optional<skin::SkinRecoveryResult> skinRecoveryResult;
   std::unique_ptr<skin::SkinResourcePreparationService>
       skinResourcePreparationService;
+  std::shared_ptr<skin::SkinLiveResourceCounters> skinLiveResourceCounters;
   std::unique_ptr<skin::GameplaySkinValidator> gameplaySkinValidator;
   std::unique_ptr<skin::SkinPackageOperationService>
       skinPackageOperationService;
@@ -253,6 +255,8 @@ public:
 
       if (skinRecoveryResult->disposition ==
           skin::SkinRecoveryDisposition::Recovered) {
+        skinLiveResourceCounters =
+            std::make_shared<skin::SkinLiveResourceCounters>();
         skinResourcePreparationService =
             std::make_unique<skin::SkinResourcePreparationService>();
         gameplaySkinValidator =
@@ -356,6 +360,7 @@ public:
     skinPackageStore.reset();
     skinPackageCatalog.reset();
     skinResourcePreparationService.reset();
+    skinLiveResourceCounters.reset();
     skinAliasDetector.reset();
     skinRecoveryResult.reset();
     skinStorageRoots.reset();

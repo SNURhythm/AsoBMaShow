@@ -289,6 +289,13 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
   if (cancelled(context.stop, result)) {
     return result;
   }
+  if (!context.liveResourceCounters) {
+    result.diagnostics.push_back(sessionDiagnostic(
+        "skin.session.live_resource_counters_missing",
+        "Gameplay skin session requires application-owned resource "
+        "accounting."));
+    return result;
+  }
   if (activation.entry.package != activation.revision.revision().package) {
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.activation_package_mismatch",
@@ -442,7 +449,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     }
 
     auto uploaded = SkinResourceCatalog::upload(std::move(*planned.plan),
-                                                context.textureDevice);
+                                                context.textureDevice,
+                                                context.liveResourceCounters);
     appendMovedDiagnostics(result.diagnostics, uploaded.diagnostics);
     if (!uploaded.catalog || hasErrors(result.diagnostics)) {
       return result;

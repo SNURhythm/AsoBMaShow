@@ -1209,7 +1209,7 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
       !context.acquireGameplaySkinForNextChart ||
       !context.skinStorageRoots || !context.skinResourcePreparationService ||
       !context.skinConfigurationWriteQueue ||
-      !context.skinDiagnosticHistory) {
+      !context.skinDiagnosticHistory || !context.skinLiveResourceCounters) {
     return;
   }
 
@@ -1239,6 +1239,7 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
              .resourcePreparation = *context.skinResourcePreparationService,
              .textureDevice =
                  std::make_shared<skin::BgfxSkinTextureDevice>(),
+             .liveResourceCounters = context.skinLiveResourceCounters,
              .configurationWrites = *context.skinConfigurationWriteQueue,
              .stop = {}});
         for (auto &diagnostic : created.diagnostics) {

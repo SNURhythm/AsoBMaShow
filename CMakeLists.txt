@@ -3670,6 +3670,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(skin_resource_catalog_tests PRIVATE cxx_std_23)
         target_compile_definitions(skin_resource_catalog_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1 ASOBMASHOW_SKIN_RESOURCE_TESTING=1)
         target_link_libraries(skin_resource_catalog_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
+
+        add_executable(skin_live_resource_counters_tests
+            tests/skin_live_resource_counters_tests.cpp
+        )
+        target_include_directories(skin_live_resource_counters_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(skin_live_resource_counters_tests PRIVATE cxx_std_23)
     endif()
 
     add_executable(mobile_memory_pressure_tests
@@ -5941,6 +5949,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endforeach()
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)
+    endif()
+    if (TARGET skin_live_resource_counters_tests)
+        asobmashow_register_test(skin_live_resource_counters_tests)
     endif()
     if (TARGET gameplay_skin_validator_tests)
         asobmashow_register_test(gameplay_skin_validator_tests)
