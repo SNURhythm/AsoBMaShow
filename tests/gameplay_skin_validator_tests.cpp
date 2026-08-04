@@ -141,6 +141,15 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
               .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
              SkinBuiltinPropertySelector{107}),
          "catalog admits an authoritative gameplay integer");
+  expect(catalog.contains(
+             {.kind = SkinBindingKind::IntegerProperty,
+              .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+             SkinBuiltinPropertySelector{314}) &&
+             !catalog.contains(
+                 {.kind = SkinBindingKind::IntegerProperty,
+                  .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+                 SkinBuiltinPropertySelector{314}),
+         "validator admits lift amount only through the upstream Value domain");
   expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
                            .floatDomain = SkinFloatPropertyDomain::Rate},
                           SkinBuiltinPropertySelector{4}),

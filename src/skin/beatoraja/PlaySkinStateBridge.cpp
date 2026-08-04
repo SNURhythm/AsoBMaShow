@@ -756,6 +756,9 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
                 snapshot->authority.laneCoverPercent) *
                     10,
             .supported = true};
+  case 314:
+    return {.value = javaDoubleToInt(snapshot->authority.liftRatio * 1000.0F),
+            .supported = true};
   case 71:
   case 101:
   case 171:

@@ -53,6 +53,12 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     }
     add(entries, integer, "nowbpm");
   }
+  // Pinned IntegerPropertyFactory exposes lift1 (314) through ValueType, not
+  // through getImageIndexProperty.
+  add(entries,
+      {.kind = SkinBindingKind::IntegerProperty,
+       .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+      314);
 
   const SkinBindingType floating{.kind = SkinBindingKind::FloatProperty,
                                  .floatDomain = SkinFloatPropertyDomain::Rate};

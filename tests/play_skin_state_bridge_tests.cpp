@@ -590,6 +590,8 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.playStartMicros = 6'001;
   state.lastJudgeVisualMicros = 6'002;
   state.fastSlowMicros = -34;
+  state.authority.liftEnabled = false;
+  state.authority.liftRatio = 0.3759F;
   state.authority.currentGauge = 62.3F;
   state.authority.judgementCounters = {
       {PGreat, 10}, {Great, 9}, {Good, 8},
@@ -648,11 +650,12 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{110, 10LL}, std::pair{111, 9LL},
            std::pair{112, 8LL}, std::pair{113, 7LL},
            std::pair{114, 5LL}, std::pair{171, 456LL},
+           std::pair{314, 375LL},
            std::pair{407, 3LL}, std::pair{427, 18LL},
            std::pair{525, -34LL}}) {
     const auto value = bridge.integerProperty({id});
     expect(value.supported && value.value == expected,
-           "selected live score, gauge, and judgement number is exact");
+           "selected live score, gauge, judgement, and lift number is exact");
   }
   for (const auto [id, expected] : std::array{
            std::pair{74, 417LL}, std::pair{90, 240LL},
