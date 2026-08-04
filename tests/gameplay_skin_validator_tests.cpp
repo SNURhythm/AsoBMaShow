@@ -131,6 +131,11 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
   expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
                           SkinBuiltinPropertySelector{241}),
          "catalog admits an authoritative gameplay boolean");
+  for (const int selector : {80, 81, 84, 1080, 1243}) {
+    expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
+                            SkinBuiltinPropertySelector{selector}),
+           "catalog admits every implemented gameplay mode/loading/judge boolean");
+  }
   expect(catalog.contains(
              {.kind = SkinBindingKind::IntegerProperty,
               .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
@@ -169,6 +174,11 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
                            SkinBuiltinPropertySelector{1000}),
          "catalog rejects custom event IDs from context-free built-in binding "
          "paths");
+  expect(!catalog.contains({.kind = SkinBindingKind::BooleanProperty},
+                           SkinBuiltinPropertySelector{32}) &&
+             !catalog.contains({.kind = SkinBindingKind::BooleanProperty},
+                               SkinBuiltinPropertySelector{33}),
+         "catalog keeps autoplay booleans closed without exact authority");
 }
 
 void testValidNumericBindingPublishesOwnedTwoPhaseMetadata() {

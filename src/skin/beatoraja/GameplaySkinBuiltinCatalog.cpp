@@ -27,9 +27,10 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
 
   const SkinBindingType boolean{.kind = SkinBindingKind::BooleanProperty};
   for (const int selector : std::to_array(
-           {42,  43,  150, 151, 152,  153,  154,  155,  170,  171,
-            172, 173, 176, 177, 180,  181,  182,  183,  184,  190,
-            191, 194, 195, 241, 1240, 1242, 1243, 2243, 2244, 2245})) {
+           {42,  43,  80,  81,  84,   150, 151,  152,  153,  154,
+            155, 170, 171, 172, 173,  176, 177,  180,  181,  182,
+            183, 184, 190, 191, 194,  195, 241, 1080, 1240, 1242,
+            1243, 2243, 2244, 2245})) {
     add(entries, boolean, selector);
   }
   for (int selector = 230; selector <= 240; ++selector) {

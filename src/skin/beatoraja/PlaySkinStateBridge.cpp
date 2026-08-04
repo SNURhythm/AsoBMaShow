@@ -606,6 +606,18 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 43:
     return {.value = gaugeTypeIndex(snapshot->authority.gaugeType) >= 3,
             .supported = true};
+  case 80:
+    return {.value = snapshot->authority.loadingState ==
+                         PlayfieldLoadingState::Loading,
+            .supported = true};
+  case 81:
+    return {.value = snapshot->authority.loadingState ==
+                         PlayfieldLoadingState::Loaded,
+            .supported = true};
+  case 84:
+    return {.value = snapshot->authority.gameplayMode ==
+                         PlayfieldGameplayMode::Replay,
+            .supported = true};
   case 172:
   case 173: {
     const bool hasLongNote = std::ranges::any_of(
@@ -705,6 +717,10 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
             .supported = true};
   case 2245:
     return {.value = capturedJudgeCount(*snapshot, Poor) > 0,
+            .supported = true};
+  case 1080:
+    return {.value = snapshot->authority.gameplayMode ==
+                         PlayfieldGameplayMode::Practice,
             .supported = true};
   default:
     break;

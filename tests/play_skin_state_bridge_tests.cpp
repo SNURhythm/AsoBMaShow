@@ -467,6 +467,85 @@ void testFramePropertiesUseAuthoritativeGaugeAndTimerRules() {
   bridge.discardFrame();
 }
 
+void testGameplayModeAndLoadingBooleanProperties() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(201);
+  state.authority.loadingState = PlayfieldLoadingState::Loading;
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  bridge.beginFrame(state, projectionAt(201));
+  expect(bridge.booleanProperty({80}).supported &&
+             bridge.booleanProperty({80}).value &&
+             bridge.booleanProperty({81}).supported &&
+             !bridge.booleanProperty({81}).value &&
+             bridge.booleanProperty({84}).supported &&
+             !bridge.booleanProperty({84}).value &&
+             bridge.booleanProperty({1080}).supported &&
+             !bridge.booleanProperty({1080}).value,
+         "loading state exactly selects the pinned preload boolean pair");
+  expect(!bridge.booleanProperty({32}).supported &&
+             !bridge.booleanProperty({33}).supported,
+         "autoplay remains closed without a distinct authoritative mode");
+  bridge.discardFrame();
+
+  state = stateAt(202);
+  state.authority.loadingState = PlayfieldLoadingState::Loaded;
+  state.authority.gameplayMode = PlayfieldGameplayMode::Replay;
+  bridge.beginFrame(state, projectionAt(202));
+  expect(bridge.booleanProperty({80}).supported &&
+             !bridge.booleanProperty({80}).value &&
+             bridge.booleanProperty({81}).supported &&
+             bridge.booleanProperty({81}).value &&
+             bridge.booleanProperty({84}).supported &&
+             bridge.booleanProperty({84}).value &&
+             bridge.booleanProperty({1080}).supported &&
+             !bridge.booleanProperty({1080}).value,
+         "replay mode and loaded state use the captured gameplay authority");
+  bridge.discardFrame();
+
+  state = stateAt(203);
+  state.authority.loadingState = PlayfieldLoadingState::Loaded;
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  bridge.beginFrame(state, projectionAt(203));
+  expect(bridge.booleanProperty({80}).supported &&
+             !bridge.booleanProperty({80}).value &&
+             bridge.booleanProperty({81}).supported &&
+             bridge.booleanProperty({81}).value &&
+             bridge.booleanProperty({84}).supported &&
+             !bridge.booleanProperty({84}).value &&
+             bridge.booleanProperty({1080}).supported &&
+             bridge.booleanProperty({1080}).value,
+         "practice mode selects only the pinned practice boolean");
+  bridge.discardFrame();
+
+  state = stateAt(204);
+  state.authority.loadingState = PlayfieldLoadingState::Unknown;
+  state.authority.gameplayMode = PlayfieldGameplayMode::Unknown;
+  bridge.beginFrame(state, projectionAt(204));
+  expect(bridge.booleanProperty({80}).supported &&
+             !bridge.booleanProperty({80}).value &&
+             bridge.booleanProperty({81}).supported &&
+             !bridge.booleanProperty({81}).value &&
+             bridge.booleanProperty({84}).supported &&
+             !bridge.booleanProperty({84}).value &&
+             bridge.booleanProperty({1080}).supported &&
+             !bridge.booleanProperty({1080}).value,
+         "unknown lifecycle fails closed instead of being guessed as loaded");
+  bridge.discardFrame();
+}
+
 void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -1040,6 +1119,7 @@ int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
+  testGameplayModeAndLoadingBooleanProperties();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
   testEmptyCustomObjectsStayZeroCost();
   testCustomTimersPrecedeAutomaticEventsInAuthoredOrder();
