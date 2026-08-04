@@ -1,5 +1,8 @@
 #include "skin/package/SkinPackageOperationService.h"
 
+#include <archive.h>
+#include <archive_entry.h>
+
 #include <atomic>
 #include <barrier>
 #include <chrono>
@@ -29,6 +32,10 @@ static_assert(std::is_move_constructible_v<SkinPackageOperationHandle>);
 static_assert(!std::is_copy_constructible_v<SkinPackageOperationHandle>);
 static_assert(std::is_move_constructible_v<RejectedPreparedDisposal>);
 static_assert(!std::is_copy_constructible_v<RejectedPreparedDisposal>);
+static_assert(std::is_nothrow_move_constructible_v<SkinPackageId>);
+static_assert(std::is_nothrow_move_assignable_v<SkinPackageId>);
+static_assert(std::is_nothrow_move_constructible_v<PublishPackageResult>);
+static_assert(std::is_nothrow_move_constructible_v<RemovePackageResult>);
 
 void expect(bool condition, std::string_view message) {
   if (!condition) {
@@ -127,10 +134,50 @@ public:
   }
 };
 
+class ThrowingValidator final : public SkinEntryValidator {
+public:
+  SkinValidationResult validate(SkinRevisionReadView, const SkinEntryId &,
+                                const EntryProfileSettings *,
+                                std::stop_token) override {
+    throw std::bad_alloc();
+  }
+};
+
 void writeText(const fs::path &path, std::string_view text) {
   fs::create_directories(path.parent_path());
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output << text;
+}
+
+fs::path makeZip(const fs::path &path, std::string_view member,
+                 std::string_view contents) {
+  archive *writer = archive_write_new();
+  expect(writer != nullptr, "archive coverage allocates a ZIP writer");
+  if (!writer) {
+    return path;
+  }
+  expect(archive_write_set_format_zip(writer) == ARCHIVE_OK,
+         "archive coverage selects ZIP format");
+  expect(archive_write_zip_set_compression_store(writer) == ARCHIVE_OK,
+         "archive coverage selects stored compression");
+  expect(archive_write_open_filename(writer, path.string().c_str()) ==
+             ARCHIVE_OK,
+         "archive coverage opens its ZIP output");
+  archive_entry *entry = archive_entry_new();
+  archive_entry_set_pathname(entry, std::string(member).c_str());
+  archive_entry_set_filetype(entry, AE_IFREG);
+  archive_entry_set_perm(entry, 0644);
+  archive_entry_set_size(entry, static_cast<la_int64_t>(contents.size()));
+  expect(archive_write_header(writer, entry) == ARCHIVE_OK,
+         "archive coverage writes its member header");
+  expect(archive_write_data(writer, contents.data(), contents.size()) ==
+             static_cast<la_ssize_t>(contents.size()),
+         "archive coverage writes its member data");
+  archive_entry_free(entry);
+  expect(archive_write_close(writer) == ARCHIVE_OK,
+         "archive coverage closes its ZIP output");
+  archive_write_free(writer);
+  return path;
 }
 
 bool waitUntil(const std::function<bool()> &condition) {
@@ -297,6 +344,38 @@ void testPrepareRequestsHaveFifoTicketsAndIndependentMailboxes() {
   }
 }
 
+void testPrepareArchiveReturnsPreparedStaging() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto archive = makeZip(temporary.root() / "service-archive.zip",
+                               "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  SkinPackageOperationService service(store, validator);
+
+  std::atomic_int cleanupRuns = 0;
+  const auto handle = service.submitPrepareArchive(
+      archive, {.directoryName = "Archive", .collisionKey = "archive"},
+      SkinDeferredCleanup([&] { ++cleanupRuns; }));
+  auto completion = waitFor(service, handle.ticket);
+  auto *result = completion
+                     ? std::get_if<PreparePackageResult>(&completion->payload)
+                     : nullptr;
+  expect(result && result->prepared,
+         "archive submission returns independently owned prepared staging");
+  expect(cleanupRuns == 1,
+         "archive submission transfers cleanup to the serialized worker");
+  if (result && result->prepared) {
+    expect(!service.discardPrepared(std::move(*result->prepared)),
+           "archive-prepared staging transfers to worker disposal");
+  }
+  service.shutdown();
+}
+
 void testDetachAndShutdownRunCleanupWithoutReenteringCaller() {
   TempDirectory temporary;
   const auto roots = rootsBelow(temporary.root());
@@ -420,6 +499,15 @@ class BlockingCompletionObserver final
 public:
   bool failAdmissionAllocation() const noexcept override { return false; }
 
+  bool cancelBeforeExecution(std::uint64_t ticket) const noexcept override {
+    return cancelBeforeExecutionTicket_.load(std::memory_order_acquire) ==
+           ticket;
+  }
+
+  void cancelBeforeExecution(std::uint64_t ticket) noexcept {
+    cancelBeforeExecutionTicket_.store(ticket, std::memory_order_release);
+  }
+
   void beforeCompletion(std::uint64_t ticket) const noexcept override {
     try {
       std::unique_lock lock(mutex_);
@@ -479,6 +567,7 @@ private:
   mutable int completedCount_ = 0;
   mutable int disposalCount_ = 0;
   mutable bool released_ = false;
+  std::atomic_uint64_t cancelBeforeExecutionTicket_ = 0;
 };
 
 class FailingAdmissionObserver final : public SkinPackageOperationTestObserver {
@@ -506,6 +595,60 @@ public:
 private:
   mutable std::atomic_bool failNext_ = false;
   mutable std::atomic_int failuresInjected_ = 0;
+};
+
+class FailingPublishPackageCopyObserver final
+    : public SkinPackageOperationTestObserver {
+public:
+  void failNextCopy() noexcept {
+    failNext_.store(true, std::memory_order_release);
+  }
+
+  bool failAdmissionAllocation() const noexcept override { return false; }
+
+  bool failPublishPackageCopy() const noexcept override {
+    if (!failNext_.exchange(false, std::memory_order_acq_rel)) {
+      return false;
+    }
+    ++failuresInjected_;
+    return true;
+  }
+
+  void beforeCompletion(std::uint64_t) const noexcept override {}
+  void completed(std::uint64_t) const noexcept override {}
+  void disposing(std::uint64_t) const noexcept override {}
+
+  int failuresInjected() const noexcept {
+    return failuresInjected_.load(std::memory_order_acquire);
+  }
+
+private:
+  mutable std::atomic_bool failNext_ = false;
+  mutable std::atomic_int failuresInjected_ = 0;
+};
+
+class FailingPublishTerminalObserver final
+    : public SkinPackageOperationTestObserver {
+public:
+  bool failAdmissionAllocation() const noexcept override { return false; }
+
+  bool failPublishTerminalAllocation() const noexcept override {
+    if (injected_.exchange(true, std::memory_order_acq_rel)) {
+      return false;
+    }
+    return true;
+  }
+
+  void beforeCompletion(std::uint64_t) const noexcept override {}
+  void completed(std::uint64_t) const noexcept override {}
+  void disposing(std::uint64_t) const noexcept override {}
+
+  bool injected() const noexcept {
+    return injected_.load(std::memory_order_acquire);
+  }
+
+private:
+  mutable std::atomic_bool injected_ = false;
 };
 
 void testCompletedResultDetachWaitsForWorkerDisposal() {
@@ -724,6 +867,105 @@ void testAllocationFailureReturnsExactPublishCapabilities() {
   service.shutdown();
 }
 
+void testPublishPackageCopyFailureReturnsExactCapabilities() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "copy-failure-source";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  auto observer = std::make_shared<FailingPublishPackageCopyObserver>();
+  SkinPackageOperationService service(store, validator, observer);
+
+  const auto prepare = service.submitPrepareFolder(
+      source, {.directoryName = "CopyFailure", .collisionKey = "copyfailure"},
+      {});
+  auto completion = waitFor(service, prepare.ticket);
+  auto *prepared = completion
+                       ? std::get_if<PreparePackageResult>(&completion->payload)
+                       : nullptr;
+  expect(prepared && prepared->prepared,
+         "copy-failure fixture first owns prepared staging");
+  if (!prepared || !prepared->prepared) {
+    service.shutdown();
+    return;
+  }
+
+  const auto expectedRoot = prepared->prepared->visibleStagingRoot();
+  std::atomic_int cleanupRuns = 0;
+  observer->failNextCopy();
+  auto rejected = service.submitPublish(
+      std::move(*prepared->prepared), PackageCollisionPolicy::Reject, {},
+      SkinDeferredCleanup([&] { ++cleanupRuns; }));
+  expect(observer->failuresInjected() == 1,
+         "publish deterministically reaches its pre-enqueue ID-copy fault");
+  expect(rejected.ticket == 0 && rejected.rejectedPrepared &&
+             !rejected.rejectedCleanup,
+         "ID-copy failure rejects publish with paired capabilities");
+  expect(rejected.rejectedPrepared &&
+             rejected.rejectedPrepared->prepared.visibleStagingRoot() ==
+                 expectedRoot,
+         "ID-copy failure returns the exact prepared staging capability");
+  expect(cleanupRuns == 0,
+         "ID-copy failure leaves cleanup ownership with the caller");
+  if (rejected.rejectedPrepared) {
+    expect(
+        !service.discardPrepared(std::move(rejected.rejectedPrepared->prepared),
+                                 std::move(rejected.rejectedPrepared->cleanup)),
+        "caller can transfer ID-copy-rejected capabilities for disposal");
+  }
+  service.shutdown();
+  expect(cleanupRuns == 1,
+         "transferred ID-copy-rejected cleanup runs exactly once");
+}
+
+void testThrowingPublishValidatorReturnsTypedTerminalFailure() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "throwing-publish-source";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  AcceptingProfiles profiles;
+  ThrowingValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  auto observer = std::make_shared<FailingPublishTerminalObserver>();
+  SkinPackageOperationService service(store, validator, observer);
+  const SkinPackageId package{.directoryName = "ThrowingPublish",
+                              .collisionKey = "throwingpublish"};
+
+  const auto prepare = service.submitPrepareFolder(source, package, {});
+  auto prepareCompletion = waitFor(service, prepare.ticket);
+  auto *prepared =
+      prepareCompletion
+          ? std::get_if<PreparePackageResult>(&prepareCompletion->payload)
+          : nullptr;
+  expect(prepared && prepared->prepared,
+         "throwing-validator fixture first owns prepared staging");
+  if (!prepared || !prepared->prepared) {
+    service.shutdown();
+    return;
+  }
+
+  const auto publish = service.submitPublish(
+      std::move(*prepared->prepared), PackageCollisionPolicy::Reject, {});
+  auto publishCompletion = waitFor(service, publish.ticket);
+  auto *failure =
+      publishCompletion
+          ? std::get_if<PublishPackageResult>(&publishCompletion->payload)
+          : nullptr;
+  expect(failure && !failure->published && failure->package == package,
+         "throwing Store validation returns the typed publish failure");
+  expect(observer->injected(),
+         "terminal failure deterministically reaches its allocation fault");
+  service.shutdown();
+}
+
 void testBoundedBackpressureReturnsCleanupOwnership() {
   TempDirectory temporary;
   const auto roots = rootsBelow(temporary.root());
@@ -823,7 +1065,7 @@ void testBoundedBackpressureReturnsCleanupOwnership() {
          "rejected cleanup remains exactly-once caller ownership");
 }
 
-void testCancelledQueuedRescanDeliversItsTypedCancellation() {
+void testDetachedQueuedRescanSuppressesCompletion() {
   TempDirectory temporary;
   const auto roots = rootsBelow(temporary.root());
   const auto source = temporary.root() / "block-rescan";
@@ -847,6 +1089,40 @@ void testCancelledQueuedRescanDeliversItsTypedCancellation() {
   service.shutdown();
   expect(!service.poll(rescan.ticket),
          "drained detached rescan suppresses completion delivery");
+}
+
+void testQueuedRemoveDeliversTypedCancellationWithoutDetach() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "block-cancelled-remove";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  auto observer = std::make_shared<BlockingCompletionObserver>();
+  SkinPackageOperationService service(store, validator, observer);
+
+  const auto blocker = service.submitPrepareFolder(
+      source, {.directoryName = "CancelBlock", .collisionKey = "cancelblock"},
+      {});
+  expect(observer->waitBeforeCompletion(blocker.ticket),
+         "typed cancellation fixture holds the worker before removal starts");
+  const SkinPackageId package{.directoryName = "CancelledRemove",
+                              .collisionKey = "cancelledremove"};
+  const auto remove = service.submitRemove(package);
+  observer->cancelBeforeExecution(remove.ticket);
+  observer->release();
+
+  auto completion = waitFor(service, remove.ticket);
+  auto *cancelled = completion
+                        ? std::get_if<RemovePackageResult>(&completion->payload)
+                        : nullptr;
+  expect(cancelled && cancelled->cancelled && cancelled->package == package,
+         "non-detached queued cancellation returns its typed payload");
+  service.shutdown();
 }
 
 void testRecoveredServiceForwardsSerializedStoreOperations() {
@@ -965,13 +1241,17 @@ void testRecoveredServiceForwardsSerializedStoreOperations() {
 int main() {
   testConstructionRequiresSuccessfulRecovery();
   testPrepareRequestsHaveFifoTicketsAndIndependentMailboxes();
+  testPrepareArchiveReturnsPreparedStaging();
   testDetachAndShutdownRunCleanupWithoutReenteringCaller();
   testCompletedResultDetachWaitsForWorkerDisposal();
   testCompletedShutdownDetachPollRaceHasExactlyOneOwner();
   testShutdownDetachPollRaceWhileWorkerCompletesDisposesExactlyOnce();
   testAllocationFailureReturnsExactPublishCapabilities();
+  testPublishPackageCopyFailureReturnsExactCapabilities();
+  testThrowingPublishValidatorReturnsTypedTerminalFailure();
   testBoundedBackpressureReturnsCleanupOwnership();
-  testCancelledQueuedRescanDeliversItsTypedCancellation();
+  testDetachedQueuedRescanSuppressesCompletion();
+  testQueuedRemoveDeliversTypedCancellationWithoutDetach();
   testRecoveredServiceForwardsSerializedStoreOperations();
   if (failures != 0) {
     std::cerr << failures

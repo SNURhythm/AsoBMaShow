@@ -75,6 +75,11 @@ class SkinPackageOperationTestObserver {
 public:
   virtual ~SkinPackageOperationTestObserver() = default;
   virtual bool failAdmissionAllocation() const noexcept = 0;
+  virtual bool failPublishPackageCopy() const noexcept { return false; }
+  virtual bool failPublishTerminalAllocation() const noexcept { return false; }
+  virtual bool cancelBeforeExecution(std::uint64_t) const noexcept {
+    return false;
+  }
   virtual void beforeCompletion(std::uint64_t ticket) const noexcept = 0;
   virtual void completed(std::uint64_t ticket) const noexcept = 0;
   virtual void disposing(std::uint64_t ticket) const noexcept = 0;
