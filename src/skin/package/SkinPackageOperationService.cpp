@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <stop_token>
 #include <thread>
 #include <type_traits>
@@ -37,6 +38,28 @@ PreparePackageResult failedPreparation(std::string_view message) noexcept {
                                   .severity = DiagnosticSeverity::Error});
   } catch (...) {
     // The empty typed failure remains terminal and allocation-free.
+  }
+  return result;
+}
+
+template <typename Result>
+Result failedOperation(std::string_view message) noexcept {
+  Result result;
+  try {
+    result.diagnostics.push_back({.code = "skin.package.operation.failed",
+                                  .message = std::string(message),
+                                  .severity = DiagnosticSeverity::Error});
+  } catch (...) {
+    // The empty typed failure remains terminal and allocation-free.
+  }
+  return result;
+}
+
+template <typename Result>
+Result cancelledOperation(std::string_view message) noexcept {
+  Result result = failedOperation<Result>(message);
+  if constexpr (requires(Result value) { value.cancelled = true; }) {
+    result.cancelled = true;
   }
   return result;
 }
@@ -104,6 +127,7 @@ struct SkinPackageOperationService::Impl {
   };
   struct PublishRequest {
     PreparedPackage prepared;
+    SkinPackageId package;
     PackageCollisionPolicy collisionPolicy;
     ProfileInventorySnapshot inventory;
     SkinDeferredCleanup cleanup;
@@ -112,9 +136,26 @@ struct SkinPackageOperationService::Impl {
     PreparedPackage prepared;
     SkinDeferredCleanup cleanup;
   };
+  struct RescanRequest {
+    ProfileInventorySnapshot inventory;
+  };
+  struct RemoveRequest {
+    SkinPackageId package;
+  };
+  struct PrepareActivationRequest {
+    VersionedSkinProfileSettings base;
+    SkinEntryId entry;
+    SkinProfileSettings candidate;
+  };
+  struct GarbageCollectionRequest {};
+  struct ReconcileProfileActivationsRequest {
+    std::vector<SkinProfileId> profiles;
+  };
   using RequestPayload =
       std::variant<PrepareArchiveRequest, PrepareFolderRequest, PublishRequest,
-                   DiscardPreparedRequest>;
+                   DiscardPreparedRequest, RescanRequest, RemoveRequest,
+                   PrepareActivationRequest, GarbageCollectionRequest,
+                   ReconcileProfileActivationsRequest>;
 
   static_assert(std::is_nothrow_move_constructible_v<RequestPayload>);
   static_assert(
@@ -180,7 +221,7 @@ struct SkinPackageOperationService::Impl {
             handle.rejectedPrepared.emplace(RejectedPreparedDisposal{
                 .prepared = std::move(operation.prepared),
                 .cleanup = std::move(operation.cleanup)});
-          } else {
+          } else if constexpr (requires(Operation value) { value.cleanup; }) {
             handle.rejectedCleanup.emplace(std::move(operation.cleanup));
           }
         },
@@ -311,6 +352,75 @@ struct SkinPackageOperationService::Impl {
       std::visit(
           [&](auto &operation) {
             using Operation = std::decay_t<decltype(operation)>;
+            const auto failed = [&](std::string_view message) {
+              if constexpr (std::is_same_v<Operation, PrepareArchiveRequest> ||
+                            std::is_same_v<Operation, PrepareFolderRequest>) {
+                return SkinPackageOperationPayload(failedPreparation(message));
+              } else if constexpr (std::is_same_v<Operation, PublishRequest>) {
+                auto failure = failedOperation<PublishPackageResult>(message);
+                failure.package = operation.package;
+                return SkinPackageOperationPayload(std::move(failure));
+              } else if constexpr (std::is_same_v<Operation, RescanRequest>) {
+                return SkinPackageOperationPayload(
+                    failedOperation<ScanPackagesResult>(message));
+              } else if constexpr (std::is_same_v<Operation, RemoveRequest>) {
+                auto failure = failedOperation<RemovePackageResult>(message);
+                failure.package = operation.package;
+                return SkinPackageOperationPayload(std::move(failure));
+              } else if constexpr (std::is_same_v<Operation,
+                                                  PrepareActivationRequest>) {
+                return SkinPackageOperationPayload(
+                    failedOperation<PrepareActivationResult>(message));
+              } else if constexpr (std::is_same_v<Operation,
+                                                  GarbageCollectionRequest>) {
+                return SkinPackageOperationPayload(
+                    failedOperation<GarbageCollectionResult>(message));
+              } else {
+                return SkinPackageOperationPayload(
+                    failedOperation<ReconcileProfileActivationsResult>(
+                        message));
+              }
+            };
+            const auto cancelled = [&] {
+              if constexpr (std::is_same_v<Operation, PrepareArchiveRequest> ||
+                            std::is_same_v<Operation, PrepareFolderRequest>) {
+                return SkinPackageOperationPayload(
+                    cancelledOperation<PreparePackageResult>(
+                        "skin package operation cancelled"));
+              } else if constexpr (std::is_same_v<Operation, PublishRequest>) {
+                auto failure = failedOperation<PublishPackageResult>(
+                    "skin package operation cancelled");
+                failure.package = operation.package;
+                return SkinPackageOperationPayload(std::move(failure));
+              } else if constexpr (std::is_same_v<Operation, RescanRequest>) {
+                return SkinPackageOperationPayload(
+                    cancelledOperation<ScanPackagesResult>(
+                        "skin package operation cancelled"));
+              } else if constexpr (std::is_same_v<Operation, RemoveRequest>) {
+                auto failure = cancelledOperation<RemovePackageResult>(
+                    "skin package operation cancelled");
+                failure.package = operation.package;
+                return SkinPackageOperationPayload(std::move(failure));
+              } else if constexpr (std::is_same_v<Operation,
+                                                  PrepareActivationRequest>) {
+                return SkinPackageOperationPayload(
+                    cancelledOperation<PrepareActivationResult>(
+                        "skin package operation cancelled"));
+              } else if constexpr (std::is_same_v<Operation,
+                                                  GarbageCollectionRequest>) {
+                return SkinPackageOperationPayload(
+                    failedOperation<GarbageCollectionResult>(
+                        "skin package operation cancelled"));
+              } else {
+                return SkinPackageOperationPayload(
+                    failedOperation<ReconcileProfileActivationsResult>(
+                        "skin package operation cancelled"));
+              }
+            };
+            if (slot.stop->stop_requested()) {
+              result.emplace(cancelled());
+              return;
+            }
             if constexpr (std::is_same_v<Operation, PrepareArchiveRequest>) {
               try {
                 result.emplace(store.prepareArchive(
@@ -335,6 +445,7 @@ struct SkinPackageOperationService::Impl {
                     failedPreparation("skin folder preparation failed"));
               }
             } else if constexpr (std::is_same_v<Operation, PublishRequest>) {
+              const SkinPackageId package = operation.package;
               try {
                 result.emplace(store.publish(
                     std::move(operation.prepared), operation.collisionPolicy,
@@ -352,14 +463,96 @@ struct SkinPackageOperationService::Impl {
                        .severity = DiagnosticSeverity::Error});
                 } catch (...) {
                 }
+                failed.package = package;
                 result.emplace(std::move(failed));
+              }
+            } else if constexpr (std::is_same_v<Operation, RescanRequest>) {
+              try {
+                result.emplace(store.rescanVisibleSources(
+                    slot.stop->get_token(),
+                    [mailbox = slot.mailbox](const SkinProgress &progress) {
+                      mailbox->publish(progress);
+                    },
+                    std::move(operation.inventory), validator));
+              } catch (...) {
+                result.emplace(failed("skin package rescan failed"));
+              }
+            } else if constexpr (std::is_same_v<Operation, RemoveRequest>) {
+              try {
+                result.emplace(store.removePackage(operation.package,
+                                                   slot.stop->get_token()));
+              } catch (...) {
+                result.emplace(failed("skin package removal failed"));
+              }
+            } else if constexpr (std::is_same_v<Operation,
+                                                PrepareActivationRequest>) {
+              try {
+                result.emplace(
+                    store.prepareActivation(operation.base, operation.entry,
+                                            std::move(operation.candidate),
+                                            validator, slot.stop->get_token()));
+              } catch (...) {
+                result.emplace(failed("skin activation preparation failed"));
+              }
+            } else if constexpr (std::is_same_v<Operation,
+                                                GarbageCollectionRequest>) {
+              try {
+                result.emplace(store.collectGarbage());
+              } catch (...) {
+                result.emplace(
+                    failed("skin package garbage collection failed"));
+              }
+            } else if constexpr (std::is_same_v<
+                                     Operation,
+                                     ReconcileProfileActivationsRequest>) {
+              try {
+                store.reconcileProfileActivations(operation.profiles);
+                result.emplace(
+                    ReconcileProfileActivationsResult{.completed = true});
+              } catch (...) {
+                result.emplace(
+                    failed("skin profile activation reconciliation failed"));
               }
             }
           },
           *slot.request);
     } catch (...) {
       if (slot.ticket != 0) {
-        result.emplace(failedPreparation("skin package operation failed"));
+        std::visit(
+            [&](const auto &operation) {
+              using Operation = std::decay_t<decltype(operation)>;
+              if constexpr (std::is_same_v<Operation, PrepareArchiveRequest> ||
+                            std::is_same_v<Operation, PrepareFolderRequest>) {
+                result.emplace(
+                    failedPreparation("skin package operation failed"));
+              } else if constexpr (std::is_same_v<Operation, PublishRequest>) {
+                auto failure = failedOperation<PublishPackageResult>(
+                    "skin package operation failed");
+                failure.package = operation.package;
+                result.emplace(std::move(failure));
+              } else if constexpr (std::is_same_v<Operation, RescanRequest>) {
+                result.emplace(failedOperation<ScanPackagesResult>(
+                    "skin package operation failed"));
+              } else if constexpr (std::is_same_v<Operation, RemoveRequest>) {
+                auto failure = failedOperation<RemovePackageResult>(
+                    "skin package operation failed");
+                failure.package = operation.package;
+                result.emplace(std::move(failure));
+              } else if constexpr (std::is_same_v<Operation,
+                                                  PrepareActivationRequest>) {
+                result.emplace(failedOperation<PrepareActivationResult>(
+                    "skin package operation failed"));
+              } else if constexpr (std::is_same_v<Operation,
+                                                  GarbageCollectionRequest>) {
+                result.emplace(failedOperation<GarbageCollectionResult>(
+                    "skin package operation failed"));
+              } else {
+                result.emplace(
+                    failedOperation<ReconcileProfileActivationsResult>(
+                        "skin package operation failed"));
+              }
+            },
+            *slot.request);
       }
     }
     return result;
@@ -398,8 +591,16 @@ struct SkinPackageOperationService::Impl {
       }
       if (disposal) {
         if (releasedRequest) {
-          std::visit([](auto &operation) { operation.cleanup.run(); },
-                     *releasedRequest);
+          std::visit(
+              [](auto &operation) {
+                using Operation = std::decay_t<decltype(operation)>;
+                if constexpr (requires(Operation value) {
+                                value.cleanup.run();
+                              }) {
+                  operation.cleanup.run();
+                }
+              },
+              *releasedRequest);
         }
 #if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
         if (observer && disposalTicket != 0) {
@@ -436,8 +637,14 @@ struct SkinPackageOperationService::Impl {
         // the worker as the only owner and ends this process-level service.
         return;
       }
-      std::visit([](auto &operation) { operation.cleanup.run(); },
-                 *slot.request);
+      std::visit(
+          [](auto &operation) {
+            using Operation = std::decay_t<decltype(operation)>;
+            if constexpr (requires(Operation value) { value.cleanup.run(); }) {
+              operation.cleanup.run();
+            }
+          },
+          *slot.request);
       bool completed = false;
       std::uint64_t completedTicket = 0;
       bool workerDisposal = false;
@@ -590,13 +797,17 @@ SkinPackageOperationService::SkinPackageOperationService(
     ,
     std::shared_ptr<const SkinPackageOperationTestObserver> observer
 #endif
-    )
-    : impl_(std::make_unique<Impl>(store, validator
+) {
+  if (!store.operationServiceReady()) {
+    throw std::logic_error(
+        "skin package store recovery must succeed before service construction");
+  }
+  impl_ = std::make_unique<Impl>(store, validator
 #if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
-                                   ,
-                                   std::move(observer)
+                                 ,
+                                 std::move(observer)
 #endif
-                                       )) {
+  );
 }
 
 SkinPackageOperationService::~SkinPackageOperationService() { shutdown(); }
@@ -624,11 +835,54 @@ SkinPackageOperationService::submitPrepareFolder(std::filesystem::path folder,
 SkinPackageOperationHandle SkinPackageOperationService::submitPublish(
     PreparedPackage prepared, PackageCollisionPolicy collisionPolicy,
     ProfileInventorySnapshot inventory, SkinDeferredCleanup cleanup) {
+  const SkinPackageId package = prepared.packageId();
   return impl_->enqueue(Impl::RequestPayload(
       Impl::PublishRequest{.prepared = std::move(prepared),
+                           .package = package,
                            .collisionPolicy = collisionPolicy,
                            .inventory = std::move(inventory),
                            .cleanup = std::move(cleanup)}));
+}
+
+SkinPackageOperationHandle
+SkinPackageOperationService::submitRescan(ProfileInventorySnapshot inventory) {
+  return impl_->enqueue(Impl::RequestPayload(
+      Impl::RescanRequest{.inventory = std::move(inventory)}));
+}
+
+SkinPackageOperationHandle
+SkinPackageOperationService::submitRemove(SkinPackageId package) {
+  return impl_->enqueue(
+      Impl::RequestPayload(Impl::RemoveRequest{.package = std::move(package)}));
+}
+
+SkinPackageOperationHandle SkinPackageOperationService::submitPrepareActivation(
+    VersionedSkinProfileSettings base, SkinEntryId entry,
+    SkinProfileSettings candidate) {
+  return impl_->enqueue(Impl::RequestPayload(
+      Impl::PrepareActivationRequest{.base = std::move(base),
+                                     .entry = std::move(entry),
+                                     .candidate = std::move(candidate)}));
+}
+
+SkinPackageOperationHandle
+SkinPackageOperationService::submitGarbageCollection() {
+  return impl_->enqueue(Impl::RequestPayload(Impl::GarbageCollectionRequest{}));
+}
+
+SkinPackageOperationHandle
+SkinPackageOperationService::submitReconcileProfileActivations(
+    std::vector<SkinProfileId> profiles) {
+  return impl_->enqueue(
+      Impl::RequestPayload(Impl::ReconcileProfileActivationsRequest{
+          .profiles = std::move(profiles)}));
+}
+
+AcquireActivationResult SkinPackageOperationService::acquireValidatedActivation(
+    const SkinProfileId &profile, const SkinEntryId &entry,
+    std::string_view configurationDigest) {
+  return impl_->store.acquireValidatedActivation(profile, entry,
+                                                 configurationDigest);
 }
 
 std::shared_ptr<const SkinPackageCatalogSnapshot>

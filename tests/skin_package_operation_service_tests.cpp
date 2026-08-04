@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -85,12 +86,44 @@ public:
       ProfileInventoryMutationBarrier &&) noexcept override {}
 };
 
+class AcceptingProfiles final : public ISkinProfileSnapshotProvider {
+public:
+  std::uint64_t beginSnapshotAllProfiles() override { return 1; }
+  std::optional<AllSkinProfileSnapshotsResult>
+  pollSnapshotAllProfiles(std::uint64_t) override {
+    return AllSkinProfileSnapshotsResult{
+        .complete = true,
+        .inventory = ProfileInventorySnapshot{.inventoryGeneration = 1}};
+  }
+  void cancelSnapshotAllProfiles(std::uint64_t) noexcept override {}
+  std::optional<ProfileInventoryCommitFence>
+  tryAcquireInventoryCommitFence(const ProfileInventorySnapshot &) override {
+    return makeInventoryCommitFence([] {});
+  }
+  ProfileInventoryMutationBarrier beginInventoryMutation() override {
+    std::terminate();
+  }
+  void finishInventoryMutation(
+      ProfileInventoryMutationBarrier &&) noexcept override {}
+};
+
 class NoValidator final : public SkinEntryValidator {
 public:
   SkinValidationResult validate(SkinRevisionReadView, const SkinEntryId &,
                                 const EntryProfileSettings *,
                                 std::stop_token) override {
     return {};
+  }
+};
+
+class SelectableValidator final : public SkinEntryValidator {
+public:
+  SkinValidationResult validate(SkinRevisionReadView, const SkinEntryId &,
+                                const EntryProfileSettings *,
+                                std::stop_token) override {
+    return {.disposition = SkinValidationDisposition::Selectable7Key,
+            .reconciledSettings = EntryProfileSettings{},
+            .configurationDigest = std::string(64, 'a')};
   }
 };
 
@@ -133,6 +166,35 @@ SkinStorageRoots rootsBelow(const fs::path &root) {
           .profileOverlays = root / "ApplicationSupport/overlays"};
 }
 
+void bootstrapStore(SkinPackageStore &store) {
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "operation-service fixture completes recovery before construction");
+}
+
+void testConstructionRequiresSuccessfulRecovery() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+
+  bool rejected = false;
+  try {
+    SkinPackageOperationService service(store, validator);
+  } catch (const std::logic_error &) {
+    rejected = true;
+  }
+  expect(rejected,
+         "operation service refuses construction before recovery succeeds");
+
+  bootstrapStore(store);
+  SkinPackageOperationService service(store, validator);
+  service.shutdown();
+}
+
 void testPrepareRequestsHaveFifoTicketsAndIndependentMailboxes() {
   TempDirectory temporary;
   const auto roots = rootsBelow(temporary.root());
@@ -146,6 +208,7 @@ void testPrepareRequestsHaveFifoTicketsAndIndependentMailboxes() {
   NoValidator validator;
   SkinPackageCatalog catalog(roots.privateCatalog);
   SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
   SkinPackageOperationService service(store, validator);
 
   const auto first = service.submitPrepareFolder(
@@ -242,6 +305,7 @@ void testDetachAndShutdownRunCleanupWithoutReenteringCaller() {
   NoValidator validator;
   SkinPackageCatalog catalog(roots.privateCatalog);
   SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
   SkinPackageOperationService service(store, validator);
 
   std::atomic_int cleanupRuns = 0;
@@ -454,6 +518,7 @@ void testCompletedResultDetachWaitsForWorkerDisposal() {
   NoValidator validator;
   SkinPackageCatalog catalog(roots.privateCatalog);
   SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
   auto observer = std::make_shared<BlockingDisposalObserver>();
   SkinPackageOperationService service(store, validator, observer);
 
@@ -492,6 +557,7 @@ void testCompletedShutdownDetachPollRaceHasExactlyOneOwner() {
   NoValidator validator;
   SkinPackageCatalog catalog(roots.privateCatalog);
   SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
   auto observer = std::make_shared<BlockingDisposalObserver>();
   SkinPackageOperationService service(store, validator, observer);
 
@@ -557,6 +623,7 @@ void testShutdownDetachPollRaceWhileWorkerCompletesDisposesExactlyOnce() {
   NoValidator validator;
   SkinPackageCatalog catalog(roots.privateCatalog);
   SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
   auto observer = std::make_shared<BlockingCompletionObserver>();
   SkinPackageOperationService service(store, validator, observer);
 
@@ -610,6 +677,7 @@ void testAllocationFailureReturnsExactPublishCapabilities() {
   NoValidator validator;
   SkinPackageCatalog catalog(roots.privateCatalog);
   SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
   auto observer = std::make_shared<FailingAdmissionObserver>();
   SkinPackageOperationService service(store, validator, observer);
 
@@ -666,6 +734,7 @@ void testBoundedBackpressureReturnsCleanupOwnership() {
   NoValidator validator;
   SkinPackageCatalog catalog(roots.privateCatalog);
   SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
   SkinPackageOperationService service(store, validator);
 
   const auto publishPrepare = service.submitPrepareFolder(
@@ -754,9 +823,148 @@ void testBoundedBackpressureReturnsCleanupOwnership() {
          "rejected cleanup remains exactly-once caller ownership");
 }
 
+void testCancelledQueuedRescanDeliversItsTypedCancellation() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "block-rescan";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  auto observer = std::make_shared<BlockingCompletionObserver>();
+  SkinPackageOperationService service(store, validator, observer);
+
+  const auto blocker = service.submitPrepareFolder(
+      source, {.directoryName = "Block", .collisionKey = "block"}, {});
+  expect(observer->waitBeforeCompletion(blocker.ticket),
+         "the first request holds the serialized worker before rescan starts");
+  const auto rescan = service.submitRescan({});
+  service.cancelAndDetach(rescan.ticket);
+  observer->release();
+
+  expect(!waitFor(service, rescan.ticket),
+         "detaching a queued rescan suppresses completion delivery");
+  service.shutdown();
+}
+
+void testRecoveredServiceForwardsSerializedStoreOperations() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "service-integration";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  AcceptingProfiles profiles;
+  SelectableValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  SkinPackageOperationService service(store, validator);
+  const SkinPackageId package{.directoryName = "ServiceSkin",
+                              .collisionKey = "serviceskin"};
+
+  const auto prepared = service.submitPrepareFolder(source, package, {});
+  auto preparedCompletion = waitFor(service, prepared.ticket);
+  auto *preparedResult =
+      preparedCompletion
+          ? std::get_if<PreparePackageResult>(&preparedCompletion->payload)
+          : nullptr;
+  expect(preparedResult && preparedResult->prepared,
+         "service integration returns the prepare payload variant");
+  if (!preparedResult || !preparedResult->prepared) {
+    service.shutdown();
+    return;
+  }
+
+  const auto published = service.submitPublish(
+      std::move(*preparedResult->prepared), PackageCollisionPolicy::Reject, {});
+  auto publishedCompletion = waitFor(service, published.ticket);
+  auto *publishedResult =
+      publishedCompletion
+          ? std::get_if<PublishPackageResult>(&publishedCompletion->payload)
+          : nullptr;
+  expect(publishedResult && publishedResult->published &&
+             publishedResult->entries.size() == 1,
+         "service integration returns the publish payload variant");
+  expect(
+      fs::exists(roots.privateCatalog / "catalog.json"),
+      "publication serializes its catalog snapshot before service continues");
+  if (!publishedResult || publishedResult->entries.empty()) {
+    service.shutdown();
+    return;
+  }
+
+  const auto rescanned = service.submitRescan({});
+  auto rescanCompletion = waitFor(service, rescanned.ticket);
+  auto *rescanResult =
+      rescanCompletion
+          ? std::get_if<ScanPackagesResult>(&rescanCompletion->payload)
+          : nullptr;
+  expect(rescanResult && !rescanResult->cancelled,
+         "service integration returns the rescan payload variant");
+
+  const SkinEntryId entry = publishedResult->entries.front();
+  VersionedSkinProfileSettings base{
+      .profileId = SkinProfileId{.opaque = "service-profile"}, .generation = 7};
+  base.settings.selected7KeyEntry = entry;
+  base.settings.entries.emplace(entry, EntryProfileSettings{});
+  const auto activation =
+      service.submitPrepareActivation(base, entry, base.settings);
+  auto activationCompletion = waitFor(service, activation.ticket);
+  auto *activationResult =
+      activationCompletion
+          ? std::get_if<PrepareActivationResult>(&activationCompletion->payload)
+          : nullptr;
+  expect(activationResult && activationResult->prepared,
+         "service integration returns the activation-prepare payload variant");
+  expect(
+      !service
+           .acquireValidatedActivation(base.profileId, entry,
+                                       std::string(64, 'a'))
+           .activation,
+      "direct acquisition forwards the activation miss without worker state");
+
+  const auto reconciled =
+      service.submitReconcileProfileActivations({base.profileId});
+  auto reconcileCompletion = waitFor(service, reconciled.ticket);
+  auto *reconcileResult = reconcileCompletion
+                              ? std::get_if<ReconcileProfileActivationsResult>(
+                                    &reconcileCompletion->payload)
+                              : nullptr;
+  expect(reconcileResult && reconcileResult->completed,
+         "service integration returns the reconciliation payload variant");
+
+  const auto removed = service.submitRemove(package);
+  auto removeCompletion = waitFor(service, removed.ticket);
+  auto *removeResult =
+      removeCompletion
+          ? std::get_if<RemovePackageResult>(&removeCompletion->payload)
+          : nullptr;
+  expect(removeResult && removeResult->removed,
+         "service integration returns the remove payload variant");
+  expect(service.catalogSnapshot()->packages.empty(),
+         "catalog snapshot forwarding observes the serialized removal");
+
+  const auto collected = service.submitGarbageCollection();
+  auto collectionCompletion = waitFor(service, collected.ticket);
+  expect(collectionCompletion &&
+             std::holds_alternative<GarbageCollectionResult>(
+                 collectionCompletion->payload),
+         "service integration returns the garbage-collection payload variant");
+
+  service.shutdown();
+  const auto rejected = service.submitRescan({});
+  expect(rejected.ticket == 0 && !rejected.progress &&
+             !rejected.rejectedCleanup && !rejected.rejectedPrepared,
+         "generic request rejection returns no capability ownership");
+}
+
 } // namespace
 
 int main() {
+  testConstructionRequiresSuccessfulRecovery();
   testPrepareRequestsHaveFifoTicketsAndIndependentMailboxes();
   testDetachAndShutdownRunCleanupWithoutReenteringCaller();
   testCompletedResultDetachWaitsForWorkerDisposal();
@@ -764,6 +972,8 @@ int main() {
   testShutdownDetachPollRaceWhileWorkerCompletesDisposesExactlyOnce();
   testAllocationFailureReturnsExactPublishCapabilities();
   testBoundedBackpressureReturnsCleanupOwnership();
+  testCancelledQueuedRescanDeliversItsTypedCancellation();
+  testRecoveredServiceForwardsSerializedStoreOperations();
   if (failures != 0) {
     std::cerr << failures
               << " skin package operation service assertion(s) failed\n";

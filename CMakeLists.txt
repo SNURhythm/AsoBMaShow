@@ -4081,7 +4081,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     # integration remains in skin_package_store_tests.
     add_executable(skin_package_operation_service_tests
         tests/skin_package_operation_service_tests.cpp
+        src/AtomicFile.cpp
         src/FileChecksum.cpp
+        src/VersionedJson.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
         src/skin/package/SkinAliasDetector.cpp
