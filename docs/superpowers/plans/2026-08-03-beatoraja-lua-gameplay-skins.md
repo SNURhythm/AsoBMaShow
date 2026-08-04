@@ -1925,7 +1925,7 @@ TEST_CASE("configured skin table matches Beatoraja shape") {
 
   Expected RED: no typed header/config export exists.
 - [ ] **Step 6: Implement the Task 10 header/reconciliation interfaces and decode the nil-configuration return value**. Reconcile saved settings by declared key/value, preserve matching values, and reset removed/invalid values to defaults. Populate `enabledOptionIds` from the selected declared choice values and `offsetsById` from the declared/synthesized offset IDs after permission sanitization; reject ambiguous duplicate IDs instead of allowing map overwrite. Compute the lowercase SHA-256 over the specified versioned length-framed option/file/offset stream; exclude viewport, host paths, and `get_path`.
-- [ ] **Step 7: Make `get_path` return a virtual normalized path resolved within the immutable revision; do not expose its host path**. Keep catalog header execution read-only and destroy that state after conversion.
+- [ ] **Step 7: Make `get_path` return a virtual normalized path resolved within the immutable revision; do not expose its host path**. Preserve pinned `SkinLoader.getPath` substitution exactly: uniquely match the configured raw pattern prefix, take the substitution wildcard from the complete request, replace it with the selected full filename, and append only the request suffix following the full matched pattern. Resource-resolve an unmatched ordinary path unchanged. Deliberately deny an unmatched wildcard instead of reproducing Beatoraja's random directory fallback, and deny ambiguous configured-prefix matches. Keep catalog header execution read-only and destroy that state after conversion.
 - [ ] **Step 8: Run the GREEN check**
 
   ```sh
