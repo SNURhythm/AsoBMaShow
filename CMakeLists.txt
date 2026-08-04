@@ -3852,12 +3852,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(platform_document_handoff_tests
             tests/platform_document_handoff_tests.cpp
             src/PlatformDocumentHandoff.cpp
+            src/skin/package/SkinPathPolicy.cpp
         )
         target_include_directories(platform_document_handoff_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(platform_document_handoff_tests PRIVATE cxx_std_23)
-        target_link_libraries(platform_document_handoff_tests PRIVATE TinyFileDialogs)
+        target_link_libraries(platform_document_handoff_tests PRIVATE TinyFileDialogs utf8proc::utf8proc)
         if (WIN32)
             target_link_libraries(platform_document_handoff_tests PRIVATE advapi32)
         endif()
@@ -3866,12 +3867,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             tests/profile_export_staging_tests.cpp
             src/ProfileExportStaging.cpp
             src/PlatformDocumentHandoff.cpp
+            src/skin/package/SkinPathPolicy.cpp
         )
         target_include_directories(profile_export_staging_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(profile_export_staging_tests PRIVATE cxx_std_23)
-        target_link_libraries(profile_export_staging_tests PRIVATE TinyFileDialogs)
+        target_link_libraries(profile_export_staging_tests PRIVATE TinyFileDialogs utf8proc::utf8proc)
         if (WIN32)
             target_link_libraries(profile_export_staging_tests PRIVATE advapi32)
         endif()

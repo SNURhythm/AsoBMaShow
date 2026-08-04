@@ -217,6 +217,9 @@ class IOSArtifactAuditTests(unittest.TestCase):
             "NSPhotoLibraryUsageDescription": "Replay export access.",
             "NSPhotoLibraryAddUsageDescription": "Save replay exports.",
             "NSAppTransportSecurity": {"NSAllowsArbitraryLoads": True},
+            "UIFileSharingEnabled": True,
+            "LSSupportsOpeningDocumentsInPlace": True,
+            "UISupportsDocumentBrowser": True,
         }
         with (app / "Info.plist").open("wb") as handle:
             plistlib.dump(info, handle)
@@ -295,6 +298,13 @@ class IOSArtifactAuditTests(unittest.TestCase):
             ("CFBundleIcons", {}, "icon"),
             ("NSMotionUsageDescription", "", "NSMotionUsageDescription"),
             ("NSAppTransportSecurity", {}, "NSAllowsArbitraryLoads"),
+            ("UIFileSharingEnabled", False, "UIFileSharingEnabled"),
+            (
+                "LSSupportsOpeningDocumentsInPlace",
+                False,
+                "LSSupportsOpeningDocumentsInPlace",
+            ),
+            ("UISupportsDocumentBrowser", False, "UISupportsDocumentBrowser"),
         )
         for key, value, diagnostic in cases:
             with self.subTest(key=key), tempfile.TemporaryDirectory() as temp:

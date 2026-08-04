@@ -18,6 +18,7 @@
 #include <SDL2/SDL.h>
 #include "AppSettings.h"
 #include "AppSettingsStore.h"
+#include "PlatformDocumentHandoff.h"
 #include "PlayerProfileManager.h"
 #include "ProfileSettingsPersistenceCoordinator.h"
 #include "ProfileSessionCoordinator.h"
@@ -153,6 +154,10 @@ public:
   audio::AudioDeviceManager audioDeviceManager;
   audio::ApplyResult audioStartupApplyResult;
   music_player::MusicPlayerService musicPlayer;
+  // One application-owned asynchronous cleanup boundary for every temporary
+  // document/folder handoff. Scene teardown only abandons operations into it.
+  platform_document_handoff::PlatformTemporaryPathCleanupServiceHandle
+      temporaryPathCleanupService;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
   display::RendererAccessCoordinator rendererAccess{bgfxRenderMutex,
@@ -194,7 +199,9 @@ public:
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio),
-        musicPlayer(musicPlaylistRepository, chartRepository) {
+        musicPlayer(musicPlaylistRepository, chartRepository),
+        temporaryPathCleanupService(
+            platform_document_handoff::CreatePlatformTemporaryPathCleanupService()) {
     std::string irDriverDiagnostic;
     if (!irDrivers.registerDriver(
             std::make_shared<ir::tachi::TachiDriver>(bokutachiCacheStore),
@@ -907,6 +914,9 @@ public:
         std::cout << "Joining thread: " << thread.first << std::endl;
         thread.second.join();
       }
+    }
+    if (temporaryPathCleanupService) {
+      temporaryPathCleanupService->shutdown();
     }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     skinResourcePreparationService.shutdown();

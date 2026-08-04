@@ -106,7 +106,14 @@ bool PickIOSFolder(std::string &path, std::string &bookmark,
 std::string ImportIOSDocument(std::uint64_t operationToken,
                               const std::string &mimeType,
                               std::uint64_t maxBytes,
-                              const std::atomic_bool *cancellationRequested);
+                              const std::atomic_bool *cancellationRequested,
+                              std::string *originalSourceName = nullptr);
+std::string ImportIOSDirectory(
+    std::uint64_t operationToken, std::uint64_t maxBytes,
+    std::uint64_t maxFiles, std::uint32_t maxDepth,
+    std::uint32_t maxPathBytes,
+    const std::atomic_bool *cancellationRequested,
+    std::string *originalSourceName = nullptr);
 std::string ExportIOSDocument(std::uint64_t operationToken,
                               const std::filesystem::path &localPath,
                               const std::string &mimeType,
@@ -119,6 +126,10 @@ bool ValidateIOSTemporaryDocument(const std::filesystem::path &localPath,
                                   std::string &errorMessage);
 bool CleanupIOSTemporaryDocument(const std::filesystem::path &localPath,
                                  std::string &errorMessage);
+bool ValidateIOSTemporaryDirectory(const std::filesystem::path &localPath,
+                                   std::string &errorMessage);
+bool CleanupIOSTemporaryDirectory(const std::filesystem::path &localPath,
+                                  std::string &errorMessage);
 void *StartIOSSecurityScopedResource(const std::string &path,
                                       const std::string &bookmark,
                                       std::string &resolvedPath,

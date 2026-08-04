@@ -115,6 +115,14 @@ done
 [ "$(plist_raw NSAppTransportSecurity.NSAllowsArbitraryLoads)" = "true" ] || \
   fail "NSAllowsArbitraryLoads must remain true for difficulty-table loading"
 
+for files_access_key in \
+  UIFileSharingEnabled \
+  LSSupportsOpeningDocumentsInPlace \
+  UISupportsDocumentBrowser; do
+  [ "$(plist_raw "${files_access_key}")" = "true" ] || \
+    fail "${files_access_key} must be true for Files-based skin management"
+done
+
 EXECUTABLE_NAME="$(plist_raw CFBundleExecutable)"
 [ -n "${EXECUTABLE_NAME}" ] || fail "CFBundleExecutable is missing"
 MAIN_EXECUTABLE="${APP_PATH}/${EXECUTABLE_NAME}"

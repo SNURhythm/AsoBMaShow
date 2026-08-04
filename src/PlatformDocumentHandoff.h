@@ -35,6 +35,9 @@ struct PlatformDocumentHandoffResult {
   PlatformDocumentHandoffStatus status = PlatformDocumentHandoffStatus::Failed;
   std::string message;
   std::filesystem::path localPath;
+  // The selected file or folder basename, normalized by the caller-supplied
+  // policy hook. Native bridges return only the raw UTF-8 name.
+  std::string originalSourceName;
 
   // A successful import is staged in application-private storage. The caller
   // owns that file and should remove it after consuming the document.
@@ -131,6 +134,8 @@ using CommitGate =
 using CommitOperationWork = std::function<PlatformDocumentHandoffResult(
     const std::atomic_bool &cancellationRequested,
     const CommitGate &commitGate)>;
+using SourceNameNormalizer =
+    std::function<std::optional<std::string>(std::string_view)>;
 PlatformDocumentHandoffOperation
 StartOperation(OperationWork work, std::function<void()> cancelNative,
                PlatformTemporaryPathCleanupServiceHandle cleanupService = {});
@@ -207,6 +212,9 @@ public:
   // cancel() leaves a Cancelled result available to takeResult(). close()
   // cancels if needed, discards any result, and releases the handle.
   void cancel() noexcept;
+  // Signals and detaches only. Completion transfers an unconsumed temporary
+  // result to its cleanup service without recursive work on this caller.
+  void abandon() noexcept;
   void close() noexcept;
   [[nodiscard]] explicit operator bool() const noexcept {
     return state_ != nullptr;
@@ -230,6 +238,12 @@ private:
 PlatformDocumentHandoffOperation
 ImportDocumentAsync(PlatformDocumentImportRequest request);
 PlatformDocumentHandoffOperation
+ImportDocumentAsync(PlatformDocumentImportRequest request,
+                    PlatformTemporaryPathCleanupServiceHandle cleanupService);
+PlatformDocumentHandoffOperation
+ImportDirectoryAsync(PlatformDirectoryImportRequest request,
+                     PlatformTemporaryPathCleanupServiceHandle cleanupService);
+PlatformDocumentHandoffOperation
 ExportDocumentAsync(PlatformDocumentExportRequest request);
 PlatformDocumentHandoffOperation
 ExportTextDocumentAsync(PlatformTextDocumentExportRequest request);
@@ -247,6 +261,8 @@ namespace detail {
 PlatformDocumentHandoffResult
 Validate(const PlatformDocumentImportRequest &request);
 PlatformDocumentHandoffResult
+Validate(const PlatformDirectoryImportRequest &request);
+PlatformDocumentHandoffResult
 Validate(const PlatformDocumentExportRequest &request);
 
 PlatformDocumentHandoffResult ParseBridgeResult(const std::string &value,
@@ -254,7 +270,21 @@ PlatformDocumentHandoffResult ParseBridgeResult(const std::string &value,
                                                 bool temporaryLocalFile,
                                                 PlatformTemporaryPathKind
                                                     temporaryPathKind =
-                                                        PlatformTemporaryPathKind::File);
+                                                        PlatformTemporaryPathKind::File,
+                                                std::string originalSourceName = {},
+                                                SourceNameNormalizer
+                                                    sourceNameNormalizer = {});
+
+// Copies one picked source directory into one application-private root. The
+// return path is that root itself, never an extra source-basename directory.
+// This portable seam is also used by desktop folder selection; native bridges
+// supply their own coordinated copies.
+PlatformDocumentHandoffResult CopyDirectoryForImport(
+    const std::filesystem::path &source,
+    const PlatformDirectoryImportRequest &request,
+    const std::filesystem::path &temporaryRoot,
+    const std::atomic_bool *cancellationRequested = nullptr,
+    const std::function<void(std::uint64_t)> &progress = {});
 
 bool CopyStreamBounded(std::istream &input, std::ostream &output,
                        std::uint64_t maxBytes, std::uint64_t &bytesCopied,

@@ -191,6 +191,31 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertIn("NSURLIsExcludedFromBackupKey", implementation)
         self.assertIn("setResourceValue", implementation)
 
+    def test_ios_folder_handoff_and_files_document_access_are_declared(self):
+        with INFO_PLIST.open("rb") as handle:
+            info = plistlib.load(handle)
+        for key in (
+            "UIFileSharingEnabled",
+            "LSSupportsOpeningDocumentsInPlace",
+            "UISupportsDocumentBrowser",
+        ):
+            self.assertIs(
+                True,
+                info.get(key),
+                f"{key} must be enabled in source Info.plist",
+            )
+
+        header = IOS_NATIVES_HEADER.read_text(encoding="utf-8")
+        source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("ImportIOSDirectory", header)
+        self.assertIn("ValidateIOSTemporaryDirectory", header)
+        self.assertIn("CleanupIOSTemporaryDirectory", header)
+        self.assertIn("UTTypeFolder", source)
+        self.assertIn("ImportIOSDirectory", source)
+        self.assertIn("CopyIOSDirectoryURLBounded", source)
+        self.assertIn("NSURLIsSymbolicLinkKey", source)
+        self.assertIn("NSURLIsAliasFileKey", source)
+
     def test_apple_skin_alias_detection_is_no_follow(self):
         source = SKIN_ALIAS_DETECTOR_APPLE.read_text(encoding="utf-8")
         self.assertIn("lstat", source)

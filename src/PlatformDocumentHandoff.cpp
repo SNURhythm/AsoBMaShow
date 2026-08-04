@@ -1,4 +1,5 @@
 #include "PlatformDocumentHandoff.h"
+#include "skin/package/SkinPathPolicy.h"
 
 #if TARGET_OS_ANDROID
 #include "AndroidNatives.h"
@@ -934,8 +935,9 @@ bool validatePlatformTemporaryPath(const std::filesystem::path &path,
   return kind == PlatformTemporaryPathKind::File &&
          ValidateAndroidTemporaryDocument(path, errorMessage);
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return kind == PlatformTemporaryPathKind::File &&
-         ValidateIOSTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File
+             ? ValidateIOSTemporaryDocument(path, errorMessage)
+             : ValidateIOSTemporaryDirectory(path, errorMessage);
 #else
   return validateDesktopTemporaryPath(path, kind, false, false, errorMessage);
 #endif
@@ -948,13 +950,96 @@ bool cleanupPlatformTemporaryPath(const std::filesystem::path &path,
   return kind == PlatformTemporaryPathKind::File &&
          CleanupAndroidTemporaryDocument(path, errorMessage);
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return kind == PlatformTemporaryPathKind::File &&
-         CleanupIOSTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File
+             ? CleanupIOSTemporaryDocument(path, errorMessage)
+             : CleanupIOSTemporaryDirectory(path, errorMessage);
 #else
   return kind == PlatformTemporaryPathKind::File
              ? cleanupDesktopTemporaryDocument(path, errorMessage)
              : cleanupDesktopTemporaryDirectory(path, errorMessage);
 #endif
+}
+
+struct TemporaryPathIdentity {
+  std::uint64_t device = 0;
+  std::uint64_t object = 0;
+};
+
+std::optional<TemporaryPathIdentity>
+captureTemporaryPathIdentity(const std::filesystem::path &path,
+                             PlatformTemporaryPathKind kind) {
+#if defined(_WIN32)
+  HANDLE handle = CreateFileW(
+      path.c_str(), FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+      nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    return std::nullopt;
+  }
+  BY_HANDLE_FILE_INFORMATION information{};
+  const bool inspected = GetFileInformationByHandle(handle, &information);
+  CloseHandle(handle);
+  if (!inspected ||
+      (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+      ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) !=
+          (kind == PlatformTemporaryPathKind::Directory)) {
+    return std::nullopt;
+  }
+  return TemporaryPathIdentity{
+      .device = information.dwVolumeSerialNumber,
+      .object = (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32U) |
+                information.nFileIndexLow};
+#else
+  struct stat status {};
+  if (::lstat(path.c_str(), &status) != 0 ||
+      (kind == PlatformTemporaryPathKind::Directory
+           ? !S_ISDIR(status.st_mode)
+           : !S_ISREG(status.st_mode))) {
+    return std::nullopt;
+  }
+  return TemporaryPathIdentity{
+      .device = static_cast<std::uint64_t>(status.st_dev),
+      .object = static_cast<std::uint64_t>(status.st_ino)};
+#endif
+}
+
+enum class TemporaryPathIdentityMatch {
+  Missing,
+  Exact,
+  SafeFinalLink,
+  Different,
+};
+
+TemporaryPathIdentityMatch matchTemporaryPathIdentity(
+    const std::filesystem::path &path, PlatformTemporaryPathKind kind,
+    TemporaryPathIdentity expected) {
+#if defined(_WIN32)
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    const DWORD error = GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
+               ? TemporaryPathIdentityMatch::Missing
+               : TemporaryPathIdentityMatch::Different;
+  }
+  if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    return TemporaryPathIdentityMatch::SafeFinalLink;
+  }
+#else
+  struct stat status {};
+  if (::lstat(path.c_str(), &status) != 0) {
+    return errno == ENOENT ? TemporaryPathIdentityMatch::Missing
+                           : TemporaryPathIdentityMatch::Different;
+  }
+  if (S_ISLNK(status.st_mode)) {
+    return TemporaryPathIdentityMatch::SafeFinalLink;
+  }
+#endif
+  const auto actual = captureTemporaryPathIdentity(path, kind);
+  return actual && actual->device == expected.device &&
+                 actual->object == expected.object
+             ? TemporaryPathIdentityMatch::Exact
+             : TemporaryPathIdentityMatch::Different;
 }
 
 std::shared_ptr<detail::TemporaryDocumentOwnership>
@@ -964,8 +1049,30 @@ adoptTemporaryPath(const std::filesystem::path &path,
   if (!validatePlatformTemporaryPath(path, kind, errorMessage)) {
     return {};
   }
+  const auto identity = captureTemporaryPathIdentity(path, kind);
+  if (!identity) {
+    return {};
+  }
   return std::make_shared<detail::TemporaryDocumentOwnership>(
-      path.lexically_normal(), kind, cleanupPlatformTemporaryPath);
+      path.lexically_normal(), kind,
+      [identity = *identity](const std::filesystem::path &ownedPath,
+                             PlatformTemporaryPathKind ownedKind) {
+        const auto match =
+            matchTemporaryPathIdentity(ownedPath, ownedKind, identity);
+        if (match == TemporaryPathIdentityMatch::Different) {
+          return false;
+        }
+#if defined(_WIN32)
+        if (match == TemporaryPathIdentityMatch::SafeFinalLink) {
+          const DWORD attributes = GetFileAttributesW(ownedPath.c_str());
+          return attributes != INVALID_FILE_ATTRIBUTES &&
+                 ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
+                      ? RemoveDirectoryW(ownedPath.c_str()) != 0
+                      : DeleteFileW(ownedPath.c_str()) != 0);
+        }
+#endif
+        return cleanupPlatformTemporaryPath(ownedPath, ownedKind);
+      });
 }
 
 std::filesystem::path
@@ -1043,37 +1150,139 @@ std::string stageDesktopImport(const std::filesystem::path &source,
     return std::string(kErrorPrefix) + errorMessage;
   }
   const auto destination = directory / "imported-document.zip";
-  std::ifstream input(source, std::ios::binary);
-  std::ofstream output(destination, std::ios::binary | std::ios::trunc);
-  if (!input.is_open() || !output.is_open()) {
-    std::error_code ignored;
-    std::filesystem::remove_all(directory, ignored);
-    return std::string(kErrorPrefix) +
-           "Unable to open the selected document for import.";
+  const auto cleanup = [&] {
+    std::string ignored;
+    (void)cleanupDesktopTemporaryDocument(destination, ignored);
+  };
+  const auto fail = [&](std::string message) {
+    cleanup();
+    return std::string(kErrorPrefix) + std::move(message);
+  };
+  const auto cancelled = [&] {
+    cleanup();
+    return std::string(kCancelled);
+  };
+  ExclusiveOutputFile output;
+  if (output.open(destination, errorMessage) !=
+      ExclusiveCreateResult::Opened) {
+    return fail(errorMessage.empty()
+                    ? "Unable to create the private document copy."
+                    : std::move(errorMessage));
   }
   std::uint64_t bytesCopied = 0;
-  if (!detail::CopyStreamBounded(input, output, maxBytes, bytesCopied,
-                                 errorMessage, &cancellationRequested)) {
-    input.close();
-    output.close();
-    std::error_code ignored;
-    std::filesystem::remove_all(directory, ignored);
-    return std::string(kErrorPrefix) + errorMessage;
+  std::array<char, 64 * 1024> buffer{};
+#if defined(_WIN32)
+  HANDLE input = CreateFileW(
+      source.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+          FILE_FLAG_SEQUENTIAL_SCAN,
+      nullptr);
+  FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+  FILE_STANDARD_INFO standardInfo{};
+  if (input == INVALID_HANDLE_VALUE ||
+      !GetFileInformationByHandleEx(input, FileAttributeTagInfo, &tagInfo,
+                                    sizeof(tagInfo)) ||
+      !GetFileInformationByHandleEx(input, FileStandardInfo, &standardInfo,
+                                    sizeof(standardInfo)) ||
+      (tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+      standardInfo.Directory) {
+    if (input != INVALID_HANDLE_VALUE) {
+      CloseHandle(input);
+    }
+    output.abort();
+    return fail("The selected document is not a no-follow regular file.");
   }
-  output.flush();
-  if (!output) {
-    input.close();
-    output.close();
-    std::error_code ignored;
-    std::filesystem::remove_all(directory, ignored);
-    return std::string(kErrorPrefix) +
-           "Unable to finish the private import copy.";
+  while (true) {
+    if (cancellationRequested.load(std::memory_order_acquire)) {
+      CloseHandle(input);
+      output.abort();
+      return cancelled();
+    }
+    DWORD count = 0;
+    if (!ReadFile(input, buffer.data(), static_cast<DWORD>(buffer.size()),
+                  &count, nullptr)) {
+      CloseHandle(input);
+      output.abort();
+      return fail("Unable to read the selected document.");
+    }
+    if (count == 0) {
+      break;
+    }
+    const auto read = static_cast<std::uint64_t>(count);
+    if (bytesCopied > maxBytes || read > maxBytes - bytesCopied ||
+        !output.write(buffer.data(), static_cast<std::size_t>(count),
+                      errorMessage)) {
+      CloseHandle(input);
+      output.abort();
+      return fail(errorMessage.empty()
+                      ? "The selected document exceeds the maximum size."
+                      : std::move(errorMessage));
+    }
+    bytesCopied += read;
   }
-  output.close();
-  if (!secureOwnerPrivatePath(destination, false, errorMessage)) {
-    std::error_code ignored;
-    std::filesystem::remove_all(directory, ignored);
-    return std::string(kErrorPrefix) + errorMessage;
+  CloseHandle(input);
+#else
+  const int input =
+      ::open(source.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+  struct stat before {};
+  if (input < 0 || ::fstat(input, &before) != 0 ||
+      !S_ISREG(before.st_mode)) {
+    if (input >= 0) {
+      ::close(input);
+    }
+    output.abort();
+    return fail("The selected document is not a no-follow regular file.");
+  }
+  while (true) {
+    if (cancellationRequested.load(std::memory_order_acquire)) {
+      ::close(input);
+      output.abort();
+      return cancelled();
+    }
+    const ssize_t count = ::read(input, buffer.data(), buffer.size());
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count < 0) {
+      ::close(input);
+      output.abort();
+      return fail("Unable to read the selected document.");
+    }
+    if (count == 0) {
+      break;
+    }
+    const auto read = static_cast<std::uint64_t>(count);
+    if (bytesCopied > maxBytes || read > maxBytes - bytesCopied ||
+        !output.write(buffer.data(), static_cast<std::size_t>(count),
+                      errorMessage)) {
+      ::close(input);
+      output.abort();
+      return fail(errorMessage.empty()
+                      ? "The selected document exceeds the maximum size."
+                      : std::move(errorMessage));
+    }
+    bytesCopied += read;
+  }
+  struct stat after {};
+  const bool unchanged = ::fstat(input, &after) == 0 &&
+                         before.st_dev == after.st_dev &&
+                         before.st_ino == after.st_ino &&
+                         before.st_size == after.st_size;
+  ::close(input);
+  if (!unchanged) {
+    output.abort();
+    return fail("The selected document changed while being copied.");
+  }
+#endif
+  if (cancellationRequested.load(std::memory_order_acquire)) {
+    output.abort();
+    return cancelled();
+  }
+  if (!output.finish(errorMessage) ||
+      !secureOwnerPrivatePath(destination, false, errorMessage)) {
+    return fail(errorMessage.empty()
+                    ? "Unable to finish the private import copy."
+                    : std::move(errorMessage));
   }
   return detail::PathToUtf8(
       std::filesystem::absolute(destination).lexically_normal());
@@ -1118,12 +1327,14 @@ importDocument(std::uint64_t operationToken,
     return cancellation();
   }
   std::string bridgeResult;
+  std::string originalSourceName;
 #if TARGET_OS_ANDROID
   bridgeResult =
       ImportAndroidDocument(operationToken, request.mimeType, request.maxBytes);
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
   bridgeResult = ImportIOSDocument(operationToken, request.mimeType,
-                                   request.maxBytes, &cancellationRequested);
+                                   request.maxBytes, &cancellationRequested,
+                                   &originalSourceName);
 #else
   const char *filters[] = {"*.asobprofile", "*.zip"};
   const char *selected = tinyfd_openFileDialog(
@@ -1133,11 +1344,70 @@ importDocument(std::uint64_t operationToken,
   } else if (cancellationRequested.load(std::memory_order_acquire)) {
     bridgeResult = std::string(kCancelled);
   } else {
-    bridgeResult = stageDesktopImport(detail::PathFromUtf8(selected),
-                                      request.maxBytes, cancellationRequested);
+    const auto source = detail::PathFromUtf8(selected);
+    originalSourceName = detail::PathToUtf8(source.filename());
+    bridgeResult =
+        stageDesktopImport(source, request.maxBytes, cancellationRequested);
   }
 #endif
-  return detail::ParseBridgeResult(bridgeResult, true, true);
+  return detail::ParseBridgeResult(bridgeResult, true, true,
+                                   PlatformTemporaryPathKind::File,
+                                   std::move(originalSourceName));
+}
+
+PlatformDocumentHandoffResult
+importDirectory(std::uint64_t operationToken,
+                const PlatformDirectoryImportRequest &request,
+                const std::atomic_bool &cancellationRequested,
+                detail::NativeCancellationRegistration &nativeCancellation) {
+  if (auto validation = detail::Validate(request); !validation.ok()) {
+    return validation;
+  }
+  if (cancellationRequested.load(std::memory_order_acquire)) {
+    return cancellation();
+  }
+  auto &handoffMutex = documentHandoffMutex();
+  if (!detail::LockInterruptibly(handoffMutex, cancellationRequested)) {
+    return cancellation();
+  }
+  std::unique_lock<std::timed_mutex> operationLock(handoffMutex,
+                                                   std::adopt_lock);
+  if (cancellationRequested.load(std::memory_order_acquire)) {
+    return cancellation();
+  }
+  NativeActivityScope nativeActivity(nativeCancellation);
+  if (!nativeActivity.active() ||
+      cancellationRequested.load(std::memory_order_acquire)) {
+    return cancellation();
+  }
+#if TARGET_OS_ANDROID
+  (void)operationToken;
+  return failure("Directory import is not supported on Android in this "
+                 "release.");
+#elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  std::string originalSourceName;
+  const std::string bridgeResult = ImportIOSDirectory(
+      operationToken, request.maxBytes, request.maxFiles, request.maxDepth,
+      request.maxPathBytes, &cancellationRequested, &originalSourceName);
+  return detail::ParseBridgeResult(bridgeResult, true, true,
+                                   PlatformTemporaryPathKind::Directory,
+                                   std::move(originalSourceName));
+#else
+  const char *selected =
+      tinyfd_selectFolderDialog("Import gameplay skin folder", "");
+  if (selected == nullptr ||
+      cancellationRequested.load(std::memory_order_acquire)) {
+    return cancellation();
+  }
+  std::error_code error;
+  const auto temporaryRoot = std::filesystem::temp_directory_path(error);
+  if (error) {
+    return failure("Unable to locate temporary storage: " + error.message());
+  }
+  return detail::CopyDirectoryForImport(detail::PathFromUtf8(selected), request,
+                                        temporaryRoot,
+                                        &cancellationRequested);
+#endif
 }
 
 PlatformDocumentHandoffResult
@@ -1329,6 +1599,267 @@ Validate(const PlatformDocumentImportRequest &request) {
 }
 
 PlatformDocumentHandoffResult
+Validate(const PlatformDirectoryImportRequest &request) {
+  if (request.maxBytes == 0 || request.maxFiles == 0 || request.maxDepth == 0 ||
+      request.maxPathBytes == 0 ||
+      request.maxBytes > static_cast<std::uint64_t>(
+                             std::numeric_limits<std::int64_t>::max())) {
+    return failure("Directory import requires non-zero supported byte, file, "
+                   "depth, and path limits.");
+  }
+  return success();
+}
+
+PlatformDocumentHandoffResult CopyDirectoryForImport(
+    const std::filesystem::path &source,
+    const PlatformDirectoryImportRequest &request,
+    const std::filesystem::path &temporaryRoot,
+    const std::atomic_bool *cancellationRequested,
+    const std::function<void(std::uint64_t)> &progress) {
+  if (auto validation = Validate(request); !validation.ok()) {
+    return validation;
+  }
+  const auto cancelled = [&] {
+    return cancellationRequested != nullptr &&
+           cancellationRequested->load(std::memory_order_acquire);
+  };
+  if (cancelled()) {
+    return cancellation();
+  }
+
+  std::error_code error;
+  const auto sourceStatus = std::filesystem::symlink_status(source, error);
+  if (error || std::filesystem::is_symlink(sourceStatus) ||
+      !std::filesystem::is_directory(sourceStatus)) {
+    return failure("The selected folder is not a regular directory.");
+  }
+
+  std::string errorMessage;
+  const auto destinationRoot =
+      CreatePrivateImportDirectoryUnder(temporaryRoot, errorMessage);
+  if (destinationRoot.empty()) {
+    return failure(errorMessage.empty() ? "Unable to allocate private folder "
+                                        "storage."
+                                        : std::move(errorMessage));
+  }
+  auto destinationOwnership =
+      adoptTemporaryPath(destinationRoot, PlatformTemporaryPathKind::Directory);
+  if (destinationOwnership == nullptr) {
+    return failure("Unable to issue private folder cleanup ownership.");
+  }
+  const auto discard = [&] {
+    (void)destinationOwnership->cleanup();
+  };
+  const auto failCopy = [&](std::string message) {
+    discard();
+    return failure(std::move(message));
+  };
+  const auto cancelledCopy = [&] {
+    discard();
+    return cancellation();
+  };
+
+  std::uint64_t copiedBytes = 0;
+  std::uint64_t copiedFiles = 0;
+  std::filesystem::recursive_directory_iterator iterator(
+      source, std::filesystem::directory_options::none, error);
+  const std::filesystem::recursive_directory_iterator end;
+  while (!error && iterator != end) {
+    if (cancelled()) {
+      return cancelledCopy();
+    }
+    const auto entryPath = iterator->path();
+    const auto relative = entryPath.lexically_relative(source);
+    if (relative.empty() || relative.is_absolute()) {
+      return failCopy("The selected folder contains an invalid path.");
+    }
+    const auto relativeUtf8 = PathToUtf8(relative);
+    if (relativeUtf8.empty() ||
+        relativeUtf8.size() > request.maxPathBytes ||
+        relativeUtf8.find('\0') != std::string::npos) {
+      return failCopy("The selected folder contains a path beyond its limit.");
+    }
+    std::uint32_t depth = 0;
+    for (const auto &component : relative) {
+      if (component != ".") {
+        ++depth;
+      }
+    }
+    if (depth == 0 || depth > request.maxDepth) {
+      return failCopy("The selected folder exceeds its depth limit.");
+    }
+
+    const auto status = std::filesystem::symlink_status(entryPath, error);
+    if (error || std::filesystem::is_symlink(status)) {
+      return failCopy("The selected folder contains a symbolic link.");
+    }
+#if defined(_WIN32)
+    const DWORD entryAttributes = GetFileAttributesW(entryPath.c_str());
+    if (entryAttributes == INVALID_FILE_ATTRIBUTES ||
+        (entryAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+      return failCopy("The selected folder contains a reparse-point entry.");
+    }
+#endif
+    const auto destination = destinationRoot / relative;
+    if (std::filesystem::is_directory(status)) {
+      std::filesystem::create_directory(destination, error);
+      if (error || !secureOwnerPrivatePath(destination, true, errorMessage)) {
+        return failCopy(errorMessage.empty()
+                            ? "Unable to create private folder storage."
+                            : std::move(errorMessage));
+      }
+    } else if (std::filesystem::is_regular_file(status)) {
+      if (++copiedFiles > request.maxFiles) {
+        return failCopy("The selected folder exceeds its file limit.");
+      }
+      ExclusiveOutputFile output;
+      const auto outputOpen = output.open(destination, errorMessage);
+      if (outputOpen != ExclusiveCreateResult::Opened) {
+        return failCopy(errorMessage.empty()
+                            ? "Unable to create a private folder copy."
+                            : std::move(errorMessage));
+      }
+
+#if defined(_WIN32)
+      HANDLE input = CreateFileW(
+          entryPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+          OPEN_EXISTING,
+          FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+              FILE_FLAG_SEQUENTIAL_SCAN,
+          nullptr);
+      FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+      FILE_STANDARD_INFO standardInfo{};
+      if (input == INVALID_HANDLE_VALUE ||
+          !GetFileInformationByHandleEx(input, FileAttributeTagInfo, &tagInfo,
+                                        sizeof(tagInfo)) ||
+          !GetFileInformationByHandleEx(input, FileStandardInfo,
+                                        &standardInfo,
+                                        sizeof(standardInfo)) ||
+          (tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+          standardInfo.Directory) {
+        if (input != INVALID_HANDLE_VALUE) {
+          CloseHandle(input);
+        }
+        output.abort();
+        return failCopy("The selected folder contains a reparse-point file.");
+      }
+      std::array<char, 64 * 1024> buffer{};
+      while (true) {
+        if (cancelled()) {
+          CloseHandle(input);
+          output.abort();
+          return cancelledCopy();
+        }
+        DWORD count = 0;
+        if (!ReadFile(input, buffer.data(), static_cast<DWORD>(buffer.size()),
+                      &count, nullptr)) {
+          CloseHandle(input);
+          output.abort();
+          return failCopy("Unable to read a selected folder file.");
+        }
+        if (count == 0) {
+          break;
+        }
+        const auto bytes = static_cast<std::uint64_t>(count);
+        if (bytes > request.maxBytes - copiedBytes ||
+            !output.write(buffer.data(), static_cast<std::size_t>(count),
+                          errorMessage)) {
+          CloseHandle(input);
+          output.abort();
+          return failCopy(errorMessage.empty()
+                              ? "The selected folder exceeds its byte limit."
+                              : std::move(errorMessage));
+        }
+        copiedBytes += bytes;
+        if (progress) {
+          progress(copiedBytes);
+        }
+      }
+      CloseHandle(input);
+#else
+      int descriptor = ::open(entryPath.c_str(), O_RDONLY | O_NONBLOCK |
+                                                     O_NOFOLLOW | O_CLOEXEC);
+      struct stat before {};
+      if (descriptor < 0 || ::fstat(descriptor, &before) != 0 ||
+          !S_ISREG(before.st_mode)) {
+        if (descriptor >= 0) {
+          ::close(descriptor);
+        }
+        output.abort();
+        return failCopy("The selected folder contains a non-regular file.");
+      }
+      std::array<char, 64 * 1024> buffer{};
+      while (true) {
+        if (cancelled()) {
+          ::close(descriptor);
+          output.abort();
+          return cancelledCopy();
+        }
+        const ssize_t count = ::read(descriptor, buffer.data(), buffer.size());
+        if (count < 0 && errno == EINTR) {
+          continue;
+        }
+        if (count < 0) {
+          ::close(descriptor);
+          output.abort();
+          return failCopy("Unable to read a selected folder file.");
+        }
+        if (count == 0) {
+          break;
+        }
+        const auto bytes = static_cast<std::uint64_t>(count);
+        if (bytes > request.maxBytes - copiedBytes ||
+            !output.write(buffer.data(), static_cast<std::size_t>(count),
+                          errorMessage)) {
+          ::close(descriptor);
+          output.abort();
+          return failCopy(errorMessage.empty()
+                              ? "The selected folder exceeds its byte limit."
+                              : std::move(errorMessage));
+        }
+        copiedBytes += bytes;
+        if (progress) {
+          progress(copiedBytes);
+        }
+      }
+      struct stat after {};
+      const bool unchanged = ::fstat(descriptor, &after) == 0 &&
+                             before.st_dev == after.st_dev &&
+                             before.st_ino == after.st_ino;
+      ::close(descriptor);
+      if (!unchanged) {
+        output.abort();
+        return failCopy("A selected folder file changed while being copied.");
+      }
+#endif
+      if (cancelled()) {
+        output.abort();
+        return cancelledCopy();
+      }
+      if (!output.finish(errorMessage) ||
+          !secureOwnerPrivatePath(destination, false, errorMessage)) {
+        return failCopy(errorMessage.empty()
+                            ? "Unable to finish a private folder copy."
+                            : std::move(errorMessage));
+      }
+    } else {
+      return failCopy("The selected folder contains a non-regular entry.");
+    }
+    iterator.increment(error);
+  }
+  if (error) {
+    return failCopy("Unable to enumerate the selected folder: " +
+                    error.message());
+  }
+  if (cancelled()) {
+    return cancelledCopy();
+  }
+  return ParseBridgeResult(PathToUtf8(destinationRoot), true, true,
+                           PlatformTemporaryPathKind::Directory,
+                           PathToUtf8(source.filename()));
+}
+
+PlatformDocumentHandoffResult
 Validate(const PlatformDocumentExportRequest &request) {
   PlatformDocumentImportRequest common{.mimeType = request.mimeType,
                                        .maxBytes = request.maxBytes};
@@ -1361,7 +1892,10 @@ PlatformDocumentHandoffResult ParseBridgeResult(const std::string &value,
                                                 bool expectsLocalPath,
                                                 bool temporaryLocalFile,
                                                 PlatformTemporaryPathKind
-                                                    temporaryPathKind) {
+                                                    temporaryPathKind,
+                                                std::string originalSourceName,
+                                                SourceNameNormalizer
+                                                    sourceNameNormalizer) {
   if (value == kCancelled) {
     return {.status = PlatformDocumentHandoffStatus::Cancelled};
   }
@@ -1380,6 +1914,7 @@ PlatformDocumentHandoffResult ParseBridgeResult(const std::string &value,
     auto result = PlatformDocumentHandoffResult{
         .status = PlatformDocumentHandoffStatus::Succeeded,
         .localPath = path.lexically_normal(),
+        .originalSourceName = {},
         .temporaryLocalFile = temporaryLocalFile &&
                               temporaryPathKind ==
                                   PlatformTemporaryPathKind::File,
@@ -1390,6 +1925,30 @@ PlatformDocumentHandoffResult ParseBridgeResult(const std::string &value,
       if (result.temporaryOwnership == nullptr) {
         return failure("The platform returned a document outside private "
                        "handoff storage.");
+      }
+    }
+    if (!originalSourceName.empty()) {
+      try {
+        if (!sourceNameNormalizer) {
+          sourceNameNormalizer = [](std::string_view sourceName)
+              -> std::optional<std::string> {
+            auto normalized = skin::normalizeSkinSourceNameNfc(sourceName);
+            return std::move(normalized.value);
+          };
+        }
+        auto normalized = sourceNameNormalizer(originalSourceName);
+        if (!normalized) {
+          if (result.temporaryOwnership != nullptr) {
+            (void)result.temporaryOwnership->cleanup();
+          }
+          return failure("The selected source name is invalid.");
+        }
+        result.originalSourceName = std::move(*normalized);
+      } catch (...) {
+        if (result.temporaryOwnership != nullptr) {
+          (void)result.temporaryOwnership->cleanup();
+        }
+        return failure("The selected source name is invalid.");
       }
     }
     return result;
@@ -1611,11 +2170,15 @@ void PlatformDocumentHandoffOperation::cancel() noexcept {
   }
 }
 
-void PlatformDocumentHandoffOperation::close() noexcept {
+void PlatformDocumentHandoffOperation::abandon() noexcept {
   if (state_ != nullptr) {
     state_->abandon();
     state_.reset();
   }
+}
+
+void PlatformDocumentHandoffOperation::close() noexcept {
+  abandon();
 }
 
 namespace {
@@ -1859,6 +2422,12 @@ void cancelNativeDocumentHandoff(std::uint64_t operationToken) {
 
 PlatformDocumentHandoffOperation
 ImportDocumentAsync(PlatformDocumentImportRequest request) {
+  return ImportDocumentAsync(std::move(request), {});
+}
+
+PlatformDocumentHandoffOperation
+ImportDocumentAsync(PlatformDocumentImportRequest request,
+                    PlatformTemporaryPathCleanupServiceHandle cleanupService) {
   const auto operationToken = detail::NextOperationToken();
   std::string registrationError;
   if (!registerNativeDocumentToken(operationToken, registrationError)) {
@@ -1868,7 +2437,7 @@ ImportDocumentAsync(PlatformDocumentImportRequest request) {
                              ? "Document handoff registration failed."
                              : message);
         },
-        [] {});
+        [] {}, std::move(cleanupService));
   }
   auto tokenLease = std::make_shared<NativeDocumentTokenLease>(operationToken);
   auto nativeCancellation =
@@ -1888,7 +2457,44 @@ ImportDocumentAsync(PlatformDocumentImportRequest request) {
           return failure("Document import failed unexpectedly.");
         }
       },
-      [nativeCancellation] { nativeCancellation->cancel(); });
+      [nativeCancellation] { nativeCancellation->cancel(); },
+      std::move(cleanupService));
+}
+
+PlatformDocumentHandoffOperation
+ImportDirectoryAsync(PlatformDirectoryImportRequest request,
+                     PlatformTemporaryPathCleanupServiceHandle cleanupService) {
+  const auto operationToken = detail::NextOperationToken();
+  std::string registrationError;
+  if (!registerNativeDocumentToken(operationToken, registrationError)) {
+    return detail::StartOperation(
+        [message = std::move(registrationError)](const std::atomic_bool &) {
+          return failure(message.empty()
+                             ? "Document handoff registration failed."
+                             : message);
+        },
+        [] {}, std::move(cleanupService));
+  }
+  auto tokenLease = std::make_shared<NativeDocumentTokenLease>(operationToken);
+  auto nativeCancellation =
+      std::make_shared<detail::NativeCancellationRegistration>(
+          [operationToken] { cancelNativeDocumentHandoff(operationToken); });
+  return detail::StartOperation(
+      [operationToken, request = std::move(request), nativeCancellation,
+       tokenLease](const std::atomic_bool &cancellationRequested) {
+        (void)tokenLease;
+        try {
+          return importDirectory(operationToken, request, cancellationRequested,
+                                 *nativeCancellation);
+        } catch (const std::exception &error) {
+          return failure(std::string("Directory import failed: ") +
+                         error.what());
+        } catch (...) {
+          return failure("Directory import failed unexpectedly.");
+        }
+      },
+      [nativeCancellation] { nativeCancellation->cancel(); },
+      std::move(cleanupService));
 }
 
 PlatformDocumentHandoffOperation
