@@ -46,6 +46,7 @@ struct PublicationJournal {
   std::string phase;
   SkinPackageId package;
   std::string destinationDirectory;
+  std::string oldVisibleDirectory;
   std::string visibleStagingToken;
   std::string visibleBackupToken;
   bool oldPresent = true;
@@ -100,6 +101,11 @@ bool safeToken(std::string_view token) {
          token.find('/') == std::string_view::npos &&
          token.find('\\') == std::string_view::npos &&
          token.size() <= SkinPackagePolicy::maxPathBytes;
+}
+
+std::string filenameUtf8(const fs::path &path) {
+  const auto value = path.filename().generic_u8string();
+  return {reinterpret_cast<const char *>(value.data()), value.size()};
 }
 
 bool lowercaseSha256(std::string_view digest) {
@@ -165,8 +171,23 @@ loadJournal(const fs::path &path, std::vector<SkinDiagnostic> &diagnostics) {
   const auto newSourceGeneration = catalog->find("newSourceGeneration");
   const auto oldPresent = visible->find("oldPresent");
   const auto normalized = normalizePackageId(packageDirectory);
+  const auto oldDirectory = visible->find("oldDirectory");
+  if (oldDirectory != visible->end() &&
+      (!oldDirectory->is_string() ||
+       !getString(*visible, "oldDirectory", result.oldVisibleDirectory))) {
+    diagnostics.push_back(storeDiagnostic(
+        "skin_package_journal_invalid",
+        "skin package publication journal has invalid old directory identity"));
+    return std::nullopt;
+  }
+  if (result.oldVisibleDirectory.empty()) {
+    result.oldVisibleDirectory = result.destinationDirectory;
+  }
+  const auto normalizedOld = normalizePackageId(result.oldVisibleDirectory);
   if (!normalized.package ||
       normalized.package->collisionKey != packageCollisionKey ||
+      !normalizedOld.package ||
+      normalizedOld.package->collisionKey != packageCollisionKey ||
       result.destinationDirectory != packageDirectory ||
       !safeToken(result.visibleStagingToken) ||
       !safeToken(result.visibleBackupToken) ||
@@ -1214,6 +1235,7 @@ bool writeJournal(const fs::path &path, const PublicationJournal &journal,
                   {"collisionKey", journal.package.collisionKey}};
   root["visible"] =
       OrderedJson{{"destinationDirectory", journal.destinationDirectory},
+                  {"oldDirectory", journal.oldVisibleDirectory},
                   {"stagingToken", journal.visibleStagingToken},
                   {"backupToken", journal.visibleBackupToken},
                   {"oldPresent", journal.oldPresent},
@@ -1773,12 +1795,14 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
     }
     const fs::path visible =
         roots_.visiblePackages / journal->destinationDirectory;
+    const fs::path oldVisible =
+        roots_.visiblePackages / journal->oldVisibleDirectory;
     const fs::path visibleStaging = roots_.visiblePackages.parent_path() /
                                     ".skin-import-staging" /
                                     journal->visibleStagingToken;
     const fs::path visibleBackup =
         roots_.visiblePackages.parent_path() / ".skin-publication-backups" /
-        journal->visibleBackupToken / journal->destinationDirectory;
+        journal->visibleBackupToken / journal->oldVisibleDirectory;
     const fs::path newRevision =
         roots_.privateRevisions / journal->newRevisionDigest;
     const fs::path revisionStaging =
@@ -1792,22 +1816,33 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
                                    ".publication-backups" /
                                    journal->catalogBackupToken;
 
+    std::error_code equivalentError;
+    const bool sameVisibleEntry =
+        visible == oldVisible ||
+        fs::equivalent(visible, oldVisible, equivalentError);
     auto visibleCapability = RetainedTreeCapability::issue(visible);
+    std::optional<RetainedTreeCapability> distinctOldVisibleCapability;
+    if (!sameVisibleEntry) {
+      distinctOldVisibleCapability = RetainedTreeCapability::issue(oldVisible);
+    }
     auto backupCapability = RetainedTreeCapability::issue(visibleBackup);
     auto stagingCapability = RetainedTreeCapability::issue(visibleStaging);
     auto newRevisionCapability = RetainedTreeCapability::issue(newRevision);
-    if (!visibleCapability || !backupCapability || !stagingCapability ||
-        !newRevisionCapability) {
+    if (!visibleCapability ||
+        (!sameVisibleEntry && !distinctOldVisibleCapability) ||
+        !backupCapability || !stagingCapability || !newRevisionCapability) {
       result.diagnostics.push_back(storeDiagnostic(
           "skin_package_recovery_capability_failed",
           "skin package recovery could not retain exact tree identities"));
       return result;
     }
-    const bool visibleIsOld =
-        journal->oldPresent && visibleCapability->existed() &&
-        treeDigestMatches(visible, journal->package, journal->oldTreeDigest,
+    RetainedTreeCapability &oldVisibleCapability =
+        sameVisibleEntry ? *visibleCapability : *distinctOldVisibleCapability;
+    const bool oldVisibleIsOld =
+        journal->oldPresent && oldVisibleCapability.existed() &&
+        treeDigestMatches(oldVisible, journal->package, journal->oldTreeDigest,
                           roots_, aliases_) &&
-        visibleCapability->matchesIssuedIdentity();
+        oldVisibleCapability.matchesIssuedIdentity();
     const bool visibleIsNew =
         visibleCapability->existed() &&
         treeDigestMatches(visible, journal->package, journal->newTreeDigest,
@@ -1883,7 +1918,7 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
         validateCatalogGeneration(newCatalog, journal->newCatalogGeneration,
                                   journal->newSourceGeneration);
     const bool oldVisibleComplete = journal->oldPresent
-                                        ? (visibleIsOld || backupIsOld)
+                                        ? (oldVisibleIsOld || backupIsOld)
                                         : (visibleMissing || visibleIsNew);
     const bool oldComplete = oldVisibleComplete && decodedOldCatalog;
     const bool newComplete =
@@ -1912,18 +1947,30 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       }
     }
 
-    if (!selectNew && journal->oldPresent && !visibleIsOld) {
-      if ((!visibleMissing &&
-           !quarantineTree(*visibleCapability,
-                           roots_.visiblePackages.parent_path() /
-                               ".skin-recovery-quarantine",
-                           journal->operationId, "rolled-back-visible")) ||
-          !backupCapability->renameTo(visible)) {
+    if (!selectNew && journal->oldPresent && !oldVisibleIsOld) {
+      const bool destinationCleared =
+          !visibleCapability->existed() ||
+          quarantineTree(*visibleCapability,
+                         roots_.visiblePackages.parent_path() /
+                             ".skin-recovery-quarantine",
+                         journal->operationId, "rolled-back-visible");
+      if (!destinationCleared || !backupCapability->renameTo(oldVisible)) {
         result.diagnostics.push_back(storeDiagnostic(
             "skin_package_recovery_visible_failed",
             "unable to restore the previous visible skin package"));
         return result;
       }
+    } else if (!selectNew && journal->oldPresent && !sameVisibleEntry &&
+               visibleCapability->existed() &&
+               !quarantineTree(*visibleCapability,
+                               roots_.visiblePackages.parent_path() /
+                                   ".skin-recovery-quarantine",
+                               journal->operationId,
+                               "rolled-back-alias-visible")) {
+      result.diagnostics.push_back(
+          storeDiagnostic("skin_package_recovery_visible_failed",
+                          "unable to remove the replacement package alias"));
+      return result;
     } else if (!selectNew && !journal->oldPresent && !visibleMissing) {
       if (!visibleIsNew ||
           !quarantineTree(*visibleCapability,
@@ -1948,6 +1995,16 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
             "unable to complete visible skin package publication"));
         return result;
       }
+    }
+    if (selectNew && !sameVisibleEntry && oldVisibleCapability.existed() &&
+        !quarantineTree(oldVisibleCapability,
+                        roots_.visiblePackages.parent_path() /
+                            ".skin-recovery-quarantine",
+                        journal->operationId, "replaced-alias-visible")) {
+      result.diagnostics.push_back(storeDiagnostic(
+          "skin_package_recovery_visible_failed",
+          "unable to remove the prior normalized package alias"));
+      return result;
     }
 
     const VerifiedCatalogBytes &selectedCatalog =
@@ -2181,22 +2238,71 @@ PublishPackageResult SkinPackageStore::publish(
     }
   }
 
+  if (!ensureDirectoryNoFollow(roots_.visiblePackages)) {
+    result.diagnostics.push_back(
+        storeDiagnostic("skin_package_destination_unavailable",
+                        "visible skin package storage cannot be inspected"));
+    return result;
+  }
+  struct PhysicalCollision {
+    fs::path path;
+    std::optional<RetainedTreeCapability> capability;
+  };
+  std::vector<PhysicalCollision> physicalCollisions;
+  std::error_code inventoryError;
+  for (fs::directory_iterator child(roots_.visiblePackages, inventoryError),
+       end;
+       !inventoryError && child != end; ++child) {
+    std::error_code typeError;
+    if (!child->is_directory(typeError) || typeError ||
+        aliases_.inspectNoFollow(child->path()) != SkinRejectedLinkKind::None) {
+      continue;
+    }
+    const auto name = child->path().filename().generic_u8string();
+    const std::string directoryName(reinterpret_cast<const char *>(name.data()),
+                                    name.size());
+    const auto normalized = normalizePackageId(directoryName);
+    if (normalized.package &&
+        normalized.package->collisionKey == prepared.packageId().collisionKey) {
+      auto capability = RetainedTreeCapability::issue(child->path());
+      if (!capability || !capability->existed() ||
+          !capability->matchesIssuedIdentity()) {
+        inventoryError = std::make_error_code(std::errc::io_error);
+        break;
+      }
+      physicalCollisions.push_back(PhysicalCollision{
+          .path = child->path(), .capability = std::move(capability)});
+    }
+  }
+  if (inventoryError || physicalCollisions.size() > 1) {
+    result.diagnostics.push_back(storeDiagnostic(
+        "skin_package_physical_identity_ambiguous",
+        "visible skin storage contains ambiguous normalized package roots"));
+    return result;
+  }
+  if (!physicalCollisions.empty() &&
+      collisionPolicy == PackageCollisionPolicy::Reject) {
+    result.diagnostics.push_back(storeDiagnostic(
+        "skin_package_collision",
+        "a skin package with this normalized identity already exists"));
+    return result;
+  }
+
   const fs::path visible =
       roots_.visiblePackages / prepared.packageId().directoryName;
-  auto visibleCapability = RetainedTreeCapability::issue(visible);
+  const fs::path oldVisible =
+      physicalCollisions.empty() ? visible : physicalCollisions.front().path;
+  auto visibleCapability =
+      physicalCollisions.empty()
+          ? RetainedTreeCapability::issue(oldVisible)
+          : std::move(physicalCollisions.front().capability);
   if (!visibleCapability) {
     result.diagnostics.push_back(storeDiagnostic(
         "skin_package_destination_unavailable",
         "visible skin package destination cannot be inspected"));
     return result;
   }
-  const bool destinationExists = visibleCapability->existed();
-  if (destinationExists && collisionPolicy == PackageCollisionPolicy::Reject) {
-    result.diagnostics.push_back(storeDiagnostic(
-        "skin_package_collision",
-        "a skin package with this normalized identity already exists"));
-    return result;
-  }
+  const bool destinationExists = !physicalCollisions.empty();
 
   auto oldCatalog = catalog_.snapshot();
   SkinPackageCatalogSnapshot newCatalog = *oldCatalog;
@@ -2217,15 +2323,15 @@ PublishPackageResult SkinPackageStore::publish(
   std::string oldTreeDigest;
   std::optional<std::vector<TreeMetadataRecord>> oldTreeManifest;
   if (destinationExists) {
-    oldTreeManifest = treeMetadataManifest(visible, aliases_);
-    auto digest = treeDigest(visible, prepared.packageId(), roots_, aliases_,
+    oldTreeManifest = treeMetadataManifest(oldVisible, aliases_);
+    auto digest = treeDigest(oldVisible, prepared.packageId(), roots_, aliases_,
                              stop, result.diagnostics);
     if (!oldTreeManifest || !digest) {
       return result;
     }
     oldTreeDigest = std::move(*digest);
     if (!visibleCapability->matchesIssuedIdentity() ||
-        treeMetadataManifest(visible, aliases_) != oldTreeManifest) {
+        treeMetadataManifest(oldVisible, aliases_) != oldTreeManifest) {
       result.diagnostics.push_back(
           storeDiagnostic("skin_package_source_changed",
                           "visible skin package changed during inspection"));
@@ -2235,12 +2341,13 @@ PublishPackageResult SkinPackageStore::publish(
   const std::string operationId = nextOperationId();
   const fs::path backup = roots_.visiblePackages.parent_path() /
                           ".skin-publication-backups" / operationId /
-                          prepared.packageId().directoryName;
+                          oldVisible.filename();
   PublicationJournal journal{
       .operationId = operationId,
       .phase = "intent-written",
       .package = prepared.packageId(),
       .destinationDirectory = prepared.packageId().directoryName,
+      .oldVisibleDirectory = filenameUtf8(oldVisible),
       .visibleStagingToken = prepared.visibleStagingRoot().filename().string(),
       .visibleBackupToken = operationId,
       .oldPresent = destinationExists,
@@ -2296,7 +2403,7 @@ PublishPackageResult SkinPackageStore::publish(
   const bool physicalMatches =
       visibleCapability->matchesIssuedIdentity() &&
       (!destinationExists ||
-       treeMetadataManifest(visible, aliases_) == oldTreeManifest);
+       treeMetadataManifest(oldVisible, aliases_) == oldTreeManifest);
   if (!physicalMatches || stop.stop_requested()) {
     clearMutation();
     result.retryableInventoryRace = !stop.stop_requested();
@@ -2354,12 +2461,12 @@ PublishPackageResult SkinPackageStore::publish(
                                                 relocationDiagnostics);
       }
       if (destinationExists &&
-          !treeDigestMatches(visible, prepared.packageId(), oldTreeDigest,
+          !treeDigestMatches(oldVisible, prepared.packageId(), oldTreeDigest,
                              roots_, aliases_)) {
         visibleRestored = treeDigestMatches(backup, prepared.packageId(),
                                             oldTreeDigest, roots_, aliases_) &&
                           visibleCapability->matchesIssuedIdentity() &&
-                          visibleCapability->renameTo(visible) &&
+                          visibleCapability->renameTo(oldVisible) &&
                           visibleRestored;
       }
       if (!destinationExists) {
@@ -2538,13 +2645,21 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
 
   struct ScannedPackage {
     SkinPackageId package;
+    fs::path visiblePath;
     std::optional<RetainedTreeCapability> visibleCapability;
     std::optional<std::vector<TreeMetadataRecord>> visibleManifest;
     std::optional<PreparedSkinRevision> revision;
     std::vector<SkinCatalogEntrySnapshot> entries;
     std::vector<SkinDiagnostic> diagnostics;
   };
+  struct VisibleInventoryEntry {
+    SkinPackageId package;
+    fs::path path;
+    std::optional<RetainedTreeCapability> capability;
+  };
   std::vector<ScannedPackage> scanned;
+  std::vector<VisibleInventoryEntry> visibleInventory;
+  std::map<std::string, std::size_t, std::less<>> collisionCounts;
   const auto oldCatalog = catalog_.snapshot();
   std::error_code iteratorError;
   if (!ensureDirectoryNoFollow(roots_.visiblePackages)) {
@@ -2576,8 +2691,38 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
           "a direct child of the Skins root has an invalid package name"));
       continue;
     }
-    ScannedPackage work{.package = *packageResult.package};
-    work.visibleCapability = RetainedTreeCapability::issue(iterator->path());
+    auto capability = RetainedTreeCapability::issue(iterator->path());
+    ++collisionCounts[packageResult.package->collisionKey];
+    visibleInventory.push_back({.package = *packageResult.package,
+                                .path = iterator->path(),
+                                .capability = std::move(capability)});
+  }
+  if (iteratorError) {
+    result.diagnostics.push_back(
+        storeDiagnostic("skin_package_scan_failed",
+                        "unable to enumerate the visible skin package root"));
+    return result;
+  }
+
+  std::set<std::string, std::less<>> reportedAmbiguities;
+  for (VisibleInventoryEntry &inventoryEntry : visibleInventory) {
+    if (stop.stop_requested()) {
+      result.cancelled = true;
+      return result;
+    }
+    if (collisionCounts[inventoryEntry.package.collisionKey] > 1) {
+      if (reportedAmbiguities.insert(inventoryEntry.package.collisionKey)
+              .second) {
+        result.diagnostics.push_back(storeDiagnostic(
+            "skin_package_physical_identity_ambiguous",
+            "multiple visible directories normalize to one package identity"));
+      }
+      continue;
+    }
+    ScannedPackage work{.package = inventoryEntry.package,
+                        .visiblePath = inventoryEntry.path,
+                        .visibleCapability =
+                            std::move(inventoryEntry.capability)};
     if (!work.visibleCapability || !work.visibleCapability->existed()) {
       work.diagnostics.push_back(
           storeDiagnostic("skin_package_source_changed",
@@ -2585,7 +2730,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
       scanned.push_back(std::move(work));
       continue;
     }
-    work.visibleManifest = treeMetadataManifest(iterator->path(), aliases_);
+    work.visibleManifest = treeMetadataManifest(work.visiblePath, aliases_);
     if (!work.visibleManifest) {
       work.diagnostics.push_back(storeDiagnostic(
           "skin_package_source_changed",
@@ -2595,7 +2740,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
     }
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
     auto snapshot =
-        snapshotter.snapshot(iterator->path(), work.package, stop, progress);
+        snapshotter.snapshot(work.visiblePath, work.package, stop, progress);
     work.diagnostics.insert(
         work.diagnostics.end(),
         std::make_move_iterator(snapshot.diagnostics.begin()),
@@ -2609,7 +2754,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
       continue;
     }
     if (!work.visibleCapability->matchesIssuedIdentity() ||
-        treeMetadataManifest(iterator->path(), aliases_) !=
+        treeMetadataManifest(work.visiblePath, aliases_) !=
             work.visibleManifest) {
       work.diagnostics.push_back(
           storeDiagnostic("skin_package_source_changed",
@@ -2731,12 +2876,6 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
     work.revision = std::move(snapshot.prepared);
     scanned.push_back(std::move(work));
   }
-  if (iteratorError) {
-    result.diagnostics.push_back(
-        storeDiagnostic("skin_package_scan_failed",
-                        "unable to enumerate the visible skin package root"));
-    return result;
-  }
 
   SkinPackageCatalogSnapshot next;
   next.catalogGeneration = oldCatalog->catalogGeneration + 1;
@@ -2803,8 +2942,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
     }
     if (!work.visibleCapability ||
         !work.visibleCapability->matchesIssuedIdentity() ||
-        treeMetadataManifest(
-            roots_.visiblePackages / work.package.directoryName, aliases_) !=
+        treeMetadataManifest(work.visiblePath, aliases_) !=
             work.visibleManifest) {
       result.retryableInventoryRace = !stop.stop_requested();
       result.cancelled = stop.stop_requested();
