@@ -1,4 +1,5 @@
 #include "TextView.h"
+#include "SdlTtfRuntime.h"
 #include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
@@ -21,8 +22,6 @@
 #include <utility>
 
 namespace {
-std::mutex g_ttfMutex;
-int g_ttfRefCount = 0;
 std::mutex g_fontCacheMutex;
 constexpr float kMarqueePixelsPerSecond = 48.0f;
 constexpr Uint64 kMarqueeStartDelayMs = 700;
@@ -49,27 +48,6 @@ struct TextLineMetrics {
 };
 
 using SurfacePtr = UniqueResource<SDL_Surface, SDL_FreeSurface>;
-
-bool acquireTtf() {
-  std::lock_guard<std::mutex> lock(g_ttfMutex);
-  if (g_ttfRefCount == 0 && TTF_Init() != 0) {
-    SDL_Log("Failed to initialize SDL_ttf: %s", TTF_GetError());
-    return false;
-  }
-  ++g_ttfRefCount;
-  return true;
-}
-
-void releaseTtf() {
-  std::lock_guard<std::mutex> lock(g_ttfMutex);
-  if (g_ttfRefCount <= 0) {
-    return;
-  }
-  --g_ttfRefCount;
-  if (g_ttfRefCount == 0) {
-    TTF_Quit();
-  }
-}
 
 void addUniquePath(std::vector<std::string> &paths, std::string path) {
   if (path.empty()) {
@@ -316,7 +294,7 @@ TextView::TextView(const std::string &fontPath, int fontSize,
   this->fontRasterSize = rasterFontSizeFor(fontSize);
   primaryFontPath_ = fontPath;
   fallbackFontPaths = fontFallbackPaths(fontPath);
-  ttfInitialized = acquireTtf();
+  ttfInitialized = text_runtime::acquire();
   if (ttfInitialized) {
     while (nextFallbackFontPath < fallbackFontPaths.size()) {
       const bool required = nextFallbackFontPath == 0;
@@ -352,7 +330,7 @@ TextView::~TextView() {
   }
   font = nullptr;
   if (ttfInitialized) {
-    releaseTtf();
+    text_runtime::release();
   }
 }
 

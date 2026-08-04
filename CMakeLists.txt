@@ -3315,6 +3315,26 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(image_decode_coordinator_tests PRIVATE cxx_std_23)
 
+    if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+        add_executable(skin_resource_catalog_tests
+            tests/skin_resource_catalog_tests.cpp
+            src/view/DecodedImageCache.cpp
+            src/view/ImageFileDecoder.cpp
+            src/FileChecksum.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+            src/skin/beatoraja/SkinResourceCatalog.cpp
+        )
+        if(APPLE)
+            target_sources(skin_resource_catalog_tests PRIVATE src/skin/package/SkinAliasDetectorApple.mm)
+        endif()
+        target_include_directories(skin_resource_catalog_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(skin_resource_catalog_tests PRIVATE cxx_std_23)
+        target_compile_definitions(skin_resource_catalog_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1)
+        target_link_libraries(skin_resource_catalog_tests PRIVATE bgfx utf8proc::utf8proc)
+    endif()
+
     add_executable(mobile_memory_pressure_tests
         tests/mobile_memory_pressure_tests.cpp
     )
@@ -3328,7 +3348,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/DecodedImageCache.cpp
         src/view/ImageDecodeCoordinator.cpp
         src/view/ImageFade.cpp
+        src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp
@@ -3366,7 +3388,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageDecodeCoordinator.cpp
         src/view/ChartListItemView.cpp
         src/view/ImageFade.cpp
+        src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/Button.cpp
         src/view/TextView.cpp
         src/view/View.cpp
@@ -3560,7 +3584,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageDecodeCoordinator.cpp
         src/view/IrUploadCandidateListView.cpp
         src/view/ImageFade.cpp
+        src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/Button.cpp
         src/view/CheckboxButtonContent.cpp
         src/view/TextView.cpp
@@ -5159,6 +5185,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    if (TARGET skin_resource_catalog_tests)
+        asobmashow_register_test(skin_resource_catalog_tests)
+    endif()
     if (TARGET ir_http_client_tests)
         asobmashow_register_test(ir_http_client_tests)
     endif()

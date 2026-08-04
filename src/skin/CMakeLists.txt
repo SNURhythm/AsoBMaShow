@@ -34,6 +34,8 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinCoverNormalization.cpp
         beatoraja/SkinObjectResolutionPrecedence.cpp
         beatoraja/SkinModelValidator.cpp
+        beatoraja/SkinResourceCatalog.cpp
+        beatoraja/SkinTextAtlas.cpp
     )
 else()
     target_sources(main PRIVATE LuaGameplaySkinFeatureUnavailable.cpp)
