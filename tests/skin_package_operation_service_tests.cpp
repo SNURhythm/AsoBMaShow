@@ -128,9 +128,11 @@ public:
   SkinValidationResult validate(SkinRevisionReadView, const SkinEntryId &,
                                 const EntryProfileSettings *,
                                 std::stop_token) override {
+    EntryProfileSettings reconciled;
+    const std::string digest = skinConfigurationDigest(reconciled);
     return {.disposition = SkinValidationDisposition::Selectable7Key,
-            .reconciledSettings = EntryProfileSettings{},
-            .configurationDigest = std::string(64, 'a')};
+            .reconciledSettings = std::move(reconciled),
+            .configurationDigest = digest};
   }
 };
 
@@ -203,6 +205,35 @@ waitFor(SkinPackageOperationService &service, std::uint64_t ticket) {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   return std::nullopt;
+}
+
+std::optional<PreparedPackage>
+prepareFolderForDisposal(SkinPackageOperationService &service,
+                         const fs::path &source, SkinPackageId package) {
+  const auto handle =
+      service.submitPrepareFolder(source, std::move(package), {});
+  auto completion = waitFor(service, handle.ticket);
+  auto *result = completion
+                     ? std::get_if<PreparePackageResult>(&completion->payload)
+                     : nullptr;
+  if (!result || !result->prepared) {
+    return std::nullopt;
+  }
+  return std::move(result->prepared);
+}
+
+void disposeRejectedOffCaller(
+    std::optional<RejectedPreparedDisposal> &rejected) {
+  if (!rejected) {
+    return;
+  }
+  std::jthread disposalWorker(
+      [owned = std::move(*rejected)]() mutable {
+        owned.cleanup.run();
+        PreparedPackage workerOwned = std::move(owned.prepared);
+        (void)workerOwned;
+      });
+  rejected.reset();
 }
 
 SkinStorageRoots rootsBelow(const fs::path &root) {
@@ -1065,6 +1096,184 @@ void testBoundedBackpressureReturnsCleanupOwnership() {
          "rejected cleanup remains exactly-once caller ownership");
 }
 
+void testReservedDisposalBypassesFullNormalQueueWithoutCallerCleanup() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "reserved-disposal-source";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  SkinPackageOperationService service(store, validator);
+
+  auto reservation = service.reservePreparedDisposal();
+  expect(reservation.has_value(),
+         "a live service reserves disposal capacity before staging exists");
+  auto prepared = prepareFolderForDisposal(
+      service, source,
+      {.directoryName = "ReservedDisposal", .collisionKey = "reserveddisposal"});
+  expect(prepared.has_value(),
+         "reserved-disposal fixture obtains prepared staging");
+  if (!reservation || !prepared) {
+    reservation.reset();
+    service.shutdown();
+    return;
+  }
+  const auto stagingRoot = prepared->visibleStagingRoot();
+
+  std::vector<SkinPackageOperationHandle> retained;
+  retained.reserve(128);
+  for (int index = 0; index < 128; ++index) {
+    auto handle = service.submitPrepareFolder(
+        temporary.root() / "missing-reserved-capacity-source",
+        {.directoryName = "ReservedCapacity" + std::to_string(index),
+         .collisionKey = "reservedcapacity" + std::to_string(index)},
+        {});
+    expect(handle.ticket != 0,
+           "normal operation capacity remains independently bounded");
+    retained.push_back(std::move(handle));
+  }
+
+  std::atomic_int cleanupRuns = 0;
+  std::mutex cleanupMutex;
+  std::condition_variable cleanupStarted;
+  std::condition_variable cleanupRelease;
+  bool cleanupIsRunning = false;
+  bool releaseCleanup = false;
+  std::thread::id cleanupThread;
+  auto rejected = service.submitPublish(
+      std::move(*prepared), PackageCollisionPolicy::Reject, {},
+      SkinDeferredCleanup([&] {
+        std::unique_lock lock(cleanupMutex);
+        cleanupThread = std::this_thread::get_id();
+        ++cleanupRuns;
+        cleanupIsRunning = true;
+        cleanupStarted.notify_all();
+        cleanupRelease.wait(lock, [&] { return releaseCleanup; });
+      }));
+  expect(rejected.ticket == 0 && rejected.rejectedPrepared.has_value(),
+         "a full normal queue returns paired publish capabilities");
+  if (!rejected.rejectedPrepared) {
+    reservation.reset();
+    service.shutdown();
+    return;
+  }
+
+  const std::thread::id callerThread = std::this_thread::get_id();
+  const auto transferStarted = std::chrono::steady_clock::now();
+  auto transferRejected = std::move(*reservation).transfer(
+      std::move(*rejected.rejectedPrepared));
+  const auto transferElapsed =
+      std::chrono::steady_clock::now() - transferStarted;
+  expect(!transferRejected,
+         "reserved disposal accepts capabilities while normal slots are full");
+  expect(transferElapsed < std::chrono::milliseconds(100),
+         "reserved capability transfer does not wait for cleanup or a slot");
+
+  {
+    std::unique_lock lock(cleanupMutex);
+    expect(cleanupStarted.wait_for(lock, std::chrono::seconds(5),
+                                   [&] { return cleanupIsRunning; }),
+           "reserved cleanup starts on the service worker");
+  }
+  expect(cleanupRuns == 1,
+         "reserved transfer invokes cleanup exactly once");
+  expect(cleanupThread != callerThread,
+         "reserved cleanup never runs on the transferring thread");
+  expect(fs::exists(stagingRoot),
+         "prepared staging remains owned while worker cleanup is blocked");
+  {
+    std::scoped_lock lock(cleanupMutex);
+    releaseCleanup = true;
+  }
+  cleanupRelease.notify_all();
+  expect(waitUntil([&] { return !fs::exists(stagingRoot); }),
+         "prepared staging destruction follows cleanup on the worker");
+  disposeRejectedOffCaller(transferRejected);
+  service.shutdown();
+}
+
+void testReservedDisposalTransferWinsConcurrentShutdown() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "shutdown-reserved-source";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  SkinPackageOperationService service(store, validator);
+
+  auto reservation = service.reservePreparedDisposal();
+  auto prepared = prepareFolderForDisposal(
+      service, source,
+      {.directoryName = "ShutdownReserved", .collisionKey = "shutdownreserved"});
+  expect(reservation.has_value() && prepared.has_value(),
+         "shutdown-race fixture owns reservation and staging");
+  if (!reservation || !prepared) {
+    reservation.reset();
+    service.shutdown();
+    return;
+  }
+  const auto stagingRoot = prepared->visibleStagingRoot();
+  std::atomic_int cleanupRuns = 0;
+  RejectedPreparedDisposal disposal{
+      .prepared = std::move(*prepared),
+      .cleanup = SkinDeferredCleanup([&] { ++cleanupRuns; })};
+  std::optional<RejectedPreparedDisposal> transferRejected;
+  std::barrier start(3);
+  std::jthread transfer([&] {
+    start.arrive_and_wait();
+    transferRejected =
+        std::move(*reservation).transfer(std::move(disposal));
+  });
+  std::jthread shutdown([&] {
+    start.arrive_and_wait();
+    service.shutdown();
+  });
+  start.arrive_and_wait();
+  transfer.join();
+  shutdown.join();
+
+  expect(!transferRejected,
+         "an existing reservation transfers even when shutdown wins the race");
+  expect(cleanupRuns == 1,
+         "shutdown drains the raced reserved cleanup exactly once");
+  expect(!fs::exists(stagingRoot),
+         "shutdown drains raced prepared staging before returning");
+  disposeRejectedOffCaller(transferRejected);
+  service.shutdown();
+}
+
+void testUnusedReservationReleasesShutdownAndPostShutdownRejectsAdmission() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  SkinPackageOperationService service(store, validator);
+
+  auto reservation = service.reservePreparedDisposal();
+  expect(reservation.has_value(),
+         "live service admits a prepared-disposal reservation");
+  expect(!service.reservePreparedDisposal(),
+         "the single close-safe disposal lane rejects excess reservation "
+         "before another staging capability exists");
+  reservation.reset();
+  service.shutdown();
+  service.shutdown();
+  expect(!service.reservePreparedDisposal(),
+         "post-shutdown reservation admission fails explicitly");
+}
+
 void testDetachedQueuedRescanSuppressesCompletion() {
   TempDirectory temporary;
   const auto roots = rootsBelow(temporary.root());
@@ -1250,6 +1459,9 @@ int main() {
   testPublishPackageCopyFailureReturnsExactCapabilities();
   testThrowingPublishValidatorReturnsTypedTerminalFailure();
   testBoundedBackpressureReturnsCleanupOwnership();
+  testReservedDisposalBypassesFullNormalQueueWithoutCallerCleanup();
+  testReservedDisposalTransferWinsConcurrentShutdown();
+  testUnusedReservationReleasesShutdownAndPostShutdownRejectsAdmission();
   testDetachedQueuedRescanSuppressesCompletion();
   testQueuedRemoveDeliversTypedCancellationWithoutDetach();
   testRecoveredServiceForwardsSerializedStoreOperations();

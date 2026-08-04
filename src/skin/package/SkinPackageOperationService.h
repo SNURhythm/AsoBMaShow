@@ -2,6 +2,7 @@
 
 #include "SkinPackageStore.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -58,6 +59,44 @@ private:
 struct RejectedPreparedDisposal {
   PreparedPackage prepared;
   SkinDeferredCleanup cleanup;
+};
+
+class SkinPackageOperationService;
+
+// Pre-acquired, allocation-free admission for one rejected prepared package.
+// Reserve before starting an import, while no staging capability exists. A
+// live reservation guarantees that transfer remains nonblocking and is drained
+// by the service worker even when normal operation slots are full or shutdown
+// starts concurrently. Shutdown waits for live reservations to transfer or be
+// released; reservation owners must therefore be torn down before the service.
+class SkinPreparedDisposalReservation {
+public:
+  SkinPreparedDisposalReservation(
+      SkinPreparedDisposalReservation &&other) noexcept;
+  SkinPreparedDisposalReservation &
+  operator=(SkinPreparedDisposalReservation &&other) noexcept;
+  SkinPreparedDisposalReservation(
+      const SkinPreparedDisposalReservation &) = delete;
+  SkinPreparedDisposalReservation &
+  operator=(const SkinPreparedDisposalReservation &) = delete;
+  ~SkinPreparedDisposalReservation();
+
+  // A valid reservation transfers ownership and returns nullopt. A returned
+  // value is an explicit fail-closed result for invalid/moved-from misuse; the
+  // service never destroys it on the caller's behalf.
+  [[nodiscard]] std::optional<RejectedPreparedDisposal>
+  transfer(RejectedPreparedDisposal disposal) && noexcept;
+  [[nodiscard]] explicit operator bool() const noexcept;
+
+private:
+  SkinPreparedDisposalReservation(SkinPackageOperationService *,
+                                  std::size_t) noexcept;
+  void release() noexcept;
+
+  SkinPackageOperationService *service_ = nullptr;
+  std::size_t slot_ = 0;
+
+  friend class SkinPackageOperationService;
 };
 
 struct SkinPackageOperationHandle {
@@ -131,6 +170,12 @@ public:
                              std::string_view configurationDigest);
   std::shared_ptr<const SkinPackageCatalogSnapshot>
   catalogSnapshot() const noexcept;
+  // Reservation admission is bounded but occurs before a caller can own a
+  // rejected PreparedPackage. Once admitted, transfer of that one capability
+  // is guaranteed while the service object remains alive, including during a
+  // concurrent shutdown.
+  [[nodiscard]] std::optional<SkinPreparedDisposalReservation>
+  reservePreparedDisposal() noexcept;
   [[nodiscard]] std::optional<SkinPackageOperationCompletion>
   poll(std::uint64_t ticket);
   void cancelAndDetach(std::uint64_t ticket) noexcept;
@@ -142,6 +187,12 @@ public:
   void shutdown() noexcept;
 
 private:
+  friend class SkinPreparedDisposalReservation;
+  [[nodiscard]] std::optional<RejectedPreparedDisposal>
+  transferReservedPreparedDisposal(std::size_t,
+                                   RejectedPreparedDisposal) noexcept;
+  void releasePreparedDisposalReservation(std::size_t) noexcept;
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

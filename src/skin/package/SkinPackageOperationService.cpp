@@ -18,6 +18,7 @@ namespace {
 
 std::atomic_uint64_t nextOperationTicket{1};
 constexpr std::size_t maxRetainedOperations = 128;
+constexpr std::size_t maxPreparedDisposalReservations = 1;
 
 std::uint64_t allocateOperationTicket() noexcept {
   auto current = nextOperationTicket.load(std::memory_order_relaxed);
@@ -125,6 +126,53 @@ void SkinDeferredCleanup::run() noexcept {
   }
 }
 
+SkinPreparedDisposalReservation::SkinPreparedDisposalReservation(
+    SkinPackageOperationService *service, std::size_t slot) noexcept
+    : service_(service), slot_(slot) {}
+
+SkinPreparedDisposalReservation::SkinPreparedDisposalReservation(
+    SkinPreparedDisposalReservation &&other) noexcept
+    : service_(std::exchange(other.service_, nullptr)), slot_(other.slot_) {}
+
+SkinPreparedDisposalReservation &
+SkinPreparedDisposalReservation::operator=(
+    SkinPreparedDisposalReservation &&other) noexcept {
+  if (this != &other) {
+    release();
+    service_ = std::exchange(other.service_, nullptr);
+    slot_ = other.slot_;
+  }
+  return *this;
+}
+
+SkinPreparedDisposalReservation::~SkinPreparedDisposalReservation() {
+  release();
+}
+
+std::optional<RejectedPreparedDisposal>
+SkinPreparedDisposalReservation::transfer(
+    RejectedPreparedDisposal disposal) && noexcept {
+  SkinPackageOperationService *service =
+      std::exchange(service_, nullptr);
+  if (service == nullptr) {
+    return disposal;
+  }
+  return service->transferReservedPreparedDisposal(slot_,
+                                                   std::move(disposal));
+}
+
+SkinPreparedDisposalReservation::operator bool() const noexcept {
+  return service_ != nullptr;
+}
+
+void SkinPreparedDisposalReservation::release() noexcept {
+  SkinPackageOperationService *service =
+      std::exchange(service_, nullptr);
+  if (service != nullptr) {
+    service->releasePreparedDisposalReservation(slot_);
+  }
+}
+
 struct SkinPackageOperationService::Impl {
   struct PrepareArchiveRequest {
     std::filesystem::path zip;
@@ -194,6 +242,18 @@ struct SkinPackageOperationService::Impl {
     std::optional<SkinPackageOperationPayload> result;
   };
 
+  enum class ReservedDisposalState : std::uint8_t {
+    Free,
+    Reserved,
+    Pending,
+    Running,
+  };
+
+  struct ReservedDisposalSlot {
+    ReservedDisposalState state = ReservedDisposalState::Free;
+    std::optional<RejectedPreparedDisposal> disposal;
+  };
+
   SkinPackageStore &store;
   SkinEntryValidator &validator;
 #if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
@@ -203,6 +263,8 @@ struct SkinPackageOperationService::Impl {
   std::condition_variable workAvailable;
   bool closing = false;
   std::array<Slot, maxRetainedOperations> slots;
+  std::array<ReservedDisposalSlot, maxPreparedDisposalReservations>
+      reservedDisposals;
   std::array<std::size_t, maxRetainedOperations> pending{};
   std::size_t pendingHead = 0;
   std::size_t pendingCount = 0;
@@ -258,6 +320,91 @@ struct SkinPackageOperationService::Impl {
       }
     }
     return std::nullopt;
+  }
+
+  std::optional<std::size_t>
+  findFreeReservedDisposalLocked() const noexcept {
+    for (std::size_t index = 0; index < reservedDisposals.size(); ++index) {
+      if (reservedDisposals[index].state == ReservedDisposalState::Free) {
+        return index;
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::optional<std::size_t>
+  findPendingReservedDisposalLocked() const noexcept {
+    for (std::size_t index = 0; index < reservedDisposals.size(); ++index) {
+      if (reservedDisposals[index].state == ReservedDisposalState::Pending) {
+        return index;
+      }
+    }
+    return std::nullopt;
+  }
+
+  bool hasLiveReservedDisposalLocked() const noexcept {
+    for (const auto &slot : reservedDisposals) {
+      if (slot.state == ReservedDisposalState::Reserved) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  std::optional<std::size_t> reservePreparedDisposal() noexcept {
+    try {
+      std::scoped_lock lock(mutex);
+      if (closing) {
+        return std::nullopt;
+      }
+      const auto slot = findFreeReservedDisposalLocked();
+      if (!slot) {
+        return std::nullopt;
+      }
+      reservedDisposals[*slot].state = ReservedDisposalState::Reserved;
+      return slot;
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<RejectedPreparedDisposal>
+  transferReservedPreparedDisposal(
+      std::size_t index, RejectedPreparedDisposal disposal) noexcept {
+    static_assert(
+        std::is_nothrow_move_constructible_v<RejectedPreparedDisposal>);
+    try {
+      std::scoped_lock lock(mutex);
+      if (index >= reservedDisposals.size() ||
+          reservedDisposals[index].state !=
+              ReservedDisposalState::Reserved) {
+        return disposal;
+      }
+      ReservedDisposalSlot &slot = reservedDisposals[index];
+      slot.disposal.emplace(std::move(disposal));
+      slot.state = ReservedDisposalState::Pending;
+    } catch (...) {
+      return disposal;
+    }
+    workAvailable.notify_one();
+    return std::nullopt;
+  }
+
+  void releasePreparedDisposalReservation(std::size_t index) noexcept {
+    bool released = false;
+    try {
+      std::scoped_lock lock(mutex);
+      if (index < reservedDisposals.size() &&
+          reservedDisposals[index].state ==
+              ReservedDisposalState::Reserved) {
+        reservedDisposals[index].state = ReservedDisposalState::Free;
+        released = true;
+      }
+    } catch (...) {
+    }
+    if (released) {
+      workAvailable.notify_all();
+    }
   }
 
   void pushPendingLocked(std::size_t index) noexcept {
@@ -566,29 +713,57 @@ struct SkinPackageOperationService::Impl {
       std::uint64_t disposalTicket = 0;
       std::uint64_t operationTicket = 0;
       bool disposal = false;
+      std::optional<std::size_t> reservedDisposalIndex;
+      std::optional<RejectedPreparedDisposal> reservedDisposal;
       std::optional<RequestPayload> releasedRequest;
       std::optional<SkinPackageOperationPayload> releasedResult;
       std::shared_ptr<SkinPackageProgressMailbox> releasedMailbox;
       try {
         std::unique_lock lock(mutex);
-        workAvailable.wait(lock,
-                           [this] { return closing || pendingCount != 0; });
-        if (pendingCount == 0) {
+        workAvailable.wait(lock, [this] {
+          return findPendingReservedDisposalLocked().has_value() ||
+                 pendingCount != 0 ||
+                 (closing && !hasLiveReservedDisposalLocked());
+        });
+        reservedDisposalIndex = findPendingReservedDisposalLocked();
+        if (reservedDisposalIndex) {
+          ReservedDisposalSlot &reserved =
+              reservedDisposals[*reservedDisposalIndex];
+          reservedDisposal.emplace(std::move(*reserved.disposal));
+          reserved.disposal.reset();
+          reserved.state = ReservedDisposalState::Running;
+        } else if (pendingCount == 0) {
           return;
-        }
-        index = popPendingLocked();
-        Slot &slot = slots[index];
-        disposal = slot.state == SlotState::QueuedDisposal;
-        if (disposal) {
-          disposalTicket = slot.ticket;
-          slot.state = SlotState::RunningDisposal;
-          takeSlotForDisposalLocked(index, releasedRequest, releasedResult,
-                                    releasedMailbox);
         } else {
-          slot.state = SlotState::RunningOperation;
-          operationTicket = slot.ticket;
+          index = popPendingLocked();
+          Slot &slot = slots[index];
+          disposal = slot.state == SlotState::QueuedDisposal;
+          if (disposal) {
+            disposalTicket = slot.ticket;
+            slot.state = SlotState::RunningDisposal;
+            takeSlotForDisposalLocked(index, releasedRequest, releasedResult,
+                                      releasedMailbox);
+          } else {
+            slot.state = SlotState::RunningOperation;
+            operationTicket = slot.ticket;
+          }
         }
       } catch (...) {
+        continue;
+      }
+      if (reservedDisposalIndex) {
+        reservedDisposal->cleanup.run();
+        // PreparedPackage destruction may recursively remove its private
+        // staging tree. It is deliberately sequenced here on the worker after
+        // cleanup, never in the transferring caller.
+        reservedDisposal.reset();
+        try {
+          std::scoped_lock lock(mutex);
+          reservedDisposals[*reservedDisposalIndex].state =
+              ReservedDisposalState::Free;
+        } catch (...) {
+          return;
+        }
         continue;
       }
       if (disposal) {
@@ -891,6 +1066,26 @@ AcquireActivationResult SkinPackageOperationService::acquireValidatedActivation(
 std::shared_ptr<const SkinPackageCatalogSnapshot>
 SkinPackageOperationService::catalogSnapshot() const noexcept {
   return impl_->store.catalogSnapshot();
+}
+
+std::optional<SkinPreparedDisposalReservation>
+SkinPackageOperationService::reservePreparedDisposal() noexcept {
+  const auto slot = impl_->reservePreparedDisposal();
+  if (!slot) {
+    return std::nullopt;
+  }
+  return SkinPreparedDisposalReservation(this, *slot);
+}
+
+std::optional<RejectedPreparedDisposal>
+SkinPackageOperationService::transferReservedPreparedDisposal(
+    std::size_t slot, RejectedPreparedDisposal disposal) noexcept {
+  return impl_->transferReservedPreparedDisposal(slot, std::move(disposal));
+}
+
+void SkinPackageOperationService::releasePreparedDisposalReservation(
+    std::size_t slot) noexcept {
+  impl_->releasePreparedDisposalReservation(slot);
 }
 
 std::optional<SkinPackageOperationCompletion>
