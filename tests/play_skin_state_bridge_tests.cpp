@@ -1,6 +1,7 @@
 #include "skin/beatoraja/PlaySkinStateBridge.h"
 
 #include "skin/SkinStoragePaths.h"
+#include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -358,6 +359,9 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
 
   auto state = stateAt(71);
   state.playStartMicros = 0;
+    state.clock.playTimer = {.active = true,
+                             .startMicros = 0,
+                             .elapsedMillisExact = true};
   auto projection = projectionAt(71);
   bridge.beginFrame(state, projection);
   state.authority.currentBpm = 999.0;
@@ -546,6 +550,161 @@ void testGameplayModeAndLoadingBooleanProperties() {
   bridge.discardFrame();
 }
 
+void testPlayTimerPropertiesMatchPinnedJavaConversions() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.durationMicros = 125'789'000;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(211);
+  state.clock.gameplayTimeMicros = 63'499'999;
+  state.clock.playTimer = {.active = false,
+                           .startMicros = 1'500'000,
+                           .elapsedMillisExact = true,
+                           .playtimeMillis = 130'789};
+  bridge.beginFrame(state, projectionAt(211));
+  expect(bridge.timerProperty({41}) == INT64_MIN,
+         "an initialized play start remains off without explicit activation");
+  expect(bridge.floatProperty({6}).supported &&
+             bridge.floatProperty({6}).value == 0.0,
+         "inactive Float 6 is exactly zero");
+  for (const auto [id, expected] : std::array{
+           std::pair{161, 0LL}, std::pair{162, 0LL},
+           std::pair{163, 2LL}, std::pair{164, 11LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "inactive play elapsed is zero while time-left retains the Java "
+           "one-second bias");
+  }
+  bridge.discardFrame();
+
+  const auto expectCapturedPlaytime =
+      [&](std::uint64_t serial, std::int32_t playtimeMillis,
+          double expectedProgress, long long remainingMinutes,
+          long long remainingSeconds, std::string_view message) {
+        state = stateAt(serial);
+        state.clock.gameplayTimeMicros = 63'499'999;
+        state.clock.playTimer = {.active = true,
+                                 .startMicros = 1'500'000,
+                                 .elapsedMillisExact = true,
+                                 .playtimeMillis = playtimeMillis};
+        bridge.beginFrame(state, projectionAt(serial));
+        const auto progress = bridge.floatProperty({6});
+        expect(bridge.timerProperty({41}) == 1'500'000,
+               "active timer 41 publishes its exact gameplay-clock start");
+        expect(progress.supported &&
+                   std::abs(progress.value - expectedProgress) <
+                       0.000000000001,
+               message);
+        expect(bridge.integerProperty({161}).supported &&
+                   bridge.integerProperty({161}).value == 1 &&
+                   bridge.integerProperty({162}).supported &&
+                   bridge.integerProperty({162}).value == 1,
+               "elapsed play-time fields retain Java long-to-int narrowing");
+        expect(bridge.integerProperty({163}).supported &&
+                   bridge.integerProperty({163}).value == remainingMinutes &&
+                   bridge.integerProperty({164}).supported &&
+                   bridge.integerProperty({164}).value == remainingSeconds,
+               "time-left consumes the immutable captured playtime authority");
+        bridge.discardFrame();
+      };
+
+  // Pinned BMSPlayer normal play uses the last playable-note time plus its
+  // 5,000ms margin; this intentionally differs from the static chart length.
+  expectCapturedPlaytime(212, 130'789, 0.47403833270072937, 1, 9,
+                         "Float 6 consumes manual last-playable plus margin");
+  // Autoplay instead uses the last timeline (including BGA/background) plus
+  // the same margin.
+  expectCapturedPlaytime(213, 145'000, 0.4275793135166168, 1, 24,
+                         "Float 6 consumes autoplay last-timeline plus margin");
+  // Pinned practice computes ((endtime + 1000) * 100 / freq) + 5000.
+  // For end=120,000ms and freq=150 this is 85,666ms.
+  expectCapturedPlaytime(214, 85'666, 0.7237293720245361, 0, 24,
+                         "Float 6 consumes captured practice range/rate time");
+
+  state = stateAt(215);
+  state.clock.gameplayTimeMicros = 63'499'999;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 1'500'000,
+                           .elapsedMillisExact = false};
+  bridge.beginFrame(state, projectionAt(215));
+  expect(bridge.timerProperty({41}) == INT64_MIN,
+         "Timer 41 fails closed without an exact practice elapsed authority");
+  expect(!bridge.floatProperty({6}).supported,
+         "Float 6 fails closed without an exact practice elapsed authority");
+  for (const int id : {161, 162, 163, 164}) {
+    expect(!bridge.integerProperty({id}).supported,
+           "practice time fields fail closed without the paired TimerManager "
+           "clock authority");
+  }
+  bridge.discardFrame();
+
+  state = stateAt(216);
+  state.clock.gameplayTimeMicros = 133'289'000;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 1'500'000,
+                           .elapsedMillisExact = true,
+                           .playtimeMillis = 130'789};
+  bridge.beginFrame(state, projectionAt(216));
+  expect(bridge.floatProperty({6}).supported &&
+             bridge.floatProperty({6}).value == 1.0,
+         "Float 6 caps at one after playtime");
+  expect(bridge.integerProperty({163}).supported &&
+             bridge.integerProperty({163}).value == 0 &&
+             bridge.integerProperty({164}).supported &&
+             bridge.integerProperty({164}).value == 0,
+         "time-left reaches zero exactly at playtime plus the Java bias");
+  bridge.discardFrame();
+
+  state = stateAt(217);
+  state.clock.gameplayTimeMicros = 2'147'485'148'000;
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 1'500'000,
+                           .elapsedMillisExact = true,
+                           .playtimeMillis = 130'789};
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.floatProperty({6}).supported &&
+             bridge.floatProperty({6}).value == 1.0,
+         "Float 6 retains the long elapsed value before its upper clamp");
+  for (const auto [id, expected] : std::array{
+           std::pair{161, -35'791LL}, std::pair{162, -23LL},
+           std::pair{163, 0LL}, std::pair{164, 0LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "integer play-time fields reproduce Java long-to-int narrowing "
+           "and signed remainder boundaries");
+  }
+  bridge.discardFrame();
+
+  const auto catalog = gameplaySkinBuiltinCatalog();
+  for (const int id : {161, 162, 163, 164}) {
+    expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                             .integerDomain =
+                                 SkinIntegerPropertyDomain::IntegerValue},
+                            SkinBuiltinPropertySelector{id}),
+           "gameplay catalog admits each implemented play-time value");
+    expect(!catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                              .integerDomain =
+                                  SkinIntegerPropertyDomain::ImageIndex},
+                             SkinBuiltinPropertySelector{id}),
+           "Beatoraja rejects play-time values as image-index selectors");
+  }
+  expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
+                           .floatDomain = SkinFloatPropertyDomain::Rate},
+                          SkinBuiltinPropertySelector{6}),
+         "gameplay catalog admits implemented music progress Float 6");
+}
+
 void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -588,6 +747,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
 
   auto state = stateAt(101);
   state.playStartMicros = 6'001;
+    state.clock.playTimer = {.active = true,
+                             .startMicros = 6'001,
+                             .elapsedMillisExact = true};
   state.lastJudgeVisualMicros = 6'002;
   state.fastSlowMicros = -34;
   state.authority.liftEnabled = false;
@@ -1154,6 +1316,7 @@ int main() {
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
+  testPlayTimerPropertiesMatchPinnedJavaConversions();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
   testEmptyCustomObjectsStayZeroCost();
   testCustomTimersPrecedeAutomaticEventsInAuthoredOrder();

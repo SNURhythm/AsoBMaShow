@@ -59,7 +59,7 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   const SkinBindingType integerValue{
       .kind = SkinBindingKind::IntegerProperty,
       .integerDomain = SkinIntegerPropertyDomain::IntegerValue};
-  for (const int selector : {314, 315, 316}) {
+  for (const int selector : {161, 162, 163, 164, 314, 315, 316}) {
     add(entries, integerValue, selector);
   }
 
@@ -67,6 +67,7 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
                                  .floatDomain = SkinFloatPropertyDomain::Rate};
   add(entries, floating, 4);
   add(entries, floating, 5);
+  add(entries, floating, 6);
   add(entries, floating, "lanecover");
   add(entries, floating, "lanecover2");
 
@@ -90,7 +91,7 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   // validation distinguishes those binding roles or the bridge bounds cycles.
 
   // Non-exhaustive pinned Beatoraja c2ed5db1 default play/play7main.lua gaps
-  // include integer refs 102/103/121/150/163/164/310-312, boolean options
+  // include integer refs 102/103/121/150/310-312, boolean options
   // 80/270/901/911/912, and a changeable lane-cover slider whose implicit
   // type/writer selector is 4. Timers are not a gap: TimerPropertyFactory and
   // PlaySkinStateBridge both define every nonnegative ID, including an exact

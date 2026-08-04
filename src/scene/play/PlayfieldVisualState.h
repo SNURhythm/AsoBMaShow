@@ -11,9 +11,25 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+struct PlayfieldPlayTimerAuthority {
+  bool active = false;
+  long long startMicros = 0;
+  // True only when gameplayTimeMicros - startMicros reproduces the pinned
+  // TimerManager elapsed-millisecond domain. Practice's frequency-adjusted
+  // lead-in has no equivalent Aso clock authority yet.
+  bool elapsedMillisExact = false;
+  // Exact BMSPlayer.getPlaytime()-equivalent value when the session can
+  // capture a paired elapsed clock. No static chart duration is a substitute:
+  // manual, autoplay, and practice have distinct upstream formulas.
+  std::optional<std::int32_t> playtimeMillis;
+
+  bool operator==(const PlayfieldPlayTimerAuthority &) const = default;
+};
 
 struct PlayfieldFrameClock {
   std::uint64_t serial = 0;
@@ -21,6 +37,7 @@ struct PlayfieldFrameClock {
   long long gameplayTimeMicros = 0;
   long long replayTouchTimeMicros = 0;
   long long bgaTimeMicros = 0;
+  PlayfieldPlayTimerAuthority playTimer;
 
   bool operator==(const PlayfieldFrameClock &) const = default;
 };

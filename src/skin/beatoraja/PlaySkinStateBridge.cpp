@@ -3,6 +3,7 @@
 #include "LuaSkinHostModules.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <type_traits>
@@ -28,6 +29,37 @@ std::int64_t javaDoubleToInt(double value) {
     return std::numeric_limits<int>::min();
   }
   return static_cast<int>(value);
+}
+
+std::int64_t javaLongSubtract(std::int64_t left, std::int64_t right) {
+  const auto bits = static_cast<std::uint64_t>(left) -
+                    static_cast<std::uint64_t>(right);
+  return std::bit_cast<std::int64_t>(bits);
+}
+
+std::int32_t javaLongToInt(std::int64_t value) {
+  return std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(value));
+}
+
+std::int32_t javaIntSubtract(std::int32_t left, std::int32_t right) {
+  const auto bits = static_cast<std::uint32_t>(left) -
+                    static_cast<std::uint32_t>(right);
+  return std::bit_cast<std::int32_t>(bits);
+}
+
+std::int32_t javaIntAdd(std::int32_t left, std::int32_t right) {
+  const auto bits = static_cast<std::uint32_t>(left) +
+                    static_cast<std::uint32_t>(right);
+  return std::bit_cast<std::int32_t>(bits);
+}
+
+std::int64_t playTimerElapsedMillis(const PlayfieldVisualState &snapshot) {
+  if (!snapshot.clock.playTimer.active) {
+    return 0;
+  }
+  return javaLongSubtract(snapshot.clock.gameplayTimeMicros,
+                          snapshot.clock.playTimer.startMicros) /
+         1000;
 }
 
 } // namespace
@@ -803,6 +835,32 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 160:
     return {.value = static_cast<std::int64_t>(snapshot->authority.currentBpm),
             .supported = true};
+  case 161:
+  case 162: {
+    if (!snapshot->clock.playTimer.elapsedMillisExact) {
+      return {};
+    }
+    const std::int32_t elapsed = javaLongToInt(playTimerElapsedMillis(*snapshot));
+    return {.value = *id == 161 ? elapsed / 60'000
+                                : (elapsed / 1000) % 60,
+            .supported = true};
+  }
+  case 163:
+  case 164: {
+    if (!snapshot->clock.playTimer.elapsedMillisExact ||
+        !snapshot->clock.playTimer.playtimeMillis.has_value()) {
+      return {};
+    }
+    const std::int32_t elapsed = javaLongToInt(playTimerElapsedMillis(*snapshot));
+    const std::int32_t remaining = std::max(
+        javaIntAdd(javaIntSubtract(*snapshot->clock.playTimer.playtimeMillis,
+                                   elapsed),
+                   1000),
+        std::int32_t{0});
+    return {.value = *id == 163 ? remaining / 60'000
+                                : (remaining / 1000) % 60,
+            .supported = true};
+  }
   case 74:
     return {.value = context_.chartModel.staticMetadata.totalNotes,
             .supported = true};
@@ -866,6 +924,21 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     const SkinBuiltinPropertySelector &selector) {
   const auto *snapshot = state();
   const auto id = numericSelector(selector);
+  if (snapshot != nullptr && id && *id == 6) {
+    if (!snapshot->clock.playTimer.elapsedMillisExact) {
+      return {};
+    }
+    if (!snapshot->clock.playTimer.active) {
+      return {.value = 0.0, .supported = true};
+    }
+    if (!snapshot->clock.playTimer.playtimeMillis.has_value()) {
+      return {};
+    }
+    const float progress =
+        static_cast<float>(playTimerElapsedMillis(*snapshot)) /
+        static_cast<float>(*snapshot->clock.playTimer.playtimeMillis);
+    return {.value = std::min(progress, 1.0F), .supported = true};
+  }
   if (snapshot != nullptr && id && (*id == 4 || *id == 5)) {
     if (!snapshot->authority.laneCoverEnabled) {
       return {.value = 0.0, .supported = true};
@@ -973,7 +1046,10 @@ std::int64_t PlaySkinStateBridge::timerProperty(
   }
   switch (*id) {
   case 41:
-    return snapshot->playStartMicros;
+    return snapshot->clock.playTimer.active &&
+                   snapshot->clock.playTimer.elapsedMillisExact
+               ? snapshot->clock.playTimer.startMicros
+               : INT64_MIN;
   case 46:
     return snapshot->lastJudgeVisualMicros;
   default:

@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -163,6 +164,40 @@ practiceAllowedNoteRange(const StartOptions &options) {
       .startMicros = configuration.startMicros,
       .endMicros = configuration.endMicros,
   };
+}
+
+constexpr std::int32_t kBeatorajaPlaytimeMarginMillis = 5'000;
+
+std::int32_t javaLongToInt(std::int64_t value) noexcept {
+  return std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(value));
+}
+
+std::int32_t javaIntAdd(std::int32_t left, std::int32_t right) noexcept {
+  const auto bits = static_cast<std::uint32_t>(left) +
+                    static_cast<std::uint32_t>(right);
+  return std::bit_cast<std::int32_t>(bits);
+}
+
+std::optional<std::int32_t>
+beatorajaPlaytimeMillis(const bms_parser::Chart *chart,
+                        const StartOptions &options) noexcept {
+  if (chart == nullptr) {
+    return std::nullopt;
+  }
+  if (options.practiceSession != nullptr) {
+    // Pinned practice also preloads TIMER_PLAY by a frequency-adjusted
+    // starttimeoffset. Aso has only chart-time playback here, so its elapsed
+    // origin cannot yet reproduce the paired upstream formula exactly.
+    return std::nullopt;
+  }
+  if (options.practiceMode) {
+    // A legacy practice launch lacks the upstream range/frequency authority.
+    return std::nullopt;
+  }
+  const long long terminalMicros =
+      options.autoPlay ? chart->Meta.TotalLength : chart->Meta.PlayLength;
+  return javaIntAdd(javaLongToInt(terminalMicros / 1'000),
+                    kBeatorajaPlaytimeMarginMillis);
 }
 
 long long nowMicros() {
@@ -3791,6 +3826,13 @@ void GamePlayScene::capturePlayfieldVisualState(
       .gameplayTimeMicros = gameplayTimeMicros,
       .replayTouchTimeMicros = gameplayTimeMicros,
       .bgaTimeMicros = gameplayTimeMicros,
+      .playTimer = {
+          .active = gameplayTimeMicros >= getStartPositionMicros(),
+          .startMicros = getStartPositionMicros(),
+          .elapsedMillisExact = options.practiceSession == nullptr &&
+                                !options.practiceMode,
+          .playtimeMillis = beatorajaPlaytimeMillis(chart, options),
+      },
   });
   capturedPlayfieldProjection = playfieldProjection.project(
       playfieldChartVisualModel, capturedPlayfieldVisualState,

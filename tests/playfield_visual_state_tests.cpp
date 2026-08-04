@@ -478,6 +478,40 @@ void testLifecycleClocksDefaultAndResetToTheOffSentinel() {
           "an older capture");
 }
 
+void testPlayTimerAuthorityIsAnImmutablePartOfTheGameplayClock() {
+  ChartFixture fixture;
+  PlayfieldVisualStateStore store(
+      buildPlayfieldChartVisualModel(fixture.chart, 0));
+
+  PlayfieldFrameClock clock{
+      .serial = 51,
+      .gameplayTimeMicros = 61'999'999,
+      .playTimer = {.active = false,
+                    .startMicros = 1'500'000,
+                    .elapsedMillisExact = true,
+                    .playtimeMillis = 130'789},
+  };
+  const auto inactive = store.capture(clock);
+
+  clock.serial = 52;
+  clock.playTimer.active = true;
+  const auto active = store.capture(clock);
+  clock.playTimer.startMicros = 60'000'000;
+  clock.playTimer.playtimeMillis = 1;
+
+  require(!inactive.clock.playTimer.active &&
+              inactive.clock.playTimer.startMicros == 1'500'000 &&
+              inactive.clock.playTimer.elapsedMillisExact &&
+              inactive.clock.playTimer.playtimeMillis == 130'789 &&
+              active.clock.playTimer.active &&
+              active.clock.playTimer.startMicros == 1'500'000 &&
+              active.clock.playTimer.elapsedMillisExact &&
+              active.clock.playTimer.playtimeMillis == 130'789,
+          "play-timer activation, start, and captured playtime remain exact "
+          "immutable frame-clock authority even when initialization is already "
+          "present");
+}
+
 void testJudgeTimingIsClampedToThePublicStateWidth() {
   ChartFixture fixture;
   const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
@@ -728,6 +762,7 @@ int main() {
   testGameplayModeAndLaneCoverAuthorityAreCapturedByValue();
   testLaneCoverAuthorityRemainsEnabledAtZeroAmount();
   testLifecycleClocksDefaultAndResetToTheOffSentinel();
+  testPlayTimerAuthorityIsAnImmutablePartOfTheGameplayClock();
   testJudgeTimingIsClampedToThePublicStateWidth();
   testCapturedBgaMissStateTracksJudgesAndResets();
   testBgaMissStatePropagatesThroughEventFanoutBeforeCapture();
