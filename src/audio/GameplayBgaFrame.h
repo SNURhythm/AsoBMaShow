@@ -1,7 +1,9 @@
 #pragma once
 
 #include "../skin/SkinPresentationTypes.h"
+#include "../skin/package/SkinPackageTypes.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -70,6 +72,33 @@ struct GameplayBgaPoint {
   float y = 0.0F;
 };
 
+// This intentionally duplicates only the four scalar fields required from
+// skin::UiLogicalRect.  UiLogicalRect belongs to the optional Beatoraja skin
+// model layer, while gameplay BGA submission must also compile without it.
+struct GameplayBgaClipRect {
+  double x = 0.0;
+  double y = 0.0;
+  double width = 0.0;
+  double height = 0.0;
+};
+
+struct BgaPreflightResult {
+  bool ready = false;
+  std::optional<skin::SkinDiagnostic> failure;
+};
+
+struct BgaDrawTarget {
+  GameplayBgaRole role = GameplayBgaRole::Base;
+  std::uint16_t viewId = 0;
+  // Matches SkinDestinationEvaluator's UI quad order: BL, BR, TR, TL.
+  std::array<GameplayBgaPoint, 4> destination{};
+  skin::SkinStretchMode stretch = skin::SkinStretchMode::Stretch;
+  std::array<float, 4> tint{1.0F, 1.0F, 1.0F, 1.0F};
+  skin::SkinBlendMode blend = skin::SkinBlendMode::Normal;
+  std::optional<GameplayBgaClipRect> clip;
+  std::uint32_t authoredOrdinal = 0;
+};
+
 enum class GameplayBgaMediaKind : std::uint8_t { Image, Video };
 
 struct PreparedGameplayBgaSurface {
@@ -86,4 +115,22 @@ struct PreparedGameplayBgaFrame {
   std::optional<PreparedGameplayBgaSurface> base;
   std::optional<PreparedGameplayBgaSurface> layer;
   std::optional<PreparedGameplayBgaSurface> miss;
+};
+
+// Resource preparation and renderer submission are deliberately separate so
+// gameplay stays independent of the optional Beatoraja renderer stack.
+class IGameplayBgaSubmitter {
+public:
+  virtual ~IGameplayBgaSubmitter() = default;
+
+  [[nodiscard]] virtual PreparedGameplayBgaFrame prepareVisualFrameAt(
+      std::uint64_t frameSerial, std::int64_t bgaTimeMicros,
+      const GameplayBgaMissState &missState) = 0;
+  [[nodiscard]] virtual BgaPreflightResult
+  preflight(const PreparedGameplayBgaFrame &frame,
+            std::span<const BgaDrawTarget> targets) = 0;
+  virtual void submitPrepared(const PreparedGameplayBgaFrame &frame,
+                              const BgaDrawTarget &target) noexcept = 0;
+  virtual void submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept =
+      0;
 };

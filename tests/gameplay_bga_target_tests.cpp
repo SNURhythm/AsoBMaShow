@@ -1,10 +1,14 @@
 #include "audio/GameplayBgaFrame.h"
 #include "audio/GameplayBgaMissStateTracker.h"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <span>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -21,6 +25,200 @@ PlayfieldJudgeEventClock clockAt(long long bgaTimeMicros,
   return {.songTimeMicros = 0,
           .visualTimeMicros = visualTimeMicros,
           .bgaTimeMicros = bgaTimeMicros};
+}
+
+bool samePoint(const GameplayBgaPoint &left,
+               const GameplayBgaPoint &right) {
+  return left.x == right.x && left.y == right.y;
+}
+
+bool sameClip(const std::optional<GameplayBgaClipRect> &left,
+              const std::optional<GameplayBgaClipRect> &right) {
+  return left.has_value() == right.has_value() &&
+         (!left.has_value() ||
+          (left->x == right->x && left->y == right->y &&
+           left->width == right->width && left->height == right->height));
+}
+
+bool sameTarget(const BgaDrawTarget &left, const BgaDrawTarget &right) {
+  return left.role == right.role && left.viewId == right.viewId &&
+         samePoint(left.destination[0], right.destination[0]) &&
+         samePoint(left.destination[1], right.destination[1]) &&
+         samePoint(left.destination[2], right.destination[2]) &&
+         samePoint(left.destination[3], right.destination[3]) &&
+         left.stretch == right.stretch && left.tint == right.tint &&
+         left.blend == right.blend && sameClip(left.clip, right.clip) &&
+         left.authoredOrdinal == right.authoredOrdinal;
+}
+
+bool sameSurface(const std::optional<PreparedGameplayBgaSurface> &left,
+                 const std::optional<PreparedGameplayBgaSurface> &right) {
+  return left.has_value() == right.has_value() &&
+         (!left.has_value() ||
+          (left->role == right->role && left->mediaKind == right->mediaKind &&
+           left->surfaceToken == right->surfaceToken &&
+           left->sourceWidth == right->sourceWidth &&
+           left->sourceHeight == right->sourceHeight));
+}
+
+bool sameFrame(const PreparedGameplayBgaFrame &left,
+               const PreparedGameplayBgaFrame &right) {
+  return left.sequence == right.sequence && left.composition == right.composition &&
+         sameSurface(left.base, right.base) && sameSurface(left.layer, right.layer) &&
+         sameSurface(left.miss, right.miss);
+}
+
+class FakeGameplayBgaSubmitter final : public IGameplayBgaSubmitter {
+public:
+  explicit FakeGameplayBgaSubmitter(bool *destroyed = nullptr)
+      : destroyed_(destroyed) {}
+
+  ~FakeGameplayBgaSubmitter() override {
+    if (destroyed_ != nullptr) {
+      *destroyed_ = true;
+    }
+  }
+
+  PreparedGameplayBgaFrame
+  prepareVisualFrameAt(std::uint64_t frameSerial, std::int64_t bgaTimeMicros,
+                       const GameplayBgaMissState &missState) override {
+    preparedFrameSerial = frameSerial;
+    preparedBgaTimeMicros = bgaTimeMicros;
+    preparedMissState = missState;
+    return prepared;
+  }
+
+  BgaPreflightResult
+  preflight(const PreparedGameplayBgaFrame &frame,
+            std::span<const BgaDrawTarget> targets) override {
+    preflightFrame = frame;
+    preflightTargets.assign(targets.begin(), targets.end());
+    return {.ready = true};
+  }
+
+  void submitPrepared(const PreparedGameplayBgaFrame &frame,
+                      const BgaDrawTarget &target) noexcept override {
+    submittedPreparedFrame = frame;
+    submittedTarget = target;
+  }
+
+  void submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept override {
+    submittedFullscreenFrame = frame;
+  }
+
+  PreparedGameplayBgaFrame prepared;
+  std::uint64_t preparedFrameSerial = 0;
+  std::int64_t preparedBgaTimeMicros = 0;
+  GameplayBgaMissState preparedMissState;
+  PreparedGameplayBgaFrame preflightFrame;
+  std::vector<BgaDrawTarget> preflightTargets;
+  PreparedGameplayBgaFrame submittedPreparedFrame;
+  std::optional<BgaDrawTarget> submittedTarget;
+  PreparedGameplayBgaFrame submittedFullscreenFrame;
+
+private:
+  bool *destroyed_ = nullptr;
+};
+
+void testBgaDrawTargetRoleIsIndependentOfViewId() {
+  const BgaDrawTarget target{
+      .role = GameplayBgaRole::Miss,
+      .viewId = 17,
+      .destination = {{{.x = 1.0F, .y = 2.0F},
+                       {.x = 3.0F, .y = 4.0F},
+                       {.x = 5.0F, .y = 6.0F},
+                       {.x = 7.0F, .y = 8.0F}}},
+      .stretch = skin::SkinStretchMode::KeepAspectRatioNoExpanding,
+      .tint = {0.1F, 0.2F, 0.3F, 0.4F},
+      .blend = skin::SkinBlendMode::Additive,
+      .clip = GameplayBgaClipRect{.x = 10.0, .y = 20.0, .width = 30.0,
+                                   .height = 40.0},
+      .authoredOrdinal = 9,
+  };
+
+  require(target.role == GameplayBgaRole::Miss && target.viewId == 17 &&
+              target.destination[3].x == 7.0F &&
+              target.stretch == skin::SkinStretchMode::KeepAspectRatioNoExpanding &&
+              target.tint[3] == 0.4F &&
+              target.blend == skin::SkinBlendMode::Additive &&
+              target.clip.has_value() && target.authoredOrdinal == 9,
+          "BGA draw targets carry an explicit role independently of view ID");
+}
+
+void testBgaSubmitterPreflightsExactMultipleTargets() {
+  FakeGameplayBgaSubmitter submitter;
+  const PreparedGameplayBgaFrame frame{
+      .sequence = 77,
+      .composition = GameplayBgaComposition::BaseThenLayer,
+  };
+  const std::array targets{
+      BgaDrawTarget{.role = GameplayBgaRole::Base,
+                    .viewId = 3,
+                    .destination = {{{.x = 1.0F, .y = 1.0F},
+                                     {.x = 2.0F, .y = 1.0F},
+                                     {.x = 2.0F, .y = 2.0F},
+                                     {.x = 1.0F, .y = 2.0F}}},
+                    .authoredOrdinal = 4},
+      BgaDrawTarget{.role = GameplayBgaRole::Layer,
+                    .viewId = 3,
+                    .destination = {{{.x = 10.0F, .y = 20.0F},
+                                     {.x = 30.0F, .y = 20.0F},
+                                     {.x = 30.0F, .y = 40.0F},
+                                     {.x = 10.0F, .y = 40.0F}}},
+                    .stretch = skin::SkinStretchMode::NoResize,
+                    .tint = {0.5F, 0.6F, 0.7F, 0.8F},
+                    .blend = skin::SkinBlendMode::Multiply,
+                    .clip = GameplayBgaClipRect{.x = 11.0, .y = 12.0,
+                                                 .width = 13.0, .height = 14.0},
+                    .authoredOrdinal = 5},
+  };
+
+  const auto result = submitter.preflight(frame, targets);
+  require(result.ready && !result.failure.has_value() &&
+              sameFrame(submitter.preflightFrame, frame) &&
+              submitter.preflightTargets.size() == targets.size() &&
+              sameTarget(submitter.preflightTargets[0], targets[0]) &&
+              sameTarget(submitter.preflightTargets[1], targets[1]),
+          "BGA preflight receives each exact authored draw target");
+}
+
+void testBgaSubmitterPreparedFrameIsAnImmutableValue() {
+  static_assert(std::is_same_v<
+                decltype(std::declval<IGameplayBgaSubmitter &>()
+                             .prepareVisualFrameAt(
+                                 0, 0,
+                                 std::declval<const GameplayBgaMissState &>())),
+                PreparedGameplayBgaFrame>);
+
+  FakeGameplayBgaSubmitter submitter;
+  submitter.prepared = {
+      .sequence = 91,
+      .composition = GameplayBgaComposition::MissOnly,
+      .miss = PreparedGameplayBgaSurface{.role = GameplayBgaRole::Miss,
+                                         .surfaceToken = 123},
+  };
+  const GameplayBgaMissState state{.active = true, .startedBgaMicros = 100};
+  const auto prepared = submitter.prepareVisualFrameAt(55, 200, state);
+  const auto original = prepared;
+  const BgaDrawTarget target{.role = GameplayBgaRole::Miss, .viewId = 8};
+
+  submitter.submitPrepared(prepared, target);
+  submitter.submitFullscreen(prepared);
+  require(submitter.preparedFrameSerial == 55 &&
+              submitter.preparedBgaTimeMicros == 200 &&
+              submitter.preparedMissState.active &&
+              sameFrame(prepared, original) &&
+              sameFrame(submitter.submittedPreparedFrame, original) &&
+              sameFrame(submitter.submittedFullscreenFrame, original),
+          "prepared BGA frames are returned by value and remain unchanged by submission");
+}
+
+void testBgaSubmitterHasVirtualDestruction() {
+  bool destroyed = false;
+  std::unique_ptr<IGameplayBgaSubmitter> submitter =
+      std::make_unique<FakeGameplayBgaSubmitter>(&destroyed);
+  submitter.reset();
+  require(destroyed, "BGA submitters destroy derived implementations virtually");
 }
 
 void testPreparedFrameRetainsExplicitSurfaceRoles() {
@@ -169,6 +367,10 @@ void testMissCompositionSuppressesBaseAndLayerWithoutFallback() {
 } // namespace
 
 int main() {
+  testBgaDrawTargetRoleIsIndependentOfViewId();
+  testBgaSubmitterPreflightsExactMultipleTargets();
+  testBgaSubmitterPreparedFrameIsAnImmutableValue();
+  testBgaSubmitterHasVirtualDestruction();
   testPreparedFrameRetainsExplicitSurfaceRoles();
   testNoneJudgeDoesNotTriggerMissState();
   testComboZeroUsesBgaClockAndRepeatedZeroRetriggers();
