@@ -259,9 +259,14 @@ NumericGlyphAtlasResult partitionNumber(const NumericGlyphAtlasRequest &request,
   }
   const auto validation =
       validateNumericGlyphAtlas(atlas.digits, request.kind, request.budget);
-  return validation == NumericGlyphAtlasError::None
+  if (validation != NumericGlyphAtlasError::None) {
+    return failure(validation);
+  }
+  const auto formatValidation = validateNumericGlyphFormat(
+      atlas.format, request.kind, atlas.digits.glyphsPerAnimationFrame);
+  return formatValidation == NumericGlyphAtlasError::None
              ? NumericGlyphAtlasResult{.atlas = std::move(atlas)}
-             : failure(validation);
+             : failure(formatValidation);
 }
 
 NumericGlyphAtlasResult partitionFloat(const NumericGlyphAtlasRequest &request,
@@ -339,9 +344,14 @@ NumericGlyphAtlasResult partitionFloat(const NumericGlyphAtlasRequest &request,
   atlas.digits.glyphsPerAnimationFrame = outputGlyphs;
   const auto validation =
       validateNumericGlyphAtlas(atlas.digits, request.kind, request.budget);
-  return validation == NumericGlyphAtlasError::None
+  if (validation != NumericGlyphAtlasError::None) {
+    return failure(validation);
+  }
+  const auto formatValidation = validateNumericGlyphFormat(
+      atlas.format, request.kind, atlas.digits.glyphsPerAnimationFrame);
+  return formatValidation == NumericGlyphAtlasError::None
              ? NumericGlyphAtlasResult{.atlas = std::move(atlas)}
-             : failure(validation);
+             : failure(formatValidation);
 }
 
 } // namespace
@@ -377,6 +387,10 @@ NumericGlyphAtlasError validateNumericGlyphFormat(
         format.perDigitOffsets.size() >
             NumericGlyphAtlasPolicy::maxNumberDigitOffsets) {
       return NumericGlyphAtlasError::InvalidFormat;
+    }
+    if (format.zeroPadding == SkinZeroPaddingMode::AlternateZero &&
+        glyphsPerAnimationFrame < 11) {
+      return NumericGlyphAtlasError::InvalidGlyphSet;
     }
     return NumericGlyphAtlasError::None;
   }

@@ -595,9 +595,14 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
       if (component != 0 && component != 255) { styledColor = true; break; }
     const auto signikaAtlas = std::find_if(planned.plan->atlases.begin(), planned.plan->atlases.end(),
         [](const skin::SkinPreparedGlyphAtlas &atlas) { return atlas.key.font == 9; });
+    const auto &firstAGlyph = firstAtlas.glyphs.at(U'A');
     expect(firstAtlas.id == 1 && secondAtlas.id == 2 && firstAtlas.key.pointSize == 16 &&
                secondAtlas.key.pointSize == 24 && firstAtlas.glyphs.contains(U'日') &&
                firstAtlas.glyphs.contains(U'4') && firstAtlas.glyphs.at(U'A').region.x > 0 &&
+               firstAtlas.capHeight > 0 &&
+               firstAGlyph.layoutOffsetY == firstAGlyph.bearingY -
+                                                  firstAGlyph.region.h -
+                                                  firstAtlas.capHeight &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width > 0.0 &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width < 1.0 && styledColor &&
                signikaAtlas != planned.plan->atlases.end() && signikaAtlas->kerning.contains({U'A', U'V'}) &&
@@ -798,6 +803,9 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
         [](const auto &item) { return !item.kerning.empty(); });
     const auto atlasId = preparedAtlas->id;
     const auto pair = preparedAtlas->kerning.begin()->first;
+    const int preparedCapHeight = preparedAtlas->capHeight;
+    const int preparedLayoutOffset =
+        preparedAtlas->glyphs.begin()->second.layoutOffsetY;
     const int signedAmount = -skin::SkinResourcePolicy::maximumDimension;
     preparedAtlas->kerning.begin()->second = signedAmount;
     auto signedDevice = std::make_shared<FakeTextureDevice>();
@@ -806,11 +814,23 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
     const auto *uploadedAtlas = signedUpload.catalog
         ? signedUpload.catalog->findTextAtlas(atlasId)
         : nullptr;
-    expect(uploadedAtlas && uploadedAtlas->kerning.at(pair) == signedAmount,
-           "valid signed kerning is preserved through catalog upload");
+    expect(uploadedAtlas && uploadedAtlas->kerning.at(pair) == signedAmount &&
+               uploadedAtlas->capHeight == preparedCapHeight &&
+               uploadedAtlas->glyphs.begin()->second.layoutOffsetY ==
+                   preparedLayoutOffset,
+           "valid signed kerning and vertical layout metrics are preserved through catalog upload");
   }
   rejectBeforeUpload("atlas metrics stay within fixed policy bounds",
                      [](auto &plan, auto &) { plan.atlases.front().lineHeight = skin::SkinResourcePolicy::maximumDimension + 1; });
+  rejectBeforeUpload("atlas cap height must remain positive",
+                     [](auto &plan, auto &) {
+                       plan.atlases.front().capHeight = 0;
+                     });
+  rejectBeforeUpload("atlas glyph layout offsets stay within fixed bounds",
+                     [](auto &plan, auto &) {
+                       plan.atlases.front().glyphs.begin()->second.layoutOffsetY =
+                           skin::SkinResourcePolicy::maximumDimension + 1;
+                     });
   rejectBeforeUpload("atlas glyph-count cap rejects before upload",
                      [](auto &plan, auto &) {
                        auto &glyphs = plan.atlases.front().glyphs;

@@ -79,6 +79,7 @@ struct GlyphBitmap {
   int width = 0;
   int height = 0;
   int padding = 0;
+  int layoutOffsetY = 0;
   std::vector<unsigned char> rgba;
 };
 
@@ -137,6 +138,33 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     opened.push_back(std::move(item));
   }
 
+  constexpr std::u32string_view capCharacters =
+      U"MNBDCEFKAGHIJLOPQRSTUVWXYZ";
+  int capHeight = 0;
+  for (const char32_t codepoint : capCharacters) {
+    if (!TTF_GlyphIsProvided32(opened.front().font,
+                               static_cast<Uint32>(codepoint))) {
+      continue;
+    }
+    int minX = 0;
+    int maxX = 0;
+    int minY = 0;
+    int maxY = 0;
+    int advance = 0;
+    if (TTF_GlyphMetrics32(opened.front().font,
+                           static_cast<Uint32>(codepoint), &minX, &maxX,
+                           &minY, &maxY, &advance) == 0) {
+      capHeight = maxY - minY;
+      break;
+    }
+  }
+  if (capHeight <= 0 || capHeight > SkinResourcePolicy::maximumDimension) {
+    result.error = "font cap height is unavailable";
+    return result;
+  }
+  const int primaryAscent = TTF_FontAscent(opened.front().font);
+  const int layoutAscent = primaryAscent - capHeight;
+
   std::vector<GlyphBitmap> glyphs;
   glyphs.reserve(codepoints.size());
   std::size_t temporaryGlyphBytes = 0;
@@ -167,40 +195,89 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     SDL_Surface *surface = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_RGBA32, 0);
     SDL_FreeSurface(raw);
     if (!surface) { result.error = "font glyph conversion failed"; return result; }
-    if (surface->w <= 0 || surface->h <= 0 || surface->w > SkinResourcePolicy::maximumDimension - 2 * padding ||
-        surface->h > SkinResourcePolicy::maximumDimension - 2 * padding) {
+    if (surface->w <= 0 || surface->h <= 0 ||
+        surface->w > SkinResourcePolicy::maximumDimension ||
+        surface->h > SkinResourcePolicy::maximumDimension) {
       SDL_FreeSurface(surface); result.error = "font glyph dimensions exceed limits"; return result;
     }
-    const std::size_t glyphBytes = static_cast<std::size_t>(surface->w + 2 * padding) *
-                                   static_cast<std::size_t>(surface->h + 2 * padding) * 4U;
+    if (SDL_LockSurface(surface) != 0) { SDL_FreeSurface(surface); result.error = "font glyph surface lock failed"; return result; }
+    const auto *pixels = static_cast<const unsigned char *>(surface->pixels);
+    int alphaMinX = surface->w;
+    int alphaMinY = surface->h;
+    int alphaMaxX = -1;
+    int alphaMaxY = -1;
+    for (int y = 0; y < surface->h; ++y) {
+      for (int x = 0; x < surface->w; ++x) {
+        const unsigned char alpha =
+            pixels[static_cast<std::size_t>(y) * surface->pitch +
+                   static_cast<std::size_t>(x) * 4U + 3U];
+        if (alpha == 0) {
+          continue;
+        }
+        alphaMinX = std::min(alphaMinX, x);
+        alphaMinY = std::min(alphaMinY, y);
+        alphaMaxX = std::max(alphaMaxX, x);
+        alphaMaxY = std::max(alphaMaxY, y);
+      }
+    }
+    const bool hasPixels = alphaMaxX >= alphaMinX && alphaMaxY >= alphaMinY;
+    const int glyphPadding = hasPixels ? padding : 0;
+    const int contentWidth =
+        hasPixels ? alphaMaxX - alphaMinX + 1 : std::max(1, advance);
+    const int contentHeight = hasPixels ? alphaMaxY - alphaMinY + 1 : 1;
+    const int glyphWidth = contentWidth + 2 * glyphPadding;
+    const int glyphHeight = contentHeight + 2 * glyphPadding;
+    if (glyphWidth <= 0 || glyphHeight <= 0 ||
+        glyphWidth > SkinResourcePolicy::maximumDimension ||
+        glyphHeight > SkinResourcePolicy::maximumDimension) {
+      SDL_UnlockSurface(surface);
+      SDL_FreeSurface(surface);
+      result.error = "font cropped glyph dimensions exceed limits";
+      return result;
+    }
+    const std::size_t glyphBytes = static_cast<std::size_t>(glyphWidth) *
+                                   static_cast<std::size_t>(glyphHeight) * 4U;
     if (glyphBytes > SkinResourcePolicy::maximumAtlasBytes - temporaryGlyphBytes) {
+      SDL_UnlockSurface(surface);
       SDL_FreeSurface(surface); result.error = "font temporary glyph bytes exceed atlas limit"; return result;
     }
     temporaryGlyphBytes += glyphBytes;
-    GlyphBitmap glyph{.codepoint=codepoint, .face=faceIndex, .bearingX=minX, .bearingY=maxY, .advance=advance,
-                      .width=surface->w + 2 * padding, .height=surface->h + 2 * padding, .padding=padding,
-                      .rgba=std::vector<unsigned char>(static_cast<std::size_t>(surface->w + 2 * padding) * static_cast<std::size_t>(surface->h + 2 * padding) * 4U, 0)};
-    if (SDL_LockSurface(surface) != 0) { SDL_FreeSurface(surface); result.error = "font glyph surface lock failed"; return result; }
-    const auto *pixels = static_cast<const unsigned char *>(surface->pixels);
+    const int selectedFaceAscent = TTF_FontAscent(opened[faceIndex].font);
+    GlyphBitmap glyph{
+        .codepoint = codepoint,
+        .face = faceIndex,
+        .bearingX = hasPixels ? minX : 0,
+        .bearingY = hasPixels ? maxY : 0,
+        .advance = advance,
+        .width = glyphWidth,
+        .height = glyphHeight,
+        .padding = glyphPadding,
+        .layoutOffsetY =
+            hasPixels ? layoutAscent + maxY - contentHeight -
+                            selectedFaceAscent - glyphPadding
+                      : 0,
+        .rgba = std::vector<unsigned char>(glyphBytes, 0)};
     const auto put = [&](int targetX, int targetY, const std::array<std::uint8_t,4> color, unsigned char alpha) {
       if (targetX < 0 || targetY < 0 || targetX >= glyph.width || targetY >= glyph.height) return;
       alphaOver(glyph.rgba.data() + (static_cast<std::size_t>(targetY) * glyph.width + targetX) * 4U, color, alpha);
     };
-    for (int y = 0; y < surface->h; ++y) for (int x = 0; x < surface->w; ++x) {
+    for (int y = alphaMinY; hasPixels && y <= alphaMaxY; ++y) for (int x = alphaMinX; x <= alphaMaxX; ++x) {
       const unsigned char alpha = pixels[static_cast<std::size_t>(y) * surface->pitch + static_cast<std::size_t>(x) * 4U + 3U];
       if (alpha == 0) continue;
-      put(x + padding + shadowX, y + padding + shadowY, key.shadowRgba, alpha);
+      const int glyphX = x - alphaMinX + glyphPadding;
+      const int glyphY = y - alphaMinY + glyphPadding;
+      put(glyphX + shadowX, glyphY + shadowY, key.shadowRgba, alpha);
       if (smoothRadius > 0) {
         const unsigned char smoothAlpha = static_cast<unsigned char>(
             static_cast<double>(alpha) * std::min(1.0, key.shadowSmoothness) /
             static_cast<double>((2 * smoothRadius + 1) * (2 * smoothRadius + 1)));
         for (int oy = -smoothRadius; oy <= smoothRadius; ++oy)
           for (int ox = -smoothRadius; ox <= smoothRadius; ++ox)
-            if (ox != 0 || oy != 0) put(x + padding + shadowX + ox, y + padding + shadowY + oy, key.shadowRgba, smoothAlpha);
+            if (ox != 0 || oy != 0) put(glyphX + shadowX + ox, glyphY + shadowY + oy, key.shadowRgba, smoothAlpha);
       }
       for (int oy = -outline; oy <= outline; ++oy) for (int ox = -outline; ox <= outline; ++ox)
-        if (ox * ox + oy * oy <= outline * outline) put(x + padding + ox, y + padding + oy, key.outlineRgba, alpha);
-      put(x + padding, y + padding, {255,255,255,255}, alpha);
+        if (ox * ox + oy * oy <= outline * outline) put(glyphX + ox, glyphY + oy, key.outlineRgba, alpha);
+      put(glyphX, glyphY, {255,255,255,255}, alpha);
     }
     SDL_UnlockSurface(surface);
     SDL_FreeSurface(surface);
@@ -213,7 +290,15 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     if (glyph.width + 2 > atlasWidth) { result.error = "font glyph exceeds atlas width"; return result; }
     if (cursorX + glyph.width + 1 > atlasWidth) { cursorX = 1; cursorY += rowHeight + 1; rowHeight = 0; }
     if (cursorY + glyph.height + 1 > SkinResourcePolicy::maximumDimension) { result.error = "font atlas exceeds one-page limit"; return result; }
-    metrics.emplace(glyph.codepoint, SkinPreparedGlyphMetrics{.region={.x=cursorX,.y=cursorY,.w=glyph.width,.h=glyph.height}, .bearingX=glyph.bearingX - glyph.padding, .bearingY=glyph.bearingY + glyph.padding, .advance=glyph.advance});
+    metrics.emplace(glyph.codepoint, SkinPreparedGlyphMetrics{
+        .region = {.x = cursorX,
+                   .y = cursorY,
+                   .w = glyph.width,
+                   .h = glyph.height},
+        .bearingX = glyph.bearingX - glyph.padding,
+        .bearingY = glyph.bearingY + glyph.padding,
+        .advance = glyph.advance,
+        .layoutOffsetY = glyph.layoutOffsetY});
     cursorX += glyph.width + 1;
     rowHeight = std::max(rowHeight, glyph.height);
   }
@@ -242,7 +327,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   result.atlas = SkinPreparedGlyphAtlas{.id=id, .key=std::move(key),
       .pixels={.width=atlasWidth,.height=atlasHeight,.rgba=std::move(rgba)},
       .glyphs=std::move(metrics), .kerning=std::move(kerning),
-      .ascent=TTF_FontAscent(opened.front().font), .descent=TTF_FontDescent(opened.front().font),
+      .ascent=primaryAscent, .capHeight=capHeight,
+      .descent=TTF_FontDescent(opened.front().font),
       .lineHeight=TTF_FontHeight(opened.front().font)};
   return result;
 }

@@ -127,12 +127,21 @@ struct SkinTextAtlasKey {
   std::string fallbackChainDigest;
   auto operator<=>(const SkinTextAtlasKey &) const = default;
 };
-struct SkinPreparedGlyphMetrics { SkinSourceRect region; int bearingX = 0; int bearingY = 0; int advance = 0; };
+struct SkinPreparedGlyphMetrics {
+  SkinSourceRect region;
+  int bearingX = 0;
+  int bearingY = 0;
+  int advance = 0;
+  // Bytecode-equivalent BitmapFontCache bottom offset from the line anchor.
+  // It includes the primary layout ascent, the selected face's yoffset, and
+  // any bounded atlas padding, so fallback glyphs need no font access later.
+  int layoutOffsetY = 0;
+};
 struct SkinPreparedGlyphAtlas {
   SkinTextAtlasId id = 0; SkinTextAtlasKey key; image_decode::DecodedImageData pixels;
   std::map<char32_t, SkinPreparedGlyphMetrics> glyphs;
   std::map<std::pair<char32_t,char32_t>, int> kerning;
-  int ascent = 0; int descent = 0; int lineHeight = 0;
+  int ascent = 0; int capHeight = 0; int descent = 0; int lineHeight = 0;
 };
 struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
@@ -205,7 +214,19 @@ struct PreparedSkinResource {
   // render-time lookup logarithmic.
   std::vector<std::uint32_t> regionLookupOrder;
 };
-struct PreparedSkinTextAtlas { SkinTextAtlasId id = 0; SkinTextAtlasKey key; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::map<char32_t,SkinPreparedGlyphMetrics> glyphs; std::map<std::pair<char32_t,char32_t>,int> kerning; int ascent = 0; int descent = 0; int lineHeight = 0; };
+struct PreparedSkinTextAtlas {
+  SkinTextAtlasId id = 0;
+  SkinTextAtlasKey key;
+  bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  int width = 0;
+  int height = 0;
+  std::map<char32_t, SkinPreparedGlyphMetrics> glyphs;
+  std::map<std::pair<char32_t, char32_t>, int> kerning;
+  int ascent = 0;
+  int capHeight = 0;
+  int descent = 0;
+  int lineHeight = 0;
+};
 
 class SkinTextureDevice {
 public:

@@ -78,6 +78,14 @@ void numberLayoutsPreserveRowMajorFrames() {
            "10-glyph number preserves authored padding");
   }
   {
+    auto input = request(NumericGlyphAtlasKind::Number, 20);
+    input.format.numberPadding = 2;
+    const auto result = partitionNumericGlyphAtlas(input);
+    expect(!result.atlas &&
+               result.error == NumericGlyphAtlasError::InvalidGlyphSet,
+           "10-glyph number rejects unavailable alternate-zero padding");
+  }
+  {
     const auto atlas = mustSucceed(
         partitionNumericGlyphAtlas(request(NumericGlyphAtlasKind::Number, 22)),
         "11-glyph number atlas partitions");
@@ -407,8 +415,12 @@ void validatesNormalizedObjectFormats() {
       .height = 0.0,
   };
   expect(validateNumericGlyphFormat(number, NumericGlyphAtlasKind::Number,
-                                    10) == NumericGlyphAtlasError::None,
+                                    12) == NumericGlyphAtlasError::None,
          "normalized Number format accepts inclusive finite boundaries");
+  expect(validateNumericGlyphFormat(number, NumericGlyphAtlasKind::Number,
+                                    10) ==
+             NumericGlyphAtlasError::InvalidGlyphSet,
+         "ten-glyph Number format rejects unavailable alternate-zero glyph");
 
   auto invalidNumber = number;
   invalidNumber.integerDigits = -1;

@@ -678,6 +678,8 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     if (!canonicalizeSkinTextAtlasKey(canonicalKey) || canonicalKey != atlas.key ||
         atlas.lineHeight <= 0 || atlas.lineHeight > SkinResourcePolicy::maximumDimension ||
         std::llabs(static_cast<long long>(atlas.ascent)) > SkinResourcePolicy::maximumDimension ||
+        atlas.capHeight <= 0 ||
+        atlas.capHeight > SkinResourcePolicy::maximumDimension ||
         std::llabs(static_cast<long long>(atlas.descent)) > SkinResourcePolicy::maximumDimension) {
       result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has noncanonical atlas data")); return result;
     }
@@ -686,7 +688,8 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
       if (!canonicalRegion(metric.region, atlas.pixels.width, atlas.pixels.height) ||
           std::llabs(static_cast<long long>(metric.bearingX)) > SkinResourcePolicy::maximumDimension ||
           std::llabs(static_cast<long long>(metric.bearingY)) > SkinResourcePolicy::maximumDimension ||
-          std::llabs(static_cast<long long>(metric.advance)) > SkinResourcePolicy::maximumDimension) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid glyph region")); return result; }
+          std::llabs(static_cast<long long>(metric.advance)) > SkinResourcePolicy::maximumDimension ||
+          std::llabs(static_cast<long long>(metric.layoutOffsetY)) > SkinResourcePolicy::maximumDimension) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid glyph region")); return result; }
     }
     for (const auto &[pair, amount] : atlas.kerning) {
       if (!atlas.glyphs.contains(pair.first) || !atlas.glyphs.contains(pair.second) ||
@@ -770,7 +773,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     catalog->owned_.push_back({handle});
     pending.release();
   }
-  for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.descent=atlas.descent,.lineHeight=atlas.lineHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); pending.release(); }
+  for (const auto &atlas : plan.atlases) { const auto handle=catalog->device_->create(atlas.pixels); if(!bgfx::isValid(handle)){result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed","texture creation failed")); rollback(); return result;} PendingHandle pending{*catalog->device_, handle}; catalog->atlases_.emplace(atlas.id,PreparedSkinTextAtlas{.id=atlas.id,.key=atlas.key,.texture=handle,.width=atlas.pixels.width,.height=atlas.pixels.height,.glyphs=atlas.glyphs,.kerning=atlas.kerning,.ascent=atlas.ascent,.capHeight=atlas.capHeight,.descent=atlas.descent,.lineHeight=atlas.lineHeight}); catalog->atlasKeys_.emplace(atlas.key,atlas.id); catalog->owned_.push_back({handle}); pending.release(); }
   catalog->textAtlasesByObject_ = std::move(plan.textAtlasesByObject);
   result.catalog=std::move(catalog); return result;
   } catch (...) {
