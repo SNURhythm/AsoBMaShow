@@ -18,6 +18,7 @@ SKIN_CMAKE = ROOT / "src/skin/CMakeLists.txt"
 RUNTIME_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinRuntime.cpp"
 HOST_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinHostModules.cpp"
 DECODER_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinTableDecoder.cpp"
+BINDING_DECODER_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinBindingDecoder.cpp"
 VALIDATOR_SOURCE = ROOT / "src/skin/beatoraja/SkinModelValidator.cpp"
 NUMERIC_GLYPH_ATLAS_SOURCE = ROOT / "src/skin/beatoraja/NumericGlyphAtlas.cpp"
 GAUGE_NODE_EXPANSION_SOURCE = (
@@ -131,6 +132,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/LuaSkinRuntime.cpp", enabled_block)
         self.assertIn("beatoraja/LuaSkinHostModules.cpp", enabled_block)
         self.assertIn("beatoraja/LuaSkinTableDecoder.cpp", enabled_block)
+        self.assertIn("beatoraja/LuaSkinBindingDecoder.cpp", enabled_block)
         self.assertIn("beatoraja/NumericGlyphAtlas.cpp", enabled_block)
         self.assertIn("beatoraja/SkinModelValidator.cpp", enabled_block)
         self.assertIn("beatoraja/SkinGaugeNodeExpansion.cpp", enabled_block)
@@ -138,11 +140,12 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
 
     def test_xcode_discovered_runtime_implementations_have_source_guards(self):
         for path in (
-            RUNTIME_SOURCE,
-            HOST_SOURCE,
-            DECODER_SOURCE,
-            NUMERIC_GLYPH_ATLAS_SOURCE,
-            VALIDATOR_SOURCE,
+             RUNTIME_SOURCE,
+             HOST_SOURCE,
+             DECODER_SOURCE,
+             BINDING_DECODER_SOURCE,
+             NUMERIC_GLYPH_ATLAS_SOURCE,
+             VALIDATOR_SOURCE,
             GAUGE_NODE_EXPANSION_SOURCE,
             TEXT_GRAPH_NORMALIZATION_SOURCE,
         ):
@@ -157,11 +160,12 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary = pathlib.Path(temporary_directory)
             for source in (
-                RUNTIME_SOURCE,
-                HOST_SOURCE,
-                DECODER_SOURCE,
-                NUMERIC_GLYPH_ATLAS_SOURCE,
-                VALIDATOR_SOURCE,
+                 RUNTIME_SOURCE,
+                 HOST_SOURCE,
+                 DECODER_SOURCE,
+                 BINDING_DECODER_SOURCE,
+                 NUMERIC_GLYPH_ATLAS_SOURCE,
+                 VALIDATOR_SOURCE,
                 GAUGE_NODE_EXPANSION_SOURCE,
                 TEXT_GRAPH_NORMALIZATION_SOURCE,
             ):

@@ -13,7 +13,9 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 struct lua_State;
 
@@ -48,6 +50,7 @@ struct LuaCallbackBudget {
 };
 
 struct LuaRuntimePolicy {
+  inline static constexpr std::size_t maxBindingPathDepth = 64;
   inline static constexpr LuaLoadBudget catalogLoad{
       .maxAllocatorBytes = 32ULL * 1024ULL * 1024ULL,
       .maxInstructions = 2'000'000,
@@ -80,12 +83,74 @@ using LuaScalar =
 struct LuaCallbackId {
   std::uint32_t slot = 0;
   std::uint32_t generation = 0;
+  explicit operator bool() const noexcept {
+    return slot != 0 && generation != 0;
+  }
   auto operator<=>(const LuaCallbackId &) const = default;
 };
 
 struct LuaCallbackLookupResult {
   std::optional<LuaCallbackId> callback;
   std::optional<SkinDiagnostic> failure;
+};
+
+struct LuaValuePathElement {
+  std::variant<std::string, std::uint32_t> key;
+
+  static LuaValuePathElement field(std::string_view name) {
+    return {.key = std::string(name)};
+  }
+  static LuaValuePathElement index(std::uint32_t value) {
+    return {.key = value};
+  }
+};
+
+using LuaValuePath = std::vector<LuaValuePathElement>;
+using LuaBindingSourceValue = std::variant<int, std::string, LuaCallbackId>;
+
+struct LuaBindingSourceLookupResult {
+  std::optional<LuaBindingSourceValue> source;
+  std::optional<SkinDiagnostic> failure;
+};
+
+enum class LuaCallbackScriptKind : std::uint8_t {
+  ReturnExpression,
+  Timer,
+  Statement,
+};
+
+struct LuaCallbackCompileResult {
+  std::optional<LuaCallbackId> callback;
+  std::optional<SkinDiagnostic> failure;
+};
+
+class LuaCallbackLivenessView final {
+public:
+  LuaCallbackLivenessView() noexcept = default;
+
+  [[nodiscard]] bool contains(LuaCallbackId callback) const noexcept {
+    return generation_ != 0 && callback.generation == generation_ &&
+           callback.slot != 0 && callback.slot <= retainedCount_;
+  }
+
+  [[nodiscard]] bool
+  containsAll(std::span<const LuaCallbackId> callbacks) const noexcept {
+    for (const auto callback : callbacks) {
+      if (!contains(callback)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+private:
+  std::uint32_t generation_ = 0;
+  std::uint32_t retainedCount_ = 0;
+
+  LuaCallbackLivenessView(std::uint32_t generation,
+                          std::uint32_t retainedCount) noexcept
+      : generation_(generation), retainedCount_(retainedCount) {}
+  friend class LuaSkinRuntime;
 };
 
 class LuaValueHandle {
@@ -100,6 +165,8 @@ public:
   callbackNamed(std::string_view name) const;
   [[nodiscard]] LuaCallbackLookupResult
   lookupCallbackNamed(std::string_view name) const;
+  [[nodiscard]] LuaBindingSourceLookupResult
+  lookupBindingSource(const LuaValuePath &path) const;
 
 private:
   using ProtectedValueOperation = void (*)(lua_State *, int, void *) noexcept;
@@ -152,6 +219,9 @@ public:
   LuaOperationResult enterRenderPhase();
   LuaOperationResult beginFrame(std::uint64_t visualStateSequence);
   LuaCallbackResult invoke(LuaCallbackId, std::span<const LuaScalar> arguments);
+  LuaCallbackCompileResult compileCallbackScript(std::string_view,
+                                                 LuaCallbackScriptKind);
+  [[nodiscard]] LuaCallbackLivenessView callbackLiveness() const noexcept;
   [[nodiscard]] LuaRuntimePhase phase() const noexcept;
   [[nodiscard]] std::span<const SkinCompatibilityDiagnostic>
   compatibilityDiagnostics() const noexcept;

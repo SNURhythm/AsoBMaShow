@@ -417,7 +417,9 @@ struct SkinDestination {
 
 struct SkinCustomTimer {
   int id = 0;
-  SkinTimerPropertyId timer{};
+  // Pinned Beatoraja also permits a passive custom timer whose value is
+  // driven externally.  Absence is distinct from binding ID zero.
+  std::optional<SkinTimerPropertyId> timer;
 };
 
 struct SkinCustomEvent {
