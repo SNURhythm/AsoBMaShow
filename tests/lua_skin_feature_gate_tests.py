@@ -22,6 +22,9 @@ VALIDATOR_SOURCE = ROOT / "src/skin/beatoraja/SkinModelValidator.cpp"
 GAUGE_NODE_EXPANSION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinGaugeNodeExpansion.cpp"
 )
+TEXT_GRAPH_NORMALIZATION_SOURCE = (
+    ROOT / "src/skin/beatoraja/SkinTextGraphNormalization.cpp"
+)
 
 
 class LuaSkinFeatureGateTests(unittest.TestCase):
@@ -129,6 +132,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/LuaSkinTableDecoder.cpp", enabled_block)
         self.assertIn("beatoraja/SkinModelValidator.cpp", enabled_block)
         self.assertIn("beatoraja/SkinGaugeNodeExpansion.cpp", enabled_block)
+        self.assertIn("beatoraja/SkinTextGraphNormalization.cpp", enabled_block)
 
     def test_xcode_discovered_runtime_implementations_have_source_guards(self):
         for path in (
@@ -137,6 +141,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
             DECODER_SOURCE,
             VALIDATOR_SOURCE,
             GAUGE_NODE_EXPANSION_SOURCE,
+            TEXT_GRAPH_NORMALIZATION_SOURCE,
         ):
             source = path.read_text(encoding="utf-8")
             self.assertIn('#include "../LuaGameplaySkinFeature.h"', source)
@@ -154,6 +159,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                 DECODER_SOURCE,
                 VALIDATOR_SOURCE,
                 GAUGE_NODE_EXPANSION_SOURCE,
+                TEXT_GRAPH_NORMALIZATION_SOURCE,
             ):
                 subprocess.run(
                     [
