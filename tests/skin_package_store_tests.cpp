@@ -1009,8 +1009,12 @@ void testBootstrapCleansOnlyBoundedRecognizableOwnedArtifacts() {
       roots.privateCatalog / ".operation-reservations" / ownedOperation;
   const fs::path quarantine =
       roots.privateCatalog / ".recovery-quarantine" / ownedQuarantine;
+  const fs::path catalogStaging = roots.privateCatalog /
+                                  ".publication-staging" /
+                                  (ownedOperation + "-new.json");
   writeText(reservation / "owned.txt", "owned");
   writeText(quarantine / "owned.txt", "owned");
+  writeText(catalogStaging, "owned regular staging");
 
   const fs::path unknown =
       roots.privateCatalog / ".operation-reservations/user-preserved";
@@ -1030,8 +1034,10 @@ void testBootstrapCleansOnlyBoundedRecognizableOwnedArtifacts() {
   expect(store.recoverBeforeServiceStart().disposition ==
              SkinRecoveryDisposition::Recovered,
          "owned-artifact cleanup bootstraps an empty catalog");
-  expect(!fs::exists(reservation) && !fs::exists(quarantine),
-         "bootstrap retries recognizable owner-created directory artifacts");
+  expect(!fs::exists(reservation) && !fs::exists(quarantine) &&
+             !fs::exists(catalogStaging),
+         "bootstrap retries recognizable owner-created file and directory "
+         "artifacts");
   expect(
       fs::exists(unknown / "keep.txt") && fs::is_symlink(linkedOwned) &&
           readText(outside / "keep.txt") == "outside",
@@ -1408,7 +1414,7 @@ void testGarbageCollectionRejectsLinksAndRetriesQuarantine() {
   writeText(nestedLink / "file.txt", "candidate");
   fs::create_symlink(outside / "keep.txt", nestedLink / "linked.txt");
   const fs::path stale =
-      roots.privateRevisions / ".gc-quarantine/stale-operation";
+      roots.privateRevisions / (".gc-quarantine/op-" + std::string(32, 'd'));
   writeText(stale / "old.txt", "retry");
 
   SkinPackageCatalog catalog(roots.privateCatalog);

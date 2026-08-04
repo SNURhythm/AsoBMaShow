@@ -567,6 +567,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(skin_archive_importer_windows_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME skin_package_store_windows_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/skin_package_store_windows_contract_tests.py -v)
+    set_tests_properties(skin_package_store_windows_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_library(ir_submission_eligibility_test_support STATIC
         src/ir/tachi/TachiEligibility.cpp
         src/ir/IrOutboxModels.cpp

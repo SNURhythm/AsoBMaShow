@@ -1113,79 +1113,353 @@ private:
 };
 #endif
 
-bool renameTreeNoReplace(const fs::path &source, const fs::path &destination) {
+class RetainedEntryCapability {
+public:
+  RetainedEntryCapability(const RetainedEntryCapability &) = delete;
+  RetainedEntryCapability &operator=(const RetainedEntryCapability &) = delete;
 #if defined(_WIN32)
-  auto capability = RetainedTreeCapability::issue(source);
-  return capability && capability->existed() &&
-         capability->renameTo(destination);
+  RetainedEntryCapability(RetainedEntryCapability &&other) noexcept
+      : path_(std::move(other.path_)), tree_(std::move(other.tree_)),
+        parents_(std::move(other.parents_)),
+        file_(std::exchange(other.file_, INVALID_HANDLE_VALUE)),
+        volume_(other.volume_), fileIndex_(other.fileIndex_) {}
+  ~RetainedEntryCapability() {
+    if (file_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(file_);
+    }
+    closeAll(parents_);
+  }
 #else
-  if (!safeLeaf(source) || !safeLeaf(destination)) {
-    return false;
+  RetainedEntryCapability(RetainedEntryCapability &&) noexcept = default;
+#endif
+
+  static std::optional<RetainedEntryCapability> issue(const fs::path &path) {
+    std::error_code error;
+    const auto status = fs::symlink_status(path, error);
+    if (error || (status.type() != fs::file_type::directory &&
+                  status.type() != fs::file_type::regular)) {
+      return std::nullopt;
+    }
+    if (status.type() == fs::file_type::directory) {
+      auto tree = RetainedTreeCapability::issue(path);
+      if (!tree || !tree->existed()) {
+        return std::nullopt;
+      }
+      return RetainedEntryCapability(path, std::move(*tree));
+    }
+#if defined(_WIN32)
+    std::vector<HANDLE> parents;
+    if (!openDirectoryChain(path.parent_path(), parents)) {
+      return std::nullopt;
+    }
+    HANDLE file = CreateFileW(
+        path.c_str(), DELETE | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    BY_HANDLE_FILE_INFORMATION identity{};
+    FILE_ATTRIBUTE_TAG_INFO tags{};
+    if (file == INVALID_HANDLE_VALUE ||
+        !GetFileInformationByHandle(file, &identity) ||
+        !GetFileInformationByHandleEx(file, FileAttributeTagInfo, &tags,
+                                      sizeof(tags)) ||
+        (tags.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+        (tags.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+        GetFileType(file) != FILE_TYPE_DISK) {
+      if (file != INVALID_HANDLE_VALUE) {
+        CloseHandle(file);
+      }
+      closeAll(parents);
+      return std::nullopt;
+    }
+    const std::uint64_t fileIndex =
+        (static_cast<std::uint64_t>(identity.nFileIndexHigh) << 32U) |
+        identity.nFileIndexLow;
+    return RetainedEntryCapability(path, std::move(parents), file,
+                                   identity.dwVolumeSerialNumber, fileIndex);
+#else
+    if (!safeLeaf(path)) {
+      return std::nullopt;
+    }
+    auto parent = openDirectoryNoFollow(path.parent_path());
+    if (!parent) {
+      return std::nullopt;
+    }
+    struct stat pathStatus{};
+    if (::fstatat(parent->get(), path.filename().c_str(), &pathStatus,
+                  AT_SYMLINK_NOFOLLOW) != 0 ||
+        !S_ISREG(pathStatus.st_mode)) {
+      return std::nullopt;
+    }
+    UniqueDirectoryDescriptor file(::openat(parent->get(),
+                                            path.filename().c_str(),
+                                            O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+    struct stat retainedStatus{};
+    if (!file || ::fstat(file.get(), &retainedStatus) != 0 ||
+        !S_ISREG(retainedStatus.st_mode) ||
+        retainedStatus.st_dev != pathStatus.st_dev ||
+        retainedStatus.st_ino != pathStatus.st_ino) {
+      return std::nullopt;
+    }
+    return RetainedEntryCapability(path, std::move(*parent), std::move(file),
+                                   pathStatus.st_dev, pathStatus.st_ino);
+#endif
   }
-  auto sourceParent = openDirectoryNoFollow(source.parent_path());
-  auto destinationParent = openDirectoryNoFollow(destination.parent_path());
-  if (!sourceParent || !destinationParent) {
-    return false;
+
+  bool matchesIssuedIdentity() const noexcept {
+    if (tree_) {
+      return tree_->matchesIssuedIdentity();
+    }
+#if defined(_WIN32)
+    HANDLE probe = CreateFileW(
+        path_.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    BY_HANDLE_FILE_INFORMATION identity{};
+    FILE_ATTRIBUTE_TAG_INFO tags{};
+    const bool matches =
+        probe != INVALID_HANDLE_VALUE &&
+        GetFileInformationByHandle(probe, &identity) &&
+        GetFileInformationByHandleEx(probe, FileAttributeTagInfo, &tags,
+                                     sizeof(tags)) &&
+        (tags.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 &&
+        (tags.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+        identity.dwVolumeSerialNumber == volume_ &&
+        ((static_cast<std::uint64_t>(identity.nFileIndexHigh) << 32U) |
+         identity.nFileIndexLow) == fileIndex_;
+    if (probe != INVALID_HANDLE_VALUE) {
+      CloseHandle(probe);
+    }
+    return matches;
+#else
+    struct stat retainedStatus{};
+    struct stat pathStatus{};
+    return file_ && parent_ && ::fstat(file_.get(), &retainedStatus) == 0 &&
+           ::fstatat(parent_.get(), path_.filename().c_str(), &pathStatus,
+                     AT_SYMLINK_NOFOLLOW) == 0 &&
+           S_ISREG(pathStatus.st_mode) && retainedStatus.st_dev == device_ &&
+           retainedStatus.st_ino == inode_ && pathStatus.st_dev == device_ &&
+           pathStatus.st_ino == inode_;
+#endif
   }
-  struct stat sourceStatus{};
-  if (::fstatat(sourceParent->get(), source.filename().c_str(), &sourceStatus,
-                AT_SYMLINK_NOFOLLOW) != 0) {
-    return false;
-  }
+
+  bool renameTo(const fs::path &destination) noexcept {
+    if (tree_) {
+      return tree_->renameTo(destination);
+    }
+    try {
+      if (!matchesIssuedIdentity()) {
+        return false;
+      }
+#if defined(_WIN32)
+      std::vector<HANDLE> destinationParents;
+      const fs::path destinationLeaf = destination.filename();
+      const std::wstring destinationLeafNative = destinationLeaf.native();
+      if (destinationLeaf.empty() || destinationLeaf == "." ||
+          destinationLeaf == ".." ||
+          destinationLeafNative.find(L'/') != std::wstring::npos ||
+          destinationLeafNative.find(L'\\') != std::wstring::npos ||
+          !openDirectoryChain(destination.parent_path(), destinationParents)) {
+        return false;
+      }
+      const std::wstring leaf = destinationLeafNative;
+      const std::size_t leafBytes = leaf.size() * sizeof(wchar_t);
+      std::vector<std::byte> storage(offsetof(FILE_RENAME_INFO, FileName) +
+                                     leafBytes);
+      auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
+      rename->ReplaceIfExists = FALSE;
+      rename->RootDirectory = destinationParents.back();
+      rename->FileNameLength = static_cast<DWORD>(leafBytes);
+      std::memcpy(rename->FileName, leaf.data(), leafBytes);
+      if (!SetFileInformationByHandle(file_, FileRenameInfo, rename,
+                                      static_cast<DWORD>(storage.size()))) {
+        closeAll(destinationParents);
+        return false;
+      }
+      closeAll(parents_);
+      parents_ = std::move(destinationParents);
+      path_ = destination;
+      return matchesIssuedIdentity();
+#else
+      if (!safeLeaf(destination)) {
+        return false;
+      }
+      auto destinationParent = openDirectoryNoFollow(destination.parent_path());
+      if (!destinationParent) {
+        return false;
+      }
 #if defined(__APPLE__)
-  int renameResult = ::renameatx_np(
-      sourceParent->get(), source.filename().c_str(), destinationParent->get(),
-      destination.filename().c_str(), RENAME_EXCL);
-  if (renameResult != 0 && errno == EACCES) {
-    const int sourceDirectory =
-        ::openat(sourceParent->get(), source.filename().c_str(),
-                 O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (sourceDirectory >= 0) {
-      const bool madeRenamable = ::fchmod(sourceDirectory, 0700) == 0;
-      ::close(sourceDirectory);
-      if (madeRenamable) {
-        renameResult =
-            ::renameatx_np(sourceParent->get(), source.filename().c_str(),
-                           destinationParent->get(),
-                           destination.filename().c_str(), RENAME_EXCL);
-      }
-    }
-  }
-  if (renameResult != 0) {
-    return false;
-  }
+      int result = ::renameatx_np(parent_.get(), path_.filename().c_str(),
+                                  destinationParent->get(),
+                                  destination.filename().c_str(), RENAME_EXCL);
 #elif defined(__linux__)
-  int renameResult = static_cast<int>(
-      ::syscall(SYS_renameat2, sourceParent->get(), source.filename().c_str(),
-                destinationParent->get(), destination.filename().c_str(),
-                RENAME_NOREPLACE));
-  if (renameResult != 0 && errno == EACCES && S_ISDIR(sourceStatus.st_mode)) {
-    const int sourceDirectory =
-        ::openat(sourceParent->get(), source.filename().c_str(),
-                 O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (sourceDirectory >= 0) {
-      const bool madeRenamable = ::fchmod(sourceDirectory, 0700) == 0;
-      ::close(sourceDirectory);
-      if (madeRenamable) {
-        renameResult = static_cast<int>(
-            ::syscall(SYS_renameat2, sourceParent->get(),
-                      source.filename().c_str(), destinationParent->get(),
-                      destination.filename().c_str(), RENAME_NOREPLACE));
+      int result = static_cast<int>(
+          ::syscall(SYS_renameat2, parent_.get(), path_.filename().c_str(),
+                    destinationParent->get(), destination.filename().c_str(),
+                    RENAME_NOREPLACE));
+#else
+      int result = -1;
+#endif
+      if (result != 0 && errno == EACCES && ::fchmod(file_.get(), 0600) == 0) {
+#if defined(__APPLE__)
+        result = ::renameatx_np(parent_.get(), path_.filename().c_str(),
+                                destinationParent->get(),
+                                destination.filename().c_str(), RENAME_EXCL);
+#elif defined(__linux__)
+        result = static_cast<int>(
+            ::syscall(SYS_renameat2, parent_.get(), path_.filename().c_str(),
+                      destinationParent->get(), destination.filename().c_str(),
+                      RENAME_NOREPLACE));
+#endif
       }
+      if (result != 0) {
+        return false;
+      }
+      const bool sourceSynced = ::fsync(parent_.get()) == 0;
+      const bool destinationSynced =
+          path_.parent_path() == destination.parent_path() ||
+          ::fsync(destinationParent->get()) == 0;
+      parent_ = std::move(*destinationParent);
+      path_ = destination;
+      return sourceSynced && destinationSynced && matchesIssuedIdentity();
+#endif
+    } catch (...) {
+      return false;
     }
   }
-  if (renameResult != 0) {
-    return false;
-  }
+
+  bool removeExact() noexcept {
+    if (tree_) {
+      return tree_->removeTreeExact();
+    }
+    try {
+      if (!matchesIssuedIdentity()) {
+        return false;
+      }
+#if defined(_WIN32)
+      FILE_BASIC_INFO basic{};
+      if (GetFileInformationByHandleEx(file_, FileBasicInfo, &basic,
+                                       sizeof(basic))) {
+        basic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
+        if (basic.FileAttributes == 0) {
+          basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+        }
+        (void)SetFileInformationByHandle(file_, FileBasicInfo, &basic,
+                                         sizeof(basic));
+      }
+      FILE_DISPOSITION_INFO disposition{.DeleteFile = TRUE};
+      if (!SetFileInformationByHandle(file_, FileDispositionInfo, &disposition,
+                                      sizeof(disposition))) {
+        return false;
+      }
+      CloseHandle(file_);
+      file_ = INVALID_HANDLE_VALUE;
+      const DWORD attributes = GetFileAttributesW(path_.c_str());
+      const DWORD deletionError = GetLastError();
+      return attributes == INVALID_FILE_ATTRIBUTES &&
+             (deletionError == ERROR_FILE_NOT_FOUND ||
+              deletionError == ERROR_PATH_NOT_FOUND);
 #else
-  return false;
+      if (::unlinkat(parent_.get(), path_.filename().c_str(), 0) != 0 ||
+          ::fsync(parent_.get()) != 0) {
+        return false;
+      }
+      return true;
 #endif
-  const bool sourceSynced = ::fsync(sourceParent->get()) == 0;
-  const bool destinationSynced =
-      source.parent_path() == destination.parent_path() ||
-      ::fsync(destinationParent->get()) == 0;
-  return sourceSynced && destinationSynced;
+    } catch (...) {
+      return false;
+    }
+  }
+
+private:
+  RetainedEntryCapability(fs::path path, RetainedTreeCapability tree)
+      : path_(std::move(path)), tree_(std::move(tree)) {}
+#if defined(_WIN32)
+  RetainedEntryCapability(fs::path path, std::vector<HANDLE> parents,
+                          HANDLE file, DWORD volume, std::uint64_t fileIndex)
+      : path_(std::move(path)), parents_(std::move(parents)), file_(file),
+        volume_(volume), fileIndex_(fileIndex) {}
+
+  static void closeAll(std::vector<HANDLE> &handles) noexcept {
+    for (HANDLE handle : handles) {
+      if (handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(handle);
+      }
+    }
+    handles.clear();
+  }
+
+  static bool openDirectoryChain(const fs::path &path,
+                                 std::vector<HANDLE> &handles) {
+    std::error_code error;
+    const fs::path absolute = fs::absolute(path, error).lexically_normal();
+    if (error || !absolute.is_absolute()) {
+      return false;
+    }
+    fs::path current = absolute.root_path();
+    HANDLE root = CreateFileW(
+        current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    FILE_ATTRIBUTE_TAG_INFO rootTags{};
+    if (root == INVALID_HANDLE_VALUE || GetFileType(root) != FILE_TYPE_DISK ||
+        !GetFileInformationByHandleEx(root, FileAttributeTagInfo, &rootTags,
+                                      sizeof(rootTags)) ||
+        (rootTags.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+        (rootTags.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+      if (root != INVALID_HANDLE_VALUE) {
+        CloseHandle(root);
+      }
+      return false;
+    }
+    handles.push_back(root);
+    for (const fs::path &component : absolute.lexically_relative(current)) {
+      current /= component;
+      HANDLE next = CreateFileW(
+          current.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      FILE_ATTRIBUTE_TAG_INFO tags{};
+      if (next == INVALID_HANDLE_VALUE ||
+          !GetFileInformationByHandleEx(next, FileAttributeTagInfo, &tags,
+                                        sizeof(tags)) ||
+          (tags.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+          (tags.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        if (next != INVALID_HANDLE_VALUE) {
+          CloseHandle(next);
+        }
+        closeAll(handles);
+        return false;
+      }
+      handles.push_back(next);
+    }
+    return true;
+  }
+
+  fs::path path_;
+  std::optional<RetainedTreeCapability> tree_;
+  std::vector<HANDLE> parents_;
+  HANDLE file_ = INVALID_HANDLE_VALUE;
+  DWORD volume_ = 0;
+  std::uint64_t fileIndex_ = 0;
+#else
+  RetainedEntryCapability(fs::path path, UniqueDirectoryDescriptor parent,
+                          UniqueDirectoryDescriptor file, dev_t device,
+                          ino_t inode)
+      : path_(std::move(path)), parent_(std::move(parent)),
+        file_(std::move(file)), device_(device), inode_(inode) {}
+
+  fs::path path_;
+  std::optional<RetainedTreeCapability> tree_;
+  UniqueDirectoryDescriptor parent_;
+  UniqueDirectoryDescriptor file_;
+  dev_t device_ = 0;
+  ino_t inode_ = 0;
 #endif
+};
+
+bool renameTreeNoReplace(const fs::path &source, const fs::path &destination) {
+  auto capability = RetainedEntryCapability::issue(source);
+  return capability && capability->renameTo(destination);
 }
 
 std::string nextOperationId();
@@ -1365,8 +1639,8 @@ bool hasLowerHexSuffix(std::string_view value, std::string_view prefix,
 }
 
 template <typename Predicate>
-void cleanupOwnedDirectories(const fs::path &root, Predicate &&owned,
-                             std::vector<SkinDiagnostic> &diagnostics) {
+void cleanupOwnedEntries(const fs::path &root, Predicate &&owned,
+                         std::vector<SkinDiagnostic> &diagnostics) {
   constexpr std::size_t maximumOwnedEntriesPerRoot = 256;
   std::error_code error;
   const auto status = fs::symlink_status(root, error);
@@ -1391,12 +1665,12 @@ void cleanupOwnedDirectories(const fs::path &root, Predicate &&owned,
     if (error) {
       break;
     }
-    if (entryStatus.type() != fs::file_type::directory) {
+    if (entryStatus.type() != fs::file_type::directory &&
+        entryStatus.type() != fs::file_type::regular) {
       continue;
     }
-    auto capability = RetainedTreeCapability::issue(entry->path());
-    if (!capability || !capability->existed() ||
-        !capability->removeTreeExact()) {
+    auto capability = RetainedEntryCapability::issue(entry->path());
+    if (!capability || !capability->removeExact()) {
       diagnostics.push_back(storeDiagnostic(
           "skin_package_owned_cleanup_failed",
           "a recognizable abandoned skin artifact could not be cleaned"));
@@ -1417,23 +1691,43 @@ void cleanupAbandonedOwnedDirectories(
   const auto quarantine = [](std::string_view name) {
     return hasLowerHexSuffix(name, "q-", 32);
   };
-  cleanupOwnedDirectories(roots.privateCatalog / ".operation-reservations",
-                          operation, diagnostics);
-  cleanupOwnedDirectories(roots.privateCatalog / ".recovery-quarantine",
-                          quarantine, diagnostics);
-  cleanupOwnedDirectories(roots.privateRevisions / ".recovery-quarantine",
-                          quarantine, diagnostics);
-  cleanupOwnedDirectories(roots.visiblePackages.parent_path() /
-                              ".skin-recovery-quarantine",
-                          quarantine, diagnostics);
-  cleanupOwnedDirectories(roots.visiblePackages.parent_path() /
-                              ".skin-publication-backups",
-                          operation, diagnostics);
-  cleanupOwnedDirectories(roots.visiblePackages.parent_path() /
-                              ".skin-removal-staging",
-                          operation, diagnostics);
-  cleanupOwnedDirectories(roots.privateRevisions / ".gc-quarantine", operation,
-                          diagnostics);
+  const auto catalogNew = [](std::string_view name) {
+    constexpr std::string_view suffix = "-new.json";
+    return name.ends_with(suffix) &&
+           hasLowerHexSuffix(name.substr(0, name.size() - suffix.size()), "op-",
+                             32);
+  };
+  const auto catalogOld = [](std::string_view name) {
+    constexpr std::string_view suffix = "-old.json";
+    return name.ends_with(suffix) &&
+           hasLowerHexSuffix(name.substr(0, name.size() - suffix.size()), "op-",
+                             32);
+  };
+  cleanupOwnedEntries(roots.privateCatalog / ".operation-reservations",
+                      operation, diagnostics);
+  cleanupOwnedEntries(roots.privateCatalog / ".recovery-quarantine", quarantine,
+                      diagnostics);
+  cleanupOwnedEntries(roots.privateRevisions / ".recovery-quarantine",
+                      quarantine, diagnostics);
+  cleanupOwnedEntries(roots.visiblePackages.parent_path() /
+                          ".skin-recovery-quarantine",
+                      quarantine, diagnostics);
+  cleanupOwnedEntries(roots.visiblePackages.parent_path() /
+                          ".skin-publication-backups",
+                      operation, diagnostics);
+  cleanupOwnedEntries(roots.visiblePackages.parent_path() /
+                          ".skin-removal-staging",
+                      operation, diagnostics);
+  cleanupOwnedEntries(roots.privateRevisions / ".gc-quarantine", operation,
+                      diagnostics);
+  cleanupOwnedEntries(roots.privateCatalog / ".publication-staging", catalogNew,
+                      diagnostics);
+  cleanupOwnedEntries(roots.privateCatalog / ".publication-backups", catalogOld,
+                      diagnostics);
+  cleanupOwnedEntries(roots.privateCatalog / ".removal-staging", catalogNew,
+                      diagnostics);
+  cleanupOwnedEntries(roots.privateCatalog / ".removal-backups", catalogOld,
+                      diagnostics);
 }
 
 bool writeJournal(const fs::path &path, const PublicationJournal &journal,
@@ -3928,6 +4222,9 @@ GarbageCollectionResult SkinPackageStore::collectGarbage() {
   if (ensureDirectoryNoFollow(gcRoot)) {
     for (fs::directory_iterator stale(gcRoot, error), staleEnd;
          !error && stale != staleEnd; ++stale) {
+      if (!hasLowerHexSuffix(filenameUtf8(stale->path()), "op-", 32)) {
+        continue;
+      }
       std::error_code typeError;
       const auto status = fs::symlink_status(stale->path(), typeError);
       bool removed = false;
