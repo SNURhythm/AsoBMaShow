@@ -556,18 +556,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(skin_path_policy_tests PRIVATE cxx_std_23)
     target_link_libraries(skin_path_policy_tests PRIVATE utf8proc::utf8proc)
 
-    add_executable(skin_gauge_node_expansion_tests
-        tests/skin_gauge_node_expansion_tests.cpp
-        src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
-    )
-    target_include_directories(skin_gauge_node_expansion_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    set_target_properties(skin_gauge_node_expansion_tests PROPERTIES
-        CXX_STANDARD 20
-        CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO
-    )
+    if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+        add_executable(skin_gauge_node_expansion_tests
+            tests/skin_gauge_node_expansion_tests.cpp
+            src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
+        )
+        target_include_directories(skin_gauge_node_expansion_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(skin_gauge_node_expansion_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+    endif()
 
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
         add_executable(lua_skin_runtime_tests
