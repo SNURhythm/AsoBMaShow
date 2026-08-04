@@ -1,0 +1,38 @@
+local first = require("luajava")
+local second = require("luajava")
+assert(first == second and first == luajava)
+local exports = 0
+for _ in pairs(luajava) do exports = exports + 1 end
+assert(exports == 2)
+assert(type(luajava.bindClass) == "function")
+assert(type(luajava.new) == "function")
+assert(luajava.newInstance == nil)
+
+local File = luajava.bindClass("java.io.File")
+assert(type(File) == "table" and next(File) == nil)
+local directory = luajava.new(File, ".")
+local members = 0
+for key in pairs(directory) do
+  assert(key == "listFiles" or key == "mkdir")
+  members = members + 1
+end
+assert(members == 2)
+local listed = directory:listFiles()
+assert(type(listed) == "table" and #listed > 0)
+for _, path in ipairs(listed) do
+  assert(type(path) == "string")
+  assert(path:sub(1, 1) ~= "/")
+  assert(not path:find("RuntimeContract", 1, true))
+end
+assert(luajava.new(File, "legacy-created"):mkdir() == true)
+
+local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
+assert(type(Gdx) == "table" and next(Gdx) == nil and Gdx.app == nil)
+assert(not pcall(luajava.new, {}, "."))
+assert(not pcall(luajava.new, File, ".", "extra"))
+assert(not pcall(luajava.bindClass, "java.net.URL"))
+assert(not pcall(luajava.bindClass, "java.net.URL"))
+assert(not pcall(luajava.bindClass, "com.badlogic.gdx.Input"))
+assert(not pcall(luajava.bindClass, "com.badlogic.gdx.controllers.Controllers"))
+
+return { phase = skin_config and "configured" or "header" }

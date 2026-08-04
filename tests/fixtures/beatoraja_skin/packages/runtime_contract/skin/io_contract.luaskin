@@ -1,0 +1,52 @@
+if skin_config then
+  return { phase = "configured" }
+end
+
+assert(type(io) == "table" and type(io.open) == "function")
+local io_exports = 0
+for _ in pairs(io) do io_exports = io_exports + 1 end
+assert(io_exports == 1)
+assert(io.stdin == nil and io.stdout == nil and io.stderr == nil)
+assert(io.lines == nil and io.popen == nil and io.tmpfile == nil)
+
+local first, number = dofile("returns.lua")
+assert(first == "alpha" and number == 7)
+
+local reader = assert(io.open("input.txt"))
+assert(reader.seek == nil and reader.read == nil and reader.flush == nil)
+local lines = reader:lines()
+assert(lines() == "first-line")
+assert(lines() == "second-line")
+assert(lines() == nil)
+assert(reader:close() == true)
+assert(reader:close() == true)
+
+local writer = assert(io.open("fresh/deep/output.txt", "w"))
+assert(writer:write() == writer)
+assert(writer:write(first, ":", number) == writer)
+assert(writer:close() == true)
+assert(writer:close() == true)
+local append = assert(io.open("fresh/deep/output.txt", "a"))
+assert(append:write(":tail") == append)
+assert(append:close() == true)
+local verify = assert(io.open("fresh/deep/output.txt", "r"))
+assert(verify:lines()() == "alpha:7:tail")
+assert(verify:close() == true)
+
+local missing, missing_error = io.open("missing.txt", "r")
+assert(missing == nil and type(missing_error) == "string")
+for _, mode in ipairs({"rb", "r+", "x", ""}) do
+  local handle, mode_error = io.open("input.txt", mode)
+  assert(handle == nil and type(mode_error) == "string")
+end
+
+local handles = {}
+for index = 1, 64 do
+  handles[index] = assert(io.open("input.txt", "r"))
+end
+local exhausted, exhausted_error = io.open("input.txt", "r")
+assert(exhausted == nil and type(exhausted_error) == "string")
+for _, handle in ipairs(handles) do assert(handle:close() == true) end
+assert(io.open("input.txt", "r"):close() == true)
+
+return { phase = "header" }

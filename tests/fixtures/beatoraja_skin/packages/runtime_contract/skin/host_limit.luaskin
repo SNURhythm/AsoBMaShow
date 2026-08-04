@@ -1,0 +1,3 @@
+local handle, message = io.open("oversized.txt", "r")
+assert(handle == nil and type(message) == "string")
+return { phase = "header" }

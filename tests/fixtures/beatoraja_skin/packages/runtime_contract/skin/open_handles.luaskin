@@ -1,0 +1,16 @@
+if not skin_config then
+  return { phase = "header" }
+end
+
+local reader = assert(io.open("input.txt", "r"))
+local next_line = reader:lines()
+local writer = assert(io.open("dirty.txt", "w"))
+writer:write("uncommitted")
+local File = luajava.bindClass("java.io.File")
+local directory = luajava.new(File, ".")
+
+return {
+  captured_read = function() return next_line() end,
+  captured_write = function() return writer:write("after-render") end,
+  captured_scan = function() return directory:listFiles() end
+}

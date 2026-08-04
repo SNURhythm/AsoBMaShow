@@ -15,6 +15,8 @@ ENABLED_SOURCE = ROOT / "src/skin/LuaGameplaySkinFeatureEnabled.cpp"
 UNAVAILABLE_SOURCE = ROOT / "src/skin/LuaGameplaySkinFeatureUnavailable.cpp"
 ROOT_CMAKE = ROOT / "CMakeLists.txt"
 SKIN_CMAKE = ROOT / "src/skin/CMakeLists.txt"
+RUNTIME_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinRuntime.cpp"
+HOST_SOURCE = ROOT / "src/skin/beatoraja/LuaSkinHostModules.cpp"
 
 
 class LuaSkinFeatureGateTests(unittest.TestCase):
@@ -109,6 +111,22 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
             """
         )
         self.assertIn(conditional, source)
+
+    def test_enabled_runtime_sources_are_selected_only_behind_the_gate(self):
+        source = SKIN_CMAKE.read_text(encoding="utf-8")
+        enabled_block = source[
+            source.index("if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)") :
+            source.index("else()", source.index("if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)"))
+        ]
+        self.assertIn("beatoraja/LuaSkinRuntime.cpp", enabled_block)
+        self.assertIn("beatoraja/LuaSkinHostModules.cpp", enabled_block)
+
+    def test_xcode_discovered_runtime_implementations_have_source_guards(self):
+        for path in (RUNTIME_SOURCE, HOST_SOURCE):
+            source = path.read_text(encoding="utf-8")
+            self.assertIn('#include "../LuaGameplaySkinFeature.h"', source)
+            self.assertIn("#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS", source)
+            self.assertIn("#endif", source)
 
 
 if __name__ == "__main__":

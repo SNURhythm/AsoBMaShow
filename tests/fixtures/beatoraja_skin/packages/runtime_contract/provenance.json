@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "referenceCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "symbols": [
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/LuaSkinLoader.java",
+      "symbol": "LuaSkinLoader.loadHeader/load",
+      "behavior": "executes nil-config header and configured entry in one retained Lua globals state"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/SkinLuaAccessor.java",
+      "symbol": "SkinLuaAccessor.createStandardGlobals/createSandboxGlobals/initializeModules/execFile/setDirectory",
+      "behavior": "opens the selected Lua libraries, preloads the three host modules, and resolves entry-relative text execution"
+    },
+    {
+      "path": "src/bms/player/beatoraja/skin/lua/LegacySkinLuaApi.java",
+      "symbol": "LegacySkinLuaApi.install/BindClassFunction/NewFunction/fileFacade/gdxFacade",
+      "behavior": "defines the selected repeated-require, File construction/listing, and absent-Gdx.app call shapes; AsoBMaShow intentionally closes every broader branch"
+    },
+    {
+      "path": "skin/default/play/play7.luaskin",
+      "symbol": "top-level require and skin_config branch",
+      "behavior": "requires its module before choosing header or configured return value"
+    }
+  ]
+}

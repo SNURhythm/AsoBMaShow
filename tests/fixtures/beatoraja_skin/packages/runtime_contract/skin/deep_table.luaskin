@@ -1,0 +1,7 @@
+local root = {}
+local cursor = root
+for depth = 1, 65 do
+  cursor.child = {}
+  cursor = cursor.child
+end
+return root

@@ -1,0 +1,8 @@
+assert(next(require("main_state")) == nil)
+assert(next(require("timer_util")) == nil)
+assert(next(require("event_util")) == nil)
+local writer, writer_error = io.open("catalog.txt", "w")
+assert(writer == nil and type(writer_error) == "string")
+local File = luajava.bindClass("java.io.File")
+assert(luajava.new(File, "catalog-directory"):mkdir() == false)
+return { phase = "header" }
