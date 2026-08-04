@@ -94,6 +94,21 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       {14, chart.Meta.Artist},
       {15, chart.Meta.SubArtist},
   };
+  result.staticMetadata = {
+      .difficulty = chart.Meta.Difficulty,
+      .judgeRank = chart.Meta.Rank,
+      .minimumBpm = chart.Meta.MinBpm,
+      .maximumBpm = chart.Meta.MaxBpm,
+      .durationMicros = chart.Meta.TotalLength,
+      .totalNotes = chart.Meta.TotalNotes,
+      .totalLongNotes = chart.Meta.TotalLongNotes,
+      .totalScratchNotes = chart.Meta.TotalScratchNotes,
+      .totalBackSpinNotes = chart.Meta.TotalBackSpinNotes,
+      .totalLandmineNotes = chart.Meta.TotalLandmineNotes,
+      .hasBga = !chart.ReferencedBmpTable.empty(),
+      .stageFilePath = chart.Meta.StageFile.generic_string(),
+      .backBmpPath = chart.Meta.BackBmp.generic_string(),
+  };
   result.laneOrder = chart.Meta.GetTotalLaneIndices();
 
   std::size_t timelineCount = 0;

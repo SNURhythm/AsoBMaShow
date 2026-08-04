@@ -79,6 +79,27 @@ struct PlayfieldChartTextMetadata {
   bool operator==(const PlayfieldChartTextMetadata &) const = default;
 };
 
+// Immutable chart data used by static Beatoraja skin properties. This remains
+// parser-free after conversion so projection and skin evaluation never need to
+// retain the mutable parser chart.
+struct PlayfieldChartStaticMetadata {
+  int difficulty = 0;
+  int judgeRank = 3;
+  double minimumBpm = 0.0;
+  double maximumBpm = 0.0;
+  long long durationMicros = 0;
+  int totalNotes = 0;
+  int totalLongNotes = 0;
+  int totalScratchNotes = 0;
+  int totalBackSpinNotes = 0;
+  int totalLandmineNotes = 0;
+  bool hasBga = false;
+  std::string stageFilePath;
+  std::string backBmpPath;
+
+  bool operator==(const PlayfieldChartStaticMetadata &) const = default;
+};
+
 struct ChartVisualBgaPoorSequence {
   long long startBgaMicros = 0;
   std::uint32_t authoredOrdinal = 0;
@@ -91,6 +112,7 @@ struct PlayfieldChartVisualModel {
   std::string chartSha256;
   int keyCount = 0;
   PlayfieldChartTextMetadata text;
+  PlayfieldChartStaticMetadata staticMetadata;
   std::vector<int> laneOrder;
   std::vector<ChartVisualTimeline> timelines;
   std::vector<ChartVisualNote> notes;

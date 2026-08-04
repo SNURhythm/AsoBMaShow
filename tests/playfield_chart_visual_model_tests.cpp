@@ -23,9 +23,45 @@ const ChartVisualNote *noteForTimeline(const PlayfieldChartVisualModel &model,
   return it == model.notes.end() ? nullptr : &*it;
 }
 
+bool testStaticChartMetadata() {
+  bms_parser::Chart chart;
+  chart.Meta.Difficulty = 3;
+  chart.Meta.Rank = 72;
+  chart.Meta.MinBpm = 124.25;
+  chart.Meta.MaxBpm = 248.5;
+  chart.Meta.TotalLength = 123'456'789;
+  chart.Meta.TotalNotes = 987;
+  chart.Meta.TotalLongNotes = 65;
+  chart.Meta.TotalScratchNotes = 43;
+  chart.Meta.TotalBackSpinNotes = 21;
+  chart.Meta.TotalLandmineNotes = 8;
+  chart.Meta.StageFile = "stage.png";
+  chart.Meta.BackBmp = "back.png";
+  chart.ReferencedBmpTable.emplace(1, "bga.png");
+
+  const auto model = buildPlayfieldChartVisualModel(chart, 0);
+  const auto &metadata = model.staticMetadata;
+  if (metadata.difficulty != 3 || metadata.judgeRank != 72 ||
+      metadata.minimumBpm != 124.25 || metadata.maximumBpm != 248.5 ||
+      metadata.durationMicros != 123'456'789 || metadata.totalNotes != 987 ||
+      metadata.totalLongNotes != 65 || metadata.totalScratchNotes != 43 ||
+      metadata.totalBackSpinNotes != 21 ||
+      metadata.totalLandmineNotes != 8 || !metadata.hasBga ||
+      metadata.stageFilePath != "stage.png" ||
+      metadata.backBmpPath != "back.png") {
+    std::cerr << "chart visual model static metadata conversion failed\n";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
+  if (!testStaticChartMetadata()) {
+    return EXIT_FAILURE;
+  }
+
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
   auto *bga = new bms_parser::TimeLine(8, false);
