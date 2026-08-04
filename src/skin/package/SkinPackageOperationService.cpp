@@ -161,6 +161,16 @@ SkinPreparedDisposalReservation::transfer(
                                                    std::move(disposal));
 }
 
+std::optional<SkinDeferredCleanup> SkinPreparedDisposalReservation::transfer(
+    SkinDeferredCleanup cleanup) && noexcept {
+  SkinPackageOperationService *service =
+      std::exchange(service_, nullptr);
+  if (service == nullptr) {
+    return cleanup;
+  }
+  return service->transferReservedPreparedCleanup(slot_, std::move(cleanup));
+}
+
 SkinPreparedDisposalReservation::operator bool() const noexcept {
   return service_ != nullptr;
 }
@@ -249,9 +259,13 @@ struct SkinPackageOperationService::Impl {
     Running,
   };
 
+  using ReservedDisposalPayload =
+      std::variant<RejectedPreparedDisposal, SkinDeferredCleanup>;
+  static_assert(std::is_nothrow_move_constructible_v<ReservedDisposalPayload>);
+
   struct ReservedDisposalSlot {
     ReservedDisposalState state = ReservedDisposalState::Free;
-    std::optional<RejectedPreparedDisposal> disposal;
+    std::optional<ReservedDisposalPayload> disposal;
   };
 
   SkinPackageStore &store;
@@ -385,6 +399,27 @@ struct SkinPackageOperationService::Impl {
       slot.state = ReservedDisposalState::Pending;
     } catch (...) {
       return disposal;
+    }
+    workAvailable.notify_one();
+    return std::nullopt;
+  }
+
+  std::optional<SkinDeferredCleanup>
+  transferReservedPreparedCleanup(std::size_t index,
+                                  SkinDeferredCleanup cleanup) noexcept {
+    static_assert(std::is_nothrow_move_constructible_v<SkinDeferredCleanup>);
+    try {
+      std::scoped_lock lock(mutex);
+      if (index >= reservedDisposals.size() ||
+          reservedDisposals[index].state != ReservedDisposalState::Reserved) {
+        return cleanup;
+      }
+      ReservedDisposalSlot &slot = reservedDisposals[index];
+      slot.disposal.emplace(std::in_place_type<SkinDeferredCleanup>,
+                            std::move(cleanup));
+      slot.state = ReservedDisposalState::Pending;
+    } catch (...) {
+      return cleanup;
     }
     workAvailable.notify_one();
     return std::nullopt;
@@ -714,7 +749,7 @@ struct SkinPackageOperationService::Impl {
       std::uint64_t operationTicket = 0;
       bool disposal = false;
       std::optional<std::size_t> reservedDisposalIndex;
-      std::optional<RejectedPreparedDisposal> reservedDisposal;
+      std::optional<ReservedDisposalPayload> reservedDisposal;
       std::optional<RequestPayload> releasedRequest;
       std::optional<SkinPackageOperationPayload> releasedResult;
       std::shared_ptr<SkinPackageProgressMailbox> releasedMailbox;
@@ -752,10 +787,24 @@ struct SkinPackageOperationService::Impl {
         continue;
       }
       if (reservedDisposalIndex) {
-        reservedDisposal->cleanup.run();
-        // PreparedPackage destruction may recursively remove its private
-        // staging tree. It is deliberately sequenced here on the worker after
-        // cleanup, never in the transferring caller.
+#if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
+        if (observer) {
+          observer->disposing(0);
+        }
+#endif
+        std::visit(
+            [](auto &payload) noexcept {
+              using Payload = std::decay_t<decltype(payload)>;
+              if constexpr (std::is_same_v<Payload, RejectedPreparedDisposal>) {
+                payload.cleanup.run();
+              } else {
+                payload.run();
+              }
+            },
+            *reservedDisposal);
+        // PreparedPackage destruction, when present, may recursively remove
+        // its private staging tree. It is deliberately sequenced here on the
+        // worker after cleanup, never in the transferring caller.
         reservedDisposal.reset();
         try {
           std::scoped_lock lock(mutex);
@@ -1081,6 +1130,12 @@ std::optional<RejectedPreparedDisposal>
 SkinPackageOperationService::transferReservedPreparedDisposal(
     std::size_t slot, RejectedPreparedDisposal disposal) noexcept {
   return impl_->transferReservedPreparedDisposal(slot, std::move(disposal));
+}
+
+std::optional<SkinDeferredCleanup>
+SkinPackageOperationService::transferReservedPreparedCleanup(
+    std::size_t slot, SkinDeferredCleanup cleanup) noexcept {
+  return impl_->transferReservedPreparedCleanup(slot, std::move(cleanup));
 }
 
 void SkinPackageOperationService::releasePreparedDisposalReservation(

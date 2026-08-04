@@ -1250,6 +1250,110 @@ void testReservedDisposalTransferWinsConcurrentShutdown() {
   service.shutdown();
 }
 
+void testReservedCleanupOnlyTransferIsNonblockingAndShutdownDrains() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  SkinPackageOperationService service(store, validator);
+
+  auto reservation = service.reservePreparedDisposal();
+  expect(reservation.has_value(),
+         "cleanup-only disposal reserves the close-safe worker lane");
+  if (!reservation) {
+    service.shutdown();
+    return;
+  }
+
+  std::mutex cleanupMutex;
+  std::condition_variable cleanupStarted;
+  std::condition_variable cleanupRelease;
+  bool cleanupIsRunning = false;
+  bool releaseCleanup = false;
+  std::atomic_int cleanupRuns = 0;
+  std::thread::id cleanupThread;
+  const std::thread::id callerThread = std::this_thread::get_id();
+  const auto transferStarted = std::chrono::steady_clock::now();
+  auto rejected = std::move(*reservation).transfer(SkinDeferredCleanup([&] {
+    std::unique_lock lock(cleanupMutex);
+    cleanupThread = std::this_thread::get_id();
+    ++cleanupRuns;
+    cleanupIsRunning = true;
+    cleanupStarted.notify_all();
+    cleanupRelease.wait(lock, [&] { return releaseCleanup; });
+  }));
+  const auto transferElapsed =
+      std::chrono::steady_clock::now() - transferStarted;
+  expect(!rejected,
+         "cleanup-only capability transfers through its reservation");
+  expect(transferElapsed < std::chrono::milliseconds(100),
+         "cleanup-only transfer never waits for worker cleanup");
+  {
+    std::unique_lock lock(cleanupMutex);
+    expect(cleanupStarted.wait_for(lock, std::chrono::seconds(5),
+                                   [&] { return cleanupIsRunning; }),
+           "cleanup-only transfer reaches the service worker");
+  }
+  expect(cleanupRuns == 1 && cleanupThread != callerThread,
+         "cleanup-only transfer runs exactly once off the caller thread");
+
+  std::atomic_bool shutdownReturned = false;
+  std::jthread shutdown([&] {
+    service.shutdown();
+    shutdownReturned = true;
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  expect(!shutdownReturned,
+         "shutdown waits while reserved cleanup is still running");
+  {
+    std::scoped_lock lock(cleanupMutex);
+    releaseCleanup = true;
+  }
+  cleanupRelease.notify_all();
+  shutdown.join();
+  expect(shutdownReturned && cleanupRuns == 1,
+         "shutdown drains cleanup-only reserved work exactly once");
+}
+
+void testMovedReservationReturnsCleanupOnlyCapabilityIntact() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  bootstrapStore(store);
+  SkinPackageOperationService service(store, validator);
+
+  auto reservation = service.reservePreparedDisposal();
+  expect(reservation.has_value(),
+         "moved-reservation fixture acquires the cleanup lane");
+  if (!reservation) {
+    service.shutdown();
+    return;
+  }
+  auto validOwner =
+      std::optional<SkinPreparedDisposalReservation>(std::move(*reservation));
+  std::atomic_int returnedCleanupRuns = 0;
+  auto returned = std::move(*reservation).transfer(SkinDeferredCleanup([&] {
+    ++returnedCleanupRuns;
+  }));
+  expect(returned.has_value() && returnedCleanupRuns == 0,
+         "moved-from reservation returns cleanup without running it");
+  if (returned) {
+    returned->run();
+  }
+  expect(returnedCleanupRuns == 1,
+         "the caller retains explicit ownership of rejected cleanup");
+  validOwner.reset();
+  service.shutdown();
+}
+
 void testUnusedReservationReleasesShutdownAndPostShutdownRejectsAdmission() {
   TempDirectory temporary;
   const auto roots = rootsBelow(temporary.root());
@@ -1461,6 +1565,8 @@ int main() {
   testBoundedBackpressureReturnsCleanupOwnership();
   testReservedDisposalBypassesFullNormalQueueWithoutCallerCleanup();
   testReservedDisposalTransferWinsConcurrentShutdown();
+  testReservedCleanupOnlyTransferIsNonblockingAndShutdownDrains();
+  testMovedReservationReturnsCleanupOnlyCapabilityIntact();
   testUnusedReservationReleasesShutdownAndPostShutdownRejectsAdmission();
   testDetachedQueuedRescanSuppressesCompletion();
   testQueuedRemoveDeliversTypedCancellationWithoutDetach();

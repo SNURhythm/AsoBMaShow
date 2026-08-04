@@ -63,12 +63,13 @@ struct RejectedPreparedDisposal {
 
 class SkinPackageOperationService;
 
-// Pre-acquired, allocation-free admission for one rejected prepared package.
-// Reserve before starting an import, while no staging capability exists. A
-// live reservation guarantees that transfer remains nonblocking and is drained
-// by the service worker even when normal operation slots are full or shutdown
-// starts concurrently. Shutdown waits for live reservations to transfer or be
-// released; reservation owners must therefore be torn down before the service.
+// Pre-acquired, allocation-free admission for one rejected prepared package or
+// one cleanup-only capability. Reserve before starting an import, while no
+// staging capability exists. A live reservation guarantees that either
+// transfer remains nonblocking and is drained by the service worker even when
+// normal operation slots are full or shutdown starts concurrently. Shutdown
+// waits for live reservations to transfer or be released; reservation owners
+// must therefore be torn down before the service.
 class SkinPreparedDisposalReservation {
 public:
   SkinPreparedDisposalReservation(
@@ -86,6 +87,11 @@ public:
   // service never destroys it on the caller's behalf.
   [[nodiscard]] std::optional<RejectedPreparedDisposal>
   transfer(RejectedPreparedDisposal disposal) && noexcept;
+  // Used when prepare admission rejects before PreparedPackage exists. A
+  // valid reservation transfers the exact cleanup capability and returns
+  // nullopt; invalid/moved-from misuse returns it intact without running it.
+  [[nodiscard]] std::optional<SkinDeferredCleanup>
+  transfer(SkinDeferredCleanup cleanup) && noexcept;
   [[nodiscard]] explicit operator bool() const noexcept;
 
 private:
@@ -191,6 +197,8 @@ private:
   [[nodiscard]] std::optional<RejectedPreparedDisposal>
   transferReservedPreparedDisposal(std::size_t,
                                    RejectedPreparedDisposal) noexcept;
+  [[nodiscard]] std::optional<SkinDeferredCleanup>
+  transferReservedPreparedCleanup(std::size_t, SkinDeferredCleanup) noexcept;
   void releasePreparedDisposalReservation(std::size_t) noexcept;
 
   struct Impl;
