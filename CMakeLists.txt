@@ -4216,7 +4216,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(skin_package_store_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
-    target_compile_features(skin_package_store_tests PRIVATE cxx_std_23)
+    # Keep this suite on the language level used by the iOS application target
+    # so shared package-store sources cannot silently acquire C++23-only APIs.
+    set_property(TARGET skin_package_store_tests PROPERTY CXX_STANDARD 20)
+    set_property(TARGET skin_package_store_tests PROPERTY CXX_STANDARD_REQUIRED ON)
     target_compile_definitions(skin_package_store_tests PRIVATE
         ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
     )

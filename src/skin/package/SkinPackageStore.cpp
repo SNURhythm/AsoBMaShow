@@ -2885,8 +2885,9 @@ PublishPackageResult SkinPackageStore::publish(
           return candidate.entry == selected;
         });
     if (catalogEntry != validatedEntries.end() &&
-        !std::ranges::contains(catalogEntry->validatedConfigurationDigests,
-                               validation.configurationDigest)) {
+        std::ranges::find(catalogEntry->validatedConfigurationDigests,
+                          validation.configurationDigest) ==
+            catalogEntry->validatedConfigurationDigests.end()) {
       catalogEntry->validatedConfigurationDigests.push_back(
           std::move(validation.configurationDigest));
     }
@@ -3560,8 +3561,9 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
       if (validation.disposition == SkinValidationDisposition::Selectable7Key &&
           validation.reconciledSettings &&
           lowercaseSha256(validation.configurationDigest) &&
-          !std::ranges::contains(selectedEntry->validatedConfigurationDigests,
-                                 validation.configurationDigest)) {
+          std::ranges::find(selectedEntry->validatedConfigurationDigests,
+                            validation.configurationDigest) ==
+              selectedEntry->validatedConfigurationDigests.end()) {
         selectedEntry->validatedConfigurationDigests.push_back(
             std::move(validation.configurationDigest));
       } else {
@@ -3741,8 +3743,9 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
                        SkinValidationDisposition::Selectable7Key &&
                    entry.revisionDigest ==
                        item.second.revision.revision().lowercaseSha256 &&
-                   std::ranges::contains(entry.validatedConfigurationDigests,
-                                         item.second.configurationDigest);
+                   std::ranges::find(entry.validatedConfigurationDigests,
+                                     item.second.configurationDigest) !=
+                       entry.validatedConfigurationDigests.end();
           });
     });
   }
@@ -3893,8 +3896,9 @@ CommitActivationResult SkinPackageStore::beginPreparedActivationCommit(
                    prepared.activation.revision.revision().lowercaseSha256;
       });
   if (catalogEntry != catalogUpdate.entries.end() &&
-      !std::ranges::contains(catalogEntry->validatedConfigurationDigests,
-                             prepared.activation.configurationDigest)) {
+      std::ranges::find(catalogEntry->validatedConfigurationDigests,
+                        prepared.activation.configurationDigest) ==
+          catalogEntry->validatedConfigurationDigests.end()) {
     catalogEntry->validatedConfigurationDigests.push_back(
         prepared.activation.configurationDigest);
     ++catalogUpdate.catalogGeneration;
@@ -4095,8 +4099,9 @@ AcquireActivationResult SkinPackageStore::acquireValidatedActivation(
         return candidate.entry == entry &&
                candidate.validation ==
                    SkinValidationDisposition::Selectable7Key &&
-               std::ranges::contains(candidate.validatedConfigurationDigests,
-                                     configurationDigest);
+               std::ranges::find(candidate.validatedConfigurationDigests,
+                                 configurationDigest) !=
+                   candidate.validatedConfigurationDigests.end();
       });
   if (catalogEntry == current->entries.end()) {
     return result;

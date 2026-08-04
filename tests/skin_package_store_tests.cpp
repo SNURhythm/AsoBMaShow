@@ -1850,10 +1850,11 @@ void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
       store.acquireValidatedActivation(base.profileId, entry, activationDigest);
   expect(acquired.activation.has_value(),
          "exact profile-entry-configuration activation can be cloned");
-  expect(std::ranges::contains(store.catalogSnapshot()
-                                   ->entries.front()
-                                   .validatedConfigurationDigests,
-                               activationDigest),
+  const auto &validatedDigests = store.catalogSnapshot()
+                                     ->entries.front()
+                                     .validatedConfigurationDigests;
+  expect(std::ranges::find(validatedDigests, activationDigest) !=
+             validatedDigests.end(),
          "activation CAS publishes a newly validated configuration digest");
   const auto repeatedTerminal =
       store.pollPreparedActivationCommit(begun.ticket, owner);
