@@ -277,6 +277,10 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   planningThread.join();
   expect(stoppedPlan && stoppedPlan->cancelled && !stoppedPlan->plan,
          "concurrent shutdown stops the injectable decoder and prevents plan publication");
+  const auto afterShutdown = gatedService.validateResources({.revision=planned.plan->revision.readView(), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
+  expect(!afterShutdown.valid && !afterShutdown.diagnostics.empty() &&
+             afterShutdown.diagnostics.front().code == "skin.resource.service_stopped",
+         "the service-owned stop state rejects synchronous validation after shutdown begins");
   skin::SkinResourceUploadPlan rollbackPlan{
       .revision = planned.plan->revision.clone(), .images = planned.plan->images, .atlases = planned.plan->atlases,
       .decodedBytes = planned.plan->decodedBytes};
@@ -303,6 +307,13 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              uploaded.catalog->find(2)->regions.front().x == 2,
          "upload owns unique physical textures while preserving per-alias sprite regions");
   if (!uploaded.catalog) return;
+  const skin::SkinSourceRect firstAuthored{.x=0,.y=0,.w=40,.h=20,.gridColumns=4,.gridRows=2};
+  const skin::SkinSourceRect aliasAuthored{.x=2,.y=3,.w=20,.h=10,.gridColumns=2,.gridRows=1};
+  const auto *firstMapped = uploaded.catalog->findResolvedRegion(1, firstAuthored);
+  const auto *aliasMapped = uploaded.catalog->findResolvedRegion(2, aliasAuthored);
+  expect(firstMapped && aliasMapped && firstMapped->resolved.x == 0 && firstMapped->resolved.w == 10 &&
+             aliasMapped->resolved.x == 2 && aliasMapped->resolved.w == 10,
+         "immutable resource lookup preserves each authored frame identity through resolution and alias reuse");
   const int readsBefore = device->creates;
   uploaded.catalog->enterRenderPhase();
   for (int frame = 0; frame != 120; ++frame) {

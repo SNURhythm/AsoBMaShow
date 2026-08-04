@@ -48,6 +48,14 @@ struct SkinResourcePolicy {
                                            int imageWidth, int imageHeight,
                                            SkinSourceRect &resolved) noexcept;
 
+// The authored rectangle is the stable command-side identity. Resolution is
+// value-owned during preparation so later command construction never needs to
+// repeat model traversal or image-size dependent crop arithmetic.
+struct SkinResolvedRegion {
+  SkinSourceRect authored;
+  SkinSourceRect resolved;
+};
+
 struct SkinDecodedImage {
   SkinResourceId id = 0;
   // Multiple model IDs can resolve to one immutable package resource. They
@@ -55,7 +63,9 @@ struct SkinDecodedImage {
   std::vector<SkinResourceId> aliases;
   image_decode::DecodedImageData pixels;
   std::vector<SkinSourceRect> regions;
+  std::vector<SkinResolvedRegion> regionMappings;
   std::map<SkinResourceId, std::vector<SkinSourceRect>> aliasRegions;
+  std::map<SkinResourceId, std::vector<SkinResolvedRegion>> aliasRegionMappings;
 };
 using SkinTextAtlasId = std::uint32_t;
 struct SkinTextAtlasKey {
@@ -117,16 +127,18 @@ private:
   enum class State { Running, Stopping, Stopped };
   bool beginCall();
   void endCall() noexcept;
-  std::mutex serviceMutex_;
+  [[nodiscard]] bool cancellationRequested(std::stop_token) const noexcept;
+  mutable std::mutex serviceMutex_;
   std::condition_variable serviceCv_;
   image_decode::DecodedImageCache cache_;
   Decoder decoder_;
   image_decode::ImageDecodeCoordinator coordinator_;
   State state_ = State::Running;
+  std::stop_source stop_;
   std::size_t activeCalls_ = 0;
   bool shutdownComplete_ = false;
 };
-struct PreparedSkinResource { SkinResourceId id = 0; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::vector<SkinSourceRect> regions; };
+struct PreparedSkinResource { SkinResourceId id = 0; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::vector<SkinSourceRect> regions; std::vector<SkinResolvedRegion> regionMappings; };
 struct PreparedSkinTextAtlas { SkinTextAtlasId id = 0; SkinTextAtlasKey key; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::map<char32_t,SkinPreparedGlyphMetrics> glyphs; std::map<std::pair<char32_t,char32_t>,int> kerning; int ascent = 0; int descent = 0; int lineHeight = 0; };
 
 class SkinTextureDevice {
@@ -152,6 +164,8 @@ public:
   SkinResourceCatalog(const SkinResourceCatalog &) = delete;
   SkinResourceCatalog &operator=(const SkinResourceCatalog &) = delete;
   const PreparedSkinResource *find(SkinResourceId) const noexcept;
+  const SkinResolvedRegion *findResolvedRegion(SkinResourceId,
+                                                const SkinSourceRect &authored) const noexcept;
   const PreparedSkinTextAtlas *findTextAtlas(SkinTextAtlasId) const noexcept;
   const PreparedSkinTextAtlas *findTextAtlas(const SkinTextAtlasKey &) const noexcept;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
