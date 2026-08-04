@@ -4352,6 +4352,58 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 "-framework Foundation"
             )
         endif()
+
+        add_executable(play_skin_session_tests
+            tests/play_skin_session_tests.cpp
+            src/FileChecksum.cpp
+            src/Utils.cpp
+            src/path.cpp
+            src/scene/play/PlayfieldProjection.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinRuntime.cpp
+            src/skin/beatoraja/PlaySkinSession.cpp
+            src/skin/beatoraja/PlaySkinStateBridge.cpp
+            src/skin/beatoraja/PlaySkinViewport.cpp
+            src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+            src/skin/beatoraja/SkinDestinationEvaluator.cpp
+            src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+        )
+        target_include_directories(play_skin_session_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(play_skin_session_tests PRIVATE cxx_std_23)
+        target_compile_definitions(play_skin_session_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(play_skin_session_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(play_skin_session_tests PRIVATE
+                ${LUAJIT_LIB}
+                advapi32
+            )
+        else()
+            target_link_libraries(play_skin_session_tests PRIVATE
+                ${LUAJIT_LIBRARIES}
+            )
+        endif()
+        if(APPLE)
+            target_sources(play_skin_session_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
+            target_link_libraries(play_skin_session_tests PRIVATE
+                "-framework Foundation"
+            )
+        endif()
     endif()
 
     add_executable(practice_session_tests
@@ -5608,6 +5660,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)
         asobmashow_register_test(play_skin_state_bridge_tests)
+    endif()
+    if(TARGET play_skin_session_tests)
+        asobmashow_register_test(play_skin_session_tests)
     endif()
     if(TARGET skin_configuration_write_queue_tests)
         asobmashow_register_test(skin_configuration_write_queue_tests)

@@ -2531,6 +2531,39 @@ std::size_t skinRendererLookupComparisonsForTesting() noexcept {
 
 SkinFrameEvaluationResult
 Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
+  return evaluateFrameImpl(inputs, true);
+}
+
+SkinFrameEvaluationResult Skin2DRenderer::evaluateFrame(
+    const SkinFrameInputs &inputs, SkinExternalFrameOwnership &&ownership) {
+  SkinFrameEvaluationResult result;
+  if (ownership.consumed_ || ownership.frameSerial_ == 0 ||
+      ownership.sessionSerial_ == 0 ||
+      ownership.frameSerial_ != inputs.frameSerial ||
+      ownership.sessionSerial_ != inputs.sessionSerial) {
+    result.diagnostics.push_back(diagnostic(
+        "skin.renderer.frame.ownership",
+        "Externally begun frame ownership does not match this evaluation."));
+    ownership.consumed_ = true;
+    return result;
+  }
+  ownership.consumed_ = true;
+  if (externalOwnershipSessionSerial_ != inputs.sessionSerial) {
+    externalOwnershipSessionSerial_ = inputs.sessionSerial;
+    lastExternalOwnershipFrameSerial_ = 0;
+  }
+  if (inputs.frameSerial <= lastExternalOwnershipFrameSerial_) {
+    result.diagnostics.push_back(diagnostic(
+        "skin.renderer.frame.ownership",
+        "Externally begun frame ownership was already consumed."));
+    return result;
+  }
+  lastExternalOwnershipFrameSerial_ = inputs.frameSerial;
+  return evaluateFrameImpl(inputs, false);
+}
+
+SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
+    const SkinFrameInputs &inputs, bool beginRuntimeFrame) {
   SkinFrameEvaluationResult result;
   try {
     if (inputs.state.frameSerial() != inputs.frameSerial) {
@@ -2545,12 +2578,14 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
                      "Gameplay skin session serial must be nonzero."));
       return result;
     }
-    const auto begun = inputs.runtime.beginFrame(inputs.frameSerial);
-    if (!begun.ok) {
-      result.diagnostics.push_back(begun.failure.value_or(
-          diagnostic("skin.renderer.frame.begin",
-                     "Lua runtime rejected the render-frame serial.")));
-      return result;
+    if (beginRuntimeFrame) {
+      const auto begun = inputs.runtime.beginFrame(inputs.frameSerial);
+      if (!begun.ok) {
+        result.diagnostics.push_back(begun.failure.value_or(
+            diagnostic("skin.renderer.frame.begin",
+                       "Lua runtime rejected the render-frame serial.")));
+        return result;
+      }
     }
     if (!invertibleViewport(inputs.viewport)) {
       result.diagnostics.push_back(

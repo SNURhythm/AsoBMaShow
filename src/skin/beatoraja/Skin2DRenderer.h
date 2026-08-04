@@ -20,6 +20,35 @@ class SkinQuadBatchRenderer;
 
 namespace skin {
 
+class PlaySkinSession;
+class Skin2DRenderer;
+
+// Move-only proof that PlaySkinSession has already opened the matching Lua
+// callback frame. Only the session may mint it and only the renderer may
+// consume it, preventing evaluator callers from expressing ambiguous frame
+// ownership with a boolean flag.
+class SkinExternalFrameOwnership final {
+public:
+  SkinExternalFrameOwnership(SkinExternalFrameOwnership &&) noexcept = default;
+  SkinExternalFrameOwnership &
+  operator=(SkinExternalFrameOwnership &&) noexcept = default;
+  SkinExternalFrameOwnership(const SkinExternalFrameOwnership &) = delete;
+  SkinExternalFrameOwnership &
+  operator=(const SkinExternalFrameOwnership &) = delete;
+
+private:
+  SkinExternalFrameOwnership(std::uint64_t frameSerial,
+                             std::uint64_t sessionSerial) noexcept
+      : frameSerial_(frameSerial), sessionSerial_(sessionSerial) {}
+
+  std::uint64_t frameSerial_ = 0;
+  std::uint64_t sessionSerial_ = 0;
+  bool consumed_ = false;
+
+  friend class PlaySkinSession;
+  friend class Skin2DRenderer;
+};
+
 template <typename T> struct SkinPropertyLookup {
   T value{};
   bool supported = false;
@@ -205,12 +234,21 @@ struct SkinFrameEvaluationResult {
 
 class Skin2DRenderer final {
 public:
+  // Legacy adapter: existing standalone evaluators retain internal ownership
+  // of LuaSkinRuntime::beginFrame until coordinator migration is complete.
   SkinFrameEvaluationResult evaluateFrame(const SkinFrameInputs &);
+  // Session path: the typed token proves beginFrame already occurred, so
+  // evaluation must not begin the runtime a second time.
+  SkinFrameEvaluationResult evaluateFrame(
+      const SkinFrameInputs &, SkinExternalFrameOwnership &&);
   [[nodiscard]] bool submit(const SkinCommandBuffer &,
                             const SkinResourceCatalog &, RenderContext &,
                             rendering::SkinQuadBatchRenderer &) const;
 
 private:
+  SkinFrameEvaluationResult evaluateFrameImpl(const SkinFrameInputs &,
+                                               bool beginRuntimeFrame);
+
   struct GaugeAnimationState {
     int animation = 0;
     std::int64_t deadlineMillis = 0;
@@ -219,6 +257,8 @@ private:
 
   std::uint64_t gaugeAnimationSessionSerial_ = 0;
   std::map<SkinObjectId, GaugeAnimationState> gaugeAnimationStates_;
+  std::uint64_t externalOwnershipSessionSerial_ = 0;
+  std::uint64_t lastExternalOwnershipFrameSerial_ = 0;
 };
 
 #if defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
