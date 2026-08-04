@@ -477,6 +477,14 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                 .subartist = "subartist",
                 .genre = "genre",
                 .auditedStringProperties = {{12, "full title"}}};
+  chart.staticMetadata = {.difficulty = 3,
+                          .judgeRank = 70,
+                          .minimumBpm = 120.9,
+                          .maximumBpm = 240.5,
+                          .durationMicros = 125'789'000,
+                          .hasBga = true,
+                          .stageFilePath = "stage.png",
+                          .backBmpPath = "back.png"};
   chart.notes = {{.id = 1, .kind = ChartVisualNoteKind::LongHead}};
   ValidatedBeatorajaSkinModel model;
   BeatorajaSkinConfiguration configuration;
@@ -532,6 +540,21 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
              bridge.booleanProperty({173}).value,
          "selected long-note options read the immutable chart model");
   for (const auto [id, expected] : std::array{
+           std::pair{150, false}, std::pair{151, false},
+           std::pair{152, false}, std::pair{153, true},
+           std::pair{154, false}, std::pair{155, false},
+           std::pair{170, false}, std::pair{171, true},
+           std::pair{176, false}, std::pair{177, true},
+           std::pair{180, false}, std::pair{181, false},
+           std::pair{182, true}, std::pair{183, false},
+           std::pair{184, false}, std::pair{190, false},
+           std::pair{191, true}, std::pair{194, false},
+           std::pair{195, true}}) {
+    const auto value = bridge.booleanProperty({id});
+    expect(value.supported && value.value == expected,
+           "selected static chart option uses its exact immutable source");
+  }
+  for (const auto [id, expected] : std::array{
            std::pair{14, 450LL}, std::pair{71, 456LL},
            std::pair{101, 456LL}, std::pair{107, 62LL},
            std::pair{110, 10LL}, std::pair{111, 9LL},
@@ -542,6 +565,17 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
     const auto value = bridge.integerProperty({id});
     expect(value.supported && value.value == expected,
            "selected live score, gauge, and judgement number is exact");
+  }
+  for (const auto [id, expected] : std::array{
+           std::pair{90, 240LL}, std::pair{91, 120LL},
+           std::pair{1163, 2LL}, std::pair{1164, 5LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "selected static chart number uses its exact immutable source");
+  }
+  for (const int id : {92, 350, 351, 352, 353}) {
+    expect(!bridge.integerProperty({id}).supported,
+           "main BPM and note categories stay unsupported without exact sources");
   }
   expect(bridge.stringProperty({12}).supported &&
              bridge.stringProperty({12}).value == "full title" &&

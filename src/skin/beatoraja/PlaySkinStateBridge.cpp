@@ -604,6 +604,66 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = *id == 172 ? !hasLongNote : hasLongNote,
             .supported = true};
   }
+  case 150:
+    return {.value = context_.chartModel.staticMetadata.difficulty <= 0 ||
+                     context_.chartModel.staticMetadata.difficulty > 5,
+            .supported = true};
+  case 151:
+  case 152:
+  case 153:
+  case 154:
+  case 155:
+    return {.value = context_.chartModel.staticMetadata.difficulty == *id - 150,
+            .supported = true};
+  case 170:
+  case 171:
+    return {.value = *id == 171
+                         ? context_.chartModel.staticMetadata.hasBga
+                         : !context_.chartModel.staticMetadata.hasBga,
+            .supported = true};
+  case 176:
+  case 177: {
+    const auto &metadata = context_.chartModel.staticMetadata;
+    return {.value = *id == 176 ? metadata.minimumBpm == metadata.maximumBpm
+                                 : metadata.minimumBpm < metadata.maximumBpm,
+            .supported = true};
+  }
+  case 180: {
+    const int judgeRank = context_.chartModel.staticMetadata.judgeRank;
+    return {.value = judgeRank == 0 || (judgeRank >= 10 && judgeRank < 35),
+            .supported = true};
+  }
+  case 181: {
+    const int judgeRank = context_.chartModel.staticMetadata.judgeRank;
+    return {.value = judgeRank == 1 || (judgeRank >= 35 && judgeRank < 60),
+            .supported = true};
+  }
+  case 182: {
+    const int judgeRank = context_.chartModel.staticMetadata.judgeRank;
+    return {.value = judgeRank == 2 || (judgeRank >= 60 && judgeRank < 85),
+            .supported = true};
+  }
+  case 183: {
+    const int judgeRank = context_.chartModel.staticMetadata.judgeRank;
+    return {.value = judgeRank == 3 || (judgeRank >= 85 && judgeRank < 110),
+            .supported = true};
+  }
+  case 184: {
+    const int judgeRank = context_.chartModel.staticMetadata.judgeRank;
+    return {.value = judgeRank == 4 || judgeRank >= 110, .supported = true};
+  }
+  case 190:
+  case 191:
+    return {.value = *id == 191
+                         ? !context_.chartModel.staticMetadata.stageFilePath.empty()
+                         : context_.chartModel.staticMetadata.stageFilePath.empty(),
+            .supported = true};
+  case 194:
+  case 195:
+    return {.value = *id == 195
+                         ? !context_.chartModel.staticMetadata.backBmpPath.empty()
+                         : context_.chartModel.staticMetadata.backBmpPath.empty(),
+            .supported = true};
   case 1240: {
     const auto gauge = gaugeState();
     if (!gauge.supported) {
@@ -692,6 +752,24 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
             .supported = true};
   case 160:
     return {.value = static_cast<std::int64_t>(snapshot->authority.currentBpm),
+            .supported = true};
+  case 90:
+    return {.value = static_cast<std::int64_t>(
+                context_.chartModel.staticMetadata.maximumBpm),
+            .supported = true};
+  case 91:
+    return {.value = static_cast<std::int64_t>(
+                context_.chartModel.staticMetadata.minimumBpm),
+            .supported = true};
+  case 1163:
+    return {.value = (context_.chartModel.staticMetadata.durationMicros /
+                      1'000'000 / 60) %
+                     60,
+            .supported = true};
+  case 1164:
+    return {.value = (context_.chartModel.staticMetadata.durationMicros /
+                      1'000'000) %
+                     60,
             .supported = true};
   case 407: {
     const float gauge = snapshot->authority.currentGauge;
