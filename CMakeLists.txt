@@ -3421,6 +3421,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/path.cpp
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
+        src/skin/beatoraja/SkinDestinationEvaluator.cpp
         src/utils/Stopwatch.cpp
         src/video/VideoDecodeState.cpp
         src/video/VideoFrameLayout.cpp
