@@ -596,6 +596,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             CXX_EXTENSIONS NO
         )
 
+        add_executable(skin_note_line_normalization_tests
+            tests/skin_note_line_normalization_tests.cpp
+            src/skin/beatoraja/SkinNoteLineNormalization.cpp
+        )
+        target_include_directories(skin_note_line_normalization_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(skin_note_line_normalization_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+
         add_executable(skin_text_graph_normalization_tests
             tests/skin_text_graph_normalization_tests.cpp
             src/skin/beatoraja/SkinTextGraphNormalization.cpp
@@ -4961,6 +4974,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET skin_note_normalization_tests)
         asobmashow_register_test(skin_note_normalization_tests)
+    endif()
+    if (TARGET skin_note_line_normalization_tests)
+        asobmashow_register_test(skin_note_line_normalization_tests)
     endif()
     if (TARGET skin_text_graph_normalization_tests)
         asobmashow_register_test(skin_text_graph_normalization_tests)
