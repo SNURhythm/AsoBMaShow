@@ -44,6 +44,33 @@ bool contains(const RealtimeTouchLaneRegion &region,
   return winding != 0;
 }
 
+bool contains(const PresentationUiHitRegion &region,
+              UiLogicalPoint point) noexcept {
+  if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+    return false;
+  }
+  int winding = 0;
+  for (std::size_t index = 0; index < region.boundary.size(); ++index) {
+    const auto &from = region.boundary[index];
+    const auto &to = region.boundary[(index + 1) % region.boundary.size()];
+    if (!std::isfinite(from.x) || !std::isfinite(from.y) ||
+        !std::isfinite(to.x) || !std::isfinite(to.y)) {
+      return false;
+    }
+    const float side = (to.x - from.x) * (point.y - from.y) -
+                       (to.y - from.y) * (point.x - from.x);
+    if (std::abs(side) <= kHitTestEpsilon) {
+      continue;
+    }
+    const int sideWinding = side > 0.0F ? 1 : -1;
+    if (winding != 0 && winding != sideWinding) {
+      return false;
+    }
+    winding = sideWinding;
+  }
+  return winding != 0;
+}
+
 RealtimeTouchPoint clampedVertically(const RealtimeTouchLaneRegion &region,
                                      RealtimeTouchPoint point) noexcept {
   const auto yRange = std::minmax({region.bottomLeft.y, region.bottomRight.y,
@@ -51,6 +78,236 @@ RealtimeTouchPoint clampedVertically(const RealtimeTouchLaneRegion &region,
   point.y = std::clamp(point.y, yRange.first, yRange.second);
   return point;
 }
+}
+
+std::optional<UiLogicalPoint> RealtimeTouchHitSnapshot::uiPoint(
+    float normalizedX, float normalizedY) const noexcept {
+  if (!std::isfinite(normalizedX) || !std::isfinite(normalizedY) ||
+      uiTransform.renderWidth <= 0 || uiTransform.renderHeight <= 0 ||
+      !std::isfinite(uiTransform.uiScaleX) ||
+      !std::isfinite(uiTransform.uiScaleY) || uiTransform.uiScaleX <= 0.0F ||
+      uiTransform.uiScaleY <= 0.0F) {
+    return std::nullopt;
+  }
+  return UiLogicalPoint{
+      .x = (normalizedX * static_cast<float>(uiTransform.renderWidth) -
+            static_cast<float>(uiTransform.uiOffsetX)) /
+           uiTransform.uiScaleX,
+      .y = (normalizedY * static_cast<float>(uiTransform.renderHeight) -
+            static_cast<float>(uiTransform.uiOffsetY)) /
+           uiTransform.uiScaleY};
+}
+
+std::optional<RealtimeTouchPoint> RealtimeTouchHitSnapshot::presentationPoint(
+    float normalizedX, float normalizedY) const noexcept {
+  const auto point = uiPoint(normalizedX, normalizedY);
+  if (!point || uiTransform.uiWidth <= 0 || uiTransform.uiHeight <= 0) {
+    return std::nullopt;
+  }
+  return RealtimeTouchPoint{
+      .x = point->x / static_cast<float>(uiTransform.uiWidth),
+      .y = point->y / static_cast<float>(uiTransform.uiHeight)};
+}
+
+PresentationUiHit RealtimeTouchHitSnapshot::hitTest(
+    float normalizedX, float normalizedY) const noexcept {
+  const auto point = uiPoint(normalizedX, normalizedY);
+  if (!point) {
+    return {};
+  }
+  for (const auto &region : regionsTopmostFirst) {
+    if (region.hit.kind != PresentationUiControlKind::None &&
+        contains(region, *point)) {
+      return region.hit;
+    }
+  }
+  return {};
+}
+
+bool RealtimeTouchHitSnapshotPublication::publish(
+    RealtimeTouchHitSnapshot snapshot) noexcept {
+  try {
+    std::atomic_store_explicit(
+        &published_,
+        std::make_shared<const RealtimeTouchHitSnapshot>(std::move(snapshot)),
+        std::memory_order_release);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+std::shared_ptr<const RealtimeTouchHitSnapshot>
+RealtimeTouchHitSnapshotPublication::acquire() const noexcept {
+  return std::atomic_load_explicit(&published_, std::memory_order_acquire);
+}
+
+void RealtimeTouchHitSnapshotPublication::clear() noexcept {
+  std::atomic_store_explicit(
+      &published_, std::shared_ptr<const RealtimeTouchHitSnapshot>{},
+      std::memory_order_release);
+}
+
+PresentationUiHit RealtimeTouchHitCaptureTracker::consume(
+    const RealtimeTouchSample &sample,
+    const RealtimeTouchHitSnapshot &snapshot) noexcept {
+  auto *capture = [&]() -> Capture * {
+    for (auto &candidate : captures_) {
+      if (candidate.active && candidate.pointerId == sample.fingerId) {
+        return &candidate;
+      }
+    }
+    return nullptr;
+  }();
+  if (sample.phase == RealtimeTouchPhase::Down && capture == nullptr) {
+    const auto hit = snapshot.hitTest(sample.normalizedX, sample.normalizedY);
+    if (hit.kind == PresentationUiControlKind::None) {
+      return {};
+    }
+    for (auto &candidate : captures_) {
+      if (!candidate.active) {
+        candidate = {
+            .pointerId = sample.fingerId, .active = true, .hit = hit};
+        capture = &candidate;
+        break;
+      }
+    }
+  }
+  if (capture == nullptr) {
+    return {};
+  }
+  const auto hit = capture->hit;
+  if (sample.phase == RealtimeTouchPhase::Up ||
+      sample.phase == RealtimeTouchPhase::Cancel) {
+    *capture = {};
+  }
+  return hit;
+}
+
+void RealtimeTouchHitCaptureTracker::reset() noexcept {
+  captures_.fill({});
+}
+
+void populateRealtimeTouchPresentationMetadata(
+    RealtimeTouchSample &sample, const RealtimeTouchHitSnapshot &snapshot,
+    RealtimeTouchHitCaptureTracker &captures) noexcept {
+  sample.presentationHit = captures.consume(sample, snapshot);
+  sample.presentationPoint =
+      snapshot.presentationPoint(sample.normalizedX, sample.normalizedY);
+  sample.presentationUiPoint.reset();
+  if (sample.presentationHit.kind != PresentationUiControlKind::None) {
+    sample.presentationUiPoint =
+        snapshot.uiPoint(sample.normalizedX, sample.normalizedY);
+  }
+}
+
+void RealtimeTouchPresentationDispatcher::setSink(
+    RealtimeTouchPresentationSink sink) noexcept {
+  captures_.fill({});
+  sink_ = sink;
+}
+
+RealtimeTouchPresentationDispatcher::Capture *
+RealtimeTouchPresentationDispatcher::find(std::int64_t pointerId) noexcept {
+  for (auto &capture : captures_) {
+    if (capture.active && capture.pointerId == pointerId) {
+      return &capture;
+    }
+  }
+  return nullptr;
+}
+
+RealtimeTouchPresentationDispatcher::Capture *
+RealtimeTouchPresentationDispatcher::allocate(
+    std::int64_t pointerId) noexcept {
+  for (auto &capture : captures_) {
+    if (!capture.active) {
+      capture = {.pointerId = pointerId, .active = true};
+      return &capture;
+    }
+  }
+  return nullptr;
+}
+
+PresentationTouchResult RealtimeTouchPresentationDispatcher::consume(
+    const RealtimeTouchSample &sample, long long eventMicros) noexcept {
+  switch (sample.phase) {
+  case RealtimeTouchPhase::Down: {
+    if (sample.presentationHit.kind == PresentationUiControlKind::None ||
+        sample.presentationHit.kind ==
+            PresentationUiControlKind::NativeOverlay ||
+        !sample.presentationUiPoint ||
+        find(sample.fingerId) != nullptr || sink_.begin == nullptr) {
+      return {};
+    }
+    auto *capture = allocate(sample.fingerId);
+    if (capture == nullptr) {
+      return {};
+    }
+    capture->hit = sample.presentationHit;
+    capture->uiPoint = *sample.presentationUiPoint;
+    const PresentationTouchEvent event{.pointerId = sample.fingerId,
+                                       .uiPoint = capture->uiPoint,
+                                       .eventMicros = eventMicros,
+                                       .hit = capture->hit};
+    const auto result = sink_.begin(sink_.context, event);
+    if (!result.consumed) {
+      *capture = {};
+    }
+    return result;
+  }
+  case RealtimeTouchPhase::Move: {
+    auto *capture = find(sample.fingerId);
+    if (capture == nullptr || sink_.update == nullptr) {
+      return {};
+    }
+    if (sample.presentationUiPoint) {
+      capture->uiPoint = *sample.presentationUiPoint;
+    }
+    const PresentationTouchEvent event{.pointerId = sample.fingerId,
+                                       .uiPoint = capture->uiPoint,
+                                       .eventMicros = eventMicros,
+                                       .hit = capture->hit};
+    return sink_.update(sink_.context, event);
+  }
+  case RealtimeTouchPhase::Up:
+  case RealtimeTouchPhase::Cancel: {
+    auto *capture = find(sample.fingerId);
+    if (capture == nullptr) {
+      return {};
+    }
+    const PresentationTouchEvent event{.pointerId = sample.fingerId,
+                                       .uiPoint = sample.presentationUiPoint
+                                                      .value_or(capture->uiPoint),
+                                       .eventMicros = eventMicros,
+                                       .hit = capture->hit};
+    *capture = {};
+    return sink_.end != nullptr
+               ? sink_.end(sink_.context, event,
+                           sample.phase == RealtimeTouchPhase::Cancel)
+               : PresentationTouchResult{};
+  }
+  case RealtimeTouchPhase::CancelExpired:
+    return {};
+  }
+  return {};
+}
+
+void RealtimeTouchPresentationDispatcher::cancelAll(
+    long long eventMicros) noexcept {
+  bool hadCapture = false;
+  for (auto &capture : captures_) {
+    hadCapture = hadCapture || capture.active;
+    capture = {};
+  }
+  if (hadCapture && sink_.cancelAll != nullptr) {
+    sink_.cancelAll(sink_.context, eventMicros);
+  }
+}
+
+void RealtimeTouchPresentationDispatcher::reconcileMetadataOverflow(
+    long long eventMicros) noexcept {
+  cancelAll(eventMicros);
 }
 
 RealtimeTouchInputRouter::RealtimeTouchInputRouter(
@@ -239,17 +496,17 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
   const int lane = finger.lane;
   const bool shouldEmit = lane >= 0 && finger.pressed;
   const auto replayControl = finger.replayControl;
+  if (shouldEmit &&
+      !emit(RealtimeGameplayInputType::Release, lane, replayControl,
+            timestampMicros, backSpin)) {
+    return false;
+  }
   finger.lane = -1;
   finger.pressed = false;
   finger.scratch = false;
   finger.scratchDirection = 0;
   finger.cancelDeadlineMicros = 0;
-  if (!shouldEmit) {
-    return true;
-  }
-  return emit(RealtimeGameplayInputType::Release, lane, replayControl,
-              timestampMicros,
-              backSpin);
+  return true;
 }
 
 bool RealtimeTouchInputRouter::handleScratchMove(
@@ -294,23 +551,57 @@ bool RealtimeTouchInputRouter::handleScratchMove(
 
 bool RealtimeTouchInputRouter::consume(
     const RealtimeTouchSample &sample) noexcept {
+  return consumeForPublication(sample) !=
+         RealtimeTouchRoutingDisposition::RetryRequired;
+}
+
+RealtimeTouchRoutingDisposition
+RealtimeTouchInputRouter::consumeForPublication(
+    const RealtimeTouchSample &sample) noexcept {
+  bool publishAuxiliary = true;
+  if (!consumeImpl(sample, publishAuxiliary)) {
+    return RealtimeTouchRoutingDisposition::RetryRequired;
+  }
+  return publishAuxiliary ? RealtimeTouchRoutingDisposition::Accepted
+                          : RealtimeTouchRoutingDisposition::Inert;
+}
+
+bool RealtimeTouchInputRouter::consumeImpl(
+    const RealtimeTouchSample &sample, bool &publishAuxiliary) noexcept {
+  publishAuxiliary = true;
   if (!gameplayEnabled_) {
     return true;
   }
   switch (sample.phase) {
   case RealtimeTouchPhase::Down: {
-    auto *finger = allocateFinger(sample.fingerId);
+    auto *finger = findFinger(sample.fingerId);
+    if (finger != nullptr && finger->suppressedUntilLift) {
+      *finger = {.fingerId = sample.fingerId, .active = true};
+    } else if (finger != nullptr && finger->cancelDeadlineMicros != 0) {
+      // A new Down with the same ID during the cancel grace period is a new
+      // physical contact, not a continuation. Release the prior contact
+      // first; on failure leave it untouched so this Down can retry.
+      if (!finger->excluded &&
+          !releaseLane(*finger, sample.steadyTimestampMicros)) {
+        return false;
+      }
+      *finger = {.fingerId = sample.fingerId, .active = true};
+    } else if (finger != nullptr) {
+      // Native backends can duplicate Down. The original contact remains the
+      // sole owner until a continuation, cancellation, or lift changes it.
+      publishAuxiliary = false;
+      return true;
+    } else {
+      finger = allocateFinger(sample.fingerId);
+    }
     if (finger == nullptr) {
       return false;
     }
-    if (finger->cancelDeadlineMicros != 0) {
-      finger->cancelDeadlineMicros = 0;
-      finger->lastX = sample.normalizedX;
-      finger->lastY = sample.normalizedY;
-      return true;
-    }
     finger->lastX = sample.normalizedX;
     finger->lastY = sample.normalizedY;
+    finger->presentationHit = sample.presentationHit;
+    finger->presentationUiPoint = sample.presentationUiPoint;
+    finger->presentationPoint = sample.presentationPoint;
     if (sample.excludedFromGameplay) {
       finger->excluded = true;
       return true;
@@ -321,8 +612,21 @@ bool RealtimeTouchInputRouter::consume(
       finger->active = false;
       return true;
     }
-    if (!beginLane(*finger, *lane, sample)) {
+    if (*lane < layout_.laneRegions.size() &&
+        laneOccupied(layout_.laneRegions[*lane].lane, finger->fingerId)) {
       finger->active = false;
+      publishAuxiliary = false;
+      return true;
+    }
+    if (!beginLane(*finger, *lane, sample)) {
+      // A failed worker Press was never accepted, but the physical contact is
+      // still down. Retain a tombstone so a stale Move after fail-closed
+      // recovery cannot enter drag routing without a new Down.
+      finger->lane = -1;
+      finger->pressed = false;
+      finger->excluded = true;
+      finger->suppressedUntilLift = true;
+      finger->active = true;
       return false;
     }
     return true;
@@ -338,10 +642,22 @@ bool RealtimeTouchInputRouter::consume(
         return false;
       }
     }
+    if (finger->suppressedUntilLift) {
+      finger->lastX = sample.normalizedX;
+      finger->lastY = sample.normalizedY;
+      publishAuxiliary = false;
+      return true;
+    }
     finger->cancelDeadlineMicros = 0;
     if (finger->excluded) {
       finger->lastX = sample.normalizedX;
       finger->lastY = sample.normalizedY;
+      if (sample.presentationUiPoint) {
+        finger->presentationUiPoint = sample.presentationUiPoint;
+      }
+      if (sample.presentationPoint) {
+        finger->presentationPoint = sample.presentationPoint;
+      }
       return true;
     }
     if (sample.excludedFromGameplay) {
@@ -349,7 +665,12 @@ bool RealtimeTouchInputRouter::consume(
       finger->lastY = sample.normalizedY;
       const bool released =
           releaseLane(*finger, sample.steadyTimestampMicros);
-      finger->excluded = true;
+      if (released) {
+        finger->excluded = true;
+        finger->presentationHit = sample.presentationHit;
+        finger->presentationUiPoint = sample.presentationUiPoint;
+        finger->presentationPoint = sample.presentationPoint;
+      }
       return released;
     }
     if (!layout_.dragMode) {
@@ -385,16 +706,27 @@ bool RealtimeTouchInputRouter::consume(
     if (finger == nullptr) {
       return true;
     }
+    if (finger->suppressedUntilLift) {
+      *finger = {};
+      publishAuxiliary = false;
+      return true;
+    }
     const bool released =
         finger->excluded
             ? true
             : releaseLane(*finger, sample.steadyTimestampMicros);
-    finger->active = false;
+    if (released) {
+      finger->active = false;
+    }
     return released;
   }
   case RealtimeTouchPhase::Cancel: {
     auto *finger = findFinger(sample.fingerId);
     if (finger == nullptr) {
+      return true;
+    }
+    if (finger->suppressedUntilLift) {
+      publishAuxiliary = false;
       return true;
     }
     finger->lastX = sample.normalizedX;
@@ -408,7 +740,14 @@ bool RealtimeTouchInputRouter::consume(
     return true;
   }
   case RealtimeTouchPhase::CancelExpired: {
+    // This phase is generated by the router's grace timer, not by the native
+    // stream, and must never appear in presentation/replay publication.
+    publishAuxiliary = false;
     auto *finger = findFinger(sample.fingerId);
+    if (finger != nullptr && finger->suppressedUntilLift) {
+      *finger = {};
+      return true;
+    }
     if (finger == nullptr || finger->cancelDeadlineMicros == 0 ||
         sample.steadyTimestampMicros < finger->cancelDeadlineMicros) {
       return true;
@@ -417,22 +756,39 @@ bool RealtimeTouchInputRouter::consume(
         finger->excluded
             ? true
             : releaseLane(*finger, sample.steadyTimestampMicros);
-    finger->cancelDeadlineMicros = 0;
-    finger->active = false;
+    if (released) {
+      finger->cancelDeadlineMicros = 0;
+      finger->active = false;
+    }
     return released;
   }
   }
   return false;
 }
 
+bool RealtimeTouchInputRouter::acknowledgePublishedCancellation(
+    std::int64_t fingerId) noexcept {
+  auto *finger = findFinger(fingerId);
+  if (finger == nullptr || finger->suppressedUntilLift ||
+      finger->cancelDeadlineMicros == 0) {
+    return false;
+  }
+  finger->cancellationPublished = true;
+  return true;
+}
+
 bool RealtimeTouchInputRouter::setGameplayEnabled(
     bool enabled, std::int64_t steadyTimestampMicros) noexcept {
-  if (gameplayEnabled_ == enabled) {
-    return true;
+  if (!enabled) {
+    gameplayEnabled_ = false;
+    return cancelAll(steadyTimestampMicros);
   }
-  const bool released = enabled || cancelAll(steadyTimestampMicros);
-  gameplayEnabled_ = enabled;
-  return released;
+  if (!cancelAll(steadyTimestampMicros)) {
+    gameplayEnabled_ = false;
+    return false;
+  }
+  gameplayEnabled_ = true;
+  return true;
 }
 
 void RealtimeTouchInputRouter::reset() noexcept {
@@ -448,19 +804,33 @@ bool RealtimeTouchInputRouter::cancelAll(
     if (!finger.active) {
       continue;
     }
-    if (sink_.cancelTouchLifecycle != nullptr) {
-      success = sink_.cancelTouchLifecycle(
-                    sink_.context,
-                    {.fingerId = finger.fingerId,
-                     .phase = RealtimeTouchPhase::Cancel,
-                     .normalizedX = finger.lastX,
-                     .normalizedY = finger.lastY,
-                     .steadyTimestampMicros = steadyTimestampMicros,
-                     .excludedFromGameplay = finger.excluded}) &&
-                success;
+    if (finger.suppressedUntilLift) {
+      continue;
     }
-    success = releaseLane(finger, steadyTimestampMicros) && success;
-    finger.active = false;
+    if (!finger.cancellationPublished &&
+        sink_.cancelTouchLifecycle != nullptr) {
+      if (!sink_.cancelTouchLifecycle(
+              sink_.context,
+              {.fingerId = finger.fingerId,
+               .phase = RealtimeTouchPhase::Cancel,
+               .normalizedX = finger.lastX,
+               .normalizedY = finger.lastY,
+               .steadyTimestampMicros = steadyTimestampMicros,
+               .excludedFromGameplay = finger.excluded,
+               .presentationHit = finger.presentationHit,
+               .presentationUiPoint = finger.presentationUiPoint,
+               .presentationPoint = finger.presentationPoint})) {
+        success = false;
+        continue;
+      }
+      finger.cancellationPublished = true;
+    }
+    if (!releaseLane(finger, steadyTimestampMicros)) {
+      success = false;
+      continue;
+    }
+    finger.excluded = true;
+    finger.suppressedUntilLift = true;
   }
   return success;
 }
@@ -469,9 +839,12 @@ bool RealtimeTouchInputRouter::updateLayout(
     RealtimeTouchLayout layout,
     std::int64_t steadyTimestampMicros) noexcept {
   const bool released = cancelAll(steadyTimestampMicros);
+  if (!released) {
+    return false;
+  }
   legacyUniformLayout_ = normalizeLayout(layout);
   layout_ = std::move(layout);
-  return released;
+  return true;
 }
 
 } // namespace gameplay

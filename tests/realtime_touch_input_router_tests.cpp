@@ -1,9 +1,12 @@
 #include "scene/play/RealtimeTouchInputRouter.h"
 #include "scene/play/RealtimeTouchPresentation.h"
+#include "scene/play/PlayfieldPresentation.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace rendering {
@@ -30,6 +33,54 @@ void requireNear(float actual, float expected, const char *message) {
   require(std::abs(actual - expected) < 0.0001F, message);
 }
 
+class ConcreteTouchPresentation final : public PlayfieldPresentation {
+public:
+  void configure(const PlayfieldPresentationConfig &) override {}
+  gameplay::RealtimeTouchLayout touchLayout() const override {
+    gameplay::RealtimeTouchLayout layout;
+    layout.revision = touchRevision;
+    return layout;
+  }
+  std::uint64_t touchLayoutRevision() const noexcept override {
+    return touchRevision;
+  }
+  std::uint64_t touchHitRegionsRevision() const noexcept override {
+    return hitRevision;
+  }
+  std::vector<PresentationUiHitRegion> touchHitRegions() const override {
+    return hitRegions;
+  }
+  PresentationUiHit hitTestUiControl(UiLogicalPoint) const override {
+    return {};
+  }
+  PresentationTouchResult
+  beginPresentationTouch(const PresentationTouchEvent &) override {
+    return {};
+  }
+  PresentationTouchResult
+  updatePresentationTouch(const PresentationTouchEvent &) override {
+    return {};
+  }
+  PresentationTouchResult
+  endPresentationTouch(const PresentationTouchEvent &, bool) override {
+    return {};
+  }
+  void cancelPresentationTouches(long long) override {}
+  void reset() override {}
+  void refreshGeometry() override {}
+  void onLanePressed(int, JudgeResult, long long) override {}
+  void onLaneReleased(int, long long) override {}
+  void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock,
+               bool) override {}
+
+  std::uint64_t touchRevision = 1;
+  std::uint64_t hitRevision = 1;
+  std::vector<PresentationUiHitRegion> hitRegions;
+};
+
+static_assert(!std::is_abstract_v<ConcreteTouchPresentation>,
+              "the complete presentation touch surface is concrete");
+
 void testTouchPresentationUsesUiNormalizedCoordinates() {
   rendering::window_width = 1920;
   rendering::window_height = 1080;
@@ -45,6 +96,8 @@ void testTouchPresentationUsesUiNormalizedCoordinates() {
   const auto center = gameplay::realtimeTouchPresentationPoint(0.5F, 0.5F);
   const auto bottomRight =
       gameplay::realtimeTouchPresentationPoint(0.9F, 0.95F);
+  const auto logicalCenter =
+      gameplay::realtimeTouchUiLogicalPoint(0.5F, 0.5F);
 
   requireNear(topLeft.x, 0.0F,
               "presentation removes the horizontal UI viewport offset");
@@ -58,16 +111,72 @@ void testTouchPresentationUsesUiNormalizedCoordinates() {
               "presentation maps the UI viewport right edge to one");
   requireNear(bottomRight.y, 1.0F,
               "presentation maps the UI viewport bottom edge to one");
+  requireNear(logicalCenter.x, 960.0F,
+              "UI hit testing receives logical x after safe-area removal");
+  requireNear(logicalCenter.y, 540.0F,
+              "UI hit testing receives logical y after safe-area removal");
+}
+
+void testLegacyBuiltInTouchFallbackRequiresExplicitOwnership() {
+  require(gameplay::realtimeTouchAllowsLegacyBuiltInControl({}),
+          "ordinary unowned touches retain the legacy built-in path");
+  require(gameplay::realtimeTouchAllowsLegacyBuiltInControl(
+              {.kind = PresentationUiControlKind::LaneCover,
+               .permitsLegacyBuiltInFallback = true}),
+          "the built-in lane-cover adapter can explicitly retain its legacy path");
+  require(!gameplay::realtimeTouchAllowsLegacyBuiltInControl(
+              {.kind = PresentationUiControlKind::NativeOverlay}),
+          "native overlays never leak into the legacy lane-cover handler");
+  require(!gameplay::realtimeTouchAllowsLegacyBuiltInControl(
+              {.kind = PresentationUiControlKind::Slider,
+               .writer = skin::SkinFloatWriterId{4}}) &&
+              !gameplay::realtimeTouchAllowsLegacyBuiltInControl(
+                  {.kind = PresentationUiControlKind::LaneCover,
+                   .writer = skin::SkinFloatWriterId{5}}),
+          "skin-owned slider and lane-cover hits remain authoritative when their writer rejects");
+  require(gameplay::realtimeTouchRouterTransitionCanReachWorker(false, true) &&
+              !gameplay::realtimeTouchRouterTransitionCanReachWorker(true,
+                                                                     false),
+          "router cancellation reaches a live worker while raw ingress is detached");
+  require(gameplay::realtimeTouchShouldScheduleCancelExpiry(
+              gameplay::RealtimeTouchRoutingDisposition::Accepted, true,
+              true) &&
+              !gameplay::realtimeTouchShouldScheduleCancelExpiry(
+                  gameplay::RealtimeTouchRoutingDisposition::Accepted, false,
+                  false) &&
+              !gameplay::realtimeTouchShouldScheduleCancelExpiry(
+                  gameplay::RealtimeTouchRoutingDisposition::Accepted, true,
+                  false) &&
+              !gameplay::realtimeTouchShouldScheduleCancelExpiry(
+                  gameplay::RealtimeTouchRoutingDisposition::RetryRequired,
+                  true, true),
+          "cancel expiry is scheduled only after auxiliary publication and router acknowledgment");
 }
 
 struct InputCapture {
   std::vector<gameplay::RealtimeGameplayInput> events;
+  std::vector<gameplay::RealtimeGameplayInput> attempts;
   std::vector<gameplay::RealtimeTouchSample> cancelledTouches;
   bool scratchLongNoteHeld = false;
+  int failedPressAttemptsRemaining = 0;
+  int failedReleaseAttemptsRemaining = 0;
+  int failedCancelAttemptsRemaining = 0;
 
   static bool emit(void *context,
                    const gameplay::RealtimeGameplayInput &event) {
-    static_cast<InputCapture *>(context)->events.push_back(event);
+    auto &capture = *static_cast<InputCapture *>(context);
+    capture.attempts.push_back(event);
+    if (event.type == gameplay::RealtimeGameplayInputType::Press &&
+        capture.failedPressAttemptsRemaining > 0) {
+      --capture.failedPressAttemptsRemaining;
+      return false;
+    }
+    if (event.type == gameplay::RealtimeGameplayInputType::Release &&
+        capture.failedReleaseAttemptsRemaining > 0) {
+      --capture.failedReleaseAttemptsRemaining;
+      return false;
+    }
+    capture.events.push_back(event);
     return true;
   }
 
@@ -77,13 +186,75 @@ struct InputCapture {
 
   static bool cancelTouchLifecycle(
       void *context, const gameplay::RealtimeTouchSample &sample) {
-    static_cast<InputCapture *>(context)->cancelledTouches.push_back(sample);
+    auto &capture = *static_cast<InputCapture *>(context);
+    if (capture.failedCancelAttemptsRemaining > 0) {
+      --capture.failedCancelAttemptsRemaining;
+      return false;
+    }
+    capture.cancelledTouches.push_back(sample);
     return true;
   }
 };
 
+struct PresentationCapture {
+  enum class Call { Begin, Update, End, CancelAll };
+  struct Record {
+    Call call = Call::Begin;
+    PresentationTouchEvent event;
+    bool cancelled = false;
+  };
+
+  std::vector<Record> records;
+  bool consumeTouches = true;
+
+  static PresentationTouchResult begin(
+      void *context, const PresentationTouchEvent &event) {
+    static_cast<PresentationCapture *>(context)->records.push_back(
+        {.call = Call::Begin, .event = event});
+    const bool consumed =
+        static_cast<PresentationCapture *>(context)->consumeTouches;
+    return {.consumed = consumed, .excludeFromGameplay = consumed};
+  }
+
+  static PresentationTouchResult update(
+      void *context, const PresentationTouchEvent &event) {
+    static_cast<PresentationCapture *>(context)->records.push_back(
+        {.call = Call::Update, .event = event});
+    const bool consumed =
+        static_cast<PresentationCapture *>(context)->consumeTouches;
+    return {.consumed = consumed, .excludeFromGameplay = consumed};
+  }
+
+  static PresentationTouchResult end(void *context,
+                                     const PresentationTouchEvent &event,
+                                     bool cancelled) {
+    static_cast<PresentationCapture *>(context)->records.push_back(
+        {.call = Call::End, .event = event, .cancelled = cancelled});
+    const bool consumed =
+        static_cast<PresentationCapture *>(context)->consumeTouches;
+    return {.consumed = consumed, .excludeFromGameplay = consumed};
+  }
+
+  static void cancelAll(void *context, long long eventMicros) {
+    static_cast<PresentationCapture *>(context)->records.push_back(
+        {.call = Call::CancelAll,
+         .event = {.eventMicros = eventMicros},
+         .cancelled = true});
+  }
+};
+
+gameplay::RealtimeTouchPresentationSink presentationSink(
+    PresentationCapture &capture) {
+  return {.context = &capture,
+          .begin = &PresentationCapture::begin,
+          .update = &PresentationCapture::update,
+          .end = &PresentationCapture::end,
+          .cancelAll = &PresentationCapture::cancelAll};
+}
+
 gameplay::RealtimeTouchLayout makeLayout(bool dragMode = false) {
   gameplay::RealtimeTouchLayout layout;
+  layout.revision = 17;
   layout.bottomLeft = {0.1F, 0.9F};
   layout.bottomRight = {0.9F, 0.9F};
   layout.topLeft = {0.3F, 0.1F};
@@ -93,6 +264,193 @@ gameplay::RealtimeTouchLayout makeLayout(bool dragMode = false) {
   layout.scratch = {false, false, false, true};
   layout.dragMode = dragMode;
   return layout;
+}
+
+PresentationUiHitRegion rectangleHitRegion(PresentationUiHit hit, float left,
+                                           float top, float right,
+                                           float bottom) {
+  return {.hit = std::move(hit),
+          .boundary = {{{left, top},
+                        {right, top},
+                        {right, bottom},
+                        {left, bottom}}}};
+}
+
+void testImmutableHitSnapshotPublishesValueOwnedTopmostGeometry() {
+  const PresentationUiHit lower{
+      .kind = PresentationUiControlKind::Slider,
+      .layoutRevision = 71,
+      .sourceObject = 1,
+      .authoredOrdinal = 3,
+      .writer = skin::SkinFloatWriterId{4}};
+  const PresentationUiHit topmost{
+      .kind = PresentationUiControlKind::LaneCover,
+      .layoutRevision = 71,
+      .sourceObject = 2,
+      .authoredOrdinal = 9,
+      .writer = skin::SkinFloatWriterId{5}};
+  gameplay::RealtimeTouchHitSnapshot source{
+      .layoutRevision = 17,
+      .uiTransform = {.renderWidth = 2400,
+                      .renderHeight = 1200,
+                      .uiScaleX = 1.0F,
+                      .uiScaleY = 1.0F,
+                      .uiOffsetX = 240,
+                      .uiOffsetY = 60},
+      .regionsTopmostFirst = {
+          rectangleHitRegion(topmost, 950.0F, 500.0F, 1'050.0F, 600.0F),
+          rectangleHitRegion(lower, 900.0F, 450.0F, 1'100.0F, 650.0F)}};
+  gameplay::RealtimeTouchHitSnapshotPublication publication;
+  require(publication.publish(source),
+          "main thread atomically publishes value-owned hit geometry");
+  source.regionsTopmostFirst.clear();
+
+  const auto published = publication.acquire();
+  require(published && published->layoutRevision == 17 &&
+              published->hitTest(0.5F, 0.5F) == topmost,
+          "raw hit testing uses the immutable topmost snapshot after the source changes");
+}
+
+void testRawHitCaptureFreezesDownIdentityAndResetPermitsReuse() {
+  const PresentationUiHit topmost{
+      .kind = PresentationUiControlKind::Slider,
+      .layoutRevision = 81,
+      .sourceObject = 7,
+      .authoredOrdinal = 12,
+      .writer = skin::SkinFloatWriterId{13}};
+  const PresentationUiHit replacement{
+      .kind = PresentationUiControlKind::NativeOverlay,
+      .layoutRevision = 82,
+      .sourceObject = 8,
+      .authoredOrdinal = 14};
+  gameplay::RealtimeTouchHitSnapshot first{
+      .layoutRevision = 21,
+      .uiTransform = {.renderWidth = 100,
+                      .renderHeight = 100,
+                      .uiScaleX = 1.0F,
+                      .uiScaleY = 1.0F},
+      .regionsTopmostFirst = {
+          rectangleHitRegion(topmost, 20.0F, 20.0F, 80.0F, 80.0F)}};
+  gameplay::RealtimeTouchHitSnapshot second{
+      .layoutRevision = 22,
+      .uiTransform = first.uiTransform,
+      .regionsTopmostFirst = {
+          rectangleHitRegion(replacement, 20.0F, 20.0F, 80.0F, 80.0F)}};
+  gameplay::RealtimeTouchHitCaptureTracker captures;
+  require(captures.consume({.fingerId = 99,
+                            .phase = gameplay::RealtimeTouchPhase::Down,
+                            .normalizedX = 0.5F,
+                            .normalizedY = 0.5F},
+                           first) == topmost &&
+              captures.consume({.fingerId = 99,
+                                .phase = gameplay::RealtimeTouchPhase::Move,
+                                .normalizedX = 0.5F,
+                                .normalizedY = 0.5F},
+                               second) == topmost,
+          "move preserves the exact Down hit across overlapping snapshot replacement");
+  captures.reset();
+  require(captures.consume({.fingerId = 99,
+                            .phase = gameplay::RealtimeTouchPhase::Down,
+                            .normalizedX = 0.5F,
+                            .normalizedY = 0.5F},
+                           second) == replacement,
+          "overflow or layout reset clears raw capture state for pointer reuse");
+}
+
+void testRawMetadataFreezesNoHitPresentationPoint() {
+  gameplay::RealtimeTouchHitSnapshot snapshot{
+      .layoutRevision = 91,
+      .uiTransform = {.renderWidth = 200,
+                      .renderHeight = 100,
+                      .uiScaleX = 2.0F,
+                      .uiScaleY = 2.0F,
+                      .uiOffsetX = 20,
+                      .uiOffsetY = 10,
+                      .uiWidth = 100,
+                      .uiHeight = 50}};
+  gameplay::RealtimeTouchHitCaptureTracker captures;
+  gameplay::RealtimeTouchSample sample{
+      .fingerId = 100,
+      .phase = gameplay::RealtimeTouchPhase::Down,
+      .normalizedX = 0.5F,
+      .normalizedY = 0.5F};
+  gameplay::populateRealtimeTouchPresentationMetadata(sample, snapshot,
+                                                       captures);
+  require(sample.presentationHit.kind == PresentationUiControlKind::None &&
+              !sample.presentationUiPoint &&
+              sample.presentationPoint ==
+                  gameplay::RealtimeTouchPoint{0.4F, 0.4F},
+          "raw gameplay touches freeze their presentation point even without a UI hit");
+}
+
+void testPresentationDispatchUsesTheRawSnapshotUiPoint() {
+  gameplay::RealtimeTouchHitSnapshot snapshot{
+      .layoutRevision = 31,
+      .uiTransform = {.renderWidth = 200,
+                      .renderHeight = 100,
+                      .uiScaleX = 2.0F,
+                      .uiScaleY = 2.0F,
+                      .uiOffsetX = 20,
+                      .uiOffsetY = 10,
+                      .uiWidth = 100,
+                      .uiHeight = 50}};
+  const auto frozen = snapshot.uiPoint(0.5F, 0.5F);
+  const auto frozenPresentation = snapshot.presentationPoint(0.5F, 0.5F);
+  require(frozen == UiLogicalPoint{40.0F, 20.0F},
+          "raw publication converts normalized input with its captured transform");
+  require(frozenPresentation == gameplay::RealtimeTouchPoint{0.4F, 0.4F},
+          "legacy fallback normalization is frozen from the same raw snapshot");
+
+  PresentationCapture presentation;
+  gameplay::RealtimeTouchPresentationDispatcher dispatcher(
+      presentationSink(presentation));
+  const gameplay::RealtimeTouchSample sample{
+      .fingerId = 77,
+      .phase = gameplay::RealtimeTouchPhase::Down,
+      .normalizedX = 0.5F,
+      .normalizedY = 0.5F,
+      .presentationHit = {.kind = PresentationUiControlKind::Slider,
+                          .layoutRevision = 31,
+                          .sourceObject = 4,
+                          .authoredOrdinal = 5,
+                          .writer = skin::SkinFloatWriterId{6}},
+      .presentationUiPoint = frozen};
+  snapshot.uiTransform = {.renderWidth = 800,
+                          .renderHeight = 600,
+                          .uiScaleX = 1.0F,
+                          .uiScaleY = 1.0F};
+  require(dispatcher.consume(sample, 9'000).consumed &&
+              presentation.records.size() == 1 &&
+              presentation.records.front().event.uiPoint == *frozen,
+          "main-thread drain uses the raw sample's frozen UI point after a resize");
+}
+
+void testStableTouchLayoutRevisionParticipatesInSwitchDetection() {
+  const gameplay::RealtimeTouchLayoutRefreshKey current{
+      .layoutRevision = 17,
+      .hitRegionRevision = 23,
+      .uiTransform = {.renderWidth = 100,
+                      .renderHeight = 50,
+                      .uiScaleX = 1.0F,
+                      .uiScaleY = 1.0F}};
+  auto sameFrame = current;
+  auto presentationSwitch = current;
+  auto hitRegionMotion = current;
+  auto overlayVisibilityChange = current;
+  presentationSwitch.layoutRevision = 18;
+  hitRegionMotion.hitRegionRevision = 24;
+  overlayVisibilityChange.nativeOverlays[0] = {
+      .visible = true, .left = 10.0F, .top = 20.0F, .right = 30.0F,
+      .bottom = 40.0F};
+  require(sameFrame == current,
+          "rendering another frame does not invalidate stable touch routing");
+  require(presentationSwitch != current,
+          "presentation revision invalidates routing with unchanged drawable geometry");
+  require(hitRegionMotion != current &&
+              hitRegionMotion.layoutRevision == current.layoutRevision,
+          "lane-cover motion invalidates hit publication without changing lane routing");
+  require(overlayVisibilityChange != current,
+          "native overlay visibility invalidates hit publication without a presentation rebuild");
 }
 
 gameplay::RealtimeTouchLaneRegion makeLaneRegion(
@@ -575,6 +933,179 @@ void testUiExcludedFingerNeverEmitsGameplayEdges() {
           "pause and lane-cover fingers never reach gameplay authority");
 }
 
+void testPresentationTouchIsDeliveredOnceAndLayoutSwitchCancelsCapture() {
+  InputCapture input;
+  PresentationCapture presentation;
+  gameplay::RealtimeTouchPresentationDispatcher dispatcher(
+      presentationSink(presentation));
+  gameplay::RealtimeTouchInputRouter router(
+      72, makeLayout(),
+      {.context = &input,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  const PresentationUiHit topmost{
+      .kind = PresentationUiControlKind::Slider,
+      .layoutRevision = 44,
+      .sourceObject = 5,
+      .authoredOrdinal = 9,
+      .writer = skin::SkinFloatWriterId{2}};
+  const PresentationUiHit overlappedLower{
+      .kind = PresentationUiControlKind::Slider,
+      .layoutRevision = 44,
+      .sourceObject = 4,
+      .authoredOrdinal = 8,
+      .writer = skin::SkinFloatWriterId{1}};
+  const gameplay::RealtimeTouchSample down{
+      .fingerId = 41,
+      .phase = gameplay::RealtimeTouchPhase::Down,
+      .normalizedX = 0.31F,
+      .normalizedY = 0.50F,
+      .steadyTimestampMicros = 300,
+      .excludedFromGameplay = true,
+      .presentationHit = topmost,
+      .presentationUiPoint = UiLogicalPoint{31.0F, 50.0F}};
+  const gameplay::RealtimeTouchSample move{
+      .fingerId = 41,
+      .phase = gameplay::RealtimeTouchPhase::Move,
+      .normalizedX = 0.35F,
+      .normalizedY = 0.45F,
+      .steadyTimestampMicros = 310,
+      .excludedFromGameplay = true,
+      .presentationHit = overlappedLower,
+      .presentationUiPoint = UiLogicalPoint{35.0F, 45.0F}};
+  require(router.consume(down) && router.consume(move),
+          "captured presentation touch is excluded by gameplay routing");
+  require(dispatcher.consume(down, 1'300).consumed &&
+              dispatcher.consume(move, 1'310).consumed,
+          "main-thread presentation dispatch consumes begin and update");
+  require(router.updateLayout(makeLayout(), 320),
+          "layout replacement cancels presentation-owned router state");
+  require(input.cancelledTouches.size() == 1 &&
+              input.cancelledTouches.front().presentationHit == topmost,
+          "layout cancellation preserves the originally captured topmost control");
+  require(dispatcher.consume(input.cancelledTouches.front(), 1'320).consumed,
+          "the synthesized layout cancellation reaches presentation dispatch");
+  require(presentation.records.size() == 3 &&
+              presentation.records[0].call ==
+                  PresentationCapture::Call::Begin &&
+              presentation.records[0].event.pointerId == 41 &&
+              presentation.records[0].event.uiPoint ==
+                  UiLogicalPoint{31.0F, 50.0F} &&
+              presentation.records[0].event.hit == topmost &&
+              presentation.records[1].call ==
+                  PresentationCapture::Call::Update &&
+              presentation.records[1].event.hit == topmost &&
+              presentation.records[2].call ==
+                  PresentationCapture::Call::End &&
+              presentation.records[2].event.hit == topmost &&
+              presentation.records[2].cancelled,
+          "presentation receives begin, update, and cancel with the exact captured topmost hit");
+  require(input.events.empty(),
+          "captured presentation lifecycle never emits gameplay edges");
+}
+
+void testPresentationSessionSwitchCancelsAllCapturesOnce() {
+  PresentationCapture presentation;
+  gameplay::RealtimeTouchPresentationDispatcher dispatcher(
+      presentationSink(presentation));
+  const gameplay::RealtimeTouchSample down{
+      .fingerId = 42,
+      .phase = gameplay::RealtimeTouchPhase::Down,
+      .normalizedX = 0.2F,
+      .normalizedY = 0.3F,
+      .presentationHit = {.kind = PresentationUiControlKind::Slider,
+                          .authoredOrdinal = 12,
+                          .writer = skin::SkinFloatWriterId{7}},
+      .presentationUiPoint = UiLogicalPoint{20.0F, 30.0F}};
+  require(dispatcher.consume(down, 2'000).consumed,
+          "session fixture begins one presentation capture");
+  dispatcher.reconcileMetadataOverflow(2'100);
+  dispatcher.reconcileMetadataOverflow(2'200);
+  const gameplay::RealtimeTouchSample staleUp{
+      .fingerId = 42,
+      .phase = gameplay::RealtimeTouchPhase::Up,
+      .normalizedX = 0.2F,
+      .normalizedY = 0.3F,
+      .presentationHit = down.presentationHit};
+  require(!dispatcher.consume(staleUp, 2'300).consumed,
+          "stale lift after a session switch is inert");
+  require(presentation.records.size() == 2 &&
+              presentation.records[0].call ==
+                  PresentationCapture::Call::Begin &&
+              presentation.records[1].call ==
+                  PresentationCapture::Call::CancelAll &&
+              presentation.records[1].event.eventMicros == 2'100,
+          "session switch cancels all active captures exactly once");
+
+  const gameplay::RealtimeTouchSample reusedDown{
+      .fingerId = 42,
+      .phase = gameplay::RealtimeTouchPhase::Down,
+      .presentationHit = {.kind = PresentationUiControlKind::Slider,
+                          .layoutRevision = 13,
+                          .sourceObject = 8,
+                          .authoredOrdinal = 14,
+                          .writer = skin::SkinFloatWriterId{9}},
+      .presentationUiPoint = UiLogicalPoint{25.0F, 35.0F}};
+  require(dispatcher.consume(reusedDown, 2'400).consumed &&
+              presentation.records.back().event.hit ==
+                  reusedDown.presentationHit,
+          "metadata overflow reconciliation permits the pointer ID to begin again");
+}
+
+void testUnconsumedPresentationBeginDoesNotCapturePointer() {
+  PresentationCapture presentation;
+  presentation.consumeTouches = false;
+  gameplay::RealtimeTouchPresentationDispatcher dispatcher(
+      presentationSink(presentation));
+  for (std::int64_t pointer = 0;
+       pointer < static_cast<std::int64_t>(
+                     gameplay::kRealtimeTouchFingerCapacity);
+       ++pointer) {
+    const gameplay::RealtimeTouchSample down{
+        .fingerId = pointer,
+        .phase = gameplay::RealtimeTouchPhase::Down,
+        .presentationHit = {
+            .kind = PresentationUiControlKind::LaneCover,
+            .permitsLegacyBuiltInFallback = true},
+        .presentationUiPoint = UiLogicalPoint{10.0F, 20.0F}};
+    require(!dispatcher.consume(down, 3'000 + pointer).consumed,
+            "unconsumed built-in presentation begin remains router-owned");
+  }
+  const gameplay::RealtimeTouchSample staleMove{
+      .fingerId = 0,
+      .phase = gameplay::RealtimeTouchPhase::Move,
+      .presentationHit = {.kind = PresentationUiControlKind::LaneCover}};
+  require(!dispatcher.consume(staleMove, 3'100).consumed,
+          "unconsumed begin receives no later update");
+  const gameplay::RealtimeTouchSample staleUp{
+      .fingerId = 0,
+      .phase = gameplay::RealtimeTouchPhase::Up,
+      .presentationHit = {.kind = PresentationUiControlKind::LaneCover}};
+  require(!dispatcher.consume(staleUp, 3'101).consumed,
+          "unconsumed begin receives no later end");
+  dispatcher.cancelAll(3'102);
+  require(presentation.records.size() ==
+              gameplay::kRealtimeTouchFingerCapacity,
+          "unconsumed begins do not participate in session cancellation");
+
+  presentation.consumeTouches = true;
+  const gameplay::RealtimeTouchSample acceptedDown{
+      .fingerId = 999,
+      .phase = gameplay::RealtimeTouchPhase::Down,
+      .presentationHit = {.kind = PresentationUiControlKind::Slider},
+      .presentationUiPoint = UiLogicalPoint{30.0F, 40.0F}};
+  require(dispatcher.consume(acceptedDown, 3'200).consumed,
+          "rejected begins release every bounded capture slot for reuse");
+  dispatcher.cancelAll(3'300);
+  require(presentation.records.size() ==
+              gameplay::kRealtimeTouchFingerCapacity + 2 &&
+              presentation.records[gameplay::kRealtimeTouchFingerCapacity]
+                      .call == PresentationCapture::Call::Begin &&
+              presentation.records.back().call ==
+                  PresentationCapture::Call::CancelAll,
+          "only the later consumed begin participates in session cancellation");
+}
+
 void testLayoutReplacementCancelsOldLaneBeforeNewMapping() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -594,6 +1125,104 @@ void testLayoutReplacementCancelsOldLaneBeforeNewMapping() {
                   gameplay::RealtimeGameplayInputType::Release &&
               capture.events[1].lane == 0,
           "layout replacement releases the old projected lane first");
+}
+
+void testFailedLayoutCancellationRetainsOwnershipAndRetriesAtomically() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      81, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 51,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 1}),
+          "failed-layout fixture presses the old lane");
+  auto replacement = makeLayout();
+  replacement.lanes[0] = 10;
+  capture.failedReleaseAttemptsRemaining = 1;
+  require(!router.updateLayout(replacement, 2) &&
+              capture.events.size() == 1 &&
+              capture.cancelledTouches.size() == 1,
+          "failed release rejects layout replacement while preserving its cancellation record");
+  require(router.updateLayout(replacement, 3) &&
+              capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().lane == 0 &&
+              capture.cancelledTouches.size() == 1,
+          "retry releases the retained old lane without duplicating lifecycle cancellation");
+  require(router.consume({.fingerId = 52,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 4}) &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events.back().lane == 10,
+          "only the successful retry commits the replacement mapping");
+}
+
+void testFailedLifecycleCancellationRetainsLaneUntilRetry() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      82, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 61,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 10}),
+          "failed-cancel fixture presses one lane");
+  capture.failedCancelAttemptsRemaining = 1;
+  require(!router.setGameplayEnabled(false, 11) &&
+              capture.events.size() == 1 &&
+              capture.cancelledTouches.empty(),
+          "failed lifecycle publication leaves local and worker lane ownership paired");
+  require(router.setGameplayEnabled(true, 12) &&
+              capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.cancelledTouches.size() == 1,
+          "resume retries cancellation before accepting new gameplay touches");
+}
+
+void testFailedMoveToPresentationOwnershipKeepsLaneUntilReleaseRetry() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      83, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 71,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 20}),
+          "presentation-transition fixture presses a gameplay lane");
+  capture.failedReleaseAttemptsRemaining = 1;
+  require(!router.consume(
+              {.fingerId = 71,
+               .phase = gameplay::RealtimeTouchPhase::Move,
+               .normalizedX = 0.4F,
+               .normalizedY = 0.4F,
+               .steadyTimestampMicros = 21,
+               .excludedFromGameplay = true,
+               .presentationHit = {
+                   .kind = PresentationUiControlKind::Slider,
+                   .writer = skin::SkinFloatWriterId{4}},
+               .presentationUiPoint = UiLogicalPoint{40.0F, 40.0F}}),
+          "failed release rejects transfer to presentation ownership");
+  require(router.consume({.fingerId = 71,
+                          .phase = gameplay::RealtimeTouchPhase::Up,
+                          .normalizedX = 0.4F,
+                          .normalizedY = 0.4F,
+                          .steadyTimestampMicros = 22}) &&
+              capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release,
+          "later lift retries the retained gameplay release instead of bypassing it as presentation-owned");
 }
 
 void testPauseReleasesHeldFingerBeforeDisablingGameplay() {
@@ -641,6 +1270,45 @@ void testPauseReleasesHeldFingerBeforeDisablingGameplay() {
           "the stale post-resume lift is harmless");
   require(capture.events.size() == 2,
           "a finger released at pause cannot strand or duplicate a lane edge");
+}
+
+void testCancelledDragPointerCannotReenterOnMoveAfterResume() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      84, makeLayout(true),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 88,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 1}) &&
+              router.setGameplayEnabled(false, 2) &&
+              router.setGameplayEnabled(true, 3),
+          "forced cancellation releases a drag pointer and resumes routing");
+  const std::size_t eventCountAfterResume = capture.events.size();
+  require(router.consume({.fingerId = 88,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.69F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 4}) &&
+              capture.events.size() == eventCountAfterResume,
+          "a still-down cancelled pointer cannot claim the new layout from a stale Move");
+  require(router.consume({.fingerId = 88,
+                          .phase = gameplay::RealtimeTouchPhase::Up,
+                          .normalizedX = 0.69F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 5}) &&
+              router.consume({.fingerId = 88,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 6}) &&
+              capture.events.size() == eventCountAfterResume + 1 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Press,
+          "the physical lift clears the tombstone and a later Down may claim a lane");
 }
 
 void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
@@ -710,10 +1378,269 @@ void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
           "an uncontinued cancelled touch releases at the grace deadline");
 }
 
+void testCancelledTouchDownReleasesOldLaneBeforeStartingNewContact() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      85, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 91,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 1}) &&
+              router.consume({.fingerId = 91,
+                              .phase = gameplay::RealtimeTouchPhase::Cancel,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 2}) &&
+              router.consume({.fingerId = 91,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 0.50F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 3}),
+          "a new Down during cancel grace starts a new physical contact");
+  require(capture.events.size() == 3 &&
+              capture.events[0].type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events[0].lane == 0 &&
+              capture.events[1].type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events[1].lane == 0 &&
+              capture.events[1].steadyTimestampMicros == 3 &&
+              capture.events[2].type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events[2].lane != 0,
+          "restart releases the old lane exactly once before pressing the new target");
+  require(capture.cancelledTouches.empty(),
+          "cancel grace restart does not duplicate forced-cancellation lifecycle metadata");
+}
+
+void testCancelledTouchDownRetainsOldLaneWhenRestartReleaseFails() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      86, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 92,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 1}) &&
+              router.consume({.fingerId = 92,
+                              .phase = gameplay::RealtimeTouchPhase::Cancel,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 2}),
+          "restart-failure fixture holds its initial lane through cancel grace");
+  capture.failedReleaseAttemptsRemaining = 1;
+  const auto rejected = router.consumeForPublication(
+      {.fingerId = 92,
+       .phase = gameplay::RealtimeTouchPhase::Down,
+       .normalizedX = 0.50F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 3});
+  require(rejected == gameplay::RealtimeTouchRoutingDisposition::RetryRequired &&
+              !gameplay::realtimeTouchRoutingPublishesAuxiliary(rejected) &&
+              gameplay::realtimeTouchRoutingRequiresRecovery(rejected) &&
+              capture.events.size() == 1 && capture.attempts.size() == 2 &&
+              capture.attempts.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release,
+          "failed restart release rejects publication and requests fail-closed recovery without replacing old ownership");
+  require(router.consume({.fingerId = 92,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.50F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 4}) &&
+              capture.events.size() == 3 &&
+              capture.events[1].type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events[1].lane == 0 &&
+              capture.events[2].type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events[2].lane != 0,
+          "the same new Down retries the retained release before beginning its fresh lane");
+  require(capture.cancelledTouches.empty(),
+          "retrying a grace restart keeps forced-cancellation metadata exact");
+}
+
+void testDuplicateDownWithoutCancelDoesNotDuplicatePress() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      87, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+  const auto first = router.consumeForPublication(
+      {.fingerId = 93,
+       .phase = gameplay::RealtimeTouchPhase::Down,
+       .normalizedX = 0.31F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 1});
+  const auto duplicate = router.consumeForPublication(
+      {.fingerId = 93,
+       .phase = gameplay::RealtimeTouchPhase::Down,
+       .normalizedX = 0.50F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 2});
+  require(first == gameplay::RealtimeTouchRoutingDisposition::Accepted &&
+              gameplay::realtimeTouchRoutingPublishesAuxiliary(first) &&
+              duplicate == gameplay::RealtimeTouchRoutingDisposition::Inert &&
+              !gameplay::realtimeTouchRoutingPublishesAuxiliary(duplicate) &&
+              !gameplay::realtimeTouchRoutingRequiresRecovery(duplicate) &&
+              capture.events.size() == 1 &&
+              capture.events.front().type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events.front().lane == 0,
+          "duplicate Down without cancellation leaves the original press untouched");
+  require(router.consume({.fingerId = 93,
+                          .phase = gameplay::RealtimeTouchPhase::Up,
+                          .normalizedX = 0.50F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 3}) &&
+              capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().lane == 0,
+          "the eventual lift releases the original contact exactly once");
+}
+
+void testRejectedInitialDownSuppressesStaleMoveUntilLift() {
+  InputCapture capture;
+  capture.failedPressAttemptsRemaining = 1;
+  gameplay::RealtimeTouchInputRouter router(
+      88, makeLayout(true), {.context = &capture, .emit = &InputCapture::emit});
+  const auto rejected = router.consumeForPublication(
+      {.fingerId = 94,
+       .phase = gameplay::RealtimeTouchPhase::Down,
+       .normalizedX = 0.31F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 1});
+  const auto staleMove = router.consumeForPublication(
+      {.fingerId = 94,
+       .phase = gameplay::RealtimeTouchPhase::Move,
+       .normalizedX = 0.50F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 2});
+  const auto staleCancel = router.consumeForPublication(
+      {.fingerId = 94,
+       .phase = gameplay::RealtimeTouchPhase::Cancel,
+       .normalizedX = 0.50F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 3});
+  const auto lift = router.consumeForPublication(
+      {.fingerId = 94,
+       .phase = gameplay::RealtimeTouchPhase::Up,
+       .normalizedX = 0.50F,
+       .normalizedY = 0.5F,
+       .steadyTimestampMicros = 4});
+  require(rejected == gameplay::RealtimeTouchRoutingDisposition::RetryRequired &&
+              staleMove == gameplay::RealtimeTouchRoutingDisposition::Inert &&
+              staleCancel == gameplay::RealtimeTouchRoutingDisposition::Inert &&
+              lift == gameplay::RealtimeTouchRoutingDisposition::Inert &&
+              capture.events.empty(),
+          "a rejected initial Down suppresses every stale lifecycle sample from gameplay and auxiliary publication");
+  require(router.consume({.fingerId = 94,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 5}) &&
+              capture.events.size() == 1 &&
+              capture.events.front().type ==
+                  gameplay::RealtimeGameplayInputType::Press,
+          "physical lift clears the rejected-contact tombstone for the next Down");
+}
+
+void testPublishedNativeCancelIsNotSynthesizedAgain() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      89, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 95,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 1}) &&
+              router.consume({.fingerId = 95,
+                              .phase = gameplay::RealtimeTouchPhase::Cancel,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 2}) &&
+              router.acknowledgePublishedCancellation(95) &&
+              router.cancelAll(3),
+          "the router accepts acknowledgment only for a live native cancellation");
+  require(capture.cancelledTouches.empty() && capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release,
+          "global recovery releases an acknowledged cancellation without publishing a duplicate Cancel");
+}
+
+void testUnpublishedNativeCancelIsSynthesizedDuringRecovery() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      90, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .cancelTouchLifecycle = &InputCapture::cancelTouchLifecycle});
+  require(router.consume({.fingerId = 96,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 1}) &&
+              router.consume({.fingerId = 96,
+                              .phase = gameplay::RealtimeTouchPhase::Cancel,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 2}) &&
+              router.cancelAll(3),
+          "recovery completes when the native Cancel could not be published");
+  require(capture.cancelledTouches.size() == 1 &&
+              capture.cancelledTouches.front().fingerId == 96 &&
+              capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release,
+          "recovery synthesizes exactly one missing cancellation before release");
+}
+
+void testFailedCancelExpiryRequestsRecovery() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      91, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 97,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 100'000}) &&
+              router.consume({.fingerId = 97,
+                              .phase = gameplay::RealtimeTouchPhase::Cancel,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 110'000}),
+          "expiry-recovery fixture enters cancellation grace");
+  capture.failedReleaseAttemptsRemaining = 1;
+  const auto expiry = router.consumeForPublication(
+      {.fingerId = 97,
+       .phase = gameplay::RealtimeTouchPhase::CancelExpired,
+       .steadyTimestampMicros = 160'000});
+  require(expiry == gameplay::RealtimeTouchRoutingDisposition::RetryRequired &&
+              gameplay::realtimeTouchRoutingRequiresRecovery(expiry) &&
+              router.cancelAll(160'001) && capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release,
+          "a failed grace-expiry release remains owned and succeeds through fail-closed recovery");
+}
+
 } // namespace
 
 int main() {
   testTouchPresentationUsesUiNormalizedCoordinates();
+  testLegacyBuiltInTouchFallbackRequiresExplicitOwnership();
+  testImmutableHitSnapshotPublishesValueOwnedTopmostGeometry();
+  testRawHitCaptureFreezesDownIdentityAndResetPermitsReuse();
+  testRawMetadataFreezesNoHitPresentationPoint();
+  testPresentationDispatchUsesTheRawSnapshotUiPoint();
+  testStableTouchLayoutRevisionParticipatesInSwitchDetection();
   testChartLaneMappingCoversEveryReplayKeyMode();
   testDirectTouchEmitsTimestampedLaneEdges();
   testScratchlessTouchPreservesBmsChannelReplayMapping();
@@ -729,8 +1656,22 @@ int main() {
   testScratchLongNoteIgnoresSmallDirectionJitter();
   testNormalModeMapsTouchesBelowProjectedPlayfield();
   testUiExcludedFingerNeverEmitsGameplayEdges();
+  testPresentationTouchIsDeliveredOnceAndLayoutSwitchCancelsCapture();
+  testPresentationSessionSwitchCancelsAllCapturesOnce();
+  testUnconsumedPresentationBeginDoesNotCapturePointer();
   testLayoutReplacementCancelsOldLaneBeforeNewMapping();
+  testFailedLayoutCancellationRetainsOwnershipAndRetriesAtomically();
+  testFailedLifecycleCancellationRetainsLaneUntilRetry();
+  testFailedMoveToPresentationOwnershipKeepsLaneUntilReleaseRetry();
   testPauseReleasesHeldFingerBeforeDisablingGameplay();
+  testCancelledDragPointerCannotReenterOnMoveAfterResume();
   testCancelledTouchUsesGraceAndContinuationCancelsExpiry();
+  testCancelledTouchDownReleasesOldLaneBeforeStartingNewContact();
+  testCancelledTouchDownRetainsOldLaneWhenRestartReleaseFails();
+  testDuplicateDownWithoutCancelDoesNotDuplicatePress();
+  testRejectedInitialDownSuppressesStaleMoveUntilLift();
+  testPublishedNativeCancelIsNotSynthesizedAgain();
+  testUnpublishedNativeCancelIsSynthesizedDuringRecovery();
+  testFailedCancelExpiryRequestsRecovery();
   return 0;
 }

@@ -354,6 +354,8 @@ private:
   float currentGaugeReducedDamageZone = 0.0f;
   bool renderLaneBeams = true;
   bool laneCoverFloatingEnabled = true;
+  std::uint64_t touchLayoutRevision_ = 1;
+  std::uint64_t touchHitRegionsRevision_ = 1;
   bool useRenderTimeForLaneBeams = false;
   bool showInvisibleNotes = false;
   int laneBeamLengthPercent = AppSettings::kDefaultLaneBeamLengthPercent;
@@ -518,6 +520,23 @@ public:
   static void renderAutoPlayMark(TextView *text, RenderContext &context);
 
   void configure(const PlayfieldPresentationConfig &configuration) override;
+  [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
+  [[nodiscard]] std::uint64_t
+  touchLayoutRevision() const noexcept override;
+  [[nodiscard]] std::uint64_t
+  touchHitRegionsRevision() const noexcept override;
+  [[nodiscard]] std::vector<PresentationUiHitRegion>
+  touchHitRegions() const override;
+  [[nodiscard]] PresentationUiHit
+  hitTestUiControl(UiLogicalPoint point) const override;
+  PresentationTouchResult
+  beginPresentationTouch(const PresentationTouchEvent &event) override;
+  PresentationTouchResult
+  updatePresentationTouch(const PresentationTouchEvent &event) override;
+  PresentationTouchResult
+  endPresentationTouch(const PresentationTouchEvent &event,
+                       bool cancelled) override;
+  void cancelPresentationTouches(long long eventMicros) override;
   void onLanePressed(int lane, JudgeResult judge,
                      long long time) override;
   void onLaneReleased(int lane, long long time) override;

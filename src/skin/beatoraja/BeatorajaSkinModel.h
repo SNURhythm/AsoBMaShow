@@ -478,6 +478,8 @@ struct ValidatedBeatorajaSkinModel {
   std::map<std::string, SkinResourceId, std::less<>> resourceIds;
   std::map<std::string, SkinObjectId, std::less<>> objectIds;
   std::vector<SkinObjectId> disabledOptionalObjects;
+  std::vector<SkinFloatPropertyId> laneCoverRatePropertyIds;
+  bool laneCoverRatePropertyIndexReady = false;
 };
 
 struct SkinModelValidationResult {

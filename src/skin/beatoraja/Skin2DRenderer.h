@@ -188,6 +188,7 @@ struct SkinFrameInputs {
 struct SkinSliderInteractionGeometry {
   SkinObjectId sourceObject = 0;
   std::uint32_t authoredOrdinal = 0;
+  PresentationUiControlKind kind = PresentationUiControlKind::Slider;
   // SkinSlider.mousePressed tests the prepared destination region, not the
   // rate-displaced knob rectangle.  Keep that base region and its directional
   // hit strip in authored coordinates so input routing remains render-free.
@@ -218,6 +219,9 @@ struct SkinLaneGroupInteractionRegion {
 // writer is retained or invoked by the geometry queue.
 struct SkinInteractionLayout {
   std::uint64_t frameSerial = 0;
+  // Stable for the lifetime of one immutable gameplay-skin session. A normal
+  // frame publication advances frameSerial but retains this revision.
+  std::uint64_t revision = 0;
   Affine2D uiToAuthored;
   UiLogicalRect safeUiBounds;
   std::vector<SkinSliderInteractionGeometry> slidersTopmostFirst;
@@ -226,6 +230,13 @@ struct SkinInteractionLayout {
 
   [[nodiscard]] std::optional<AuthoredPoint>
   authoredPointForUi(double x, double y) const noexcept;
+  [[nodiscard]] PresentationUiHit
+  hitTestUiControl(UiLogicalPoint point) const noexcept;
+  [[nodiscard]] std::vector<PresentationUiHitRegion>
+  uiHitRegions() const;
+  [[nodiscard]] std::optional<SkinWriterInvocation>
+  writerInvocationFor(const PresentationUiHit &hit, UiLogicalPoint point,
+                      long long eventMicros) const noexcept;
 };
 
 struct SkinFrameEvaluationResult {

@@ -123,10 +123,11 @@ bool invertibleViewport(const PlaySkinViewport &viewport) noexcept {
 SkinSliderInteractionGeometry sliderInteraction(
     SkinObjectId sourceObject, std::uint32_t authoredOrdinal,
     const AuthoredDestinationGeometry &geometry,
-    const SkinSliderObject &slider) {
+    const SkinSliderObject &slider, PresentationUiControlKind kind) {
   SkinSliderInteractionGeometry result{
       .sourceObject = sourceObject,
       .authoredOrdinal = authoredOrdinal,
+      .kind = kind,
       .authoredDestination = geometry.rect,
       .authoredHitRegion = geometry.rect,
       .valueZero = {.x = geometry.rect.x, .y = geometry.rect.y},
@@ -156,6 +157,36 @@ SkinSliderInteractionGeometry sliderInteraction(
     break;
   }
   return result;
+}
+
+bool laneCoverRateSelector(const SkinBuiltinPropertySelector &builtin) {
+  if (const auto *selector = std::get_if<int>(&builtin.value)) {
+    return *selector == 4 || *selector == 5;
+  }
+  const auto &selector = std::get<std::string>(builtin.value);
+  return selector == "lanecover" || selector == "lanecover2";
+}
+
+bool laneCoverRateProperty(const ValidatedBeatorajaSkinModel &model,
+                           const SkinSliderObject &slider) {
+  const auto *propertyId = std::get_if<SkinFloatPropertyId>(&slider.value);
+  if (propertyId == nullptr) {
+    return false;
+  }
+  if (model.laneCoverRatePropertyIndexReady) {
+    return std::ranges::binary_search(model.laneCoverRatePropertyIds,
+                                      *propertyId);
+  }
+  const auto property =
+      std::ranges::find(model.model.floatProperties, *propertyId,
+                        &SkinFloatPropertyBinding::id);
+  if (property == model.model.floatProperties.end() ||
+      property->domain != SkinFloatPropertyDomain::Rate) {
+    return false;
+  }
+  const auto *builtin =
+      std::get_if<SkinBuiltinPropertySelector>(&property->source);
+  return builtin != nullptr && laneCoverRateSelector(*builtin);
 }
 
 bool sameState(const SkinRenderState &left,
@@ -2519,6 +2550,158 @@ SkinInteractionLayout::authoredPointForUi(double x, double y) const noexcept {
              : std::nullopt;
 }
 
+PresentationUiHit
+SkinInteractionLayout::hitTestUiControl(UiLogicalPoint point) const noexcept {
+  const auto contains = [](double x, double y, const auto &rect) {
+    return std::isfinite(x) && std::isfinite(y) && std::isfinite(rect.x) &&
+           std::isfinite(rect.y) && std::isfinite(rect.width) &&
+           std::isfinite(rect.height) && rect.width >= 0.0 &&
+           rect.height >= 0.0 && x >= rect.x && x <= rect.x + rect.width &&
+           y >= rect.y && y <= rect.y + rect.height;
+  };
+  const auto authored = authoredPointForUi(point.x, point.y);
+  if (!authored) {
+    return {};
+  }
+  for (const auto &slider : slidersTopmostFirst) {
+    if (!slider.writer || slider.range <= 0.0 ||
+        !std::isfinite(slider.range) || slider.direction > 3 ||
+        !contains(authored->x, authored->y, slider.authoredHitRegion)) {
+      continue;
+    }
+    return {.kind = slider.kind,
+            .layoutRevision = revision,
+            .sourceObject = slider.sourceObject,
+            .authoredOrdinal = slider.authoredOrdinal,
+            .writer = slider.writer};
+  }
+  return {};
+}
+
+std::vector<PresentationUiHitRegion>
+SkinInteractionLayout::uiHitRegions() const {
+  std::vector<PresentationUiHitRegion> result;
+  result.reserve(slidersTopmostFirst.size());
+  const double determinant =
+      uiToAuthored.m00 * uiToAuthored.m11 -
+      uiToAuthored.m01 * uiToAuthored.m10;
+  if (!std::isfinite(determinant) || determinant == 0.0) {
+    return result;
+  }
+  const auto toUi = [&](double authoredX,
+                        double authoredY) -> std::optional<UiLogicalPoint> {
+    const double translatedX = authoredX - uiToAuthored.tx;
+    const double translatedY = authoredY - uiToAuthored.ty;
+    const double uiX = (uiToAuthored.m11 * translatedX -
+                        uiToAuthored.m01 * translatedY) /
+                       determinant;
+    const double uiY = (-uiToAuthored.m10 * translatedX +
+                        uiToAuthored.m00 * translatedY) /
+                       determinant;
+    if (!std::isfinite(uiX) || !std::isfinite(uiY)) {
+      return std::nullopt;
+    }
+    return UiLogicalPoint{.x = static_cast<float>(uiX),
+                          .y = static_cast<float>(uiY)};
+  };
+  for (const auto &slider : slidersTopmostFirst) {
+    if (!slider.writer || slider.range <= 0.0 ||
+        !std::isfinite(slider.range) || slider.direction > 3 ||
+        !std::isfinite(slider.authoredHitRegion.x) ||
+        !std::isfinite(slider.authoredHitRegion.y) ||
+        !std::isfinite(slider.authoredHitRegion.width) ||
+        !std::isfinite(slider.authoredHitRegion.height) ||
+        slider.authoredHitRegion.width < 0.0 ||
+        slider.authoredHitRegion.height < 0.0) {
+      continue;
+    }
+    const double left = slider.authoredHitRegion.x;
+    const double right = left + slider.authoredHitRegion.width;
+    const double top = slider.authoredHitRegion.y;
+    const double bottom = top + slider.authoredHitRegion.height;
+    const auto first = toUi(left, top);
+    const auto second = toUi(right, top);
+    const auto third = toUi(right, bottom);
+    const auto fourth = toUi(left, bottom);
+    if (!first || !second || !third || !fourth) {
+      continue;
+    }
+    result.push_back(
+        {.hit = {.kind = slider.kind,
+                 .layoutRevision = revision,
+                 .sourceObject = slider.sourceObject,
+                 .authoredOrdinal = slider.authoredOrdinal,
+                 .writer = slider.writer},
+         .boundary = {*first, *second, *third, *fourth}});
+  }
+  return result;
+}
+
+std::optional<SkinWriterInvocation>
+SkinInteractionLayout::writerInvocationFor(const PresentationUiHit &hit,
+                                           UiLogicalPoint point,
+                                           long long eventMicros) const
+    noexcept {
+  if ((hit.kind != PresentationUiControlKind::Slider &&
+       hit.kind != PresentationUiControlKind::LaneCover) ||
+      hit.layoutRevision != revision || !hit.writer) {
+    return std::nullopt;
+  }
+  const auto authored = authoredPointForUi(point.x, point.y);
+  if (!authored) {
+    return std::nullopt;
+  }
+  const auto contains = [](const AuthoredPoint &candidate,
+                           const AuthoredRect &rect) {
+    return std::isfinite(candidate.x) && std::isfinite(candidate.y) &&
+           std::isfinite(rect.x) && std::isfinite(rect.y) &&
+           std::isfinite(rect.width) && std::isfinite(rect.height) &&
+           rect.width >= 0.0 && rect.height >= 0.0 &&
+           candidate.x >= rect.x && candidate.x <= rect.x + rect.width &&
+           candidate.y >= rect.y && candidate.y <= rect.y + rect.height;
+  };
+  for (const auto &slider : slidersTopmostFirst) {
+    if (slider.sourceObject != hit.sourceObject ||
+        slider.kind != hit.kind ||
+        slider.authoredOrdinal != hit.authoredOrdinal ||
+        slider.writer != hit.writer || !slider.writer ||
+        slider.range <= 0.0 || !std::isfinite(slider.range) ||
+        !contains(*authored, slider.authoredHitRegion)) {
+      continue;
+    }
+    double displacement = 0.0;
+    switch (slider.direction) {
+    case 0:
+      displacement = authored->y - slider.valueZero.y;
+      break;
+    case 1:
+      displacement = authored->x - slider.valueZero.x;
+      break;
+    case 2:
+      displacement = slider.valueZero.y - authored->y;
+      break;
+    case 3:
+      displacement = slider.valueZero.x - authored->x;
+      break;
+    default:
+      return std::nullopt;
+    }
+    double normalizedValue = 0.0;
+    if (std::abs(displacement) < 1.0) {
+      normalizedValue = 0.0;
+    } else if (std::abs(displacement - slider.range) < 1.0) {
+      normalizedValue = 1.0;
+    } else {
+      normalizedValue = std::clamp(displacement / slider.range, 0.0, 1.0);
+    }
+    return SkinWriterInvocation{
+        .writer = *slider.writer,
+        .normalizedValue = static_cast<float>(normalizedValue),
+        .eventMicros = eventMicros};
+  }
+  return std::nullopt;
+}
+
 #if defined(ASOBMASHOW_SKIN_RENDERER_TESTING)
 void resetSkinRendererLookupComparisonsForTesting() noexcept {
   lookupComparisonsForTesting.store(0, std::memory_order_relaxed);
@@ -2632,6 +2815,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     buffer.frameSerial = inputs.frameSerial;
     SkinInteractionLayout interactionLayout{
         .frameSerial = inputs.frameSerial,
+        .revision = inputs.sessionSerial,
         .uiToAuthored = inputs.viewport.uiToAuthored,
         .safeUiBounds = inputs.viewport.safeUiBounds};
     // PlaySkin owns one static lane-region array. Each later authored Note
@@ -3313,10 +3497,17 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           }
           buffer.commands.push_back(std::move(*lowered.command));
           if (slider) {
+            PresentationUiControlKind interactionKind =
+                PresentationUiControlKind::Slider;
+            if (slider->writer &&
+                laneCoverRateProperty(inputs.model, *slider)) {
+              interactionKind = PresentationUiControlKind::LaneCover;
+            }
             interactionLayout.slidersTopmostFirst.push_back(
                 sliderInteraction(object->id,
                                   destination.presentation.authoredOrdinal,
-                                  *evaluated.geometry, *slider));
+                                  *evaluated.geometry, *slider,
+                                  interactionKind));
           }
         }
         continue;

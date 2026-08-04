@@ -47,6 +47,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <new>
@@ -224,6 +225,39 @@ bool laneIsPressed(const std::unordered_map<int, bool> &lanePressed, int lane) {
 bool isInsideButton(const Button &button, float uiX, float uiY) {
   return uiX >= button.getX() && uiX <= button.getX() + button.getWidth() &&
          uiY >= button.getY() && uiY <= button.getY() + button.getHeight();
+}
+
+gameplay::RealtimeTouchNativeOverlayRegion
+realtimeTouchOverlayRegion(const Button *button) noexcept {
+  if (button == nullptr || !button->getVisible() || button->getWidth() <= 0 ||
+      button->getHeight() <= 0) {
+    return {};
+  }
+  const float left = static_cast<float>(button->getX());
+  const float top = static_cast<float>(button->getY());
+  return {.visible = true,
+          .left = left,
+          .top = top,
+          .right = left + static_cast<float>(button->getWidth()),
+          .bottom = top + static_cast<float>(button->getHeight())};
+}
+
+gameplay::RealtimeTouchLayoutRefreshKey makeRealtimeTouchLayoutRefreshKey(
+    std::uint64_t layoutRevision, std::uint64_t hitRegionRevision,
+    const Button *pauseButton, const Button *practiceRestartButton) noexcept {
+  return {.layoutRevision = layoutRevision,
+          .hitRegionRevision = hitRegionRevision,
+          .uiTransform = {.renderWidth = rendering::render_width,
+                          .renderHeight = rendering::render_height,
+                          .uiScaleX = rendering::ui_scale_x,
+                          .uiScaleY = rendering::ui_scale_y,
+                          .uiOffsetX = rendering::ui_offset_x,
+                          .uiOffsetY = rendering::ui_offset_y,
+                          .uiWidth = rendering::window_width,
+                          .uiHeight = rendering::window_height},
+          .nativeOverlays = {
+              realtimeTouchOverlayRegion(pauseButton),
+              realtimeTouchOverlayRegion(practiceRestartButton)}};
 }
 
 void mouseEventToUi(const SDL_MouseButtonEvent &event, float &uiX, float &uiY) {
@@ -533,37 +567,15 @@ buildRealtimeGameplayNoteLookup(const bms_parser::Chart &chart) {
 }
 
 std::optional<gameplay::RealtimeTouchLayout>
-buildRealtimeTouchLayout(const bms_parser::Chart &chart, BMSRenderer &renderer,
+buildRealtimeTouchLayout(const PlayfieldPresentation &presentation,
                          bool dragMode) {
-  const auto touchBounds = renderer.gameplayTouchBoundsUi();
-  const auto lanes = chart.Meta.GetTotalLaneIndices();
-  if (!touchBounds.has_value() || lanes.empty() ||
-      rendering::render_width <= 0 || rendering::render_height <= 0) {
-    return std::nullopt;
-  }
-
-  gameplay::RealtimeTouchLayout layout;
-  const auto normalizedScreenPoint = [](const auto &point) {
-    return gameplay::RealtimeTouchPoint{
-        .x = (point.first * rendering::ui_scale_x +
-              static_cast<float>(rendering::ui_offset_x)) /
-             static_cast<float>(rendering::render_width),
-        .y = (point.second * rendering::ui_scale_y +
-              static_cast<float>(rendering::ui_offset_y)) /
-             static_cast<float>(rendering::render_height),
-    };
-  };
-  layout.bottomLeft = normalizedScreenPoint((*touchBounds)[0]);
-  layout.bottomRight = normalizedScreenPoint((*touchBounds)[1]);
-  layout.topLeft = normalizedScreenPoint((*touchBounds)[2]);
-  layout.topRight = normalizedScreenPoint((*touchBounds)[3]);
-  layout.laneCount = lanes.size();
-  layout.keyMode = chart.Meta.KeyMode;
+  auto layout = presentation.touchLayout();
   layout.dragMode = dragMode;
-  layout.lanes = lanes;
-  layout.scratch.reserve(lanes.size());
-  for (std::size_t index = 0; index < lanes.size(); ++index) {
-    layout.scratch.push_back(chartLaneIsScratch(chart.Meta, lanes[index]));
+  if (layout.revision == 0 ||
+      (layout.laneRegions.empty() &&
+      (layout.laneCount == 0 || layout.lanes.size() < layout.laneCount ||
+       layout.scratch.size() < layout.laneCount))) {
+    return std::nullopt;
   }
   return layout;
 }
@@ -607,6 +619,7 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
   std::unique_ptr<gameplay::RealtimeGameplayInputBridge> legacyInputBridge;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
+  std::mutex touchRouterMutex;
   std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::unique_ptr<NativeCallbackLifetime> touchCallbackLifetime;
@@ -624,53 +637,37 @@ struct GamePlayScene::RealtimeGameplaySession {
                              kAuxiliaryTouchCapacity>
       auxiliaryTouches;
   std::atomic_bool auxiliaryTouchOverflow{false};
-  std::array<std::int64_t, gameplay::kRealtimeTouchFingerCapacity>
-      uiOwnedFingers{};
-  std::array<bool, gameplay::kRealtimeTouchFingerCapacity>
-      uiOwnedFingerActive{};
+  std::atomic_bool touchRoutingRecoveryRequested{false};
+  gameplay::RealtimeTouchPresentationDispatcher presentationTouches;
+  gameplay::RealtimeTouchHitSnapshotPublication touchHitSnapshots;
+  gameplay::RealtimeTouchHitCaptureTracker rawHitCaptures;
+  std::atomic<std::uint64_t> requestedHitCaptureReset{0};
+  std::uint64_t appliedRawHitCaptureReset = 0;
   std::uint64_t appliedSnapshotGeneration = 0;
   std::uint64_t appliedTransactionSequence = 0;
   std::size_t visualMeasureIndex = 0;
   std::size_t visualTimelineIndex = 0;
-  int layoutRenderWidth = 0;
-  int layoutRenderHeight = 0;
-  float layoutUiScaleX = 0.0F;
-  float layoutUiScaleY = 0.0F;
-  int layoutUiOffsetX = 0;
-  int layoutUiOffsetY = 0;
+  gameplay::RealtimeTouchLayoutRefreshKey layoutRefreshKey;
+  bool touchHitSnapshotDirty = true;
+  bool touchIngressDesired = false;
 
-  bool uiOwnsFinger(const gameplay::RealtimeTouchSample &sample) {
-    const auto find = [&]() -> std::optional<std::size_t> {
-      for (std::size_t index = 0; index < uiOwnedFingers.size(); ++index) {
-        if (uiOwnedFingerActive[index] &&
-            uiOwnedFingers[index] == sample.fingerId) {
-          return index;
-        }
-      }
-      return std::nullopt;
-    };
-    auto ownedIndex = find();
-    if (sample.phase == gameplay::RealtimeTouchPhase::Down &&
-        !ownedIndex.has_value() && scene != nullptr &&
-        scene->realtimeTouchHitsUi(sample.normalizedX, sample.normalizedY)) {
-      for (std::size_t index = 0; index < uiOwnedFingers.size(); ++index) {
-        if (!uiOwnedFingerActive[index]) {
-          uiOwnedFingerActive[index] = true;
-          uiOwnedFingers[index] = sample.fingerId;
-          ownedIndex = index;
-          break;
-        }
-      }
+  void populateImmutableHit(gameplay::RealtimeTouchSample &sample) {
+    const auto requested =
+        requestedHitCaptureReset.load(std::memory_order_acquire);
+    if (appliedRawHitCaptureReset != requested) {
+      rawHitCaptures.reset();
+      appliedRawHitCaptureReset = requested;
     }
-    const bool owned = ownedIndex.has_value();
-    if (owned && (sample.phase == gameplay::RealtimeTouchPhase::Up ||
-                  sample.phase == gameplay::RealtimeTouchPhase::Cancel)) {
-      uiOwnedFingerActive[*ownedIndex] = false;
-    }
-    return owned;
+    const auto snapshot = touchHitSnapshots.acquire();
+    static const gameplay::RealtimeTouchHitSnapshot emptySnapshot;
+    const auto &published = snapshot ? *snapshot : emptySnapshot;
+    gameplay::populateRealtimeTouchPresentationMetadata(
+        sample, published, rawHitCaptures);
   }
 
-  void clearUiOwnedFingers() noexcept { uiOwnedFingerActive.fill(false); }
+  void requestHitCaptureReset() noexcept {
+    requestedHitCaptureReset.fetch_add(1, std::memory_order_release);
+  }
 
   [[nodiscard]] bool
   registryRealtimeEnabled(input::DeviceClass deviceClass) const noexcept {
@@ -750,8 +747,9 @@ struct GamePlayScene::RealtimeGameplaySession {
   static bool emitTouchInput(void *context,
                              const gameplay::RealtimeGameplayInput &input) {
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
-    if (!session.acceptingTouch.load(std::memory_order_acquire) ||
-        session.worker == nullptr) {
+    if (!gameplay::realtimeTouchRouterTransitionCanReachWorker(
+            session.acceptingTouch.load(std::memory_order_acquire),
+            session.worker != nullptr)) {
       return false;
     }
     auto owned = input;
@@ -801,6 +799,39 @@ struct GamePlayScene::RealtimeGameplaySession {
     }
     session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
     return false;
+  }
+
+  static PresentationTouchResult beginPresentationTouch(
+      void *context, const PresentationTouchEvent &event) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    return session.scene != nullptr && session.scene->presentation != nullptr
+               ? session.scene->presentation->beginPresentationTouch(event)
+               : PresentationTouchResult{};
+  }
+
+  static PresentationTouchResult updatePresentationTouch(
+      void *context, const PresentationTouchEvent &event) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    return session.scene != nullptr && session.scene->presentation != nullptr
+               ? session.scene->presentation->updatePresentationTouch(event)
+               : PresentationTouchResult{};
+  }
+
+  static PresentationTouchResult endPresentationTouch(
+      void *context, const PresentationTouchEvent &event, bool cancelled) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    return session.scene != nullptr && session.scene->presentation != nullptr
+               ? session.scene->presentation->endPresentationTouch(event,
+                                                                    cancelled)
+               : PresentationTouchResult{};
+  }
+
+  static void cancelPresentationTouches(void *context,
+                                        long long eventMicros) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (session.scene != nullptr && session.scene->presentation != nullptr) {
+      session.scene->presentation->cancelPresentationTouches(eventMicros);
+    }
   }
 
   static bool
@@ -924,10 +955,24 @@ struct GamePlayScene::RealtimeGameplaySession {
     }
     auto lease = NativeCallbackLifetime::acquire(expiry->lifetimeToken);
     auto *session = lease.ownerAs<RealtimeGameplaySession>();
-    if (session == nullptr || session->touchRouter == nullptr) {
+    if (session == nullptr) {
       return;
     }
-    (void)session->touchRouter->consume(expiry->sample);
+    gameplay::RealtimeTouchRoutingDisposition disposition =
+        gameplay::RealtimeTouchRoutingDisposition::Inert;
+    {
+      std::lock_guard lock(session->touchRouterMutex);
+      if (session->touchRouter == nullptr) {
+        return;
+      }
+      disposition =
+          session->touchRouter->consumeForPublication(expiry->sample);
+    }
+    if (gameplay::realtimeTouchRoutingRequiresRecovery(disposition)) {
+      session->acceptingTouch.store(false, std::memory_order_release);
+      session->touchRoutingRecoveryRequested.store(true,
+                                                    std::memory_order_release);
+    }
   }
 
   static void scheduleCancelledTouchExpiry(
@@ -992,12 +1037,53 @@ struct GamePlayScene::RealtimeGameplaySession {
             session.touchTimestampSession.toSteadyMicros(
                 event->timestampMicros),
     };
-    sample.excludedFromGameplay = session.uiOwnsFinger(sample);
-    if (!session.auxiliaryTouches.tryPush(sample)) {
-      session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
+    session.populateImmutableHit(sample);
+    sample.excludedFromGameplay =
+        sample.presentationHit.kind != PresentationUiControlKind::None;
+    gameplay::RealtimeTouchRoutingDisposition disposition =
+        gameplay::RealtimeTouchRoutingDisposition::RetryRequired;
+    {
+      std::lock_guard lock(session.touchRouterMutex);
+      if (session.touchRouter != nullptr) {
+        disposition = session.touchRouter->consumeForPublication(sample);
+      }
     }
-    (void)session.touchRouter->consume(sample);
-    if (phase == gameplay::RealtimeTouchPhase::Cancel) {
+    bool auxiliaryPublished = false;
+    if (gameplay::realtimeTouchRoutingPublishesAuxiliary(disposition)) {
+      if (!session.auxiliaryTouches.tryPush(sample)) {
+        // Stop admitting later callbacks until the game thread drains and
+        // transactionally cancels every ownership domain.
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
+      } else {
+        auxiliaryPublished = true;
+      }
+    } else if (gameplay::realtimeTouchRoutingRequiresRecovery(disposition)) {
+      // The sample was not accepted by the router, so publishing it to
+      // presentation/replay would create mismatched ownership. Fail closed;
+      // the normal overflow recovery releases the old contact and republishes
+      // a clean snapshot before ingress resumes.
+      session.acceptingTouch.store(false, std::memory_order_release);
+      session.touchRoutingRecoveryRequested.store(true,
+                                                  std::memory_order_release);
+    }
+    bool cancellationAcknowledged = false;
+    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
+        auxiliaryPublished) {
+      std::lock_guard lock(session.touchRouterMutex);
+      cancellationAcknowledged =
+          session.touchRouter != nullptr &&
+          session.touchRouter->acknowledgePublishedCancellation(
+              sample.fingerId);
+      if (!cancellationAcknowledged) {
+        session.acceptingTouch.store(false, std::memory_order_release);
+        session.touchRoutingRecoveryRequested.store(true,
+                                                    std::memory_order_release);
+      }
+    }
+    if (phase == gameplay::RealtimeTouchPhase::Cancel &&
+        gameplay::realtimeTouchShouldScheduleCancelExpiry(
+            disposition, auxiliaryPublished, cancellationAcknowledged)) {
       scheduleCancelledTouchExpiry(session, sample);
     }
   }
@@ -1011,7 +1097,7 @@ bool GamePlayScene::realtimeGameplayAuthorityActive() const noexcept {
 
 bool GamePlayScene::startRealtimeGameplayAuthority() {
   if (realtimeGameplayAuthorityActive() || chart == nullptr ||
-      state == nullptr || renderer == nullptr) {
+      state == nullptr || renderer == nullptr || presentation == nullptr) {
     return false;
   }
 
@@ -1048,9 +1134,9 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::optional<gameplay::RealtimeTouchLayout> touchLayout;
   if (!options.autoPlay) {
-    renderer->refreshGeometry();
+    presentation->refreshGeometry();
     touchLayout = buildRealtimeTouchLayout(
-        *chart, *renderer, assist_options::isDragMode(options.assistOption));
+        *presentation, assist_options::isDragMode(options.assistOption));
     if (!touchLayout.has_value()) {
       SDL_Log("Realtime iOS gameplay input unavailable: invalid touch layout");
       return false;
@@ -1066,6 +1152,12 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       std::make_unique<NativeCallbackLifetime>(session.get());
 #endif
   session->scene = this;
+  session->presentationTouches.setSink(
+      {.context = session.get(),
+       .begin = &RealtimeGameplaySession::beginPresentationTouch,
+       .update = &RealtimeGameplaySession::updatePresentationTouch,
+       .end = &RealtimeGameplaySession::endPresentationTouch,
+       .cancelAll = &RealtimeGameplaySession::cancelPresentationTouches});
   session->audio = &context.jukebox.audioRuntime();
   session->inputRegistry = &context.inputDeviceRegistry;
   session->audioOffsetMicros = getAudioOffsetMicros();
@@ -1162,12 +1254,14 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   }
   session->visualMeasureIndex = state->passedMeasureCount;
   session->visualTimelineIndex = state->passedTimelineCount;
-  session->layoutRenderWidth = rendering::render_width;
-  session->layoutRenderHeight = rendering::render_height;
-  session->layoutUiScaleX = rendering::ui_scale_x;
-  session->layoutUiScaleY = rendering::ui_scale_y;
-  session->layoutUiOffsetX = rendering::ui_offset_x;
-  session->layoutUiOffsetY = rendering::ui_offset_y;
+  session->layoutRefreshKey = makeRealtimeTouchLayoutRefreshKey(
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+      touchLayout ? touchLayout->revision : 0,
+      presentation->touchHitRegionsRevision(),
+#else
+      0, 0,
+#endif
+      pauseButton, practiceRestartButton);
   if (!session->worker->start()) {
     SDL_Log("Realtime gameplay worker failed to start");
     return false;
@@ -1254,65 +1348,125 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
     session.physicalInputRouter->setGameplayEnabled(enabled, timestampMicros);
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  session.touchIngressDesired = enabled;
   if (enabled) {
+    if (session.acceptingTouch.load(std::memory_order_acquire)) {
+      return;
+    }
+    // SDL's UIKit bridge holds its callback spinlock until an in-flight raw
+    // callback returns. Detach before mutating any raw-thread-owned state.
+    IOSSetRawTouchEventSink(nullptr, nullptr);
+    session.acceptingTouch.store(false, std::memory_order_release);
+    const auto expectedKey = makeRealtimeTouchLayoutRefreshKey(
+        presentation != nullptr ? presentation->touchLayoutRevision() : 0,
+        presentation != nullptr ? presentation->touchHitRegionsRevision() : 0,
+        pauseButton, practiceRestartButton);
+    if (presentation == nullptr || session.layoutRefreshKey != expectedKey) {
+      SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                   "Realtime touch ingress remains disabled until current layout publication succeeds");
+      session.touchHitSnapshotDirty = true;
+      return;
+    }
+    if ((session.touchHitSnapshotDirty ||
+         !session.touchHitSnapshots.acquire()) &&
+        !publishRealtimeTouchHitSnapshot()) {
+      SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                   "Realtime touch ingress remains disabled without an immutable hit snapshot");
+      return;
+    }
     session.touchTimestampSession.reanchor();
-    if (session.touchRouter != nullptr) {
-      (void)session.touchRouter->setGameplayEnabled(true, timestampMicros);
+    bool routerEnabled = true;
+    {
+      std::lock_guard lock(session.touchRouterMutex);
+      routerEnabled = session.touchRouter == nullptr ||
+                      session.touchRouter->setGameplayEnabled(
+                          true, timestampMicros);
+    }
+    if (!routerEnabled) {
+      SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                   "Realtime touch ingress remains disabled until held lanes release");
+      return;
     }
     session.acceptingTouch.store(true, std::memory_order_release);
     IOSSetRawTouchEventSink(&RealtimeGameplaySession::rawTouchSink, &session);
     return;
   }
+  IOSSetRawTouchEventSink(nullptr, nullptr);
   session.acceptingTouch.store(false, std::memory_order_release);
-  if (session.touchRouter != nullptr &&
-      !session.touchRouter->setGameplayEnabled(false, timestampMicros)) {
+  bool routerDisabled = true;
+  {
+    std::lock_guard lock(session.touchRouterMutex);
+    routerDisabled = session.touchRouter == nullptr ||
+                     session.touchRouter->setGameplayEnabled(
+                         false, timestampMicros);
+  }
+  if (!routerDisabled) {
     SDL_LogError(SDL_LOG_CATEGORY_INPUT,
                  "Realtime touch release failed while closing ingress");
   }
-  drainRealtimeTouchSamples();
-  IOSSetRawTouchEventSink(nullptr, nullptr);
-  session.clearUiOwnedFingers();
+  drainRealtimeTouchSamples(timestampMicros);
+  cancelLegacyFloatingLaneCoverTouch();
+  session.requestHitCaptureReset();
 #else
   (void)enabled;
 #endif
 }
 
-bool GamePlayScene::realtimeTouchHitsUi(float normalizedX,
-                                        float normalizedY) const {
-  float uiX = 0.0F;
-  float uiY = 0.0F;
-  rendering::normalizedToUi(normalizedX, normalizedY, uiX, uiY);
-  if ((pauseButton != nullptr && pauseButton->getVisible() &&
-       isInsideButton(*pauseButton, uiX, uiY)) ||
-      (practiceRestartButton != nullptr &&
-       practiceRestartButton->getVisible() &&
-       isInsideButton(*practiceRestartButton, uiX, uiY))) {
-    return true;
-  }
-  if (renderer == nullptr || courseNoSpeed() ||
-      !context.settings.floatingLaneCoverEnabled) {
+bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
+  if (!realtimeGameplayAuthorityActive() || presentation == nullptr) {
     return false;
   }
-  return renderer
-      ->laneCoverHandleGrabOffset(
-          normalizedX * static_cast<float>(rendering::render_width),
-          normalizedY * static_cast<float>(rendering::render_height))
-      .has_value();
+  auto &session = *realtimeGameplaySession;
+  gameplay::RealtimeTouchHitSnapshot snapshot{
+      .layoutRevision = session.layoutRefreshKey.layoutRevision,
+      .uiTransform = session.layoutRefreshKey.uiTransform};
+  const auto appendNativeOverlay = [&](const auto &overlay) {
+    if (!overlay.visible) {
+      return;
+    }
+    snapshot.regionsTopmostFirst.push_back(
+        {.hit = {.kind = PresentationUiControlKind::NativeOverlay},
+         .boundary = {{{overlay.left, overlay.top},
+                       {overlay.right, overlay.top},
+                       {overlay.right, overlay.bottom},
+                       {overlay.left, overlay.bottom}}}});
+  };
+  try {
+    for (const auto &overlay : session.layoutRefreshKey.nativeOverlays) {
+      appendNativeOverlay(overlay);
+    }
+    auto presentationRegions = presentation->touchHitRegions();
+    snapshot.regionsTopmostFirst.insert(
+        snapshot.regionsTopmostFirst.end(),
+        std::make_move_iterator(presentationRegions.begin()),
+        std::make_move_iterator(presentationRegions.end()));
+    if (session.touchHitSnapshots.publish(std::move(snapshot))) {
+      session.touchHitSnapshotDirty = false;
+      return true;
+    }
+  } catch (...) {
+  }
+  SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+               "Realtime touch hit snapshot publication failed; preserving the last good snapshot");
+  session.touchHitSnapshotDirty = true;
+  return false;
 }
 
-void GamePlayScene::drainRealtimeTouchSamples() {
+void GamePlayScene::drainRealtimeTouchSamples(
+    std::optional<long long> cancelPresentationAtSteadyMicros) {
   if (!realtimeGameplayAuthorityActive()) {
     return;
   }
   auto &session = *realtimeGameplaySession;
   const long long visualGameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
-  gameplay::RealtimeTouchSample sample;
-  while (session.auxiliaryTouches.tryPop(sample)) {
+  const auto consumeSample = [&](const gameplay::RealtimeTouchSample &sample) {
     const auto gameplayTime = RealtimeGameplaySession::mapSteadyToSong(
         &session, sample.steadyTimestampMicros);
+    (void)session.presentationTouches.consume(
+        sample, gameplayTime.value_or(sample.steadyTimestampMicros));
     if (!gameplayTime.has_value()) {
-      continue;
+      return;
     }
     ReplayTouchAction action = ReplayTouchAction::Move;
     switch (sample.phase) {
@@ -1329,19 +1483,63 @@ void GamePlayScene::drainRealtimeTouchSamples() {
       action = ReplayTouchAction::Cancel;
       break;
     case gameplay::RealtimeTouchPhase::CancelExpired:
-      continue;
+      return;
     }
-    const auto presentationPoint = gameplay::realtimeTouchPresentationPoint(
-        sample.normalizedX, sample.normalizedY);
+    const auto presentationPoint = sample.presentationPoint.value_or(
+        gameplay::realtimeTouchPresentationPoint(sample.normalizedX,
+                                                  sample.normalizedY));
     (void)handleTouchInputAtGameplayTime(
         static_cast<SDL_FingerID>(sample.fingerId), action,
         Vector3(presentationPoint.x, presentationPoint.y, 0.0F), *gameplayTime,
-        visualGameplayTimeMicros);
+        visualGameplayTimeMicros,
+        gameplay::realtimeTouchAllowsLegacyBuiltInControl(
+            sample.presentationHit));
+  };
+  gameplay::RealtimeTouchSample sample;
+  while (session.auxiliaryTouches.tryPop(sample)) {
+    consumeSample(sample);
   }
-  if (session.auxiliaryTouchOverflow.exchange(false,
-                                              std::memory_order_acq_rel)) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
-                "Realtime touch metadata queue overflowed");
+  const bool metadataOverflow = session.auxiliaryTouchOverflow.exchange(
+      false, std::memory_order_acq_rel);
+  const bool routingRecovery = session.touchRoutingRecoveryRequested.exchange(
+      false, std::memory_order_acq_rel);
+  if (metadataOverflow || routingRecovery) {
+    SDL_LogWarn(
+        SDL_LOG_CATEGORY_INPUT,
+        metadataOverflow
+            ? "Realtime touch metadata queue overflowed; cancelling active touch ownership"
+            : "Realtime touch routing rejected a sample; cancelling active touch ownership");
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+    IOSSetRawTouchEventSink(nullptr, nullptr);
+#endif
+    session.acceptingTouch.store(false, std::memory_order_release);
+    const auto recoverySteadyMicros = nowMicros();
+    bool routerCancelled = true;
+    {
+      std::lock_guard lock(session.touchRouterMutex);
+      if (session.touchRouter != nullptr) {
+        routerCancelled =
+            session.touchRouter->cancelAll(recoverySteadyMicros);
+      }
+    }
+    while (session.auxiliaryTouches.tryPop(sample)) {
+      consumeSample(sample);
+    }
+    const auto recoveryEventMicros = RealtimeGameplaySession::mapSteadyToSong(
+        &session, recoverySteadyMicros);
+    session.presentationTouches.reconcileMetadataOverflow(
+        recoveryEventMicros.value_or(recoverySteadyMicros));
+    cancelLegacyFloatingLaneCoverTouch();
+    session.requestHitCaptureReset();
+    if (session.touchIngressDesired && routerCancelled) {
+      setRealtimeGameplayIngressEnabled(true);
+    }
+  }
+  if (cancelPresentationAtSteadyMicros) {
+    const auto eventMicros = RealtimeGameplaySession::mapSteadyToSong(
+        &session, *cancelPresentationAtSteadyMicros);
+    session.presentationTouches.cancelAll(
+        eventMicros.value_or(*cancelPresentationAtSteadyMicros));
   }
 }
 
@@ -1362,37 +1560,97 @@ void GamePlayScene::drainRealtimeInputCommands() {
 
 void GamePlayScene::refreshRealtimeTouchLayout() {
   if (!realtimeGameplayAuthorityActive() || chart == nullptr ||
-      renderer == nullptr || realtimeGameplaySession->worker == nullptr ||
+      presentation == nullptr || realtimeGameplaySession->worker == nullptr ||
       !realtimeGameplaySession->worker->running() ||
       realtimeGameplaySession->touchRouter == nullptr) {
     return;
   }
   auto &session = *realtimeGameplaySession;
-  const bool changed = session.layoutRenderWidth != rendering::render_width ||
-                       session.layoutRenderHeight != rendering::render_height ||
-                       session.layoutUiScaleX != rendering::ui_scale_x ||
-                       session.layoutUiScaleY != rendering::ui_scale_y ||
-                       session.layoutUiOffsetX != rendering::ui_offset_x ||
-                       session.layoutUiOffsetY != rendering::ui_offset_y;
-  if (!changed) {
+  if (pauseButton != nullptr) {
+    pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
+  }
+  if (practiceRestartButton != nullptr) {
+    practiceRestartButton->setPositionNoLayout(rendering::window_width - 88,
+                                               98);
+  }
+  const auto currentKey = makeRealtimeTouchLayoutRefreshKey(
+      presentation->touchLayoutRevision(),
+      presentation->touchHitRegionsRevision(), pauseButton,
+      practiceRestartButton);
+  if (session.layoutRefreshKey == currentKey &&
+      !session.touchHitSnapshotDirty) {
+    if (session.touchIngressDesired &&
+        !session.acceptingTouch.load(std::memory_order_acquire)) {
+      setRealtimeGameplayIngressEnabled(true);
+    }
     return;
   }
-  renderer->refreshGeometry();
+  const bool presentationLayoutChanged =
+      session.layoutRefreshKey.layoutRevision != currentKey.layoutRevision ||
+      session.layoutRefreshKey.uiTransform != currentKey.uiTransform;
+  if (!presentationLayoutChanged) {
+    session.layoutRefreshKey = currentKey;
+    if (publishRealtimeTouchHitSnapshot() && session.touchIngressDesired &&
+        !session.acceptingTouch.load(std::memory_order_acquire)) {
+      setRealtimeGameplayIngressEnabled(true);
+    }
+    return;
+  }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  // A changed topology or transform invalidates the currently published raw
+  // routing immediately. Detach before asking the presentation to rebuild so
+  // an invalid/transient resize cannot keep accepting touches through stale
+  // geometry.
+  IOSSetRawTouchEventSink(nullptr, nullptr);
+#endif
+  session.acceptingTouch.store(false, std::memory_order_release);
+  const auto switchMicros = nowMicros();
+  presentation->refreshGeometry();
   const auto layout = buildRealtimeTouchLayout(
-      *chart, *renderer, assist_options::isDragMode(options.assistOption));
-  if (!layout.has_value() ||
-      !session.touchRouter->updateLayout(*layout, nowMicros())) {
+      *presentation, assist_options::isDragMode(options.assistOption));
+  if (!layout.has_value()) {
     SDL_LogError(SDL_LOG_CATEGORY_INPUT,
                  "Realtime touch layout refresh failed");
+    bool cancelled = true;
+    {
+      std::lock_guard lock(session.touchRouterMutex);
+      cancelled = session.touchRouter == nullptr ||
+                  session.touchRouter->cancelAll(switchMicros);
+    }
+    drainRealtimeTouchSamples(switchMicros);
+    cancelLegacyFloatingLaneCoverTouch();
+    session.requestHitCaptureReset();
+    session.touchHitSnapshotDirty = true;
+    if (!cancelled) {
+      SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                   "Realtime touch cancellation will retry while layout remains invalid");
+    }
     return;
   }
-  session.clearUiOwnedFingers();
-  session.layoutRenderWidth = rendering::render_width;
-  session.layoutRenderHeight = rendering::render_height;
-  session.layoutUiScaleX = rendering::ui_scale_x;
-  session.layoutUiScaleY = rendering::ui_scale_y;
-  session.layoutUiOffsetX = rendering::ui_offset_x;
-  session.layoutUiOffsetY = rendering::ui_offset_y;
+  bool updated = false;
+  {
+    std::lock_guard lock(session.touchRouterMutex);
+    updated = session.touchRouter != nullptr &&
+              session.touchRouter->updateLayout(*layout, switchMicros);
+  }
+  drainRealtimeTouchSamples(switchMicros);
+  if (!updated) {
+    SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                 "Realtime touch layout refresh failed");
+    cancelLegacyFloatingLaneCoverTouch();
+    session.requestHitCaptureReset();
+    return;
+  }
+  cancelLegacyFloatingLaneCoverTouch();
+  session.requestHitCaptureReset();
+  session.layoutRefreshKey = currentKey;
+  session.layoutRefreshKey.layoutRevision = layout->revision;
+  session.layoutRefreshKey.hitRegionRevision =
+      presentation->touchHitRegionsRevision();
+  const bool published = publishRealtimeTouchHitSnapshot();
+  if (published && session.touchIngressDesired) {
+    setRealtimeGameplayIngressEnabled(true);
+  }
 }
 
 void GamePlayScene::updateRealtimeVisualTimeline(long long gameplayTimeMicros) {
@@ -1571,6 +1829,33 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
     }
   }
   drainRealtimeTouchSamples();
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  // A first cancellation can fail transactionally when either bounded queue
+  // is full. Draining above makes the normal recovery path available; retry
+  // before stopping the worker so every accepted Press can still acquire its
+  // matching Release. If the retry also fails, do not publish an incomplete
+  // replay as valid evidence.
+  bool touchCancellationComplete = true;
+  const auto finalTouchMicros = nowMicros();
+  {
+    std::lock_guard lock(session.touchRouterMutex);
+    touchCancellationComplete = session.touchRouter == nullptr ||
+                                session.touchRouter->setGameplayEnabled(
+                                    false, finalTouchMicros);
+  }
+  drainRealtimeTouchSamples(finalTouchMicros);
+  if (!touchCancellationComplete) {
+    SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                 "Realtime touch cancellation failed during final shutdown; replay transfer is invalid");
+    transferReplay = false;
+  }
+  // No raw callback can enter after sink detachment. Closing the delayed
+  // callback lifetime here also prevents a queued cancellation-expiry callback
+  // from racing worker shutdown; destruction remains an idempotent fallback.
+  if (session.touchCallbackLifetime != nullptr) {
+    session.touchCallbackLifetime->closeAndWait();
+  }
+#endif
   session.worker->stop();
   syncRealtimeGameplaySnapshot();
   if (state != nullptr) {
@@ -1701,6 +1986,7 @@ void GamePlayScene::init() {
       chart, judge.timingWindows, effectiveVisibleTimeGreenNumber(), true,
       options.playback);
   renderer = ownedRenderer.get();
+  presentation = renderer;
   PlayfieldPresentationConfig presentationConfiguration{
       .visibleTimeGreenNumber = effectiveVisibleTimeGreenNumber(),
       .visibleTimeUseMilliseconds =
@@ -1986,6 +2272,8 @@ void GamePlayScene::init() {
     practiceHudText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
     updatePracticeHud(context.jukebox.getTimeMicros());
   }
+  refreshRealtimeTouchLayout();
+  setRealtimeGameplayIngressEnabled(true);
 }
 
 bool GamePlayScene::reset() {
@@ -2319,7 +2607,6 @@ void GamePlayScene::closePauseMenu() {
                  "Realtime gameplay worker failed to resume");
     return;
   }
-  setRealtimeGameplayIngressEnabled(true);
   if (pauseLayout != nullptr) {
     pauseLayout->setVisible(false);
   }
@@ -2330,6 +2617,10 @@ void GamePlayScene::closePauseMenu() {
     practiceRestartButton->setVisible(true);
   }
   resetCoursePauseHold();
+  // Publish the post-pause overlay geometry and any resize that occurred
+  // while detached before raw touch ingress becomes observable again.
+  refreshRealtimeTouchLayout();
+  setRealtimeGameplayIngressEnabled(true);
 }
 
 void GamePlayScene::togglePauseMenuFromInput() {
@@ -4163,6 +4454,7 @@ void GamePlayScene::cleanupScene() {
   ownedPresentationEventFanout.reset();
   presentationEventFanout = nullptr;
   hellChargeGaugeBalanceMicros.clear();
+  presentation = nullptr;
   ownedRenderer.reset();
   renderer = nullptr;
   ownedPlayfieldVisualStateStore.reset();
@@ -4934,7 +5226,8 @@ bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
 bool GamePlayScene::handleTouchInputAtGameplayTime(
     SDL_FingerID fingerIndex, ReplayTouchAction action,
     Vector3 normalizedLocation, long long gameplayTimeMicros,
-    std::optional<long long> visualGameplayTimeMicros) {
+    std::optional<long long> visualGameplayTimeMicros,
+    bool allowBuiltInControl) {
   if (!practiceInputAllowed(gameplayTimeMicros)) {
     return false;
   }
@@ -4967,8 +5260,9 @@ bool GamePlayScene::handleTouchInputAtGameplayTime(
   }
   appendReplayTouchSample(fingerIndex, action, normalizedLocation,
                           gameplayTimeMicros);
-  return handleFloatingLaneCoverInput(fingerIndex, action, normalizedLocation,
-                                      gameplayTimeMicros);
+  return !allowBuiltInControl ||
+         handleFloatingLaneCoverInput(fingerIndex, action,
+                                      normalizedLocation, gameplayTimeMicros);
 }
 
 bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
@@ -5040,6 +5334,17 @@ bool GamePlayScene::handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
   }
 
   return false;
+}
+
+void GamePlayScene::cancelLegacyFloatingLaneCoverTouch() {
+  if (!floatingLaneCoverDragActive) {
+    return;
+  }
+  floatingLaneCoverDragActive = false;
+  floatingLaneCoverDragChanged = false;
+  floatingLaneCoverFinger = -1;
+  floatingLaneCoverDragOffsetY = 0.0F;
+  persistFloatingLaneCoverSettings();
 }
 
 void GamePlayScene::persistFloatingLaneCoverSettings() {

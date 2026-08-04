@@ -239,6 +239,16 @@ SkinDestination destination(SkinObjectId object, std::uint32_t ordinal,
                .authoredOrdinal = ordinal}};
 }
 
+UiLogicalPoint uiPointForAuthored(const PlaySkinViewport &viewport, double x,
+                                  double y) {
+  return {.x = static_cast<float>(viewport.authoredToUi.m00 * x +
+                                  viewport.authoredToUi.m01 * y +
+                                  viewport.authoredToUi.tx),
+          .y = static_cast<float>(viewport.authoredToUi.m10 * x +
+                                  viewport.authoredToUi.m11 * y +
+                                  viewport.authoredToUi.ty)};
+}
+
 void addSlider(ValidatedBeatorajaSkinModel &model,
                FakeResources &resources, SkinObjectId id,
                std::uint8_t direction, double range, bool changeable,
@@ -270,12 +280,13 @@ public:
          .authoredOrdinal = 1});
   }
 
-  SkinFrameEvaluationResult evaluate(const PlaySkinViewport &viewport) {
+  SkinFrameEvaluationResult evaluate(const PlaySkinViewport &viewport,
+                                     std::uint64_t sessionSerial = 1) {
     const std::uint64_t serial = nextSerial++;
     state.serial = serial;
     static const BeatorajaSkinConfiguration configuration;
     return renderer.evaluateFrame({.frameSerial = serial,
-                                   .sessionSerial = 1,
+                                   .sessionSerial = sessionSerial,
                                    .visualTimeMicros = 0,
                                    .model = model,
                                    .configuration = configuration,
@@ -349,10 +360,14 @@ void testViewportInverseMappingUsesUiLogicalSafeArea() {
 void testSliderTracksPreservePinnedDirectionsAndEndpoints() {
   TestContext context;
   for (std::uint32_t id = 1; id <= 4; ++id) {
-    context.model.model.floatWriters.push_back(
-        {.id = SkinFloatWriterId{id},
-         .source = SkinBuiltinPropertySelector{.value = static_cast<int>(id)},
-         .authoredOrdinal = id});
+    SkinFloatWriterBinding writer{
+        .id = SkinFloatWriterId{id},
+        .source = SkinBuiltinPropertySelector{.value = static_cast<int>(id)},
+        .authoredOrdinal = id};
+    if (id == 4) {
+      writer.source = LuaCallbackId{.slot = 4, .generation = 1};
+    }
+    context.model.model.floatWriters.push_back(std::move(writer));
     addSlider(context.model, context.resources, id,
               static_cast<std::uint8_t>(id - 1), 40.0, id != 4,
               SkinFloatWriterId{id}, id);
@@ -400,16 +415,32 @@ void testSliderTracksPreservePinnedDirectionsAndEndpoints() {
   expect(left.writer == SkinFloatWriterId{4} && !left.changeable &&
              up.writer == SkinFloatWriterId{1} && up.changeable,
          "layout records writer identity and authored changeability without invoking it");
+  const UiLogicalPoint explicitWriterPoint =
+      uiPointForAuthored(viewport, -10.0, 25.0);
+  const auto explicitWriterHit =
+      result.interactionLayout->hitTestUiControl(explicitWriterPoint);
+  const auto explicitWriterInvocation =
+      result.interactionLayout->writerInvocationFor(
+          explicitWriterHit, explicitWriterPoint, 4'000);
+  expect(result.interactionLayout->uiHitRegions().size() == 4 &&
+             explicitWriterHit.sourceObject == 4 &&
+             explicitWriterHit.writer == SkinFloatWriterId{4} &&
+             explicitWriterInvocation &&
+             explicitWriterInvocation->writer == SkinFloatWriterId{4} &&
+             near(explicitWriterInvocation->normalizedValue, 0.5),
+         "an explicit callback writer remains interactive when authored changeable is false");
 }
 
 void testOverlappingSlidersPublishReverseAuthoredTopmostOrder() {
   TestContext context;
+  context.model.model.floatProperties.front().source =
+      SkinBuiltinPropertySelector{.value = 40};
   context.model.model.floatWriters = {
       {.id = SkinFloatWriterId{1},
-       .source = SkinBuiltinPropertySelector{.value = 4},
+       .source = SkinBuiltinPropertySelector{.value = 40},
        .authoredOrdinal = 1},
       {.id = SkinFloatWriterId{2},
-       .source = SkinBuiltinPropertySelector{.value = 5},
+       .source = SkinBuiltinPropertySelector{.value = 50},
        .authoredOrdinal = 2}};
   addSlider(context.model, context.resources, 1, 1, 40.0, true,
             SkinFloatWriterId{1}, 1);
@@ -435,12 +466,215 @@ void testOverlappingSlidersPublishReverseAuthoredTopmostOrder() {
                result.interactionLayout->slidersTopmostFirst[1]
                        .authoredOrdinal == 900,
            "authored ordinals remain metadata and do not replace source order");
+    const auto hit = result.interactionLayout->hitTestUiControl(
+        uiPointForAuthored(viewport, 20.0, 25.0));
+    const auto publishedRegions = result.interactionLayout->uiHitRegions();
+    expect(hit.kind == PresentationUiControlKind::Slider &&
+               hit.sourceObject == 2 &&
+               hit.authoredOrdinal == 1 &&
+               hit.writer == SkinFloatWriterId{2},
+           "overlap hit testing captures the reverse-authored topmost slider");
+    expect(publishedRegions.size() == 2 &&
+               publishedRegions.front().hit == hit,
+           "immutable presentation geometry preserves reverse-authored overlap identity");
   }
 }
 
-void testVisibleWriterlessSliderPublishesNonInteractiveGeometry() {
+void testLaneCoverWriterUsesTypedHitAndQueueOnlyDrag() {
   TestContext context;
-  addSlider(context.model, context.resources, 9, 1, 25.0, false,
+  context.model.model.floatWriters.push_back(
+      {.id = SkinFloatWriterId{1},
+       .source = LuaCallbackId{.slot = 1, .generation = 1},
+       .authoredOrdinal = 1});
+  addSlider(context.model, context.resources, 1, 2, 40.0, true,
+            SkinFloatWriterId{1}, 1);
+  context.model.model.destinations = {destination(1, 1, 10.0, 20.0)};
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0},
+      {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0}, {});
+  const auto result = context.evaluate(viewport);
+  expect(result.interactionLayout.has_value(),
+         "lane-cover fixture publishes interaction geometry");
+  if (!result.interactionLayout) {
+    return;
+  }
+  const UiLogicalPoint dragPoint =
+      uiPointForAuthored(viewport, 15.0, -10.0);
+  const auto hit = result.interactionLayout->hitTestUiControl(dragPoint);
+  const auto invocation = result.interactionLayout->writerInvocationFor(
+      hit, dragPoint, 5'000);
+  expect(hit.kind == PresentationUiControlKind::LaneCover && invocation &&
+             invocation->writer == SkinFloatWriterId{1} &&
+             near(invocation->normalizedValue, 0.75) &&
+             invocation->eventMicros == 5'000,
+         "lane-cover Rate property with a separate callback writer queues the drag");
+}
+
+void testRendererUsesLaneCoverRateIndexAndDirectPropertyFallback() {
+  TestContext context;
+  context.model.model.floatWriters.push_back(
+      {.id = SkinFloatWriterId{1},
+       .source = LuaCallbackId{.slot = 1, .generation = 1},
+       .authoredOrdinal = 1});
+  context.model.laneCoverRatePropertyIndexReady = true;
+  context.model.laneCoverRatePropertyIds = {SkinFloatPropertyId{1}};
+  addSlider(context.model, context.resources, 1, 1, 40.0, true,
+            SkinFloatWriterId{1}, 1);
+  context.model.model.destinations = {destination(1, 1, 10.0, 20.0)};
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0},
+      {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0}, {});
+
+  const auto indexed = context.evaluate(viewport);
+  expect(indexed.interactionLayout &&
+             indexed.interactionLayout->slidersTopmostFirst.size() == 1 &&
+             indexed.interactionLayout->slidersTopmostFirst.front().kind ==
+                 PresentationUiControlKind::LaneCover,
+         "renderer uses the validated Rate-property index with a separate writer");
+
+  context.model.laneCoverRatePropertyIndexReady = false;
+  context.model.model.floatProperties.front().source =
+      SkinBuiltinPropertySelector{.value = std::string("lanecover2")};
+  const auto direct = context.evaluate(viewport);
+  expect(direct.interactionLayout &&
+             direct.interactionLayout->slidersTopmostFirst.size() == 1 &&
+             direct.interactionLayout->slidersTopmostFirst.front().kind ==
+                 PresentationUiControlKind::LaneCover,
+         "direct models retain the exact linear Rate-property fallback");
+
+  context.model.model.floatProperties.front().source =
+      SkinBuiltinPropertySelector{.value = 400};
+  context.model.model.floatWriters.front().source =
+      SkinBuiltinPropertySelector{.value = 4};
+  const auto writerOnly = context.evaluate(viewport);
+  expect(writerOnly.interactionLayout &&
+             writerOnly.interactionLayout->slidersTopmostFirst.size() == 1 &&
+             writerOnly.interactionLayout->slidersTopmostFirst.front().kind ==
+                 PresentationUiControlKind::Slider,
+         "writer selector four alone never grants lane-cover identity");
+}
+
+void testInvalidSliderGeometryCannotCaptureGameplayTouch() {
+  TestContext context;
+  context.model.model.floatWriters.push_back(
+      {.id = SkinFloatWriterId{1},
+       .source = SkinBuiltinPropertySelector{.value = 40},
+       .authoredOrdinal = 1});
+  addSlider(context.model, context.resources, 1, 1, 0.0, true,
+            SkinFloatWriterId{1}, 1);
+  context.model.model.destinations = {destination(1, 1, 10.0, 20.0)};
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0},
+      {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0}, {});
+  const auto result = context.evaluate(viewport);
+  expect(result.interactionLayout &&
+             result.interactionLayout
+                     ->hitTestUiControl(
+                         uiPointForAuthored(viewport, 10.0, 20.0))
+                     .kind == PresentationUiControlKind::None,
+         "zero-range slider cannot exclude gameplay without a writable value");
+}
+
+void testSliderHitsProduceQueueOnlyWriterInvocations() {
+  TestContext context;
+  for (std::uint32_t id = 1; id <= 4; ++id) {
+    context.model.model.floatWriters.push_back(
+        {.id = SkinFloatWriterId{id},
+         .source = SkinBuiltinPropertySelector{.value = static_cast<int>(id)},
+         .authoredOrdinal = id});
+    addSlider(context.model, context.resources, id,
+              static_cast<std::uint8_t>(id - 1), 40.0, true,
+              SkinFloatWriterId{id}, id);
+    context.model.model.destinations.push_back(
+        destination(id, id, 10.0, 20.0));
+  }
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0},
+      {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0}, {});
+  const auto result = context.evaluate(viewport);
+  expect(result.interactionLayout.has_value(),
+         "slider invocation fixture publishes interaction geometry");
+  if (!result.interactionLayout) {
+    return;
+  }
+
+  struct Scenario {
+    UiLogicalPoint point;
+    SkinFloatWriterId writer;
+    double value;
+  };
+  const std::vector<Scenario> scenarios{
+      {.point = uiPointForAuthored(viewport, 10.0, 60.0),
+       .writer = SkinFloatWriterId{1},
+       .value = 1.0},
+      {.point = uiPointForAuthored(viewport, 50.0, 20.0),
+       .writer = SkinFloatWriterId{2},
+       .value = 1.0},
+      {.point = uiPointForAuthored(viewport, 10.0, -20.0),
+       .writer = SkinFloatWriterId{3},
+       .value = 1.0},
+      {.point = uiPointForAuthored(viewport, -30.0, 20.0),
+       .writer = SkinFloatWriterId{4},
+       .value = 1.0},
+  };
+  for (const auto &scenario : scenarios) {
+    const auto hit =
+        result.interactionLayout->hitTestUiControl(scenario.point);
+    const auto invocation = result.interactionLayout->writerInvocationFor(
+        hit, scenario.point, 4'321);
+    expect(invocation && invocation->writer == scenario.writer &&
+               near(invocation->normalizedValue, scenario.value) &&
+               invocation->eventMicros == 4'321,
+           "each pinned slider direction queues its endpoint value without invoking a callback");
+  }
+
+  const UiLogicalPoint nearOrigin =
+      uiPointForAuthored(viewport, 10.5, 20.0);
+  const auto nearOriginHit =
+      result.interactionLayout->hitTestUiControl(nearOrigin);
+  const auto nearOriginInvocation =
+      result.interactionLayout->writerInvocationFor(nearOriginHit, nearOrigin,
+                                                     4'322);
+  expect(nearOriginInvocation &&
+             near(nearOriginInvocation->normalizedValue, 0.0),
+         "slider values within one authored unit of the origin snap to zero");
+
+  const auto nextFrame = context.evaluate(viewport);
+  expect(nextFrame.interactionLayout &&
+             nextFrame.interactionLayout->frameSerial !=
+                 result.interactionLayout->frameSerial &&
+             nextFrame.interactionLayout->revision ==
+                 result.interactionLayout->revision &&
+             nextFrame.interactionLayout->writerInvocationFor(
+                 nearOriginHit, nearOrigin, 4'323),
+         "a captured Down hit remains actionable after a normal render-frame publication");
+
+  const auto changedLayout = context.evaluate(viewport, 2);
+  expect(changedLayout.interactionLayout &&
+             changedLayout.interactionLayout->revision !=
+                 result.interactionLayout->revision &&
+             !changedLayout.interactionLayout->writerInvocationFor(
+                 nearOriginHit, nearOrigin, 4'324),
+         "a captured hit from a genuinely changed interaction layout fails closed");
+
+  auto staleHit = nearOriginHit;
+  ++staleHit.layoutRevision;
+  expect(!result.interactionLayout->writerInvocationFor(
+             staleHit, nearOrigin, 4'325),
+         "a hit from an older published layout cannot queue a writer");
+  auto forgedHit = nearOriginHit;
+  ++forgedHit.sourceObject;
+  expect(!result.interactionLayout->writerInvocationFor(
+             forgedHit, nearOrigin, 4'326),
+         "a writer ID without the exact current source identity fails closed");
+  expect(!result.interactionLayout->writerInvocationFor(
+             nearOriginHit, uiPointForAuthored(viewport, 90.0, 45.0), 4'327),
+         "a captured hit cannot queue a writer from outside its current region");
+}
+
+void testImplicitLaneCoverWithoutWriterStaysNonInteractive() {
+  TestContext context;
+  addSlider(context.model, context.resources, 9, 1, 25.0, true,
             std::nullopt, 1);
   context.model.model.destinations = {destination(9, 1, 5.0, 6.0)};
   const auto viewport = evaluatePlaySkinViewport(
@@ -450,8 +684,15 @@ void testVisibleWriterlessSliderPublishesNonInteractiveGeometry() {
   expect(result.interactionLayout &&
              result.interactionLayout->slidersTopmostFirst.size() == 1 &&
              !result.interactionLayout->slidersTopmostFirst.front().writer &&
-             !result.interactionLayout->slidersTopmostFirst.front().changeable,
-         "a drawn writerless slider remains visible geometry but explicitly non-interactive");
+             result.interactionLayout->slidersTopmostFirst.front().changeable,
+         "an authored changeable lane-cover slider remains visible when its "
+         "implicit builtin writer is unavailable");
+  if (result.interactionLayout) {
+    expect(result.interactionLayout
+                   ->hitTestUiControl(uiPointForAuthored(viewport, 5.0, 6.0))
+                   .kind == PresentationUiControlKind::None,
+           "an unavailable implicit lane-cover writer never captures a pointer");
+  }
 }
 
 void testDroppedNoncriticalSliderPublishesNoInteractionGeometry() {
@@ -645,7 +886,11 @@ int main() {
   testViewportInverseMappingUsesUiLogicalSafeArea();
   testSliderTracksPreservePinnedDirectionsAndEndpoints();
   testOverlappingSlidersPublishReverseAuthoredTopmostOrder();
-  testVisibleWriterlessSliderPublishesNonInteractiveGeometry();
+  testLaneCoverWriterUsesTypedHitAndQueueOnlyDrag();
+  testRendererUsesLaneCoverRateIndexAndDirectPropertyFallback();
+  testInvalidSliderGeometryCannotCaptureGameplayTouch();
+  testSliderHitsProduceQueueOnlyWriterInvocations();
+  testImplicitLaneCoverWithoutWriterStaysNonInteractive();
   testDroppedNoncriticalSliderPublishesNoInteractionGeometry();
   testNoteModelPublishesLaneAndLaneGroupRegions();
   testLastNoteObjectOwnsStaticRegionsEvenWhenClipped();

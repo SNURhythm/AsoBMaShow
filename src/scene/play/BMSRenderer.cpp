@@ -61,6 +61,12 @@ constexpr double kScratchLaneBeamHeldAlpha = 0.08;
 constexpr long long kScratchLaneBeamHeldFadeMicros = 180000LL;
 constexpr long long kLaneBeamReleaseFadeMicros = 200000LL;
 
+void advanceTouchRevision(std::uint64_t &revision) noexcept {
+  revision = revision == std::numeric_limits<std::uint64_t>::max()
+                 ? 1
+                 : revision + 1;
+}
+
 constexpr std::array<const char *, kHudCounterItemCount> kCounterLabels{
     "PGREAT", "GREAT", "GOOD", "BAD", "POOR", "KPOOR", "BREAK"};
 
@@ -3976,6 +3982,112 @@ void BMSRenderer::configure(
   setReplayGhostRenderingEnabled(configuration.replayGhostRenderingEnabled);
 }
 
+gameplay::RealtimeTouchLayout BMSRenderer::touchLayout() const {
+  gameplay::RealtimeTouchLayout layout;
+  layout.revision = touchLayoutRevision();
+  const auto touchBounds = gameplayTouchBoundsUi();
+  if (!touchBounds || laneOrder.empty() || chart == nullptr ||
+      rendering::render_width <= 0 || rendering::render_height <= 0 ||
+      !std::isfinite(rendering::ui_scale_x) ||
+      !std::isfinite(rendering::ui_scale_y)) {
+    return layout;
+  }
+  const auto normalizedScreenPoint = [](const auto &point) {
+    return gameplay::RealtimeTouchPoint{
+        .x = (point.first * rendering::ui_scale_x +
+              static_cast<float>(rendering::ui_offset_x)) /
+             static_cast<float>(rendering::render_width),
+        .y = (point.second * rendering::ui_scale_y +
+              static_cast<float>(rendering::ui_offset_y)) /
+             static_cast<float>(rendering::render_height)};
+  };
+  layout.bottomLeft = normalizedScreenPoint((*touchBounds)[0]);
+  layout.bottomRight = normalizedScreenPoint((*touchBounds)[1]);
+  layout.topLeft = normalizedScreenPoint((*touchBounds)[2]);
+  layout.topRight = normalizedScreenPoint((*touchBounds)[3]);
+  layout.laneCount = laneOrder.size();
+  layout.keyMode = chart->Meta.KeyMode;
+  layout.lanes = laneOrder;
+  layout.scratch.reserve(laneOrder.size());
+  for (const int lane : laneOrder) {
+    layout.scratch.push_back(chartLaneIsScratch(chart->Meta, lane));
+  }
+  return layout;
+}
+
+std::uint64_t BMSRenderer::touchLayoutRevision() const noexcept {
+  return touchLayoutRevision_;
+}
+
+std::uint64_t BMSRenderer::touchHitRegionsRevision() const noexcept {
+  return touchHitRegionsRevision_;
+}
+
+std::vector<PresentationUiHitRegion> BMSRenderer::touchHitRegions() const {
+  std::vector<PresentationUiHitRegion> result;
+  if (!laneCoverFloatingEnabled) {
+    return result;
+  }
+  const PresentationUiHit laneCover{
+      .kind = PresentationUiControlKind::LaneCover,
+      .layoutRevision = touchLayoutRevision(),
+      .permitsLegacyBuiltInFallback = true};
+  const LaneCoverHandleGeometry handle = laneCoverHandleGeometry();
+  if (handle.width > 0.0F && handle.height > 0.0F) {
+    const float hitSlopX = std::max(noteRenderWidth * 0.35F, 0.12F);
+    const float hitSlopY = std::max(noteRenderHeight * 0.55F, 0.10F);
+    const float hitMinY = std::max(noteVisibleUpperBound, handle.y - hitSlopY);
+    const float hitMaxY =
+        std::min(upperBound, handle.y + handle.height + hitSlopY);
+    const float hitMinX = handle.x - hitSlopX;
+    const float hitMaxX = handle.x + handle.width + hitSlopX;
+    const auto first = projectLanePointToUi(hitMinX, hitMinY);
+    const auto second = projectLanePointToUi(hitMaxX, hitMinY);
+    const auto third = projectLanePointToUi(hitMaxX, hitMaxY);
+    const auto fourth = projectLanePointToUi(hitMinX, hitMaxY);
+    if (first && second && third && fourth) {
+      result.push_back(
+          {.hit = laneCover,
+           .boundary = {{{first->first, first->second},
+                         {second->first, second->second},
+                         {third->first, third->second},
+                         {fourth->first, fourth->second}}}});
+    }
+  }
+  if (const auto virtualHandle = laneCoverVirtualHandleGeometry()) {
+    const float right = virtualHandle->x + virtualHandle->width;
+    const float bottom = virtualHandle->y + virtualHandle->height;
+    result.push_back(
+        {.hit = laneCover,
+         .boundary = {{{virtualHandle->x, virtualHandle->y},
+                       {right, virtualHandle->y},
+                       {right, bottom},
+                       {virtualHandle->x, bottom}}}});
+  }
+  return result;
+}
+
+PresentationUiHit BMSRenderer::hitTestUiControl(UiLogicalPoint) const {
+  return {};
+}
+
+PresentationTouchResult BMSRenderer::beginPresentationTouch(
+    const PresentationTouchEvent &) {
+  return {};
+}
+
+PresentationTouchResult BMSRenderer::updatePresentationTouch(
+    const PresentationTouchEvent &) {
+  return {};
+}
+
+PresentationTouchResult BMSRenderer::endPresentationTouch(
+    const PresentationTouchEvent &, bool) {
+  return {};
+}
+
+void BMSRenderer::cancelPresentationTouches(long long) {}
+
 void BMSRenderer::reset() {
   state.reset();
   floatingVisibleTimeReferenceBpm.reset();
@@ -4009,8 +4121,18 @@ void BMSRenderer::reset() {
 }
 
 void BMSRenderer::refreshGeometry() {
-  upperBound = calculateLanePlaneScreenTopIntersection();
-  noteVisibleUpperBound = upperBound;
+  const float nextUpperBound = calculateLanePlaneScreenTopIntersection();
+  const float hiddenRatio =
+      static_cast<float>(noteStartPositionPercent) / 100.0F;
+  const float nextVisibleUpperBound =
+      judgeY + std::max(0.0F, nextUpperBound - judgeY) * (1.0F - hiddenRatio);
+  if (nextUpperBound != upperBound ||
+      nextVisibleUpperBound != noteVisibleUpperBound) {
+    advanceTouchRevision(touchLayoutRevision_);
+    advanceTouchRevision(touchHitRegionsRevision_);
+  }
+  upperBound = nextUpperBound;
+  noteVisibleUpperBound = nextVisibleUpperBound;
 }
 
 void BMSRenderer::setVisibleTimeGreenNumber(int greenNumber) {
@@ -4051,7 +4173,11 @@ void BMSRenderer::setLaneBeamsEnabled(bool enabled) {
 }
 
 void BMSRenderer::setLaneCoverFloatingEnabled(bool enabled) {
+  if (laneCoverFloatingEnabled == enabled) {
+    return;
+  }
   laneCoverFloatingEnabled = enabled;
+  advanceTouchRevision(touchHitRegionsRevision_);
 }
 
 std::optional<std::array<std::pair<float, float>, 4>>
@@ -4075,9 +4201,18 @@ void BMSRenderer::setLaneBeamLengthPercent(int percent) {
 }
 
 void BMSRenderer::setNoteStartPositionPercent(int percent) {
-  noteStartPositionPercent =
+  const int next =
       std::clamp(percent, AppSettings::kMinNoteStartPositionPercent,
                  AppSettings::kMaxNoteStartPositionPercent);
+  if (noteStartPositionPercent == next) {
+    return;
+  }
+  noteStartPositionPercent = next;
+  const float hiddenRatio =
+      static_cast<float>(noteStartPositionPercent) / 100.0F;
+  noteVisibleUpperBound =
+      judgeY + std::max(0.0F, upperBound - judgeY) * (1.0F - hiddenRatio);
+  advanceTouchRevision(touchHitRegionsRevision_);
 }
 
 void BMSRenderer::applyLaneCoverState(int percent,
@@ -4742,6 +4877,8 @@ void BMSRenderer::rebuildPlayAreaGeometry() {
     }
     laneXLookup[static_cast<size_t>(lane)] = computeLaneX(lane);
   }
+  advanceTouchRevision(touchLayoutRevision_);
+  advanceTouchRevision(touchHitRegionsRevision_);
 }
 inline float BMSRenderer::computeLaneX(int lane) const {
   if (const auto it = laneToOrderIndex.find(lane);

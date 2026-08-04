@@ -9,12 +9,6 @@
 
 namespace skin {
 
-struct SkinWriterInvocation {
-  SkinFloatWriterId writer{};
-  double normalizedValue = 0.0;
-  long long eventMicros = 0;
-};
-
 struct PlaySkinSessionFrameContext {
   std::uint64_t sessionSerial = 0;
   const ValidatedBeatorajaSkinModel &model;

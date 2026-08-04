@@ -22,6 +22,7 @@
 #include "../../practice/PracticeResultFlow.h"
 #include "../../replay/ChartReplayCapture.h"
 #include "../../replay/ReplayInputRecorder.h"
+#include "../../skin/SkinPresentationTypes.h"
 #include "../../view/TextView.h"
 #include "../ResultScene.h"
 #include <atomic>
@@ -37,6 +38,7 @@ class Button;
 class RhythmLaneInputController;
 class RhythmInputHandler;
 class BMSRenderer;
+class PlayfieldPresentation;
 class GamePlayScene : public Scene, public IRhythmControl {
 private:
   std::unique_ptr<bms_parser::Chart> ownedChart;
@@ -81,12 +83,13 @@ private:
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
   void setRealtimeGameplayIngressEnabled(bool enabled);
-  void drainRealtimeTouchSamples();
+  void drainRealtimeTouchSamples(
+      std::optional<long long> cancelPresentationAtSteadyMicros =
+          std::nullopt);
   void drainRealtimeInputCommands();
   void refreshRealtimeTouchLayout();
+  [[nodiscard]] bool publishRealtimeTouchHitSnapshot();
   void updateRealtimeVisualTimeline(long long gameplayTimeMicros);
-  [[nodiscard]] bool realtimeTouchHitsUi(float normalizedX,
-                                         float normalizedY) const;
   void syncRealtimeGameplaySnapshot();
   [[nodiscard]] bool realtimeGameplayAuthorityActive() const noexcept;
   void showPlaybackInitializationFailure(const std::string &message);
@@ -203,11 +206,13 @@ private:
   bool handleTouchInputAtGameplayTime(
       SDL_FingerID fingerIndex, ReplayTouchAction action,
       Vector3 normalizedLocation, long long gameplayTimeMicros,
-      std::optional<long long> visualGameplayTimeMicros = std::nullopt);
+      std::optional<long long> visualGameplayTimeMicros = std::nullopt,
+      bool allowBuiltInControl = true);
   bool handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
                                     ReplayTouchAction action,
                                     Vector3 normalizedLocation,
                                     long long songTimeMicros);
+  void cancelLegacyFloatingLaneCoverTouch();
   void persistFloatingLaneCoverSettings();
   void appendReplayTouchSample(SDL_FingerID fingerIndex,
                                ReplayTouchAction action,
@@ -236,6 +241,7 @@ private:
   PlayfieldVisualStateStore *playfieldVisualStateStore = nullptr;
   std::unique_ptr<BMSRenderer> ownedRenderer;
   BMSRenderer *renderer = nullptr;
+  PlayfieldPresentation *presentation = nullptr;
   std::unique_ptr<PlayfieldPresentationEventFanout>
       ownedPresentationEventFanout;
   PlayfieldPresentationEventFanout *presentationEventFanout = nullptr;

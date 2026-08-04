@@ -17,6 +17,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace skin {
 namespace {
@@ -53,6 +54,36 @@ bool validBindingSource(const Binding &binding, SkinBindingType type,
     return context.builtins.contains(type, *builtin);
   }
   return context.callbacks.contains(std::get<LuaCallbackId>(binding.source));
+}
+
+bool laneCoverRateSelector(const SkinBuiltinPropertySelector &builtin) {
+  if (const auto *selector = std::get_if<int>(&builtin.value)) {
+    return *selector == 4 || *selector == 5;
+  }
+  const auto &selector = std::get<std::string>(builtin.value);
+  return selector == "lanecover" || selector == "lanecover2";
+}
+
+std::vector<SkinFloatPropertyId> laneCoverRatePropertyIds(
+    const std::vector<SkinFloatPropertyBinding> &bindings,
+    const std::set<std::uint32_t> &validIds) {
+  std::vector<SkinFloatPropertyId> result;
+  result.reserve(bindings.size());
+  for (const auto &binding : bindings) {
+    if (binding.domain != SkinFloatPropertyDomain::Rate ||
+        !validIds.contains(binding.id.value)) {
+      continue;
+    }
+    const auto *builtin =
+        std::get_if<SkinBuiltinPropertySelector>(&binding.source);
+    if (builtin != nullptr && laneCoverRateSelector(*builtin)) {
+      result.push_back(binding.id);
+    }
+  }
+  std::ranges::sort(result);
+  const auto unique = std::ranges::unique(result);
+  result.erase(unique.begin(), result.end());
+  return result;
 }
 
 template <typename Binding>
@@ -734,11 +765,15 @@ SkinModelValidationResult SkinModelValidator::validate(
         "Lua skin optional object has an invalid destination dependency"));
   }
 
+  auto laneCoverRateIds =
+      laneCoverRatePropertyIds(model.floatProperties, validFloatIds);
   result.model.emplace(ValidatedBeatorajaSkinModel{
       .model = std::move(model),
       .resourceIds = std::move(resourceNames),
       .objectIds = std::move(objectNames),
       .disabledOptionalObjects = std::move(disabled),
+      .laneCoverRatePropertyIds = std::move(laneCoverRateIds),
+      .laneCoverRatePropertyIndexReady = true,
   });
   return result;
 }

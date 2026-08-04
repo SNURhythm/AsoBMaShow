@@ -943,6 +943,55 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
   }
 }
 
+void testValidatedLaneCoverRateIndexClassifiesOnlyPinnedSelectors() {
+  BeatorajaSkinModel authored;
+  authored.header.type = 0;
+  authored.floatProperties = {
+      {.id = SkinFloatPropertyId{90},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 5},
+       .authoredOrdinal = 1},
+      {.id = SkinFloatPropertyId{40},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 400},
+       .authoredOrdinal = 2},
+      {.id = SkinFloatPropertyId{70},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 4},
+       .authoredOrdinal = 3},
+      {.id = SkinFloatPropertyId{20},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 6},
+       .authoredOrdinal = 4},
+      {.id = SkinFloatPropertyId{10},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = std::string("lanecover")},
+       .authoredOrdinal = 5},
+      {.id = SkinFloatPropertyId{80},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source =
+           SkinBuiltinPropertySelector{.value = std::string("lanecover2")},
+       .authoredOrdinal = 6},
+      {.id = SkinFloatPropertyId{30},
+       .domain = SkinFloatPropertyDomain::FloatValue,
+       .source = SkinBuiltinPropertySelector{.value = 4},
+       .authoredOrdinal = 7},
+  };
+
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(std::move(authored));
+  expect(validated.model &&
+             validated.model->laneCoverRatePropertyIndexReady,
+         "validated models publish a Rate-property interaction index");
+  if (!validated.model) {
+    return;
+  }
+  expect(validated.model->laneCoverRatePropertyIds ==
+             std::vector<SkinFloatPropertyId>{{10}, {70}, {80}, {90}},
+         "validated Rate-property index is sorted and contains only the exact "
+         "numeric or named lane-cover selectors");
+}
+
 void testLiveCoverJudgeAndBgaSpecialObjects() {
   constexpr std::string_view fixture = R"lua(
 return {
@@ -1260,6 +1309,7 @@ int main() {
   testLuaProtectedDecodeOwnsEveryRawParseTemporaryInTheRequest();
   testNoteHeightAndIgnoredAuthoredVisualsRemainExplicitPolicies();
   testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject();
+  testValidatedLaneCoverRateIndexClassifiesOnlyPinnedSelectors();
   testLiveCoverJudgeAndBgaSpecialObjects();
   testLiveGenericObjectPrecedesSameIdGameplaySpecials();
   testLiveDestinationMouseRectAndCenterNormalization();
