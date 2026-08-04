@@ -3,6 +3,7 @@
 #include "../PrepMetronome.h"
 #include "ClubBeat.h"
 #include "AudioWrapper.h"
+#include "GameplayBgaFrame.h"
 #include <algorithm>
 #include <array>
 #include <thread>
@@ -45,6 +46,15 @@ struct ScheduledBgaPoorSequence {
 };
 
 using BgaPoorSequenceSchedule = std::vector<ScheduledBgaPoorSequence>;
+
+struct GameplayBgaResolvedQuad {
+  std::array<GameplayBgaPoint, 4> destination{};
+  std::array<GameplayBgaPoint, 4> uvs{};
+};
+
+[[nodiscard]] std::optional<GameplayBgaResolvedQuad>
+ResolveGameplayBgaTargetQuad(const BgaDrawTarget &target, int sourceWidth,
+                             int sourceHeight) noexcept;
 
 [[nodiscard]] BgaPoorSequenceSchedule
 BuildBgaPoorSequenceSchedule(const bms_parser::Chart &chart);
@@ -126,8 +136,17 @@ SchedulerWaitMicrosForChartDelta(long long chartDeltaMicros, PlaybackRate rate,
 }
 } // namespace audio::playback
 
-class Jukebox : public audio::IPlaybackSession {
+class Jukebox : public audio::IPlaybackSession,
+                public IGameplayBgaSubmitter {
 public:
+  struct GameplayBgaSubmissionStats {
+    std::uint64_t preparedFrames = 0;
+    std::uint64_t videoUpdates = 0;
+    std::uint64_t embeddedSubmissions = 0;
+    std::uint64_t fullscreenSubmissions = 0;
+    std::uint64_t pinnedFrames = 0;
+  };
+
   struct PerformanceAnalytics {
     static const int BUFFER_SIZE = 10000;
     // ring buffer to store loop delta time
@@ -185,6 +204,21 @@ public:
   void handleMemoryPressure();
   void setBgaOffsetMs(int offsetMs);
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
+  [[nodiscard]] PreparedGameplayBgaFrame prepareVisualFrameAt(
+      std::uint64_t frameSerial, std::int64_t bgaTimeMicros,
+      const GameplayBgaMissState &missState) override;
+  [[nodiscard]] BgaPreflightResult
+  preflight(const PreparedGameplayBgaFrame &frame,
+            std::span<const BgaDrawTarget> targets) override;
+  void commitPrepared(
+      const PreparedGameplayBgaFrame &frame) noexcept override;
+  void submitPrepared(const PreparedGameplayBgaFrame &frame,
+                      const BgaDrawTarget &target) noexcept override;
+  void finalizePrepared(
+      const PreparedGameplayBgaFrame &frame) noexcept override;
+  void submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept override;
+  [[nodiscard]] GameplayBgaSubmissionStats
+  gameplayBgaSubmissionStats() const noexcept;
   [[nodiscard]] const BgaPoorSequenceSchedule &
   poorBgaSequenceSchedule() const noexcept {
     return poorBgaSequences;
@@ -301,6 +335,23 @@ private:
   void restoreVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros);
   void advanceVisualsAtTimelineMicros(long long bgaTimelineMicros);
   void renderImage(ImageData &image, int viewId);
+  struct PinnedGameplayBgaSurface {
+    PreparedGameplayBgaSurface descriptor;
+    std::shared_ptr<VideoPlayer> video;
+    std::shared_ptr<ImageData> image;
+  };
+  struct PreparedBgaFrameLease {
+    std::uint64_t frameSequence = 0;
+    std::optional<PinnedGameplayBgaSurface> base;
+    std::optional<PinnedGameplayBgaSurface> layer;
+    std::optional<PinnedGameplayBgaSurface> miss;
+  };
+  [[nodiscard]] std::optional<PinnedGameplayBgaSurface>
+  prepareGameplayBgaSurface(GameplayBgaRole role, int visualId,
+                            std::unordered_set<int> &updatedVideoIds);
+  void submitFullscreenSurface(const PinnedGameplayBgaSurface &surface,
+                               bgfx::ViewId viewId) noexcept;
+  void invalidatePreparedBgaPlans() noexcept;
   struct BgaRect {
     float x = 0.0f;
     float y = 0.0f;
@@ -322,10 +373,10 @@ private:
   size_t bmpLayerCursor = 0;
   long long lastVisualTimelineMicros = -1;
   std::unordered_map<int, path_t> wavTableAbs;
-  std::unordered_map<int, std::unique_ptr<VideoPlayer>> videoPlayerTable;
+  std::unordered_map<int, std::shared_ptr<VideoPlayer>> videoPlayerTable;
   std::unordered_map<int, std::filesystem::path> videoMaterializedPathTable;
   mutable std::mutex videoPlayerTableMutex;
-  std::unordered_map<int, ImageData> imageTable;
+  std::unordered_map<int, std::shared_ptr<ImageData>> imageTable;
   mutable std::mutex imageTableMutex;
   std::unordered_map<int, path_t> visualPathTable;
   std::unordered_map<int, ResolvedVisualAsset> visualDescriptors;
@@ -341,4 +392,52 @@ private:
                                           "mpeg", "m1v", "m2v", "avi"};
   const std::string imageExtensions[6] = {"jpg", "jpeg", "gif",
                                           "bmp", "png",  "tga"};
+  struct PreparedBgaFrameKey {
+    std::uint64_t frameSerial = 0;
+    std::int64_t bgaTimeMicros = 0;
+    GameplayBgaMissState missState;
+
+    [[nodiscard]] bool
+    operator==(const PreparedBgaFrameKey &other) const noexcept {
+      return frameSerial == other.frameSerial &&
+             bgaTimeMicros == other.bgaTimeMicros &&
+             missState.active == other.missState.active &&
+             missState.startedBgaMicros == other.missState.startedBgaMicros &&
+             missState.durationMicros == other.missState.durationMicros &&
+             missState.triggerSerial == other.missState.triggerSerial;
+    }
+  };
+  struct PreparedBgaTargetPlan {
+    std::uint64_t frameSequence = 0;
+    BgaDrawTarget target;
+    std::optional<PreparedGameplayBgaSurface> surface;
+    std::shared_ptr<VideoPlayer> video;
+    std::shared_ptr<ImageData> image;
+    std::optional<VideoPlayer::PreparedEmbeddedSubmission> videoSubmission;
+    bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle imageTexture = BGFX_INVALID_HANDLE;
+    bgfx::TransientVertexBuffer vertexBuffer{};
+    bgfx::TransientIndexBuffer indexBuffer{};
+    bool reserved = false;
+    std::array<GameplayBgaPoint, 4> destination{};
+    std::array<GameplayBgaPoint, 4> uvs{};
+    std::optional<rendering::DrawableScissor> scissor;
+    bool placeholder = false;
+    bool noDraw = false;
+  };
+  std::mutex preparedBgaFrameMutex;
+  std::optional<PreparedBgaFrameKey> preparedBgaFrameKey;
+  std::optional<PreparedGameplayBgaFrame> preparedBgaFrame;
+  std::unordered_map<std::uint64_t, PreparedBgaFrameLease>
+      preparedBgaFrameLeases;
+  std::uint64_t preparedBgaSequence = 0;
+  std::vector<PreparedBgaTargetPlan> preparedBgaTargetPlans;
+  std::optional<std::uint64_t> preparedBgaTargetFrameSequence;
+  std::size_t preparedBgaTargetCursor = 0;
+  bool preparedBgaTargetsCommitted = false;
+  std::atomic<std::uint64_t> preparedGameplayBgaFrames{0};
+  std::atomic<std::uint64_t> preparedGameplayBgaVideoUpdates{0};
+  std::atomic<std::uint64_t> embeddedGameplayBgaSubmissions{0};
+  std::atomic<std::uint64_t> fullscreenGameplayBgaSubmissions{0};
+  std::atomic<std::uint64_t> pinnedGameplayBgaFrames{0};
 };

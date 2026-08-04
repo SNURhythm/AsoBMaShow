@@ -1,15 +1,45 @@
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 #include "audio/GameplayBgaFrame.h"
 #include "audio/GameplayBgaMissStateTracker.h"
+#include "audio/Jukebox.h"
+#include "rendering/ShaderManager.h"
+#include "rendering/UniformCache.h"
+#include "utils/Stopwatch.h"
 
 #include <array>
 #include <cstdlib>
+#include <deque>
+#include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+namespace rendering {
+bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
+bgfx::VertexLayout PosColorVertex::ms_decl;
+bgfx::VertexLayout PosTexVertex::ms_decl;
+int window_width = 1280;
+int window_height = 720;
+int render_width = 1280;
+int render_height = 720;
+float widthScale = 1.0F;
+float heightScale = 1.0F;
+float ui_scale_x = 1.0F;
+float ui_scale_y = 1.0F;
+int ui_offset_x = 0;
+int ui_offset_y = 0;
+int ui_view_width = 1280;
+int ui_view_height = 720;
+} // namespace rendering
 
 namespace {
 
@@ -68,6 +98,49 @@ bool sameFrame(const PreparedGameplayBgaFrame &left,
          sameSurface(left.miss, right.miss);
 }
 
+struct JukeboxBackendControl {
+  bool running = false;
+};
+
+class JukeboxTestBackend final : public audio::IBackend {
+public:
+  explicit JukeboxTestBackend(std::shared_ptr<JukeboxBackendControl> control)
+      : control_(std::move(control)) {}
+
+  bool start(std::string &) override {
+    control_->running = true;
+    return true;
+  }
+  bool stop(std::string &) override {
+    control_->running = false;
+    return true;
+  }
+  [[nodiscard]] bool isStarted() const override { return control_->running; }
+  [[nodiscard]] audio::RuntimeState runtimeState() const override {
+    return {.effectiveSampleRate = 44'100};
+  }
+
+private:
+  std::shared_ptr<JukeboxBackendControl> control_;
+};
+
+class JukeboxTestBackendFactory final : public audio::IBackendFactory {
+public:
+  explicit JukeboxTestBackendFactory(
+      std::shared_ptr<JukeboxBackendControl> control)
+      : control_(std::move(control)) {}
+
+  [[nodiscard]] audio::Capabilities capabilities() const override { return {}; }
+  std::unique_ptr<audio::IBackend>
+  open(const audio::StreamRequest &, audio::RenderCallback, void *,
+       std::string &) override {
+    return std::make_unique<JukeboxTestBackend>(control_);
+  }
+
+private:
+  std::shared_ptr<JukeboxBackendControl> control_;
+};
+
 class FakeGameplayBgaSubmitter final : public IGameplayBgaSubmitter {
 public:
   explicit FakeGameplayBgaSubmitter(bool *destroyed = nullptr)
@@ -96,11 +169,15 @@ public:
     return {.ready = true};
   }
 
+  void commitPrepared(const PreparedGameplayBgaFrame &) noexcept override {}
+
   void submitPrepared(const PreparedGameplayBgaFrame &frame,
                       const BgaDrawTarget &target) noexcept override {
     submittedPreparedFrame = frame;
     submittedTarget = target;
   }
+
+  void finalizePrepared(const PreparedGameplayBgaFrame &) noexcept override {}
 
   void submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept override {
     submittedFullscreenFrame = frame;
@@ -189,6 +266,12 @@ void testBgaSubmitterPreparedFrameIsAnImmutableValue() {
                                  0, 0,
                                  std::declval<const GameplayBgaMissState &>())),
                 PreparedGameplayBgaFrame>);
+  static_assert(std::is_same_v<
+                decltype(std::declval<IGameplayBgaSubmitter &>()
+                             .submitPrepared(
+                                 std::declval<const PreparedGameplayBgaFrame &>(),
+                                 std::declval<const BgaDrawTarget &>())),
+                void>);
 
   FakeGameplayBgaSubmitter submitter;
   submitter.prepared = {
@@ -219,6 +302,223 @@ void testBgaSubmitterHasVirtualDestruction() {
       std::make_unique<FakeGameplayBgaSubmitter>(&destroyed);
   submitter.reset();
   require(destroyed, "BGA submitters destroy derived implementations virtually");
+}
+
+void testJukeboxPreparesOneValueFrameAndNeverUpdatesOnSubmission() {
+  static_assert(std::derived_from<Jukebox, IGameplayBgaSubmitter>);
+
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  const auto before = jukebox.gameplayBgaSubmissionStats();
+  const GameplayBgaMissState miss{.active = true,
+                                  .startedBgaMicros = 5,
+                                  .durationMicros = 500'000,
+                                  .triggerSerial = 9};
+  const auto first = jukebox.prepareVisualFrameAt(77, 123'456, miss);
+  const auto repeat = jukebox.prepareVisualFrameAt(77, 123'456, miss);
+  const BgaDrawTarget target{.role = GameplayBgaRole::Base,
+                             .viewId = rendering::bga_view,
+                             .destination = {{{.x = 0.0F, .y = 1.0F},
+                                              {.x = 1.0F, .y = 1.0F},
+                                              {.x = 1.0F, .y = 0.0F},
+                                              {.x = 0.0F, .y = 0.0F}}}};
+  const auto preflight = jukebox.preflight(first, std::span(&target, 1));
+  if (preflight.ready) {
+    jukebox.commitPrepared(first);
+    jukebox.submitPrepared(first, target);
+    jukebox.finalizePrepared(first);
+  }
+  jukebox.submitFullscreen(first);
+  const auto afterSubmission =
+      jukebox.prepareVisualFrameAt(77, 123'456, miss);
+  const auto next = jukebox.prepareVisualFrameAt(78, 123'456, miss);
+  const auto after = jukebox.gameplayBgaSubmissionStats();
+
+  require(first.sequence != 0 && sameFrame(first, repeat) &&
+              first.sequence != next.sequence &&
+              first.composition == GameplayBgaComposition::Blank &&
+              (preflight.ready ? !preflight.failure.has_value()
+                               : preflight.failure.has_value()) &&
+              sameFrame(first, afterSubmission) &&
+              after.preparedFrames == before.preparedFrames + 2 &&
+              after.videoUpdates == before.videoUpdates &&
+              after.embeddedSubmissions ==
+                  before.embeddedSubmissions + (preflight.ready ? 1U : 0U) &&
+              after.fullscreenSubmissions == before.fullscreenSubmissions + 1,
+          "Jukebox Noop preflight truthfully agrees with whether its packaged GPU resources are submit-ready");
+}
+
+void testJukeboxBgaTargetStretchAndTrimmedUvs() {
+  BgaDrawTarget target{
+      .destination = {{{.x = 0.0F, .y = 100.0F},
+                       {.x = 200.0F, .y = 100.0F},
+                       {.x = 200.0F, .y = 0.0F},
+                       {.x = 0.0F, .y = 0.0F}}},
+      .stretch = skin::SkinStretchMode::KeepAspectRatioFitInner};
+  const auto inner = ResolveGameplayBgaTargetQuad(target, 400, 100);
+  require(inner && inner->destination[0].y == 75.0F &&
+              inner->destination[2].y == 25.0F &&
+              inner->uvs[0].x == 0.0F && inner->uvs[2].x == 1.0F,
+          "fit-inner uses source dimensions and centers the final BGA quad");
+
+  target.stretch = skin::SkinStretchMode::KeepAspectRatioFitOuterTrimmed;
+  const auto trimmed = ResolveGameplayBgaTargetQuad(target, 400, 100);
+  require(trimmed && trimmed->destination[0].x == 0.0F &&
+              trimmed->destination[0].y == 100.0F &&
+              trimmed->destination[2].x == 200.0F &&
+              trimmed->destination[2].y == 0.0F &&
+              trimmed->uvs[0].x == 0.25F && trimmed->uvs[1].x == 0.75F &&
+              trimmed->uvs[0].y == 1.0F && trimmed->uvs[2].y == 0.0F,
+          "outer-trimmed keeps the authored target while center-cropping UVs");
+
+  target.stretch = skin::SkinStretchMode::NoResizeTrimmed;
+  const auto noResizeTrimmed = ResolveGameplayBgaTargetQuad(target, 400, 100);
+  require(noResizeTrimmed && noResizeTrimmed->uvs[0].x == 0.25F &&
+              noResizeTrimmed->uvs[1].x == 0.75F,
+          "no-resize-trimmed uses the same centered source crop");
+  require(!ResolveGameplayBgaTargetQuad(target, 0, 100) &&
+              !ResolveGameplayBgaTargetQuad(target, 400, 0),
+          "nonpositive BGA source dimensions fail preflight geometry resolution");
+
+  target.destination = {{{.x = 0.0F, .y = 100.0F},
+                         {.x = 200.0F, .y = 100.0F},
+                         {.x = 175.0F, .y = -20.0F},
+                         {.x = -10.0F, .y = 0.0F}}};
+  target.stretch = skin::SkinStretchMode::Stretch;
+  const auto arbitrary = ResolveGameplayBgaTargetQuad(target, 320, 240);
+  require(arbitrary && samePoint(arbitrary->destination[0], target.destination[0]) &&
+              samePoint(arbitrary->destination[1], target.destination[1]) &&
+              samePoint(arbitrary->destination[2], target.destination[2]) &&
+              samePoint(arbitrary->destination[3], target.destination[3]),
+          "Stretch preserves every authored point of an arbitrary BGA quad");
+}
+
+const bgfx::VertexLayout &capacityProbeLayout() {
+  static const bgfx::VertexLayout layout = [] {
+    bgfx::VertexLayout value;
+    value.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+        .end();
+    return value;
+  }();
+  return layout;
+}
+
+void testLaterBgaValidationFailureLeavesTransientCapacityUntouched() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  const PreparedGameplayBgaFrame frame{
+      .sequence = 700, .composition = GameplayBgaComposition::Blank};
+  std::array targets{
+      BgaDrawTarget{.role = GameplayBgaRole::Base,
+                    .destination = {{{.x = 0.0F, .y = 64.0F},
+                                     {.x = 64.0F, .y = 64.0F},
+                                     {.x = 64.0F, .y = 0.0F},
+                                     {.x = 0.0F, .y = 0.0F}}},
+                    .authoredOrdinal = 1},
+      BgaDrawTarget{.role = GameplayBgaRole::Base,
+                    .destination = {{{.x = 0.0F, .y = 64.0F},
+                                     {.x = 64.0F, .y = 64.0F},
+                                     {.x = 64.0F, .y = 0.0F},
+                                     {.x = 0.0F, .y = 0.0F}}},
+                    .authoredOrdinal = 2}};
+  targets[1].destination[2].x = std::numeric_limits<float>::quiet_NaN();
+  const auto *caps = bgfx::getCaps();
+  require(caps != nullptr, "bgfx exposes transient capacity limits");
+  const auto probeVertices =
+      caps->limits.maxTransientVbSize / capacityProbeLayout().getStride();
+  const auto probeIndices = caps->limits.maxTransientIbSize /
+                            static_cast<std::uint32_t>(sizeof(std::uint16_t));
+  const auto verticesBefore = bgfx::getAvailTransientVertexBuffer(
+      probeVertices, capacityProbeLayout());
+  const auto indicesBefore =
+      bgfx::getAvailTransientIndexBuffer(probeIndices);
+
+  const auto result = jukebox.preflight(frame, targets);
+
+  require(!result.ready &&
+              bgfx::getAvailTransientVertexBuffer(probeVertices,
+                                                  capacityProbeLayout()) ==
+                  verticesBefore &&
+              bgfx::getAvailTransientIndexBuffer(probeIndices) == indicesBefore,
+          "a later BGA validation failure consumes no transient capacity");
+}
+
+void testDuplicateTargetsConsumeDistinctPreparedEntriesExactlyOnce() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  const PreparedGameplayBgaFrame frame{
+      .sequence = 701, .composition = GameplayBgaComposition::MissOnly};
+  const BgaDrawTarget target{
+      .role = GameplayBgaRole::Miss,
+      .destination = {{{.x = 0.0F, .y = 64.0F},
+                       {.x = 64.0F, .y = 64.0F},
+                       {.x = 64.0F, .y = 0.0F},
+                       {.x = 0.0F, .y = 0.0F}}},
+      .authoredOrdinal = 9};
+  const std::array targets{target, target};
+  const auto before = jukebox.gameplayBgaSubmissionStats();
+  const auto result = jukebox.preflight(frame, targets);
+  require(result.ready, "duplicate no-draw targets can be planned");
+
+  jukebox.commitPrepared(frame);
+  jukebox.submitPrepared(frame, target);
+  jukebox.submitPrepared(frame, target);
+  const auto consumed = jukebox.gameplayBgaSubmissionStats();
+  jukebox.submitPrepared(frame, target);
+  const auto afterExtra = jukebox.gameplayBgaSubmissionStats();
+
+  require(consumed.embeddedSubmissions == before.embeddedSubmissions + 2 &&
+              afterExtra.embeddedSubmissions == consumed.embeddedSubmissions,
+          "duplicate byte-identical targets consume two ordered plan entries and cannot be reused");
+}
+
+void testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  bms_parser::Chart chart;
+  const auto imagePath = std::filesystem::path(__FILE__).parent_path() /
+                         "fixtures/beatoraja_skin/resources/fixture.png";
+  chart.Meta.Folder = imagePath.parent_path();
+  chart.ReferencedBmpTable.emplace(1, imagePath.filename().string());
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(1, false);
+  timeline->Timing = 0;
+  timeline->BgaBase = 1;
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+
+  const auto before = jukebox.gameplayBgaSubmissionStats();
+  const auto frame = jukebox.prepareVisualFrameAt(702, 0, {});
+  const auto prepared = jukebox.gameplayBgaSubmissionStats();
+  require(frame.base.has_value() &&
+              prepared.pinnedFrames == before.pinnedFrames + 1,
+          "prepared image media is pinned for the frame");
+
+  jukebox.unloadVisuals();
+  require(jukebox.gameplayBgaSubmissionStats().pinnedFrames ==
+              prepared.pinnedFrames,
+          "media reset defers destruction of a prepared image lease");
+  jukebox.loadVisuals(chart, cancelled);
+  require(jukebox.gameplayBgaSubmissionStats().pinnedFrames ==
+              prepared.pinnedFrames,
+          "replacement media does not invalidate the prior frame's pinned image");
+
+  jukebox.submitFullscreen(frame);
+  require(jukebox.gameplayBgaSubmissionStats().pinnedFrames ==
+              before.pinnedFrames,
+          "same-frame fullscreen fallback consumes and releases the pinned image lease");
 }
 
 void testPreparedFrameRetainsExplicitSurfaceRoles() {
@@ -367,14 +667,30 @@ void testMissCompositionSuppressesBaseAndLayerWithoutFallback() {
 } // namespace
 
 int main() {
+  bgfx::Init init;
+  init.type = bgfx::RendererType::Noop;
+  init.resolution.width = 64;
+  init.resolution.height = 64;
+  require(bgfx::init(init), "headless bgfx initializes for Jukebox BGA tests");
+  rendering::PosTexCoord0Vertex::init();
+  rendering::PosColorVertex::init();
+  rendering::PosTexVertex::init();
   testBgaDrawTargetRoleIsIndependentOfViewId();
   testBgaSubmitterPreflightsExactMultipleTargets();
   testBgaSubmitterPreparedFrameIsAnImmutableValue();
   testBgaSubmitterHasVirtualDestruction();
+  testJukeboxPreparesOneValueFrameAndNeverUpdatesOnSubmission();
+  testJukeboxBgaTargetStretchAndTrimmedUvs();
+  testLaterBgaValidationFailureLeavesTransientCapacityUntouched();
+  testDuplicateTargetsConsumeDistinctPreparedEntriesExactlyOnce();
+  testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback();
   testPreparedFrameRetainsExplicitSurfaceRoles();
   testNoneJudgeDoesNotTriggerMissState();
   testComboZeroUsesBgaClockAndRepeatedZeroRetriggers();
   testZeroStartAndFrameBoundariesAreDeterministic();
   testMissCompositionSuppressesBaseAndLayerWithoutFallback();
+  rendering::ShaderManager::getInstance().release();
+  rendering::UniformCache::getInstance().destroyAll();
+  bgfx::shutdown();
   return 0;
 }

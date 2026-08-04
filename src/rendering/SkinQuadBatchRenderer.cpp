@@ -96,6 +96,17 @@ bool validScissor(const std::optional<skin::UiLogicalRect> &scissor) noexcept {
               static_cast<double>(std::numeric_limits<int>::max() / 4));
 }
 
+const bgfx::VertexLayout &transientCapacityProbeLayout() {
+  static const bgfx::VertexLayout layout = [] {
+    bgfx::VertexLayout value;
+    value.begin()
+        .add(bgfx::Attrib::Position, 1, bgfx::AttribType::Float)
+        .end();
+    return value;
+  }();
+  return layout;
+}
+
 class BgfxSkinQuadBatchBackend final : public SkinQuadBatchBackend {
 public:
   bool preflightSamplers(
@@ -111,28 +122,89 @@ public:
     return bgfx::isValid(sampler_);
   }
 
-  bool reserve(std::size_t vertexCount, std::size_t indexCount) override {
-    try {
-      // Program creation is part of the no-draw preflight. A missing packaged
-      // shader therefore selects fallback before any skin submission.
-      texturedProgram_ = ShaderManager::getInstance().getProgram(
-          "vs_skin_quad.bin", "fs_skin_quad.bin");
-      primitiveProgram_ =
-          ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-    } catch (...) {
+  bool reserve(
+      std::size_t vertexCount, std::size_t indexCount,
+      std::size_t skinAllocationCount,
+      const GameplayBgaTransientRequirements &bgaRequirements) override {
+    if (vertexCount != 0 || indexCount != 0) {
+      try {
+        // Program creation is part of the no-draw preflight. A missing
+        // packaged shader therefore selects fallback before any submission.
+        texturedProgram_ = ShaderManager::getInstance().getProgram(
+            "vs_skin_quad.bin", "fs_skin_quad.bin");
+        primitiveProgram_ =
+            ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+      } catch (...) {
+        return false;
+      }
+      if (!bgfx::isValid(texturedProgram_) ||
+          !bgfx::isValid(primitiveProgram_)) {
+        return false;
+      }
+    }
+
+    const auto skinStride =
+        static_cast<std::uint64_t>(SkinQuadGpuVertex::ms_decl.getStride());
+    if (skinStride == 0 ||
+        static_cast<std::uint64_t>(vertexCount) >
+            std::numeric_limits<std::uint64_t>::max() / skinStride) {
       return false;
     }
-    if (!bgfx::isValid(texturedProgram_) || !bgfx::isValid(primitiveProgram_)) {
+    std::uint64_t requiredVertexBytes =
+        static_cast<std::uint64_t>(vertexCount) * skinStride;
+    const auto paddingPerSkinAllocation = skinStride - 1U;
+    if (paddingPerSkinAllocation != 0 &&
+        static_cast<std::uint64_t>(skinAllocationCount) >
+            std::numeric_limits<std::uint64_t>::max() /
+                paddingPerSkinAllocation) {
       return false;
     }
-    if (vertexCount > std::numeric_limits<std::uint32_t>::max() ||
-        indexCount > std::numeric_limits<std::uint32_t>::max()) {
+    const auto skinAlignmentPadding =
+        static_cast<std::uint64_t>(skinAllocationCount) *
+        paddingPerSkinAllocation;
+    const auto addVertexBytes = [&](std::uint64_t bytes) {
+      if (bytes > std::numeric_limits<std::uint64_t>::max() -
+                      requiredVertexBytes) {
+        return false;
+      }
+      requiredVertexBytes += bytes;
+      return true;
+    };
+    if (!addVertexBytes(skinAlignmentPadding) ||
+        !addVertexBytes(bgaRequirements.vertexBytes) ||
+        !addVertexBytes(bgaRequirements.vertexAlignmentPadding)) {
       return false;
     }
-    const auto vertices = static_cast<std::uint32_t>(vertexCount);
-    const auto indices = static_cast<std::uint32_t>(indexCount);
-    return bgfx::getAvailTransientVertexBuffer(
-               vertices, SkinQuadGpuVertex::ms_decl) >= vertices &&
+
+    if (bgaRequirements.indexCount >
+        std::numeric_limits<std::uint64_t>::max() -
+            static_cast<std::uint64_t>(indexCount)) {
+      return false;
+    }
+    const auto requiredIndices =
+        static_cast<std::uint64_t>(indexCount) + bgaRequirements.indexCount;
+    if (requiredIndices > std::numeric_limits<std::uint32_t>::max()) {
+      return false;
+    }
+
+    const auto *caps = bgfx::getCaps();
+    if (caps == nullptr) {
+      return requiredVertexBytes == 0 && requiredIndices == 0;
+    }
+    const auto &probeLayout = transientCapacityProbeLayout();
+    const auto probeStride =
+        static_cast<std::uint64_t>(probeLayout.getStride());
+    if (probeStride == 0) {
+      return false;
+    }
+    const auto maximumProbeVertices = static_cast<std::uint32_t>(
+        caps->limits.maxTransientVbSize / probeStride);
+    const auto availableVertexBytes =
+        static_cast<std::uint64_t>(bgfx::getAvailTransientVertexBuffer(
+            maximumProbeVertices, probeLayout)) *
+        probeStride;
+    const auto indices = static_cast<std::uint32_t>(requiredIndices);
+    return requiredVertexBytes <= availableVertexBytes &&
            bgfx::getAvailTransientIndexBuffer(indices) >= indices;
   }
 
@@ -254,6 +326,9 @@ void SkinQuadBatchRenderer::begin(RenderContext &context,
 void SkinQuadBatchRenderer::begin(
     RenderContext &context, const skin::SkinPreparedResourceView &resources) {
   clearBatch();
+  if (++generation_ == 0) {
+    ++generation_;
+  }
   resources_ = &resources;
   submittedSpan_ = false;
   ready_ = backend_ != nullptr;
@@ -271,14 +346,13 @@ void SkinQuadBatchRenderer::begin(
   }
 }
 
-bool SkinQuadBatchRenderer::preflight(
+bool SkinQuadBatchRenderer::preflightSegment(
     std::span<const skin::SkinDrawCommand> commands,
-    std::vector<ResolvedCommand> &resolved,
+    std::vector<SkinQuadSubmissionPlan::ResolvedCommand> &resolved,
     std::vector<skin::SkinFilterMode> &samplers, std::size_t &vertexCount,
     std::size_t &indexCount) const {
   resolved.clear();
   resolved.resize(commands.size());
-  samplers.clear();
   vertexCount = 0;
   indexCount = 0;
   const auto addCounts = [&](std::size_t vertices, std::size_t indices) {
@@ -396,41 +470,89 @@ bool SkinQuadBatchRenderer::preflight(
   return true;
 }
 
-bool SkinQuadBatchRenderer::submit(
-    std::span<const skin::SkinDrawCommand> commands) {
+bool SkinQuadBatchRenderer::prepare(
+    std::span<const std::span<const skin::SkinDrawCommand>> segments,
+    SkinQuadSubmissionPlan &plan,
+    const GameplayBgaTransientRequirements &bgaRequirements) {
   if (!ready_ || submittedSpan_ || !resources_) {
     return false;
   }
   submittedSpan_ = true;
-  std::vector<ResolvedCommand> resolved;
+  plan = SkinQuadSubmissionPlan{};
   std::vector<skin::SkinFilterMode> samplers;
-  std::size_t vertexCount = 0;
-  std::size_t indexCount = 0;
+  std::size_t totalVertexCount = 0;
+  std::size_t totalIndexCount = 0;
+  std::size_t skinAllocationCount = 0;
+  std::size_t maximumSegmentVertices = 0;
+  std::size_t maximumSegmentIndices = 0;
   try {
-    if (!preflight(commands, resolved, samplers, vertexCount, indexCount) ||
-        !backend_->preflightSamplers(samplers)) {
-      ready_ = false;
-      clearBatch();
-      return false;
+    plan.segments_.reserve(segments.size());
+    for (const auto commands : segments) {
+      SkinQuadSubmissionPlan::Segment segment{.commands = commands};
+      std::size_t vertexCount = 0;
+      std::size_t indexCount = 0;
+      if (!preflightSegment(commands, segment.resolved, samplers, vertexCount,
+                            indexCount) ||
+          vertexCount >
+              std::numeric_limits<std::size_t>::max() - totalVertexCount ||
+          indexCount >
+              std::numeric_limits<std::size_t>::max() - totalIndexCount) {
+        ready_ = false;
+        clearBatch();
+        return false;
+      }
+      totalVertexCount += vertexCount;
+      totalIndexCount += indexCount;
+      if (vertexCount != 0) {
+        ++skinAllocationCount;
+      }
+      maximumSegmentVertices =
+          std::max(maximumSegmentVertices, vertexCount);
+      maximumSegmentIndices = std::max(maximumSegmentIndices, indexCount);
+      plan.segments_.push_back(std::move(segment));
     }
-    // No CPU allocation is allowed after backend reservation succeeds: state
-    // changes can flush immediately, so a later allocation failure would
-    // otherwise create a partial hybrid frame before fallback.
-    vertices_.reserve(std::min(vertexCount, maximumBatchVertices));
-    indices_.reserve(std::min(indexCount, maximumBatchIndices));
-    if (!backend_->reserve(vertexCount, indexCount)) {
+    // No CPU allocation is allowed after this preparation point: state
+    // changes can flush immediately around BGA slots, so all working buffers
+    // retain enough capacity for the largest preflighted segment chunk.
+    vertices_.reserve(
+        std::min(maximumSegmentVertices, maximumBatchVertices));
+    indices_.reserve(std::min(maximumSegmentIndices, maximumBatchIndices));
+    if ((!segments.empty() || !bgaRequirements.empty()) &&
+        (!backend_->preflightSamplers(samplers) ||
+         !backend_->reserve(totalVertexCount, totalIndexCount,
+                            skinAllocationCount,
+                            bgaRequirements))) {
       ready_ = false;
       clearBatch();
       return false;
     }
   } catch (...) {
-    // Every fallible operation above happens before backend submission.
-    // Allocation, shader-loading, and backend-reservation failures therefore
-    // select built-in fallback without leaving a hybrid partial skin frame.
+    // Every fallible operation happens before backend submission. Allocation,
+    // shader-loading, and backend-reservation failures therefore select
+    // built-in fallback without leaving a hybrid partial skin frame.
     ready_ = false;
     clearBatch();
     return false;
   }
+
+  plan.owner_ = this;
+  plan.generation_ = generation_;
+  plan.ready_ = true;
+  return true;
+}
+
+void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
+                                            std::size_t segmentIndex) noexcept {
+  if (!ready_ || !plan.ready_ || plan.owner_ != this ||
+      plan.generation_ != generation_ || segmentIndex != plan.nextSegment_ ||
+      segmentIndex >= plan.segments_.size()) {
+    discardPrepared(plan);
+    return;
+  }
+
+  const auto &segment = plan.segments_[segmentIndex];
+  const auto commands = segment.commands;
+  const auto &resolved = segment.resolved;
 
   for (std::size_t commandIndex = 0; commandIndex < commands.size();
        ++commandIndex) {
@@ -475,7 +597,27 @@ bool SkinQuadBatchRenderer::submit(
                                 .scissor = resolved[commandIndex].scissor,
                                 .textured = false});
   }
-  return true;
+  ++plan.nextSegment_;
+}
+
+void SkinQuadBatchRenderer::discardPrepared(
+    SkinQuadSubmissionPlan &plan) noexcept {
+  if (plan.owner_ == this && plan.generation_ == generation_) {
+    plan.ready_ = false;
+    ready_ = false;
+    clearBatch();
+  }
+}
+
+bool SkinQuadBatchRenderer::submit(
+    std::span<const skin::SkinDrawCommand> commands) {
+  const std::array segments{commands};
+  SkinQuadSubmissionPlan plan;
+  if (!prepare(segments, plan)) {
+    return false;
+  }
+  submitPrepared(plan, 0);
+  return ready_ && plan.fullyConsumed();
 }
 
 void SkinQuadBatchRenderer::requireBatch(const BatchKey &key) {

@@ -1,15 +1,25 @@
+#include "audio/GameplayBgaFrame.h"
+#include "rendering/RenderPlan.h"
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "rendering/common.h"
+#include "skin/beatoraja/Skin2DRenderer.h"
 #include "view/View.h"
+
+// This target deliberately compiles the narrow production adapter directly:
+// Task 19 keeps build-system edits out of scope while exercising the actual
+// two-phase integration rather than a test copy of its orchestration.
+#include "skin/beatoraja/Skin2DRendererSubmit.cpp"
 
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <new>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -97,10 +107,15 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
     return true;
   }
 
-  bool reserve(std::size_t vertexCount, std::size_t indexCount) override {
+  bool reserve(
+      std::size_t vertexCount, std::size_t indexCount,
+      std::size_t skinAllocationCount,
+      const GameplayBgaTransientRequirements &bgaRequirements) override {
     ++reserveCalls;
     reservedVertices = vertexCount;
     reservedIndices = indexCount;
+    reservedSkinAllocations = skinAllocationCount;
+    reservedBgaRequirements = bgaRequirements;
     if (throwOnReserve) {
       throw std::bad_alloc();
     }
@@ -120,6 +135,12 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
     captured.samplerFlags = batch.samplerFlags;
     captured.textured = batch.textured;
     batches.push_back(std::move(captured));
+    if (submissionOrder != nullptr) {
+      submissionOrder->push_back("quad:" + std::to_string(batch.texture.idx));
+    }
+    if (afterSubmit) {
+      afterSubmit();
+    }
   }
 
   bool reserveResult = true;
@@ -128,8 +149,63 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
   int samplerPreflightCalls = 0;
   std::size_t reservedVertices = 0;
   std::size_t reservedIndices = 0;
+  std::size_t reservedSkinAllocations = 0;
+  GameplayBgaTransientRequirements reservedBgaRequirements;
   std::optional<skin::SkinFilterMode> unavailableSampler;
   std::vector<CapturedBatch> batches;
+  std::vector<std::string> *submissionOrder = nullptr;
+  std::function<void()> afterSubmit;
+};
+
+struct FakeBgaSubmitter final : IGameplayBgaSubmitter {
+  PreparedGameplayBgaFrame
+  prepareVisualFrameAt(std::uint64_t, std::int64_t,
+                       const GameplayBgaMissState &) override {
+    return {};
+  }
+
+  BgaPreflightResult
+  preflight(const PreparedGameplayBgaFrame &frame,
+            std::span<const BgaDrawTarget> targets) override {
+    ++preflightCalls;
+    preflightFrame = frame;
+    preflightTargets.assign(targets.begin(), targets.end());
+    return {.ready = preflightReady,
+            .requirements = preflightReady ? preflightRequirements
+                                           : GameplayBgaTransientRequirements{}};
+  }
+
+  void commitPrepared(const PreparedGameplayBgaFrame &) noexcept override {
+    ++commitCalls;
+  }
+
+  void submitPrepared(const PreparedGameplayBgaFrame &,
+                      const BgaDrawTarget &target) noexcept override {
+    submittedTargets.push_back(target);
+    if (submissionOrder != nullptr) {
+      const char role = target.role == GameplayBgaRole::Base    ? 'B'
+                        : target.role == GameplayBgaRole::Layer ? 'L'
+                                                               : 'M';
+      submissionOrder->push_back("bga:" + std::string(1, role) + ":" +
+                                 std::to_string(target.authoredOrdinal));
+    }
+  }
+
+  void finalizePrepared(const PreparedGameplayBgaFrame &) noexcept override {
+    ++finalizeCalls;
+  }
+
+  void submitFullscreen(const PreparedGameplayBgaFrame &) noexcept override {}
+
+  bool preflightReady = true;
+  GameplayBgaTransientRequirements preflightRequirements;
+  int preflightCalls = 0;
+  int commitCalls = 0;
+  int finalizeCalls = 0;
+  PreparedGameplayBgaFrame preflightFrame;
+  std::vector<BgaDrawTarget> preflightTargets;
+  std::vector<BgaDrawTarget> submittedTargets;
+  std::vector<std::string> *submissionOrder = nullptr;
 };
 
 skin::SkinTexturedQuadCommand
@@ -158,6 +234,40 @@ skin::SkinDrawCommand command(std::uint32_t ordinal,
   return {.authoredOrdinal = ordinal,
           .sourceObject = ordinal,
           .payload = std::move(payload)};
+}
+
+skin::SkinBgaCommand bga(std::uint32_t ordinal, double x = 10.0) {
+  skin::SkinBgaCommand result;
+  result.authoredOrdinal = ordinal;
+  result.authoredGeometry = {
+      .rect = {.x = x, .y = 20.0, .width = 30.0, .height = 40.0},
+      .clip = skin::AuthoredRect{.x = x + 2.0,
+                                 .y = 23.0,
+                                 .width = 7.0,
+                                 .height = 11.0},
+      .centerX = 0.5,
+      .centerY = 0.5,
+      .rgba = {0.1F, 0.2F, 0.3F, 0.4F},
+      .blend = skin::SkinBlendMode::Additive,
+      .stretch = skin::SkinStretchMode::KeepAspectRatioFitInner};
+  result.viewport = {
+      .authoredToUi = {.m00 = 2.0,
+                       .m01 = 0.5,
+                       .tx = 5.0,
+                       .m10 = 0.25,
+                       .m11 = -3.0,
+                       .ty = 100.0},
+      .valid = true};
+  return result;
+}
+
+PreparedGameplayBgaSurface surface(GameplayBgaRole role,
+                                   std::uint64_t token) {
+  return {.role = role,
+          .mediaKind = GameplayBgaMediaKind::Image,
+          .surfaceToken = token,
+          .sourceWidth = 640,
+          .sourceHeight = 480};
 }
 
 FakeResources resources() {
@@ -386,6 +496,239 @@ void testPrimitiveTopologyAndBgaRequiresFallbackUntilIntegrated() {
       "an unsupported BGA rejects the whole span before primitive submission");
 }
 
+void testTwoPhaseSkinSubmissionPreservesMixedAuthoredOrder() {
+  auto prepared = resources();
+  RenderContext context;
+  std::vector<std::string> submissionOrder;
+  FakeBackend backend;
+  backend.submissionOrder = &submissionOrder;
+  rendering::SkinQuadBatchRenderer quadRenderer(backend);
+  skin::Skin2DRenderer skinRenderer;
+  FakeBgaSubmitter bgaSubmitter;
+  bgaSubmitter.preflightRequirements = {
+      .vertexBytes = 384, .vertexAlignmentPadding = 36, .indexCount = 24};
+  bgaSubmitter.submissionOrder = &submissionOrder;
+  const PreparedGameplayBgaFrame frame{
+      .sequence = 7,
+      .composition = GameplayBgaComposition::BaseThenLayer,
+      .base = surface(GameplayBgaRole::Base, 70),
+      .layer = surface(GameplayBgaRole::Layer, 71)};
+  const skin::SkinCommandBuffer buffer{
+      .frameSerial = 11,
+      .commands = {
+          command(10, quad(11, skin::SkinBlendMode::Normal,
+                           skin::SkinFilterMode::Nearest)),
+          command(20, bga(20)),
+          command(30, quad(12, skin::SkinBlendMode::Normal,
+                           skin::SkinFilterMode::Nearest)),
+          command(40, bga(40, 50.0)),
+          command(50, quad(11, skin::SkinBlendMode::Normal,
+                           skin::SkinFilterMode::Nearest)),
+      }};
+
+  expect(skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+                             bgaSubmitter),
+         "two-phase skin submission accepts mixed quad/BGA authored slots");
+  expect(submissionOrder ==
+             std::vector<std::string>{"quad:101", "bga:B:20", "bga:L:20",
+                                      "quad:102", "bga:B:40", "bga:L:40",
+                                      "quad:101"},
+         "quad segments and every stable BGA role remain contiguous in exact "
+         "authored order");
+  expect(backend.samplerPreflightCalls == 1 && backend.reserveCalls == 1 &&
+             backend.reservedVertices == 12 && backend.reservedIndices == 18 &&
+             backend.reservedSkinAllocations == 3 &&
+             bgaSubmitter.preflightCalls == 1 &&
+             bgaSubmitter.preflightTargets.size() == 4 &&
+             bgaSubmitter.submittedTargets.size() == 4 &&
+             bgaSubmitter.commitCalls == 1 &&
+             bgaSubmitter.finalizeCalls == 1 &&
+             backend.reservedBgaRequirements.vertexBytes == 384 &&
+             backend.reservedBgaRequirements.vertexAlignmentPadding == 36 &&
+             backend.reservedBgaRequirements.indexCount == 24,
+         "all quad segments and all BGA targets preflight exactly once before "
+         "one combined capacity decision and no-fail submission");
+  if (bgaSubmitter.preflightTargets.size() != 4) {
+    return;
+  }
+  const auto &base = bgaSubmitter.preflightTargets[0];
+  const auto &layer = bgaSubmitter.preflightTargets[1];
+  expect(base.role == GameplayBgaRole::Base &&
+             layer.role == GameplayBgaRole::Layer &&
+             base.viewId == rendering::ui_view &&
+             base.authoredOrdinal == 20 && layer.authoredOrdinal == 20 &&
+             base.destination[0].x == 35.0F &&
+             base.destination[0].y == 42.5F &&
+             base.destination[1].x == 95.0F &&
+             base.destination[1].y == 50.0F &&
+             base.destination[2].x == 115.0F &&
+             base.destination[2].y == -70.0F &&
+             base.destination[3].x == 55.0F &&
+             base.destination[3].y == -77.5F &&
+             base.stretch == skin::SkinStretchMode::KeepAspectRatioFitInner &&
+             base.tint == std::array<float, 4>{0.1F, 0.2F, 0.3F, 0.4F} &&
+             base.blend == skin::SkinBlendMode::Additive && base.clip &&
+             base.clip->x == 40.5 && base.clip->y == 1.0 &&
+             base.clip->width == 19.5 && base.clip->height == 34.75,
+         "role materialization preserves projected destination, stretch, tint, "
+         "blend, clip, view, and authored ordinal");
+}
+
+void testCommittedSubmissionCannotReturnFallbackSignal() {
+  auto prepared = resources();
+  RenderContext context;
+  FakeBackend backend;
+  rendering::SkinQuadBatchRenderer quadRenderer(backend);
+  skin::Skin2DRenderer skinRenderer;
+  FakeBgaSubmitter submitter;
+  const PreparedGameplayBgaFrame frame{
+      .sequence = 81,
+      .composition = GameplayBgaComposition::BaseThenLayer,
+      .base = surface(GameplayBgaRole::Base, 810)};
+  const skin::SkinCommandBuffer buffer{
+      .frameSerial = 82,
+      .commands = {
+          command(1, quad(11, skin::SkinBlendMode::Normal,
+                          skin::SkinFilterMode::Nearest)),
+          command(2, bga(2)),
+          command(3, quad(12, skin::SkinBlendMode::Normal,
+                          skin::SkinFilterMode::Nearest)),
+      }};
+  bool invalidatedAfterFirstDraw = false;
+  backend.afterSubmit = [&] {
+    if (!invalidatedAfterFirstDraw) {
+      invalidatedAfterFirstDraw = true;
+      quadRenderer.begin(context, prepared);
+    }
+  };
+
+  const bool submitted = skinRenderer.submit(
+      buffer, prepared, context, quadRenderer, frame, submitter);
+
+  expect(submitted && invalidatedAfterFirstDraw && submitter.commitCalls == 1 &&
+             submitter.finalizeCalls == 1 &&
+             submitter.submittedTargets.size() == 1,
+         "once BGA capacity is committed, submission always finalizes and can "
+         "never signal built-in fallback after a draw");
+}
+
+void testBgaCompositionExpandsPlaceholdersAndMissingRolesExactly() {
+  const auto run = [](const PreparedGameplayBgaFrame &frame,
+                      std::span<const GameplayBgaRole> expectedRoles,
+                      std::string_view message) {
+    auto prepared = resources();
+    RenderContext context;
+    FakeBackend backend;
+    rendering::SkinQuadBatchRenderer quadRenderer(backend);
+    skin::Skin2DRenderer skinRenderer;
+    FakeBgaSubmitter submitter;
+    const skin::SkinCommandBuffer buffer{
+        .frameSerial = 3, .commands = {command(77, bga(77))}};
+    const bool submitted = skinRenderer.submit(
+        buffer, prepared, context, quadRenderer, frame, submitter);
+    bool rolesMatch = submitter.preflightTargets.size() == expectedRoles.size();
+    for (std::size_t index = 0;
+         rolesMatch && index < expectedRoles.size(); ++index) {
+      rolesMatch =
+          submitter.preflightTargets[index].role == expectedRoles[index] &&
+          submitter.preflightTargets[index].authoredOrdinal == 77;
+    }
+    if (rolesMatch && !expectedRoles.empty()) {
+      const auto &target = submitter.preflightTargets.front();
+      rolesMatch = target.destination[0].x == 35.0F &&
+                   target.destination[0].y == 42.5F &&
+                   target.destination[2].x == 115.0F &&
+                   target.destination[2].y == -70.0F &&
+                   target.stretch ==
+                       skin::SkinStretchMode::KeepAspectRatioFitInner;
+    }
+    expect(submitted && submitter.preflightCalls == 1 && rolesMatch &&
+               submitter.submittedTargets.size() == expectedRoles.size() &&
+               backend.batches.empty(),
+           message);
+  };
+
+  const std::array blankRoles{GameplayBgaRole::Base};
+  run({.sequence = 1, .composition = GameplayBgaComposition::Blank},
+      blankRoles,
+      "Blank expands to one full-destination base placeholder");
+
+  const std::array baseLayerRoles{GameplayBgaRole::Base,
+                                  GameplayBgaRole::Layer};
+  run({.sequence = 2,
+       .composition = GameplayBgaComposition::BaseThenLayer,
+       .layer = surface(GameplayBgaRole::Layer, 22)},
+      baseLayerRoles,
+      "missing base expands to a base placeholder before its available layer");
+
+  run({.sequence = 3, .composition = GameplayBgaComposition::MissOnly}, {},
+      "missing miss suppresses base/layer and emits no BGA target");
+
+  const std::array missRoles{GameplayBgaRole::Miss};
+  run({.sequence = 4,
+       .composition = GameplayBgaComposition::MissOnly,
+       .miss = surface(GameplayBgaRole::Miss, 44)},
+      missRoles, "available miss expands to only its miss target");
+}
+
+void testTwoPhaseSubmissionFailuresAreZeroDrawAtomic() {
+  const PreparedGameplayBgaFrame frame{
+      .sequence = 8,
+      .composition = GameplayBgaComposition::BaseThenLayer,
+      .base = surface(GameplayBgaRole::Base, 80)};
+
+  {
+    auto prepared = resources();
+    RenderContext context;
+    FakeBackend backend;
+    rendering::SkinQuadBatchRenderer quadRenderer(backend);
+    skin::Skin2DRenderer skinRenderer;
+    FakeBgaSubmitter submitter;
+    submitter.preflightReady = false;
+    const skin::SkinCommandBuffer buffer{
+        .frameSerial = 9,
+        .commands = {
+            command(1, quad(11, skin::SkinBlendMode::Normal,
+                            skin::SkinFilterMode::Nearest)),
+            command(2, bga(2)),
+            command(3, quad(12, skin::SkinBlendMode::Normal,
+                            skin::SkinFilterMode::Nearest)),
+        }};
+    expect(!skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+                                submitter) &&
+               backend.reserveCalls == 1 && backend.batches.empty() &&
+               submitter.preflightCalls == 1 &&
+               submitter.commitCalls == 0 &&
+               submitter.submittedTargets.empty(),
+           "BGA preflight failure occurs after quad planning but before every "
+           "draw");
+  }
+
+  {
+    auto prepared = resources();
+    RenderContext context;
+    FakeBackend backend;
+    rendering::SkinQuadBatchRenderer quadRenderer(backend);
+    skin::Skin2DRenderer skinRenderer;
+    FakeBgaSubmitter submitter;
+    const skin::SkinCommandBuffer buffer{
+        .frameSerial = 10,
+        .commands = {
+            command(1, quad(999, skin::SkinBlendMode::Normal,
+                            skin::SkinFilterMode::Nearest)),
+            command(2, bga(2)),
+        }};
+    expect(!skinRenderer.submit(buffer, prepared, context, quadRenderer, frame,
+                                submitter) &&
+               backend.reserveCalls == 0 && backend.batches.empty() &&
+               submitter.preflightCalls == 1 &&
+               submitter.commitCalls == 0 &&
+               submitter.submittedTargets.empty(),
+           "quad preflight failure after BGA validation consumes no BGA capacity "
+           "and produces zero quad or BGA draws");
+  }
+}
+
 void testLogicalScissorConversionAtOneAndTwoTimesScale() {
   rendering::render_width = 200;
   rendering::render_height = 100;
@@ -556,6 +899,10 @@ int main() {
   testVerticesStatesScissorsAndSequentialFlushes();
   testExactBackendStateMapping();
   testPrimitiveTopologyAndBgaRequiresFallbackUntilIntegrated();
+  testTwoPhaseSkinSubmissionPreservesMixedAuthoredOrder();
+  testBgaCompositionExpandsPlaceholdersAndMissingRolesExactly();
+  testTwoPhaseSubmissionFailuresAreZeroDrawAtomic();
+  testCommittedSubmissionCannotReturnFallbackSignal();
   testLogicalScissorConversionAtOneAndTwoTimesScale();
   testOuterRenderContextScissorIsIntersectedBeforeSubmission();
   testBackendReservationFailureIsAtomic();

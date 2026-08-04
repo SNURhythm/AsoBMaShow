@@ -2,6 +2,7 @@
 
 #include <SDL2/SDL.h>
 #include <bgfx/bgfx.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -24,6 +25,23 @@ class VideoPlayer {
 public:
   enum class MemoryPressureMode { PreserveActive, DiscardIdle };
 
+  struct PreparedEmbeddedSubmission {
+    video::EmbeddedYuvQuadLayout quad;
+    std::uint64_t state = 0;
+    std::optional<rendering::DrawableScissor> scissor;
+    bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
+    std::array<bgfx::TextureHandle, 3> textures{
+        bgfx::TextureHandle{bgfx::kInvalidHandle},
+        bgfx::TextureHandle{bgfx::kInvalidHandle},
+        bgfx::TextureHandle{bgfx::kInvalidHandle}};
+    std::array<bgfx::UniformHandle, 3> samplers{
+        bgfx::UniformHandle{bgfx::kInvalidHandle},
+        bgfx::UniformHandle{bgfx::kInvalidHandle},
+        bgfx::UniformHandle{bgfx::kInvalidHandle}};
+    bgfx::TransientVertexBuffer vertexBuffer{};
+    bgfx::TransientIndexBuffer indexBuffer{};
+  };
+
   VideoPlayer(Stopwatch *stopwatch);
   ~VideoPlayer();
   VideoPlayer(const VideoPlayer &) = delete;
@@ -39,6 +57,15 @@ public:
       bgfx::ViewId viewId, const video::EmbeddedYuvQuadLayout &quad,
       std::uint64_t state,
       std::optional<rendering::DrawableScissor> scissor = std::nullopt) const;
+  [[nodiscard]] std::optional<PreparedEmbeddedSubmission>
+  prepareEmbeddedSubmission(
+      const video::EmbeddedYuvQuadLayout &quad, std::uint64_t state,
+      std::optional<rendering::DrawableScissor> scissor = std::nullopt) const;
+  void commitPreparedEmbedded(
+      PreparedEmbeddedSubmission &submission) const noexcept;
+  void submitPreparedEmbedded(
+      bgfx::ViewId viewId,
+      const PreparedEmbeddedSubmission &submission) const noexcept;
   void play();
   void playFrom(int64_t micro);
   void pause();
@@ -88,7 +115,7 @@ private:
   void stopPredecoding();
 
   bool updateVideoTexture(int width, int height);
-  std::mutex videoFrameMutex;
+  mutable std::mutex videoFrameMutex;
 
   int videoFrameWidth;
   int videoFrameHeight;

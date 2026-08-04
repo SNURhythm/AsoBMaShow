@@ -82,9 +82,23 @@ struct GameplayBgaClipRect {
   double height = 0.0;
 };
 
+// Byte-oriented because embedded BGA and skin quads use different vertex
+// layouts. Padding is the conservative aggregate needed to align every BGA
+// allocation before the skin renderer makes its one capacity decision.
+struct GameplayBgaTransientRequirements {
+  std::uint64_t vertexBytes = 0;
+  std::uint64_t vertexAlignmentPadding = 0;
+  std::uint64_t indexCount = 0;
+
+  [[nodiscard]] bool empty() const noexcept {
+    return vertexBytes == 0 && vertexAlignmentPadding == 0 && indexCount == 0;
+  }
+};
+
 struct BgaPreflightResult {
   bool ready = false;
   std::optional<skin::SkinDiagnostic> failure;
+  GameplayBgaTransientRequirements requirements;
 };
 
 struct BgaDrawTarget {
@@ -129,8 +143,17 @@ public:
   [[nodiscard]] virtual BgaPreflightResult
   preflight(const PreparedGameplayBgaFrame &frame,
             std::span<const BgaDrawTarget> targets) = 0;
+  // commitPrepared is called only after the compositor's combined capacity
+  // decision succeeds. It materializes the already validated plan without
+  // lookup, decoding, shader creation, or any other fallible work.
+  virtual void
+  commitPrepared(const PreparedGameplayBgaFrame &frame) noexcept = 0;
   virtual void submitPrepared(const PreparedGameplayBgaFrame &frame,
                               const BgaDrawTarget &target) noexcept = 0;
+  // Successful embedded composition and same-frame fullscreen fallback both
+  // release the media lease explicitly.
+  virtual void
+  finalizePrepared(const PreparedGameplayBgaFrame &frame) noexcept = 0;
   virtual void submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept =
       0;
 };

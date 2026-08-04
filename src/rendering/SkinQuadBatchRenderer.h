@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../audio/GameplayBgaFrame.h"
 #include "../skin/beatoraja/SkinDrawCommand.h"
 #include "../skin/beatoraja/SkinResourceCatalog.h"
 
@@ -16,6 +17,8 @@
 struct RenderContext;
 
 namespace rendering {
+
+class SkinQuadBatchRenderer;
 
 struct SkinQuadGpuVertex {
   float x = 0.0F;
@@ -59,13 +62,57 @@ public:
 
   // Called once after whole-command-buffer validation and before the first
   // submission. A false result leaves the frame completely unsubmitted.
-  virtual bool reserve(std::size_t vertexCount, std::size_t indexCount) = 0;
+  virtual bool reserve(
+      std::size_t vertexCount, std::size_t indexCount,
+      std::size_t skinAllocationCount,
+      const GameplayBgaTransientRequirements &bgaRequirements) = 0;
   virtual void submit(const SkinQuadBackendBatch &) = 0;
 };
 
 [[nodiscard]] std::uint64_t skinBgfxState(skin::SkinBlendMode blend) noexcept;
 [[nodiscard]] std::uint32_t
 skinSamplerFlags(skin::SkinFilterMode filter) noexcept;
+
+// A value-owned preflight result for non-BGA command spans. Command payloads
+// remain borrowed from the immutable SkinCommandBuffer for the duration of
+// one Skin2DRenderer::submit call; every resource lookup, allocation, sampler
+// check, and backend reservation is completed before this plan becomes ready.
+class SkinQuadSubmissionPlan final {
+public:
+  SkinQuadSubmissionPlan() = default;
+  SkinQuadSubmissionPlan(SkinQuadSubmissionPlan &&) noexcept = default;
+  SkinQuadSubmissionPlan &
+  operator=(SkinQuadSubmissionPlan &&) noexcept = default;
+  SkinQuadSubmissionPlan(const SkinQuadSubmissionPlan &) = delete;
+  SkinQuadSubmissionPlan &operator=(const SkinQuadSubmissionPlan &) = delete;
+
+  [[nodiscard]] std::size_t segmentCount() const noexcept {
+    return segments_.size();
+  }
+  [[nodiscard]] bool fullyConsumed() const noexcept {
+    return ready_ && nextSegment_ == segments_.size();
+  }
+
+private:
+  struct ResolvedCommand {
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    std::optional<skin::UiLogicalRect> scissor;
+    bool suppressed = false;
+  };
+
+  struct Segment {
+    std::span<const skin::SkinDrawCommand> commands;
+    std::vector<ResolvedCommand> resolved;
+  };
+
+  const SkinQuadBatchRenderer *owner_ = nullptr;
+  std::uint64_t generation_ = 0;
+  std::size_t nextSegment_ = 0;
+  std::vector<Segment> segments_;
+  bool ready_ = false;
+
+  friend class SkinQuadBatchRenderer;
+};
 
 class SkinQuadBatchRenderer final {
 public:
@@ -82,6 +129,18 @@ public:
   // resource upload while production still binds a concrete session catalog.
   void begin(RenderContext &, const skin::SkinPreparedResourceView &);
 
+  // Two-phase path used by the skin/BGA compositor. BGA variants must never
+  // appear in these spans. All spans are preflighted together so aggregate
+  // transient capacity is known before any backend submission.
+  [[nodiscard]] bool prepare(
+      std::span<const std::span<const skin::SkinDrawCommand>> segments,
+      SkinQuadSubmissionPlan &plan,
+      const GameplayBgaTransientRequirements &bgaRequirements = {});
+  void submitPrepared(SkinQuadSubmissionPlan &plan,
+                      std::size_t segmentIndex) noexcept;
+  void discardPrepared(SkinQuadSubmissionPlan &plan) noexcept;
+
+  // Legacy adapter: one non-BGA span is prepared and emitted internally.
   [[nodiscard]] bool submit(std::span<const skin::SkinDrawCommand> commands);
   void flush();
 
@@ -95,17 +154,11 @@ private:
     bool textured = false;
   };
 
-  struct ResolvedCommand {
-    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
-    std::optional<skin::UiLogicalRect> scissor;
-    bool suppressed = false;
-  };
-
-  [[nodiscard]] bool preflight(std::span<const skin::SkinDrawCommand> commands,
-                               std::vector<ResolvedCommand> &resolved,
-                               std::vector<skin::SkinFilterMode> &samplers,
-                               std::size_t &vertexCount,
-                               std::size_t &indexCount) const;
+  [[nodiscard]] bool preflightSegment(
+      std::span<const skin::SkinDrawCommand> commands,
+      std::vector<SkinQuadSubmissionPlan::ResolvedCommand> &resolved,
+      std::vector<skin::SkinFilterMode> &samplers, std::size_t &vertexCount,
+      std::size_t &indexCount) const;
   void appendQuad(const std::array<skin::SkinVertex, 4> &, const BatchKey &);
   void appendPrimitive(const skin::SkinPrimitiveCommand &, const BatchKey &);
   void requireBatch(const BatchKey &);
@@ -121,6 +174,7 @@ private:
   std::vector<std::uint16_t> indices_;
   bool ready_ = false;
   bool submittedSpan_ = false;
+  std::uint64_t generation_ = 0;
 };
 
 } // namespace rendering

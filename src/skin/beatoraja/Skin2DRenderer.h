@@ -14,6 +14,8 @@
 #include <vector>
 
 struct RenderContext;
+struct PreparedGameplayBgaFrame;
+class IGameplayBgaSubmitter;
 namespace rendering {
 class SkinQuadBatchRenderer;
 }
@@ -244,6 +246,10 @@ public:
   [[nodiscard]] bool submit(const SkinCommandBuffer &,
                             const SkinResourceCatalog &, RenderContext &,
                             rendering::SkinQuadBatchRenderer &) const;
+  [[nodiscard]] bool submit(
+      const SkinCommandBuffer &, const SkinPreparedResourceView &,
+      RenderContext &, rendering::SkinQuadBatchRenderer &,
+      const PreparedGameplayBgaFrame &, IGameplayBgaSubmitter &) const;
 
 private:
   SkinFrameEvaluationResult evaluateFrameImpl(const SkinFrameInputs &,

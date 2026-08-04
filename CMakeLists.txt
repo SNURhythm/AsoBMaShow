@@ -3413,6 +3413,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
         src/audio/ClubBeat.cpp
+        src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp
         src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
@@ -4271,12 +4272,38 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(gameplay_bga_target_tests
         tests/gameplay_bga_target_tests.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/Utils.cpp
+        src/audio/AudioBackend.cpp
+        src/audio/AudioDeviceManager.cpp
+        src/audio/AudioMix.cpp
+        src/audio/AudioWrapper.cpp
+        src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
+        src/audio/Jukebox.cpp
+        src/audio/PrepMetronomeSound.cpp
+        src/audio/decoder.cpp
+        src/bms_parser.cpp
+        src/path.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/utils/Stopwatch.cpp
+        src/video/VideoDecodeState.cpp
+        src/video/VideoFrameLayout.cpp
+        src/video/VideoPlayer.cpp
     )
     target_include_directories(gameplay_bga_target_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(gameplay_bga_target_tests PRIVATE cxx_std_23)
+    target_link_libraries(gameplay_bga_target_tests PRIVATE ${COMMON_LIBS} bgfx)
+    if(APPLE)
+        target_link_libraries(gameplay_bga_target_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(gameplay_bga_target_tests PRIVATE shell32 ole32)
+    endif()
 
     add_executable(playfield_chart_visual_model_tests
         tests/playfield_chart_visual_model_tests.cpp
