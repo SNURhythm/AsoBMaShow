@@ -11,9 +11,18 @@
 
 namespace {
 
-bool isLongEndpoint(ChartVisualNoteKind kind) {
-  return kind == ChartVisualNoteKind::LongHead ||
-         kind == ChartVisualNoteKind::LongTail;
+ChartVisualNoteSource effectiveSource(const ChartVisualNote &note) {
+  // Fixtures and persisted models created before source was introduced retain
+  // their old kind-only encoding. New chart models always carry source.
+  if (note.source == ChartVisualNoteSource::Playable) {
+    if (note.kind == ChartVisualNoteKind::Invisible) {
+      return ChartVisualNoteSource::Invisible;
+    }
+    if (note.kind == ChartVisualNoteKind::Mine) {
+      return ChartVisualNoteSource::Mine;
+    }
+  }
+  return note.source;
 }
 
 bool isVisible(double scrollDelta, const PlayfieldProjectionRequest &request) {
@@ -26,8 +35,7 @@ bool isVisible(double scrollDelta, const PlayfieldProjectionRequest &request) {
 
 bool isLongIntervalVisible(double headScrollDelta, double tailScrollDelta,
                            const PlayfieldProjectionRequest &request) {
-  if (request.visibleScrollBefore == 0.0 &&
-      request.visibleScrollAfter == 0.0) {
+  if (request.visibleScrollBefore == 0.0 && request.visibleScrollAfter == 0.0) {
     return true;
   }
   const double minimum = -request.visibleScrollBefore;
@@ -36,16 +44,13 @@ bool isLongIntervalVisible(double headScrollDelta, double tailScrollDelta,
          std::min(headScrollDelta, tailScrollDelta) <= maximum;
 }
 
-skin::SkinProjectedNoteKind toSkinNoteKind(ChartVisualNoteKind kind) {
-  switch (kind) {
-  case ChartVisualNoteKind::Invisible:
+skin::SkinProjectedNoteKind toSkinNoteKind(ChartVisualNoteSource source) {
+  switch (source) {
+  case ChartVisualNoteSource::Invisible:
     return skin::SkinProjectedNoteKind::Invisible;
-  case ChartVisualNoteKind::Mine:
+  case ChartVisualNoteSource::Mine:
     return skin::SkinProjectedNoteKind::Mine;
-  case ChartVisualNoteKind::Normal:
-  case ChartVisualNoteKind::LongHead:
-  case ChartVisualNoteKind::LongBody:
-  case ChartVisualNoteKind::LongTail:
+  case ChartVisualNoteSource::Playable:
     return skin::SkinProjectedNoteKind::Normal;
   }
   return skin::SkinProjectedNoteKind::Normal;
@@ -81,42 +86,43 @@ skin::SkinProjectedLineKind toSkinLineKind(ProjectedLineKind kind) {
 
 double scrollPositionAtTime(const PlayfieldChartVisualModel &model,
                             long long timeMicros) {
-  if (model.timelines.empty()) {
-    return 0.0;
+  std::vector<const ChartVisualTimeline *> retained;
+  retained.reserve(model.timelines.size());
+  for (const auto &timeline : model.timelines) {
+    if (timeline.retainedForProjection) {
+      retained.push_back(&timeline);
+    }
   }
-  const auto next = std::upper_bound(
-      model.timelines.begin(), model.timelines.end(), timeMicros,
-      [](long long time, const ChartVisualTimeline &timeline) {
-        return time < timeline.timeMicros;
+  std::stable_sort(
+      retained.begin(), retained.end(),
+      [](const auto *left, const auto *right) {
+        const auto leftOrdinal =
+            left->retainedOrdinal == kNoRetainedTimelineOrdinal
+                ? left->authoredOrdinal
+                : left->retainedOrdinal;
+        const auto rightOrdinal =
+            right->retainedOrdinal == kNoRetainedTimelineOrdinal
+                ? right->authoredOrdinal
+                : right->retainedOrdinal;
+        return std::tie(leftOrdinal, left->authoredOrdinal, left->id) <
+               std::tie(rightOrdinal, right->authoredOrdinal, right->id);
       });
-  if (next == model.timelines.begin()) {
-    return next->scrollPosition;
+  std::vector<gameplay_scroll_geometry::ScrollPositionTimeline> values;
+  values.reserve(retained.size());
+  for (const auto *timeline : retained) {
+    values.push_back({.timeMicros = timeline->timeMicros,
+                      .scrollPosition = timeline->scrollPosition,
+                      .stopMicros = timeline->stopMicros,
+                      .bpm = timeline->bpm,
+                      .scrollRate = timeline->scrollRate});
   }
-  const auto &previous = *std::prev(next);
-  if (next == model.timelines.end() ||
-      next->timeMicros == previous.timeMicros) {
-    return previous.scrollPosition;
-  }
-  const long long stopEnd = previous.timeMicros + previous.stopMicros;
-  if (timeMicros <= stopEnd) {
-    return previous.scrollPosition;
-  }
-  const long long travelDuration =
-      next->timeMicros - previous.timeMicros - previous.stopMicros;
-  if (travelDuration <= 0) {
-    return next->scrollPosition;
-  }
-  const double progress = std::clamp(
-      static_cast<double>(timeMicros - stopEnd) /
-          static_cast<double>(travelDuration),
-      0.0, 1.0);
-  return previous.scrollPosition +
-         (next->scrollPosition - previous.scrollPosition) * progress;
+  return gameplay_scroll_geometry::scrollPositionAtTime(values, timeMicros);
 }
 
-PlayfieldProjectionResult PlayfieldProjection::project(
-    const PlayfieldChartVisualModel &model, const PlayfieldVisualState &state,
-    const PlayfieldProjectionRequest &request) {
+PlayfieldProjectionResult
+PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
+                             const PlayfieldVisualState &state,
+                             const PlayfieldProjectionRequest &request) {
   PlayfieldProjectionResult result;
   result.frameSerial = state.clock.serial;
   const long long timeMicros = state.clock.visualTimeMicros;
@@ -137,8 +143,8 @@ PlayfieldProjectionResult PlayfieldProjection::project(
   for (const auto &noteState : state.notes) {
     noteStates.emplace(noteState.id, &noteState);
   }
-  const auto stateFor = [&noteStates](ChartVisualId id)
-      -> const NotePresentationState * {
+  const auto stateFor =
+      [&noteStates](ChartVisualId id) -> const NotePresentationState * {
     const auto it = noteStates.find(id);
     return it == noteStates.end() ? nullptr : it->second;
   };
@@ -165,14 +171,18 @@ PlayfieldProjectionResult PlayfieldProjection::project(
 
   std::uint32_t lineOrdinal = 1;
   const auto appendLine = [&result, &reserve, &lineOrdinal](
-                              ChartVisualId timelineId, ProjectedLineKind kind,
-                              double scrollDelta) {
-    if (!reserve(gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
+                              const ChartVisualTimeline &timeline,
+                              ProjectedLineKind kind, double scrollDelta) {
+    if (!reserve(
+            gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
       return;
     }
-    result.lines.push_back({.timelineId = timelineId,
+    result.lines.push_back({.timelineId = timeline.id,
                             .kind = kind,
                             .scrollDelta = scrollDelta,
+                            .timeMicros = timeline.timeMicros,
+                            .authoredOrdinal = timeline.authoredOrdinal,
+                            .retainedOrdinal = timeline.retainedOrdinal,
                             .submissionOrdinal = lineOrdinal++});
   };
 
@@ -189,17 +199,20 @@ PlayfieldProjectionResult PlayfieldProjection::project(
             {.timelineId = timeline->id,
              .scrollDelta = scrollDelta,
              .timeMicros = timeline->timeMicros,
+             .authoredOrdinal = timeline->authoredOrdinal,
+             .retainedOrdinal = timeline->retainedOrdinal,
              .submissionOrdinal = timeline->authoredOrdinal});
         if (timeline->sectionLine) {
-          appendLine(timeline->id, ProjectedLineKind::Section, scrollDelta);
+          appendLine(*timeline, ProjectedLineKind::Section, scrollDelta);
         }
-        if (previousTimeline != nullptr && timeline->bpm != previousTimeline->bpm) {
-          appendLine(timeline->id, ProjectedLineKind::BpmChange, scrollDelta);
+        if (previousTimeline != nullptr &&
+            timeline->bpm != previousTimeline->bpm) {
+          appendLine(*timeline, ProjectedLineKind::BpmChange, scrollDelta);
         }
         if (timeline->stopMicros > 0) {
-          appendLine(timeline->id, ProjectedLineKind::Stop, scrollDelta);
+          appendLine(*timeline, ProjectedLineKind::Stop, scrollDelta);
         }
-        appendLine(timeline->id, ProjectedLineKind::Time, scrollDelta);
+        appendLine(*timeline, ProjectedLineKind::Time, scrollDelta);
       }
     }
     previousTimeline = timeline;
@@ -241,41 +254,45 @@ PlayfieldProjectionResult PlayfieldProjection::project(
     }
     const double rowScrollDelta =
         timeline->scrollPosition - result.currentScrollPosition;
-    const bool rowHasLongHead = std::ranges::any_of(
-        rowIt->second, [](const ChartVisualNote *note) {
-          return note->kind == ChartVisualNoteKind::LongHead;
+    const bool rowHasLongHead =
+        std::ranges::any_of(rowIt->second, [](const ChartVisualNote *note) {
+          return effectiveSource(*note) == ChartVisualNoteSource::Playable &&
+                 note->kind == ChartVisualNoteKind::LongHead;
         });
     bool needsPrimaryDepth = false;
     bool needsInvisibleDepth = false;
     for (const auto *note : rowIt->second) {
       const auto *noteState = stateFor(note->id);
       const bool dead = noteState != nullptr && noteState->dead;
-      if (note->kind == ChartVisualNoteKind::Invisible) {
+      if (effectiveSource(*note) == ChartVisualNoteSource::Invisible) {
         needsInvisibleDepth =
-            needsInvisibleDepth ||
-            (request.includeInvisibleNotes && !dead &&
-             timeline->timeMicros >= timeMicros &&
-             isVisible(rowScrollDelta, request));
+            needsInvisibleDepth || (request.includeInvisibleNotes && !dead &&
+                                    timeline->timeMicros >= timeMicros &&
+                                    isVisible(rowScrollDelta, request));
         continue;
       }
-      if (note->kind == ChartVisualNoteKind::Mine) {
+      if (effectiveSource(*note) == ChartVisualNoteSource::Mine) {
         needsPrimaryDepth =
-            needsPrimaryDepth ||
-            (!dead && timeline->timeMicros >= timeMicros &&
-             isVisible(rowScrollDelta, request));
+            needsPrimaryDepth || (!dead && timeline->timeMicros >= timeMicros &&
+                                  isVisible(rowScrollDelta, request));
         continue;
       }
-      if (note->kind == ChartVisualNoteKind::LongTail) {
+      if (effectiveSource(*note) == ChartVisualNoteSource::Playable &&
+          note->kind == ChartVisualNoteKind::LongTail) {
         continue;
       }
-      if (note->kind == ChartVisualNoteKind::LongHead) {
+      if (effectiveSource(*note) == ChartVisualNoteSource::Playable &&
+          note->kind == ChartVisualNoteKind::LongHead) {
         const auto pairIt = notes.find(note->pairId);
         const ChartVisualNote *tail =
             pairIt == notes.end() ? nullptr : pairIt->second;
-        const auto tailTimelineIt =
-            tail == nullptr ? timelines.end() : timelines.find(tail->timelineId);
+        const auto tailTimelineIt = tail == nullptr
+                                        ? timelines.end()
+                                        : timelines.find(tail->timelineId);
         const bool validPair =
-            tail != nullptr && tail->kind == ChartVisualNoteKind::LongTail &&
+            tail != nullptr &&
+            effectiveSource(*tail) == ChartVisualNoteSource::Playable &&
+            tail->kind == ChartVisualNoteKind::LongTail &&
             tail->pairId == note->id && tail->lane == note->lane &&
             tail->longNoteMode == note->longNoteMode &&
             tailTimelineIt != timelines.end() &&
@@ -330,23 +347,26 @@ PlayfieldProjectionResult PlayfieldProjection::project(
       continue;
     }
     const auto *noteState = stateFor(note->id);
-    if (note->kind == ChartVisualNoteKind::Invisible &&
+    if (effectiveSource(*note) == ChartVisualNoteSource::Invisible &&
         (!request.includeInvisibleNotes || timeline->timeMicros < timeMicros)) {
       continue;
     }
 
-    if (note->kind == ChartVisualNoteKind::LongHead) {
+    if (effectiveSource(*note) == ChartVisualNoteSource::Playable &&
+        note->kind == ChartVisualNoteKind::LongHead) {
       const auto pairIt = notes.find(note->pairId);
       const ChartVisualNote *tail =
           pairIt == notes.end() ? nullptr : pairIt->second;
       const auto tailTimelineIt =
           tail == nullptr ? timelines.end() : timelines.find(tail->timelineId);
-      const bool validPair = tail != nullptr &&
-                             tail->kind == ChartVisualNoteKind::LongTail &&
-                             tail->pairId == note->id && tail->lane == note->lane &&
-                             tail->longNoteMode == note->longNoteMode &&
-                             tailTimelineIt != timelines.end() &&
-                             timeline->timeMicros <= tailTimelineIt->second->timeMicros;
+      const bool validPair =
+          tail != nullptr &&
+          effectiveSource(*tail) == ChartVisualNoteSource::Playable &&
+          tail->kind == ChartVisualNoteKind::LongTail &&
+          tail->pairId == note->id && tail->lane == note->lane &&
+          tail->longNoteMode == note->longNoteMode &&
+          tailTimelineIt != timelines.end() &&
+          timeline->timeMicros <= tailTimelineIt->second->timeMicros;
       if (validPair) {
         const auto *tailTimeline = tailTimelineIt->second;
         const double tailScrollDelta =
@@ -358,7 +378,8 @@ PlayfieldProjectionResult PlayfieldProjection::project(
           result.budgetExceeded = true;
           continue;
         }
-        if (!reserve(gameplay_chart_entity_render_budget::kLongNoteReservationCost)) {
+        if (!reserve(gameplay_chart_entity_render_budget::
+                         kLongNoteReservationCost)) {
           continue;
         }
         const auto *tailState = stateFor(tail->id);
@@ -377,10 +398,20 @@ PlayfieldProjectionResult PlayfieldProjection::project(
         result.longNotes.push_back(
             {.headId = note->id,
              .tailId = tail->id,
+             .headTimelineId = timeline->id,
+             .tailTimelineId = tailTimeline->id,
              .lane = static_cast<int>(lane - model.laneOrder.begin()),
              .mode = note->longNoteMode,
+             .headSource = effectiveSource(*note),
+             .tailSource = effectiveSource(*tail),
              .headScrollDelta = scrollDelta,
              .tailScrollDelta = tailScrollDelta,
+             .headTimeMicros = timeline->timeMicros,
+             .tailTimeMicros = tailTimeline->timeMicros,
+             .headAuthoredOrdinal = note->authoredOrdinal,
+             .tailAuthoredOrdinal = tail->authoredOrdinal,
+             .headRetainedOrdinal = timeline->retainedOrdinal,
+             .tailRetainedOrdinal = tailTimeline->retainedOrdinal,
              .active = (noteState != nullptr && noteState->longActive) ||
                        (tailState != nullptr && tailState->longActive),
              .damaged = (noteState != nullptr && noteState->longDamaged) ||
@@ -389,18 +420,18 @@ PlayfieldProjectionResult PlayfieldProjection::project(
                          (tailState != nullptr && tailState->longReactive),
              .headPlayed = noteState != nullptr && noteState->judged,
              .tailPlayed = tailState != nullptr && tailState->judged,
-             .headJudged = noteState != nullptr &&
-                            (noteState->judged || noteState->dead),
-             .tailJudged = tailState != nullptr &&
-                            (tailState->judged || tailState->dead),
+             .headJudged =
+                 noteState != nullptr && (noteState->judged || noteState->dead),
+             .tailJudged =
+                 tailState != nullptr && (tailState->judged || tailState->dead),
              .headDead = headDead,
              .tailDead = tailDead,
-             .headPlayedTimeMicros =
-                 noteState != nullptr ? noteState->playedTimeMicros
-                                      : kPlayfieldTimestampOff,
-             .tailPlayedTimeMicros =
-                 tailState != nullptr ? tailState->playedTimeMicros
-                                      : kPlayfieldTimestampOff,
+             .headPlayedTimeMicros = noteState != nullptr
+                                         ? noteState->playedTimeMicros
+                                         : kPlayfieldTimestampOff,
+             .tailPlayedTimeMicros = tailState != nullptr
+                                         ? tailState->playedTimeMicros
+                                         : kPlayfieldTimestampOff,
              .tailReleasedEarly = tailReleasedEarly,
              .tailMissedWithHead = headDead && !tailDead && tailReleasedEarly,
              .tailResolvedAtOrAfterTiming =
@@ -427,14 +458,23 @@ PlayfieldProjectionResult PlayfieldProjection::project(
       result.budgetExceeded = true;
       continue;
     }
-    if (!reserve(gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
+    if (!reserve(
+            gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
       continue;
     }
     result.notes.push_back(
         {.noteId = note->id,
+         .timelineId = timeline->id,
+         .pairId = note->pairId,
          .lane = static_cast<int>(lane - model.laneOrder.begin()),
          .kind = note->kind,
+         .source = effectiveSource(*note),
+         .longNoteMode = note->longNoteMode,
+         .mineDamage = note->mineDamage,
          .scrollDelta = scrollDelta,
+         .timeMicros = timeline->timeMicros,
+         .authoredOrdinal = note->authoredOrdinal,
+         .retainedTimelineOrdinal = timeline->retainedOrdinal,
          .judged = noteState != nullptr && noteState->judged,
          .submissionOrdinal = order.next(),
          .builtInDepth = [&]() {
@@ -442,7 +482,7 @@ PlayfieldProjectionResult PlayfieldProjection::project(
            if (found == builtInDepths.end()) {
              return std::uint32_t{0};
            }
-           return note->kind == ChartVisualNoteKind::Invisible
+           return effectiveSource(*note) == ChartVisualNoteSource::Invisible
                       ? found->second.invisibleDepth.value_or(0)
                       : found->second.primaryDepth.value_or(0);
          }()});
@@ -461,7 +501,7 @@ adaptPlayfieldProjectionForSkin(const PlayfieldProjectionResult &projection) {
   for (const auto &note : projection.notes) {
     result.notes.push_back({.visualId = note.noteId,
                             .lane = note.lane,
-                            .kind = toSkinNoteKind(note.kind),
+                            .kind = toSkinNoteKind(note.source),
                             .authoredYDisplacement = note.scrollDelta,
                             .judged = note.judged,
                             .submissionOrdinal = note.submissionOrdinal});

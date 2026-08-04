@@ -26,14 +26,24 @@ struct ProjectedTimelineDescriptor {
   ChartVisualId timelineId = 0;
   double scrollDelta = 0.0;
   long long timeMicros = 0;
+  std::uint32_t authoredOrdinal = 0;
+  std::uint32_t retainedOrdinal = kNoRetainedTimelineOrdinal;
   std::uint32_t submissionOrdinal = 0;
 };
 
 struct ProjectedPlayfieldNote {
   ChartVisualId noteId = 0;
+  ChartVisualId timelineId = 0;
+  ChartVisualId pairId = 0;
   int lane = -1;
   ChartVisualNoteKind kind = ChartVisualNoteKind::Normal;
+  ChartVisualNoteSource source = ChartVisualNoteSource::Playable;
+  ChartLongNoteMode longNoteMode = ChartLongNoteMode::LN;
+  int mineDamage = 0;
   double scrollDelta = 0.0;
+  long long timeMicros = 0;
+  std::uint32_t authoredOrdinal = 0;
+  std::uint32_t retainedTimelineOrdinal = kNoRetainedTimelineOrdinal;
   bool judged = false;
   std::uint32_t submissionOrdinal = 0;
   // The built-in renderer shares one primary depth across playable notes and
@@ -44,10 +54,20 @@ struct ProjectedPlayfieldNote {
 struct ProjectedLongNoteDescriptor {
   ChartVisualId headId = 0;
   ChartVisualId tailId = 0;
+  ChartVisualId headTimelineId = 0;
+  ChartVisualId tailTimelineId = 0;
   int lane = -1;
   ChartLongNoteMode mode = ChartLongNoteMode::LN;
+  ChartVisualNoteSource headSource = ChartVisualNoteSource::Playable;
+  ChartVisualNoteSource tailSource = ChartVisualNoteSource::Playable;
   double headScrollDelta = 0.0;
   double tailScrollDelta = 0.0;
+  long long headTimeMicros = 0;
+  long long tailTimeMicros = 0;
+  std::uint32_t headAuthoredOrdinal = 0;
+  std::uint32_t tailAuthoredOrdinal = 0;
+  std::uint32_t headRetainedOrdinal = kNoRetainedTimelineOrdinal;
+  std::uint32_t tailRetainedOrdinal = kNoRetainedTimelineOrdinal;
   bool active = false;
   bool damaged = false;
   bool reactive = false;
@@ -71,6 +91,9 @@ struct ProjectedLineDescriptor {
   ChartVisualId timelineId = 0;
   ProjectedLineKind kind = ProjectedLineKind::Time;
   double scrollDelta = 0.0;
+  long long timeMicros = 0;
+  std::uint32_t authoredOrdinal = 0;
+  std::uint32_t retainedOrdinal = kNoRetainedTimelineOrdinal;
   std::uint32_t submissionOrdinal = 0;
 };
 

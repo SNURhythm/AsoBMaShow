@@ -13,8 +13,8 @@ bool closeTo(double actual, double expected) {
 
 bool containsNote(const std::vector<ProjectedPlayfieldNote> &notes,
                   ChartVisualId id) {
-  return std::ranges::any_of(notes,
-                             [id](const auto &note) { return note.noteId == id; });
+  return std::ranges::any_of(
+      notes, [id](const auto &note) { return note.noteId == id; });
 }
 
 } // namespace
@@ -23,46 +23,116 @@ int main() {
   PlayfieldChartVisualModel model;
   model.laneOrder = {1, 2};
   model.timelines = {
-      {.id = 1, .timeMicros = 0, .scrollPosition = 0.0, .bpm = 120.0,
-       .sectionLine = true, .retainedForProjection = true, .authoredOrdinal = 0},
-      {.id = 2, .timeMicros = 1'000'000, .scrollPosition = 4.0, .bpm = 120.0,
-       .stopMicros = 200'000, .retainedForProjection = true, .authoredOrdinal = 1},
-      {.id = 3, .timeMicros = 2'000'000, .scrollPosition = 7.2, .bpm = 180.0,
-       .scrollRate = 0.8, .retainedForProjection = true, .authoredOrdinal = 2},
-      {.id = 4, .timeMicros = 3'000'000, .scrollPosition = 10.4, .bpm = 180.0,
-       .scrollRate = 0.8, .sectionLine = true, .retainedForProjection = true,
-       .authoredOrdinal = 3},
+      {.id = 1,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .bpm = 120.0,
+       .sectionLine = true,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0,
+       .retainedOrdinal = 0},
+      {.id = 2,
+       .timeMicros = 1'000'000,
+       .scrollPosition = 4.0,
+       .bpm = 120.0,
+       .stopMicros = 200'000,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1,
+       .retainedOrdinal = 1},
+      {.id = 3,
+       .timeMicros = 2'000'000,
+       .scrollPosition = 7.2,
+       .bpm = 180.0,
+       .scrollRate = 0.8,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2,
+       .retainedOrdinal = 2},
+      {.id = 4,
+       .timeMicros = 3'000'000,
+       .scrollPosition = 10.4,
+       .bpm = 180.0,
+       .scrollRate = 0.8,
+       .sectionLine = true,
+       .retainedForProjection = true,
+       .authoredOrdinal = 3,
+       .retainedOrdinal = 3},
   };
   model.notes = {
-      {.id = 11, .timelineId = 1, .lane = 1,
-       .kind = ChartVisualNoteKind::Invisible, .authoredOrdinal = 0},
-      {.id = 12, .timelineId = 3, .lane = 1,
-       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 1},
-      {.id = 13, .timelineId = 3, .lane = 2,
-       .kind = ChartVisualNoteKind::Mine, .authoredOrdinal = 2},
-      {.id = 20, .timelineId = 2, .pairId = 21, .lane = 1,
-       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::HCN,
+      {.id = 11,
+       .timelineId = 1,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Invisible,
+       .source = ChartVisualNoteSource::Invisible,
+       .authoredOrdinal = 0},
+      {.id = 12,
+       .timelineId = 3,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Normal,
+       .authoredOrdinal = 1},
+      {.id = 13,
+       .timelineId = 3,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::Mine,
+       .source = ChartVisualNoteSource::Mine,
+       .authoredOrdinal = 2},
+      {.id = 20,
+       .timelineId = 2,
+       .pairId = 21,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::HCN,
        .authoredOrdinal = 3},
-      {.id = 21, .timelineId = 4, .pairId = 20, .lane = 1,
-       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::HCN,
+      {.id = 21,
+       .timelineId = 4,
+       .pairId = 20,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::HCN,
        .authoredOrdinal = 4},
-      {.id = 22, .timelineId = 3, .lane = 2,
-       .kind = ChartVisualNoteKind::LongHead, .authoredOrdinal = 5},
-      {.id = 23, .timelineId = 3, .pairId = 24, .lane = 2,
-       .kind = ChartVisualNoteKind::LongHead, .authoredOrdinal = 6},
-      {.id = 24, .timelineId = 4, .pairId = 23, .lane = 2,
-       .kind = ChartVisualNoteKind::LongHead, .authoredOrdinal = 7},
-      {.id = 30, .timelineId = 2, .pairId = 31, .lane = 2,
-       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::LN,
+      {.id = 22,
+       .timelineId = 3,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::LongHead,
+       .authoredOrdinal = 5},
+      {.id = 23,
+       .timelineId = 3,
+       .pairId = 24,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::LongHead,
+       .authoredOrdinal = 6},
+      {.id = 24,
+       .timelineId = 4,
+       .pairId = 23,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::LongHead,
+       .authoredOrdinal = 7},
+      {.id = 30,
+       .timelineId = 2,
+       .pairId = 31,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::LN,
        .authoredOrdinal = 8},
-      {.id = 31, .timelineId = 3, .pairId = 30, .lane = 2,
-       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::LN,
+      {.id = 31,
+       .timelineId = 3,
+       .pairId = 30,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::LN,
        .authoredOrdinal = 9},
-      {.id = 40, .timelineId = 2, .pairId = 41, .lane = 2,
-       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::CN,
+      {.id = 40,
+       .timelineId = 2,
+       .pairId = 41,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::CN,
        .authoredOrdinal = 10},
-      {.id = 41, .timelineId = 4, .pairId = 40, .lane = 2,
-       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::CN,
+      {.id = 41,
+       .timelineId = 4,
+       .pairId = 40,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::CN,
        .authoredOrdinal = 11},
   };
   const auto originalModel = model;
@@ -70,32 +140,43 @@ int main() {
   PlayfieldVisualState state;
   state.clock = {.serial = 42, .visualTimeMicros = 1'100'000};
   state.notes = {
-      {.id = 20, .judged = true, .longActive = true, .longDamaged = true,
+      {.id = 20,
+       .judged = true,
+       .longActive = true,
+       .longDamaged = true,
        .longReactive = true},
       {.id = 21, .dead = true},
   };
   const auto originalState = state;
 
   PlayfieldProjection projection;
-  const auto result = projection.project(
-      model, state,
-      {.visibleScrollBefore = 10.0, .visibleScrollAfter = 10.0,
-       .includeInvisibleNotes = true});
+  const auto result = projection.project(model, state,
+                                         {.visibleScrollBefore = 10.0,
+                                          .visibleScrollAfter = 10.0,
+                                          .includeInvisibleNotes = true});
 
   if (result.frameSerial != 42 || !closeTo(result.currentScrollPosition, 4.0) ||
       !closeTo(scrollPositionAtTime(model, 1'100'000), 4.0) ||
       result.timelines.size() != 4 || result.longNotes.size() != 3 ||
       containsNote(result.notes, 11) || !containsNote(result.notes, 12) ||
       !containsNote(result.notes, 13) || !containsNote(result.notes, 22) ||
-      model != originalModel || state.clock.serial != originalState.clock.serial ||
+      model != originalModel ||
+      state.clock.serial != originalState.clock.serial ||
       state.clock.visualTimeMicros != originalState.clock.visualTimeMicros ||
       state.notes != originalState.notes) {
-    std::cerr << "projection state, stop, invisible, or retained timeline contract failed\n";
+    std::cerr << "projection state, stop, invisible, or retained timeline "
+                 "contract failed\n";
     return EXIT_FAILURE;
   }
 
   const auto &longNote = result.longNotes.front();
   if (longNote.headId != 20 || longNote.tailId != 21 ||
+      longNote.headTimelineId != 2 || longNote.tailTimelineId != 4 ||
+      longNote.headTimeMicros != 1'000'000 ||
+      longNote.tailTimeMicros != 3'000'000 ||
+      longNote.headRetainedOrdinal != 1 || longNote.tailRetainedOrdinal != 3 ||
+      longNote.headSource != ChartVisualNoteSource::Playable ||
+      longNote.tailSource != ChartVisualNoteSource::Playable ||
       longNote.mode != ChartLongNoteMode::HCN || !longNote.active ||
       !longNote.damaged || !longNote.reactive || !longNote.headJudged ||
       !longNote.tailJudged || longNote.submissionOrdinal <= 181U) {
@@ -105,15 +186,87 @@ int main() {
   if (result.longNotes[1].mode != ChartLongNoteMode::LN ||
       result.longNotes[2].mode != ChartLongNoteMode::CN ||
       result.notes.size() != 5 || result.notes[0].noteId != 12 ||
-      result.notes[0].submissionOrdinal != 181U || result.notes[1].noteId != 13 ||
+      result.notes[0].submissionOrdinal != 181U ||
+      result.notes[1].noteId != 13 ||
       result.notes[1].submissionOrdinal != 182U) {
     std::cerr << "projection mode or deterministic ordering contract failed\n";
     return EXIT_FAILURE;
   }
+  if (result.timelines[1].timelineId != 2 ||
+      result.timelines[1].timeMicros != 1'000'000 ||
+      result.timelines[1].authoredOrdinal != 1 ||
+      result.timelines[1].retainedOrdinal != 1 ||
+      result.notes[0].timelineId != 3 ||
+      result.notes[0].timeMicros != 2'000'000 ||
+      result.notes[0].retainedTimelineOrdinal != 2 ||
+      result.notes[0].source != ChartVisualNoteSource::Playable) {
+    std::cerr << "projection value DTO contract failed\n";
+    return EXIT_FAILURE;
+  }
+
+  PlayfieldChartVisualModel invisibleLongModel;
+  invisibleLongModel.laneOrder = {1};
+  invisibleLongModel.timelines = {
+      {.id = 100,
+       .timeMicros = 1'000'000,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 7,
+       .retainedOrdinal = 0},
+      {.id = 101,
+       .timeMicros = 2'000'000,
+       .scrollPosition = 2.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 8,
+       .retainedOrdinal = 1},
+  };
+  invisibleLongModel.notes = {
+      {.id = 1001,
+       .timelineId = 100,
+       .pairId = 1002,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead,
+       .source = ChartVisualNoteSource::Invisible,
+       .longNoteMode = ChartLongNoteMode::CN,
+       .authoredOrdinal = 3},
+      {.id = 1002,
+       .timelineId = 101,
+       .pairId = 1001,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail,
+       .source = ChartVisualNoteSource::Invisible,
+       .longNoteMode = ChartLongNoteMode::CN,
+       .authoredOrdinal = 4},
+  };
+  PlayfieldVisualState invisibleLongState;
+  invisibleLongState.clock.visualTimeMicros = 500'000;
+  const auto invisibleLongResult = projection.project(
+      invisibleLongModel, invisibleLongState, {.includeInvisibleNotes = true});
+  // Projection descriptors are parser-free value snapshots: disposing of the
+  // input model cannot alter the endpoint data retained for this frame.
+  invisibleLongModel = {};
+  if (invisibleLongResult.longNotes.size() != 0 ||
+      invisibleLongResult.notes.size() != 2 ||
+      invisibleLongResult.notes[0].source != ChartVisualNoteSource::Invisible ||
+      invisibleLongResult.notes[0].kind != ChartVisualNoteKind::LongHead ||
+      invisibleLongResult.notes[0].longNoteMode != ChartLongNoteMode::CN ||
+      invisibleLongResult.notes[0].pairId != 1002 ||
+      invisibleLongResult.notes[0].timelineId != 100 ||
+      invisibleLongResult.notes[0].timeMicros != 1'000'000 ||
+      invisibleLongResult.notes[0].builtInDepth != 183U ||
+      invisibleLongResult.notes[1].source != ChartVisualNoteSource::Invisible ||
+      invisibleLongResult.notes[1].kind != ChartVisualNoteKind::LongTail ||
+      invisibleLongResult.notes[1].pairId != 1001 ||
+      invisibleLongResult.notes[1].retainedTimelineOrdinal != 1 ||
+      invisibleLongResult.notes[1].builtInDepth != 184U) {
+    std::cerr << "invisible long endpoint source contract failed\n";
+    return EXIT_FAILURE;
+  }
 
   const auto lineKindCount = [&result](ProjectedLineKind kind) {
-    return std::count_if(result.lines.begin(), result.lines.end(),
-                         [kind](const auto &line) { return line.kind == kind; });
+    return std::count_if(
+        result.lines.begin(), result.lines.end(),
+        [kind](const auto &line) { return line.kind == kind; });
   };
   if (lineKindCount(ProjectedLineKind::Section) != 2 ||
       lineKindCount(ProjectedLineKind::BpmChange) != 1 ||
@@ -125,17 +278,20 @@ int main() {
 
   const auto views = adaptPlayfieldProjectionForSkin(result);
   const auto hasSkinLineKind = [&views](skin::SkinProjectedLineKind kind) {
-    return std::ranges::any_of(views.lines,
-                               [kind](const auto &line) { return line.kind == kind; });
+    return std::ranges::any_of(
+        views.lines, [kind](const auto &line) { return line.kind == kind; });
   };
-  if (views.longNotes.size() != 3 || views.lines.size() != result.lines.size() ||
+  if (views.longNotes.size() != 3 ||
+      views.lines.size() != result.lines.size() ||
       views.longNotes.front().headVisualId != 20 ||
-      views.longNotes.front().tailVisualId != 21 || !views.longNotes.front().active ||
-      !views.longNotes.front().damaged || !views.longNotes.front().reactive ||
+      views.longNotes.front().tailVisualId != 21 ||
+      !views.longNotes.front().active || !views.longNotes.front().damaged ||
+      !views.longNotes.front().reactive ||
       views.longNotes.front().submissionOrdinal != longNote.submissionOrdinal ||
       !closeTo(views.longNotes.front().headAuthoredYDisplacement,
                longNote.headScrollDelta) ||
-      views.lines.front().submissionOrdinal != result.lines.front().submissionOrdinal ||
+      views.lines.front().submissionOrdinal !=
+          result.lines.front().submissionOrdinal ||
       !hasSkinLineKind(skin::SkinProjectedLineKind::Group) ||
       !hasSkinLineKind(skin::SkinProjectedLineKind::Bpm) ||
       !hasSkinLineKind(skin::SkinProjectedLineKind::Stop) ||
@@ -168,11 +324,15 @@ int main() {
 
   PlayfieldChartVisualModel budgetModel;
   budgetModel.laneOrder = {1};
-  budgetModel.timelines = {{.id = 1, .scrollPosition = 0.0,
-                            .retainedForProjection = true}};
-  budgetModel.notes = {{.id = 1, .timelineId = 1, .lane = 1,
+  budgetModel.timelines = {
+      {.id = 1, .scrollPosition = 0.0, .retainedForProjection = true}};
+  budgetModel.notes = {{.id = 1,
+                        .timelineId = 1,
+                        .lane = 1,
                         .kind = ChartVisualNoteKind::Normal},
-                       {.id = 2, .timelineId = 1, .lane = 1,
+                       {.id = 2,
+                        .timelineId = 1,
+                        .lane = 1,
                         .kind = ChartVisualNoteKind::Normal}};
   const auto budgetResult = projection.project(
       budgetModel, state,
@@ -189,22 +349,34 @@ int main() {
   PlayfieldChartVisualModel sharedRowDepthModel;
   sharedRowDepthModel.laneOrder = {1, 2};
   sharedRowDepthModel.timelines = {
-      {.id = 50, .timeMicros = 2'000'000, .scrollPosition = 10.0,
-       .retainedForProjection = true, .authoredOrdinal = 0},
+      {.id = 50,
+       .timeMicros = 2'000'000,
+       .scrollPosition = 10.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0},
   };
   sharedRowDepthModel.notes = {
-      {.id = 501, .timelineId = 50, .lane = 1,
-       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 0},
-      {.id = 502, .timelineId = 50, .lane = 2,
-       .kind = ChartVisualNoteKind::Mine, .authoredOrdinal = 1},
-      {.id = 503, .timelineId = 50, .lane = 1,
-       .kind = ChartVisualNoteKind::Invisible, .authoredOrdinal = 2},
+      {.id = 501,
+       .timelineId = 50,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Normal,
+       .authoredOrdinal = 0},
+      {.id = 502,
+       .timelineId = 50,
+       .lane = 2,
+       .kind = ChartVisualNoteKind::Mine,
+       .authoredOrdinal = 1},
+      {.id = 503,
+       .timelineId = 50,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Invisible,
+       .authoredOrdinal = 2},
   };
   PlayfieldVisualState sharedRowDepthState;
   sharedRowDepthState.clock.visualTimeMicros = 1'000'000;
-  const auto sharedRowDepthResult = projection.project(
-      sharedRowDepthModel, sharedRowDepthState,
-      {.includeInvisibleNotes = true});
+  const auto sharedRowDepthResult =
+      projection.project(sharedRowDepthModel, sharedRowDepthState,
+                         {.includeInvisibleNotes = true});
   if (sharedRowDepthResult.notes.size() != 3 ||
       sharedRowDepthResult.notes[0].noteId != 501 ||
       sharedRowDepthResult.notes[0].submissionOrdinal != 181U ||
@@ -222,23 +394,37 @@ int main() {
   PlayfieldChartVisualModel pastLongDepthModel;
   pastLongDepthModel.laneOrder = {1};
   pastLongDepthModel.timelines = {
-      {.id = 60, .timeMicros = 0, .scrollPosition = 0.0,
-       .retainedForProjection = true, .authoredOrdinal = 0},
-      {.id = 61, .timeMicros = 1'000'000, .scrollPosition = 1.0,
-       .retainedForProjection = true, .authoredOrdinal = 1},
+      {.id = 60,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0},
+      {.id = 61,
+       .timeMicros = 1'000'000,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1},
   };
   pastLongDepthModel.notes = {
-      {.id = 601, .timelineId = 60, .pairId = 602, .lane = 1,
-       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::LN,
+      {.id = 601,
+       .timelineId = 60,
+       .pairId = 602,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::LN,
        .authoredOrdinal = 0},
-      {.id = 602, .timelineId = 61, .pairId = 601, .lane = 1,
-       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::LN,
+      {.id = 602,
+       .timelineId = 61,
+       .pairId = 601,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::LN,
        .authoredOrdinal = 1},
   };
   PlayfieldVisualState pastLongDepthState;
   pastLongDepthState.clock.visualTimeMicros = 0;
-  const auto pastLongDepthResult = projection.project(
-      pastLongDepthModel, pastLongDepthState, {});
+  const auto pastLongDepthResult =
+      projection.project(pastLongDepthModel, pastLongDepthState, {});
   // Desired DTO contract: the always pre-reserved past-long body/endpoint
   // depths are 181/182, so the first authored long note exposes body 183 and
   // endpoint 184 while its submission ordinal remains a separate, unique
@@ -254,19 +440,36 @@ int main() {
   PlayfieldChartVisualModel spanningLongModel;
   spanningLongModel.laneOrder = {1};
   spanningLongModel.timelines = {
-      {.id = 70, .timeMicros = 0, .scrollPosition = -3.0,
-       .retainedForProjection = true, .authoredOrdinal = 0},
-      {.id = 71, .timeMicros = 500'000, .scrollPosition = 0.0,
-       .retainedForProjection = true, .authoredOrdinal = 1},
-      {.id = 72, .timeMicros = 1'000'000, .scrollPosition = 3.0,
-       .retainedForProjection = true, .authoredOrdinal = 2},
+      {.id = 70,
+       .timeMicros = 0,
+       .scrollPosition = -3.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0},
+      {.id = 71,
+       .timeMicros = 500'000,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1},
+      {.id = 72,
+       .timeMicros = 1'000'000,
+       .scrollPosition = 3.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2},
   };
   spanningLongModel.notes = {
-      {.id = 701, .timelineId = 70, .pairId = 702, .lane = 1,
-       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::LN,
+      {.id = 701,
+       .timelineId = 70,
+       .pairId = 702,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::LN,
        .authoredOrdinal = 0},
-      {.id = 702, .timelineId = 72, .pairId = 701, .lane = 1,
-       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::LN,
+      {.id = 702,
+       .timelineId = 72,
+       .pairId = 701,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::LN,
        .authoredOrdinal = 1},
   };
   PlayfieldVisualState spanningLongState;
@@ -284,29 +487,59 @@ int main() {
   PlayfieldChartVisualModel longStateModel;
   longStateModel.laneOrder = {1};
   longStateModel.timelines = {
-      {.id = 80, .timeMicros = 0, .scrollPosition = 0.0,
-       .retainedForProjection = true, .authoredOrdinal = 0},
-      {.id = 81, .timeMicros = 1'000'000, .scrollPosition = 1.0,
-       .retainedForProjection = true, .authoredOrdinal = 1},
+      {.id = 80,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0},
+      {.id = 81,
+       .timeMicros = 1'000'000,
+       .scrollPosition = 1.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1},
   };
   longStateModel.notes = {
-      {.id = 801, .timelineId = 80, .pairId = 802, .lane = 1,
-       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::LN,
+      {.id = 801,
+       .timelineId = 80,
+       .pairId = 802,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::LN,
        .authoredOrdinal = 0},
-      {.id = 802, .timelineId = 81, .pairId = 801, .lane = 1,
-       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::LN,
+      {.id = 802,
+       .timelineId = 81,
+       .pairId = 801,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::LN,
        .authoredOrdinal = 1},
-      {.id = 803, .timelineId = 80, .pairId = 804, .lane = 1,
-       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::CN,
+      {.id = 803,
+       .timelineId = 80,
+       .pairId = 804,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::CN,
        .authoredOrdinal = 2},
-      {.id = 804, .timelineId = 81, .pairId = 803, .lane = 1,
-       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::CN,
+      {.id = 804,
+       .timelineId = 81,
+       .pairId = 803,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::CN,
        .authoredOrdinal = 3},
-      {.id = 805, .timelineId = 80, .pairId = 806, .lane = 1,
-       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::CN,
+      {.id = 805,
+       .timelineId = 80,
+       .pairId = 806,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead,
+       .longNoteMode = ChartLongNoteMode::CN,
        .authoredOrdinal = 4},
-      {.id = 806, .timelineId = 81, .pairId = 805, .lane = 1,
-       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::CN,
+      {.id = 806,
+       .timelineId = 81,
+       .pairId = 805,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail,
+       .longNoteMode = ChartLongNoteMode::CN,
        .authoredOrdinal = 5},
   };
   PlayfieldVisualState longState;
@@ -316,12 +549,10 @@ int main() {
       {.id = 803, .judged = true},
       {.id = 804, .judged = true, .playedTimeMicros = 500'000},
       {.id = 805, .judged = true},
-      {.id = 806,
-       .judged = true,
-       .dead = true,
-       .playedTimeMicros = 1'000'000},
+      {.id = 806, .judged = true, .dead = true, .playedTimeMicros = 1'000'000},
   };
-  const auto longStateResult = projection.project(longStateModel, longState, {});
+  const auto longStateResult =
+      projection.project(longStateModel, longState, {});
   // Desired DTO contract: ProjectedLongNoteDescriptor::headDead and
   // ::tailDead preserve death independently from judgement, so a dead-head
   // orphan, an early-release CN tail, and a dead resolved tail do not collapse
@@ -354,20 +585,43 @@ int main() {
   PlayfieldChartVisualModel reverseStopModel;
   reverseStopModel.laneOrder = {1};
   reverseStopModel.timelines = {
-      {.id = 90, .timeMicros = 0, .scrollPosition = 0.0, .bpm = 120.0,
-       .retainedForProjection = true, .authoredOrdinal = 0},
-      {.id = 91, .timeMicros = 1'000'000, .scrollPosition = -1.0, .bpm = 120.0,
-       .stopMicros = 500'000, .retainedForProjection = true, .authoredOrdinal = 1},
-      {.id = 92, .timeMicros = 1'000'000, .scrollPosition = -1.0, .bpm = 120.0,
-       .retainedForProjection = true, .authoredOrdinal = 2},
-      {.id = 93, .timeMicros = 2'000'000, .scrollPosition = -2.0, .bpm = 120.0,
-       .retainedForProjection = true, .authoredOrdinal = 3},
+      {.id = 90,
+       .timeMicros = 0,
+       .scrollPosition = 0.0,
+       .bpm = 120.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 0},
+      {.id = 91,
+       .timeMicros = 1'000'000,
+       .scrollPosition = -1.0,
+       .bpm = 120.0,
+       .stopMicros = 500'000,
+       .retainedForProjection = true,
+       .authoredOrdinal = 1},
+      {.id = 92,
+       .timeMicros = 1'000'000,
+       .scrollPosition = -1.0,
+       .bpm = 120.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 2},
+      {.id = 93,
+       .timeMicros = 2'000'000,
+       .scrollPosition = -2.0,
+       .bpm = 120.0,
+       .retainedForProjection = true,
+       .authoredOrdinal = 3},
   };
   reverseStopModel.notes = {
-      {.id = 901, .timelineId = 91, .lane = 1,
-       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 0},
-      {.id = 902, .timelineId = 92, .lane = 1,
-       .kind = ChartVisualNoteKind::Mine, .authoredOrdinal = 1},
+      {.id = 901,
+       .timelineId = 91,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Normal,
+       .authoredOrdinal = 0},
+      {.id = 902,
+       .timelineId = 92,
+       .lane = 1,
+       .kind = ChartVisualNoteKind::Mine,
+       .authoredOrdinal = 1},
   };
   PlayfieldVisualState reverseStopState;
   reverseStopState.clock.visualTimeMicros = 1'250'000;
@@ -383,7 +637,8 @@ int main() {
       reverseStopResult.notes[1].noteId != 902 ||
       reverseStopResult.notes[0].submissionOrdinal >=
           reverseStopResult.notes[1].submissionOrdinal) {
-    std::cerr << "reverse scroll, stop, and equal-row traversal contract failed\n";
+    std::cerr
+        << "reverse scroll, stop, and equal-row traversal contract failed\n";
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;
