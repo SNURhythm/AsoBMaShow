@@ -44,9 +44,15 @@ bool PlayfieldAuthorityUpdate::operator==(
          sameSnapshot(pacemakerStatus, other.pacemakerStatus) &&
          playOptionLabel == other.playOptionLabel &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
+         gameplayMode == other.gameplayMode &&
+         loadingState == other.loadingState &&
          startLaneIndicators == other.startLaneIndicators &&
          startLaneIndicatorsVisible == other.startLaneIndicatorsVisible &&
          laneCoverPercent == other.laneCoverPercent &&
+         laneCoverEnabled == other.laneCoverEnabled &&
+         liftEnabled == other.liftEnabled && liftRatio == other.liftRatio &&
+         hiddenEnabled == other.hiddenEnabled &&
+         hiddenRatio == other.hiddenRatio &&
          resetLaneCoverVisibleTimeReference ==
              other.resetLaneCoverVisibleTimeReference;
 }
@@ -86,6 +92,8 @@ void PlayfieldVisualStateStore::resetModel(
   combo_ = 0;
   score_ = 0;
   fastSlowMicros_ = 0;
+  sceneStartMicros_ = kPlayfieldTimestampOff;
+  playStartMicros_ = kPlayfieldTimestampOff;
 }
 
 void PlayfieldVisualStateStore::setConfiguration(

@@ -364,6 +364,91 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
           "untouched lane timestamps use the shared OFF sentinel");
 }
 
+void testGameplayModeAndLaneCoverAuthorityAreCapturedByValue() {
+  ChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+
+  PlayfieldAuthorityUpdate authority;
+  authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  authority.loadingState = PlayfieldLoadingState::Loading;
+  authority.laneCoverEnabled = true;
+  authority.laneCoverPercent = 60;
+  authority.liftEnabled = true;
+  authority.liftRatio = 0.25F;
+  authority.hiddenEnabled = true;
+  authority.hiddenRatio = 0.40F;
+  store.applyAuthorityUpdate(authority);
+
+  const auto captured = store.capture({.serial = 41});
+  authority.gameplayMode = PlayfieldGameplayMode::Replay;
+  authority.loadingState = PlayfieldLoadingState::Loaded;
+  authority.laneCoverEnabled = false;
+  authority.laneCoverPercent = 0;
+  authority.liftEnabled = false;
+  authority.liftRatio = 0.0F;
+  authority.hiddenEnabled = false;
+  authority.hiddenRatio = 0.0F;
+  store.applyAuthorityUpdate(authority);
+  const auto replayCaptured = store.capture({.serial = 42});
+  authority.gameplayMode = PlayfieldGameplayMode::Play;
+  store.applyAuthorityUpdate(authority);
+  const auto playCaptured = store.capture({.serial = 43});
+
+  require(captured.authority.gameplayMode ==
+                  PlayfieldGameplayMode::Practice &&
+              captured.authority.loadingState ==
+                  PlayfieldLoadingState::Loading &&
+              captured.authority.laneCoverEnabled &&
+              captured.authority.laneCoverPercent == 60 &&
+              captured.authority.liftEnabled &&
+              captured.authority.liftRatio == 0.25F &&
+              captured.authority.hiddenEnabled &&
+              captured.authority.hiddenRatio == 0.40F,
+          "captured gameplay mode and lane-cover authority remain an "
+          "immutable frame value");
+  require(replayCaptured.authority.gameplayMode ==
+                  PlayfieldGameplayMode::Replay &&
+              replayCaptured.authority.loadingState ==
+                  PlayfieldLoadingState::Loaded &&
+              playCaptured.authority.gameplayMode ==
+                  PlayfieldGameplayMode::Play,
+          "play, replay, and practice modes remain explicit and mutually "
+          "exclusive");
+}
+
+void testLifecycleClocksDefaultAndResetToTheOffSentinel() {
+  ChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+
+  const auto beforeStart = store.capture({});
+  require(beforeStart.authority.gameplayMode ==
+                  PlayfieldGameplayMode::Unknown &&
+              beforeStart.authority.loadingState ==
+                  PlayfieldLoadingState::Unknown &&
+              beforeStart.sceneStartMicros == kPlayfieldTimestampOff &&
+              beforeStart.playStartMicros == kPlayfieldTimestampOff,
+          "unstarted gameplay authority stays unknown and lifecycle clocks "
+          "use the explicit OFF sentinel");
+
+  store.setSceneStartMicros(0);
+  store.setPlayStartMicros(-1'500'000);
+  const auto started = store.capture({});
+  require(started.sceneStartMicros == 0 &&
+              started.playStartMicros == -1'500'000,
+          "zero and negative gameplay lifecycle starts remain exact timestamps");
+
+  store.resetModel(model);
+  const auto reset = store.capture({});
+  require(reset.sceneStartMicros == kPlayfieldTimestampOff &&
+              reset.playStartMicros == kPlayfieldTimestampOff &&
+              started.sceneStartMicros == 0 &&
+              started.playStartMicros == -1'500'000,
+          "model reset turns current lifecycle clocks off without mutating "
+          "an older capture");
+}
+
 void testJudgeTimingIsClampedToThePublicStateWidth() {
   ChartFixture fixture;
   const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
@@ -611,6 +696,8 @@ int main() {
   testChartModelOwnsStablePointerFreeValues();
   testLongNoteModeUsesChartThenOverridePrecedence();
   testVisualStateCaptureAndFanoutAreCoherentValueSnapshots();
+  testGameplayModeAndLaneCoverAuthorityAreCapturedByValue();
+  testLifecycleClocksDefaultAndResetToTheOffSentinel();
   testJudgeTimingIsClampedToThePublicStateWidth();
   testCapturedBgaMissStateTracksJudgesAndResets();
   testBgaMissStatePropagatesThroughEventFanoutBeforeCapture();

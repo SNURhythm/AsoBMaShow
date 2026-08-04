@@ -58,6 +58,19 @@ struct PlayfieldPresentationConfig {
   bool operator==(const PlayfieldPresentationConfig &) const = default;
 };
 
+enum class PlayfieldGameplayMode : std::uint8_t {
+  Unknown,
+  Play,
+  Replay,
+  Practice,
+};
+
+enum class PlayfieldLoadingState : std::uint8_t {
+  Unknown,
+  Loading,
+  Loaded,
+};
+
 struct PlayfieldAuthorityUpdate {
   double currentBpm = 0.0;
   std::map<Judgement, int> judgementCounters;
@@ -70,9 +83,16 @@ struct PlayfieldAuthorityUpdate {
   pacemaker::Snapshot pacemakerStatus;
   std::string playOptionLabel;
   bool autoPlayMarkVisible = false;
+  PlayfieldGameplayMode gameplayMode = PlayfieldGameplayMode::Unknown;
+  PlayfieldLoadingState loadingState = PlayfieldLoadingState::Unknown;
   std::vector<int> startLaneIndicators;
   bool startLaneIndicatorsVisible = false;
   int laneCoverPercent = 0;
+  bool laneCoverEnabled = false;
+  bool liftEnabled = false;
+  float liftRatio = 0.0F;
+  bool hiddenEnabled = false;
+  float hiddenRatio = 0.0F;
   bool resetLaneCoverVisibleTimeReference = false;
 
   bool operator==(const PlayfieldAuthorityUpdate &other) const;
@@ -135,8 +155,8 @@ struct PlayfieldVisualState {
   int combo = 0;
   int score = 0;
   int fastSlowMicros = 0;
-  long long sceneStartMicros = 0;
-  long long playStartMicros = 0;
+  long long sceneStartMicros = kPlayfieldTimestampOff;
+  long long playStartMicros = kPlayfieldTimestampOff;
 };
 
 class PlayfieldVisualStateStore final : public IPlayfieldPresentationEvents {
@@ -196,8 +216,8 @@ private:
   int combo_ = 0;
   int score_ = 0;
   int fastSlowMicros_ = 0;
-  long long sceneStartMicros_ = 0;
-  long long playStartMicros_ = 0;
+  long long sceneStartMicros_ = kPlayfieldTimestampOff;
+  long long playStartMicros_ = kPlayfieldTimestampOff;
 };
 
 class PlayfieldPresentationEventFanout final

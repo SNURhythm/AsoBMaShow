@@ -3432,9 +3432,21 @@ void GamePlayScene::capturePlayfieldVisualState(
       .autoPlayMarkVisible =
           options.autoPlay ||
           (options.replayData != nullptr && options.replayData->autoPlay),
+      .gameplayMode =
+          isReplayPlayback()
+              ? PlayfieldGameplayMode::Replay
+              : ((options.practiceMode || options.practiceSession != nullptr)
+                     ? PlayfieldGameplayMode::Practice
+                     : PlayfieldGameplayMode::Play),
+      .loadingState = PlayfieldLoadingState::Loaded,
       .startLaneIndicators = preparationPlan.laneIndicator.lanes,
       .startLaneIndicatorsVisible = startLaneIndicatorsVisible,
       .laneCoverPercent = playfieldLaneCoverPercent,
+      .laneCoverEnabled = playfieldLaneCoverPercent > 0,
+      .liftEnabled = false,
+      .liftRatio = 0.0F,
+      .hiddenEnabled = false,
+      .hiddenRatio = 0.0F,
       .resetLaneCoverVisibleTimeReference =
           playfieldLaneCoverResetPending,
   };
