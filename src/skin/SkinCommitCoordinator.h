@@ -91,7 +91,13 @@ public:
                              bool profileStillExists) noexcept;
   // Accepted Store/owner tickets are required to become terminal. Shutdown
   // drains them synchronously with bounded backoff; it never times out by
-  // dropping an unacknowledged ticket or retained revision lease.
+  // dropping an unacknowledged ticket or retained revision lease. This and
+  // destruction must run on the thread that constructed the coordinator.
+  // Off-thread shutdown rejects the call without changing ownership; later
+  // destruction with any accepted transaction still owned terminates rather
+  // than silently abandoning it. Off-thread destruction is safe only when no
+  // accepted state remains (normally after owning-thread shutdown drains work
+  // and suppresses any unconsumed delivery records).
   void shutdown() noexcept;
 
 private:

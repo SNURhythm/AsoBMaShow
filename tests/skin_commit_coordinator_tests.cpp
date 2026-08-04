@@ -6,16 +6,25 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(__APPLE__) || defined(__unix__)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -142,6 +151,9 @@ public:
   }
 
   void acknowledgeCommit(std::uint64_t ticket) noexcept override {
+    if (acknowledgementAttempts++ == 0) {
+      firstAcknowledgementAttempt = ticket;
+    }
     const auto found = commits_.find(ticket);
     if (found == commits_.end()) {
       return;
@@ -178,7 +190,11 @@ public:
     return unresolved_.contains(profile.opaque);
   }
 
+  void setNextTicket(std::uint64_t ticket) noexcept { nextTicket_ = ticket; }
+
   std::size_t acknowledgements = 0;
+  std::size_t acknowledgementAttempts = 0;
+  std::uint64_t firstAcknowledgementAttempt = 0;
   int defaultTerminalAfterPolls = 0;
   SkinProfileCommitResult::Status defaultTerminalStatus =
       SkinProfileCommitResult::Status::Persisted;
@@ -566,6 +582,134 @@ void testPausedPollingAndShutdownResolveAcceptedOwnerWorkExactlyOnce() {
          "terminal result");
 }
 
+void testActivationStoreOwnsItsDistinctOwnerAcknowledgement() {
+  Fixture fixture;
+  fixture.owner.setNextTicket(41);
+  const auto client = fixture.coordinator.createClient();
+  auto prepared = makePreparedActivation(fixture, {"A"});
+  const auto submitted =
+      fixture.coordinator.submitActivation(client, std::move(prepared));
+  fixture.coordinator.poll();
+
+  expect(submitted.accepted && fixture.owner.acknowledgementAttempts == 1 &&
+             fixture.owner.firstAcknowledgementAttempt == 42 &&
+             fixture.owner.acknowledgements == 1,
+         "the Store uses a distinct ticket namespace and alone acknowledges "
+         "its terminal owner commit");
+}
+
+void testOffMainShutdownRetainsOwnershipForMainThreadDrain() {
+  Fixture fixture;
+  fixture.owner.defaultTerminalAfterPolls = 1;
+  const auto client = fixture.coordinator.createClient();
+  const auto submitted = fixture.coordinator.submitProfileSettings(
+      client, fixture.owner.snapshot({"A"}), changedSettings(1));
+  std::thread wrongThread([&] { fixture.coordinator.shutdown(); });
+  wrongThread.join();
+
+  expect(submitted.accepted && fixture.owner.hasUnresolved({"A"}) &&
+             fixture.owner.acknowledgementAttempts == 0,
+         "off-main shutdown rejects the call without abandoning accepted "
+         "owner work");
+  fixture.coordinator.shutdown();
+  expect(!fixture.owner.hasUnresolved({"A"}) &&
+             fixture.owner.acknowledgementAttempts == 1 &&
+             fixture.owner.acknowledgements == 1,
+         "a later owning-thread shutdown drains and acknowledges exactly "
+         "once");
+}
+
+void testOffMainShutdownRetainsTerminalActivationDelivery() {
+  Fixture fixture;
+  const auto client = fixture.coordinator.createClient();
+  auto prepared = makePreparedActivation(fixture, {"A"});
+  auto pin = prepared.activation.revision.weakPin();
+  const auto submitted =
+      fixture.coordinator.submitActivation(client, std::move(prepared));
+  fixture.coordinator.poll();
+  std::thread wrongThread([&] { fixture.coordinator.shutdown(); });
+  wrongThread.join();
+
+  auto completions = fixture.coordinator.takeCompletions(client);
+  expect(submitted.accepted && completions.size() == 1 &&
+             fixture.owner.acknowledgements == 1 && pin.hasLiveLease(),
+         "off-main shutdown retains a terminal activation completion and its "
+         "revision lease for owning-thread delivery");
+  completions.clear();
+  fixture.coordinator.shutdown();
+  expect(!pin.hasLiveLease(),
+         "consuming the retained completion releases its activation lease");
+}
+
+#if defined(__APPLE__) || defined(__unix__)
+void testOffMainDestructionWithAcceptedWorkTerminates() {
+  constexpr int terminatedExit = 86;
+  constexpr int returnedExit = 87;
+  auto fixture = std::make_unique<Fixture>();
+  fixture->owner.defaultTerminalAfterPolls = 1;
+  const auto client = fixture->coordinator.createClient();
+  const auto submitted = fixture->coordinator.submitProfileSettings(
+      client, fixture->owner.snapshot({"A"}), changedSettings(1));
+  expect(submitted.accepted,
+         "death-test fixture owns an accepted transaction before fork");
+
+  const auto child = ::fork();
+  if (child == 0) {
+    std::set_terminate([] { std::_Exit(terminatedExit); });
+    std::thread wrongThread([&] { fixture.reset(); });
+    wrongThread.join();
+    std::_Exit(returnedExit);
+  }
+  if (child < 0) {
+    expect(false, "off-main destruction death test forks successfully");
+    fixture->coordinator.shutdown();
+    return;
+  }
+
+  int status = 0;
+  const auto waited = ::waitpid(child, &status, 0);
+  expect(waited == child && WIFEXITED(status) &&
+             WEXITSTATUS(status) == terminatedExit,
+         "off-main destruction with accepted work fails fast instead of "
+         "dropping ownership");
+  fixture->coordinator.shutdown();
+}
+
+void testOffMainDestructionWithTerminalActivationDeliveryTerminates() {
+  constexpr int terminatedExit = 88;
+  constexpr int returnedExit = 89;
+  auto fixture = std::make_unique<Fixture>();
+  const auto client = fixture->coordinator.createClient();
+  auto prepared = makePreparedActivation(*fixture, {"A"});
+  const auto submitted =
+      fixture->coordinator.submitActivation(client, std::move(prepared));
+  fixture->coordinator.poll();
+  expect(submitted.accepted && fixture->owner.acknowledgements == 1,
+         "terminal-delivery death fixture drains Store ownership before fork");
+
+  const auto child = ::fork();
+  if (child == 0) {
+    std::set_terminate([] { std::_Exit(terminatedExit); });
+    std::thread wrongThread([&] { fixture.reset(); });
+    wrongThread.join();
+    std::_Exit(returnedExit);
+  }
+  if (child < 0) {
+    expect(false, "terminal-delivery off-main destruction death test forks");
+    fixture->coordinator.shutdown();
+    return;
+  }
+
+  int status = 0;
+  const auto waited = ::waitpid(child, &status, 0);
+  expect(waited == child && WIFEXITED(status) &&
+             WEXITSTATUS(status) == terminatedExit,
+         "off-main destruction fails fast while an accepted terminal "
+         "activation delivery is unconsumed");
+  fixture->coordinator.shutdown();
+}
+#endif
+
 void testCompletionDeliveryIsBounded() {
   std::vector<SkinProfileId> profiles;
   for (int index = 0; index < 200; ++index) {
@@ -635,6 +779,13 @@ int main() {
   testActivationPollingRevalidationDetachAndLeaseRelease();
   testRevalidationRequestsCoalesceLatestSnapshotPerProfile();
   testPausedPollingAndShutdownResolveAcceptedOwnerWorkExactlyOnce();
+  testActivationStoreOwnsItsDistinctOwnerAcknowledgement();
+  testOffMainShutdownRetainsOwnershipForMainThreadDrain();
+  testOffMainShutdownRetainsTerminalActivationDelivery();
+#if defined(__APPLE__) || defined(__unix__)
+  testOffMainDestructionWithAcceptedWorkTerminates();
+  testOffMainDestructionWithTerminalActivationDeliveryTerminates();
+#endif
   testCompletionDeliveryIsBounded();
 
   if (failures != 0) {

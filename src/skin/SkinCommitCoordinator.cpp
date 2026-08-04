@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -80,6 +81,7 @@ public:
   static_assert(std::is_nothrow_move_constructible_v<Value>);
 
   bool full() const noexcept { return size_ == Capacity; }
+  bool empty() const noexcept { return size_ == 0; }
 
   bool push(Value value) noexcept {
     if (size_ == Capacity) {
@@ -211,6 +213,36 @@ struct SkinCommitCoordinator::Impl {
         mainThread(std::this_thread::get_id()),
         gates(std::make_shared<ProfileGateRegistry>()) {}
 
+  ~Impl() noexcept {
+    // Accepted transactions may only be terminalized and acknowledged through
+    // their main-thread Store/owner APIs. Never turn wrong-thread teardown or
+    // incomplete owning-thread shutdown into silent ticket/lease abandonment.
+    if (hasOwnedAcceptedState()) {
+      std::terminate();
+    }
+  }
+
+  bool hasOwnedAcceptedState() const noexcept {
+    if (!activations.empty() || !profiles.empty()) {
+      return true;
+    }
+    for (const auto &[client, delivery] : deliveries) {
+      (void)client;
+      if (delivery.activationOutstanding != 0 ||
+          delivery.profileOutstanding != 0 || !delivery.activations.empty() ||
+          !delivery.profiles.empty()) {
+        return true;
+      }
+    }
+    for (const auto &[profile, slot] : revalidation) {
+      (void)profile;
+      if (slot.reservations != 0 || slot.request) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   bool onMainThread() const noexcept {
     return std::this_thread::get_id() == mainThread;
   }
@@ -319,7 +351,6 @@ struct SkinCommitCoordinator::Impl {
         continue;
       }
       releaseRevalidationReservation(iterator->second.profile);
-      owner.acknowledgeCommit(storeTicket);
       iterator = activations.erase(iterator);
     }
 

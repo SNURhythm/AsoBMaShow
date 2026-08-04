@@ -158,7 +158,9 @@ public:
   // Strong admission boundary: before returning PendingProfileSave, any
   // exception or typed rejection must retain no owner ticket or prepared
   // activation. After PendingProfileSave is returned, Store owns both and
-  // pollPreparedActivationCommit must eventually return a terminal result.
+  // pollPreparedActivationCommit must eventually return a terminal result,
+  // acknowledging its distinct owner ticket exactly once before doing so.
+  // Callers treat the Store ticket as opaque and never pass it to the owner.
   CommitActivationResult
   beginPreparedActivationCommit(PreparedSkinActivation &&prepared,
                                 ISkinProfileSettingsOwner &owner);
