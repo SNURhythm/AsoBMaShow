@@ -595,6 +595,23 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             CXX_STANDARD_REQUIRED YES
             CXX_EXTENSIONS NO
         )
+
+        add_executable(numeric_glyph_model_validator_tests
+            tests/numeric_glyph_model_validator_tests.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
+            src/skin/beatoraja/SkinModelValidator.cpp
+        )
+        target_include_directories(numeric_glyph_model_validator_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(numeric_glyph_model_validator_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+        target_compile_definitions(numeric_glyph_model_validator_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+        )
     endif()
 
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
@@ -652,6 +669,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/package/SkinAliasDetector.cpp
             src/skin/package/SkinPathPolicy.cpp
@@ -751,6 +769,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinHostModules.cpp
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/package/SkinAliasDetector.cpp
@@ -4733,6 +4752,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET numeric_glyph_atlas_tests)
         asobmashow_register_test(numeric_glyph_atlas_tests)
+    endif()
+    if (TARGET numeric_glyph_model_validator_tests)
+        asobmashow_register_test(numeric_glyph_model_validator_tests)
     endif()
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10

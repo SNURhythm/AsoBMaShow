@@ -2,6 +2,7 @@
 
 #include "../LuaGameplaySkinFeature.h"
 #include "LuaSkinTableDecoder.h"
+#include "NumericGlyphAtlas.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
@@ -57,11 +58,13 @@ bool validSprite(const SkinSpriteFrames &sprite,
          (!sprite.timer || timers.contains(sprite.timer->value));
 }
 
-bool validDigits(const SkinDigitSpriteSet &digits,
+bool validDigits(const SkinDigitSpriteSet &digits, NumericGlyphAtlasKind kind,
                  const std::set<SkinResourceId> &resources,
                  const std::set<std::uint32_t> &timers) {
   return validSprite(digits.positive, resources, timers) &&
-         (!digits.negative || validSprite(*digits.negative, resources, timers));
+         (!digits.negative || validSprite(*digits.negative, resources, timers)) &&
+         validateNumericGlyphAtlas(digits, kind) ==
+             NumericGlyphAtlasError::None;
 }
 
 bool validNoteVisual(const SkinNoteVisual &visual,
@@ -99,12 +102,14 @@ bool validPayload(const SkinObjectPayload &payload,
                   hasDomain(context.integers, object.stateIndex->value,
                             SkinIntegerPropertyDomain::ImageIndex));
         } else if constexpr (std::is_same_v<T, SkinNumberObject>) {
-          return validDigits(object.digits, context.resources,
+          return validDigits(object.digits, NumericGlyphAtlasKind::Number,
+                             context.resources,
                              context.timers) &&
                  hasDomain(context.integers, object.value.value,
                            SkinIntegerPropertyDomain::IntegerValue);
         } else if constexpr (std::is_same_v<T, SkinFloatObject>) {
-          return validDigits(object.digits, context.resources,
+          return validDigits(object.digits, NumericGlyphAtlasKind::Float,
+                             context.resources,
                              context.timers) &&
                  hasDomain(context.floats, object.value.value,
                            SkinFloatPropertyDomain::FloatValue);

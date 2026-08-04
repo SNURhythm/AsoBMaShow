@@ -7,6 +7,7 @@
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 
 namespace {
 
@@ -93,6 +95,84 @@ return {
   offset = {{category = "Play", name = "Authored offset", id = 120,
              x = 0, y = false, w = true, h = false, r = true, a = false}},
   unknown = {ignored = true}
+}
+)lua");
+    writeText(source / "skin/numeric-glyphs.luaskin", R"lua(
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "atlas", path = "atlas.png"}},
+  value = {
+    {id = "signed-number", src = "atlas", x = 0, y = 0,
+     w = 480, h = 10, divx = 48, divy = 1, timer = 7, cycle = 240,
+     digit = 12, align = 2, padding = 1, zeropadding = 2, space = 3,
+     ref = 101,
+     offset = {{x = 1.5, y = -2.5, w = 3.5, h = 4.5},
+               {x = 5.5, y = 6.5, w = -7.5, h = 8.5}}},
+    {id = "plain-number", src = "atlas", x = 0, y = 20,
+     w = 200, h = 10, divx = 20, divy = 1, cycle = 120,
+     digit = 4, align = 1, padding = 1, zeropadding = 2, space = 2,
+     ref = 102},
+  },
+  floatvalue = {
+    {id = "signed-float", src = "atlas", x = 0, y = 40,
+     w = 440, h = 10, divx = 44, divy = 1, timer = 8, cycle = 360,
+     iketa = 7, fketa = 5, align = 0, zeropadding = 1, space = 4,
+     isSignvisible = true, gain = 1.25, ref = 201,
+     offset = {{x = 9.5, y = 10.5, w = 11.5, h = 12.5}}},
+  },
+  destination = {
+    {id = "signed-number", dst = {{time = 0}}},
+    {id = "plain-number", dst = {{time = 0}}},
+    {id = "signed-float", dst = {{time = 0}}},
+  },
+}
+)lua");
+    writeText(source / "skin/numeric-offset-limit.luaskin", R"lua(
+local offsets = {}
+for i = 1, 257 do
+  offsets[i] = {x = i, y = -i, w = i + 0.5, h = i + 1.5}
+end
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "atlas", path = "atlas.png"}},
+  value = {{id = "number", src = "atlas", w = 100, h = 10,
+            divx = 10, divy = 1, digit = 4, ref = 1,
+            offset = offsets}},
+  destination = {{id = "number", dst = {{}}}},
+}
+)lua");
+    writeText(source / "skin/numeric-offset-nonfinite.luaskin", R"lua(
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "atlas", path = "atlas.png"}},
+  floatvalue = {{id = "number", src = "atlas", w = 120, h = 10,
+                 divx = 12, divy = 1, iketa = 2, fketa = 2, ref = 1,
+                 offset = {{x = 0 / 0, y = 2, w = 3, h = 4}}}},
+  destination = {{id = "number", dst = {{}}}},
+}
+)lua");
+    writeText(source / "skin/numeric-budget-boundary.luaskin", R"lua(
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "atlas", path = "atlas.png"}},
+  image = {{id = "filler", src = "atlas", w = 199976, h = 1,
+            divx = 199976, divy = 1}},
+  floatvalue = {{id = "number", src = "atlas", w = 22, h = 1,
+                 divx = 22, divy = 1, iketa = 2, fketa = 2, ref = 1}},
+  destination = {{id = "filler", dst = {{}}},
+                 {id = "number", dst = {{}}}},
+}
+)lua");
+    writeText(source / "skin/numeric-budget-exceeded.luaskin", R"lua(
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "atlas", path = "atlas.png"}},
+  image = {{id = "filler", src = "atlas", w = 199978, h = 1,
+            divx = 199978, divy = 1}},
+  floatvalue = {{id = "number", src = "atlas", w = 22, h = 1,
+                 divx = 22, divy = 1, iketa = 2, fketa = 2, ref = 1}},
+  destination = {{id = "filler", dst = {{}}},
+                 {id = "number", dst = {{}}}},
 }
 )lua");
     writeText(source / "skin/hole.luaskin", R"lua(
@@ -262,6 +342,48 @@ return {type=0, property=p}
       return {};
     }
     return LuaSkinTableDecoder{}.decodeHeader(*value.value);
+  }
+
+  BeatorajaSkinModelDecodeResult decodeGameplay(std::string_view filename) {
+    auto runtimeFileSystem = fileSystem(filename);
+    auto reconciliationFileSystem = fileSystem(filename);
+    expect(runtimeFileSystem != nullptr && reconciliationFileSystem != nullptr,
+           "gameplay decoder filesystems create");
+    if (!runtimeFileSystem || !reconciliationFileSystem) {
+      return {};
+    }
+    auto created =
+        LuaSkinRuntime::create({.purpose = LuaRuntimePurpose::Validation,
+                                .fileSystem = std::move(runtimeFileSystem)});
+    expect(created.runtime != nullptr, "gameplay decoder runtime creates");
+    if (!created.runtime) {
+      return {};
+    }
+    auto headerValue = created.runtime->loadHeader();
+    expect(headerValue.value.has_value(), "gameplay header executes");
+    if (!headerValue.value) {
+      return {};
+    }
+    LuaSkinTableDecoder decoder;
+    const auto header = decoder.decodeHeader(*headerValue.value);
+    expect(header.header.has_value(), "gameplay header decodes");
+    if (!header.header) {
+      return {};
+    }
+    headerValue.value.reset();
+    const auto reconciled = reconcileSkinConfiguration(
+        *header.header, nullptr, *reconciliationFileSystem);
+    expect(reconciled.configuration.has_value(),
+           "gameplay configuration reconciles");
+    if (!reconciled.configuration) {
+      return {};
+    }
+    auto configured = created.runtime->loadConfigured(*reconciled.configuration);
+    expect(configured.value.has_value(), "gameplay configured phase executes");
+    if (!configured.value) {
+      return {};
+    }
+    return decoder.decodeGameplay(*configured.value);
   }
 
   std::unique_ptr<LuaSkinFileSystem>
@@ -542,6 +664,120 @@ void testConfigurationDigestUsesTheFrozenBigEndianGrammar() {
          "empty configuration digest matches the frozen vector");
 }
 
+const SkinObjectDefinition *objectNamed(const BeatorajaSkinModel &model,
+                                        std::string_view name) {
+  const auto found = std::ranges::find_if(model.objects, [&](const auto &object) {
+    return object.authoredName == name;
+  });
+  return found != model.objects.end() ? &*found : nullptr;
+}
+
+void testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects() {
+  const auto decoded = fixture().decodeGameplay("numeric-glyphs.luaskin");
+  expect(decoded.model.has_value() && decoded.diagnostics.empty(),
+         "numeric glyph gameplay model decodes");
+  if (!decoded.model) {
+    return;
+  }
+
+  const auto *signedNumber = objectNamed(*decoded.model, "signed-number");
+  const auto *plainNumber = objectNamed(*decoded.model, "plain-number");
+  const auto *signedFloat = objectNamed(*decoded.model, "signed-float");
+  expect(signedNumber != nullptr && plainNumber != nullptr &&
+             signedFloat != nullptr,
+         "all numeric destinations materialize objects");
+  if (!signedNumber || !plainNumber || !signedFloat) {
+    return;
+  }
+
+  const auto *number = std::get_if<SkinNumberObject>(&signedNumber->payload);
+  const auto *plain = std::get_if<SkinNumberObject>(&plainNumber->payload);
+  const auto *floating = std::get_if<SkinFloatObject>(&signedFloat->payload);
+  expect(number != nullptr && plain != nullptr && floating != nullptr,
+         "numeric objects retain their typed payloads");
+  if (!number || !plain || !floating) {
+    return;
+  }
+
+  expect(number->digits.glyphsPerAnimationFrame == 12 &&
+             number->digits.positive.frames.size() == 24 &&
+             number->digits.negative &&
+             number->digits.negative->frames.size() == 24 &&
+             number->digits.positive.frames[12].x == 240 &&
+             number->digits.negative->frames[12].x == 360,
+         "Number-24 partitions both signed multi-frame glyph sets");
+  expect(number->digits.positive.resource ==
+             number->digits.negative->resource &&
+             number->digits.positive.timer == number->digits.negative->timer &&
+             number->digits.positive.cycleMillis == 240 &&
+             number->digits.negative->cycleMillis == 240,
+         "Number partition preserves resource, timer, and cycle");
+  expect(number->digitCount == 12 && number->spacing == 3 &&
+             number->alignment == 2 &&
+             number->zeroPadding == SkinZeroPaddingMode::AlternateZero &&
+             number->perDigitOffsets.size() == 2 &&
+             number->perDigitOffsets[0].x == 1.5 &&
+             number->perDigitOffsets[0].y == -2.5 &&
+             number->perDigitOffsets[0].width == 3.5 &&
+             number->perDigitOffsets[0].height == 4.5 &&
+             number->perDigitOffsets[1].width == -7.5,
+         "Number maps normalized format and every offset component");
+  expect(plain->digits.glyphsPerAnimationFrame == 10 &&
+             !plain->digits.negative &&
+             plain->zeroPadding == SkinZeroPaddingMode::Zero,
+         "Number-10 padding takes precedence from padding over zeropadding");
+
+  expect(floating->digits.glyphsPerAnimationFrame == 12 &&
+             floating->digits.positive.frames.size() == 24 &&
+             floating->digits.negative &&
+             floating->digits.negative->frames.size() == 24 &&
+             floating->digits.positive.frames[10].x == 0 &&
+             floating->digits.negative->frames[10].x == 110 &&
+             floating->digits.positive.frames[11].x == 100 &&
+             floating->digits.negative->frames[11].x == 210 &&
+             floating->digits.positive.frames[12].x == 220 &&
+             floating->digits.negative->frames[12].x == 330,
+         "Float-22 duplicates signed reverse-zero and preserves row order");
+  expect(floating->integerDigits == 3 && floating->fractionalDigits == 5 &&
+             floating->zeroPadding == SkinZeroPaddingMode::Zero &&
+             !floating->signVisible && floating->gain == 1.25 &&
+             floating->spacing == 4 && floating->perDigitOffsets.size() == 1 &&
+             floating->perDigitOffsets.front().x == 9.5 &&
+             floating->perDigitOffsets.front().height == 12.5,
+         "Float maps normalized digits, sign, padding, gain, and offsets");
+  expect(floating->digits.positive.resource ==
+             floating->digits.negative->resource &&
+             floating->digits.positive.timer ==
+                 floating->digits.negative->timer &&
+             floating->digits.positive.cycleMillis == 360 &&
+             floating->digits.negative->cycleMillis == 360,
+         "Float partition preserves resource, timer, and cycle");
+}
+
+void testGameplayNumericOffsetsAndCumulativeFrameBudgetAreBounded() {
+  const auto offsets = fixture().decodeGameplay("numeric-offset-limit.luaskin");
+  expect(!offsets.model && !offsets.diagnostics.empty(),
+         "numeric offset arrays reject above the established maxOffsets bound");
+  const auto nonFinite =
+      fixture().decodeGameplay("numeric-offset-nonfinite.luaskin");
+  expect(!nonFinite.model && !nonFinite.diagnostics.empty(),
+         "numeric offsets reuse finite-number decoding for every component");
+
+  const auto boundary =
+      fixture().decodeGameplay("numeric-budget-boundary.luaskin");
+  expect(boundary.model.has_value(),
+         "normalized numeric output may consume the exact remaining model "
+         "frame budget");
+
+  const auto exceeded =
+      fixture().decodeGameplay("numeric-budget-exceeded.luaskin");
+  expect(!exceeded.model && !exceeded.diagnostics.empty() &&
+             exceeded.diagnostics.front().code ==
+                 "skin_lua_model_limit_exceeded",
+         "Float-22 expansion is checked against the cumulative remaining "
+         "model frame budget");
+}
+
 } // namespace
 
 int main() {
@@ -555,6 +791,8 @@ int main() {
   testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive();
   testUnrelatedDirectoryEntriesDoNotConsumeTheChoiceLimit();
   testConfigurationDigestUsesTheFrozenBigEndianGrammar();
+  testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects();
+  testGameplayNumericOffsetsAndCumulativeFrameBudgetAreBounded();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;

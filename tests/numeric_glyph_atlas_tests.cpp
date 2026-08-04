@@ -1,6 +1,8 @@
 #include "skin/beatoraja/NumericGlyphAtlas.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -267,7 +269,8 @@ void rejectsMalformedOrUnboundedAtlases() {
     const auto atlas = mustSucceed(
         partitionNumericGlyphAtlas(request(NumericGlyphAtlasKind::Float,
                                            22 * 8332)),
-        "largest complete Float-22 atlas partitions");
+        "largest selected Float-22 atlas below budget partitions before "
+        "8333 selects Float-26 by precedence");
     expect(atlas.digits.positive.frames.size() +
                    atlas.digits.negative->frames.size() ==
                199'968,
@@ -277,7 +280,8 @@ void rejectsMalformedOrUnboundedAtlases() {
     auto input = request(NumericGlyphAtlasKind::Float, 22 * 8334);
     const auto result = partitionNumericGlyphAtlas(input);
     expect(result.error == NumericGlyphAtlasError::OutputLimitExceeded,
-            "one-over Float-22 output limit rejects before allocation");
+           "smallest selected Float-22 atlas above budget rejects before "
+           "allocation");
   }
   {
     const auto atlas = mustSucceed(
@@ -308,6 +312,88 @@ void rejectsMalformedOrUnboundedAtlases() {
   }
 }
 
+void rejectsInvalidKindsAndNonFiniteFormats() {
+  {
+    auto input = request(static_cast<NumericGlyphAtlasKind>(0xff), 12);
+    const auto result = partitionNumericGlyphAtlas(input);
+    expect(result.error == NumericGlyphAtlasError::InvalidKind,
+           "partition rejects an invalid public kind enum");
+  }
+  {
+    SkinDigitSpriteSet digits;
+    expect(validateNumericGlyphAtlas(
+               digits, static_cast<NumericGlyphAtlasKind>(0xff)) ==
+               NumericGlyphAtlasError::InvalidKind,
+           "validation rejects an invalid public kind before atlas shape");
+  }
+  for (const double gain : {std::numeric_limits<double>::quiet_NaN(),
+                            std::numeric_limits<double>::infinity(),
+                            -std::numeric_limits<double>::infinity()}) {
+    auto input = request(NumericGlyphAtlasKind::Float, 12);
+    input.format.gain = gain;
+    const auto result = partitionNumericGlyphAtlas(input);
+    expect(result.error == NumericGlyphAtlasError::NonFiniteFormat,
+           "non-finite float gain rejects");
+  }
+
+  constexpr std::array offsetMembers{
+      &SkinDigitOffset::x, &SkinDigitOffset::y, &SkinDigitOffset::width,
+      &SkinDigitOffset::height};
+  for (const auto member : offsetMembers) {
+    auto input = request(NumericGlyphAtlasKind::Number, 10);
+    input.format.perDigitOffsets.front().*member =
+        std::numeric_limits<double>::quiet_NaN();
+    const auto result = partitionNumericGlyphAtlas(input);
+    expect(result.error == NumericGlyphAtlasError::NonFiniteFormat,
+           "non-finite per-digit offset component rejects");
+  }
+
+  auto finiteBoundary = request(NumericGlyphAtlasKind::Float, 12);
+  finiteBoundary.format.gain = std::numeric_limits<double>::max();
+  finiteBoundary.format.perDigitOffsets.front() = {
+      .x = std::numeric_limits<double>::lowest(),
+      .y = std::numeric_limits<double>::max(),
+      .width = -0.0,
+      .height = 0.0,
+  };
+  expect(partitionNumericGlyphAtlas(finiteBoundary).atlas.has_value(),
+         "finite double boundaries remain accepted");
+}
+
+void validatesKindSpecificNormalizedGlyphSets() {
+  SkinDigitSpriteSet number;
+  number.glyphsPerAnimationFrame = 13;
+  number.positive.frames = frames(13);
+  expect(validateNumericGlyphAtlas(number, NumericGlyphAtlasKind::Number) ==
+             NumericGlyphAtlasError::InvalidGlyphSet,
+         "Number validation rejects Float-only 13-glyph sets");
+
+  SkinDigitSpriteSet floating;
+  floating.glyphsPerAnimationFrame = 10;
+  floating.positive.frames = frames(10);
+  expect(validateNumericGlyphAtlas(floating, NumericGlyphAtlasKind::Float) ==
+             NumericGlyphAtlasError::InvalidGlyphSet,
+         "Float validation rejects Number-only 10-glyph sets");
+
+  SkinDigitSpriteSet numberBoundary;
+  numberBoundary.glyphsPerAnimationFrame = 12;
+  numberBoundary.positive.frames = frames(12);
+  numberBoundary.negative = SkinSpriteFrames{.frames = frames(12)};
+  expect(validateNumericGlyphAtlas(numberBoundary,
+                                   NumericGlyphAtlasKind::Number) ==
+             NumericGlyphAtlasError::None,
+         "Number normalized 12-glyph boundary remains valid");
+
+  SkinDigitSpriteSet floatBoundary;
+  floatBoundary.glyphsPerAnimationFrame = 13;
+  floatBoundary.positive.frames = frames(13);
+  floatBoundary.negative = SkinSpriteFrames{.frames = frames(13)};
+  expect(validateNumericGlyphAtlas(floatBoundary,
+                                   NumericGlyphAtlasKind::Float) ==
+             NumericGlyphAtlasError::None,
+         "Float normalized 13-glyph boundary remains valid");
+}
+
 } // namespace
 
 int main() {
@@ -315,5 +401,7 @@ int main() {
   floatLayoutsMatchPinnedGlyphConventions();
   floatFormatNormalizesDigitsAndPadding();
   rejectsMalformedOrUnboundedAtlases();
+  rejectsInvalidKindsAndNonFiniteFormats();
+  validatesKindSpecificNormalizedGlyphSets();
   return failures == 0 ? 0 : 1;
 }

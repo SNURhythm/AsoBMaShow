@@ -5,6 +5,7 @@
 #include "NumericGlyphAtlas.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -30,6 +31,21 @@ int nonNegative(int value) noexcept { return std::max(value, 0); }
 
 NumericGlyphAtlasResult failure(NumericGlyphAtlasError error) {
   return {.error = error};
+}
+
+bool validKind(NumericGlyphAtlasKind kind) noexcept {
+  return kind == NumericGlyphAtlasKind::Number ||
+         kind == NumericGlyphAtlasKind::Float;
+}
+
+bool finiteFormat(const NumericGlyphFormatRequest &format) noexcept {
+  if (!std::isfinite(format.gain)) {
+    return false;
+  }
+  return std::ranges::all_of(format.perDigitOffsets, [](const auto &offset) {
+    return std::isfinite(offset.x) && std::isfinite(offset.y) &&
+           std::isfinite(offset.width) && std::isfinite(offset.height);
+  });
 }
 
 std::size_t maxOffsetsFor(NumericGlyphAtlasKind kind) noexcept {
@@ -81,6 +97,67 @@ NumericGlyphAtlasError validateSet(const SkinSpriteFrames &set,
   }
   *animationFrames = frames;
   return NumericGlyphAtlasError::None;
+}
+
+NumericGlyphAtlasError validateGlyphSetShape(const SkinDigitSpriteSet &atlas,
+                                             NumericGlyphAtlasKind *kind) {
+  if (kind != nullptr && !validKind(*kind)) {
+    return NumericGlyphAtlasError::InvalidKind;
+  }
+  const int glyphs = atlas.glyphsPerAnimationFrame;
+  if (glyphs <= 0 ||
+      static_cast<std::size_t>(glyphs) >
+          NumericGlyphAtlasPolicy::maxMaterializedFrames) {
+    return NumericGlyphAtlasError::ArithmeticOverflow;
+  }
+  if (kind == nullptr) {
+    return glyphs >= 10 && glyphs <= 13
+               ? NumericGlyphAtlasError::None
+               : NumericGlyphAtlasError::InvalidGlyphSet;
+  }
+  if (*kind == NumericGlyphAtlasKind::Number) {
+    if (glyphs < 10 || glyphs > 12 ||
+        (glyphs == 12) != atlas.negative.has_value()) {
+      return NumericGlyphAtlasError::InvalidGlyphSet;
+    }
+  } else if ((glyphs != 12 && glyphs != 13) ||
+             (glyphs == 13 && !atlas.negative)) {
+    return NumericGlyphAtlasError::InvalidGlyphSet;
+  }
+  return NumericGlyphAtlasError::None;
+}
+
+NumericGlyphAtlasError validateNumericGlyphAtlasImpl(
+    const SkinDigitSpriteSet &atlas, NumericGlyphAtlasKind *kind,
+    NumericGlyphAtlasBudget budget) noexcept {
+  const auto shape = validateGlyphSetShape(atlas, kind);
+  if (shape != NumericGlyphAtlasError::None) {
+    return shape;
+  }
+  std::size_t positiveFrames = 0;
+  const auto positive = validateSet(atlas.positive,
+                                    atlas.glyphsPerAnimationFrame, budget,
+                                    &positiveFrames);
+  if (positive != NumericGlyphAtlasError::None) {
+    return positive;
+  }
+  if (!atlas.negative) {
+    return NumericGlyphAtlasError::None;
+  }
+  std::size_t negativeFrames = 0;
+  const auto negative = validateSet(*atlas.negative,
+                                    atlas.glyphsPerAnimationFrame, budget,
+                                    &negativeFrames);
+  if (negative != NumericGlyphAtlasError::None) {
+    return negative;
+  }
+  if (atlas.negative->frames.size() >
+      budget.remainingMaterializedFrames - atlas.positive.frames.size()) {
+    return NumericGlyphAtlasError::OutputLimitExceeded;
+  }
+  return positiveFrames == negativeFrames
+             ? NumericGlyphAtlasError::None
+             : NumericGlyphAtlasError::UnequalAnimationFrames;
 }
 
 bool combinedOutputExceedsLimit(std::size_t animationFrames,
@@ -172,7 +249,8 @@ NumericGlyphAtlasResult partitionNumber(const NumericGlyphAtlasRequest &request,
     atlas.digits.positive = request.source;
     atlas.digits.glyphsPerAnimationFrame = glyphs;
   }
-  const auto validation = validateNumericGlyphAtlas(atlas.digits, request.budget);
+  const auto validation =
+      validateNumericGlyphAtlas(atlas.digits, request.kind, request.budget);
   return validation == NumericGlyphAtlasError::None
              ? NumericGlyphAtlasResult{.atlas = std::move(atlas)}
              : failure(validation);
@@ -251,7 +329,8 @@ NumericGlyphAtlasResult partitionFloat(const NumericGlyphAtlasRequest &request,
     atlas.digits.negative = makeSprite(request.source, std::move(negative));
   }
   atlas.digits.glyphsPerAnimationFrame = outputGlyphs;
-  const auto validation = validateNumericGlyphAtlas(atlas.digits, request.budget);
+  const auto validation =
+      validateNumericGlyphAtlas(atlas.digits, request.kind, request.budget);
   return validation == NumericGlyphAtlasError::None
              ? NumericGlyphAtlasResult{.atlas = std::move(atlas)}
              : failure(validation);
@@ -261,36 +340,23 @@ NumericGlyphAtlasResult partitionFloat(const NumericGlyphAtlasRequest &request,
 
 NumericGlyphAtlasError validateNumericGlyphAtlas(
     const SkinDigitSpriteSet &atlas, NumericGlyphAtlasBudget budget) noexcept {
-  std::size_t positiveFrames = 0;
-  const auto positive = validateSet(atlas.positive, atlas.glyphsPerAnimationFrame,
-                                    budget,
-                                    &positiveFrames);
-  if (positive != NumericGlyphAtlasError::None) {
-    return positive;
-  }
-  if (!atlas.negative) {
-    return NumericGlyphAtlasError::None;
-  }
-  std::size_t negativeFrames = 0;
-  const auto negative = validateSet(*atlas.negative,
-                                    atlas.glyphsPerAnimationFrame,
-                                    budget,
-                                    &negativeFrames);
-  if (negative != NumericGlyphAtlasError::None) {
-    return negative;
-  }
-  if (atlas.negative->frames.size() >
-      budget.remainingMaterializedFrames -
-          atlas.positive.frames.size()) {
-    return NumericGlyphAtlasError::OutputLimitExceeded;
-  }
-  return positiveFrames == negativeFrames
-             ? NumericGlyphAtlasError::None
-             : NumericGlyphAtlasError::UnequalAnimationFrames;
+  return validateNumericGlyphAtlasImpl(atlas, nullptr, budget);
+}
+
+NumericGlyphAtlasError validateNumericGlyphAtlas(
+    const SkinDigitSpriteSet &atlas, NumericGlyphAtlasKind kind,
+    NumericGlyphAtlasBudget budget) noexcept {
+  return validateNumericGlyphAtlasImpl(atlas, &kind, budget);
 }
 
 NumericGlyphAtlasResult partitionNumericGlyphAtlas(
     const NumericGlyphAtlasRequest &request) {
+  if (!validKind(request.kind)) {
+    return failure(NumericGlyphAtlasError::InvalidKind);
+  }
+  if (!finiteFormat(request.format)) {
+    return failure(NumericGlyphAtlasError::NonFiniteFormat);
+  }
   if (request.source.frames.empty()) {
     return failure(NumericGlyphAtlasError::EmptyFrames);
   }

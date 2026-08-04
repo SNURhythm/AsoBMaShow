@@ -7,6 +7,7 @@
 #include "../../FileChecksum.h"
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinRuntime.h"
+#include "NumericGlyphAtlas.h"
 #include "../package/SkinPackageTypes.h"
 
 extern "C" {
@@ -734,6 +735,7 @@ struct RawSkinNumber {
   int padding = 0;
   int zeroPadding = 0;
   int spacing = 0;
+  std::vector<SkinDigitOffset> perDigitOffsets;
 };
 
 struct RawSkinFloat {
@@ -745,6 +747,7 @@ struct RawSkinFloat {
   int spacing = 0;
   double gain = 1.0;
   bool signVisible = false;
+  std::vector<SkinDigitOffset> perDigitOffsets;
 };
 
 struct RawSkinSlider {
@@ -953,6 +956,15 @@ bool decodeRawImageSet(lua_State *state, int index, std::size_t depth,
          stringArrayField(state, index, "images", output.imageIds, request);
 }
 
+bool decodeRawDigitOffset(lua_State *state, int index, std::size_t depth,
+                          SkinDigitOffset &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         numberField(state, index, "x", output.x, request) &&
+         numberField(state, index, "y", output.y, request) &&
+         numberField(state, index, "w", output.width, request) &&
+         numberField(state, index, "h", output.height, request);
+}
+
 bool decodeRawNumber(lua_State *state, int index, std::size_t depth,
                      RawSkinNumber &output, DecodeRequest &request) {
   return decodeRawImage(state, index, depth, output.image, request) &&
@@ -961,7 +973,11 @@ bool decodeRawNumber(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "padding", output.padding, request) &&
          integerField(state, index, "zeropadding", output.zeroPadding,
                       request) &&
-         integerField(state, index, "space", output.spacing, request);
+         integerField(state, index, "space", output.spacing, request) &&
+         decodeObjectArrayField(
+             state, index, "offset", depth,
+             LuaSkinTableDecoderPolicy::maxOffsets, output.perDigitOffsets,
+             request, decodeRawDigitOffset);
 }
 
 bool decodeRawFloat(lua_State *state, int index, std::size_t depth,
@@ -976,7 +992,11 @@ bool decodeRawFloat(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "space", output.spacing, request) &&
          numberField(state, index, "gain", output.gain, request) &&
          booleanField(state, index, "isSignvisible", output.signVisible,
-                      request);
+                      request) &&
+         decodeObjectArrayField(
+             state, index, "offset", depth,
+             LuaSkinTableDecoderPolicy::maxOffsets, output.perDigitOffsets,
+             request, decodeRawDigitOffset);
 }
 
 bool decodeRawSlider(lua_State *state, int index, std::size_t depth,
@@ -1428,15 +1448,47 @@ bool makeImageObject(GameplayDecodeRequest &request,
   return true;
 }
 
-SkinZeroPaddingMode zeroPaddingMode(int value) {
-  switch (value) {
-  case 1:
-    return SkinZeroPaddingMode::Zero;
-  case 2:
-    return SkinZeroPaddingMode::AlternateZero;
-  default:
-    return SkinZeroPaddingMode::None;
+bool materializeNumericGlyphAtlas(GameplayDecodeRequest &request,
+                                  NumericGlyphAtlasKind kind,
+                                  const SkinSpriteFrames &source,
+                                  NumericGlyphFormatRequest format,
+                                  NumericGlyphAtlas &output) {
+  const std::size_t remaining =
+      LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames -
+      request.materializedSpriteFrames;
+  auto normalized = partitionNumericGlyphAtlas(
+      {.kind = kind,
+       .source = source,
+       .format = std::move(format),
+       .budget = {.remainingMaterializedFrames = remaining}});
+  if (!normalized.atlas) {
+    const bool limit =
+        normalized.error == NumericGlyphAtlasError::InputLimitExceeded ||
+        normalized.error == NumericGlyphAtlasError::OutputLimitExceeded;
+    return fail(request.decoding,
+                limit ? "skin_lua_model_limit_exceeded"
+                      : "skin_lua_model_invalid",
+                limit ? "Lua skin numeric glyph atlas exceeds the remaining "
+                        "materialized frame budget"
+                      : "Lua skin numeric glyph atlas is invalid");
   }
+
+  std::size_t outputFrames = normalized.atlas->digits.positive.frames.size();
+  if (normalized.atlas->digits.negative) {
+    const std::size_t negativeFrames =
+        normalized.atlas->digits.negative->frames.size();
+    if (negativeFrames > std::numeric_limits<std::size_t>::max() -
+                             outputFrames) {
+      return fail(request.decoding, "skin_lua_model_limit_exceeded",
+                  "Lua skin numeric glyph output frame count overflows");
+    }
+    outputFrames += negativeFrames;
+  }
+  if (!consumeMaterializedSpriteFrames(request, outputFrames)) {
+    return false;
+  }
+  output = std::move(*normalized.atlas);
+  return true;
 }
 
 std::optional<SkinBlendMode> blendMode(int value) {
@@ -1508,45 +1560,57 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   if (number != request.numbers.end()) {
-    if (!consumeMaterializedSpriteFrames(
-            request, number->second.image.sprite.frames.size())) {
+    NumericGlyphAtlas atlas;
+    if (!materializeNumericGlyphAtlas(
+            request, NumericGlyphAtlasKind::Number,
+            number->second.image.sprite,
+            {.integerDigits = number->second.digitCount,
+             .zeroPadding = number->second.zeroPadding,
+             .numberPadding = number->second.padding,
+             .perDigitOffsets = number->second.perDigitOffsets},
+            atlas)) {
       return false;
     }
     SkinNumberObject object;
-    object.digits.positive = number->second.image.sprite;
-    object.digits.glyphsPerAnimationFrame =
-        static_cast<int>(object.digits.positive.frames.size());
+    object.digits = std::move(atlas.digits);
     object.value =
         internIntegerBinding(request, SkinIntegerPropertyDomain::IntegerValue,
                              number->second.image.stateSelector);
-    object.digitCount = number->second.digitCount;
+    object.digitCount = atlas.format.integerDigits;
     object.spacing = number->second.spacing;
     object.alignment = number->second.alignment;
-    object.zeroPadding = zeroPaddingMode(number->second.zeroPadding != 0
-                                             ? number->second.zeroPadding
-                                             : number->second.padding);
+    object.zeroPadding = atlas.format.zeroPadding;
+    object.perDigitOffsets = std::move(atlas.format.perDigitOffsets);
     output = std::move(object);
     return true;
   }
   if (floating != request.floats.end()) {
-    if (!consumeMaterializedSpriteFrames(
-            request, floating->second.image.sprite.frames.size())) {
+    NumericGlyphAtlas atlas;
+    if (!materializeNumericGlyphAtlas(
+            request, NumericGlyphAtlasKind::Float,
+            floating->second.image.sprite,
+            {.integerDigits = floating->second.integerDigits,
+             .fractionalDigits = floating->second.fractionalDigits,
+             .zeroPadding = floating->second.zeroPadding,
+             .signVisible = floating->second.signVisible,
+             .gain = floating->second.gain,
+             .perDigitOffsets = floating->second.perDigitOffsets},
+            atlas)) {
       return false;
     }
     SkinFloatObject object;
-    object.digits.positive = floating->second.image.sprite;
-    object.digits.glyphsPerAnimationFrame =
-        static_cast<int>(object.digits.positive.frames.size());
+    object.digits = std::move(atlas.digits);
     object.value =
         internFloatBinding(request, SkinFloatPropertyDomain::FloatValue,
                            floating->second.image.stateSelector);
-    object.integerDigits = floating->second.integerDigits;
-    object.fractionalDigits = floating->second.fractionalDigits;
+    object.integerDigits = atlas.format.integerDigits;
+    object.fractionalDigits = atlas.format.fractionalDigits;
     object.spacing = floating->second.spacing;
     object.alignment = floating->second.alignment;
-    object.zeroPadding = zeroPaddingMode(floating->second.zeroPadding);
-    object.signVisible = floating->second.signVisible;
-    object.gain = floating->second.gain;
+    object.zeroPadding = atlas.format.zeroPadding;
+    object.signVisible = atlas.format.signVisible;
+    object.gain = atlas.format.gain;
+    object.perDigitOffsets = std::move(atlas.format.perDigitOffsets);
     output = std::move(object);
     return true;
   }

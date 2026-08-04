@@ -39,6 +39,9 @@ enum class NumericGlyphAtlasKind : std::uint8_t { Number, Float };
 
 enum class NumericGlyphAtlasError : std::uint8_t {
   None,
+  InvalidKind,
+  NonFiniteFormat,
+  InvalidGlyphSet,
   EmptyFrames,
   UnsupportedGlyphLayout,
   InvalidPadding,
@@ -90,6 +93,9 @@ struct NumericGlyphAtlasResult {
 // model from a different source format cannot bypass animation-frame bounds.
 NumericGlyphAtlasError validateNumericGlyphAtlas(
     const SkinDigitSpriteSet &atlas,
+    NumericGlyphAtlasBudget budget = {}) noexcept;
+NumericGlyphAtlasError validateNumericGlyphAtlas(
+    const SkinDigitSpriteSet &atlas, NumericGlyphAtlasKind kind,
     NumericGlyphAtlasBudget budget = {}) noexcept;
 
 // Partitions a row-major source atlas into the exact numeric glyph sets used
