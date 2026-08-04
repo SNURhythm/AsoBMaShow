@@ -1,8 +1,10 @@
 #include "skin/beatoraja/PlaySkinSession.h"
 
 #include "skin/SkinStoragePaths.h"
+#include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/beatoraja/PlaySkinViewport.h"
+#include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
@@ -19,6 +21,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -161,6 +164,402 @@ bool hasDiagnostic(const PlaySkinFrameTransactionResult &result,
                    std::string_view code) {
   return hasDiagnostic(result.diagnostics, code) ||
          hasDiagnostic(result.evaluation.diagnostics, code);
+}
+
+class SessionTextureDevice final : public SkinTextureDevice {
+public:
+  SessionTextureDevice() : owner_(std::this_thread::get_id()) {}
+
+  bgfx::TextureHandle
+  create(const image_decode::DecodedImageData &) override {
+    ++createCalls;
+    if (!ownsCurrentThread()) {
+      ++wrongThreadOperations;
+    }
+    if (stopAfterCreateCalls && createCalls == *stopAfterCreateCalls) {
+      stopSource->request_stop();
+    }
+    return bgfx::TextureHandle{nextHandle_++};
+  }
+
+  void destroy(bgfx::TextureHandle) noexcept override {
+    ++destroyCalls;
+    if (!ownsCurrentThread()) {
+      ++wrongThreadOperations;
+    }
+    if (observedRevision && !observedRevision->hasLiveLease()) {
+      revisionLiveDuringDestroy = false;
+    }
+  }
+
+  bool ownsCurrentThread() const noexcept override {
+    return std::this_thread::get_id() == owner_;
+  }
+
+  void observeRevision(SkinRevisionWeakPin revision) {
+    observedRevision = std::move(revision);
+  }
+
+  void requestStopAfter(std::size_t createCall, std::stop_source &source) {
+    stopAfterCreateCalls = createCall;
+    stopSource = &source;
+  }
+
+  std::size_t createCalls = 0;
+  std::size_t destroyCalls = 0;
+  std::size_t wrongThreadOperations = 0;
+  bool revisionLiveDuringDestroy = true;
+
+private:
+  std::thread::id owner_;
+  std::uint16_t nextHandle_ = 1;
+  std::optional<SkinRevisionWeakPin> observedRevision;
+  std::optional<std::size_t> stopAfterCreateCalls;
+  std::stop_source *stopSource = nullptr;
+};
+
+struct ActivationFixtureOptions {
+  bool resourceBearing = false;
+};
+
+class ActivationFixture final {
+public:
+  explicit ActivationFixture(ActivationFixtureOptions options = {})
+      : roots_{.visiblePackages = temp_.root() / "visible",
+               .privateRevisions = temp_.root() / "revisions",
+               .privateCatalog = temp_.root() / "catalog",
+               .profileOverlays = temp_.root() / "overlays"},
+        package_(*normalizePackageId("ActivationContract").package),
+        entry_(*normalizeEntryPath(package_, "skin/main.luaskin").entry),
+        profile_(*makeSkinProfileId(
+            "66666666-6666-4666-8666-666666666666")),
+        device_(std::make_shared<SessionTextureDevice>()) {
+    chart_.text.title = "Artist 日本 42";
+    chart_.text.subtitle = "Session subtitle";
+    chart_.text.artist = "Session artist";
+
+    const fs::path source = temp_.root() / "source";
+    if (options.resourceBearing) {
+      fs::create_directories(source / "skin/resources");
+      fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                        "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                    source / "skin/resources/fixture.png");
+      fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                        "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
+                    source / "skin/resources/fixture.ttf");
+    }
+    std::string script = R"lua(
+local phase_count = (rawget(_G, "session_activation_phase_count") or 0) + 1
+_G.session_activation_phase_count = phase_count
+if skin_config then
+  if phase_count ~= 2 then
+    error("configured phase did not reuse exactly one fresh header state")
+  end
+  local marker = io.open("configured-phase-marker.txt", "w")
+  if marker then
+    marker:write("configured")
+    marker:close()
+  end
+)lua";
+    if (options.resourceBearing) {
+      script += R"lua(
+  return {
+    type = 0, w = 1280, h = 720,
+    source = {{id = "fixture-image", path = "resources/fixture.png"}},
+    font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
+    image = {{id = "fixture-object", src = "fixture-image", x = 0, y = 0, w = 40, h = 20}},
+    text = {{id = "runtime-title", font = "fixture-font", size = 16, ref = 10}},
+    destination = {
+      {id = "fixture-object", dst = {{x = 0, y = 0, w = 40, h = 20}}},
+      {id = "runtime-title", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else {
+      script += R"lua(
+  return { type = 0, w = 1280, h = 720 }
+)lua";
+    }
+    script += R"lua(
+end
+if phase_count ~= 1 then
+  error("header phase did not begin in a fresh state")
+end
+return { type = 0, name = "activation shell", w = 1280, h = 720 }
+)lua";
+    writeText(source / "skin/main.luaskin", script);
+
+    SkinTreeSnapshotter snapshotter(roots_, aliases_);
+    auto snapshot = snapshotter.snapshot(source, package_, {}, {});
+    expect(snapshot.prepared.has_value(),
+           "activation fixture snapshots an immutable revision");
+    if (!snapshot.prepared) {
+      return;
+    }
+    std::string publishError;
+    lease_ = std::move(*snapshot.prepared).publish(publishError);
+    expect(lease_.has_value() && publishError.empty(),
+           "activation fixture publishes the immutable revision");
+    if (!lease_) {
+      return;
+    }
+
+    GameplaySkinValidator validator(resources_);
+    validation_ = validator.validate(lease_->readView(), entry_, &desired_, {});
+    expect(validation_.disposition ==
+               SkinValidationDisposition::Selectable7Key &&
+               validation_.reconciledSettings.has_value() &&
+               !validation_.configurationDigest.empty(),
+           "activation fixture validates a selectable 7-key skin");
+  }
+
+  bool ready() const noexcept {
+    return lease_.has_value() && validation_.reconciledSettings.has_value() &&
+           !validation_.configurationDigest.empty();
+  }
+
+  ValidatedSkinActivation takeActivation() {
+    return {.revision = std::move(*lease_),
+            .entry = entry_,
+            .reconciledSettings = *validation_.reconciledSettings,
+            .configurationDigest = validation_.configurationDigest};
+  }
+
+  PlaySkinSessionContext context(
+      ViewportSettings viewport = {}, std::stop_token stop = {}) {
+    return {.sessionSerial = 73,
+            .profileId = profile_,
+            .chartModel = chart_,
+            .viewport = viewport,
+            .safeUiBounds = {.x = 0.0,
+                             .y = 0.0,
+                             .width = 1280.0,
+                             .height = 720.0},
+            .storageRoots = roots_,
+            .resourcePreparation = resources_,
+            .textureDevice = device_,
+            .stop = stop};
+  }
+
+  const SkinEntryId &entry() const noexcept { return entry_; }
+  const SkinProfileId &profile() const noexcept { return profile_; }
+  const std::string &configurationDigest() const noexcept {
+    return validation_.configurationDigest;
+  }
+  fs::path configuredMarkerPath() const {
+    const auto overlay =
+        deriveSkinPrivateOverlayRoot(roots_, profile_, entry_);
+    return *overlay.root / "skin/configured-phase-marker.txt";
+  }
+  const std::shared_ptr<SessionTextureDevice> &device() const noexcept {
+    return device_;
+  }
+
+private:
+  TempDirectory temp_;
+  SkinStorageRoots roots_;
+  SkinPackageId package_;
+  SkinEntryId entry_;
+  SkinProfileId profile_;
+  AcceptFiles aliases_;
+  PlayfieldChartVisualModel chart_;
+  EntryProfileSettings desired_;
+  SkinResourcePreparationService resources_;
+  std::shared_ptr<SessionTextureDevice> device_;
+  std::optional<SkinRevisionLease> lease_;
+  SkinValidationResult validation_;
+};
+
+void testActivationCreatesAnOwningFreshStateSession() {
+  ActivationFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  auto activation = fixture.takeActivation();
+  const auto weakRevision = activation.revision.weakPin();
+  const std::string revisionDigest =
+      activation.revision.revision().lowercaseSha256;
+  const ViewportSettings customViewport{
+      .mode = ViewportMode::Custom,
+      .customBase = CustomViewportBase::Stretch,
+      .scaleX = 0.5F,
+      .scaleY = 0.5F,
+      .translateX = 10.0F,
+      .translateY = -20.0F,
+  };
+
+  auto created = PlaySkinSession::create(
+      std::move(activation), fixture.context(customViewport));
+  expect(created.session != nullptr && !created.cancelled &&
+             created.configurationDigest == fixture.configurationDigest() &&
+             created.reconciledSettings.viewport == customViewport,
+         "activation creates one fresh owning session and context viewport wins");
+  if (!created.session) {
+    return;
+  }
+
+  const auto &identity = created.session->identity();
+  expect(identity.sessionSerial == 73 &&
+             identity.profileId == fixture.profile() &&
+             identity.entry == fixture.entry() &&
+             identity.revisionDigest == revisionDigest &&
+             identity.configurationDigest == fixture.configurationDigest(),
+         "session identity retains the exact immutable activation identity");
+
+  const auto frame = created.session->prepareFrame(
+      stateAt(1), projectionAt(1), {});
+  expect(frame.ready() && frame.evaluation.interactionLayout.has_value(),
+         "fresh activation session enters render phase and prepares a frame");
+  if (frame.evaluation.interactionLayout) {
+    const auto &transform = frame.evaluation.interactionLayout->uiToAuthored;
+    expect(transform.m00 == 2.0 && transform.m11 == -2.0 &&
+               transform.tx == -660.0 && transform.ty == 1040.0,
+           "context custom viewport is the frame's exact authored transform");
+  }
+  expect(weakRevision.hasLiveLease(),
+         "session and uploaded catalog retain immutable revision pins");
+  created.session.reset();
+  expect(!weakRevision.hasLiveLease(),
+         "final session and resource teardown releases every revision pin");
+}
+
+void testActivationRejectsAReconciledDigestMismatch() {
+  ActivationFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  auto activation = fixture.takeActivation();
+  activation.configurationDigest.assign(64, '0');
+  const auto expectedDigest = fixture.configurationDigest();
+
+  auto created =
+      PlaySkinSession::create(std::move(activation), fixture.context());
+  expect(!created.session && !created.cancelled &&
+             created.configurationDigest == expectedDigest &&
+             hasDiagnostic(created.diagnostics,
+                           "skin.session.configuration_digest_mismatch") &&
+             !fs::exists(fixture.configuredMarkerPath()),
+         "digest mismatch rejects before configured-phase sandbox writes");
+}
+
+void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
+  ActivationFixture fixture({.resourceBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto activation = fixture.takeActivation();
+  const auto weakRevision = activation.revision.weakPin();
+  fixture.device()->observeRevision(weakRevision);
+
+  auto created =
+      PlaySkinSession::create(std::move(activation), fixture.context());
+  expect(created.session && fixture.device()->createCalls == 2 &&
+             fixture.device()->destroyCalls == 0 &&
+             fixture.device()->wrongThreadOperations == 0 &&
+             weakRevision.hasLiveLease(),
+         "session owns one image and one runtime-string glyph atlas upload");
+  if (!created.session) {
+    return;
+  }
+  const auto frame = created.session->prepareFrame(
+      stateAt(1), projectionAt(1), {});
+  const auto textCommand =
+      frame.evaluation.submitReady
+          ? std::ranges::find_if(
+                frame.evaluation.submitReady->commands,
+                [](const SkinDrawCommand &command) {
+                  return std::holds_alternative<SkinGlyphRunCommand>(
+                      command.payload);
+                })
+          : std::vector<SkinDrawCommand>::const_iterator{};
+  const bool emittedTitle =
+      frame.evaluation.submitReady &&
+      textCommand != frame.evaluation.submitReady->commands.end() &&
+      std::get<SkinGlyphRunCommand>(textCommand->payload).glyphs.size() == 12;
+  expect(frame.ready() && emittedTitle,
+         "title selector emits one runtime text command with every glyph");
+
+  created.session.reset();
+  expect(fixture.device()->destroyCalls == 2 &&
+             fixture.device()->wrongThreadOperations == 0 &&
+             fixture.device()->revisionLiveDuringDestroy &&
+             !weakRevision.hasLiveLease(),
+         "catalog textures tear down on owner thread before the final revision "
+         "pin releases");
+}
+
+void testPostUploadCancellationRollsBackResourcesOnOwnerThread() {
+  ActivationFixture fixture({.resourceBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto activation = fixture.takeActivation();
+  const auto weakRevision = activation.revision.weakPin();
+  fixture.device()->observeRevision(weakRevision);
+  std::stop_source stop;
+  fixture.device()->requestStopAfter(2, stop);
+
+  auto created = PlaySkinSession::create(
+      std::move(activation), fixture.context({}, stop.get_token()));
+  expect(created.cancelled && !created.session && fixture.device()->createCalls == 2 &&
+             fixture.device()->destroyCalls == 2 &&
+             fixture.device()->wrongThreadOperations == 0 &&
+             fixture.device()->revisionLiveDuringDestroy &&
+             !weakRevision.hasLiveLease(),
+         "post-upload cancellation destroys both owner-thread textures and "
+         "releases the final revision pin");
+}
+
+void testInvalidViewportRollsBackUploadedResourcesOnOwnerThread() {
+  ActivationFixture fixture({.resourceBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto activation = fixture.takeActivation();
+  const auto weakRevision = activation.revision.weakPin();
+  fixture.device()->observeRevision(weakRevision);
+  auto context = fixture.context();
+  context.safeUiBounds.width = 0.0;
+
+  auto created =
+      PlaySkinSession::create(std::move(activation), std::move(context));
+  expect(!created.session &&
+             hasDiagnostic(created.diagnostics,
+                           "skin.session.viewport_invalid") &&
+             fixture.device()->createCalls == 2 &&
+             fixture.device()->destroyCalls == 2 &&
+             fixture.device()->wrongThreadOperations == 0 &&
+             fixture.device()->revisionLiveDuringDestroy &&
+             !weakRevision.hasLiveLease(),
+         "post-upload viewport failure rolls back resources and releases all "
+         "revision pins on the owner thread");
+}
+
+void testActivationCancellationAndZeroSerialDoNotPublishSessions() {
+  {
+    ActivationFixture fixture;
+    if (fixture.ready()) {
+      std::stop_source stop;
+      stop.request_stop();
+      auto created = PlaySkinSession::create(
+          fixture.takeActivation(), fixture.context({}, stop.get_token()));
+      expect(!created.session && created.cancelled,
+             "pre-cancelled activation publishes no session");
+    }
+  }
+  {
+    ActivationFixture fixture;
+    if (fixture.ready()) {
+      auto context = fixture.context();
+      context.sessionSerial = 0;
+      auto created =
+          PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+      expect(!created.session && !created.cancelled &&
+                 hasDiagnostic(created.diagnostics,
+                               "skin.session.serial_invalid"),
+             "zero session serial is rejected before runtime publication");
+    }
+  }
 }
 
 const SessionPresentationWrite *presentationMutation(
@@ -499,6 +898,12 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 } // namespace
 
 int main() {
+  testActivationCreatesAnOwningFreshStateSession();
+  testActivationRejectsAReconciledDigestMismatch();
+  testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
+  testPostUploadCancellationRollsBackResourcesOnOwnerThread();
+  testInvalidViewportRollsBackUploadedResourcesOnOwnerThread();
+  testActivationCancellationAndZeroSerialDoNotPublishSessions();
   testSuccessfulFrameCommitsWriterMutationsInInputOrder();
   testWriterFailureDiscardsEarlierAndFailedCallbackMutations();
   testEvaluatorFailureDiscardsWriterTransaction();
