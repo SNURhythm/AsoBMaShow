@@ -49,19 +49,19 @@ class WindowsLuaSkinFileSystemContractTests(unittest.TestCase):
     def test_windows_enumeration_uses_the_retained_directory_handle(self):
         source = self.source
         for token in (
-            "FileIdBothDirectoryRestartInfo",
-            "FILE_ID_BOTH_DIR_INFO",
+            "FileIdExtdDirectoryRestartInfo",
+            "FILE_ID_EXTD_DIR_INFO",
             "FILE_ATTRIBUTE_REPARSE_POINT",
-            "FileIdBothDirectoryInfo",
-            "LARGE_INTEGER fileId",
+            "FileIdExtdDirectoryInfo",
+            "FILE_ID_128 fileId",
             "sameWindowsEnumeratedIdentity",
             "entry.fileId",
-            "information.dwVolumeSerialNumber",
-            "information.nFileIndexHigh",
-            "information.nFileIndexLow",
+            "metadata.identity.FileId.Identifier",
+            "metadata.identity.VolumeSerialNumber",
             "entry.volumeSerial",
         ):
             self.assertIn(token, source)
+        self.assertNotIn("FILE_ID_BOTH_DIR_INFO", source)
         self.assertNotIn("FindFirstFileW", source)
         self.assertNotIn("FindNextFileW", source)
 
@@ -82,6 +82,9 @@ class WindowsLuaSkinFileSystemContractTests(unittest.TestCase):
             "verifyPrivateWindowsSecurity(chain->leaf())",
             "verifyPrivateWindowsSecurity(child.get())",
             "acquireWindowsOverlayMutationPin",
+            "InternalTemporaryCleanup",
+            "recoverWindowsOwnedTemporaries",
+            "internalTemporaryDirectoryName",
         ):
             self.assertIn(token, source)
         self.assertRegex(source, r"FILE_READ_ATTRIBUTES\s*\|\s*READ_CONTROL")
@@ -96,6 +99,7 @@ class WindowsLuaSkinFileSystemContractTests(unittest.TestCase):
         self.assertNotIn("atomic_file::writeWithoutBackup", source)
         self.assertIn("maximumTemporaryCreateAttempts", source)
         self.assertIn("uniqueOverlayTemporaryName", source)
+        self.assertIn("markWindowsDeletion", source)
         replacement = source[
             source.index("secureReplaceAtWindowsParent") :
             source.index(
@@ -134,6 +138,24 @@ class WindowsLuaSkinFileSystemContractTests(unittest.TestCase):
             mkdir.index("acquireWindowsOverlayMutationPin"),
             mkdir.index("collectUsage"),
         )
+
+    def test_existing_windows_overlay_privacy_is_checked_on_create_and_read(self):
+        source = self.source
+        for token in (
+            "validatePrivateOverlayRoot",
+            "readAtPrivateOverlay",
+            "verifyPrivateWindowsSecurity(chain->leaf())",
+        ):
+            self.assertIn(token, source)
+        self.assertRegex(
+            source,
+            r"FILE_LIST_DIRECTORY\s*\|\s*FILE_READ_ATTRIBUTES\s*\|\s*READ_CONTROL",
+        )
+        create = source[
+            source.index("LuaSkinFileSystem::create") :
+            source.index("LuaSkinFileSystem::LuaSkinFileSystem", source.index("LuaSkinFileSystem::create"))
+        ]
+        self.assertIn("validatePrivateOverlayRoot", create)
 
     def test_windows_test_target_links_the_security_api(self):
         target = self.cmake[

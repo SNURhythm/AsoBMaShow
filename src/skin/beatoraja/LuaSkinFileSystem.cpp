@@ -34,6 +34,7 @@ enum class HostEntryKind : std::uint8_t {
   Regular,
   Directory,
   NonRegular,
+  LimitExceeded,
   IoError,
 };
 
@@ -43,6 +44,16 @@ enum class RenderOperation : std::uint8_t { Read, Write, DirectoryScan };
 // them across filesystem instances that may share the same derived root.
 std::mutex overlayMutationMutex;
 constexpr std::size_t maximumTemporaryCreateAttempts = 16;
+constexpr std::size_t maximumAbandonedTemporaries = 64;
+constexpr std::uint64_t maximumOverlayDirectories = 1'024;
+constexpr std::uint64_t maximumOverlayNodes = 2'048;
+constexpr std::size_t maximumOverlayDepth =
+    SkinPackagePolicy::maxPathComponents;
+constexpr std::size_t maximumListingEntries = SkinPackagePolicy::maxFiles;
+constexpr std::string_view internalTemporaryDirectoryName =
+    ".asobmashow-internal";
+constexpr std::string_view temporaryNamePrefix = "write-";
+constexpr std::string_view temporaryNameSuffix = ".tmp";
 
 std::optional<std::string> uniqueOverlayTemporaryName() {
   std::array<std::uint32_t, 4> randomWords{};
@@ -55,7 +66,7 @@ std::optional<std::string> uniqueOverlayTemporaryName() {
     return std::nullopt;
   }
   constexpr char hex[] = "0123456789abcdef";
-  std::string name = ".asobmashow-";
+  std::string name(temporaryNamePrefix);
   name.reserve(name.size() + randomWords.size() * 8 + 4);
   for (const std::uint32_t word : randomWords) {
     for (int shift = 28; shift >= 0; shift -= 4) {
@@ -64,6 +75,20 @@ std::optional<std::string> uniqueOverlayTemporaryName() {
   }
   name += ".tmp";
   return name;
+}
+
+bool isOwnedTemporaryName(std::string_view name) {
+  if (!name.starts_with(temporaryNamePrefix) ||
+      !name.ends_with(temporaryNameSuffix) ||
+      name.size() !=
+          temporaryNamePrefix.size() + 32 + temporaryNameSuffix.size()) {
+    return false;
+  }
+  const std::string_view identifier =
+      name.substr(temporaryNamePrefix.size(), 32);
+  return std::ranges::all_of(identifier, [](unsigned char value) {
+    return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+  });
 }
 
 struct HostStatResult {
@@ -80,6 +105,8 @@ struct HostReadResult {
 struct OverlayUsage {
   std::uint64_t bytes = 0;
   std::uint64_t files = 0;
+  std::uint64_t directories = 0;
+  std::uint64_t nodes = 0;
   HostEntryKind kind = HostEntryKind::Regular;
 };
 
@@ -131,8 +158,22 @@ fs::path pathFromUtf8(std::string_view path) {
   return fs::path(utf8);
 }
 
+bool equalsAsciiCaseInsensitive(std::string_view left, std::string_view right) {
+  return left.size() == right.size() &&
+         std::ranges::equal(left, right, [](unsigned char a, unsigned char b) {
+           const auto fold = [](unsigned char value) {
+             return value >= 'A' && value <= 'Z'
+                        ? static_cast<unsigned char>(value - 'A' + 'a')
+                        : value;
+           };
+           return fold(a) == fold(b);
+         });
+}
+
 bool isPortableSkinFileComponent(std::string_view component) {
-  if (component.empty() || component.back() == '.' || component.back() == ' ') {
+  if (component.empty() ||
+      equalsAsciiCaseInsensitive(component, internalTemporaryDirectoryName) ||
+      component.back() == '.' || component.back() == ' ') {
     return false;
   }
   for (const unsigned char value : component) {
@@ -275,6 +316,8 @@ SkinFileError errorForKind(HostEntryKind kind) {
   case HostEntryKind::NonRegular:
   case HostEntryKind::Directory:
     return SkinFileError::NonRegular;
+  case HostEntryKind::LimitExceeded:
+    return SkinFileError::QuotaExceeded;
   case HostEntryKind::IoError:
     return SkinFileError::IoError;
   case HostEntryKind::Regular:
@@ -290,6 +333,8 @@ std::string_view messageForKind(HostEntryKind kind) {
   case HostEntryKind::NonRegular:
   case HostEntryKind::Directory:
     return "skin virtual path is not a single regular file";
+  case HostEntryKind::LimitExceeded:
+    return "skin filesystem work exceeds its fixed limit";
   case HostEntryKind::IoError:
     return "skin virtual file operation failed";
   case HostEntryKind::Regular:
@@ -339,7 +384,8 @@ HostEntryKind errnoKind(int value) {
 }
 
 std::pair<UniqueFd, HostEntryKind>
-openDirectoryNoFollow(const fs::path &root, std::string_view virtualDirectory) {
+openDirectoryNoFollow(const fs::path &root, std::string_view virtualDirectory,
+                      bool requirePrivate = false) {
   int flags = O_RDONLY | O_DIRECTORY;
 #ifdef O_CLOEXEC
   flags |= O_CLOEXEC;
@@ -351,20 +397,35 @@ openDirectoryNoFollow(const fs::path &root, std::string_view virtualDirectory) {
   if (!current) {
     return {UniqueFd{}, errnoKind(errno)};
   }
+  struct stat rootStatus{};
+  if (requirePrivate &&
+      (::fstat(current.get(), &rootStatus) != 0 ||
+       !S_ISDIR(rootStatus.st_mode) || rootStatus.st_uid != ::geteuid() ||
+       (rootStatus.st_mode & 077) != 0)) {
+    return {UniqueFd{}, HostEntryKind::NonRegular};
+  }
   for (const std::string &component : splitNormalized(virtualDirectory)) {
     UniqueFd next(::openat(current.get(), component.c_str(), flags));
     if (!next) {
       return {UniqueFd{}, errnoKind(errno)};
+    }
+    struct stat status{};
+    if (requirePrivate &&
+        (::fstat(next.get(), &status) != 0 || !S_ISDIR(status.st_mode) ||
+         status.st_uid != ::geteuid() || (status.st_mode & 077) != 0)) {
+      return {UniqueFd{}, HostEntryKind::NonRegular};
     }
     current = std::move(next);
   }
   return {std::move(current), HostEntryKind::Directory};
 }
 
-HostStatResult statAtRoot(const fs::path &root, std::string_view virtualPath) {
+HostStatResult statAtRootImpl(const fs::path &root,
+                              std::string_view virtualPath,
+                              bool requirePrivate) {
   const std::vector<std::string> components = splitNormalized(virtualPath);
   if (components.empty()) {
-    auto [directory, kind] = openDirectoryNoFollow(root, {});
+    auto [directory, kind] = openDirectoryNoFollow(root, {}, requirePrivate);
     return {.kind = directory ? HostEntryKind::Directory : kind};
   }
   std::string parent;
@@ -372,7 +433,8 @@ HostStatResult statAtRoot(const fs::path &root, std::string_view virtualPath) {
     parent = joinComponents(
         std::vector<std::string>(components.begin(), components.end() - 1));
   }
-  auto [directory, directoryKind] = openDirectoryNoFollow(root, parent);
+  auto [directory, directoryKind] =
+      openDirectoryNoFollow(root, parent, requirePrivate);
   if (!directory) {
     return {.kind = directoryKind};
   }
@@ -382,17 +444,35 @@ HostStatResult statAtRoot(const fs::path &root, std::string_view virtualPath) {
     return {.kind = errnoKind(errno)};
   }
   if (S_ISDIR(status.st_mode)) {
+    if (requirePrivate &&
+        (status.st_uid != ::geteuid() || (status.st_mode & 077) != 0)) {
+      return {.kind = HostEntryKind::NonRegular};
+    }
     return {.kind = HostEntryKind::Directory};
   }
   if (!S_ISREG(status.st_mode) || status.st_nlink != 1) {
+    return {.kind = HostEntryKind::NonRegular};
+  }
+  if (requirePrivate &&
+      (status.st_uid != ::geteuid() || (status.st_mode & 077) != 0)) {
     return {.kind = HostEntryKind::NonRegular};
   }
   return {.kind = HostEntryKind::Regular,
           .size = static_cast<std::uint64_t>(status.st_size)};
 }
 
-HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
-                          std::uint64_t maximumBytes) {
+HostStatResult statAtRoot(const fs::path &root, std::string_view virtualPath) {
+  return statAtRootImpl(root, virtualPath, false);
+}
+
+HostStatResult statAtPrivateOverlay(const fs::path &root,
+                                    std::string_view virtualPath) {
+  return statAtRootImpl(root, virtualPath, true);
+}
+
+HostReadResult readAtRootImpl(const fs::path &root,
+                              std::string_view virtualPath,
+                              std::uint64_t maximumBytes, bool requirePrivate) {
   const std::vector<std::string> components = splitNormalized(virtualPath);
   if (components.empty()) {
     return {.kind = HostEntryKind::Directory};
@@ -402,7 +482,8 @@ HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
     parent = joinComponents(
         std::vector<std::string>(components.begin(), components.end() - 1));
   }
-  auto [directory, directoryKind] = openDirectoryNoFollow(root, parent);
+  auto [directory, directoryKind] =
+      openDirectoryNoFollow(root, parent, requirePrivate);
   if (!directory) {
     return {.kind = directoryKind};
   }
@@ -424,7 +505,9 @@ HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
   if (::fstat(file.get(), &before) != 0) {
     return {.kind = HostEntryKind::IoError};
   }
-  if (!S_ISREG(before.st_mode) || before.st_nlink != 1) {
+  if (!S_ISREG(before.st_mode) || before.st_nlink != 1 ||
+      (requirePrivate &&
+       (before.st_uid != ::geteuid() || (before.st_mode & 077) != 0))) {
     return {.kind = HostEntryKind::NonRegular};
   }
   const std::uint64_t size = static_cast<std::uint64_t>(before.st_size);
@@ -453,50 +536,35 @@ HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
   if (::fstat(file.get(), &after) != 0 || before.st_dev != after.st_dev ||
       before.st_ino != after.st_ino || before.st_size != after.st_size ||
       before.st_nlink != after.st_nlink || !S_ISREG(after.st_mode) ||
-      after.st_nlink != 1) {
+      after.st_nlink != 1 ||
+      (requirePrivate &&
+       (after.st_uid != ::geteuid() || (after.st_mode & 077) != 0))) {
     return {.kind = HostEntryKind::IoError};
   }
   return result;
 }
 
-bool ensureAbsoluteDirectoryNoFollow(const fs::path &directory) {
-  const fs::path normalized = directory.lexically_normal();
-  if (!normalized.is_absolute() || normalized.root_path().empty()) {
-    return false;
-  }
-  int flags = O_RDONLY | O_DIRECTORY;
-#ifdef O_CLOEXEC
-  flags |= O_CLOEXEC;
-#endif
-#ifdef O_NOFOLLOW
-  flags |= O_NOFOLLOW;
-#endif
-  UniqueFd current(::open(normalized.root_path().c_str(), flags));
-  if (!current) {
-    return false;
-  }
-  for (const fs::path &component : normalized.relative_path()) {
-    const std::string name = component.string();
-    if (name.empty() || name == "." || name == "..") {
-      return false;
-    }
-    UniqueFd next(::openat(current.get(), name.c_str(), flags));
-    if (!next && errno == ENOENT) {
-      if (::mkdirat(current.get(), name.c_str(), 0700) != 0 &&
-          errno != EEXIST) {
-        return false;
-      }
-      next = UniqueFd(::openat(current.get(), name.c_str(), flags));
-    }
-    if (!next) {
-      return false;
-    }
-    current = std::move(next);
-  }
-  return true;
+HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
+                          std::uint64_t maximumBytes) {
+  return readAtRootImpl(root, virtualPath, maximumBytes, false);
 }
 
-bool collectUsageFromDirectory(int directory, OverlayUsage &usage) {
+HostReadResult readAtPrivateOverlay(const fs::path &root,
+                                    std::string_view virtualPath,
+                                    std::uint64_t maximumBytes) {
+  return readAtRootImpl(root, virtualPath, maximumBytes, true);
+}
+
+HostEntryKind validatePrivateOverlayRoot(const fs::path &root) {
+  return statAtPrivateOverlay(root, {}).kind;
+}
+
+bool isPrivatePosixEntry(const struct stat &status) {
+  return status.st_uid == ::geteuid() && (status.st_mode & 077) == 0;
+}
+
+bool collectUsageFromDirectory(int directory, OverlayUsage &usage,
+                               std::size_t depth, bool overlayRoot) {
   const int duplicate = ::dup(directory);
   if (duplicate < 0) {
     usage.kind = HostEntryKind::IoError;
@@ -514,6 +582,9 @@ bool collectUsageFromDirectory(int directory, OverlayUsage &usage) {
     if (name == "." || name == "..") {
       continue;
     }
+    if (overlayRoot && name == internalTemporaryDirectoryName) {
+      continue;
+    }
     struct stat status{};
     if (::fstatat(directory, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) !=
         0) {
@@ -521,7 +592,23 @@ bool collectUsageFromDirectory(int directory, OverlayUsage &usage) {
       usage.kind = HostEntryKind::IoError;
       return false;
     }
+    if (usage.nodes == maximumOverlayNodes) {
+      ::closedir(stream);
+      usage.kind = HostEntryKind::LimitExceeded;
+      return false;
+    }
+    ++usage.nodes;
     if (S_ISDIR(status.st_mode)) {
+      if (!isPrivatePosixEntry(status) ||
+          usage.directories == maximumOverlayDirectories ||
+          depth == maximumOverlayDepth) {
+        ::closedir(stream);
+        usage.kind = !isPrivatePosixEntry(status)
+                         ? HostEntryKind::NonRegular
+                         : HostEntryKind::LimitExceeded;
+        return false;
+      }
+      ++usage.directories;
       int flags = O_RDONLY | O_DIRECTORY;
 #ifdef O_CLOEXEC
       flags |= O_CLOEXEC;
@@ -530,7 +617,11 @@ bool collectUsageFromDirectory(int directory, OverlayUsage &usage) {
       flags |= O_NOFOLLOW;
 #endif
       UniqueFd child(::openat(directory, entry->d_name, flags));
-      if (!child || !collectUsageFromDirectory(child.get(), usage)) {
+      struct stat opened{};
+      if (!child || ::fstat(child.get(), &opened) != 0 ||
+          opened.st_dev != status.st_dev || opened.st_ino != status.st_ino ||
+          !isPrivatePosixEntry(opened) ||
+          !collectUsageFromDirectory(child.get(), usage, depth + 1, false)) {
         ::closedir(stream);
         if (usage.kind == HostEntryKind::Regular) {
           usage.kind = HostEntryKind::NonRegular;
@@ -540,7 +631,7 @@ bool collectUsageFromDirectory(int directory, OverlayUsage &usage) {
       continue;
     }
     if (!S_ISREG(status.st_mode) || status.st_nlink != 1 ||
-        status.st_size < 0 ||
+        !isPrivatePosixEntry(status) || status.st_size < 0 ||
         usage.files == std::numeric_limits<std::uint64_t>::max() ||
         usage.bytes > std::numeric_limits<std::uint64_t>::max() -
                           static_cast<std::uint64_t>(status.st_size)) {
@@ -560,22 +651,15 @@ bool collectUsageFromDirectory(int directory, OverlayUsage &usage) {
   return true;
 }
 
-OverlayUsage collectUsage(const fs::path &root) {
-  auto [directory, kind] = openDirectoryNoFollow(root, {});
-  if (!directory) {
-    if (kind == HostEntryKind::Missing) {
-      return {};
-    }
-    return {.kind = kind};
-  }
+OverlayUsage collectUsage(int root) {
   OverlayUsage usage;
-  collectUsageFromDirectory(directory.get(), usage);
+  collectUsageFromDirectory(root, usage, 0, true);
   return usage;
 }
 
 std::pair<std::vector<std::string>, HostEntryKind>
 listAtRoot(const fs::path &root, std::string_view virtualDirectory,
-           const SkinPackageId &package) {
+           const SkinPackageId &package, std::size_t maximumEntries) {
   auto [directory, kind] = openDirectoryNoFollow(root, virtualDirectory);
   if (!directory) {
     return {{}, kind};
@@ -595,6 +679,10 @@ listAtRoot(const fs::path &root, std::string_view virtualDirectory,
     const std::string_view name(entry->d_name);
     if (name == "." || name == "..") {
       continue;
+    }
+    if (result.size() > maximumEntries) {
+      ::closedir(stream);
+      return {{}, HostEntryKind::LimitExceeded};
     }
     struct stat status{};
     if (::fstatat(directory.get(), entry->d_name, &status,
@@ -629,26 +717,286 @@ listAtRoot(const fs::path &root, std::string_view virtualDirectory,
   return {std::move(result), HostEntryKind::Directory};
 }
 
-bool secureReplaceOverlayFile(const fs::path &root,
-                              std::string_view virtualPath,
-                              std::span<const std::byte> contents) {
+class InternalTemporaryCleanup {
+public:
+  InternalTemporaryCleanup() = default;
+  InternalTemporaryCleanup(const InternalTemporaryCleanup &) = delete;
+  InternalTemporaryCleanup &
+  operator=(const InternalTemporaryCleanup &) = delete;
+  ~InternalTemporaryCleanup() { (void)remove(); }
+
+  void arm(int directory, std::string name) {
+    directory_ = directory;
+    name_ = std::move(name);
+    armed_ = true;
+  }
+  bool remove() {
+    if (!armed_) {
+      return true;
+    }
+    if (::unlinkat(directory_, name_.c_str(), 0) != 0 && errno != ENOENT) {
+      return false;
+    }
+    armed_ = false;
+    return true;
+  }
+  void disarm() noexcept { armed_ = false; }
+
+private:
+  int directory_ = -1;
+  std::string name_;
+  bool armed_ = false;
+};
+
+bool isPrivatePosixDirectory(int descriptor) {
+  struct stat status{};
+  return ::fstat(descriptor, &status) == 0 && S_ISDIR(status.st_mode) &&
+         isPrivatePosixEntry(status);
+}
+
+std::pair<UniqueFd, HostEntryKind>
+openOrCreatePrivateOverlayRoot(const fs::path &root) {
+  const fs::path normalized = root.lexically_normal();
+  if (!normalized.is_absolute() || normalized.root_path().empty()) {
+    return {UniqueFd{}, HostEntryKind::NonRegular};
+  }
+  int flags = O_RDONLY | O_DIRECTORY;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  UniqueFd current(::open(normalized.root_path().c_str(), flags));
+  if (!current) {
+    return {UniqueFd{}, errnoKind(errno)};
+  }
+  const fs::path relative = normalized.relative_path();
+  std::size_t index = 0;
+  const std::size_t count =
+      static_cast<std::size_t>(std::distance(relative.begin(), relative.end()));
+  for (const fs::path &component : relative) {
+    ++index;
+    const std::string name = component.string();
+    if (name.empty() || name == "." || name == "..") {
+      return {UniqueFd{}, HostEntryKind::NonRegular};
+    }
+    UniqueFd next(::openat(current.get(), name.c_str(), flags));
+    if (!next && errno == ENOENT) {
+      if (::mkdirat(current.get(), name.c_str(), 0700) != 0) {
+        return {UniqueFd{}, errnoKind(errno)};
+      }
+      next = UniqueFd(::openat(current.get(), name.c_str(), flags));
+    }
+    if (!next) {
+      return {UniqueFd{}, errnoKind(errno)};
+    }
+    if (index == count && !isPrivatePosixDirectory(next.get())) {
+      return {UniqueFd{}, HostEntryKind::NonRegular};
+    }
+    current = std::move(next);
+  }
+  return {std::move(current), HostEntryKind::Directory};
+}
+
+bool recoverPosixOwnedTemporaries(int temporaryDirectory) {
+  const int duplicate = ::dup(temporaryDirectory);
+  if (duplicate < 0) {
+    return false;
+  }
+  DIR *stream = ::fdopendir(duplicate);
+  if (stream == nullptr) {
+    ::close(duplicate);
+    return false;
+  }
+  std::size_t recovered = 0;
+  errno = 0;
+  while (dirent *entry = ::readdir(stream)) {
+    const std::string_view name(entry->d_name);
+    if (name == "." || name == "..") {
+      continue;
+    }
+    struct stat status{};
+    if (++recovered > maximumAbandonedTemporaries ||
+        !isOwnedTemporaryName(name) ||
+        ::fstatat(temporaryDirectory, entry->d_name, &status,
+                  AT_SYMLINK_NOFOLLOW) != 0 ||
+        !S_ISREG(status.st_mode) || status.st_nlink != 1 ||
+        !isPrivatePosixEntry(status) ||
+        ::unlinkat(temporaryDirectory, entry->d_name, 0) != 0) {
+      ::closedir(stream);
+      return false;
+    }
+  }
+  const int savedErrno = errno;
+  ::closedir(stream);
+  return savedErrno == 0 && ::fsync(temporaryDirectory) == 0;
+}
+
+struct PosixOverlayMutationPin {
+  std::vector<UniqueFd> parentChain;
+  std::vector<std::string> missingParents;
+  std::string leaf;
+  UniqueFd temporaryDirectory;
+
+  int root() const noexcept { return parentChain.front().get(); }
+  int parent() const noexcept { return parentChain.back().get(); }
+  bool parentExists() const noexcept { return missingParents.empty(); }
+};
+
+std::optional<PosixOverlayMutationPin>
+acquirePosixOverlayMutationPin(const fs::path &root,
+                               std::string_view virtualPath) {
   const std::vector<std::string> components = splitNormalized(virtualPath);
   if (components.empty()) {
+    return std::nullopt;
+  }
+  auto [rootDescriptor, rootKind] = openOrCreatePrivateOverlayRoot(root);
+  if (!rootDescriptor || rootKind != HostEntryKind::Directory) {
+    return std::nullopt;
+  }
+  PosixOverlayMutationPin pin;
+  pin.parentChain.push_back(std::move(rootDescriptor));
+  pin.leaf = components.back();
+  int flags = O_RDONLY | O_DIRECTORY;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  for (std::size_t index = 0; index + 1 < components.size(); ++index) {
+    UniqueFd next(::openat(pin.parent(), components[index].c_str(), flags));
+    if (!next) {
+      if (errno != ENOENT) {
+        return std::nullopt;
+      }
+      pin.missingParents.insert(pin.missingParents.end(),
+                                components.begin() + index,
+                                components.end() - 1);
+      break;
+    }
+    if (!isPrivatePosixDirectory(next.get())) {
+      return std::nullopt;
+    }
+    pin.parentChain.push_back(std::move(next));
+  }
+  if (::mkdirat(pin.root(), internalTemporaryDirectoryName.data(), 0700) != 0 &&
+      errno != EEXIST) {
+    return std::nullopt;
+  }
+  pin.temporaryDirectory = UniqueFd(
+      ::openat(pin.root(), internalTemporaryDirectoryName.data(), flags));
+  if (!pin.temporaryDirectory ||
+      !isPrivatePosixDirectory(pin.temporaryDirectory.get()) ||
+      !recoverPosixOwnedTemporaries(pin.temporaryDirectory.get())) {
+    return std::nullopt;
+  }
+  return pin;
+}
+
+bool ensurePosixPinnedParents(PosixOverlayMutationPin &pin) {
+  int flags = O_RDONLY | O_DIRECTORY;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  for (const std::string &component : pin.missingParents) {
+    if (::mkdirat(pin.parent(), component.c_str(), 0700) != 0 &&
+        errno != EEXIST) {
+      return false;
+    }
+    UniqueFd next(::openat(pin.parent(), component.c_str(), flags));
+    if (!next || !isPrivatePosixDirectory(next.get())) {
+      return false;
+    }
+    pin.parentChain.push_back(std::move(next));
+  }
+  pin.missingParents.clear();
+  return true;
+}
+
+HostStatResult statAtPosixMutationTarget(const PosixOverlayMutationPin &pin) {
+  if (!pin.parentExists()) {
+    return {.kind = HostEntryKind::Missing};
+  }
+  struct stat status{};
+  if (::fstatat(pin.parent(), pin.leaf.c_str(), &status, AT_SYMLINK_NOFOLLOW) !=
+      0) {
+    return {.kind = errnoKind(errno)};
+  }
+  if (S_ISDIR(status.st_mode)) {
+    return {.kind = isPrivatePosixEntry(status) ? HostEntryKind::Directory
+                                                : HostEntryKind::NonRegular};
+  }
+  if (!S_ISREG(status.st_mode) || status.st_nlink != 1 ||
+      !isPrivatePosixEntry(status) || status.st_size < 0) {
+    return {.kind = HostEntryKind::NonRegular};
+  }
+  return {.kind = HostEntryKind::Regular,
+          .size = static_cast<std::uint64_t>(status.st_size)};
+}
+
+HostReadResult readAtPosixMutationTarget(const PosixOverlayMutationPin &pin,
+                                         std::uint64_t maximumBytes) {
+  if (!pin.parentExists()) {
+    return {.kind = HostEntryKind::Missing};
+  }
+  int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  UniqueFd file(::openat(pin.parent(), pin.leaf.c_str(), flags));
+  if (!file) {
+    return {.kind = errnoKind(errno)};
+  }
+  struct stat before{};
+  if (::fstat(file.get(), &before) != 0 || !S_ISREG(before.st_mode) ||
+      before.st_nlink != 1 || !isPrivatePosixEntry(before) ||
+      before.st_size < 0) {
+    return {.kind = HostEntryKind::NonRegular};
+  }
+  const std::uint64_t size = static_cast<std::uint64_t>(before.st_size);
+  if (size > maximumBytes || size > std::numeric_limits<std::size_t>::max()) {
+    return {.kind = HostEntryKind::Regular, .limitExceeded = true};
+  }
+  HostReadResult result{.kind = HostEntryKind::Regular};
+  try {
+    result.bytes.resize(static_cast<std::size_t>(size));
+  } catch (...) {
+    return {.kind = HostEntryKind::IoError};
+  }
+  std::size_t offset = 0;
+  while (offset < result.bytes.size()) {
+    const ssize_t count = ::read(file.get(), result.bytes.data() + offset,
+                                 result.bytes.size() - offset);
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count <= 0) {
+      return {.kind = HostEntryKind::IoError};
+    }
+    offset += static_cast<std::size_t>(count);
+  }
+  struct stat after{};
+  if (::fstat(file.get(), &after) != 0 || before.st_dev != after.st_dev ||
+      before.st_ino != after.st_ino || before.st_size != after.st_size ||
+      before.st_nlink != after.st_nlink || !isPrivatePosixEntry(after)) {
+    return {.kind = HostEntryKind::IoError};
+  }
+  return result;
+}
+
+bool secureReplaceOverlayFile(PosixOverlayMutationPin &pin,
+                              std::span<const std::byte> contents) {
+  if (!ensurePosixPinnedParents(pin)) {
     return false;
   }
-  std::string parentVirtual;
-  if (components.size() > 1) {
-    parentVirtual = joinComponents(
-        std::vector<std::string>(components.begin(), components.end() - 1));
-  }
-  if (!ensureAbsoluteDirectoryNoFollow(root / pathFromUtf8(parentVirtual))) {
-    return false;
-  }
-  auto [parent, parentKind] = openDirectoryNoFollow(root, parentVirtual);
-  if (!parent || parentKind != HostEntryKind::Directory) {
-    return false;
-  }
-  const std::string &leaf = components.back();
   int flags = O_WRONLY | O_CREAT | O_EXCL;
 #ifdef O_CLOEXEC
   flags |= O_CLOEXEC;
@@ -658,6 +1006,7 @@ bool secureReplaceOverlayFile(const fs::path &root,
 #endif
   UniqueFd output;
   std::string temporary;
+  InternalTemporaryCleanup cleanup;
   for (std::size_t attempt = 0; attempt < maximumTemporaryCreateAttempts;
        ++attempt) {
     const auto candidate = uniqueOverlayTemporaryName();
@@ -665,10 +1014,11 @@ bool secureReplaceOverlayFile(const fs::path &root,
       return false;
     }
     const int descriptor =
-        ::openat(parent.get(), candidate->c_str(), flags, 0600);
+        ::openat(pin.temporaryDirectory.get(), candidate->c_str(), flags, 0600);
     if (descriptor >= 0) {
       output = UniqueFd(descriptor);
       temporary = *candidate;
+      cleanup.arm(pin.temporaryDirectory.get(), temporary);
       break;
     }
     if (errno != EEXIST) {
@@ -678,12 +1028,6 @@ bool secureReplaceOverlayFile(const fs::path &root,
   if (!output || ::fchmod(output.get(), 0600) != 0) {
     return false;
   }
-  bool renamed = false;
-  const auto cleanup = [&] {
-    if (!renamed) {
-      ::unlinkat(parent.get(), temporary.c_str(), 0);
-    }
-  };
   std::size_t offset = 0;
   while (offset < contents.size()) {
     const auto *data = reinterpret_cast<const char *>(contents.data() + offset);
@@ -693,7 +1037,7 @@ bool secureReplaceOverlayFile(const fs::path &root,
       continue;
     }
     if (written <= 0) {
-      cleanup();
+      (void)cleanup.remove();
       return false;
     }
     offset += static_cast<std::size_t>(written);
@@ -701,12 +1045,12 @@ bool secureReplaceOverlayFile(const fs::path &root,
   struct stat before{};
   if (::fsync(output.get()) != 0 || ::fstat(output.get(), &before) != 0 ||
       !S_ISREG(before.st_mode) || before.st_nlink != 1 ||
-      ::renameat(parent.get(), temporary.c_str(), parent.get(), leaf.c_str()) !=
-          0) {
-    cleanup();
+      ::renameat(pin.temporaryDirectory.get(), temporary.c_str(), pin.parent(),
+                 pin.leaf.c_str()) != 0) {
+    (void)cleanup.remove();
     return false;
   }
-  renamed = true;
+  cleanup.disarm();
   int readFlags = O_RDONLY;
 #ifdef O_CLOEXEC
   readFlags |= O_CLOEXEC;
@@ -714,45 +1058,32 @@ bool secureReplaceOverlayFile(const fs::path &root,
 #ifdef O_NOFOLLOW
   readFlags |= O_NOFOLLOW;
 #endif
-  UniqueFd installed(::openat(parent.get(), leaf.c_str(), readFlags));
+  UniqueFd installed(::openat(pin.parent(), pin.leaf.c_str(), readFlags));
   struct stat after{};
   return installed && ::fstat(installed.get(), &after) == 0 &&
          S_ISREG(after.st_mode) && after.st_nlink == 1 &&
-         before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
-         before.st_size == after.st_size && ::fsync(parent.get()) == 0;
+         isPrivatePosixEntry(after) && before.st_dev == after.st_dev &&
+         before.st_ino == after.st_ino && before.st_size == after.st_size &&
+         ::fsync(pin.parent()) == 0 &&
+         ::fsync(pin.temporaryDirectory.get()) == 0;
 }
 
-HostEntryKind secureCreateOverlayDirectory(const fs::path &root,
-                                           std::string_view virtualDirectory) {
-  const std::vector<std::string> components = splitNormalized(virtualDirectory);
-  if (components.empty()) {
+HostEntryKind secureCreateOverlayDirectory(PosixOverlayMutationPin &pin) {
+  if (!ensurePosixPinnedParents(pin)) {
     return HostEntryKind::NonRegular;
   }
-  std::string parentVirtual;
-  if (components.size() > 1) {
-    parentVirtual = joinComponents(
-        std::vector<std::string>(components.begin(), components.end() - 1));
-  }
-  if (!ensureAbsoluteDirectoryNoFollow(root / pathFromUtf8(parentVirtual))) {
-    return HostEntryKind::NonRegular;
-  }
-  auto [parent, parentKind] = openDirectoryNoFollow(root, parentVirtual);
-  if (!parent || parentKind != HostEntryKind::Directory) {
-    return parentKind;
-  }
-  const std::string &leaf = components.back();
-  if (::mkdirat(parent.get(), leaf.c_str(), 0700) != 0 && errno != EEXIST) {
+  if (::mkdirat(pin.parent(), pin.leaf.c_str(), 0700) != 0 && errno != EEXIST) {
     return errnoKind(errno);
   }
   struct stat status{};
-  if (::fstatat(parent.get(), leaf.c_str(), &status, AT_SYMLINK_NOFOLLOW) !=
+  if (::fstatat(pin.parent(), pin.leaf.c_str(), &status, AT_SYMLINK_NOFOLLOW) !=
       0) {
     return errnoKind(errno);
   }
-  if (!S_ISDIR(status.st_mode)) {
+  if (!S_ISDIR(status.st_mode) || !isPrivatePosixEntry(status)) {
     return HostEntryKind::NonRegular;
   }
-  return ::fsync(parent.get()) == 0 ? HostEntryKind::Directory
+  return ::fsync(pin.parent()) == 0 ? HostEntryKind::Directory
                                     : HostEntryKind::IoError;
 }
 
@@ -791,8 +1122,6 @@ private:
 struct WindowsMetadata {
   HostEntryKind kind = HostEntryKind::IoError;
   FILE_ID_INFO identity{};
-  DWORD volumeSerial = 0;
-  std::uint64_t fileIndex = 0;
   std::uint64_t size = 0;
   std::uint32_t links = 0;
   FILETIME modified{};
@@ -802,11 +1131,14 @@ struct WindowsHandleChain {
   fs::path currentPath;
   std::vector<UniqueWindowsHandle> handles;
   WindowsMetadata metadata;
+  std::size_t rootIndex = 0;
 
   HANDLE leaf() const noexcept {
     return handles.empty() ? INVALID_HANDLE_VALUE : handles.back().get();
   }
 };
+
+bool verifyPrivateWindowsSecurity(HANDLE handle);
 
 HostEntryKind windowsErrorKind(DWORD error) {
   if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
@@ -843,10 +1175,6 @@ bool windowsMetadataFromHandle(HANDLE handle, WindowsMetadata &metadata) {
   }
   metadata.kind = directory ? HostEntryKind::Directory : HostEntryKind::Regular;
   metadata.identity = identity;
-  metadata.volumeSerial = information.dwVolumeSerialNumber;
-  metadata.fileIndex =
-      (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32U) |
-      information.nFileIndexLow;
   metadata.size =
       directory
           ? 0
@@ -908,8 +1236,8 @@ bool appendExistingWindowsComponent(WindowsHandleChain &chain,
 }
 
 std::optional<WindowsHandleChain>
-openWindowsDirectoryChain(const fs::path &directory,
-                          HostEntryKind &failureKind) {
+openWindowsDirectoryChain(const fs::path &directory, HostEntryKind &failureKind,
+                          DWORD rootDesiredAccess = 0) {
   std::error_code error;
   const fs::path absolute = fs::absolute(directory, error).lexically_normal();
   if (error || !absolute.is_absolute() || absolute.root_path().empty()) {
@@ -931,23 +1259,37 @@ openWindowsDirectoryChain(const fs::path &directory,
     return std::nullopt;
   }
   chain.handles.push_back(std::move(root));
+  std::vector<fs::path> components;
   for (const fs::path &component :
        absolute.lexically_relative(absolute.root_path())) {
+    components.push_back(component);
+  }
+  for (std::size_t index = 0; index < components.size(); ++index) {
     if (!appendExistingWindowsComponent(
-            chain, component, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true,
-            failureKind)) {
+            chain, components[index],
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES |
+                (index + 1 == components.size() ? rootDesiredAccess : 0),
+            true, failureKind)) {
       return std::nullopt;
     }
   }
+  chain.rootIndex = chain.handles.size() - 1;
   failureKind = HostEntryKind::Directory;
   return chain;
 }
 
-std::optional<WindowsHandleChain> openWindowsPathAtRoot(
-    const fs::path &root, std::string_view virtualPath, DWORD desiredAccess,
-    std::optional<bool> expectedDirectory, HostEntryKind &failureKind) {
-  auto chain = openWindowsDirectoryChain(root, failureKind);
+std::optional<WindowsHandleChain>
+openWindowsPathAtRoot(const fs::path &root, std::string_view virtualPath,
+                      DWORD desiredAccess,
+                      std::optional<bool> expectedDirectory,
+                      HostEntryKind &failureKind, bool requirePrivate = false) {
+  auto chain = openWindowsDirectoryChain(root, failureKind,
+                                         requirePrivate ? READ_CONTROL : 0);
   if (!chain) {
+    return std::nullopt;
+  }
+  if (requirePrivate && !verifyPrivateWindowsSecurity(chain->leaf())) {
+    failureKind = HostEntryKind::NonRegular;
     return std::nullopt;
   }
   const std::vector<std::string> components = splitNormalized(virtualPath);
@@ -955,9 +1297,15 @@ std::optional<WindowsHandleChain> openWindowsPathAtRoot(
     const bool final = index + 1 == components.size();
     if (!appendExistingWindowsComponent(
             *chain, pathFromUtf8(components[index]),
-            final ? desiredAccess : FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+            (final ? desiredAccess
+                   : FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES) |
+                (requirePrivate ? READ_CONTROL : 0),
             final ? expectedDirectory : std::optional<bool>(true),
             failureKind)) {
+      return std::nullopt;
+    }
+    if (requirePrivate && !verifyPrivateWindowsSecurity(chain->leaf())) {
+      failureKind = HostEntryKind::NonRegular;
       return std::nullopt;
     }
   }
@@ -979,15 +1327,21 @@ HostStatResult statAtRoot(const fs::path &root, std::string_view virtualPath) {
   return {.kind = chain->metadata.kind, .size = chain->metadata.size};
 }
 
-HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
-                          std::uint64_t maximumBytes) {
+HostStatResult statAtPrivateOverlay(const fs::path &root,
+                                    std::string_view virtualPath) {
   HostEntryKind kind = HostEntryKind::IoError;
-  auto chain =
-      openWindowsPathAtRoot(root, virtualPath, GENERIC_READ, false, kind);
+  auto chain = openWindowsPathAtRoot(root, virtualPath,
+                                     FILE_READ_ATTRIBUTES | READ_CONTROL,
+                                     std::nullopt, kind, true);
   if (!chain) {
     return {.kind = kind};
   }
-  const WindowsMetadata before = chain->metadata;
+  return {.kind = chain->metadata.kind, .size = chain->metadata.size};
+}
+
+HostReadResult readWindowsHandleChain(WindowsHandleChain &chain,
+                                      std::uint64_t maximumBytes) {
+  const WindowsMetadata before = chain.metadata;
   if (before.size > maximumBytes ||
       before.size > std::numeric_limits<std::size_t>::max()) {
     return {.kind = HostEntryKind::Regular, .limitExceeded = true};
@@ -1003,7 +1357,7 @@ HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
     const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
         result.bytes.size() - offset, std::numeric_limits<DWORD>::max()));
     DWORD read = 0;
-    if (!ReadFile(chain->leaf(), result.bytes.data() + offset, chunk, &read,
+    if (!ReadFile(chain.leaf(), result.bytes.data() + offset, chunk, &read,
                   nullptr) ||
         read == 0) {
       return {.kind = HostEntryKind::IoError};
@@ -1011,7 +1365,7 @@ HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
     offset += read;
   }
   WindowsMetadata after;
-  if (!windowsMetadataFromHandle(chain->leaf(), after) ||
+  if (!windowsMetadataFromHandle(chain.leaf(), after) ||
       after.kind != HostEntryKind::Regular ||
       !sameWindowsIdentity(before, after) || before.size != after.size ||
       before.links != after.links ||
@@ -1021,11 +1375,38 @@ HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
   return result;
 }
 
+HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
+                          std::uint64_t maximumBytes) {
+  HostEntryKind kind = HostEntryKind::IoError;
+  auto chain =
+      openWindowsPathAtRoot(root, virtualPath, GENERIC_READ, false, kind);
+  if (!chain) {
+    return {.kind = kind};
+  }
+  return readWindowsHandleChain(*chain, maximumBytes);
+}
+
+HostReadResult readAtPrivateOverlay(const fs::path &root,
+                                    std::string_view virtualPath,
+                                    std::uint64_t maximumBytes) {
+  HostEntryKind kind = HostEntryKind::IoError;
+  auto chain = openWindowsPathAtRoot(
+      root, virtualPath, GENERIC_READ | READ_CONTROL, false, kind, true);
+  if (!chain) {
+    return {.kind = kind};
+  }
+  return readWindowsHandleChain(*chain, maximumBytes);
+}
+
+HostEntryKind validatePrivateOverlayRoot(const fs::path &root) {
+  return statAtPrivateOverlay(root, {}).kind;
+}
+
 struct WindowsDirectoryEntry {
   std::wstring name;
   DWORD attributes = 0;
-  LARGE_INTEGER fileId{};
-  DWORD volumeSerial = 0;
+  FILE_ID_128 fileId{};
+  ULONGLONG volumeSerial = 0;
   bool hasFileId = false;
 };
 
@@ -1034,56 +1415,64 @@ bool sameWindowsEnumeratedIdentity(const WindowsDirectoryEntry &entry,
   if (!entry.hasFileId) {
     return true;
   }
-  return entry.volumeSerial == metadata.volumeSerial &&
-         static_cast<std::uint64_t>(entry.fileId.QuadPart) ==
-             metadata.fileIndex;
+  return entry.volumeSerial == metadata.identity.VolumeSerialNumber &&
+         std::memcmp(entry.fileId.Identifier,
+                     metadata.identity.FileId.Identifier,
+                     sizeof(entry.fileId.Identifier)) == 0;
 }
 
-bool enumerateWindowsDirectory(HANDLE directory,
-                               std::vector<WindowsDirectoryEntry> &entries) {
+HostEntryKind
+enumerateWindowsDirectory(HANDLE directory,
+                          std::vector<WindowsDirectoryEntry> &entries,
+                          std::size_t maximumEntries) {
   WindowsMetadata directoryMetadata;
   if (!windowsMetadataFromHandle(directory, directoryMetadata) ||
       directoryMetadata.kind != HostEntryKind::Directory) {
-    return false;
+    return HostEntryKind::IoError;
   }
-  alignas(FILE_ID_BOTH_DIR_INFO) std::array<std::byte, 64 * 1024> buffer{};
+  alignas(FILE_ID_EXTD_DIR_INFO) std::array<std::byte, 64 * 1024> buffer{};
   bool restart = true;
   for (;;) {
     const FILE_INFO_BY_HANDLE_CLASS informationClass =
-        restart ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
+        restart ? FileIdExtdDirectoryRestartInfo : FileIdExtdDirectoryInfo;
     if (!GetFileInformationByHandleEx(directory, informationClass,
                                       buffer.data(),
                                       static_cast<DWORD>(buffer.size()))) {
-      return GetLastError() == ERROR_NO_MORE_FILES;
+      return GetLastError() == ERROR_NO_MORE_FILES ? HostEntryKind::Directory
+                                                   : HostEntryKind::IoError;
     }
     restart = false;
     std::size_t offset = 0;
     for (;;) {
-      if (offset + sizeof(FILE_ID_BOTH_DIR_INFO) > buffer.size()) {
-        return false;
+      if (offset + sizeof(FILE_ID_EXTD_DIR_INFO) > buffer.size()) {
+        return HostEntryKind::IoError;
       }
-      const auto *entry = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO *>(
+      const auto *entry = reinterpret_cast<const FILE_ID_EXTD_DIR_INFO *>(
           buffer.data() + offset);
       constexpr std::size_t fileNameOffset =
-          offsetof(FILE_ID_BOTH_DIR_INFO, FileName);
+          offsetof(FILE_ID_EXTD_DIR_INFO, FileName);
       if (entry->FileNameLength % sizeof(wchar_t) != 0 ||
           entry->FileNameLength > buffer.size() - offset - fileNameOffset) {
-        return false;
+        return HostEntryKind::IoError;
       }
       const std::wstring name(entry->FileName,
                               entry->FileNameLength / sizeof(wchar_t));
       if (name != L"." && name != L"..") {
-        entries.push_back({.name = name,
-                           .attributes = entry->FileAttributes,
-                           .fileId = entry->FileId,
-                           .volumeSerial = directoryMetadata.volumeSerial,
-                           .hasFileId = true});
+        entries.push_back(
+            {.name = name,
+             .attributes = entry->FileAttributes,
+             .fileId = entry->FileId,
+             .volumeSerial = directoryMetadata.identity.VolumeSerialNumber,
+             .hasFileId = true});
+        if (entries.size() > maximumEntries) {
+          return HostEntryKind::LimitExceeded;
+        }
       }
       if (entry->NextEntryOffset == 0) {
         break;
       }
       if (entry->NextEntryOffset > buffer.size() - offset) {
-        return false;
+        return HostEntryKind::IoError;
       }
       offset += entry->NextEntryOffset;
     }
@@ -1136,13 +1525,21 @@ bool verifyPrivateWindowsSecurity(HANDLE handle);
 
 bool collectUsageFromWindowsDirectory(HANDLE directory,
                                       const fs::path &directoryPath,
-                                      OverlayUsage &usage) {
+                                      OverlayUsage &usage, std::size_t depth,
+                                      bool overlayRoot) {
   std::vector<WindowsDirectoryEntry> entries;
-  if (!enumerateWindowsDirectory(directory, entries)) {
-    usage.kind = HostEntryKind::IoError;
+  const std::size_t remaining = static_cast<std::size_t>(
+      maximumOverlayNodes - std::min(usage.nodes, maximumOverlayNodes));
+  const HostEntryKind enumeration =
+      enumerateWindowsDirectory(directory, entries, remaining);
+  if (enumeration != HostEntryKind::Directory) {
+    usage.kind = enumeration;
     return false;
   }
   for (const WindowsDirectoryEntry &entry : entries) {
+    if (overlayRoot && entry.name == L".asobmashow-internal") {
+      continue;
+    }
     auto [child, metadata] = openWindowsChildNoFollow(
         directoryPath, entry,
         ((entry.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
@@ -1157,9 +1554,21 @@ bool collectUsageFromWindowsDirectory(HANDLE directory,
       usage.kind = HostEntryKind::NonRegular;
       return false;
     }
+    if (usage.nodes == maximumOverlayNodes) {
+      usage.kind = HostEntryKind::LimitExceeded;
+      return false;
+    }
+    ++usage.nodes;
     if (metadata.kind == HostEntryKind::Directory) {
-      if (!collectUsageFromWindowsDirectory(
-              child.get(), directoryPath / entry.name, usage)) {
+      if (usage.directories == maximumOverlayDirectories ||
+          depth == maximumOverlayDepth) {
+        usage.kind = HostEntryKind::LimitExceeded;
+        return false;
+      }
+      ++usage.directories;
+      if (!collectUsageFromWindowsDirectory(child.get(),
+                                            directoryPath / entry.name, usage,
+                                            depth + 1, false)) {
         return false;
       }
       continue;
@@ -1188,13 +1597,14 @@ OverlayUsage collectUsage(const fs::path &root) {
     return {.kind = HostEntryKind::NonRegular};
   }
   OverlayUsage usage;
-  collectUsageFromWindowsDirectory(chain->leaf(), chain->currentPath, usage);
+  collectUsageFromWindowsDirectory(chain->leaf(), chain->currentPath, usage, 0,
+                                   true);
   return usage;
 }
 
 std::pair<std::vector<std::string>, HostEntryKind>
 listAtRoot(const fs::path &root, std::string_view virtualDirectory,
-           const SkinPackageId &package) {
+           const SkinPackageId &package, std::size_t maximumEntries) {
   HostEntryKind kind = HostEntryKind::IoError;
   auto chain = openWindowsPathAtRoot(root, virtualDirectory,
                                      FILE_LIST_DIRECTORY, true, kind);
@@ -1202,8 +1612,10 @@ listAtRoot(const fs::path &root, std::string_view virtualDirectory,
     return {{}, kind};
   }
   std::vector<WindowsDirectoryEntry> children;
-  if (!enumerateWindowsDirectory(chain->leaf(), children)) {
-    return {{}, HostEntryKind::IoError};
+  const HostEntryKind enumeration =
+      enumerateWindowsDirectory(chain->leaf(), children, maximumEntries);
+  if (enumeration != HostEntryKind::Directory) {
+    return {{}, enumeration};
   }
   std::vector<std::string> result;
   result.reserve(children.size());
@@ -1407,11 +1819,6 @@ ensureWindowsOverlayDirectory(const fs::path &root,
   return chain;
 }
 
-std::optional<WindowsHandleChain>
-acquireWindowsOverlayMutationPin(const fs::path &root) {
-  return ensureWindowsOverlayDirectory(root, {});
-}
-
 bool markWindowsDeletion(HANDLE handle) {
   FILE_DISPOSITION_INFO disposition{};
   disposition.DeleteFile = TRUE;
@@ -1419,11 +1826,109 @@ bool markWindowsDeletion(HANDLE handle) {
                                     sizeof(disposition)) != FALSE;
 }
 
+class InternalTemporaryCleanup {
+public:
+  InternalTemporaryCleanup() = default;
+  InternalTemporaryCleanup(const InternalTemporaryCleanup &) = delete;
+  InternalTemporaryCleanup &
+  operator=(const InternalTemporaryCleanup &) = delete;
+  ~InternalTemporaryCleanup() { (void)remove(); }
+
+  void arm(HANDLE handle) noexcept {
+    handle_ = handle;
+    armed_ = true;
+  }
+  bool remove() {
+    if (!armed_) {
+      return true;
+    }
+    if (!markWindowsDeletion(handle_)) {
+      return false;
+    }
+    armed_ = false;
+    return true;
+  }
+  void disarm() noexcept { armed_ = false; }
+
+private:
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
+  bool armed_ = false;
+};
+
+bool recoverWindowsOwnedTemporaries(WindowsHandleChain &temporary) {
+  std::vector<WindowsDirectoryEntry> entries;
+  if (enumerateWindowsDirectory(temporary.leaf(), entries,
+                                maximumAbandonedTemporaries) !=
+      HostEntryKind::Directory) {
+    return false;
+  }
+  for (const WindowsDirectoryEntry &entry : entries) {
+    const auto name = utf8FromWide(entry.name);
+    if (!name || !isOwnedTemporaryName(*name)) {
+      return false;
+    }
+    auto [child, metadata] =
+        openWindowsChildNoFollow(temporary.currentPath, entry,
+                                 DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL);
+    if (!child || metadata.kind != HostEntryKind::Regular ||
+        !verifyPrivateWindowsSecurity(child.get()) ||
+        !markWindowsDeletion(child.get())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<std::size_t>
+countMissingWindowsOverlayParents(const fs::path &root,
+                                  std::string_view virtualPath) {
+  const std::vector<std::string> components = splitNormalized(virtualPath);
+  std::string prefix;
+  for (std::size_t index = 0; index + 1 < components.size(); ++index) {
+    if (!prefix.empty()) {
+      prefix.push_back('/');
+    }
+    prefix += components[index];
+    const HostStatResult status = statAtPrivateOverlay(root, prefix);
+    if (status.kind == HostEntryKind::Missing) {
+      return components.size() - index - 1;
+    }
+    if (status.kind != HostEntryKind::Directory) {
+      return std::nullopt;
+    }
+  }
+  return 0;
+}
+
+struct WindowsOverlayMutationPin {
+  WindowsHandleChain root;
+  WindowsHandleChain temporary;
+  std::size_t missingParents = 0;
+};
+
+std::optional<WindowsOverlayMutationPin>
+acquireWindowsOverlayMutationPin(const fs::path &root,
+                                 std::string_view virtualPath) {
+  auto rootChain = ensureWindowsOverlayDirectory(root, {});
+  auto temporary =
+      ensureWindowsOverlayDirectory(root, internalTemporaryDirectoryName);
+  const auto missing = countMissingWindowsOverlayParents(root, virtualPath);
+  if (!rootChain || !temporary || !missing ||
+      !recoverWindowsOwnedTemporaries(*temporary)) {
+    return std::nullopt;
+  }
+  return WindowsOverlayMutationPin{.root = std::move(*rootChain),
+                                   .temporary = std::move(*temporary),
+                                   .missingParents = *missing};
+}
+
 bool secureReplaceAtWindowsParent(HANDLE parent, const fs::path &parentPath,
+                                  const fs::path &temporaryPath,
                                   const std::wstring &leaf,
                                   std::span<const std::byte> contents,
                                   PrivateWindowsSecurity &security) {
   UniqueWindowsHandle output;
+  InternalTemporaryCleanup cleanup;
   for (std::size_t attempt = 0; attempt < maximumTemporaryCreateAttempts;
        ++attempt) {
     const auto candidate = uniqueOverlayTemporaryName();
@@ -1431,11 +1936,12 @@ bool secureReplaceAtWindowsParent(HANDLE parent, const fs::path &parentPath,
       return false;
     }
     UniqueWindowsHandle created(CreateFileW(
-        (parentPath / pathFromUtf8(*candidate)).c_str(),
+        (temporaryPath / pathFromUtf8(*candidate)).c_str(),
         GENERIC_READ | GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE, security.attributes(), CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
     if (created) {
+      cleanup.arm(created.get());
       output = std::move(created);
       break;
     }
@@ -1449,12 +1955,6 @@ bool secureReplaceAtWindowsParent(HANDLE parent, const fs::path &parentPath,
       before.kind != HostEntryKind::Regular || !security.verify(output.get())) {
     return false;
   }
-  bool renamed = false;
-  const auto cleanup = [&] {
-    if (!renamed) {
-      markWindowsDeletion(output.get());
-    }
-  };
   std::size_t offset = 0;
   while (offset < contents.size()) {
     const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
@@ -1463,7 +1963,7 @@ bool secureReplaceAtWindowsParent(HANDLE parent, const fs::path &parentPath,
     if (!WriteFile(output.get(), contents.data() + offset, chunk, &written,
                    nullptr) ||
         written == 0) {
-      cleanup();
+      (void)cleanup.remove();
       return false;
     }
     offset += written;
@@ -1471,7 +1971,7 @@ bool secureReplaceAtWindowsParent(HANDLE parent, const fs::path &parentPath,
   if (!FlushFileBuffers(output.get()) ||
       !windowsMetadataFromHandle(output.get(), before) ||
       before.kind != HostEntryKind::Regular || before.size != contents.size()) {
-    cleanup();
+    (void)cleanup.remove();
     return false;
   }
   const std::size_t renameBytes =
@@ -1486,10 +1986,10 @@ bool secureReplaceAtWindowsParent(HANDLE parent, const fs::path &parentPath,
   std::memcpy(rename.FileName, leaf.data(), rename.FileNameLength);
   if (!SetFileInformationByHandle(output.get(), FileRenameInfo, &rename,
                                   static_cast<DWORD>(renameBytes))) {
-    cleanup();
+    (void)cleanup.remove();
     return false;
   }
-  renamed = true;
+  cleanup.disarm();
   WindowsDirectoryEntry installedEntry{.name = leaf};
   auto [installed, after] = openWindowsChildNoFollow(
       parentPath, installedEntry, FILE_READ_ATTRIBUTES | READ_CONTROL);
@@ -1498,7 +1998,8 @@ bool secureReplaceAtWindowsParent(HANDLE parent, const fs::path &parentPath,
          security.verify(installed.get());
 }
 
-bool secureReplaceOverlayFile(const fs::path &root,
+bool secureReplaceOverlayFile(const WindowsOverlayMutationPin &pin,
+                              const fs::path &root,
                               std::string_view virtualPath,
                               std::span<const std::byte> contents) {
   const std::vector<std::string> components = splitNormalized(virtualPath);
@@ -1513,9 +2014,9 @@ bool secureReplaceOverlayFile(const fs::path &root,
   auto parent = ensureWindowsOverlayDirectory(root, parentVirtual);
   PrivateWindowsSecurity &security = privateWindowsSecurity();
   return parent &&
-         secureReplaceAtWindowsParent(parent->leaf(), parent->currentPath,
-                                      pathFromUtf8(components.back()).native(),
-                                      contents, security);
+         secureReplaceAtWindowsParent(
+             parent->leaf(), parent->currentPath, pin.temporary.currentPath,
+             pathFromUtf8(components.back()).native(), contents, security);
 }
 
 HostEntryKind secureCreateOverlayDirectory(const fs::path &root,
@@ -1735,7 +2236,8 @@ struct LuaSkinFileSystem::Impl {
 
   HostStatResult statLogicalData(std::string_view normalized) const {
     if (overlayRoot) {
-      const HostStatResult overlay = statAtRoot(*overlayRoot, normalized);
+      const HostStatResult overlay =
+          statAtPrivateOverlay(*overlayRoot, normalized);
       if (overlay.kind != HostEntryKind::Missing) {
         return overlay;
       }
@@ -1747,7 +2249,7 @@ struct LuaSkinFileSystem::Impl {
                                  std::uint64_t maximumBytes) const {
     if (overlayRoot) {
       HostReadResult overlay =
-          readAtRoot(*overlayRoot, normalized, maximumBytes);
+          readAtPrivateOverlay(*overlayRoot, normalized, maximumBytes);
       if (overlay.kind != HostEntryKind::Missing) {
         return overlay;
       }
@@ -1879,9 +2381,9 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
                                  options.entry.packageRelativePath,
                                  "skin data overlay identity is invalid")};
     }
-    const HostStatResult status = statAtRoot(*overlayRoot, {});
-    if (status.kind != HostEntryKind::Missing &&
-        status.kind != HostEntryKind::Directory) {
+    const HostEntryKind status = validatePrivateOverlayRoot(*overlayRoot);
+    if (status != HostEntryKind::Missing &&
+        status != HostEntryKind::Directory) {
       return {.failure = failure(SkinFileError::NonRegular,
                                  options.entry.packageRelativePath,
                                  "skin data overlay root is not a directory")};
@@ -2047,8 +2549,14 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
+  const std::size_t boundedMaximum =
+      std::min(maximumEntries, maximumListingEntries);
   auto [entries, kind] = listAtRoot(impl_->revision.root(), *normalized.path,
-                                    impl_->entry.package);
+                                    impl_->entry.package, boundedMaximum);
+  if (kind == HostEntryKind::LimitExceeded) {
+    return {.failure = failure(SkinFileError::LimitExceeded, *normalized.path,
+                               "skin directory listing exceeds its limit")};
+  }
   if (kind != HostEntryKind::Directory) {
     return {.failure = failure(errorForKind(kind), *normalized.path,
                                messageForKind(kind))};
@@ -2058,7 +2566,7 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
       return !matchesLinearLuaPattern(*compiledPattern, entry);
     });
   }
-  if (entries.size() > maximumEntries) {
+  if (entries.size() > boundedMaximum) {
     return {.failure = failure(SkinFileError::LimitExceeded, *normalized.path,
                                "skin directory listing exceeds its limit")};
   }
@@ -2072,7 +2580,6 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
   if (auto denied = impl_->guard(RenderOperation::Write, virtualPath)) {
     return {.failure = std::move(denied)};
   }
-  const std::scoped_lock overlayLock(overlayMutationMutex);
   const auto normalized = impl_->normalize(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
@@ -2081,14 +2588,30 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
     return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
                                "skin data writes are not enabled")};
   }
+  if (bytes.size() > impl_->dataPolicy.maximumBytes) {
+    return {.failure = failure(SkinFileError::QuotaExceeded, *normalized.path,
+                               "skin data write exceeds its byte quota")};
+  }
+  const std::scoped_lock overlayLock(overlayMutationMutex);
 #if defined(_WIN32)
-  auto overlayPin = acquireWindowsOverlayMutationPin(*impl_->overlayRoot);
+  auto overlayPin =
+      acquireWindowsOverlayMutationPin(*impl_->overlayRoot, *normalized.path);
+#else
+  auto overlayPin =
+      acquirePosixOverlayMutationPin(*impl_->overlayRoot, *normalized.path);
+#endif
   if (!overlayPin) {
     return {.failure = failure(SkinFileError::NonRegular, *normalized.path,
                                "skin data overlay root is not private")};
   }
-#endif
+#if defined(_WIN32)
   OverlayUsage usage = collectUsage(*impl_->overlayRoot);
+  const HostStatResult existing =
+      statAtRoot(*impl_->overlayRoot, *normalized.path);
+#else
+  OverlayUsage usage = collectUsage(overlayPin->root());
+  const HostStatResult existing = statAtPosixMutationTarget(*overlayPin);
+#endif
   if (usage.kind != HostEntryKind::Regular) {
     return {.resultingBytes = usage.bytes,
             .resultingFiles = usage.files,
@@ -2096,8 +2619,6 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
                 failure(errorForKind(usage.kind), *normalized.path,
                         "skin data overlay contains a non-regular entry")};
   }
-  const HostStatResult existing =
-      statAtRoot(*impl_->overlayRoot, *normalized.path);
   if (existing.kind != HostEntryKind::Missing &&
       existing.kind != HostEntryKind::Regular) {
     return {.resultingBytes = usage.bytes,
@@ -2108,8 +2629,17 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
 
   std::vector<std::byte> replacement;
   if (append) {
+#if defined(_WIN32)
     HostReadResult prior = impl_->readLogicalData(
         *normalized.path, impl_->dataPolicy.maximumBytes);
+#else
+    HostReadResult prior =
+        readAtPosixMutationTarget(*overlayPin, impl_->dataPolicy.maximumBytes);
+    if (prior.kind == HostEntryKind::Missing) {
+      prior = readAtRoot(impl_->revision.root(), *normalized.path,
+                         impl_->dataPolicy.maximumBytes);
+    }
+#endif
     if (prior.limitExceeded) {
       return {.resultingBytes = usage.bytes,
               .resultingFiles = usage.files,
@@ -2127,12 +2657,47 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
       replacement = std::move(prior.bytes);
     }
   }
-  if (bytes.size() >
-      std::numeric_limits<std::size_t>::max() - replacement.size()) {
+  if (bytes.size() > impl_->dataPolicy.maximumBytes - replacement.size()) {
     return {.resultingBytes = usage.bytes,
             .resultingFiles = usage.files,
             .failure = failure(SkinFileError::QuotaExceeded, *normalized.path,
                                "skin data write exceeds its byte quota")};
+  }
+  const std::uint64_t priorSize =
+      existing.kind == HostEntryKind::Regular ? existing.size : 0;
+  const std::uint64_t resultingFiles =
+      usage.files + (existing.kind == HostEntryKind::Missing ? 1U : 0U);
+  const std::uint64_t replacementSize = replacement.size() + bytes.size();
+  if (usage.bytes < priorSize ||
+      replacementSize > std::numeric_limits<std::uint64_t>::max() -
+                            (usage.bytes - priorSize)) {
+    return {.resultingBytes = usage.bytes,
+            .resultingFiles = usage.files,
+            .failure = failure(SkinFileError::QuotaExceeded, *normalized.path,
+                               "skin data write exceeds its byte quota")};
+  }
+  const std::uint64_t resultingBytes =
+      usage.bytes - priorSize + replacementSize;
+  if (resultingBytes > impl_->dataPolicy.maximumBytes ||
+      resultingFiles > impl_->dataPolicy.maximumFiles) {
+    return {.resultingBytes = usage.bytes,
+            .resultingFiles = usage.files,
+            .failure = failure(SkinFileError::QuotaExceeded, *normalized.path,
+                               "skin data overlay quota is exhausted")};
+  }
+#if defined(_WIN32)
+  const std::uint64_t createdDirectories = overlayPin->missingParents;
+#else
+  const std::uint64_t createdDirectories = overlayPin->missingParents.size();
+#endif
+  const std::uint64_t createdNodes =
+      createdDirectories + (existing.kind == HostEntryKind::Missing ? 1U : 0U);
+  if (usage.directories > maximumOverlayDirectories - createdDirectories ||
+      usage.nodes > maximumOverlayNodes - createdNodes) {
+    return {.resultingBytes = usage.bytes,
+            .resultingFiles = usage.files,
+            .failure = failure(SkinFileError::QuotaExceeded, *normalized.path,
+                               "skin data overlay node quota is exhausted")};
   }
   try {
     replacement.insert(replacement.end(), bytes.begin(), bytes.end());
@@ -2144,30 +2709,12 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
                         "skin data write could not allocate its buffer")};
   }
 
-  const std::uint64_t priorSize =
-      existing.kind == HostEntryKind::Regular ? existing.size : 0;
-  const std::uint64_t resultingFiles =
-      usage.files + (existing.kind == HostEntryKind::Missing ? 1U : 0U);
-  if (usage.bytes < priorSize ||
-      replacement.size() > std::numeric_limits<std::uint64_t>::max() -
-                               (usage.bytes - priorSize)) {
-    return {.resultingBytes = usage.bytes,
-            .resultingFiles = usage.files,
-            .failure = failure(SkinFileError::QuotaExceeded, *normalized.path,
-                               "skin data write exceeds its byte quota")};
-  }
-  const std::uint64_t resultingBytes =
-      usage.bytes - priorSize + replacement.size();
-  if (resultingBytes > impl_->dataPolicy.maximumBytes ||
-      resultingFiles > impl_->dataPolicy.maximumFiles) {
-    return {.resultingBytes = usage.bytes,
-            .resultingFiles = usage.files,
-            .failure = failure(SkinFileError::QuotaExceeded, *normalized.path,
-                               "skin data overlay quota is exhausted")};
-  }
-
+#if defined(_WIN32)
   const HostStatResult rechecked =
       statAtRoot(*impl_->overlayRoot, *normalized.path);
+#else
+  const HostStatResult rechecked = statAtPosixMutationTarget(*overlayPin);
+#endif
   if (rechecked.kind != existing.kind ||
       (rechecked.kind == HostEntryKind::Regular &&
        rechecked.size != existing.size)) {
@@ -2176,8 +2723,12 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
             .failure = failure(SkinFileError::IoError, *normalized.path,
                                "skin data target changed during replacement")};
   }
-  if (!secureReplaceOverlayFile(*impl_->overlayRoot, *normalized.path,
-                                replacement)) {
+#if defined(_WIN32)
+  if (!secureReplaceOverlayFile(*overlayPin, *impl_->overlayRoot,
+                                *normalized.path, replacement)) {
+#else
+  if (!secureReplaceOverlayFile(*overlayPin, replacement)) {
+#endif
     return {.resultingBytes = usage.bytes,
             .resultingFiles = usage.files,
             .failure = failure(SkinFileError::IoError, *normalized.path,
@@ -2192,7 +2743,6 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   if (auto denied = impl_->guard(RenderOperation::Write, virtualDirectory)) {
     return {.failure = std::move(denied)};
   }
-  const std::scoped_lock overlayLock(overlayMutationMutex);
   const auto normalized = impl_->normalize(virtualDirectory);
   if (!normalized.path) {
     return {.failure = normalized.failure};
@@ -2201,14 +2751,23 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
     return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
                                "skin data writes are not enabled")};
   }
+  const std::scoped_lock overlayLock(overlayMutationMutex);
 #if defined(_WIN32)
-  auto overlayPin = acquireWindowsOverlayMutationPin(*impl_->overlayRoot);
+  auto overlayPin =
+      acquireWindowsOverlayMutationPin(*impl_->overlayRoot, *normalized.path);
+#else
+  auto overlayPin =
+      acquirePosixOverlayMutationPin(*impl_->overlayRoot, *normalized.path);
+#endif
   if (!overlayPin) {
     return {.failure = failure(SkinFileError::NonRegular, *normalized.path,
                                "skin data overlay root is not private")};
   }
-#endif
+#if defined(_WIN32)
   OverlayUsage usage = collectUsage(*impl_->overlayRoot);
+#else
+  OverlayUsage usage = collectUsage(overlayPin->root());
+#endif
   if (usage.kind != HostEntryKind::Regular) {
     return {.resultingBytes = usage.bytes,
             .resultingFiles = usage.files,
@@ -2221,8 +2780,14 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   if (!parentVirtual.empty()) {
     const HostStatResult packageParent =
         statAtRoot(impl_->revision.root(), parentVirtual);
+#if defined(_WIN32)
     const HostStatResult overlayParent =
         statAtRoot(*impl_->overlayRoot, parentVirtual);
+#else
+    const HostStatResult overlayParent{.kind = overlayPin->parentExists()
+                                                   ? HostEntryKind::Directory
+                                                   : HostEntryKind::Missing};
+#endif
     if (overlayParent.kind != HostEntryKind::Directory &&
         packageParent.kind != HostEntryKind::Directory) {
       return {.resultingBytes = usage.bytes,
@@ -2231,8 +2796,12 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
                                  "skin data directory parent is missing")};
     }
   }
+#if defined(_WIN32)
   const HostStatResult existing =
       statAtRoot(*impl_->overlayRoot, *normalized.path);
+#else
+  const HostStatResult existing = statAtPosixMutationTarget(*overlayPin);
+#endif
   if (existing.kind == HostEntryKind::Directory) {
     return {.resultingBytes = usage.bytes, .resultingFiles = usage.files};
   }
@@ -2242,8 +2811,25 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
             .failure = failure(errorForKind(existing.kind), *normalized.path,
                                messageForKind(existing.kind))};
   }
+#if defined(_WIN32)
+  const std::uint64_t createdDirectories = overlayPin->missingParents + 1U;
+#else
+  const std::uint64_t createdDirectories =
+      overlayPin->missingParents.size() + 1U;
+#endif
+  if (usage.directories > maximumOverlayDirectories - createdDirectories ||
+      usage.nodes > maximumOverlayNodes - createdDirectories) {
+    return {.resultingBytes = usage.bytes,
+            .resultingFiles = usage.files,
+            .failure = failure(SkinFileError::QuotaExceeded, *normalized.path,
+                               "skin data overlay node quota is exhausted")};
+  }
+#if defined(_WIN32)
   if (secureCreateOverlayDirectory(*impl_->overlayRoot, *normalized.path) !=
       HostEntryKind::Directory) {
+#else
+  if (secureCreateOverlayDirectory(*overlayPin) != HostEntryKind::Directory) {
+#endif
     return {.resultingBytes = usage.bytes,
             .resultingFiles = usage.files,
             .failure = failure(SkinFileError::IoError, *normalized.path,

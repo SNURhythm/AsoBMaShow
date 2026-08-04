@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <barrier>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -23,7 +24,10 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -332,6 +336,9 @@ void testNoFollowReadsAndOverlayUseSeparation() {
 #if !defined(_WIN32)
   fs::create_directories(overlay / "entry/data");
   writeText(overlay / "entry/data/state.txt.tmp", "stale-temp");
+  fs::permissions(overlay / "entry/data/state.txt.tmp",
+                  fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::replace);
   const auto staleTempWrite =
       fileSystem.writeData("data/state.txt", bytesOf("new-state"), false);
   expect(!staleTempWrite.failure &&
@@ -457,6 +464,291 @@ void testAtomicWritesNestedParentsAndQuotaRollback() {
     expect(failedWith(denied.failure, SkinFileError::WrongUse),
            "read-only validation cannot create an overlay");
   }
+}
+
+void testOverlayWorkIsBoundedBeforeMutation() {
+  PackageFixture fixture;
+  const SkinProfileId selectedProfile =
+      profile("88888888-8888-4888-8888-888888888888");
+  auto created = fixture.create(fixture.entry, selectedProfile, true,
+                                {.maximumBytes = 5, .maximumFiles = 1});
+  expect(created.fileSystem != nullptr, "bounded-work fixture is created");
+  if (!created.fileSystem) {
+    return;
+  }
+  auto &fileSystem = *created.fileSystem;
+  const fs::path overlay = fixture.overlayRoot(fixture.entry, selectedProfile);
+
+  const std::vector<std::byte> oversized(1024 * 1024, std::byte{'x'});
+  const auto oversizedWrite =
+      fileSystem.writeData("oversized.bin", oversized, false);
+  expect(failedWith(oversizedWrite.failure, SkinFileError::QuotaExceeded) &&
+             !fs::exists(overlay),
+         "an oversized payload is rejected before overlay creation or copy");
+
+#if !defined(_WIN32)
+  const long pageSize = ::sysconf(_SC_PAGESIZE);
+  void *guardedPayload =
+      ::mmap(nullptr, static_cast<std::size_t>(pageSize),
+             PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  expect(guardedPayload != MAP_FAILED,
+         "oversized payload guard page is allocated");
+  if (guardedPayload != MAP_FAILED) {
+    std::fill_n(static_cast<std::byte *>(guardedPayload), pageSize,
+                std::byte{0});
+    expect(::mprotect(guardedPayload, static_cast<std::size_t>(pageSize),
+                      PROT_NONE) == 0,
+           "oversized payload guard page becomes inaccessible");
+    const pid_t child = ::fork();
+    if (child == 0) {
+      const auto guarded = fileSystem.writeData(
+          "guarded.bin",
+          std::span(static_cast<const std::byte *>(guardedPayload),
+                    static_cast<std::size_t>(pageSize)),
+          false);
+      ::_exit(failedWith(guarded.failure, SkinFileError::QuotaExceeded) ? 0
+                                                                        : 1);
+    }
+    int status = 0;
+    expect(child > 0 && ::waitpid(child, &status, 0) == child &&
+               WIFEXITED(status) && WEXITSTATUS(status) == 0,
+           "oversized payload bytes are never touched before quota rejection");
+    ::munmap(guardedPayload, static_cast<std::size_t>(pageSize));
+  }
+
+  fs::create_directories(overlay);
+  fs::permissions(overlay, fs::perms::owner_all, fs::perm_options::replace);
+  for (int index = 0; index < 1'025; ++index) {
+    const fs::path directory = overlay / ("directory-" + std::to_string(index));
+    fs::create_directory(directory);
+    fs::permissions(directory, fs::perms::owner_all, fs::perm_options::replace);
+  }
+  const auto wide = fileSystem.writeData("wide.txt", bytesOf("x"), false);
+  expect(failedWith(wide.failure, SkinFileError::QuotaExceeded) &&
+             !fs::exists(overlay / "entry/wide.txt"),
+         "overlay directory growth is bounded independently of file quota");
+
+  fs::remove_all(overlay);
+  fs::create_directories(overlay);
+  fs::permissions(overlay, fs::perms::owner_all, fs::perm_options::replace);
+  fs::path deep = overlay;
+  for (int depth = 0; depth < 65; ++depth) {
+    deep /= "d";
+    fs::create_directory(deep);
+    fs::permissions(deep, fs::perms::owner_all, fs::perm_options::replace);
+  }
+  const auto tooDeep =
+      fileSystem.writeData("deep-limit.txt", bytesOf("x"), false);
+  expect(failedWith(tooDeep.failure, SkinFileError::QuotaExceeded) &&
+             !fs::exists(overlay / "entry/deep-limit.txt"),
+         "overlay traversal stops at the fixed recursion-depth limit");
+#endif
+
+  enableAdversarialStagingMutation(fixture.prepared->stagingRoot() / "entry");
+  const fs::path huge = fixture.prepared->stagingRoot() / "entry/huge";
+  fs::create_directory(huge);
+  for (int index = 0; index < 3'000; ++index) {
+    writeText(huge / ("entry-" + std::to_string(index) + ".txt"), "x");
+  }
+  const auto hugeList = fileSystem.list("huge", "", 8);
+  expect(failedWith(hugeList.failure, SkinFileError::LimitExceeded) &&
+             hugeList.entries.empty(),
+         "a huge directory listing stops at its caller limit without a partial "
+         "result");
+
+#if !defined(_WIN32)
+  const fs::path poison = huge / "listing-poison";
+  fs::create_symlink(fixture.temp.root() / "outside-list-target", poison);
+  std::size_t poisonPosition = 0;
+  std::size_t position = 0;
+  for (const auto &entry : fs::directory_iterator(huge)) {
+    ++position;
+    if (entry.path().filename() == poison.filename()) {
+      poisonPosition = position;
+      break;
+    }
+  }
+  expect(poisonPosition > 2, "listing poison follows bounded regular entries");
+  if (poisonPosition > 2) {
+    const auto stoppedBeforePoison =
+        fileSystem.list("huge", "", poisonPosition - 2);
+    expect(
+        failedWith(stoppedBeforePoison.failure, SkinFileError::LimitExceeded),
+        "listing stops at maximumEntries plus one before inspecting later "
+        "children");
+  }
+#endif
+}
+
+void testInternalTemporaryNamespaceAndRecovery() {
+  PackageFixture fixture;
+  const SkinProfileId selectedProfile =
+      profile("99999999-9999-4999-8999-999999999999");
+  auto created = fixture.create(fixture.entry, selectedProfile, true);
+  expect(created.fileSystem != nullptr,
+         "temporary recovery fixture is created");
+  if (!created.fileSystem) {
+    return;
+  }
+  auto &fileSystem = *created.fileSystem;
+  const auto reserved = fileSystem.resolve(
+      ".asobmashow-internal/write-0123456789abcdef0123456789abcdef.tmp",
+      SkinFileUse::DataWrite);
+  const auto reservedCaseAlias = fileSystem.resolve(
+      ".ASOBMASHOW-INTERNAL/write-0123456789abcdef0123456789abcdef.tmp",
+      SkinFileUse::DataWrite);
+  expect(failedWith(reserved.failure, SkinFileError::InvalidPath) &&
+             failedWith(reservedCaseAlias.failure, SkinFileError::InvalidPath),
+         "authored paths cannot enter the internal temporary namespace");
+
+#if !defined(_WIN32)
+  const fs::path overlay = fixture.overlayRoot(fixture.entry, selectedProfile);
+  fs::create_directories(overlay / ".asobmashow-internal");
+  fs::permissions(overlay, fs::perms::owner_all, fs::perm_options::replace);
+  fs::permissions(overlay / ".asobmashow-internal", fs::perms::owner_all,
+                  fs::perm_options::replace);
+  const fs::path stale = overlay / ".asobmashow-internal" /
+                         "write-0123456789abcdef0123456789abcdef.tmp";
+  writeText(stale, "abandoned");
+  fs::permissions(stale, fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::replace);
+  const auto recovered =
+      fileSystem.writeData("recovered.txt", bytesOf("recovered"), false);
+  expect(!recovered.failure && !fs::exists(stale),
+         "an exactly named abandoned owned temporary is recovered before "
+         "mutation");
+
+  writeText(stale, "undeletable");
+  fs::permissions(stale, fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::replace);
+  fs::permissions(overlay / ".asobmashow-internal",
+                  fs::perms::owner_read | fs::perms::owner_exec,
+                  fs::perm_options::replace);
+  const auto cleanupDenied =
+      fileSystem.writeData("cleanup-denied.txt", bytesOf("x"), false);
+  expect(cleanupDenied.failure &&
+             !fs::exists(overlay / "entry/cleanup-denied.txt"),
+         "a failed abandoned-temporary deletion fails closed");
+  fs::permissions(overlay / ".asobmashow-internal", fs::perms::owner_all,
+                  fs::perm_options::replace);
+#endif
+}
+
+void testExistingOverlayPrivacyIsValidated() {
+#if !defined(_WIN32)
+  PackageFixture fixture;
+  const SkinProfileId selectedProfile =
+      profile("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  const fs::path overlay = fixture.overlayRoot(fixture.entry, selectedProfile);
+  fs::create_directories(overlay);
+  fs::permissions(overlay,
+                  fs::perms::owner_all | fs::perms::group_read |
+                      fs::perms::others_read,
+                  fs::perm_options::replace);
+  const auto publicRoot = fixture.create(fixture.entry, selectedProfile, true);
+  expect(!publicRoot.fileSystem &&
+             failedWith(publicRoot.failure, SkinFileError::NonRegular),
+         "construction rejects an existing non-private overlay root");
+
+  fs::permissions(overlay, fs::perms::owner_all, fs::perm_options::replace);
+  auto created = fixture.create(fixture.entry, selectedProfile, true);
+  expect(created.fileSystem != nullptr,
+         "construction accepts an owner-private overlay root");
+  if (!created.fileSystem) {
+    return;
+  }
+  auto &fileSystem = *created.fileSystem;
+  expect(
+      !fileSystem.writeData("private.txt", bytesOf("private"), false).failure,
+      "private overlay fixture writes its initial file");
+  const fs::path privateFile = overlay / "entry/private.txt";
+  fs::permissions(privateFile,
+                  fs::perms::owner_read | fs::perms::owner_write |
+                      fs::perms::group_read,
+                  fs::perm_options::replace);
+  const auto fileDrift =
+      fileSystem.read("private.txt", SkinFileUse::DataRead, 64);
+  expect(failedWith(fileDrift.failure, SkinFileError::NonRegular),
+         "overlay reads reject file privacy drift");
+  fs::permissions(privateFile, fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::replace);
+  fs::permissions(overlay, fs::perms::owner_all | fs::perms::group_read,
+                  fs::perm_options::replace);
+  const auto rootDrift =
+      fileSystem.read("private.txt", SkinFileUse::DataRead, 64);
+  expect(failedWith(rootDrift.failure, SkinFileError::NonRegular),
+         "overlay reads reject root privacy drift after construction");
+  fs::permissions(overlay, fs::perms::owner_all, fs::perm_options::replace);
+#endif
+}
+
+void testPosixMutationPinsSurviveRenameSwaps() {
+#if !defined(_WIN32)
+  PackageFixture fixture;
+  const SkinProfileId selectedProfile =
+      profile("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  auto created = fixture.create(fixture.entry, selectedProfile, true);
+  expect(created.fileSystem != nullptr, "rename-swap fixture is created");
+  if (!created.fileSystem) {
+    return;
+  }
+  auto &fileSystem = *created.fileSystem;
+  expect(!fileSystem.writeData("data/seed.txt", bytesOf("seed"), false).failure,
+         "rename-swap fixture creates its overlay root");
+  const fs::path overlay = fixture.overlayRoot(fixture.entry, selectedProfile);
+  for (int index = 0; index < 1'000; ++index) {
+    const fs::path filler = overlay / ("filler-" + std::to_string(index));
+    writeText(filler, "x");
+    fs::permissions(filler, fs::perms::owner_read | fs::perms::owner_write,
+                    fs::perm_options::replace);
+  }
+
+  const fs::path parkedRoot = fixture.temp.root() / "parked-overlay";
+  const fs::path attackerRoot = fixture.temp.root() / "attacker-overlay";
+  fs::create_directories(attackerRoot / "entry/data");
+  fs::permissions(attackerRoot, fs::perms::all, fs::perm_options::replace);
+  fs::permissions(attackerRoot / "entry", fs::perms::all,
+                  fs::perm_options::replace);
+  fs::permissions(attackerRoot / "entry/data", fs::perms::all,
+                  fs::perm_options::replace);
+  std::barrier rootStart(2);
+  std::thread rootWriter([&] {
+    rootStart.arrive_and_wait();
+    (void)fileSystem.writeData("data/root-swap.txt", bytesOf("redirect"),
+                               false);
+  });
+  rootStart.arrive_and_wait();
+  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  fs::rename(overlay, parkedRoot);
+  fs::rename(attackerRoot, overlay);
+  rootWriter.join();
+  fs::rename(overlay, attackerRoot);
+  fs::rename(parkedRoot, overlay);
+  expect(!fs::exists(attackerRoot / "entry/data/root-swap.txt"),
+         "renaming and replacing the overlay root cannot redirect a mutation");
+
+  const fs::path parkedEntry = fixture.temp.root() / "parked-entry";
+  const fs::path attackerEntry = fixture.temp.root() / "attacker-entry";
+  fs::create_directories(attackerEntry / "data");
+  fs::permissions(attackerEntry, fs::perms::all, fs::perm_options::replace);
+  fs::permissions(attackerEntry / "data", fs::perms::all,
+                  fs::perm_options::replace);
+  std::barrier ancestorStart(2);
+  std::thread ancestorWriter([&] {
+    ancestorStart.arrive_and_wait();
+    (void)fileSystem.writeData("data/ancestor-swap.txt", bytesOf("redirect"),
+                               false);
+  });
+  ancestorStart.arrive_and_wait();
+  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  fs::rename(overlay / "entry", parkedEntry);
+  fs::rename(attackerEntry, overlay / "entry");
+  ancestorWriter.join();
+  fs::rename(overlay / "entry", attackerEntry);
+  fs::rename(parkedEntry, overlay / "entry");
+  expect(!fs::exists(attackerEntry / "data/ancestor-swap.txt"),
+         "renaming and replacing a target ancestor cannot redirect a mutation");
+#endif
 }
 
 void testDeterministicListingAndProfileEntryIsolation() {
@@ -776,6 +1068,10 @@ int main() {
   testWorkingDirectoryPackageCeilingAndModuleSearch();
   testNoFollowReadsAndOverlayUseSeparation();
   testAtomicWritesNestedParentsAndQuotaRollback();
+  testOverlayWorkIsBoundedBeforeMutation();
+  testInternalTemporaryNamespaceAndRecovery();
+  testExistingOverlayPrivacyIsValidated();
+  testPosixMutationPinsSurviveRenameSwaps();
   testDeterministicListingAndProfileEntryIsolation();
   testConcurrentWritesCannotOversubscribeQuota();
   testSeparateInstancesCannotOversubscribeQuota();
