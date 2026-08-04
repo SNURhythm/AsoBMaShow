@@ -102,15 +102,36 @@ bool validPayload(const SkinObjectPayload &payload,
                   hasDomain(context.integers, object.stateIndex->value,
                             SkinIntegerPropertyDomain::ImageIndex));
         } else if constexpr (std::is_same_v<T, SkinNumberObject>) {
+          const NumericGlyphFormat format{
+              .integerDigits = object.digitCount,
+              .zeroPadding = object.zeroPadding,
+              .perDigitOffsets = object.perDigitOffsets,
+          };
           return validDigits(object.digits, NumericGlyphAtlasKind::Number,
                              context.resources,
                              context.timers) &&
+                 validateNumericGlyphFormat(
+                     format, NumericGlyphAtlasKind::Number,
+                     object.digits.glyphsPerAnimationFrame) ==
+                     NumericGlyphAtlasError::None &&
                  hasDomain(context.integers, object.value.value,
                            SkinIntegerPropertyDomain::IntegerValue);
         } else if constexpr (std::is_same_v<T, SkinFloatObject>) {
+          const NumericGlyphFormat format{
+              .integerDigits = object.integerDigits,
+              .fractionalDigits = object.fractionalDigits,
+              .zeroPadding = object.zeroPadding,
+              .signVisible = object.signVisible,
+              .gain = object.gain,
+              .perDigitOffsets = object.perDigitOffsets,
+          };
           return validDigits(object.digits, NumericGlyphAtlasKind::Float,
                              context.resources,
                              context.timers) &&
+                 validateNumericGlyphFormat(
+                     format, NumericGlyphAtlasKind::Float,
+                     object.digits.glyphsPerAnimationFrame) ==
+                     NumericGlyphAtlasError::None &&
                  hasDomain(context.floats, object.value.value,
                            SkinFloatPropertyDomain::FloatValue);
         } else if constexpr (std::is_same_v<T, SkinTextObject>) {

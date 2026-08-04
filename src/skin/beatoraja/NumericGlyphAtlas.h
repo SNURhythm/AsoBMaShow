@@ -41,6 +41,7 @@ enum class NumericGlyphAtlasError : std::uint8_t {
   None,
   InvalidKind,
   NonFiniteFormat,
+  InvalidFormat,
   InvalidGlyphSet,
   EmptyFrames,
   UnsupportedGlyphLayout,
@@ -97,6 +98,12 @@ NumericGlyphAtlasError validateNumericGlyphAtlas(
 NumericGlyphAtlasError validateNumericGlyphAtlas(
     const SkinDigitSpriteSet &atlas, NumericGlyphAtlasKind kind,
     NumericGlyphAtlasBudget budget = {}) noexcept;
+
+// Validates an already-normalized model object's formatting fields. The
+// glyph width is used only for cross-field requirements such as Float signs.
+NumericGlyphAtlasError validateNumericGlyphFormat(
+    const NumericGlyphFormat &format, NumericGlyphAtlasKind kind,
+    int glyphsPerAnimationFrame) noexcept;
 
 // Partitions a row-major source atlas into the exact numeric glyph sets used
 // by Beatoraja's Number and Float loaders. It is pure and owns no resources.

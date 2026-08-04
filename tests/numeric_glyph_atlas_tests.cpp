@@ -394,6 +394,92 @@ void validatesKindSpecificNormalizedGlyphSets() {
          "Float normalized 13-glyph boundary remains valid");
 }
 
+void validatesNormalizedObjectFormats() {
+  NumericGlyphFormat number;
+  number.integerDigits = NumericGlyphAtlasPolicy::maxNumberDigits;
+  number.zeroPadding = SkinZeroPaddingMode::AlternateZero;
+  number.perDigitOffsets.resize(
+      NumericGlyphAtlasPolicy::maxNumberDigitOffsets);
+  number.perDigitOffsets.back() = {
+      .x = std::numeric_limits<double>::lowest(),
+      .y = std::numeric_limits<double>::max(),
+      .width = -0.0,
+      .height = 0.0,
+  };
+  expect(validateNumericGlyphFormat(number, NumericGlyphAtlasKind::Number,
+                                    10) == NumericGlyphAtlasError::None,
+         "normalized Number format accepts inclusive finite boundaries");
+
+  auto invalidNumber = number;
+  invalidNumber.integerDigits = -1;
+  expect(validateNumericGlyphFormat(invalidNumber,
+                                    NumericGlyphAtlasKind::Number, 10) ==
+             NumericGlyphAtlasError::InvalidFormat,
+         "normalized Number format rejects negative digit counts");
+  invalidNumber = number;
+  invalidNumber.fractionalDigits = 1;
+  expect(validateNumericGlyphFormat(invalidNumber,
+                                    NumericGlyphAtlasKind::Number, 10) ==
+             NumericGlyphAtlasError::InvalidFormat,
+         "normalized Number format rejects fractional digits");
+  invalidNumber = number;
+  invalidNumber.zeroPadding = static_cast<SkinZeroPaddingMode>(3);
+  expect(validateNumericGlyphFormat(invalidNumber,
+                                    NumericGlyphAtlasKind::Number, 10) ==
+             NumericGlyphAtlasError::InvalidPadding,
+         "normalized Number format rejects invalid padding enums");
+  invalidNumber = number;
+  invalidNumber.perDigitOffsets.resize(
+      NumericGlyphAtlasPolicy::maxNumberDigitOffsets + 1);
+  expect(validateNumericGlyphFormat(invalidNumber,
+                                    NumericGlyphAtlasKind::Number, 10) ==
+             NumericGlyphAtlasError::InvalidFormat,
+         "normalized Number format rejects excess offsets");
+  invalidNumber = number;
+  invalidNumber.perDigitOffsets.front().width =
+      std::numeric_limits<double>::quiet_NaN();
+  expect(validateNumericGlyphFormat(invalidNumber,
+                                    NumericGlyphAtlasKind::Number, 10) ==
+             NumericGlyphAtlasError::NonFiniteFormat,
+         "normalized Number format rejects non-finite offsets");
+
+  NumericGlyphFormat floating;
+  floating.integerDigits = 0;
+  floating.fractionalDigits = NumericGlyphAtlasPolicy::maxFloatDigits;
+  floating.zeroPadding = SkinZeroPaddingMode::Zero;
+  floating.signVisible = true;
+  floating.gain = std::numeric_limits<double>::max();
+  floating.perDigitOffsets.resize(
+      NumericGlyphAtlasPolicy::maxFloatDigitOffsets);
+  expect(validateNumericGlyphFormat(floating, NumericGlyphAtlasKind::Float,
+                                    13) == NumericGlyphAtlasError::None,
+         "normalized Float format accepts eight fractional digits, sign, and "
+         "inclusive offset boundaries");
+
+  auto invalidFloat = floating;
+  invalidFloat.integerDigits = 1;
+  expect(validateNumericGlyphFormat(invalidFloat,
+                                    NumericGlyphAtlasKind::Float, 13) ==
+             NumericGlyphAtlasError::InvalidFormat,
+         "normalized Float format rejects combined digits above eight");
+  invalidFloat = floating;
+  invalidFloat.gain = std::numeric_limits<double>::infinity();
+  expect(validateNumericGlyphFormat(invalidFloat,
+                                    NumericGlyphAtlasKind::Float, 13) ==
+             NumericGlyphAtlasError::NonFiniteFormat,
+         "normalized Float format rejects non-finite gain");
+  invalidFloat = floating;
+  invalidFloat.signVisible = true;
+  expect(validateNumericGlyphFormat(invalidFloat,
+                                    NumericGlyphAtlasKind::Float, 12) ==
+             NumericGlyphAtlasError::InvalidGlyphSet,
+         "visible Float signs require a 13-glyph set");
+  expect(validateNumericGlyphFormat(
+             floating, static_cast<NumericGlyphAtlasKind>(0xff), 13) ==
+             NumericGlyphAtlasError::InvalidKind,
+         "normalized format validation rejects invalid kinds first");
+}
+
 } // namespace
 
 int main() {
@@ -403,5 +489,6 @@ int main() {
   rejectsMalformedOrUnboundedAtlases();
   rejectsInvalidKindsAndNonFiniteFormats();
   validatesKindSpecificNormalizedGlyphSets();
+  validatesNormalizedObjectFormats();
   return failures == 0 ? 0 : 1;
 }

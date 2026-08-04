@@ -1,8 +1,11 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
+#include "skin/beatoraja/NumericGlyphAtlas.h"
 #include "skin/beatoraja/SkinModelValidator.h"
 
+#include <array>
 #include <cstddef>
 #include <iostream>
+#include <limits>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -84,6 +87,45 @@ void expectDisabled(SkinModelValidationResult result,
          message);
 }
 
+SkinDigitSpriteSet validNumberDigits() {
+  SkinDigitSpriteSet digits;
+  digits.glyphsPerAnimationFrame = 10;
+  digits.positive = sprite(10);
+  return digits;
+}
+
+SkinDigitSpriteSet validFloatDigits() {
+  SkinDigitSpriteSet digits;
+  digits.glyphsPerAnimationFrame = 12;
+  digits.positive = sprite(12);
+  return digits;
+}
+
+SkinNumberObject &numberObject(BeatorajaSkinModel &model) {
+  return std::get<SkinNumberObject>(model.objects.front().payload);
+}
+
+SkinFloatObject &floatObject(BeatorajaSkinModel &model) {
+  return std::get<SkinFloatObject>(model.objects.front().payload);
+}
+
+void expectOptionalAndCriticalRejected(BeatorajaSkinModel model,
+                                       std::string_view message) {
+  auto optional = SkinModelValidator{}.validate(model);
+  expect(optional.model.has_value() && !optional.criticalFailure &&
+             optional.model->disabledOptionalObjects ==
+                 std::vector<SkinObjectId>{1},
+         message);
+
+  model.objects.front().critical = true;
+  auto critical = SkinModelValidator{}.validate(std::move(model));
+  expect(!critical.model && critical.criticalFailure &&
+             !critical.diagnostics.empty() &&
+             critical.diagnostics.front().code ==
+                 "skin_lua_model_critical_dependency_invalid",
+         message);
+}
+
 void validatorRejectsUnequalInvalidAndExcessDigitSets() {
   {
     SkinDigitSpriteSet digits;
@@ -139,10 +181,107 @@ void validatorAcceptsKindSpecificGlyphBoundaries() {
          "validator accepts normalized Float-13 digit sets");
 }
 
+void validatorRejectsMalformedNumberObjectFormats() {
+  const auto reject = [](auto mutate, std::string_view message) {
+    auto model = numberModel(validNumberDigits());
+    mutate(numberObject(model));
+    expectOptionalAndCriticalRejected(std::move(model), message);
+  };
+
+  reject([](auto &number) { number.digitCount = -1; },
+         "validator rejects negative Number digitCount for optional and "
+         "critical objects");
+  reject(
+      [](auto &number) {
+        number.digitCount = NumericGlyphAtlasPolicy::maxNumberDigits + 1;
+      },
+      "validator rejects Number digitCount above its normalized bound");
+  reject(
+      [](auto &number) {
+        number.zeroPadding = static_cast<SkinZeroPaddingMode>(3);
+      },
+      "validator rejects invalid Number zero-padding enums");
+  reject(
+      [](auto &number) {
+        number.perDigitOffsets.resize(
+            NumericGlyphAtlasPolicy::maxNumberDigitOffsets + 1);
+      },
+      "validator rejects excess Number per-digit offsets");
+
+  constexpr std::array offsetMembers{
+      &SkinDigitOffset::x, &SkinDigitOffset::y, &SkinDigitOffset::width,
+      &SkinDigitOffset::height};
+  for (const auto member : offsetMembers) {
+    reject(
+        [member](auto &number) {
+          number.perDigitOffsets.resize(1);
+          number.perDigitOffsets.front().*member =
+              std::numeric_limits<double>::quiet_NaN();
+        },
+        "validator rejects every non-finite Number offset component");
+  }
+}
+
+void validatorRejectsMalformedFloatObjectFormats() {
+  const auto reject = [](auto mutate, std::string_view message) {
+    auto model = floatModel(validFloatDigits());
+    mutate(floatObject(model));
+    expectOptionalAndCriticalRejected(std::move(model), message);
+  };
+
+  reject([](auto &floating) { floating.integerDigits = -1; },
+         "validator rejects negative Float integer digits");
+  reject([](auto &floating) { floating.integerDigits = 9; },
+         "validator rejects Float integer digits above eight");
+  reject([](auto &floating) { floating.fractionalDigits = -1; },
+         "validator rejects negative Float fractional digits");
+  reject([](auto &floating) { floating.fractionalDigits = 9; },
+         "validator rejects Float fractional digits above eight");
+  reject(
+      [](auto &floating) {
+        floating.integerDigits = 5;
+        floating.fractionalDigits = 4;
+      },
+      "validator rejects Float digit sums above eight");
+  reject(
+      [](auto &floating) {
+        floating.zeroPadding = static_cast<SkinZeroPaddingMode>(3);
+      },
+      "validator rejects invalid Float zero-padding enums");
+  reject(
+      [](auto &floating) {
+        floating.gain = std::numeric_limits<double>::infinity();
+      },
+      "validator rejects non-finite Float gain");
+  reject(
+      [](auto &floating) {
+        floating.perDigitOffsets.resize(
+            NumericGlyphAtlasPolicy::maxFloatDigitOffsets + 1);
+      },
+      "validator rejects excess Float per-digit offsets");
+
+  constexpr std::array offsetMembers{
+      &SkinDigitOffset::x, &SkinDigitOffset::y, &SkinDigitOffset::width,
+      &SkinDigitOffset::height};
+  for (const auto member : offsetMembers) {
+    reject(
+        [member](auto &floating) {
+          floating.perDigitOffsets.resize(1);
+          floating.perDigitOffsets.front().*member =
+              -std::numeric_limits<double>::infinity();
+        },
+        "validator rejects every non-finite Float offset component");
+  }
+  reject([](auto &floating) { floating.signVisible = true; },
+         "validator rejects visible Float signs without 13-glyph sets");
+}
+
 } // namespace
 
 int main() {
   validatorRejectsUnequalInvalidAndExcessDigitSets();
   validatorAcceptsKindSpecificGlyphBoundaries();
+  validatorRejectsMalformedNumberObjectFormats();
+  validatorRejectsMalformedFloatObjectFormats();
   return failures == 0 ? 0 : 1;
 }

@@ -38,14 +38,22 @@ bool validKind(NumericGlyphAtlasKind kind) noexcept {
          kind == NumericGlyphAtlasKind::Float;
 }
 
-bool finiteFormat(const NumericGlyphFormatRequest &format) noexcept {
-  if (!std::isfinite(format.gain)) {
-    return false;
-  }
-  return std::ranges::all_of(format.perDigitOffsets, [](const auto &offset) {
+bool finiteOffsets(const std::vector<SkinDigitOffset> &offsets) noexcept {
+  return std::ranges::all_of(offsets, [](const auto &offset) {
     return std::isfinite(offset.x) && std::isfinite(offset.y) &&
            std::isfinite(offset.width) && std::isfinite(offset.height);
   });
+}
+
+bool finiteFormat(const NumericGlyphFormatRequest &format) noexcept {
+  return std::isfinite(format.gain) &&
+         finiteOffsets(format.perDigitOffsets);
+}
+
+bool validPadding(SkinZeroPaddingMode padding) noexcept {
+  return padding == SkinZeroPaddingMode::None ||
+         padding == SkinZeroPaddingMode::Zero ||
+         padding == SkinZeroPaddingMode::AlternateZero;
 }
 
 std::size_t maxOffsetsFor(NumericGlyphAtlasKind kind) noexcept {
@@ -347,6 +355,46 @@ NumericGlyphAtlasError validateNumericGlyphAtlas(
     const SkinDigitSpriteSet &atlas, NumericGlyphAtlasKind kind,
     NumericGlyphAtlasBudget budget) noexcept {
   return validateNumericGlyphAtlasImpl(atlas, &kind, budget);
+}
+
+NumericGlyphAtlasError validateNumericGlyphFormat(
+    const NumericGlyphFormat &format, NumericGlyphAtlasKind kind,
+    int glyphsPerAnimationFrame) noexcept {
+  if (!validKind(kind)) {
+    return NumericGlyphAtlasError::InvalidKind;
+  }
+  if (!validPadding(format.zeroPadding)) {
+    return NumericGlyphAtlasError::InvalidPadding;
+  }
+  if (!finiteOffsets(format.perDigitOffsets) ||
+      (kind == NumericGlyphAtlasKind::Float && !std::isfinite(format.gain))) {
+    return NumericGlyphAtlasError::NonFiniteFormat;
+  }
+  if (kind == NumericGlyphAtlasKind::Number) {
+    if (format.integerDigits < 0 ||
+        format.integerDigits > NumericGlyphAtlasPolicy::maxNumberDigits ||
+        format.fractionalDigits != 0 || format.signVisible ||
+        format.perDigitOffsets.size() >
+            NumericGlyphAtlasPolicy::maxNumberDigitOffsets) {
+      return NumericGlyphAtlasError::InvalidFormat;
+    }
+    return NumericGlyphAtlasError::None;
+  }
+
+  if (format.integerDigits < 0 ||
+      format.integerDigits > NumericGlyphAtlasPolicy::maxFloatDigits ||
+      format.fractionalDigits < 0 ||
+      format.fractionalDigits > NumericGlyphAtlasPolicy::maxFloatDigits ||
+      format.integerDigits > NumericGlyphAtlasPolicy::maxFloatDigits -
+                                 format.fractionalDigits ||
+      format.perDigitOffsets.size() >
+          NumericGlyphAtlasPolicy::maxFloatDigitOffsets) {
+    return NumericGlyphAtlasError::InvalidFormat;
+  }
+  if (format.signVisible && glyphsPerAnimationFrame != 13) {
+    return NumericGlyphAtlasError::InvalidGlyphSet;
+  }
+  return NumericGlyphAtlasError::None;
 }
 
 NumericGlyphAtlasResult partitionNumericGlyphAtlas(
