@@ -12,10 +12,18 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 namespace platform_document_handoff::detail {
 class TemporaryDocumentOwnership;
 }
+
+enum class PlatformTemporaryPathKind {
+  None,
+  File,
+  Directory,
+};
 
 enum class PlatformDocumentHandoffStatus {
   Succeeded,
@@ -31,6 +39,7 @@ struct PlatformDocumentHandoffResult {
   // A successful import is staged in application-private storage. The caller
   // owns that file and should remove it after consuming the document.
   bool temporaryLocalFile = false;
+  PlatformTemporaryPathKind temporaryPathKind = PlatformTemporaryPathKind::None;
 
   // Opaque deletion capability issued only for a platform-created private
   // copy. Cleanup never trusts temporaryLocalFile or localPath alone.
@@ -48,6 +57,16 @@ struct PlatformDocumentHandoffResult {
 struct PlatformDocumentImportRequest {
   std::string mimeType;
   std::uint64_t maxBytes = 0;
+};
+
+// Reserved for the platform folder-picker implementation. It is deliberately a
+// value type so portable lifecycle and cleanup code does not depend on native
+// picker availability.
+struct PlatformDirectoryImportRequest {
+  std::uint64_t maxBytes = 0;
+  std::uint64_t maxFiles = 0;
+  std::uint32_t maxDepth = 0;
+  std::uint32_t maxPathBytes = 0;
 };
 
 struct PlatformDocumentExportRequest {
@@ -70,6 +89,38 @@ struct PlatformTextDocumentExportRequest {
 
 namespace platform_document_handoff {
 
+class PlatformTemporaryPathCleanupService {
+public:
+  using CleanupTask =
+      std::function<bool(PlatformDocumentHandoffResult &result)>;
+
+  explicit PlatformTemporaryPathCleanupService(CleanupTask cleanupTask = {});
+  ~PlatformTemporaryPathCleanupService();
+  PlatformTemporaryPathCleanupService(
+      const PlatformTemporaryPathCleanupService &) = delete;
+  PlatformTemporaryPathCleanupService &operator=(
+      const PlatformTemporaryPathCleanupService &) = delete;
+  [[nodiscard]] bool schedule(PlatformDocumentHandoffResult &result) noexcept;
+  void shutdown() noexcept;
+  [[nodiscard]] std::vector<PlatformDocumentHandoffResult>
+  takeUnprocessed();
+
+private:
+  struct State;
+  std::shared_ptr<State> state_;
+  std::thread worker_;
+  std::mutex shutdownMutex_;
+};
+
+using PlatformTemporaryPathCleanupServiceHandle =
+    std::shared_ptr<PlatformTemporaryPathCleanupService>;
+
+PlatformTemporaryPathCleanupServiceHandle
+CreatePlatformTemporaryPathCleanupService(
+    PlatformTemporaryPathCleanupService::CleanupTask cleanupTask = {});
+PlatformTemporaryPathCleanupServiceHandle
+DefaultPlatformTemporaryPathCleanupService();
+
 class PlatformDocumentHandoffOperation;
 namespace detail {
 class OperationState;
@@ -81,11 +132,14 @@ using CommitOperationWork = std::function<PlatformDocumentHandoffResult(
     const std::atomic_bool &cancellationRequested,
     const CommitGate &commitGate)>;
 PlatformDocumentHandoffOperation
-StartOperation(OperationWork work, std::function<void()> cancelNative);
+StartOperation(OperationWork work, std::function<void()> cancelNative,
+               PlatformTemporaryPathCleanupServiceHandle cleanupService = {});
 PlatformDocumentHandoffOperation
 StartOperationWithCommit(CommitOperationWork work,
                          std::function<void()> cancelNative,
-                         std::shared_ptr<void> workerLifetime = {});
+                         std::shared_ptr<void> workerLifetime = {},
+                         PlatformTemporaryPathCleanupServiceHandle
+                             cleanupService = {});
 std::uint64_t NextOperationToken();
 std::uint64_t NextOperationToken(std::atomic_uint64_t &counter);
 std::filesystem::path
@@ -164,11 +218,13 @@ private:
   std::shared_ptr<detail::OperationState> state_;
 
   friend PlatformDocumentHandoffOperation
-      detail::StartOperation(detail::OperationWork, std::function<void()>);
+      detail::StartOperation(detail::OperationWork, std::function<void()>,
+                             PlatformTemporaryPathCleanupServiceHandle);
   friend PlatformDocumentHandoffOperation
       detail::StartOperationWithCommit(detail::CommitOperationWork,
                                        std::function<void()>,
-                                       std::shared_ptr<void>);
+                                       std::shared_ptr<void>,
+                                       PlatformTemporaryPathCleanupServiceHandle);
 };
 
 PlatformDocumentHandoffOperation
@@ -182,6 +238,11 @@ ExportTextDocumentAsync(PlatformTextDocumentExportRequest request);
 // Ownership is cleared even if the file was already absent.
 bool CleanupTemporaryDocument(PlatformDocumentHandoffResult &result) noexcept;
 
+// Synchronously removes an owned temporary file or directory. Cleanup is
+// authorized solely by the opaque capability held in result and always targets
+// its exact root. Lifecycle teardown uses PlatformTemporaryPathCleanupService.
+bool CleanupTemporaryPath(PlatformDocumentHandoffResult &result) noexcept;
+
 namespace detail {
 PlatformDocumentHandoffResult
 Validate(const PlatformDocumentImportRequest &request);
@@ -190,7 +251,10 @@ Validate(const PlatformDocumentExportRequest &request);
 
 PlatformDocumentHandoffResult ParseBridgeResult(const std::string &value,
                                                 bool expectsLocalPath,
-                                                bool temporaryLocalFile);
+                                                bool temporaryLocalFile,
+                                                PlatformTemporaryPathKind
+                                                    temporaryPathKind =
+                                                        PlatformTemporaryPathKind::File);
 
 bool CopyStreamBounded(std::istream &input, std::ostream &output,
                        std::uint64_t maxBytes, std::uint64_t &bytesCopied,

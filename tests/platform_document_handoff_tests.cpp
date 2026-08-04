@@ -726,6 +726,121 @@ void testTakenTemporaryImportHasExplicitCleanup() {
   std::filesystem::remove_all(root, error);
 }
 
+void testDirectoryCleanupRequiresItsExactIssuedRoot() {
+  std::string errorMessage;
+  const auto root =
+      platform_document_handoff::detail::CreatePrivateImportDirectoryUnder(
+          std::filesystem::temp_directory_path(), errorMessage);
+  expect(!root.empty() && errorMessage.empty(),
+         "directory import test allocates a private issued root");
+  const auto child = root / "chart";
+  std::ofstream(child, std::ios::binary) << "chart";
+
+  auto result = platform_document_handoff::detail::ParseBridgeResult(
+      root.string(), true, true, PlatformTemporaryPathKind::Directory);
+  expect(result.ok() && !result.temporaryLocalFile &&
+             result.temporaryPathKind == PlatformTemporaryPathKind::Directory,
+         "directory result carries an owned directory cleanup capability");
+  expect(!platform_document_handoff::CleanupTemporaryDocument(result) &&
+             std::filesystem::exists(result.localPath),
+         "legacy file cleanup refuses an owned directory");
+
+  const auto issuedRoot = result.localPath;
+  result.localPath = child;
+  expect(!platform_document_handoff::CleanupTemporaryPath(result) &&
+             std::filesystem::exists(issuedRoot),
+         "directory cleanup refuses a child of its issued root");
+  result.localPath = issuedRoot.parent_path();
+  expect(!platform_document_handoff::CleanupTemporaryPath(result) &&
+             std::filesystem::exists(issuedRoot),
+         "directory cleanup refuses a parent of its issued root");
+  result.localPath = std::filesystem::temp_directory_path();
+  expect(!platform_document_handoff::CleanupTemporaryPath(result) &&
+             std::filesystem::exists(issuedRoot),
+         "directory cleanup refuses a substituted path");
+  result.localPath = issuedRoot;
+  expect(platform_document_handoff::CleanupTemporaryPath(result) &&
+             !std::filesystem::exists(issuedRoot),
+         "directory cleanup removes exactly its issued root");
+  expect(platform_document_handoff::CleanupTemporaryPath(result),
+         "directory cleanup is idempotent");
+}
+
+void testScheduledTemporaryCleanupAndReadyAbandonAreNonblocking() {
+  const PlatformDocumentHandoffResult defaults;
+  const PlatformDirectoryImportRequest directoryDefaults;
+  expect(defaults.temporaryPathKind == PlatformTemporaryPathKind::None &&
+             directoryDefaults.maxBytes == 0 && directoryDefaults.maxFiles == 0 &&
+             directoryDefaults.maxDepth == 0 &&
+             directoryDefaults.maxPathBytes == 0,
+         "temporary path and directory import value defaults are explicit");
+
+  const auto temporaryImport = makePrivateTestDocument(
+      "scheduled-cleanup", "temporary");
+  const auto firstRoot = temporaryImport.parent_path();
+  std::error_code error;
+  auto result = platform_document_handoff::detail::ParseBridgeResult(
+      temporaryImport.string(), true, true);
+
+  auto blockingCleanup = std::make_shared<BlockingWork>();
+  const auto service =
+      platform_document_handoff::CreatePlatformTemporaryPathCleanupService(
+          [blockingCleanup](PlatformDocumentHandoffResult &) {
+            blockingCleanup->waitForRelease();
+            return false;
+          });
+  const auto scheduledAt = std::chrono::steady_clock::now();
+  expect(service->schedule(result) &&
+             std::chrono::steady_clock::now() - scheduledAt < 250ms &&
+             blockingCleanup->waitUntilEntered(),
+         "injected cleanup service schedules without waiting for its cleaner");
+
+  const auto racedImport =
+      makePrivateTestDocument("ready-abandon", "temporary");
+  auto operation = platform_document_handoff::detail::StartOperation(
+      [racedImport](const std::atomic_bool &) {
+        return platform_document_handoff::detail::ParseBridgeResult(
+            racedImport.string(), true, true);
+      },
+      [] {}, service);
+  expect(waitUntil([&] { return operation.ready(); }),
+         "ready-abandon test receives an unconsumed import result");
+  const auto abandonedAt = std::chrono::steady_clock::now();
+  operation.close();
+  expect(std::chrono::steady_clock::now() - abandonedAt < 250ms,
+         "close transfers a ready import without waiting for the cleaner");
+
+  std::atomic_bool shutdownReturned = false;
+  std::thread shutdownThread([&] {
+    service->shutdown();
+    shutdownReturned = true;
+  });
+  std::this_thread::sleep_for(25ms);
+  expect(!shutdownReturned,
+         "shutdown drains queued cleanup instead of abandoning a capability");
+  blockingCleanup->release();
+  shutdownThread.join();
+  service->shutdown();
+  const auto unprocessed = service->takeUnprocessed();
+  expect(unprocessed.size() == 2,
+         "failed injected cleanup remains reportable after shutdown");
+
+  auto rejected = platform_document_handoff::detail::ParseBridgeResult(
+      makePrivateTestDocument("rejected-cleanup", "temporary").string(), true,
+      true);
+  expect(!service->schedule(rejected) && rejected.temporaryOwnership == nullptr,
+         "rejected scheduling transfers ownership into the service report");
+  const auto rejectedResults = service->takeUnprocessed();
+  expect(rejectedResults.size() == 1,
+         "shutdown service reports capabilities rejected after shutdown");
+
+  std::filesystem::remove_all(firstRoot, error);
+  std::filesystem::remove_all(racedImport.parent_path(), error);
+  for (const auto &pending : rejectedResults) {
+    std::filesystem::remove_all(pending.localPath.parent_path(), error);
+  }
+}
+
 void testTemporaryCleanupRejectsForgedAndSymlinkEscapes() {
   const auto outsideRoot = std::filesystem::temp_directory_path() /
                            "asobmashow-platform-cleanup-outside";
@@ -1055,6 +1170,8 @@ int main() {
   testLateImportCompletionIsIgnoredAndCleaned();
   testUnconsumedTemporaryImportIsCleanedOnClose();
   testTakenTemporaryImportHasExplicitCleanup();
+  testDirectoryCleanupRequiresItsExactIssuedRoot();
+  testScheduledTemporaryCleanupAndReadyAbandonAreNonblocking();
   testTemporaryCleanupRejectsForgedAndSymlinkEscapes();
   testTemporaryOwnershipRequiresExactPrivateShapeAndModes();
   testPrivateImportRootRejectsPreplantedLinks();

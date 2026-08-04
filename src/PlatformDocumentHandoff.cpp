@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <condition_variable>
+#include <deque>
 #include <exception>
 #include <fstream>
 #include <limits>
@@ -37,14 +39,19 @@ namespace platform_document_handoff {
 namespace detail {
 class TemporaryDocumentOwnership {
 public:
-  using Cleanup = std::function<bool(const std::filesystem::path &)>;
+  using Cleanup = std::function<bool(const std::filesystem::path &,
+                                     PlatformTemporaryPathKind)>;
 
-  TemporaryDocumentOwnership(std::filesystem::path path, Cleanup cleanup)
-      : path_(std::move(path)), cleanup_(std::move(cleanup)) {}
-  ~TemporaryDocumentOwnership() { cleanup(); }
+  TemporaryDocumentOwnership(std::filesystem::path path,
+                             PlatformTemporaryPathKind kind, Cleanup cleanup)
+      : path_(std::move(path)), kind_(kind), cleanup_(std::move(cleanup)) {}
+  ~TemporaryDocumentOwnership() = default;
 
   [[nodiscard]] const std::filesystem::path &path() const noexcept {
     return path_;
+  }
+  [[nodiscard]] PlatformTemporaryPathKind kind() const noexcept {
+    return kind_;
   }
 
   bool cleanup() noexcept {
@@ -53,7 +60,7 @@ public:
       return true;
     }
     try {
-      if (!cleanup_ || !cleanup_(path_)) {
+      if (!cleanup_ || !cleanup_(path_, kind_)) {
         return false;
       }
       cleaned_ = true;
@@ -66,12 +73,18 @@ public:
 private:
   std::mutex mutex_;
   std::filesystem::path path_;
+  PlatformTemporaryPathKind kind_;
   Cleanup cleanup_;
   bool cleaned_ = false;
 };
 
 class OperationState {
 public:
+  explicit OperationState(PlatformTemporaryPathCleanupServiceHandle cleanupService)
+      : cleanupService_(cleanupService != nullptr
+                            ? std::move(cleanupService)
+                            : DefaultPlatformTemporaryPathCleanupService()) {}
+
   ~OperationState() {
     std::optional<PlatformDocumentHandoffResult> discarded;
     {
@@ -82,7 +95,7 @@ public:
       }
     }
     if (discarded.has_value()) {
-      CleanupTemporaryDocument(*discarded);
+      scheduleDiscarded(*discarded);
     }
   }
 
@@ -112,7 +125,7 @@ public:
       }
     }
     if (discarded.has_value()) {
-      CleanupTemporaryDocument(*discarded);
+      scheduleDiscarded(*discarded);
     }
   }
 
@@ -186,11 +199,17 @@ public:
     }
     invokeCancellation(cancelNative);
     if (discarded.has_value()) {
-      CleanupTemporaryDocument(*discarded);
+      scheduleDiscarded(*discarded);
     }
   }
 
 private:
+  void scheduleDiscarded(PlatformDocumentHandoffResult &result) noexcept {
+    if (cleanupService_ != nullptr) {
+      (void)cleanupService_->schedule(result);
+    }
+  }
+
   static void invokeCancellation(std::function<void()> &cancelNative) noexcept {
     if (!cancelNative) {
       return;
@@ -209,6 +228,7 @@ private:
   bool commitWon_ = false;
   std::optional<PlatformDocumentHandoffResult> result_;
   std::function<void()> cancelNative_;
+  PlatformTemporaryPathCleanupServiceHandle cleanupService_;
 };
 
 NativeCancellationRegistration::NativeCancellationRegistration(
@@ -748,9 +768,10 @@ std::filesystem::path desktopDocumentHandoffBase(std::error_code &error) {
   return (temporary / "AsoBMaShow" / "document-handoff").lexically_normal();
 }
 
-bool validateDesktopTemporaryDocument(const std::filesystem::path &path,
-                                      bool allowMissing, bool allowFinalSymlink,
-                                      std::string &errorMessage) {
+bool validateDesktopTemporaryPath(const std::filesystem::path &path,
+                                  PlatformTemporaryPathKind kind,
+                                  bool allowMissing, bool allowFinalSymlink,
+                                  std::string &errorMessage) {
   std::error_code error;
   const auto base = desktopDocumentHandoffBase(error);
   const auto candidate = path.lexically_normal();
@@ -759,9 +780,14 @@ bool validateDesktopTemporaryDocument(const std::filesystem::path &path,
     errorMessage = "Temporary document is outside the private handoff root.";
     return false;
   }
-  if (candidate.filename() != "imported-document.zip" ||
-      candidate.parent_path().parent_path() != base ||
-      !validPrivateDirectoryName(candidate.parent_path())) {
+  const auto issuedRoot = kind == PlatformTemporaryPathKind::File
+                              ? candidate.parent_path()
+                              : candidate;
+  const bool validShape = kind == PlatformTemporaryPathKind::File
+                              ? candidate.filename() == "imported-document.zip" &&
+                                    issuedRoot.parent_path() == base
+                              : issuedRoot.parent_path() == base;
+  if (!validShape || !validPrivateDirectoryName(issuedRoot)) {
     errorMessage = "Temporary document does not match an issued handoff path.";
     return false;
   }
@@ -780,13 +806,23 @@ bool validateDesktopTemporaryDocument(const std::filesystem::path &path,
       !verifyOwnerPrivatePath(base, true, errorMessage)) {
     return false;
   }
-  for (auto ancestor = candidate.parent_path(); ancestor != base;
+  for (auto ancestor = issuedRoot; ancestor != base;
        ancestor = ancestor.parent_path()) {
     if (ancestor.empty()) {
       errorMessage = "Temporary document ancestry is invalid.";
       return false;
     }
     const auto status = std::filesystem::symlink_status(ancestor, error);
+    if (allowMissing && ancestor == candidate &&
+        (error == std::errc::no_such_file_or_directory ||
+         (!error && status.type() == std::filesystem::file_type::not_found))) {
+      errorMessage.clear();
+      return true;
+    }
+    if (allowFinalSymlink && ancestor == candidate &&
+        std::filesystem::is_symlink(status)) {
+      break;
+    }
     if (error || std::filesystem::is_symlink(status)) {
       errorMessage = "Temporary document has a symbolic-link ancestor.";
       return false;
@@ -801,8 +837,10 @@ bool validateDesktopTemporaryDocument(const std::filesystem::path &path,
     errorMessage = "The private handoff root cannot be resolved.";
     return false;
   }
-  const auto canonicalParent =
-      std::filesystem::canonical(candidate.parent_path(), error);
+  const auto canonicalParent = std::filesystem::canonical(
+      kind == PlatformTemporaryPathKind::File ? candidate.parent_path()
+                                               : issuedRoot.parent_path(),
+      error);
   if (error || !pathIsWithin(canonicalParent, canonicalBase, true)) {
     errorMessage = "Temporary document escaped the private handoff root.";
     return false;
@@ -815,17 +853,30 @@ bool validateDesktopTemporaryDocument(const std::filesystem::path &path,
     errorMessage.clear();
     return true;
   }
-  if (error || (!std::filesystem::is_regular_file(status) &&
+  const bool expectedType = kind == PlatformTemporaryPathKind::File
+                                ? std::filesystem::is_regular_file(status)
+                                : std::filesystem::is_directory(status);
+  if (error || (!expectedType &&
                 !(allowFinalSymlink && std::filesystem::is_symlink(status)))) {
-    errorMessage = "Temporary document is not a regular file.";
+    errorMessage = "Temporary path has an unexpected file type.";
     return false;
   }
   if (!std::filesystem::is_symlink(status) &&
-      !verifyOwnerPrivatePath(candidate, false, errorMessage)) {
+      !verifyOwnerPrivatePath(candidate,
+                              kind == PlatformTemporaryPathKind::Directory,
+                              errorMessage)) {
     return false;
   }
   errorMessage.clear();
   return true;
+}
+
+bool validateDesktopTemporaryDocument(const std::filesystem::path &path,
+                                      bool allowMissing, bool allowFinalSymlink,
+                                      std::string &errorMessage) {
+  return validateDesktopTemporaryPath(path, PlatformTemporaryPathKind::File,
+                                      allowMissing, allowFinalSymlink,
+                                      errorMessage);
 }
 
 bool cleanupDesktopTemporaryDocument(const std::filesystem::path &path,
@@ -850,36 +901,71 @@ bool cleanupDesktopTemporaryDocument(const std::filesystem::path &path,
   return true;
 }
 
-bool validatePlatformTemporaryDocument(const std::filesystem::path &path,
-                                       std::string &errorMessage) {
+bool cleanupDesktopTemporaryDirectory(const std::filesystem::path &path,
+                                      std::string &errorMessage) {
+  if (!validateDesktopTemporaryPath(path, PlatformTemporaryPathKind::Directory,
+                                    true, true, errorMessage)) {
+    return false;
+  }
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error == std::errc::no_such_file_or_directory) {
+    error.clear();
+  } else if (error) {
+    errorMessage = "Temporary directory cleanup failed: " + error.message();
+    return false;
+  } else if (std::filesystem::is_symlink(status)) {
+    std::filesystem::remove(path, error);
+  } else {
+    std::filesystem::remove_all(path, error);
+  }
+  if (error) {
+    errorMessage = "Temporary directory cleanup failed: " + error.message();
+    return false;
+  }
+  errorMessage.clear();
+  return true;
+}
+
+bool validatePlatformTemporaryPath(const std::filesystem::path &path,
+                                   PlatformTemporaryPathKind kind,
+                                   std::string &errorMessage) {
 #if TARGET_OS_ANDROID
-  return ValidateAndroidTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File &&
+         ValidateAndroidTemporaryDocument(path, errorMessage);
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return ValidateIOSTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File &&
+         ValidateIOSTemporaryDocument(path, errorMessage);
 #else
-  return validateDesktopTemporaryDocument(path, false, false, errorMessage);
+  return validateDesktopTemporaryPath(path, kind, false, false, errorMessage);
 #endif
 }
 
-bool cleanupPlatformTemporaryDocument(const std::filesystem::path &path) {
+bool cleanupPlatformTemporaryPath(const std::filesystem::path &path,
+                                  PlatformTemporaryPathKind kind) {
   std::string errorMessage;
 #if TARGET_OS_ANDROID
-  return CleanupAndroidTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File &&
+         CleanupAndroidTemporaryDocument(path, errorMessage);
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return CleanupIOSTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File &&
+         CleanupIOSTemporaryDocument(path, errorMessage);
 #else
-  return cleanupDesktopTemporaryDocument(path, errorMessage);
+  return kind == PlatformTemporaryPathKind::File
+             ? cleanupDesktopTemporaryDocument(path, errorMessage)
+             : cleanupDesktopTemporaryDirectory(path, errorMessage);
 #endif
 }
 
 std::shared_ptr<detail::TemporaryDocumentOwnership>
-adoptTemporaryDocument(const std::filesystem::path &path) {
+adoptTemporaryPath(const std::filesystem::path &path,
+                   PlatformTemporaryPathKind kind) {
   std::string errorMessage;
-  if (!validatePlatformTemporaryDocument(path, errorMessage)) {
+  if (!validatePlatformTemporaryPath(path, kind, errorMessage)) {
     return {};
   }
   return std::make_shared<detail::TemporaryDocumentOwnership>(
-      path.lexically_normal(), cleanupPlatformTemporaryDocument);
+      path.lexically_normal(), kind, cleanupPlatformTemporaryPath);
 }
 
 std::filesystem::path
@@ -1273,7 +1359,9 @@ Validate(const PlatformDocumentExportRequest &request) {
 
 PlatformDocumentHandoffResult ParseBridgeResult(const std::string &value,
                                                 bool expectsLocalPath,
-                                                bool temporaryLocalFile) {
+                                                bool temporaryLocalFile,
+                                                PlatformTemporaryPathKind
+                                                    temporaryPathKind) {
   if (value == kCancelled) {
     return {.status = PlatformDocumentHandoffStatus::Cancelled};
   }
@@ -1292,9 +1380,13 @@ PlatformDocumentHandoffResult ParseBridgeResult(const std::string &value,
     auto result = PlatformDocumentHandoffResult{
         .status = PlatformDocumentHandoffStatus::Succeeded,
         .localPath = path.lexically_normal(),
-        .temporaryLocalFile = temporaryLocalFile};
+        .temporaryLocalFile = temporaryLocalFile &&
+                              temporaryPathKind ==
+                                  PlatformTemporaryPathKind::File,
+        .temporaryPathKind = temporaryPathKind};
     if (temporaryLocalFile) {
-      result.temporaryOwnership = adoptTemporaryDocument(result.localPath);
+      result.temporaryOwnership =
+          adoptTemporaryPath(result.localPath, temporaryPathKind);
       if (result.temporaryOwnership == nullptr) {
         return failure("The platform returned a document outside private "
                        "handoff storage.");
@@ -1526,13 +1618,15 @@ void PlatformDocumentHandoffOperation::close() noexcept {
   }
 }
 
-bool CleanupTemporaryDocument(PlatformDocumentHandoffResult &result) noexcept {
-  if (!result.temporaryLocalFile) {
+namespace {
+bool cleanupTemporaryPathNow(PlatformDocumentHandoffResult &result) noexcept {
+  if (result.localPath.empty() && result.temporaryOwnership == nullptr) {
     return true;
   }
   if (result.localPath.empty() || result.temporaryOwnership == nullptr ||
       result.temporaryOwnership->path() !=
-          result.localPath.lexically_normal()) {
+          result.localPath.lexically_normal() ||
+      result.temporaryOwnership->kind() != result.temporaryPathKind) {
     return false;
   }
   if (!result.temporaryOwnership->cleanup()) {
@@ -1542,6 +1636,121 @@ bool CleanupTemporaryDocument(PlatformDocumentHandoffResult &result) noexcept {
   result.temporaryLocalFile = false;
   result.localPath.clear();
   return true;
+}
+
+} // namespace
+
+struct PlatformTemporaryPathCleanupService::State {
+  std::mutex mutex;
+  std::condition_variable ready;
+  std::deque<PlatformDocumentHandoffResult> queued;
+  std::vector<PlatformDocumentHandoffResult> unprocessed;
+  CleanupTask cleanupTask;
+  bool accepting = true;
+  bool stopping = false;
+};
+
+PlatformTemporaryPathCleanupService::PlatformTemporaryPathCleanupService(
+    CleanupTask cleanupTask)
+    : state_(std::make_shared<State>()) {
+  state_->cleanupTask = cleanupTask ? std::move(cleanupTask)
+                                    : CleanupTask{cleanupTemporaryPathNow};
+  worker_ = std::thread([state = state_] {
+    while (true) {
+      PlatformDocumentHandoffResult result;
+      {
+        std::unique_lock lock(state->mutex);
+        state->ready.wait(lock,
+                          [&] { return state->stopping || !state->queued.empty(); });
+        if (state->queued.empty()) {
+          if (state->stopping) {
+            return;
+          }
+          continue;
+        }
+        result = std::move(state->queued.front());
+        state->queued.pop_front();
+      }
+      bool cleaned = false;
+      try {
+        cleaned = state->cleanupTask(result);
+      } catch (...) {
+        cleaned = false;
+      }
+      if (!cleaned) {
+        std::lock_guard lock(state->mutex);
+        state->unprocessed.push_back(std::move(result));
+      }
+    }
+  });
+}
+
+PlatformTemporaryPathCleanupService::~PlatformTemporaryPathCleanupService() {
+  shutdown();
+}
+
+bool PlatformTemporaryPathCleanupService::schedule(
+    PlatformDocumentHandoffResult &result) noexcept {
+  try {
+    {
+      std::lock_guard lock(state_->mutex);
+      if (!state_->accepting) {
+        state_->unprocessed.push_back(std::move(result));
+        result = {};
+        return false;
+      }
+      state_->queued.push_back(std::move(result));
+    }
+    result = {};
+    state_->ready.notify_one();
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+void PlatformTemporaryPathCleanupService::shutdown() noexcept {
+  std::lock_guard shutdownLock(shutdownMutex_);
+  if (state_ == nullptr) {
+    return;
+  }
+  {
+    std::lock_guard lock(state_->mutex);
+    state_->accepting = false;
+    state_->stopping = true;
+  }
+  state_->ready.notify_one();
+  if (worker_.joinable()) {
+    worker_.join();
+  }
+}
+
+std::vector<PlatformDocumentHandoffResult>
+PlatformTemporaryPathCleanupService::takeUnprocessed() {
+  std::lock_guard lock(state_->mutex);
+  return std::move(state_->unprocessed);
+}
+
+PlatformTemporaryPathCleanupServiceHandle
+CreatePlatformTemporaryPathCleanupService(
+    PlatformTemporaryPathCleanupService::CleanupTask cleanupTask) {
+  return std::make_shared<PlatformTemporaryPathCleanupService>(
+      std::move(cleanupTask));
+}
+
+PlatformTemporaryPathCleanupServiceHandle
+DefaultPlatformTemporaryPathCleanupService() {
+  static const auto service = CreatePlatformTemporaryPathCleanupService();
+  return service;
+}
+
+bool CleanupTemporaryPath(PlatformDocumentHandoffResult &result) noexcept {
+  return cleanupTemporaryPathNow(result);
+}
+
+bool CleanupTemporaryDocument(PlatformDocumentHandoffResult &result) noexcept {
+  return result.temporaryPathKind == PlatformTemporaryPathKind::File &&
+         CleanupTemporaryPath(result);
 }
 
 namespace detail {
@@ -1565,20 +1774,23 @@ std::uint64_t NextOperationToken(std::atomic_uint64_t &counter) {
 }
 
 PlatformDocumentHandoffOperation
-StartOperation(OperationWork work, std::function<void()> cancelNative) {
+StartOperation(OperationWork work, std::function<void()> cancelNative,
+               PlatformTemporaryPathCleanupServiceHandle cleanupService) {
   return StartOperationWithCommit(
       [work = std::move(work)](const std::atomic_bool &cancellationRequested,
                                const CommitGate &) {
         return work(cancellationRequested);
       },
-      std::move(cancelNative));
+      std::move(cancelNative), {}, std::move(cleanupService));
 }
 
 PlatformDocumentHandoffOperation
 StartOperationWithCommit(CommitOperationWork work,
                          std::function<void()> cancelNative,
-                         std::shared_ptr<void> workerLifetime) {
-  auto state = std::make_shared<OperationState>();
+                         std::shared_ptr<void> workerLifetime,
+                         PlatformTemporaryPathCleanupServiceHandle
+                             cleanupService) {
+  auto state = std::make_shared<OperationState>(std::move(cleanupService));
   PlatformDocumentHandoffOperation operation(state);
   std::thread([state, work = std::move(work),
                cancelNative = std::move(cancelNative),
