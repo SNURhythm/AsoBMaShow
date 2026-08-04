@@ -4,7 +4,9 @@
 #include "SkinArchiveImporter.h"
 #include "SkinPackageCatalog.h"
 
+#include <atomic>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -14,6 +16,8 @@
 #include <vector>
 
 namespace skin {
+
+class SkinPackageOperationService;
 
 struct SkinValidationResult {
   SkinValidationDisposition disposition = SkinValidationDisposition::Invalid;
@@ -171,10 +175,37 @@ public:
   GarbageCollectionResult collectGarbage();
 
 private:
+  friend class SkinPackageOperationService;
+  bool operationServiceReady() const noexcept;
+
   SkinStorageRoots roots_;
   SkinPackageCatalog &catalog_;
   SkinAliasDetector &aliases_;
   ISkinProfileSnapshotProvider &profileSnapshots_;
+  // 0 = not started, 1 = running, 2 = attempted/completed.
+  std::atomic_uint8_t recoveryState_{0};
+  std::atomic_bool recoverySucceeded_{false};
+  std::atomic_bool poisoned_{false};
+  std::map<std::string, SkinRevisionLease, std::less<>> revisionLeases_;
+  std::map<std::string, SkinRevisionWeakPin, std::less<>> revisionPins_;
+  using ActivationMap =
+      std::map<std::string, ValidatedSkinActivation, std::less<>>;
+  ActivationMap activations_;
+  struct PendingActivationCommit {
+    std::uint64_t ownerTicket = 0;
+    std::uint64_t sourceGeneration = 0;
+    std::uint64_t catalogGeneration = 0;
+    SkinProfileId profileId;
+    ActivationMap::node_type activationNode;
+    ValidatedSkinActivation terminalActivation;
+    SkinPackageCatalogSnapshot catalogUpdate;
+    bool catalogChanged = false;
+  };
+  std::map<std::uint64_t, PendingActivationCommit> pendingActivationCommits_;
+  std::uint64_t nextActivationCommitTicket_ = 0;
+  std::uint64_t stateCatalogGeneration_ = 0;
+  std::uint64_t stateSourceGeneration_ = 0;
+  bool catalogMutationInFlight_ = false;
   std::mutex stateMutex_;
 };
 

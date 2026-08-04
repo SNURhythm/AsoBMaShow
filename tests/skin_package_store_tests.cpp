@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <mutex>
@@ -40,7 +41,7 @@ public:
   TempDirectory() {
     static std::atomic_uint64_t serial{0};
     root_ = fs::canonical(fs::temp_directory_path()) /
-            ("asobmashow-skin-store-red-" +
+            ("asobmashow-skin-store-" +
              std::to_string(
                  std::chrono::steady_clock::now().time_since_epoch().count()) +
              "-" + std::to_string(++serial));
@@ -142,6 +143,12 @@ public:
 
   std::optional<ProfileInventoryCommitFence>
   tryAcquireInventoryCommitFence(const ProfileInventorySnapshot &) override {
+    if (beforeFence) {
+      beforeFence();
+    }
+    if (rejectFence) {
+      return std::nullopt;
+    }
     return issueFence();
   }
 
@@ -153,26 +160,133 @@ public:
       ProfileInventoryMutationBarrier &&) noexcept override {}
 
   int releaseCount = 0;
+  bool rejectFence = false;
+  std::function<void()> beforeFence;
 };
 
 class SelectableValidator final : public SkinEntryValidator {
 public:
   SkinValidationResult validate(SkinRevisionReadView, const SkinEntryId &,
-                                const EntryProfileSettings *,
+                                const EntryProfileSettings *desired,
                                 std::stop_token) override {
+    ++calls;
+    const bool cancelNow =
+        cancelled || (cancelConfigured && desired != nullptr);
+    if (cancelNow || (rejectConfigured && desired != nullptr)) {
+      return {.disposition = rejectConfigured
+                                 ? SkinValidationDisposition::Invalid
+                                 : SkinValidationDisposition::Selectable7Key,
+              .cancelled = cancelNow};
+    }
+    if (disposition != SkinValidationDisposition::Selectable7Key) {
+      return {.disposition = disposition};
+    }
     SkinEntryMetadataSnapshot metadata;
     metadata.displayName = "Synthetic Play";
     metadata.author = "AsoBMaShow tests";
     metadata.skinType = 0;
     metadata.authoredWidth = 1280;
     metadata.authoredHeight = 720;
-    return {
-        .disposition = SkinValidationDisposition::Selectable7Key,
-        .reconciledSettings = EntryProfileSettings{},
-        .metadata = std::move(metadata),
-        .configurationDigest =
-            "1111111111111111111111111111111111111111111111111111111111111111"};
+    return {.disposition = SkinValidationDisposition::Selectable7Key,
+            .reconciledSettings = EntryProfileSettings{},
+            .metadata = std::move(metadata),
+            .configurationDigest = configurationDigest};
   }
+
+  SkinValidationDisposition disposition =
+      SkinValidationDisposition::Selectable7Key;
+  std::string configurationDigest =
+      "1111111111111111111111111111111111111111111111111111111111111111";
+  bool rejectConfigured = false;
+  bool cancelled = false;
+  bool cancelConfigured = false;
+  int calls = 0;
+};
+
+class OneShotThrowingObserver final : public SkinImportIoObserver {
+public:
+  void reached(SkinImportIoOperation operation,
+               const fs::path &) const override {
+    if (operation == SkinImportIoOperation::BeforeVisiblePublication &&
+        throwsRemaining.fetch_sub(1) > 0) {
+      throw std::runtime_error("injected visible publication failure");
+    }
+  }
+
+  mutable std::atomic_int throwsRemaining{1};
+};
+
+class FakeProfileOwner final : public ISkinProfileSettingsOwner {
+public:
+  explicit FakeProfileOwner(VersionedSkinProfileSettings initial)
+      : current(std::move(initial)) {}
+
+  VersionedSkinProfileSettings snapshot(const SkinProfileId &) const override {
+    return current;
+  }
+
+  SkinProfileCommitResult beginCommit(const SkinProfileId &,
+                                      std::uint64_t expectedGeneration,
+                                      SkinProfileSettings candidate) override {
+    if (throwBegin) {
+      throw std::runtime_error("injected owner begin failure");
+    }
+    if (expectedGeneration != current.generation) {
+      return {.status = SkinProfileCommitResult::Status::GenerationChanged,
+              .generationChanged = true,
+              .snapshot = current};
+    }
+    pending = std::move(candidate);
+    return {.status = SkinProfileCommitResult::Status::Pending, .ticket = 77};
+  }
+
+  SkinProfileCommitResult pollCommit(std::uint64_t ticket) override {
+    expect(ticket == 77, "store polls the exact retained owner ticket");
+    if (throwPollOnce) {
+      throwPollOnce = false;
+      throw std::runtime_error("injected owner poll failure");
+    }
+    if (terminalStatus == SkinProfileCommitResult::Status::GenerationChanged) {
+      return {.status = SkinProfileCommitResult::Status::GenerationChanged,
+              .ticket = ticket,
+              .generationChanged = true,
+              .snapshot = current};
+    }
+    if (terminalStatus == SkinProfileCommitResult::Status::RetryableFailure) {
+      return {.status = SkinProfileCommitResult::Status::RetryableFailure,
+              .ticket = ticket,
+              .failure = SkinDiagnostic{.code = "injected_retry",
+                                        .message = "retry profile save",
+                                        .severity = DiagnosticSeverity::Error}};
+    }
+    if (!persisted) {
+      return {.status = SkinProfileCommitResult::Status::Pending,
+              .ticket = ticket};
+    }
+    if (pending) {
+      current.settings = std::move(*pending);
+      pending.reset();
+      ++current.generation;
+    }
+    return {.status = SkinProfileCommitResult::Status::Persisted,
+            .ticket = ticket,
+            .snapshot = current};
+  }
+
+  void acknowledgeCommit(std::uint64_t ticket) noexcept override {
+    if (ticket == 77) {
+      ++acknowledgements;
+    }
+  }
+
+  VersionedSkinProfileSettings current;
+  std::optional<SkinProfileSettings> pending;
+  bool persisted = false;
+  bool throwBegin = false;
+  bool throwPollOnce = false;
+  SkinProfileCommitResult::Status terminalStatus =
+      SkinProfileCommitResult::Status::Pending;
+  int acknowledgements = 0;
 };
 
 constexpr std::string_view kOldTreeDigest =
@@ -210,15 +324,65 @@ std::string journalDocument(std::string_view phase) {
          "\"collisionKey\":\"fixtureskin\"},\"visible\":{"
          "\"destinationDirectory\":\"FixtureSkin\","
          "\"stagingToken\":\"import-op-17\","
-         "\"backupToken\":\"op-17\",\"oldTreeDigest\":\"" +
+         "\"backupToken\":\"op-17\",\"oldPresent\":true,"
+         "\"oldTreeDigest\":\"" +
          std::string(kOldTreeDigest) + "\",\"newTreeDigest\":\"" +
          std::string(kNewTreeDigest) + "\"},\"revision\":{\"oldDigest\":\"" +
          std::string(kOldTreeDigest) + "\",\"newDigest\":\"" +
          std::string(kNewTreeDigest) +
          "\",\"stagingToken\":\"revision-op-17\"},\"catalog\":{"
-         "\"fileName\":\"catalog.json\",\"oldGeneration\":7,"
-         "\"newGeneration\":8,\"oldSnapshotDigest\":\"" +
+         "\"fileName\":\"catalog.json\","
+         "\"stagingToken\":\"op-17-new.json\","
+         "\"backupToken\":\"op-17-old.json\",\"oldGeneration\":7,"
+         "\"newGeneration\":8,\"oldSourceGeneration\":7,"
+         "\"newSourceGeneration\":8,\"oldSnapshotDigest\":\"" +
          std::string(kOldCatalogDigest) + "\",\"newSnapshotDigest\":\"" +
+         std::string(kNewCatalogDigest) + "\"}}\n";
+}
+
+std::string emptyCatalogDocument(std::uint64_t generation = 7) {
+  return "{\"schemaVersion\":1,\"catalogGeneration\":" +
+         std::to_string(generation) +
+         ",\"sourceGeneration\":" + std::to_string(generation) +
+         ",\"packages\":[],\"entries\":[]}\n";
+}
+
+std::string removalJournalDocument(std::string_view oldCatalogDigest,
+                                   std::string_view newCatalogDigest) {
+  return "{\"schemaVersion\":1,\"operation\":\"remove-package\","
+         "\"operationId\":\"remove-17\",\"package\":{"
+         "\"directoryName\":\"FixtureSkin\",\"collisionKey\":"
+         "\"fixtureskin\"},\"retainedToken\":\"remove-17\","
+         "\"oldTreeDigest\":\"" +
+         std::string(kOldTreeDigest) +
+         "\",\"catalog\":{\"stagingToken\":\"remove-17-new.json\","
+         "\"backupToken\":\"remove-17-old.json\",\"oldGeneration\":7,"
+         "\"newGeneration\":8,\"oldSourceGeneration\":7,"
+         "\"newSourceGeneration\":8,\"oldSnapshotDigest\":\"" +
+         std::string(oldCatalogDigest) + "\",\"newSnapshotDigest\":\"" +
+         std::string(newCatalogDigest) + "\"}}\n";
+}
+
+std::string createJournalDocument(std::string_view phase,
+                                  std::string_view oldCatalogDigest) {
+  return "{\"schemaVersion\":1,\"operation\":\"replace-package\","
+         "\"operationId\":\"create-17\",\"phase\":\"" +
+         std::string(phase) +
+         "\",\"package\":{\"directoryName\":\"FixtureSkin\","
+         "\"collisionKey\":\"fixtureskin\"},\"visible\":{"
+         "\"destinationDirectory\":\"FixtureSkin\","
+         "\"stagingToken\":\"import-create-17\","
+         "\"backupToken\":\"create-17\",\"oldPresent\":false,"
+         "\"newTreeDigest\":\"" +
+         std::string(kNewTreeDigest) + "\"},\"revision\":{\"newDigest\":\"" +
+         std::string(kNewTreeDigest) +
+         "\",\"stagingToken\":\"revision-create-17\"},\"catalog\":{"
+         "\"fileName\":\"catalog.json\","
+         "\"stagingToken\":\"create-17-new.json\","
+         "\"backupToken\":\"create-17-old.json\",\"oldGeneration\":7,"
+         "\"newGeneration\":8,\"oldSourceGeneration\":7,"
+         "\"newSourceGeneration\":8,\"oldSnapshotDigest\":\"" +
+         std::string(oldCatalogDigest) + "\",\"newSnapshotDigest\":\"" +
          std::string(kNewCatalogDigest) + "\"}}\n";
 }
 
@@ -393,6 +557,10 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
     const fs::path newRevisionStaging =
         roots.privateRevisions / ".staging/revision-op-17";
     const fs::path catalogFile = roots.privateCatalog / "catalog.json";
+    const fs::path catalogStaging =
+        roots.privateCatalog / ".publication-staging/op-17-new.json";
+    const fs::path catalogBackup =
+        roots.privateCatalog / ".publication-backups/op-17-old.json";
     const fs::path journalFile =
         roots.privateCatalog / "publication-journal.json";
 
@@ -426,6 +594,11 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
     writeText(catalogFile, boundary.newCatalog
                                ? catalogDocument(8, kNewTreeDigest)
                                : catalogDocument(7, kOldTreeDigest));
+    if (!boundary.newCatalog) {
+      writeText(catalogStaging, catalogDocument(8, kNewTreeDigest));
+    } else {
+      writeText(catalogBackup, catalogDocument(7, kOldTreeDigest));
+    }
     const std::string journal = journalDocument(boundary.phase);
     expect(journal.find(temp.root().string()) == std::string::npos,
            "publication journal owns typed identities, never host paths");
@@ -436,6 +609,12 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
     NoAliases aliases;
     SkinPackageStore store(roots, catalog, aliases, profiles);
     const auto recovery = store.recoverBeforeServiceStart();
+    if (recovery.disposition != SkinRecoveryDisposition::Recovered) {
+      for (const auto &diagnostic : recovery.diagnostics) {
+        std::cerr << "  recovery diagnostic " << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
     expect(recovery.disposition == SkinRecoveryDisposition::Recovered,
            "the exclusive pre-service recovery call completes");
     const auto recovered = catalog.snapshot();
@@ -462,9 +641,112 @@ void testCatalogJournalReplayAtEveryDurabilityBoundary() {
                                          : catalogDocument(7, kOldTreeDigest)),
            "recovery repairs catalog metadata to the selected generation");
     expect(!fs::exists(visibleStaging) && !fs::exists(visibleBackup) &&
-               !fs::exists(newRevisionStaging) && !fs::exists(journalFile),
+               !fs::exists(newRevisionStaging) && !fs::exists(catalogStaging) &&
+               !fs::exists(catalogBackup) && !fs::exists(journalFile),
            "recovery cleans journal-owned staging and backup capabilities");
   }
+}
+
+void testCreateJournalRestoresAbsenceOrCompleteNewPackage() {
+  struct Boundary {
+    bool visibleNew;
+    bool stagedNew;
+    bool revisionNew;
+    bool catalogNew;
+    bool expectNew;
+  };
+  constexpr Boundary boundaries[] = {
+      {false, true, false, false, false},
+      {true, false, false, false, false},
+      {true, false, true, false, true},
+      {true, false, true, true, true},
+  };
+  const std::string oldCatalog = emptyCatalogDocument();
+  const std::string oldCatalogDigest = file_checksum::sha256(oldCatalog);
+  for (const Boundary &boundary : boundaries) {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    const fs::path visible = roots.visiblePackages / "FixtureSkin";
+    const fs::path visibleStaging = roots.visiblePackages.parent_path() /
+                                    ".skin-import-staging/import-create-17";
+    const fs::path newRevision =
+        roots.privateRevisions / std::string(kNewTreeDigest);
+    const fs::path catalogFile = roots.privateCatalog / "catalog.json";
+    const fs::path catalogStaging =
+        roots.privateCatalog / ".publication-staging/create-17-new.json";
+    const fs::path catalogBackup =
+        roots.privateCatalog / ".publication-backups/create-17-old.json";
+    if (boundary.visibleNew) {
+      writeNewTree(visible);
+    }
+    if (boundary.stagedNew) {
+      writeNewTree(visibleStaging);
+    }
+    if (boundary.revisionNew) {
+      writeNewTree(newRevision);
+      freezeRevisionTree(newRevision);
+    }
+    writeText(catalogFile, boundary.catalogNew
+                               ? catalogDocument(8, kNewTreeDigest)
+                               : oldCatalog);
+    if (boundary.catalogNew) {
+      writeText(catalogBackup, oldCatalog);
+    } else {
+      writeText(catalogStaging, catalogDocument(8, kNewTreeDigest));
+    }
+    writeText(roots.privateCatalog / "publication-journal.json",
+              createJournalDocument("fixture", oldCatalogDigest));
+
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    NoAliases aliases;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    const auto recovered = store.recoverBeforeServiceStart();
+    expect(recovered.disposition == SkinRecoveryDisposition::Recovered,
+           "create recovery completes from a physical generation");
+    expect(boundary.expectNew ? treeIsNew(visible) : !fs::exists(visible),
+           "create recovery selects complete new or restores old absence");
+    expect(boundary.expectNew
+               ? snapshotIsExactly(*catalog.snapshot(), 8, kNewTreeDigest)
+               : catalog.snapshot()->packages.empty(),
+           "create recovery restores the matching catalog generation");
+  }
+}
+
+void testCorruptNewCatalogFallsBackToCompleteOldGeneration() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const fs::path visible = roots.visiblePackages / "FixtureSkin";
+  const fs::path backup = roots.visiblePackages.parent_path() /
+                          ".skin-publication-backups/op-17/FixtureSkin";
+  const fs::path oldRevision =
+      roots.privateRevisions / std::string(kOldTreeDigest);
+  const fs::path newRevision =
+      roots.privateRevisions / std::string(kNewTreeDigest);
+  writeNewTree(visible);
+  writeOldTree(backup);
+  writeOldTree(oldRevision);
+  writeNewTree(newRevision);
+  freezeRevisionTree(oldRevision);
+  freezeRevisionTree(newRevision);
+  writeText(roots.privateCatalog / "catalog.json",
+            catalogDocument(7, kOldTreeDigest));
+  writeText(roots.privateCatalog / ".publication-staging/op-17-new.json",
+            "corrupt");
+  writeText(roots.privateCatalog / "publication-journal.json",
+            journalDocument("revision-parent-synced"));
+
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  const auto recovered = store.recoverBeforeServiceStart();
+  expect(recovered.disposition == SkinRecoveryDisposition::Recovered,
+         "corrupt new catalog falls back to the complete old generation");
+  expect(treeIsOld(visible),
+         "corrupt new catalog rollback restores the old visible tree");
+  expect(snapshotIsExactly(*catalog.snapshot(), 7, kOldTreeDigest),
+         "corrupt new catalog rollback retains old catalog identity");
 }
 
 void testRecoveryRejectsRepeatedBootstrapOwnership() {
@@ -499,13 +781,17 @@ void testRecoveryRejectsOverlappingBootstrapOwnership() {
   const fs::path newRevisionStaging =
       roots.privateRevisions / ".staging/revision-op-17";
   const fs::path catalogFile = roots.privateCatalog / "catalog.json";
+  const fs::path catalogStaging =
+      roots.privateCatalog / ".publication-staging/op-17-new.json";
   const fs::path journalFile =
       roots.privateCatalog / "publication-journal.json";
   writeOldTree(visible);
   writeNewTree(visibleStaging);
   writeOldTree(oldRevision);
+  freezeRevisionTree(oldRevision);
   writeNewTree(newRevisionStaging);
   writeText(catalogFile, catalogDocument(7, kOldTreeDigest));
+  writeText(catalogStaging, catalogDocument(8, kNewTreeDigest));
   const std::string journal = journalDocument("intent-written");
   writeText(journalFile, journal);
 
@@ -541,6 +827,387 @@ void testRecoveryRejectsOverlappingBootstrapOwnership() {
          "an overlapping caller receives the typed rejection");
   expect(journalUnchangedWhileOwnerBlocked,
          "an overlapping caller performs no filesystem replay");
+}
+
+void testMalformedAndOversizedCatalogFailBootstrap() {
+  for (const bool oversized : {false, true}) {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    writeText(roots.privateCatalog / "catalog.json",
+              oversized ? std::string(33 * 1024 * 1024, 'x') : "{");
+    writeText(roots.privateCatalog / "catalog.json.bak",
+              emptyCatalogDocument());
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    NoAliases aliases;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    const auto recovered = store.recoverBeforeServiceStart();
+    expect(recovered.disposition == SkinRecoveryDisposition::Failed,
+           oversized ? "oversized catalog fails closed during bootstrap"
+                     : "malformed catalog fails closed during bootstrap");
+    expect(catalog.snapshot()->catalogGeneration == 0 &&
+               catalog.snapshot()->packages.empty(),
+           "failed catalog bootstrap never exposes backup/default as durable "
+           "metadata");
+  }
+}
+
+void testRemovalJournalRecoversOldAndNewGenerations() {
+  const std::string oldCatalog = catalogDocument(7, kOldTreeDigest);
+  const std::string newCatalog = emptyCatalogDocument(8);
+  const std::string oldDigest = file_checksum::sha256(oldCatalog);
+  const std::string newDigest = file_checksum::sha256(newCatalog);
+  for (const bool committedNew : {false, true}) {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    const fs::path retained = roots.visiblePackages.parent_path() /
+                              ".skin-removal-staging/remove-17/FixtureSkin";
+    writeOldTree(retained);
+    const fs::path oldRevision =
+        roots.privateRevisions / std::string(kOldTreeDigest);
+    writeOldTree(oldRevision);
+    freezeRevisionTree(oldRevision);
+    writeText(roots.privateCatalog / "catalog.json",
+              committedNew ? newCatalog : oldCatalog);
+    writeText(roots.privateCatalog / ".removal-staging/remove-17-new.json",
+              newCatalog);
+    writeText(roots.privateCatalog / ".removal-backups/remove-17-old.json",
+              oldCatalog);
+    writeText(roots.privateCatalog / "removal-journal.json",
+              removalJournalDocument(oldDigest, newDigest));
+
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    NoAliases aliases;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    const auto recovered = store.recoverBeforeServiceStart();
+    expect(recovered.disposition == SkinRecoveryDisposition::Recovered,
+           "removal journal selects a complete physical generation");
+    expect(committedNew ? !fs::exists(roots.visiblePackages / "FixtureSkin")
+                        : treeIsOld(roots.visiblePackages / "FixtureSkin"),
+           "removal recovery restores old visible or committed absence");
+    expect(committedNew
+               ? catalog.snapshot()->packages.empty()
+               : snapshotIsExactly(*catalog.snapshot(), 7, kOldTreeDigest),
+           "removal recovery installs the matching exact catalog bytes");
+    expect(!fs::exists(roots.privateCatalog / "removal-journal.json"),
+           "successful removal recovery consumes its journal exactly once");
+  }
+}
+
+void testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation() {
+  for (const bool editDescendant : {false, true}) {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    const auto package = normalizePackageId("FixtureSkin");
+    if (!package.package) {
+      expect(false, "inventory-race fixture package ID is valid");
+      return;
+    }
+    writeOldTree(roots.visiblePackages / "FixtureSkin");
+    const fs::path source = temp.root() / "inventory-candidate";
+    writeNewTree(source);
+    NoAliases aliases;
+    SkinArchiveImporter importer(roots, aliases);
+    auto prepared = importer.prepareFolder(source, *package.package, {}, {});
+    expect(prepared.prepared.has_value(), "inventory-race candidate prepares");
+    if (!prepared.prepared) {
+      continue;
+    }
+    const std::string revision =
+        prepared.prepared->candidateRevision().lowercaseSha256;
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    if (editDescendant) {
+      profiles.beforeFence = [&] {
+        writeText(roots.visiblePackages / "FixtureSkin/old-only.txt",
+                  "edited immediately before commit");
+      };
+    } else {
+      profiles.rejectFence = true;
+    }
+    SelectableValidator validator;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    auto published = store.publish(
+        std::move(*prepared.prepared), PackageCollisionPolicy::Replace,
+        ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+    expect(published.retryableInventoryRace &&
+               published.retryPrepared.has_value() && !published.published,
+           editDescendant
+               ? "descendant edit at the fence returns the exact prepared "
+                 "candidate"
+               : "stale inventory fence returns the exact prepared candidate");
+    expect(catalog.snapshot()->catalogGeneration == 0 &&
+               !fs::exists(roots.privateCatalog / "publication-journal.json") &&
+               !fs::exists(roots.privateRevisions / revision),
+           "inventory race performs zero journal/catalog/revision mutation");
+  }
+}
+
+void testConfiguredValidationFailureAndCancellationPreserveOldPackage() {
+  for (const bool cancelConfigured : {false, true}) {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    const auto package = normalizePackageId("FixtureSkin");
+    if (!package.package) {
+      expect(false, "configured-validation fixture package ID is valid");
+      return;
+    }
+    const fs::path oldSource = temp.root() / "configured-old";
+    writeOldTree(oldSource);
+    NoAliases aliases;
+    SkinArchiveImporter importer(roots, aliases);
+    auto oldPrepared =
+        importer.prepareFolder(oldSource, *package.package, {}, {});
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    SelectableValidator validator;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    expect(store.recoverBeforeServiceStart().disposition ==
+               SkinRecoveryDisposition::Recovered,
+           "configured-validation fixture bootstraps store roots");
+    auto initial = store.publish(
+        std::move(*oldPrepared.prepared), PackageCollisionPolicy::Reject,
+        ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+    expect(initial.published && initial.entries.size() == 1,
+           "configured-validation fixture publishes old package");
+    if (!initial.published || initial.entries.empty()) {
+      continue;
+    }
+    const auto before = store.catalogSnapshot();
+    ProfileInventorySnapshot inventory{.inventoryGeneration = 2};
+    VersionedSkinProfileSettings selected{
+        .profileId =
+            SkinProfileId{.opaque = "12345678-1234-1234-1234-123456789abc"},
+        .generation = 9};
+    selected.settings.selected7KeyEntry = initial.entries.front();
+    selected.settings.entries.emplace(initial.entries.front(),
+                                      EntryProfileSettings{});
+    inventory.profiles.push_back(std::move(selected));
+
+    const fs::path replacementSource = temp.root() / "configured-new";
+    writeNewTree(replacementSource);
+    auto replacement =
+        importer.prepareFolder(replacementSource, *package.package, {}, {});
+    validator.rejectConfigured = !cancelConfigured;
+    validator.cancelConfigured = cancelConfigured;
+    auto rejected = store.publish(std::move(*replacement.prepared),
+                                  PackageCollisionPolicy::Replace,
+                                  std::move(inventory), validator, {}, {});
+    expect(!rejected.published,
+           cancelConfigured
+               ? "selected-profile cancellation rejects replacement"
+               : "selected-profile validation failure rejects replacement");
+    expect(treeIsOld(roots.visiblePackages / "FixtureSkin") &&
+               store.catalogSnapshot()->catalogGeneration ==
+                   before->catalogGeneration &&
+               store.catalogSnapshot()->entries.front().revisionDigest ==
+                   before->entries.front().revisionDigest,
+           "selected-profile rejection preserves the whole old tree/catalog");
+  }
+}
+
+void testTransactionFailureRetainsJournalForRestartRecovery() {
+  {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    const auto package = normalizePackageId("FixtureSkin");
+    if (!package.package) {
+      expect(false, "publication rollback fixture package ID is valid");
+      return;
+    }
+    const fs::path oldSource = temp.root() / "rollback-old";
+    writeOldTree(oldSource);
+    NoAliases aliases;
+    SkinArchiveImporter importer(roots, aliases);
+    auto oldPrepared =
+        importer.prepareFolder(oldSource, *package.package, {}, {});
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    SelectableValidator validator;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    expect(store.recoverBeforeServiceStart().disposition ==
+               SkinRecoveryDisposition::Recovered,
+           "publication rollback fixture bootstraps store roots");
+    auto initial = store.publish(
+        std::move(*oldPrepared.prepared), PackageCollisionPolicy::Reject,
+        ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+    expect(initial.published,
+           "publication rollback fixture publishes old tree");
+
+    const fs::path newSource = temp.root() / "rollback-new";
+    writeNewTree(newSource);
+    auto observer = std::make_shared<OneShotThrowingObserver>();
+    SkinArchiveImporter throwingImporter(roots, aliases, observer);
+    auto replacement =
+        throwingImporter.prepareFolder(newSource, *package.package, {}, {});
+    catalog.shutdown();
+    bool threw = false;
+    try {
+      (void)store.publish(std::move(*replacement.prepared),
+                          PackageCollisionPolicy::Replace,
+                          ProfileInventorySnapshot{.inventoryGeneration = 2},
+                          validator, {}, {});
+    } catch (const std::runtime_error &) {
+      threw = true;
+    }
+    expect(
+        threw && fs::exists(roots.privateCatalog / "publication-journal.json"),
+        "throw after old visible move retains publication recovery evidence");
+    expect(treeIsOld(roots.visiblePackages / "FixtureSkin"),
+           "best-effort publication rollback restores old visible identity");
+    SkinPackageCatalog restartedCatalog(roots.privateCatalog);
+    FakeProfileSnapshots restartedProfiles;
+    SkinPackageStore restarted(roots, restartedCatalog, aliases,
+                               restartedProfiles);
+    expect(restarted.recoverBeforeServiceStart().disposition ==
+               SkinRecoveryDisposition::Recovered,
+           "restart consumes retained publication evidence");
+    expect(treeIsOld(roots.visiblePackages / "FixtureSkin"),
+           "publication restart recovery selects the complete old generation");
+  }
+
+  {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    const auto package = normalizePackageId("FixtureSkin");
+    if (!package.package) {
+      expect(false, "removal rollback fixture package ID is valid");
+      return;
+    }
+    const fs::path oldSource = temp.root() / "remove-rollback-old";
+    writeOldTree(oldSource);
+    NoAliases aliases;
+    SkinArchiveImporter importer(roots, aliases);
+    auto oldPrepared =
+        importer.prepareFolder(oldSource, *package.package, {}, {});
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    SelectableValidator validator;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    expect(store.recoverBeforeServiceStart().disposition ==
+               SkinRecoveryDisposition::Recovered,
+           "removal rollback fixture bootstraps store roots");
+    expect(store
+               .publish(std::move(*oldPrepared.prepared),
+                        PackageCollisionPolicy::Reject,
+                        ProfileInventorySnapshot{.inventoryGeneration = 1},
+                        validator, {}, {})
+               .published,
+           "removal rollback fixture publishes old tree");
+    catalog.shutdown();
+    const auto removed = store.removePackage(*package.package, {});
+    expect(!removed.removed &&
+               fs::exists(roots.privateCatalog / "removal-journal.json"),
+           "failed removal rollback retains its journal and catalog copies");
+    expect(treeIsOld(roots.visiblePackages / "FixtureSkin"),
+           "best-effort removal rollback restores old visible identity");
+    SkinPackageCatalog restartedCatalog(roots.privateCatalog);
+    FakeProfileSnapshots restartedProfiles;
+    SkinPackageStore restarted(roots, restartedCatalog, aliases,
+                               restartedProfiles);
+    expect(restarted.recoverBeforeServiceStart().disposition ==
+               SkinRecoveryDisposition::Recovered,
+           "restart consumes retained removal rollback evidence");
+  }
+}
+
+void testGarbageCollectionRejectsLinksAndRetriesQuarantine() {
+#if !defined(_WIN32)
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  fs::create_directories(roots.privateRevisions);
+  const fs::path outside = temp.root() / "outside";
+  writeText(outside / "keep.txt", "outside");
+  const fs::path linkedRoot = roots.privateRevisions / std::string(64, 'a');
+  fs::create_directory_symlink(outside, linkedRoot);
+  const fs::path nestedLink = roots.privateRevisions / std::string(64, 'b');
+  writeText(nestedLink / "file.txt", "candidate");
+  fs::create_symlink(outside / "keep.txt", nestedLink / "linked.txt");
+  const fs::path stale =
+      roots.privateRevisions / ".gc-quarantine/stale-operation";
+  writeText(stale / "old.txt", "retry");
+
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  const auto collected = store.collectGarbage();
+  expect(collected.revisionsRemoved == 0 && fs::exists(linkedRoot) &&
+             fs::exists(nestedLink) && fs::exists(outside / "keep.txt"),
+         "GC rejects root and nested links without following or deleting them");
+  expect(!fs::exists(stale),
+         "GC retries and removes a prior safe quarantine directory");
+#endif
+}
+
+void testManualInvalidEditRetainsActivationButDeleteHidesIt() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const auto package = normalizePackageId("FixtureSkin");
+  if (!package.package) {
+    expect(false, "manual-edit fixture package ID is valid");
+    return;
+  }
+  const fs::path source = temp.root() / "manual-edit-source";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  SkinArchiveImporter importer(roots, aliases);
+  auto prepared = importer.prepareFolder(source, *package.package, {}, {});
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "manual-edit fixture bootstraps store roots");
+  auto published = store.publish(
+      std::move(*prepared.prepared), PackageCollisionPolicy::Reject,
+      ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+  if (!published.published || published.entries.empty()) {
+    expect(false, "manual-edit fixture publishes an entry");
+    return;
+  }
+  const SkinEntryId entry = published.entries.front();
+  const SkinProfileId profile{.opaque = "12345678-1234-1234-1234-123456789abc"};
+  VersionedSkinProfileSettings base{.profileId = profile, .generation = 3};
+  base.settings.selected7KeyEntry = entry;
+  base.settings.entries.emplace(entry, EntryProfileSettings{});
+  validator.configurationDigest = std::string(64, '2');
+  auto activation =
+      store.prepareActivation(base, entry, base.settings, validator, {});
+  FakeProfileOwner owner(base);
+  owner.persisted = true;
+  const auto begun = store.beginPreparedActivationCommit(
+      std::move(*activation.prepared), owner);
+  const auto committed =
+      store.pollPreparedActivationCommit(begun.ticket, owner);
+  expect(committed.disposition ==
+             ActivationCommitDisposition::ActivatedRequested,
+         "manual-edit fixture activates a validated revision");
+
+  writeText(roots.visiblePackages / "FixtureSkin/play/play7.luaskin",
+            "return invalid manual edit");
+  validator.disposition = SkinValidationDisposition::Invalid;
+  const auto invalidScan = store.rescanVisibleSources(
+      {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 2}, validator);
+  expect(
+      !invalidScan.cancelled &&
+          store.acquireValidatedActivation(profile, entry, std::string(64, '2'))
+              .activation.has_value(),
+      "invalid manual edit retains the exact last-known-good activation");
+  expect(readText(roots.visiblePackages / "FixtureSkin/play/play7.luaskin") ==
+             "return invalid manual edit",
+         "invalid manual edit remains user-visible and diagnosed");
+
+  fs::remove_all(roots.visiblePackages / "FixtureSkin");
+  validator.disposition = SkinValidationDisposition::Selectable7Key;
+  (void)store.rescanVisibleSources(
+      {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 3}, validator);
+  expect(!store.acquireValidatedActivation(profile, entry, std::string(64, '2'))
+              .activation,
+         "manual package deletion immediately hides activation from new "
+         "sessions");
 }
 
 void testReplacementPublishesExactlyTheNewWholePackage() {
@@ -589,6 +1256,221 @@ void testReplacementPublishesExactlyTheNewWholePackage() {
   }
 }
 
+void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const auto package = normalizePackageId("FixtureSkin");
+  if (!package.package) {
+    expect(false, "activation fixture package ID is valid");
+    return;
+  }
+  const fs::path source = temp.root() / "activation-source";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  SkinArchiveImporter importer(roots, aliases);
+  auto candidate = importer.prepareFolder(source, *package.package, {}, {});
+  expect(candidate.prepared.has_value(),
+         "activation fixture prepares a package");
+  if (!candidate.prepared) {
+    return;
+  }
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "activation fixture bootstraps the store");
+  auto published = store.publish(
+      std::move(*candidate.prepared), PackageCollisionPolicy::Reject,
+      ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+  expect(published.published && published.entries.size() == 1,
+         "activation fixture publishes one validated entry");
+  if (!published.published || published.entries.empty()) {
+    return;
+  }
+  const SkinEntryId entry = published.entries.front();
+  const std::string activationDigest(64, '2');
+  validator.configurationDigest = activationDigest;
+  VersionedSkinProfileSettings base{
+      .profileId =
+          SkinProfileId{.opaque = "12345678-1234-1234-1234-123456789abc"},
+      .generation = 4};
+  base.settings.gameplayCompatibilityEnabled = true;
+  base.settings.selected7KeyEntry = entry;
+  base.settings.entries.emplace(entry, EntryProfileSettings{});
+  SkinProfileSettings candidateSettings = base.settings;
+  auto activation =
+      store.prepareActivation(base, entry, candidateSettings, validator, {});
+  expect(activation.prepared.has_value(),
+         "activation preparation validates without mutating store state");
+  expect(
+      !store.acquireValidatedActivation(base.profileId, entry, activationDigest)
+           .activation,
+      "prepared activation is unavailable before durable profile save");
+  if (!activation.prepared) {
+    return;
+  }
+  FakeProfileOwner owner(base);
+  auto begun = store.beginPreparedActivationCommit(
+      std::move(*activation.prepared), owner);
+  expect(begun.disposition == ActivationCommitDisposition::PendingProfileSave &&
+             begun.ticket != 0,
+         "activation commit retains a distinct nonzero Store ticket");
+  expect(store.pollPreparedActivationCommit(begun.ticket, owner).disposition ==
+             ActivationCommitDisposition::PendingProfileSave,
+         "pending owner save retains the old activation");
+  owner.persisted = true;
+  auto committed = store.pollPreparedActivationCommit(begun.ticket, owner);
+  expect(committed.disposition ==
+                 ActivationCommitDisposition::ActivatedRequested &&
+             committed.activation.has_value(),
+         "persisted owner save performs the activation CAS");
+  expect(owner.acknowledgements == 1,
+         "Store acknowledges the exact owner ticket once after CAS");
+  auto acquired =
+      store.acquireValidatedActivation(base.profileId, entry, activationDigest);
+  expect(acquired.activation.has_value(),
+         "exact profile-entry-configuration activation can be cloned");
+  expect(std::ranges::contains(store.catalogSnapshot()
+                                   ->entries.front()
+                                   .validatedConfigurationDigests,
+                               activationDigest),
+         "activation CAS publishes a newly validated configuration digest");
+  const auto repeatedTerminal =
+      store.pollPreparedActivationCommit(begun.ticket, owner);
+  expect(repeatedTerminal.disposition ==
+             ActivationCommitDisposition::RetainedPrevious,
+         "polling a terminal Store ticket again reports it as unknown");
+  expect(owner.acknowledgements == 1,
+         "polling a terminal Store ticket cannot acknowledge twice");
+
+  const auto prepareDigest = [&](char digit) {
+    validator.configurationDigest = std::string(64, digit);
+    return store.prepareActivation(base, entry, candidateSettings, validator,
+                                   {});
+  };
+  {
+    auto generationChanged = prepareDigest('3');
+    expect(generationChanged.prepared.has_value(),
+           "generation-change activation fixture prepares");
+    if (generationChanged.prepared) {
+      FakeProfileOwner changedOwner(base);
+      changedOwner.terminalStatus =
+          SkinProfileCommitResult::Status::GenerationChanged;
+      const auto started = store.beginPreparedActivationCommit(
+          std::move(*generationChanged.prepared), changedOwner);
+      const auto terminal =
+          store.pollPreparedActivationCommit(started.ticket, changedOwner);
+      expect(terminal.disposition ==
+                 ActivationCommitDisposition::ProfileGenerationChanged,
+             "owner generation change retains the previous activation");
+      (void)store.pollPreparedActivationCommit(started.ticket, changedOwner);
+      expect(changedOwner.acknowledgements == 1,
+             "owner generation-change ticket is acknowledged exactly once");
+    }
+  }
+  {
+    auto retryable = prepareDigest('4');
+    expect(retryable.prepared.has_value(),
+           "retryable-failure activation fixture prepares");
+    if (retryable.prepared) {
+      FakeProfileOwner retryOwner(base);
+      retryOwner.terminalStatus =
+          SkinProfileCommitResult::Status::RetryableFailure;
+      const auto started = store.beginPreparedActivationCommit(
+          std::move(*retryable.prepared), retryOwner);
+      const auto terminal =
+          store.pollPreparedActivationCommit(started.ticket, retryOwner);
+      expect(terminal.disposition ==
+                     ActivationCommitDisposition::RetainedPrevious &&
+                 !terminal.diagnostics.empty(),
+             "retryable owner failure retains activation and its diagnostic");
+      (void)store.pollPreparedActivationCommit(started.ticket, retryOwner);
+      expect(retryOwner.acknowledgements == 1,
+             "retryable owner ticket is acknowledged exactly once");
+    }
+  }
+  {
+    auto throwingPoll = prepareDigest('5');
+    expect(throwingPoll.prepared.has_value(),
+           "throwing-poll activation fixture prepares");
+    if (throwingPoll.prepared) {
+      FakeProfileOwner throwingOwner(base);
+      throwingOwner.throwPollOnce = true;
+      throwingOwner.persisted = true;
+      const auto started = store.beginPreparedActivationCommit(
+          std::move(*throwingPoll.prepared), throwingOwner);
+      const auto retry =
+          store.pollPreparedActivationCommit(started.ticket, throwingOwner);
+      expect(retry.disposition ==
+                     ActivationCommitDisposition::PendingProfileSave &&
+                 !retry.diagnostics.empty(),
+             "a throwing owner poll leaves the Store ticket retryable");
+      const auto terminal =
+          store.pollPreparedActivationCommit(started.ticket, throwingOwner);
+      expect(terminal.disposition ==
+                 ActivationCommitDisposition::ActivatedRequested,
+             "a later owner poll completes after a transient exception");
+      expect(throwingOwner.acknowledgements == 1,
+             "throwing owner poll is acknowledged only after terminal CAS");
+    }
+  }
+  {
+    auto raced = prepareDigest('6');
+    expect(raced.prepared.has_value(), "post-save race activation prepares");
+    if (raced.prepared) {
+      FakeProfileOwner racedOwner(base);
+      racedOwner.persisted = true;
+      const auto started = store.beginPreparedActivationCommit(
+          std::move(*raced.prepared), racedOwner);
+      const auto rescanned = store.rescanVisibleSources(
+          {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 1},
+          validator);
+      expect(!rescanned.retryableInventoryRace,
+             "post-save race fixture advances the source generation");
+      const auto terminal =
+          store.pollPreparedActivationCommit(started.ticket, racedOwner);
+      expect(terminal.disposition ==
+                 ActivationCommitDisposition::ProfileCommittedNeedsRevalidation,
+             "source race after profile save requests revalidation");
+      (void)store.pollPreparedActivationCommit(started.ticket, racedOwner);
+      expect(racedOwner.acknowledgements == 1,
+             "post-save source race acknowledges exactly once");
+    }
+  }
+  {
+    auto throwingBegin = prepareDigest('7');
+    expect(throwingBegin.prepared.has_value(),
+           "throwing-begin activation fixture prepares");
+    if (throwingBegin.prepared) {
+      FakeProfileOwner throwingOwner(base);
+      throwingOwner.throwBegin = true;
+      const auto rejected = store.beginPreparedActivationCommit(
+          std::move(*throwingBegin.prepared), throwingOwner);
+      expect(rejected.ticket == 0 && !rejected.diagnostics.empty(),
+             "throwing owner begin erases the preallocated Store ticket");
+      expect(throwingOwner.acknowledgements == 0,
+             "unadmitted throwing owner begin is never acknowledged");
+    }
+  }
+
+  auto removed = store.removePackage(*package.package, {});
+  expect(removed.removed && !fs::exists(roots.visiblePackages / "FixtureSkin"),
+         "explicit removal hides discovery and removes activation keys");
+  expect(
+      !store.acquireValidatedActivation(base.profileId, entry, activationDigest)
+           .activation,
+      "removed package cannot start a new skin session");
+  expect(store.collectGarbage().revisionsRemoved == 0,
+         "a cloned active revision lease prevents garbage collection");
+  acquired.activation.reset();
+  committed.activation.reset();
+  const auto collected = store.collectGarbage();
+  expect(collected.revisionsRemoved == 1,
+         "the final released revision lease makes the revision collectible");
+}
+
 static_assert(!std::is_copy_constructible_v<ValidatedSkinActivation>);
 static_assert(!std::is_copy_constructible_v<SkinDeferredCleanup>);
 static_assert(!std::is_copy_constructible_v<SkinProfileMutationBarrier>);
@@ -603,13 +1485,22 @@ int main(int argc, char **argv) {
   }
   testRecoveryFixtureDigestsBindPhysicalBytes();
   testCatalogJournalReplayAtEveryDurabilityBoundary();
+  testCreateJournalRestoresAbsenceOrCompleteNewPackage();
+  testCorruptNewCatalogFallsBackToCompleteOldGeneration();
   testRecoveryRejectsRepeatedBootstrapOwnership();
   testRecoveryRejectsOverlappingBootstrapOwnership();
+  testMalformedAndOversizedCatalogFailBootstrap();
+  testRemovalJournalRecoversOldAndNewGenerations();
+  testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation();
+  testConfiguredValidationFailureAndCancellationPreserveOldPackage();
+  testTransactionFailureRetainsJournalForRestartRecovery();
+  testGarbageCollectionRejectsLinksAndRetriesQuarantine();
+  testManualInvalidEditRetainsActivationButDeleteHidesIt();
   testReplacementPublishesExactlyTheNewWholePackage();
+  testActivationCommitRemovalAndLeaseAwareGarbageCollection();
 
   if (failures != 0) {
-    std::cerr << failures
-              << " expected Task 7 RED assertion(s); implementation pending\n";
+    std::cerr << failures << " skin package store assertion(s) failed\n";
   }
   return failures == 0 ? 0 : 1;
 }

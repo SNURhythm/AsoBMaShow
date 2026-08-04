@@ -11,6 +11,8 @@
 
 namespace skin {
 
+class SkinPackageStore;
+
 enum class SkinImportIoOperation : std::uint8_t {
   VisibleRootIssued,
   BeforeVisibleDirectory,
@@ -20,6 +22,7 @@ enum class SkinImportIoOperation : std::uint8_t {
   OwnedArchiveCopyChunk,
   RawZipRecord,
   OwnedArchiveHashChunk,
+  BeforeVisiblePublication,
 };
 
 // Narrow observer seam for deterministic cancellation and path-race tests.
@@ -46,11 +49,19 @@ public:
   SkinRevisionReadView readView() const noexcept;
 
 private:
+  std::optional<SkinRevisionLease> publishRevision(std::string &error);
+  bool renameVisibleStagingTo(const std::filesystem::path &destination,
+                              std::vector<SkinDiagnostic> &diagnostics);
+  bool relocateVisibleOwnershipTo(const std::filesystem::path &destination,
+                                  std::vector<SkinDiagnostic> &diagnostics);
+  void releaseVisibleOwnership() noexcept;
+
   PreparedPackage(PreparedSkinRevision, std::vector<SkinEntryId>,
                   std::filesystem::path, std::shared_ptr<void>);
   struct State;
   std::unique_ptr<State> state_;
   friend class SkinArchiveImporter;
+  friend class SkinPackageStore;
 };
 
 struct PreparePackageResult {

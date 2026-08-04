@@ -29,6 +29,10 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#endif
 #endif
 
 namespace skin {
@@ -1155,6 +1159,7 @@ public:
       return {};
     }
     auto tree = std::shared_ptr<SecureStagingTree>(new SecureStagingTree());
+    tree->observer_ = observer;
     if (!tree->allocate(roots.visiblePackages.parent_path() /
                             ".skin-import-staging",
                         diagnostics)) {
@@ -1165,6 +1170,145 @@ public:
   }
 
   [[nodiscard]] const fs::path &path() const noexcept { return path_; }
+
+  bool renameTo(const fs::path &destination,
+                std::vector<SkinDiagnostic> &diagnostics,
+                bool notifyObserver = true) {
+    std::error_code pathError;
+    const fs::path absolute =
+        fs::absolute(destination, pathError).lexically_normal();
+    const fs::path parent = absolute.parent_path();
+    const fs::path leafPath = absolute.filename();
+    if (pathError || !absolute.is_absolute() || parent.empty() ||
+        leafPath.empty() || leafPath == fs::path(".") ||
+        leafPath == fs::path("..")) {
+      diagnostics.push_back(
+          diagnostic("skin_import_publication_destination_invalid",
+                     "visible package publication destination is invalid"));
+      return false;
+    }
+    if (notifyObserver) {
+      observe(observer_, SkinImportIoOperation::BeforeVisiblePublication,
+              absolute);
+    }
+#if defined(_WIN32)
+    if (!verifyIdentity(diagnostics)) {
+      return false;
+    }
+    std::vector<HANDLE> destinationHandles;
+    fs::path destinationParent;
+    if (!openExistingAbsoluteWindowsDirectoryChain(parent, destinationHandles,
+                                                   destinationParent)) {
+      diagnostics.push_back(
+          diagnostic("skin_import_publication_parent_invalid",
+                     "visible package publication parent is unavailable"));
+      return false;
+    }
+    const std::wstring leaf = leafPath.native();
+    const std::size_t leafBytes = leaf.size() * sizeof(wchar_t);
+    const std::size_t allocation =
+        offsetof(FILE_RENAME_INFO, FileName) + leafBytes;
+    std::vector<std::byte> storage(allocation);
+    auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
+    rename->ReplaceIfExists = FALSE;
+    rename->RootDirectory = destinationHandles.back();
+    rename->FileNameLength = static_cast<DWORD>(leafBytes);
+    std::memcpy(rename->FileName, leaf.data(), leafBytes);
+    const bool renamed =
+        SetFileInformationByHandle(issuedRootHandle_, FileRenameInfo, rename,
+                                   static_cast<DWORD>(allocation)) != 0;
+    if (!renamed) {
+      closeWindowsHandles(destinationHandles);
+      diagnostics.push_back(
+          diagnostic("skin_import_publication_rename_failed",
+                     "unable to publish the exact prepared visible package"));
+      return false;
+    }
+    closeWindowsHandles(ancestryHandles_);
+    ancestryHandles_ = std::move(destinationHandles);
+    parentPath_ = std::move(destinationParent);
+#else
+    const int destinationParent = openAbsoluteDirectory(parent, false);
+    const std::string leaf = leafPath.string();
+    struct stat expected{};
+    struct stat actual{};
+    const bool sourceMatches =
+        rootFd_ >= 0 && parentFd_ >= 0 && destinationParent >= 0 &&
+        ::fstat(rootFd_, &expected) == 0 && S_ISDIR(expected.st_mode) &&
+        ::fstatat(parentFd_, name_.c_str(), &actual, AT_SYMLINK_NOFOLLOW) ==
+            0 &&
+        S_ISDIR(actual.st_mode) && expected.st_dev == actual.st_dev &&
+        expected.st_ino == actual.st_ino;
+    bool renamed = false;
+    if (sourceMatches) {
+#if defined(__APPLE__)
+      renamed = ::renameatx_np(parentFd_, name_.c_str(), destinationParent,
+                               leaf.c_str(), RENAME_EXCL) == 0;
+#elif defined(__linux__)
+      renamed =
+          ::syscall(SYS_renameat2, parentFd_, name_.c_str(), destinationParent,
+                    leaf.c_str(), RENAME_NOREPLACE) == 0;
+#else
+      errno = ENOTSUP;
+#endif
+    }
+    if (!renamed) {
+      if (destinationParent >= 0) {
+        ::close(destinationParent);
+      }
+      diagnostics.push_back(
+          diagnostic("skin_import_publication_rename_failed",
+                     "unable to publish the exact prepared visible package"));
+      return false;
+    }
+    const bool sourceParentSynchronized = ::fsync(parentFd_) == 0;
+    const bool destinationParentSynchronized = ::fsync(destinationParent) == 0;
+    const bool synchronized =
+        sourceParentSynchronized && destinationParentSynchronized;
+    ::close(parentFd_);
+    parentFd_ = destinationParent;
+    name_ = leaf;
+    path_ = absolute;
+    if (!synchronized) {
+      diagnostics.push_back(
+          diagnostic("skin_import_publication_sync_failed",
+                     "unable to synchronize visible package publication"));
+      return false;
+    }
+#endif
+#if defined(_WIN32)
+    name_ = utf8Path(leafPath);
+    path_ = absolute;
+#endif
+    return true;
+  }
+
+  void releaseOwnership() noexcept {
+#if defined(_WIN32)
+    if (issuedRootHandle_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(issuedRootHandle_);
+      issuedRootHandle_ = INVALID_HANDLE_VALUE;
+    }
+    closeWindowsHandles(ancestryHandles_);
+#else
+    for (const RetainedDirectory &retained : retainedDirectories_) {
+      ::close(retained.fd);
+    }
+    retainedDirectories_.clear();
+    activeParentFd_ = -1;
+    activeParentPath_.clear();
+    activeLeaf_.clear();
+    if (rootFd_ >= 0) {
+      ::close(rootFd_);
+      rootFd_ = -1;
+    }
+    if (parentFd_ >= 0) {
+      ::close(parentFd_);
+      parentFd_ = -1;
+    }
+#endif
+    path_.clear();
+  }
 
   bool verifyIdentity(std::vector<SkinDiagnostic> &diagnostics) const {
 #if defined(_WIN32)
@@ -1893,6 +2037,7 @@ private:
   fs::path path_;
   fs::path parentPath_;
   std::string name_;
+  std::shared_ptr<const SkinImportIoObserver> observer_;
 #if defined(_WIN32)
   PrivateWindowsSecurity security_;
   std::vector<HANDLE> ancestryHandles_;
@@ -2552,6 +2697,40 @@ const fs::path &PreparedPackage::visibleStagingRoot() const noexcept {
 SkinRevisionReadView PreparedPackage::readView() const noexcept {
   assert(state_ != nullptr);
   return state_->revision.readView();
+}
+
+std::optional<SkinRevisionLease>
+PreparedPackage::publishRevision(std::string &error) {
+  assert(state_ != nullptr);
+  return std::move(state_->revision).publish(error);
+}
+
+bool PreparedPackage::renameVisibleStagingTo(
+    const fs::path &destination, std::vector<SkinDiagnostic> &diagnostics) {
+  assert(state_ != nullptr);
+  const auto owner =
+      std::static_pointer_cast<SecureStagingTree>(state_->visibleOwner);
+  return owner && owner->renameTo(destination, diagnostics);
+}
+
+bool PreparedPackage::relocateVisibleOwnershipTo(
+    const fs::path &destination, std::vector<SkinDiagnostic> &diagnostics) {
+  assert(state_ != nullptr);
+  const auto owner =
+      std::static_pointer_cast<SecureStagingTree>(state_->visibleOwner);
+  return owner && owner->renameTo(destination, diagnostics, false);
+}
+
+void PreparedPackage::releaseVisibleOwnership() noexcept {
+  if (!state_) {
+    return;
+  }
+  const auto owner =
+      std::static_pointer_cast<SecureStagingTree>(state_->visibleOwner);
+  if (owner) {
+    owner->releaseOwnership();
+  }
+  state_->visibleOwner.reset();
 }
 
 SkinArchiveImporter::SkinArchiveImporter(

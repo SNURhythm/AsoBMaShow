@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace skin {
@@ -48,7 +49,21 @@ public:
 
 private:
   friend class SkinPackageStore;
-  void recover();
+  bool recover();
+  bool loadSnapshotFromDisk(SkinPackageCatalogSnapshot &,
+                            std::vector<SkinDiagnostic> &) const;
+  bool decodeSnapshotBytes(std::string_view,
+                           SkinPackageCatalogSnapshot &) const;
+  bool replaceSnapshotDurably(SkinPackageCatalogSnapshot,
+                              std::vector<SkinDiagnostic> &);
+  bool replaceSnapshotAsync(SkinPackageCatalogSnapshot);
+  bool replaceSnapshotAsyncIfGeneration(std::uint64_t expectedCatalog,
+                                        std::uint64_t expectedSource,
+                                        SkinPackageCatalogSnapshot);
+  std::string snapshotDigest(const SkinPackageCatalogSnapshot &) const;
+  bool writeSnapshotFile(const std::filesystem::path &,
+                         const SkinPackageCatalogSnapshot &,
+                         std::vector<SkinDiagnostic> &) const;
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

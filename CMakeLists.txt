@@ -4076,12 +4076,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(skin_archive_importer_tests PRIVATE advapi32)
     endif()
 
-    # Task 7 TDD checkpoint: this target compiles the dependency-stable public
-    # contracts and deliberately failing journal/publication specifications.
-    # Keep it opt-in and out of CTest until the transactional implementation
-    # turns the assertions green.
+    # Transactional skin package store/catalog contract suite.
     find_package(zstd CONFIG QUIET)
-    add_executable(skin_package_store_red_tests EXCLUDE_FROM_ALL
+    add_executable(skin_package_store_tests
         tests/skin_package_store_tests.cpp
         src/AtomicFile.cpp
         src/FileChecksum.cpp
@@ -4097,41 +4094,41 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/package/SkinPathPolicy.cpp
         src/skin/package/SkinTreeSnapshotter.cpp
     )
-    target_include_directories(skin_package_store_red_tests PRIVATE
+    target_include_directories(skin_package_store_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
-    target_compile_features(skin_package_store_red_tests PRIVATE cxx_std_23)
-    target_compile_definitions(skin_package_store_red_tests PRIVATE
+    target_compile_features(skin_package_store_tests PRIVATE cxx_std_23)
+    target_compile_definitions(skin_package_store_tests PRIVATE
         ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
     )
-    target_link_libraries(skin_package_store_red_tests PRIVATE
+    target_link_libraries(skin_package_store_tests PRIVATE
         BZip2::BZip2
         LibLZMA::LibLZMA
         ZLIB::ZLIB
         utf8proc::utf8proc
     )
     if(TARGET zstd::libzstd_static)
-        target_link_libraries(skin_package_store_red_tests PRIVATE
+        target_link_libraries(skin_package_store_tests PRIVATE
             zstd::libzstd_static
         )
     endif()
     if(TARGET LibArchive::LibArchive)
-        target_link_libraries(skin_package_store_red_tests PRIVATE
+        target_link_libraries(skin_package_store_tests PRIVATE
             LibArchive::LibArchive
         )
     else()
-        target_include_directories(skin_package_store_red_tests PRIVATE
+        target_include_directories(skin_package_store_tests PRIVATE
             ${LibArchive_INCLUDE_DIRS}
         )
-        target_link_libraries(skin_package_store_red_tests PRIVATE
+        target_link_libraries(skin_package_store_tests PRIVATE
             ${LibArchive_LIBRARIES}
         )
     endif()
     if(APPLE)
-        target_sources(skin_package_store_red_tests PRIVATE
+        target_sources(skin_package_store_tests PRIVATE
             src/skin/package/SkinAliasDetectorApple.mm
         )
-        target_link_libraries(skin_package_store_red_tests PRIVATE
+        target_link_libraries(skin_package_store_tests PRIVATE
             "-framework Foundation"
         )
     endif()
@@ -4154,6 +4151,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
     endfunction()
+
+    asobmashow_register_test(skin_package_store_tests)
 
     foreach(eligibility_target IN ITEMS
         chart_replay_context_tests
