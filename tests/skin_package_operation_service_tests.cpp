@@ -844,10 +844,9 @@ void testCancelledQueuedRescanDeliversItsTypedCancellation() {
   const auto rescan = service.submitRescan({});
   service.cancelAndDetach(rescan.ticket);
   observer->release();
-
-  expect(!waitFor(service, rescan.ticket),
-         "detaching a queued rescan suppresses completion delivery");
   service.shutdown();
+  expect(!service.poll(rescan.ticket),
+         "drained detached rescan suppresses completion delivery");
 }
 
 void testRecoveredServiceForwardsSerializedStoreOperations() {
