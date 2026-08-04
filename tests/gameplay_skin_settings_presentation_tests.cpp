@@ -1,0 +1,269 @@
+#include "scene/GameplaySkinSettingsPresentation.h"
+#include "skin/beatoraja/BeatorajaSkinConfiguration.h"
+
+#include <cstdlib>
+#include <iostream>
+#include <string>
+#include <utility>
+
+namespace {
+
+void require(bool condition, const char *message) {
+  if (!condition) {
+    std::cerr << message << '\n';
+    std::exit(1);
+  }
+}
+
+skin::SkinEntryId entryId(std::string suffix = {}) {
+  return {.package = {.directoryName = "package" + suffix,
+                      .collisionKey = "package-key" + suffix},
+          .packageRelativePath = "play/7key" + suffix + ".lua",
+          .collisionKey = "entry-key" + suffix};
+}
+
+skin::GameplaySkinEntryRow entryRow() {
+  skin::GameplaySkinEntryRow row;
+  row.entry = entryId();
+  row.metadata.displayName = "Display";
+  row.metadata.author = "Author";
+  row.metadata.skinType = 0;
+  row.metadata.authoredWidth = 1280;
+  row.metadata.authoredHeight = 720;
+  row.metadata.categories = {{.name = "Mode", .items = {"Normal", "Mirror"}}};
+  row.metadata.options = {
+      {.category = "Lane",
+       .name = "Lane cover",
+       .choices = {{.label = "Off", .value = 0}, {.label = "On", .value = 1}},
+       .defaultLabel = "Off"}};
+  row.metadata.files = {{.category = "Sound",
+                         .name = "Judge sound",
+                         .pattern = "*.wav",
+                         .defaultValue = "default.wav",
+                         .choices = {"default.wav", "quiet.wav"}}};
+  row.metadata.offsets = {
+      {.category = "Judge",
+       .name = "Judge position",
+       .id = 7,
+       .permissions = skin::kOffsetPermissionX | skin::kOffsetPermissionY}};
+  row.revisionDigest = "same-revision";
+  row.configurationDigest = "same-configuration";
+  row.validation = skin::SkinValidationDisposition::Selectable7Key;
+  row.settings.options["Lane cover"] = 1;
+  row.settings.filePaths["Judge sound"] = "quiet.wav";
+  row.settings.offsets["Judge position"] = {
+      .x = 1, .y = 2, .w = 3, .h = 4, .r = 5, .a = 6};
+  row.settings.viewport = {.mode = skin::ViewportMode::Custom,
+                           .customBase = skin::CustomViewportBase::Stretch,
+                           .scaleX = 1.25F,
+                           .scaleY = 0.75F,
+                           .translateX = 17.0F,
+                           .translateY = -9.0F};
+  row.diagnostics = {
+      {.code = "warning",
+       .message = "Something changed",
+       .virtualPath = "play/7key.lua",
+       .severity = skin::DiagnosticSeverity::Warning,
+       .source = skin::SkinSourceLocation{
+           .virtualPath = "play/7key.lua", .line = 2, .column = 4}}};
+  return row;
+}
+
+skin::GameplaySkinSettingsSnapshot snapshotWithEntry() {
+  skin::GameplaySkinSettingsSnapshot snapshot;
+  snapshot.state = skin::GameplaySkinSettingsState::Ready;
+  snapshot.featureAvailable = true;
+  snapshot.compatibilityEnabled = true;
+  snapshot.selected7KeyEntry = entryId();
+  snapshot.entries = {entryRow()};
+  snapshot.progress = {.phase = skin::SkinProgressPhase::Publishing,
+                       .completedBytes = 10,
+                       .totalBytes = 20,
+                       .completedFiles = 3};
+  snapshot.statusMessage = "Ready";
+  return snapshot;
+}
+
+template <typename Mutation>
+void requirePresentationChange(const skin::GameplaySkinSettingsSnapshot &base,
+                               Mutation mutation, const char *message) {
+  auto changed = base;
+  mutation(changed);
+  require(skin::gameplaySkinSettingsPresentationKey(base) !=
+              skin::gameplaySkinSettingsPresentationKey(changed),
+          message);
+}
+
+void testNameReadyAvailabilityIsExact() {
+  skin::GameplaySkinSettingsSnapshot snapshot;
+  snapshot.state = skin::GameplaySkinSettingsState::Ready;
+  snapshot.canCancel = true;
+  snapshot.preparedName = skin::SkinPackageNameSuggestion{
+      .originalSourceName = "source", .suggestedPackageName = "skin"};
+
+  auto availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
+  require(!availability.ordinaryActions,
+          "ordinary actions stay disabled during NameReady");
+  require(availability.canCancel, "NameReady remains cancellable");
+  require(availability.canEditPreparedName,
+          "NameReady permits package-name editing");
+  require(availability.canInstallPrepared,
+          "valid NameReady permits installation");
+
+  snapshot.preparedName->validationError = "invalid";
+  availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
+  require(availability.canEditPreparedName,
+          "invalid NameReady still permits correcting the name");
+  require(!availability.canInstallPrepared,
+          "invalid NameReady cannot be installed");
+
+  snapshot.state = skin::GameplaySkinSettingsState::Busy;
+  snapshot.preparedName->validationError.clear();
+  availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
+  require(!availability.canEditPreparedName &&
+              !availability.canInstallPrepared && availability.canCancel,
+          "Busy never exposes NameReady editing or installation");
+
+  snapshot.state = skin::GameplaySkinSettingsState::Ready;
+  snapshot.canCancel = false;
+  availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
+  require(availability.ordinaryActions && !availability.canEditPreparedName &&
+              !availability.canInstallPrepared,
+          "idle Ready with stale name data is not NameReady");
+
+  snapshot.canCancel = true;
+  snapshot.preparedName.reset();
+  availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
+  require(!availability.ordinaryActions && availability.canCancel &&
+              !availability.canEditPreparedName &&
+              !availability.canInstallPrepared,
+          "a cancellable Ready snapshot without a prepared name is not "
+          "NameReady");
+
+  snapshot.state = skin::GameplaySkinSettingsState::Error;
+  snapshot.canCancel = false;
+  snapshot.preparedName = skin::SkinPackageNameSuggestion{
+      .originalSourceName = "stale", .suggestedPackageName = "stale"};
+  availability = skin::gameplaySkinSettingsActionAvailability(snapshot);
+  require(availability.ordinaryActions && !availability.canCancel &&
+              !availability.canEditPreparedName &&
+              !availability.canInstallPrepared,
+          "terminal Error is not NameReady even when stale name data exists");
+}
+
+void testMetadataChangesInvalidateAnUnchangedDigest() {
+  const auto base = snapshotWithEntry();
+  requirePresentationChange(
+      base,
+      [](auto &value) { value.entries[0].metadata.displayName = "Other"; },
+      "display-name changes invalidate presentation");
+  requirePresentationChange(
+      base, [](auto &value) { value.entries[0].metadata.author = "Other"; },
+      "author changes invalidate presentation");
+  requirePresentationChange(
+      base, [](auto &value) { value.entries[0].metadata.authoredWidth = 1920; },
+      "authored dimensions invalidate presentation");
+  requirePresentationChange(
+      base,
+      [](auto &value) {
+        value.entries[0].metadata.options[0].choices[0].label = "Disabled";
+      },
+      "option labels invalidate presentation");
+  requirePresentationChange(
+      base,
+      [](auto &value) {
+        value.entries[0].metadata.files[0].choices[0] = "replacement.wav";
+      },
+      "file choices invalidate presentation");
+  requirePresentationChange(
+      base,
+      [](auto &value) {
+        value.entries[0].metadata.offsets[0].permissions |=
+            skin::kOffsetPermissionW;
+      },
+      "offset permissions invalidate presentation");
+}
+
+void testActionDrivingChangesInvalidatePresentation() {
+  const auto base = snapshotWithEntry();
+  requirePresentationChange(
+      base, [](auto &value) { value.canCancel = true; },
+      "cancellability changes invalidate presentation");
+  requirePresentationChange(
+      base,
+      [](auto &value) {
+        value.collisionPackage = skin::SkinPackageId{
+            .directoryName = "collision", .collisionKey = "collision-key"};
+      },
+      "collision changes invalidate presentation");
+  requirePresentationChange(
+      base, [](auto &value) { value.featureAvailable = false; },
+      "feature availability changes invalidate presentation");
+}
+
+void testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity() {
+  auto left = snapshotWithEntry();
+  left.preparedName =
+      skin::SkinPackageNameSuggestion{.originalSourceName = "source",
+                                      .suggestedPackageName = "a:b",
+                                      .validationError = "c"};
+  auto right = left;
+  right.preparedName->suggestedPackageName = "a";
+  right.preparedName->validationError = "b:c";
+  require(skin::gameplaySkinSettingsPresentationKey(left) !=
+              skin::gameplaySkinSettingsPresentationKey(right),
+          "length-prefixed strings cannot shift delimiters between fields");
+
+  skin::SkinDiagnosticHistoryRecord record;
+  record.recordSerial = 1;
+  record.entry = entryId("-history");
+  record.revisionDigest = "revision";
+  record.configurationDigest = "configuration";
+  record.diagnostic = {.code = "code", .message = "message"};
+  left.history = {record};
+  left.history[0].luaLine = 7;
+  left.history[0].frameSerial.reset();
+  right = left;
+  right.history[0].luaLine.reset();
+  right.history[0].frameSerial = 7;
+  require(skin::gameplaySkinSettingsPresentationKey(left) !=
+              skin::gameplaySkinSettingsPresentationKey(right),
+          "optional history fields encode presence and identity");
+}
+
+void testViewportModeChangesPreserveEveryOtherField() {
+  const skin::ViewportSettings original = {
+      .mode = skin::ViewportMode::Custom,
+      .customBase = skin::CustomViewportBase::Stretch,
+      .scaleX = 1.5F,
+      .scaleY = 0.625F,
+      .translateX = 23.0F,
+      .translateY = -31.0F,
+  };
+
+  for (const auto mode : {skin::ViewportMode::Fit, skin::ViewportMode::Stretch,
+                          skin::ViewportMode::Custom}) {
+    auto expected = original;
+    expected.mode = mode;
+    require(skin::gameplaySkinViewportWithMode(original, mode) == expected,
+            "mode switch preserves customBase and every numeric field");
+  }
+
+  auto expected = original;
+  expected.mode = skin::ViewportMode::Custom;
+  expected.customBase = skin::CustomViewportBase::Fit;
+  require(skin::gameplaySkinViewportWithCustomBase(
+              original, skin::CustomViewportBase::Fit) == expected,
+          "custom-base switch preserves all numeric fields");
+}
+
+} // namespace
+
+int main() {
+  testNameReadyAvailabilityIsExact();
+  testMetadataChangesInvalidateAnUnchangedDigest();
+  testActionDrivingChangesInvalidatePresentation();
+  testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
+  testViewportModeChangesPreserveEveryOtherField();
+  return 0;
+}

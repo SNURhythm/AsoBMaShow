@@ -140,6 +140,7 @@ void SettingsScene::resetViewState() {
   displayTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
+  gameplaySkinsTabButton = nullptr;
   irTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
@@ -150,6 +151,7 @@ void SettingsScene::resetViewState() {
   displayTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
+  gameplaySkinsTabText = nullptr;
   irTabText = nullptr;
   irPendingCountText = nullptr;
   irAwaitingCountText = nullptr;
@@ -2706,6 +2708,15 @@ void SettingsScene::initView() {
         profileController->cancelConfirmation();
       }
       activeTab = tab;
+      if (activeTab == SettingsTab::GameplaySkins) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+        ensureGameplaySkinSettingsController();
+        if (gameplaySkinSettingsController != nullptr) {
+          handleGameplaySkinActionResult(
+              gameplaySkinSettingsController->requestRescan());
+        }
+#endif
+      }
       lastLayoutWidth = -1;
     });
     return button;
@@ -2727,6 +2738,9 @@ void SettingsScene::initView() {
                     &difficultyTablesTabText);
   bmsLibraryTabButton =
       makeTabButton(SettingsTab::BmsLibrary, "BMS Library", &bmsLibraryTabText);
+  gameplaySkinsTabButton = makeTabButton(SettingsTab::GameplaySkins,
+                                         "Gameplay Skins",
+                                         &gameplaySkinsTabText);
   irTabButton = makeTabButton(SettingsTab::Ir, "IR", &irTabText);
   tabControls->addView(profileTabButton);
   tabControls->addView(timingTabButton);
@@ -2738,6 +2752,7 @@ void SettingsScene::initView() {
   tabControls->addView(displayTabButton);
   tabControls->addView(difficultyTablesTabButton);
   tabControls->addView(bmsLibraryTabButton);
+  tabControls->addView(gameplaySkinsTabButton);
   tabControls->addView(irTabButton);
   auto *tabRail = new ScrollView();
   tabRail->setWidth(static_cast<float>(tabColumnWidth));
@@ -2792,6 +2807,9 @@ void SettingsScene::initView() {
     break;
   case SettingsTab::BmsLibrary:
     cardsColumn = buildBmsLibraryTab(metrics);
+    break;
+  case SettingsTab::GameplaySkins:
+    cardsColumn = buildGameplaySkinsTab(metrics);
     break;
   case SettingsTab::Ir:
     cardsColumn = buildIrTab(metrics);

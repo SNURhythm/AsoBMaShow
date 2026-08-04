@@ -8,6 +8,7 @@
 #include "SettingsAudioVideoModel.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
+#include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
 #include <atomic>
 #include <cstdint>
@@ -63,6 +64,9 @@ class Note;
 #include "../input/IRhythmControl.h"
 #include "../input/InputTypes.h"
 #include "SettingsSceneInputRebuild.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "GameplaySkinSettingsController.h"
+#endif
 
 enum class SettingsDestination { Profile, Ir };
 
@@ -96,6 +100,7 @@ private:
     Display,
     DifficultyTables,
     BmsLibrary,
+    GameplaySkins,
     Ir,
   };
 
@@ -189,6 +194,7 @@ private:
   Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
   Button *bmsLibraryTabButton = nullptr;
+  Button *gameplaySkinsTabButton = nullptr;
   Button *irTabButton = nullptr;
   TextView *timingTabText = nullptr;
   TextView *visualTabText = nullptr;
@@ -199,6 +205,7 @@ private:
   TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
   TextView *bmsLibraryTabText = nullptr;
+  TextView *gameplaySkinsTabText = nullptr;
   TextView *irTabText = nullptr;
   TextView *irPendingCountText = nullptr;
   TextView *irAwaitingCountText = nullptr;
@@ -292,6 +299,15 @@ private:
   std::jthread profileArchiveThread;
   std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
   std::unique_ptr<ProfileSettingsController> profileController;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  std::unique_ptr<skin::GameplaySkinSettingsController>
+      gameplaySkinSettingsController;
+  std::string gameplaySkinSettingsProfileId;
+  std::string gameplaySkinSettingsPresentationKey;
+  std::string gameplaySkinUiMessage;
+  bool gameplaySkinReplaceConfirmationArmed = false;
+  std::string gameplaySkinRemovalConfirmationKey;
+#endif
   platform_document_handoff::PlatformDocumentHandoffOperation
       profileDocumentHandoff;
   SettingsProfileDocumentHandoffKind profileDocumentHandoffKind =
@@ -394,6 +410,7 @@ private:
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
   View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildGameplaySkinsTab(const settings_scene::LayoutMetrics &metrics);
   View *buildIrTab(const settings_scene::LayoutMetrics &metrics);
   void
   buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);
@@ -453,6 +470,11 @@ private:
   void refreshSettingsText();
   void refreshIrSettingsPresentation();
   void ensureProfileController();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  void ensureGameplaySkinSettingsController();
+  void updateGameplaySkinSettingsController();
+  bool handleGameplaySkinActionResult(skin::ControllerActionResult result);
+#endif
   void applyPendingProfileArchiveCompletion();
   void applyPendingProfileDocumentHandoff();
   bool startProfileArchiveTask(ProfileArchiveTask task,

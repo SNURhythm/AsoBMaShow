@@ -4681,6 +4681,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ASOBMASHOW_BUILD_CONFIGURATION="Release"
             ASOBMASHOW_SOURCE_CLEAN=1
         )
+
     endif()
 
     add_executable(practice_session_tests
@@ -5514,6 +5515,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(gameplay_skin_settings_tests PRIVATE advapi32)
     endif()
 
+    add_executable(gameplay_skin_settings_presentation_tests
+        tests/gameplay_skin_settings_presentation_tests.cpp
+        src/scene/GameplaySkinSettingsPresentation.cpp
+    )
+    target_include_directories(gameplay_skin_settings_presentation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    set_property(TARGET gameplay_skin_settings_presentation_tests
+        PROPERTY CXX_STANDARD 20
+    )
+    set_property(TARGET gameplay_skin_settings_presentation_tests
+        PROPERTY CXX_STANDARD_REQUIRED ON
+    )
+
     add_executable(skin_archive_importer_tests
         tests/skin_archive_importer_tests.cpp
         src/FileChecksum.cpp
@@ -5826,6 +5841,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(gameplay_skin_lifecycle_tests)
     asobmashow_register_test(gameplay_skin_settings_tests)
+    asobmashow_register_test(gameplay_skin_settings_presentation_tests)
     asobmashow_register_test(skin_archive_importer_tests)
     asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)

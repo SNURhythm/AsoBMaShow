@@ -23,6 +23,8 @@ target_sources(main PRIVATE
     SettingsAudioVideoModel.cpp
     SettingsSceneAudioVideo.cpp
     SettingsSceneControls.cpp
+    SettingsSceneSkins.cpp
+    SettingsSceneSkinsUnavailable.cpp
     SettingsSceneInput.cpp
     SettingsSceneIr.cpp
     SettingsSceneLayout.cpp
@@ -30,4 +32,10 @@ target_sources(main PRIVATE
     SettingsSceneProfiles.cpp
     SettingsSceneTables.cpp
 )
+if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+  target_sources(main PRIVATE
+      GameplaySkinSettingsController.cpp
+      GameplaySkinSettingsPresentation.cpp
+  )
+endif()
 add_subdirectory(play)

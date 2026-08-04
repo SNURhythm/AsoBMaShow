@@ -220,6 +220,9 @@ void SettingsScene::measureTemporaryArchiveCache() {
 void SettingsScene::init() {
   lastLayoutWidth = -1;
   ensureProfileController();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  ensureGameplaySkinSettingsController();
+#endif
   ensureAudioVideoSession();
   context.profileSwitchBlockers.scene = [this]() -> std::optional<std::string> {
     if (audioVideoSession != nullptr &&
@@ -252,6 +255,9 @@ void SettingsScene::init() {
 }
 
 void SettingsScene::update(float dt) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  updateGameplaySkinSettingsController();
+#endif
   if (audioVideoSession != nullptr) {
     const bool hadPreview = audioVideoSession->hasDisplayPreview();
     const auto previewResult =
@@ -346,6 +352,17 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
 
 void SettingsScene::cleanupScene() {
   context.profileSwitchBlockers.scene = nullptr;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (gameplaySkinSettingsController != nullptr) {
+    gameplaySkinSettingsController->close();
+    gameplaySkinSettingsController.reset();
+  }
+  gameplaySkinSettingsProfileId.clear();
+  gameplaySkinSettingsPresentationKey.clear();
+  gameplaySkinUiMessage.clear();
+  gameplaySkinReplaceConfirmationArmed = false;
+  gameplaySkinRemovalConfirmationKey.clear();
+#endif
   stopProfileArchiveWork();
   if (audioVideoSession != nullptr) {
     const auto result = audioVideoSession->cleanup();
