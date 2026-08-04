@@ -102,12 +102,18 @@ struct SkinPackageOperationService::Impl {
     SkinPackageId package;
     SkinDeferredCleanup cleanup;
   };
+  struct PublishRequest {
+    PreparedPackage prepared;
+    PackageCollisionPolicy collisionPolicy;
+    ProfileInventorySnapshot inventory;
+    SkinDeferredCleanup cleanup;
+  };
   struct DiscardPreparedRequest {
     PreparedPackage prepared;
     SkinDeferredCleanup cleanup;
   };
   using RequestPayload =
-      std::variant<PrepareArchiveRequest, PrepareFolderRequest,
+      std::variant<PrepareArchiveRequest, PrepareFolderRequest, PublishRequest,
                    DiscardPreparedRequest>;
 
   static_assert(std::is_nothrow_move_constructible_v<RequestPayload>);
@@ -164,14 +170,21 @@ struct SkinPackageOperationService::Impl {
 
   ~Impl() { shutdown(); }
 
-  static SkinDeferredCleanup takeCleanup(RequestPayload &payload) noexcept {
-    return std::visit(
-        [](auto &operation) { return std::move(operation.cleanup); }, payload);
-  }
-
   static SkinPackageOperationHandle reject(RequestPayload &payload) noexcept {
     SkinPackageOperationHandle handle;
-    handle.rejectedCleanup.emplace(takeCleanup(payload));
+    std::visit(
+        [&handle](auto &operation) {
+          using Operation = std::decay_t<decltype(operation)>;
+          if constexpr (std::is_same_v<Operation, PublishRequest> ||
+                        std::is_same_v<Operation, DiscardPreparedRequest>) {
+            handle.rejectedPrepared.emplace(RejectedPreparedDisposal{
+                .prepared = std::move(operation.prepared),
+                .cleanup = std::move(operation.cleanup)});
+          } else {
+            handle.rejectedCleanup.emplace(std::move(operation.cleanup));
+          }
+        },
+        payload);
     return handle;
   }
 
@@ -197,6 +210,11 @@ struct SkinPackageOperationService::Impl {
   }
 
   SkinPackageOperationHandle enqueue(RequestPayload payload) noexcept {
+#if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
+    if (observer && observer->failAdmissionAllocation()) {
+      return reject(payload);
+    }
+#endif
     std::shared_ptr<SkinPackageProgressMailbox> mailbox;
     std::optional<std::stop_source> operationStop;
     try {
@@ -315,6 +333,26 @@ struct SkinPackageOperationService::Impl {
               } catch (...) {
                 result.emplace(
                     failedPreparation("skin folder preparation failed"));
+              }
+            } else if constexpr (std::is_same_v<Operation, PublishRequest>) {
+              try {
+                result.emplace(store.publish(
+                    std::move(operation.prepared), operation.collisionPolicy,
+                    std::move(operation.inventory), validator,
+                    slot.stop->get_token(),
+                    [mailbox = slot.mailbox](const SkinProgress &progress) {
+                      mailbox->publish(progress);
+                    }));
+              } catch (...) {
+                PublishPackageResult failed;
+                try {
+                  failed.diagnostics.push_back(
+                      {.code = "skin.package.operation.failed",
+                       .message = "skin package publication failed",
+                       .severity = DiagnosticSeverity::Error});
+                } catch (...) {
+                }
+                result.emplace(std::move(failed));
               }
             }
           },
@@ -504,7 +542,6 @@ struct SkinPackageOperationService::Impl {
   }
 
   void shutdown() noexcept {
-    bool shouldJoin = false;
     try {
       std::scoped_lock lock(mutex);
       if (!closing) {
@@ -530,11 +567,10 @@ struct SkinPackageOperationService::Impl {
           }
         }
       }
-      shouldJoin = worker.joinable();
     } catch (...) {
     }
     workAvailable.notify_all();
-    if (shouldJoin) {
+    try {
       std::call_once(joined, [this] {
         try {
           if (worker.joinable()) {
@@ -543,6 +579,7 @@ struct SkinPackageOperationService::Impl {
         } catch (...) {
         }
       });
+    } catch (...) {
     }
   }
 };
@@ -582,6 +619,16 @@ SkinPackageOperationService::submitPrepareFolder(std::filesystem::path folder,
       Impl::PrepareFolderRequest{.folder = std::move(folder),
                                  .package = std::move(package),
                                  .cleanup = std::move(cleanup)}));
+}
+
+SkinPackageOperationHandle SkinPackageOperationService::submitPublish(
+    PreparedPackage prepared, PackageCollisionPolicy collisionPolicy,
+    ProfileInventorySnapshot inventory, SkinDeferredCleanup cleanup) {
+  return impl_->enqueue(Impl::RequestPayload(
+      Impl::PublishRequest{.prepared = std::move(prepared),
+                           .collisionPolicy = collisionPolicy,
+                           .inventory = std::move(inventory),
+                           .cleanup = std::move(cleanup)}));
 }
 
 std::shared_ptr<const SkinPackageCatalogSnapshot>

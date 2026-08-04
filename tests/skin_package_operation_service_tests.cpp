@@ -202,9 +202,24 @@ void testPrepareRequestsHaveFifoTicketsAndIndependentMailboxes() {
   if (secondResult && secondResult->prepared) {
     const auto expectedRoot = secondResult->prepared->visibleStagingRoot();
     std::atomic_int rejectedDiscardRuns = 0;
-    auto rejected = service.discardPrepared(
-        std::move(*secondResult->prepared),
+    auto rejectedPublish = service.submitPublish(
+        std::move(*secondResult->prepared), PackageCollisionPolicy::Reject, {},
         SkinDeferredCleanup([&] { ++rejectedDiscardRuns; }));
+    expect(rejectedPublish.ticket == 0 &&
+               rejectedPublish.rejectedPrepared.has_value() &&
+               !rejectedPublish.rejectedCleanup,
+           "closed publish returns paired staging and cleanup ownership");
+    expect(
+        rejectedPublish.rejectedPrepared &&
+            rejectedPublish.rejectedPrepared->prepared.visibleStagingRoot() ==
+                expectedRoot,
+        "closed publish rejection returns the exact prepared staging");
+    auto rejected =
+        rejectedPublish.rejectedPrepared
+            ? service.discardPrepared(
+                  std::move(rejectedPublish.rejectedPrepared->prepared),
+                  std::move(rejectedPublish.rejectedPrepared->cleanup))
+            : std::optional<RejectedPreparedDisposal>{};
     expect(rejected.has_value(),
            "closed discard lane returns both move-only capabilities");
     expect(rejected && rejected->prepared.visibleStagingRoot() == expectedRoot,
@@ -270,6 +285,7 @@ void testDetachAndShutdownRunCleanupWithoutReenteringCaller() {
 
 class BlockingDisposalObserver final : public SkinPackageOperationTestObserver {
 public:
+  bool failAdmissionAllocation() const noexcept override { return false; }
   void beforeCompletion(std::uint64_t) const noexcept override {}
 
   void completed(std::uint64_t ticket) const noexcept override {
@@ -338,6 +354,8 @@ private:
 class BlockingCompletionObserver final
     : public SkinPackageOperationTestObserver {
 public:
+  bool failAdmissionAllocation() const noexcept override { return false; }
+
   void beforeCompletion(std::uint64_t ticket) const noexcept override {
     try {
       std::unique_lock lock(mutex_);
@@ -397,6 +415,33 @@ private:
   mutable int completedCount_ = 0;
   mutable int disposalCount_ = 0;
   mutable bool released_ = false;
+};
+
+class FailingAdmissionObserver final : public SkinPackageOperationTestObserver {
+public:
+  void failNextAdmission() noexcept {
+    failNext_.store(true, std::memory_order_release);
+  }
+
+  bool failAdmissionAllocation() const noexcept override {
+    if (!failNext_.exchange(false, std::memory_order_acq_rel)) {
+      return false;
+    }
+    ++failuresInjected_;
+    return true;
+  }
+
+  void beforeCompletion(std::uint64_t) const noexcept override {}
+  void completed(std::uint64_t) const noexcept override {}
+  void disposing(std::uint64_t) const noexcept override {}
+
+  int failuresInjected() const noexcept {
+    return failuresInjected_.load(std::memory_order_acquire);
+  }
+
+private:
+  mutable std::atomic_bool failNext_ = false;
+  mutable std::atomic_int failuresInjected_ = 0;
 };
 
 void testCompletedResultDetachWaitsForWorkerDisposal() {
@@ -555,15 +600,84 @@ void testShutdownDetachPollRaceWhileWorkerCompletesDisposesExactlyOnce() {
          "the explicitly detached completion cannot be delivered later");
 }
 
+void testAllocationFailureReturnsExactPublishCapabilities() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "allocation-rejection-source";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  auto observer = std::make_shared<FailingAdmissionObserver>();
+  SkinPackageOperationService service(store, validator, observer);
+
+  const auto prepare = service.submitPrepareFolder(
+      source, {.directoryName = "Allocation", .collisionKey = "allocation"},
+      {});
+  auto completion = waitFor(service, prepare.ticket);
+  auto *preparedResult =
+      completion ? std::get_if<PreparePackageResult>(&completion->payload)
+                 : nullptr;
+  expect(preparedResult && preparedResult->prepared.has_value(),
+         "allocation rejection test first obtains owned prepared staging");
+  if (!preparedResult || !preparedResult->prepared) {
+    return;
+  }
+
+  const auto expectedRoot = preparedResult->prepared->visibleStagingRoot();
+  std::atomic_int cleanupRuns = 0;
+  observer->failNextAdmission();
+  auto rejected = service.submitPublish(
+      std::move(*preparedResult->prepared), PackageCollisionPolicy::Reject, {},
+      SkinDeferredCleanup([&] { ++cleanupRuns; }));
+  expect(observer->failuresInjected() == 1,
+         "enqueue deterministically takes its allocation-failure branch");
+  expect(rejected.ticket == 0 && !rejected.progress,
+         "allocation failure rejects publish before admission");
+  expect(!rejected.rejectedCleanup && rejected.rejectedPrepared.has_value(),
+         "publish rejection uses the paired prepared-capability result");
+  expect(rejected.rejectedPrepared &&
+             rejected.rejectedPrepared->prepared.visibleStagingRoot() ==
+                 expectedRoot,
+         "allocation rejection returns the exact prepared staging owner");
+  expect(cleanupRuns == 0,
+         "allocation rejection does not run returned cleanup synchronously");
+  if (rejected.rejectedPrepared) {
+    auto disposal =
+        service.discardPrepared(std::move(rejected.rejectedPrepared->prepared),
+                                std::move(rejected.rejectedPrepared->cleanup));
+    expect(!disposal,
+           "caller can explicitly transfer allocation-rejected capabilities");
+  }
+  expect(waitUntil([&] { return cleanupRuns == 1; }),
+         "transferred allocation-rejected cleanup runs exactly once");
+  service.shutdown();
+}
+
 void testBoundedBackpressureReturnsCleanupOwnership() {
   TempDirectory temporary;
   const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "full-publish-source";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
   NoAliases aliases;
   NoProfiles profiles;
   NoValidator validator;
   SkinPackageCatalog catalog(roots.privateCatalog);
   SkinPackageStore store(roots, catalog, aliases, profiles);
   SkinPackageOperationService service(store, validator);
+
+  const auto publishPrepare = service.submitPrepareFolder(
+      source, {.directoryName = "FullPublish", .collisionKey = "fullpublish"},
+      {});
+  auto publishCompletion = waitFor(service, publishPrepare.ticket);
+  auto *publishPrepared =
+      publishCompletion
+          ? std::get_if<PreparePackageResult>(&publishCompletion->payload)
+          : nullptr;
+  expect(publishPrepared && publishPrepared->prepared.has_value(),
+         "bounded rejection test first obtains publish staging ownership");
 
   std::atomic_int acceptedCleanupRuns = 0;
   std::vector<SkinPackageOperationHandle> accepted;
@@ -591,6 +705,48 @@ void testBoundedBackpressureReturnsCleanupOwnership() {
   if (rejected.rejectedCleanup) {
     rejected.rejectedCleanup->run();
   }
+
+  std::atomic_int rejectedPublishCleanupRuns = 0;
+  std::optional<RejectedPreparedDisposal> pendingPublishDisposal;
+  if (publishPrepared && publishPrepared->prepared) {
+    const auto expectedRoot = publishPrepared->prepared->visibleStagingRoot();
+    auto rejectedPublish = service.submitPublish(
+        std::move(*publishPrepared->prepared), PackageCollisionPolicy::Reject,
+        {}, SkinDeferredCleanup([&] { ++rejectedPublishCleanupRuns; }));
+    expect(rejectedPublish.ticket == 0 &&
+               rejectedPublish.rejectedPrepared.has_value() &&
+               !rejectedPublish.rejectedCleanup,
+           "bounded-full publish returns both capabilities together");
+    expect(
+        rejectedPublish.rejectedPrepared &&
+            rejectedPublish.rejectedPrepared->prepared.visibleStagingRoot() ==
+                expectedRoot,
+        "bounded-full rejection returns the exact publish staging owner");
+    if (rejectedPublish.rejectedPrepared) {
+      pendingPublishDisposal.emplace(
+          std::move(*rejectedPublish.rejectedPrepared));
+    }
+  }
+  expect(rejectedPublishCleanupRuns == 0,
+         "bounded-full publish rejection does not run cleanup on caller");
+
+  service.cancelAndDetach(accepted.front().ticket);
+  const auto retryDeadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (pendingPublishDisposal &&
+         std::chrono::steady_clock::now() < retryDeadline) {
+    auto rejectedDisposal =
+        service.discardPrepared(std::move(pendingPublishDisposal->prepared),
+                                std::move(pendingPublishDisposal->cleanup));
+    pendingPublishDisposal = std::move(rejectedDisposal);
+    if (pendingPublishDisposal) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  }
+  expect(!pendingPublishDisposal,
+         "bounded rejection capabilities transfer after capacity is released");
+  expect(waitUntil([&] { return rejectedPublishCleanupRuns == 1; }),
+         "bounded-full publish cleanup runs exactly once after transfer");
   service.shutdown();
   expect(acceptedCleanupRuns == 128,
          "shutdown drains cleanup for every accepted bounded request");
@@ -606,6 +762,7 @@ int main() {
   testCompletedResultDetachWaitsForWorkerDisposal();
   testCompletedShutdownDetachPollRaceHasExactlyOneOwner();
   testShutdownDetachPollRaceWhileWorkerCompletesDisposesExactlyOnce();
+  testAllocationFailureReturnsExactPublishCapabilities();
   testBoundedBackpressureReturnsCleanupOwnership();
   if (failures != 0) {
     std::cerr << failures
