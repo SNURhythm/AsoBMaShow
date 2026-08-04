@@ -262,6 +262,7 @@ void PlayfieldVisualStateStore::onLanePressed(int lane, JudgeResult judge,
   }
   auto &state = lanes_[it->second];
   state.pressed = true;
+  state.lastPressedJudge = judge;
   state.pressMicros = eventMicros;
   if (judge.judgement != None) {
     state.bombMicros = eventMicros;

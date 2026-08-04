@@ -83,11 +83,19 @@ inline constexpr long long kPlayfieldTimestampOff =
 
 struct LanePresentationState {
   bool pressed = false;
+  JudgeResult lastPressedJudge = JudgeResult(None, 0);
   long long pressMicros = kPlayfieldTimestampOff;
   long long releaseMicros = kPlayfieldTimestampOff;
   long long bombMicros = kPlayfieldTimestampOff;
 
-  bool operator==(const LanePresentationState &) const = default;
+  bool operator==(const LanePresentationState &other) const {
+    return pressed == other.pressed &&
+           lastPressedJudge.judgement == other.lastPressedJudge.judgement &&
+           lastPressedJudge.Diff == other.lastPressedJudge.Diff &&
+           pressMicros == other.pressMicros &&
+           releaseMicros == other.releaseMicros &&
+           bombMicros == other.bombMicros;
+  }
 };
 
 struct NotePresentationState {

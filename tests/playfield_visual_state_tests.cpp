@@ -332,6 +332,7 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
           "fanout updates the store first and forwards once to only its current sink");
   require(captured.clock.serial == 99 && captured.configuration == configuration &&
               captured.authority == authority && captured.lanes.at(2).pressed &&
+              captured.lanes.at(2).lastPressedJudge.judgement == None &&
               captured.lanes.at(2).pressMicros == 300 &&
               captured.lanes.at(2).releaseMicros == 200 &&
               captured.lanes.at(2).bombMicros == 0 &&
