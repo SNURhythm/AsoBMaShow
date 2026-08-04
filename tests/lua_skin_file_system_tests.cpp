@@ -258,12 +258,24 @@ void testWorkingDirectoryPackageCeilingAndModuleSearch() {
                        "path failures never disclose a host path");
     }
   }
+  for (const std::string &windowsAlias :
+       {"state.txt:stream", "NUL.txt", "trailing. ", "wild?.lua"}) {
+    const auto denied = fileSystem.resolve(windowsAlias, SkinFileUse::Resource);
+    expect(failedWith(denied.failure, SkinFileError::InvalidPath),
+           "Windows alternate names and reserved components are rejected");
+  }
 
   auto forgedEntry = fixture.entry;
   forgedEntry.package = *normalizePackageId("OtherPackage").package;
   const auto mismatch = fixture.create(forgedEntry, std::nullopt, false);
   expect(!mismatch.fileSystem && mismatch.failure,
          "entry and revision package identities must match");
+  const auto aliasedEntry =
+      normalizeEntryPath(fixture.entry.package, "entry/NUL.luaskin");
+  const auto aliased = fixture.create(*aliasedEntry.entry, std::nullopt, false);
+  expect(!aliased.fileSystem &&
+             failedWith(aliased.failure, SkinFileError::InvalidPath),
+         "selected entries with Windows namespace aliases are rejected");
 }
 
 void testNoFollowReadsAndOverlayUseSeparation() {
@@ -316,6 +328,17 @@ void testNoFollowReadsAndOverlayUseSeparation() {
              "package-state",
          "overlay writes never mutate the immutable package view");
 
+  const fs::path overlay = fixture.overlayRoot(fixture.entry, selectedProfile);
+#if !defined(_WIN32)
+  fs::create_directories(overlay / "entry/data");
+  writeText(overlay / "entry/data/state.txt.tmp", "stale-temp");
+  const auto staleTempWrite =
+      fileSystem.writeData("data/state.txt", bytesOf("new-state"), false);
+  expect(!staleTempWrite.failure &&
+             readText(overlay / "entry/data/state.txt.tmp") == "stale-temp",
+         "a stale predictable temp name cannot permanently deny replacement");
+#endif
+
 #if !defined(_WIN32)
   const fs::path outside = fixture.temp.root() / "outside.txt";
   writeText(outside, "outside");
@@ -350,7 +373,6 @@ void testNoFollowReadsAndOverlayUseSeparation() {
   expect(failedWith(hardLinkedRead.failure, SkinFileError::NonRegular),
          "multiply-linked package files are rejected");
 
-  const fs::path overlay = fixture.overlayRoot(fixture.entry, selectedProfile);
   fs::create_directories(overlay / "entry");
   const fs::path overlayLink = overlay / "entry/overlay-link.txt";
   fs::create_symlink(outside, overlayLink);
@@ -570,6 +592,58 @@ void testConcurrentWritesCannotOversubscribeQuota() {
          "concurrent writes cannot leave more files than the quota");
 }
 
+void testSeparateInstancesCannotOversubscribeQuota() {
+  PackageFixture fixture;
+  const SkinProfileId selectedProfile =
+      profile("77777777-7777-4777-8777-777777777777");
+  constexpr int writerCount = 8;
+  std::vector<std::unique_ptr<LuaSkinFileSystem>> fileSystems;
+  fileSystems.reserve(writerCount);
+  for (int index = 0; index < writerCount; ++index) {
+    auto created = fixture.create(fixture.entry, selectedProfile, true,
+                                  {.maximumBytes = 64, .maximumFiles = 1});
+    expect(created.fileSystem != nullptr,
+           "separate-instance quota fixture is created");
+    if (created.fileSystem) {
+      fileSystems.push_back(std::move(created.fileSystem));
+    }
+  }
+  if (fileSystems.size() != writerCount) {
+    return;
+  }
+
+  std::barrier start(writerCount + 1);
+  std::atomic_int successes = 0;
+  std::vector<std::thread> writers;
+  writers.reserve(writerCount);
+  for (int index = 0; index < writerCount; ++index) {
+    writers.emplace_back([&, index] {
+      start.arrive_and_wait();
+      const auto result = fileSystems[index]->writeData(
+          "separate-" + std::to_string(index) + ".txt", bytesOf("x"), false);
+      if (!result.failure) {
+        ++successes;
+      }
+    });
+  }
+  start.arrive_and_wait();
+  for (std::thread &writer : writers) {
+    writer.join();
+  }
+
+  const fs::path overlay = fixture.overlayRoot(fixture.entry, selectedProfile);
+  std::size_t regularFiles = 0;
+  std::error_code error;
+  for (fs::recursive_directory_iterator iterator(overlay, error), end;
+       !error && iterator != end; ++iterator) {
+    if (iterator->is_regular_file(error)) {
+      ++regularFiles;
+    }
+  }
+  expect(successes == 1 && regularFiles == 1,
+         "separate filesystem instances serialize one shared overlay quota");
+}
+
 void testRenderTransitionLocksCapturedOperationsAndCounters() {
   PackageFixture fixture;
   const SkinProfileId selectedProfile =
@@ -704,6 +778,7 @@ int main() {
   testAtomicWritesNestedParentsAndQuotaRollback();
   testDeterministicListingAndProfileEntryIsolation();
   testConcurrentWritesCannotOversubscribeQuota();
+  testSeparateInstancesCannotOversubscribeQuota();
   testRenderTransitionLocksCapturedOperationsAndCounters();
   testPreparedAndPublishedViewsStaySynchronouslyOwned();
   testCompatibilityDiagnosticsDeduplicateAndRetainCriticality();

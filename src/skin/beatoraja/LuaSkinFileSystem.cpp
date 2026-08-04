@@ -1,20 +1,21 @@
 #include "LuaSkinFileSystem.h"
 
-#include "../../AtomicFile.h"
 #include "../package/SkinPathPolicy.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <limits>
 #include <mutex>
+#include <random>
 #include <string>
 #include <utility>
 
 #if defined(_WIN32)
+#include <Aclapi.h>
 #include <windows.h>
 #else
 #include <dirent.h>
@@ -37,6 +38,33 @@ enum class HostEntryKind : std::uint8_t {
 };
 
 enum class RenderOperation : std::uint8_t { Read, Write, DirectoryScan };
+
+// Overlay quotas and replacements are process-global invariants. Serialize
+// them across filesystem instances that may share the same derived root.
+std::mutex overlayMutationMutex;
+constexpr std::size_t maximumTemporaryCreateAttempts = 16;
+
+std::optional<std::string> uniqueOverlayTemporaryName() {
+  std::array<std::uint32_t, 4> randomWords{};
+  try {
+    std::random_device entropy;
+    for (std::uint32_t &word : randomWords) {
+      word = entropy();
+    }
+  } catch (...) {
+    return std::nullopt;
+  }
+  constexpr char hex[] = "0123456789abcdef";
+  std::string name = ".asobmashow-";
+  name.reserve(name.size() + randomWords.size() * 8 + 4);
+  for (const std::uint32_t word : randomWords) {
+    for (int shift = 28; shift >= 0; shift -= 4) {
+      name.push_back(hex[(word >> shift) & 0xfU]);
+    }
+  }
+  name += ".tmp";
+  return name;
+}
 
 struct HostStatResult {
   HostEntryKind kind = HostEntryKind::IoError;
@@ -103,11 +131,39 @@ fs::path pathFromUtf8(std::string_view path) {
   return fs::path(utf8);
 }
 
+bool isPortableSkinFileComponent(std::string_view component) {
+  if (component.empty() || component.back() == '.' || component.back() == ' ') {
+    return false;
+  }
+  for (const unsigned char value : component) {
+    if (value < 0x20 ||
+        std::string_view("<>:\"/\\|?*").find(value) != std::string_view::npos) {
+      return false;
+    }
+  }
+  std::string device(component.substr(0, component.find('.')));
+  std::ranges::transform(device, device.begin(), [](unsigned char value) {
+    return value >= 'a' && value <= 'z' ? static_cast<char>(value - 'a' + 'A')
+                                        : static_cast<char>(value);
+  });
+  if (device == "CON" || device == "PRN" || device == "AUX" ||
+      device == "NUL" || device == "CLOCK$") {
+    return false;
+  }
+  return !((device.starts_with("COM") || device.starts_with("LPT")) &&
+           device.size() == 4 && device.back() >= '1' && device.back() <= '9');
+}
+
 std::optional<fs::path> canonicalTrustedRoot(const fs::path &root) {
   if (root.empty() || !root.is_absolute()) {
     return std::nullopt;
   }
   const fs::path normalized = root.lexically_normal();
+#if defined(_WIN32)
+  // Reparse containment is established by retained no-reparse handle walks;
+  // canonicalizing here would follow the very alias being validated.
+  return normalized;
+#else
   const fs::path relative = normalized.relative_path();
   auto component = relative.begin();
   const auto end = relative.end();
@@ -136,6 +192,7 @@ std::optional<fs::path> canonicalTrustedRoot(const fs::path &root) {
     canonical = candidate;
   }
   return canonical.lexically_normal();
+#endif
 }
 
 std::string utf8Path(const fs::path &path) {
@@ -182,6 +239,10 @@ normalizeReference(const SkinPackageId &package,
       if (!normalized.value) {
         return {.failure = failure(SkinFileError::InvalidPath, authored,
                                    "skin virtual path is invalid")};
+      }
+      if (!isPortableSkinFileComponent(*normalized.value)) {
+        return {.failure = failure(SkinFileError::InvalidPath, authored,
+                                   "skin virtual path has an unsafe name")};
       }
       components.push_back(std::move(*normalized.value));
     }
@@ -568,144 +629,599 @@ listAtRoot(const fs::path &root, std::string_view virtualDirectory,
   return {std::move(result), HostEntryKind::Directory};
 }
 
+bool secureReplaceOverlayFile(const fs::path &root,
+                              std::string_view virtualPath,
+                              std::span<const std::byte> contents) {
+  const std::vector<std::string> components = splitNormalized(virtualPath);
+  if (components.empty()) {
+    return false;
+  }
+  std::string parentVirtual;
+  if (components.size() > 1) {
+    parentVirtual = joinComponents(
+        std::vector<std::string>(components.begin(), components.end() - 1));
+  }
+  if (!ensureAbsoluteDirectoryNoFollow(root / pathFromUtf8(parentVirtual))) {
+    return false;
+  }
+  auto [parent, parentKind] = openDirectoryNoFollow(root, parentVirtual);
+  if (!parent || parentKind != HostEntryKind::Directory) {
+    return false;
+  }
+  const std::string &leaf = components.back();
+  int flags = O_WRONLY | O_CREAT | O_EXCL;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  UniqueFd output;
+  std::string temporary;
+  for (std::size_t attempt = 0; attempt < maximumTemporaryCreateAttempts;
+       ++attempt) {
+    const auto candidate = uniqueOverlayTemporaryName();
+    if (!candidate) {
+      return false;
+    }
+    const int descriptor =
+        ::openat(parent.get(), candidate->c_str(), flags, 0600);
+    if (descriptor >= 0) {
+      output = UniqueFd(descriptor);
+      temporary = *candidate;
+      break;
+    }
+    if (errno != EEXIST) {
+      return false;
+    }
+  }
+  if (!output || ::fchmod(output.get(), 0600) != 0) {
+    return false;
+  }
+  bool renamed = false;
+  const auto cleanup = [&] {
+    if (!renamed) {
+      ::unlinkat(parent.get(), temporary.c_str(), 0);
+    }
+  };
+  std::size_t offset = 0;
+  while (offset < contents.size()) {
+    const auto *data = reinterpret_cast<const char *>(contents.data() + offset);
+    const ssize_t written =
+        ::write(output.get(), data, contents.size() - offset);
+    if (written < 0 && errno == EINTR) {
+      continue;
+    }
+    if (written <= 0) {
+      cleanup();
+      return false;
+    }
+    offset += static_cast<std::size_t>(written);
+  }
+  struct stat before{};
+  if (::fsync(output.get()) != 0 || ::fstat(output.get(), &before) != 0 ||
+      !S_ISREG(before.st_mode) || before.st_nlink != 1 ||
+      ::renameat(parent.get(), temporary.c_str(), parent.get(), leaf.c_str()) !=
+          0) {
+    cleanup();
+    return false;
+  }
+  renamed = true;
+  int readFlags = O_RDONLY;
+#ifdef O_CLOEXEC
+  readFlags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  readFlags |= O_NOFOLLOW;
+#endif
+  UniqueFd installed(::openat(parent.get(), leaf.c_str(), readFlags));
+  struct stat after{};
+  return installed && ::fstat(installed.get(), &after) == 0 &&
+         S_ISREG(after.st_mode) && after.st_nlink == 1 &&
+         before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
+         before.st_size == after.st_size && ::fsync(parent.get()) == 0;
+}
+
+HostEntryKind secureCreateOverlayDirectory(const fs::path &root,
+                                           std::string_view virtualDirectory) {
+  const std::vector<std::string> components = splitNormalized(virtualDirectory);
+  if (components.empty()) {
+    return HostEntryKind::NonRegular;
+  }
+  std::string parentVirtual;
+  if (components.size() > 1) {
+    parentVirtual = joinComponents(
+        std::vector<std::string>(components.begin(), components.end() - 1));
+  }
+  if (!ensureAbsoluteDirectoryNoFollow(root / pathFromUtf8(parentVirtual))) {
+    return HostEntryKind::NonRegular;
+  }
+  auto [parent, parentKind] = openDirectoryNoFollow(root, parentVirtual);
+  if (!parent || parentKind != HostEntryKind::Directory) {
+    return parentKind;
+  }
+  const std::string &leaf = components.back();
+  if (::mkdirat(parent.get(), leaf.c_str(), 0700) != 0 && errno != EEXIST) {
+    return errnoKind(errno);
+  }
+  struct stat status{};
+  if (::fstatat(parent.get(), leaf.c_str(), &status, AT_SYMLINK_NOFOLLOW) !=
+      0) {
+    return errnoKind(errno);
+  }
+  if (!S_ISDIR(status.st_mode)) {
+    return HostEntryKind::NonRegular;
+  }
+  return ::fsync(parent.get()) == 0 ? HostEntryKind::Directory
+                                    : HostEntryKind::IoError;
+}
+
 #else
-HostStatResult statAtRoot(const fs::path &root, std::string_view virtualPath) {
-  fs::path current = root;
+class UniqueWindowsHandle {
+public:
+  UniqueWindowsHandle() = default;
+  explicit UniqueWindowsHandle(HANDLE value) noexcept : value_(value) {}
+  UniqueWindowsHandle(const UniqueWindowsHandle &) = delete;
+  UniqueWindowsHandle &operator=(const UniqueWindowsHandle &) = delete;
+  UniqueWindowsHandle(UniqueWindowsHandle &&other) noexcept
+      : value_(std::exchange(other.value_, INVALID_HANDLE_VALUE)) {}
+  UniqueWindowsHandle &operator=(UniqueWindowsHandle &&other) noexcept {
+    if (this != &other) {
+      reset(std::exchange(other.value_, INVALID_HANDLE_VALUE));
+    }
+    return *this;
+  }
+  ~UniqueWindowsHandle() { reset(); }
+
+  HANDLE get() const noexcept { return value_; }
+  explicit operator bool() const noexcept {
+    return value_ != INVALID_HANDLE_VALUE && value_ != nullptr;
+  }
+
+private:
+  void reset(HANDLE value = INVALID_HANDLE_VALUE) noexcept {
+    if (*this) {
+      CloseHandle(value_);
+    }
+    value_ = value;
+  }
+  HANDLE value_ = INVALID_HANDLE_VALUE;
+};
+
+struct WindowsMetadata {
+  HostEntryKind kind = HostEntryKind::IoError;
+  FILE_ID_INFO identity{};
+  DWORD volumeSerial = 0;
+  std::uint64_t fileIndex = 0;
+  std::uint64_t size = 0;
+  std::uint32_t links = 0;
+  FILETIME modified{};
+};
+
+struct WindowsHandleChain {
+  fs::path currentPath;
+  std::vector<UniqueWindowsHandle> handles;
+  WindowsMetadata metadata;
+
+  HANDLE leaf() const noexcept {
+    return handles.empty() ? INVALID_HANDLE_VALUE : handles.back().get();
+  }
+};
+
+HostEntryKind windowsErrorKind(DWORD error) {
+  if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+    return HostEntryKind::Missing;
+  }
+  if (error == ERROR_CANT_ACCESS_FILE || error == ERROR_INVALID_REPARSE_DATA ||
+      error == ERROR_REPARSE_TAG_INVALID) {
+    return HostEntryKind::NonRegular;
+  }
+  return HostEntryKind::IoError;
+}
+
+bool windowsMetadataFromHandle(HANDLE handle, WindowsMetadata &metadata) {
+  FILE_ATTRIBUTE_TAG_INFO tag{};
+  BY_HANDLE_FILE_INFORMATION information{};
+  FILE_ID_INFO identity{};
+  const bool disk = GetFileType(handle) == FILE_TYPE_DISK;
+  if (!disk ||
+      !GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag,
+                                    sizeof(tag)) ||
+      !GetFileInformationByHandleEx(handle, FileIdInfo, &identity,
+                                    sizeof(identity)) ||
+      !GetFileInformationByHandle(handle, &information)) {
+    return false;
+  }
+  if ((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    metadata.kind = HostEntryKind::NonRegular;
+    return true;
+  }
+  const bool directory = (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  if (!directory && information.nNumberOfLinks != 1) {
+    metadata.kind = HostEntryKind::NonRegular;
+    return true;
+  }
+  metadata.kind = directory ? HostEntryKind::Directory : HostEntryKind::Regular;
+  metadata.identity = identity;
+  metadata.volumeSerial = information.dwVolumeSerialNumber;
+  metadata.fileIndex =
+      (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32U) |
+      information.nFileIndexLow;
+  metadata.size =
+      directory
+          ? 0
+          : (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32U) |
+                information.nFileSizeLow;
+  metadata.links = information.nNumberOfLinks;
+  metadata.modified = information.ftLastWriteTime;
+  return true;
+}
+
+bool sameWindowsIdentity(const WindowsMetadata &left,
+                         const WindowsMetadata &right) {
+  return left.identity.VolumeSerialNumber ==
+             right.identity.VolumeSerialNumber &&
+         std::memcmp(left.identity.FileId.Identifier,
+                     right.identity.FileId.Identifier,
+                     sizeof(left.identity.FileId.Identifier)) == 0;
+}
+
+bool appendExistingWindowsComponent(WindowsHandleChain &chain,
+                                    const fs::path &component,
+                                    DWORD desiredAccess,
+                                    std::optional<bool> expectedDirectory,
+                                    HostEntryKind &failureKind) {
+  if (component.empty() || component == fs::path(L".") ||
+      component == fs::path(L"..")) {
+    failureKind = HostEntryKind::NonRegular;
+    return false;
+  }
+  chain.currentPath /= component;
+  DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT;
+  if (!expectedDirectory || *expectedDirectory) {
+    flags |= FILE_FLAG_BACKUP_SEMANTICS;
+  } else {
+    flags |= FILE_FLAG_SEQUENTIAL_SCAN;
+  }
+  UniqueWindowsHandle handle(CreateFileW(
+      chain.currentPath.c_str(), desiredAccess | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, flags,
+      nullptr));
+  if (!handle) {
+    failureKind = windowsErrorKind(GetLastError());
+    return false;
+  }
+  WindowsMetadata metadata;
+  if (!windowsMetadataFromHandle(handle.get(), metadata)) {
+    failureKind = HostEntryKind::IoError;
+    return false;
+  }
+  if (metadata.kind == HostEntryKind::NonRegular ||
+      (expectedDirectory &&
+       (metadata.kind == HostEntryKind::Directory) != *expectedDirectory)) {
+    failureKind = HostEntryKind::NonRegular;
+    return false;
+  }
+  chain.metadata = metadata;
+  chain.handles.push_back(std::move(handle));
+  return true;
+}
+
+std::optional<WindowsHandleChain>
+openWindowsDirectoryChain(const fs::path &directory,
+                          HostEntryKind &failureKind) {
   std::error_code error;
-  const auto rootStatus = fs::symlink_status(current, error);
-  if (error == std::errc::no_such_file_or_directory) {
-    return {.kind = HostEntryKind::Missing};
+  const fs::path absolute = fs::absolute(directory, error).lexically_normal();
+  if (error || !absolute.is_absolute() || absolute.root_path().empty()) {
+    failureKind = HostEntryKind::NonRegular;
+    return std::nullopt;
   }
-  if (error || !fs::is_directory(rootStatus) || fs::is_symlink(rootStatus)) {
-    return {.kind = HostEntryKind::NonRegular};
+  WindowsHandleChain chain{.currentPath = absolute.root_path()};
+  UniqueWindowsHandle root(CreateFileW(
+      chain.currentPath.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (!root) {
+    failureKind = windowsErrorKind(GetLastError());
+    return std::nullopt;
   }
-  for (const std::string &component : splitNormalized(virtualPath)) {
-    current /= pathFromUtf8(component);
-    const auto status = fs::symlink_status(current, error);
-    if (error == std::errc::no_such_file_or_directory) {
-      return {.kind = HostEntryKind::Missing};
+  if (!windowsMetadataFromHandle(root.get(), chain.metadata) ||
+      chain.metadata.kind != HostEntryKind::Directory) {
+    failureKind = HostEntryKind::NonRegular;
+    return std::nullopt;
+  }
+  chain.handles.push_back(std::move(root));
+  for (const fs::path &component :
+       absolute.lexically_relative(absolute.root_path())) {
+    if (!appendExistingWindowsComponent(
+            chain, component, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true,
+            failureKind)) {
+      return std::nullopt;
     }
-    if (error || fs::is_symlink(status)) {
-      return {.kind = HostEntryKind::NonRegular};
+  }
+  failureKind = HostEntryKind::Directory;
+  return chain;
+}
+
+std::optional<WindowsHandleChain> openWindowsPathAtRoot(
+    const fs::path &root, std::string_view virtualPath, DWORD desiredAccess,
+    std::optional<bool> expectedDirectory, HostEntryKind &failureKind) {
+  auto chain = openWindowsDirectoryChain(root, failureKind);
+  if (!chain) {
+    return std::nullopt;
+  }
+  const std::vector<std::string> components = splitNormalized(virtualPath);
+  for (std::size_t index = 0; index < components.size(); ++index) {
+    const bool final = index + 1 == components.size();
+    if (!appendExistingWindowsComponent(
+            *chain, pathFromUtf8(components[index]),
+            final ? desiredAccess : FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+            final ? expectedDirectory : std::optional<bool>(true),
+            failureKind)) {
+      return std::nullopt;
     }
   }
-  const auto status = fs::symlink_status(current, error);
-  if (error) {
-    return {.kind = HostEntryKind::IoError};
+  if (components.empty() && expectedDirectory && !*expectedDirectory) {
+    failureKind = HostEntryKind::NonRegular;
+    return std::nullopt;
   }
-  if (fs::is_directory(status)) {
-    return {.kind = HostEntryKind::Directory};
+  failureKind = chain->metadata.kind;
+  return chain;
+}
+
+HostStatResult statAtRoot(const fs::path &root, std::string_view virtualPath) {
+  HostEntryKind kind = HostEntryKind::IoError;
+  auto chain = openWindowsPathAtRoot(root, virtualPath, FILE_READ_ATTRIBUTES,
+                                     std::nullopt, kind);
+  if (!chain) {
+    return {.kind = kind};
   }
-  if (!fs::is_regular_file(status) ||
-      fs::hard_link_count(current, error) != 1 || error) {
-    return {.kind = HostEntryKind::NonRegular};
-  }
-  const std::uint64_t size = fs::file_size(current, error);
-  return error ? HostStatResult{.kind = HostEntryKind::IoError}
-               : HostStatResult{.kind = HostEntryKind::Regular, .size = size};
+  return {.kind = chain->metadata.kind, .size = chain->metadata.size};
 }
 
 HostReadResult readAtRoot(const fs::path &root, std::string_view virtualPath,
                           std::uint64_t maximumBytes) {
-  const HostStatResult status = statAtRoot(root, virtualPath);
-  if (status.kind != HostEntryKind::Regular) {
-    return {.kind = status.kind};
+  HostEntryKind kind = HostEntryKind::IoError;
+  auto chain =
+      openWindowsPathAtRoot(root, virtualPath, GENERIC_READ, false, kind);
+  if (!chain) {
+    return {.kind = kind};
   }
-  if (status.size > maximumBytes ||
-      status.size > std::numeric_limits<std::size_t>::max()) {
+  const WindowsMetadata before = chain->metadata;
+  if (before.size > maximumBytes ||
+      before.size > std::numeric_limits<std::size_t>::max()) {
     return {.kind = HostEntryKind::Regular, .limitExceeded = true};
   }
-  std::ifstream input(root / pathFromUtf8(virtualPath), std::ios::binary);
-  if (!input) {
+  HostReadResult result{.kind = HostEntryKind::Regular};
+  try {
+    result.bytes.resize(static_cast<std::size_t>(before.size));
+  } catch (...) {
     return {.kind = HostEntryKind::IoError};
   }
-  HostReadResult result{.kind = HostEntryKind::Regular};
-  result.bytes.resize(static_cast<std::size_t>(status.size));
-  input.read(reinterpret_cast<char *>(result.bytes.data()),
-             static_cast<std::streamsize>(result.bytes.size()));
-  if (input.gcount() != static_cast<std::streamsize>(result.bytes.size())) {
+  std::size_t offset = 0;
+  while (offset < result.bytes.size()) {
+    const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
+        result.bytes.size() - offset, std::numeric_limits<DWORD>::max()));
+    DWORD read = 0;
+    if (!ReadFile(chain->leaf(), result.bytes.data() + offset, chunk, &read,
+                  nullptr) ||
+        read == 0) {
+      return {.kind = HostEntryKind::IoError};
+    }
+    offset += read;
+  }
+  WindowsMetadata after;
+  if (!windowsMetadataFromHandle(chain->leaf(), after) ||
+      after.kind != HostEntryKind::Regular ||
+      !sameWindowsIdentity(before, after) || before.size != after.size ||
+      before.links != after.links ||
+      CompareFileTime(&before.modified, &after.modified) != 0) {
     return {.kind = HostEntryKind::IoError};
   }
   return result;
 }
 
-bool ensureAbsoluteDirectoryNoFollow(const fs::path &directory) {
-  std::error_code error;
-  fs::path current = directory.root_path();
-  for (const fs::path &component :
-       directory.lexically_normal().relative_path()) {
-    current /= component;
-    auto status = fs::symlink_status(current, error);
-    if (error == std::errc::no_such_file_or_directory) {
-      error.clear();
-      if (!fs::create_directory(current, error) || error) {
+struct WindowsDirectoryEntry {
+  std::wstring name;
+  DWORD attributes = 0;
+  LARGE_INTEGER fileId{};
+  DWORD volumeSerial = 0;
+  bool hasFileId = false;
+};
+
+bool sameWindowsEnumeratedIdentity(const WindowsDirectoryEntry &entry,
+                                   const WindowsMetadata &metadata) {
+  if (!entry.hasFileId) {
+    return true;
+  }
+  return entry.volumeSerial == metadata.volumeSerial &&
+         static_cast<std::uint64_t>(entry.fileId.QuadPart) ==
+             metadata.fileIndex;
+}
+
+bool enumerateWindowsDirectory(HANDLE directory,
+                               std::vector<WindowsDirectoryEntry> &entries) {
+  WindowsMetadata directoryMetadata;
+  if (!windowsMetadataFromHandle(directory, directoryMetadata) ||
+      directoryMetadata.kind != HostEntryKind::Directory) {
+    return false;
+  }
+  alignas(FILE_ID_BOTH_DIR_INFO) std::array<std::byte, 64 * 1024> buffer{};
+  bool restart = true;
+  for (;;) {
+    const FILE_INFO_BY_HANDLE_CLASS informationClass =
+        restart ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
+    if (!GetFileInformationByHandleEx(directory, informationClass,
+                                      buffer.data(),
+                                      static_cast<DWORD>(buffer.size()))) {
+      return GetLastError() == ERROR_NO_MORE_FILES;
+    }
+    restart = false;
+    std::size_t offset = 0;
+    for (;;) {
+      if (offset + sizeof(FILE_ID_BOTH_DIR_INFO) > buffer.size()) {
         return false;
       }
-      status = fs::symlink_status(current, error);
+      const auto *entry = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO *>(
+          buffer.data() + offset);
+      constexpr std::size_t fileNameOffset =
+          offsetof(FILE_ID_BOTH_DIR_INFO, FileName);
+      if (entry->FileNameLength % sizeof(wchar_t) != 0 ||
+          entry->FileNameLength > buffer.size() - offset - fileNameOffset) {
+        return false;
+      }
+      const std::wstring name(entry->FileName,
+                              entry->FileNameLength / sizeof(wchar_t));
+      if (name != L"." && name != L"..") {
+        entries.push_back({.name = name,
+                           .attributes = entry->FileAttributes,
+                           .fileId = entry->FileId,
+                           .volumeSerial = directoryMetadata.volumeSerial,
+                           .hasFileId = true});
+      }
+      if (entry->NextEntryOffset == 0) {
+        break;
+      }
+      if (entry->NextEntryOffset > buffer.size() - offset) {
+        return false;
+      }
+      offset += entry->NextEntryOffset;
     }
-    if (error || fs::is_symlink(status) || !fs::is_directory(status)) {
+  }
+}
+
+std::optional<std::string> utf8FromWide(std::wstring_view value) {
+  if (value.empty()) {
+    return std::string{};
+  }
+  const int bytes = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+      static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+  if (bytes <= 0) {
+    return std::nullopt;
+  }
+  std::string result(static_cast<std::size_t>(bytes), '\0');
+  return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                             static_cast<int>(value.size()), result.data(),
+                             bytes, nullptr, nullptr) == bytes
+             ? std::optional<std::string>(std::move(result))
+             : std::nullopt;
+}
+
+std::pair<UniqueWindowsHandle, WindowsMetadata>
+openWindowsChildNoFollow(const fs::path &parentPath,
+                         const WindowsDirectoryEntry &entry,
+                         DWORD desiredAccess) {
+  DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT;
+  if ((entry.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    flags |= FILE_FLAG_BACKUP_SEMANTICS;
+  }
+  UniqueWindowsHandle child(CreateFileW(
+      (parentPath / entry.name).c_str(), desiredAccess | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, flags,
+      nullptr));
+  WindowsMetadata metadata;
+  if (!child || !windowsMetadataFromHandle(child.get(), metadata) ||
+      metadata.kind == HostEntryKind::NonRegular ||
+      ((entry.attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) ||
+      ((entry.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) !=
+          (metadata.kind == HostEntryKind::Directory) ||
+      !sameWindowsEnumeratedIdentity(entry, metadata)) {
+    return {};
+  }
+  return {std::move(child), metadata};
+}
+
+bool verifyPrivateWindowsSecurity(HANDLE handle);
+
+bool collectUsageFromWindowsDirectory(HANDLE directory,
+                                      const fs::path &directoryPath,
+                                      OverlayUsage &usage) {
+  std::vector<WindowsDirectoryEntry> entries;
+  if (!enumerateWindowsDirectory(directory, entries)) {
+    usage.kind = HostEntryKind::IoError;
+    return false;
+  }
+  for (const WindowsDirectoryEntry &entry : entries) {
+    auto [child, metadata] = openWindowsChildNoFollow(
+        directoryPath, entry,
+        ((entry.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
+             ? FILE_LIST_DIRECTORY
+             : FILE_READ_ATTRIBUTES) |
+            READ_CONTROL);
+    if (!child) {
+      usage.kind = HostEntryKind::NonRegular;
       return false;
     }
+    if (!verifyPrivateWindowsSecurity(child.get())) {
+      usage.kind = HostEntryKind::NonRegular;
+      return false;
+    }
+    if (metadata.kind == HostEntryKind::Directory) {
+      if (!collectUsageFromWindowsDirectory(
+              child.get(), directoryPath / entry.name, usage)) {
+        return false;
+      }
+      continue;
+    }
+    if (usage.files == std::numeric_limits<std::uint64_t>::max() ||
+        usage.bytes >
+            std::numeric_limits<std::uint64_t>::max() - metadata.size) {
+      usage.kind = HostEntryKind::NonRegular;
+      return false;
+    }
+    ++usage.files;
+    usage.bytes += metadata.size;
   }
   return true;
 }
 
 OverlayUsage collectUsage(const fs::path &root) {
-  const HostStatResult rootStatus = statAtRoot(root, {});
-  if (rootStatus.kind == HostEntryKind::Missing) {
-    return {};
+  HostEntryKind kind = HostEntryKind::IoError;
+  auto chain = openWindowsPathAtRoot(
+      root, {}, FILE_LIST_DIRECTORY | READ_CONTROL, true, kind);
+  if (!chain) {
+    return kind == HostEntryKind::Missing ? OverlayUsage{}
+                                          : OverlayUsage{.kind = kind};
   }
-  if (rootStatus.kind != HostEntryKind::Directory) {
-    return {.kind = rootStatus.kind};
+  if (!verifyPrivateWindowsSecurity(chain->leaf())) {
+    return {.kind = HostEntryKind::NonRegular};
   }
   OverlayUsage usage;
-  std::error_code error;
-  for (fs::recursive_directory_iterator iterator(root, error), end;
-       !error && iterator != end; ++iterator) {
-    const auto status = iterator->symlink_status(error);
-    if (error || fs::is_symlink(status)) {
-      return {.kind = HostEntryKind::NonRegular};
-    }
-    if (fs::is_directory(status)) {
-      continue;
-    }
-    if (!fs::is_regular_file(status) ||
-        fs::hard_link_count(iterator->path(), error) != 1 || error) {
-      return {.kind = HostEntryKind::NonRegular};
-    }
-    ++usage.files;
-    usage.bytes += iterator->file_size(error);
-    if (error) {
-      return {.kind = HostEntryKind::IoError};
-    }
-  }
-  return error ? OverlayUsage{.kind = HostEntryKind::IoError} : usage;
+  collectUsageFromWindowsDirectory(chain->leaf(), chain->currentPath, usage);
+  return usage;
 }
 
 std::pair<std::vector<std::string>, HostEntryKind>
 listAtRoot(const fs::path &root, std::string_view virtualDirectory,
            const SkinPackageId &package) {
-  const fs::path directory = root / pathFromUtf8(virtualDirectory);
-  const HostStatResult directoryStatus = statAtRoot(root, virtualDirectory);
-  if (directoryStatus.kind != HostEntryKind::Directory) {
-    return {{}, directoryStatus.kind};
+  HostEntryKind kind = HostEntryKind::IoError;
+  auto chain = openWindowsPathAtRoot(root, virtualDirectory,
+                                     FILE_LIST_DIRECTORY, true, kind);
+  if (!chain) {
+    return {{}, kind};
+  }
+  std::vector<WindowsDirectoryEntry> children;
+  if (!enumerateWindowsDirectory(chain->leaf(), children)) {
+    return {{}, HostEntryKind::IoError};
   }
   std::vector<std::string> result;
-  std::error_code error;
-  for (fs::directory_iterator iterator(directory, error), end;
-       !error && iterator != end; ++iterator) {
-    const auto status = iterator->symlink_status(error);
-    if (error || fs::is_symlink(status) ||
-        (!fs::is_directory(status) && !fs::is_regular_file(status)) ||
-        (fs::is_regular_file(status) &&
-         fs::hard_link_count(iterator->path(), error) != 1)) {
+  result.reserve(children.size());
+  for (const WindowsDirectoryEntry &childEntry : children) {
+    auto [child, metadata] = openWindowsChildNoFollow(
+        chain->currentPath, childEntry, FILE_READ_ATTRIBUTES);
+    if (!child) {
+      return {{}, HostEntryKind::NonRegular};
+    }
+    const auto name = utf8FromWide(childEntry.name);
+    if (!name) {
       return {{}, HostEntryKind::NonRegular};
     }
     std::string candidate;
     if (!virtualDirectory.empty()) {
       candidate = std::string(virtualDirectory) + "/";
     }
-    candidate += utf8Path(iterator->path().filename());
+    candidate += *name;
     const auto normalized = normalizeEntryPath(package, candidate);
     if (!normalized.entry ||
         normalized.entry->packageRelativePath != candidate) {
@@ -713,11 +1229,314 @@ listAtRoot(const fs::path &root, std::string_view virtualDirectory,
     }
     result.push_back(std::move(candidate));
   }
-  if (error) {
-    return {{}, HostEntryKind::IoError};
-  }
   std::ranges::sort(result);
   return {std::move(result), HostEntryKind::Directory};
+}
+
+class PrivateWindowsSecurity {
+public:
+  PrivateWindowsSecurity() = default;
+  PrivateWindowsSecurity(const PrivateWindowsSecurity &) = delete;
+  PrivateWindowsSecurity &operator=(const PrivateWindowsSecurity &) = delete;
+  ~PrivateWindowsSecurity() {
+    if (accessControlList_ != nullptr) {
+      LocalFree(accessControlList_);
+    }
+    if (token_ != nullptr) {
+      CloseHandle(token_);
+    }
+  }
+
+  bool initialize() {
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token_)) {
+      return false;
+    }
+    DWORD bytes = 0;
+    GetTokenInformation(token_, TokenUser, nullptr, 0, &bytes);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes == 0) {
+      return false;
+    }
+    tokenUser_.resize(bytes);
+    if (!GetTokenInformation(token_, TokenUser, tokenUser_.data(), bytes,
+                             &bytes)) {
+      return false;
+    }
+    EXPLICIT_ACCESSW access{};
+    access.grfAccessPermissions = FILE_ALL_ACCESS;
+    access.grfAccessMode = SET_ACCESS;
+    access.grfInheritance = NO_INHERITANCE;
+    access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    access.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    access.Trustee.ptstrName = static_cast<LPWSTR>(userSid());
+    if (SetEntriesInAclW(1, &access, nullptr, &accessControlList_) !=
+            ERROR_SUCCESS ||
+        !InitializeSecurityDescriptor(&descriptor_,
+                                      SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorOwner(&descriptor_, userSid(), FALSE) ||
+        !SetSecurityDescriptorDacl(&descriptor_, TRUE, accessControlList_,
+                                   FALSE) ||
+        !SetSecurityDescriptorControl(&descriptor_, SE_DACL_PROTECTED,
+                                      SE_DACL_PROTECTED)) {
+      return false;
+    }
+    attributes_.nLength = sizeof(attributes_);
+    attributes_.lpSecurityDescriptor = &descriptor_;
+    attributes_.bInheritHandle = FALSE;
+    ready_ = true;
+    return true;
+  }
+
+  bool ready() const noexcept { return ready_; }
+  SECURITY_ATTRIBUTES *attributes() noexcept { return &attributes_; }
+
+  bool verify(HANDLE handle) const {
+    PSID owner = nullptr;
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD result =
+        GetSecurityInfo(handle, SE_FILE_OBJECT,
+                        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                        &owner, nullptr, &dacl, nullptr, &descriptor);
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    void *rawAce = nullptr;
+    bool valid =
+        result == ERROR_SUCCESS && descriptor != nullptr && owner != nullptr &&
+        EqualSid(owner, userSid()) != FALSE && dacl != nullptr &&
+        dacl->AceCount == 1 &&
+        GetSecurityDescriptorControl(descriptor, &control, &revision) &&
+        (control & SE_DACL_PROTECTED) != 0 && GetAce(dacl, 0, &rawAce) &&
+        rawAce != nullptr;
+    if (valid) {
+      const auto *header = static_cast<const ACE_HEADER *>(rawAce);
+      const auto *ace = static_cast<const ACCESS_ALLOWED_ACE *>(rawAce);
+      valid = header->AceType == ACCESS_ALLOWED_ACE_TYPE &&
+              header->AceFlags == 0 && ace->Mask == FILE_ALL_ACCESS &&
+              EqualSid(const_cast<DWORD *>(&ace->SidStart), userSid()) != FALSE;
+    }
+    if (descriptor != nullptr) {
+      LocalFree(descriptor);
+    }
+    return valid;
+  }
+
+private:
+  PSID userSid() const noexcept {
+    return tokenUser_.empty()
+               ? nullptr
+               : reinterpret_cast<const TOKEN_USER *>(tokenUser_.data())
+                     ->User.Sid;
+  }
+
+  HANDLE token_ = nullptr;
+  std::vector<std::byte> tokenUser_;
+  PACL accessControlList_ = nullptr;
+  SECURITY_DESCRIPTOR descriptor_{};
+  SECURITY_ATTRIBUTES attributes_{};
+  bool ready_ = false;
+};
+
+PrivateWindowsSecurity &privateWindowsSecurity() {
+  static PrivateWindowsSecurity security;
+  static const bool initialized = security.initialize();
+  (void)initialized;
+  return security;
+}
+
+bool verifyPrivateWindowsSecurity(HANDLE handle) {
+  PrivateWindowsSecurity &security = privateWindowsSecurity();
+  return security.ready() && security.verify(handle);
+}
+
+bool appendWindowsOverlayDirectory(WindowsHandleChain &chain,
+                                   const fs::path &component, bool create,
+                                   bool requirePrivate,
+                                   PrivateWindowsSecurity &security) {
+  const fs::path candidate = chain.currentPath / component;
+  if (create && !CreateDirectoryW(candidate.c_str(), security.attributes()) &&
+      GetLastError() != ERROR_ALREADY_EXISTS) {
+    return false;
+  }
+  HostEntryKind kind = HostEntryKind::IoError;
+  if (!appendExistingWindowsComponent(chain, component,
+                                      FILE_LIST_DIRECTORY |
+                                          FILE_READ_ATTRIBUTES | READ_CONTROL,
+                                      true, kind)) {
+    return false;
+  }
+  return !requirePrivate || security.verify(chain.leaf());
+}
+
+std::optional<WindowsHandleChain>
+ensureWindowsOverlayDirectory(const fs::path &root,
+                              std::string_view virtualDirectory) {
+  PrivateWindowsSecurity &security = privateWindowsSecurity();
+  if (!security.ready() || root.empty() || !root.is_absolute()) {
+    return std::nullopt;
+  }
+  const fs::path base = root.parent_path();
+  const fs::path absolute = base.lexically_normal();
+  WindowsHandleChain chain{.currentPath = absolute.root_path()};
+  UniqueWindowsHandle rootHandle(CreateFileW(
+      chain.currentPath.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (!rootHandle ||
+      !windowsMetadataFromHandle(rootHandle.get(), chain.metadata) ||
+      chain.metadata.kind != HostEntryKind::Directory) {
+    return std::nullopt;
+  }
+  chain.handles.push_back(std::move(rootHandle));
+  for (const fs::path &component :
+       absolute.lexically_relative(absolute.root_path())) {
+    if (!appendWindowsOverlayDirectory(chain, component, true, false,
+                                       security)) {
+      return std::nullopt;
+    }
+  }
+  if (!appendWindowsOverlayDirectory(chain, root.filename(), true, true,
+                                     security)) {
+    return std::nullopt;
+  }
+  for (const std::string &component : splitNormalized(virtualDirectory)) {
+    if (!appendWindowsOverlayDirectory(chain, pathFromUtf8(component), true,
+                                       true, security)) {
+      return std::nullopt;
+    }
+  }
+  return chain;
+}
+
+std::optional<WindowsHandleChain>
+acquireWindowsOverlayMutationPin(const fs::path &root) {
+  return ensureWindowsOverlayDirectory(root, {});
+}
+
+bool markWindowsDeletion(HANDLE handle) {
+  FILE_DISPOSITION_INFO disposition{};
+  disposition.DeleteFile = TRUE;
+  return SetFileInformationByHandle(handle, FileDispositionInfo, &disposition,
+                                    sizeof(disposition)) != FALSE;
+}
+
+bool secureReplaceAtWindowsParent(HANDLE parent, const fs::path &parentPath,
+                                  const std::wstring &leaf,
+                                  std::span<const std::byte> contents,
+                                  PrivateWindowsSecurity &security) {
+  UniqueWindowsHandle output;
+  for (std::size_t attempt = 0; attempt < maximumTemporaryCreateAttempts;
+       ++attempt) {
+    const auto candidate = uniqueOverlayTemporaryName();
+    if (!candidate) {
+      return false;
+    }
+    UniqueWindowsHandle created(CreateFileW(
+        (parentPath / pathFromUtf8(*candidate)).c_str(),
+        GENERIC_READ | GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, security.attributes(), CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (created) {
+      output = std::move(created);
+      break;
+    }
+    if (GetLastError() != ERROR_FILE_EXISTS &&
+        GetLastError() != ERROR_ALREADY_EXISTS) {
+      return false;
+    }
+  }
+  WindowsMetadata before;
+  if (!output || !windowsMetadataFromHandle(output.get(), before) ||
+      before.kind != HostEntryKind::Regular || !security.verify(output.get())) {
+    return false;
+  }
+  bool renamed = false;
+  const auto cleanup = [&] {
+    if (!renamed) {
+      markWindowsDeletion(output.get());
+    }
+  };
+  std::size_t offset = 0;
+  while (offset < contents.size()) {
+    const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(
+        contents.size() - offset, std::numeric_limits<DWORD>::max()));
+    DWORD written = 0;
+    if (!WriteFile(output.get(), contents.data() + offset, chunk, &written,
+                   nullptr) ||
+        written == 0) {
+      cleanup();
+      return false;
+    }
+    offset += written;
+  }
+  if (!FlushFileBuffers(output.get()) ||
+      !windowsMetadataFromHandle(output.get(), before) ||
+      before.kind != HostEntryKind::Regular || before.size != contents.size()) {
+    cleanup();
+    return false;
+  }
+  const std::size_t renameBytes =
+      sizeof(FILE_RENAME_INFO) + leaf.size() * sizeof(wchar_t);
+  std::vector<std::max_align_t> storage(
+      (renameBytes + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
+  auto &rename = *reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
+  std::memset(&rename, 0, renameBytes);
+  rename.ReplaceIfExists = TRUE;
+  rename.RootDirectory = parent;
+  rename.FileNameLength = static_cast<DWORD>(leaf.size() * sizeof(wchar_t));
+  std::memcpy(rename.FileName, leaf.data(), rename.FileNameLength);
+  if (!SetFileInformationByHandle(output.get(), FileRenameInfo, &rename,
+                                  static_cast<DWORD>(renameBytes))) {
+    cleanup();
+    return false;
+  }
+  renamed = true;
+  WindowsDirectoryEntry installedEntry{.name = leaf};
+  auto [installed, after] = openWindowsChildNoFollow(
+      parentPath, installedEntry, FILE_READ_ATTRIBUTES | READ_CONTROL);
+  return installed && after.kind == HostEntryKind::Regular &&
+         sameWindowsIdentity(before, after) && before.size == after.size &&
+         security.verify(installed.get());
+}
+
+bool secureReplaceOverlayFile(const fs::path &root,
+                              std::string_view virtualPath,
+                              std::span<const std::byte> contents) {
+  const std::vector<std::string> components = splitNormalized(virtualPath);
+  if (components.empty()) {
+    return false;
+  }
+  std::string parentVirtual;
+  if (components.size() > 1) {
+    parentVirtual = joinComponents(
+        std::vector<std::string>(components.begin(), components.end() - 1));
+  }
+  auto parent = ensureWindowsOverlayDirectory(root, parentVirtual);
+  PrivateWindowsSecurity &security = privateWindowsSecurity();
+  return parent &&
+         secureReplaceAtWindowsParent(parent->leaf(), parent->currentPath,
+                                      pathFromUtf8(components.back()).native(),
+                                      contents, security);
+}
+
+HostEntryKind secureCreateOverlayDirectory(const fs::path &root,
+                                           std::string_view virtualDirectory) {
+  const std::vector<std::string> components = splitNormalized(virtualDirectory);
+  if (components.empty()) {
+    return HostEntryKind::NonRegular;
+  }
+  std::string parentVirtual;
+  if (components.size() > 1) {
+    parentVirtual = joinComponents(
+        std::vector<std::string>(components.begin(), components.end() - 1));
+  }
+  auto parent = ensureWindowsOverlayDirectory(root, parentVirtual);
+  PrivateWindowsSecurity &security = privateWindowsSecurity();
+  if (!parent ||
+      !appendWindowsOverlayDirectory(*parent, pathFromUtf8(components.back()),
+                                     true, true, security)) {
+    return HostEntryKind::IoError;
+  }
+  return HostEntryKind::Directory;
 }
 #endif
 
@@ -1006,6 +1825,14 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
                                options.entry.packageRelativePath,
                                "skin entry does not belong to the revision")};
   }
+  for (const std::string &component :
+       splitNormalized(options.entry.packageRelativePath)) {
+    if (!isPortableSkinFileComponent(component)) {
+      return {.failure = failure(SkinFileError::InvalidPath,
+                                 options.entry.packageRelativePath,
+                                 "skin entry has an unsafe portable name")};
+    }
+  }
   const fs::path revisionRoot = options.revision.root().lexically_normal();
   if (revisionRoot.empty() || !revisionRoot.is_absolute() ||
       statAtRoot(revisionRoot, {}).kind != HostEntryKind::Directory) {
@@ -1245,6 +2072,7 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
   if (auto denied = impl_->guard(RenderOperation::Write, virtualPath)) {
     return {.failure = std::move(denied)};
   }
+  const std::scoped_lock overlayLock(overlayMutationMutex);
   const auto normalized = impl_->normalize(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
@@ -1253,6 +2081,13 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
     return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
                                "skin data writes are not enabled")};
   }
+#if defined(_WIN32)
+  auto overlayPin = acquireWindowsOverlayMutationPin(*impl_->overlayRoot);
+  if (!overlayPin) {
+    return {.failure = failure(SkinFileError::NonRegular, *normalized.path,
+                               "skin data overlay root is not private")};
+  }
+#endif
   OverlayUsage usage = collectUsage(*impl_->overlayRoot);
   if (usage.kind != HostEntryKind::Regular) {
     return {.resultingBytes = usage.bytes,
@@ -1331,14 +2166,6 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
                                "skin data overlay quota is exhausted")};
   }
 
-  const fs::path destination =
-      *impl_->overlayRoot / pathFromUtf8(*normalized.path);
-  if (!ensureAbsoluteDirectoryNoFollow(destination.parent_path())) {
-    return {.resultingBytes = usage.bytes,
-            .resultingFiles = usage.files,
-            .failure = failure(SkinFileError::NonRegular, *normalized.path,
-                               "skin data parent is not a safe directory")};
-  }
   const HostStatResult rechecked =
       statAtRoot(*impl_->overlayRoot, *normalized.path);
   if (rechecked.kind != existing.kind ||
@@ -1349,20 +2176,8 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
             .failure = failure(SkinFileError::IoError, *normalized.path,
                                "skin data target changed during replacement")};
   }
-  const std::string temporaryVirtualPath = *normalized.path + ".tmp";
-  if (statAtRoot(*impl_->overlayRoot, temporaryVirtualPath).kind !=
-      HostEntryKind::Missing) {
-    return {.resultingBytes = usage.bytes,
-            .resultingFiles = usage.files,
-            .failure = failure(SkinFileError::IoError, *normalized.path,
-                               "skin data temporary name is unavailable")};
-  }
-
-  std::string ignoredHostError;
-  const atomic_file::Operations privateOperations =
-      atomic_file::privateFileOperations();
-  if (!atomic_file::writeWithoutBackup(destination, replacement,
-                                       ignoredHostError, &privateOperations)) {
+  if (!secureReplaceOverlayFile(*impl_->overlayRoot, *normalized.path,
+                                replacement)) {
     return {.resultingBytes = usage.bytes,
             .resultingFiles = usage.files,
             .failure = failure(SkinFileError::IoError, *normalized.path,
@@ -1377,6 +2192,7 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
   if (auto denied = impl_->guard(RenderOperation::Write, virtualDirectory)) {
     return {.failure = std::move(denied)};
   }
+  const std::scoped_lock overlayLock(overlayMutationMutex);
   const auto normalized = impl_->normalize(virtualDirectory);
   if (!normalized.path) {
     return {.failure = normalized.failure};
@@ -1385,6 +2201,13 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
     return {.failure = failure(SkinFileError::WrongUse, *normalized.path,
                                "skin data writes are not enabled")};
   }
+#if defined(_WIN32)
+  auto overlayPin = acquireWindowsOverlayMutationPin(*impl_->overlayRoot);
+  if (!overlayPin) {
+    return {.failure = failure(SkinFileError::NonRegular, *normalized.path,
+                               "skin data overlay root is not private")};
+  }
+#endif
   OverlayUsage usage = collectUsage(*impl_->overlayRoot);
   if (usage.kind != HostEntryKind::Regular) {
     return {.resultingBytes = usage.bytes,
@@ -1408,13 +2231,6 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
                                  "skin data directory parent is missing")};
     }
   }
-  const fs::path destination = *impl_->overlayRoot / relative;
-  if (!ensureAbsoluteDirectoryNoFollow(destination.parent_path())) {
-    return {.resultingBytes = usage.bytes,
-            .resultingFiles = usage.files,
-            .failure = failure(SkinFileError::NonRegular, *normalized.path,
-                               "skin data parent is not a safe directory")};
-  }
   const HostStatResult existing =
       statAtRoot(*impl_->overlayRoot, *normalized.path);
   if (existing.kind == HostEntryKind::Directory) {
@@ -1426,10 +2242,8 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
             .failure = failure(errorForKind(existing.kind), *normalized.path,
                                messageForKind(existing.kind))};
   }
-  std::error_code createError;
-  if (!fs::create_directory(destination, createError) || createError ||
-      statAtRoot(*impl_->overlayRoot, *normalized.path).kind !=
-          HostEntryKind::Directory) {
+  if (secureCreateOverlayDirectory(*impl_->overlayRoot, *normalized.path) !=
+      HostEntryKind::Directory) {
     return {.resultingBytes = usage.bytes,
             .resultingFiles = usage.files,
             .failure = failure(SkinFileError::IoError, *normalized.path,

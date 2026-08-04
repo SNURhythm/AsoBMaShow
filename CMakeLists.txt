@@ -574,6 +574,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(skin_package_store_windows_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME lua_skin_file_system_windows_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/lua_skin_file_system_windows_contract_tests.py -v)
+    set_tests_properties(lua_skin_file_system_windows_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_library(ir_submission_eligibility_test_support STATIC
         src/ir/tachi/TachiEligibility.cpp
         src/ir/IrOutboxModels.cpp
@@ -4251,7 +4258,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(lua_skin_file_system_tests
         tests/lua_skin_file_system_tests.cpp
-        src/AtomicFile.cpp
         src/FileChecksum.cpp
         src/skin/SkinProfileSettings.cpp
         src/skin/SkinStoragePaths.cpp
@@ -4272,6 +4278,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(lua_skin_file_system_tests PRIVATE
         utf8proc::utf8proc
     )
+    if(WIN32)
+        target_link_libraries(lua_skin_file_system_tests PRIVATE advapi32)
+    endif()
     if(APPLE)
         target_sources(lua_skin_file_system_tests PRIVATE
             src/skin/package/SkinAliasDetectorApple.mm
