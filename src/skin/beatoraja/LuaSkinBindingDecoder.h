@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -90,12 +91,21 @@ struct LuaSkinBindingRequest {
   LuaValuePath path;
   std::uint32_t authoredOrdinal = 0;
   std::optional<int> fallbackNumeric;
+  // Synthesized numeric overloads (Text.ref and implicit Slider.type) are
+  // selected by the loader without serializing or inspecting an authored Lua
+  // field.  This keeps ignored event fields out of callback/work accounting.
+  bool numericFallbackOnly = false;
 };
 
 struct LuaSkinBindingDecodeResult {
   std::optional<SkinDecodedBindingId> id;
   std::optional<SkinDiagnostic> failure;
 };
+
+// Invalid decoder requests and session-global resource failures abort model
+// decoding. User-authored binding failures remain typed zero dependencies for
+// the validator to dispose at object/session scope.
+[[nodiscard]] bool luaSkinBindingFailureIsFatal(std::string_view code) noexcept;
 
 struct LuaSkinBindingDecoderPolicy {
   static constexpr std::size_t maxBindingsPerKind = 20'000;

@@ -228,7 +228,7 @@ constexpr auto kBuiltins = std::to_array<SkinBuiltinBindingCatalogEntry>({
     {.type = {.kind = SkinBindingKind::StringProperty},
      .selector = SkinBuiltinPropertySelector{501}},
     {.type = {.kind = SkinBindingKind::StringWriter},
-     .selector = SkinBuiltinPropertySelector{std::string("501")}},
+     .selector = SkinBuiltinPropertySelector{501}},
     {.type = {.kind = SkinBindingKind::TimerProperty},
      .selector = SkinBuiltinPropertySelector{7}},
 });
@@ -322,9 +322,47 @@ void testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks() {
   const auto valid = SkinModelValidator{}.validate(
       model, {.builtins = builtins,
               .callbacks = session.runtime()->callbackLiveness()});
-  expect(valid.model && !valid.criticalFailure &&
-             valid.model->disabledOptionalObjects.empty(),
-         "live binding catalog and callback generation validate end to end");
+  const auto *imageSetDefinition = objectNamed(model, "image-set");
+  const auto *textDefinition = objectNamed(model, "text");
+  const auto *fallbackTextDefinition = objectNamed(model, "text-fallback");
+  expect(valid.model && !valid.criticalFailure && stateDefinition &&
+             imageSetDefinition && textDefinition && fallbackTextDefinition &&
+             valid.model->disabledOptionalObjects ==
+                 std::vector<SkinObjectId>{
+                     stateDefinition->id, imageSetDefinition->id,
+                     textDefinition->id, fallbackTextDefinition->id} &&
+             std::ranges::count_if(
+                 valid.diagnostics,
+                 [](const auto &item) {
+                   return item.code ==
+                          "skin_lua_model_image_interaction_unsupported";
+                 }) == 2 &&
+             std::ranges::count_if(
+                 valid.diagnostics,
+                 [](const auto &item) {
+                   return item.code ==
+                          "skin_lua_model_text_interaction_unsupported";
+                 }) == 2,
+         "unsupported Image/Text interactions are diagnosed and disabled");
+
+  auto criticalInteraction = model;
+  auto criticalImage =
+      std::ranges::find_if(criticalInteraction.objects, [](const auto &object) {
+        return object.authoredName == "state-image";
+      });
+  criticalImage->critical = true;
+  const auto interactionRejected = SkinModelValidator{}.validate(
+      std::move(criticalInteraction),
+      {.builtins = builtins,
+       .callbacks = session.runtime()->callbackLiveness()});
+  expect(!interactionRejected.model && interactionRejected.criticalFailure &&
+             std::ranges::any_of(
+                 interactionRejected.diagnostics,
+                 [](const auto &item) {
+                   return item.code ==
+                          "skin_lua_model_image_interaction_unsupported";
+                 }),
+         "critical Image click interaction is diagnosed and rejected");
 
   const auto timerCallback =
       std::ranges::find_if(model.timerProperties, [](const auto &binding) {
@@ -461,26 +499,267 @@ return {type=0,w=1280,h=720,
               {id='second',op={1,2,{}},dst={{}}}}}
 )lua");
   const auto decoded = session.decode();
-  expect(!decoded.model && decoded.diagnostics.size() == 1 &&
+  expect(decoded.model && decoded.diagnostics.size() == 1 &&
              decoded.diagnostics.front().code ==
                  "skin_lua_binding_type_invalid" &&
              decoded.diagnostics.front().virtualPath == "destination[2].op[3]",
-         "invalid binding reports its exact indexed source path");
+         "invalid optional binding survives with its exact indexed path");
+  if (!decoded.model) {
+    return;
+  }
+  const auto validated = SkinModelValidator{}.validate(*decoded.model, {});
+  const auto *second = objectNamed(*decoded.model, "second");
+  expect(validated.model && second &&
+             std::ranges::find(validated.model->disabledOptionalObjects,
+                               second->id) !=
+                 validated.model->disabledOptionalObjects.end(),
+         "invalid optional binding is disposed by model validation");
 }
 
-void testInvalidExplicitRefSourceFailsClosed() {
+void testAllEightInvalidBindingKindsRemainTypedDependencies() {
   LiveSession session(R"lua(
 return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},
  font={{id='main',path='main.fnt'}},
- text={{id='text',font='main',size=20,ref=501,event={}}},
- destination={{id='text',dst={{}}}}}
+ image={{id='bad-timer',src='atlas',w=1,h=1,timer={}},
+        {id='bad-event',src='atlas',w=1,h=1,act={}},
+        {id='bad-boolean',src='atlas',w=1,h=1}},
+ value={{id='bad-integer',src='atlas',w=10,h=1,divx=10,value={}}},
+ floatvalue={{id='bad-float',src='atlas',w=12,h=1,divx=12,value={}}},
+ slider={{id='bad-float-writer',src='atlas',w=1,h=1,value=11,event={}}},
+ text={{id='bad-string',font='main',size=20,ref=10,value={}},
+       {id='bad-string-writer',font='main',size=20,ref=30,value=30,event={}}},
+ destination={{id='bad-timer',dst={{}}},{id='bad-event',dst={{}}},
+              {id='bad-integer',dst={{}}},{id='bad-float',dst={{}}},
+              {id='bad-float-writer',dst={{}}},{id='bad-string',dst={{}}},
+              {id='bad-string-writer',dst={{}}},
+              {id='bad-boolean',draw={},dst={{}}}}}
+)lua");
+  constexpr auto builtins = std::to_array<SkinBuiltinBindingCatalogEntry>({
+      {.type = {.kind = SkinBindingKind::FloatProperty,
+                .floatDomain = SkinFloatPropertyDomain::Rate},
+       .selector = SkinBuiltinPropertySelector{11}},
+      {.type = {.kind = SkinBindingKind::StringProperty},
+       .selector = SkinBuiltinPropertySelector{30}},
+  });
+  const SkinBuiltinBindingCatalogView catalog(builtins);
+  const auto decoded = session.decode(catalog);
+  constexpr std::array<std::string_view, 8> expectedPaths{
+      "image[1].timer",      "image[2].act",        "value[1].value",
+      "floatvalue[1].value", "slider[1].event",     "text[1].value",
+      "text[2].event",       "destination[8].draw",
+  };
+  expect(decoded.model && decoded.diagnostics.size() == expectedPaths.size(),
+         "all eight invalid binding kinds preserve the decoded model");
+  for (const auto path : expectedPaths) {
+    expect(std::ranges::any_of(decoded.diagnostics,
+                               [&](const auto &item) {
+                                 return item.code ==
+                                            "skin_lua_binding_type_invalid" &&
+                                        item.virtualPath == path;
+                               }),
+           "invalid binding retains its exact authored field path");
+  }
+  if (!decoded.model) {
+    return;
+  }
+  const auto *badTimer = objectNamed(*decoded.model, "bad-timer");
+  const auto *badEvent = objectNamed(*decoded.model, "bad-event");
+  const auto *badInteger = objectNamed(*decoded.model, "bad-integer");
+  const auto *badFloat = objectNamed(*decoded.model, "bad-float");
+  const auto *badFloatWriter = objectNamed(*decoded.model, "bad-float-writer");
+  const auto *badString = objectNamed(*decoded.model, "bad-string");
+  const auto *badStringWriter =
+      objectNamed(*decoded.model, "bad-string-writer");
+  const auto *timerImage =
+      badTimer ? std::get_if<SkinImageObject>(&badTimer->payload) : nullptr;
+  const auto *eventImage =
+      badEvent ? std::get_if<SkinImageObject>(&badEvent->payload) : nullptr;
+  const auto *integer =
+      badInteger ? std::get_if<SkinNumberObject>(&badInteger->payload)
+                 : nullptr;
+  const auto *floating =
+      badFloat ? std::get_if<SkinFloatObject>(&badFloat->payload) : nullptr;
+  const auto *slider =
+      badFloatWriter ? std::get_if<SkinSliderObject>(&badFloatWriter->payload)
+                     : nullptr;
+  const auto *string =
+      badString ? std::get_if<SkinTextObject>(&badString->payload) : nullptr;
+  const auto *stringWriter =
+      badStringWriter ? std::get_if<SkinTextObject>(&badStringWriter->payload)
+                      : nullptr;
+  expect(timerImage && timerImage->orderedStates.front().timer &&
+             !*timerImage->orderedStates.front().timer && eventImage &&
+             eventImage->clickEvent && !*eventImage->clickEvent && integer &&
+             !integer->value && floating && !floating->value && slider &&
+             slider->writer && !*slider->writer && string && string->value &&
+             !*string->value && stringWriter && stringWriter->writer &&
+             !*stringWriter->writer,
+         "invalid definitions retain typed zero sentinels through "
+         "materialization");
+
+  const auto validated = SkinModelValidator{}.validate(
+      *decoded.model, {.builtins = catalog,
+                       .callbacks = session.runtime()->callbackLiveness()});
+  expect(validated.model && !validated.criticalFailure &&
+             validated.model->disabledOptionalObjects.size() ==
+                 decoded.model->objects.size(),
+         "validator disables every optional object with an invalid binding");
+}
+
+void testUnusedInvalidDefinitionDoesNotKillSkin() {
+  LiveSession session(R"lua(
+return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},
+ image={{id='unused-invalid',src='atlas',w=1,h=1,timer={}},
+        {id='visible',src='atlas',w=1,h=1}},
+ destination={{id='visible',dst={{}}}}}
 )lua");
   const auto decoded = session.decode();
-  expect(
-      !decoded.model && decoded.diagnostics.size() == 1 &&
-          decoded.diagnostics.front().code == "skin_lua_binding_type_invalid" &&
-          decoded.diagnostics.front().virtualPath == "text[1].event",
-      "invalid explicit ref-backed source fails closed at its authored path");
+  expect(decoded.model && decoded.diagnostics.size() == 1 &&
+             decoded.diagnostics.front().virtualPath == "image[1].timer",
+         "unused invalid definition retains a diagnostic without killing skin");
+  if (!decoded.model) {
+    return;
+  }
+  const auto validated = SkinModelValidator{}.validate(*decoded.model, {});
+  expect(validated.model && !validated.criticalFailure &&
+             validated.model->disabledOptionalObjects.empty(),
+         "unused invalid dependency has no object-level disposition");
+}
+
+void testInvalidCriticalBindingFailsDuringValidation() {
+  LiveSession session(R"lua(
+return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},
+ image={{id='lane',src='atlas',w=1,h=1,timer={}}},
+ note={id='note',note={'lane'},mine={'lane'},
+       lnend={'lane'},lnstart={'lane'},lnbody={'lane'},lnactive={'lane'},
+       hcnend={'lane'},hcnstart={'lane'},hcnbody={'lane'},
+       hcnactive={'lane'},hcndamage={'lane'},hcnreactive={'lane'},
+       dst={{x=0,y=0,w=1,h=1}}},
+ destination={{id='note',dst={{}}}}}
+)lua");
+  const auto decoded = session.decode();
+  expect(decoded.model && decoded.diagnostics.size() == 1 &&
+             decoded.diagnostics.front().virtualPath == "image[1].timer",
+         "critical dependency survives decoding as a typed sentinel");
+  if (!decoded.model) {
+    return;
+  }
+  const auto validated = SkinModelValidator{}.validate(*decoded.model, {});
+  expect(!validated.model && validated.criticalFailure,
+         "validator rejects a critical object with an invalid binding");
+}
+
+void testCustomObjectsPreserveOrderBindingsAndValidation() {
+  LiveSession session(R"lua(
+local timer = function() return 1234 end
+local action = function(a, b) return (a or 0) + (b or 0) end
+local condition = function() return true end
+return {type=0,w=1280,h=720,
+ customTimers={{id=19999,timer=timer},{id=10000}},
+ customEvents={{id=1999,action=action,condition=condition,minInterval=17},
+               {id=1000,action=42,minInterval=2147483647}}}
+)lua");
+  constexpr auto builtins = std::to_array<SkinBuiltinBindingCatalogEntry>({
+      {.type = {.kind = SkinBindingKind::Event},
+       .selector = SkinBuiltinPropertySelector{42}},
+  });
+  const SkinBuiltinBindingCatalogView catalog(builtins);
+  const auto decoded = session.decode(catalog);
+  const auto divergenceCount =
+      std::ranges::count_if(decoded.diagnostics, [](const auto &item) {
+        return item.code == "custom_object_order_authored_divergence";
+      });
+  expect(decoded.model && divergenceCount == 1,
+         "nonempty custom vectors emit exactly one order divergence warning");
+  if (!decoded.model || !session.runtime()) {
+    return;
+  }
+  const auto &model = *decoded.model;
+  expect(model.customTimers.size() == 2 && model.customTimers[0].id == 19999 &&
+             model.customTimers[0].timer && model.customTimers[1].id == 10000 &&
+             !model.customTimers[1].timer && model.customEvents.size() == 2 &&
+             model.customEvents[0].id == 1999 && model.customEvents[0].action &&
+             model.customEvents[0].condition &&
+             model.customEvents[0].minimumIntervalMillis == 17 &&
+             model.customEvents[1].id == 1000 && model.customEvents[1].action &&
+             !model.customEvents[1].condition &&
+             model.customEvents[1].minimumIntervalMillis == 2147483647,
+         "custom timers/events preserve separate authored vectors and fields");
+  const auto validated = SkinModelValidator{}.validate(
+      model, {.builtins = catalog,
+              .callbacks = session.runtime()->callbackLiveness()});
+  expect(validated.model && !validated.criticalFailure,
+         "live custom timer/action/condition dependencies validate");
+
+  auto duplicateEvent = model;
+  duplicateEvent.customEvents.push_back(duplicateEvent.customEvents.front());
+  const auto duplicateEventResult = SkinModelValidator{}.validate(
+      std::move(duplicateEvent),
+      {.builtins = catalog,
+       .callbacks = session.runtime()->callbackLiveness()});
+  expect(!duplicateEventResult.model && duplicateEventResult.criticalFailure,
+         "duplicate custom event IDs fail closed");
+}
+
+void testInvalidCustomObjectContractsFailClosed() {
+  LiveSession session(R"lua(
+return {type=0,w=1280,h=720,
+ customTimers={{id=9999,timer={}}},
+ customEvents={{id=999,action={},condition={},minInterval=-1}}}
+)lua");
+  const auto decoded = session.decode();
+  constexpr std::array<std::string_view, 3> paths{"customTimers[1].timer",
+                                                  "customEvents[1].action",
+                                                  "customEvents[1].condition"};
+  expect(decoded.model && decoded.diagnostics.size() == paths.size() + 1,
+         "invalid custom dependencies remain available for validation");
+  for (const auto path : paths) {
+    expect(std::ranges::any_of(
+               decoded.diagnostics,
+               [&](const auto &item) { return item.virtualPath == path; }),
+           "custom dependency diagnostic retains its exact path");
+  }
+  if (!decoded.model) {
+    return;
+  }
+  const auto invalid = SkinModelValidator{}.validate(*decoded.model, {});
+  expect(!invalid.model && invalid.criticalFailure,
+         "invalid custom IDs, interval, and bindings fail closed globally");
+
+  auto duplicate = *decoded.model;
+  duplicate.customTimers[0].id = 10000;
+  duplicate.customTimers[0].timer.reset();
+  duplicate.customTimers.push_back(duplicate.customTimers[0]);
+  duplicate.customEvents.clear();
+  const auto duplicateResult =
+      SkinModelValidator{}.validate(std::move(duplicate), {});
+  expect(!duplicateResult.model && duplicateResult.criticalFailure,
+         "duplicate custom IDs fail closed");
+}
+
+void testCustomBindingsShareAggregateSourceWorkBudget() {
+  LiveSession session(R"lua(
+local huge = string.rep(' ', 65513) .. 'function() return 1 end'
+local images = {}
+for i = 1, 128 do
+  images[i] = {id='image-' .. i,src='atlas',w=1,h=1,timer=huge}
+end
+return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},image=images,
+ customEvents={{id=1000,action=huge}}}
+)lua");
+  const auto decoded = session.decode();
+  expect(!decoded.model &&
+             std::ranges::any_of(
+                 decoded.diagnostics,
+                 [](const auto &item) {
+                   return item.code == "skin_lua_binding_work_limit_exceeded" &&
+                          item.virtualPath == "customEvents[1].action";
+                 }),
+         "custom bindings consume the shared 8 MiB source-work budget");
 }
 
 void testLiveAggregateBindingSourceBudget() {
@@ -515,7 +794,12 @@ int main() {
   testAllKindsDecodeWithPinnedDispatchAndLiveCallbacks();
   testValidationRejectsDeadCallbacksAndWrongBuiltinDomain();
   testExactIndexedBindingFailurePath();
-  testInvalidExplicitRefSourceFailsClosed();
+  testAllEightInvalidBindingKindsRemainTypedDependencies();
+  testUnusedInvalidDefinitionDoesNotKillSkin();
+  testInvalidCriticalBindingFailsDuringValidation();
+  testCustomObjectsPreserveOrderBindingsAndValidation();
+  testInvalidCustomObjectContractsFailClosed();
+  testCustomBindingsShareAggregateSourceWorkBudget();
   testLiveAggregateBindingSourceBudget();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";

@@ -297,6 +297,9 @@ void testPinnedDispatchAndTypedInterning() {
           .type = {.kind = SkinBindingKind::StringWriter},
           .selector = SkinBuiltinPropertySelector{std::string("42")}},
       SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringWriter},
+          .selector = SkinBuiltinPropertySelector{42}},
+      SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::Event},
           .selector = SkinBuiltinPropertySelector{std::string("known_event")}},
       SkinBuiltinBindingCatalogEntry{
@@ -595,11 +598,11 @@ void testPinnedDispatchAndTypedInterning() {
          "built-in catalog lookup is kind and domain aware");
   expect(builtins.contains({.kind = SkinBindingKind::BooleanProperty},
                            SkinBuiltinPropertySelector{42}) &&
-             !builtins.contains({.kind = SkinBindingKind::StringWriter},
-                                SkinBuiltinPropertySelector{42}) &&
+             builtins.contains({.kind = SkinBindingKind::StringWriter},
+                               SkinBuiltinPropertySelector{42}) &&
              !builtins.contains({.kind = SkinBindingKind::BooleanProperty},
                                 SkinBuiltinPropertySelector{999}),
-         "built-in catalog distinguishes valid, wrong-kind, and unknown IDs");
+         "built-in catalog distinguishes typed fallback and unknown IDs");
 
   const auto wrongKindName = decoder.decode(
       *session.configured,
@@ -652,7 +655,7 @@ void testMissingFieldUsesTypedNumericFallback() {
           .selector = SkinBuiltinPropertySelector{42}},
       SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::StringWriter},
-          .selector = SkinBuiltinPropertySelector{std::string("42")}},
+          .selector = SkinBuiltinPropertySelector{42}},
   };
   LuaSkinBindingDecoder decoder(*session.runtime,
                                 SkinBuiltinBindingCatalogView(builtinEntries));
@@ -680,10 +683,10 @@ void testMissingFieldUsesTypedNumericFallback() {
   const auto writerView = decoder.bindings();
   const auto *writerBuiltin = std::get_if<SkinBuiltinPropertySelector>(
       &writerView.stringWriters[writer.value - 1].source);
-  const auto *writerName =
-      writerBuiltin ? std::get_if<std::string>(&writerBuiltin->value) : nullptr;
-  expect(writerName && *writerName == "42",
-         "StringWriter fallback follows pinned name-only numeric dispatch");
+  const auto *writerSelector =
+      writerBuiltin ? std::get_if<int>(&writerBuiltin->value) : nullptr;
+  expect(writerSelector && *writerSelector == 42,
+         "StringWriter ref fallback preserves the pinned integer overload");
 }
 
 void testNestedFunctionSurvivesConfiguredHandleDestruction() {
@@ -759,6 +762,22 @@ void testBindingPathDepthIsBounded() {
   expect(!oneOver.source && oneOver.failure &&
              oneOver.failure->code == "skin_lua_binding_path_too_deep",
          "a binding path one over the maximum depth is rejected precisely");
+}
+
+void testIncompleteDecoderRequestIsSessionFatal() {
+  auto session = fixture().session();
+  if (!session.runtime || !session.configured) {
+    return;
+  }
+  LuaSkinBindingDecoder decoder(*session.runtime, {});
+  const auto incomplete = decoder.decode(
+      *session.configured,
+      {.type = {.kind = SkinBindingKind::TimerProperty}, .path = {}});
+  expect(!incomplete.id && incomplete.failure &&
+             incomplete.failure->code == "skin_lua_binding_invalid" &&
+             luaSkinBindingFailureIsFatal(incomplete.failure->code),
+         "an incomplete internal binding request is session-fatal rather than "
+         "an object-local dependency");
 }
 
 void testThousandsOfDistinctFunctionsStayIndexed() {
@@ -994,6 +1013,7 @@ int main() {
   testMissingFieldUsesTypedNumericFallback();
   testNestedFunctionSurvivesConfiguredHandleDestruction();
   testBindingPathDepthIsBounded();
+  testIncompleteDecoderRequestIsSessionFatal();
   testThousandsOfDistinctFunctionsStayIndexed();
   testBindingSourceWorkAndIndividualTextAreBounded();
   testTimerTrialsShareOneConfiguredCompilationBudget();

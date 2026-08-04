@@ -816,7 +816,8 @@ struct RawSkinText {
   int refSelector = 0;
   std::uint32_t authoredIndex = 0;
   SkinStringPropertyId value{};
-  SkinStringWriterId writer{};
+  std::optional<SkinStringWriterId> writer;
+  bool writerFieldPresent = false;
   bool writerWasExplicit = false;
   std::string literal;
   bool editable = false;
@@ -828,6 +829,20 @@ struct RawSkinText {
   double shadowOffsetX = 0.0;
   double shadowOffsetY = 0.0;
   double shadowSmoothness = 0.0;
+};
+
+struct RawCustomTimer {
+  int id = 0;
+  std::uint32_t authoredIndex = 0;
+  std::optional<SkinTimerPropertyId> timer;
+};
+
+struct RawCustomEvent {
+  int id = 0;
+  std::uint32_t authoredIndex = 0;
+  SkinEventBindingId action{};
+  std::optional<SkinBooleanPropertyId> condition;
+  int minimumIntervalMillis = 0;
 };
 
 struct RawSkinGraph {
@@ -968,6 +983,8 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinCover> rawLiftCovers;
   std::vector<RawSkinJudge> rawJudges;
   std::vector<RawDestination> rawDestinations;
+  std::vector<RawCustomTimer> rawCustomTimers;
+  std::vector<RawCustomEvent> rawCustomEvents;
   std::optional<RawSkinNote> note;
   std::size_t decodedFrames = 0;
   std::size_t materializedSpriteFrames = 0;
@@ -1251,7 +1268,7 @@ bool decodeRawText(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "size", output.pointSize, request) &&
          integerField(state, index, "align", output.alignment, request) &&
          integerField(state, index, "ref", output.refSelector, request) &&
-         bindingFieldPresent(state, index, "event", output.writerWasExplicit,
+         bindingFieldPresent(state, index, "event", output.writerFieldPresent,
                              request) &&
          stringField(state, index, "constantText", output.literal,
                      LuaSkinTableDecoderPolicy::maxCopiedTextBytes, true,
@@ -1273,6 +1290,20 @@ bool decodeRawText(lua_State *state, int index, std::size_t depth,
                      request) &&
          numberField(state, index, "shadowSmoothness", output.shadowSmoothness,
                      request);
+}
+
+bool decodeRawCustomTimer(lua_State *state, int index, std::size_t depth,
+                          RawCustomTimer &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         integerField(state, index, "id", output.id, request);
+}
+
+bool decodeRawCustomEvent(lua_State *state, int index, std::size_t depth,
+                          RawCustomEvent &output, DecodeRequest &request) {
+  return requireObject(state, index, depth, request) &&
+         integerField(state, index, "id", output.id, request) &&
+         integerField(state, index, "minInterval", output.minimumIntervalMillis,
+                      request);
 }
 
 bool decodeRawGraph(lua_State *state, int index, std::size_t depth,
@@ -2334,6 +2365,7 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     } else {
       object.value =
           slider->second.implicitValue.value_or(SkinFloatPropertyId{});
+      object.writer = slider->second.writer;
     }
     object.direction = static_cast<std::uint8_t>(slider->second.direction);
     object.range = static_cast<double>(slider->second.range);
@@ -2961,6 +2993,40 @@ void decodeGameplayProtected(lua_State *state, int index,
       request->rawDestinations[ordinal].authoredIndex =
           static_cast<std::uint32_t>(ordinal + 1);
     }
+
+    // JsonSkinLoader constructs custom events before custom timers, while the
+    // runtime evaluates timers before events. Preserve each authored vector
+    // independently and make that phase-order mismatch explicit once.
+    if (!decodeObjectArrayField(state, index, "customEvents", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawCustomEvents, request->decoding,
+                                decodeRawCustomEvent) ||
+        !decodeObjectArrayField(state, index, "customTimers", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawCustomTimers, request->decoding,
+                                decodeRawCustomTimer)) {
+      transferDecodeDiagnostics(*request);
+      request->result.model.reset();
+      return;
+    }
+    for (std::size_t ordinal = 0; ordinal < request->rawCustomEvents.size();
+         ++ordinal) {
+      request->rawCustomEvents[ordinal].authoredIndex =
+          static_cast<std::uint32_t>(ordinal + 1);
+    }
+    for (std::size_t ordinal = 0; ordinal < request->rawCustomTimers.size();
+         ++ordinal) {
+      request->rawCustomTimers[ordinal].authoredIndex =
+          static_cast<std::uint32_t>(ordinal + 1);
+    }
+    if (!request->rawCustomEvents.empty() ||
+        !request->rawCustomTimers.empty()) {
+      request->result.diagnostics.push_back(
+          {.code = "custom_object_order_authored_divergence",
+           .message = "Pinned custom object construction order differs from "
+                      "runtime timer/event phase order",
+           .severity = DiagnosticSeverity::Warning});
+    }
   } catch (...) {
     request->allocationFailed = true;
     request->result.model.reset();
@@ -3036,8 +3102,9 @@ bool retainBindingFailure(GameplayDecodeRequest &request,
           : diagnostic("skin_lua_binding_invalid",
                        "Lua binding decoder returned no typed binding");
   failure.virtualPath = std::move(path);
+  const bool fatal = luaSkinBindingFailureIsFatal(failure.code);
   request.result.diagnostics.push_back(std::move(failure));
-  return false;
+  return !fatal;
 }
 
 std::uint32_t nextBindingOrdinal(const LuaSkinBindingDecoder &decoder,
@@ -3077,11 +3144,13 @@ bool decodeRequiredBinding(GameplayDecodeRequest &request,
               .authoredOrdinal = nextBindingOrdinal(decoder, type.kind),
               .fallbackNumeric = fallbackNumeric});
   if (!decoded.id) {
+    output = Id{};
     return retainBindingFailure(request, std::move(decoded),
                                 std::move(pathText));
   }
   const auto *typed = std::get_if<Id>(&*decoded.id);
   if (typed == nullptr || !*typed) {
+    output = Id{};
     return retainBindingFailure(request, std::move(decoded),
                                 std::move(pathText));
   }
@@ -3094,21 +3163,27 @@ bool decodeOptionalBinding(GameplayDecodeRequest &request,
                            LuaSkinBindingDecoder &decoder,
                            const LuaValueHandle &value, SkinBindingType type,
                            LuaValuePath path, std::string pathText,
-                           std::uint32_t, std::optional<Id> &output) {
+                           std::uint32_t, std::optional<Id> &output,
+                           std::optional<int> fallbackNumeric = {},
+                           bool numericFallbackOnly = false) {
   auto decoded = decoder.decode(
       value, {.type = type,
               .path = std::move(path),
-              .authoredOrdinal = nextBindingOrdinal(decoder, type.kind)});
+              .authoredOrdinal = nextBindingOrdinal(decoder, type.kind),
+              .fallbackNumeric = fallbackNumeric,
+              .numericFallbackOnly = numericFallbackOnly});
   if (!decoded.id) {
     if (decoded.failure &&
         decoded.failure->code == "skin_lua_binding_missing") {
       return true;
     }
+    output = Id{};
     return retainBindingFailure(request, std::move(decoded),
                                 std::move(pathText));
   }
   const auto *typed = std::get_if<Id>(&*decoded.id);
   if (typed == nullptr || !*typed) {
+    output = Id{};
     return retainBindingFailure(request, std::move(decoded),
                                 std::move(pathText));
   }
@@ -3183,7 +3258,8 @@ bool bindNoteLinePrefix(GameplayDecodeRequest &request,
 
 bool bindGameplayDefinitions(GameplayDecodeRequest &request,
                              LuaSkinBindingDecoder &decoder,
-                             const LuaValueHandle &value) {
+                             const LuaValueHandle &value,
+                             SkinBuiltinBindingCatalogView builtins) {
   for (auto &image : request.rawImages) {
     if (!bindImageTimer(request, decoder, value, "image", image)) {
       return false;
@@ -3279,15 +3355,17 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
              .floatDomain = SkinFloatPropertyDomain::Rate},
             bindingPath("slider", slider.image.authoredIndex, "value"),
             bindingPathText("slider", slider.image.authoredIndex, "value"),
-            slider.image.authoredIndex - 1, slider.explicitValue) ||
-        !decodeOptionalBinding(
-            request, decoder, value, {.kind = SkinBindingKind::FloatWriter},
-            bindingPath("slider", slider.image.authoredIndex, "event"),
-            bindingPathText("slider", slider.image.authoredIndex, "event"),
-            slider.image.authoredIndex - 1, slider.writer)) {
+            slider.image.authoredIndex - 1, slider.explicitValue)) {
       return false;
     }
     if (slider.explicitValue) {
+      if (!decodeOptionalBinding(
+              request, decoder, value, {.kind = SkinBindingKind::FloatWriter},
+              bindingPath("slider", slider.image.authoredIndex, "event"),
+              bindingPathText("slider", slider.image.authoredIndex, "event"),
+              slider.image.authoredIndex - 1, slider.writer)) {
+        return false;
+      }
       continue;
     }
     if (slider.isRefNum) {
@@ -3314,6 +3392,17 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
         return false;
       }
       slider.implicitValue = id;
+      const SkinBindingType writerType{.kind = SkinBindingKind::FloatWriter};
+      const SkinBuiltinPropertySelector selector{slider.typeSelector};
+      if (slider.changeable && builtins.contains(writerType, selector) &&
+          !decodeOptionalBinding(
+              request, decoder, value, writerType,
+              bindingPath("slider", slider.image.authoredIndex, "event"),
+              bindingPathText("slider", slider.image.authoredIndex, "event"),
+              slider.image.authoredIndex - 1, slider.writer,
+              slider.typeSelector, true)) {
+        return false;
+      }
     }
   }
 
@@ -3322,12 +3411,27 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
             request, decoder, value, {.kind = SkinBindingKind::StringProperty},
             bindingPath("text", text.authoredIndex, "value"),
             bindingPathText("text", text.authoredIndex, "value"),
-            text.authoredIndex - 1, text.refSelector, text.value) ||
-        !decodeRequiredBinding(
-            request, decoder, value, {.kind = SkinBindingKind::StringWriter},
-            bindingPath("text", text.authoredIndex, "event"),
-            bindingPathText("text", text.authoredIndex, "event"),
-            text.authoredIndex - 1, text.refSelector, text.writer)) {
+            text.authoredIndex - 1, text.refSelector, text.value)) {
+      return false;
+    }
+    const SkinBindingType writerType{.kind = SkinBindingKind::StringWriter};
+    if (text.writerFieldPresent) {
+      if (!decodeOptionalBinding(
+              request, decoder, value, writerType,
+              bindingPath("text", text.authoredIndex, "event"),
+              bindingPathText("text", text.authoredIndex, "event"),
+              text.authoredIndex - 1, text.writer)) {
+        return false;
+      }
+      text.writerWasExplicit = text.writer && static_cast<bool>(*text.writer);
+    } else if (builtins.contains(
+                   writerType, SkinBuiltinPropertySelector{text.refSelector}) &&
+               !decodeOptionalBinding(
+                   request, decoder, value, writerType,
+                   bindingPath("text", text.authoredIndex, "event"),
+                   bindingPathText("text", text.authoredIndex, "event"),
+                   text.authoredIndex - 1, text.writer, text.refSelector,
+                   true)) {
       return false;
     }
   }
@@ -3453,8 +3557,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       }
       SkinBooleanPropertyId id;
       auto conditionPath = path("op");
-      conditionPath.push_back(
-          LuaValuePathElement::index(static_cast<std::uint32_t>(conditionIndex + 1)));
+      conditionPath.push_back(LuaValuePathElement::index(
+          static_cast<std::uint32_t>(conditionIndex + 1)));
       if (!decodeRequiredBinding(
               request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
               std::move(conditionPath), pathText("op") + "[" +
@@ -3489,6 +3593,34 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
                                 static_cast<std::uint32_t>(childIndex + 1))) {
         return false;
       }
+    }
+  }
+
+  // Match JsonSkinLoader construction order. Runtime evaluation order remains
+  // timers then events and is represented by the compatibility manifest.
+  for (auto &customEvent : request.rawCustomEvents) {
+    if (!decodeRequiredBinding(
+            request, decoder, value, {.kind = SkinBindingKind::Event},
+            bindingPath("customEvents", customEvent.authoredIndex, "action"),
+            bindingPathText("customEvents", customEvent.authoredIndex,
+                            "action"),
+            customEvent.authoredIndex - 1, std::nullopt, customEvent.action) ||
+        !decodeOptionalBinding(
+            request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
+            bindingPath("customEvents", customEvent.authoredIndex, "condition"),
+            bindingPathText("customEvents", customEvent.authoredIndex,
+                            "condition"),
+            customEvent.authoredIndex - 1, customEvent.condition)) {
+      return false;
+    }
+  }
+  for (auto &customTimer : request.rawCustomTimers) {
+    if (!decodeOptionalBinding(
+            request, decoder, value, {.kind = SkinBindingKind::TimerProperty},
+            bindingPath("customTimers", customTimer.authoredIndex, "timer"),
+            bindingPathText("customTimers", customTimer.authoredIndex, "timer"),
+            customTimer.authoredIndex - 1, customTimer.timer)) {
+      return false;
     }
   }
   return true;
@@ -3532,7 +3664,7 @@ bool materializeGameplay(GameplayDecodeRequest &request,
                          const LuaValueHandle &value,
                          LuaSkinGameplayDecodeContext context) {
   LuaSkinBindingDecoder decoder(context.runtime, context.builtins);
-  if (!bindGameplayDefinitions(request, decoder, value)) {
+  if (!bindGameplayDefinitions(request, decoder, value, context.builtins)) {
     return false;
   }
 
@@ -3607,6 +3739,18 @@ bool materializeGameplay(GameplayDecodeRequest &request,
 
   auto &model = *request.result.model;
   transferBindings(model, decoder.bindings());
+  model.customEvents.reserve(request.rawCustomEvents.size());
+  for (const auto &event : request.rawCustomEvents) {
+    model.customEvents.push_back(
+        {.id = event.id,
+         .action = event.action,
+         .condition = event.condition,
+         .minimumIntervalMillis = event.minimumIntervalMillis});
+  }
+  model.customTimers.reserve(request.rawCustomTimers.size());
+  for (const auto &timer : request.rawCustomTimers) {
+    model.customTimers.push_back({.id = timer.id, .timer = timer.timer});
+  }
   request.nextSyntheticObjectId =
       static_cast<SkinObjectId>(request.rawDestinations.size() + 1U);
   std::set<std::string> destinationIds;

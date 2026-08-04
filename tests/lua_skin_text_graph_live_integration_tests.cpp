@@ -72,10 +72,19 @@ BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
   static const std::array writerBuiltins{
       SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::StringWriter},
-          .selector = SkinBuiltinPropertySelector{std::string("102")}},
+          .selector = SkinBuiltinPropertySelector{102}},
       SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::StringWriter},
           .selector = SkinBuiltinPropertySelector{std::string("303")}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringWriter},
+          .selector = SkinBuiltinPropertySelector{30}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatWriter},
+          .selector = SkinBuiltinPropertySelector{601}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::FloatWriter},
+          .selector = SkinBuiltinPropertySelector{703}},
   };
   TempDirectory temp;
   const SkinStorageRoots roots{
@@ -305,10 +314,105 @@ void testLiveTextAndFontSemantics() {
     const auto *writer =
         bindingById(model.stringWriters, fallbackText->writer->value);
     expect(value && writer && builtinSelector(value->source) &&
-               builtinName(writer->source) &&
+               builtinSelector(writer->source) &&
                *builtinSelector(value->source) == 102 &&
-               *builtinName(writer->source) == "102",
-           "Text.ref fallback retains one selector in each typed registry");
+               *builtinSelector(writer->source) == 102,
+           "Text.ref fallback retains its integer selector in both registries");
+  }
+}
+
+void testTextRefWriterFallbackUsesOnlySupportedIntegerSelectors() {
+  const auto decoded = decodeInline(R"lua(
+return {type=0,w=1280,h=720,
+ font={{id='main',path='main.fnt'}},
+ text={{id='title',font='main',size=20,ref=10},
+       {id='searchword',font='main',size=20,ref=30}},
+ destination={{id='title',dst={{}}},{id='searchword',dst={{}}}}}
+)lua");
+  expect(decoded.model.has_value() && decoded.diagnostics.empty(),
+         "passive title and writable searchword Text definitions decode");
+  if (!decoded.model) {
+    return;
+  }
+  const auto *titleDefinition = objectNamed(*decoded.model, "title");
+  const auto *searchDefinition = objectNamed(*decoded.model, "searchword");
+  const auto *title =
+      titleDefinition ? std::get_if<SkinTextObject>(&titleDefinition->payload)
+                      : nullptr;
+  const auto *search =
+      searchDefinition ? std::get_if<SkinTextObject>(&searchDefinition->payload)
+                       : nullptr;
+  expect(title && title->value && !title->writer && !title->editable,
+         "title remains passive when its integer ref has no writer factory");
+  expect(search && search->value && search->writer && search->editable,
+         "searchword attaches the integer writer returned for ref 30");
+  if (search && search->writer) {
+    const auto *binding =
+        bindingById(decoded.model->stringWriters, search->writer->value);
+    expect(binding && builtinSelector(binding->source) &&
+               *builtinSelector(binding->source) == 30 &&
+               !builtinName(binding->source),
+           "searchword writer is not interned as decimal string text");
+  }
+}
+
+void testSliderBindingPrecedenceIgnoresInactiveEvents() {
+  const auto decoded = decodeInline(R"lua(
+local explicit_writer = function(value) return value end
+return {type=0,w=1280,h=720,
+ source={{id='atlas',path='atlas.png'}},
+ slider={
+   {id='explicit',src='atlas',w=8,h=8,type=701,value=700,
+    event=explicit_writer,isRefNum=true,changeable=false},
+   {id='integer-range',src='atlas',w=8,h=8,type=702,isRefNum=true,
+    min=-5,max=5,event={}},
+   {id='implicit-writable',src='atlas',w=8,h=8,type=703,
+    changeable=true,event={}},
+   {id='implicit-passive',src='atlas',w=8,h=8,type=704,
+    changeable=false,event={}},
+   {id='implicit-unsupported-writer',src='atlas',w=8,h=8,type=705,
+    changeable=true,event={}}
+ },
+ destination={{id='explicit',dst={{}}},{id='integer-range',dst={{}}},
+              {id='implicit-writable',dst={{}}},
+              {id='implicit-passive',dst={{}}},
+              {id='implicit-unsupported-writer',dst={{}}}}}
+)lua");
+  expect(decoded.model.has_value() && decoded.diagnostics.empty(),
+         "ignored Slider.event fields consume no binding dispatch");
+  if (!decoded.model) {
+    return;
+  }
+  const auto sliderNamed = [&](std::string_view name) {
+    const auto *definition = objectNamed(*decoded.model, name);
+    return definition ? std::get_if<SkinSliderObject>(&definition->payload)
+                      : nullptr;
+  };
+  const auto *explicitSlider = sliderNamed("explicit");
+  const auto *integerRange = sliderNamed("integer-range");
+  const auto *implicitWritable = sliderNamed("implicit-writable");
+  const auto *implicitPassive = sliderNamed("implicit-passive");
+  const auto *unsupportedWriter = sliderNamed("implicit-unsupported-writer");
+  expect(explicitSlider && explicitSlider->writer &&
+             std::holds_alternative<SkinFloatPropertyId>(explicitSlider->value),
+         "explicit Slider.value selects its optional authored event branch");
+  expect(integerRange && !integerRange->writer &&
+             std::holds_alternative<SkinSliderObject::IntegerRangeSource>(
+                 integerRange->value),
+         "isRefNum Slider ignores event and has no writer");
+  expect(
+      implicitWritable && implicitWritable->writer &&
+          std::holds_alternative<SkinFloatPropertyId>(implicitWritable->value),
+      "changeable implicit Slider synthesizes a supported numeric writer");
+  expect(implicitPassive && !implicitPassive->writer && unsupportedWriter &&
+             !unsupportedWriter->writer,
+         "passive or unsupported implicit Slider has no writer");
+  if (implicitWritable && implicitWritable->writer) {
+    const auto *binding = bindingById(decoded.model->floatWriters,
+                                      implicitWritable->writer->value);
+    expect(binding && builtinSelector(binding->source) &&
+               *builtinSelector(binding->source) == 703,
+           "implicit Slider writer uses its numeric type selector");
   }
 }
 
@@ -420,9 +524,33 @@ return {type=0,w=1280,h=720,
 void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
   auto base = decodedValidModel();
   const auto valid = test_support::validateWithAuthoredBuiltins(base);
-  expect(valid.model && !valid.criticalFailure &&
-             valid.model->disabledOptionalObjects.empty(),
-         "decoded Text/Graph fixture passes validation before mutation");
+  const auto *explicitText = objectNamed(base, "text-explicit");
+  const auto *fallbackText = objectNamed(base, "text-fallback");
+  expect(
+      valid.model && !valid.criticalFailure && explicitText && fallbackText &&
+          valid.model->disabledOptionalObjects ==
+              std::vector<SkinObjectId>{explicitText->id, fallbackText->id} &&
+          std::ranges::count_if(
+              valid.diagnostics,
+              [](const auto &item) {
+                return item.code ==
+                       "skin_lua_model_text_interaction_unsupported";
+              }) == 2,
+      "Text event/editable surfaces are diagnosed and disabled");
+
+  auto criticalInteraction = base;
+  auto *criticalText = objectNamed(criticalInteraction, "text-explicit");
+  criticalText->critical = true;
+  const auto rejectedInteraction = test_support::validateWithAuthoredBuiltins(
+      std::move(criticalInteraction));
+  expect(!rejectedInteraction.model && rejectedInteraction.criticalFailure &&
+             std::ranges::any_of(
+                 rejectedInteraction.diagnostics,
+                 [](const auto &item) {
+                   return item.code ==
+                          "skin_lua_model_text_interaction_unsupported";
+                 }),
+         "critical Text interaction surface is diagnosed and rejected");
 
   const auto invalidObject = [&](std::string_view name, auto mutate,
                                  std::string_view message) {
@@ -527,6 +655,8 @@ void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
 
 int main() {
   testLiveTextAndFontSemantics();
+  testTextRefWriterFallbackUsesOnlySupportedIntegerSelectors();
+  testSliderBindingPrecedenceIgnoresInactiveEvents();
   testLiveGraphPrecedenceAndAuthoredOrder();
   testDistributionGraphIsDiagnosedAndDisabled();
   testValidatorEnforcesTypedResourcesBindingsAndDestinations();

@@ -121,10 +121,6 @@ normalizeSkinText(const SkinTextNormalizationInput &input,
       input.shadowSmoothness < 0.0) {
     return textFailure(SkinTextGraphNormalizationError::InvalidTextStyle);
   }
-  if ((input.value && !*input.value) || (input.writer && !*input.writer)) {
-    return textFailure(SkinTextGraphNormalizationError::InvalidTextBinding);
-  }
-
   const SkinFontResource *font = nullptr;
   for (const auto &candidate : fonts) {
     if (candidate.authoredName != input.fontName) {
@@ -155,23 +151,25 @@ normalizeSkinText(const SkinTextNormalizationInput &input,
     }
   }
 
-  return {.text = SkinTextObject{.font = font->id,
-                                 .value = input.value,
-                                 .writer = input.writer,
-                                 .literal = input.literal,
-                                 .pointSize = input.pointSize,
-                                 .alignment = input.alignment,
-                                 .wrapping = input.wrapping,
-                                 .overflow = static_cast<int>(input.overflow),
-                                 .outlineRgba = input.outlineRgba,
-                                 .outlineWidth = input.outlineWidth,
-                                 .shadowRgba = input.shadowRgba,
-                                 .shadowOffsetX = input.shadowOffsetX,
-                                 .shadowOffsetY = input.shadowOffsetY,
-                                 .shadowSmoothness = input.shadowSmoothness,
-                                 .editable = input.authoredEditable ||
-                                             (!input.writerWasExplicit &&
-                                              input.writer.has_value())},
+  return {.text =
+              SkinTextObject{.font = font->id,
+                             .value = input.value,
+                             .writer = input.writer,
+                             .literal = input.literal,
+                             .pointSize = input.pointSize,
+                             .alignment = input.alignment,
+                             .wrapping = input.wrapping,
+                             .overflow = static_cast<int>(input.overflow),
+                             .outlineRgba = input.outlineRgba,
+                             .outlineWidth = input.outlineWidth,
+                             .shadowRgba = input.shadowRgba,
+                             .shadowOffsetX = input.shadowOffsetX,
+                             .shadowOffsetY = input.shadowOffsetY,
+                             .shadowSmoothness = input.shadowSmoothness,
+                             .editable =
+                                 input.authoredEditable ||
+                                 (!input.writerWasExplicit && input.writer &&
+                                  static_cast<bool>(*input.writer))},
           .error = SkinTextGraphNormalizationError::None};
 }
 
@@ -195,20 +193,14 @@ normalizeSkinGraph(const SkinGraphNormalizationInput &input) {
   graph.direction = input.direction == 1 ? 1 : 0;
 
   if (input.explicitRate) {
-    if (!*input.explicitRate) {
-      return graphFailure(SkinTextGraphNormalizationError::InvalidGraphBinding);
-    }
     graph.value = *input.explicitRate;
   } else if (input.isRefNum) {
-    if (!input.integerRange || !input.integerRange->value ||
+    if (!input.integerRange ||
         input.integerRange->minimum > input.integerRange->maximum) {
       return graphFailure(SkinTextGraphNormalizationError::InvalidGraphRange);
     }
     graph.value = *input.integerRange;
   } else {
-    if (!input.implicitRate) {
-      return graphFailure(SkinTextGraphNormalizationError::InvalidGraphBinding);
-    }
     graph.value = input.implicitRate;
   }
   return {.graph = std::move(graph),

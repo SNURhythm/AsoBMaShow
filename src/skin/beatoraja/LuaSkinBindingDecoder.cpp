@@ -77,6 +77,21 @@ void hashCombine(std::size_t &seed, std::size_t value) noexcept {
 
 } // namespace
 
+bool luaSkinBindingFailureIsFatal(std::string_view code) noexcept {
+  return code == "skin_lua_binding_invalid" ||
+         code == "skin_lua_allocator_limit_exceeded" ||
+         code == "skin_lua_binding_work_limit_exceeded" ||
+         code == "skin_lua_binding_limit_exceeded" ||
+         code == "skin_lua_callback_limit_exceeded" ||
+         code == "skin_lua_host_limit_exceeded" ||
+         code == "skin_lua_wall_time_limit_exceeded" ||
+         code == "skin_lua_instruction_limit_exceeded" ||
+         code == "skin_lua_return_limit_exceeded" ||
+         code == "skin_lua_stack_limit_exceeded" ||
+         code == "skin_lua_binding_path_too_deep" ||
+         code == "skin_lua_runtime_create_failed";
+}
+
 bool LuaSkinBindingDecoder::InternKey::operator==(
     const InternKey &other) const noexcept {
   return script == other.script && sameType(type, other.type) &&
@@ -123,27 +138,26 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
       LuaSkinBindingDecoderPolicy::maxSourceWorkBytes -
       std::min(consumedSourceWorkBytes_,
                LuaSkinBindingDecoderPolicy::maxSourceWorkBytes);
-  auto lookedUp = value.lookupBindingSource(
-      request.path,
-      {.maxStringBytes = LuaSkinBindingDecoderPolicy::maxSourceTextBytes,
-       .remainingWorkBytes = remainingWorkBytes,
-       .numericFactoryAvailable = supportsNumericFactory(request.type.kind)});
+  LuaBindingSourceLookupResult lookedUp;
+  if (request.numericFallbackOnly && !request.fallbackNumeric) {
+    return {.failure = diagnostic("skin_lua_binding_invalid",
+                                  "numeric fallback request has no selector")};
+  }
+  if (request.numericFallbackOnly) {
+    lookedUp.source = *request.fallbackNumeric;
+  } else {
+    lookedUp = value.lookupBindingSource(
+        request.path,
+        {.maxStringBytes = LuaSkinBindingDecoderPolicy::maxSourceTextBytes,
+         .remainingWorkBytes = remainingWorkBytes,
+         .numericFactoryAvailable = supportsNumericFactory(request.type.kind)});
+  }
   consumedSourceWorkBytes_ += std::min(lookedUp.workBytes, remainingWorkBytes);
   if (!lookedUp.source) {
     const bool missing = !lookedUp.failure ||
                          lookedUp.failure->code == "skin_lua_binding_missing";
     if (missing && request.fallbackNumeric) {
-      try {
-        if (request.type.kind == SkinBindingKind::StringWriter) {
-          lookedUp.source = std::to_string(*request.fallbackNumeric);
-        } else {
-          lookedUp.source = *request.fallbackNumeric;
-        }
-      } catch (...) {
-        return {.failure =
-                    diagnostic("skin_lua_allocator_limit_exceeded",
-                               "Lua binding fallback allocation failed")};
-      }
+      lookedUp.source = *request.fallbackNumeric;
     } else {
       return {.failure = lookedUp.failure
                              ? std::move(lookedUp.failure)
@@ -166,7 +180,9 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
   std::variant<SkinBuiltinPropertySelector, LuaCallbackId> bindingSource;
 
   if (const auto *numeric = std::get_if<int>(&internKey.source)) {
-    if (!supportsNumericFactory(request.type.kind)) {
+    if (!supportsNumericFactory(request.type.kind) &&
+        !(request.type.kind == SkinBindingKind::StringWriter &&
+          request.fallbackNumeric && *request.fallbackNumeric == *numeric)) {
       return {.failure = diagnostic(
                   "skin_lua_binding_type_invalid",
                   "Lua binding kind does not accept a numeric selector")};

@@ -402,6 +402,22 @@ bool validPayload(const SkinObjectPayload &payload,
       payload);
 }
 
+enum class UnsupportedInteraction : std::uint8_t { None, Image, Text };
+
+UnsupportedInteraction
+unsupportedInteraction(const SkinObjectPayload &payload) noexcept {
+  if (const auto *image = std::get_if<SkinImageObject>(&payload)) {
+    return image->clickEvent || image->clickMode != 0
+               ? UnsupportedInteraction::Image
+               : UnsupportedInteraction::None;
+  }
+  if (const auto *text = std::get_if<SkinTextObject>(&payload)) {
+    return text->writer || text->editable ? UnsupportedInteraction::Text
+                                          : UnsupportedInteraction::None;
+  }
+  return UnsupportedInteraction::None;
+}
+
 } // namespace
 
 SkinModelValidationResult SkinModelValidator::validate(
@@ -572,10 +588,47 @@ SkinModelValidationResult SkinModelValidator::validate(
                                   .stringWriters = validStringWriterIds,
                                   .events = validEventIds};
 
+  std::set<int> customTimerIds;
+  const bool customTimersValid =
+      std::ranges::all_of(model.customTimers, [&](const auto &timer) {
+        return timer.id >= 10'000 && timer.id <= 19'999 &&
+               customTimerIds.insert(timer.id).second &&
+               (!timer.timer || validTimerIds.contains(timer.timer->value));
+      });
+  std::set<int> customEventIds;
+  const bool customEventsValid =
+      std::ranges::all_of(model.customEvents, [&](const auto &event) {
+        return event.id >= 1'000 && event.id <= 1'999 &&
+               customEventIds.insert(event.id).second && event.action &&
+               validEventIds.contains(event.action.value) &&
+               (!event.condition ||
+                validBooleanIds.contains(event.condition->value)) &&
+               event.minimumIntervalMillis >= 0;
+      });
+  if (!customTimersValid || !customEventsValid) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_custom_object_invalid",
+        "Lua skin custom timer/event identities or dependencies are invalid"));
+    return result;
+  }
+
   std::vector<SkinObjectId> disabled;
   std::set<SkinObjectId> disabledIds;
   for (const auto &object : model.objects) {
-    if (validPayload(object.payload, context)) {
+    const auto interaction = unsupportedInteraction(object.payload);
+    if (interaction != UnsupportedInteraction::None) {
+      result.diagnostics.push_back(validationDiagnostic(
+          interaction == UnsupportedInteraction::Image
+              ? "skin_lua_model_image_interaction_unsupported"
+              : "skin_lua_model_text_interaction_unsupported",
+          interaction == UnsupportedInteraction::Image
+              ? "Lua skin Image act/click interaction is not supported yet"
+              : "Lua skin Text event/editable interaction is not supported "
+                "yet"));
+    }
+    if (interaction == UnsupportedInteraction::None &&
+        validPayload(object.payload, context)) {
       continue;
     }
     if (object.critical) {

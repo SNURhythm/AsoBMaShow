@@ -283,10 +283,12 @@ void testGraphRejectsInvalidDependencies() {
   input.isRefNum = false;
   input.implicitRate = SkinFloatPropertyId{};
   const auto missingRate = normalizeSkinGraph(input);
-  expect(!missingRate.graph &&
-             missingRate.error ==
-                 SkinTextGraphNormalizationError::InvalidGraphBinding,
-         "missing implicit float graph source fails closed");
+  const auto *implicit =
+      missingRate.graph
+          ? std::get_if<SkinFloatPropertyId>(&missingRate.graph->value)
+          : nullptr;
+  expect(implicit && !*implicit,
+         "invalid implicit graph binding preserves a typed zero sentinel");
 }
 
 void testDistributionGraphsAreExplicitlyUnsupported() {
