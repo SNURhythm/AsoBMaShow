@@ -7,52 +7,144 @@
 namespace gameplay {
 namespace {
 constexpr std::int64_t kCancelledTouchGraceMicros = 50'000;
+constexpr float kHitTestEpsilon = 0.000001F;
+
+bool isFinite(const RealtimeTouchPoint &point) noexcept {
+  return std::isfinite(point.x) && std::isfinite(point.y);
+}
+
+float cross(const RealtimeTouchPoint &from, const RealtimeTouchPoint &to,
+            const RealtimeTouchPoint &point) noexcept {
+  return (to.x - from.x) * (point.y - from.y) -
+         (to.y - from.y) * (point.x - from.x);
+}
+
+bool contains(const RealtimeTouchLaneRegion &region,
+              const RealtimeTouchPoint &point) noexcept {
+  if (!isFinite(point) || !isFinite(region.bottomLeft) ||
+      !isFinite(region.bottomRight) || !isFinite(region.topLeft) ||
+      !isFinite(region.topRight)) {
+    return false;
+  }
+  const std::array points{region.bottomLeft, region.bottomRight,
+                          region.topRight, region.topLeft};
+  int winding = 0;
+  for (std::size_t index = 0; index < points.size(); ++index) {
+    const float side = cross(points[index], points[(index + 1) % points.size()],
+                             point);
+    if (std::abs(side) <= kHitTestEpsilon) {
+      continue;
+    }
+    const int sideWinding = side > 0.0F ? 1 : -1;
+    if (winding != 0 && winding != sideWinding) {
+      return false;
+    }
+    winding = sideWinding;
+  }
+  return winding != 0;
+}
+
+RealtimeTouchPoint clampedVertically(const RealtimeTouchLaneRegion &region,
+                                     RealtimeTouchPoint point) noexcept {
+  const auto yRange = std::minmax({region.bottomLeft.y, region.bottomRight.y,
+                                   region.topLeft.y, region.topRight.y});
+  point.y = std::clamp(point.y, yRange.first, yRange.second);
+  return point;
+}
 }
 
 RealtimeTouchInputRouter::RealtimeTouchInputRouter(
     std::uint64_t epoch, RealtimeTouchLayout layout,
     RealtimeTouchInputSink sink) noexcept
     : epoch_(epoch), layout_(std::move(layout)), sink_(sink) {
-  layout_.laneCount =
-      std::min({layout_.laneCount, layout_.lanes.size(),
-                layout_.scratch.size()});
+  legacyUniformLayout_ = normalizeLayout(layout_);
 }
 
 std::optional<std::size_t>
 RealtimeTouchInputRouter::laneIndexAt(float x, float y,
                                       bool requireInside) const noexcept {
-  if (layout_.laneCount == 0 || !std::isfinite(x) || !std::isfinite(y)) {
+  if (layout_.laneRegions.empty() || !std::isfinite(x) || !std::isfinite(y)) {
     return std::nullopt;
   }
-  const float bottomY =
-      (layout_.bottomLeft.y + layout_.bottomRight.y) * 0.5F;
-  const float topY = (layout_.topLeft.y + layout_.topRight.y) * 0.5F;
-  const float height = topY - bottomY;
-  if (std::abs(height) <= 0.000001F) {
+  const RealtimeTouchPoint point{x, y};
+  for (std::size_t index = 0; index < layout_.laneRegions.size(); ++index) {
+    if (contains(layout_.laneRegions[index], point)) {
+      return index;
+    }
+  }
+  if (requireInside) {
     return std::nullopt;
   }
-  float vertical = (y - bottomY) / height;
-  if (requireInside && (vertical < 0.0F || vertical > 1.0F)) {
-    return std::nullopt;
+  if (legacyUniformLayout_) {
+    const float bottomY =
+        (layout_.bottomLeft.y + layout_.bottomRight.y) * 0.5F;
+    const float topY =
+        (layout_.topLeft.y + layout_.topRight.y) * 0.5F;
+    const float height = topY - bottomY;
+    if (std::abs(height) <= kHitTestEpsilon) {
+      return std::nullopt;
+    }
+    const float vertical = std::clamp((y - bottomY) / height, 0.0F, 1.0F);
+    const float left =
+        std::lerp(layout_.bottomLeft.x, layout_.topLeft.x, vertical);
+    const float right =
+        std::lerp(layout_.bottomRight.x, layout_.topRight.x, vertical);
+    const float width = right - left;
+    if (std::abs(width) <= kHitTestEpsilon) {
+      return std::nullopt;
+    }
+    const float horizontal = std::clamp(
+        (x - left) / width, 0.0F, std::nextafter(1.0F, 0.0F));
+    const std::size_t originalIndex = std::min(
+        static_cast<std::size_t>(
+            horizontal * static_cast<float>(layout_.laneCount)),
+        layout_.laneCount - 1);
+    return layout_.laneCount - 1 - originalIndex;
   }
-  vertical = std::clamp(vertical, 0.0F, 1.0F);
-  const float left = std::lerp(layout_.bottomLeft.x, layout_.topLeft.x,
-                               vertical);
-  const float right = std::lerp(layout_.bottomRight.x, layout_.topRight.x,
-                                vertical);
-  const float width = right - left;
-  if (std::abs(width) <= 0.000001F) {
-    return std::nullopt;
+  for (std::size_t index = 0; index < layout_.laneRegions.size(); ++index) {
+    if (contains(layout_.laneRegions[index],
+                 clampedVertically(layout_.laneRegions[index], point))) {
+      return index;
+    }
   }
-  float horizontal = (x - left) / width;
-  if (requireInside && (horizontal < 0.0F || horizontal >= 1.0F)) {
-    return std::nullopt;
+  return std::nullopt;
+}
+
+bool RealtimeTouchInputRouter::normalizeLayout(
+    RealtimeTouchLayout &layout) noexcept {
+  if (!layout.laneRegions.empty()) {
+    layout.laneCount = layout.laneRegions.size();
+    return false;
   }
-  horizontal = std::clamp(horizontal, 0.0F,
-                          std::nextafter(1.0F, 0.0F));
-  return std::min(static_cast<std::size_t>(
-                      horizontal * static_cast<float>(layout_.laneCount)),
-                  layout_.laneCount - 1);
+  layout.laneCount =
+      std::min({layout.laneCount, layout.lanes.size(), layout.scratch.size()});
+  layout.laneRegions.reserve(layout.laneCount);
+  // The historical uniform layout selects a shared boundary's lane on its
+  // right. Reverse adapter insertion retains that behavior while authored
+  // regions use their explicit vector order.
+  for (std::size_t reverse = layout.laneCount; reverse > 0; --reverse) {
+    const std::size_t index = reverse - 1;
+    const float left = static_cast<float>(index) /
+                       static_cast<float>(layout.laneCount);
+    const float right = static_cast<float>(index + 1) /
+                        static_cast<float>(layout.laneCount);
+    layout.laneRegions.push_back(
+        {.bottomLeft = {std::lerp(layout.bottomLeft.x, layout.bottomRight.x,
+                                  left),
+                        std::lerp(layout.bottomLeft.y, layout.bottomRight.y,
+                                  left)},
+         .bottomRight = {std::lerp(layout.bottomLeft.x, layout.bottomRight.x,
+                                   right),
+                         std::lerp(layout.bottomLeft.y, layout.bottomRight.y,
+                                   right)},
+         .topLeft = {std::lerp(layout.topLeft.x, layout.topRight.x, left),
+                     std::lerp(layout.topLeft.y, layout.topRight.y, left)},
+         .topRight = {std::lerp(layout.topLeft.x, layout.topRight.x, right),
+                      std::lerp(layout.topLeft.y, layout.topRight.y, right)},
+         .lane = layout.lanes[index],
+         .scratch = layout.scratch[index]});
+  }
+  return true;
 }
 
 RealtimeTouchInputRouter::FingerState *
@@ -111,15 +203,16 @@ bool RealtimeTouchInputRouter::emit(RealtimeGameplayInputType type, int lane,
 bool RealtimeTouchInputRouter::beginLane(
     FingerState &finger, std::size_t laneIndex,
     const RealtimeTouchSample &sample) noexcept {
-  if (laneIndex >= layout_.laneCount) {
+  if (laneIndex >= layout_.laneRegions.size()) {
     return false;
   }
-  const int lane = layout_.lanes[laneIndex];
+  const auto &region = layout_.laneRegions[laneIndex];
+  const int lane = region.lane;
   if (laneOccupied(lane, finger.fingerId)) {
     return false;
   }
   finger.lane = lane;
-  finger.scratch = layout_.scratch[laneIndex];
+  finger.scratch = region.scratch;
   const auto replayControl = replay::logicalControlForChartLane(
       layout_.keyMode, lane, finger.scratch);
   finger.replayControl = replayControl;
@@ -273,7 +366,7 @@ bool RealtimeTouchInputRouter::consume(
       finger->lastY = sample.normalizedY;
       return releaseLane(*finger, sample.steadyTimestampMicros);
     }
-    const int nextLane = layout_.lanes[*lane];
+    const int nextLane = layout_.laneRegions[*lane].lane;
     if (finger->lane == nextLane) {
       if (finger->scratch) {
         return handleScratchMove(*finger, sample);
@@ -376,9 +469,7 @@ bool RealtimeTouchInputRouter::updateLayout(
     RealtimeTouchLayout layout,
     std::int64_t steadyTimestampMicros) noexcept {
   const bool released = cancelAll(steadyTimestampMicros);
-  layout.laneCount =
-      std::min({layout.laneCount, layout.lanes.size(),
-                layout.scratch.size()});
+  legacyUniformLayout_ = normalizeLayout(layout);
   layout_ = std::move(layout);
   return released;
 }

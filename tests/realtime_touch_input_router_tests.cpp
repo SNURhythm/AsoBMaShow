@@ -95,6 +95,31 @@ gameplay::RealtimeTouchLayout makeLayout(bool dragMode = false) {
   return layout;
 }
 
+gameplay::RealtimeTouchLaneRegion makeLaneRegion(
+    gameplay::RealtimeTouchPoint bottomLeft,
+    gameplay::RealtimeTouchPoint bottomRight,
+    gameplay::RealtimeTouchPoint topLeft,
+    gameplay::RealtimeTouchPoint topRight, int lane, bool scratch = false) {
+  return {.bottomLeft = bottomLeft,
+          .bottomRight = bottomRight,
+          .topLeft = topLeft,
+          .topRight = topRight,
+          .lane = lane,
+          .scratch = scratch};
+}
+
+gameplay::RealtimeTouchLayout makeAuthoredLayout(bool dragMode = false) {
+  gameplay::RealtimeTouchLayout layout;
+  layout.dragMode = dragMode;
+  layout.laneRegions = {
+      makeLaneRegion({0.10F, 0.90F}, {0.34F, 0.90F}, {0.24F, 0.10F},
+                     {0.36F, 0.10F}, 21),
+      makeLaneRegion({0.42F, 0.90F}, {0.80F, 0.90F}, {0.40F, 0.10F},
+                     {0.72F, 0.10F}, 47),
+  };
+  return layout;
+}
+
 void testChartLaneMappingCoversEveryReplayKeyMode() {
   for (const auto &layout : replay::kReplayKeyModeLayouts) {
     const auto first = replay::logicalControlForChartLane(
@@ -234,6 +259,176 @@ void testTouchLayoutDoesNotClampChartsAboveSixtyFourLanes() {
   require(capture.events.size() == 1 && capture.events.front().lane == 64 &&
               !capture.events.front().hasReplayControl,
           "touch routing preserves the final dynamic chart lane");
+}
+
+void testAuthoredLaneRegionsPreservePerspectiveWidthsAndGaps() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      66, makeAuthoredLayout(), {.context = &capture, .emit = &InputCapture::emit});
+
+  require(router.consume({.fingerId = 1,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.25F,
+                          .normalizedY = 0.20F,
+                          .steadyTimestampMicros = 1}) &&
+              router.consume({.fingerId = 1,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .steadyTimestampMicros = 2}) &&
+              router.consume({.fingerId = 2,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 0.70F,
+                              .normalizedY = 0.20F,
+                              .steadyTimestampMicros = 3}) &&
+              router.consume({.fingerId = 2,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .steadyTimestampMicros = 4}) &&
+              router.consume({.fingerId = 3,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 0.38F,
+                              .normalizedY = 0.50F,
+                              .steadyTimestampMicros = 5}),
+          "authored lane samples are accepted");
+  require(capture.events.size() == 4 && capture.events[0].lane == 21 &&
+              capture.events[1].lane == 21 && capture.events[2].lane == 47 &&
+              capture.events[3].lane == 47,
+          "perspective quads retain their authored widths while gaps stay inert");
+}
+
+void testAuthoredLaneRegionsUseFirstMatchForEdgesAndOverlaps() {
+  auto layout = makeAuthoredLayout();
+  layout.laneRegions = {
+      makeLaneRegion({0.10F, 0.90F}, {0.50F, 0.90F}, {0.10F, 0.10F},
+                     {0.50F, 0.10F}, 31),
+      makeLaneRegion({0.50F, 0.90F}, {0.90F, 0.90F}, {0.50F, 0.10F},
+                     {0.90F, 0.10F}, 32),
+      makeLaneRegion({0.30F, 0.90F}, {0.49F, 0.90F}, {0.30F, 0.10F},
+                     {0.49F, 0.10F}, 33),
+  };
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      67, layout, {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 1,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.50F,
+                          .normalizedY = 0.50F,
+                          .steadyTimestampMicros = 1}) &&
+              router.consume({.fingerId = 1,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .steadyTimestampMicros = 2}) &&
+              router.consume({.fingerId = 2,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 0.40F,
+                              .normalizedY = 0.50F,
+                              .steadyTimestampMicros = 3}),
+          "shared edges and overlaps are routable");
+  require(capture.events.size() == 3 && capture.events[0].lane == 31 &&
+              capture.events[1].lane == 31 && capture.events[2].lane == 31,
+          "the first authored region owns shared edges and overlap priority");
+}
+
+void testAuthoredScratchRegionsFollowTheirOwnPlacement() {
+  auto layout = makeAuthoredLayout();
+  layout.laneRegions = {
+      makeLaneRegion({0.10F, 0.90F}, {0.30F, 0.90F}, {0.10F, 0.10F},
+                     {0.30F, 0.10F}, 7, true),
+      makeLaneRegion({0.40F, 0.90F}, {0.60F, 0.90F}, {0.40F, 0.10F},
+                     {0.60F, 0.10F}, 3),
+      makeLaneRegion({0.70F, 0.90F}, {0.90F, 0.90F}, {0.70F, 0.10F},
+                     {0.90F, 0.10F}, 15, true),
+  };
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      68, layout, {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 1,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.50F,
+                          .normalizedY = 0.50F,
+                          .steadyTimestampMicros = 1}) &&
+              router.consume({.fingerId = 2,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 0.20F,
+                              .normalizedY = 0.50F,
+                              .steadyTimestampMicros = 2}) &&
+              router.consume({.fingerId = 2,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.20F,
+                              .normalizedY = 0.48F,
+                              .steadyTimestampMicros = 3}) &&
+              router.consume({.fingerId = 3,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 0.80F,
+                              .normalizedY = 0.50F,
+                              .steadyTimestampMicros = 4}) &&
+              router.consume({.fingerId = 3,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.80F,
+                              .normalizedY = 0.48F,
+                              .steadyTimestampMicros = 5}),
+          "center normal and left/right scratch authored regions accept touch input");
+  require(capture.events.size() == 3 && capture.events[0].lane == 3 &&
+              capture.events[1].lane == 7 && capture.events[2].lane == 15 &&
+              capture.events[1].replayControl.kind ==
+                  replay::LogicalControlKind::ScratchClockwise,
+          "scratch behavior follows authored geometry rather than lane order");
+}
+
+void testAuthoredLayoutReplacementCancelsTheOldRegion() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      69, makeAuthoredLayout(), {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 1,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.25F,
+                          .normalizedY = 0.20F,
+                          .steadyTimestampMicros = 1}),
+          "authored layout begins a lane press");
+  auto replacement = makeAuthoredLayout();
+  replacement.laneRegions.front().lane = 99;
+  require(router.updateLayout(replacement, 2),
+          "authored layout replacement is accepted");
+  require(capture.events.size() == 2 && capture.events[1].type ==
+                                          gameplay::RealtimeGameplayInputType::Release &&
+              capture.events[1].lane == 21,
+          "replacing authored regions releases the old lane before switching");
+}
+
+void testLegacyLayoutAdapterKeepsItsRightSharedEdgeOwner() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      70, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 1,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.35F,
+                          .normalizedY = 0.50F,
+                          .steadyTimestampMicros = 1}),
+          "legacy layout accepts its lane boundary");
+  require(capture.events.size() == 1 && capture.events.front().lane == 1,
+          "the built-in uniform adapter preserves legacy right-edge ownership");
+}
+
+void testLegacyLayoutAdapterStillClampsOutsideTheTrapezoid() {
+  auto layout = makeLayout();
+  layout.scratch.assign(layout.laneCount, false);
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      71, layout, {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 1,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = -0.5F,
+                          .normalizedY = 1.2F,
+                          .steadyTimestampMicros = 1}) &&
+              router.consume({.fingerId = 1,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .steadyTimestampMicros = 2}) &&
+              router.consume({.fingerId = 2,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = 1.5F,
+                              .normalizedY = -0.2F,
+                              .steadyTimestampMicros = 3}),
+          "legacy non-drag input accepts samples outside its trapezoid");
+  require(capture.events.size() == 3 && capture.events[0].lane == 0 &&
+              capture.events[1].lane == 0 && capture.events[2].lane == 7,
+          "legacy uniform layout retains horizontal and vertical clamping");
 }
 
 void testDragModeChangesLaneWithoutWaitingForAFrame() {
@@ -523,6 +718,12 @@ int main() {
   testDirectTouchEmitsTimestampedLaneEdges();
   testScratchlessTouchPreservesBmsChannelReplayMapping();
   testTouchLayoutDoesNotClampChartsAboveSixtyFourLanes();
+  testAuthoredLaneRegionsPreservePerspectiveWidthsAndGaps();
+  testAuthoredLaneRegionsUseFirstMatchForEdgesAndOverlaps();
+  testAuthoredScratchRegionsFollowTheirOwnPlacement();
+  testAuthoredLayoutReplacementCancelsTheOldRegion();
+  testLegacyLayoutAdapterKeepsItsRightSharedEdgeOwner();
+  testLegacyLayoutAdapterStillClampsOutsideTheTrapezoid();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();
   testScratchLongNoteIgnoresSmallDirectionJitter();

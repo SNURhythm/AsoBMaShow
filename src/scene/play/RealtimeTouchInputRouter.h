@@ -17,6 +17,17 @@ struct RealtimeTouchPoint {
   float y = 0.0F;
 };
 
+// Ordered hit region authored by the gameplay skin. Regions are tested in
+// vector order, so an earlier region owns a shared edge or overlap.
+struct RealtimeTouchLaneRegion {
+  RealtimeTouchPoint bottomLeft;
+  RealtimeTouchPoint bottomRight;
+  RealtimeTouchPoint topLeft;
+  RealtimeTouchPoint topRight;
+  int lane = -1;
+  bool scratch = false;
+};
+
 struct RealtimeTouchLayout {
   RealtimeTouchPoint bottomLeft;
   RealtimeTouchPoint bottomRight;
@@ -24,6 +35,7 @@ struct RealtimeTouchLayout {
   RealtimeTouchPoint topRight;
   std::vector<int> lanes;
   std::vector<bool> scratch;
+  std::vector<RealtimeTouchLaneRegion> laneRegions;
   std::size_t laneCount = 0;
   int keyMode = 7;
   bool dragMode = false;
@@ -85,6 +97,8 @@ private:
 
   [[nodiscard]] std::optional<std::size_t>
   laneIndexAt(float x, float y, bool requireInside) const noexcept;
+  [[nodiscard]] static bool
+  normalizeLayout(RealtimeTouchLayout &layout) noexcept;
   [[nodiscard]] FingerState *findFinger(std::int64_t fingerId) noexcept;
   [[nodiscard]] FingerState *allocateFinger(std::int64_t fingerId) noexcept;
   [[nodiscard]] bool laneOccupied(int lane,
@@ -102,6 +116,7 @@ private:
   std::uint64_t epoch_ = 0;
   RealtimeTouchLayout layout_;
   RealtimeTouchInputSink sink_;
+  bool legacyUniformLayout_ = false;
   bool gameplayEnabled_ = true;
   std::array<FingerState, kRealtimeTouchFingerCapacity> fingers_{};
 };
