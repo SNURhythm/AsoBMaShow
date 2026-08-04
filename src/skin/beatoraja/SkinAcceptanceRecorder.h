@@ -92,7 +92,9 @@ struct SkinResourceLifecycleSample {
   std::uint32_t cycleIndex = 0;
   std::uint64_t liveTextures = 0;
   std::uint64_t liveResources = 0;
-  std::uint64_t residentBytes = 0;
+  // Only a platform process-residency probe may populate this. Decoded or
+  // uploaded bytes are not an honest substitute for resident process memory.
+  std::optional<std::uint64_t> residentBytes;
 };
 
 struct SkinAcceptanceScenarioMetadata {

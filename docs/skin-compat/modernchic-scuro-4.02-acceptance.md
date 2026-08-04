@@ -150,6 +150,18 @@ samples, nonzero passing render-I/O counters, threshold violations, resource
 growth, or a negative result that differs from its exact diagnostic, action,
 counter, or equal-overlay-digest contract.
 
+### Resident-memory provenance
+
+`SkinResourceLifecycleSample::residentBytes` is optional at runtime. When no
+platform process-residency probe is available, the recorder omits the field
+from its lifecycle JSON; it never substitutes zero, decoded bytes, or uploaded
+resource bytes. Schema-v1 external evidence deliberately remains stricter and
+requires a measured numeric `residentBytes` value for its baseline and every
+post-destruction sample. Consequently, an export with omitted residency remains
+honest but cannot satisfy final physical acceptance until a real process-memory
+measurement is supplied. This preserves the frozen schema-v1 compatibility
+contract rather than treating unmeasured memory as proof of no drift.
+
 ## Audited compatibility decision and remaining work
 
 The selected 7-key entry's loaded closure critically imports Beatoraja's

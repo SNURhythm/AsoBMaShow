@@ -1142,8 +1142,10 @@ private:
       appendUnsigned(output, lifecycleBaseline_->liveTextures);
       output += ",\"liveResources\":";
       appendUnsigned(output, lifecycleBaseline_->liveResources);
-      output += ",\"residentBytes\":";
-      appendUnsigned(output, lifecycleBaseline_->residentBytes);
+      if (lifecycleBaseline_->residentBytes) {
+        output += ",\"residentBytes\":";
+        appendUnsigned(output, *lifecycleBaseline_->residentBytes);
+      }
       output += "},\"postDestruction\":[";
       for (std::size_t index = 0; index < lifecycleSampleCount_; ++index) {
         if (index != 0) {
@@ -1155,8 +1157,10 @@ private:
         appendUnsigned(output, lifecycleSamples_[index].liveTextures);
         output += ",\"liveResources\":";
         appendUnsigned(output, lifecycleSamples_[index].liveResources);
-        output += ",\"residentBytes\":";
-        appendUnsigned(output, lifecycleSamples_[index].residentBytes);
+        if (lifecycleSamples_[index].residentBytes) {
+          output += ",\"residentBytes\":";
+          appendUnsigned(output, *lifecycleSamples_[index].residentBytes);
+        }
         output.push_back('}');
       }
       output += "]}";

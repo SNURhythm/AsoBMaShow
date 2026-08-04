@@ -826,9 +826,46 @@ void testLifecycleRequiresBaselineAndTenSequentialDestroyedSessions() {
              recorder.state() == SkinAcceptanceCaptureState::Exporting,
          "the tenth explicit post-destruction sample triggers export");
   const auto result = waitForExport(recorder, *ticket);
+  expect(
+      result.result && result.result->exported &&
+          writer.payload.find("\"cycle\":10") != std::string::npos &&
+          writer.payload.find("\"residentBytes\":10000") != std::string::npos &&
+          writer.payload.find("\"residentBytes\":10010") != std::string::npos,
+      "lifecycle export contains exactly the ten numbered samples");
+}
+
+void testLifecycleOmitsUnknownResidentBytes() {
+  FakeOverlayProvider provider;
+  WriterProbe writer;
+  writer.released = true;
+  SkinAcceptanceRecorder recorder(dependencies(
+      SkinAcceptanceRunKind::ResourceLifecycle, &provider, &writer));
+  expect(recorder.arm("lifecycle-unknown-0123456789", "resource-lifecycle",
+                      activation()),
+         "unknown-residency lifecycle fixture arms");
+  recorder.recordResourceLifecycle(
+      {.phase = SkinResourceLifecyclePhase::BeforeFirstEntry,
+       .cycleIndex = 0,
+       .liveTextures = 7,
+       .liveResources = 9});
+  for (std::uint32_t cycle = 1; cycle <= 10; ++cycle) {
+    const std::uint64_t serial = 200 + cycle;
+    expect(recorder.bindSession(facts(serial)).has_value(),
+           "each unknown-residency lifecycle session binds");
+    recorder.sessionEnded(identity(serial));
+    recorder.recordResourceLifecycle(
+        {.phase = SkinResourceLifecyclePhase::AfterExit,
+         .cycleIndex = cycle,
+         .liveTextures = 7,
+         .liveResources = 9});
+    recorder.sessionTeardownComplete(identity(serial));
+  }
+  const auto ticket = recorder.currentExportTicket();
+  expect(ticket.has_value(), "unknown-residency lifecycle export starts");
+  const auto result = waitForExport(recorder, *ticket);
   expect(result.result && result.result->exported &&
-             writer.payload.find("\"cycle\":10") != std::string::npos,
-         "lifecycle export contains exactly the ten numbered samples");
+             writer.payload.find("\"residentBytes\"") == std::string::npos,
+         "unknown process residency is omitted from lifecycle export");
 }
 
 void testNegativeOverlayOrderingCountersAndProviderShutdown() {
@@ -1132,6 +1169,7 @@ int main() {
   testTimestampArithmeticOverflowFailsClosed();
   testCapacityIncompleteAndMismatchAreFatal();
   testLifecycleRequiresBaselineAndTenSequentialDestroyedSessions();
+  testLifecycleOmitsUnknownResidentBytes();
   testNegativeOverlayOrderingCountersAndProviderShutdown();
   testObservedNegativeEvidenceIsScopedAndCompared();
   testAcknowledgedRunInvalidatesItsBoundScopeGeneration();

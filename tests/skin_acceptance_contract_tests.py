@@ -464,6 +464,28 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
 
+    def test_schema_v1_requires_measured_lifecycle_resident_bytes(self):
+        contract = self.passing_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            contract_path = temporary_root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            self.write_passing_evidence(temporary_root, contract)
+            evidence_path = temporary_root / "acceptance-evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["resourceLifecycle"]["baseline"].pop("residentBytes")
+            for sample in evidence["resourceLifecycle"]["postDestruction"]:
+                sample.pop("residentBytes")
+            evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+            result = self.invoke(
+                "verify",
+                "--contract", str(contract_path),
+                "--evidence-root", str(temporary_root),
+                "--expected-app-commit", PINNED_COMMIT,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("residentBytes", result.stdout)
+
     def test_verify_rejects_incomplete_or_limit_violating_execution_reports(self):
         contract = self.passing_contract()
         mutations = (
