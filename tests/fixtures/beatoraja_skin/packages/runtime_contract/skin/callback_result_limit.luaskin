@@ -1,0 +1,5 @@
+local oversized = string.rep("x", 16 * 1024 * 1024 + 1)
+return {
+  phase = skin_config and "configured" or "header",
+  oversized_result = function() return oversized end
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BeatorajaSkinConfiguration.h"
+#include "SkinCompatibilityDiagnostics.h"
 #include "../package/SkinPackageTypes.h"
 
 #include <chrono>
@@ -11,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <variant>
 
 namespace skin {
@@ -86,6 +88,9 @@ public:
   LuaValueHandle &operator=(const LuaValueHandle &) = delete;
   ~LuaValueHandle();
 
+  [[nodiscard]] std::optional<LuaCallbackId>
+  callbackNamed(std::string_view name) const;
+
 private:
   struct Impl;
   explicit LuaValueHandle(std::unique_ptr<Impl>) noexcept;
@@ -131,9 +136,10 @@ public:
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
   LuaOperationResult beginFrame(std::uint64_t visualStateSequence);
-  LuaCallbackResult invoke(LuaCallbackId,
-                           std::span<const LuaScalar> arguments);
+  LuaCallbackResult invoke(LuaCallbackId, std::span<const LuaScalar> arguments);
   [[nodiscard]] LuaRuntimePhase phase() const noexcept;
+  [[nodiscard]] std::span<const SkinCompatibilityDiagnostic>
+  compatibilityDiagnostics() const noexcept;
 
 private:
   struct Impl;

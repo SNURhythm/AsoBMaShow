@@ -101,16 +101,17 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
 
     def test_cmake_selects_exactly_one_complementary_translation_unit(self):
         source = SKIN_CMAKE.read_text(encoding="utf-8")
-        conditional = textwrap.dedent(
-            """\
-            if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
-                target_sources(main PRIVATE LuaGameplaySkinFeatureEnabled.cpp)
-            else()
-                target_sources(main PRIVATE LuaGameplaySkinFeatureUnavailable.cpp)
-            endif()
-            """
+        conditional_start = source.index(
+            "if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)"
         )
-        self.assertIn(conditional, source)
+        alternative = source.index("else()", conditional_start)
+        conditional_end = source.index("endif()", alternative)
+        enabled = source[conditional_start:alternative]
+        unavailable = source[alternative:conditional_end]
+        self.assertIn("LuaGameplaySkinFeatureEnabled.cpp", enabled)
+        self.assertNotIn("LuaGameplaySkinFeatureUnavailable.cpp", enabled)
+        self.assertIn("LuaGameplaySkinFeatureUnavailable.cpp", unavailable)
+        self.assertNotIn("LuaGameplaySkinFeatureEnabled.cpp", unavailable)
 
     def test_enabled_runtime_sources_are_selected_only_behind_the_gate(self):
         source = SKIN_CMAKE.read_text(encoding="utf-8")
@@ -127,6 +128,31 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
             self.assertIn('#include "../LuaGameplaySkinFeature.h"', source)
             self.assertIn("#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS", source)
             self.assertIn("#endif", source)
+
+    def test_disabled_runtime_sources_compile_without_lua_headers_or_libraries(self):
+        compiler = os.environ.get("CXX") or shutil.which("c++")
+        self.assertIsNotNone(compiler, "a C++ compiler is required")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = pathlib.Path(temporary_directory)
+            for source in (RUNTIME_SOURCE, HOST_SOURCE):
+                subprocess.run(
+                    [
+                        compiler,
+                        "-std=c++23",
+                        "-D__ANDROID__=1",
+                        "-DASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=0",
+                        "-I",
+                        str(ROOT / "src"),
+                        "-c",
+                        str(source),
+                        "-o",
+                        str(temporary / (source.stem + ".o")),
+                    ],
+                    cwd=ROOT,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
 
 
 if __name__ == "__main__":

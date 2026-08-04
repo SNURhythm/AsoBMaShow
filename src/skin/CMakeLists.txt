@@ -15,7 +15,11 @@ target_sources(main PRIVATE
 )
 
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
-    target_sources(main PRIVATE LuaGameplaySkinFeatureEnabled.cpp)
+    target_sources(main PRIVATE
+        LuaGameplaySkinFeatureEnabled.cpp
+        beatoraja/LuaSkinHostModules.cpp
+        beatoraja/LuaSkinRuntime.cpp
+    )
 else()
     target_sources(main PRIVATE LuaGameplaySkinFeatureUnavailable.cpp)
 endif()

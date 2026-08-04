@@ -47,7 +47,7 @@ assert(not pcall(luajava.bindClass,
                  "com.badlogic.gdx.controllers.Controllers"))
 
 local binary_signature = string.char(27) .. "Lua"
-assert(not pcall(loadstring, binary_signature))
+assert(select(1, loadstring(binary_signature)) == nil)
 
 return {
   phase = "header"

@@ -286,7 +286,7 @@ else()
             )
         endif()
         if (LUAJIT_LIB AND LUAJIT_INCLUDE_DIR)
-            include_directories(${LUAJIT_INCLUDE_DIR})
+            include_directories(BEFORE ${LUAJIT_INCLUDE_DIR})
             list(APPEND COMMON_LIBS ${LUAJIT_LIB})
             message(STATUS "Found LuaJIT: ${LUAJIT_LIB}")
         else()
@@ -296,7 +296,7 @@ else()
         # On Unix-like systems, use pkg-config
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(LUAJIT REQUIRED luajit)
-        include_directories(${LUAJIT_INCLUDE_DIRS})
+        include_directories(BEFORE ${LUAJIT_INCLUDE_DIRS})
         link_directories(${LUAJIT_LIBRARY_DIRS})
         list(APPEND COMMON_LIBS ${LUAJIT_LIBRARIES})
     endif()
@@ -559,14 +559,47 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
         add_executable(lua_skin_runtime_tests
             tests/lua_skin_runtime_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinRuntime.cpp
+            src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
         )
         target_include_directories(lua_skin_runtime_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(lua_skin_runtime_tests PRIVATE cxx_std_23)
         target_compile_definitions(lua_skin_runtime_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
             ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         )
+        target_link_libraries(lua_skin_runtime_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(lua_skin_runtime_tests PRIVATE
+                ${LUAJIT_LIB}
+                advapi32
+            )
+        else()
+            target_link_libraries(lua_skin_runtime_tests PRIVATE
+                ${LUAJIT_LIBRARIES}
+            )
+        endif()
+        if(APPLE)
+            target_sources(lua_skin_runtime_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
+            target_link_libraries(lua_skin_runtime_tests PRIVATE
+                "-framework Foundation"
+            )
+        endif()
     endif()
 
     add_test(NAME beatoraja_skin_reference_contract

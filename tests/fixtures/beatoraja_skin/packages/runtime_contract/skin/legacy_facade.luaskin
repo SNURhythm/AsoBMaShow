@@ -17,6 +17,8 @@ for key in pairs(directory) do
   members = members + 1
 end
 assert(members == 2)
+assert(not pcall(function() return directory:getAbsolutePath() end))
+assert(not pcall(function() return directory:getAbsolutePath() end))
 local listed = directory:listFiles()
 assert(type(listed) == "table" and #listed > 0)
 for _, path in ipairs(listed) do
@@ -28,8 +30,10 @@ assert(luajava.new(File, "legacy-created"):mkdir() == true)
 
 local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
 assert(type(Gdx) == "table" and next(Gdx) == nil and Gdx.app == nil)
+assert(not pcall(function() return Gdx.files end))
 assert(not pcall(luajava.new, {}, "."))
 assert(not pcall(luajava.new, File, ".", "extra"))
+assert(not pcall(luajava.new, File, 123))
 assert(not pcall(luajava.bindClass, "java.net.URL"))
 assert(not pcall(luajava.bindClass, "java.net.URL"))
 assert(not pcall(luajava.bindClass, "com.badlogic.gdx.Input"))

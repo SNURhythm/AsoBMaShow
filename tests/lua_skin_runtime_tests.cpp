@@ -148,23 +148,25 @@ struct RuntimeHarness {
 };
 
 std::unique_ptr<RuntimeHarness>
-makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture) {
+makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
+            bool forceWriteCapableFileSystem = false) {
   static std::atomic_uint64_t profileSerial{0};
   RuntimePackageFixture &package = runtimePackage();
   if (!package.prepared) {
     return {};
   }
   const SkinEntryId entry = package.entry(entryFixture);
-  const bool writes = purpose != LuaRuntimePurpose::Catalog;
+  const bool writes =
+      purpose != LuaRuntimePurpose::Catalog || forceWriteCapableFileSystem;
   const std::optional<SkinProfileId> profile =
       writes ? std::optional<SkinProfileId>(profileFor(++profileSerial))
              : std::nullopt;
-  auto fileSystem = LuaSkinFileSystem::create(
-      {.revision = package.prepared->readView(),
-       .entry = entry,
-       .storageRoots = package.roots,
-       .profileId = profile,
-       .allowDataWrites = writes});
+  auto fileSystem =
+      LuaSkinFileSystem::create({.revision = package.prepared->readView(),
+                                 .entry = entry,
+                                 .storageRoots = package.roots,
+                                 .profileId = profile,
+                                 .allowDataWrites = writes});
   expect(fileSystem.fileSystem != nullptr,
          "runtime filesystem is created for the fixture");
   if (!fileSystem.fileSystem) {
@@ -238,27 +240,27 @@ void testPurposeSpecificBudgetsAreFixed() {
 }
 
 void testRuntimeContractsUseFrozenAuthoritiesAndProvenance() {
-  const auto manifest = readFixture(
-      "tests/fixtures/beatoraja_skin/reference_manifest.json");
-  const auto policy = readFixture(
-      "tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json");
+  const auto manifest =
+      readFixture("tests/fixtures/beatoraja_skin/reference_manifest.json");
+  const auto policy =
+      readFixture("tests/fixtures/beatoraja_skin/policies/lua_sandbox_v1.json");
   const auto legacyTrace = readFixture(
       "tests/fixtures/beatoraja_skin/traces/legacy_lua_upstream_v1.json");
-  const auto provenance = readFixture(
-      "tests/fixtures/beatoraja_skin/packages/runtime_contract/provenance.json");
+  const auto provenance = readFixture("tests/fixtures/beatoraja_skin/packages/"
+                                      "runtime_contract/provenance.json");
 
   expect(!manifest.empty() && !policy.empty() && !legacyTrace.empty() &&
              !provenance.empty(),
          "runtime consumes committed audit, policy, trace, and provenance");
-  expect(policy.find(
-             "ccfd3ed2e67b991815aefe000fbc221b37064366bd37c148ea2504c0e423a8ed") !=
-             std::string::npos,
-         "sandbox authority remains bound to the audited selected surface");
-  for (const auto capability : {"package-text-dofile", "restricted-io-open",
-                                "legacy-file-list", "legacy-overlay-mkdir",
-                                "network", "reflection", "native-access",
-                                "process-execution",
-                                "unaudited-legacy-surface"}) {
+  expect(
+      policy.find(
+          "ccfd3ed2e67b991815aefe000fbc221b37064366bd37c148ea2504c0e423a8ed") !=
+          std::string::npos,
+      "sandbox authority remains bound to the audited selected surface");
+  for (const auto capability :
+       {"package-text-dofile", "restricted-io-open", "legacy-file-list",
+        "legacy-overlay-mkdir", "network", "reflection", "native-access",
+        "process-execution", "unaudited-legacy-surface"}) {
     expect(policy.find(capability) != std::string::npos,
            "runtime authority names every allowed and denied capability");
   }
@@ -270,17 +272,18 @@ void testRuntimeContractsUseFrozenAuthoritiesAndProvenance() {
 void testFilesystemReadsTheSelectedEntryWithoutAHostPath() {
   RuntimePackageFixture &package = runtimePackage();
   const SkinEntryId entry = package.entry("two_phase.luaskin");
-  auto fileSystem = LuaSkinFileSystem::create(
-      {.revision = package.prepared->readView(),
-       .entry = entry,
-       .storageRoots = package.roots});
+  auto fileSystem =
+      LuaSkinFileSystem::create({.revision = package.prepared->readView(),
+                                 .entry = entry,
+                                 .storageRoots = package.roots});
   expect(fileSystem.fileSystem != nullptr, "direct entry fixture creates");
   if (!fileSystem.fileSystem) {
     return;
   }
   const auto read = fileSystem.fileSystem->readEntry(1024 * 1024);
-  expect(!read.failure && !read.bytes.empty(),
-         "direct entry read uses the selected identity, not a caller host path");
+  expect(
+      !read.failure && !read.bytes.empty(),
+      "direct entry read uses the selected identity, not a caller host path");
 }
 
 void testStrictTwoPhaseStateMachineUsesOneState() {
@@ -323,16 +326,16 @@ void testConfiguredTableUsesCanonicalVirtualData() {
   configuration.options = {{"Gauge", 11}, {"Lane type", 927}};
   configuration.enabledOptionIds = {11, 927};
   configuration.filePaths = {{"Background", "images/bg.png"}};
-  configuration.offsets = {{"Notes offset",
-                            {.x = 1, .y = 2, .w = 3, .h = 4, .r = 5, .a = 6}}};
+  configuration.offsets = {
+      {"Notes offset", {.x = 1, .y = 2, .w = 3, .h = 4, .r = 5, .a = 6}}};
   expect(harness->runtime->loadConfigured(configuration).value.has_value(),
          "configured Lua table matches canonical option/file/offset shape");
 }
 
 void testFreshPurposesDoNotShareLuaState() {
-  for (const auto purpose : {LuaRuntimePurpose::Catalog,
-                             LuaRuntimePurpose::Validation,
-                             LuaRuntimePurpose::Gameplay}) {
+  for (const auto purpose :
+       {LuaRuntimePurpose::Catalog, LuaRuntimePurpose::Validation,
+        LuaRuntimePurpose::Gameplay}) {
     auto first = makeHarness(purpose, "fresh_state.luaskin");
     auto second = makeHarness(purpose, "fresh_state.luaskin");
     if (!first || !second) {
@@ -344,6 +347,26 @@ void testFreshPurposesDoNotShareLuaState() {
   }
 }
 
+void testValueHandlesLoseAuthorityWhenTheirRuntimeCloses() {
+  std::optional<LuaValueHandle> escaped;
+  {
+    auto harness =
+        makeHarness(LuaRuntimePurpose::Validation, "two_phase.luaskin");
+    if (!harness) {
+      return;
+    }
+    auto header = harness->runtime->loadHeader();
+    expect(header.value.has_value(), "lifetime fixture header succeeds");
+    if (!header.value) {
+      return;
+    }
+    escaped.emplace(std::move(*header.value));
+  }
+  expect(!escaped->callbackNamed("anything").has_value(),
+         "value handles retain no Lua authority after runtime destruction");
+  escaped.reset();
+}
+
 void testLanguageSurfaceBit32AndTextOnlyLoading() {
   auto harness =
       makeHarness(LuaRuntimePurpose::Validation, "language_surface.luaskin");
@@ -351,6 +374,13 @@ void testLanguageSurfaceBit32AndTextOnlyLoading() {
     return;
   }
   loadThroughConfigured(*harness);
+
+  auto forbidden = makeHarness(LuaRuntimePurpose::Validation,
+                               "forbidden_capabilities.luaskin");
+  if (forbidden) {
+    expect(forbidden->runtime->loadHeader().value.has_value(),
+           "network, native, process, and unrestricted modules stay absent");
+  }
 
   auto binaryEntry = makeHarness(LuaRuntimePurpose::Validation, "binary.lua");
   if (binaryEntry) {
@@ -361,8 +391,8 @@ void testLanguageSurfaceBit32AndTextOnlyLoading() {
 }
 
 void testCatalogHasNoOverlayWriteOrEventAuthority() {
-  auto harness =
-      makeHarness(LuaRuntimePurpose::Catalog, "catalog_read_only.luaskin");
+  auto harness = makeHarness(LuaRuntimePurpose::Catalog,
+                             "catalog_read_only.luaskin", true);
   if (!harness) {
     return;
   }
@@ -371,8 +401,8 @@ void testCatalogHasNoOverlayWriteOrEventAuthority() {
 }
 
 void testLoadQuotasInterruptMemoryStackTablesAndLoops() {
-  for (const auto fixture : {"allocator_exhaustion.luaskin",
-                             "infinite_header.luaskin"}) {
+  for (const auto fixture :
+       {"allocator_exhaustion.luaskin", "infinite_header.luaskin"}) {
     auto harness = makeHarness(LuaRuntimePurpose::Catalog, fixture);
     if (!harness) {
       continue;
@@ -402,10 +432,20 @@ void testLoadQuotasInterruptMemoryStackTablesAndLoops() {
     expect(!result.value && result.failure,
            "configured execution has its own instruction/deadline budget");
   }
+
+  auto wall =
+      makeHarness(LuaRuntimePurpose::Catalog, "wall_time_header.luaskin");
+  if (wall) {
+    const auto result = wall->runtime->loadHeader();
+    expect(result.failure &&
+               result.failure->code == "skin_lua_wall_time_limit_exceeded",
+           "header work dominated by host calls is stopped by wall time");
+  }
 }
 
 void testIoFacadeCallShapesHandlesAndHostByteLimit() {
-  auto ioHarness = makeHarness(LuaRuntimePurpose::Validation, "io_contract.luaskin");
+  auto ioHarness =
+      makeHarness(LuaRuntimePurpose::Validation, "io_contract.luaskin");
   if (!ioHarness) {
     return;
   }
@@ -435,11 +475,15 @@ void testClosedLegacyFacadeIsExactAndDiagnosed() {
 
   std::size_t denied = 0;
   std::size_t urlDenied = 0;
+  std::size_t fileMemberDenied = 0;
   for (const auto &entry : harness->runtime->compatibilityDiagnostics()) {
     if (entry.diagnostic.code == "skin_legacy_lua_access_denied") {
       ++denied;
       if (entry.objectId == "java.net.URL") {
         ++urlDenied;
+      }
+      if (entry.objectId == "java.io.File.member") {
+        ++fileMemberDenied;
       }
     }
   }
@@ -447,6 +491,8 @@ void testClosedLegacyFacadeIsExactAndDiagnosed() {
          "every unaudited class/constructor shape produces a diagnostic");
   expect(urlDenied == 1,
          "repeated legacy denial is deduplicated by denied authority");
+  expect(fileMemberDenied == 1,
+         "repeated unaudited File members produce one deduplicated denial");
 }
 
 void testCoroutineLoopsShareCallbackAndFrameHooks() {
@@ -471,6 +517,52 @@ void testCoroutineLoopsShareCallbackAndFrameHooks() {
     expect(!result.value && result.failure,
            "create/wrap child loop consumes the shared hooked callback budget");
   }
+}
+
+void testCallbackWallTimeIncludesHostCalls() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::Gameplay, "callback_wall_time.luaskin");
+  if (!harness) {
+    return;
+  }
+  auto header = harness->runtime->loadHeader();
+  if (!header.value) {
+    expect(false, "callback wall-time fixture header succeeds");
+    return;
+  }
+  const LuaCallbackId callback =
+      requireCallback(*header.value, "host_heavy_callback");
+  expect(harness->runtime->loadConfigured({}).value.has_value() &&
+             harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "callback wall-time fixture enters render");
+  const auto result = harness->runtime->invoke(callback, {});
+  expect(result.failure &&
+             result.failure->code == "skin_lua_wall_time_limit_exceeded",
+         "callback wall time includes time spent inside host functions");
+}
+
+void testCallbackResultStringsUseTheFixedHostLimit() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::Gameplay, "callback_result_limit.luaskin");
+  if (!harness) {
+    return;
+  }
+  auto header = harness->runtime->loadHeader();
+  if (!header.value) {
+    expect(false, "callback result-limit fixture header succeeds");
+    return;
+  }
+  const LuaCallbackId callback =
+      requireCallback(*header.value, "oversized_result");
+  expect(harness->runtime->loadConfigured({}).value.has_value() &&
+             harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "callback result-limit fixture enters render");
+  const auto result = harness->runtime->invoke(callback, {});
+  expect(result.failure &&
+             result.failure->code == "skin_lua_callback_result_invalid",
+         "callback strings cannot bypass the fixed host byte limit");
 }
 
 void testFrameTotalsResetOnlyForNewVisualState() {
@@ -503,7 +595,8 @@ void testFrameTotalsResetOnlyForNewVisualState() {
          "new visual-state sequence resets totals once");
   expect(!harness->runtime->invoke(callback, {}).failure,
          "bounded callback runs after the next frame reset");
-  expect(harness->runtime->invoke({.slot = 999, .generation = 999}, {}).failure,
+  expect(harness->runtime->invoke({.slot = 999, .generation = 999}, {})
+             .failure.has_value(),
          "forged/stale callback IDs are rejected");
 }
 
@@ -518,13 +611,13 @@ void testCleanTransitionInvalidatesOpenReadHandle() {
     expect(false, "captured-read header succeeds");
     return;
   }
-  const LuaCallbackId callback = requireCallback(*header.value, "captured_read");
+  const LuaCallbackId callback =
+      requireCallback(*header.value, "captured_read");
   expect(harness->runtime->loadConfigured({}).value.has_value(),
          "captured-read fixture configures");
   expect(harness->runtime->enterRenderPhase().ok,
          "an open read handle is safely invalidated at render transition");
-  expect(harness->runtime->beginFrame(1).ok,
-         "captured-read frame begins");
+  expect(harness->runtime->beginFrame(1).ok, "captured-read frame begins");
   const auto result = harness->runtime->invoke(callback, {});
   expect(result.failure &&
              result.failure->code == "skin_file_render_phase_denied",
@@ -570,8 +663,7 @@ void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
            "captured read/write/scan authority is denied after transition");
   }
   const auto counters = harness->fileSystem->activityCounters();
-  expect(counters.renderReadsDenied == 1 &&
-             counters.renderWritesDenied == 1 &&
+  expect(counters.renderReadsDenied == 1 && counters.renderWritesDenied == 1 &&
              counters.renderDirectoryScansDenied == 1,
          "captured operations increment their exact denied category");
   expect(counters.renderReadsPerformed == 0 &&
@@ -591,12 +683,15 @@ int main() {
   testStrictTwoPhaseStateMachineUsesOneState();
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
+  testValueHandlesLoseAuthorityWhenTheirRuntimeCloses();
   testLanguageSurfaceBit32AndTextOnlyLoading();
   testCatalogHasNoOverlayWriteOrEventAuthority();
   testLoadQuotasInterruptMemoryStackTablesAndLoops();
   testIoFacadeCallShapesHandlesAndHostByteLimit();
   testClosedLegacyFacadeIsExactAndDiagnosed();
   testCoroutineLoopsShareCallbackAndFrameHooks();
+  testCallbackWallTimeIncludesHostCalls();
+  testCallbackResultStringsUseTheFixedHostLimit();
   testFrameTotalsResetOnlyForNewVisualState();
   testCleanTransitionInvalidatesOpenReadHandle();
   testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation();

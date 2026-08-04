@@ -11,6 +11,7 @@ assert(io.lines == nil and io.popen == nil and io.tmpfile == nil)
 
 local first, number = dofile("returns.lua")
 assert(first == "alpha" and number == 7)
+assert(not pcall(dofile, "returns.lua", "extra"))
 
 local reader = assert(io.open("input.txt"))
 assert(reader.seek == nil and reader.read == nil and reader.flush == nil)

@@ -40,5 +40,6 @@ local binary = string.char(27) .. "Lua"
 assert(select(1, loadstring(binary)) == nil)
 assert(select(1, load(binary)) == nil)
 assert(not pcall(dofile, "binary.lua"))
+assert(not pcall(require, "binary"))
 
 return { phase = skin_config and "configured" or "header" }
