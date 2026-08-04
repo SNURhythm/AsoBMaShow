@@ -1,6 +1,7 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
 #include "skin/beatoraja/NumericGlyphAtlas.h"
 #include "skin/beatoraja/SkinModelValidator.h"
+#include "lua_skin_binding_test_support.h"
 
 #include <array>
 #include <cstddef>
@@ -111,14 +112,14 @@ SkinFloatObject &floatObject(BeatorajaSkinModel &model) {
 
 void expectOptionalAndCriticalRejected(BeatorajaSkinModel model,
                                        std::string_view message) {
-  auto optional = SkinModelValidator{}.validate(model);
+  auto optional = test_support::validateWithAuthoredBuiltins(model);
   expect(optional.model.has_value() && !optional.criticalFailure &&
              optional.model->disabledOptionalObjects ==
                  std::vector<SkinObjectId>{1},
          message);
 
   model.objects.front().critical = true;
-  auto critical = SkinModelValidator{}.validate(std::move(model));
+  auto critical = test_support::validateWithAuthoredBuiltins(std::move(model));
   expect(!critical.model && critical.criticalFailure &&
              !critical.diagnostics.empty() &&
              critical.diagnostics.front().code ==
@@ -132,21 +133,24 @@ void validatorRejectsUnequalInvalidAndExcessDigitSets() {
     digits.glyphsPerAnimationFrame = 12;
     digits.positive = sprite(24);
     digits.negative = sprite(12);
-    expectDisabled(SkinModelValidator{}.validate(numberModel(std::move(digits))),
+    expectDisabled(test_support::validateWithAuthoredBuiltins(
+                       numberModel(std::move(digits))),
                    "validator disables unequal signed animation-frame sets");
   }
   {
     SkinDigitSpriteSet digits;
     digits.glyphsPerAnimationFrame = 10;
     digits.positive = sprite(11);
-    expectDisabled(SkinModelValidator{}.validate(numberModel(std::move(digits))),
+    expectDisabled(test_support::validateWithAuthoredBuiltins(
+                       numberModel(std::move(digits))),
                    "validator disables non-divisible normalized digit sets");
   }
   {
     SkinDigitSpriteSet digits;
     digits.glyphsPerAnimationFrame = 13;
     digits.positive = sprite(13);
-    expectDisabled(SkinModelValidator{}.validate(numberModel(std::move(digits))),
+    expectDisabled(test_support::validateWithAuthoredBuiltins(
+                       numberModel(std::move(digits))),
                    "validator disables Float-only glyph sets on Number");
   }
   {
@@ -154,7 +158,8 @@ void validatorRejectsUnequalInvalidAndExcessDigitSets() {
     digits.glyphsPerAnimationFrame = 10;
     digits.positive =
         sprite(LuaSkinTableDecoderPolicy::maxMaterializedSpriteFrames + 1);
-    expectDisabled(SkinModelValidator{}.validate(numberModel(std::move(digits))),
+    expectDisabled(test_support::validateWithAuthoredBuiltins(
+                       numberModel(std::move(digits))),
                    "validator disables digit sets above the frame budget");
   }
 }
@@ -164,8 +169,8 @@ void validatorAcceptsKindSpecificGlyphBoundaries() {
   numberDigits.glyphsPerAnimationFrame = 12;
   numberDigits.positive = sprite(12);
   numberDigits.negative = sprite(12);
-  auto number =
-      SkinModelValidator{}.validate(numberModel(std::move(numberDigits)));
+  auto number = test_support::validateWithAuthoredBuiltins(
+      numberModel(std::move(numberDigits)));
   expect(number.model.has_value() &&
              number.model->disabledOptionalObjects.empty(),
          "validator accepts normalized Number-12 digit sets");
@@ -174,8 +179,8 @@ void validatorAcceptsKindSpecificGlyphBoundaries() {
   floatDigits.glyphsPerAnimationFrame = 13;
   floatDigits.positive = sprite(13);
   floatDigits.negative = sprite(13);
-  auto floating =
-      SkinModelValidator{}.validate(floatModel(std::move(floatDigits)));
+  auto floating = test_support::validateWithAuthoredBuiltins(
+      floatModel(std::move(floatDigits)));
   expect(floating.model.has_value() &&
              floating.model->disabledOptionalObjects.empty(),
          "validator accepts normalized Float-13 digit sets");

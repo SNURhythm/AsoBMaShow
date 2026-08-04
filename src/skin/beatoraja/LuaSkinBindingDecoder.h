@@ -44,7 +44,21 @@ public:
       : entries_(entries) {}
 
   [[nodiscard]] bool
-  contains(SkinBindingType, const SkinBuiltinPropertySelector &) const noexcept;
+  contains(SkinBindingType type,
+           const SkinBuiltinPropertySelector &selector) const noexcept {
+    for (const auto &entry : entries_) {
+      const bool sameDomain =
+          (type.kind != SkinBindingKind::IntegerProperty ||
+           type.integerDomain == entry.type.integerDomain) &&
+          (type.kind != SkinBindingKind::FloatProperty ||
+           type.floatDomain == entry.type.floatDomain);
+      if (type.kind == entry.type.kind && sameDomain &&
+          entry.selector.value == selector.value) {
+        return true;
+      }
+    }
+    return false;
+  }
 
 private:
   std::span<const SkinBuiltinBindingCatalogEntry> entries_;
@@ -75,6 +89,7 @@ struct LuaSkinBindingRequest {
   SkinBindingType type;
   LuaValuePath path;
   std::uint32_t authoredOrdinal = 0;
+  std::optional<int> fallbackNumeric;
 };
 
 struct LuaSkinBindingDecodeResult {

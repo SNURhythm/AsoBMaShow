@@ -639,6 +639,53 @@ void testPinnedDispatchAndTypedInterning() {
   }
 }
 
+void testMissingFieldUsesTypedNumericFallback() {
+  auto session = fixture().session();
+  if (!session.runtime || !session.configured) {
+    return;
+  }
+
+  const std::array builtinEntries{
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::IntegerProperty,
+                   .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+          .selector = SkinBuiltinPropertySelector{42}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringWriter},
+          .selector = SkinBuiltinPropertySelector{std::string("42")}},
+  };
+  LuaSkinBindingDecoder decoder(*session.runtime,
+                                SkinBuiltinBindingCatalogView(builtinEntries));
+
+  auto integerFallback = integerRequest(SkinIntegerPropertyDomain::IntegerValue,
+                                        "invalid_nil", 17);
+  integerFallback.fallbackNumeric = 42;
+  const auto integer = decodedId<SkinIntegerPropertyId>(
+      decoder.decode(*session.configured, integerFallback),
+      "missing Integer field uses its authored numeric fallback");
+  const auto integerView = decoder.bindings();
+  const auto *integerBuiltin = std::get_if<SkinBuiltinPropertySelector>(
+      &integerView.integerProperties[integer.value - 1].source);
+  expect(integerBuiltin && std::get<int>(integerBuiltin->value) == 42 &&
+             integerView.integerProperties[integer.value - 1].authoredOrdinal ==
+                 17,
+         "typed fallback preserves numeric selector and authored ordinal");
+
+  auto writerFallback =
+      request(SkinBindingKind::StringWriter, "invalid_nil", 19);
+  writerFallback.fallbackNumeric = 42;
+  const auto writer = decodedId<SkinStringWriterId>(
+      decoder.decode(*session.configured, writerFallback),
+      "missing StringWriter field uses its authored ref fallback");
+  const auto writerView = decoder.bindings();
+  const auto *writerBuiltin = std::get_if<SkinBuiltinPropertySelector>(
+      &writerView.stringWriters[writer.value - 1].source);
+  const auto *writerName =
+      writerBuiltin ? std::get_if<std::string>(&writerBuiltin->value) : nullptr;
+  expect(writerName && *writerName == "42",
+         "StringWriter fallback follows pinned name-only numeric dispatch");
+}
+
 void testNestedFunctionSurvivesConfiguredHandleDestruction() {
   auto session = fixture().session();
   if (!session.runtime || !session.configured) {
@@ -944,6 +991,7 @@ void testPassiveCustomTimerIsExplicitAndNeverUsesBindingZero() {
 
 int main() {
   testPinnedDispatchAndTypedInterning();
+  testMissingFieldUsesTypedNumericFallback();
   testNestedFunctionSurvivesConfiguredHandleDestruction();
   testBindingPathDepthIsBounded();
   testThousandsOfDistinctFunctionsStayIndexed();

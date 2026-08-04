@@ -1,5 +1,6 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
 #include "skin/beatoraja/SkinModelValidator.h"
+#include "lua_skin_binding_test_support.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
@@ -68,6 +69,14 @@ void writeText(const fs::path &path, std::string_view value) {
 }
 
 BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
+  static const std::array writerBuiltins{
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringWriter},
+          .selector = SkinBuiltinPropertySelector{std::string("102")}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringWriter},
+          .selector = SkinBuiltinPropertySelector{std::string("303")}},
+  };
   TempDirectory temp;
   const SkinStorageRoots roots{
       .visiblePackages = temp.root() / "visible",
@@ -135,7 +144,10 @@ BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
   if (!configured.value) {
     return {};
   }
-  return decoder.decodeGameplay(*configured.value);
+  return decoder.decodeGameplay(
+      *configured.value,
+      {.runtime = *created.runtime,
+       .builtins = SkinBuiltinBindingCatalogView(writerBuiltins)});
 }
 
 const SkinObjectDefinition *objectNamed(const BeatorajaSkinModel &model,
@@ -158,6 +170,12 @@ const int *builtinSelector(
     const std::variant<SkinBuiltinPropertySelector, LuaCallbackId> &source) {
   const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&source);
   return builtin ? std::get_if<int>(&builtin->value) : nullptr;
+}
+
+const std::string *builtinName(
+    const std::variant<SkinBuiltinPropertySelector, LuaCallbackId> &source) {
+  const auto *builtin = std::get_if<SkinBuiltinPropertySelector>(&source);
+  return builtin ? std::get_if<std::string>(&builtin->value) : nullptr;
 }
 
 template <typename Binding>
@@ -274,8 +292,8 @@ void testLiveTextAndFontSemantics() {
         bindingById(model.stringWriters, explicitText->writer->value);
     expect(value && builtinSelector(value->source) &&
                *builtinSelector(value->source) == 202 && writer &&
-               builtinSelector(writer->source) &&
-               *builtinSelector(writer->source) == 303,
+               builtinName(writer->source) &&
+               *builtinName(writer->source) == "303",
            "Text.value wins over ref and Text.event wins for its writer");
   }
   expect(fallbackText && fallbackText->value && fallbackText->writer &&
@@ -287,9 +305,9 @@ void testLiveTextAndFontSemantics() {
     const auto *writer =
         bindingById(model.stringWriters, fallbackText->writer->value);
     expect(value && writer && builtinSelector(value->source) &&
-               builtinSelector(writer->source) &&
+               builtinName(writer->source) &&
                *builtinSelector(value->source) == 102 &&
-               *builtinSelector(writer->source) == 102,
+               *builtinName(writer->source) == "102",
            "Text.ref fallback retains one selector in each typed registry");
   }
 }
@@ -390,7 +408,8 @@ return {type=0,w=1280,h=720,
   const auto *definition = objectNamed(*decoded.model, "distribution");
   expect(definition && !definition->critical,
          "unsupported distribution Graph remains optional");
-  const auto validated = SkinModelValidator{}.validate(*decoded.model);
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
   expect(definition && validated.model && !validated.criticalFailure &&
              std::ranges::find(validated.model->disabledOptionalObjects,
                                definition->id) !=
@@ -400,7 +419,7 @@ return {type=0,w=1280,h=720,
 
 void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
   auto base = decodedValidModel();
-  const auto valid = SkinModelValidator{}.validate(base);
+  const auto valid = test_support::validateWithAuthoredBuiltins(base);
   expect(valid.model && !valid.criticalFailure &&
              valid.model->disabledOptionalObjects.empty(),
          "decoded Text/Graph fixture passes validation before mutation");
@@ -415,8 +434,9 @@ void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
     }
     const auto id = object->id;
     mutate(model, *object);
-    expectOnlyDisabled(SkinModelValidator{}.validate(std::move(model)),
-                       id, message);
+    expectOnlyDisabled(
+        test_support::validateWithAuthoredBuiltins(std::move(model)), id,
+        message);
   };
 
   invalidObject(
@@ -490,15 +510,15 @@ void testValidatorEnforcesTypedResourcesBindingsAndDestinations() {
     return;
   }
   destination->presentation.timer = SkinTimerPropertyId{999};
-  expectOnlyDisabled(SkinModelValidator{}.validate(destinationModel),
-                     graph->id,
-                     "invalid optional destination timer disables its object");
+  expectOnlyDisabled(
+      test_support::validateWithAuthoredBuiltins(destinationModel), graph->id,
+      "invalid optional destination timer disables its object");
 
   auto criticalDestination = destinationModel;
   auto *criticalGraph = objectNamed(criticalDestination, "graph-explicit");
   criticalGraph->critical = true;
-  const auto critical =
-      SkinModelValidator{}.validate(std::move(criticalDestination));
+  const auto critical = test_support::validateWithAuthoredBuiltins(
+      std::move(criticalDestination));
   expect(!critical.model && critical.criticalFailure,
          "the same invalid destination fails a critical object");
 }

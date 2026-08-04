@@ -383,7 +383,8 @@ return {type=0, property=p}
     if (!configured.value) {
       return {};
     }
-    return decoder.decodeGameplay(*configured.value);
+    return decoder.decodeGameplay(*configured.value,
+                                  {.runtime = *created.runtime});
   }
 
   std::unique_ptr<LuaSkinFileSystem>

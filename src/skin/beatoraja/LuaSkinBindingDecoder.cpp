@@ -111,15 +111,6 @@ std::size_t LuaSkinBindingDecoder::InternKeyHash::operator()(
   return result;
 }
 
-bool SkinBuiltinBindingCatalogView::contains(
-    SkinBindingType type,
-    const SkinBuiltinPropertySelector &selector) const noexcept {
-  return std::ranges::any_of(entries_, [&](const auto &entry) {
-    return sameType(entry.type, type) &&
-           sameVariant(entry.selector.value, selector.value);
-  });
-}
-
 LuaSkinBindingDecodeResult
 LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
                               const LuaSkinBindingRequest &request) {
@@ -139,11 +130,27 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
        .numericFactoryAvailable = supportsNumericFactory(request.type.kind)});
   consumedSourceWorkBytes_ += std::min(lookedUp.workBytes, remainingWorkBytes);
   if (!lookedUp.source) {
-    return {.failure = lookedUp.failure
-                           ? std::move(lookedUp.failure)
-                           : std::optional<SkinDiagnostic>(
-                                 diagnostic("skin_lua_binding_missing",
-                                            "Lua binding source is missing"))};
+    const bool missing = !lookedUp.failure ||
+                         lookedUp.failure->code == "skin_lua_binding_missing";
+    if (missing && request.fallbackNumeric) {
+      try {
+        if (request.type.kind == SkinBindingKind::StringWriter) {
+          lookedUp.source = std::to_string(*request.fallbackNumeric);
+        } else {
+          lookedUp.source = *request.fallbackNumeric;
+        }
+      } catch (...) {
+        return {.failure =
+                    diagnostic("skin_lua_allocator_limit_exceeded",
+                               "Lua binding fallback allocation failed")};
+      }
+    } else {
+      return {.failure = lookedUp.failure
+                             ? std::move(lookedUp.failure)
+                             : std::optional<SkinDiagnostic>(diagnostic(
+                                   "skin_lua_binding_missing",
+                                   "Lua binding source is missing"))};
+    }
   }
 
   InternKey internKey;

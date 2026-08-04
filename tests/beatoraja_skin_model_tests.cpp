@@ -1,5 +1,6 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
 #include "skin/beatoraja/SkinModelValidator.h"
+#include "lua_skin_binding_test_support.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
@@ -146,7 +147,8 @@ BeatorajaSkinModelDecodeResult decodeInlineModel(std::string_view sourceText) {
   if (!configured.value) {
     return {};
   }
-  return decoder.decodeGameplay(*configured.value);
+  return decoder.decodeGameplay(*configured.value,
+                                {.runtime = *created.runtime});
 }
 
 const Json &expectedContract() {
@@ -229,7 +231,8 @@ public:
     if (!configured.value) {
       return {};
     }
-    return decoder.decodeGameplay(*configured.value);
+    return decoder.decodeGameplay(*configured.value,
+                                  {.runtime = *created.runtime});
   }
 
 private:
@@ -743,7 +746,8 @@ void testLuaProtectedDecodeOwnsEveryRawParseTemporaryInTheRequest() {
   const std::string source((std::istreambuf_iterator<char>(input)),
                            std::istreambuf_iterator<char>());
   const auto protectedStart = source.find("void decodeGameplayProtected(");
-  const auto protectedEnd = source.find("\n} // namespace", protectedStart);
+  const auto protectedEnd =
+      source.find("\nLuaValuePath bindingPath(", protectedStart);
   expect(!source.empty() && protectedStart != std::string::npos &&
              protectedEnd != std::string::npos,
          "gameplay decoder source is available for the longjmp audit");
@@ -830,9 +834,8 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
     return;
   }
   const auto &expected = expectedContract().at("validation");
-  SkinModelValidator validator;
-
-  const auto optionalResult = validator.validate(*decoded.model);
+  const auto optionalResult =
+      test_support::validateWithAuthoredBuiltins(*decoded.model);
   expect(!optionalResult.criticalFailure && optionalResult.model.has_value(),
          "missing optional image source does not reject the gameplay model");
   if (optionalResult.model) {
@@ -876,8 +879,8 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
     return;
   }
   notePayload.lanes.front().visuals.erase(SkinNoteVisualKind::Normal);
-  const auto criticalResult =
-      validator.validate(std::move(missingCriticalNote));
+  const auto criticalResult = test_support::validateWithAuthoredBuiltins(
+      std::move(missingCriticalNote));
   expect(
       expected.at("missingNormalNoteIsCritical").get<bool>() &&
           criticalResult.criticalFailure && !criticalResult.model,
@@ -886,14 +889,16 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
   BeatorajaSkinModel duplicateBindings = *decoded.model;
   duplicateBindings.integerProperties.push_back(
       duplicateBindings.integerProperties.front());
-  const auto duplicateResult = validator.validate(std::move(duplicateBindings));
+  const auto duplicateResult =
+      test_support::validateWithAuthoredBuiltins(std::move(duplicateBindings));
   expect(duplicateResult.criticalFailure && !duplicateResult.model,
          "duplicate typed binding IDs reject the model");
 
   BeatorajaSkinModel oversizedCanvas = *decoded.model;
   oversizedCanvas.header.width =
       LuaSkinTableDecoderPolicy::maxAuthoredDimension + 1;
-  const auto canvasResult = validator.validate(std::move(oversizedCanvas));
+  const auto canvasResult =
+      test_support::validateWithAuthoredBuiltins(std::move(oversizedCanvas));
   expect(canvasResult.criticalFailure && !canvasResult.model,
          "authored canvas axes enforce the model dimension limit");
 
@@ -906,7 +911,8 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
   if (score != wrongNumericDomain.objects.end()) {
     std::get<SkinNumberObject>(score->payload).value = SkinIntegerPropertyId{1};
     const SkinObjectId scoreId = score->id;
-    const auto domainResult = validator.validate(std::move(wrongNumericDomain));
+    const auto domainResult = test_support::validateWithAuthoredBuiltins(
+        std::move(wrongNumericDomain));
     expect(domainResult.model &&
                std::ranges::find(domainResult.model->disabledOptionalObjects,
                                  scoreId) !=

@@ -136,7 +136,8 @@ BeatorajaSkinModelDecodeResult decodeInline(std::string_view sourceText) {
   if (!configured.value) {
     return {};
   }
-  return decoder.decodeGameplay(*configured.value);
+  return decoder.decodeGameplay(*configured.value,
+                                {.runtime = *created.runtime});
 }
 
 const SkinObjectDefinition *objectNamed(const BeatorajaSkinModel &model,

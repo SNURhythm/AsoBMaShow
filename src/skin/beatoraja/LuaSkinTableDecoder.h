@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BeatorajaSkinModel.h"
+#include "LuaSkinBindingDecoder.h"
 
 #include <cstddef>
 
@@ -8,6 +9,11 @@ namespace skin {
 
 class LuaSkinFileSystem;
 class LuaValueHandle;
+
+struct LuaSkinGameplayDecodeContext {
+  LuaSkinRuntime &runtime;
+  SkinBuiltinBindingCatalogView builtins;
+};
 
 struct LuaSkinTableDecoderPolicy {
   static constexpr std::size_t maxDepth = 64;
@@ -28,7 +34,8 @@ struct LuaSkinTableDecoderPolicy {
 class LuaSkinTableDecoder final {
 public:
   HeaderDecodeResult decodeHeader(const LuaValueHandle &) const;
-  BeatorajaSkinModelDecodeResult decodeGameplay(const LuaValueHandle &) const;
+  BeatorajaSkinModelDecodeResult
+  decodeGameplay(const LuaValueHandle &, LuaSkinGameplayDecodeContext) const;
 };
 
 ConfigurationReconcileResult
