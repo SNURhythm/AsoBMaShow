@@ -4170,6 +4170,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(playfield_visual_state_tests PRIVATE cxx_std_23)
 
+    add_executable(gameplay_bga_target_tests
+        tests/gameplay_bga_target_tests.cpp
+        src/audio/GameplayBgaMissStateTracker.cpp
+    )
+    target_include_directories(gameplay_bga_target_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_bga_target_tests PRIVATE cxx_std_23)
+
     add_executable(playfield_chart_visual_model_tests
         tests/playfield_chart_visual_model_tests.cpp
         src/bms_parser.cpp
@@ -5455,6 +5464,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_rule_override_tests)
     asobmashow_register_test(gameplay_score_state_tests)
     asobmashow_register_test(playfield_visual_state_tests)
+    asobmashow_register_test(gameplay_bga_target_tests)
     asobmashow_register_test(practice_session_tests)
     asobmashow_register_test(gameplay_practice_boundary_tests)
     asobmashow_register_test(gameplay_playback_startup_tests)
