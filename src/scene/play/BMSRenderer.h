@@ -44,6 +44,7 @@ class TexBatchRenderer;
 } // namespace rendering
 
 class SpriteLoader;
+struct PlayfieldProjectionResult;
 struct LaneState {
   long long lastStateTime = -1;
   long long lastPressedTime = -1;
@@ -525,6 +526,8 @@ public:
   void render(RenderContext &context, long long micro);
   void render(RenderContext &context, long long micro,
               long long replayTouchTimeMicros);
+  void render(RenderContext &context, const PlayfieldVisualState &state,
+              const PlayfieldProjectionResult &projection);
   void reset() override;
   void refreshGeometry() override;
   void setVisibleTimeGreenNumber(int greenNumber);

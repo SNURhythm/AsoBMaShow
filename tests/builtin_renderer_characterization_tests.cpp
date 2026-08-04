@@ -5,6 +5,7 @@
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/play/PlayfieldChartVisualModel.h"
+#include "scene/play/PlayfieldProjection.h"
 #include "scene/play/PlayfieldVisualState.h"
 
 #include <bgfx/bgfx.h>
@@ -77,6 +78,9 @@ constexpr unsigned kDrawableHeight = 720;
 constexpr long long kRenderMicros = 1'625'000;
 constexpr long long kGameplayMicros = 1'750'000;
 constexpr long long kBgaMicros = 1'700'000;
+constexpr long long kPastInvisibleRenderMicros = 2'125'000;
+constexpr std::uint64_t kCapturedEquivalenceFrameSerial = 3;
+constexpr long long kInvisibleProbePlayedTime = 1'998'765;
 constexpr int kBeforeCoverPercent = 0;
 constexpr int kAfterCoverPercent = 24;
 constexpr int kDraggedCoverPercent = 40;
@@ -215,6 +219,7 @@ struct SyntheticChartFixture {
   std::unique_ptr<bms_parser::Chart> chart =
       std::make_unique<bms_parser::Chart>();
   bms_parser::Note *probeNote = nullptr;
+  bms_parser::Note *invisibleProbeNote = nullptr;
 
   SyntheticChartFixture() {
     chart->Meta.SHA256 = std::string(64, '7');
@@ -285,8 +290,8 @@ struct SyntheticChartFixture {
     normal0->SetNote(0, new bms_parser::Note(bms_parser::Parser::NoWav));
     normal2->SetNote(2, new bms_parser::Note(bms_parser::Parser::NoWav));
     scratch->SetNote(7, new bms_parser::Note(bms_parser::Parser::NoWav));
-    invisible->SetInvisibleNote(
-        1, new bms_parser::Note(bms_parser::Parser::NoWav));
+    invisibleProbeNote = new bms_parser::Note(bms_parser::Parser::NoWav);
+    invisible->SetInvisibleNote(1, invisibleProbeNote);
     mine->SetLandmineNote(5, new bms_parser::LandmineNote(12.0F));
     probeNote = new bms_parser::Note(bms_parser::Parser::NoWav);
     mine->SetNote(0, probeNote);
@@ -493,9 +498,20 @@ void applyAuthority(BMSRenderer &renderer,
 }
 
 struct ScenarioResult {
+  struct ParserNoteState {
+    bool isDead = false;
+    bool isPlayed = false;
+    long long playedTime = 0;
+
+    bool operator==(const ParserNoteState &) const = default;
+  };
+
   int coverPercent = 0;
   Recorder recorder;
   PlayfieldVisualState state;
+  PlayfieldProjectionResult projection;
+  ParserNoteState invisibleBeforeRender;
+  ParserNoteState invisibleAfterRender;
   Json chart;
   std::array<std::pair<float, float>, 4> touchBounds{};
   bool hasTouchBounds = false;
@@ -505,6 +521,88 @@ struct ScenarioResult {
   float dragRenderY = 0.0F;
   std::vector<std::uint8_t> rgba;
 };
+
+enum class ScenarioRenderPath {
+  Legacy,
+  Captured,
+};
+
+std::vector<bms_parser::Note *>
+chartVisualNoteSources(const bms_parser::Chart &chart) {
+  std::vector<bms_parser::Note *> result;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      const auto append = [&result](const auto &notes) {
+        for (auto *note : notes) {
+          if (note != nullptr) {
+            result.push_back(note);
+          }
+        }
+      };
+      append(timeline->Notes);
+      append(timeline->InvisibleNotes);
+      append(timeline->LandmineNotes);
+    }
+  }
+  return result;
+}
+
+std::vector<NotePresentationState>
+captureNoteStates(const bms_parser::Chart &chart,
+                  const PlayfieldChartVisualModel &model,
+                  long long visualTimeMicros) {
+  const auto sources = chartVisualNoteSources(chart);
+  expect(sources.size() == model.notes.size(),
+         "the immutable snapshot covers every parser-backed visual note");
+
+  std::vector<NotePresentationState> result;
+  const std::size_t noteCount = std::min(sources.size(), model.notes.size());
+  result.reserve(noteCount);
+  for (std::size_t index = 0; index < noteCount; ++index) {
+    const auto *source = sources[index];
+    const auto &note = model.notes[index];
+    NotePresentationState state{
+        .id = note.id,
+        .judged = source->IsPlayed,
+        .dead = source->IsDead,
+        .playedTimeMicros = source->IsPlayed ? source->PlayedTime
+                                             : kPlayfieldTimestampOff,
+    };
+    if (const auto *longNote =
+            dynamic_cast<const bms_parser::LongNote *>(source);
+        longNote != nullptr) {
+      const auto *head = longNote->IsTail() && longNote->Head != nullptr
+                             ? longNote->Head
+                             : longNote;
+      const bool headReachedJudge =
+          head->IsPlayed || head->IsDead ||
+          (head->Timeline != nullptr &&
+           head->Timeline->Timing <= visualTimeMicros);
+      state.longReactive = false;
+      state.longActive = head->IsHolding;
+      state.longDamaged =
+          note.longNoteMode == ChartLongNoteMode::HCN &&
+          headReachedJudge && !state.longActive;
+    }
+    result.push_back(state);
+  }
+  return result;
+}
+
+ScenarioResult::ParserNoteState
+parserNoteState(const bms_parser::Note &note) {
+  return {
+      .isDead = note.IsDead,
+      .isPlayed = note.IsPlayed,
+      .playedTime = note.PlayedTime,
+  };
+}
 
 Json chartJson(const PlayfieldChartVisualModel &model) {
   Json timelines = Json::array();
@@ -564,12 +662,21 @@ std::vector<std::uint8_t> readPixels(const RenderTarget &target) {
   return bgra;
 }
 
-ScenarioResult renderScenario(const RenderTarget &target, int coverPercent,
-                              bool capturePixels) {
+ScenarioResult renderScenario(
+    const RenderTarget &target, int coverPercent, bool capturePixels,
+    ScenarioRenderPath renderPath = ScenarioRenderPath::Legacy,
+    long long visualTimeMicros = kRenderMicros,
+    std::uint64_t frameSerial = 0,
+    bool seedPastInvisibleProbe = false) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
   SyntheticChartFixture fixture;
+  if (seedPastInvisibleProbe) {
+    fixture.invisibleProbeNote->IsDead = false;
+    fixture.invisibleProbeNote->IsPlayed = true;
+    fixture.invisibleProbeNote->PlayedTime = kInvisibleProbePlayedTime;
+  }
   const PlayfieldChartVisualModel model =
       buildPlayfieldChartVisualModel(*fixture.chart, 0);
   PlayfieldVisualStateStore store(model);
@@ -589,35 +696,60 @@ ScenarioResult renderScenario(const RenderTarget &target, int coverPercent,
     BMSRenderer renderer(fixture.chart.get(), judge.timingWindows,
                          configuration.visibleTimeGreenNumber, true);
     renderer.setCharacterizationRecorder(&result.recorder);
-    renderer.configure(configuration);
-    applyAuthority(renderer, authority);
-
-    PlayfieldPresentationEventFanout fanout(store, renderer);
-    fanout.onLanePressed(4, JudgeResult(PGreat, -250), 1'575'000);
-    fanout.onLaneReleased(4, 1'600'000);
     const PlayfieldJudgeEventClock judgeClock{
         .songTimeMicros = kGameplayMicros,
         .visualTimeMicros = kRenderMicros,
         .bgaTimeMicros = kBgaMicros,
     };
-    fanout.onJudge(JudgeResult(Great, 1'500), 24, 123456, judgeClock, true);
+    if (renderPath == ScenarioRenderPath::Legacy) {
+      renderer.configure(configuration);
+      applyAuthority(renderer, authority);
+
+      PlayfieldPresentationEventFanout fanout(store, renderer);
+      fanout.onLanePressed(4, JudgeResult(PGreat, -250), 1'575'000);
+      fanout.onLaneReleased(4, 1'600'000);
+      fanout.onJudge(JudgeResult(Great, 1'500), 24, 123456, judgeClock, true);
+      renderer.setLiveTouchPoint(42, ReplayTouchAction::Down, 0.33F, 0.72F,
+                                 1'600'000);
+    } else {
+      store.onLanePressed(4, JudgeResult(PGreat, -250), 1'575'000);
+      store.onLaneReleased(4, 1'600'000);
+      store.onJudge(JudgeResult(Great, 1'500), 24, 123456, judgeClock, true);
+    }
     store.setLiveTouchPoint(42, ReplayTouchAction::Down, 0.33F, 0.72F,
                             1'600'000);
-    renderer.setLiveTouchPoint(42, ReplayTouchAction::Down, 0.33F, 0.72F,
-                               1'600'000);
+    store.setNoteStates(
+        captureNoteStates(*fixture.chart, model, visualTimeMicros));
 
     const PlayfieldFrameClock frameClock{
-        .serial = coverPercent == kBeforeCoverPercent ? 1U : 2U,
-        .visualTimeMicros = kRenderMicros,
+        .serial = frameSerial != 0
+                      ? frameSerial
+                      : (coverPercent == kBeforeCoverPercent ? 1U : 2U),
+        .visualTimeMicros = visualTimeMicros,
         .gameplayTimeMicros = kGameplayMicros,
-        .replayTouchTimeMicros = kRenderMicros,
+        .replayTouchTimeMicros = visualTimeMicros,
         .bgaTimeMicros = kBgaMicros,
     };
-    result.state = store.capture(frameClock);
+    const PlayfieldVisualState capturedState = store.capture(frameClock);
+    result.state = capturedState;
+    result.invisibleBeforeRender =
+        parserNoteState(*fixture.invisibleProbeNote);
 
     RenderContext context;
-    renderer.render(context, frameClock.visualTimeMicros,
-                    frameClock.replayTouchTimeMicros);
+    if (renderPath == ScenarioRenderPath::Captured) {
+      PlayfieldProjection projector;
+      const PlayfieldProjectionResult capturedProjection = projector.project(
+          model, capturedState,
+          {.includeInvisibleNotes =
+               capturedState.configuration.showInvisibleNotes});
+      result.projection = capturedProjection;
+      renderer.render(context, capturedState, capturedProjection);
+    } else {
+      renderer.render(context, frameClock.visualTimeMicros,
+                      frameClock.replayTouchTimeMicros);
+    }
+    result.invisibleAfterRender =
+        parserNoteState(*fixture.invisibleProbeNote);
 
     const auto touchBounds = renderer.gameplayTouchBoundsUi();
     if (touchBounds.has_value()) {
@@ -989,6 +1121,41 @@ void verifyBehavioralCoverage(const ScenarioResult &before,
          "lane cover changes both the visible boundary and projection scale");
 }
 
+void verifyCapturedOverloadEquivalence(const ScenarioResult &legacy,
+                                       const ScenarioResult &captured) {
+  expect(legacy.state.clock.serial != 0 &&
+             legacy.state.clock.serial == captured.state.clock.serial &&
+             captured.state.clock.serial == captured.projection.frameSerial,
+         "legacy, immutable state, and projection share a nonzero frame serial");
+  expect(captured.state.notes.size() == captured.chart.at("notes").size(),
+         "the immutable render state includes every modeled note state");
+  expect(scenarioJson(legacy) == scenarioJson(captured),
+         "captured-state overload matches the legacy characterization trace");
+
+  expect(!legacy.rgba.empty() && legacy.rgba.size() == captured.rgba.size(),
+         "legacy and captured-state renders produce comparable RGBA frames");
+  if (legacy.rgba.size() == captured.rgba.size()) {
+    std::size_t mismatches = 0;
+    for (std::size_t index = 0; index < legacy.rgba.size(); ++index) {
+      if (std::abs(static_cast<int>(legacy.rgba[index]) -
+                   static_cast<int>(captured.rgba[index])) > 2) {
+        ++mismatches;
+      }
+    }
+    expect(mismatches == 0,
+           "captured-state PNG matches legacy within channel tolerance 2");
+  }
+
+  expect(!captured.invisibleBeforeRender.isDead &&
+             captured.invisibleBeforeRender.isPlayed &&
+             captured.invisibleBeforeRender.playedTime ==
+                 kInvisibleProbePlayedTime,
+         "past invisible probe starts with non-default parser note state");
+  expect(captured.invisibleAfterRender == captured.invisibleBeforeRender,
+         "captured-state rendering does not mutate past invisible parser "
+         "IsDead/IsPlayed/PlayedTime");
+}
+
 std::filesystem::path fixturePath(std::string_view filename) {
   return std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "tests" / "fixtures" /
          "gameplay_presentation" / filename;
@@ -1112,6 +1279,15 @@ int main() {
       verifyBehavioralCoverage(before, after);
       verifyOrUpdateJson(buildCharacterization(before, after));
       verifyOrUpdatePng(after.rgba);
+
+      const auto legacyPastInvisible = renderScenario(
+          target, kAfterCoverPercent, true, ScenarioRenderPath::Legacy,
+          kPastInvisibleRenderMicros, kCapturedEquivalenceFrameSerial, true);
+      const auto capturedPastInvisible = renderScenario(
+          target, kAfterCoverPercent, true, ScenarioRenderPath::Captured,
+          kPastInvisibleRenderMicros, kCapturedEquivalenceFrameSerial, true);
+      verifyCapturedOverloadEquivalence(legacyPastInvisible,
+                                        capturedPastInvisible);
     } catch (const std::exception &error) {
       std::cerr << "FAIL: characterization threw: " << error.what() << '\n';
       ++failures;

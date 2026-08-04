@@ -3,6 +3,8 @@
 //
 
 #include "BMSRenderer.h"
+
+#include "PlayfieldProjection.h"
 #include "GamePlayTiming.h"
 #include "GameplayScrollGeometry.h"
 #include "JudgementTimingText.h"
@@ -2625,6 +2627,78 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
   render(context, micro, micro);
 }
 
+void BMSRenderer::render(RenderContext &context,
+                         const PlayfieldVisualState &capturedState,
+                         const PlayfieldProjectionResult &projection) {
+  if (capturedState.clock.serial == 0 ||
+      projection.frameSerial != capturedState.clock.serial) {
+    return;
+  }
+
+  configure(capturedState.configuration);
+  const auto &authority = capturedState.authority;
+  setCurrentBpm(authority.currentBpm);
+  setJudgementCounters(authority.judgementCounters, authority.comboBreak);
+  setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
+                 authority.currentGauge, authority.gaugeRules);
+  setPacemakerTarget(authority.pacemakerTarget);
+  setPacemakerStatus(authority.pacemakerStatus);
+  setPlayOptionStatus(authority.playOptionLabel);
+  setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
+  setStartLaneIndicators(authority.startLaneIndicators);
+  setStartLaneIndicatorsVisible(authority.startLaneIndicatorsVisible);
+  applyLaneCoverState(authority.laneCoverPercent,
+                      authority.resetLaneCoverVisibleTimeReference);
+
+  const std::size_t laneCount =
+      std::min(laneStatesByOrder.size(), capturedState.lanes.size());
+  for (std::size_t index = 0; index < laneStatesByOrder.size(); ++index) {
+    const LanePresentationState lane =
+        index < laneCount ? capturedState.lanes[index]
+                          : LanePresentationState{};
+    auto &destination = laneStatesByOrder[index];
+    destination.lastPressedJudgement.store(
+        static_cast<int>(lane.lastPressedJudge.judgement),
+        std::memory_order_relaxed);
+    destination.lastPressedDiff.store(lane.lastPressedJudge.Diff,
+                                      std::memory_order_relaxed);
+    destination.lastPressedTime.store(
+        lane.pressMicros == kPlayfieldTimestampOff ? -1 : lane.pressMicros,
+        std::memory_order_relaxed);
+    destination.isPressed.store(lane.pressed, std::memory_order_relaxed);
+    const long long lastStateTime = lane.pressed ? lane.pressMicros
+                                                 : lane.releaseMicros;
+    destination.lastStateTime.store(
+        lastStateTime == kPlayfieldTimestampOff ? -1 : lastStateTime,
+        std::memory_order_release);
+  }
+
+  // Rebuild the event-derived indicator from the immutable snapshot so
+  // repeated rendering of the same frame cannot append duplicate samples or
+  // retain a judgement that the current snapshot no longer contains.
+  judgementIndicator.clear();
+  if (capturedState.lastJudge.judgement != None &&
+      capturedState.lastJudgeVisualMicros != kPlayfieldTimestampOff) {
+    onJudge(capturedState.lastJudge, capturedState.combo, capturedState.score,
+            {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
+             .visualTimeMicros = capturedState.lastJudgeVisualMicros,
+             .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
+            true);
+  }
+
+  clearLiveTouchPoints();
+  for (const auto &touch : capturedState.touches) {
+    setLiveTouchPoint(touch.fingerId, touch.action, touch.normalizedX,
+                      touch.normalizedY, touch.songTimeMicros);
+  }
+
+  // This parity adapter is intentionally isolated behind the immutable
+  // overload. The next Task 17 slice replaces the traversal below with the
+  // already-captured projection; no state is written back to parser notes.
+  render(context, capturedState.clock.visualTimeMicros,
+         capturedState.clock.replayTouchTimeMicros);
+}
+
 void BMSRenderer::render(RenderContext &context, long long micro,
                          long long replayTouchTimeMicros) {
   const long long chartTimeMicros =
@@ -2967,8 +3041,6 @@ void BMSRenderer::render(RenderContext &context, long long micro,
           }
           drawInvisibleNote(y, note, *rowInvisibleDepth);
         }
-      } else {
-        note->IsDead = true;
       }
     }
   }

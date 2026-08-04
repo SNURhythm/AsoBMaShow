@@ -3917,7 +3917,8 @@ void GamePlayScene::renderScene() {
   const long long visualTimeMicros = getVisualTimeMicros(gameplayTimeMicros);
   capturePlayfieldVisualState(gameplayTimeMicros, visualTimeMicros,
                               startLaneIndicatorsVisible);
-  renderer->render(renderContext, visualTimeMicros, gameplayTimeMicros);
+  renderer->render(renderContext, capturedPlayfieldVisualState,
+                   capturedPlayfieldProjection);
   renderCoursePauseHoldRing();
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);

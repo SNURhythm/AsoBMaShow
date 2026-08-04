@@ -567,6 +567,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/scene/play/Judge.cpp
             src/scene/play/JudgementIndicatorRenderer.cpp
             src/scene/play/PlayfieldChartVisualModel.cpp
+            src/scene/play/PlayfieldProjection.cpp
             src/scene/play/PlayfieldVisualState.cpp
             src/utils/SpriteLoader.cpp
             src/view/DecodedImageCache.cpp
