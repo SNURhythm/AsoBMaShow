@@ -741,12 +741,8 @@ void Jukebox::render() {
         videoPlayer->update();
         const auto rect = calculateBgaRect(videoPlayer->getFrameWidth(),
                                            videoPlayer->getFrameHeight());
-        videoPlayer->viewX = rect.x;
-        videoPlayer->viewY = rect.y;
-        videoPlayer->viewWidth = rect.width;
-        videoPlayer->viewHeight = rect.height;
-        videoPlayer->viewId = rendering::bga_view;
-        videoPlayer->render();
+        videoPlayer->render(rendering::bga_view, rect.x, rect.y, rect.width,
+                            rect.height);
         rendered = true;
       }
     }
@@ -769,12 +765,8 @@ void Jukebox::render() {
         videoPlayer->update();
         const auto rect = calculateBgaRect(videoPlayer->getFrameWidth(),
                                            videoPlayer->getFrameHeight());
-        videoPlayer->viewX = rect.x;
-        videoPlayer->viewY = rect.y;
-        videoPlayer->viewWidth = rect.width;
-        videoPlayer->viewHeight = rect.height;
-        videoPlayer->viewId = rendering::bga_layer_view;
-        videoPlayer->render();
+        videoPlayer->render(rendering::bga_layer_view, rect.x, rect.y,
+                            rect.width, rect.height);
         rendered = true;
       }
     }
@@ -1001,8 +993,9 @@ bool Jukebox::loadMaterializedVideoPath(
     videoMaterializedPathTable[id] = materializedPath.lexically_normal();
     visualPathTable[id] = fspath_to_path_t(displayPath);
 
-    SDL_Log("video width: %f, video height: %f", loadedVideoPlayer->viewWidth,
-            loadedVideoPlayer->viewHeight);
+    SDL_Log("video width: %d, video height: %d",
+            loadedVideoPlayer->getFrameWidth(),
+            loadedVideoPlayer->getFrameHeight());
     SDL_Log("Loaded video to id: %d", id);
     return true;
   }
@@ -2999,7 +2992,7 @@ bool Jukebox::activateVisual(int visualId, bgfx::ViewId viewId) {
   return activateVisualAt(visualId, viewId, 0);
 }
 
-bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
+bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId,
                                long long elapsedMicros) {
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
@@ -3015,9 +3008,6 @@ bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
         videoPlayer->seek(0);
         videoPlayer->play();
       }
-      videoPlayer->viewWidth = rendering::window_width;
-      videoPlayer->viewHeight = rendering::window_height;
-      videoPlayer->viewId = viewId;
       return true;
     }
   }

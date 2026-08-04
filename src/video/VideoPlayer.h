@@ -5,7 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <vector>
+#include "VideoFrameLayout.h"
 #include "../utils/Stopwatch.h"
 #include "../rendering/common.h"
 #include <thread>
@@ -31,7 +33,12 @@ public:
 
   bool loadVideo(const std::string &videoPath, std::atomic<bool> &isCancelled);
   void update();
-  void render();
+  void render(bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
+              float viewHeight) const;
+  void renderEmbedded(
+      bgfx::ViewId viewId, const video::EmbeddedYuvQuadLayout &quad,
+      std::uint64_t state,
+      std::optional<rendering::DrawableScissor> scissor = std::nullopt) const;
   void play();
   void playFrom(int64_t micro);
   void pause();
@@ -42,11 +49,6 @@ public:
   long long getDurationMicros() const;
   int getFrameWidth() const { return videoFrameWidth; }
   int getFrameHeight() const { return videoFrameHeight; }
-  float viewWidth = 1920.0f;
-  float viewHeight = 1080.0f;
-  int viewId = rendering::bga_view;
-  float viewX = 0.0f;
-  float viewY = 0.0f;
   // float fps = 60.0f;
 
 private:

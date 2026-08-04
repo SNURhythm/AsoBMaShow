@@ -9,6 +9,45 @@
 #include <inttypes.h>
 
 #include <thread>
+
+namespace {
+
+struct EmbeddedYuvVertex {
+  float x;
+  float y;
+  float z;
+  float u;
+  float v;
+  std::uint32_t abgr;
+};
+
+const bgfx::VertexLayout &embeddedYuvVertexLayout() {
+  static const bgfx::VertexLayout layout = [] {
+    bgfx::VertexLayout value;
+    value.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+        .end();
+    return value;
+  }();
+  return layout;
+}
+
+std::uint8_t colorByte(float value) {
+  return static_cast<std::uint8_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F);
+}
+
+std::uint32_t packAbgr(const video::EmbeddedYuvQuadVertex &vertex) {
+  const auto red = static_cast<std::uint32_t>(colorByte(vertex.r));
+  const auto green = static_cast<std::uint32_t>(colorByte(vertex.g));
+  const auto blue = static_cast<std::uint32_t>(colorByte(vertex.b));
+  const auto alpha = static_cast<std::uint32_t>(colorByte(vertex.a));
+  return (alpha << 24U) | (blue << 16U) | (green << 8U) | red;
+}
+
+} // namespace
+
 VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
     : stopwatch(stopwatch), videoFrameWidth(0), videoFrameHeight(0),
       hasVideoFrame(false) {
@@ -308,7 +347,8 @@ unsigned int VideoPlayer::getPrecisePosition() {
   return static_cast<unsigned int>(lastFramePTS * 1000000);
 }
 
-void VideoPlayer::render() {
+void VideoPlayer::render(bgfx::ViewId viewId, float viewX, float viewY,
+                         float viewWidth, float viewHeight) const {
   if (!hasVideoFrame)
     return;
   if (!isPlaying) {
@@ -370,6 +410,62 @@ void VideoPlayer::render() {
 
   static const bgfx::ProgramHandle kProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_YUVRGB);
+  bgfx::submit(viewId, kProgram);
+}
+
+void VideoPlayer::renderEmbedded(
+    bgfx::ViewId viewId, const video::EmbeddedYuvQuadLayout &quad,
+    std::uint64_t state,
+    std::optional<rendering::DrawableScissor> scissor) const {
+  if (!hasVideoFrame || !isPlaying) {
+    return;
+  }
+
+  bgfx::TransientVertexBuffer tvb{};
+  bgfx::TransientIndexBuffer tib{};
+  if (bgfx::getAvailTransientVertexBuffer(
+          static_cast<std::uint32_t>(quad.vertices.size()),
+          embeddedYuvVertexLayout()) < quad.vertices.size() ||
+      bgfx::getAvailTransientIndexBuffer(
+          static_cast<std::uint32_t>(quad.indices.size())) <
+          quad.indices.size()) {
+    return;
+  }
+  bgfx::allocTransientVertexBuffer(&tvb, quad.vertices.size(),
+                                   embeddedYuvVertexLayout());
+  bgfx::allocTransientIndexBuffer(&tib, quad.indices.size());
+
+  auto *vertices = reinterpret_cast<EmbeddedYuvVertex *>(tvb.data);
+  for (std::size_t index = 0; index < quad.vertices.size(); ++index) {
+    const auto &source = quad.vertices[index];
+    vertices[index] = {.x = source.x,
+                       .y = source.y,
+                       .z = 0.0F,
+                       .u = source.u,
+                       .v = source.v,
+                       .abgr = packAbgr(source)};
+  }
+  std::memcpy(tib.data, quad.indices.data(),
+              quad.indices.size() * sizeof(quad.indices.front()));
+
+  bgfx::setState(state);
+  if (scissor && scissor->enabled) {
+    bgfx::setScissor(static_cast<std::uint16_t>(scissor->x),
+                     static_cast<std::uint16_t>(scissor->y),
+                     static_cast<std::uint16_t>(scissor->width),
+                     static_cast<std::uint16_t>(scissor->height));
+  } else {
+    bgfx::setScissor();
+  }
+  bgfx::setVertexBuffer(0, &tvb);
+  bgfx::setIndexBuffer(&tib);
+  bgfx::setTexture(0, s_texY, videoTextureY);
+  bgfx::setTexture(1, s_texU, videoTextureU);
+  bgfx::setTexture(2, s_texV, videoTextureV);
+
+  static const bgfx::ProgramHandle kProgram =
+      rendering::ShaderManager::getInstance().getProgram(
+          "vs_skin_yuvrgb.bin", "fs_skin_yuvrgb.bin");
   bgfx::submit(viewId, kProgram);
 }
 
