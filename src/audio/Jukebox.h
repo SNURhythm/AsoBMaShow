@@ -26,12 +26,22 @@
 #include "../AppSettings.h"
 #include <cassert>
 
+namespace rendering {
+class BgfxVertexLayoutRegistration;
+}
+
 struct ImageData {
   bgfx::TextureHandle texture;
   int width;
   int height;
   int channels;
 };
+
+// Transfers a loader-guarded texture into the shared frame/image table owner.
+// On failure before transfer, image remains owning; after transfer, image is
+// invalid and the raw/shared deleter is the sole owner.
+[[nodiscard]] std::shared_ptr<ImageData>
+AdoptImageTextureToSharedOwner(ImageData &image);
 
 using ChartResourceTable = std::unordered_map<int, std::string>;
 
@@ -432,6 +442,8 @@ private:
       preparedBgaFrameLeases;
   std::uint64_t preparedBgaSequence = 0;
   std::vector<PreparedBgaTargetPlan> preparedBgaTargetPlans;
+  std::unique_ptr<rendering::BgfxVertexLayoutRegistration>
+      preparedBgaVertexLayouts;
   std::optional<std::uint64_t> preparedBgaTargetFrameSequence;
   std::size_t preparedBgaTargetCursor = 0;
   bool preparedBgaTargetsCommitted = false;

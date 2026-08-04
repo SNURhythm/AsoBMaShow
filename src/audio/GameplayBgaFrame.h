@@ -72,6 +72,29 @@ struct GameplayBgaPoint {
   float y = 0.0F;
 };
 
+// Render-neutral authored geometry retained until the selected BGA surface
+// supplies its intrinsic dimensions. Stretch is therefore resolved before
+// this authored-to-UI affine, including nonuniform scale and shear.
+struct GameplayBgaAffine2D {
+  double m00 = 1.0;
+  double m01 = 0.0;
+  double tx = 0.0;
+  double m10 = 0.0;
+  double m11 = 1.0;
+  double ty = 0.0;
+};
+
+struct GameplayBgaAuthoredProjection {
+  double x = 0.0;
+  double y = 0.0;
+  double width = 0.0;
+  double height = 0.0;
+  double centerX = 0.5;
+  double centerY = 0.5;
+  double angleDegrees = 0.0;
+  GameplayBgaAffine2D authoredToUi;
+};
+
 // This intentionally duplicates only the four scalar fields required from
 // skin::UiLogicalRect.  UiLogicalRect belongs to the optional Beatoraja skin
 // model layer, while gameplay BGA submission must also compile without it.
@@ -107,6 +130,7 @@ struct BgaDrawTarget {
   // Matches SkinDestinationEvaluator's UI quad order: BL, BR, TR, TL.
   std::array<GameplayBgaPoint, 4> destination{};
   skin::SkinStretchMode stretch = skin::SkinStretchMode::Stretch;
+  std::optional<GameplayBgaAuthoredProjection> authoredProjection;
   std::array<float, 4> tint{1.0F, 1.0F, 1.0F, 1.0F};
   skin::SkinBlendMode blend = skin::SkinBlendMode::Normal;
   std::optional<GameplayBgaClipRect> clip;

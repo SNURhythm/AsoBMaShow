@@ -51,9 +51,102 @@ struct SkinQuadBackendBatch {
   bool textured = false;
 };
 
+// createVertexLayout is the only bgfx API that can prove a transient vertex
+// layout has a live pool entry. Holding these references across commit keeps
+// allocTransientVertexBuffer's lazy lookup from becoming a post-commit
+// failure. Function seams make pool exhaustion deterministic in focused tests.
+class BgfxVertexLayoutRegistration final {
+public:
+  using Create = bgfx::VertexLayoutHandle (*)(const bgfx::VertexLayout &,
+                                               void *) noexcept;
+  using Destroy = void (*)(bgfx::VertexLayoutHandle, void *) noexcept;
+
+  BgfxVertexLayoutRegistration() noexcept
+      : BgfxVertexLayoutRegistration(&createDefault, &destroyDefault,
+                                     nullptr) {}
+  BgfxVertexLayoutRegistration(Create create, Destroy destroy,
+                               void *context) noexcept
+      : create_(create), destroy_(destroy), context_(context) {}
+  ~BgfxVertexLayoutRegistration() { reset(); }
+
+  BgfxVertexLayoutRegistration(BgfxVertexLayoutRegistration &&other) noexcept {
+    moveFrom(other);
+  }
+  BgfxVertexLayoutRegistration &
+  operator=(BgfxVertexLayoutRegistration &&other) noexcept {
+    if (this != &other) {
+      reset();
+      moveFrom(other);
+    }
+    return *this;
+  }
+  BgfxVertexLayoutRegistration(const BgfxVertexLayoutRegistration &) = delete;
+  BgfxVertexLayoutRegistration &
+  operator=(const BgfxVertexLayoutRegistration &) = delete;
+
+  [[nodiscard]] bool
+  registerLayout(const bgfx::VertexLayout &layout) noexcept {
+    if (create_ == nullptr || destroy_ == nullptr || count_ == handles_.size()) {
+      return false;
+    }
+    const auto handle = create_(layout, context_);
+    if (!bgfx::isValid(handle)) {
+      return false;
+    }
+    handles_[count_++] = handle;
+    return true;
+  }
+
+  void reset() noexcept {
+    if (destroy_ != nullptr) {
+      while (count_ != 0) {
+        destroy_(handles_[--count_], context_);
+        handles_[count_] = BGFX_INVALID_HANDLE;
+      }
+    } else {
+      count_ = 0;
+    }
+  }
+
+  [[nodiscard]] std::size_t size() const noexcept { return count_; }
+
+private:
+  static bgfx::VertexLayoutHandle
+  createDefault(const bgfx::VertexLayout &layout, void *) noexcept {
+    return bgfx::createVertexLayout(layout);
+  }
+  static void destroyDefault(bgfx::VertexLayoutHandle handle, void *) noexcept {
+    bgfx::destroy(handle);
+  }
+  void moveFrom(BgfxVertexLayoutRegistration &other) noexcept {
+    handles_ = other.handles_;
+    count_ = other.count_;
+    create_ = other.create_;
+    destroy_ = other.destroy_;
+    context_ = other.context_;
+    other.count_ = 0;
+    other.handles_.fill(BGFX_INVALID_HANDLE);
+  }
+
+  std::array<bgfx::VertexLayoutHandle, 4> handles_{
+      bgfx::VertexLayoutHandle{bgfx::kInvalidHandle},
+      bgfx::VertexLayoutHandle{bgfx::kInvalidHandle},
+      bgfx::VertexLayoutHandle{bgfx::kInvalidHandle},
+      bgfx::VertexLayoutHandle{bgfx::kInvalidHandle}};
+  std::size_t count_ = 0;
+  Create create_ = nullptr;
+  Destroy destroy_ = nullptr;
+  void *context_ = nullptr;
+};
+
 class SkinQuadBatchBackend {
 public:
   virtual ~SkinQuadBatchBackend() = default;
+
+  // Registers and retains every layout used by the subsequent transient
+  // allocations. False is a pre-submission fallback signal.
+  virtual bool preflightVertexLayouts(
+      std::span<const bgfx::VertexLayout *const> layouts) = 0;
 
   // Called after command/resource validation and before capacity reservation.
   // Every required texture sampler must be ready before any batch can submit.

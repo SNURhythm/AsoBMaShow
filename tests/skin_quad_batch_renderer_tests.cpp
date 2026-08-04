@@ -96,6 +96,14 @@ struct CapturedBatch {
 };
 
 struct FakeBackend final : rendering::SkinQuadBatchBackend {
+  bool preflightVertexLayouts(
+      std::span<const bgfx::VertexLayout *const> layouts) override {
+    ++layoutPreflightCalls;
+    preflightLayoutCount = layouts.size();
+    layoutsReady = layoutPreflightResult;
+    return layoutPreflightResult;
+  }
+
   bool preflightSamplers(
       std::span<const skin::SkinFilterMode> filters) override {
     ++samplerPreflightCalls;
@@ -112,6 +120,7 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
       std::size_t skinAllocationCount,
       const GameplayBgaTransientRequirements &bgaRequirements) override {
     ++reserveCalls;
+    layoutsReadyAtReserve = layoutsReady;
     reservedVertices = vertexCount;
     reservedIndices = indexCount;
     reservedSkinAllocations = skinAllocationCount;
@@ -144,9 +153,14 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
   }
 
   bool reserveResult = true;
+  bool layoutPreflightResult = true;
   bool throwOnReserve = false;
   int reserveCalls = 0;
   int samplerPreflightCalls = 0;
+  int layoutPreflightCalls = 0;
+  std::size_t preflightLayoutCount = 0;
+  bool layoutsReady = false;
+  bool layoutsReadyAtReserve = false;
   std::size_t reservedVertices = 0;
   std::size_t reservedIndices = 0;
   std::size_t reservedSkinAllocations = 0;
@@ -156,6 +170,30 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
   std::vector<std::string> *submissionOrder = nullptr;
   std::function<void()> afterSubmit;
 };
+
+struct LayoutPoolControl {
+  int createCalls = 0;
+  int failOnCreate = -1;
+  std::array<std::uint16_t, 4> destroyed{};
+  std::size_t destroyedCount = 0;
+};
+
+bgfx::VertexLayoutHandle fakeCreateVertexLayout(
+    const bgfx::VertexLayout &, void *context) noexcept {
+  auto &control = *static_cast<LayoutPoolControl *>(context);
+  ++control.createCalls;
+  if (control.createCalls == control.failOnCreate) {
+    return BGFX_INVALID_HANDLE;
+  }
+  return bgfx::VertexLayoutHandle{
+      static_cast<std::uint16_t>(900 + control.createCalls)};
+}
+
+void fakeDestroyVertexLayout(bgfx::VertexLayoutHandle handle,
+                             void *context) noexcept {
+  auto &control = *static_cast<LayoutPoolControl *>(context);
+  control.destroyed[control.destroyedCount++] = handle.idx;
+}
 
 struct FakeBgaSubmitter final : IGameplayBgaSubmitter {
   PreparedGameplayBgaFrame
@@ -536,6 +574,9 @@ void testTwoPhaseSkinSubmissionPreservesMixedAuthoredOrder() {
          "quad segments and every stable BGA role remain contiguous in exact "
          "authored order");
   expect(backend.samplerPreflightCalls == 1 && backend.reserveCalls == 1 &&
+             backend.layoutPreflightCalls == 1 &&
+             backend.preflightLayoutCount == 1 &&
+             backend.layoutsReadyAtReserve &&
              backend.reservedVertices == 12 && backend.reservedIndices == 18 &&
              backend.reservedSkinAllocations == 3 &&
              bgaSubmitter.preflightCalls == 1 &&
@@ -566,12 +607,26 @@ void testTwoPhaseSkinSubmissionPreservesMixedAuthoredOrder() {
              base.destination[3].x == 55.0F &&
              base.destination[3].y == -77.5F &&
              base.stretch == skin::SkinStretchMode::KeepAspectRatioFitInner &&
+             base.authoredProjection &&
+             base.authoredProjection->x == 10.0 &&
+             base.authoredProjection->y == 20.0 &&
+             base.authoredProjection->width == 30.0 &&
+             base.authoredProjection->height == 40.0 &&
+             base.authoredProjection->centerX == 0.5 &&
+             base.authoredProjection->centerY == 0.5 &&
+             base.authoredProjection->angleDegrees == 0.0 &&
+             base.authoredProjection->authoredToUi.m00 == 2.0 &&
+             base.authoredProjection->authoredToUi.m01 == 0.5 &&
+             base.authoredProjection->authoredToUi.tx == 5.0 &&
+             base.authoredProjection->authoredToUi.m10 == 0.25 &&
+             base.authoredProjection->authoredToUi.m11 == -3.0 &&
+             base.authoredProjection->authoredToUi.ty == 100.0 &&
              base.tint == std::array<float, 4>{0.1F, 0.2F, 0.3F, 0.4F} &&
              base.blend == skin::SkinBlendMode::Additive && base.clip &&
              base.clip->x == 40.5 && base.clip->y == 1.0 &&
              base.clip->width == 19.5 && base.clip->height == 34.75,
-         "role materialization preserves projected destination, stretch, tint, "
-         "blend, clip, view, and authored ordinal");
+         "role materialization preserves authored geometry until source-aware "
+         "stretch while retaining projected placeholder geometry and draw state");
 }
 
 void testCommittedSubmissionCannotReturnFallbackSignal() {
@@ -822,6 +877,51 @@ void testBackendReservationFailureIsAtomic() {
          "reservation exceptions cannot leave a partial skin frame");
 }
 
+void testVertexLayoutRegistrationFailureIsZeroDrawAtomic() {
+  auto prepared = resources();
+  RenderContext context;
+  FakeBackend backend;
+  backend.layoutPreflightResult = false;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+  const std::array commands{command(
+      1, quad(11, skin::SkinBlendMode::Normal,
+              skin::SkinFilterMode::Nearest))};
+
+  renderer.begin(context, prepared);
+  expect(!renderer.submit(commands),
+         "vertex-layout pool exhaustion selects fallback during preflight");
+  renderer.flush();
+  expect(backend.layoutPreflightCalls == 1 && backend.reserveCalls == 0 &&
+             backend.batches.empty(),
+         "layout registration fails before capacity reservation or submission");
+}
+
+void testVertexLayoutRegistrationRetainsAndReleasesExactHandles() {
+  bgfx::VertexLayout layout;
+  layout.begin()
+      .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+      .end();
+  LayoutPoolControl control{.failOnCreate = 2};
+  rendering::BgfxVertexLayoutRegistration registration(
+      &fakeCreateVertexLayout, &fakeDestroyVertexLayout, &control);
+
+  expect(registration.registerLayout(layout) && registration.size() == 1 &&
+             control.destroyedCount == 0,
+         "a validated layout handle remains registered through commit");
+  expect(!registration.registerLayout(layout) && registration.size() == 1 &&
+             control.destroyedCount == 0,
+         "deterministic layout-pool exhaustion preserves earlier live "
+         "registrations for rollback");
+  auto retained = std::move(registration);
+  expect(registration.size() == 0 && retained.size() == 1 &&
+             control.destroyedCount == 0,
+         "moving a prepared registration transfers its sole release duty");
+  retained.reset();
+  expect(control.destroyedCount == 1 && control.destroyed[0] == 901,
+         "rollback/finalization releases every successfully registered handle "
+         "exactly once");
+}
+
 void testInvalidLaterSamplerPreventsEveryBackendSubmission() {
   auto prepared = resources();
   RenderContext context;
@@ -906,6 +1006,8 @@ int main() {
   testLogicalScissorConversionAtOneAndTwoTimesScale();
   testOuterRenderContextScissorIsIntersectedBeforeSubmission();
   testBackendReservationFailureIsAtomic();
+  testVertexLayoutRegistrationFailureIsZeroDrawAtomic();
+  testVertexLayoutRegistrationRetainsAndReleasesExactHandles();
   testInvalidLaterSamplerPreventsEveryBackendSubmission();
   testLargeStripsSplitWithoutUint16IndexCorruption();
   if (failures != 0) {

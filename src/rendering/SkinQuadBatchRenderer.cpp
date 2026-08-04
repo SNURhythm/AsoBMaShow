@@ -109,6 +109,18 @@ const bgfx::VertexLayout &transientCapacityProbeLayout() {
 
 class BgfxSkinQuadBatchBackend final : public SkinQuadBatchBackend {
 public:
+  bool preflightVertexLayouts(
+      std::span<const bgfx::VertexLayout *const> layouts) override {
+    BgfxVertexLayoutRegistration registration;
+    for (const auto *layout : layouts) {
+      if (layout == nullptr || !registration.registerLayout(*layout)) {
+        return false;
+      }
+    }
+    layoutRegistration_ = std::move(registration);
+    return true;
+  }
+
   bool preflightSamplers(
       std::span<const skin::SkinFilterMode> filters) override {
     if (filters.empty()) {
@@ -251,6 +263,7 @@ public:
   }
 
 private:
+  BgfxVertexLayoutRegistration layoutRegistration_;
   bgfx::UniformHandle sampler_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle texturedProgram_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle primitiveProgram_ = BGFX_INVALID_HANDLE;
@@ -517,8 +530,15 @@ bool SkinQuadBatchRenderer::prepare(
     vertices_.reserve(
         std::min(maximumSegmentVertices, maximumBatchVertices));
     indices_.reserve(std::min(maximumSegmentIndices, maximumBatchIndices));
+    const std::array<const bgfx::VertexLayout *, 1> skinLayouts{
+        &SkinQuadGpuVertex::ms_decl};
+    const std::span<const bgfx::VertexLayout *const> requiredLayouts =
+        totalVertexCount == 0
+            ? std::span<const bgfx::VertexLayout *const>{}
+            : std::span<const bgfx::VertexLayout *const>{skinLayouts};
     if ((!segments.empty() || !bgaRequirements.empty()) &&
-        (!backend_->preflightSamplers(samplers) ||
+        (!backend_->preflightVertexLayouts(requiredLayouts) ||
+         !backend_->preflightSamplers(samplers) ||
          !backend_->reserve(totalVertexCount, totalIndexCount,
                             skinAllocationCount,
                             bgaRequirements))) {

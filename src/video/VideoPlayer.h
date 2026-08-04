@@ -61,6 +61,8 @@ public:
   prepareEmbeddedSubmission(
       const video::EmbeddedYuvQuadLayout &quad, std::uint64_t state,
       std::optional<rendering::DrawableScissor> scissor = std::nullopt) const;
+  [[nodiscard]] static const bgfx::VertexLayout &
+  embeddedVertexLayout() noexcept;
   void commitPreparedEmbedded(
       PreparedEmbeddedSubmission &submission) const noexcept;
   void submitPreparedEmbedded(

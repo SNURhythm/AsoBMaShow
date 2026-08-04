@@ -6,9 +6,11 @@
 #include "audio/Jukebox.h"
 #include "rendering/ShaderManager.h"
 #include "rendering/UniformCache.h"
+#include "skin/beatoraja/SkinDestinationEvaluator.cpp"
 #include "utils/Stopwatch.h"
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
@@ -22,6 +24,29 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+namespace {
+thread_local int allocationFailureCountdown = -1;
+}
+
+void *operator new(std::size_t size) {
+  if (allocationFailureCountdown == 0) {
+    allocationFailureCountdown = -1;
+    throw std::bad_alloc();
+  }
+  if (allocationFailureCountdown > 0) {
+    --allocationFailureCountdown;
+  }
+  if (void *allocation = std::malloc(size)) {
+    return allocation;
+  }
+  throw std::bad_alloc();
+}
+
+void operator delete(void *allocation) noexcept { std::free(allocation); }
+void operator delete(void *allocation, std::size_t) noexcept {
+  std::free(allocation);
+}
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -71,7 +96,28 @@ bool sameClip(const std::optional<GameplayBgaClipRect> &left,
 }
 
 bool sameTarget(const BgaDrawTarget &left, const BgaDrawTarget &right) {
-  return left.role == right.role && left.viewId == right.viewId &&
+  const auto sameAuthoredProjection = [&] {
+    if (left.authoredProjection.has_value() !=
+        right.authoredProjection.has_value()) {
+      return false;
+    }
+    if (!left.authoredProjection) {
+      return true;
+    }
+    const auto &a = *left.authoredProjection;
+    const auto &b = *right.authoredProjection;
+    return a.x == b.x && a.y == b.y && a.width == b.width &&
+           a.height == b.height && a.centerX == b.centerX &&
+           a.centerY == b.centerY && a.angleDegrees == b.angleDegrees &&
+           a.authoredToUi.m00 == b.authoredToUi.m00 &&
+           a.authoredToUi.m01 == b.authoredToUi.m01 &&
+           a.authoredToUi.tx == b.authoredToUi.tx &&
+           a.authoredToUi.m10 == b.authoredToUi.m10 &&
+           a.authoredToUi.m11 == b.authoredToUi.m11 &&
+           a.authoredToUi.ty == b.authoredToUi.ty;
+  };
+  return sameAuthoredProjection() && left.role == right.role &&
+         left.viewId == right.viewId &&
          samePoint(left.destination[0], right.destination[0]) &&
          samePoint(left.destination[1], right.destination[1]) &&
          samePoint(left.destination[2], right.destination[2]) &&
@@ -337,17 +383,19 @@ void testJukeboxPreparesOneValueFrameAndNeverUpdatesOnSubmission() {
   const auto after = jukebox.gameplayBgaSubmissionStats();
 
   require(first.sequence != 0 && sameFrame(first, repeat) &&
-              first.sequence != next.sequence &&
+              first.sequence != afterSubmission.sequence &&
+              afterSubmission.sequence != next.sequence &&
               first.composition == GameplayBgaComposition::Blank &&
               (preflight.ready ? !preflight.failure.has_value()
                                : preflight.failure.has_value()) &&
-              sameFrame(first, afterSubmission) &&
-              after.preparedFrames == before.preparedFrames + 2 &&
+              afterSubmission.composition == GameplayBgaComposition::Blank &&
+              after.preparedFrames == before.preparedFrames + 3 &&
               after.videoUpdates == before.videoUpdates &&
               after.embeddedSubmissions ==
                   before.embeddedSubmissions + (preflight.ready ? 1U : 0U) &&
               after.fullscreenSubmissions == before.fullscreenSubmissions + 1,
-          "Jukebox Noop preflight truthfully agrees with whether its packaged GPU resources are submit-ready");
+          "finalizing a prepared frame invalidates its same-key cache entry "
+          "before a fresh sequence is prepared");
 }
 
 void testJukeboxBgaTargetStretchAndTrimmedUvs() {
@@ -393,6 +441,113 @@ void testJukeboxBgaTargetStretchAndTrimmedUvs() {
               samePoint(arbitrary->destination[2], target.destination[2]) &&
               samePoint(arbitrary->destination[3], target.destination[3]),
           "Stretch preserves every authored point of an arbitrary BGA quad");
+}
+
+void testBgaStretchPrecedesNonuniformViewportProjection() {
+  BgaDrawTarget target{
+      .stretch = skin::SkinStretchMode::KeepAspectRatioFitInner,
+      .authoredProjection = GameplayBgaAuthoredProjection{
+          .x = 0.0,
+          .y = 0.0,
+          .width = 100.0,
+          .height = 100.0,
+          .centerX = 0.5,
+          .centerY = 0.5,
+          .authoredToUi = {.m00 = 2.0, .m11 = 1.0},
+      }};
+  const auto projected = ResolveGameplayBgaTargetQuad(target, 200, 100);
+  require(projected && projected->destination[0].x == 0.0F &&
+              projected->destination[0].y == 25.0F &&
+              projected->destination[1].x == 200.0F &&
+              projected->destination[1].y == 25.0F &&
+              projected->destination[2].x == 200.0F &&
+              projected->destination[2].y == 75.0F &&
+              projected->destination[3].x == 0.0F &&
+              projected->destination[3].y == 75.0F,
+          "a 2:1 BGA fits to 100x50 in authored space before a 2x/1x "
+          "viewport produces a 200x50 UI quad");
+
+  target.authoredProjection = GameplayBgaAuthoredProjection{
+      .x = 10.0,
+      .y = 20.0,
+      .width = 100.0,
+      .height = 100.0,
+      .centerX = 0.25,
+      .centerY = 0.75,
+      .angleDegrees = 90.0,
+      .authoredToUi = {.m00 = 2.0,
+                       .m01 = 0.5,
+                       .tx = 3.0,
+                       .m10 = 0.25,
+                       .m11 = 1.0,
+                       .ty = -4.0},
+  };
+  const auto rotated = ResolveGameplayBgaTargetQuad(target, 200, 100);
+  require(rotated && rotated->destination[0].x == 176.75F &&
+              rotated->destination[0].y == 71.625F &&
+              rotated->destination[1].x == 226.75F &&
+              rotated->destination[1].y == 171.625F &&
+              rotated->destination[2].x == 126.75F &&
+              rotated->destination[2].y == 159.125F &&
+              rotated->destination[3].x == 76.75F &&
+              rotated->destination[3].y == 59.125F,
+          "stretch-adjusted authored geometry rotates around its off-center "
+          "pivot before the viewport shear is applied");
+
+  target.stretch = skin::SkinStretchMode::KeepAspectRatioFitOuterTrimmed;
+  target.authoredProjection = GameplayBgaAuthoredProjection{
+      .x = 0.0,
+      .y = 0.0,
+      .width = 199.0,
+      .height = 100.0,
+  };
+  const auto trimmed = ResolveGameplayBgaTargetQuad(target, 401, 101);
+  require(trimmed &&
+              std::abs(trimmed->uvs[0].x - 100.0F / 401.0F) < 0.000001F &&
+              std::abs(trimmed->uvs[1].x - 300.0F / 401.0F) < 0.000001F,
+          "authored outer trimming keeps the shared projector's Java-style "
+          "integer source-region truncation");
+}
+
+void testAuthoredProjectionPreservesBgaUvOrientation() {
+  BgaDrawTarget raw{
+      .destination = {{{.x = 0.0F, .y = 100.0F},
+                       {.x = 100.0F, .y = 100.0F},
+                       {.x = 100.0F, .y = 0.0F},
+                       {.x = 0.0F, .y = 0.0F}}},
+      .stretch = skin::SkinStretchMode::Stretch};
+  auto authored = raw;
+  authored.authoredProjection = GameplayBgaAuthoredProjection{
+      .x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0};
+
+  const auto rawFull = ResolveGameplayBgaTargetQuad(raw, 100, 100);
+  const auto authoredFull = ResolveGameplayBgaTargetQuad(authored, 100, 100);
+  const auto sameUvs = [](const GameplayBgaResolvedQuad &left,
+                          const GameplayBgaResolvedQuad &right) {
+    for (std::size_t index = 0; index < left.uvs.size(); ++index) {
+      if (!samePoint(left.uvs[index], right.uvs[index])) {
+        return false;
+      }
+    }
+    return true;
+  };
+  require(rawFull && authoredFull && sameUvs(*authoredFull, *rawFull) &&
+              authoredFull->uvs[0].y == 1.0F &&
+              authoredFull->uvs[2].y == 0.0F,
+          "identity authored projection keeps the BGA contract's bottom-v=1 "
+          "and top-v=0 full-source orientation");
+
+  raw.stretch = skin::SkinStretchMode::KeepAspectRatioFitOuterTrimmed;
+  authored.stretch = raw.stretch;
+  const auto rawVerticalTrim = ResolveGameplayBgaTargetQuad(raw, 100, 200);
+  const auto authoredVerticalTrim =
+      ResolveGameplayBgaTargetQuad(authored, 100, 200);
+  require(rawVerticalTrim && authoredVerticalTrim &&
+              sameUvs(*authoredVerticalTrim, *rawVerticalTrim) &&
+              authoredVerticalTrim->uvs[0].y == 0.75F &&
+              authoredVerticalTrim->uvs[2].y == 0.25F,
+          "vertically trimmed authored projection preserves the raw BGA UV "
+          "orientation at the adapter boundary");
 }
 
 const bgfx::VertexLayout &capacityProbeLayout() {
@@ -480,6 +635,44 @@ void testDuplicateTargetsConsumeDistinctPreparedEntriesExactlyOnce() {
           "duplicate byte-identical targets consume two ordered plan entries and cannot be reused");
 }
 
+void testAuthoredProjectionParticipatesInPreparedTargetIdentity() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<JukeboxTestBackendFactory>(control));
+  const PreparedGameplayBgaFrame frame{
+      .sequence = 703, .composition = GameplayBgaComposition::MissOnly};
+  BgaDrawTarget first{
+      .role = GameplayBgaRole::Miss,
+      .destination = {{{.x = 0.0F, .y = 64.0F},
+                       {.x = 64.0F, .y = 64.0F},
+                       {.x = 64.0F, .y = 0.0F},
+                       {.x = 0.0F, .y = 0.0F}}},
+      .authoredProjection = GameplayBgaAuthoredProjection{
+          .x = 10.0, .y = 20.0, .width = 30.0, .height = 40.0},
+      .authoredOrdinal = 5};
+  auto second = first;
+  second.authoredProjection->authoredToUi.tx = 1.0;
+  const std::array targets{first, second};
+  const auto before = jukebox.gameplayBgaSubmissionStats();
+  const auto result = jukebox.preflight(frame, targets);
+  require(result.ready,
+          "distinct authored projections can be prepared in stable order");
+  jukebox.commitPrepared(frame);
+
+  jukebox.submitPrepared(frame, second);
+  require(jukebox.gameplayBgaSubmissionStats().embeddedSubmissions ==
+              before.embeddedSubmissions,
+          "a later target with matching raw UI points cannot consume the "
+          "earlier authored projection");
+  jukebox.submitPrepared(frame, first);
+  jukebox.submitPrepared(frame, second);
+  require(jukebox.gameplayBgaSubmissionStats().embeddedSubmissions ==
+              before.embeddedSubmissions + 2,
+          "each distinct authored projection consumes its own prepared entry");
+  jukebox.finalizePrepared(frame);
+}
+
 void testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback() {
   Stopwatch stopwatch;
   auto control = std::make_shared<JukeboxBackendControl>();
@@ -519,6 +712,67 @@ void testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback() {
   require(jukebox.gameplayBgaSubmissionStats().pinnedFrames ==
               before.pinnedFrames,
           "same-frame fullscreen fallback consumes and releases the pinned image lease");
+}
+
+bgfx::TextureHandle makeOwnershipTestTexture() {
+  const std::uint32_t pixel = 0xffffffffU;
+  return bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8,
+                               BGFX_TEXTURE_NONE,
+                               bgfx::copy(&pixel, sizeof(pixel)));
+}
+
+void testImageTextureOwnershipTransferIsSingleAndExceptionSafe() {
+  ImageData successful{.texture = makeOwnershipTestTexture(),
+                       .width = 1,
+                       .height = 1,
+                       .channels = 4};
+  require(bgfx::isValid(successful.texture),
+          "ownership test texture is created");
+  const auto successfulHandle = successful.texture;
+  auto owner = AdoptImageTextureToSharedOwner(successful);
+  require(owner && owner->texture.idx == successfulHandle.idx &&
+              !bgfx::isValid(successful.texture),
+          "successful adoption invalidates the loader guard at the exact "
+          "shared-owner transfer");
+  owner.reset();
+
+  ImageData controlBlockFailure{.texture = makeOwnershipTestTexture(),
+                                .width = 1,
+                                .height = 1,
+                                .channels = 4};
+  require(bgfx::isValid(controlBlockFailure.texture),
+          "control-block failure texture is created");
+  allocationFailureCountdown = 1;
+  bool threw = false;
+  try {
+    (void)AdoptImageTextureToSharedOwner(controlBlockFailure);
+  } catch (const std::bad_alloc &) {
+    threw = true;
+  }
+  allocationFailureCountdown = -1;
+  require(threw && !bgfx::isValid(controlBlockFailure.texture),
+          "a throwing shared control-block allocation leaves only its deleter "
+          "owning the transferred texture, never the loader guard");
+
+  ImageData rawAllocationFailure{.texture = makeOwnershipTestTexture(),
+                                 .width = 1,
+                                 .height = 1,
+                                 .channels = 4};
+  require(bgfx::isValid(rawAllocationFailure.texture),
+          "raw-owner failure texture is created");
+  allocationFailureCountdown = 0;
+  threw = false;
+  try {
+    (void)AdoptImageTextureToSharedOwner(rawAllocationFailure);
+  } catch (const std::bad_alloc &) {
+    threw = true;
+  }
+  allocationFailureCountdown = -1;
+  require(threw && bgfx::isValid(rawAllocationFailure.texture),
+          "failure before the transfer leaves the loader guard as the sole "
+          "texture owner");
+  bgfx::destroy(rawAllocationFailure.texture);
+  rawAllocationFailure.texture = BGFX_INVALID_HANDLE;
 }
 
 void testPreparedFrameRetainsExplicitSurfaceRoles() {
@@ -681,9 +935,13 @@ int main() {
   testBgaSubmitterHasVirtualDestruction();
   testJukeboxPreparesOneValueFrameAndNeverUpdatesOnSubmission();
   testJukeboxBgaTargetStretchAndTrimmedUvs();
+  testBgaStretchPrecedesNonuniformViewportProjection();
+  testAuthoredProjectionPreservesBgaUvOrientation();
   testLaterBgaValidationFailureLeavesTransientCapacityUntouched();
   testDuplicateTargetsConsumeDistinctPreparedEntriesExactlyOnce();
+  testAuthoredProjectionParticipatesInPreparedTargetIdentity();
   testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback();
+  testImageTextureOwnershipTransferIsSingleAndExceptionSafe();
   testPreparedFrameRetainsExplicitSurfaceRoles();
   testNoneJudgeDoesNotTriggerMissState();
   testComboZeroUsesBgaClockAndRepeatedZeroRetriggers();

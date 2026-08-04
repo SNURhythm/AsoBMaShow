@@ -14,7 +14,12 @@
 #include "../path.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
+#include "../rendering/SkinQuadBatchRenderer.h"
 #include "../rendering/UniformCache.h"
+#include "../skin/LuaGameplaySkinFeature.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "../skin/beatoraja/SkinDestinationEvaluator.h"
+#endif
 #include "ChartAssetExtensions.h"
 #include "JukeboxLifecycle.h"
 #include "JukeboxSoundResources.h"
@@ -187,7 +192,9 @@ bool sameBgaTarget(const BgaDrawTarget &left,
   if (left.role != right.role || left.viewId != right.viewId ||
       left.stretch != right.stretch || left.tint != right.tint ||
       left.blend != right.blend || left.authoredOrdinal != right.authoredOrdinal ||
-      left.clip.has_value() != right.clip.has_value()) {
+      left.clip.has_value() != right.clip.has_value() ||
+      left.authoredProjection.has_value() !=
+          right.authoredProjection.has_value()) {
     return false;
   }
   for (std::size_t index = 0; index < left.destination.size(); ++index) {
@@ -196,10 +203,26 @@ bool sameBgaTarget(const BgaDrawTarget &left,
       return false;
     }
   }
-  return !left.clip ||
-         (left.clip->x == right.clip->x && left.clip->y == right.clip->y &&
-          left.clip->width == right.clip->width &&
-          left.clip->height == right.clip->height);
+  if (left.clip &&
+      (left.clip->x != right.clip->x || left.clip->y != right.clip->y ||
+       left.clip->width != right.clip->width ||
+       left.clip->height != right.clip->height)) {
+    return false;
+  }
+  if (!left.authoredProjection) {
+    return true;
+  }
+  const auto &a = *left.authoredProjection;
+  const auto &b = *right.authoredProjection;
+  return a.x == b.x && a.y == b.y && a.width == b.width &&
+         a.height == b.height && a.centerX == b.centerX &&
+         a.centerY == b.centerY && a.angleDegrees == b.angleDegrees &&
+         a.authoredToUi.m00 == b.authoredToUi.m00 &&
+         a.authoredToUi.m01 == b.authoredToUi.m01 &&
+         a.authoredToUi.tx == b.authoredToUi.tx &&
+         a.authoredToUi.m10 == b.authoredToUi.m10 &&
+         a.authoredToUi.m11 == b.authoredToUi.m11 &&
+         a.authoredToUi.ty == b.authoredToUi.ty;
 }
 
 std::optional<GameplayBgaResolvedQuad>
@@ -207,6 +230,79 @@ resolveGameplayBgaTargetQuad(const BgaDrawTarget &target, int sourceWidth,
                              int sourceHeight) noexcept {
   if (sourceWidth <= 0 || sourceHeight <= 0) {
     return std::nullopt;
+  }
+  if (target.authoredProjection) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    const auto &authored = *target.authoredProjection;
+    const auto &matrix = authored.authoredToUi;
+    const std::array values{authored.x,
+                            authored.y,
+                            authored.width,
+                            authored.height,
+                            authored.centerX,
+                            authored.centerY,
+                            authored.angleDegrees,
+                            matrix.m00,
+                            matrix.m01,
+                            matrix.tx,
+                            matrix.m10,
+                            matrix.m11,
+                            matrix.ty};
+    if (authored.width <= 0.0 || authored.height <= 0.0 ||
+        !std::ranges::all_of(values,
+                            [](double value) { return std::isfinite(value); })) {
+      return std::nullopt;
+    }
+
+    const auto projected = skin::projectSkinDestinationToUi(
+        skin::AuthoredDestinationGeometry{
+            .rect = {.x = authored.x,
+                     .y = authored.y,
+                     .width = authored.width,
+                     .height = authored.height},
+            .centerX = authored.centerX,
+            .centerY = authored.centerY,
+            .angleDegrees = authored.angleDegrees,
+            .stretch = target.stretch},
+        skin::SkinSourceRegionGeometry{
+            .textureWidth = sourceWidth,
+            .textureHeight = sourceHeight,
+            .region = {.x = 0,
+                       .y = 0,
+                       .w = sourceWidth,
+                       .h = sourceHeight}},
+        skin::PlaySkinViewport{
+            .authoredToUi = {.m00 = matrix.m00,
+                             .m01 = matrix.m01,
+                             .tx = matrix.tx,
+                             .m10 = matrix.m10,
+                             .m11 = matrix.m11,
+                             .ty = matrix.ty},
+            .valid = true});
+    GameplayBgaResolvedQuad resolved;
+    for (std::size_t index = 0; index < projected.vertices.size(); ++index) {
+      const double projectedX = projected.vertices[index][0];
+      const double projectedY = projected.vertices[index][1];
+      const double u = projected.normalizedUvs[index][0];
+      const double v = 1.0 - projected.normalizedUvs[index][1];
+      if (!std::isfinite(projectedX) || !std::isfinite(projectedY) ||
+          !std::isfinite(u) || !std::isfinite(v) ||
+          std::abs(projectedX) > std::numeric_limits<float>::max() ||
+          std::abs(projectedY) > std::numeric_limits<float>::max() ||
+          std::abs(u) > std::numeric_limits<float>::max() ||
+          std::abs(v) > std::numeric_limits<float>::max()) {
+        return std::nullopt;
+      }
+      resolved.destination[index] = {
+          .x = static_cast<float>(projectedX),
+          .y = static_cast<float>(projectedY)};
+      resolved.uvs[index] = {.x = static_cast<float>(u),
+                             .y = static_cast<float>(v)};
+    }
+    return resolved;
+#else
+    return std::nullopt;
+#endif
   }
   const auto &raw = target.destination;
   const float widthVectorX = raw[1].x - raw[0].x;
@@ -893,18 +989,10 @@ void destroyImageTexture(ImageData &image) {
   }
 }
 
-std::shared_ptr<ImageData> makeSharedImage(ImageData image) {
-  return std::shared_ptr<ImageData>(
-      new ImageData(image), [](ImageData *owned) {
-        destroyImageTexture(*owned);
-        delete owned;
-      });
-}
-
 void replaceImageLocked(
     std::unordered_map<int, std::shared_ptr<ImageData>> &table, int id,
-    ImageData image) {
-  auto replacement = makeSharedImage(image);
+    ImageData &image) {
+  auto replacement = AdoptImageTextureToSharedOwner(image);
   const auto existing = table.find(id);
   if (existing != table.end()) {
     existing->second = std::move(replacement);
@@ -914,6 +1002,20 @@ void replaceImageLocked(
 }
 
 } // namespace
+
+std::shared_ptr<ImageData>
+AdoptImageTextureToSharedOwner(ImageData &image) {
+  // Allocate the object while the loader guard still owns the texture. Once
+  // this succeeds, invalidate that guard before shared_ptr allocates its
+  // control block: the constructor invokes the deleter if that allocation
+  // throws, so ownership is singular on every edge.
+  auto *transferred = new ImageData(image);
+  image.texture = BGFX_INVALID_HANDLE;
+  return std::shared_ptr<ImageData>(transferred, [](ImageData *owned) {
+    destroyImageTexture(*owned);
+    delete owned;
+  });
+}
 
 std::optional<GameplayBgaResolvedQuad>
 ResolveGameplayBgaTargetQuad(const BgaDrawTarget &target, int sourceWidth,
@@ -1064,6 +1166,7 @@ PreparedGameplayBgaFrame Jukebox::prepareVisualFrameAt(
     return *preparedBgaFrame;
   }
   preparedBgaTargetPlans.clear();
+  preparedBgaVertexLayouts.reset();
   preparedBgaTargetFrameSequence.reset();
   preparedBgaTargetCursor = 0;
   preparedBgaTargetsCommitted = false;
@@ -1141,6 +1244,11 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
   std::vector<PreparedBgaTargetPlan> plans;
   GameplayBgaTransientRequirements requirements;
   try {
+    auto vertexLayouts =
+        std::make_unique<rendering::BgfxVertexLayoutRegistration>();
+    bool placeholderLayoutRegistered = false;
+    bool imageLayoutRegistered = false;
+    bool videoLayoutRegistered = false;
     plans.reserve(targets.size());
     for (const auto &target : targets) {
       const auto resolution = resolvePreparedBgaTarget(frame, target.role);
@@ -1254,11 +1362,14 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
       if (plan.placeholder) {
         plan.program =
             rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-        if (!bgfx::isValid(plan.program) ||
+        if ((!placeholderLayoutRegistered &&
+             !vertexLayouts->registerLayout(gameplayBgaColorVertexLayout())) ||
+            !bgfx::isValid(plan.program) ||
             !addRequirement(gameplayBgaColorVertexLayout())) {
           return failure("gameplay_bga.placeholder.preflight",
                          "BGA placeholder GPU resources are unavailable.");
         }
+        placeholderLayoutRegistered = true;
         continue;
       }
       if (!plan.surface) {
@@ -1287,11 +1398,14 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
         }
         plan.videoSubmission = plan.video->prepareEmbeddedSubmission(
             *quad, bgaTargetState(plan.target.blend), plan.scissor);
-        if (!plan.videoSubmission ||
-            !addRequirement(gameplayBgaImageVertexLayout())) {
+        const auto &videoLayout = VideoPlayer::embeddedVertexLayout();
+        if ((!videoLayoutRegistered &&
+             !vertexLayouts->registerLayout(videoLayout)) ||
+            !plan.videoSubmission || !addRequirement(videoLayout)) {
           return failure("gameplay_bga.video.preflight",
                          "BGA video GPU resources are unavailable.");
         }
+        videoLayoutRegistered = true;
         continue;
       }
       if (!plan.image || !bgfx::isValid(plan.image->texture) ||
@@ -1306,22 +1420,26 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
               : rendering::ShaderManager::getInstance().getProgram(
                     "vs_skin_quad.bin", "fs_skin_quad.bin");
       plan.imageTexture = plan.image->texture;
-      if (!bgfx::isValid(plan.program) ||
+      if ((!imageLayoutRegistered &&
+           !vertexLayouts->registerLayout(gameplayBgaImageVertexLayout())) ||
+          !bgfx::isValid(plan.program) ||
           !addRequirement(gameplayBgaImageVertexLayout())) {
         return failure("gameplay_bga.image.preflight",
                        "BGA image GPU resources are unavailable.");
       }
+      imageLayoutRegistered = true;
+    }
+    {
+      std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+      preparedBgaTargetPlans = std::move(plans);
+      preparedBgaVertexLayouts = std::move(vertexLayouts);
+      preparedBgaTargetFrameSequence = frame.sequence;
+      preparedBgaTargetCursor = 0;
+      preparedBgaTargetsCommitted = false;
     }
   } catch (...) {
     return failure("gameplay_bga.preflight",
                    "BGA resources could not be prepared without drawing.");
-  }
-  {
-    std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
-    preparedBgaTargetPlans = std::move(plans);
-    preparedBgaTargetFrameSequence = frame.sequence;
-    preparedBgaTargetCursor = 0;
-    preparedBgaTargetsCommitted = false;
   }
   return {.ready = true, .requirements = requirements};
 }
@@ -1377,13 +1495,13 @@ void Jukebox::commitPrepared(
 void Jukebox::submitPrepared(const PreparedGameplayBgaFrame &frame,
                              const BgaDrawTarget &submittedTarget) noexcept {
   std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
-  (void)submittedTarget;
   if (!preparedBgaTargetsCommitted ||
       preparedBgaTargetCursor >= preparedBgaTargetPlans.size()) {
     return;
   }
   auto &plan = preparedBgaTargetPlans[preparedBgaTargetCursor];
-  if (plan.frameSequence != frame.sequence) {
+  if (plan.frameSequence != frame.sequence ||
+      !sameBgaTarget(plan.target, submittedTarget)) {
     return;
   }
   ++preparedBgaTargetCursor;
@@ -1417,9 +1535,14 @@ void Jukebox::submitPrepared(const PreparedGameplayBgaFrame &frame,
 void Jukebox::finalizePrepared(
     const PreparedGameplayBgaFrame &frame) noexcept {
   std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  if (preparedBgaFrame && preparedBgaFrame->sequence == frame.sequence) {
+    preparedBgaFrameKey.reset();
+    preparedBgaFrame.reset();
+  }
   if (preparedBgaTargetFrameSequence &&
       *preparedBgaTargetFrameSequence == frame.sequence) {
     preparedBgaTargetPlans.clear();
+    preparedBgaVertexLayouts.reset();
     preparedBgaTargetFrameSequence.reset();
     preparedBgaTargetCursor = 0;
     preparedBgaTargetsCommitted = false;

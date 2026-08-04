@@ -48,6 +48,10 @@ std::uint32_t packAbgr(const video::EmbeddedYuvQuadVertex &vertex) {
 
 } // namespace
 
+const bgfx::VertexLayout &VideoPlayer::embeddedVertexLayout() noexcept {
+  return embeddedYuvVertexLayout();
+}
+
 VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
     : stopwatch(stopwatch), videoFrameWidth(0), videoFrameHeight(0),
       hasVideoFrame(false) {
