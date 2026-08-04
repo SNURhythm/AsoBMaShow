@@ -2001,8 +2001,27 @@ TEST_CASE("configured skin table matches Beatoraja shape") {
     std::uint32_t authoredOrdinal = 0;
   };
   using SkinBooleanPropertyBinding = SkinRuntimeBinding<SkinBooleanPropertyId>;
-  using SkinIntegerPropertyBinding = SkinRuntimeBinding<SkinIntegerPropertyId>;
-  using SkinFloatPropertyBinding = SkinRuntimeBinding<SkinFloatPropertyId>;
+  enum class SkinIntegerPropertyDomain : std::uint8_t {
+    IntegerValue,
+    ImageIndex
+  };
+  struct SkinIntegerPropertyBinding {
+    SkinIntegerPropertyId id{};
+    SkinIntegerPropertyDomain domain =
+        SkinIntegerPropertyDomain::IntegerValue;
+    std::variant<SkinBuiltinPropertySelector, LuaCallbackId> source;
+    std::uint32_t authoredOrdinal = 0;
+  };
+  enum class SkinFloatPropertyDomain : std::uint8_t {
+    Rate,
+    FloatValue
+  };
+  struct SkinFloatPropertyBinding {
+    SkinFloatPropertyId id{};
+    SkinFloatPropertyDomain domain = SkinFloatPropertyDomain::Rate;
+    std::variant<SkinBuiltinPropertySelector, LuaCallbackId> source;
+    std::uint32_t authoredOrdinal = 0;
+  };
   using SkinStringPropertyBinding = SkinRuntimeBinding<SkinStringPropertyId>;
   using SkinTimerPropertyBinding = SkinRuntimeBinding<SkinTimerPropertyId>;
   using SkinFloatWriterBinding = SkinRuntimeBinding<SkinFloatWriterId>;
@@ -2017,8 +2036,8 @@ TEST_CASE("configured skin table matches Beatoraja shape") {
   struct SkinImageResource {
     SkinResourceId id = 0;
     std::string virtualPath;
-    int divisionX = 1;
-    int divisionY = 1;
+    // divx/divy belong to each authored Image use, not the shared Source.
+    // The decoder expands them into that use's row-major frame rectangles.
     std::uint32_t authoredOrdinal = 0;
   };
   struct SkinFontFallbackResource {
@@ -2165,12 +2184,20 @@ TEST_CASE("configured skin table matches Beatoraja shape") {
     HcnEnd, HcnStart, HcnBodyActive, HcnBodyInactive,
     HcnDamage, HcnReactive
   };
+  struct SkinSynthesizedNoteVisual {
+    // Pinned JsonPlaySkinObjectLoader ignores authored hidden/processed
+    // fields. SkinNote synthesizes those two presentations instead.
+    SkinNoteVisualKind kind = SkinNoteVisualKind::Hidden;
+  };
+  using SkinNoteVisual =
+      std::variant<SkinSpriteFrames, SkinSynthesizedNoteVisual>;
   struct SkinLaneNotePresentation {
     int authoredLane = -1;
     SkinAuthoredRect laneDestination;
-    double noteHeight = 0.0;
+    // Missing size is resource-dependent and is resolved during Task 13.
+    std::optional<double> authoredNoteHeight;
     std::optional<double> secondaryDestinationY;
-    std::map<SkinNoteVisualKind, SkinSpriteFrames> visuals;
+    std::map<SkinNoteVisualKind, SkinNoteVisual> visuals;
   };
   enum class SkinNoteLineKind : std::uint8_t {
     Group, Bpm, Stop, Time
@@ -2237,8 +2264,19 @@ TEST_CASE("configured skin table matches Beatoraja shape") {
     std::optional<SkinBooleanPropertyId> condition;
     int minimumIntervalMillis = 0;
   };
+  struct SkinGameplayTiming {
+    int fadeoutMillis = 0;
+    int inputMillis = 0;
+    int sceneMillis = 0;
+    int closeMillis = 0;
+    int loadEndMillis = 0;
+    int playStartMillis = 0;
+    int judgeTimerMillis = 1;
+    int finishMarginMillis = 0;
+  };
   struct BeatorajaSkinModel {
     BeatorajaSkinHeader header;
+    SkinGameplayTiming timing;
     std::vector<SkinBooleanPropertyBinding> booleanProperties;
     std::vector<SkinIntegerPropertyBinding> integerProperties;
     std::vector<SkinFloatPropertyBinding> floatProperties;
@@ -2288,8 +2326,8 @@ TEST_CASE("critical note dependency rejects the model") {
 }
 ```
 
-- [ ] **Step 2: Make the RED model fixture reference source-neutral variants for every v1 target surface**. Require stable binding/resource/object IDs and authored ordinals; exact custom-timer/event ID, typed action/timer/condition binding, interval, and authored declaration order; and explicit unsupported-field diagnostics. Exercise every Boolean/Integer/Float/String/Timer/FloatWriter/StringWriter/Event input spelling accepted by pinned `LuaSkinLoader`: numeric built-in ID, recognized built-in name where that factory permits it, Lua function, and Lua script string. A script string must remain a runtime callback rather than silently becoming built-in ID zero.
-- [ ] **Step 3: Write model tests first for defaults, sprite divisions/regions, negative dimensions, destination references, duplicate IDs, missing sources/images/fonts, plain single-state images, `Image.len > 1` row-major state partitioning selected by `ref`, and ordered `ImageSet.images[]` choices whose resource/crop/timer/cycle may each differ; note-array lane counts and authored lane order; all normal/mine/hidden/processed and LN/CN/HCN visual phases; per-lane `dst`/`size`/`dst2`; expansion rate; group/BPM/stop/time line presentations; hidden/lift cover timer/cycle/disappear-line/link-lift semantics; gauge node/parts/range; judge indices; BGA identity; destination numeric-sign versus Boolean-binding conditions; draw bindings; center/pivot; mouse rectangle; timer/event/property callback variants; slider directions 0–3, `changeable`, custom float writers, numeric rate properties, and `isRefNum` integer min/max mapping; regular graph numeric/custom/`isRefNum` rate sources and direction; authored ordinals; conversion limits; critical/optional dependency propagation; and malformed critical note paths. Add nonempty synthetic custom timer/event vectors and assert deterministic authored order plus one compatibility-divergence diagnostic; Task 2's seeded `IntMap` collision/resize cases remain upstream evidence only. Assert Task 1a's selected SCURO map counts are both zero and the decoded external acceptance model must match or fail closed.** Preserve `Image.act/click` and `Text.event/editable` as typed model fields so the validator can issue exact diagnostics; v1 deliberately rejects a critical use or disables an optional use because Task 20 implements only audited gameplay float sliders/lane cover. The SCURO manifest must prove those direct click/text-input fields absent or Task 25 opens a gap-remediation plan. Decode the pinned Beatoraja `StretchType` IDs 0 through 10 to the exact enum values above and reject any other value with the audited critical/optional disposition; do not collapse trimmed and non-trimmed modes.
+- [ ] **Step 2: Make the RED model fixture reference source-neutral variants for every v1 target surface**. Require stable binding/resource/object IDs and authored ordinals; exact custom-timer/event ID, typed action/timer/condition binding, interval, authored declaration order, and every pinned gameplay timing field (`fadeout`, `input`, `scene`, `close`, `loadend`, `playstart`, `judgetimer`, `finishmargin`). Exercise every Boolean/Integer/Float/String/Timer/FloatWriter/StringWriter/Event input spelling accepted by pinned `LuaSkinLoader`: numeric built-in ID, recognized built-in name where that factory permits it, Lua function, and Lua script string. A script string must remain a runtime callback rather than silently becoming built-in ID zero. Keep image-index integer bindings distinct from ordinary integer-value bindings, and FloatValue selectors distinct from slider/graph rate selectors; the pinned factories differ and identical numeric selectors in different domains must not intern together.
+- [ ] **Step 3: Write model tests first for defaults, gameplay timing, per-use sprite divisions/regions, shared-source images with different divisions, negative dimensions, destination references, duplicate IDs, missing sources/images/fonts, plain single-state images, `Image.len > 1` row-major state partitioning selected by the image-index property domain, and ordered `ImageSet.images[]` choices whose resource/crop/timer/cycle may each differ; note-array lane counts and authored lane order; all normal/mine and LN/CN/HCN visual phases; the pinned synthesized hidden/processed presentations plus a deduplicated diagnostic when authored hidden/processed fields are ignored; per-lane `dst`/optional resource-resolved `size`/`dst2`; expansion rate; group/BPM/stop/time line presentations; hidden/lift cover timer/cycle/disappear-line/link-lift semantics; gauge node/parts/range; judge indices; BGA identity; destination numeric-sign versus Boolean-binding conditions; draw bindings; center/pivot; mouse rectangle; timer/event/property callback variants; slider directions 0–3, `changeable`, custom float writers, numeric rate properties, and `isRefNum` integer min/max mapping; regular graph numeric/custom/`isRefNum` rate sources and direction; FloatValue versus rate-property binding domains; authored ordinals; conversion limits; critical/optional dependency propagation; and malformed critical note paths. Add nonempty synthetic custom timer/event vectors and assert deterministic authored order plus one compatibility-divergence diagnostic; Task 2's seeded `IntMap` collision/resize cases remain upstream evidence only. Assert Task 1a's selected SCURO map counts are both zero and the decoded external acceptance model must match or fail closed.** Preserve `Image.act/click` and `Text.event/editable` as typed model fields so the validator can issue exact diagnostics; v1 deliberately rejects a critical use or disables an optional use because Task 20 implements only audited gameplay float sliders/lane cover. The SCURO manifest must prove those direct click/text-input fields absent or Task 25 opens a gap-remediation plan. Decode the pinned Beatoraja `StretchType` IDs 0 through 10 to the exact enum values above and reject any other value with the audited critical/optional disposition; do not collapse trimmed and non-trimmed modes.
 - [ ] **Step 3a: Add lossless HUD model regressions from the pinned loader**. Cover positive/negative number and float sprite-set partitioning, three-state zero padding, per-digit x/y/w/h offsets, float gain/sign visibility, sparse judge grades with independently optional image/detail nested full destinations and half-detail-width shift, and gauge ordered node roles/parts/animation type/range/cycle/result interval. Task 14 reads current gauge value/type/min/max/border only through `SkinGaugeStateView`; the model must not fake gauge state as a generic float property.
 - [ ] **Step 4: Run the RED check**
 
@@ -2299,7 +2337,7 @@ TEST_CASE("critical note dependency rejects the model") {
   ```
 
   Expected RED: only header records exist.
-- [ ] **Step 5: Implement every Task 11 source-neutral model/result type and extend `LuaSkinTableDecoder`**. Intern every typed binding once in its model registry, retain Lua functions/scripts by runtime-owned `LuaCallbackId`, dispatch traced numeric/name/function/script forms exactly like pinned `serializeLuaScript`, preserve authored order, and attach available Lua file/line information. Preserve custom timer/event declaration vectors exactly and attach one deduplicated `custom_object_order_authored_divergence` diagnostic when either is nonempty; do not claim or simulate pinned `IntMap` RNG state. Decode note line destinations and covers into their typed nested presentations; synthesize Beatoraja's cover offset lists (`Lift+Hidden Cover` for hidden and `Lift` for lift) without conflating either with the separate interactive lane-cover slider.
+- [ ] **Step 5: Implement every Task 11 source-neutral model/result type and extend `LuaSkinTableDecoder`**. Intern every typed binding once in its model registry, but include integer/float selector domain in the intern key; retain Lua functions/scripts by runtime-owned `LuaCallbackId`, dispatch traced numeric/name/function/script forms exactly like pinned `serializeLuaScript`, preserve authored order, and attach available Lua file/line information. Preserve the complete gameplay timing record. Keep Source resources division-neutral and expand each Image's `divx`/`divy` into its own row-major frames. Preserve custom timer/event declaration vectors exactly and attach one deduplicated `custom_object_order_authored_divergence` diagnostic when either is nonempty; do not claim or simulate pinned `IntMap` RNG state. Decode note line destinations and covers into their typed nested presentations; represent missing note height for resource preparation, reproduce pinned synthesized hidden/processed presentations instead of claiming the ignored authored fields are trace-equivalent, and synthesize Beatoraja's cover offset lists (`Lift+Hidden Cover` for hidden and `Lift` for lift) without conflating either with the separate interactive lane-cover slider.
 - [ ] **Step 6: Implement `SkinModelValidator` as a separate pass**. Reject the entry when canvas/type, note presentation, required lane geometry, binding kind/reference, slider direction, cover, or another critical dependency is invalid; disable only optional objects with one deduplicated diagnostic. Require exactly the audited v1 surface and report every unimplemented object/property/timer/writer/event identifier. Validate each typed binding against the corresponding built-in host registry or live runtime callback; never reinterpret a missing or wrong-kind binding as ID zero.
 - [ ] **Step 7: Run the GREEN check**
 
