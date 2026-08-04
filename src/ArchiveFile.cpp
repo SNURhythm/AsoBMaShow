@@ -7737,7 +7737,9 @@ bool readFileBounded(const std::filesystem::path &path,
     }
     return false;
   }
-  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  const auto index = cachedIndexForArchive(
+      archivePath, errorMessage, [stop] { return !stop.stop_requested(); });
+  if (stop.stop_requested()) return false;
   if (index == nullptr) return false;
   const Entry *entry = findIndexedEntry(*index, innerPath);
   if (entry == nullptr || entry->directory) {

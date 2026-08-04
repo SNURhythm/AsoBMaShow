@@ -102,10 +102,14 @@ struct FakeTextureDevice final : skin::SkinTextureDevice {
     if (bgfx::isValid(handle)) { ++destroys; --live; }
   }
   bool ownsCurrentThread() const noexcept override { return true; }
+  int maximumTextureDimension() const noexcept override {
+    return maximumDimension;
+  }
   int creates = 0;
   int destroys = 0;
   int live = 0;
   int failAt = 0;
+  int maximumDimension = skin::SkinResourcePolicy::maximumDimension;
 };
 
 void testSecurePreparationLeaseAliasAndCatalogLifetime() {
@@ -249,15 +253,229 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
            "prepared font atlases have stable keys, normalized UV regions, styled pixels, Japanese/runtime glyphs, fallback selection, and real AV kerning");
   }
   if (!planned.plan) return;
+  const auto copyUploadPlan = [&] {
+    return skin::SkinResourceUploadPlan{
+        .revision = planned.plan->revision.clone(),
+        .images = planned.plan->images,
+        .atlases = planned.plan->atlases,
+        .decodedBytes = planned.plan->decodedBytes};
+  };
+  const auto rejectBeforeUpload = [&](std::string_view message,
+                                      const auto &mutate) {
+    auto rejectedPlan = copyUploadPlan();
+    auto preflightDevice = std::make_shared<FakeTextureDevice>();
+    mutate(rejectedPlan, *preflightDevice);
+    const auto rejected = skin::SkinResourceCatalog::upload(
+        std::move(rejectedPlan), preflightDevice);
+    expect(!rejected.catalog && preflightDevice->creates == 0 &&
+               preflightDevice->live == 0,
+           message);
+  };
+  const auto sharedSixteenMiBPixels = [] {
+    auto rgba = std::make_shared<std::vector<unsigned char>>(16U * 1024U *
+                                                              1024U);
+    return image_decode::DecodedImageData{.width = 2048,
+                                          .height = 2048,
+                                          .rgba = std::move(rgba)};
+  };
+  rejectBeforeUpload("zero device texture limit fails before upload or lease move",
+                     [](auto &, auto &device) { device.maximumDimension = 0; });
+  rejectBeforeUpload("effective device texture limit bounds every decoded image before upload",
+                     [](auto &, auto &device) { device.maximumDimension = 1; });
+  rejectBeforeUpload("resource-count cap rejects shared-pixel synthetic plans before upload",
+                     [](auto &plan, auto &) {
+                       const auto image = plan.images.front();
+                       plan.images.clear();
+                       for (skin::SkinResourceId id = 1;
+                            id <= skin::SkinResourcePolicy::maximumResources;
+                            ++id) {
+                         auto copy = image;
+                         copy.id = id;
+                         copy.aliases.clear();
+                         copy.aliasRegions.clear();
+                         copy.aliasRegionMappings.clear();
+                         plan.images.push_back(std::move(copy));
+                       }
+                       auto overflow = image;
+                       overflow.id = skin::SkinResourcePolicy::maximumResources + 1;
+                       overflow.aliases.clear();
+                       overflow.aliasRegions.clear();
+                       overflow.aliasRegionMappings.clear();
+                       plan.images.push_back(std::move(overflow));
+                     });
+  rejectBeforeUpload("alias-count cap rejects before upload",
+                     [](auto &plan, auto &) {
+                       auto &image = plan.images.front();
+                       image.aliases.clear();
+                       image.aliasRegions.clear();
+                       image.aliasRegionMappings.clear();
+                       for (skin::SkinResourceId id = 4;
+                            image.aliases.size() < skin::SkinResourcePolicy::maximumResources;
+                            ++id) {
+                         image.aliases.push_back(id);
+                       }
+                     });
+  rejectBeforeUpload("duplicate image aliases fail complete preflight before upload",
+                     [](auto &plan, auto &) {
+                       plan.images.front().aliases.push_back(plan.images.back().id);
+                     });
+  rejectBeforeUpload("decoded image dimensions and shared RGBA byte count must agree",
+                     [](auto &plan, auto &) { ++plan.images.front().pixels.width; });
+  rejectBeforeUpload("canonical primary regions are verified before upload",
+                     [](auto &plan, auto &) { plan.images.front().regions.front().x = -1; });
+  rejectBeforeUpload("primary authored-to-resolved mappings cannot be substituted",
+                     [](auto &plan, auto &) { ++plan.images.front().regionMappings.front().resolved.x; });
+  rejectBeforeUpload("canonical alias regions are verified before upload",
+                     [](auto &plan, auto &) { plan.images.front().aliasRegions.begin()->second.front().x = -1; });
+  rejectBeforeUpload("alias authored-to-resolved mappings cannot be substituted",
+                     [](auto &plan, auto &) { ++plan.images.front().aliasRegionMappings.begin()->second.front().resolved.x; });
+  rejectBeforeUpload("aggregate image decoded-byte accounting rejects shared pixels before upload",
+                     [&](auto &plan, auto &) {
+                       const auto templateImage = plan.images.front();
+                       const auto pixels = sharedSixteenMiBPixels();
+                       plan.images.clear();
+                       plan.atlases.clear();
+                       for (skin::SkinResourceId id = 1; id <= 17; ++id) {
+                         auto image = templateImage;
+                         image.id = id;
+                         image.aliases.clear();
+                         image.aliasRegions.clear();
+                         image.aliasRegionMappings.clear();
+                         image.pixels = pixels;
+                         plan.images.push_back(std::move(image));
+                       }
+                     });
+  rejectBeforeUpload("upload plan decoded-byte totals must exactly match shared pixels",
+                     [](auto &plan, auto &) { ++plan.decodedBytes; });
+  rejectBeforeUpload("atlas-count cap rejects shared-pixel synthetic plans before upload",
+                     [](auto &plan, auto &) {
+                       const auto atlas = plan.atlases.front();
+                       plan.atlases.clear();
+                       for (skin::SkinTextAtlasId id = 1;
+                            id <= skin::SkinResourcePolicy::maximumAtlases;
+                            ++id) {
+                         auto copy = atlas;
+                         copy.id = id;
+                         copy.key.pointSize += static_cast<int>(id);
+                         plan.atlases.push_back(std::move(copy));
+                       }
+                       auto overflow = atlas;
+                       overflow.id = skin::SkinResourcePolicy::maximumAtlases + 1;
+                       overflow.key.pointSize +=
+                           static_cast<int>(skin::SkinResourcePolicy::maximumAtlases + 1);
+                       plan.atlases.push_back(std::move(overflow));
+                     });
+  rejectBeforeUpload("duplicate atlas IDs fail before upload",
+                     [](auto &plan, auto &) { plan.atlases.back().id = plan.atlases.front().id; });
+  rejectBeforeUpload("atlas styles must retain canonical finite keys",
+                     [](auto &plan, auto &) { plan.atlases.front().key.outlineWidth = -1.0; });
+  rejectBeforeUpload("atlas dimensions and shared RGBA byte counts must agree",
+                     [](auto &plan, auto &) { ++plan.atlases.front().pixels.width; });
+  rejectBeforeUpload("aggregate atlas decoded-byte accounting rejects shared pixels before upload",
+                     [&](auto &plan, auto &) {
+                       const auto templateAtlas = plan.atlases.front();
+                       const auto pixels = sharedSixteenMiBPixels();
+                       plan.atlases.clear();
+                       for (skin::SkinTextAtlasId id = 1; id <= 9; ++id) {
+                         auto atlas = templateAtlas;
+                         atlas.id = id;
+                         atlas.key.pointSize += static_cast<int>(id);
+                         atlas.pixels = pixels;
+                         plan.atlases.push_back(std::move(atlas));
+                       }
+                     });
+  rejectBeforeUpload("atlas glyph regions must be canonical",
+                     [](auto &plan, auto &) { plan.atlases.front().glyphs.begin()->second.region.x = -1; });
+  rejectBeforeUpload("atlas kerning pairs must reference prepared glyphs",
+                     [](auto &plan, auto &) { plan.atlases.front().kerning[{U'\U0010ffff', U'\U0010ffff'}] = 1; });
+  rejectBeforeUpload("atlas metrics stay within fixed policy bounds",
+                     [](auto &plan, auto &) { plan.atlases.front().lineHeight = skin::SkinResourcePolicy::maximumDimension + 1; });
+  rejectBeforeUpload("atlas glyph-count cap rejects before upload",
+                     [](auto &plan, auto &) {
+                       auto &glyphs = plan.atlases.front().glyphs;
+                       const auto metric = glyphs.begin()->second;
+                       for (char32_t codepoint = U'\U0010fffe';
+                            glyphs.size() <= skin::SkinResourcePolicy::maximumGlyphs;
+                            --codepoint) {
+                         glyphs.emplace(codepoint, metric);
+                       }
+                     });
+  rejectBeforeUpload("atlas kerning-count cap rejects before upload",
+                     [](auto &plan, auto &) {
+                       auto &atlas = plan.atlases.front();
+                       const auto metric = atlas.glyphs.begin()->second;
+                       std::vector<char32_t> codepoints;
+                       for (char32_t codepoint = U'\u1000'; codepoint < U'\u1082'; ++codepoint) {
+                         atlas.glyphs.emplace(codepoint, metric);
+                         codepoints.push_back(codepoint);
+                       }
+                       for (const char32_t left : codepoints) {
+                         for (const char32_t right : codepoints) {
+                           atlas.kerning.emplace(std::pair{left, right}, 0);
+                           if (atlas.kerning.size() > skin::SkinResourcePolicy::maximumKerningPairs) return;
+                         }
+                       }
+                     });
+  rejectBeforeUpload("aggregate glyph-count cap rejects otherwise valid atlases before upload",
+                     [](auto &plan, auto &) {
+                       auto first = plan.atlases.front();
+                       auto second = first;
+                       second.id = first.id + 1;
+                       ++second.key.pointSize;
+                       for (auto *atlas : {&first, &second}) {
+                         const auto metric = atlas->glyphs.begin()->second;
+                         for (char32_t codepoint = U'\u3000';
+                              atlas->glyphs.size() < 5000;
+                              ++codepoint) {
+                           atlas->glyphs.emplace(codepoint, metric);
+                         }
+                       }
+                       plan.atlases = {std::move(first), std::move(second)};
+                     });
+  rejectBeforeUpload("aggregate kerning-count cap rejects otherwise valid atlases before upload",
+                     [](auto &plan, auto &) {
+                       auto first = plan.atlases.front();
+                       auto second = first;
+                       second.id = first.id + 1;
+                       ++second.key.pointSize;
+                       for (auto *atlas : {&first, &second}) {
+                         const auto metric = atlas->glyphs.begin()->second;
+                         std::vector<char32_t> codepoints;
+                         for (char32_t codepoint = U'\u4000'; codepoint < U'\u4064'; ++codepoint) {
+                           atlas->glyphs.emplace(codepoint, metric);
+                           codepoints.push_back(codepoint);
+                         }
+                         for (const char32_t left : codepoints) {
+                           for (const char32_t right : codepoints) {
+                             atlas->kerning.emplace(std::pair{left, right}, 0);
+                           }
+                         }
+                       }
+                       plan.atlases = {std::move(first), std::move(second)};
+                     });
   {
     skin::SkinResourceUploadPlan duplicatePlan{
         .revision = planned.plan->revision.clone(), .images = planned.plan->images,
+        .atlases = planned.plan->atlases,
         .decodedBytes = planned.plan->decodedBytes};
     duplicatePlan.images.front().aliases.push_back(duplicatePlan.images.front().id);
     auto preflightDevice = std::make_shared<FakeTextureDevice>();
     const auto duplicateUpload = skin::SkinResourceCatalog::upload(std::move(duplicatePlan), preflightDevice);
     expect(!duplicateUpload.catalog && preflightDevice->creates == 0,
            "duplicate upload IDs fail complete preflight before any texture creation");
+  }
+  {
+    skin::SkinResourceUploadPlan malformedMappingPlan{
+        .revision = planned.plan->revision.clone(), .images = planned.plan->images,
+        .atlases = planned.plan->atlases,
+        .decodedBytes = planned.plan->decodedBytes};
+    malformedMappingPlan.images.front().regionMappings.front().authored.x = -1;
+    auto preflightDevice = std::make_shared<FakeTextureDevice>();
+    const auto malformedMappingUpload =
+        skin::SkinResourceCatalog::upload(std::move(malformedMappingPlan),
+                                          preflightDevice);
+    expect(!malformedMappingUpload.catalog && preflightDevice->creates == 0,
+           "noncanonical authored mapping fails before upload or lease move");
   }
   std::mutex decoderMutex;
   std::condition_variable decoderCv;

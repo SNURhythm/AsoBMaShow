@@ -652,6 +652,57 @@ int main() {
     require(pending == 1,
             "priority selection reuses an ordinary in-flight decode");
   }
+
+  {
+    const std::filesystem::path fixtureRoot =
+        std::filesystem::temp_directory_path() /
+        ("asobmashow-image-cancelled-fifo-" + std::to_string(getpid()));
+    std::filesystem::remove_all(fixtureRoot);
+    std::filesystem::create_directories(fixtureRoot);
+    const std::array<std::filesystem::path, 2> blockedPaths = {
+        fixtureRoot / "never-0.ppm", fixtureRoot / "never-1.ppm"};
+    for (const auto &blockedPath : blockedPaths) {
+      require(mkfifo(blockedPath.c_str(), 0600) == 0,
+              "cancelled FIFO fixture creates a named pipe");
+    }
+    const std::filesystem::path readyPath = fixtureRoot / "ready.ppm";
+    writeSinglePixelPpm(readyPath);
+    ImageView::dropAllCache();
+    std::array<std::unique_ptr<ImageView>, 2> blockedImages;
+    std::array<int, 2> writers = {-1, -1};
+    for (std::size_t index = 0; index < blockedPaths.size(); ++index) {
+      blockedImages[index] = std::make_unique<ImageView>(0, 0, 8, 8);
+      blockedImages[index]->setImageAsync(blockedPaths[index].string(), true);
+    }
+    const auto readerDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((writers[0] < 0 || writers[1] < 0) &&
+           std::chrono::steady_clock::now() < readerDeadline) {
+      for (std::size_t index = 0; index < blockedPaths.size(); ++index) {
+        if (writers[index] < 0) {
+          writers[index] = open(blockedPaths[index].c_str(), O_WRONLY | O_NONBLOCK);
+        }
+      }
+      if (writers[0] < 0 || writers[1] < 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(writers[0] >= 0 && writers[1] >= 0,
+            "cancelled FIFO decodes occupy both workers");
+    for (auto &image : blockedImages) image->freeImage();
+    ImageView ready(0, 0, 8, 8);
+    ready.setImageAsync(readyPath.string(), true);
+    const auto cancelledDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (ready.imageWidth() == 0 &&
+           std::chrono::steady_clock::now() < cancelledDeadline) {
+      ready.setImageAsync(readyPath.string(), true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    const bool workersReturnedBeforeWriterClose = ready.imageWidth() == 1;
+    for (int writer : writers) close(writer);
+    std::filesystem::remove_all(fixtureRoot);
+    require(workersReturnedBeforeWriterClose,
+            "cancelling never-producing FIFOs returns both workers promptly");
+  }
 #endif
 
   rendering::UniformCache::getInstance().destroyAll();

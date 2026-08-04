@@ -10,6 +10,7 @@
 #if !TARGET_OS_WINDOWS
 #include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -31,6 +32,7 @@
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -119,27 +121,45 @@ image_decode::ImageDecodeOptions imageDecodeOptions(
 
 #if !TARGET_OS_WINDOWS
 std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
-    int descriptor, std::size_t maximumBytes, std::stop_token stop) {
+    int descriptor, std::size_t maximumBytes, std::stop_token stop,
+    bool waitForInitialFifoWriter = false) {
   std::vector<std::byte> bytes;
   std::array<std::byte, 64U * 1024U> chunk{};
-  bool cancelled = stop.stop_requested();
   for (;;) {
+    if (stop.stop_requested()) return std::nullopt;
     const ssize_t count = read(descriptor, chunk.data(), chunk.size());
     if (count == 0) {
-      if (cancelled || stop.stop_requested() || bytes.empty()) {
-        return std::nullopt;
-      }
-      return bytes;
+      if (stop.stop_requested()) return std::nullopt;
+      if (!bytes.empty()) return bytes;
+      if (!waitForInitialFifoWriter) return std::nullopt;
+
+      // A nonblocking FIFO has no writer yet. Keep the read end alive so a
+      // producer can attach, while poll bounds cancellation latency.
     }
+    if (count > 0) {
+      const auto readCount = static_cast<std::size_t>(count);
+      if (readCount > maximumBytes - bytes.size()) return std::nullopt;
+      bytes.insert(bytes.end(), chunk.begin(), chunk.begin() + count);
+      continue;
+    }
+
     if (count < 0) {
+      if (errno == EINTR) continue;
+      if (errno != EAGAIN && errno != EWOULDBLOCK) return std::nullopt;
+    }
+
+    pollfd descriptorPoll{.fd = descriptor, .events = POLLIN, .revents = 0};
+    const int ready = poll(&descriptorPoll, 1, 25);
+    if (ready < 0) {
       if (errno == EINTR) continue;
       return std::nullopt;
     }
-    cancelled = cancelled || stop.stop_requested();
-    if (cancelled) continue;
-    const auto readCount = static_cast<std::size_t>(count);
-    if (readCount > maximumBytes - bytes.size()) return std::nullopt;
-    bytes.insert(bytes.end(), chunk.begin(), chunk.begin() + count);
+    if (ready == 0) continue;
+    if (descriptorPoll.revents & (POLLERR | POLLNVAL)) return std::nullopt;
+    if ((descriptorPoll.revents & POLLHUP) && !bytes.empty()) return bytes;
+    if ((descriptorPoll.revents & POLLHUP) && waitForInitialFifoWriter) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
   }
 }
 #endif
@@ -272,6 +292,12 @@ decodeImageFile(const std::filesystem::path &path,
       return std::nullopt;
     }
     const auto closeDescriptor = makeScopeExit([fd = *fd] { (void)close(fd); });
+    const int flags = fcntl(*fd, F_GETFL);
+    if (flags < 0 || fcntl(*fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+      SDL_Log("Failed to make Android image descriptor nonblocking: %s",
+              fspath_to_utf8(path).c_str());
+      return std::nullopt;
+    }
     struct stat status {};
     if (fstat(*fd, &status) != 0 ||
         (S_ISREG(status.st_mode) &&
@@ -302,7 +328,7 @@ decodeImageFile(const std::filesystem::path &path,
     const auto status = std::filesystem::status(path, statusError);
     if (!statusError && !std::filesystem::is_regular_file(status)) {
       const auto sourceAccessStarted = std::chrono::steady_clock::now();
-      const int descriptor = open(path.c_str(), O_RDONLY);
+      const int descriptor = open(path.c_str(), O_RDONLY | O_NONBLOCK);
       measured.sourceAccessMillis = elapsedMillis(
           sourceAccessStarted, std::chrono::steady_clock::now());
       if (descriptor < 0) return std::nullopt;
@@ -310,7 +336,8 @@ decodeImageFile(const std::filesystem::path &path,
           makeScopeExit([descriptor] { (void)close(descriptor); });
       const auto sourceLoadStarted = std::chrono::steady_clock::now();
       const auto bytes = readBoundedDescriptorBytes(
-          descriptor, kImageMaximumEncodedBytes, stop);
+          descriptor, kImageMaximumEncodedBytes, stop,
+          std::filesystem::is_fifo(status));
       measured.sourceLoadDecodeMillis = elapsedMillis(
           sourceLoadStarted, std::chrono::steady_clock::now());
       if (!bytes) return std::nullopt;

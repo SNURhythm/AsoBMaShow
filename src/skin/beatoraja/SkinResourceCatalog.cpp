@@ -259,11 +259,13 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
 
 std::optional<std::vector<SkinTextAtlasFontBytes>> readFontFaces(
     const FontAtlasRequest &request, const LuaSkinFileSystem &files,
-    std::size_t &sessionEncodedBytes, std::vector<SkinDiagnostic> &diagnostics) {
+    std::size_t &sessionEncodedBytes, std::vector<SkinDiagnostic> &diagnostics,
+    const std::function<bool()> &cancellationRequested) {
   std::vector<SkinTextAtlasFontBytes> faces;
   std::vector<std::string_view> paths{request.font->virtualPath};
   for (const auto &fallback : request.font->fallbacks) paths.push_back(fallback.virtualPath);
   for (const std::string_view path : paths) {
+    if (cancellationRequested()) return std::nullopt;
     const std::string extension = std::filesystem::path(path).extension().string();
     std::string lowerExtension;
     lowerExtension.reserve(extension.size());
@@ -281,7 +283,9 @@ std::optional<std::vector<SkinTextAtlasFontBytes>> readFontFaces(
       diagnostics.push_back(fontDiagnostic(*request.font, request.critical, "skin.resource.font_missing", "font path cannot be resolved"));
       return std::nullopt;
     }
+    if (cancellationRequested()) return std::nullopt;
     const auto read = files.readResolvedResource(*candidate.normalizedVirtualPath, SkinResourcePolicy::maximumEncodedBytes);
+    if (cancellationRequested()) return std::nullopt;
     if (read.failure) {
       diagnostics.push_back(fontDiagnostic(*request.font, request.critical, "skin.resource.font_missing", "font bytes are unavailable"));
       return std::nullopt;
@@ -367,12 +371,18 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     if (image.regions.size() > SkinResourcePolicy::maximumRegions - regions) { result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource region count exceeds fixed limit")); return result; }
     for (const auto &region : image.regions) if (!canonicalRegion(region, image.pixels.width, image.pixels.height)) { result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has invalid image region")); return result; }
     if (image.regionMappings.size() != image.regions.size()) { result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan is missing stable region identities")); return result; }
-    for (std::size_t index = 0; index < image.regionMappings.size(); ++index)
-      if (!canonicalRegion(image.regionMappings[index].resolved, image.pixels.width, image.pixels.height) ||
+    for (std::size_t index = 0; index < image.regionMappings.size(); ++index) {
+      SkinSourceRect resolvedAuthored;
+      if (!skinResourceResolveRect(image.regionMappings[index].authored,
+                                   image.pixels.width, image.pixels.height,
+                                   resolvedAuthored) ||
+          !canonicalRegion(image.regionMappings[index].resolved, image.pixels.width, image.pixels.height) ||
+          !sameRect(resolvedAuthored, image.regionMappings[index].resolved) ||
           !sameRect(image.regionMappings[index].resolved, image.regions[index]) ||
           std::ranges::any_of(image.regionMappings.begin(), image.regionMappings.begin() + static_cast<std::ptrdiff_t>(index), [&](const SkinResolvedRegion &item) { return sameRect(item.authored, image.regionMappings[index].authored) && !sameRect(item.resolved, image.regionMappings[index].resolved); })) {
         result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has conflicting region identities")); return result;
       }
+    }
     regions += image.regions.size();
     for (SkinResourceId alias : image.aliases) {
       const auto aliasRegions = image.aliasRegions.find(alias);
@@ -385,12 +395,18 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
         if (!canonicalRegion(region, image.pixels.width, image.pixels.height)) { result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has invalid alias region")); return result; }
       const auto aliasMappings = image.aliasRegionMappings.find(alias);
       if (aliasMappings == image.aliasRegionMappings.end() || aliasMappings->second.size() != count) { result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan is missing alias region identities")); return result; }
-      for (std::size_t index = 0; index < aliasMappings->second.size(); ++index)
-        if (!canonicalRegion(aliasMappings->second[index].resolved, image.pixels.width, image.pixels.height) ||
+      for (std::size_t index = 0; index < aliasMappings->second.size(); ++index) {
+        SkinSourceRect resolvedAuthored;
+        if (!skinResourceResolveRect(aliasMappings->second[index].authored,
+                                     image.pixels.width, image.pixels.height,
+                                     resolvedAuthored) ||
+            !canonicalRegion(aliasMappings->second[index].resolved, image.pixels.width, image.pixels.height) ||
+            !sameRect(resolvedAuthored, aliasMappings->second[index].resolved) ||
             !sameRect(aliasMappings->second[index].resolved, aliasRegions == image.aliasRegions.end() ? image.regions[index] : aliasRegions->second[index]) ||
             std::ranges::any_of(aliasMappings->second.begin(), aliasMappings->second.begin() + static_cast<std::ptrdiff_t>(index), [&](const SkinResolvedRegion &item) { return sameRect(item.authored, aliasMappings->second[index].authored) && !sameRect(item.resolved, aliasMappings->second[index].resolved); })) {
           result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has conflicting alias region identities")); return result;
         }
+      }
       regions += count;
     }
     for (const auto &[alias, aliasRegions] : image.aliasRegions) {
@@ -603,7 +619,10 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
       result.diagnostics.push_back(fontDiagnostic(*request.font, request.critical, "skin.resource.atlas_limit", "font atlas count exceeds policy"));
       continue;
     }
-    const auto faces = readFontFaces(request, input.fileSystem, fontEncodedBytes, result.diagnostics);
+    const auto faces = readFontFaces(
+        request, input.fileSystem, fontEncodedBytes, result.diagnostics,
+        [this, &input] { return cancellationRequested(input.stop); });
+    if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!faces) continue;
     const auto built = buildSkinTextAtlas(atlasId++, request.key, *faces, request.codepoints, request.pairs);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -680,7 +699,10 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       result.diagnostics.push_back(fontDiagnostic(*request.font, request.critical, "skin.resource.atlas_limit", "font atlas count exceeds policy"));
       continue;
     }
-    const auto faces = readFontFaces(request, input.fileSystem, fontEncodedBytes, result.diagnostics);
+    const auto faces = readFontFaces(
+        request, input.fileSystem, fontEncodedBytes, result.diagnostics,
+        [this, &input] { return cancellationRequested(input.stop); });
+    if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!faces) continue;
     const auto built = buildSkinTextAtlas(atlasId++, request.key, *faces, request.codepoints, request.pairs);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
