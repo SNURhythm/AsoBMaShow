@@ -477,9 +477,11 @@ SkinResourcePreparationService::SkinResourcePreparationService()
           [](std::span<const std::byte> encoded, std::stop_token stop)
               -> std::optional<image_decode::DecodedImageData> {
             if (stop.stop_requested()) return std::nullopt;
-            return image_decode::decodeImageMemory(
-                encoded, SkinResourcePolicy::maximumDimension,
-                SkinResourcePolicy::maximumImageBytes);
+            return image_decode::decodeImageMemory(encoded,
+                {.maximumDimension = SkinResourcePolicy::maximumDimension,
+                 .maximumEncodedBytes = SkinResourcePolicy::maximumEncodedBytes,
+                 .maximumDecodedBytes = SkinResourcePolicy::maximumImageBytes,
+                 .stop = stop});
           },
           SkinResourcePolicy::workerCount) {}
 
@@ -573,7 +575,12 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
         if (read.bytes.size() > SkinResourcePolicy::maximumSessionEncodedBytes - sessionBytes) { result.diagnostics.push_back(useDiagnostic("skin.resource.session_limit", "skin.resource.session_limit", "encoded resource bytes exceed the session policy", use->second.critical)); continue; }
         sessionBytes += read.bytes.size();
       }
-      const auto image = image_decode::decodeImageMemory(read.bytes, SkinResourcePolicy::maximumDimension, SkinResourcePolicy::maximumImageBytes);
+      const auto image = image_decode::decodeImageMemory(
+          read.bytes,
+          {.maximumDimension = SkinResourcePolicy::maximumDimension,
+           .maximumEncodedBytes = SkinResourcePolicy::maximumEncodedBytes,
+           .maximumDecodedBytes = SkinResourcePolicy::maximumImageBytes,
+           .stop = input.stop});
       if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
       if (!image || !skinResourceDimensionsAllowed(image->width, image->height, image->byteSize())) { result.diagnostics.push_back(useDiagnostic("skin.resource.image_decode_failed", "skin.resource.image_decode_failed", "image decode failed resource validation", use->second.critical)); continue; }
       if (image->byteSize() > SkinResourcePolicy::maximumSessionDecodedBytes - decodedSessionBytes) {

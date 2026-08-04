@@ -4,21 +4,23 @@
 
 #include "ImageView.h"
 #include "../ArchiveFile.h"
+#include "ImageFileDecoder.h"
 #include "../path.h"
 #include "../targets.h"
+#if !TARGET_OS_WINDOWS
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
-#include <unistd.h>
 #endif
 #include "../RAII.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
 #include <bgfx/bgfx.h>
-#include <stb_image.h>
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "../../bgfx/bimg/3rdparty/stb/stb_image_resize.h"
-#include "../StbImageRAII.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -35,6 +37,11 @@
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kArchivedThumbnailMaxDimension = 256;
+constexpr int kImageMaximumDimension =
+    static_cast<int>(std::numeric_limits<std::uint16_t>::max());
+constexpr std::size_t kImageMaximumEncodedBytes = 32U * 1024U * 1024U;
+constexpr std::size_t kImageMaximumDecodedBytes =
+    static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
 #if TARGET_OS_IOS || TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
 constexpr std::size_t kDecodedImageCacheBudget = 64U * 1024U * 1024U;
 #else
@@ -48,7 +55,6 @@ using DecodedImage = image_decode::DecodedImageData;
 struct ImageDecodeTimings {
   std::int64_t sourceAccessMillis = 0;
   std::int64_t sourceLoadDecodeMillis = 0;
-  std::int64_t rgbaCopyMillis = 0;
   std::int64_t archivePreviewMillis = 0;
 };
 
@@ -100,6 +106,43 @@ bool decodedImageDimensionsAreValid(int width, int height) {
                  static_cast<std::uint64_t>(height) <=
              std::numeric_limits<std::uint32_t>::max() / 4;
 }
+
+image_decode::ImageDecodeOptions imageDecodeOptions(
+    int targetWidth = 0, int targetHeight = 0, std::stop_token stop = {}) {
+  return {.maximumDimension = kImageMaximumDimension,
+          .maximumEncodedBytes = kImageMaximumEncodedBytes,
+          .maximumDecodedBytes = kImageMaximumDecodedBytes,
+          .targetWidth = targetWidth,
+          .targetHeight = targetHeight,
+          .stop = stop};
+}
+
+#if !TARGET_OS_WINDOWS
+std::optional<std::vector<std::byte>> readBoundedDescriptorBytes(
+    int descriptor, std::size_t maximumBytes, std::stop_token stop) {
+  std::vector<std::byte> bytes;
+  std::array<std::byte, 64U * 1024U> chunk{};
+  bool cancelled = stop.stop_requested();
+  for (;;) {
+    const ssize_t count = read(descriptor, chunk.data(), chunk.size());
+    if (count == 0) {
+      if (cancelled || stop.stop_requested() || bytes.empty()) {
+        return std::nullopt;
+      }
+      return bytes;
+    }
+    if (count < 0) {
+      if (errno == EINTR) continue;
+      return std::nullopt;
+    }
+    cancelled = cancelled || stop.stop_requested();
+    if (cancelled) continue;
+    const auto readCount = static_cast<std::size_t>(count);
+    if (readCount > maximumBytes - bytes.size()) return std::nullopt;
+    bytes.insert(bytes.end(), chunk.begin(), chunk.begin() + count);
+  }
+}
+#endif
 
 bool isArchiveEntryImagePath(const std::filesystem::path &path) {
   std::filesystem::path archivePath;
@@ -174,54 +217,11 @@ readCachedArchivedThumbnail(const std::filesystem::path &path) {
   return DecodedImage{.width = width, .height = height, .rgba = rgba};
 }
 
-DecodedImage makeArchivedThumbnail(const DecodedImage &decoded) {
-  const int maxDimension = std::max(decoded.width, decoded.height);
-  if (maxDimension <= kArchivedThumbnailMaxDimension) {
-    return decoded;
-  }
-
-  const float scale = static_cast<float>(kArchivedThumbnailMaxDimension) /
-                      static_cast<float>(maxDimension);
-  const int thumbnailWidth =
-      std::max(1, static_cast<int>(std::round(decoded.width * scale)));
-  const int thumbnailHeight =
-      std::max(1, static_cast<int>(std::round(decoded.height * scale)));
-  auto rgba = std::make_shared<std::vector<unsigned char>>(
-      static_cast<size_t>(thumbnailWidth) *
-      static_cast<size_t>(thumbnailHeight) * 4U);
-  const int resized =
-      stbir_resize_uint8(decoded.rgba->data(), decoded.width, decoded.height, 0,
-                         rgba->data(), thumbnailWidth, thumbnailHeight, 0, 4);
-  if (resized == 0) {
-    return decoded;
-  }
-  return DecodedImage{.width = thumbnailWidth,
-                      .height = thumbnailHeight,
-                      .rgba = rgba};
-}
-
-DecodedImage downsampleDecodedImage(const DecodedImage &decoded,
-                                    int targetWidth, int targetHeight) {
-  if (!decoded.valid() || targetWidth <= 0 || targetHeight <= 0 ||
-      (decoded.width <= targetWidth && decoded.height <= targetHeight)) {
-    return decoded;
-  }
-  const double scale =
-      std::min(static_cast<double>(targetWidth) / decoded.width,
-               static_cast<double>(targetHeight) / decoded.height);
-  const int resizedWidth =
-      std::max(1, static_cast<int>(std::floor(decoded.width * scale)));
-  const int resizedHeight =
-      std::max(1, static_cast<int>(std::floor(decoded.height * scale)));
-  auto rgba = std::make_shared<std::vector<unsigned char>>(
-      static_cast<std::size_t>(resizedWidth) * resizedHeight * 4U);
-  if (stbir_resize_uint8(decoded.rgba->data(), decoded.width, decoded.height, 0,
-                        rgba->data(), resizedWidth, resizedHeight, 0, 4) == 0) {
-    return decoded;
-  }
-  return {.width = resizedWidth,
-          .height = resizedHeight,
-          .rgba = std::move(rgba)};
+std::optional<DecodedImage> makeArchivedThumbnail(const DecodedImage &decoded,
+                                                   std::stop_token stop) {
+  return image_decode::resizeDecodedImage(
+      decoded, imageDecodeOptions(kArchivedThumbnailMaxDimension,
+                                  kArchivedThumbnailMaxDimension, stop));
 }
 
 void writeCachedArchivedThumbnail(const std::filesystem::path &path,
@@ -254,17 +254,13 @@ void writeCachedArchivedThumbnail(const std::filesystem::path &path,
 std::optional<DecodedImage>
 decodeImageFile(const std::filesystem::path &path,
                 ImageDecodeTimings *timings = nullptr, int targetWidth = 0,
-                int targetHeight = 0) {
+                int targetHeight = 0, std::stop_token stop = {}) {
   ImageDecodeTimings measured;
   const bool archiveEntryPath = isArchiveEntryImagePath(path);
-  int width = 0;
-  int height = 0;
-  int channels = 0;
-  StbiImageHandle data(nullptr);
+  const auto options = imageDecodeOptions(targetWidth, targetHeight, stop);
+  if (stop.stop_requested()) return std::nullopt;
 #if TARGET_OS_ANDROID
-  bool androidTreePath = false;
   if (IsAndroidTreePath(path)) {
-    androidTreePath = true;
     std::string fdError;
     const auto sourceAccessStarted = std::chrono::steady_clock::now();
     const auto fd = OpenAndroidTreeFileDescriptor(path, fdError);
@@ -275,47 +271,70 @@ decodeImageFile(const std::filesystem::path &path,
               fspath_to_utf8(path).c_str(), fdError.c_str());
       return std::nullopt;
     }
-    FILE *file = fdopen(*fd, "rb");
-    if (file == nullptr) {
-      close(*fd);
-      SDL_Log("Failed to create FILE for Android image descriptor: %s",
+    const auto closeDescriptor = makeScopeExit([fd = *fd] { (void)close(fd); });
+    struct stat status {};
+    if (fstat(*fd, &status) != 0 ||
+        (S_ISREG(status.st_mode) &&
+         (status.st_size <= 0 || static_cast<std::uintmax_t>(status.st_size) >
+                                      kImageMaximumEncodedBytes))) {
+      SDL_Log("Android image descriptor is outside encoded byte bounds: %s",
               fspath_to_utf8(path).c_str());
       return std::nullopt;
     }
     const auto sourceLoadStarted = std::chrono::steady_clock::now();
-    data.reset(stbi_load_from_file(file, &width, &height, &channels, 4));
+    const auto bytes = readBoundedDescriptorBytes(*fd,
+                                                  kImageMaximumEncodedBytes,
+                                                  stop);
     measured.sourceLoadDecodeMillis = elapsedMillis(
         sourceLoadStarted, std::chrono::steady_clock::now());
-    fclose(file);
+    if (!bytes || stop.stop_requested()) return std::nullopt;
+    const auto decodeStarted = std::chrono::steady_clock::now();
+    auto decoded = image_decode::decodeImageMemory(*bytes, options);
+    measured.sourceLoadDecodeMillis += elapsedMillis(
+        decodeStarted, std::chrono::steady_clock::now());
+    if (timings != nullptr) *timings = measured;
+    return decoded;
   }
-  if (!androidTreePath && !archive_file::isVirtualPath(path)) {
-#else
-  if (!archive_file::isVirtualPath(path)) {
 #endif
-    const std::string utf8Path = fspath_to_utf8(path);
-#ifdef _WIN32
-    const auto sourceLoadStarted = std::chrono::steady_clock::now();
-    data.reset(stbi_load(utf8Path.c_str(), &width, &height, &channels, 4));
-    measured.sourceLoadDecodeMillis = elapsedMillis(
-        sourceLoadStarted, std::chrono::steady_clock::now());
-#else
-    const auto sourceAccessStarted = std::chrono::steady_clock::now();
-    UniqueResource<FILE, fclose> file(fopen(utf8Path.c_str(), "rb"));
-    measured.sourceAccessMillis = elapsedMillis(
-        sourceAccessStarted, std::chrono::steady_clock::now());
-    if (file) {
+  if (!archive_file::isVirtualPath(path)) {
+#if !TARGET_OS_WINDOWS
+    std::error_code statusError;
+    const auto status = std::filesystem::status(path, statusError);
+    if (!statusError && !std::filesystem::is_regular_file(status)) {
+      const auto sourceAccessStarted = std::chrono::steady_clock::now();
+      const int descriptor = open(path.c_str(), O_RDONLY);
+      measured.sourceAccessMillis = elapsedMillis(
+          sourceAccessStarted, std::chrono::steady_clock::now());
+      if (descriptor < 0) return std::nullopt;
+      const auto closeDescriptor =
+          makeScopeExit([descriptor] { (void)close(descriptor); });
       const auto sourceLoadStarted = std::chrono::steady_clock::now();
-      data.reset(
-          stbi_load_from_file(file.get(), &width, &height, &channels, 4));
+      const auto bytes = readBoundedDescriptorBytes(
+          descriptor, kImageMaximumEncodedBytes, stop);
       measured.sourceLoadDecodeMillis = elapsedMillis(
           sourceLoadStarted, std::chrono::steady_clock::now());
+      if (!bytes) return std::nullopt;
+      const auto decodeStarted = std::chrono::steady_clock::now();
+      auto decoded = image_decode::decodeImageMemory(*bytes, options);
+      measured.sourceLoadDecodeMillis += elapsedMillis(
+          decodeStarted, std::chrono::steady_clock::now());
+      if (timings != nullptr) *timings = measured;
+      return decoded;
     }
 #endif
+    const auto sourceLoadStarted = std::chrono::steady_clock::now();
+    auto decoded = image_decode::decodeImageFile(path, options);
+    measured.sourceLoadDecodeMillis = elapsedMillis(
+        sourceLoadStarted, std::chrono::steady_clock::now());
+    if (timings != nullptr) *timings = measured;
+    return decoded;
   } else {
     std::vector<unsigned char> bytes;
     std::string errorMessage;
     const auto sourceAccessStarted = std::chrono::steady_clock::now();
-    if (!archive_file::readFile(path, bytes, &errorMessage)) {
+    if (!archive_file::readFileBounded(path, bytes,
+                                       kImageMaximumEncodedBytes,
+                                       &errorMessage, stop)) {
       measured.sourceAccessMillis = elapsedMillis(
           sourceAccessStarted, std::chrono::steady_clock::now());
       if (timings != nullptr) {
@@ -327,52 +346,45 @@ decodeImageFile(const std::filesystem::path &path,
     }
     measured.sourceAccessMillis = elapsedMillis(
         sourceAccessStarted, std::chrono::steady_clock::now());
+    if (stop.stop_requested()) {
+      if (timings != nullptr) *timings = measured;
+      return std::nullopt;
+    }
     const auto sourceLoadStarted = std::chrono::steady_clock::now();
-    data.reset(stbi_load_from_memory(bytes.data(),
-                                     static_cast<int>(bytes.size()), &width,
-                                     &height, &channels, 4));
+    auto decoded = image_decode::decodeImageMemory(
+        std::span<const std::byte>(reinterpret_cast<const std::byte *>(bytes.data()),
+                                   bytes.size()),
+        imageDecodeOptions(0, 0, stop));
     measured.sourceLoadDecodeMillis = elapsedMillis(
         sourceLoadStarted, std::chrono::steady_clock::now());
-  }
-
-  if (data == nullptr || !decodedImageDimensionsAreValid(width, height)) {
-    if (timings != nullptr) {
-      *timings = measured;
+    if (!decoded.has_value()) {
+      if (timings != nullptr) *timings = measured;
+      return std::nullopt;
     }
-    return std::nullopt;
+    if (archiveEntryPath) {
+      const auto archivePreviewStarted = std::chrono::steady_clock::now();
+      if (const auto thumbnail = makeArchivedThumbnail(*decoded, stop);
+          thumbnail && !stop.stop_requested()) {
+        writeCachedArchivedThumbnail(path, *thumbnail);
+      }
+      measured.archivePreviewMillis = elapsedMillis(
+          archivePreviewStarted, std::chrono::steady_clock::now());
+    }
+    if (timings != nullptr) *timings = measured;
+    return image_decode::resizeDecodedImage(*decoded, options);
   }
-
-  const auto copyStarted = std::chrono::steady_clock::now();
-  const size_t byteCount = static_cast<size_t>(width) *
-                           static_cast<size_t>(height) * 4;
-  auto rgba = std::make_shared<std::vector<unsigned char>>(byteCount);
-  std::copy(data.get(), data.get() + byteCount, rgba->begin());
-  measured.rgbaCopyMillis =
-      elapsedMillis(copyStarted, std::chrono::steady_clock::now());
-  DecodedImage decoded{.width = width, .height = height, .rgba = rgba};
-  if (archiveEntryPath) {
-    const auto archivePreviewStarted = std::chrono::steady_clock::now();
-    DecodedImage thumbnail = makeArchivedThumbnail(decoded);
-    writeCachedArchivedThumbnail(path, thumbnail);
-    measured.archivePreviewMillis = elapsedMillis(
-        archivePreviewStarted, std::chrono::steady_clock::now());
-  }
-  if (timings != nullptr) {
-    *timings = measured;
-  }
-  return downsampleDecodedImage(decoded, targetWidth, targetHeight);
 }
 
 
 image_decode::ImageDecodeCoordinator &imageDecodeCoordinator() {
   static image_decode::ImageDecodeCoordinator coordinator(
-      [](const image_decode::ImageDecodeRequest &request)
+      [](const image_decode::ImageDecodeRequest &request, std::stop_token stop)
           -> std::optional<DecodedImage> {
         const auto started = std::chrono::steady_clock::now();
         ImageDecodeTimings timings;
         auto decoded = decodeImageFile(request.path, &timings,
                                        request.targetWidth,
-                                       request.targetHeight);
+                                       request.targetHeight, stop);
         const auto workerMillis = elapsedMillis(
             started, std::chrono::steady_clock::now());
         if (workerMillis >= 250) {
@@ -381,7 +393,6 @@ image_decode::ImageDecodeCoordinator &imageDecodeCoordinator() {
               std::to_string(timings.sourceAccessMillis) +
               "ms load_decode=" +
               std::to_string(timings.sourceLoadDecodeMillis) +
-              "ms copy=" + std::to_string(timings.rgbaCopyMillis) +
               "ms archive_preview=" +
               std::to_string(timings.archivePreviewMillis) +
               "ms worker=" + std::to_string(workerMillis) + "ms path=" +

@@ -2678,7 +2678,9 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
                       const std::filesystem::path &innerPath,
                       std::vector<unsigned char> &bytes,
                       std::string *errorMessage,
-                      const PauseCallback &pauseCallback = nullptr) {
+                      const PauseCallback &pauseCallback = nullptr,
+                      std::uintmax_t maximumBytes =
+                          std::numeric_limits<std::uintmax_t>::max()) {
   bytes.clear();
   const std::string target = normalizeEntryName(innerPath.generic_string());
   if (target.empty()) {
@@ -2729,6 +2731,13 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
     }
 
     const la_int64_t entrySize = archive_entry_size(entry);
+    if (archive_entry_size_is_set(entry) && entrySize > 0 &&
+        static_cast<std::uintmax_t>(entrySize) > maximumBytes) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Archive entry exceeds bounded read limit: " + target;
+      }
+      return false;
+    }
     if (archive_entry_size_is_set(entry) && entrySize > 0) {
       reserveBufferedBytes(bytes, static_cast<std::uintmax_t>(entrySize));
     }
@@ -2747,6 +2756,13 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
           *errorMessage = "Could not read archive entry: " +
                           archiveErrorString(archiveHandle, "");
         }
+        return false;
+      }
+      if (static_cast<std::uintmax_t>(count) > maximumBytes - bytes.size()) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Archive entry exceeds bounded read limit: " + target;
+        }
+        bytes.clear();
         return false;
       }
       bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + count);
@@ -7697,6 +7713,61 @@ bool readFile(const std::filesystem::path &path,
     *errorMessage = "Archive support is not compiled in.";
   }
   return false;
+#endif
+}
+
+bool readFileBounded(const std::filesystem::path &path,
+                     std::vector<unsigned char> &bytes,
+                     std::size_t maximumBytes, std::string *errorMessage,
+                     std::stop_token stop) {
+  bytes.clear();
+  if (stop.stop_requested()) return false;
+  std::filesystem::path archivePath;
+  std::filesystem::path innerPath;
+  if (!splitVirtualPath(path, archivePath, innerPath)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Bounded archive reads require a virtual archive path.";
+    }
+    return false;
+  }
+  if (isSystemEntryPath(innerPath)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive entry is system metadata: " +
+                      innerPath.generic_string();
+    }
+    return false;
+  }
+  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  if (index == nullptr) return false;
+  const Entry *entry = findIndexedEntry(*index, innerPath);
+  if (entry == nullptr || entry->directory) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive entry not found: " + innerPath.generic_string();
+    }
+    return false;
+  }
+  if (entry->size > maximumBytes) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Archive entry exceeds bounded read limit: " +
+                      entry->path.generic_string();
+    }
+    return false;
+  }
+#if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
+  return readArchiveEntry(archivePath, entry->path, bytes, errorMessage,
+                          [stop] { return !stop.stop_requested(); },
+                          maximumBytes);
+#else
+  // The indexed size remains a pre-extraction bound for backends unavailable
+  // to libarchive; the platform build used by ImageView includes libarchive.
+  if (!readFile(path, bytes, errorMessage) || bytes.size() > maximumBytes) {
+    bytes.clear();
+    if (errorMessage != nullptr && errorMessage->empty()) {
+      *errorMessage = "Archive entry exceeds bounded read limit.";
+    }
+    return false;
+  }
+  return true;
 #endif
 }
 

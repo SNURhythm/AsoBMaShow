@@ -3317,6 +3317,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(image_decode_coordinator_tests PRIVATE cxx_std_23)
 
+    add_executable(image_file_decoder_tests
+        tests/image_file_decoder_tests.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageFileDecoder.cpp
+    )
+    target_include_directories(image_file_decoder_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(image_file_decoder_tests PRIVATE cxx_std_23)
+    target_compile_definitions(image_file_decoder_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
         add_executable(skin_resource_catalog_tests
             tests/skin_resource_catalog_tests.cpp
@@ -3383,6 +3392,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(APPLE)
         target_link_libraries(image_view_fade_tests PRIVATE iconv)
     endif()
+    add_test(NAME image_view_decoder_ownership_tests
+        COMMAND ${CMAKE_COMMAND}
+            -DIMAGE_VIEW_SOURCE=${CMAKE_SOURCE_DIR}/src/view/ImageView.cpp
+            -P ${CMAKE_SOURCE_DIR}/tests/assert_image_view_decoder_ownership.cmake
+    )
 
     add_executable(artwork_cache_contract_tests
         tests/artwork_cache_contract_tests.cpp
@@ -5177,6 +5191,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         image_fade_tests
         decoded_image_cache_tests
         image_decode_coordinator_tests
+        image_file_decoder_tests
         mobile_memory_pressure_tests
         image_view_fade_tests
         artwork_cache_contract_tests
