@@ -3323,6 +3323,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/DecodedImageCache.cpp
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
+            src/view/SdlTtfRuntime.cpp
             src/FileChecksum.cpp
             src/Utils.cpp
             src/path.cpp
@@ -3333,6 +3334,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/package/SkinTreeSnapshotter.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/skin/beatoraja/SkinTextAtlas.cpp
         )
         if(APPLE)
             target_sources(skin_resource_catalog_tests PRIVATE src/skin/package/SkinAliasDetectorApple.mm)
@@ -3340,7 +3342,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_include_directories(skin_resource_catalog_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
         target_compile_features(skin_resource_catalog_tests PRIVATE cxx_std_23)
         target_compile_definitions(skin_resource_catalog_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1)
-        target_link_libraries(skin_resource_catalog_tests PRIVATE bgfx utf8proc::utf8proc)
+        target_link_libraries(skin_resource_catalog_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
     endif()
 
     add_executable(mobile_memory_pressure_tests

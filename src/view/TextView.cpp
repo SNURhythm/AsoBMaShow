@@ -127,6 +127,7 @@ std::string fontCacheKey(const std::string &path, int fontSize,
 
 TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
                                int fontStyle, bool required) {
+  text_runtime::OperationGuard operation;
   if (!required && !canReadFile(path)) {
     return nullptr;
   }
@@ -160,6 +161,7 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
 
 void releaseFontCandidate(const std::string &path, int fontSize, int fontStyle,
                           TTF_Font *font) {
+  text_runtime::OperationGuard operation;
   if (font == nullptr) {
     return;
   }
@@ -259,6 +261,7 @@ bool isIgnorableUnsupportedCodepoint(Uint32 codepoint) {
 }
 
 int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
+  text_runtime::OperationGuard operation;
   if (font == nullptr || utf8.empty()) {
     return 0;
   }
@@ -442,6 +445,7 @@ int TextView::rasterTextLineHeight() const {
 }
 
 void TextView::includeFontMetrics(TTF_Font *loadedFont) {
+  text_runtime::OperationGuard operation;
   if (loadedFont == nullptr) {
     return;
   }
@@ -514,6 +518,7 @@ int TextView::measureFontSourceTextWidth(const SelectedFont &source,
 }
 
 int TextView::fontSourceAscent(const SelectedFont &source) {
+  text_runtime::OperationGuard operation;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (source.iosSystemFont) {
     includeIOSSystemFontMetrics();
@@ -526,6 +531,7 @@ int TextView::fontSourceAscent(const SelectedFont &source) {
 
 SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
                                                    const std::string &utf8) {
+  text_runtime::OperationGuard operation;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (source.iosSystemFont) {
     includeIOSSystemFontMetrics();
@@ -540,6 +546,7 @@ SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
 }
 
 TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
+  text_runtime::OperationGuard operation;
   if (fontFaces.empty()) {
     return {};
   }
@@ -586,6 +593,7 @@ TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
 }
 
 bool TextView::primaryFontSupportsText(const std::string &utf8) const {
+  text_runtime::OperationGuard operation;
   if (font == nullptr) {
     return false;
   }
@@ -900,6 +908,7 @@ void TextView::onThemeChanged() {
 
 void TextView::createTexture(bool markDirty, bool force,
                              int requestedWrapWidth) {
+  text_runtime::OperationGuard operation;
   const int previousWidth = rect.w;
   const int previousHeight = rect.h;
   const int effectiveWrapWidth =

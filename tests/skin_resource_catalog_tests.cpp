@@ -3,8 +3,11 @@
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 #include "view/ImageFileDecoder.h"
+#include "view/SdlTtfRuntime.h"
 
 #include <atomic>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -37,6 +40,18 @@ void testBoundedPngAndJpegDecodeBeforeAllocation() {
          "file decoder rejects encoded bytes before allocating a read buffer");
   std::error_code removeError;
   std::filesystem::remove(oversized, removeError);
+}
+
+void testSharedSdlTtfRuntimeFinalRelease() {
+  expect(text_runtime::acquire() && text_runtime::acquire() &&
+             text_runtime::activeReferencesForTesting() == 2,
+         "overlapping SDL_ttf owners retain one process runtime");
+  text_runtime::release();
+  expect(text_runtime::activeReferencesForTesting() == 1,
+         "releasing one SDL_ttf owner cannot quit the shared runtime");
+  text_runtime::release();
+  expect(text_runtime::activeReferencesForTesting() == 0,
+         "the final SDL_ttf owner releases only after prior operations close");
 }
 
 void testSpriteBoundsAndNormalizedGridCells() {
@@ -93,6 +108,16 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                     "tests/fixtures/beatoraja_skin/resources/fixture.jpg",
                 source / "entry/resources/fixture.jpg");
+  fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                    "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
+                source / "entry/resources/fixture.ttf");
+  fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                    "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
+                source / "entry/resources/unsupported.fnt");
+  fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) / "assets/fonts/fa-solid-900.ttf",
+                source / "entry/resources/icons.ttf");
+  fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) / "bgfx/bgfx/examples/runtime/font/signika-regular.ttf",
+                source / "entry/resources/signika.ttf");
   const auto package = *skin::normalizePackageId("Task13Fixture").package;
   const auto entry = *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
   skin::SkinStorageRoots roots{.visiblePackages=temporary.root/"visible",
@@ -114,13 +139,21 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   model.model.resources.emplace_back(skin::SkinImageResource{.id=4, .authoredName="unused", .virtualPath="resources/does-not-exist.png"});
   model.model.resources.emplace_back(skin::SkinImageResource{.id=5, .authoredName="optional", .virtualPath="resources/does-not-exist.png"});
   model.model.resources.emplace_back(skin::SkinImageResource{.id=6, .authoredName="disabled", .virtualPath="resources/does-not-exist.png"});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=7, .authoredName="fixture-font", .virtualPath="resources/fixture.ttf", .type=0});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=8, .authoredName="fallback-font", .virtualPath="resources/icons.ttf", .type=0, .fallbacks={{.virtualPath="resources/fixture.ttf", .type=0}}});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=9, .authoredName="kerning-font", .virtualPath="resources/signika.ttf", .type=0});
   model.model.objects.push_back({.id=1, .authoredName="primary", .payload=skin::SkinImageObject{.orderedStates={{.resource=1, .frames={{.x=0,.y=0,.w=40,.h=20,.gridColumns=4,.gridRows=2}}}}}, .critical=true});
   model.model.objects.push_back({.id=2, .authoredName="alias", .payload=skin::SkinImageObject{.orderedStates={{.resource=2, .frames={{.x=2,.y=3,.w=20,.h=10,.gridColumns=2,.gridRows=1}}}}}, .critical=true});
   model.model.objects.push_back({.id=3, .authoredName="jpeg", .payload=skin::SkinImageObject{.orderedStates={{.resource=3, .frames={{.x=0,.y=0,.w=40,.h=20}}}}}, .critical=true});
   model.model.objects.push_back({.id=4, .authoredName="optional", .payload=skin::SkinImageObject{.orderedStates={{.resource=5, .frames={{.x=0,.y=0,.w=40,.h=20}}}}}, .critical=false});
   model.model.objects.push_back({.id=5, .authoredName="disabled", .payload=skin::SkinImageObject{.orderedStates={{.resource=6, .frames={{.x=0,.y=0,.w=40,.h=20}}}}}, .critical=false});
+  model.model.objects.push_back({.id=6, .authoredName="caption", .payload=skin::SkinTextObject{.font=7, .value=skin::SkinStringPropertyId{.value=1}, .literal="AV 123 日本", .pointSize=16}, .critical=true});
+  model.model.objects.push_back({.id=7, .authoredName="styled-caption", .payload=skin::SkinTextObject{.font=7, .literal="AV", .pointSize=24, .outlineRgba={255,0,0,255}, .outlineWidth=1.0, .shadowRgba={0,0,255,128}, .shadowOffsetX=1.0, .shadowOffsetY=2.0, .shadowSmoothness=0.5}, .critical=true});
+  model.model.objects.push_back({.id=8, .authoredName="fallback-caption", .payload=skin::SkinTextObject{.font=8, .literal="日本", .pointSize=16}, .critical=true});
+  model.model.objects.push_back({.id=9, .authoredName="kerning-caption", .payload=skin::SkinTextObject{.font=9, .literal="AV", .pointSize=16}, .critical=true});
   model.disabledOptionalObjects.push_back(5);
   skin::BeatorajaSkinConfiguration configuration;
+  const std::array<std::string, 1> runtimeStrings{"Artist 日本 42"};
   skin::SkinResourcePreparationService service;
   std::ofstream(source / "entry/play.luaskin", std::ios::app) << "-- different revision\n";
   auto mismatchSnapshot = snapshotter.snapshot(source, package, {}, {});
@@ -152,7 +185,22 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   const auto invalidCrop = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=invalidCropModel, .configuration=configuration});
   expect(!invalidCrop.valid && hasDiagnostic(invalidCrop.diagnostics, "skin.resource.sprite_bounds"),
          "a critical post-decode source crop outside its image is a blocking error");
-  const auto validated = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=model, .configuration=configuration});
+  auto unsupportedFontModel = model;
+  std::get<skin::SkinFontResource>(unsupportedFontModel.model.resources[6]).virtualPath = "resources/unsupported.fnt";
+  const auto unsupportedFont = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unsupportedFontModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
+  expect(!unsupportedFont.valid && hasDiagnostic(unsupportedFont.diagnostics, "skin.resource.font_format_unsupported"),
+         "a critical bitmap font declaration is explicitly unsupported");
+  unsupportedFontModel.model.objects[5].critical = false;
+  unsupportedFontModel.model.objects[6].critical = false;
+  const auto optionalUnsupportedFont = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unsupportedFontModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
+  expect(optionalUnsupportedFont.valid && hasDiagnostic(optionalUnsupportedFont.diagnostics, "skin.resource.font_format_unsupported"),
+         "an optional bitmap font declaration reports a non-blocking diagnostic");
+  auto unknownGlyphModel = model;
+  std::get<skin::SkinTextObject>(unknownGlyphModel.model.objects[5].payload).literal = "\xF4\x8F\xBF\xBF";
+  const auto unknownGlyph = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unknownGlyphModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
+  expect(!unknownGlyph.valid && hasDiagnostic(unknownGlyph.diagnostics, "skin.resource.glyph_missing"),
+         "unknown live text glyphs fail synchronously before resource publication");
+  const auto validated = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
   expect(validated.valid && !validated.cancelled && validated.diagnostics.size() == 1 &&
              validated.diagnostics.front().code == "skin.resource.missing_optional",
          "optional missing resources warn while unreferenced declarations do not become false critical failures");
@@ -165,10 +213,29 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   auto leasedFs = skin::LuaSkinFileSystem::create({.revision=lease->readView(), .entry=entry, .storageRoots=roots});
   expect(leasedFs.fileSystem != nullptr, "published resource filesystem is available");
   if (!leasedFs.fileSystem) return;
-  auto planned = service.decodeAndPlan({.revision=std::move(*lease), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration});
-  expect(planned.plan && planned.plan->images.size() == 2 &&
+  auto planned = service.decodeAndPlan({.revision=std::move(*lease), .entry=entry, .fileSystem=*leasedFs.fileSystem, .model=model, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
+  expect(planned.plan && planned.plan->images.size() == 2 && planned.plan->atlases.size() == 4 &&
              planned.plan->images.front().aliases == std::vector<skin::SkinResourceId>{2},
-         "duplicate resource locators decode once and retain an ID alias record");
+         "duplicate image locators reuse one texture while live text styles produce distinct atlases");
+  std::optional<skin::SkinTextAtlasKey> firstAtlasKey;
+  if (planned.plan && planned.plan->atlases.size() == 4) {
+    const auto &firstAtlas = planned.plan->atlases[0];
+    const auto &secondAtlas = planned.plan->atlases[1];
+    firstAtlasKey = firstAtlas.key;
+    bool styledColor = false;
+    for (const unsigned char component : *secondAtlas.pixels.rgba)
+      if (component != 0 && component != 255) { styledColor = true; break; }
+    const auto signikaAtlas = std::find_if(planned.plan->atlases.begin(), planned.plan->atlases.end(),
+        [](const skin::SkinPreparedGlyphAtlas &atlas) { return atlas.key.font == 9; });
+    expect(firstAtlas.id == 1 && secondAtlas.id == 2 && firstAtlas.key.pointSize == 16 &&
+               secondAtlas.key.pointSize == 24 && firstAtlas.glyphs.contains(U'日') &&
+               firstAtlas.glyphs.contains(U'4') && firstAtlas.glyphs.at(U'A').region.x > 0 &&
+               static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width > 0.0 &&
+               static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width < 1.0 && styledColor &&
+               signikaAtlas != planned.plan->atlases.end() && signikaAtlas->kerning.contains({U'A', U'V'}) &&
+               signikaAtlas->kerning.at({U'A', U'V'}) != 0,
+           "prepared font atlases have stable keys, normalized UV regions, styled pixels, Japanese/runtime glyphs, fallback selection, and real AV kerning");
+  }
   if (!planned.plan) return;
   {
     skin::SkinResourceUploadPlan duplicatePlan{
@@ -211,7 +278,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   expect(stoppedPlan && stoppedPlan->cancelled && !stoppedPlan->plan,
          "concurrent shutdown stops the injectable decoder and prevents plan publication");
   skin::SkinResourceUploadPlan rollbackPlan{
-      .revision = planned.plan->revision.clone(), .images = planned.plan->images,
+      .revision = planned.plan->revision.clone(), .images = planned.plan->images, .atlases = planned.plan->atlases,
       .decodedBytes = planned.plan->decodedBytes};
   auto failingDevice = std::make_shared<FakeTextureDevice>();
   failingDevice->failAt = 2;
@@ -228,8 +295,10 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   auto device = std::make_shared<FakeTextureDevice>();
   auto uploaded = skin::SkinResourceCatalog::upload(std::move(*planned.plan), device);
   planned.plan.reset();
-  expect(uploaded.catalog && device->creates == 2 && device->live == 2 &&
+  expect(uploaded.catalog && device->creates == 6 && device->live == 6 &&
              uploaded.catalog->find(1) && uploaded.catalog->find(2) && uploaded.catalog->find(3) &&
+             uploaded.catalog->findTextAtlas(1) && uploaded.catalog->findTextAtlas(2) && uploaded.catalog->findTextAtlas(3) && uploaded.catalog->findTextAtlas(4) &&
+             firstAtlasKey && uploaded.catalog->findTextAtlas(*firstAtlasKey) &&
              uploaded.catalog->find(1)->regions.front().x == 0 &&
              uploaded.catalog->find(2)->regions.front().x == 2,
          "upload owns unique physical textures while preserving per-alias sprite regions");
@@ -240,6 +309,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
     (void)uploaded.catalog->find(1);
     (void)uploaded.catalog->find(2);
     (void)uploaded.catalog->find(9999);
+    (void)uploaded.catalog->findTextAtlas(1);
   }
   expect(device->creates == readsBefore,
          "render-phase ID lookups do not upload or access resource files");
@@ -257,6 +327,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
 
 int main() {
   testBoundedPngAndJpegDecodeBeforeAllocation();
+  testSharedSdlTtfRuntimeFinalRelease();
   testSpriteBoundsAndNormalizedGridCells();
   testSecurePreparationLeaseAliasAndCatalogLifetime();
   if (failures) return 1;

@@ -135,6 +135,9 @@ public:
   virtual bgfx::TextureHandle create(const image_decode::DecodedImageData &) = 0;
   virtual void destroy(bgfx::TextureHandle) noexcept = 0;
   virtual bool ownsCurrentThread() const noexcept = 0;
+  virtual int maximumTextureDimension() const noexcept {
+    return SkinResourcePolicy::maximumDimension;
+  }
 };
 
 class SkinResourceCatalog;
