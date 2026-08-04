@@ -477,6 +477,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
                 .subartist = "subartist",
                 .genre = "genre",
                 .auditedStringProperties = {{12, "full title"}}};
+  chart.notes = {{.id = 1, .kind = ChartVisualNoteKind::LongHead}};
   ValidatedBeatorajaSkinModel model;
   BeatorajaSkinConfiguration configuration;
   configuration.offsetsById = {
@@ -492,6 +493,11 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   auto state = stateAt(101);
   state.playStartMicros = 6'001;
   state.lastJudgeVisualMicros = 6'002;
+  state.fastSlowMicros = -34;
+  state.authority.currentGauge = 62.3F;
+  state.authority.judgementCounters = {
+      {PGreat, 10}, {Great, 9}, {Good, 8},
+      {Bad, 7},    {Kpoor, 6}, {Poor, 5}};
   state.lanes.resize(8);
   for (std::size_t index = 0; index < state.lanes.size(); ++index) {
     state.lanes[index].pressMicros = 1'000 + static_cast<long long>(index);
@@ -513,6 +519,30 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   expect(bridge.integerProperty({160}).supported &&
              bridge.integerProperty({160}).value == 172,
          "now-BPM truncates the authoritative current BPM");
+  expect(bridge.booleanProperty({2243}).supported &&
+             bridge.booleanProperty({2243}).value &&
+             bridge.booleanProperty({2244}).supported &&
+             bridge.booleanProperty({2244}).value &&
+             bridge.booleanProperty({2245}).supported &&
+             bridge.booleanProperty({2245}).value,
+         "selected judge-existence options read captured judgement counters");
+  expect(bridge.booleanProperty({172}).supported &&
+             !bridge.booleanProperty({172}).value &&
+             bridge.booleanProperty({173}).supported &&
+             bridge.booleanProperty({173}).value,
+         "selected long-note options read the immutable chart model");
+  for (const auto [id, expected] : std::array{
+           std::pair{14, 450LL}, std::pair{71, 456LL},
+           std::pair{101, 456LL}, std::pair{107, 62LL},
+           std::pair{110, 10LL}, std::pair{111, 9LL},
+           std::pair{112, 8LL}, std::pair{113, 7LL},
+           std::pair{114, 5LL}, std::pair{171, 456LL},
+           std::pair{407, 3LL}, std::pair{427, 18LL},
+           std::pair{525, -34LL}}) {
+    const auto value = bridge.integerProperty({id});
+    expect(value.supported && value.value == expected,
+           "selected live score, gauge, and judgement number is exact");
+  }
   expect(bridge.stringProperty({12}).supported &&
              bridge.stringProperty({12}).value == "full title" &&
              bridge.stringProperty({13}).value == "genre" &&

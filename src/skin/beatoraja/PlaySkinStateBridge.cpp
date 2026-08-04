@@ -8,6 +8,17 @@
 #include <type_traits>
 #include <utility>
 
+namespace {
+
+std::int64_t capturedJudgeCount(const PlayfieldVisualState &snapshot,
+                                Judgement judgement) {
+  const auto found = snapshot.authority.judgementCounters.find(judgement);
+  return found == snapshot.authority.judgementCounters.end() ? 0
+                                                              : found->second;
+}
+
+} // namespace
+
 namespace skin {
 
 SkinEventMutationTable::SkinEventMutationTable(
@@ -582,6 +593,17 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 43:
     return {.value = gaugeTypeIndex(snapshot->authority.gaugeType) >= 3,
             .supported = true};
+  case 172:
+  case 173: {
+    const bool hasLongNote = std::ranges::any_of(
+        context_.chartModel.notes, [](const ChartVisualNote &note) {
+          return note.kind == ChartVisualNoteKind::LongHead ||
+                 note.kind == ChartVisualNoteKind::LongBody ||
+                 note.kind == ChartVisualNoteKind::LongTail;
+        });
+    return {.value = *id == 172 ? !hasLongNote : hasLongNote,
+            .supported = true};
+  }
   case 1240: {
     const auto gauge = gaugeState();
     if (!gauge.supported) {
@@ -601,6 +623,15 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 1243:
     return {.value = snapshot->lastJudge.judgement != None &&
                      snapshot->fastSlowMicros < 0,
+            .supported = true};
+  case 2243:
+    return {.value = capturedJudgeCount(*snapshot, Good) > 0,
+            .supported = true};
+  case 2244:
+    return {.value = capturedJudgeCount(*snapshot, Bad) > 0,
+            .supported = true};
+  case 2245:
+    return {.value = capturedJudgeCount(*snapshot, Poor) > 0,
             .supported = true};
   default:
     break;
@@ -631,9 +662,50 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {};
   }
   switch (*id) {
+  case 14:
+    return {.value = static_cast<std::int64_t>(
+                snapshot->authority.laneCoverPercent) *
+                    10,
+            .supported = true};
+  case 71:
+  case 101:
+  case 171:
+    return {.value = snapshot->score, .supported = true};
+  case 107:
+    return {.value = static_cast<std::int64_t>(
+                snapshot->authority.currentGauge),
+            .supported = true};
+  case 110:
+    return {.value = capturedJudgeCount(*snapshot, PGreat),
+            .supported = true};
+  case 111:
+    return {.value = capturedJudgeCount(*snapshot, Great),
+            .supported = true};
+  case 112:
+    return {.value = capturedJudgeCount(*snapshot, Good),
+            .supported = true};
+  case 113:
+    return {.value = capturedJudgeCount(*snapshot, Bad),
+            .supported = true};
+  case 114:
+    return {.value = capturedJudgeCount(*snapshot, Poor),
+            .supported = true};
   case 160:
     return {.value = static_cast<std::int64_t>(snapshot->authority.currentBpm),
             .supported = true};
+  case 407: {
+    const float gauge = snapshot->authority.currentGauge;
+    const int tenths =
+        gauge > 0.0F && gauge < 0.1F ? 1 : static_cast<int>(gauge * 10.0F);
+    return {.value = tenths % 10, .supported = true};
+  }
+  case 427:
+    return {.value = capturedJudgeCount(*snapshot, Bad) +
+                     capturedJudgeCount(*snapshot, Poor) +
+                     capturedJudgeCount(*snapshot, Kpoor),
+            .supported = true};
+  case 525:
+    return {.value = snapshot->fastSlowMicros, .supported = true};
   default:
     reportUnsupported("integer", selector);
     return {};
