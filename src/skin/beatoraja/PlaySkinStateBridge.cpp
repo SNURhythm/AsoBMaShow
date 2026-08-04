@@ -618,6 +618,12 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = snapshot->authority.gameplayMode ==
                          PlayfieldGameplayMode::Replay,
             .supported = true};
+  case 271:
+    return {.value = snapshot->authority.laneCoverEnabled, .supported = true};
+  case 272:
+    return {.value = snapshot->authority.liftEnabled, .supported = true};
+  case 273:
+    return {.value = snapshot->authority.hiddenEnabled, .supported = true};
   case 172:
   case 173: {
     const bool hasLongNote = std::ranges::any_of(
@@ -759,6 +765,18 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 314:
     return {.value = javaDoubleToInt(snapshot->authority.liftRatio * 1000.0F),
             .supported = true};
+  case 315:
+    return {.value =
+                javaDoubleToInt(snapshot->authority.hiddenRatio * 1000.0F),
+            .supported = true};
+  case 316: {
+    const double laneCover =
+        static_cast<double>(snapshot->authority.laneCoverPercent) / 100.0;
+    return {.value = javaDoubleToInt(
+                (1.0 - static_cast<double>(snapshot->authority.liftRatio)) *
+                laneCover * 1000.0),
+            .supported = true};
+  }
   case 71:
   case 101:
   case 171:
@@ -848,7 +866,7 @@ SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     const SkinBuiltinPropertySelector &selector) {
   const auto *snapshot = state();
   const auto id = numericSelector(selector);
-  if (snapshot != nullptr && id && *id == 4) {
+  if (snapshot != nullptr && id && (*id == 4 || *id == 5)) {
     if (!snapshot->authority.laneCoverEnabled) {
       return {.value = 0.0, .supported = true};
     }
@@ -1136,6 +1154,8 @@ std::optional<int> PlaySkinStateBridge::numericSelector(
     return 160;
   if (name == "lanecover")
     return 4;
+  if (name == "lanecover2")
+    return 5;
   if (name == "judge_1p_perfect")
     return 241;
   if (name == "judge_1p_early")

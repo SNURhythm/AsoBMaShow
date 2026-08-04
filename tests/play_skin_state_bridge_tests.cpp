@@ -592,6 +592,8 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.fastSlowMicros = -34;
   state.authority.liftEnabled = false;
   state.authority.liftRatio = 0.3759F;
+  state.authority.hiddenEnabled = false;
+  state.authority.hiddenRatio = 0.2867F;
   state.authority.currentGauge = 62.3F;
   state.authority.judgementCounters = {
       {PGreat, 10}, {Great, 9}, {Good, 8},
@@ -611,6 +613,13 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   expect(bridge.booleanProperty({43}).supported &&
              !bridge.booleanProperty({43}).value,
          "gauge-hard option reads the authoritative gauge type");
+  for (const auto [id, expected] : std::array{
+           std::pair{271, false}, std::pair{272, false},
+           std::pair{273, false}}) {
+    const auto value = bridge.booleanProperty({id});
+    expect(value.supported && value.value == expected,
+           "lane-cover family enabled option reads its exact authority flag");
+  }
   expect(bridge.booleanProperty({241}).supported &&
              bridge.booleanProperty({241}).value,
          "judge-perfect option reads the most recent judgement");
@@ -650,7 +659,8 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{110, 10LL}, std::pair{111, 9LL},
            std::pair{112, 8LL}, std::pair{113, 7LL},
            std::pair{114, 5LL}, std::pair{171, 456LL},
-           std::pair{314, 375LL},
+           std::pair{314, 375LL}, std::pair{315, 286LL},
+           std::pair{316, 280LL},
            std::pair{407, 3LL}, std::pair{427, 18LL},
            std::pair{525, -34LL}}) {
     const auto value = bridge.integerProperty({id});
@@ -708,6 +718,13 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   expect(bridge.floatProperty({4}).supported &&
              bridge.floatProperty({4}).value == 0.0,
          "disabled lane cover reports zero despite a retained amount");
+  expect(bridge.floatProperty({5}).supported &&
+             bridge.floatProperty({5}).value == bridge.floatProperty({4}).value,
+         "second lane-cover rate matches the disabled primary rate");
+  expect(bridge.floatProperty({"lanecover2"}).supported &&
+             bridge.floatProperty({"lanecover2"}).value ==
+                 bridge.floatProperty({4}).value,
+         "second lane-cover rate alias matches the disabled primary rate");
   bridge.discardFrame();
 
   state = stateAt(102);
@@ -719,6 +736,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   expect(bridge.floatProperty({4}).supported &&
              bridge.floatProperty({4}).value == 0.0,
          "enabled zero lane cover remains zero");
+  expect(bridge.floatProperty({5}).supported &&
+             bridge.floatProperty({5}).value == bridge.floatProperty({4}).value,
+         "second lane-cover rate matches the enabled zero primary rate");
   expect(bridge.booleanProperty({1242}).supported &&
              bridge.booleanProperty({1242}).value &&
              bridge.booleanProperty({1243}).supported &&
@@ -730,12 +750,23 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   state.authority.laneCoverEnabled = true;
   state.authority.liftEnabled = true;
   state.authority.liftRatio = 0.2F;
+  state.authority.hiddenEnabled = true;
   state.lastJudge = JudgeResult(Great, -20);
   state.fastSlowMicros = -20;
   bridge.beginFrame(state, projectionAt(103));
   expect(bridge.floatProperty({4}).supported &&
              std::abs(bridge.floatProperty({4}).value - 0.36) < 0.000001,
          "enabled lift scales the lane-cover amount by one minus lift");
+  expect(bridge.floatProperty({5}).supported &&
+             bridge.floatProperty({5}).value == bridge.floatProperty({4}).value,
+         "second lane-cover rate exactly matches the lifted primary rate");
+  for (const auto [id, expected] : std::array{
+           std::pair{271, true}, std::pair{272, true},
+           std::pair{273, true}}) {
+    const auto value = bridge.booleanProperty({id});
+    expect(value.supported && value.value == expected,
+           "lane-cover family enabled option tracks the active authority flag");
+  }
   expect(bridge.booleanProperty({1242}).supported &&
              !bridge.booleanProperty({1242}).value &&
              bridge.booleanProperty({1243}).supported &&

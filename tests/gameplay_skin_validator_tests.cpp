@@ -131,7 +131,7 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
   expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
                           SkinBuiltinPropertySelector{241}),
          "catalog admits an authoritative gameplay boolean");
-  for (const int selector : {80, 81, 84, 1080, 1243}) {
+  for (const int selector : {80, 81, 84, 271, 272, 273, 1080, 1243}) {
     expect(catalog.contains({.kind = SkinBindingKind::BooleanProperty},
                             SkinBuiltinPropertySelector{selector}),
            "catalog admits every implemented gameplay mode/loading/judge boolean");
@@ -141,19 +141,28 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
               .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
              SkinBuiltinPropertySelector{107}),
          "catalog admits an authoritative gameplay integer");
-  expect(catalog.contains(
-             {.kind = SkinBindingKind::IntegerProperty,
-              .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-             SkinBuiltinPropertySelector{314}) &&
-             !catalog.contains(
-                 {.kind = SkinBindingKind::IntegerProperty,
-                  .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
-                 SkinBuiltinPropertySelector{314}),
-         "validator admits lift amount only through the upstream Value domain");
+  for (const int selector : {314, 315, 316}) {
+    expect(catalog.contains(
+               {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
+               SkinBuiltinPropertySelector{selector}) &&
+               !catalog.contains(
+                   {.kind = SkinBindingKind::IntegerProperty,
+                    .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+                   SkinBuiltinPropertySelector{selector}),
+           "validator admits each lane-cover family amount only through the "
+           "upstream Value domain");
+  }
+  for (const int selector : {4, 5}) {
+    expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
+                             .floatDomain = SkinFloatPropertyDomain::Rate},
+                            SkinBuiltinPropertySelector{selector}),
+           "catalog admits each readable lane-cover rate");
+  }
   expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
                            .floatDomain = SkinFloatPropertyDomain::Rate},
-                          SkinBuiltinPropertySelector{4}),
-         "catalog admits the readable lane-cover rate");
+                          SkinBuiltinPropertySelector{"lanecover2"}),
+         "catalog admits the upstream second lane-cover rate alias");
   expect(catalog.contains({.kind = SkinBindingKind::TimerProperty},
                           SkinBuiltinPropertySelector{41}),
          "catalog admits a timer backed by play state");

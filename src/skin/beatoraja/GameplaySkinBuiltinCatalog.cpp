@@ -29,7 +29,8 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   for (const int selector : std::to_array(
            {42,  43,  80,  81,  84,   150, 151,  152,  153,  154,
             155, 170, 171, 172, 173,  176, 177,  180,  181,  182,
-            183, 184, 190, 191, 194,  195, 241, 1080, 1240, 1242,
+            183, 184, 190, 191, 194,  195, 241, 271,  272,  273,
+            1080, 1240, 1242,
             1243, 2243, 2244, 2245})) {
     add(entries, boolean, selector);
   }
@@ -53,17 +54,21 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     }
     add(entries, integer, "nowbpm");
   }
-  // Pinned IntegerPropertyFactory exposes lift1 (314) through ValueType, not
-  // through getImageIndexProperty.
-  add(entries,
-      {.kind = SkinBindingKind::IntegerProperty,
-       .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-      314);
+  // Pinned IntegerPropertyFactory exposes the lane-cover family through
+  // ValueType, not through getImageIndexProperty.
+  const SkinBindingType integerValue{
+      .kind = SkinBindingKind::IntegerProperty,
+      .integerDomain = SkinIntegerPropertyDomain::IntegerValue};
+  for (const int selector : {314, 315, 316}) {
+    add(entries, integerValue, selector);
+  }
 
   const SkinBindingType floating{.kind = SkinBindingKind::FloatProperty,
                                  .floatDomain = SkinFloatPropertyDomain::Rate};
   add(entries, floating, 4);
+  add(entries, floating, 5);
   add(entries, floating, "lanecover");
+  add(entries, floating, "lanecover2");
 
   const SkinBindingType string{.kind = SkinBindingKind::StringProperty};
   constexpr auto stringSelectors = std::to_array({10, 11, 12, 13, 14, 15});
