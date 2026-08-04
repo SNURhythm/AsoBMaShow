@@ -28,6 +28,7 @@ NOTE_NORMALIZATION_SOURCE = ROOT / "src/skin/beatoraja/SkinNoteNormalization.cpp
 TEXT_GRAPH_NORMALIZATION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinTextGraphNormalization.cpp"
 )
+COVER_NORMALIZATION_SOURCE = ROOT / "src/skin/beatoraja/SkinCoverNormalization.cpp"
 
 
 class LuaSkinFeatureGateTests(unittest.TestCase):
@@ -139,6 +140,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/SkinGaugeNodeExpansion.cpp", enabled_block)
         self.assertIn("beatoraja/SkinNoteNormalization.cpp", enabled_block)
         self.assertIn("beatoraja/SkinTextGraphNormalization.cpp", enabled_block)
+        self.assertIn("beatoraja/SkinCoverNormalization.cpp", enabled_block)
 
     def test_xcode_discovered_runtime_implementations_have_source_guards(self):
         for path in (
@@ -151,6 +153,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
             GAUGE_NODE_EXPANSION_SOURCE,
             NOTE_NORMALIZATION_SOURCE,
             TEXT_GRAPH_NORMALIZATION_SOURCE,
+            COVER_NORMALIZATION_SOURCE,
         ):
             source = path.read_text(encoding="utf-8")
             self.assertIn('#include "../LuaGameplaySkinFeature.h"', source)
@@ -172,6 +175,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                 GAUGE_NODE_EXPANSION_SOURCE,
                 NOTE_NORMALIZATION_SOURCE,
                 TEXT_GRAPH_NORMALIZATION_SOURCE,
+                COVER_NORMALIZATION_SOURCE,
             ):
                 subprocess.run(
                     [

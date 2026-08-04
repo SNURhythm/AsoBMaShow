@@ -596,6 +596,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             CXX_EXTENSIONS NO
         )
 
+        add_executable(skin_cover_normalization_tests
+            tests/skin_cover_normalization_tests.cpp
+            src/skin/beatoraja/SkinCoverNormalization.cpp
+        )
+        target_include_directories(skin_cover_normalization_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        set_target_properties(skin_cover_normalization_tests PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+            CXX_EXTENSIONS NO
+        )
+
         add_executable(numeric_glyph_atlas_tests
             tests/numeric_glyph_atlas_tests.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
@@ -4935,6 +4948,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET skin_text_graph_normalization_tests)
         asobmashow_register_test(skin_text_graph_normalization_tests)
+    endif()
+    if (TARGET skin_cover_normalization_tests)
+        asobmashow_register_test(skin_cover_normalization_tests)
     endif()
     if (TARGET numeric_glyph_atlas_tests)
         asobmashow_register_test(numeric_glyph_atlas_tests)
