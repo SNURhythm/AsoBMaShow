@@ -935,26 +935,6 @@ bool clearDirectoryDescriptor(int directory) {
   return cleared;
 }
 
-bool removeDirectoryTreeNoFollow(const fs::path &path) {
-  auto parent = openDirectoryNoFollow(path.parent_path());
-  const fs::path leaf = path.filename();
-  if (!parent || leaf.empty() || leaf == "." || leaf == ".." ||
-      leaf.native().find('/') != std::string::npos) {
-    return false;
-  }
-  const int root = ::openat(parent->get(), path.filename().c_str(),
-                            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (root < 0) {
-    return errno == ENOENT;
-  }
-  const bool cleared = clearDirectoryDescriptor(root);
-  ::close(root);
-  return cleared &&
-         ::unlinkat(parent->get(), path.filename().c_str(), AT_REMOVEDIR) ==
-             0 &&
-         ::fsync(parent->get()) == 0;
-}
-
 bool safeLeaf(const fs::path &path) {
   const fs::path leaf = path.filename();
   return !leaf.empty() && leaf != "." && leaf != ".." &&
@@ -1081,6 +1061,32 @@ public:
       parent_ = std::move(*destinationParent);
       path_ = std::move(retainedDestination);
       return destinationMatches && sourceSynced && destinationSynced;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  bool removeTreeExact() noexcept {
+    try {
+      if (!existed_ || !matchesIssuedIdentity() ||
+          !clearDirectoryDescriptor(root_.get())) {
+        return false;
+      }
+      struct stat retainedStatus{};
+      struct stat currentStatus{};
+      if (::fstat(root_.get(), &retainedStatus) != 0 ||
+          ::fstatat(parent_.get(), path_.filename().c_str(), &currentStatus,
+                    AT_SYMLINK_NOFOLLOW) != 0 ||
+          !S_ISDIR(currentStatus.st_mode) || retainedStatus.st_dev != device_ ||
+          retainedStatus.st_ino != inode_ || currentStatus.st_dev != device_ ||
+          currentStatus.st_ino != inode_ ||
+          ::unlinkat(parent_.get(), path_.filename().c_str(), AT_REMOVEDIR) !=
+              0 ||
+          ::fsync(parent_.get()) != 0) {
+        return false;
+      }
+      existed_ = false;
+      return true;
     } catch (...) {
       return false;
     }
@@ -3693,13 +3699,9 @@ GarbageCollectionResult SkinPackageStore::collectGarbage() {
       const auto status = fs::symlink_status(stale->path(), typeError);
       bool removed = false;
       if (!typeError && status.type() == fs::file_type::directory) {
-#if defined(_WIN32)
         auto staleCapability = RetainedTreeCapability::issue(stale->path());
         removed = staleCapability && staleCapability->existed() &&
                   staleCapability->removeTreeExact();
-#else
-        removed = removeDirectoryTreeNoFollow(stale->path());
-#endif
       }
       if (!removed) {
         result.diagnostics.push_back(storeDiagnostic(
@@ -3762,11 +3764,7 @@ GarbageCollectionResult SkinPackageStore::collectGarbage() {
       error.clear();
       continue;
     }
-#if defined(_WIN32)
     const bool deleted = capability->removeTreeExact();
-#else
-    const bool deleted = removeDirectoryTreeNoFollow(quarantine);
-#endif
     if (!deleted) {
       result.diagnostics.push_back(
           storeDiagnostic("skin_package_gc_delete_failed",

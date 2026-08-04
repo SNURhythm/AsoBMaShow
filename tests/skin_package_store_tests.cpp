@@ -18,6 +18,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -1327,6 +1328,66 @@ void testGarbageCollectionRejectsLinksAndRetriesQuarantine() {
 #endif
 }
 
+void testGarbageCollectionNeverUnlinksAnExchangedQuarantinePath() {
+#if !defined(_WIN32)
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const std::string digest(64, 'c');
+  const fs::path candidate = roots.privateRevisions / digest;
+  for (int index = 0; index < 2048; ++index) {
+    writeText(candidate / ("entry-" + std::to_string(index) + ".txt"),
+              "collectible");
+  }
+
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  std::atomic_bool collectionFinished{false};
+  std::atomic_bool exchanged{false};
+  fs::path replacement;
+  std::thread attacker([&] {
+    const fs::path gcRoot = roots.privateRevisions / ".gc-quarantine";
+    while (!collectionFinished.load(std::memory_order_acquire)) {
+      std::error_code error;
+      for (fs::directory_iterator operation(gcRoot, error), end;
+           !error && operation != end; ++operation) {
+        const fs::path target = operation->path() / digest;
+        const fs::path held = operation->path() / "attacker-held-original";
+        if (!fs::exists(target, error) || error) {
+          error.clear();
+          continue;
+        }
+        fs::rename(target, held, error);
+        if (error) {
+          error.clear();
+          continue;
+        }
+        fs::create_directory(target, error);
+        if (!error) {
+          replacement = target;
+          exchanged.store(true, std::memory_order_release);
+          return;
+        }
+      }
+      std::this_thread::yield();
+    }
+  });
+  const auto collected = store.collectGarbage();
+  collectionFinished.store(true, std::memory_order_release);
+  attacker.join();
+
+  expect(exchanged.load(std::memory_order_acquire),
+         "GC exchange fixture replaces the quarantined pathname");
+  if (exchanged.load(std::memory_order_acquire)) {
+    expect(fs::exists(replacement),
+           "GC keeps an attacker replacement at the retained pathname");
+    expect(collected.revisionsRemoved == 0,
+           "GC does not report an exchanged quarantine as deleted");
+  }
+#endif
+}
+
 void testManualInvalidEditRetainsActivationButDeleteHidesIt() {
   TempDirectory temp;
   const SkinStorageRoots roots = rootsBelow(temp.root());
@@ -1696,6 +1757,7 @@ int main(int argc, char **argv) {
   testConfiguredValidationFailureAndCancellationPreserveOldPackage();
   testTransactionFailureRetainsJournalForRestartRecovery();
   testGarbageCollectionRejectsLinksAndRetriesQuarantine();
+  testGarbageCollectionNeverUnlinksAnExchangedQuarantinePath();
   testManualInvalidEditRetainsActivationButDeleteHidesIt();
   testReplacementPublishesExactlyTheNewWholePackage();
   testActivationCommitRemovalAndLeaseAwareGarbageCollection();
