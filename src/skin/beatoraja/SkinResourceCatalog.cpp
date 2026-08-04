@@ -6,6 +6,7 @@
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <exception>
@@ -13,6 +14,7 @@
 #include <functional>
 #include <filesystem>
 #include <set>
+#include <tuple>
 #include <type_traits>
 
 namespace skin {
@@ -128,6 +130,29 @@ bool sameRect(const SkinSourceRect &left, const SkinSourceRect &right) noexcept 
          left.gridColumns == right.gridColumns && left.gridRows == right.gridRows;
 }
 
+struct SkinSourceRectLess {
+  bool operator()(const SkinSourceRect &left,
+                  const SkinSourceRect &right) const noexcept {
+    return std::tie(left.x, left.y, left.w, left.h, left.gridColumn,
+                    left.gridRow, left.gridColumns, left.gridRows) <
+           std::tie(right.x, right.y, right.w, right.h, right.gridColumn,
+                    right.gridRow, right.gridColumns, right.gridRows);
+  }
+};
+
+using RegionIdentityMap = std::map<SkinSourceRect, SkinSourceRect,
+                                   SkinSourceRectLess>;
+
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+std::atomic_size_t regionIdentityChecksForTesting{0};
+
+void recordRegionIdentityCheck() noexcept {
+  regionIdentityChecksForTesting.fetch_add(1, std::memory_order_relaxed);
+}
+#else
+void recordRegionIdentityCheck() noexcept {}
+#endif
+
 bool resolveRegions(const ResourceUse &use, int width, int height,
                     std::vector<SkinSourceRect> &output,
                     std::vector<SkinResolvedRegion> *mappings,
@@ -137,6 +162,18 @@ bool resolveRegions(const ResourceUse &use, int width, int height,
     diagnostics.push_back(useDiagnostic("skin.resource.session_limit", "skin.resource.session_limit", "sprite region count exceeds the resource policy", use.critical));
     return false;
   }
+  RegionIdentityMap identities;
+  if (mappings != nullptr) {
+    for (const SkinResolvedRegion &mapping : *mappings) {
+      recordRegionIdentityCheck();
+      const auto [existing, inserted] = identities.emplace(
+          mapping.authored, mapping.resolved);
+      if (!inserted && !sameRect(existing->second, mapping.resolved)) {
+        diagnostics.push_back(useDiagnostic("skin.resource.region_identity", "skin.resource.region_identity", "authored sprite rectangle resolves inconsistently", use.critical));
+        return false;
+      }
+    }
+  }
   for (const SkinSourceRect &authored : use.regions) {
     SkinSourceRect resolved;
     if (!skinResourceResolveRect(authored, width, height, resolved)) {
@@ -144,14 +181,11 @@ bool resolveRegions(const ResourceUse &use, int width, int height,
       return false;
     }
     if (mappings) {
-      const auto existing = std::ranges::find_if(*mappings, [&authored](const SkinResolvedRegion &mapping) {
-        return sameRect(mapping.authored, authored);
-      });
-      if (existing != mappings->end()) {
-        if (!sameRect(existing->resolved, resolved)) {
-          diagnostics.push_back(useDiagnostic("skin.resource.region_identity", "skin.resource.region_identity", "authored sprite rectangle resolves inconsistently", use.critical));
-          return false;
-        }
+      recordRegionIdentityCheck();
+      const auto [existing, inserted] = identities.emplace(authored, resolved);
+      if (!inserted && !sameRect(existing->second, resolved)) {
+        diagnostics.push_back(useDiagnostic("skin.resource.region_identity", "skin.resource.region_identity", "authored sprite rectangle resolves inconsistently", use.critical));
+        return false;
       }
     }
     output.push_back(resolved);
@@ -363,6 +397,16 @@ std::optional<std::vector<SkinTextAtlasFontBytes>> readFontFaces(
   return faces;
 }
 }
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+void resetSkinResourceRegionIdentityChecksForTesting() noexcept {
+  regionIdentityChecksForTesting.store(0, std::memory_order_relaxed);
+}
+
+std::size_t skinResourceRegionIdentityChecksForTesting() noexcept {
+  return regionIdentityChecksForTesting.load(std::memory_order_relaxed);
+}
+#endif
+
 bool skinResourceDimensionsAllowed(int width, int height, std::size_t bytes) noexcept {
   if (width <= 0 || height <= 0 || width > SkinResourcePolicy::maximumDimension || height > SkinResourcePolicy::maximumDimension) return false;
   const auto pixels = static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
@@ -435,15 +479,20 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     if (image.regions.size() > SkinResourcePolicy::maximumRegions - regions) { result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource region count exceeds fixed limit")); return result; }
     for (const auto &region : image.regions) if (!canonicalRegion(region, image.pixels.width, image.pixels.height)) { result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has invalid image region")); return result; }
     if (image.regionMappings.size() != image.regions.size()) { result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan is missing stable region identities")); return result; }
+    RegionIdentityMap identities;
     for (std::size_t index = 0; index < image.regionMappings.size(); ++index) {
       SkinSourceRect resolvedAuthored;
+      const SkinResolvedRegion &mapping = image.regionMappings[index];
+      recordRegionIdentityCheck();
+      const auto [existing, inserted] = identities.emplace(mapping.authored,
+                                                            mapping.resolved);
       if (!skinResourceResolveRect(image.regionMappings[index].authored,
                                    image.pixels.width, image.pixels.height,
                                    resolvedAuthored) ||
           !canonicalRegion(image.regionMappings[index].resolved, image.pixels.width, image.pixels.height) ||
           !sameRect(resolvedAuthored, image.regionMappings[index].resolved) ||
           !sameRect(image.regionMappings[index].resolved, image.regions[index]) ||
-          std::ranges::any_of(image.regionMappings.begin(), image.regionMappings.begin() + static_cast<std::ptrdiff_t>(index), [&](const SkinResolvedRegion &item) { return sameRect(item.authored, image.regionMappings[index].authored) && !sameRect(item.resolved, image.regionMappings[index].resolved); })) {
+          (!inserted && !sameRect(existing->second, mapping.resolved))) {
         result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has conflicting region identities")); return result;
       }
     }
@@ -459,15 +508,20 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
         if (!canonicalRegion(region, image.pixels.width, image.pixels.height)) { result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has invalid alias region")); return result; }
       const auto aliasMappings = image.aliasRegionMappings.find(alias);
       if (aliasMappings == image.aliasRegionMappings.end() || aliasMappings->second.size() != count) { result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan is missing alias region identities")); return result; }
+      RegionIdentityMap identities;
       for (std::size_t index = 0; index < aliasMappings->second.size(); ++index) {
         SkinSourceRect resolvedAuthored;
+        const SkinResolvedRegion &mapping = aliasMappings->second[index];
+        recordRegionIdentityCheck();
+        const auto [existing, inserted] = identities.emplace(mapping.authored,
+                                                              mapping.resolved);
         if (!skinResourceResolveRect(aliasMappings->second[index].authored,
                                      image.pixels.width, image.pixels.height,
                                      resolvedAuthored) ||
             !canonicalRegion(aliasMappings->second[index].resolved, image.pixels.width, image.pixels.height) ||
             !sameRect(resolvedAuthored, aliasMappings->second[index].resolved) ||
             !sameRect(aliasMappings->second[index].resolved, aliasRegions == image.aliasRegions.end() ? image.regions[index] : aliasRegions->second[index]) ||
-            std::ranges::any_of(aliasMappings->second.begin(), aliasMappings->second.begin() + static_cast<std::ptrdiff_t>(index), [&](const SkinResolvedRegion &item) { return sameRect(item.authored, aliasMappings->second[index].authored) && !sameRect(item.resolved, aliasMappings->second[index].resolved); })) {
+            (!inserted && !sameRect(existing->second, mapping.resolved))) {
           result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has conflicting alias region identities")); return result;
         }
       }

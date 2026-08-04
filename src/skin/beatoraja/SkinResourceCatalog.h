@@ -52,6 +52,13 @@ struct SkinResourcePolicy {
                                            int imageWidth, int imageHeight,
                                            SkinSourceRect &resolved) noexcept;
 
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+// The regression suite observes indexed identity lookups rather than wall
+// time, which keeps the maximum-region test deterministic across machines.
+void resetSkinResourceRegionIdentityChecksForTesting() noexcept;
+[[nodiscard]] std::size_t skinResourceRegionIdentityChecksForTesting() noexcept;
+#endif
+
 // The authored rectangle is the stable command-side identity. Resolution is
 // value-owned during preparation so later command construction never needs to
 // repeat model traversal or image-size dependent crop arithmetic.

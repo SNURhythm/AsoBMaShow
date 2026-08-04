@@ -706,6 +706,98 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
     expect(!malformedMappingUpload.catalog && preflightDevice->creates == 0,
            "noncanonical authored mapping fails before upload or lease move");
   }
+  {
+    skin::ValidatedBeatorajaSkinModel repeatedPlanningModel;
+    repeatedPlanningModel.model.resources.emplace_back(skin::SkinImageResource{
+        .id=1, .authoredName="repeated", .virtualPath="resources/fixture.png"});
+    skin::SkinSpriteFrames repeatedFrames{.resource=1};
+    constexpr std::size_t repeatedCount = 100000;
+    repeatedFrames.frames.reserve(repeatedCount);
+    for (std::size_t index = 0; index < repeatedCount; ++index) {
+      repeatedFrames.frames.push_back(
+          {.x=0, .y=0, .w=40, .h=20, .gridColumn=static_cast<int>(index % 2),
+           .gridColumns=4, .gridRows=2});
+    }
+    repeatedPlanningModel.model.objects.push_back(
+        {.id=1, .authoredName="repeated-image",
+         .payload=skin::SkinImageObject{.orderedStates={repeatedFrames}},
+         .critical=true});
+    skin::resetSkinResourceRegionIdentityChecksForTesting();
+    const auto repeatedPlan = service.decodeAndPlan(
+        {.revision=planned.plan->revision.clone(), .entry=entry,
+         .fileSystem=*leasedFs.fileSystem, .model=repeatedPlanningModel,
+         .configuration=configuration});
+    expect(repeatedPlan.plan && repeatedPlan.plan->images.size() == 1 &&
+               repeatedPlan.plan->images.front().regions.size() == repeatedCount &&
+               repeatedPlan.plan->images.front().regions[0].x == 0 &&
+               repeatedPlan.plan->images.front().regions[1].x == 10 &&
+               skin::skinResourceRegionIdentityChecksForTesting() <= repeatedCount,
+           "planning preserves repeated authored mapping order and count with indexed identity checks");
+  }
+  {
+    auto repeatedMappingPlan = copyUploadPlan();
+    repeatedMappingPlan.images.resize(1);
+    repeatedMappingPlan.atlases.clear();
+    auto &image = repeatedMappingPlan.images.front();
+    image.aliases = {2};
+    image.aliasRegions.clear();
+    image.aliasRegionMappings.clear();
+    constexpr std::size_t repeatedCount = 100000;
+    const auto firstMapping = image.regionMappings.front();
+    auto secondMapping = firstMapping;
+    secondMapping.authored.gridColumn = 1;
+    secondMapping.resolved = {.x=10, .y=0, .w=10, .h=10,
+                              .gridColumn=0, .gridRow=0,
+                              .gridColumns=1, .gridRows=1};
+    image.regions.clear();
+    image.regionMappings.clear();
+    image.regions.reserve(repeatedCount);
+    image.regionMappings.reserve(repeatedCount);
+    for (std::size_t index = 0; index < repeatedCount; ++index) {
+      const auto &mapping = index % 2 == 0 ? firstMapping : secondMapping;
+      image.regions.push_back(mapping.resolved);
+      image.regionMappings.push_back(mapping);
+    }
+    image.aliasRegions.emplace(2, image.regions);
+    image.aliasRegionMappings.emplace(2, image.regionMappings);
+    repeatedMappingPlan.decodedBytes = image.pixels.byteSize();
+    skin::resetSkinResourceRegionIdentityChecksForTesting();
+    auto repeatedDevice = std::make_shared<FakeTextureDevice>();
+    const auto repeatedUpload = skin::SkinResourceCatalog::upload(
+        std::move(repeatedMappingPlan), repeatedDevice);
+    expect(repeatedUpload.catalog &&
+               repeatedUpload.catalog->find(1)->regions.size() == repeatedCount &&
+               repeatedUpload.catalog->find(2)->regions.size() == repeatedCount &&
+               repeatedUpload.catalog->find(1)->regions[0].x == 0 &&
+               repeatedUpload.catalog->find(1)->regions[1].x == 10 &&
+               repeatedUpload.catalog->findResolvedRegion(
+                   1, firstMapping.authored) != nullptr &&
+               skin::skinResourceRegionIdentityChecksForTesting() <=
+                   repeatedCount * 2,
+           "primary and alias preflight preserve repeated mapping order and count with indexed identity checks");
+  }
+  {
+    auto conflictingMappingPlan = copyUploadPlan();
+    conflictingMappingPlan.images.resize(1);
+    conflictingMappingPlan.atlases.clear();
+    auto &image = conflictingMappingPlan.images.front();
+    image.aliases.clear();
+    image.aliasRegions.clear();
+    image.aliasRegionMappings.clear();
+    const auto conflicting = skin::SkinResolvedRegion{
+        .authored = image.regionMappings.front().authored,
+        .resolved = {.x=10, .y=0, .w=10, .h=10,
+                     .gridColumn=0, .gridRow=0, .gridColumns=1, .gridRows=1}};
+    image.regionMappings.push_back(conflicting);
+    image.regions.push_back(conflicting.resolved);
+    conflictingMappingPlan.decodedBytes = image.pixels.byteSize();
+    auto conflictingDevice = std::make_shared<FakeTextureDevice>();
+    const auto conflictingUpload = skin::SkinResourceCatalog::upload(
+        std::move(conflictingMappingPlan), conflictingDevice);
+    expect(!conflictingUpload.catalog && conflictingDevice->creates == 0 &&
+               conflictingDevice->live == 0,
+           "conflicting duplicate authored mappings fail complete preflight before a texture create");
+  }
   std::mutex decoderMutex;
   std::condition_variable decoderCv;
   bool decoderStarted = false;

@@ -3350,7 +3350,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         endif()
         target_include_directories(skin_resource_catalog_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
         target_compile_features(skin_resource_catalog_tests PRIVATE cxx_std_23)
-        target_compile_definitions(skin_resource_catalog_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1)
+        target_compile_definitions(skin_resource_catalog_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1 ASOBMASHOW_SKIN_RESOURCE_TESTING=1)
         target_link_libraries(skin_resource_catalog_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
     endif()
 
