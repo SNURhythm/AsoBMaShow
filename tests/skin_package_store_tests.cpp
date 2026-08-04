@@ -943,6 +943,102 @@ void testRemovalRecoveryRetainsIntentWhenOwnedCleanupCannotFinish() {
          "removal cleanup never follows an unowned link target");
 }
 
+void testOperationNamesDoNotReusePreseededPriorProcessArtifacts() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const auto package = normalizePackageId("FixtureSkin");
+  if (!package.package) {
+    expect(false, "operation-identity fixture package ID is valid");
+    return;
+  }
+  const fs::path source = temp.root() / "operation-identity-source";
+  writeNewTree(source);
+  const fs::path priorBackup = roots.visiblePackages.parent_path() /
+                               ".skin-publication-backups/publish-1";
+  writeText(priorBackup / "sentinel.txt", "prior-process-backup");
+  const fs::path priorCatalogStaging =
+      roots.privateCatalog / ".publication-staging/publish-1-new.json";
+  const fs::path priorCatalogBackup =
+      roots.privateCatalog / ".publication-backups/publish-1-old.json";
+  writeText(priorCatalogStaging, "prior-process-staging");
+  writeText(priorCatalogBackup, "prior-process-catalog-backup");
+
+  NoAliases aliases;
+  SkinArchiveImporter importer(roots, aliases);
+  auto prepared = importer.prepareFolder(source, *package.package, {}, {});
+  expect(prepared.prepared.has_value(),
+         "operation-identity candidate prepares");
+  if (!prepared.prepared) {
+    return;
+  }
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "operation-identity fixture bootstraps storage");
+  const auto published = store.publish(
+      std::move(*prepared.prepared), PackageCollisionPolicy::Reject,
+      ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+  expect(published.published,
+         "a new lifetime publishes without colliding with prior artifacts");
+  expect(readText(priorBackup / "sentinel.txt") == "prior-process-backup" &&
+             readText(priorCatalogStaging) == "prior-process-staging" &&
+             readText(priorCatalogBackup) == "prior-process-catalog-backup",
+         "new operations preserve every preseeded prior-process artifact");
+  std::error_code reservationError;
+  std::size_t reservations = 0;
+  for (fs::directory_iterator entry(
+           roots.privateCatalog / ".operation-reservations", reservationError),
+       end;
+       !reservationError && entry != end; ++entry) {
+    ++reservations;
+  }
+  expect(!reservationError && reservations == 0,
+         "successful publication releases its exclusive operation reservation");
+}
+
+void testBootstrapCleansOnlyBoundedRecognizableOwnedArtifacts() {
+#if !defined(_WIN32)
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const std::string ownedOperation = "op-" + std::string(32, 'a');
+  const std::string ownedQuarantine = "q-" + std::string(32, 'b');
+  const fs::path reservation =
+      roots.privateCatalog / ".operation-reservations" / ownedOperation;
+  const fs::path quarantine =
+      roots.privateCatalog / ".recovery-quarantine" / ownedQuarantine;
+  writeText(reservation / "owned.txt", "owned");
+  writeText(quarantine / "owned.txt", "owned");
+
+  const fs::path unknown =
+      roots.privateCatalog / ".operation-reservations/user-preserved";
+  writeText(unknown / "keep.txt", "unknown");
+  const fs::path outside = temp.root() / "outside-owned-cleanup";
+  writeText(outside / "keep.txt", "outside");
+  const fs::path linkedOwned = roots.privateCatalog /
+                               ".operation-reservations" /
+                               ("op-" + std::string(32, 'c'));
+  std::error_code linkError;
+  fs::create_directory_symlink(outside, linkedOwned, linkError);
+
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "owned-artifact cleanup bootstraps an empty catalog");
+  expect(!fs::exists(reservation) && !fs::exists(quarantine),
+         "bootstrap retries recognizable owner-created directory artifacts");
+  expect(
+      fs::exists(unknown / "keep.txt") && fs::is_symlink(linkedOwned) &&
+          readText(outside / "keep.txt") == "outside",
+      "bootstrap preserves unknown entries and recognizable reparse entries");
+#endif
+}
+
 void testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation() {
   for (const bool editDescendant : {false, true}) {
     TempDirectory temp;
@@ -1716,6 +1812,11 @@ void testActivationCommitRemovalAndLeaseAwareGarbageCollection() {
   auto removed = store.removePackage(*package.package, {});
   expect(removed.removed && !fs::exists(roots.visiblePackages / "FixtureSkin"),
          "explicit removal hides discovery and removes activation keys");
+  std::error_code reservationError;
+  expect(fs::is_empty(roots.privateCatalog / ".operation-reservations",
+                      reservationError) &&
+             !reservationError,
+         "successful removal releases its exclusive operation reservation");
   expect(
       !store.acquireValidatedActivation(base.profileId, entry, activationDigest)
            .activation,
@@ -1750,6 +1851,8 @@ int main(int argc, char **argv) {
   testMalformedAndOversizedCatalogFailBootstrap();
   testRemovalJournalRecoversOldAndNewGenerations();
   testRemovalRecoveryRetainsIntentWhenOwnedCleanupCannotFinish();
+  testOperationNamesDoNotReusePreseededPriorProcessArtifacts();
+  testBootstrapCleansOnlyBoundedRecognizableOwnedArtifacts();
   testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation();
   testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage();
   testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity();

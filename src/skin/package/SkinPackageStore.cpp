@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <random>
 #include <ranges>
 #include <set>
 #include <span>
@@ -1187,8 +1188,12 @@ bool renameTreeNoReplace(const fs::path &source, const fs::path &destination) {
 #endif
 }
 
+std::string nextOperationId();
+
 bool quarantineTree(const fs::path &path, const fs::path &quarantineRoot,
                     std::string_view operationId, std::string_view label) {
+  (void)operationId;
+  (void)label;
   std::error_code error;
   const fs::file_status status = fs::symlink_status(path, error);
   if (status.type() == fs::file_type::not_found ||
@@ -1201,32 +1206,234 @@ bool quarantineTree(const fs::path &path, const fs::path &quarantineRoot,
   if (!ensureDirectoryNoFollow(quarantineRoot)) {
     return false;
   }
-  static std::atomic_uint64_t serial{0};
-  const fs::path destination =
-      quarantineRoot / (std::string(operationId) + "-" + std::string(label) +
-                        "-" + std::to_string(++serial));
-  return renameTreeNoReplace(path, destination);
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    const fs::path destination =
+        quarantineRoot / ("q-" + nextOperationId().substr(3));
+    if (renameTreeNoReplace(path, destination)) {
+      return true;
+    }
+    const auto destinationStatus = fs::symlink_status(destination, error);
+    if (error || destinationStatus.type() == fs::file_type::not_found) {
+      return false;
+    }
+  }
+  return false;
 }
 
 bool quarantineTree(RetainedTreeCapability &capability,
                     const fs::path &quarantineRoot,
                     std::string_view operationId, std::string_view label) {
+  (void)operationId;
+  (void)label;
   if (!capability.existed()) {
     return true;
   }
   if (!ensureDirectoryNoFollow(quarantineRoot)) {
     return false;
   }
-  static std::atomic_uint64_t serial{0};
-  const fs::path destination =
-      quarantineRoot / (std::string(operationId) + "-" + std::string(label) +
-                        "-" + std::to_string(++serial));
-  return capability.renameTo(destination);
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    const fs::path destination =
+        quarantineRoot / ("q-" + nextOperationId().substr(3));
+    if (capability.renameTo(destination)) {
+      return true;
+    }
+    std::error_code error;
+    const auto destinationStatus = fs::symlink_status(destination, error);
+    if (error || destinationStatus.type() == fs::file_type::not_found) {
+      return false;
+    }
+  }
+  return false;
 }
 
 std::string nextOperationId() {
   static std::atomic_uint64_t serial{0};
-  return "publish-" + std::to_string(++serial);
+  static std::mutex entropyMutex;
+  std::string entropy =
+      std::to_string(
+          std::chrono::system_clock::now().time_since_epoch().count()) +
+      ":" +
+      std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()) +
+      ":" + std::to_string(++serial);
+#if defined(_WIN32)
+  entropy += ":" + std::to_string(GetCurrentProcessId());
+#else
+  entropy += ":" + std::to_string(::getpid());
+#endif
+  try {
+    std::scoped_lock lock(entropyMutex);
+    std::random_device random;
+    for (int index = 0; index < 8; ++index) {
+      entropy += ":" + std::to_string(random());
+    }
+  } catch (...) {
+  }
+  return "op-" + file_checksum::sha256(entropy).substr(0, 32);
+}
+
+class OperationReservation {
+public:
+  OperationReservation(std::string operationId,
+                       RetainedTreeCapability capability)
+      : operationId_(std::move(operationId)),
+        capability_(std::move(capability)) {}
+  OperationReservation(const OperationReservation &) = delete;
+  OperationReservation &operator=(const OperationReservation &) = delete;
+  OperationReservation(OperationReservation &&) noexcept = default;
+  ~OperationReservation() {
+    if (releaseOnDestruction_) {
+      (void)release();
+    }
+  }
+
+  const std::string &operationId() const noexcept { return operationId_; }
+  void retainForRecovery() noexcept { releaseOnDestruction_ = false; }
+  bool release() noexcept {
+    if (released_) {
+      return true;
+    }
+    released_ = capability_.removeTreeExact();
+    return released_;
+  }
+
+private:
+  std::string operationId_;
+  RetainedTreeCapability capability_;
+  bool releaseOnDestruction_ = true;
+  bool released_ = false;
+};
+
+std::optional<OperationReservation>
+reserveOperation(const fs::path &privateCatalog) {
+  const fs::path reservationRoot = privateCatalog / ".operation-reservations";
+  if (!ensureDirectoryNoFollow(reservationRoot)) {
+    return std::nullopt;
+  }
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    const std::string operationId = nextOperationId();
+    const fs::path reservation = reservationRoot / operationId;
+#if defined(_WIN32)
+    if (!CreateDirectoryW(reservation.c_str(), nullptr)) {
+      if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        continue;
+      }
+      return std::nullopt;
+    }
+#else
+    auto retainedRoot = openDirectoryNoFollow(reservationRoot);
+    if (!retainedRoot) {
+      return std::nullopt;
+    }
+    if (::mkdirat(retainedRoot->get(), operationId.c_str(), 0700) != 0) {
+      if (errno == EEXIST) {
+        continue;
+      }
+      return std::nullopt;
+    }
+    if (::fsync(retainedRoot->get()) != 0) {
+      return std::nullopt;
+    }
+#endif
+    auto capability = RetainedTreeCapability::issue(reservation);
+    if (!capability || !capability->existed() ||
+        !capability->matchesIssuedIdentity()) {
+      return std::nullopt;
+    }
+    return OperationReservation(operationId, std::move(*capability));
+  }
+  return std::nullopt;
+}
+
+bool releaseOperationReservation(const fs::path &privateCatalog,
+                                 std::string_view operationId) {
+  auto capability = RetainedTreeCapability::issue(
+      privateCatalog / ".operation-reservations" / operationId);
+  return capability &&
+         (!capability->existed() || capability->removeTreeExact());
+}
+
+bool hasLowerHexSuffix(std::string_view value, std::string_view prefix,
+                       std::size_t suffixSize) {
+  return value.starts_with(prefix) &&
+         value.size() == prefix.size() + suffixSize &&
+         std::ranges::all_of(value.substr(prefix.size()),
+                             [](unsigned char character) {
+                               return std::isdigit(character) != 0 ||
+                                      (character >= 'a' && character <= 'f');
+                             });
+}
+
+template <typename Predicate>
+void cleanupOwnedDirectories(const fs::path &root, Predicate &&owned,
+                             std::vector<SkinDiagnostic> &diagnostics) {
+  constexpr std::size_t maximumOwnedEntriesPerRoot = 256;
+  std::error_code error;
+  const auto status = fs::symlink_status(root, error);
+  if (status.type() == fs::file_type::not_found ||
+      error == std::errc::no_such_file_or_directory) {
+    return;
+  }
+  if (error || status.type() != fs::file_type::directory) {
+    return;
+  }
+  std::size_t ownedEntries = 0;
+  for (fs::directory_iterator entry(root, error), end; !error && entry != end;
+       ++entry) {
+    const std::string name = filenameUtf8(entry->path());
+    if (!owned(name)) {
+      continue;
+    }
+    if (ownedEntries++ >= maximumOwnedEntriesPerRoot) {
+      break;
+    }
+    const auto entryStatus = fs::symlink_status(entry->path(), error);
+    if (error) {
+      break;
+    }
+    if (entryStatus.type() != fs::file_type::directory) {
+      continue;
+    }
+    auto capability = RetainedTreeCapability::issue(entry->path());
+    if (!capability || !capability->existed() ||
+        !capability->removeTreeExact()) {
+      diagnostics.push_back(storeDiagnostic(
+          "skin_package_owned_cleanup_failed",
+          "a recognizable abandoned skin artifact could not be cleaned"));
+    }
+  }
+  if (error) {
+    diagnostics.push_back(storeDiagnostic(
+        "skin_package_owned_cleanup_failed",
+        "abandoned skin artifact cleanup could not be enumerated safely"));
+  }
+}
+
+void cleanupAbandonedOwnedDirectories(
+    const SkinStorageRoots &roots, std::vector<SkinDiagnostic> &diagnostics) {
+  const auto operation = [](std::string_view name) {
+    return hasLowerHexSuffix(name, "op-", 32);
+  };
+  const auto quarantine = [](std::string_view name) {
+    return hasLowerHexSuffix(name, "q-", 32);
+  };
+  cleanupOwnedDirectories(roots.privateCatalog / ".operation-reservations",
+                          operation, diagnostics);
+  cleanupOwnedDirectories(roots.privateCatalog / ".recovery-quarantine",
+                          quarantine, diagnostics);
+  cleanupOwnedDirectories(roots.privateRevisions / ".recovery-quarantine",
+                          quarantine, diagnostics);
+  cleanupOwnedDirectories(roots.visiblePackages.parent_path() /
+                              ".skin-recovery-quarantine",
+                          quarantine, diagnostics);
+  cleanupOwnedDirectories(roots.visiblePackages.parent_path() /
+                              ".skin-publication-backups",
+                          operation, diagnostics);
+  cleanupOwnedDirectories(roots.visiblePackages.parent_path() /
+                              ".skin-removal-staging",
+                          operation, diagnostics);
+  cleanupOwnedDirectories(roots.privateRevisions / ".gc-quarantine", operation,
+                          diagnostics);
 }
 
 bool writeJournal(const fs::path &path, const PublicationJournal &journal,
@@ -1767,7 +1974,9 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       const bool backupClean = quarantineTree(
           catalogBackup, roots_.privateCatalog / ".recovery-quarantine",
           journal->operationId, "removal-catalog-backup");
-      if (!stagingClean || !backupClean) {
+      const bool reservationClean = releaseOperationReservation(
+          roots_.privateCatalog, journal->operationId);
+      if (!stagingClean || !backupClean || !reservationClean) {
         result.diagnostics.push_back(storeDiagnostic(
             "skin_package_removal_recovery_cleanup_failed",
             "unable to finalize recovered skin package removal"));
@@ -1796,6 +2005,7 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       if (!hydrateRevisionLeases()) {
         return result;
       }
+      cleanupAbandonedOwnedDirectories(roots_, result.diagnostics);
       recoverySucceeded_.store(true);
       result.disposition = SkinRecoveryDisposition::Recovered;
       return result;
@@ -2103,9 +2313,11 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
     const bool catalogBackupCleaned =
         quarantineTree(catalogBackup, catalogQuarantine, journal->operationId,
                        "catalog-backup");
+    const bool reservationCleaned = releaseOperationReservation(
+        roots_.privateCatalog, journal->operationId);
     if (!visibleStagingCleaned || !visibleBackupCleaned ||
         !revisionStagingCleaned || !catalogStagingCleaned ||
-        !catalogBackupCleaned) {
+        !catalogBackupCleaned || !reservationCleaned) {
       result.diagnostics.push_back(storeDiagnostic(
           "skin_package_recovery_cleanup_failed",
           "unable to clean journal-owned skin package staging"));
@@ -2350,7 +2562,15 @@ PublishPackageResult SkinPackageStore::publish(
       return result;
     }
   }
-  const std::string operationId = nextOperationId();
+  auto operationReservation = reserveOperation(roots_.privateCatalog);
+  if (!operationReservation) {
+    result.diagnostics.push_back(
+        storeDiagnostic("skin_package_operation_reservation_failed",
+                        "skin package publication could not reserve unique "
+                        "transaction storage"));
+    return result;
+  }
+  const std::string operationId = operationReservation->operationId();
   const fs::path backup = roots_.visiblePackages.parent_path() /
                           ".skin-publication-backups" / operationId /
                           oldVisible.filename();
@@ -2502,7 +2722,7 @@ PublishPackageResult SkinPackageStore::publish(
         const bool backupClean = quarantineTree(
             catalogBackup, roots_.privateCatalog / ".recovery-quarantine",
             operationId, "in-process-catalog-backup");
-        if (stagingClean && backupClean) {
+        if (stagingClean && backupClean && operationReservation->release()) {
           std::error_code removeError;
           fs::remove(journalPath, removeError);
           std::string syncError;
@@ -2552,6 +2772,7 @@ PublishPackageResult SkinPackageStore::publish(
     rollback();
     return result;
   }
+  operationReservation->retainForRecovery();
 
   std::string revisionError;
   auto revisionLease = prepared.publishRevision(revisionError);
@@ -2626,7 +2847,8 @@ PublishPackageResult SkinPackageStore::publish(
                      operationId, "committed-catalog-staging") &&
       quarantineTree(catalogBackup,
                      roots_.privateCatalog / ".recovery-quarantine",
-                     operationId, "committed-catalog-backup");
+                     operationId, "committed-catalog-backup") &&
+      operationReservation->release();
   bool journalRemoved = false;
   if (cleanupComplete) {
     fs::remove(journalPath, directoryError);
@@ -3453,7 +3675,14 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
   ++next.sourceGeneration;
 
   const fs::path visible = roots_.visiblePackages / package.directoryName;
-  const std::string operation = nextOperationId();
+  auto operationReservation = reserveOperation(roots_.privateCatalog);
+  if (!operationReservation) {
+    result.diagnostics.push_back(storeDiagnostic(
+        "skin_package_operation_reservation_failed",
+        "skin package removal could not reserve unique transaction storage"));
+    return result;
+  }
+  const std::string operation = operationReservation->operationId();
   const fs::path retained = roots_.visiblePackages.parent_path() /
                             ".skin-removal-staging" / operation /
                             package.directoryName;
@@ -3525,6 +3754,9 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
     clearMutation();
     return result;
   }
+  if (exists) {
+    operationReservation->retainForRecovery();
+  }
 
   bool rollbackAttempted = false;
   bool rollbackSucceeded = false;
@@ -3554,7 +3786,7 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
         const bool backupClean = quarantineTree(
             catalogBackup, roots_.privateCatalog / ".recovery-quarantine",
             operation, "failed-removal-catalog-backup");
-        if (stagingClean && backupClean) {
+        if (stagingClean && backupClean && operationReservation->release()) {
           std::error_code cleanupError;
           fs::remove(removalJournal, cleanupError);
           std::string syncError;
@@ -3628,7 +3860,8 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
                              operation, "removed-catalog-staging") &&
               quarantineTree(catalogBackup,
                              roots_.privateCatalog / ".recovery-quarantine",
-                             operation, "removed-catalog-backup");
+                             operation, "removed-catalog-backup") &&
+              operationReservation->release();
     if (cleaned) {
       fs::remove(removalJournal, error);
       std::string syncError;
@@ -3752,7 +3985,14 @@ GarbageCollectionResult SkinPackageStore::collectGarbage() {
         bytes += record.size;
       }
     }
-    const std::string operation = nextOperationId();
+    auto operationReservation = reserveOperation(roots_.privateCatalog);
+    if (!operationReservation) {
+      result.diagnostics.push_back(storeDiagnostic(
+          "skin_package_gc_reservation_failed",
+          "an unreferenced revision could not reserve quarantine storage"));
+      continue;
+    }
+    const std::string operation = operationReservation->operationId();
     const fs::path quarantine = gcRoot / operation / digest;
     if (!ensureDirectoryNoFollow(quarantine.parent_path())) {
       error = std::make_error_code(std::errc::io_error);
