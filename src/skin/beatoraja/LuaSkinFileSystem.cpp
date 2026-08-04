@@ -2516,6 +2516,14 @@ const SkinEntryId &LuaSkinFileSystem::entry() const noexcept {
   return impl_->entry;
 }
 
+const SkinRevision &LuaSkinFileSystem::revision() const noexcept {
+  return impl_->revision.revision();
+}
+
+const fs::path &LuaSkinFileSystem::revisionRoot() const noexcept {
+  return impl_->revision.root();
+}
+
 SkinFileResolveResult
 LuaSkinFileSystem::resolveModule(std::string_view moduleName) const {
   const std::scoped_lock lock(impl_->operationMutex);

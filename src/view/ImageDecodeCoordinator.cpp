@@ -269,6 +269,11 @@ std::size_t ImageDecodeCoordinator::readyBytes() const {
   return readyBytes_;
 }
 
+std::size_t ImageDecodeCoordinator::terminalTicketCount() const {
+  std::lock_guard lock(mutex_);
+  return terminalTickets_.size();
+}
+
 std::size_t ImageDecodeCoordinator::workerCount() const noexcept {
   return configuredWorkerCount_;
 }
@@ -277,6 +282,7 @@ void ImageDecodeCoordinator::run() {
   for (;;) {
     ImageDecodeRequest request;
     std::uint64_t workId = 0;
+    std::stop_token workStop;
     {
       std::unique_lock lock(mutex_);
       cv_.wait(lock, [this] {
@@ -298,6 +304,7 @@ void ImageDecodeCoordinator::run() {
         work->second.state = WorkState::InFlight;
         workId = work->second.id;
         request = work->second.request;
+        workStop = work->second.stop.get_token();
         found = true;
       }
       if (!found) {
@@ -308,15 +315,7 @@ void ImageDecodeCoordinator::run() {
     std::optional<DecodedImageData> decoded;
     try {
       if (loader_) {
-        std::stop_token stop;
-        {
-          std::lock_guard lock(mutex_);
-          const auto found = work_.find(request.key);
-          if (found != work_.end() && found->second.id == workId) {
-            stop = found->second.stop.get_token();
-          }
-        }
-        decoded = loader_(request, stop);
+        decoded = loader_(request, workStop);
       }
     } catch (...) {
       decoded.reset();

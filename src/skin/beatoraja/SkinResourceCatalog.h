@@ -8,6 +8,7 @@
 
 #include <array>
 #include <condition_variable>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -54,6 +55,7 @@ struct SkinDecodedImage {
   std::vector<SkinResourceId> aliases;
   image_decode::DecodedImageData pixels;
   std::vector<SkinSourceRect> regions;
+  std::map<SkinResourceId, std::vector<SkinSourceRect>> aliasRegions;
 };
 using SkinTextAtlasId = std::uint32_t;
 struct SkinTextAtlasKey {
@@ -100,7 +102,11 @@ struct SkinResourcePlanResult { std::optional<SkinResourceUploadPlan> plan; bool
 
 class SkinResourcePreparationService {
 public:
+  using Decoder = std::function<std::optional<image_decode::DecodedImageData>(
+      std::span<const std::byte>, std::stop_token)>;
   SkinResourcePreparationService();
+  explicit SkinResourcePreparationService(Decoder decoder,
+                                          std::size_t workerCount = SkinResourcePolicy::workerCount);
   ~SkinResourcePreparationService();
   SkinResourcePreparationService(const SkinResourcePreparationService &) = delete;
   SkinResourcePreparationService &operator=(const SkinResourcePreparationService &) = delete;
@@ -114,9 +120,11 @@ private:
   std::mutex serviceMutex_;
   std::condition_variable serviceCv_;
   image_decode::DecodedImageCache cache_;
+  Decoder decoder_;
   image_decode::ImageDecodeCoordinator coordinator_;
   State state_ = State::Running;
   std::size_t activeCalls_ = 0;
+  bool shutdownComplete_ = false;
 };
 struct PreparedSkinResource { SkinResourceId id = 0; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::vector<SkinSourceRect> regions; };
 struct PreparedSkinTextAtlas { SkinTextAtlasId id = 0; SkinTextAtlasKey key; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::map<char32_t,SkinPreparedGlyphMetrics> glyphs; std::map<std::pair<char32_t,char32_t>,int> kerning; int ascent = 0; int descent = 0; int lineHeight = 0; };
@@ -133,7 +141,10 @@ class SkinResourceCatalog;
 struct SkinResourceUploadResult { std::unique_ptr<SkinResourceCatalog> catalog; std::vector<SkinDiagnostic> diagnostics; };
 class SkinResourceCatalog {
 public:
-  static SkinResourceUploadResult upload(SkinResourceUploadPlan &&, SkinTextureDevice &);
+  static SkinResourceUploadResult upload(SkinResourceUploadPlan &&,
+                                         std::shared_ptr<SkinTextureDevice>);
+  // The catalog must be destroyed on the upload owner thread. Violations
+  // fail fast rather than silently leaking GPU resources.
   ~SkinResourceCatalog();
   SkinResourceCatalog(const SkinResourceCatalog &) = delete;
   SkinResourceCatalog &operator=(const SkinResourceCatalog &) = delete;
@@ -143,9 +154,11 @@ public:
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };
-  explicit SkinResourceCatalog(SkinRevisionLease &&, SkinTextureDevice &);
+  explicit SkinResourceCatalog(SkinRevisionLease &&,
+                               std::shared_ptr<SkinTextureDevice>);
   SkinRevisionLease revision_; // declared first: destroyed last
-  SkinTextureDevice *device_ = nullptr;
+  // Structural ownership prevents backend destruction before catalog teardown.
+  std::shared_ptr<SkinTextureDevice> device_;
   std::thread::id owner_;
   bool renderPhase_ = false;
   std::vector<OwnedTexture> owned_;

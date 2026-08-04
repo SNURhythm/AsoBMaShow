@@ -70,14 +70,16 @@ decodeImageMemory(std::span<const std::byte> encoded, int maximumDimension,
 
 std::optional<DecodedImageData>
 decodeImageFile(const std::filesystem::path &path, int maximumDimension,
-                std::size_t maximumDecodedBytes) {
+                std::size_t maximumDecodedBytes,
+                std::size_t maximumEncodedBytes) {
   std::ifstream input(path, std::ios::binary | std::ios::ate);
   if (!input) {
     return std::nullopt;
   }
   const auto length = input.tellg();
   if (length <= 0 || static_cast<std::uintmax_t>(length) >
-                         static_cast<std::uintmax_t>(INT_MAX)) {
+                         static_cast<std::uintmax_t>(INT_MAX) ||
+      static_cast<std::uintmax_t>(length) > maximumEncodedBytes) {
     return std::nullopt;
   }
   std::vector<std::byte> encoded(static_cast<std::size_t>(length));

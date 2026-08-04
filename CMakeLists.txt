@@ -3317,7 +3317,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(image_decode_coordinator_tests PRIVATE cxx_std_23)
 
-    if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+    if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS AND NOT IOS)
         add_executable(skin_resource_catalog_tests
             tests/skin_resource_catalog_tests.cpp
             src/view/DecodedImageCache.cpp

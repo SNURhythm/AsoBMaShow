@@ -49,6 +49,10 @@
 #include "video/FramePacer.h"
 #include "video/RendererAccessCoordinator.h"
 #include "view/UiTheme.h"
+#include "skin/LuaGameplaySkinFeature.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "skin/beatoraja/SkinResourceCatalog.h"
+#endif
 
 namespace application_context_detail {
 inline std::string firstDiagnostic(const std::vector<std::string> &diagnostics,
@@ -169,6 +173,11 @@ public:
 
   // string: annotation, thread: thread
   std::vector<std::pair<std::string, std::thread>> threads;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  // The sole app-owned preparation service. Gameplay callers must finish
+  // before context teardown invokes its stop/join boundary.
+  skin::SkinResourcePreparationService skinResourcePreparationService;
+#endif
 
   ApplicationContext()
       : quitFlag(false), applicationDataRoot(Utils::GetDocumentsPath()),
@@ -899,6 +908,9 @@ public:
         thread.second.join();
       }
     }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    skinResourcePreparationService.shutdown();
+#endif
     if (irSubmissionService) {
       irSubmissionService->stop();
     }

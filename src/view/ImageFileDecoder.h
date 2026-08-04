@@ -23,6 +23,8 @@ decodeImageMemory(std::span<const std::byte> encoded,
 decodeImageFile(const std::filesystem::path &path,
                 int maximumDimension = 65535,
                 std::size_t maximumDecodedBytes =
+                    static_cast<std::size_t>(UINT32_MAX),
+                std::size_t maximumEncodedBytes =
                     static_cast<std::size_t>(UINT32_MAX));
 
 } // namespace image_decode

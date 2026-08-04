@@ -72,6 +72,7 @@ public:
   [[nodiscard]] std::size_t pendingCount(std::string_view key) const;
   [[nodiscard]] std::size_t pendingCountPrefix(std::string_view prefix) const;
   [[nodiscard]] std::size_t readyBytes() const;
+  [[nodiscard]] std::size_t terminalTicketCount() const;
   [[nodiscard]] std::size_t workerCount() const noexcept;
 
 private:

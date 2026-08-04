@@ -123,6 +123,8 @@ public:
   SkinFileReadResult readResolvedResource(std::string_view packageNormalized,
                                           std::uint64_t maximumBytes) const;
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
+  [[nodiscard]] const SkinRevision &revision() const noexcept;
+  [[nodiscard]] const std::filesystem::path &revisionRoot() const noexcept;
   SkinFileResolveResult resolveModule(std::string_view moduleName) const;
   SkinFileReadResult readEntry(std::uint64_t maximumBytes) const;
   SkinFileReadResult read(std::string_view virtualPath, SkinFileUse,

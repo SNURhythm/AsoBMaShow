@@ -276,6 +276,20 @@ void testTerminalWaitCancellationDoesNotCancelAnotherConsumer() {
          "a second consumer still receives the shared decoded image");
 }
 
+void testLegacyCancellationDoesNotAccumulateTerminalTickets() {
+  image_decode::ImageDecodeCoordinator coordinator(
+      [](const auto &) -> std::optional<image_decode::DecodedImageData> {
+        return image_decode::DecodedImageData{.width=1, .height=1,
+          .rgba=std::make_shared<std::vector<unsigned char>>(4, 0)};
+      });
+  for (int index = 0; index != 32; ++index) {
+    const auto ticket = coordinator.request(request("legacy-" + std::to_string(index)));
+    coordinator.cancel(ticket);
+  }
+  expect(coordinator.terminalTicketCount() == 0,
+         "fire-and-forget cancellation leaves no terminal ticket records behind");
+}
+
 } // namespace
 
 int main() {
@@ -285,6 +299,7 @@ int main() {
   testDropPreventsStaleCompletionFromReplacingNewWork();
   testTerminalWaitIsNotifiedAndTakesReadyImage();
   testTerminalWaitCancellationDoesNotCancelAnotherConsumer();
+  testLegacyCancellationDoesNotAccumulateTerminalTickets();
   if (failures != 0) {
     std::cerr << failures << " image decode coordinator test(s) failed\n";
     return 1;
