@@ -14,6 +14,12 @@ target_sources(main PRIVATE
     package/SkinTreeSnapshotter.cpp
 )
 
+if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+    target_sources(main PRIVATE LuaGameplaySkinFeatureEnabled.cpp)
+else()
+    target_sources(main PRIVATE LuaGameplaySkinFeatureUnavailable.cpp)
+endif()
+
 if(APPLE)
     target_sources(main PRIVATE package/SkinAliasDetectorApple.mm)
 endif()
