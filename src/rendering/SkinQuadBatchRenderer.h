@@ -52,6 +52,11 @@ class SkinQuadBatchBackend {
 public:
   virtual ~SkinQuadBatchBackend() = default;
 
+  // Called after command/resource validation and before capacity reservation.
+  // Every required texture sampler must be ready before any batch can submit.
+  virtual bool
+  preflightSamplers(std::span<const skin::SkinFilterMode> filters) = 0;
+
   // Called once after whole-command-buffer validation and before the first
   // submission. A false result leaves the frame completely unsubmitted.
   virtual bool reserve(std::size_t vertexCount, std::size_t indexCount) = 0;
@@ -98,6 +103,7 @@ private:
 
   [[nodiscard]] bool preflight(std::span<const skin::SkinDrawCommand> commands,
                                std::vector<ResolvedCommand> &resolved,
+                               std::vector<skin::SkinFilterMode> &samplers,
                                std::size_t &vertexCount,
                                std::size_t &indexCount) const;
   void appendQuad(const std::array<skin::SkinVertex, 4> &, const BatchKey &);

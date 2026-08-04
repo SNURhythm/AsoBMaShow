@@ -98,6 +98,19 @@ bool validScissor(const std::optional<skin::UiLogicalRect> &scissor) noexcept {
 
 class BgfxSkinQuadBatchBackend final : public SkinQuadBatchBackend {
 public:
+  bool preflightSamplers(
+      std::span<const skin::SkinFilterMode> filters) override {
+    if (filters.empty()) {
+      return true;
+    }
+    try {
+      sampler_ = UniformCache::getInstance().getSampler("s_texColor");
+    } catch (...) {
+      return false;
+    }
+    return bgfx::isValid(sampler_);
+  }
+
   bool reserve(std::size_t vertexCount, std::size_t indexCount) override {
     try {
       // Program creation is part of the no-draw preflight. A missing packaged
@@ -106,12 +119,10 @@ public:
           "vs_skin_quad.bin", "fs_skin_quad.bin");
       primitiveProgram_ =
           ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-      sampler_ = UniformCache::getInstance().getSampler("s_texColor");
     } catch (...) {
       return false;
     }
-    if (!bgfx::isValid(texturedProgram_) || !bgfx::isValid(primitiveProgram_) ||
-        !bgfx::isValid(sampler_)) {
+    if (!bgfx::isValid(texturedProgram_) || !bgfx::isValid(primitiveProgram_)) {
       return false;
     }
     if (vertexCount > std::numeric_limits<std::uint32_t>::max() ||
@@ -262,10 +273,12 @@ void SkinQuadBatchRenderer::begin(
 
 bool SkinQuadBatchRenderer::preflight(
     std::span<const skin::SkinDrawCommand> commands,
-    std::vector<ResolvedCommand> &resolved, std::size_t &vertexCount,
+    std::vector<ResolvedCommand> &resolved,
+    std::vector<skin::SkinFilterMode> &samplers, std::size_t &vertexCount,
     std::size_t &indexCount) const {
   resolved.clear();
   resolved.resize(commands.size());
+  samplers.clear();
   vertexCount = 0;
   indexCount = 0;
   const auto addCounts = [&](std::size_t vertices, std::size_t indices) {
@@ -276,6 +289,11 @@ bool SkinQuadBatchRenderer::preflight(
     vertexCount += vertices;
     indexCount += indices;
     return true;
+  };
+  const auto addSampler = [&](skin::SkinFilterMode filter) {
+    if (std::ranges::find(samplers, filter) == samplers.end()) {
+      samplers.push_back(filter);
+    }
   };
 
   for (std::size_t commandIndex = 0; commandIndex < commands.size();
@@ -304,6 +322,9 @@ bool SkinQuadBatchRenderer::preflight(
       if (!prepared.suppressed && !addCounts(4, 6)) {
         return false;
       }
+      if (!prepared.suppressed) {
+        addSampler(quad->state.filter);
+      }
       continue;
     }
     if (const auto *glyphs =
@@ -326,6 +347,9 @@ bool SkinQuadBatchRenderer::preflight(
            !addCounts(glyphs->glyphs.size() * 4U,
                       glyphs->glyphs.size() * 6U))) {
         return false;
+      }
+      if (!prepared.suppressed && !glyphs->glyphs.empty()) {
+        addSampler(glyphs->state.filter);
       }
       continue;
     }
@@ -379,10 +403,12 @@ bool SkinQuadBatchRenderer::submit(
   }
   submittedSpan_ = true;
   std::vector<ResolvedCommand> resolved;
+  std::vector<skin::SkinFilterMode> samplers;
   std::size_t vertexCount = 0;
   std::size_t indexCount = 0;
   try {
-    if (!preflight(commands, resolved, vertexCount, indexCount)) {
+    if (!preflight(commands, resolved, samplers, vertexCount, indexCount) ||
+        !backend_->preflightSamplers(samplers)) {
       ready_ = false;
       clearBatch();
       return false;

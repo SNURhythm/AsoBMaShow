@@ -86,6 +86,17 @@ struct CapturedBatch {
 };
 
 struct FakeBackend final : rendering::SkinQuadBatchBackend {
+  bool preflightSamplers(
+      std::span<const skin::SkinFilterMode> filters) override {
+    ++samplerPreflightCalls;
+    for (const auto filter : filters) {
+      if (unavailableSampler && filter == *unavailableSampler) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   bool reserve(std::size_t vertexCount, std::size_t indexCount) override {
     ++reserveCalls;
     reservedVertices = vertexCount;
@@ -114,8 +125,10 @@ struct FakeBackend final : rendering::SkinQuadBatchBackend {
   bool reserveResult = true;
   bool throwOnReserve = false;
   int reserveCalls = 0;
+  int samplerPreflightCalls = 0;
   std::size_t reservedVertices = 0;
   std::size_t reservedIndices = 0;
+  std::optional<skin::SkinFilterMode> unavailableSampler;
   std::vector<CapturedBatch> batches;
 };
 
@@ -466,6 +479,27 @@ void testBackendReservationFailureIsAtomic() {
          "reservation exceptions cannot leave a partial skin frame");
 }
 
+void testInvalidLaterSamplerPreventsEveryBackendSubmission() {
+  auto prepared = resources();
+  RenderContext context;
+  FakeBackend backend;
+  backend.unavailableSampler = skin::SkinFilterMode::Linear;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+  const std::array commands{
+      command(1, quad(11, skin::SkinBlendMode::Normal,
+                      skin::SkinFilterMode::Nearest)),
+      command(2, quad(12, skin::SkinBlendMode::Additive,
+                      skin::SkinFilterMode::Linear))};
+
+  renderer.begin(context, prepared);
+  expect(!renderer.submit(commands),
+         "an unavailable sampler rejects the whole command span");
+  renderer.flush();
+  expect(backend.samplerPreflightCalls == 1 && backend.reserveCalls == 0 &&
+             backend.batches.empty(),
+         "a later unavailable sampler is detected before any batch submits");
+}
+
 void testLargeStripsSplitWithoutUint16IndexCorruption() {
   auto prepared = resources();
   RenderContext context;
@@ -525,6 +559,7 @@ int main() {
   testLogicalScissorConversionAtOneAndTwoTimesScale();
   testOuterRenderContextScissorIsIntersectedBeforeSubmission();
   testBackendReservationFailureIsAtomic();
+  testInvalidLaterSamplerPreventsEveryBackendSubmission();
   testLargeStripsSplitWithoutUint16IndexCorruption();
   if (failures != 0) {
     return 1;
