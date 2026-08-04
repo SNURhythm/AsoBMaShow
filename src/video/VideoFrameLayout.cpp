@@ -1,5 +1,6 @@
 #include "VideoFrameLayout.h"
 
+#include <cmath>
 #include <limits>
 
 namespace video {
@@ -26,6 +27,15 @@ bool planeBytes(std::uint16_t pitch, std::uint16_t rows,
   }
   bytes = static_cast<std::uint32_t>(pitch) * rows;
   return true;
+}
+
+bool finite(VideoQuadPoint point) noexcept {
+  return std::isfinite(point.x) && std::isfinite(point.y);
+}
+
+bool finite(VideoQuadTint tint) noexcept {
+  return std::isfinite(tint.r) && std::isfinite(tint.g) &&
+         std::isfinite(tint.b) && std::isfinite(tint.a);
 }
 
 } // namespace
@@ -58,6 +68,38 @@ makeYuv420FrameLayout(std::int64_t width, std::int64_t height,
 
   layout.totalBytes = static_cast<std::uint64_t>(layout.yBytes) +
                       layout.uBytes + layout.vBytes;
+  return layout;
+}
+
+std::optional<EmbeddedYuvQuadLayout>
+makeEmbeddedYuvQuadLayout(const std::array<VideoQuadPoint, 4> &destinations,
+                          const std::array<VideoQuadPoint, 4> &uvs,
+                          VideoQuadTint tint) noexcept {
+  if (!finite(tint)) {
+    return std::nullopt;
+  }
+
+  for (std::size_t i = 0; i < destinations.size(); ++i) {
+    if (!finite(destinations[i]) || !finite(uvs[i])) {
+      return std::nullopt;
+    }
+  }
+
+  EmbeddedYuvQuadLayout layout{
+      .indices = {0, 1, 2, 1, 3, 2},
+  };
+  for (std::size_t i = 0; i < layout.vertices.size(); ++i) {
+    layout.vertices[i] = {
+        .x = destinations[i].x,
+        .y = destinations[i].y,
+        .u = uvs[i].x,
+        .v = uvs[i].y,
+        .r = tint.r,
+        .g = tint.g,
+        .b = tint.b,
+        .a = tint.a,
+    };
+  }
   return layout;
 }
 
