@@ -40,9 +40,15 @@ OBJECT_RESOLUTION_PRECEDENCE_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp"
 )
 RENDERER_SOURCE = ROOT / "src/skin/beatoraja/Skin2DRenderer.cpp"
+GAMEPLAY_SKIN_LIFECYCLE_SOURCE = ROOT / "src/skin/GameplaySkinLifecycle.cpp"
 APPLICATION_CONTEXT_HEADER = ROOT / "src/context.h"
 MAIN_SOURCE = ROOT / "src/main.cpp"
 SCENE_MANAGER_SOURCE = ROOT / "src/scene/SceneManager.cpp"
+PROFILE_SETTINGS_CONTROLLER_HEADER = ROOT / "src/scene/ProfileSettingsController.h"
+PROFILE_SETTINGS_CONTROLLER_SOURCE = ROOT / "src/scene/ProfileSettingsController.cpp"
+PROFILE_SETTINGS_CONTROLLER_CONTEXT_SOURCE = (
+    ROOT / "src/scene/ProfileSettingsControllerContext.cpp"
+)
 
 
 def braced_body(source, marker):
@@ -172,10 +178,11 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
 
     def test_enabled_runtime_sources_are_selected_only_behind_the_gate(self):
         source = SKIN_CMAKE.read_text(encoding="utf-8")
-        enabled_block = source[
-            source.index("if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)") :
-            source.index("else()", source.index("if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)"))
-        ]
+        conditional = source.index("if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)")
+        alternative = source.index("else()", conditional)
+        conditional_end = source.index("endif()", alternative)
+        enabled_block = source[conditional:alternative]
+        unavailable_block = source[alternative:conditional_end]
         self.assertIn("beatoraja/LuaSkinRuntime.cpp", enabled_block)
         self.assertIn("beatoraja/LuaSkinHostModules.cpp", enabled_block)
         self.assertIn("beatoraja/LuaSkinTableDecoder.cpp", enabled_block)
@@ -193,6 +200,8 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/SkinCoverNormalization.cpp", enabled_block)
         self.assertIn("beatoraja/SkinObjectResolutionPrecedence.cpp", enabled_block)
         self.assertIn("beatoraja/Skin2DRenderer.cpp", enabled_block)
+        self.assertIn("GameplaySkinLifecycle.cpp", enabled_block)
+        self.assertNotIn("GameplaySkinLifecycle.cpp", unavailable_block)
 
     def test_xcode_discovered_runtime_implementations_have_source_guards(self):
         for path in (
@@ -306,6 +315,70 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         services = constructor.index("initializeGameplaySkinServices();")
         self.assertLess(owner, services)
 
+    def test_application_context_wires_one_lifecycle_after_recovery(self):
+        source = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        initialization = braced_body(source, "void initializeGameplaySkinServices()")
+        compact = " ".join(initialization.split())
+        ordered = (
+            "skinPackageStore->recoverBeforeServiceStart();",
+            "skinPackageOperationService =",
+            "skinCommitCoordinator =",
+            "gameplaySkinLifecycle = std::make_unique<skin::GameplaySkinLifecycle>",
+            "gameplaySkinLifecycle->startAfterProfileInitialization",
+            "acquireGameplaySkinForNextChart = [this]",
+        )
+        positions = [compact.index(token) for token in ordered]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(
+            1, initialization.count("skinCommitCoordinator->createClient()")
+        )
+        client = initialization.index("const auto lifecycleClientId =")
+        created = initialization.index(
+            "skinCommitCoordinator->createClient()", client
+        )
+        checked = initialization.index("if (lifecycleClientId == 0)", created)
+        constructed = initialization.index(
+            "gameplaySkinLifecycle = std::make_unique<skin::GameplaySkinLifecycle>",
+            checked,
+        )
+        self.assertLess(client, created)
+        self.assertLess(created, checked)
+        self.assertLess(checked, constructed)
+
+        polling = braced_body(source, "void pollGameplaySkinCommits() noexcept")
+        self.assertLess(
+            polling.index("skinCommitCoordinator->poll();"),
+            polling.index("gameplaySkinLifecycle->poll();"),
+        )
+
+        constructor = braced_body(source, "ApplicationContext()")
+        committed_tail = braced_body(constructor, ".activeProfileCommitted =")
+        self.assertTrue(committed_tail.lstrip().startswith("try {"))
+        caught = committed_tail.index("} catch (...) {")
+        self.assertLess(
+            committed_tail.index("bindCommittedActiveProfile"),
+            committed_tail.index("gameplaySkinLifecycle->profileChanged"),
+        )
+        for token in (
+            "makeSkinProfileId",
+            "bindCommittedActiveProfile",
+            "gameplaySkinLifecycle->profileChanged",
+        ):
+            self.assertLess(committed_tail.index(token), caught)
+
+        teardown = braced_body(source, "~ApplicationContext()")
+        self.assertLess(
+            teardown.index("shutdownGameplaySkinLifecycle();"),
+            teardown.index("shutdownGameplaySkinOperationService();"),
+        )
+        lifecycle_shutdown = braced_body(
+            source, "void shutdownGameplaySkinLifecycle() noexcept"
+        )
+        self.assertLess(
+            lifecycle_shutdown.index("acquireGameplaySkinForNextChart = {};"),
+            lifecycle_shutdown.index("gameplaySkinLifecycle->shutdown();"),
+        )
+
     def test_skin_service_startup_failure_unwinds_to_sanitized_unavailable_state(self):
         source = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
         initialization = braced_body(source, "void initializeGameplaySkinServices()")
@@ -346,10 +419,31 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                 "SkinDiagnosticHistory",
                 "SkinConfigurationWriteQueue",
                 "SkinCommitCoordinator",
+                "GameplaySkinLifecycle",
                 "GameplaySkinActivationRequest",
                 "AcquireGameplaySkinForNextChart",
             ),
         )
+
+    def test_lifecycle_requires_reconciliation_and_scan_readiness_before_acquisition(
+        self,
+    ):
+        source = GAMEPLAY_SKIN_LIFECYCLE_SOURCE.read_text(encoding="utf-8")
+        inventory = braced_body(source, "void pollInventoryAndRescan()")
+        self.assertIn("submitReconcileProfileActivations", inventory)
+        self.assertNotIn("submitRescan", inventory)
+
+        completion = braced_body(source, "consumePrepareCompletion(")
+        reconcile = completion.index("PreparePurpose::Reconcile")
+        rescan = completion.index("deps.submitRescan", reconcile)
+        scan = completion.index("PreparePurpose::Rescan", rescan)
+        ready = completion.index("acquisitionReady = true", scan)
+        self.assertLess(reconcile, rescan)
+        self.assertLess(rescan, scan)
+        self.assertLess(scan, ready)
+
+        acquisition = braced_body(source, "acquireForNextChart()")
+        self.assertIn("!impl_->acquisitionReady", acquisition)
 
     def test_skin_service_teardown_preserves_dependency_lifetimes(self):
         source = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
@@ -420,6 +514,53 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertNotIn("temporaryPathCleanupService", startup_unwind)
         self.assertNotIn("profileSettingsPersistenceCoordinator", startup_unwind)
+
+    def test_profile_catalog_mutation_wiring_orders_both_enabled_barriers(self):
+        context = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        begin = braced_body(
+            context, "beginSkinProfileCatalogMutation("
+        )
+        self.assertLess(
+            begin.index("skinCommitCoordinator->beginProfileMutation"),
+            begin.index(
+                "profileSettingsPersistenceCoordinator->beginInventoryMutation"
+            ),
+        )
+
+        finish = braced_body(
+            context, "finishSkinProfileCatalogMutation("
+        )
+        self.assertLess(
+            finish.index("skinCommitCoordinator->finishProfileMutation"),
+            finish.index(
+                "profileSettingsPersistenceCoordinator->finishInventoryMutation"
+            ),
+        )
+
+        wiring = PROFILE_SETTINGS_CONTROLLER_CONTEXT_SOURCE.read_text(
+            encoding="utf-8"
+        )
+        dependencies = braced_body(wiring, "applicationDependencies(")
+        self.assertIn(".beginSkinProfileCatalogMutation", dependencies)
+        self.assertIn("context.beginSkinProfileCatalogMutation", dependencies)
+        self.assertIn(".finishSkinProfileCatalogMutation", dependencies)
+        self.assertIn("context.finishSkinProfileCatalogMutation", dependencies)
+
+    def test_unguarded_profile_controller_sources_name_no_skin_barrier_types(self):
+        forbidden = (
+            "SkinCommitCoordinator",
+            "SkinProfileMutationBarrier",
+            "ProfileInventoryMutationBarrier",
+            "ISkinProfileSnapshotProvider",
+        )
+        for path in (
+            PROFILE_SETTINGS_CONTROLLER_HEADER,
+            PROFILE_SETTINGS_CONTROLLER_SOURCE,
+            PROFILE_SETTINGS_CONTROLLER_CONTEXT_SOURCE,
+        ):
+            source = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                self.assertNotIn(token, source, f"{token} leaked into {path}")
 
     def test_scene_manager_resets_bga_composite_state_before_scene_lookup(self):
         context = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")

@@ -5411,6 +5411,101 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endif()
 
+    add_executable(gameplay_skin_lifecycle_tests
+        tests/gameplay_skin_lifecycle_tests.cpp
+        src/FileChecksum.cpp
+        src/skin/GameplaySkinLifecycle.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/SkinStoragePaths.cpp
+        src/skin/package/SkinAliasDetector.cpp
+        src/skin/package/SkinPathPolicy.cpp
+        src/skin/package/SkinTreeSnapshotter.cpp
+    )
+    target_include_directories(gameplay_skin_lifecycle_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_skin_lifecycle_tests PRIVATE cxx_std_23)
+    target_compile_definitions(gameplay_skin_lifecycle_tests PRIVATE
+        ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+        ASOBMASHOW_GAMEPLAY_SKIN_LIFECYCLE_TESTING=1
+        ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+    )
+    target_link_libraries(gameplay_skin_lifecycle_tests PRIVATE
+        utf8proc::utf8proc
+    )
+    if(APPLE)
+        target_sources(gameplay_skin_lifecycle_tests PRIVATE
+            src/skin/package/SkinAliasDetectorApple.mm
+        )
+        target_link_libraries(gameplay_skin_lifecycle_tests PRIVATE
+            "-framework Foundation"
+        )
+    endif()
+
+    add_executable(gameplay_skin_settings_tests
+        tests/gameplay_skin_settings_tests.cpp
+        src/PlatformDocumentHandoff.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/VersionedJson.cpp
+        src/scene/GameplaySkinSettingsController.cpp
+        src/skin/SkinCommitCoordinator.cpp
+        src/skin/SkinProfileSettings.cpp
+        src/skin/SkinStoragePaths.cpp
+        src/skin/beatoraja/SkinDiagnosticHistory.cpp
+        src/skin/package/SkinAliasDetector.cpp
+        src/skin/package/SkinArchiveImporter.cpp
+        src/skin/package/SkinPackageCatalog.cpp
+        src/skin/package/SkinPackageOperationService.cpp
+        src/skin/package/SkinPackageStore.cpp
+        src/skin/package/SkinPathPolicy.cpp
+        src/skin/package/SkinTreeSnapshotter.cpp
+    )
+    target_include_directories(gameplay_skin_settings_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    set_property(TARGET gameplay_skin_settings_tests PROPERTY CXX_STANDARD 20)
+    set_property(TARGET gameplay_skin_settings_tests PROPERTY CXX_STANDARD_REQUIRED ON)
+    target_compile_definitions(gameplay_skin_settings_tests PRIVATE
+        ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING
+        ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+    )
+    target_link_libraries(gameplay_skin_settings_tests PRIVATE
+        BZip2::BZip2
+        LibLZMA::LibLZMA
+        TinyFileDialogs
+        ZLIB::ZLIB
+        utf8proc::utf8proc
+    )
+    if(TARGET zstd::libzstd_static)
+        target_link_libraries(gameplay_skin_settings_tests PRIVATE
+            zstd::libzstd_static
+        )
+    endif()
+    if(TARGET LibArchive::LibArchive)
+        target_link_libraries(gameplay_skin_settings_tests PRIVATE
+            LibArchive::LibArchive
+        )
+    else()
+        target_include_directories(gameplay_skin_settings_tests PRIVATE
+            ${LibArchive_INCLUDE_DIRS}
+        )
+        target_link_libraries(gameplay_skin_settings_tests PRIVATE
+            ${LibArchive_LIBRARIES}
+        )
+    endif()
+    if(APPLE)
+        target_sources(gameplay_skin_settings_tests PRIVATE
+            src/skin/package/SkinAliasDetectorApple.mm
+        )
+        target_link_libraries(gameplay_skin_settings_tests PRIVATE
+            "-framework Foundation"
+        )
+    endif()
+    if(WIN32)
+        target_link_libraries(gameplay_skin_settings_tests PRIVATE advapi32)
+    endif()
+
     add_executable(skin_archive_importer_tests
         tests/skin_archive_importer_tests.cpp
         src/FileChecksum.cpp
@@ -5721,6 +5816,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(skin_path_policy_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
+    asobmashow_register_test(gameplay_skin_lifecycle_tests)
+    asobmashow_register_test(gameplay_skin_settings_tests)
     asobmashow_register_test(skin_archive_importer_tests)
     asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)

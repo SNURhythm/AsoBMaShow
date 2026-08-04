@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,6 +55,7 @@
 #include "view/UiTheme.h"
 #include "skin/LuaGameplaySkinFeature.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "skin/GameplaySkinLifecycle.h"
 #include "skin/GameplaySkinActivationRequest.h"
 #include "skin/SkinCommitCoordinator.h"
 #include "skin/SkinConfigurationWriteQueue.h"
@@ -114,6 +117,19 @@ inline InputProfile loadActiveInput(PlayerProfileManager &manager,
   initialization.message = firstDiagnostic(
       loaded.diagnostics, "Unable to load the active input profile.");
   return makeDefaultInputProfile();
+}
+
+inline std::uint64_t allocateSkinProfileCatalogMutationToken() noexcept {
+  static std::atomic_uint64_t nextToken{0};
+  auto current = nextToken.load(std::memory_order_relaxed);
+  while (current != std::numeric_limits<std::uint64_t>::max()) {
+    if (nextToken.compare_exchange_weak(current, current + 1,
+                                        std::memory_order_relaxed,
+                                        std::memory_order_relaxed)) {
+      return current + 1;
+    }
+  }
+  return 0;
 }
 } // namespace application_context_detail
 
@@ -205,6 +221,21 @@ public:
   std::unique_ptr<skin::SkinConfigurationWriteQueue>
       skinConfigurationWriteQueue;
   std::unique_ptr<skin::SkinCommitCoordinator> skinCommitCoordinator;
+  std::unique_ptr<skin::GameplaySkinLifecycle> gameplaySkinLifecycle;
+  struct SkinProfileCatalogMutationState {
+    SkinProfileCatalogMutationState(
+        skin::ProfileInventoryMutationBarrier &&inventoryValue,
+        std::optional<skin::SkinProfileMutationBarrier> &&profileValue)
+        : inventory(std::move(inventoryValue)),
+          profile(std::move(profileValue)) {}
+
+    skin::ProfileInventoryMutationBarrier inventory;
+    // Declared after inventory so an abandoned state resumes the per-profile
+    // gate before its inventory barrier releases.
+    std::optional<skin::SkinProfileMutationBarrier> profile;
+  };
+  std::map<std::uint64_t, SkinProfileCatalogMutationState>
+      skinProfileCatalogMutations;
   // Task 24 supplies the lifecycle-owned callback. Empty means built-in-only;
   // GamePlayScene is intentionally unable to reach package activation APIs.
   skin::AcquireGameplaySkinForNextChart acquireGameplaySkinForNextChart;
@@ -237,6 +268,29 @@ public:
         skinCommitCoordinator =
             std::make_unique<skin::SkinCommitCoordinator>(
                 *skinPackageStore, *profileSettingsPersistenceCoordinator);
+        const auto activeProfileId =
+            skin::makeSkinProfileId(profileManager.activeProfile().id);
+        if (!activeProfileId) {
+          throw std::runtime_error("The active profile ID is invalid");
+        }
+        const auto lifecycleClientId = skinCommitCoordinator->createClient();
+        if (lifecycleClientId == 0) {
+          throw std::runtime_error(
+              "The gameplay skin lifecycle client was not admitted");
+        }
+        gameplaySkinLifecycle = std::make_unique<skin::GameplaySkinLifecycle>(
+            *skinStorageRoots, *skinPackageOperationService,
+            *skinDiagnosticHistory, *skinConfigurationWriteQueue,
+            *profileSettingsPersistenceCoordinator,
+            *profileSettingsPersistenceCoordinator, *skinCommitCoordinator,
+            lifecycleClientId);
+        gameplaySkinLifecycle->startAfterProfileInitialization(
+            *activeProfileId);
+        acquireGameplaySkinForNextChart = [this] {
+          return gameplaySkinLifecycle
+                     ? gameplaySkinLifecycle->acquireForNextChart()
+                     : std::optional<skin::GameplaySkinActivationRequest>{};
+        };
       }
     } catch (...) {
       unwindGameplaySkinServicesAfterStartupFailure();
@@ -248,6 +302,14 @@ public:
               .severity = skin::DiagnosticSeverity::Error,
           }},
       };
+    }
+  }
+
+  void shutdownGameplaySkinLifecycle() noexcept {
+    acquireGameplaySkinForNextChart = {};
+    if (gameplaySkinLifecycle) {
+      gameplaySkinLifecycle->shutdown();
+      gameplaySkinLifecycle.reset();
     }
   }
 
@@ -300,12 +362,96 @@ public:
   }
 
   void unwindGameplaySkinServicesAfterStartupFailure() noexcept {
+    shutdownGameplaySkinLifecycle();
     shutdownGameplaySkinOperationService();
     shutdownGameplaySkinCommitCoordinator();
     flushAndShutdownGameplaySkinBackingServices();
     destroyGameplaySkinServices();
   }
 #endif
+
+  std::optional<std::uint64_t> beginSkinProfileCatalogMutation(
+      std::optional<std::string_view> existingTargetId,
+      std::string &error) {
+    const auto token =
+        application_context_detail::allocateSkinProfileCatalogMutationToken();
+    if (token == 0) {
+      error = "Profile mutation token IDs are exhausted.";
+      return std::nullopt;
+    }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    if (!profileSettingsPersistenceCoordinator) {
+      return token;
+    }
+    std::optional<skin::SkinProfileMutationBarrier> profileBarrier;
+    if (existingTargetId && skinCommitCoordinator) {
+      const auto profileId = skin::makeSkinProfileId(*existingTargetId);
+      if (!profileId) {
+        error = "The target profile ID is invalid.";
+        return std::nullopt;
+      }
+      auto started = skinCommitCoordinator->beginProfileMutation(*profileId);
+      if (!started.barrier) {
+        error = started.error.empty()
+                    ? "The profile's gameplay skin transactions could not be "
+                      "drained."
+                    : std::move(started.error);
+        return std::nullopt;
+      }
+      profileBarrier.emplace(std::move(*started.barrier));
+    }
+    try {
+      auto inventoryBarrier =
+          profileSettingsPersistenceCoordinator->beginInventoryMutation();
+      skinProfileCatalogMutations.emplace(
+          token, SkinProfileCatalogMutationState(
+                     std::move(inventoryBarrier), std::move(profileBarrier)));
+    } catch (...) {
+      error = "The profile inventory mutation barrier could not be acquired.";
+      return std::nullopt;
+    }
+#else
+    (void)existingTargetId;
+#endif
+    return token;
+  }
+
+  void finishSkinProfileCatalogMutation(std::uint64_t token, bool succeeded,
+                                        bool profileStillExists) noexcept {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    const auto found = skinProfileCatalogMutations.find(token);
+    if (found == skinProfileCatalogMutations.end()) {
+      return;
+    }
+    auto state = skinProfileCatalogMutations.extract(found);
+    if (state.mapped().profile) {
+      if (skinCommitCoordinator) {
+        skinCommitCoordinator->finishProfileMutation(
+            std::move(*state.mapped().profile), succeeded,
+            profileStillExists);
+      } else {
+        state.mapped().profile.reset();
+      }
+    }
+    if (profileSettingsPersistenceCoordinator) {
+      profileSettingsPersistenceCoordinator->finishInventoryMutation(
+          std::move(state.mapped().inventory));
+    }
+#else
+    (void)token;
+    (void)succeeded;
+    (void)profileStillExists;
+#endif
+  }
+
+  void abandonSkinProfileCatalogMutations() noexcept {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    while (!skinProfileCatalogMutations.empty()) {
+      finishSkinProfileCatalogMutation(skinProfileCatalogMutations.begin()->first,
+                                       false, true);
+    }
+#endif
+  }
 
   // This lifecycle hook deliberately exposes no enabled-only type, so callers
   // poll it unconditionally on platforms where Lua gameplay skins are off.
@@ -314,6 +460,9 @@ public:
     try {
       if (skinCommitCoordinator) {
         skinCommitCoordinator->poll();
+      }
+      if (gameplaySkinLifecycle) {
+        gameplaySkinLifecycle->poll();
       }
     } catch (...) {
       SDL_Log("Gameplay skin commit polling failed unexpectedly");
@@ -470,12 +619,21 @@ public:
             .activeProfileCommitted =
                 [this](std::string_view profileId,
                        AppSettings &activeSettings) noexcept {
-                  const auto typedId = skin::makeSkinProfileId(profileId);
-                  if (!typedId || !profileSettingsPersistenceCoordinator) {
-                    return;
+                  try {
+                    const auto typedId = skin::makeSkinProfileId(profileId);
+                    if (!typedId || !profileSettingsPersistenceCoordinator) {
+                      return;
+                    }
+                    profileSettingsPersistenceCoordinator
+                        ->bindCommittedActiveProfile(*typedId, activeSettings);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+                    if (gameplaySkinLifecycle) {
+                      gameplaySkinLifecycle->profileChanged(*typedId);
+                    }
+#endif
+                  } catch (...) {
+                    SDL_Log("Gameplay skin profile binding failed unexpectedly");
                   }
-                  profileSettingsPersistenceCoordinator
-                      ->bindCommittedActiveProfile(*typedId, activeSettings);
                 }});
 
     settings.sanitize();
@@ -1064,8 +1222,10 @@ public:
     irSubmissionService.reset();
     irRankingService.reset();
     irHttpClient.reset();
+    abandonSkinProfileCatalogMutations();
     profileSessionCoordinator.reset();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    shutdownGameplaySkinLifecycle();
     shutdownGameplaySkinOperationService();
 #endif
     if (temporaryPathCleanupService) {
