@@ -13,6 +13,7 @@
 namespace gameplay {
 
 inline constexpr std::size_t kRealtimeTouchFingerCapacity = 32;
+inline constexpr std::size_t kRealtimeTouchNativeOverlayCapacity = 3;
 
 struct RealtimeTouchPoint {
   float x = 0.0F;
@@ -75,7 +76,9 @@ struct RealtimeTouchLayoutRefreshKey {
   std::uint64_t layoutRevision = 0;
   std::uint64_t hitRegionRevision = 0;
   RealtimeTouchUiTransform uiTransform;
-  std::array<RealtimeTouchNativeOverlayRegion, 2> nativeOverlays{};
+  std::array<RealtimeTouchNativeOverlayRegion,
+             kRealtimeTouchNativeOverlayCapacity>
+      nativeOverlays{};
 
   bool operator==(const RealtimeTouchLayoutRefreshKey &) const = default;
 };

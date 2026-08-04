@@ -844,13 +844,24 @@ void PlaySkinSession::clearPublishedGeometry(bool advanceTopology) noexcept {
 }
 
 void PlaySkinSession::setViewport(ViewportSettings settings) {
-  pendingFrame_.reset();
   context_.viewportSettings = settings;
+  if (owned_) {
+    owned_->viewportSettings = settings;
+  }
+  updateViewportGeometry(context_.viewport.safeUiBounds);
+}
+
+void PlaySkinSession::updateViewportGeometry(UiLogicalRect safeUiBounds) {
+  pendingFrame_.reset();
   const auto &header = context_.model.model.header;
   context_.viewport = evaluatePlaySkinViewport(
       {.width = static_cast<double>(header.width),
        .height = static_cast<double>(header.height)},
-      context_.viewport.safeUiBounds, settings);
+      safeUiBounds, context_.viewportSettings);
+  if (owned_) {
+    owned_->safeUiBounds = safeUiBounds;
+    owned_->viewport = context_.viewport;
+  }
   clearPublishedGeometry(true);
 }
 

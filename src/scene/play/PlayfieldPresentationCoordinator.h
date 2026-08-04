@@ -27,6 +27,7 @@ public:
   render(RenderContext &, const PreparedGameplayBgaFrame &,
          IGameplayBgaSubmitter &) = 0;
   virtual void setViewport(skin::ViewportSettings) = 0;
+  virtual void updateViewportGeometry(skin::UiLogicalRect) = 0;
   [[nodiscard]] virtual gameplay::RealtimeTouchLayout touchLayout() const = 0;
   [[nodiscard]] virtual std::uint64_t
   touchLayoutRevision() const noexcept = 0;
@@ -94,6 +95,10 @@ public:
   void installSkinSession(std::unique_ptr<CoordinatedPlaySkinSession>);
   void clearSkinSession() noexcept;
   [[nodiscard]] bool resetLayoutToFit();
+  // Rotation/safe-area replacement is distinct from a user viewport choice.
+  // The caller suppresses unchanged rectangles; this operation invalidates
+  // pending input/frame geometry for both warmed presentation candidates.
+  void updateSkinViewportGeometry(skin::UiLogicalRect safeUiBounds);
 
   void configure(const PlayfieldPresentationConfig &) override;
   [[nodiscard]] PresentationFrameOutcome prepareFrame(

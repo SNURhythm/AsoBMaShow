@@ -118,6 +118,10 @@ public:
   render(RenderContext &, const PreparedGameplayBgaFrame &,
          IGameplayBgaSubmitter &);
   void setViewport(ViewportSettings);
+  // Geometry-only chart-lifetime refresh for safe-area/rotation changes. This
+  // preserves the selected viewport settings and immutable activation identity
+  // while invalidating every input capture and pending old-geometry frame.
+  void updateViewportGeometry(UiLogicalRect safeUiBounds);
   [[nodiscard]] const PlaySkinSessionIdentity &identity() const noexcept;
   [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const;
   [[nodiscard]] std::uint64_t touchLayoutRevision() const noexcept;

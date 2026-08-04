@@ -127,6 +127,17 @@ bool PlayfieldPresentationCoordinator::resetLayoutToFit() {
   return true;
 }
 
+void PlayfieldPresentationCoordinator::updateSkinViewportGeometry(
+    skin::UiLogicalRect safeUiBounds) {
+  cancelAndClearActiveTouches();
+  pending_.reset();
+  builtIn_->refreshGeometry();
+  if (skin_) {
+    skin_->updateViewportGeometry(safeUiBounds);
+  }
+  markTouchTargetChanged();
+}
+
 void PlayfieldPresentationCoordinator::configure(
     const PlayfieldPresentationConfig &configuration) {
   builtIn_->configure(configuration);

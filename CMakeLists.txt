@@ -4610,6 +4610,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ASOBMASHOW_PLAYFIELD_PRESENTATION_COORDINATOR_TESTING=1
         )
 
+        add_executable(builtin_playfield_presentation_tests
+            tests/builtin_playfield_presentation_tests.cpp
+        )
+        target_include_directories(builtin_playfield_presentation_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(builtin_playfield_presentation_tests PRIVATE
+            cxx_std_23
+        )
+        target_link_libraries(builtin_playfield_presentation_tests PRIVATE
+            ${COMMON_LIBS}
+            bgfx
+        )
+
         add_executable(skin_performance_telemetry_tests
             tests/skin_performance_telemetry_tests.cpp
             src/skin/beatoraja/SkinPerformanceTelemetry.cpp
@@ -5904,6 +5918,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if(TARGET playfield_presentation_coordinator_tests)
         asobmashow_register_test(playfield_presentation_coordinator_tests)
+    endif()
+    if(TARGET builtin_playfield_presentation_tests)
+        asobmashow_register_test(builtin_playfield_presentation_tests)
     endif()
     if(TARGET skin_performance_telemetry_tests)
         asobmashow_register_test(skin_performance_telemetry_tests)

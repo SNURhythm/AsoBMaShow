@@ -336,6 +336,59 @@ PresentationUiHitRegion rectangleHitRegion(PresentationUiHit hit, float left,
                         {left, bottom}}}};
 }
 
+void testThirdNativeOverlayIsHitTestedAndExcludedFromGameplay() {
+  gameplay::RealtimeTouchLayoutRefreshKey refresh;
+  refresh.nativeOverlays[2] = {
+      .visible = true,
+      .left = 40.0F,
+      .top = 20.0F,
+      .right = 60.0F,
+      .bottom = 40.0F,
+  };
+  require(refresh.nativeOverlays.size() == 3 &&
+              refresh.nativeOverlays[2].visible,
+          "pause, existing system chrome, and Reset Layout each retain "
+          "refresh geometry");
+
+  gameplay::RealtimeTouchHitSnapshot snapshot{
+      .layoutRevision = 33,
+      .uiTransform = {.renderWidth = 100,
+                      .renderHeight = 100,
+                      .uiScaleX = 1.0F,
+                      .uiScaleY = 1.0F,
+                      .uiWidth = 100,
+                      .uiHeight = 100},
+      .regionsTopmostFirst = {rectangleHitRegion(
+          {.kind = PresentationUiControlKind::NativeOverlay}, 40.0F, 20.0F,
+          60.0F, 40.0F)}};
+  gameplay::RealtimeTouchHitCaptureTracker captures;
+  gameplay::RealtimeTouchSample sample{
+      .fingerId = 333,
+      .phase = gameplay::RealtimeTouchPhase::Down,
+      .normalizedX = 0.5F,
+      .normalizedY = 0.3F,
+      .steadyTimestampMicros = 100};
+  gameplay::populateRealtimeTouchPresentationMetadata(sample, snapshot,
+                                                       captures);
+  sample.excludedFromGameplay =
+      sample.presentationHit.kind != PresentationUiControlKind::None;
+
+  InputCapture input;
+  gameplay::RealtimeTouchInputRouter router(
+      33, makeLayout(), {.context = &input, .emit = &InputCapture::emit});
+  PresentationCapture presentation;
+  gameplay::RealtimeTouchPresentationDispatcher dispatcher(
+      presentationSink(presentation));
+  require(sample.presentationHit.kind ==
+                  PresentationUiControlKind::NativeOverlay &&
+              router.consume(sample) && input.events.empty() &&
+              !dispatcher.consume(sample, 100).consumed &&
+              !gameplay::realtimeTouchAllowsLegacyBuiltInControl(
+                  sample.presentationHit),
+          "the third native overlay excludes gameplay, skin dispatch, and "
+          "legacy lane-cover authority");
+}
+
 void testImmutableHitSnapshotPublishesValueOwnedTopmostGeometry() {
   const PresentationUiHit lower{
       .kind = PresentationUiControlKind::Slider,
@@ -1702,6 +1755,7 @@ int main() {
   testRawMetadataFreezesNoHitPresentationPoint();
   testPresentationDispatchUsesTheRawSnapshotUiPoint();
   testStableTouchLayoutRevisionParticipatesInSwitchDetection();
+  testThirdNativeOverlayIsHitTestedAndExcludedFromGameplay();
   testChartLaneMappingCoversEveryReplayKeyMode();
   testDirectTouchEmitsTimestampedLaneEdges();
   testScratchlessTouchPreservesBmsChannelReplayMapping();

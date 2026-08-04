@@ -70,6 +70,7 @@ struct PresentationStats {
   int resetCalls = 0;
   int refreshCalls = 0;
   int viewportCalls = 0;
+  int viewportGeometryCalls = 0;
   std::uint64_t preparedFrameSerial = 0;
   std::uint64_t receivedBgaSequence = 0;
   std::uint64_t layoutRevision = 7;
@@ -77,6 +78,7 @@ struct PresentationStats {
   PresentationFrameOutcome prepareOutcome = PresentationFrameOutcome::Ready;
   PresentationFrameResult renderResult;
   skin::ViewportSettings lastViewport;
+  skin::UiLogicalRect lastSafeUiBounds;
   PresentationTouchEvent lastTouch;
   const PlayfieldVisualState *preparedState = nullptr;
   const PlayfieldProjectionResult *preparedProjection = nullptr;
@@ -241,6 +243,11 @@ public:
     ++stats_->viewportCalls;
     stats_->lastViewport = viewport;
     recordEvent(stats_, "skin.viewport");
+  }
+  void updateViewportGeometry(skin::UiLogicalRect safeUiBounds) override {
+    ++stats_->viewportGeometryCalls;
+    stats_->lastSafeUiBounds = safeUiBounds;
+    recordEvent(stats_, "skin.geometry");
   }
   gameplay::RealtimeTouchLayout touchLayout() const override {
     return {.revision = stats_->layoutRevision, .laneCount = 2, .keyMode = 7};
@@ -832,6 +839,45 @@ void testDuplicatePrepareCannotAdvanceBgaTwice() {
          "original pending frame remains renderable after duplicate rejection");
 }
 
+void testSafeAreaReplacementCancelsBeforeRefreshingBothPresentations() {
+  auto builtIn = std::make_shared<PresentationStats>();
+  auto skinStats = std::make_shared<PresentationStats>();
+  FakeBga bga;
+  PlayfieldPresentationCoordinator coordinator({
+      .builtIn = std::make_unique<FakeBuiltIn>(builtIn),
+      .skin = std::make_unique<FakeSkin>(skinStats, identity()),
+      .bga = bga,
+  });
+  const auto hit = coordinator.hitTestUiControl({.x = 10.0F, .y = 20.0F});
+  expect(coordinator.beginPresentationTouch(
+             {.pointerId = 71,
+              .uiPoint = {.x = 10.0F, .y = 20.0F},
+              .eventMicros = 3,
+              .hit = hit})
+             .consumed,
+         "safe-area fixture owns one skin pointer before rotation");
+
+  const skin::UiLogicalRect safe{
+      .x = 30.0, .y = 20.0, .width = 1220.0, .height = 680.0};
+  coordinator.updateSkinViewportGeometry(safe);
+  expect(skinStats->cancelCalls == 1 &&
+             eventIndex(skinStats->events, "skin.cancel") <
+                 eventIndex(skinStats->events, "skin.geometry"),
+         "rotation cancels captured skin ownership before geometry replacement");
+  expect(builtIn->refreshCalls == 1 && skinStats->viewportGeometryCalls == 1 &&
+             skinStats->lastSafeUiBounds.x == safe.x &&
+             skinStats->lastSafeUiBounds.y == safe.y &&
+             skinStats->lastSafeUiBounds.width == safe.width &&
+             skinStats->lastSafeUiBounds.height == safe.height,
+         "one safe-area replacement refreshes the warmed built-in and live skin");
+  expect(coordinator.updatePresentationTouch(
+             {.pointerId = 71,
+              .uiPoint = {.x = 12.0F, .y = 22.0F},
+              .eventMicros = 4,
+              .hit = hit}) == PresentationTouchResult{},
+         "pre-rotation pointer ownership cannot cross into new geometry");
+}
+
 void testResetAndDestructorCancelBeforeDestroyingSkin() {
   auto builtIn = std::make_shared<PresentationStats>();
   auto replacedSkin = std::make_shared<PresentationStats>();
@@ -876,6 +922,7 @@ int main() {
   testAllocationDeniedAcrossEveryPrecommitFailureStillFallsBack();
   testResetLayoutAppliesFitBeforeOneImmutablePersistenceRequest();
   testDuplicatePrepareCannotAdvanceBgaTwice();
+  testSafeAreaReplacementCancelsBeforeRefreshingBothPresentations();
   testResetAndDestructorCancelBeforeDestroyingSkin();
   if (failures != 0) {
     std::cerr << failures << " coordinator test(s) failed\n";

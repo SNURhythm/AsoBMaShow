@@ -592,9 +592,9 @@ public:
   void applyLaneCoverState(int percent, bool resetVisibleTimeReference);
   bool isLaneCoverHandleHit(float renderX, float renderY) const;
   std::optional<float> laneCoverHandleGrabOffset(float renderX,
-                                                float renderY) const;
+                                                 float renderY) const override;
   int dragLaneCoverHandleTo(float renderX, float renderY,
-                            float lanePointYOffset);
+                            float lanePointYOffset) override;
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,

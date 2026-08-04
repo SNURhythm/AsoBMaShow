@@ -1833,6 +1833,98 @@ void testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry() {
          "viewport changes do not alter the five-field session identity");
 }
 
+void testViewportGeometryChangeCancelsOldInputAndPreservesSessionIdentity() {
+  SessionFixture fixture;
+  if (!fixture.ready()) {
+    return;
+  }
+  fixture.addBgaMarker();
+  fixture.addTouchGeometry(SkinFloatWriterId{3});
+  SessionBgaSubmitter bga;
+  RenderContext context;
+  const ViewportSettings customViewport{
+      .mode = ViewportMode::Custom,
+      .customBase = CustomViewportBase::Fit,
+      .scaleX = 0.75F,
+      .scaleY = 0.75F,
+      .translateX = 15.0F,
+      .translateY = -10.0F};
+  fixture.session().setViewport(customViewport);
+  expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(201), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "resize fixture publishes its initial touch geometry");
+
+  const auto initialRegions = fixture.session().touchHitRegions();
+  UiLogicalPoint oldPoint;
+  if (!initialRegions.empty()) {
+    oldPoint = {
+        .x = (initialRegions.front().boundary[0].x +
+              initialRegions.front().boundary[2].x) /
+             2.0F,
+        .y = (initialRegions.front().boundary[0].y +
+              initialRegions.front().boundary[2].y) /
+             2.0F};
+  }
+  const auto oldHit = fixture.session().hitTestUiControl(oldPoint);
+  expect(fixture.session().beginPresentationTouch(
+             {.pointerId = 91,
+              .uiPoint = oldPoint,
+              .eventMicros = 1,
+              .hit = oldHit}) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true},
+         "resize fixture owns one authored capture and queued Down writer");
+
+  const auto identityBefore = fixture.session().identity();
+  const auto layoutRevisionBefore = fixture.session().touchLayoutRevision();
+  const auto hitRevisionBefore =
+      fixture.session().touchHitRegionsRevision();
+  fixture.session().updateViewportGeometry(
+      {.x = 100.0, .y = 50.0, .width = 1280.0, .height = 720.0});
+
+  expect(fixture.session().touchLayoutRevision() != layoutRevisionBefore &&
+             fixture.session().touchHitRegionsRevision() !=
+                 hitRevisionBefore &&
+             fixture.session().touchLayout().laneRegions.empty() &&
+             fixture.session().touchHitRegions().empty() &&
+             fixture.session().updatePresentationTouch(
+                 {.pointerId = 91,
+                  .uiPoint = oldPoint,
+                  .eventMicros = 2,
+                  .hit = oldHit}) == PresentationTouchResult{} &&
+             fixture.configurationWrites().drain().empty(),
+         "safe-area replacement cancels old captures, queued writers, and "
+         "published geometry");
+
+  expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
+             PresentationFrameOutcome::Ready &&
+             fixture.session().render(context, bgaFrame(202), bga).outcome ==
+                 PresentationFrameOutcome::Ready,
+         "the next frame republishes against the replacement safe area");
+  const auto layout = fixture.session().touchLayout();
+  const auto identityAfter = fixture.session().identity();
+  expect(layout.laneRegions.size() == 2 &&
+             std::abs(layout.laneRegions[0].bottomLeft.x - 0.1822917F) <
+                 0.0001F &&
+             std::abs(layout.laneRegions[0].bottomLeft.y - 0.6064815F) <
+                 0.0001F &&
+             std::abs(layout.laneRegions[1].topRight.x - 0.2604167F) <
+                 0.0001F &&
+             std::abs(layout.laneRegions[1].topRight.y - 0.2592593F) <
+                 0.0001F,
+         "rotation republishes lane routing with the unchanged Custom "
+         "viewport settings in the new UI-logical geometry");
+  expect(identityAfter.sessionSerial == identityBefore.sessionSerial &&
+             identityAfter.profileId == identityBefore.profileId &&
+             identityAfter.entry == identityBefore.entry &&
+             identityAfter.revisionDigest == identityBefore.revisionDigest &&
+             identityAfter.configurationDigest ==
+                 identityBefore.configurationDigest,
+         "geometry-only replacement preserves immutable activation identity");
+}
+
 void testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin() {
   SessionFixture fixture(
       37, {.x = 100.0, .y = 50.0, .width = 1280.0, .height = 720.0});
@@ -1961,6 +2053,7 @@ int main() {
   testQueueFullAndClosedAreRecoverableOnlyAfterSuccessfulSkinDraw();
   testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
+  testViewportGeometryChangeCancelsOldInputAndPreservesSessionIdentity();
   testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
