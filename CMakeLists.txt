@@ -557,6 +557,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(skin_path_policy_tests PRIVATE utf8proc::utf8proc)
 
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+        add_executable(play_skin_viewport_tests
+            tests/play_skin_viewport_tests.cpp
+            src/skin/beatoraja/PlaySkinViewport.cpp
+            src/skin/beatoraja/SkinDestinationEvaluator.cpp
+        )
+        add_executable(skin_destination_evaluator_tests
+            tests/skin_destination_evaluator_tests.cpp
+            src/skin/beatoraja/PlaySkinViewport.cpp
+            src/skin/beatoraja/SkinDestinationEvaluator.cpp
+        )
+        foreach(target IN ITEMS play_skin_viewport_tests skin_destination_evaluator_tests)
+            target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+            set_target_properties(${target} PROPERTIES
+                CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+        endforeach()
+
         add_executable(skin_gauge_node_expansion_tests
             tests/skin_gauge_node_expansion_tests.cpp
             src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
@@ -5172,6 +5188,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET beatoraja_skin_model_tests)
         asobmashow_register_test(beatoraja_skin_model_tests)
+    endif()
+    if (TARGET play_skin_viewport_tests)
+        asobmashow_register_test(play_skin_viewport_tests)
+    endif()
+    if (TARGET skin_destination_evaluator_tests)
+        asobmashow_register_test(skin_destination_evaluator_tests)
     endif()
     if (TARGET skin_gauge_node_expansion_tests)
         asobmashow_register_test(skin_gauge_node_expansion_tests)

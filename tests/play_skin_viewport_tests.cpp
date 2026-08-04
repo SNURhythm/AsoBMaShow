@@ -1,0 +1,129 @@
+#include "skin/beatoraja/PlaySkinViewport.h"
+#include "skin/beatoraja/SkinDestinationEvaluator.h"
+
+#include <cmath>
+#include <iostream>
+#include <limits>
+#include <string_view>
+
+namespace {
+
+using namespace skin;
+
+int failures = 0;
+
+void expect(bool condition, std::string_view message) {
+  if (!condition) {
+    std::cerr << "FAIL: " << message << '\n';
+    ++failures;
+  }
+}
+
+bool near(double actual, double expected, double epsilon = 1e-9) {
+  return std::abs(actual - expected) <= epsilon;
+}
+
+std::array<double, 2> apply(const Affine2D &affine, double x, double y) {
+  return {affine.m00 * x + affine.m01 * y + affine.tx,
+          affine.m10 * x + affine.m11 * y + affine.ty};
+}
+
+void testFitUsesSafeAreaAndBars() {
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 1600.0, .height = 900.0},
+      {.x = 20.0, .y = 30.0, .width = 1200.0, .height = 900.0}, {});
+  expect(viewport.valid, "fit viewport is valid for positive authored and safe sizes");
+  expect(near(viewport.authoredToUi.m00, 0.75), "fit uses the limiting horizontal scale");
+  expect(near(viewport.authoredToUi.m11, -0.75), "fit flips authored bottom-left y");
+  expect(near(viewport.authoredToUi.tx, 20.0), "fit centers horizontal content in the safe area");
+  expect(near(viewport.authoredToUi.ty, 817.5), "fit centers vertical content in the safe area");
+  expect(near(viewport.drawableAuthoredBounds.width, 1600.0), "fit inverse bounds retain authored width");
+  expect(near(viewport.drawableAuthoredBounds.height, 1200.0), "fit inverse bounds include letterbox extent");
+}
+
+void testStretchAndCustomComposeOverSelectedBase() {
+  ViewportSettings stretch;
+  stretch.mode = ViewportMode::Stretch;
+  const auto stretched = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 100.0}, {.x = 10.0, .y = 20.0, .width = 300.0, .height = 200.0}, stretch);
+  expect(near(stretched.authoredToUi.m00, 3.0) && near(stretched.authoredToUi.m11, -2.0),
+         "stretch independently fills safe width and height");
+
+  ViewportSettings custom = stretch;
+  custom.mode = ViewportMode::Custom;
+  custom.customBase = CustomViewportBase::Stretch;
+  custom.scaleX = 2.0F;
+  custom.scaleY = 0.5F;
+  custom.translateX = 7.0F;
+  custom.translateY = -9.0F;
+  const auto transformed = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 100.0}, {.x = 10.0, .y = 20.0, .width = 300.0, .height = 200.0}, custom);
+  expect(near(transformed.authoredToUi.m00, 6.0) && near(transformed.authoredToUi.m11, -1.0),
+         "custom scale composes over stretch rather than replacing it");
+  expect(near(transformed.authoredToUi.tx, -133.0) && near(transformed.authoredToUi.ty, 161.0),
+         "custom scaling stays centered then applies bounded UI translation");
+}
+
+void testInvalidSettingsBecomeFitAndInverseRoundTrips() {
+  ViewportSettings invalid;
+  invalid.mode = static_cast<ViewportMode>(99);
+  invalid.customBase = static_cast<CustomViewportBase>(99);
+  invalid.scaleX = -1.0F;
+  invalid.scaleY = std::numeric_limits<float>::infinity();
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 200.0, .height = 100.0}, {.x = 0.0, .y = 0.0, .width = 400.0, .height = 400.0}, invalid);
+  expect(viewport.valid, "invalid persisted viewport is defensively reset to fit");
+  const auto ui = apply(viewport.authoredToUi, 50.0, 25.0);
+  const auto authored = apply(viewport.uiToAuthored, ui[0], ui[1]);
+  expect(near(authored[0], 50.0) && near(authored[1], 25.0), "viewport inverse round trips authored points");
+
+  const auto invalidBounds = evaluatePlaySkinViewport(
+      {.width = 0.0, .height = 100.0}, {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0}, {});
+  expect(!invalidBounds.valid, "degenerate authored bounds deny inverse interaction");
+}
+
+void testProjectionUsesBottomLeftOrderAndClockwiseUiHandedness() {
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 100.0}, {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0}, {});
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 20.0, .width = 30.0, .height = 40.0};
+  geometry.centerX = 0.5;
+  geometry.centerY = 0.5;
+  geometry.angleDegrees = 90.0;
+  geometry.clip = SkinAuthoredRect{.x = 10.0, .y = 20.0, .width = 30.0, .height = 40.0};
+  const auto projected = projectSkinDestinationToUi(
+      geometry, {.textureWidth = 100, .textureHeight = 100, .region = {.x = 10, .y = 20, .w = 30, .h = 40}}, viewport);
+  expect(near(projected.vertices[0][0], 45.0) && near(projected.vertices[0][1], 75.0),
+         "first vertex starts at rotated authored bottom-left");
+  expect(near(projected.vertices[1][0], 45.0) && near(projected.vertices[1][1], 45.0),
+         "positive authored CCW rotation becomes clockwise in top-left UI");
+  expect(near(projected.vertices[2][0], 5.0) && near(projected.vertices[2][1], 45.0),
+         "vertices preserve BL BR TR TL order through projection");
+  expect(projected.clip.has_value() && near(projected.clip->x, 10.0) && near(projected.clip->y, 40.0),
+         "unrotated authored clip is converted to top-left UI coordinates");
+}
+
+void testOffsetsPrecedeViewportProjection() {
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 100.0}, {.x = 0.0, .y = 0.0, .width = 200.0, .height = 200.0}, {});
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = {.x = 10.0, .y = 0.0, .width = 10.0, .height = 10.0};
+  const auto before = projectSkinDestinationToUi(
+      geometry, {.textureWidth = 10, .textureHeight = 10, .region = {.w = 10, .h = 10}}, viewport);
+  geometry.rect.x += 10.0;
+  const auto after = projectSkinDestinationToUi(
+      geometry, {.textureWidth = 10, .textureHeight = 10, .region = {.w = 10, .h = 10}}, viewport);
+  expect(near(after.vertices[0][0] - before.vertices[0][0], 20.0),
+         "authored offsets scale before the viewport");
+}
+
+} // namespace
+
+int main() {
+  testFitUsesSafeAreaAndBars();
+  testStretchAndCustomComposeOverSelectedBase();
+  testInvalidSettingsBecomeFitAndInverseRoundTrips();
+  testProjectionUsesBottomLeftOrderAndClockwiseUiHandedness();
+  testOffsetsPrecedeViewportProjection();
+  return failures == 0 ? 0 : 1;
+}
