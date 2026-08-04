@@ -53,7 +53,8 @@ struct EmbeddedYuvQuadLayout {
   std::array<std::uint16_t, 6> indices{};
 };
 
-// Destination and UV points use the stable TL, TR, BL, BR order.
+// Destination and UV points use the canonical BL, BR, TR, TL order shared by
+// UiDestinationGeometry, BgaDrawTarget, and SkinQuadBatchRenderer.
 [[nodiscard]] std::optional<EmbeddedYuvQuadLayout>
 makeEmbeddedYuvQuadLayout(const std::array<VideoQuadPoint, 4> &destinations,
                           const std::array<VideoQuadPoint, 4> &uvs,

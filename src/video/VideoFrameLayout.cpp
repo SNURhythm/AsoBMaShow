@@ -86,7 +86,7 @@ makeEmbeddedYuvQuadLayout(const std::array<VideoQuadPoint, 4> &destinations,
   }
 
   EmbeddedYuvQuadLayout layout{
-      .indices = {0, 1, 2, 1, 3, 2},
+      .indices = {0, 1, 2, 0, 2, 3},
   };
   for (std::size_t i = 0; i < layout.vertices.size(); ++i) {
     layout.vertices[i] = {

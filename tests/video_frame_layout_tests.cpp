@@ -89,21 +89,22 @@ void testPaddedPitchesAreCheckedAndAccounted() {
 }
 
 void testEmbeddedYuvQuadPreservesArbitraryDestinationPoints() {
+  // The canonical skin/renderer contract is BL, BR, TR, TL.
   const std::array<video::VideoQuadPoint, 4> destinations = {{
-      {11.5F, -3.25F},
-      {47.0F, 9.5F},
       {4.25F, 38.0F},
       {52.75F, 46.5F},
+      {47.0F, 9.5F},
+      {11.5F, -3.25F},
   }};
   const std::array<video::VideoQuadPoint, 4> uvs = {{
-      {0.0F, 0.0F},
-      {1.0F, 0.0F},
       {0.0F, 1.0F},
       {1.0F, 1.0F},
+      {1.0F, 0.0F},
+      {0.0F, 0.0F},
   }};
+  const video::VideoQuadTint tint{-0.5F, 1.25F, 2.0F, 0.4F};
 
-  const auto layout = video::makeEmbeddedYuvQuadLayout(
-      destinations, uvs, {1.0F, 1.0F, 1.0F, 1.0F});
+  const auto layout = video::makeEmbeddedYuvQuadLayout(destinations, uvs, tint);
   expect(layout.has_value(), "arbitrary destination quad is accepted");
   if (!layout) {
     return;
@@ -111,23 +112,27 @@ void testEmbeddedYuvQuadPreservesArbitraryDestinationPoints() {
 
   for (std::size_t i = 0; i < destinations.size(); ++i) {
     expect(layout->vertices[i].x == destinations[i].x &&
-               layout->vertices[i].y == destinations[i].y,
-           "rotated or skewed destination points are preserved in semantic order");
+               layout->vertices[i].y == destinations[i].y &&
+               layout->vertices[i].u == uvs[i].x &&
+               layout->vertices[i].v == uvs[i].y &&
+               layout->vertices[i].r == tint.r && layout->vertices[i].g == tint.g &&
+               layout->vertices[i].b == tint.b && layout->vertices[i].a == tint.a,
+           "distinct BL/BR/TR/TL destination and UV values pass through without permutation");
   }
 }
 
 void testEmbeddedYuvQuadPreservesTrimmedUvs() {
   const std::array<video::VideoQuadPoint, 4> destinations = {{
-      {0.0F, 0.0F},
-      {100.0F, 0.0F},
       {0.0F, 50.0F},
       {100.0F, 50.0F},
+      {100.0F, 0.0F},
+      {0.0F, 0.0F},
   }};
   const std::array<video::VideoQuadPoint, 4> trimmedUvs = {{
-      {0.125F, 0.25F},
-      {0.875F, 0.25F},
       {0.125F, 0.75F},
       {0.875F, 0.75F},
+      {0.875F, 0.25F},
+      {0.125F, 0.25F},
   }};
 
   const auto layout = video::makeEmbeddedYuvQuadLayout(
@@ -146,10 +151,10 @@ void testEmbeddedYuvQuadPreservesTrimmedUvs() {
 
 void testEmbeddedYuvQuadReplicatesTintAndUsesFixedWinding() {
   const std::array<video::VideoQuadPoint, 4> points = {{
-      {-2.0F, 3.0F},
-      {8.0F, 3.0F},
       {-2.0F, 13.0F},
       {8.0F, 13.0F},
+      {8.0F, 3.0F},
+      {-2.0F, 3.0F},
   }};
   const video::VideoQuadTint tint{-0.5F, 1.25F, 2.0F, 0.4F};
 
@@ -164,16 +169,16 @@ void testEmbeddedYuvQuadReplicatesTintAndUsesFixedWinding() {
                vertex.a == 0.4F,
            "the exact tint is replicated to every vertex without clamping");
   }
-  expect(layout->indices == std::array<std::uint16_t, 6>{0, 1, 2, 1, 3, 2},
-         "quad uses the fixed TL/TR/BL then TR/BR/BL winding");
+  expect(layout->indices == std::array<std::uint16_t, 6>{0, 1, 2, 0, 2, 3},
+         "quad uses the fixed BL/BR/TR then BL/TR/TL winding");
 }
 
 void testEmbeddedYuvQuadRejectsNonFiniteInputs() {
   const std::array<video::VideoQuadPoint, 4> finitePoints = {{
-      {0.0F, 0.0F},
-      {1.0F, 0.0F},
       {0.0F, 1.0F},
       {1.0F, 1.0F},
+      {1.0F, 0.0F},
+      {0.0F, 0.0F},
   }};
   const video::VideoQuadTint finiteTint{0.0F, 1.0F, -3.0F, 2.0F};
   auto invalidDestinations = finitePoints;
