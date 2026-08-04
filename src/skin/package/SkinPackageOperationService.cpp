@@ -331,6 +331,7 @@ struct SkinPackageOperationService::Impl {
     for (;;) {
       std::size_t index = 0;
       std::uint64_t disposalTicket = 0;
+      std::uint64_t operationTicket = 0;
       bool disposal = false;
       std::optional<RequestPayload> releasedRequest;
       std::optional<SkinPackageOperationPayload> releasedResult;
@@ -352,6 +353,7 @@ struct SkinPackageOperationService::Impl {
                                     releasedMailbox);
         } else {
           slot.state = SlotState::RunningOperation;
+          operationTicket = slot.ticket;
         }
       } catch (...) {
         continue;
@@ -380,6 +382,11 @@ struct SkinPackageOperationService::Impl {
 
       Slot &slot = slots[index];
       auto result = executeOperation(slot);
+#if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
+      if (observer) {
+        observer->beforeCompletion(operationTicket);
+      }
+#endif
       try {
         std::scoped_lock lock(mutex);
         if (!slot.detached && slot.ticket != 0) {
@@ -420,6 +427,11 @@ struct SkinPackageOperationService::Impl {
       }
 #endif
       if (workerDisposal) {
+#if defined(ASOBMASHOW_SKIN_OPERATION_SERVICE_TESTING)
+        if (observer && operationTicket != 0) {
+          observer->disposing(operationTicket);
+        }
+#endif
         releasedRequest.reset();
         releasedResult.reset();
         releasedMailbox.reset();

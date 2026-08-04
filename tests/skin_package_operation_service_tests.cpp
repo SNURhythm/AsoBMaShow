@@ -1,6 +1,7 @@
 #include "skin/package/SkinPackageOperationService.h"
 
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -269,6 +270,8 @@ void testDetachAndShutdownRunCleanupWithoutReenteringCaller() {
 
 class BlockingDisposalObserver final : public SkinPackageOperationTestObserver {
 public:
+  void beforeCompletion(std::uint64_t) const noexcept override {}
+
   void completed(std::uint64_t ticket) const noexcept override {
     try {
       std::scoped_lock lock(mutex_);
@@ -332,6 +335,70 @@ private:
   mutable bool released_ = false;
 };
 
+class BlockingCompletionObserver final
+    : public SkinPackageOperationTestObserver {
+public:
+  void beforeCompletion(std::uint64_t ticket) const noexcept override {
+    try {
+      std::unique_lock lock(mutex_);
+      beforeCompletionTicket_ = ticket;
+      beforeCompletionCondition_.notify_all();
+      releaseCondition_.wait(lock, [this] { return released_; });
+    } catch (...) {
+    }
+  }
+
+  void completed(std::uint64_t) const noexcept override {
+    try {
+      std::scoped_lock lock(mutex_);
+      ++completedCount_;
+    } catch (...) {
+    }
+  }
+
+  void disposing(std::uint64_t ticket) const noexcept override {
+    try {
+      std::scoped_lock lock(mutex_);
+      disposalTicket_ = ticket;
+      ++disposalCount_;
+    } catch (...) {
+    }
+  }
+
+  bool waitBeforeCompletion(std::uint64_t ticket) const {
+    std::unique_lock lock(mutex_);
+    return beforeCompletionCondition_.wait_for(
+        lock, std::chrono::seconds(5),
+        [this, ticket] { return beforeCompletionTicket_ == ticket; });
+  }
+
+  void release() const {
+    std::scoped_lock lock(mutex_);
+    released_ = true;
+    releaseCondition_.notify_all();
+  }
+
+  int completedCount() const {
+    std::scoped_lock lock(mutex_);
+    return completedCount_;
+  }
+
+  int disposalCount(std::uint64_t ticket) const {
+    std::scoped_lock lock(mutex_);
+    return disposalTicket_ == ticket ? disposalCount_ : 0;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  mutable std::condition_variable beforeCompletionCondition_;
+  mutable std::condition_variable releaseCondition_;
+  mutable std::uint64_t beforeCompletionTicket_ = 0;
+  mutable std::uint64_t disposalTicket_ = 0;
+  mutable int completedCount_ = 0;
+  mutable int disposalCount_ = 0;
+  mutable bool released_ = false;
+};
+
 void testCompletedResultDetachWaitsForWorkerDisposal() {
   TempDirectory temporary;
   const auto roots = rootsBelow(temporary.root());
@@ -368,6 +435,124 @@ void testCompletedResultDetachWaitsForWorkerDisposal() {
   expect(cleanupRuns == 1, "request cleanup remains exactly once");
   expect(!service.poll(handle.ticket),
          "detached completed result is disposed without late delivery");
+}
+
+void testCompletedShutdownDetachPollRaceHasExactlyOneOwner() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "completed-race";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  auto observer = std::make_shared<BlockingDisposalObserver>();
+  SkinPackageOperationService service(store, validator, observer);
+
+  std::atomic_int cleanupRuns = 0;
+  const auto handle = service.submitPrepareFolder(
+      source, {.directoryName = "Race", .collisionKey = "race"},
+      SkinDeferredCleanup([&] { ++cleanupRuns; }));
+  expect(observer->waitCompleted(handle.ticket),
+         "race starts only after the accepted result becomes deliverable");
+  observer->release();
+
+  std::barrier start(5);
+  std::optional<SkinPackageOperationCompletion> polledCompletion;
+  std::jthread firstShutdown([&] {
+    start.arrive_and_wait();
+    service.shutdown();
+  });
+  std::jthread secondShutdown([&] {
+    start.arrive_and_wait();
+    service.shutdown();
+  });
+  std::jthread detach([&] {
+    start.arrive_and_wait();
+    service.cancelAndDetach(handle.ticket);
+  });
+  std::jthread poll([&] {
+    start.arrive_and_wait();
+    polledCompletion = service.poll(handle.ticket);
+  });
+  start.arrive_and_wait();
+  firstShutdown.join();
+  secondShutdown.join();
+  detach.join();
+  poll.join();
+
+  const bool delivered = polledCompletion.has_value();
+  const int disposalCount = observer->disposalCount();
+  expect((delivered && disposalCount == 0) ||
+             (!delivered && disposalCount == 1),
+         "completed shutdown/detach/poll race has exactly one result owner");
+  expect(cleanupRuns == 1,
+         "concurrent shutdown callers retain exactly-once request cleanup");
+  if (polledCompletion) {
+    auto *result =
+        std::get_if<PreparePackageResult>(&polledCompletion->payload);
+    expect(result && result->prepared.has_value(),
+           "a poll winner explicitly receives the accepted prepared result");
+  } else {
+    expect(disposalCount == 1,
+           "detach or shutdown explicitly transfers the result to disposal");
+  }
+  expect(!service.poll(handle.ticket),
+         "the completed race cannot deliver the accepted result twice");
+}
+
+void testShutdownDetachPollRaceWhileWorkerCompletesDisposesExactlyOnce() {
+  TempDirectory temporary;
+  const auto roots = rootsBelow(temporary.root());
+  const auto source = temporary.root() / "completion-race";
+  writeText(source / "play/play7.luaskin", "return { type = 0 }");
+  NoAliases aliases;
+  NoProfiles profiles;
+  NoValidator validator;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  auto observer = std::make_shared<BlockingCompletionObserver>();
+  SkinPackageOperationService service(store, validator, observer);
+
+  std::atomic_int cleanupRuns = 0;
+  const auto handle = service.submitPrepareFolder(
+      source,
+      {.directoryName = "CompletionRace", .collisionKey = "completion-race"},
+      SkinDeferredCleanup([&] { ++cleanupRuns; }));
+  expect(observer->waitBeforeCompletion(handle.ticket),
+         "completion race pauses the worker before publishing its result");
+
+  std::barrier start(4);
+  std::optional<SkinPackageOperationCompletion> polledCompletion;
+  std::jthread shutdown([&] {
+    start.arrive_and_wait();
+    service.shutdown();
+  });
+  std::jthread detach([&] {
+    start.arrive_and_wait();
+    service.cancelAndDetach(handle.ticket);
+  });
+  std::jthread poll([&] {
+    start.arrive_and_wait();
+    polledCompletion = service.poll(handle.ticket);
+  });
+  start.arrive_and_wait();
+  detach.join();
+  poll.join();
+  expect(!polledCompletion,
+         "poll cannot steal a result that the worker has not published");
+  observer->release();
+  shutdown.join();
+
+  expect(cleanupRuns == 1,
+         "shutdown racing completion runs accepted cleanup exactly once");
+  expect(observer->completedCount() == 0,
+         "explicit detach/shutdown prevents a late deliverable completion");
+  expect(observer->disposalCount(handle.ticket) == 1,
+         "the completion race transfers result disposal to the worker once");
+  expect(!service.poll(handle.ticket),
+         "the explicitly detached completion cannot be delivered later");
 }
 
 void testBoundedBackpressureReturnsCleanupOwnership() {
@@ -419,6 +604,8 @@ int main() {
   testPrepareRequestsHaveFifoTicketsAndIndependentMailboxes();
   testDetachAndShutdownRunCleanupWithoutReenteringCaller();
   testCompletedResultDetachWaitsForWorkerDisposal();
+  testCompletedShutdownDetachPollRaceHasExactlyOneOwner();
+  testShutdownDetachPollRaceWhileWorkerCompletesDisposesExactlyOnce();
   testBoundedBackpressureReturnsCleanupOwnership();
   if (failures != 0) {
     std::cerr << failures

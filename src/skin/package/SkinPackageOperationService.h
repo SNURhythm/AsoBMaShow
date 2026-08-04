@@ -72,6 +72,7 @@ struct RejectedPreparedDisposal {
 class SkinPackageOperationTestObserver {
 public:
   virtual ~SkinPackageOperationTestObserver() = default;
+  virtual void beforeCompletion(std::uint64_t ticket) const noexcept = 0;
   virtual void completed(std::uint64_t ticket) const noexcept = 0;
   virtual void disposing(std::uint64_t ticket) const noexcept = 0;
 };
@@ -97,23 +98,24 @@ public:
   // Tickets are nonzero, process-monotonic, and never reused. Success consumes
   // cleanup ownership. A zero-ticket handle means the service is closed or at
   // its bounded retention limit and transfers cleanup back in rejectedCleanup.
-  SkinPackageOperationHandle submitPrepareArchive(std::filesystem::path zip,
-                                                  SkinPackageId package,
-                                                  SkinDeferredCleanup cleanup);
-  SkinPackageOperationHandle submitPrepareFolder(std::filesystem::path folder,
-                                                 SkinPackageId package,
-                                                 SkinDeferredCleanup cleanup);
-  SkinPackageOperationHandle
+  [[nodiscard]] SkinPackageOperationHandle
+  submitPrepareArchive(std::filesystem::path zip, SkinPackageId package,
+                       SkinDeferredCleanup cleanup);
+  [[nodiscard]] SkinPackageOperationHandle
+  submitPrepareFolder(std::filesystem::path folder, SkinPackageId package,
+                      SkinDeferredCleanup cleanup);
+  [[nodiscard]] SkinPackageOperationHandle
   submitPublish(PreparedPackage prepared,
                 PackageCollisionPolicy collisionPolicy,
                 ProfileInventorySnapshot inventory);
-  SkinPackageOperationHandle submitRescan(ProfileInventorySnapshot inventory);
-  SkinPackageOperationHandle submitRemove(SkinPackageId package);
-  SkinPackageOperationHandle
+  [[nodiscard]] SkinPackageOperationHandle
+  submitRescan(ProfileInventorySnapshot inventory);
+  [[nodiscard]] SkinPackageOperationHandle submitRemove(SkinPackageId package);
+  [[nodiscard]] SkinPackageOperationHandle
   submitPrepareActivation(VersionedSkinProfileSettings base, SkinEntryId entry,
                           SkinProfileSettings candidate);
-  SkinPackageOperationHandle submitGarbageCollection();
-  SkinPackageOperationHandle
+  [[nodiscard]] SkinPackageOperationHandle submitGarbageCollection();
+  [[nodiscard]] SkinPackageOperationHandle
   submitReconcileProfileActivations(std::vector<SkinProfileId> profiles);
   AcquireActivationResult
   acquireValidatedActivation(const SkinProfileId &profile,
@@ -126,7 +128,7 @@ public:
   // Success returns nullopt and transfers both capabilities to the worker.
   // Rejection returns both intact without running cleanup or destroying
   // prepared staging on the caller's behalf.
-  std::optional<RejectedPreparedDisposal>
+  [[nodiscard]] std::optional<RejectedPreparedDisposal>
   discardPrepared(PreparedPackage prepared, SkinDeferredCleanup cleanup = {});
   void shutdown() noexcept;
 
