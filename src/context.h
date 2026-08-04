@@ -30,6 +30,7 @@
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
+#include "audio/GameplayBgaFrame.h"
 #include "audio/Jukebox.h"
 #include "audio/AudioDeviceManager.h"
 #include "audio/NativeMusicPlayer.h"
@@ -52,7 +53,16 @@
 #include "view/UiTheme.h"
 #include "skin/LuaGameplaySkinFeature.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "skin/SkinCommitCoordinator.h"
+#include "skin/SkinConfigurationWriteQueue.h"
+#include "skin/SkinStoragePaths.h"
+#include "skin/beatoraja/GameplaySkinValidator.h"
+#include "skin/beatoraja/SkinDiagnosticHistory.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
+#include "skin/package/SkinAliasDetector.h"
+#include "skin/package/SkinPackageCatalog.h"
+#include "skin/package/SkinPackageOperationService.h"
+#include "skin/package/SkinPackageStore.h"
 #endif
 
 namespace application_context_detail {
@@ -167,6 +177,7 @@ public:
   std::atomic<bool> appInBackground{false};
   std::atomic<bool> backgroundTasksPausedForForegroundScene{false};
   std::atomic<bool> ignoreBgaPostOptions{false};
+  GameplayBgaCompositeState gameplayBgaCompositeState;
   std::atomic<std::uint32_t> bgfxResetFlags{0};
   FramePacer framePacer;
   std::unique_ptr<display::IDisplayBackend> displayBackend;
@@ -179,10 +190,132 @@ public:
   // string: annotation, thread: thread
   std::vector<std::pair<std::string, std::thread>> threads;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  // The sole app-owned preparation service. Gameplay callers must finish
-  // before context teardown invokes its stop/join boundary.
-  skin::SkinResourcePreparationService skinResourcePreparationService;
+  std::optional<skin::SkinStorageRoots> skinStorageRoots;
+  std::unique_ptr<skin::SkinAliasDetector> skinAliasDetector;
+  std::unique_ptr<skin::SkinPackageCatalog> skinPackageCatalog;
+  std::unique_ptr<skin::SkinPackageStore> skinPackageStore;
+  std::optional<skin::SkinRecoveryResult> skinRecoveryResult;
+  std::unique_ptr<skin::SkinResourcePreparationService>
+      skinResourcePreparationService;
+  std::unique_ptr<skin::GameplaySkinValidator> gameplaySkinValidator;
+  std::unique_ptr<skin::SkinPackageOperationService>
+      skinPackageOperationService;
+  std::unique_ptr<skin::SkinDiagnosticHistory> skinDiagnosticHistory;
+  std::unique_ptr<skin::SkinConfigurationWriteQueue>
+      skinConfigurationWriteQueue;
+  std::unique_ptr<skin::SkinCommitCoordinator> skinCommitCoordinator;
+
+  void initializeGameplaySkinServices() {
+    try {
+      skinStorageRoots = skin::defaultSkinStorageRoots();
+      skinAliasDetector = skin::createPlatformSkinAliasDetector();
+      skinPackageCatalog = std::make_unique<skin::SkinPackageCatalog>(
+          skinStorageRoots->privateCatalog);
+      skinPackageStore = std::make_unique<skin::SkinPackageStore>(
+          *skinStorageRoots, *skinPackageCatalog, *skinAliasDetector,
+          *profileSettingsPersistenceCoordinator);
+      skinRecoveryResult = skinPackageStore->recoverBeforeServiceStart();
+
+      if (skinRecoveryResult->disposition ==
+          skin::SkinRecoveryDisposition::Recovered) {
+        skinResourcePreparationService =
+            std::make_unique<skin::SkinResourcePreparationService>();
+        gameplaySkinValidator =
+            std::make_unique<skin::GameplaySkinValidator>(
+                *skinResourcePreparationService);
+        skinPackageOperationService =
+            std::make_unique<skin::SkinPackageOperationService>(
+                *skinPackageStore, *gameplaySkinValidator);
+        skinDiagnosticHistory =
+            std::make_unique<skin::SkinDiagnosticHistory>(*skinPackageCatalog);
+        skinConfigurationWriteQueue =
+            std::make_unique<skin::SkinConfigurationWriteQueue>();
+        skinCommitCoordinator =
+            std::make_unique<skin::SkinCommitCoordinator>(
+                *skinPackageStore, *profileSettingsPersistenceCoordinator);
+      }
+    } catch (...) {
+      unwindGameplaySkinServicesAfterStartupFailure();
+      skinRecoveryResult = skin::SkinRecoveryResult{
+          .disposition = skin::SkinRecoveryDisposition::Failed,
+          .diagnostics = {skin::SkinDiagnostic{
+              .code = "skin.startup.unavailable",
+              .message = "Gameplay skin services could not be initialized",
+              .severity = skin::DiagnosticSeverity::Error,
+          }},
+      };
+    }
+  }
+
+  void shutdownGameplaySkinOperationService() noexcept {
+    if (skinPackageOperationService) {
+      skinPackageOperationService->shutdown();
+      skinPackageOperationService.reset();
+    }
+  }
+
+  void shutdownGameplaySkinCommitCoordinator() noexcept {
+    if (skinCommitCoordinator) {
+      skinCommitCoordinator->shutdown();
+      skinCommitCoordinator.reset();
+    }
+  }
+
+  void flushAndShutdownGameplaySkinBackingServices() noexcept {
+    if (skinDiagnosticHistory) {
+      try {
+        skinDiagnosticHistory->flush();
+      } catch (...) {
+      }
+    }
+    if (skinPackageCatalog) {
+      try {
+        skinPackageCatalog->flush();
+      } catch (...) {
+      }
+      skinPackageCatalog->shutdown();
+    }
+    if (skinResourcePreparationService) {
+      skinResourcePreparationService->shutdown();
+    }
+  }
+
+  void destroyGameplaySkinServices() noexcept {
+    if (skinConfigurationWriteQueue) {
+      skinConfigurationWriteQueue->close();
+      skinConfigurationWriteQueue.reset();
+    }
+    skinDiagnosticHistory.reset();
+    gameplaySkinValidator.reset();
+    skinPackageStore.reset();
+    skinPackageCatalog.reset();
+    skinResourcePreparationService.reset();
+    skinAliasDetector.reset();
+    skinRecoveryResult.reset();
+    skinStorageRoots.reset();
+  }
+
+  void unwindGameplaySkinServicesAfterStartupFailure() noexcept {
+    shutdownGameplaySkinOperationService();
+    shutdownGameplaySkinCommitCoordinator();
+    flushAndShutdownGameplaySkinBackingServices();
+    destroyGameplaySkinServices();
+  }
 #endif
+
+  // This lifecycle hook deliberately exposes no enabled-only type, so callers
+  // poll it unconditionally on platforms where Lua gameplay skins are off.
+  void pollGameplaySkinCommits() noexcept {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    try {
+      if (skinCommitCoordinator) {
+        skinCommitCoordinator->poll();
+      }
+    } catch (...) {
+      SDL_Log("Gameplay skin commit polling failed unexpectedly");
+    }
+#endif
+  }
 
   ApplicationContext()
       : quitFlag(false), applicationDataRoot(Utils::GetDocumentsPath()),
@@ -223,6 +356,9 @@ public:
     profileSettingsPersistenceCoordinator =
         std::make_unique<ProfileSettingsPersistenceCoordinator>(profileManager,
                                                                 settings);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    initializeGameplaySkinServices();
+#endif
     saveActiveInputProfile = [this](const InputProfile &candidate,
                                     std::string &error) {
       if (!profileInitializationResult.ok()) {
@@ -915,12 +1051,6 @@ public:
         thread.second.join();
       }
     }
-    if (temporaryPathCleanupService) {
-      temporaryPathCleanupService->shutdown();
-    }
-#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-    skinResourcePreparationService.shutdown();
-#endif
     if (irSubmissionService) {
       irSubmissionService->stop();
     }
@@ -930,6 +1060,24 @@ public:
     irSubmissionService.reset();
     irRankingService.reset();
     irHttpClient.reset();
+    profileSessionCoordinator.reset();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    shutdownGameplaySkinOperationService();
+#endif
+    if (temporaryPathCleanupService) {
+      temporaryPathCleanupService->shutdown();
+    }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    shutdownGameplaySkinCommitCoordinator();
+    flushAndShutdownGameplaySkinBackingServices();
+#endif
+    if (profileSettingsPersistenceCoordinator) {
+      profileSettingsPersistenceCoordinator->shutdown();
+      profileSettingsPersistenceCoordinator.reset();
+    }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    destroyGameplaySkinServices();
+#endif
     scoreRepository.Shutdown();
     replayRepository.Shutdown();
     std::cout << "Main function is quitting..." << std::endl;

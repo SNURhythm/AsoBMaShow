@@ -945,6 +945,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
+    context.pollGameplaySkinCommits();
 
     auto currentFrameTime = std::chrono::steady_clock::now();
     const bool exportActiveForPacing =
@@ -1345,19 +1346,33 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
-        if (hasActiveVisuals) {
+        sceneManager.render();
+
+        const GameplayBgaCompositeState &bgaCompositeState =
+            context.gameplayBgaCompositeState;
+        const bool submitPreparedFullscreen =
+            bgaCompositeState.mode ==
+                GameplayBgaCompositeMode::FullscreenBuiltIn &&
+            bgaCompositeState.prepared.has_value();
+        const bool submitLegacyFullscreen =
+            bgaCompositeState.mode ==
+                GameplayBgaCompositeMode::FullscreenBuiltIn &&
+            !bgaCompositeState.prepared.has_value() && hasActiveVisuals;
+        const bool compositeFullscreenBga =
+            submitPreparedFullscreen || submitLegacyFullscreen;
+        if (compositeFullscreenBga) {
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
           bgfx::touch(s_blurPass->finalView());
           bgfx::touch(s_blurPass->blurViewH());
           bgfx::touch(s_blurPass->blurViewV());
-        }
-
-        sceneManager.render();
-        if (hasActiveVisuals) {
           const bool ignoreBgaPostOptions =
               context.ignoreBgaPostOptions.load(std::memory_order_acquire);
-          context.jukebox.render();
+          if (submitPreparedFullscreen) {
+            context.jukebox.submitFullscreen(*bgaCompositeState.prepared);
+          } else {
+            context.jukebox.render();
+          }
           s_blurPass->setBlurStrength(
               ignoreBgaPostOptions ? 0.0f : context.settings.bgaBlurStrength);
           s_postProcess.apply();

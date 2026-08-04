@@ -40,6 +40,40 @@ OBJECT_RESOLUTION_PRECEDENCE_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp"
 )
 RENDERER_SOURCE = ROOT / "src/skin/beatoraja/Skin2DRenderer.cpp"
+APPLICATION_CONTEXT_HEADER = ROOT / "src/context.h"
+MAIN_SOURCE = ROOT / "src/main.cpp"
+SCENE_MANAGER_SOURCE = ROOT / "src/scene/SceneManager.cpp"
+
+
+def braced_body(source, marker):
+    marker_offset = source.index(marker)
+    opening = source.index("{", marker_offset + len(marker))
+    depth = 0
+    for offset in range(opening, len(source)):
+        if source[offset] == "{":
+            depth += 1
+        elif source[offset] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1 : offset]
+    raise AssertionError(f"unterminated body after {marker!r}")
+
+
+def assert_feature_guarded(test_case, source, tokens):
+    enabled_depth = 0
+    for number, line in enumerate(source.splitlines(), start=1):
+        directive = line.strip()
+        if directive.startswith("#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS"):
+            enabled_depth += 1
+        elif directive.startswith("#endif") and enabled_depth:
+            enabled_depth -= 1
+        for token in tokens:
+            if token in line:
+                test_case.assertGreater(
+                    enabled_depth,
+                    0,
+                    f"{token} escapes the disabled-build guard on line {number}",
+                )
 
 
 class LuaSkinFeatureGateTests(unittest.TestCase):
@@ -223,6 +257,220 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                 )
+
+    def test_application_loop_polls_skin_commits_first_and_exactly_once(self):
+        source = MAIN_SOURCE.read_text(encoding="utf-8")
+        loop = braced_body(source, "while (!context.quitFlag)")
+        self.assertTrue(
+            loop.lstrip().startswith("context.pollGameplaySkinCommits();"),
+            "commit polling must precede every application-loop early continue",
+        )
+        self.assertEqual(1, loop.count("context.pollGameplaySkinCommits();"))
+        context = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        self.assertIn("void pollGameplaySkinCommits() noexcept", context)
+
+    def test_application_context_owns_enabled_skin_services_in_dependency_order(self):
+        source = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        initialization = braced_body(source, "void initializeGameplaySkinServices()")
+        compact = " ".join(initialization.split())
+        ordered_initialization = (
+            "skinStorageRoots = skin::defaultSkinStorageRoots();",
+            "skinAliasDetector = skin::createPlatformSkinAliasDetector();",
+            "skinPackageCatalog = std::make_unique<skin::SkinPackageCatalog>",
+            "skinPackageStore = std::make_unique<skin::SkinPackageStore>",
+            "skinRecoveryResult = skinPackageStore->recoverBeforeServiceStart();",
+            "skinRecoveryResult->disposition == skin::SkinRecoveryDisposition::Recovered",
+            "skinResourcePreparationService = std::make_unique<skin::SkinResourcePreparationService>();",
+            "gameplaySkinValidator = std::make_unique<skin::GameplaySkinValidator>",
+            "skinPackageOperationService = std::make_unique<skin::SkinPackageOperationService>",
+            "skinDiagnosticHistory = std::make_unique<skin::SkinDiagnosticHistory>",
+            "skinConfigurationWriteQueue = std::make_unique<skin::SkinConfigurationWriteQueue>();",
+            "skinCommitCoordinator = std::make_unique<skin::SkinCommitCoordinator>",
+        )
+        positions = [compact.index(token) for token in ordered_initialization]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(
+            1,
+            initialization.count(
+                "skinPackageStore->recoverBeforeServiceStart();"
+            ),
+        )
+        self.assertNotIn(
+            "SkinRecoveryDisposition::AlreadyRecovered",
+            initialization,
+            "a repeated recovery must never admit a second service graph",
+        )
+
+        constructor = braced_body(source, "ApplicationContext()")
+        owner = constructor.index("profileSettingsPersistenceCoordinator =")
+        services = constructor.index("initializeGameplaySkinServices();")
+        self.assertLess(owner, services)
+
+    def test_skin_service_startup_failure_unwinds_to_sanitized_unavailable_state(self):
+        source = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        initialization = braced_body(source, "void initializeGameplaySkinServices()")
+        self.assertTrue(initialization.lstrip().startswith("try {"))
+        failure = initialization.index("} catch (...) {")
+        shutdown = initialization.index(
+            "unwindGameplaySkinServicesAfterStartupFailure();", failure
+        )
+        result = initialization.index(
+            "skinRecoveryResult = skin::SkinRecoveryResult{", shutdown
+        )
+        self.assertLess(failure, shutdown)
+        self.assertLess(shutdown, result)
+        self.assertIn(
+            ".disposition = skin::SkinRecoveryDisposition::Failed",
+            initialization[result:],
+        )
+        self.assertIn('.code = "skin.startup.unavailable"', initialization[result:])
+        self.assertIn(
+            '.message = "Gameplay skin services could not be initialized"',
+            initialization[result:],
+        )
+
+    def test_disabled_context_names_no_enabled_skin_service_types(self):
+        source = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        assert_feature_guarded(
+            self,
+            source,
+            (
+                "SkinStorageRoots",
+                "SkinAliasDetector",
+                "SkinPackageCatalog",
+                "SkinPackageStore",
+                "SkinRecoveryResult",
+                "SkinResourcePreparationService",
+                "GameplaySkinValidator",
+                "SkinPackageOperationService",
+                "SkinDiagnosticHistory",
+                "SkinConfigurationWriteQueue",
+                "SkinCommitCoordinator",
+            ),
+        )
+
+    def test_skin_service_teardown_preserves_dependency_lifetimes(self):
+        source = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        destructor = braced_body(source, "~ApplicationContext()")
+        ordered_destructor = (
+            "shutdownGameplaySkinOperationService();",
+            "temporaryPathCleanupService->shutdown();",
+            "shutdownGameplaySkinCommitCoordinator();",
+            "flushAndShutdownGameplaySkinBackingServices();",
+            "profileSettingsPersistenceCoordinator->shutdown();",
+            "profileSettingsPersistenceCoordinator.reset();",
+            "destroyGameplaySkinServices();",
+        )
+        positions = [destructor.index(token) for token in ordered_destructor]
+        self.assertEqual(positions, sorted(positions))
+
+        operation = braced_body(
+            source, "void shutdownGameplaySkinOperationService() noexcept"
+        )
+        self.assertLess(
+            operation.index("skinPackageOperationService->shutdown();"),
+            operation.index("skinPackageOperationService.reset();"),
+        )
+
+        commit = braced_body(
+            source, "void shutdownGameplaySkinCommitCoordinator() noexcept"
+        )
+        self.assertLess(
+            commit.index("skinCommitCoordinator->shutdown();"),
+            commit.index("skinCommitCoordinator.reset();"),
+        )
+
+        backing = braced_body(
+            source, "void flushAndShutdownGameplaySkinBackingServices() noexcept"
+        )
+        ordered_backing = (
+            "skinDiagnosticHistory->flush();",
+            "skinPackageCatalog->flush();",
+            "skinPackageCatalog->shutdown();",
+            "skinResourcePreparationService->shutdown();",
+        )
+        positions = [backing.index(token) for token in ordered_backing]
+        self.assertEqual(positions, sorted(positions))
+
+        destroy = braced_body(source, "void destroyGameplaySkinServices() noexcept")
+        ordered_destroy = (
+            "skinDiagnosticHistory.reset();",
+            "gameplaySkinValidator.reset();",
+            "skinPackageStore.reset();",
+            "skinPackageCatalog.reset();",
+            "skinResourcePreparationService.reset();",
+            "skinAliasDetector.reset();",
+        )
+        positions = [destroy.index(token) for token in ordered_destroy]
+        self.assertEqual(positions, sorted(positions))
+
+        startup_unwind = braced_body(
+            source,
+            "void unwindGameplaySkinServicesAfterStartupFailure() noexcept",
+        )
+        ordered_startup_unwind = (
+            "shutdownGameplaySkinOperationService();",
+            "shutdownGameplaySkinCommitCoordinator();",
+            "flushAndShutdownGameplaySkinBackingServices();",
+            "destroyGameplaySkinServices();",
+        )
+        positions = [startup_unwind.index(token) for token in ordered_startup_unwind]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn("temporaryPathCleanupService", startup_unwind)
+        self.assertNotIn("profileSettingsPersistenceCoordinator", startup_unwind)
+
+    def test_scene_manager_resets_bga_composite_state_before_scene_lookup(self):
+        context = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")
+        self.assertIn(
+            "GameplayBgaCompositeState gameplayBgaCompositeState;", context
+        )
+        source = SCENE_MANAGER_SOURCE.read_text(encoding="utf-8")
+        render = braced_body(source, "void SceneManager::render()")
+        self.assertTrue(
+            render.lstrip().startswith("context.gameplayBgaCompositeState = {};"),
+            "the per-frame state must reset even when there is no current scene",
+        )
+        self.assertLess(
+            render.index("context.gameplayBgaCompositeState = {};"),
+            render.index("if (currentScene)"),
+        )
+
+    def test_post_scene_bga_compositor_uses_the_same_frame_decision(self):
+        source = MAIN_SOURCE.read_text(encoding="utf-8")
+        render_branch = braced_body(
+            source,
+            "else if (bgfxLock.owns_lock() && !context.replayVideoExportActive.load",
+        )
+        scene = render_branch.index("sceneManager.render();")
+        decision = render_branch.index(
+            "const GameplayBgaCompositeState &bgaCompositeState ="
+        )
+        touches = render_branch.index("bgfx::touch(rendering::bga_view);")
+        prepared = render_branch.index(
+            "context.jukebox.submitFullscreen(*bgaCompositeState.prepared);"
+        )
+        legacy = render_branch.index("context.jukebox.render();")
+        postprocess = render_branch.index("s_postProcess.apply();")
+        prepared_decision = render_branch[decision : render_branch.index(
+            "const bool submitLegacyFullscreen =", decision
+        )]
+        self.assertLess(scene, decision)
+        self.assertLess(decision, touches)
+        self.assertLess(touches, prepared)
+        self.assertLess(prepared, legacy)
+        self.assertLess(legacy, postprocess)
+        self.assertEqual(1, render_branch.count("context.jukebox.submitFullscreen("))
+        self.assertEqual(1, render_branch.count("context.jukebox.render();"))
+        self.assertNotIn("hasActiveVisuals", prepared_decision)
+        self.assertIn(
+            "bgaCompositeState.mode ==\n                GameplayBgaCompositeMode::FullscreenBuiltIn",
+            render_branch,
+        )
+        self.assertIn(
+            "const bool compositeFullscreenBga =\n            submitPreparedFullscreen || submitLegacyFullscreen;",
+            render_branch,
+        )
+        self.assertNotIn("if (hasActiveVisuals)", render_branch[scene:])
 
 
 if __name__ == "__main__":

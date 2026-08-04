@@ -138,6 +138,7 @@ void SceneManager::handleDeferred() {
 }
 
 void SceneManager::render() {
+  context.gameplayBgaCompositeState = {};
   if (currentScene) {
     currentScene->render();
   }
