@@ -2487,6 +2487,10 @@ PublishPackageResult SkinPackageStore::publish(
     });
     revisionLeases_.insert(std::move(revisionNode));
     revisionPins_.insert(std::move(revisionPinNode));
+    std::erase_if(activations_, [&](const auto &item) {
+      return item.second.entry.package.collisionKey ==
+             prepared.packageId().collisionKey;
+    });
     stateCatalogGeneration_ = oldCatalog->catalogGeneration + 1;
     stateSourceGeneration_ = oldCatalog->sourceGeneration + 1;
     catalogMutationInFlight_ = false;
@@ -2880,10 +2884,16 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
     stateSourceGeneration_ = next.sourceGeneration;
     catalogMutationInFlight_ = false;
     std::erase_if(activations_, [&](const auto &item) {
-      return !std::ranges::any_of(next.entries,
-                                  [&](const SkinCatalogEntrySnapshot &entry) {
-                                    return entry.entry == item.second.entry;
-                                  });
+      return !std::ranges::any_of(
+          next.entries, [&](const SkinCatalogEntrySnapshot &entry) {
+            return entry.entry == item.second.entry &&
+                   entry.validation ==
+                       SkinValidationDisposition::Selectable7Key &&
+                   entry.revisionDigest ==
+                       item.second.revision.revision().lowercaseSha256 &&
+                   std::ranges::contains(entry.validatedConfigurationDigests,
+                                         item.second.configurationDigest);
+          });
     });
   }
   mutationReset.dismiss();
@@ -3229,16 +3239,29 @@ AcquireActivationResult SkinPackageStore::acquireValidatedActivation(
     std::string_view configurationDigest) {
   AcquireActivationResult result;
   const auto current = catalog_.snapshot();
-  if (!std::ranges::any_of(current->entries,
-                           [&entry](const SkinCatalogEntrySnapshot &candidate) {
-                             return candidate.entry == entry;
-                           })) {
+  const auto catalogEntry = std::ranges::find_if(
+      current->entries,
+      [&entry, configurationDigest](const SkinCatalogEntrySnapshot &candidate) {
+        return candidate.entry == entry &&
+               candidate.validation ==
+                   SkinValidationDisposition::Selectable7Key &&
+               std::ranges::contains(candidate.validatedConfigurationDigests,
+                                     configurationDigest);
+      });
+  if (catalogEntry == current->entries.end()) {
     return result;
   }
   std::scoped_lock lock(stateMutex_);
+  if (catalogMutationInFlight_ ||
+      stateCatalogGeneration_ != current->catalogGeneration ||
+      stateSourceGeneration_ != current->sourceGeneration) {
+    return result;
+  }
   const auto activation =
       activations_.find(activationKey(profile, entry, configurationDigest));
-  if (activation != activations_.end()) {
+  if (activation != activations_.end() &&
+      activation->second.revision.revision().lowercaseSha256 ==
+          catalogEntry->revisionDigest) {
     result.activation = cloneActivation(activation->second);
   }
   return result;

@@ -12,6 +12,7 @@
 #include <cctype>
 #include <deque>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -362,6 +363,157 @@ OrderedJson encodeCatalog(const SkinPackageCatalogSnapshot &snapshot) {
   return result;
 }
 
+bool boundedText(std::string_view value) {
+  return value.size() <= SkinPackagePolicy::maxPathBytes &&
+         value.find('\0') == std::string_view::npos;
+}
+
+bool safeVirtualPath(std::string_view value) {
+  if (!boundedText(value)) {
+    return false;
+  }
+  if (value.empty()) {
+    return true;
+  }
+  if (value.starts_with('/') || value.starts_with('\\') ||
+      value.find('\\') != std::string_view::npos ||
+      value.find(':') != std::string_view::npos) {
+    return false;
+  }
+  std::size_t start = 0;
+  while (start <= value.size()) {
+    const std::size_t separator = value.find('/', start);
+    const std::string_view component = value.substr(
+        start, separator == std::string_view::npos ? value.size() - start
+                                                   : separator - start);
+    if (component.empty() || component == "." || component == "..") {
+      return false;
+    }
+    if (separator == std::string_view::npos) {
+      break;
+    }
+    start = separator + 1;
+  }
+  return true;
+}
+
+bool uniqueBoundedStrings(std::vector<std::string> &values, std::size_t maximum,
+                          bool requireDigest = false) {
+  if (values.size() > maximum) {
+    return false;
+  }
+  std::ranges::sort(values);
+  if (std::ranges::adjacent_find(values) != values.end()) {
+    return false;
+  }
+  return std::ranges::all_of(values, [&](const std::string &value) {
+    return boundedText(value) && (!requireDigest || lowercaseSha256(value));
+  });
+}
+
+bool validateMetadata(SkinEntryMetadataSnapshot &metadata) {
+  constexpr std::size_t maximumDeclarations = 256;
+  if (!boundedText(metadata.displayName) || !boundedText(metadata.author) ||
+      metadata.categories.size() > maximumDeclarations ||
+      metadata.options.size() > maximumDeclarations ||
+      metadata.files.size() > maximumDeclarations ||
+      metadata.offsets.size() > maximumDeclarations) {
+    return false;
+  }
+  for (auto &category : metadata.categories) {
+    if (!boundedText(category.name) ||
+        !uniqueBoundedStrings(category.items, maximumDeclarations)) {
+      return false;
+    }
+  }
+  for (auto &option : metadata.options) {
+    if (!boundedText(option.category) || !boundedText(option.name) ||
+        !boundedText(option.defaultLabel) ||
+        option.choices.size() > maximumDeclarations) {
+      return false;
+    }
+    for (const auto &choice : option.choices) {
+      if (!boundedText(choice.label)) {
+        return false;
+      }
+    }
+  }
+  for (auto &file : metadata.files) {
+    if (!boundedText(file.category) || !boundedText(file.name) ||
+        !boundedText(file.pattern) || !boundedText(file.defaultValue) ||
+        !uniqueBoundedStrings(file.choices, maximumDeclarations)) {
+      return false;
+    }
+  }
+  return std::ranges::all_of(metadata.offsets, [](const auto &offset) {
+    return boundedText(offset.category) && boundedText(offset.name);
+  });
+}
+
+bool validateDiagnostic(const SkinDiagnostic &diagnostic) {
+  return boundedText(diagnostic.code) && boundedText(diagnostic.message) &&
+         safeVirtualPath(diagnostic.virtualPath) &&
+         (!diagnostic.source ||
+          safeVirtualPath(diagnostic.source->virtualPath));
+}
+
+bool validateAndCanonicalize(SkinPackageCatalogSnapshot &snapshot) {
+  constexpr std::size_t maximumDeclarations = 256;
+  if (snapshot.catalogGeneration == std::numeric_limits<std::uint64_t>::max() ||
+      snapshot.sourceGeneration == std::numeric_limits<std::uint64_t>::max() ||
+      snapshot.packages.size() > SkinPackagePolicy::maxFiles ||
+      snapshot.entries.size() > SkinPackagePolicy::maxFiles) {
+    return false;
+  }
+  std::set<std::string, std::less<>> packageKeys;
+  std::map<std::string, SkinPackageId, std::less<>> packages;
+  for (const SkinPackageId &package : snapshot.packages) {
+    const auto normalized = normalizePackageId(package.directoryName);
+    if (!normalized.package || *normalized.package != package ||
+        !packageKeys.insert(package.collisionKey).second) {
+      return false;
+    }
+    packages.emplace(package.collisionKey, package);
+  }
+  std::set<std::string, std::less<>> entryKeys;
+  for (SkinCatalogEntrySnapshot &entry : snapshot.entries) {
+    const auto normalized = normalizeEntryPath(entry.entry.package,
+                                               entry.entry.packageRelativePath);
+    const auto package = packages.find(entry.entry.package.collisionKey);
+    if (!normalized.entry || *normalized.entry != entry.entry ||
+        package == packages.end() || package->second != entry.entry.package ||
+        !entryKeys.insert(entry.entry.collisionKey).second ||
+        !lowercaseSha256(entry.revisionDigest) ||
+        !uniqueBoundedStrings(entry.validatedConfigurationDigests,
+                              maximumDeclarations, true) ||
+        entry.diagnostics.size() > maximumDeclarations ||
+        (entry.metadata && !validateMetadata(*entry.metadata)) ||
+        !std::ranges::all_of(entry.diagnostics, validateDiagnostic)) {
+      return false;
+    }
+  }
+  std::ranges::sort(snapshot.packages, {}, &SkinPackageId::collisionKey);
+  std::ranges::sort(snapshot.entries, {},
+                    [](const SkinCatalogEntrySnapshot &entry) {
+                      return entry.entry.collisionKey;
+                    });
+  return true;
+}
+
+bool encodedCatalogBytes(SkinPackageCatalogSnapshot snapshot,
+                         std::string &bytes) {
+  try {
+    if (!validateAndCanonicalize(snapshot)) {
+      return false;
+    }
+    bytes = encodeCatalog(snapshot).dump() + "\n";
+    return bytes.size() <= kMaximumCatalogBytes;
+  } catch (...) {
+    bytes.clear();
+    return false;
+  }
+}
+
 bool getString(const Json &object, std::string_view key, std::string &value) {
   const auto iterator = object.find(std::string(key));
   if (iterator == object.end() || !iterator->is_string()) {
@@ -654,7 +806,7 @@ bool decodeCatalog(const Json &document, SkinPackageCatalogSnapshot &snapshot) {
       }
       snapshot.entries.push_back(std::move(entry));
     }
-    return true;
+    return validateAndCanonicalize(snapshot);
   } catch (const nlohmann::json::exception &) {
     snapshot = {};
     return false;
@@ -667,7 +819,11 @@ bool decodeCatalog(const Json &document, SkinPackageCatalogSnapshot &snapshot) {
 bool writeCatalogFile(const fs::path &path,
                       const SkinPackageCatalogSnapshot &snapshot,
                       std::string &error) {
-  const std::string encoded = encodeCatalog(snapshot).dump() + "\n";
+  std::string encoded;
+  if (!encodedCatalogBytes(snapshot, encoded)) {
+    error = "private catalog snapshot is invalid or exceeds its size bound";
+    return false;
+  }
   const auto operations = atomic_file::privateFileOperations();
   return atomic_file::writeWithBackup(path, std::as_bytes(std::span(encoded)),
                                       error, &operations);
@@ -748,6 +904,10 @@ struct SkinPackageCatalog::Impl {
           std::optional<std::uint64_t> expectedCatalog = std::nullopt,
           std::optional<std::uint64_t> expectedSource = std::nullopt) noexcept {
     try {
+      std::string boundedEncoding;
+      if (!encodedCatalogBytes(snapshot, boundedEncoding)) {
+        return std::nullopt;
+      }
       auto published =
           publishImmediately
               ? std::make_shared<SkinPackageCatalogSnapshot>(snapshot)
@@ -905,6 +1065,14 @@ bool SkinPackageCatalog::recover() {
 bool SkinPackageCatalog::replaceSnapshotDurably(
     SkinPackageCatalogSnapshot snapshot,
     std::vector<SkinDiagnostic> &diagnostics) {
+  std::string boundedEncoding;
+  if (!validateAndCanonicalize(snapshot) ||
+      !encodedCatalogBytes(snapshot, boundedEncoding)) {
+    diagnostics.push_back(catalogDiagnostic(
+        "skin_catalog_snapshot_invalid",
+        "private skin catalog snapshot violates its bounded typed contract"));
+    return false;
+  }
   auto committed = std::make_shared<SkinPackageCatalogSnapshot>(snapshot);
   const auto sequence = impl_->enqueue(std::move(snapshot), true, false);
   if (!sequence) {
@@ -942,7 +1110,11 @@ bool SkinPackageCatalog::replaceSnapshotAsyncIfGeneration(
 
 std::string SkinPackageCatalog::snapshotDigest(
     const SkinPackageCatalogSnapshot &snapshot) const {
-  return file_checksum::sha256(encodeCatalog(snapshot).dump() + "\n");
+  std::string encoded;
+  if (!encodedCatalogBytes(snapshot, encoded)) {
+    return {};
+  }
+  return file_checksum::sha256(encoded);
 }
 
 bool SkinPackageCatalog::writeSnapshotFile(

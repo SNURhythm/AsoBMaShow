@@ -187,6 +187,10 @@ public:
     metadata.skinType = 0;
     metadata.authoredWidth = 1280;
     metadata.authoredHeight = 720;
+    for (std::size_t index = 0; index < metadataDeclarations; ++index) {
+      metadata.categories.push_back(SkinCatalogCategoryDeclaration{
+          .name = "category-" + std::to_string(index)});
+    }
     return {.disposition = SkinValidationDisposition::Selectable7Key,
             .reconciledSettings = EntryProfileSettings{},
             .metadata = std::move(metadata),
@@ -200,6 +204,7 @@ public:
   bool rejectConfigured = false;
   bool cancelled = false;
   bool cancelConfigured = false;
+  std::size_t metadataDeclarations = 0;
   int calls = 0;
 };
 
@@ -944,6 +949,145 @@ void testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation() {
   }
 }
 
+void testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage() {
+  struct AliasPair {
+    std::string existing;
+    std::string candidate;
+  };
+  const std::vector<AliasPair> pairs = {
+      {"FixtureSkin", "fixtureskin"},
+      {"Straße", "STRASSE"},
+      {"Caf\xC3\xA9", "Cafe\xCC\x81"},
+  };
+  for (const AliasPair &pair : pairs) {
+    const auto existingId = normalizePackageId(pair.existing);
+    const auto candidateId = normalizePackageId(pair.candidate);
+    expect(existingId.package && candidateId.package &&
+               existingId.package->collisionKey ==
+                   candidateId.package->collisionKey,
+           "collision fixture aliases normalize to one package identity");
+    if (!existingId.package || !candidateId.package ||
+        existingId.package->collisionKey != candidateId.package->collisionKey) {
+      continue;
+    }
+    for (const PackageCollisionPolicy policy :
+         {PackageCollisionPolicy::Reject, PackageCollisionPolicy::Replace}) {
+      TempDirectory temp;
+      const SkinStorageRoots roots = rootsBelow(temp.root());
+      writeOldTree(roots.visiblePackages / pair.existing);
+      const fs::path source = temp.root() / "collision-candidate";
+      writeNewTree(source);
+      NoAliases aliases;
+      SkinArchiveImporter importer(roots, aliases);
+      auto prepared =
+          importer.prepareFolder(source, *candidateId.package, {}, {});
+      SkinPackageCatalog catalog(roots.privateCatalog);
+      FakeProfileSnapshots profiles;
+      SelectableValidator validator;
+      SkinPackageStore store(roots, catalog, aliases, profiles);
+      expect(store.recoverBeforeServiceStart().disposition ==
+                 SkinRecoveryDisposition::Recovered,
+             "collision fixture bootstraps store");
+      auto result =
+          store.publish(std::move(*prepared.prepared), policy,
+                        ProfileInventorySnapshot{.inventoryGeneration = 1},
+                        validator, {}, {});
+      std::size_t matchingChildren = 0;
+      std::error_code error;
+      for (fs::directory_iterator child(roots.visiblePackages, error), end;
+           !error && child != end; ++child) {
+        const auto name = child->path().filename().u8string();
+        const std::string utf8(reinterpret_cast<const char *>(name.data()),
+                               name.size());
+        const auto normalized = normalizePackageId(utf8);
+        if (normalized.package && normalized.package->collisionKey ==
+                                      candidateId.package->collisionKey) {
+          ++matchingChildren;
+        }
+      }
+      if (policy == PackageCollisionPolicy::Reject) {
+        expect(!result.published && matchingChildren == 1 &&
+                   treeIsOld(roots.visiblePackages / pair.existing),
+               "Reject uses normalized collision identity without adding an "
+               "alias root");
+      } else {
+        expect(result.published && matchingChildren == 1,
+               "Replace atomically leaves one normalized physical package");
+      }
+    }
+  }
+}
+
+void testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const fs::path first = roots.visiblePackages / "FixtureSkin";
+  const fs::path second = roots.visiblePackages / "fixtureskin";
+  writeOldTree(first);
+  writeNewTree(second);
+  std::error_code equivalentError;
+  if (fs::equivalent(first, second, equivalentError) && !equivalentError) {
+    return;
+  }
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "ambiguous collision fixture bootstraps store");
+  const auto scan = store.rescanVisibleSources(
+      {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 1}, validator);
+  expect(!scan.diagnostics.empty() && catalog.snapshot()->packages.empty() &&
+             catalog.snapshot()->entries.empty(),
+         "ambiguous normalized direct children fail closed without duplicate "
+         "catalog identities");
+  catalog.flush();
+  SkinPackageCatalog restartedCatalog(roots.privateCatalog);
+  FakeProfileSnapshots restartedProfiles;
+  SkinPackageStore restarted(roots, restartedCatalog, aliases,
+                             restartedProfiles);
+  expect(restarted.recoverBeforeServiceStart().disposition ==
+                 SkinRecoveryDisposition::Recovered &&
+             restartedCatalog.snapshot()->packages.empty(),
+         "restart never reloads a duplicate normalized catalog identity");
+}
+
+void testEncoderInvalidSnapshotPerformsZeroPublicationMutation() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const auto package = normalizePackageId("FixtureSkin");
+  if (!package.package) {
+    expect(false, "encoder validation fixture package ID is valid");
+    return;
+  }
+  const fs::path source = temp.root() / "encoder-invalid";
+  writeNewTree(source);
+  NoAliases aliases;
+  SkinArchiveImporter importer(roots, aliases);
+  auto prepared = importer.prepareFolder(source, *package.package, {}, {});
+  const std::string revision =
+      prepared.prepared->candidateRevision().lowercaseSha256;
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  SelectableValidator validator;
+  validator.metadataDeclarations = 257;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "encoder validation fixture bootstraps store");
+  const auto result = store.publish(
+      std::move(*prepared.prepared), PackageCollisionPolicy::Reject,
+      ProfileInventorySnapshot{.inventoryGeneration = 1}, validator, {}, {});
+  expect(!result.published && catalog.snapshot()->catalogGeneration == 0 &&
+             !fs::exists(roots.visiblePackages / "FixtureSkin") &&
+             !fs::exists(roots.privateRevisions / revision) &&
+             !fs::exists(roots.privateCatalog / "publication-journal.json"),
+         "decoder-invalid metadata is rejected before any publication "
+         "mutation");
+}
+
 void testConfiguredValidationFailureAndCancellationPreserveOldPackage() {
   for (const bool cancelConfigured : {false, true}) {
     TempDirectory temp;
@@ -1200,10 +1344,21 @@ void testManualInvalidEditRetainsActivationButDeleteHidesIt() {
              "return invalid manual edit",
          "invalid manual edit remains user-visible and diagnosed");
 
-  fs::remove_all(roots.visiblePackages / "FixtureSkin");
+  writeText(roots.visiblePackages / "FixtureSkin/play/play7.luaskin",
+            "return { type = 0, generation = 'valid-new' }");
   validator.disposition = SkinValidationDisposition::Selectable7Key;
-  (void)store.rescanVisibleSources(
+  validator.configurationDigest = std::string(64, '3');
+  const auto validScan = store.rescanVisibleSources(
       {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 3}, validator);
+  expect(!validScan.cancelled && !store
+                                      .acquireValidatedActivation(
+                                          profile, entry, std::string(64, '2'))
+                                      .activation,
+         "valid manual revision advance invalidates the stale activation");
+
+  fs::remove_all(roots.visiblePackages / "FixtureSkin");
+  (void)store.rescanVisibleSources(
+      {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 4}, validator);
   expect(!store.acquireValidatedActivation(profile, entry, std::string(64, '2'))
               .activation,
          "manual package deletion immediately hides activation from new "
@@ -1492,6 +1647,9 @@ int main(int argc, char **argv) {
   testMalformedAndOversizedCatalogFailBootstrap();
   testRemovalJournalRecoversOldAndNewGenerations();
   testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation();
+  testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage();
+  testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity();
+  testEncoderInvalidSnapshotPerformsZeroPublicationMutation();
   testConfiguredValidationFailureAndCancellationPreserveOldPackage();
   testTransactionFailureRetainsJournalForRestartRecovery();
   testGarbageCollectionRejectsLinksAndRetriesQuarantine();
