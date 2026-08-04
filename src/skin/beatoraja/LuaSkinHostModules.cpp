@@ -18,7 +18,6 @@ extern "C" {
 #include <cstring>
 #include <limits>
 #include <new>
-#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -238,6 +237,8 @@ struct LuaSkinHostModulesImpl {
   int fileTokenReference = LUA_NOREF;
   int gdxTokenReference = LUA_NOREF;
   const BeatorajaSkinConfiguration *pendingConfiguration = nullptr;
+  std::vector<ConfiguredFile> configuredFiles;
+  std::string resolvedConfigurationPath;
   std::string lastErrorCode;
   std::string lastErrorMessage;
 
@@ -280,6 +281,8 @@ struct LuaSkinHostModulesImpl {
   }
 
   void releaseHandle(LuaFileHandle &handle) noexcept;
+  bool copyConfiguredFiles(const std::vector<ConfiguredFile> &) noexcept;
+  bool resolveConfiguredPath(std::string_view) noexcept;
   bool reserveHandleBytes(std::uint64_t bytes) noexcept {
     return bytes <= LuaSkinHostPolicy::maxAggregateHandleBytes -
                         std::min(openHandleBytes,
@@ -321,6 +324,102 @@ void LuaSkinHostModulesImpl::releaseHandle(LuaFileHandle &handle) noexcept {
   handle.holdsQuota = false;
   if (openHandleCount > 0) {
     --openHandleCount;
+  }
+}
+
+bool LuaSkinHostModulesImpl::copyConfiguredFiles(
+    const std::vector<ConfiguredFile> &files) noexcept {
+  if (files.size() > SkinProfileSettingsPolicy::maxFilesPerEntry) {
+    storeError("skin_lua_configuration_export_failed",
+               "Lua skin configured file list exceeds its fixed limit");
+    return false;
+  }
+  for (const auto &file : files) {
+    if (file.name.size() >
+            SkinProfileSettingsPolicy::maxConfigurationKeyBytes ||
+        file.pattern.size() >
+            SkinProfileSettingsPolicy::maxConfigurationValueBytes ||
+        file.selectedValue.size() >
+            SkinProfileSettingsPolicy::maxConfigurationValueBytes) {
+      storeError("skin_lua_configuration_export_failed",
+                 "Lua skin configured file text exceeds its fixed limit");
+      return false;
+    }
+  }
+  try {
+    configuredFiles = files;
+    resolvedConfigurationPath.clear();
+    return true;
+  } catch (...) {
+    storeError("skin_lua_configuration_export_failed",
+               "Lua skin configured file copy failed");
+    return false;
+  }
+}
+
+bool LuaSkinHostModulesImpl::resolveConfiguredPath(
+    std::string_view request) noexcept {
+  try {
+    const ConfiguredFile *match = nullptr;
+    for (const auto &file : configuredFiles) {
+      if (!request.starts_with(file.pattern)) {
+        continue;
+      }
+      if (match != nullptr) {
+        storeError("skin_lua_file_operation_failed",
+                   "skin_config.get_path matched multiple configured files");
+        return false;
+      }
+      match = &file;
+    }
+    if (match == nullptr) {
+      storeError("skin_lua_file_operation_failed",
+                 "skin_config.get_path has no configured file match");
+      return false;
+    }
+
+    const std::size_t wildcard = match->pattern.rfind('*');
+    if (wildcard == std::string::npos ||
+        request.size() < match->pattern.size()) {
+      storeError("skin_lua_file_operation_failed",
+                 "skin_config.get_path pattern cannot be resolved");
+      return false;
+    }
+    const std::size_t requestSuffixSize =
+        request.size() - match->pattern.size();
+    if (wildcard > SkinPackagePolicy::maxPathBytes ||
+        match->selectedValue.size() >
+            SkinPackagePolicy::maxPathBytes - wildcard ||
+        requestSuffixSize > SkinPackagePolicy::maxPathBytes - wildcard -
+                                match->selectedValue.size()) {
+      storeError("skin_lua_file_operation_failed",
+                 "skin_config.get_path result exceeds its fixed limit");
+      return false;
+    }
+
+    std::string candidate;
+    candidate.reserve(wildcard + match->selectedValue.size() +
+                      requestSuffixSize);
+    candidate.append(match->pattern, 0, wildcard);
+    candidate.append(match->selectedValue);
+    candidate.append(request, match->pattern.size(), requestSuffixSize);
+
+    auto resolved = fileSystem->resolve(candidate, SkinFileUse::Resource);
+    if (resolved.failure) {
+      storeFileError(*resolved.failure);
+      return false;
+    }
+    if (!resolved.normalizedVirtualPath) {
+      storeError("skin_lua_file_operation_failed",
+                 "skin_config.get_path did not resolve a resource");
+      return false;
+    }
+    resolvedConfigurationPath = std::move(*resolved.normalizedVirtualPath);
+    return true;
+  } catch (...) {
+    storeError("skin_lua_file_operation_failed",
+               "skin_config.get_path failed within host limits");
+    return false;
   }
 }
 
@@ -1083,10 +1182,30 @@ void pushOffset(lua_State *state, const ConfigOffset &offset) {
   lua_setfield(state, -2, "a");
 }
 
+int configuredGetPath(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  if (lua_gettop(state) != 1) {
+    impl->storeError("skin_lua_file_operation_failed",
+                     "skin_config.get_path accepts exactly one path");
+    return raiseStoredError(state, impl);
+  }
+  std::size_t requestSize = 0;
+  const char *request = luaL_checklstring(state, 1, &requestSize);
+  if (!impl->resolveConfiguredPath(std::string_view(request, requestSize))) {
+    return raiseStoredError(state, impl);
+  }
+  lua_pushlstring(state, impl->resolvedConfigurationPath.data(),
+                  impl->resolvedConfigurationPath.size());
+  return 1;
+}
+
 int installPendingConfiguration(lua_State *state) {
   auto *impl = static_cast<LuaSkinHostModulesImpl *>(lua_touserdata(state, 1));
   const auto &configuration = *impl->pendingConfiguration;
-  lua_createtable(state, 0, 4);
+  lua_createtable(state, 0, 5);
+
+  installClosure(state, impl, configuredGetPath);
+  lua_setfield(state, -2, "get_path");
 
   lua_createtable(state, 0, static_cast<int>(configuration.filePaths.size()));
   for (const auto &[name, path] : configuration.filePaths) {
@@ -1106,22 +1225,12 @@ int installPendingConfiguration(lua_State *state) {
   }
   lua_setfield(state, -2, "option");
 
-  lua_createtable(state,
-                  static_cast<int>(configuration.enabledOptionIds.size()), 0);
-  std::set<int> emitted;
+  lua_createtable(state, static_cast<int>(configuration.orderedOptions.size()),
+                  0);
   int enabledIndex = 1;
   for (const auto &option : configuration.orderedOptions) {
-    if (configuration.enabledOptionIds.contains(option.value) &&
-        emitted.insert(option.value).second) {
-      lua_pushinteger(state, option.value);
-      lua_rawseti(state, -2, enabledIndex++);
-    }
-  }
-  for (const int value : configuration.enabledOptionIds) {
-    if (emitted.insert(value).second) {
-      lua_pushinteger(state, value);
-      lua_rawseti(state, -2, enabledIndex++);
-    }
+    lua_pushinteger(state, option.value);
+    lua_rawseti(state, -2, enabledIndex++);
   }
   lua_setfield(state, -2, "enabled_options");
 
@@ -1181,6 +1290,10 @@ LuaSkinHostModules::~LuaSkinHostModules() = default;
 
 std::optional<SkinDiagnostic> LuaSkinHostModules::installConfiguration(
     const BeatorajaSkinConfiguration &configuration) {
+  if (!impl_->copyConfiguredFiles(configuration.orderedFiles)) {
+    return diagnostic("skin_lua_configuration_export_failed",
+                      impl_->lastErrorMessage);
+  }
   impl_->pendingConfiguration = &configuration;
   const int status =
       lua_cpcall(impl_->state, installPendingConfiguration, impl_.get());

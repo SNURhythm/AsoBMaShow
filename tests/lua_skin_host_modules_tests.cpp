@@ -123,6 +123,29 @@ if not skin_config then return {type = 0} end
 local path = skin_config.get_path("parts/frame/*/panel.png")
 assert(path == "skin/parts/frame/red/panel.png")
 assert(not path:find("HOST_ROOT_MUST_NOT_LEAK", 1, true))
+local full_filename = skin_config.get_path("parts/background/*.png")
+assert(full_filename == "skin/parts/background/bg.png")
+return {}
+)lua");
+    writeText(source / "skin/get_path_denied.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+local requests = {
+  "parts/random/*.png",
+  "parts/frame/*/panel.png",
+  "parts/frame/*/still-*.png",
+  "/etc/*",
+  "../../outside/*",
+  "parts/frame/*/panel.png",
+  "parts/frame/*",
+}
+local ok, message = pcall(skin_config.get_path,
+                           requests[skin_config.option.Case])
+assert(not ok, "unsafe get_path request unexpectedly succeeded")
+message = tostring(message)
+assert(message:find("@ASOBMSKIN:skin_lua_file_operation_failed:", 1, true) == 1,
+       "get_path denial must be a protected host error")
+assert(not message:find("HOST_ROOT_MUST_NOT_LEAK", 1, true),
+       "get_path denial leaked the host revision root")
 return {}
 )lua");
     writeText(source / "skin/captured_get_path.luaskin", R"lua(
@@ -135,6 +158,13 @@ return {
 }
 )lua");
     writeText(source / "skin/parts/frame/red/panel.png", "selected");
+    writeText(source / "skin/parts/frame/blue/panel.png",
+              "random-fallback-must-not-win");
+    writeText(source / "skin/parts/frame/folder/placeholder.txt",
+              "directory-is-not-a-resource");
+    writeText(source / "skin/parts/background/bg.png", "selected-filename");
+    writeText(source / "skin/parts/random/fallback.png",
+              "random-fallback-must-not-win");
 
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
@@ -193,11 +223,14 @@ HostContractFixture &fixture() {
 
 BeatorajaSkinConfiguration happyConfiguration() {
   BeatorajaSkinConfiguration configuration;
-  configuration.filePaths = {{"Frame", "red"}};
+  configuration.filePaths = {{"Background", "bg.png"}, {"Frame", "red"}};
   configuration.orderedFiles = {
       ConfiguredFile{.name = "Frame",
                      .pattern = "parts/frame/*",
-                     .selectedValue = "red"}};
+                     .selectedValue = "red"},
+      ConfiguredFile{.name = "Background",
+                     .pattern = "parts/background/*.png",
+                     .selectedValue = "bg.png"}};
   return configuration;
 }
 
@@ -238,6 +271,70 @@ void testGetPathSubstitutesAtWildcardAndKeepsTheSuffixVirtual() {
   expect(configured.value.has_value() && !configured.failure,
          "get_path substitutes the selected value at '*' while preserving "
          "the authored suffix and returns only a normalized package path");
+}
+
+BeatorajaSkinConfiguration deniedConfiguration(int caseId) {
+  BeatorajaSkinConfiguration configuration = happyConfiguration();
+  configuration.orderedOptions = {{.name = "Case", .value = caseId}};
+  configuration.options = {{"Case", caseId}};
+  configuration.enabledOptionIds = {caseId};
+  switch (caseId) {
+  case 2:
+    configuration.filePaths = {{"Frame A", "red"}, {"Frame B", "blue"}};
+    configuration.orderedFiles = {
+        {.name = "Frame A",
+         .pattern = "parts/frame/*",
+         .selectedValue = "red"},
+        {.name = "Frame B",
+         .pattern = "parts/frame/*",
+         .selectedValue = "blue"}};
+    break;
+  case 4:
+    configuration.filePaths = {{"Host", "passwd"}};
+    configuration.orderedFiles = {
+        {.name = "Host", .pattern = "/etc/*", .selectedValue = "passwd"}};
+    break;
+  case 5:
+    configuration.filePaths = {{"Escape", "file.png"}};
+    configuration.orderedFiles = {
+        {.name = "Escape",
+         .pattern = "../../outside/*",
+         .selectedValue = "file.png"}};
+    break;
+  case 6:
+    configuration.filePaths = {{"Frame", "missing"}};
+    configuration.orderedFiles.front().selectedValue = "missing";
+    break;
+  case 7:
+    configuration.filePaths = {{"Frame", "folder"}};
+    configuration.orderedFiles.front().selectedValue = "folder";
+    break;
+  default:
+    break;
+  }
+  return configuration;
+}
+
+void testGetPathRejectsUnsafeAndNondeterministicResolution() {
+  static constexpr std::string_view cases[] = {
+      "unconfigured pattern",       "ambiguous configured patterns",
+      "unresolved wildcard",        "absolute host path",
+      "package escape",             "missing selected resource",
+      "non-regular selected resource",
+  };
+  for (int caseId = 1; caseId <= 7; ++caseId) {
+    auto harness = fixture().create("get_path_denied.luaskin",
+                                    LuaRuntimePurpose::Validation);
+    if (!harness) {
+      continue;
+    }
+    expect(harness->runtime->loadHeader().value.has_value(),
+           "get_path denial fixture loads its header");
+    const auto configured =
+        harness->runtime->loadConfigured(deniedConfiguration(caseId));
+    expect(configured.value.has_value() && !configured.failure,
+           cases[caseId - 1]);
+  }
 }
 
 void testCapturedGetPathLosesAuthorityAtRenderTransition() {
@@ -284,6 +381,7 @@ void testCapturedGetPathLosesAuthorityAtRenderTransition() {
 int main() {
   testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates();
   testGetPathSubstitutesAtWildcardAndKeepsTheSuffixVirtual();
+  testGetPathRejectsUnsafeAndNondeterministicResolution();
   testCapturedGetPathLosesAuthorityAtRenderTransition();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
