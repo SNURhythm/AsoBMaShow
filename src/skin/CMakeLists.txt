@@ -19,6 +19,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
     target_sources(main PRIVATE
         beatoraja/GameplaySkinBuiltinCatalog.cpp
         beatoraja/GameplaySkinValidator.cpp
+        beatoraja/BgfxSkinTextureDevice.cpp
         LuaGameplaySkinFeatureEnabled.cpp
         SkinConfigurationWriteQueue.cpp
         beatoraja/PlaySkinSession.cpp

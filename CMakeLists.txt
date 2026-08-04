@@ -4367,6 +4367,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(gameplay_bga_target_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(bgfx_skin_texture_device_tests
+        tests/bgfx_skin_texture_device_tests.cpp
+        src/skin/beatoraja/BgfxSkinTextureDevice.cpp
+    )
+    target_include_directories(bgfx_skin_texture_device_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(bgfx_skin_texture_device_tests PRIVATE cxx_std_23)
+    target_link_libraries(bgfx_skin_texture_device_tests PRIVATE ${COMMON_LIBS} bgfx)
+
     add_executable(playfield_chart_visual_model_tests
         tests/playfield_chart_visual_model_tests.cpp
         src/bms_parser.cpp
@@ -5800,6 +5810,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_score_state_tests)
     asobmashow_register_test(playfield_visual_state_tests)
     asobmashow_register_test(gameplay_bga_target_tests)
+    asobmashow_register_test(bgfx_skin_texture_device_tests)
     asobmashow_register_test(practice_session_tests)
     asobmashow_register_test(gameplay_practice_boundary_tests)
     asobmashow_register_test(gameplay_playback_startup_tests)
