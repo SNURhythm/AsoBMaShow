@@ -26,6 +26,7 @@
 #include <bx/math.h>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -111,6 +112,106 @@ struct JudgementCounterSnapshot {
   int kpoor = 0;
   int comboBreak = 0;
 };
+
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+namespace bms_renderer_characterization {
+
+inline constexpr std::size_t kNoTimelineOrdinal =
+    std::numeric_limits<std::size_t>::max();
+
+enum class Surface {
+  Main,
+  Ui,
+};
+
+enum class SubmissionKind {
+  Background,
+  JudgeLine,
+  MeasureLine,
+  NormalNote,
+  InvisiblePrimitive,
+  Mine,
+  LongBody,
+  LongTail,
+  LongHead,
+  ReplayGhostPrimitive,
+  ReplayMissPrimitive,
+  LaneBeamPass,
+  LaneCoverPass,
+  StartIndicatorPass,
+  JudgementIndicatorPass,
+  GaugePass,
+  HudPass,
+  TouchPass,
+};
+
+enum class LongBodyState {
+  None,
+  Off,
+  On,
+  Damage,
+};
+
+struct Rect {
+  float x = 0.0F;
+  float y = 0.0F;
+  float width = 0.0F;
+  float height = 0.0F;
+};
+
+struct FrameSnapshot {
+  long long renderTimeMicros = 0;
+  long long chartTimeMicros = 0;
+  long long replayTouchTimeMicros = 0;
+  double currentScrollPosition = 0.0;
+  double visibleScrollMinimum = 0.0;
+  double visibleScrollMaximum = 0.0;
+  double visibleReferenceBpm = 0.0;
+  float hispeed = 0.0F;
+  float rxhs = 0.0F;
+  float playAreaLeftX = 0.0F;
+  float playAreaWidth = 0.0F;
+  float noteRenderWidth = 0.0F;
+  float noteRenderHeight = 0.0F;
+  float lowerBound = 0.0F;
+  float judgeY = 0.0F;
+  float upperBound = 0.0F;
+  float noteVisibleUpperBound = 0.0F;
+  int laneCoverPercent = 0;
+  Rect laneCoverHandle;
+};
+
+struct TimelineProjection {
+  std::size_t timelineOrdinal = kNoTimelineOrdinal;
+  long long timelineMicros = 0;
+  float y = 0.0F;
+  bool future = false;
+  bool finite = false;
+};
+
+struct Submission {
+  SubmissionKind kind = SubmissionKind::Background;
+  Surface surface = Surface::Main;
+  std::uint32_t depth = 0;
+  std::size_t timelineOrdinal = kNoTimelineOrdinal;
+  std::size_t pairedTimelineOrdinal = kNoTimelineOrdinal;
+  long long timelineMicros = 0;
+  int lane = -1;
+  std::size_t primitiveOrdinal = 0;
+  LongBodyState longBodyState = LongBodyState::None;
+  Rect rect;
+};
+
+class Recorder {
+public:
+  virtual ~Recorder() = default;
+  virtual void beginFrame(const FrameSnapshot &frame) = 0;
+  virtual void project(const TimelineProjection &projection) = 0;
+  virtual void submit(const Submission &submission) = 0;
+};
+
+} // namespace bms_renderer_characterization
+#endif
 
 class BMSRenderer : public PlayfieldPresentation {
 public:
@@ -388,6 +489,19 @@ private:
   NoteSheet scratchSheet;
   bms_parser::Chart *chart;
   bool laneIsCurrentlyPressed(int lane) const;
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  bms_renderer_characterization::Recorder *characterizationRecorder = nullptr;
+  [[nodiscard]] std::size_t characterizationTimelineOrdinal(
+      const bms_parser::TimeLine *timeline) const;
+  void recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind kind,
+      bms_renderer_characterization::Surface surface, std::uint32_t depth,
+      const bms_parser::TimeLine *timeline,
+      const bms_parser::TimeLine *pairedTimeline, int lane,
+      std::size_t primitiveOrdinal,
+      bms_renderer_characterization::LongBodyState longBodyState,
+      bms_renderer_characterization::Rect rect);
+#endif
 
 public:
   static std::unique_ptr<TextView> createAutoPlayMarkText();
@@ -459,6 +573,12 @@ public:
   void setReplayGhostRenderingEnabled(bool enabled);
   void setStartLaneIndicators(std::vector<int> lanes);
   void setStartLaneIndicatorsVisible(bool visible);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  void setCharacterizationRecorder(
+      bms_renderer_characterization::Recorder *recorder) {
+    characterizationRecorder = recorder;
+  }
+#endif
   void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,
                          float y, long long songTimeMicros);
   void clearLiveTouchPoints();

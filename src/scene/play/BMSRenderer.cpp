@@ -1838,6 +1838,46 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
   }
 }
 
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+std::size_t BMSRenderer::characterizationTimelineOrdinal(
+    const bms_parser::TimeLine *timeline) const {
+  if (timeline == nullptr) {
+    return bms_renderer_characterization::kNoTimelineOrdinal;
+  }
+  const auto found = std::find(timelines.cbegin(), timelines.cend(), timeline);
+  if (found == timelines.cend()) {
+    return bms_renderer_characterization::kNoTimelineOrdinal;
+  }
+  return static_cast<std::size_t>(std::distance(timelines.cbegin(), found));
+}
+
+void BMSRenderer::recordCharacterizationSubmission(
+    bms_renderer_characterization::SubmissionKind kind,
+    bms_renderer_characterization::Surface surface, std::uint32_t depth,
+    const bms_parser::TimeLine *timeline,
+    const bms_parser::TimeLine *pairedTimeline, int lane,
+    std::size_t primitiveOrdinal,
+    bms_renderer_characterization::LongBodyState longBodyState,
+    bms_renderer_characterization::Rect rect) {
+  if (characterizationRecorder == nullptr) {
+    return;
+  }
+  characterizationRecorder->submit({
+      .kind = kind,
+      .surface = surface,
+      .depth = depth,
+      .timelineOrdinal = characterizationTimelineOrdinal(timeline),
+      .pairedTimelineOrdinal =
+          characterizationTimelineOrdinal(pairedTimeline),
+      .timelineMicros = timeline != nullptr ? timeline->Timing : 0,
+      .lane = lane,
+      .primitiveOrdinal = primitiveOrdinal,
+      .longBodyState = longBodyState,
+      .rect = rect,
+  });
+}
+#endif
+
 void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
     gameplay_note_submission_order::LongNoteOrder order,
@@ -1880,6 +1920,14 @@ void BMSRenderer::drawLongNote(
   const bool hcnBodyRegrabbed = headHasReachedJudge && isHellCharge &&
                                 laneIsCurrentlyPressed(head->Lane);
   const bool bodyActive = head->IsHolding || hcnBodyRegrabbed;
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  const auto characterizationBodyState =
+      bodyActive
+          ? bms_renderer_characterization::LongBodyState::On
+          : (isHellCharge && headHasReachedJudge
+                 ? bms_renderer_characterization::LongBodyState::Damage
+                 : bms_renderer_characterization::LongBodyState::Off);
+#endif
   bgfx::TextureHandle bodyTexture = BGFX_INVALID_HANDLE;
   float bodyRenderHeight = longBodyRenderHeightOff;
   int bodyFrameCount = 1;
@@ -1923,6 +1971,17 @@ void BMSRenderer::drawLongNote(
       bodyBatch.addRect(laneToX(head->Lane), bodyStartY, bodyWidth, bodyHeight,
                         1.0f, tileV, bodyTexture);
     }
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::LongBody,
+        bms_renderer_characterization::Surface::Main, order.bodyDepth,
+        head->Timeline, head->Tail->Timeline, head->Lane, 0,
+        characterizationBodyState,
+        {.x = laneToX(head->Lane),
+         .y = bodyStartY,
+         .width = bodyWidth,
+         .height = bodyHeight});
+#endif
   }
 
   if (tailClip.visible && !isClassicLongNote &&
@@ -1933,6 +1992,17 @@ void BMSRenderer::drawLongNote(
         clippedBottomV(tailUv.v0, tailUv.v1,
                        tailClip.bottomTextureFraction),
         sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::LongTail,
+        bms_renderer_characterization::Surface::Main, order.endpointDepth,
+        head->Tail->Timeline, head->Timeline, head->Tail->Lane, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = laneToX(head->Tail->Lane),
+         .y = tailClip.y,
+         .width = noteRenderWidth,
+         .height = tailClip.height});
+#endif
   }
 
   if (head->IsPlayed || !headClip.visible)
@@ -1945,6 +2015,17 @@ void BMSRenderer::drawLongNote(
       clippedBottomV(headUv.v0, headUv.v1,
                      headClip.bottomTextureFraction),
       sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::LongHead,
+      bms_renderer_characterization::Surface::Main, order.endpointDepth,
+      head->Timeline, head->Tail->Timeline, head->Lane, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = laneToX(head->Lane),
+       .y = headClip.y,
+       .width = noteRenderWidth,
+       .height = headClip.height});
+#endif
 }
 
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
@@ -1969,6 +2050,17 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
       clippedBottomV(sheet.note.v0, sheet.note.v1,
                      clip.bottomTextureFraction),
       sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::NormalNote,
+      bms_renderer_characterization::Surface::Main, submitDepth,
+      note->Timeline, nullptr, note->Lane, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = laneToX(note->Lane),
+       .y = clip.y,
+       .width = noteRenderWidth,
+       .height = clip.height});
+#endif
 }
 
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
@@ -1992,6 +2084,17 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
     setInvisibleBatchDepth(submitDepth);
     gimmickBatchRenderer.addRect(x, clip.y, noteRenderWidth, clip.height,
                                  color);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::InvisiblePrimitive,
+        bms_renderer_characterization::Surface::Main, submitDepth,
+        note->Timeline, nullptr, note->Lane, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = x,
+         .y = clip.y,
+         .width = noteRenderWidth,
+         .height = clip.height});
+#endif
     return;
   }
 
@@ -2012,6 +2115,17 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
     const auto &rect = outline.rectangles[i];
     gimmickBatchRenderer.addRect(rect.x, rect.y, rect.width, rect.height,
                                  color);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::InvisiblePrimitive,
+        bms_renderer_characterization::Surface::Main, submitDepth,
+        note->Timeline, nullptr, note->Lane, i,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = rect.x,
+         .y = rect.y,
+         .width = rect.width,
+         .height = rect.height});
+#endif
   }
 }
 
@@ -2038,6 +2152,17 @@ void BMSRenderer::drawLandmineNote(float y,
       clippedBottomV(sheet.mine.v0, sheet.mine.v1,
                      clip.bottomTextureFraction),
       sheet.texture);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::Mine,
+      bms_renderer_characterization::Surface::Main, submitDepth,
+      note->Timeline, nullptr, note->Lane, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = laneToX(note->Lane),
+       .y = clip.y,
+       .width = noteRenderWidth,
+       .height = clip.height});
+#endif
 }
 
 void BMSRenderer::buildTimelineScrollPositions() {
@@ -2544,6 +2669,56 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   float rxhs = visibleTravelHeight * hispeed;
   float y = judgeY;
   const double currentScrollPosition = scrollPositionAtTime(chartTimeMicros);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  if (characterizationRecorder != nullptr) {
+    const auto visibleScroll = gameplay_scroll_geometry::visibleScrollRange(
+        currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+        judgeY);
+    const auto coverHandle = laneCoverHandleGeometry();
+    characterizationRecorder->beginFrame({
+        .renderTimeMicros = micro,
+        .chartTimeMicros = chartTimeMicros,
+        .replayTouchTimeMicros = replayTouchTimeMicros,
+        .currentScrollPosition = currentScrollPosition,
+        .visibleScrollMinimum = visibleScroll.minimum,
+        .visibleScrollMaximum = visibleScroll.maximum,
+        .visibleReferenceBpm = visibleTimeReferenceBpm(),
+        .hispeed = hispeed,
+        .rxhs = rxhs,
+        .playAreaLeftX = playAreaLeftX,
+        .playAreaWidth = playAreaWidth,
+        .noteRenderWidth = noteRenderWidth,
+        .noteRenderHeight = noteRenderHeight,
+        .lowerBound = lowerBound,
+        .judgeY = judgeY,
+        .upperBound = upperBound,
+        .noteVisibleUpperBound = noteVisibleUpperBound,
+        .laneCoverPercent = noteStartPositionPercent,
+        .laneCoverHandle = {.x = coverHandle.x,
+                            .y = coverHandle.y,
+                            .width = coverHandle.width,
+                            .height = coverHandle.height},
+    });
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::Background,
+        bms_renderer_characterization::Surface::Main, kBackgroundDepth,
+        nullptr, nullptr, -1, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = playAreaLeftX,
+         .y = judgeY,
+         .width = playAreaWidth,
+         .height = upperBound - judgeY});
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::JudgeLine,
+        bms_renderer_characterization::Surface::Main, kBackgroundDepth,
+        nullptr, nullptr, -1, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = playAreaLeftX,
+         .y = judgeY,
+         .width = playAreaWidth,
+         .height = noteRenderHeight});
+  }
+#endif
   gameplay_note_submission_order::Allocator submissionOrder;
   const auto pastLongNoteOrder = submissionOrder.captureLongNote();
   auto &longNoteLookahead = longNoteLookaheadScratch;
@@ -2602,6 +2777,17 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       y = gameplay_scroll_geometry::renderY(
           timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY);
     }
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    if (characterizationRecorder != nullptr) {
+      characterizationRecorder->project({
+          .timelineOrdinal = i,
+          .timelineMicros = timeLine->Timing,
+          .y = y,
+          .future = timelineIsFuture,
+          .finite = std::isfinite(y),
+      });
+    }
+#endif
 
     if (timeLine->IsFirstInMeasure &&
         gameplay_scroll_geometry::shouldDrawMeasureLine(
@@ -2611,6 +2797,17 @@ void BMSRenderer::render(RenderContext &context, long long micro,
                 kSingleRectangleEntityCost)) {
       drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
                Color(255, 255, 255, 128));
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+      recordCharacterizationSubmission(
+          bms_renderer_characterization::SubmissionKind::MeasureLine,
+          bms_renderer_characterization::Surface::Main, kBackgroundDepth,
+          timeLine, nullptr, -1, 0,
+          bms_renderer_characterization::LongBodyState::None,
+          {.x = playAreaLeftX,
+           .y = y,
+           .width = playAreaWidth,
+           .height = 0.05F});
+#endif
     }
     if (timeLine->Timing < chartTimeMicros - latePoorTiming) {
       state.currentTimelineIndex = i;
@@ -2793,6 +2990,17 @@ void BMSRenderer::render(RenderContext &context, long long micro,
 
   if (renderLaneBeams) {
     simpleBatchRenderer.setSubmitDepth(kLaneBeamDepth);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::LaneBeamPass,
+        bms_renderer_characterization::Surface::Main, kLaneBeamDepth, nullptr,
+        nullptr, -1, 0,
+        bms_renderer_characterization::LongBodyState::None,
+        {.x = playAreaLeftX,
+         .y = judgeY,
+         .width = playAreaWidth,
+         .height = std::max(0.0F, noteVisibleUpperBound - judgeY)});
+#endif
     const long long nowMicros =
         useRenderTimeForLaneBeams
             ? micro
@@ -2824,12 +3032,34 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   simpleBatchRenderer.setSubmitDepth(start_lane_indicator::kLaneCoverDepth);
   simpleBatchRenderer.begin();
   drawLaneCover();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::LaneCoverPass,
+      bms_renderer_characterization::Surface::Main,
+      start_lane_indicator::kLaneCoverDepth, nullptr, nullptr, -1, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = playAreaLeftX,
+       .y = noteVisibleUpperBound,
+       .width = playAreaWidth,
+       .height = std::max(0.0F, upperBound - noteVisibleUpperBound)});
+#endif
   simpleBatchRenderer.flush();
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(start_lane_indicator::kIndicatorDepth);
   simpleBatchRenderer.begin();
   drawStartLaneIndicators();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+  recordCharacterizationSubmission(
+      bms_renderer_characterization::SubmissionKind::StartIndicatorPass,
+      bms_renderer_characterization::Surface::Main,
+      start_lane_indicator::kIndicatorDepth, nullptr, nullptr, -1, 0,
+      bms_renderer_characterization::LongBodyState::None,
+      {.x = playAreaLeftX,
+       .y = judgeY,
+       .width = playAreaWidth,
+       .height = std::max(0.0F, noteVisibleUpperBound - judgeY)});
+#endif
   simpleBatchRenderer.flush();
   layoutLaneCoverNumberTexts();
   if (laneCoverWhiteNumberText != nullptr) {
@@ -2854,6 +3084,18 @@ void BMSRenderer::render(RenderContext &context, long long micro,
                                .playAreaWidth = playAreaWidth,
                                .noteRenderWidth = noteRenderWidth,
                                .noteRenderHeight = noteRenderHeight});
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::JudgementIndicatorPass,
+        indicatorHudMode ? bms_renderer_characterization::Surface::Ui
+                         : bms_renderer_characterization::Surface::Main,
+        indicatorHudMode ? 0U : kJudgementIndicatorDepth, nullptr, nullptr, -1,
+        0, bms_renderer_characterization::LongBodyState::None,
+        {.x = playAreaLeftX,
+         .y = judgeY,
+         .width = playAreaWidth,
+         .height = std::max(0.0F, upperBound - judgeY)});
+#endif
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
   }
@@ -2864,6 +3106,18 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       simpleBatchRenderer.setSubmitDepth(kGaugeDepth);
       simpleBatchRenderer.begin();
       drawGaugeBar();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+      const auto gaugeRect = worldGaugeRect();
+      recordCharacterizationSubmission(
+          bms_renderer_characterization::SubmissionKind::GaugePass,
+          bms_renderer_characterization::Surface::Main, kGaugeDepth, nullptr,
+          nullptr, -1, 0,
+          bms_renderer_characterization::LongBodyState::None,
+          {.x = gaugeRect[0],
+           .y = gaugeRect[1],
+           .width = gaugeRect[2],
+           .height = gaugeRect[3]});
+#endif
       simpleBatchRenderer.flush();
     }
     layoutCenteredJudgementText();
@@ -2874,11 +3128,32 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     drawGameplayHudPanels();
     if (gaugeBarPosition != AppSettings::GaugeBarPosition::World) {
       drawGaugeBar();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+      const auto gaugeRect = hudGaugeRect();
+      recordCharacterizationSubmission(
+          bms_renderer_characterization::SubmissionKind::GaugePass,
+          bms_renderer_characterization::Surface::Ui, 0, nullptr, nullptr, -1,
+          0, bms_renderer_characterization::LongBodyState::None,
+          {.x = gaugeRect[0],
+           .y = gaugeRect[1],
+           .width = gaugeRect[2],
+           .height = gaugeRect[3]});
+#endif
     }
     if (judgementCounterEnabled) {
       drawJudgementCounterPanels();
     }
     drawJudgementAccentBar();
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::HudPass,
+        bms_renderer_characterization::Surface::Ui, 0, nullptr, nullptr, -1,
+        0, bms_renderer_characterization::LongBodyState::None,
+        {.x = 0.0F,
+         .y = 0.0F,
+         .width = static_cast<float>(rendering::window_width),
+         .height = static_cast<float>(rendering::window_height)});
+#endif
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
     drawTitle(context);
@@ -2907,6 +3182,16 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     simpleBatchRenderer.setSubmitDepth(1);
     simpleBatchRenderer.begin();
     drawTouchPoints(replayTouchTimeMicros);
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+    recordCharacterizationSubmission(
+        bms_renderer_characterization::SubmissionKind::TouchPass,
+        bms_renderer_characterization::Surface::Ui, 1, nullptr, nullptr, -1,
+        0, bms_renderer_characterization::LongBodyState::None,
+        {.x = 0.0F,
+         .y = 0.0F,
+         .width = static_cast<float>(rendering::window_width),
+         .height = static_cast<float>(rendering::window_height)});
+#endif
     simpleBatchRenderer.flush();
     simpleBatchRenderer.setSubmitView(rendering::main_view);
   }

@@ -546,6 +546,53 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+    if(APPLE AND NOT IOS)
+        add_executable(builtin_renderer_characterization_tests
+            tests/builtin_renderer_characterization_tests.cpp
+            src/ArchiveFile.cpp
+            src/MinizBridge.c
+            src/audio/GameplayBgaMissStateTracker.cpp
+            src/bms_parser.cpp
+            src/path.cpp
+            src/rendering/Camera.cpp
+            src/rendering/Color.cpp
+            src/rendering/common.cpp
+            src/rendering/RenderPlan.cpp
+            src/rendering/SimpleBatchRenderer.cpp
+            src/rendering/TexBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
+            src/scene/play/BMSRenderer.cpp
+            src/scene/play/GameplayGaugeRules.cpp
+            src/scene/play/Judge.cpp
+            src/scene/play/JudgementIndicatorRenderer.cpp
+            src/scene/play/PlayfieldChartVisualModel.cpp
+            src/scene/play/PlayfieldVisualState.cpp
+            src/utils/SpriteLoader.cpp
+            src/view/DecodedImageCache.cpp
+            src/view/ImageFileDecoder.cpp
+            src/view/SdlTtfRuntime.cpp
+            src/view/TextView.cpp
+            src/view/View.cpp
+            bgfx/bimg/3rdparty/lodepng/lodepng.cpp
+        )
+        target_include_directories(builtin_renderer_characterization_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+            ${CMAKE_SOURCE_DIR}/bgfx/bimg/3rdparty/lodepng
+        )
+        target_compile_features(builtin_renderer_characterization_tests PRIVATE cxx_std_23)
+        target_compile_definitions(builtin_renderer_characterization_tests PRIVATE
+            ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION=1
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(builtin_renderer_characterization_tests PRIVATE
+            ${COMMON_LIBS}
+            bgfx
+            yogacore
+            iconv
+        )
+    endif()
+
     add_executable(skin_path_policy_tests
         tests/skin_path_policy_tests.cpp
         src/skin/package/SkinPathPolicy.cpp
@@ -5397,6 +5444,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if (TARGET skin_renderer_golden_tests)
         asobmashow_register_test(skin_renderer_golden_tests)
         set_tests_properties(skin_renderer_golden_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+    endif()
+    if(TARGET builtin_renderer_characterization_tests)
+        asobmashow_register_test(builtin_renderer_characterization_tests)
+        set_tests_properties(builtin_renderer_characterization_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
     endif()
