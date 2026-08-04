@@ -3,6 +3,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include "Skin2DRenderer.h"
+#include "SkinCoverNormalization.h"
 
 #include <algorithm>
 #include <array>
@@ -545,6 +546,29 @@ ResolvedValue<std::int64_t> resolveTimer(const SkinFrameInputs &inputs,
   return {.value = *value};
 }
 
+struct ResolvedTimerUse {
+  std::int64_t value = INT64_MIN;
+  bool off = false;
+  std::optional<SkinDiagnostic> failure;
+};
+
+ResolvedTimerUse resolveTimerUse(const SkinFrameInputs &inputs,
+                                 const FrameLookupIndex &index,
+                                 SkinTimerPropertyId id) {
+  const auto probe = resolveTimer(inputs, index, id);
+  if (probe.failure) {
+    return {.failure = *probe.failure};
+  }
+  if (*probe.value == INT64_MIN) {
+    return {.off = true};
+  }
+  const auto value = resolveTimer(inputs, index, id);
+  if (value.failure) {
+    return {.failure = *value.failure};
+  }
+  return {.value = *value.value};
+}
+
 struct SpriteSelection {
   const SkinSourceRect *frame = nullptr;
   bool suppressed = false;
@@ -573,21 +597,27 @@ selectAnimationFrame(const SkinFrameInputs &inputs,
   }
   std::int64_t elapsedMicros = inputs.visualTimeMicros;
   if (timer) {
-    const auto resolved = resolveTimer(inputs, index, *timer);
+    const auto resolved = resolveTimerUse(inputs, index, *timer);
     if (resolved.failure) {
       return {.failure = *resolved.failure};
     }
-    if (*resolved.value == INT64_MIN) {
+    if (resolved.off) {
       return {.frame = 0};
     }
-    const auto difference = static_cast<__int128>(inputs.visualTimeMicros) -
-                            static_cast<__int128>(*resolved.value);
+    const auto difference =
+        static_cast<__int128>(inputs.visualTimeMicros / 1000) -
+        static_cast<__int128>(resolved.value / 1000);
     if (difference < 0) {
       return {.frame = 0};
     }
-    elapsedMicros = difference > std::numeric_limits<std::int64_t>::max()
-                        ? std::numeric_limits<std::int64_t>::max()
-                        : static_cast<std::int64_t>(difference);
+    const auto elapsedMillis =
+        difference > std::numeric_limits<std::int64_t>::max()
+            ? std::numeric_limits<std::int64_t>::max()
+            : static_cast<std::int64_t>(difference);
+    elapsedMicros =
+        elapsedMillis > std::numeric_limits<std::int64_t>::max() / 1000
+            ? std::numeric_limits<std::int64_t>::max()
+            : elapsedMillis * 1000;
   }
   std::size_t frame = 0;
   if (frameCount > 1 && cycleMillis > 0) {
@@ -1401,17 +1431,20 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   }
 
   std::int64_t timerStartMicros = INT64_MIN;
+  bool timerOff = false;
   if (presentation.timer) {
-    const auto timer = resolveTimer(inputs, index, *presentation.timer);
+    const auto timer = resolveTimerUse(inputs, index, *presentation.timer);
     if (timer.failure) {
       result.failures.push_back(*timer.failure);
       return result;
     }
-    timerStartMicros = *timer.value;
+    timerStartMicros = timer.value;
+    timerOff = timer.off;
   }
   auto temporal = evaluateSkinDestinationAuthored(
       presentation, {.nowMicros = inputs.visualTimeMicros,
                      .timerStartMicros = timerStartMicros,
+                     .timerOff = timerOff,
                      .optionConditions = std::span<const bool>(conditions.get(),
                                                                conditionCount),
                      .orderedOffsets = {}});
@@ -1457,6 +1490,7 @@ resolveDestination(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   auto evaluated = evaluateSkinDestinationAuthored(
       presentation, {.nowMicros = inputs.visualTimeMicros,
                      .timerStartMicros = timerStartMicros,
+                     .timerOff = timerOff,
                      .optionConditions = std::span<const bool>(conditions.get(),
                                                                conditionCount),
                      .orderedOffsets = offsets});
@@ -1574,6 +1608,615 @@ QuadLoweringResult lowerSpriteQuad(const SkinFrameInputs &inputs,
   return lowerPreparedQuad(inputs, sourceObject, authoredOrdinal, geometry,
                            sprite.resource, resource->width, resource->height,
                            region->resolved);
+}
+
+std::optional<AuthoredRect>
+intersectAuthoredRects(const std::optional<AuthoredRect> &left,
+                       const std::optional<AuthoredRect> &right,
+                       bool &empty) noexcept {
+  empty = false;
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  const double x = std::max(left->x, right->x);
+  const double y = std::max(left->y, right->y);
+  const double maximumX =
+      std::min(left->x + left->width, right->x + right->width);
+  const double maximumY =
+      std::min(left->y + left->height, right->y + right->height);
+  if (maximumX <= x || maximumY <= y) {
+    empty = true;
+    return std::nullopt;
+  }
+  return AuthoredRect{
+      .x = x, .y = y, .width = maximumX - x, .height = maximumY - y};
+}
+
+AuthoredDestinationGeometry
+gameplayVisualGeometry(const SkinAuthoredRect &rect,
+                       const std::optional<AuthoredRect> &outerClip) {
+  AuthoredDestinationGeometry geometry;
+  geometry.rect = rect;
+  geometry.clip = outerClip;
+  geometry.rgba = {1.0F, 1.0F, 1.0F, 1.0F};
+  geometry.blend = SkinBlendMode::Normal;
+  geometry.filter = SkinFilterMode::Nearest;
+  geometry.stretch = SkinStretchMode::Stretch;
+  return geometry;
+}
+
+struct GameplayVisualLoweringResult {
+  std::vector<SkinDrawCommand> commands;
+  std::size_t primitiveVertices = 0;
+  std::optional<SkinDiagnostic> failure;
+};
+
+GameplayVisualLoweringResult lowerSynthesizedNoteVisual(
+    const SkinFrameInputs &inputs, SkinObjectId sourceObject,
+    std::uint32_t authoredOrdinal, const AuthoredDestinationGeometry &geometry,
+    const SkinSynthesizedNoteVisual &visual) {
+  GameplayVisualLoweringResult result;
+  std::array<float, 4> rgba{};
+  bool outline = false;
+  switch (visual.kind) {
+  case SkinNoteVisualKind::Normal:
+    rgba = {1.0F, 1.0F, 1.0F, 1.0F};
+    break;
+  case SkinNoteVisualKind::Mine:
+    rgba = {1.0F, 0.0F, 0.0F, 1.0F};
+    break;
+  case SkinNoteVisualKind::Hidden:
+    rgba = {1.0F, 0.5F, 0.0F, 1.0F};
+    outline = true;
+    break;
+  case SkinNoteVisualKind::Processed:
+    rgba = {0.0F, 1.0F, 1.0F, 1.0F};
+    outline = true;
+    break;
+  default:
+    rgba = {1.0F, 1.0F, 0.0F, 1.0F};
+    break;
+  }
+
+  const auto emit = [&](const AuthoredDestinationGeometry &primitiveGeometry,
+                        SkinPrimitiveKind kind,
+                        GameplayVisualLoweringResult &output) {
+    auto colored = primitiveGeometry;
+    colored.rgba = rgba;
+    const auto projected =
+        projectSkinDestinationToUi(colored,
+                                   {.textureWidth = 1,
+                                    .textureHeight = 1,
+                                    .region = {.x = 0, .y = 0, .w = 1, .h = 1}},
+                                   inputs.viewport);
+    if (!projectedQuadFitsUpload(projected)) {
+      output.failure = diagnostic(
+          "skin.renderer.geometry.invalid",
+          "Projected synthesized note geometry is outside float range.");
+      return;
+    }
+    bool emptyClip = false;
+    const auto clip =
+        intersectClip(projected.clip, inputs.viewport.safeUiBounds, emptyClip);
+    if (emptyClip) {
+      return;
+    }
+    SkinPrimitiveCommand primitive;
+    primitive.kind = kind;
+    primitive.state = {.blend = SkinBlendMode::Normal,
+                       .filter = SkinFilterMode::Nearest,
+                       .scissor = clip};
+    const std::uint32_t color = packAbgr(rgba);
+    if (kind == SkinPrimitiveKind::SolidQuad) {
+      primitive.vertices.reserve(4);
+      for (const auto &vertex : projected.vertices) {
+        primitive.vertices.push_back({.x = static_cast<float>(vertex[0]),
+                                      .y = static_cast<float>(vertex[1]),
+                                      .rgba = color});
+      }
+    } else {
+      primitive.vertices.reserve(5);
+      constexpr std::array<std::size_t, 5> order{0, 1, 2, 3, 0};
+      for (const std::size_t index : order) {
+        primitive.vertices.push_back(
+            {.x = static_cast<float>(projected.vertices[index][0]),
+             .y = static_cast<float>(projected.vertices[index][1]),
+             .rgba = color});
+      }
+    }
+    output.primitiveVertices += primitive.vertices.size();
+    output.commands.push_back({.authoredOrdinal = authoredOrdinal,
+                               .sourceObject = sourceObject,
+                               .payload = std::move(primitive)});
+  };
+
+  if (!outline) {
+    emit(geometry, SkinPrimitiveKind::SolidQuad, result);
+    return result;
+  }
+  const double insetX = geometry.rect.width / 32.0;
+  const double insetY = geometry.rect.height / 8.0;
+  const auto strip = [&](double x, double y, double width, double height) {
+    auto border = geometry;
+    border.rect = {.x = x, .y = y, .width = width, .height = height};
+    emit(border, SkinPrimitiveKind::SolidQuad, result);
+  };
+  const double x = geometry.rect.x;
+  const double y = geometry.rect.y;
+  const double width = geometry.rect.width;
+  const double height = geometry.rect.height;
+  strip(x, y, width, insetY);
+  strip(x + width - insetX, y + insetY, insetX, height - insetY * 2.0);
+  strip(x, y + height - insetY, width, insetY);
+  strip(x, y + insetY, insetX, height - insetY * 2.0);
+  strip(x + insetX, y + insetY, width - insetX * 2.0, insetY);
+  strip(x + width - insetX * 2.0, y + insetY * 2.0, insetX,
+        height - insetY * 4.0);
+  strip(x + insetX, y + height - insetY * 2.0, width - insetX * 2.0, insetY);
+  strip(x + insetX, y + insetY * 2.0, insetX, height - insetY * 4.0);
+  if (result.failure) {
+    return result;
+  }
+  return result;
+}
+
+GameplayVisualLoweringResult
+lowerNoteVisual(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
+                SkinObjectId sourceObject, std::uint32_t authoredOrdinal,
+                const AuthoredDestinationGeometry &geometry,
+                const SkinNoteVisual &visual,
+                const SpriteSelection *prepared = nullptr) {
+  if (const auto *sprite = std::get_if<SkinSpriteFrames>(&visual)) {
+    const auto selected =
+        prepared ? *prepared : selectSpriteFrame(inputs, index, *sprite);
+    if (selected.failure) {
+      return {.failure = *selected.failure};
+    }
+    if (selected.suppressed || !selected.frame) {
+      return {};
+    }
+    auto lowered = lowerSpriteQuad(inputs, sourceObject, authoredOrdinal,
+                                   geometry, *sprite, *selected.frame);
+    if (lowered.failure) {
+      return {.failure = *lowered.failure};
+    }
+    GameplayVisualLoweringResult result;
+    if (lowered.command) {
+      result.commands.push_back(std::move(*lowered.command));
+    }
+    return result;
+  }
+  return lowerSynthesizedNoteVisual(
+      inputs, sourceObject, authoredOrdinal, geometry,
+      std::get<SkinSynthesizedNoteVisual>(visual));
+}
+
+const SkinNoteVisual *findNoteVisual(const SkinLaneNotePresentation &lane,
+                                     SkinNoteVisualKind kind) noexcept {
+  const auto found = lane.visuals.find(kind);
+  return found == lane.visuals.end() ? nullptr : &found->second;
+}
+
+std::optional<SkinNoteLineKind>
+noteLineKind(SkinProjectedLineKind kind) noexcept {
+  switch (kind) {
+  case SkinProjectedLineKind::Group:
+    return SkinNoteLineKind::Group;
+  case SkinProjectedLineKind::Bpm:
+    return SkinNoteLineKind::Bpm;
+  case SkinProjectedLineKind::Stop:
+    return SkinNoteLineKind::Stop;
+  case SkinProjectedLineKind::Time:
+    return SkinNoteLineKind::Time;
+  }
+  return std::nullopt;
+}
+
+constexpr std::size_t kNoteVisualCount = 14;
+using PreparedNoteVisuals =
+    std::vector<std::array<SpriteSelection, kNoteVisualCount>>;
+
+struct NotePreparationResult {
+  PreparedNoteVisuals visuals;
+  std::optional<SkinDiagnostic> failure;
+};
+
+NotePreparationResult prepareNoteVisuals(const SkinFrameInputs &inputs,
+                                         const FrameLookupIndex &index,
+                                         const SkinNoteObject &note) {
+  NotePreparationResult result;
+  result.visuals.resize(note.lanes.size());
+  std::array<SkinNoteVisualKind, kNoteVisualCount> prepareOrder{
+      SkinNoteVisualKind::Normal,          SkinNoteVisualKind::LnEnd,
+      SkinNoteVisualKind::LnStart,         SkinNoteVisualKind::LnBodyActive,
+      SkinNoteVisualKind::LnBodyInactive,  SkinNoteVisualKind::HcnEnd,
+      SkinNoteVisualKind::HcnStart,        SkinNoteVisualKind::HcnBodyActive,
+      SkinNoteVisualKind::HcnBodyInactive, SkinNoteVisualKind::HcnDamage,
+      SkinNoteVisualKind::HcnReactive,     SkinNoteVisualKind::Mine,
+      SkinNoteVisualKind::Hidden,          SkinNoteVisualKind::Processed};
+  if (note.hcnBodySlotLayout == SkinHcnBodySlotLayout::Modern) {
+    std::swap(prepareOrder[9], prepareOrder[10]);
+  }
+  for (std::size_t laneIndex = 0; laneIndex < note.lanes.size(); ++laneIndex) {
+    const auto &lane = note.lanes[laneIndex];
+    for (const auto kind : prepareOrder) {
+      const auto *visual = findNoteVisual(lane, kind);
+      if (!visual) {
+        result.failure = diagnostic(
+            "skin.renderer.note.visual",
+            "Note lane is missing a visual required during preparation.");
+        return result;
+      }
+      const auto *sprite = std::get_if<SkinSpriteFrames>(visual);
+      if (!sprite) {
+        continue;
+      }
+      auto selected = selectSpriteFrame(inputs, index, *sprite);
+      if (selected.failure) {
+        result.failure = *selected.failure;
+        return result;
+      }
+      result.visuals[laneIndex][static_cast<std::size_t>(kind)] = selected;
+    }
+  }
+  return result;
+}
+
+bool noteOuterClipDrawable(const SkinFrameInputs &inputs,
+                           const AuthoredDestinationGeometry &geometry) {
+  if (!geometry.clip) {
+    return true;
+  }
+  const auto projected =
+      projectSkinDestinationToUi(geometry,
+                                 {.textureWidth = 1,
+                                  .textureHeight = 1,
+                                  .region = {.x = 0, .y = 0, .w = 1, .h = 1}},
+                                 inputs.viewport);
+  bool emptyClip = false;
+  (void)intersectClip(projected.clip, inputs.viewport.safeUiBounds, emptyClip);
+  return !emptyClip;
+}
+
+GameplayVisualLoweringResult
+lowerNoteObject(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
+                const SkinObjectDefinition &object,
+                const SkinDestination &destination, const SkinNoteObject &note,
+                const AuthoredDestinationGeometry *outerGeometry,
+                std::span<const ConfigOffset> offsets,
+                std::span<const std::uint32_t> mergedOrdinals,
+                const PreparedNoteVisuals &preparedVisuals) {
+  GameplayVisualLoweringResult result;
+  if (!outerGeometry) {
+    return result;
+  }
+  double offsetX = 0.0;
+  double offsetY = 0.0;
+  double offsetWidth = 0.0;
+  double offsetHeight = 0.0;
+  for (const auto &offset : offsets) {
+    offsetX += offset.x;
+    offsetY += offset.y;
+    offsetWidth += offset.w;
+    offsetHeight += offset.h;
+  }
+
+  float expansionWidth = 1.0F;
+  float expansionHeight = 1.0F;
+  const bool expansionConfigured =
+      note.expansionRatePercent != std::array<int, 2>{100, 100};
+  bool expansionResolved = false;
+  const auto resolveExpansion = [&](GameplayVisualLoweringResult &output) {
+    if (!expansionConfigured || expansionResolved) {
+      return true;
+    }
+    const auto expansion = inputs.state.noteExpansionState();
+    if (!expansion.supported || expansion.elapsedSinceQuarterNoteMillis < 0) {
+      output.failure = diagnostic(
+          "skin.renderer.note.expansion",
+          "Non-default note expansion requires a captured quarter-note phase.");
+      return false;
+    }
+    constexpr std::int64_t expansionMillis = 9;
+    constexpr std::int64_t contractionMillis = 150;
+    const std::int64_t elapsed = expansion.elapsedSinceQuarterNoteMillis;
+    float pulse = 0.0F;
+    if (elapsed < expansionMillis) {
+      pulse = static_cast<float>(elapsed) / static_cast<float>(expansionMillis);
+    } else if (elapsed <= expansionMillis + contractionMillis) {
+      pulse =
+          static_cast<float>(contractionMillis - (elapsed - expansionMillis)) /
+          static_cast<float>(contractionMillis);
+    }
+    expansionWidth =
+        1.0F +
+        (static_cast<float>(note.expansionRatePercent[0]) / 100.0F - 1.0F) *
+            pulse;
+    expansionHeight =
+        1.0F +
+        (static_cast<float>(note.expansionRatePercent[1]) / 100.0F - 1.0F) *
+            pulse;
+    if (!std::isfinite(expansionWidth) || !std::isfinite(expansionHeight)) {
+      output.failure =
+          diagnostic("skin.renderer.note.expansion",
+                     "Note expansion produced non-finite lane geometry.");
+      return false;
+    }
+    expansionResolved = true;
+    return true;
+  };
+
+  const auto expandChip = [&](double x, double y, double width, double height,
+                              double referenceWidth,
+                              double referenceHeight) -> SkinAuthoredRect {
+    if (!expansionConfigured) {
+      return {.x = x, .y = y, .width = width, .height = height};
+    }
+    const float expandedWidth = static_cast<float>(width) * expansionWidth;
+    const float expandedHeight = static_cast<float>(height) * expansionHeight;
+    return {.x = static_cast<float>(x) -
+                 (expandedWidth - static_cast<float>(referenceWidth)) * 0.5F,
+            .y = static_cast<float>(y) -
+                 (expandedHeight - static_cast<float>(referenceHeight)) * 0.5F,
+            .width = expandedWidth,
+            .height = expandedHeight};
+  };
+
+  const auto appendVisual = [&](const SkinLaneNotePresentation &lane,
+                                SkinNoteVisualKind kind,
+                                const SkinAuthoredRect &rect,
+                                GameplayVisualLoweringResult &output) {
+    const auto *visual = findNoteVisual(lane, kind);
+    if (!visual) {
+      output.failure =
+          diagnostic("skin.renderer.note.visual",
+                     "Projected note selected a visual absent from its lane.");
+      return;
+    }
+    auto lowered = lowerNoteVisual(
+        inputs, index, object.id, destination.presentation.authoredOrdinal,
+        gameplayVisualGeometry(rect, outerGeometry->clip), *visual,
+        &preparedVisuals[static_cast<std::size_t>(lane.authoredLane)]
+                        [static_cast<std::size_t>(kind)]);
+    if (lowered.failure) {
+      output.failure = std::move(lowered.failure);
+      return;
+    }
+    if (lowered.commands.size() >
+            SkinCommandPolicy::maximumCommands - output.commands.size() ||
+        lowered.primitiveVertices >
+            SkinCommandPolicy::maximumPrimitiveVertices -
+                output.primitiveVertices) {
+      output.failure =
+          diagnostic("skin.renderer.command.limit",
+                     "Projected note visual exceeds a fixed command limit.");
+      return;
+    }
+    output.primitiveVertices += lowered.primitiveVertices;
+    output.commands.insert(output.commands.end(),
+                           std::make_move_iterator(lowered.commands.begin()),
+                           std::make_move_iterator(lowered.commands.end()));
+  };
+
+  const auto laneAt = [&](int lane) -> const SkinLaneNotePresentation * {
+    if (lane < 0 || static_cast<std::size_t>(lane) >= note.lanes.size()) {
+      return nullptr;
+    }
+    const auto &presentation = note.lanes[static_cast<std::size_t>(lane)];
+    return presentation.authoredLane == lane ? &presentation : nullptr;
+  };
+
+  const auto lowerProjectedNote = [&](const SkinProjectedNoteView &projected,
+                                      GameplayVisualLoweringResult &output) {
+    const auto *lane = laneAt(projected.lane);
+    if (!lane || !std::isfinite(projected.authoredYDisplacement)) {
+      output.failure = diagnostic(
+          "skin.renderer.note.projection",
+          "Projected note lane or authored displacement is invalid.");
+      return;
+    }
+    SkinNoteVisualKind kind = SkinNoteVisualKind::Normal;
+    bool applyOffsets = true;
+    switch (projected.kind) {
+    case SkinProjectedNoteKind::Normal:
+      kind = projected.judged ? SkinNoteVisualKind::Processed
+                              : SkinNoteVisualKind::Normal;
+      break;
+    case SkinProjectedNoteKind::Invisible:
+      kind = SkinNoteVisualKind::Hidden;
+      applyOffsets = false;
+      break;
+    case SkinProjectedNoteKind::Mine:
+      kind = SkinNoteVisualKind::Mine;
+      break;
+    }
+    if (applyOffsets && !resolveExpansion(output)) {
+      return;
+    }
+    const double noteHeight = lane->authoredNoteHeight.value_or(8.0);
+    SkinAuthoredRect rect;
+    if (applyOffsets) {
+      rect = expandChip(
+          lane->laneDestination.x + offsetX,
+          lane->laneDestination.y + projected.authoredYDisplacement + offsetY,
+          lane->laneDestination.width + offsetWidth, noteHeight + offsetHeight,
+          lane->laneDestination.width, noteHeight);
+    } else {
+      rect = {.x = lane->laneDestination.x,
+              .y = lane->laneDestination.y + projected.authoredYDisplacement,
+              .width = lane->laneDestination.width,
+              .height = noteHeight};
+    }
+    appendVisual(*lane, kind, rect, output);
+  };
+
+  const auto lowerProjectedLongNote =
+      [&](const SkinProjectedLongNoteView &projected,
+          GameplayVisualLoweringResult &output) {
+        const auto *lane = laneAt(projected.lane);
+        if (!lane || !std::isfinite(projected.headAuthoredYDisplacement) ||
+            !std::isfinite(projected.tailAuthoredYDisplacement)) {
+          output.failure = diagnostic(
+              "skin.renderer.note.projection",
+              "Projected long-note lane or authored displacement is invalid.");
+          return;
+        }
+        if (!resolveExpansion(output)) {
+          return;
+        }
+        const double referenceHeight = lane->authoredNoteHeight.value_or(8.0);
+        const double displacement = projected.tailAuthoredYDisplacement -
+                                    projected.headAuthoredYDisplacement;
+        if (displacement <= 0.0) {
+          return;
+        }
+        const auto chip =
+            expandChip(lane->laneDestination.x + offsetX,
+                       lane->laneDestination.y +
+                           projected.headAuthoredYDisplacement + offsetY,
+                       lane->laneDestination.width + offsetWidth,
+                       referenceHeight + offsetHeight,
+                       lane->laneDestination.width, referenceHeight);
+        const double tailY = chip.y + displacement;
+        SkinNoteVisualKind body = SkinNoteVisualKind::LnBodyInactive;
+        SkinNoteVisualKind end = SkinNoteVisualKind::LnEnd;
+        SkinNoteVisualKind start = SkinNoteVisualKind::LnStart;
+        if (projected.mode == SkinProjectedLongNoteMode::HCN) {
+          end = SkinNoteVisualKind::HcnEnd;
+          start = SkinNoteVisualKind::HcnStart;
+          if (projected.active) {
+            body = SkinNoteVisualKind::HcnBodyActive;
+          } else if (projected.reactive) {
+            body = note.hcnBodySlotLayout == SkinHcnBodySlotLayout::Modern
+                       ? SkinNoteVisualKind::HcnReactive
+                       : SkinNoteVisualKind::HcnDamage;
+          } else if (projected.damaged) {
+            body = note.hcnBodySlotLayout == SkinHcnBodySlotLayout::Modern
+                       ? SkinNoteVisualKind::HcnDamage
+                       : SkinNoteVisualKind::HcnReactive;
+          } else {
+            body = SkinNoteVisualKind::HcnBodyInactive;
+          }
+        } else {
+          body = projected.active ? SkinNoteVisualKind::LnBodyActive
+                                  : SkinNoteVisualKind::LnBodyInactive;
+        }
+        appendVisual(*lane, body,
+                     {.x = chip.x,
+                      .y = chip.y + chip.height,
+                      .width = chip.width,
+                      .height = displacement - chip.height},
+                     output);
+        if (output.failure) {
+          return;
+        }
+        if (projected.mode != SkinProjectedLongNoteMode::LN) {
+          appendVisual(*lane, end,
+                       {.x = chip.x,
+                        .y = tailY,
+                        .width = chip.width,
+                        .height = chip.height},
+                       output);
+          if (output.failure) {
+            return;
+          }
+        }
+        appendVisual(*lane, start, chip, output);
+      };
+
+  const auto lowerProjectedLine = [&](const SkinProjectedLineView &projected,
+                                      GameplayVisualLoweringResult &output) {
+    if (!std::isfinite(projected.authoredYDisplacement)) {
+      output.failure =
+          diagnostic("skin.renderer.note.projection",
+                     "Projected line authored displacement is invalid.");
+      return;
+    }
+    const auto requestedKind = noteLineKind(projected.kind);
+    const std::size_t groupCount = note.lines.size() / 4;
+    if (!requestedKind || note.lines.size() % 4 != 0 || groupCount == 0) {
+      output.failure = diagnostic(
+          "skin.renderer.note.line",
+          "Projected timeline line has no valid lane-group presentation.");
+      return;
+    }
+    (void)projected.timelineVisualId;
+    const std::size_t kindIndex = static_cast<std::size_t>(*requestedKind);
+    for (std::size_t group = 0; group < groupCount; ++group) {
+      const auto &line = note.lines[kindIndex * groupCount + group];
+      if (line.kind != *requestedKind) {
+        output.failure = diagnostic(
+            "skin.renderer.note.line",
+            "Projected timeline line kind does not match the model.");
+        return;
+      }
+      if (!line.sprite || !line.destination) {
+        output.failure =
+            diagnostic("skin.renderer.note.line",
+                       "Projected timeline line selected a sparse model hole.");
+        return;
+      }
+      auto evaluated = resolveDestination(inputs, index, *line.destination);
+      if (!evaluated.failures.empty()) {
+        output.failure = std::move(evaluated.failures.front());
+        return;
+      }
+      const auto selected = selectSpriteFrame(inputs, index, *line.sprite);
+      if (selected.failure) {
+        output.failure = *selected.failure;
+        return;
+      }
+      if (!evaluated.geometry || selected.suppressed || !selected.frame) {
+        continue;
+      }
+      evaluated.geometry->rect.y += projected.authoredYDisplacement;
+      // LaneRenderer invokes nested line images directly, so their own clip
+      // is inert. The containing Note clip remains active for every group.
+      evaluated.geometry->clip = outerGeometry->clip;
+      auto lowered = lowerSpriteQuad(
+          inputs, object.id, destination.presentation.authoredOrdinal,
+          *evaluated.geometry, *line.sprite, *selected.frame);
+      if (lowered.failure) {
+        output.failure = *lowered.failure;
+        return;
+      }
+      if (lowered.command) {
+        if (output.commands.size() >= SkinCommandPolicy::maximumCommands) {
+          output.failure =
+              diagnostic("skin.renderer.command.limit",
+                         "Projected line exceeds the fixed command limit.");
+          return;
+        }
+        output.commands.push_back(std::move(*lowered.command));
+      }
+    }
+  };
+
+  const auto notes = inputs.state.projectedNotes();
+  const auto longNotes = inputs.state.projectedLongNotes();
+  const auto lines = inputs.state.projectedLines();
+  std::array<std::size_t, 3> indices{};
+  for (const std::uint32_t ordinal : mergedOrdinals) {
+    if (indices[0] < notes.size() &&
+        notes[indices[0]].submissionOrdinal == ordinal) {
+      lowerProjectedNote(notes[indices[0]++], result);
+    } else if (indices[1] < longNotes.size() &&
+               longNotes[indices[1]].submissionOrdinal == ordinal) {
+      lowerProjectedLongNote(longNotes[indices[1]++], result);
+    } else if (indices[2] < lines.size() &&
+               lines[indices[2]].submissionOrdinal == ordinal) {
+      lowerProjectedLine(lines[indices[2]++], result);
+    }
+    if (result.failure) {
+      result.commands.clear();
+      result.primitiveVertices = 0;
+      return result;
+    }
+  }
+  return result;
 }
 
 struct JudgeLoweringResult {
@@ -1850,8 +2493,20 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
     SkinCommandBuffer buffer;
     buffer.frameSerial = inputs.frameSerial;
     std::size_t glyphInstances = 0;
+    std::size_t primitiveVertices = 0;
     buffer.commands.reserve(std::min(inputs.model.model.destinations.size(),
                                      SkinCommandPolicy::maximumCommands));
+    struct DeferredNoteLowering {
+      std::size_t insertionIndex = 0;
+      const SkinObjectDefinition *object = nullptr;
+      const SkinDestination *destination = nullptr;
+      const SkinNoteObject *note = nullptr;
+      AuthoredDestinationGeometry geometry;
+      std::vector<ConfigOffset> offsets;
+      PreparedNoteVisuals preparedVisuals;
+    };
+    std::vector<DeferredNoteLowering> deferredNotes;
+    deferredNotes.reserve(inputs.model.model.destinations.size());
 
     for (const auto &destination : inputs.model.model.destinations) {
       const auto *object = findObject(objects, destination.object);
@@ -1892,9 +2547,12 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
       const auto *slider = std::get_if<SkinSliderObject>(&object->payload);
       const auto *graph = std::get_if<SkinGraphObject>(&object->payload);
       const auto *gauge = std::get_if<SkinGaugeObject>(&object->payload);
+      const auto *note = std::get_if<SkinNoteObject>(&object->payload);
+      const auto *cover = std::get_if<SkinCoverObject>(&object->payload);
       const auto *judge = std::get_if<SkinJudgeObject>(&object->payload);
+      const auto *bga = std::get_if<SkinBgaObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
-          !gauge && !judge) {
+          !gauge && !note && !cover && !judge && !bga) {
         if (reportObjectFailure(
                 result, *object,
                 diagnostic("skin.renderer.object.unsupported",
@@ -2033,21 +2691,24 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         destinationVisible = *resolved.value;
       }
 
-      if (!destinationVisible && !gauge && !judge) {
+      if (!destinationVisible && !image && !gauge && !note && !cover &&
+          !judge) {
         continue;
       }
 
       std::int64_t timerStartMicros = INT64_MIN;
+      bool timerOff = false;
       if (destinationVisible && destination.presentation.timer) {
-        const auto timer =
-            resolveTimer(inputs, lookupIndex, *destination.presentation.timer);
+        const auto timer = resolveTimerUse(inputs, lookupIndex,
+                                           *destination.presentation.timer);
         if (timer.failure) {
           if (reportObjectFailure(result, *object, *timer.failure)) {
             return result;
           }
           continue;
         }
-        timerStartMicros = *timer.value;
+        timerStartMicros = timer.value;
+        timerOff = timer.off;
       }
       SkinDestinationEvaluationResult evaluated;
       if (destinationVisible) {
@@ -2055,6 +2716,7 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
             destination.presentation,
             {.nowMicros = inputs.visualTimeMicros,
              .timerStartMicros = timerStartMicros,
+             .timerOff = timerOff,
              .optionConditions =
                  std::span<const bool>(conditions.get(), conditionCount),
              .orderedOffsets = {}});
@@ -2071,11 +2733,13 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         }
         destinationVisible = evaluated.geometry.has_value();
       }
-      if (!destinationVisible && !gauge && !judge) {
+      if (!destinationVisible && !image && !gauge && !note && !cover &&
+          !judge) {
         continue;
       }
 
       std::vector<ConfigOffset> offsets;
+      std::optional<double> coverLiftOffsetY;
       if (destinationVisible) {
         offsets.reserve(destination.presentation.offsetIds.size());
       }
@@ -2090,6 +2754,9 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
           const auto found = inputs.configuration.offsetsById.find(id);
           if (found != inputs.configuration.offsetsById.end()) {
             offsets.push_back(found->second);
+            if (cover && id == kSkinCoverLiftOffsetId) {
+              coverLiftOffsetY = found->second.y;
+            }
             continue;
           }
           const auto dynamic = inputs.state.offsetProperty(id);
@@ -2105,6 +2772,9 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
             break;
           }
           offsets.push_back(dynamic.value);
+          if (cover && id == kSkinCoverLiftOffsetId) {
+            coverLiftOffsetY = dynamic.value.y;
+          }
         }
       }
       if (offsetFailure) {
@@ -2116,6 +2786,7 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
             destination.presentation,
             {.nowMicros = inputs.visualTimeMicros,
              .timerStartMicros = timerStartMicros,
+             .timerOff = timerOff,
              .optionConditions =
                  std::span<const bool>(conditions.get(), conditionCount),
              .orderedOffsets = offsets});
@@ -2131,7 +2802,8 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         }
         continue;
       }
-      if (!evaluated.geometry && !gauge && !judge) {
+      if (!evaluated.geometry && !image && !gauge && !note && !cover &&
+          !judge) {
         continue;
       }
 
@@ -2497,6 +3169,122 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         continue;
       }
 
+      if (note) {
+        auto prepared = prepareNoteVisuals(inputs, lookupIndex, *note);
+        if (prepared.failure) {
+          if (reportObjectFailure(result, *object, *prepared.failure)) {
+            return result;
+          }
+          continue;
+        }
+        if (!evaluated.geometry ||
+            !noteOuterClipDrawable(inputs, *evaluated.geometry)) {
+          continue;
+        }
+        deferredNotes.push_back(
+            {.insertionIndex = buffer.commands.size(),
+             .object = object,
+             .destination = &destination,
+             .note = note,
+             .geometry = *evaluated.geometry,
+             .offsets = std::move(offsets),
+             .preparedVisuals = std::move(prepared.visuals)});
+        continue;
+      }
+
+      if (cover) {
+        const auto selectedCover =
+            selectSpriteFrame(inputs, lookupIndex, cover->sprite);
+        if (selectedCover.failure) {
+          if (reportObjectFailure(result, *object, *selectedCover.failure)) {
+            return result;
+          }
+          continue;
+        }
+        if (selectedCover.suppressed || !selectedCover.frame) {
+          continue;
+        }
+        if (!evaluated.geometry) {
+          continue;
+        }
+        auto geometry = *evaluated.geometry;
+        if (cover->disappearLine >= 0.0) {
+          if (cover->disappearLineLinksLift && !coverLiftOffsetY) {
+            if (reportObjectFailure(
+                    result, *object,
+                    diagnostic("skin.renderer.cover.lift",
+                               "Linked cover has no resolved Lift offset."))) {
+              return result;
+            }
+            continue;
+          }
+          const double line =
+              cover->disappearLine +
+              (cover->disappearLineLinksLift ? *coverLiftOffsetY : 0.0);
+          const double top = geometry.rect.y + geometry.rect.height;
+          if (top <= line) {
+            continue;
+          }
+          if (geometry.rect.y < line) {
+            bool emptyClip = false;
+            geometry.clip = intersectAuthoredRects(
+                geometry.clip,
+                AuthoredRect{.x = geometry.rect.x,
+                             .y = line,
+                             .width = geometry.rect.width,
+                             .height = top - line},
+                emptyClip);
+            if (emptyClip) {
+              continue;
+            }
+          }
+        }
+        auto lowered = lowerSpriteQuad(
+            inputs, object->id, destination.presentation.authoredOrdinal,
+            geometry, cover->sprite, *selectedCover.frame);
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        if (lowered.command) {
+          if (buffer.commands.size() >= SkinCommandPolicy::maximumCommands) {
+            if (reportObjectFailure(
+                    result, *object,
+                    diagnostic(
+                        "skin.renderer.command.limit",
+                        "Cover command exceeds the fixed frame limit."))) {
+              return result;
+            }
+            continue;
+          }
+          buffer.commands.push_back(std::move(*lowered.command));
+        }
+        continue;
+      }
+
+      if (bga) {
+        if (buffer.commands.size() >= SkinCommandPolicy::maximumCommands) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.command.limit",
+                             "BGA command exceeds the fixed frame limit."))) {
+            return result;
+          }
+          continue;
+        }
+        SkinBgaCommand command{.authoredGeometry = *evaluated.geometry,
+                               .viewport = inputs.viewport,
+                               .authoredOrdinal =
+                                   destination.presentation.authoredOrdinal};
+        buffer.commands.push_back(
+            {.authoredOrdinal = destination.presentation.authoredOrdinal,
+             .sourceObject = object->id,
+             .payload = std::move(command)});
+        continue;
+      }
+
       if (image) {
         selected = selectSpriteFrame(inputs, lookupIndex,
                                      image->orderedStates[stateIndex]);
@@ -2530,6 +3318,9 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
         if (textLayout->suppressed) {
           continue;
         }
+      }
+      if (!evaluated.geometry) {
+        continue;
       }
       if (evaluated.geometry->rgba[3] <= 0.0F) {
         continue;
@@ -2644,6 +3435,41 @@ Skin2DRenderer::evaluateFrame(const SkinFrameInputs &inputs) {
           {.authoredOrdinal = destination.presentation.authoredOrdinal,
            .sourceObject = object->id,
            .payload = std::move(command)});
+    }
+
+    std::size_t insertedNoteCommands = 0;
+    for (auto &deferred : deferredNotes) {
+      auto lowered = lowerNoteObject(
+          inputs, lookupIndex, *deferred.object, *deferred.destination,
+          *deferred.note, &deferred.geometry, deferred.offsets,
+          mergedProjectionOrdinals, deferred.preparedVisuals);
+      if (lowered.failure) {
+        if (reportObjectFailure(result, *deferred.object, *lowered.failure)) {
+          return result;
+        }
+        continue;
+      }
+      if (lowered.commands.size() >
+              SkinCommandPolicy::maximumCommands - buffer.commands.size() ||
+          lowered.primitiveVertices >
+              SkinCommandPolicy::maximumPrimitiveVertices - primitiveVertices) {
+        if (reportObjectFailure(
+                result, *deferred.object,
+                diagnostic("skin.renderer.command.limit",
+                           "Note commands exceed a fixed frame limit."))) {
+          return result;
+        }
+        continue;
+      }
+      primitiveVertices += lowered.primitiveVertices;
+      const auto insertion =
+          buffer.commands.begin() +
+          static_cast<std::ptrdiff_t>(deferred.insertionIndex +
+                                      insertedNoteCommands);
+      insertedNoteCommands += lowered.commands.size();
+      buffer.commands.insert(insertion,
+                             std::make_move_iterator(lowered.commands.begin()),
+                             std::make_move_iterator(lowered.commands.end()));
     }
 
     buildAdjacentBatches(buffer);

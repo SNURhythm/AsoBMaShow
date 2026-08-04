@@ -1,0 +1,18 @@
+{
+  "schema": "asobmashow.skin.commands.v1",
+  "authoredSize": [1280.0, 720.0],
+  "safeBounds": [0.0, 0.0, 1280.0, 720.0],
+  "viewportMode": "fit",
+  "coverage": [
+    "Image", "Number", "Float", "Text", "Slider", "Graph", "Gauge",
+    "Judge", "Note.Normal", "Note.Invisible", "Note.Mine",
+    "Note.Processed", "Note.LN.Active", "Note.LN.Inactive", "Note.CN",
+    "Note.HCN.Active", "Note.HCN.Inactive", "Note.HCN.Damaged",
+    "Note.HCN.Reactive", "Line.Group", "Line.Bpm", "Line.Stop",
+    "Line.Time", "Note.Synthesized", "Cover.Hidden", "Cover.Lift", "BGA"
+  ],
+  "commandCount": 83,
+  "batchCount": 44,
+  "payloadCounts": {"quad": 44, "glyph": 1, "primitive": 37, "bga": 1},
+  "canonicalSha256": "81f25a48e47891a5161e47c4e0946ff5fb361e194c1f2812c972dde5d18b3aa7"
+}

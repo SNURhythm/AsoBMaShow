@@ -36,8 +36,9 @@ SkinNormalizedNoteVisual fallbackFor(SkinNoteVisualKind kind) {
         .color = SkinNoteFallbackColor::Orange,
         .shape = SkinNoteFallbackShape::DoubleOutline};
   case SkinNoteVisualKind::Processed:
-    return SkinSynthesizedNoteFallback{.color = SkinNoteFallbackColor::Cyan,
-                                       .shape = SkinNoteFallbackShape::DoubleOutline};
+    return SkinSynthesizedNoteFallback{
+        .color = SkinNoteFallbackColor::Cyan,
+        .shape = SkinNoteFallbackShape::DoubleOutline};
   default:
     return SkinSynthesizedNoteFallback{.color = SkinNoteFallbackColor::Yellow,
                                        .shape = SkinNoteFallbackShape::Solid};
@@ -46,12 +47,13 @@ SkinNormalizedNoteVisual fallbackFor(SkinNoteVisualKind kind) {
 
 bool validSprite(const SkinSpriteFrames &sprite) {
   return sprite.resource != 0 && !sprite.frames.empty() &&
-         sprite.frames.size() <= SkinNoteNormalizationPolicy::maxFramesPerVisual;
+         sprite.frames.size() <=
+             SkinNoteNormalizationPolicy::maxFramesPerVisual;
 }
 
-SkinNoteNormalizationError validateSelectedArrays(
-    std::size_t laneCount,
-    std::initializer_list<const Slots *> selectedArrays) {
+SkinNoteNormalizationError
+validateSelectedArrays(std::size_t laneCount,
+                       std::initializer_list<const Slots *> selectedArrays) {
   std::size_t totalFrames = 0;
   for (const Slots *const slots : selectedArrays) {
     if (slots->size() != laneCount) {
@@ -79,8 +81,8 @@ SkinNoteNormalizationError validateSelectedArrays(
 
 void setVisual(SkinNormalizedNoteLane &lane, SkinNoteVisualKind kind,
                const SkinAuthoredNoteVisualSlot &authored) {
-  lane.visuals[visualIndex(kind)] = authored ? SkinNormalizedNoteVisual(*authored)
-                                               : fallbackFor(kind);
+  lane.visuals[visualIndex(kind)] =
+      authored ? SkinNormalizedNoteVisual(*authored) : fallbackFor(kind);
 }
 
 } // namespace
@@ -96,8 +98,7 @@ normalizeSkinNote(const SkinNoteNormalizationInput &input) {
   // for each compatibility switch. The two switches are intentionally
   // independent: a skin can use one modern family and one legacy family.
   const bool modernLn = input.lnBodyActive && !input.lnBodyActive->empty();
-  const bool modernHcn =
-      input.hcnBodyActive && !input.hcnBodyActive->empty();
+  const bool modernHcn = input.hcnBodyActive && !input.hcnBodyActive->empty();
   const Slots &lnActive = modernLn ? *input.lnBodyActive : input.lnBody;
   const Slots &lnInactive = modernLn ? input.lnBody : input.lnActive;
   const Slots &hcnActive = modernHcn ? *input.hcnBodyActive : input.hcnBody;
@@ -118,6 +119,8 @@ normalizeSkinNote(const SkinNoteNormalizationInput &input) {
   }
 
   SkinNormalizedNote normalized;
+  normalized.hcnBodySlotLayout =
+      modernHcn ? SkinHcnBodySlotLayout::Modern : SkinHcnBodySlotLayout::Legacy;
   normalized.lanes.reserve(laneCount);
   for (std::size_t laneIndex = 0; laneIndex < laneCount; ++laneIndex) {
     SkinNormalizedNoteLane lane{.authoredLane = laneIndex};
@@ -130,8 +133,7 @@ normalizeSkinNote(const SkinNoteNormalizationInput &input) {
     setVisual(lane, SkinNoteVisualKind::LnEnd, input.lnEnd[laneIndex]);
     setVisual(lane, SkinNoteVisualKind::LnStart, input.lnStart[laneIndex]);
     setVisual(lane, SkinNoteVisualKind::LnBodyActive, lnActive[laneIndex]);
-    setVisual(lane, SkinNoteVisualKind::LnBodyInactive,
-              lnInactive[laneIndex]);
+    setVisual(lane, SkinNoteVisualKind::LnBodyInactive, lnInactive[laneIndex]);
     setVisual(lane, SkinNoteVisualKind::HcnEnd, input.hcnEnd[laneIndex]);
     setVisual(lane, SkinNoteVisualKind::HcnStart, input.hcnStart[laneIndex]);
     setVisual(lane, SkinNoteVisualKind::HcnBodyActive, hcnActive[laneIndex]);

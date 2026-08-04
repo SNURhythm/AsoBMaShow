@@ -1,5 +1,6 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
 
+#include "FileChecksum.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/package/SkinAliasDetector.h"
@@ -18,6 +19,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 namespace {
 
@@ -86,7 +89,7 @@ public:
               "local callback_order=0\n"
               "local ordered_timer=function() callback_order=callback_order+1 "
               "return 0 end\n"
-              "local ordered_rate=function() if callback_order~=1 then "
+              "local ordered_rate=function() if callback_order~=2 then "
               "error('rate before timer') end return 0.5 end\n"
               "return {type=0,w=1280,h=720,name='command-test',"
               "host_fail_callback=fail,host_number_callback=number,"
@@ -287,6 +290,9 @@ public:
     accessOrder.push_back(2'000 + (std::holds_alternative<int>(selector.value)
                                        ? std::get<int>(selector.value)
                                        : -1));
+    if (timerSequenceIndex < timerSequence.size()) {
+      return timerSequence[timerSequenceIndex++];
+    }
     return timerResult;
   }
   std::span<const SkinProjectedNoteView>
@@ -307,6 +313,10 @@ public:
   SkinJudgeStateView judgeState(int) const noexcept override {
     return judgeResult;
   }
+  SkinNoteExpansionStateView noteExpansionState() const noexcept override {
+    ++noteExpansionCalls;
+    return noteExpansionResult;
+  }
   std::uint64_t frameSerial() const noexcept override { return capturedSerial; }
 
   std::vector<SkinProjectedNoteView> notes;
@@ -314,13 +324,17 @@ public:
   std::vector<SkinProjectedLineView> lines;
   SkinGaugeStateView gaugeResult;
   SkinJudgeStateView judgeResult;
+  SkinNoteExpansionStateView noteExpansionResult;
   SkinPropertyLookup<bool> booleanResult;
   SkinPropertyLookup<std::int64_t> integerResult;
   SkinPropertyLookup<double> floatResult;
   SkinPropertyLookup<std::string_view> stringResult;
   std::int64_t timerResult = INT64_MIN;
+  std::vector<std::int64_t> timerSequence;
+  std::size_t timerSequenceIndex = 0;
   std::size_t booleanCalls = 0;
   std::size_t timerCalls = 0;
+  mutable std::size_t noteExpansionCalls = 0;
   std::map<int, SkinPropertyLookup<ConfigOffset>> offsets;
   std::vector<int> accessOrder;
   std::uint64_t capturedSerial = 1;
@@ -533,6 +547,45 @@ void testBuiltinImageStateAndOutOfRangeFallback() {
                  fallback.submitReady->commands.front().payload)
                      .resource == 1,
          "out-of-range nonnegative image state falls back to state zero");
+}
+
+void testHiddenImageStillSelectsSourceAfterRuntimeSuppression() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addImage(1, {.x = 0, .y = 0, .w = 10, .h = 10});
+  FakeState state;
+  state.booleanResult = {.value = false, .supported = true};
+  state.timerResult = 0;
+
+  auto object = imageObject(1, 1, true);
+  auto &sprite =
+      std::get<SkinImageObject>(object.payload).orderedStates.front();
+  sprite.cycleMillis = 100;
+  sprite.timer = SkinTimerPropertyId{1};
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.booleanProperties.push_back({
+      .id = SkinBooleanPropertyId{1},
+      .source = SkinBuiltinPropertySelector{.value = 10},
+      .authoredOrdinal = 1,
+  });
+  model.model.timerProperties.push_back({
+      .id = SkinTimerPropertyId{1},
+      .source = SkinBuiltinPropertySelector{.value = 20},
+      .authoredOrdinal = 2,
+  });
+  model.model.objects.push_back(std::move(object));
+  auto presented = destination(1, 10, 10.0);
+  presented.presentation.conditions.push_back(SkinBooleanPropertyId{1});
+  model.model.destinations.push_back(std::move(presented));
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             result.diagnostics.empty() &&
+             state.accessOrder == std::vector<int>({1'010, 2'020, 2'020}),
+         "runtime-hidden image still probes and reads its source timer after "
+         "the false destination condition");
 }
 
 bool hasDiagnostic(const SkinFrameEvaluationResult &result,
@@ -2091,7 +2144,7 @@ void testHiddenGaugeStillAdvancesAndDirectDrawIgnoresImageTransforms() {
     expect(hidden.submitReady && hidden.submitReady->commands.empty() &&
                visible.submitReady && visible.submitReady->commands.size() == 5,
            "condition-hidden gauge advances without emitting commands");
-    expect(state.booleanCalls == 3 && state.timerCalls == 1,
+    expect(state.booleanCalls == 3 && state.timerCalls == 2,
            "first false gauge condition skips later conditions, offsets, and "
            "timer before the visible frame");
     if (visible.submitReady && visible.submitReady->commands.size() == 5) {
@@ -2517,8 +2570,8 @@ void testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder() {
   const auto hidden =
       evaluate(renderer, runtime, model, resources, state, 1, 1'000);
   expect(hidden.submitReady && hidden.submitReady->commands.empty() &&
-             state.accessOrder ==
-                 std::vector<int>({1'010, 1'011, 2'020, 3'005, 2'021}),
+             state.accessOrder == std::vector<int>({1'010, 1'011, 2'020, 2'020,
+                                                    3'005, 2'021, 2'021}),
          "hidden outer judge still prepares child conditions, destination "
          "timer, offset, then source timer");
 
@@ -2527,7 +2580,7 @@ void testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder() {
   const auto childHidden =
       evaluate(renderer, runtime, model, resources, state, 2, 2'000);
   expect(childHidden.submitReady && childHidden.submitReady->commands.empty() &&
-             state.accessOrder == std::vector<int>({1'010, 2'021}),
+             state.accessOrder == std::vector<int>({1'010, 2'021, 2'021}),
          "false first child condition skips later condition, timer, offset, "
          "but still selects the nested image source frame");
 
@@ -2564,6 +2617,1286 @@ void testCriticalJudgeRequiresSupportedState() {
          "unsupported critical judge state discards the frame");
 }
 
+SkinSpriteFrames singleFrameSprite(SkinResourceId resource) {
+  return {.resource = resource, .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}};
+}
+
+SkinNoteObject gameplayNoteObject(FakeResources &resources,
+                                  std::size_t groupCount = 1) {
+  SkinNoteObject note;
+  SkinLaneNotePresentation lane;
+  lane.authoredLane = 0;
+  lane.laneDestination = {
+      .x = 100.0, .y = 200.0, .width = 40.0, .height = 300.0};
+  lane.authoredNoteHeight = 10.0;
+  for (int kind = static_cast<int>(SkinNoteVisualKind::Normal);
+       kind <= static_cast<int>(SkinNoteVisualKind::HcnReactive); ++kind) {
+    const auto visualKind = static_cast<SkinNoteVisualKind>(kind);
+    const SkinResourceId resource = 100 + static_cast<SkinResourceId>(kind);
+    const auto sprite = singleFrameSprite(resource);
+    resources.addImage(resource, sprite.frames.front());
+    lane.visuals.emplace(visualKind, sprite);
+  }
+  note.lanes.push_back(std::move(lane));
+
+  for (int kind = static_cast<int>(SkinNoteLineKind::Group);
+       kind <= static_cast<int>(SkinNoteLineKind::Time); ++kind) {
+    for (std::size_t group = 0; group < groupCount; ++group) {
+      const SkinResourceId resource =
+          200 + static_cast<SkinResourceId>(kind) + group * 10;
+      auto sprite = singleFrameSprite(resource);
+      resources.addImage(resource, sprite.frames.front());
+      SkinDestinationBody lineDestination;
+      lineDestination.loop = -1;
+      lineDestination.frames = {
+          {.timeMillis = 0,
+           .x = 50.0 + static_cast<double>(group) * 100.0,
+           .y = 60.0,
+           .width = 80.0,
+           .height = 4.0,
+           .clip = SkinSourceRect{.x = 60, .y = 61, .w = 1, .h = 1}}};
+      note.lines.push_back(
+          {.kind = static_cast<SkinNoteLineKind>(kind),
+           .sprite = std::move(sprite),
+           .laneGroupDestination = {.x = 50.0 +
+                                         static_cast<double>(group) * 100.0,
+                                    .y = 60.0,
+                                    .width = 80.0,
+                                    .height = 4.0},
+           .destination = std::move(lineDestination)});
+    }
+  }
+  return note;
+}
+
+void testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.notes = {
+      {.visualId = 10,
+       .lane = 0,
+       .kind = SkinProjectedNoteKind::Normal,
+       .authoredYDisplacement = 30.0,
+       .judged = false,
+       .submissionOrdinal = 2},
+      {.visualId = 11,
+       .lane = 0,
+       .kind = SkinProjectedNoteKind::Invisible,
+       .authoredYDisplacement = 50.0,
+       .judged = false,
+       .submissionOrdinal = 4},
+      {.visualId = 12,
+       .lane = 0,
+       .kind = SkinProjectedNoteKind::Mine,
+       .authoredYDisplacement = 80.0,
+       .judged = false,
+       .submissionOrdinal = 7},
+      {.visualId = 13,
+       .lane = 0,
+       .kind = SkinProjectedNoteKind::Normal,
+       .authoredYDisplacement = 90.0,
+       .judged = true,
+       .submissionOrdinal = 9},
+  };
+  state.longNotes = {
+      {.headVisualId = 20,
+       .tailVisualId = 21,
+       .lane = 0,
+       .mode = SkinProjectedLongNoteMode::LN,
+       .headAuthoredYDisplacement = 40.0,
+       .tailAuthoredYDisplacement = 100.0,
+       .active = false,
+       .submissionOrdinal = 3},
+      {.headVisualId = 22,
+       .tailVisualId = 23,
+       .lane = 0,
+       .mode = SkinProjectedLongNoteMode::CN,
+       .headAuthoredYDisplacement = 70.0,
+       .tailAuthoredYDisplacement = 140.0,
+       .active = true,
+       .submissionOrdinal = 6},
+      {.headVisualId = 24,
+       .tailVisualId = 25,
+       .lane = 0,
+       .mode = SkinProjectedLongNoteMode::HCN,
+       .headAuthoredYDisplacement = 90.0,
+       .tailAuthoredYDisplacement = 160.0,
+       .reactive = true,
+       .submissionOrdinal = 8},
+  };
+  state.lines = {
+      {.timelineVisualId = 0,
+       .kind = SkinProjectedLineKind::Group,
+       .authoredYDisplacement = 20.0,
+       .submissionOrdinal = 1},
+      {.timelineVisualId = 0,
+       .kind = SkinProjectedLineKind::Bpm,
+       .authoredYDisplacement = 60.0,
+       .submissionOrdinal = 5},
+      {.timelineVisualId = 0,
+       .kind = SkinProjectedLineKind::Stop,
+       .authoredYDisplacement = 100.0,
+       .submissionOrdinal = 10},
+      {.timelineVisualId = 0,
+       .kind = SkinProjectedLineKind::Time,
+       .authoredYDisplacement = 120.0,
+       .submissionOrdinal = 11},
+  };
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "notes",
+                          .payload = gameplayNoteObject(resources),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 77, 0.0);
+  presented.presentation.offsetIds = {7};
+  presented.presentation.frames.front().rgba[3] = 0;
+  model.model.destinations = {std::move(presented)};
+  BeatorajaSkinConfiguration configuration;
+  configuration.offsetsById.emplace(
+      7, ConfigOffset{.x = 3, .y = 4, .w = 5, .h = 6});
+
+  const auto result = evaluate(renderer, runtime, model, resources, state, 1, 0,
+                               &configuration);
+  expect(result.submitReady && result.submitReady->commands.size() == 16,
+         "merged note projection emits every line, note, body, and cap");
+  if (!result.submitReady || result.submitReady->commands.size() != 16) {
+    return;
+  }
+  const std::vector<SkinResourceId> expectedResources = {
+      200, 100, 107, 105, 102, 201, 106, 104,
+      105, 101, 112, 108, 109, 103, 202, 203};
+  std::vector<SkinResourceId> actualResources;
+  for (const auto &command : result.submitReady->commands) {
+    actualResources.push_back(
+        std::get<SkinTexturedQuadCommand>(command.payload).resource);
+  }
+  expect(actualResources == expectedResources,
+         "projection merge and pinned long-note body/cap order are exact");
+  expect(std::ranges::all_of(result.submitReady->commands,
+                             [](const SkinDrawCommand &command) {
+                               return command.authoredOrdinal == 77;
+                             }),
+         "all projected commands retain their containing destination order");
+
+  const auto &normal = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands[1].payload);
+  const auto &invisible = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands[4].payload);
+  expect(normal.vertices[0].x == 103.0F && normal.vertices[0].y == 486.0F &&
+             normal.vertices[2].x == 148.0F && normal.vertices[2].y == 470.0F,
+         "normal note composes wrapper x/y/width/height offsets");
+  expect(invisible.vertices[0].x == 100.0F &&
+             invisible.vertices[0].y == 470.0F &&
+             invisible.vertices[2].x == 140.0F &&
+             invisible.vertices[2].y == 460.0F,
+         "invisible notes preserve pinned offset-free lane geometry");
+  const auto &groupLine = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands.front().payload);
+  expect(groupLine.vertices[0].x == 50.0F && groupLine.vertices[0].y == 640.0F,
+         "timeline displacement offsets its nested line destination only");
+}
+
+void testEveryLongNoteBodyStateUsesItsDistinctVisualRole() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  const auto addLongNote = [&](SkinProjectedLongNoteMode mode, bool active,
+                               bool damaged, bool reactive,
+                               std::uint32_t ordinal) {
+    state.longNotes.push_back(
+        {.headVisualId = ordinal * 2,
+         .tailVisualId = ordinal * 2 + 1,
+         .lane = 0,
+         .mode = mode,
+         .headAuthoredYDisplacement = ordinal * 20.0,
+         .tailAuthoredYDisplacement = ordinal * 20.0 + 40.0,
+         .active = active,
+         .damaged = damaged,
+         .reactive = reactive,
+         .submissionOrdinal = ordinal});
+  };
+  addLongNote(SkinProjectedLongNoteMode::LN, true, false, false, 1);
+  addLongNote(SkinProjectedLongNoteMode::CN, false, false, false, 2);
+  addLongNote(SkinProjectedLongNoteMode::HCN, false, false, false, 3);
+  addLongNote(SkinProjectedLongNoteMode::HCN, true, false, false, 4);
+  addLongNote(SkinProjectedLongNoteMode::HCN, false, true, false, 5);
+  addLongNote(SkinProjectedLongNoteMode::HCN, false, false, true, 6);
+
+  auto note = gameplayNoteObject(resources);
+  note.hcnBodySlotLayout = SkinHcnBodySlotLayout::Modern;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "long-note-roles",
+                          .payload = std::move(note),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  model.model.destinations = {destination(1, 88, 0.0)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 17,
+         "all long-note modes and states emit pinned body/cap counts");
+  if (!result.submitReady || result.submitReady->commands.size() != 17) {
+    return;
+  }
+  const std::vector<SkinResourceId> expectedResources = {
+      106, 105, 107, 104, 105, 111, 108, 109, 110,
+      108, 109, 112, 108, 109, 113, 108, 109};
+  std::vector<SkinResourceId> actualResources;
+  for (const auto &command : result.submitReady->commands) {
+    actualResources.push_back(
+        std::get<SkinTexturedQuadCommand>(command.payload).resource);
+  }
+  expect(actualResources == expectedResources,
+         "LN active/inactive and HCN inactive/active/damage/reactive roles "
+         "remain distinct");
+}
+
+void testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.lines = {
+      {.timelineVisualId = 400,
+       .kind = SkinProjectedLineKind::Group,
+       .authoredYDisplacement = 10.0,
+       .submissionOrdinal = 1},
+      {.timelineVisualId = 401,
+       .kind = SkinProjectedLineKind::Bpm,
+       .authoredYDisplacement = 20.0,
+       .submissionOrdinal = 2},
+      {.timelineVisualId = 402,
+       .kind = SkinProjectedLineKind::Stop,
+       .authoredYDisplacement = 30.0,
+       .submissionOrdinal = 3},
+      {.timelineVisualId = 403,
+       .kind = SkinProjectedLineKind::Time,
+       .authoredYDisplacement = 40.0,
+       .submissionOrdinal = 4},
+  };
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "two-group-lines",
+                          .payload = gameplayNoteObject(resources, 2),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 95, 0.0);
+  presented.presentation.frames.front().clip =
+      SkinSourceRect{.x = 20, .y = 30, .w = 500, .h = 400};
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 8,
+         "each projected timeline event emits all lane-group presentations");
+  if (!result.submitReady || result.submitReady->commands.size() != 8) {
+    return;
+  }
+  const std::vector<SkinResourceId> expectedResources = {200, 210, 201, 211,
+                                                         202, 212, 203, 213};
+  std::vector<SkinResourceId> actualResources;
+  for (const auto &command : result.submitReady->commands) {
+    const auto &quad = std::get<SkinTexturedQuadCommand>(command.payload);
+    actualResources.push_back(quad.resource);
+    expect(quad.state.scissor && quad.state.scissor->x == 20.0 &&
+               quad.state.scissor->y == 290.0 &&
+               quad.state.scissor->width == 500.0 &&
+               quad.state.scissor->height == 400.0,
+           "nested line clip is inert while the outer Note clip remains");
+  }
+  expect(actualResources == expectedResources,
+         "line groups remain increasing inside each projected kind");
+
+  auto &note = std::get<SkinNoteObject>(model.model.objects.front().payload);
+  note.lines[3].sprite.reset();
+  state.lines = {{.timelineVisualId = 404,
+                  .kind = SkinProjectedLineKind::Bpm,
+                  .submissionOrdinal = 1}};
+  const auto sparse = evaluate(renderer, runtime, model, resources, state, 2);
+  expect(!sparse.submitReady &&
+             hasDiagnostic(sparse, "skin.renderer.note.line"),
+         "a projected sparse line hole fails the critical note atomically");
+}
+
+void testSynthesizedNoteFallbacksEmitBoundedColoredPrimitives() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.notes = {
+      {.lane = 0,
+       .kind = SkinProjectedNoteKind::Normal,
+       .submissionOrdinal = 1},
+      {.lane = 0,
+       .kind = SkinProjectedNoteKind::Invisible,
+       .submissionOrdinal = 2},
+      {.lane = 0, .kind = SkinProjectedNoteKind::Mine, .submissionOrdinal = 3},
+      {.lane = 0,
+       .kind = SkinProjectedNoteKind::Normal,
+       .judged = true,
+       .submissionOrdinal = 4},
+  };
+
+  SkinNoteObject note = gameplayNoteObject(resources);
+  for (auto &[kind, visual] : note.lanes.front().visuals) {
+    visual = SkinSynthesizedNoteVisual{.kind = kind};
+  }
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "fallback-notes",
+                          .payload = std::move(note),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  model.model.destinations = {destination(1, 89, 0.0)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 18,
+         "solid and double-outline note fallbacks emit fixed-width strips");
+  if (!result.submitReady || result.submitReady->commands.size() != 18) {
+    return;
+  }
+  const auto &normal =
+      std::get<SkinPrimitiveCommand>(result.submitReady->commands[0].payload);
+  const auto &hiddenOuterBottom =
+      std::get<SkinPrimitiveCommand>(result.submitReady->commands[1].payload);
+  const auto &hiddenInnerBottom =
+      std::get<SkinPrimitiveCommand>(result.submitReady->commands[5].payload);
+  const auto &mine =
+      std::get<SkinPrimitiveCommand>(result.submitReady->commands[9].payload);
+  const auto &processedOuter =
+      std::get<SkinPrimitiveCommand>(result.submitReady->commands[10].payload);
+  expect(normal.kind == SkinPrimitiveKind::SolidQuad &&
+             normal.vertices.size() == 4 &&
+             normal.vertices.front().rgba == 0xffffffffU &&
+             hiddenOuterBottom.kind == SkinPrimitiveKind::SolidQuad &&
+             hiddenOuterBottom.vertices.size() == 4 &&
+             hiddenOuterBottom.vertices.front().rgba == 0xff007fffU &&
+             hiddenInnerBottom.vertices.size() == 4 &&
+             mine.vertices.front().rgba == 0xff0000ffU &&
+             processedOuter.vertices.front().rgba == 0xffffff00U,
+         "fallback shapes, vertex bounds, and pinned colors are explicit");
+  expect(hiddenOuterBottom.vertices[0].x == 100.0F &&
+             hiddenOuterBottom.vertices[0].y == 520.0F &&
+             hiddenOuterBottom.vertices[2].x == 140.0F &&
+             hiddenOuterBottom.vertices[2].y == 518.75F &&
+             hiddenInnerBottom.vertices[0].x == 101.25F &&
+             hiddenInnerBottom.vertices[0].y == 518.75F,
+         "double-outline fallback scales its 32x8 source-pixel thickness");
+}
+
+void testHiddenAndLiftCoversApplyDisappearLineClipping() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  auto hiddenSprite = singleFrameSprite(300);
+  auto liftSprite = singleFrameSprite(301);
+  resources.addImage(300, hiddenSprite.frames.front());
+  resources.addImage(301, liftSprite.frames.front());
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {
+      {.id = 1,
+       .authoredName = "hidden-cover",
+       .payload = SkinCoverObject{.kind = SkinCoverKind::Hidden,
+                                  .sprite = std::move(hiddenSprite),
+                                  .disappearLine = 150.0,
+                                  .disappearLineLinksLift = true},
+       .authoredOrdinal = 1,
+       .critical = true},
+      {.id = 2,
+       .authoredName = "lift-cover",
+       .payload = SkinCoverObject{.kind = SkinCoverKind::Lift,
+                                  .sprite = std::move(liftSprite),
+                                  .disappearLine = 150.0,
+                                  .disappearLineLinksLift = false},
+       .authoredOrdinal = 2,
+       .critical = true}};
+  auto hiddenDestination = destination(1, 90, 100.0);
+  hiddenDestination.presentation.frames.front().y = 100.0;
+  hiddenDestination.presentation.frames.front().width = 100.0;
+  hiddenDestination.presentation.frames.front().height = 100.0;
+  hiddenDestination.presentation.offsetIds = {3, 5};
+  auto liftDestination = destination(2, 91, 300.0);
+  liftDestination.presentation.frames.front().y = 100.0;
+  liftDestination.presentation.frames.front().width = 100.0;
+  liftDestination.presentation.frames.front().height = 100.0;
+  liftDestination.presentation.offsetIds = {3};
+  model.model.destinations = {std::move(hiddenDestination),
+                              std::move(liftDestination)};
+  BeatorajaSkinConfiguration configuration;
+  configuration.offsetsById.emplace(3, ConfigOffset{.y = 10});
+  configuration.offsetsById.emplace(5, ConfigOffset{.y = 20});
+
+  const auto result = evaluate(renderer, runtime, model, resources, state, 1, 0,
+                               &configuration);
+  expect(result.submitReady && result.submitReady->commands.size() == 2,
+         "hidden and lift covers emit after disappear-line clipping");
+  if (!result.submitReady || result.submitReady->commands.size() != 2) {
+    return;
+  }
+  const auto &hidden = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands[0].payload);
+  const auto &lift = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands[1].payload);
+  expect(hidden.state.scissor && hidden.state.scissor->x == 100.0 &&
+             hidden.state.scissor->y == 490.0 &&
+             hidden.state.scissor->width == 100.0 &&
+             hidden.state.scissor->height == 70.0,
+         "hidden cover links its disappear line to Lift after offsets");
+  expect(lift.state.scissor && lift.state.scissor->x == 300.0 &&
+             lift.state.scissor->y == 510.0 &&
+             lift.state.scissor->width == 100.0 &&
+             lift.state.scissor->height == 60.0,
+         "lift cover uses its fixed authored disappear line");
+}
+
+void testHiddenCoverStillSelectsSourceAfterRuntimeSuppression() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.booleanResult = {.value = false, .supported = true};
+  state.timerResult = 0;
+  auto sprite = singleFrameSprite(302);
+  sprite.cycleMillis = 100;
+  sprite.timer = SkinTimerPropertyId{1};
+  resources.addImage(302, sprite.frames.front());
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.booleanProperties = {
+      {.id = SkinBooleanPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 41},
+       .authoredOrdinal = 1}};
+  model.model.timerProperties = {
+      {.id = SkinTimerPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 42},
+       .authoredOrdinal = 2}};
+  model.model.objects = {
+      {.id = 1,
+       .authoredName = "hidden-cover-prepare",
+       .payload = SkinCoverObject{.kind = SkinCoverKind::Lift,
+                                  .sprite = std::move(sprite),
+                                  .disappearLine = -1.0,
+                                  .disappearLineLinksLift = false},
+       .authoredOrdinal = 1,
+       .critical = true}};
+  auto presented = destination(1, 97, 100.0);
+  presented.presentation.conditions = {SkinBooleanPropertyId{1}};
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             state.accessOrder == std::vector<int>({1'041, 2'042, 2'042}),
+         "runtime-hidden cover still probes and reads its animated source");
+}
+
+void testBgaEmitsOneRoleFreePreStretchCommand() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "bga",
+                          .payload = SkinBgaObject{},
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 92, 123.0);
+  presented.presentation.frames.front().y = 45.0;
+  presented.presentation.frames.front().width = 640.0;
+  presented.presentation.frames.front().height = 360.0;
+  presented.presentation.frames.front().rgba = {1, 2, 3, 4};
+  presented.presentation.stretch = SkinStretchMode::KeepAspectRatioFitInner;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+             result.submitReady->adjacentBatches.size() == 1,
+         "BGA emits exactly one unbatchable compositor command");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto *bga = std::get_if<SkinBgaCommand>(
+      &result.submitReady->commands.front().payload);
+  expect(bga && bga->authoredOrdinal == 92 &&
+             bga->authoredGeometry.rect.x == 123.0 &&
+             bga->authoredGeometry.rect.y == 45.0 &&
+             bga->authoredGeometry.rect.width == 640.0 &&
+             bga->authoredGeometry.rect.height == 360.0 &&
+             bga->authoredGeometry.stretch ==
+                 SkinStretchMode::KeepAspectRatioFitInner &&
+             bga->viewport.valid,
+         "BGA preserves evaluated authored geometry, stretch, and viewport");
+}
+
+void testTimersProbeThenReadAndTruncateMillisecondsIndependently() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.timerSequence = {0, 1'999};
+
+  SkinSpriteFrames sprite;
+  sprite.resource = 400;
+  sprite.frames = {{.x = 0, .y = 0, .w = 10, .h = 10}};
+  resources.addImage(400, sprite.frames.front());
+  SkinImageObject image;
+  image.orderedStates = {sprite};
+  ValidatedBeatorajaSkinModel model;
+  model.model.timerProperties = {
+      {.id = SkinTimerPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 31},
+       .authoredOrdinal = 1}};
+  model.model.objects = {{.id = 1,
+                          .authoredName = "two-call-timer",
+                          .payload = std::move(image),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  SkinDestinationBody body;
+  body.loop = -1;
+  body.timer = SkinTimerPropertyId{1};
+  body.authoredOrdinal = 93;
+  body.frames = {
+      {.timeMillis = 0, .x = 10.0, .y = 20.0, .width = 30.0, .height = 40.0},
+      {.timeMillis = 1, .x = 50.0, .y = 20.0, .width = 30.0, .height = 40.0}};
+  model.model.destinations = {{.object = 1, .presentation = std::move(body)}};
+
+  const auto result =
+      evaluate(renderer, runtime, model, resources, state, 1, 2'000);
+  expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+             state.timerCalls == 2,
+         "destination timer performs an OFF probe and an independent read");
+  if (!result.submitReady || result.submitReady->commands.empty()) {
+    return;
+  }
+  const auto &quad = std::get<SkinTexturedQuadCommand>(
+      result.submitReady->commands.front().payload);
+  expect(quad.vertices[0].x == 50.0F,
+         "timer subtraction truncates each microsecond value to milliseconds "
+         "before subtraction");
+}
+
+void testTimerProbeOnKeepsIndependentSentinelValueReadActive() {
+  {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    FakeState state;
+    state.timerSequence = {0, INT64_MIN};
+    resources.addImage(401, {.x = 0, .y = 0, .w = 10, .h = 10});
+    auto object = imageObject(1, 401, true);
+    ValidatedBeatorajaSkinModel model;
+    model.model.timerProperties = {
+        {.id = SkinTimerPropertyId{1},
+         .source = SkinBuiltinPropertySelector{.value = 32},
+         .authoredOrdinal = 1}};
+    model.model.objects = {std::move(object)};
+    auto presented = destination(1, 98, 10.0);
+    presented.presentation.timer = SkinTimerPropertyId{1};
+    presented.presentation.loop = 0;
+    presented.presentation.frames.push_back({.timeMillis = 100,
+                                             .x = 110.0,
+                                             .y = 20.0,
+                                             .width = 40.0,
+                                             .height = 30.0});
+    model.model.destinations = {std::move(presented)};
+
+    const auto result = evaluate(renderer, runtime, model, resources, state);
+    expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+               state.timerCalls == 2,
+           "ON destination timer uses its independent INT64_MIN value read");
+  }
+
+  {
+    RuntimeHarness runtime;
+    Skin2DRenderer renderer;
+    FakeResources resources;
+    FakeState state;
+    state.timerSequence = {0, INT64_MIN};
+    const std::vector<SkinSourceRect> frames{
+        {.x = 0, .y = 0, .w = 10, .h = 10},
+        {.x = 10, .y = 0, .w = 10, .h = 10}};
+    resources.addImageAtlas(402, frames, 20, 10);
+    auto object = imageObject(1, 402, true);
+    auto &sprite =
+        std::get<SkinImageObject>(object.payload).orderedStates.front();
+    sprite.frames = frames;
+    sprite.cycleMillis = 100;
+    sprite.timer = SkinTimerPropertyId{1};
+    ValidatedBeatorajaSkinModel model;
+    model.model.timerProperties = {
+        {.id = SkinTimerPropertyId{1},
+         .source = SkinBuiltinPropertySelector{.value = 33},
+         .authoredOrdinal = 1}};
+    model.model.objects = {std::move(object)};
+    model.model.destinations = {destination(1, 99, 10.0)};
+
+    const auto result = evaluate(renderer, runtime, model, resources, state);
+    expect(result.submitReady && result.submitReady->commands.size() == 1 &&
+               state.timerCalls == 2 &&
+               std::get<SkinTexturedQuadCommand>(
+                   result.submitReady->commands.front().payload)
+                       .vertices[0]
+                       .u == 0.5F,
+           "ON sprite timer uses its independent INT64_MIN value read");
+  }
+}
+
+void testNoteExpansionUsesCapturedQuarterNotePhase() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.noteExpansionResult = {.supported = true,
+                               .elapsedSinceQuarterNoteMillis = 9};
+  state.notes = {
+      {.lane = 0,
+       .kind = SkinProjectedNoteKind::Normal,
+       .submissionOrdinal = 1},
+      {.lane = 0,
+       .kind = SkinProjectedNoteKind::Invisible,
+       .authoredYDisplacement = 30.0,
+       .submissionOrdinal = 2},
+  };
+  state.longNotes = {{.lane = 0,
+                      .mode = SkinProjectedLongNoteMode::CN,
+                      .headAuthoredYDisplacement = 60.0,
+                      .tailAuthoredYDisplacement = 120.0,
+                      .submissionOrdinal = 3}};
+
+  auto note = gameplayNoteObject(resources);
+  note.expansionRatePercent = {150, 200};
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .authoredName = "expanded-notes",
+                          .payload = std::move(note),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  model.model.destinations = {destination(1, 94, 0.0)};
+
+  const auto expanded = evaluate(renderer, runtime, model, resources, state);
+  expect(expanded.submitReady && expanded.submitReady->commands.size() == 5,
+         "captured quarter-note phase expands notes and long-note chips");
+  if (!expanded.submitReady || expanded.submitReady->commands.size() != 5) {
+    return;
+  }
+  const auto &normal = std::get<SkinTexturedQuadCommand>(
+      expanded.submitReady->commands[0].payload);
+  const auto &invisible = std::get<SkinTexturedQuadCommand>(
+      expanded.submitReady->commands[1].payload);
+  const auto &longStart = std::get<SkinTexturedQuadCommand>(
+      expanded.submitReady->commands[4].payload);
+  expect(normal.vertices[0].x == 90.0F && normal.vertices[0].y == 525.0F &&
+             normal.vertices[2].x == 150.0F && normal.vertices[2].y == 505.0F,
+         "normal note reaches the authored expansion maximum at 9 ms");
+  expect(invisible.vertices[0].x == 100.0F &&
+             invisible.vertices[0].y == 490.0F &&
+             invisible.vertices[2].x == 140.0F &&
+             invisible.vertices[2].y == 480.0F,
+         "invisible note ignores the expansion pulse");
+  expect(longStart.vertices[0].x == 90.0F &&
+             longStart.vertices[0].y == 465.0F &&
+             longStart.vertices[2].x == 150.0F &&
+             longStart.vertices[2].y == 445.0F,
+         "long-note start uses the same expanded chip geometry");
+
+  state.noteExpansionResult.supported = false;
+  const auto unavailable =
+      evaluate(renderer, runtime, model, resources, state, 2);
+  expect(!unavailable.submitReady &&
+             hasDiagnostic(unavailable, "skin.renderer.note.expansion"),
+         "non-default note expansion fails closed without a captured phase");
+
+  state.notes = {{.lane = 0,
+                  .kind = SkinProjectedNoteKind::Invisible,
+                  .submissionOrdinal = 1}};
+  state.longNotes.clear();
+  const auto callsBeforeInvisible = state.noteExpansionCalls;
+  const auto invisibleOnly =
+      evaluate(renderer, runtime, model, resources, state, 3);
+  expect(invisibleOnly.submitReady &&
+             invisibleOnly.submitReady->commands.size() == 1 &&
+             state.noteExpansionCalls == callsBeforeInvisible,
+         "invisible-only projection never requests note expansion phase");
+
+  state.notes.clear();
+  state.lines = {
+      {.kind = SkinProjectedLineKind::Group, .submissionOrdinal = 1}};
+  const auto callsBeforeLine = state.noteExpansionCalls;
+  const auto lineOnly = evaluate(renderer, runtime, model, resources, state, 4);
+  expect(lineOnly.submitReady && lineOnly.submitReady->commands.size() == 1 &&
+             state.noteExpansionCalls == callsBeforeLine,
+         "line-only projection never requests note expansion phase");
+}
+
+void testNoteLineCallbacksRunAfterTopLevelPreparationAndOnlyWhenDrawable() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.timerResult = 0;
+  state.lines = {
+      {.kind = SkinProjectedLineKind::Group, .submissionOrdinal = 1}};
+
+  auto note = gameplayNoteObject(resources);
+  note.lines.front().sprite->cycleMillis = 100;
+  note.lines.front().sprite->timer = SkinTimerPropertyId{1};
+  note.lines.front().destination->timer = SkinTimerPropertyId{2};
+  auto laterImage = imageObject(2, 500, true);
+  auto &laterSprite =
+      std::get<SkinImageObject>(laterImage.payload).orderedStates.front();
+  laterSprite.cycleMillis = 100;
+  laterSprite.timer = SkinTimerPropertyId{3};
+  resources.addImage(500, laterSprite.frames.front());
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.timerProperties = {
+      {.id = SkinTimerPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 51},
+       .authoredOrdinal = 1},
+      {.id = SkinTimerPropertyId{2},
+       .source = SkinBuiltinPropertySelector{.value = 52},
+       .authoredOrdinal = 2},
+      {.id = SkinTimerPropertyId{3},
+       .source = SkinBuiltinPropertySelector{.value = 53},
+       .authoredOrdinal = 3}};
+  model.model.objects = {{.id = 1,
+                          .authoredName = "deferred-line",
+                          .payload = std::move(note),
+                          .authoredOrdinal = 1,
+                          .critical = true},
+                         std::move(laterImage)};
+  model.model.destinations = {destination(1, 100, 0.0),
+                              destination(2, 101, 0.0)};
+
+  const auto visible = evaluate(renderer, runtime, model, resources, state);
+  expect(visible.submitReady && visible.submitReady->commands.size() == 2 &&
+             state.accessOrder ==
+                 std::vector<int>({2'053, 2'053, 2'052, 2'052, 2'051, 2'051}),
+         "nested line callbacks run during Note draw after every top-level "
+         "object has prepared");
+
+  state.accessOrder.clear();
+  state.timerCalls = 0;
+  auto &noteDestination = model.model.destinations.front().presentation;
+  noteDestination.frames.front().clip =
+      SkinSourceRect{.x = 2'000, .y = 2'000, .w = 10, .h = 10};
+  const auto clipped = evaluate(renderer, runtime, model, resources, state, 2);
+  expect(clipped.submitReady && clipped.submitReady->commands.size() == 1 &&
+             state.accessOrder == std::vector<int>({2'053, 2'053}),
+         "fully clipped Note skips nested line draw callbacks");
+}
+
+void testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.booleanResult = {.value = false, .supported = true};
+  state.timerResult = 0;
+  auto note = gameplayNoteObject(resources);
+  const std::array<SkinNoteVisualKind, 14> prepareOrder{
+      SkinNoteVisualKind::Normal,          SkinNoteVisualKind::LnEnd,
+      SkinNoteVisualKind::LnStart,         SkinNoteVisualKind::LnBodyActive,
+      SkinNoteVisualKind::LnBodyInactive,  SkinNoteVisualKind::HcnEnd,
+      SkinNoteVisualKind::HcnStart,        SkinNoteVisualKind::HcnBodyActive,
+      SkinNoteVisualKind::HcnBodyInactive, SkinNoteVisualKind::HcnDamage,
+      SkinNoteVisualKind::HcnReactive,     SkinNoteVisualKind::Mine,
+      SkinNoteVisualKind::Hidden,          SkinNoteVisualKind::Processed};
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.booleanProperties = {
+      {.id = SkinBooleanPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 40},
+       .authoredOrdinal = 1}};
+  int timer = 1;
+  for (const auto kind : prepareOrder) {
+    auto &sprite =
+        std::get<SkinSpriteFrames>(note.lanes.front().visuals.at(kind));
+    sprite.cycleMillis = 100;
+    sprite.timer = SkinTimerPropertyId{static_cast<std::uint32_t>(timer)};
+    model.model.timerProperties.push_back(
+        {.id = *sprite.timer,
+         .source = SkinBuiltinPropertySelector{.value = 100 + timer},
+         .authoredOrdinal = static_cast<std::uint32_t>(timer)});
+    ++timer;
+  }
+  model.model.objects = {{.id = 1,
+                          .authoredName = "hidden-note-prepare",
+                          .payload = std::move(note),
+                          .authoredOrdinal = 1,
+                          .critical = true}};
+  auto presented = destination(1, 96, 0.0);
+  presented.presentation.conditions = {SkinBooleanPropertyId{1}};
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  std::vector<int> expected{1'040};
+  for (int selector = 101; selector <= 114; ++selector) {
+    expected.push_back(2'000 + selector);
+    expected.push_back(2'000 + selector);
+  }
+  expect(result.submitReady && result.submitReady->commands.empty() &&
+             state.accessOrder == expected,
+         "runtime-hidden Note prepares normal, LN/HCN slots, mine, hidden, "
+         "and processed sources before drawing nothing");
+}
+
+nlohmann::json fixtureVertex(const SkinVertex &vertex) {
+  return {vertex.x, vertex.y, vertex.u, vertex.v, vertex.rgba};
+}
+
+nlohmann::json fixtureState(const SkinRenderState &state) {
+  nlohmann::json scissor = nullptr;
+  if (state.scissor) {
+    scissor = {state.scissor->x, state.scissor->y, state.scissor->width,
+               state.scissor->height};
+  }
+  return {{"blend", static_cast<int>(state.blend)},
+          {"filter", static_cast<int>(state.filter)},
+          {"scissor", std::move(scissor)}};
+}
+
+nlohmann::json fixtureGeometry(const AuthoredDestinationGeometry &geometry) {
+  nlohmann::json clip = nullptr;
+  if (geometry.clip) {
+    clip = {geometry.clip->x, geometry.clip->y, geometry.clip->width,
+            geometry.clip->height};
+  }
+  return {{"rect",
+           {geometry.rect.x, geometry.rect.y, geometry.rect.width,
+            geometry.rect.height}},
+          {"clip", std::move(clip)},
+          {"center", {geometry.centerX, geometry.centerY}},
+          {"angle", geometry.angleDegrees},
+          {"rgba", geometry.rgba},
+          {"blend", static_cast<int>(geometry.blend)},
+          {"filter", static_cast<int>(geometry.filter)},
+          {"stretch", static_cast<int>(geometry.stretch)}};
+}
+
+nlohmann::json fixtureViewport(const PlaySkinViewport &viewport) {
+  const auto matrix = [](const Affine2D &value) {
+    return nlohmann::json{value.m00, value.m01, value.tx,
+                          value.m10, value.m11, value.ty};
+  };
+  return {
+      {"authoredToUi", matrix(viewport.authoredToUi)},
+      {"uiToAuthored", matrix(viewport.uiToAuthored)},
+      {"drawableAuthoredBounds",
+       {viewport.drawableAuthoredBounds.x, viewport.drawableAuthoredBounds.y,
+        viewport.drawableAuthoredBounds.width,
+        viewport.drawableAuthoredBounds.height}},
+      {"safeUiBounds",
+       {viewport.safeUiBounds.x, viewport.safeUiBounds.y,
+        viewport.safeUiBounds.width, viewport.safeUiBounds.height}},
+      {"valid", viewport.valid}};
+}
+
+nlohmann::json fixtureCommandBuffer(const SkinCommandBuffer &buffer) {
+  nlohmann::json commands = nlohmann::json::array();
+  for (const auto &command : buffer.commands) {
+    nlohmann::json payload;
+    if (const auto *quad =
+            std::get_if<SkinTexturedQuadCommand>(&command.payload)) {
+      nlohmann::json vertices = nlohmann::json::array();
+      for (const auto &vertex : quad->vertices) {
+        vertices.push_back(fixtureVertex(vertex));
+      }
+      payload = {{"type", "quad"},
+                 {"resource", quad->resource},
+                 {"vertices", std::move(vertices)},
+                 {"state", fixtureState(quad->state)}};
+    } else if (const auto *run =
+                   std::get_if<SkinGlyphRunCommand>(&command.payload)) {
+      nlohmann::json glyphs = nlohmann::json::array();
+      for (const auto &glyph : run->glyphs) {
+        nlohmann::json vertices = nlohmann::json::array();
+        for (const auto &vertex : glyph.vertices) {
+          vertices.push_back(fixtureVertex(vertex));
+        }
+        glyphs.push_back(
+            {{"codepoint", static_cast<std::uint32_t>(glyph.codepoint)},
+             {"vertices", std::move(vertices)}});
+      }
+      payload = {{"type", "glyph"},
+                 {"atlas", run->atlas},
+                 {"glyphs", std::move(glyphs)},
+                 {"state", fixtureState(run->state)}};
+    } else if (const auto *primitive =
+                   std::get_if<SkinPrimitiveCommand>(&command.payload)) {
+      nlohmann::json vertices = nlohmann::json::array();
+      for (const auto &vertex : primitive->vertices) {
+        vertices.push_back(fixtureVertex(vertex));
+      }
+      payload = {{"type", "primitive"},
+                 {"kind", static_cast<int>(primitive->kind)},
+                 {"vertices", std::move(vertices)},
+                 {"state", fixtureState(primitive->state)}};
+    } else {
+      const auto &bga = std::get<SkinBgaCommand>(command.payload);
+      payload = {{"type", "bga"},
+                 {"geometry", fixtureGeometry(bga.authoredGeometry)},
+                 {"viewport", fixtureViewport(bga.viewport)},
+                 {"ordinal", bga.authoredOrdinal}};
+    }
+    commands.push_back({{"ordinal", command.authoredOrdinal},
+                        {"sourceObject", command.sourceObject},
+                        {"payload", std::move(payload)}});
+  }
+  nlohmann::json batches = nlohmann::json::array();
+  for (const auto &batch : buffer.adjacentBatches) {
+    batches.push_back({batch.firstCommand, batch.commandCount});
+  }
+  return {{"frameSerial", buffer.frameSerial},
+          {"commands", std::move(commands)},
+          {"batches", std::move(batches)}};
+}
+
+SkinFrameEvaluationResult
+evaluateAllV1Fixture(const PlaySkinViewport &viewport) {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.integerResult = {.value = 42, .supported = true};
+  state.floatResult = {.value = 0.5, .supported = true};
+  state.gaugeResult = {.supported = true,
+                       .value = 50.0,
+                       .gaugeType = 0,
+                       .minimum = 0.0,
+                       .maximum = 100.0,
+                       .border = 20.0};
+  state.judgeResult = {.supported = true,
+                       .optionalZeroBasedGrade = 0,
+                       .combo = 0,
+                       .maximumGauge = false};
+  state.notes = {{.lane = 0,
+                  .kind = SkinProjectedNoteKind::Normal,
+                  .submissionOrdinal = 1},
+                 {.lane = 0,
+                  .kind = SkinProjectedNoteKind::Invisible,
+                  .authoredYDisplacement = 15.0,
+                  .submissionOrdinal = 2},
+                 {.lane = 0,
+                  .kind = SkinProjectedNoteKind::Mine,
+                  .authoredYDisplacement = 30.0,
+                  .submissionOrdinal = 3},
+                 {.lane = 0,
+                  .kind = SkinProjectedNoteKind::Normal,
+                  .authoredYDisplacement = 45.0,
+                  .judged = true,
+                  .submissionOrdinal = 4}};
+  state.longNotes = {{.lane = 0,
+                      .mode = SkinProjectedLongNoteMode::LN,
+                      .headAuthoredYDisplacement = 60.0,
+                      .tailAuthoredYDisplacement = 100.0,
+                      .submissionOrdinal = 5},
+                     {.lane = 0,
+                      .mode = SkinProjectedLongNoteMode::LN,
+                      .headAuthoredYDisplacement = 105.0,
+                      .tailAuthoredYDisplacement = 145.0,
+                      .active = true,
+                      .submissionOrdinal = 6},
+                     {.lane = 0,
+                      .mode = SkinProjectedLongNoteMode::CN,
+                      .headAuthoredYDisplacement = 150.0,
+                      .tailAuthoredYDisplacement = 190.0,
+                      .submissionOrdinal = 7},
+                     {.lane = 0,
+                      .mode = SkinProjectedLongNoteMode::HCN,
+                      .headAuthoredYDisplacement = 195.0,
+                      .tailAuthoredYDisplacement = 235.0,
+                      .submissionOrdinal = 8},
+                     {.lane = 0,
+                      .mode = SkinProjectedLongNoteMode::HCN,
+                      .headAuthoredYDisplacement = 240.0,
+                      .tailAuthoredYDisplacement = 280.0,
+                      .active = true,
+                      .submissionOrdinal = 9},
+                     {.lane = 0,
+                      .mode = SkinProjectedLongNoteMode::HCN,
+                      .headAuthoredYDisplacement = 285.0,
+                      .tailAuthoredYDisplacement = 325.0,
+                      .damaged = true,
+                      .submissionOrdinal = 10},
+                     {.lane = 0,
+                      .mode = SkinProjectedLongNoteMode::HCN,
+                      .headAuthoredYDisplacement = 330.0,
+                      .tailAuthoredYDisplacement = 370.0,
+                      .reactive = true,
+                      .submissionOrdinal = 11}};
+  state.lines = {
+      {.kind = SkinProjectedLineKind::Group, .submissionOrdinal = 12},
+      {.kind = SkinProjectedLineKind::Bpm,
+       .authoredYDisplacement = 10.0,
+       .submissionOrdinal = 13},
+      {.kind = SkinProjectedLineKind::Stop,
+       .authoredYDisplacement = 20.0,
+       .submissionOrdinal = 14},
+      {.kind = SkinProjectedLineKind::Time,
+       .authoredYDisplacement = 30.0,
+       .submissionOrdinal = 15}};
+
+  resources.addImage(10, {.x = 0, .y = 0, .w = 10, .h = 10});
+  const auto numberRegions = glyphRegions(10);
+  const auto floatRegions = glyphRegions(13);
+  resources.addImageAtlas(20, numberRegions, 100, 20);
+  resources.addImageAtlas(21, floatRegions, 130, 20);
+  resources.addTextAtlas(4, avAtlas());
+  resources.addImage(30, {.x = 0, .y = 0, .w = 10, .h = 10});
+  resources.addImage(31, {.x = 10, .y = 20, .w = 10, .h = 10}, 100, 100);
+  resources.addImage(40, {.x = 0, .y = 0, .w = 10, .h = 10});
+
+  SkinNumberObject number;
+  number.digits.positive = glyphSprite(20, numberRegions);
+  number.digits.glyphsPerAnimationFrame = 10;
+  number.value = SkinIntegerPropertyId{1};
+  number.digitCount = 2;
+  SkinFloatObject floating;
+  floating.digits.positive = glyphSprite(21, floatRegions);
+  floating.digits.glyphsPerAnimationFrame = 13;
+  floating.value = SkinFloatPropertyId{1};
+  floating.integerDigits = 1;
+  floating.fractionalDigits = 1;
+  SkinSliderObject slider;
+  slider.knob = singleFrameSprite(30);
+  slider.value = SkinFloatPropertyId{1};
+  slider.direction = 1;
+  slider.range = 20.0;
+  SkinGraphObject graph;
+  graph.fill = {.resource = 31,
+                .frames = {{.x = 10, .y = 20, .w = 10, .h = 10}}};
+  graph.value = SkinFloatPropertyId{1};
+  graph.direction = 0;
+  SkinGaugeObject gauge;
+  gauge.parts = 2;
+  gauge.animation = SkinGaugeAnimationType::Increase;
+  gauge.animationRange = 0;
+  gauge.animationCycleMillis = 4;
+  for (int role = 0; role < 36; ++role) {
+    const SkinResourceId resource = 1'000 + role;
+    resources.addImage(resource, {.x = 0, .y = 0, .w = 10, .h = 10});
+    gauge.orderedNodes.push_back(singleFrameSprite(resource));
+  }
+  SkinJudgeObject judge;
+  judge.grades.resize(7);
+  judge.grades[0].image = SkinNestedObjectPresentation{
+      .object = 9, .destination = destination(9, 80, 470.0).presentation};
+  auto spriteNote = gameplayNoteObject(resources);
+  auto synthesizedNote = gameplayNoteObject(resources);
+  for (auto &[kind, visual] : synthesizedNote.lanes.front().visuals) {
+    visual = SkinSynthesizedNoteVisual{.kind = kind};
+  }
+  auto hiddenSprite = singleFrameSprite(3'000);
+  auto liftSprite = singleFrameSprite(3'001);
+  resources.addImage(3'000, hiddenSprite.frames.front());
+  resources.addImage(3'001, liftSprite.frames.front());
+
+  ValidatedBeatorajaSkinModel model;
+  model.model.integerProperties = {
+      {.id = SkinIntegerPropertyId{1},
+       .domain = SkinIntegerPropertyDomain::IntegerValue,
+       .source = SkinBuiltinPropertySelector{.value = 61},
+       .authoredOrdinal = 1}};
+  model.model.floatProperties = {
+      {.id = SkinFloatPropertyId{1},
+       .domain = SkinFloatPropertyDomain::Rate,
+       .source = SkinBuiltinPropertySelector{.value = 62},
+       .authoredOrdinal = 2}};
+  model.model.objects = {
+      imageObject(1, 10, true),
+      {.id = 2,
+       .authoredName = "fixture-number",
+       .payload = std::move(number),
+       .authoredOrdinal = 2,
+       .critical = true},
+      {.id = 3,
+       .authoredName = "fixture-float",
+       .payload = std::move(floating),
+       .authoredOrdinal = 3,
+       .critical = true},
+      textObject(4, true),
+      {.id = 5,
+       .authoredName = "fixture-slider",
+       .payload = std::move(slider),
+       .authoredOrdinal = 5,
+       .critical = true},
+      {.id = 6,
+       .authoredName = "fixture-graph",
+       .payload = std::move(graph),
+       .authoredOrdinal = 6,
+       .critical = true},
+      {.id = 7,
+       .authoredName = "fixture-gauge",
+       .payload = std::move(gauge),
+       .authoredOrdinal = 7,
+       .critical = true},
+      {.id = 8,
+       .authoredName = "fixture-judge",
+       .payload = std::move(judge),
+       .authoredOrdinal = 8,
+       .critical = true},
+      imageObject(9, 40, false),
+      {.id = 10,
+       .authoredName = "fixture-note",
+       .payload = std::move(spriteNote),
+       .authoredOrdinal = 10,
+       .critical = true},
+      {.id = 11,
+       .authoredName = "fixture-synthesized-note",
+       .payload = std::move(synthesizedNote),
+       .authoredOrdinal = 11,
+       .critical = true},
+      {.id = 12,
+       .authoredName = "fixture-hidden",
+       .payload = SkinCoverObject{.kind = SkinCoverKind::Hidden,
+                                  .sprite = std::move(hiddenSprite),
+                                  .disappearLine = 150.0,
+                                  .disappearLineLinksLift = false},
+       .authoredOrdinal = 12,
+       .critical = true},
+      {.id = 13,
+       .authoredName = "fixture-lift",
+       .payload = SkinCoverObject{.kind = SkinCoverKind::Lift,
+                                  .sprite = std::move(liftSprite),
+                                  .disappearLine = 150.0,
+                                  .disappearLineLinksLift = false},
+       .authoredOrdinal = 13,
+       .critical = true},
+      {.id = 14,
+       .authoredName = "fixture-bga",
+       .payload = SkinBgaObject{},
+       .authoredOrdinal = 14,
+       .critical = true}};
+
+  auto sizedDestination = [](SkinObjectId object, std::uint32_t ordinal,
+                             double x, double y, double width, double height) {
+    auto value = destination(object, ordinal, x);
+    value.presentation.frames.front().y = y;
+    value.presentation.frames.front().width = width;
+    value.presentation.frames.front().height = height;
+    return value;
+  };
+  model.model.destinations = {
+      sizedDestination(1, 10, 10.0, 10.0, 30.0, 20.0),
+      sizedDestination(2, 20, 50.0, 10.0, 10.0, 20.0),
+      sizedDestination(3, 30, 90.0, 10.0, 10.0, 20.0),
+      sizedDestination(4, 40, 140.0, 10.0, 100.0, 20.0),
+      sizedDestination(5, 50, 250.0, 10.0, 20.0, 20.0),
+      sizedDestination(6, 60, 300.0, 10.0, 40.0, 20.0),
+      sizedDestination(7, 70, 350.0, 10.0, 100.0, 20.0),
+      sizedDestination(8, 80, 0.0, 0.0, 10.0, 10.0),
+      sizedDestination(10, 90, 0.0, 0.0, 10.0, 10.0),
+      sizedDestination(11, 100, 0.0, 0.0, 10.0, 10.0),
+      sizedDestination(12, 110, 600.0, 100.0, 100.0, 100.0),
+      sizedDestination(13, 120, 720.0, 100.0, 100.0, 100.0),
+      sizedDestination(14, 130, 500.0, 300.0, 640.0, 360.0)};
+  model.model.destinations.back().presentation.stretch =
+      SkinStretchMode::KeepAspectRatioFitInner;
+
+  static const BeatorajaSkinConfiguration configuration;
+  return renderer.evaluateFrame({.frameSerial = 1,
+                                 .sessionSerial = 1,
+                                 .visualTimeMicros = 0,
+                                 .model = model,
+                                 .configuration = configuration,
+                                 .resources = resources,
+                                 .viewport = viewport,
+                                 .runtime = runtime.runtime(),
+                                 .state = state});
+}
+
+void testDesktopAndIpadFitCommandFixtures() {
+  const nlohmann::json requiredCoverage = {"Image",
+                                           "Number",
+                                           "Float",
+                                           "Text",
+                                           "Slider",
+                                           "Graph",
+                                           "Gauge",
+                                           "Judge",
+                                           "Note.Normal",
+                                           "Note.Invisible",
+                                           "Note.Mine",
+                                           "Note.Processed",
+                                           "Note.LN.Active",
+                                           "Note.LN.Inactive",
+                                           "Note.CN",
+                                           "Note.HCN.Active",
+                                           "Note.HCN.Inactive",
+                                           "Note.HCN.Damaged",
+                                           "Note.HCN.Reactive",
+                                           "Line.Group",
+                                           "Line.Bpm",
+                                           "Line.Stop",
+                                           "Line.Time",
+                                           "Note.Synthesized",
+                                           "Cover.Hidden",
+                                           "Cover.Lift",
+                                           "BGA"};
+  for (const std::string_view fixtureName : {
+           "all_v1_objects_1280x720.json",
+           "all_v1_objects_ipad_fit.json",
+       }) {
+    const fs::path fixturePath = fs::path(ASOBMASHOW_SOURCE_DIR) /
+                                 "tests/fixtures/beatoraja_skin/commands" /
+                                 fixtureName;
+    std::ifstream fixtureInput(fixturePath, std::ios::binary);
+    nlohmann::json fixture;
+    fixtureInput >> fixture;
+    expect(fixture.value("schema", "") == "asobmashow.skin.commands.v1" &&
+               fixture.at("coverage") == requiredCoverage,
+           "external command fixture covers every v1 gameplay object role");
+    const auto authored = fixture.at("authoredSize");
+    const auto safe = fixture.at("safeBounds");
+    const auto playViewport =
+        evaluatePlaySkinViewport({.width = authored.at(0).get<double>(),
+                                  .height = authored.at(1).get<double>()},
+                                 {.x = safe.at(0).get<double>(),
+                                  .y = safe.at(1).get<double>(),
+                                  .width = safe.at(2).get<double>(),
+                                  .height = safe.at(3).get<double>()},
+                                 {});
+    const auto result = evaluateAllV1Fixture(playViewport);
+    expect(result.submitReady.has_value(),
+           "all-v1 fixture scenario evaluates atomically");
+    if (!result.submitReady) {
+      for (const auto &diagnostic : result.diagnostics) {
+        std::cerr << "Fixture diagnostic for " << fixtureName << ": "
+                  << diagnostic.code << " " << diagnostic.message << '\n';
+      }
+      continue;
+    }
+    const auto canonical = fixtureCommandBuffer(*result.submitReady);
+    const std::string digest = file_checksum::sha256(canonical.dump());
+    std::map<std::string, std::size_t> payloadCounts{
+        {"quad", 0}, {"glyph", 0}, {"primitive", 0}, {"bga", 0}};
+    for (const auto &command : canonical.at("commands")) {
+      ++payloadCounts.at(command.at("payload").at("type").get<std::string>());
+    }
+    if (fixture.value("canonicalSha256", "") != digest) {
+      std::cerr << "Fixture digest for " << fixtureName << ": " << digest
+                << " commands=" << result.submitReady->commands.size()
+                << " batches=" << result.submitReady->adjacentBatches.size()
+                << " payloads=" << nlohmann::json(payloadCounts).dump() << '\n';
+    }
+    expect(fixture.at("commandCount").get<std::size_t>() ==
+                   result.submitReady->commands.size() &&
+               fixture.at("batchCount").get<std::size_t>() ==
+                   result.submitReady->adjacentBatches.size() &&
+               fixture.at("payloadCounts") == nlohmann::json(payloadCounts) &&
+               fixture.value("canonicalSha256", "") == digest,
+           "external fixture hash covers exact payloads, vertices, UVs, "
+           "colors, states, clips, source IDs, BGA viewport, and batches");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -2573,6 +3906,7 @@ int main() {
   testCriticalLuaCallbackFailureIsAlsoAtomic();
   testOptionalFailureSuppressesOnlyItsObject();
   testBuiltinImageStateAndOutOfRangeFallback();
+  testHiddenImageStillSelectsSourceAfterRuntimeSuppression();
   testProjectionOrderAndCrossSpanUniquenessAreFrameCritical();
   testProjectionLimitsAreCheckedBeforeEvaluation();
   testBindingAndDisabledLookupsStayLogarithmicAtModelLimits();
@@ -2609,5 +3943,18 @@ int main() {
   testJudgeMaxGaugeFallsBackImageAndDetailIndependently();
   testHiddenJudgeStillPreparesChildrenInPinnedCallbackOrder();
   testCriticalJudgeRequiresSupportedState();
+  testNoteLongNoteAndLineCommandsPreserveMergedProjectionOrder();
+  testEveryLongNoteBodyStateUsesItsDistinctVisualRole();
+  testProjectedLineEmitsEveryLaneGroupAndIgnoresNestedClip();
+  testSynthesizedNoteFallbacksEmitBoundedColoredPrimitives();
+  testHiddenAndLiftCoversApplyDisappearLineClipping();
+  testHiddenCoverStillSelectsSourceAfterRuntimeSuppression();
+  testBgaEmitsOneRoleFreePreStretchCommand();
+  testTimersProbeThenReadAndTruncateMillisecondsIndependently();
+  testTimerProbeOnKeepsIndependentSentinelValueReadActive();
+  testNoteExpansionUsesCapturedQuarterNotePhase();
+  testNoteLineCallbacksRunAfterTopLevelPreparationAndOnlyWhenDrawable();
+  testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder();
+  testDesktopAndIpadFitCommandFixtures();
   return failures == 0 ? 0 : 1;
 }

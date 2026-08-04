@@ -79,8 +79,7 @@ bool validSprite(const SkinSpriteFrames &sprite,
          (!sprite.timer || timers.contains(sprite.timer->value));
 }
 
-bool validIntegerRateRange(
-    const SkinSliderObject::IntegerRangeSource &range) {
+bool validIntegerRateRange(const SkinSliderObject::IntegerRangeSource &range) {
   const auto span = static_cast<std::int64_t>(range.maximum) -
                     static_cast<std::int64_t>(range.minimum);
   return span != 0 && span >= std::numeric_limits<int>::min() &&
@@ -194,17 +193,30 @@ bool validNoteObject(const SkinNoteObject &object,
       noteVisualSlots(object, SkinNoteVisualKind::HcnEnd, complete);
   visualInput.hcnStart =
       noteVisualSlots(object, SkinNoteVisualKind::HcnStart, complete);
-  visualInput.hcnBody =
-      noteVisualSlots(object, SkinNoteVisualKind::HcnBodyInactive, complete);
-  visualInput.hcnBodyActive =
-      noteVisualSlots(object, SkinNoteVisualKind::HcnBodyActive, complete);
-  visualInput.hcnBodyMiss =
-      noteVisualSlots(object, SkinNoteVisualKind::HcnDamage, complete);
-  visualInput.hcnBodyReactive =
-      noteVisualSlots(object, SkinNoteVisualKind::HcnReactive, complete);
+  if (object.hcnBodySlotLayout == SkinHcnBodySlotLayout::Modern) {
+    visualInput.hcnBody =
+        noteVisualSlots(object, SkinNoteVisualKind::HcnBodyInactive, complete);
+    visualInput.hcnBodyActive =
+        noteVisualSlots(object, SkinNoteVisualKind::HcnBodyActive, complete);
+    visualInput.hcnBodyMiss =
+        noteVisualSlots(object, SkinNoteVisualKind::HcnDamage, complete);
+    visualInput.hcnBodyReactive =
+        noteVisualSlots(object, SkinNoteVisualKind::HcnReactive, complete);
+  } else {
+    visualInput.hcnBody =
+        noteVisualSlots(object, SkinNoteVisualKind::HcnBodyActive, complete);
+    visualInput.hcnActive =
+        noteVisualSlots(object, SkinNoteVisualKind::HcnBodyInactive, complete);
+    visualInput.hcnDamage =
+        noteVisualSlots(object, SkinNoteVisualKind::HcnDamage, complete);
+    visualInput.hcnReactive =
+        noteVisualSlots(object, SkinNoteVisualKind::HcnReactive, complete);
+  }
   (void)noteVisualSlots(object, SkinNoteVisualKind::Hidden, complete);
   (void)noteVisualSlots(object, SkinNoteVisualKind::Processed, complete);
-  if (!complete || !normalizeSkinNote(visualInput).note) {
+  const auto normalizedVisuals = normalizeSkinNote(visualInput);
+  if (!complete || !normalizedVisuals.note ||
+      normalizedVisuals.note->hcnBodySlotLayout != object.hcnBodySlotLayout) {
     return false;
   }
 
@@ -669,8 +681,8 @@ SkinModelValidationResult SkinModelValidator::validate(
     if (judge == nullptr || disabledIds.contains(object.id)) {
       continue;
     }
-    const bool childDisabled = std::ranges::any_of(
-        judge->grades, [&](const auto &grade) {
+    const bool childDisabled =
+        std::ranges::any_of(judge->grades, [&](const auto &grade) {
           return (grade.image && disabledIds.contains(grade.image->object)) ||
                  (grade.detailNumber &&
                   disabledIds.contains(grade.detailNumber->object));
@@ -687,9 +699,9 @@ SkinModelValidationResult SkinModelValidator::validate(
     }
     disabled.push_back(object.id);
     disabledIds.insert(object.id);
-    result.diagnostics.push_back(validationDiagnostic(
-        "skin_lua_model_optional_object_disabled",
-        "Lua skin Judge references a disabled child"));
+    result.diagnostics.push_back(
+        validationDiagnostic("skin_lua_model_optional_object_disabled",
+                             "Lua skin Judge references a disabled child"));
   }
 
   for (const auto &destination : model.destinations) {

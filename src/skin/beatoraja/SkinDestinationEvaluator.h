@@ -13,6 +13,10 @@ namespace skin {
 struct SkinDestinationEvaluationInputs {
   std::int64_t nowMicros = 0;
   std::int64_t timerStartMicros = INT64_MIN;
+  // TimerProperty.isOff() and TimerProperty.get() are independent calls in
+  // pinned Beatoraja. A raw INT64_MIN value remains a valid read when the
+  // preceding OFF probe returned false.
+  bool timerOff = false;
   // One resolved value per SkinDestinationBody::conditions entry in authored
   // order, followed by drawCondition when that condition is present.
   std::span<const bool> optionConditions;
@@ -55,12 +59,13 @@ struct UiDestinationGeometry {
   SkinFilterMode filter = SkinFilterMode::Nearest;
 };
 
-SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
-    const SkinDestinationBody &destination,
-    const SkinDestinationEvaluationInputs &inputs);
+SkinDestinationEvaluationResult
+evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
+                                const SkinDestinationEvaluationInputs &inputs);
 
-UiDestinationGeometry projectSkinDestinationToUi(
-    const AuthoredDestinationGeometry &destination,
-    const SkinSourceRegionGeometry &source, const PlaySkinViewport &viewport);
+UiDestinationGeometry
+projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
+                           const SkinSourceRegionGeometry &source,
+                           const PlaySkinViewport &viewport);
 
 } // namespace skin

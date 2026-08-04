@@ -368,10 +368,15 @@ struct SkinNoteLinePresentation {
   std::optional<SkinDestinationBody> destination;
 };
 
+enum class SkinHcnBodySlotLayout : std::uint8_t { Legacy, Modern };
+
 struct SkinNoteObject {
   std::vector<SkinLaneNotePresentation> lanes;
   std::vector<SkinNoteLinePresentation> lines;
   std::array<int, 2> expansionRatePercent{100, 100};
+  // Pinned drawLongNote selects positional slots 8/9. Their semantic names
+  // are reversed between the legacy and modern JSON/Lua field families.
+  SkinHcnBodySlotLayout hcnBodySlotLayout = SkinHcnBodySlotLayout::Legacy;
 };
 
 enum class SkinCoverKind : std::uint8_t { Hidden, Lift };

@@ -9,9 +9,9 @@ namespace skin {
 namespace {
 
 constexpr std::array<double, 10> kCenterX = {0.5, 0.0, 0.5, 1.0, 0.0,
-                                               0.5, 1.0, 0.0, 0.5, 1.0};
+                                             0.5, 1.0, 0.0, 0.5, 1.0};
 constexpr std::array<double, 10> kCenterY = {0.5, 0.0, 0.0, 0.0, 0.5,
-                                               0.5, 0.5, 1.0, 1.0, 1.0};
+                                             0.5, 0.5, 1.0, 1.0, 1.0};
 
 SkinDiagnostic diagnostic(std::string code, std::string message) {
   return {.code = std::move(code), .message = std::move(message)};
@@ -24,8 +24,8 @@ bool finite(const SkinDestinationFrame &frame) {
 }
 
 std::int64_t subtractMillis(std::int64_t now, std::int64_t start) {
-  const auto value = static_cast<__int128>(now / 1000) -
-                     static_cast<__int128>(start / 1000);
+  const auto value =
+      static_cast<__int128>(now / 1000) - static_cast<__int128>(start / 1000);
   if (value > std::numeric_limits<std::int64_t>::max()) {
     return std::numeric_limits<std::int64_t>::max();
   }
@@ -155,7 +155,8 @@ void fitWidthTrimmed(AuthoredRect &rect, double scale, SkinSourceRect &region) {
   }
 }
 
-void fitHeightTrimmed(AuthoredRect &rect, double scale, SkinSourceRect &region) {
+void fitHeightTrimmed(AuthoredRect &rect, double scale,
+                      SkinSourceRect &region) {
   const double target = scale * regionHeight(region);
   if (rect.height < target) {
     const double crop = rect.height / scale;
@@ -217,8 +218,8 @@ void applyStretch(AuthoredRect &rect, SkinSourceRect &region,
     fitWidthTrimmed(rect, rect.height / sourceHeight, region);
     break;
   case SkinStretchMode::KeepAspectRatioNoExpanding: {
-    const double scale = std::min(1.0, std::min(rect.width / sourceWidth,
-                                                  rect.height / sourceHeight));
+    const double scale = std::min(
+        1.0, std::min(rect.width / sourceWidth, rect.height / sourceHeight));
     fitWidth(rect, sourceWidth * scale);
     fitHeight(rect, sourceHeight * scale);
     break;
@@ -236,19 +237,20 @@ void applyStretch(AuthoredRect &rect, SkinSourceRect &region,
 
 } // namespace
 
-SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
-    const SkinDestinationBody &destination,
-    const SkinDestinationEvaluationInputs &inputs) {
+SkinDestinationEvaluationResult
+evaluateSkinDestinationAuthored(const SkinDestinationBody &destination,
+                                const SkinDestinationEvaluationInputs &inputs) {
   SkinDestinationEvaluationResult result;
-  const std::size_t expectedConditions = destination.conditions.size() +
-                                         (destination.drawCondition ? 1U : 0U);
+  const std::size_t expectedConditions =
+      destination.conditions.size() + (destination.drawCondition ? 1U : 0U);
   if (inputs.optionConditions.size() != expectedConditions) {
     result.diagnostics.push_back(diagnostic(
         "skin.destination.conditions.length_mismatch",
         "Resolved condition count does not match destination conditions."));
     return result;
   }
-  if (std::any_of(inputs.optionConditions.begin(), inputs.optionConditions.end(),
+  if (std::any_of(inputs.optionConditions.begin(),
+                  inputs.optionConditions.end(),
                   [](bool value) { return !value; })) {
     return result;
   }
@@ -261,20 +263,20 @@ SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
     if (!finite(destination.frames[index]) ||
         (index > 0 && destination.frames[index - 1].timeMillis >
                           destination.frames[index].timeMillis)) {
-      result.diagnostics.push_back(diagnostic(
-          "skin.destination.frames.invalid",
-          "Destination frames must be finite and sorted by time."));
+      result.diagnostics.push_back(
+          diagnostic("skin.destination.frames.invalid",
+                     "Destination frames must be finite and sorted by time."));
       return result;
     }
   }
-  if (destination.timer && inputs.timerStartMicros == INT64_MIN) {
+  if (destination.timer && inputs.timerOff) {
     return result;
   }
 
-  std::int64_t timeMillis = destination.timer
-                                ? subtractMillis(inputs.nowMicros,
-                                                 inputs.timerStartMicros)
-                                : inputs.nowMicros / 1000;
+  std::int64_t timeMillis =
+      destination.timer
+          ? subtractMillis(inputs.nowMicros, inputs.timerStartMicros)
+          : inputs.nowMicros / 1000;
   const std::int64_t start = destination.frames.front().timeMillis;
   const std::int64_t end = destination.frames.back().timeMillis;
   if (destination.loop == -1) {
@@ -302,7 +304,8 @@ SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
     for (std::size_t reverse = destination.frames.size() - 1; reverse > 0;
          --reverse) {
       const std::size_t index = reverse - 1;
-      const auto lowerTime = static_cast<std::int64_t>(destination.frames[index].timeMillis);
+      const auto lowerTime =
+          static_cast<std::int64_t>(destination.frames[index].timeMillis);
       if (lowerTime <= timeMillis && upperTime > timeMillis) {
         lowerIndex = index;
         rate = static_cast<float>(timeMillis - lowerTime) /
@@ -315,32 +318,37 @@ SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
   const int acceleration = objectAcceleration(destination);
   const bool fixedColor = hasFixedColor(destination);
   rate = easedRate(rate, acceleration);
-  const bool interpolated = lowerIndex + 1 < destination.frames.size() && rate != 0.0F;
+  const bool interpolated =
+      lowerIndex + 1 < destination.frames.size() && rate != 0.0F;
   const auto &lower = destination.frames[lowerIndex];
-  const auto &upper = destination.frames[std::min(lowerIndex + 1,
-                                                    destination.frames.size() - 1)];
+  const auto &upper =
+      destination
+          .frames[std::min(lowerIndex + 1, destination.frames.size() - 1)];
 
   AuthoredDestinationGeometry geometry;
   if (!interpolated || acceleration == 3) {
-    geometry.rect = {.x = lower.x, .y = lower.y, .width = lower.width,
+    geometry.rect = {.x = lower.x,
+                     .y = lower.y,
+                     .width = lower.width,
                      .height = lower.height};
     geometry.angleDegrees = lower.angleDegrees;
     for (std::size_t index = 0; index < geometry.rgba.size(); ++index) {
       geometry.rgba[index] = static_cast<float>(lower.rgba[index]) / 255.0F;
     }
     if (lower.clip) {
-      geometry.clip = AuthoredRect{.x = static_cast<double>(lower.clip->x),
-                                   .y = static_cast<double>(lower.clip->y),
-                                   .width = static_cast<double>(lower.clip->w),
-                                   .height = static_cast<double>(lower.clip->h)};
+      geometry.clip =
+          AuthoredRect{.x = static_cast<double>(lower.clip->x),
+                       .y = static_cast<double>(lower.clip->y),
+                       .width = static_cast<double>(lower.clip->w),
+                       .height = static_cast<double>(lower.clip->h)};
     }
   } else {
     geometry.rect = {.x = interpolate(lower.x, upper.x, rate),
                      .y = interpolate(lower.y, upper.y, rate),
                      .width = interpolate(lower.width, upper.width, rate),
                      .height = interpolate(lower.height, upper.height, rate)};
-    geometry.angleDegrees = truncateJava(
-        interpolate(lower.angleDegrees, upper.angleDegrees, rate));
+    geometry.angleDegrees =
+        truncateJava(interpolate(lower.angleDegrees, upper.angleDegrees, rate));
     for (std::size_t index = 0; index < geometry.rgba.size(); ++index) {
       const float low = static_cast<float>(lower.rgba[index]) / 255.0F;
       const float high = static_cast<float>(upper.rgba[index]) / 255.0F;
@@ -354,10 +362,11 @@ SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
             .width = interpolate(lower.clip->w, upper.clip->w, rate),
             .height = interpolate(lower.clip->h, upper.clip->h, rate)};
       } else {
-        geometry.clip = AuthoredRect{.x = static_cast<double>(lower.clip->x),
-                                     .y = static_cast<double>(lower.clip->y),
-                                     .width = static_cast<double>(lower.clip->w),
-                                     .height = static_cast<double>(lower.clip->h)};
+        geometry.clip =
+            AuthoredRect{.x = static_cast<double>(lower.clip->x),
+                         .y = static_cast<double>(lower.clip->y),
+                         .width = static_cast<double>(lower.clip->w),
+                         .height = static_cast<double>(lower.clip->h)};
       }
     }
   }
@@ -392,15 +401,17 @@ SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
   return result;
 }
 
-UiDestinationGeometry projectSkinDestinationToUi(
-    const AuthoredDestinationGeometry &destination,
-    const SkinSourceRegionGeometry &source, const PlaySkinViewport &viewport) {
+UiDestinationGeometry
+projectSkinDestinationToUi(const AuthoredDestinationGeometry &destination,
+                           const SkinSourceRegionGeometry &source,
+                           const PlaySkinViewport &viewport) {
   UiDestinationGeometry result;
   result.rgba = destination.rgba;
   result.blend = destination.blend;
   result.filter = destination.filter;
-  if (!viewport.valid || source.textureWidth <= 0 || source.textureHeight <= 0 ||
-      source.region.w == 0 || source.region.h == 0) {
+  if (!viewport.valid || source.textureWidth <= 0 ||
+      source.textureHeight <= 0 || source.region.w == 0 ||
+      source.region.h == 0) {
     return result;
   }
 
@@ -412,16 +423,17 @@ UiDestinationGeometry projectSkinDestinationToUi(
   const double sine = std::sin(radians);
   const double pivotX = rect.x + destination.centerX * rect.width;
   const double pivotY = rect.y + destination.centerY * rect.height;
-  const std::array<std::array<double, 2>, 4> corners = {{{rect.x, rect.y},
-                                                           {rect.x + rect.width, rect.y},
-                                                           {rect.x + rect.width, rect.y + rect.height},
-                                                           {rect.x, rect.y + rect.height}}};
+  const std::array<std::array<double, 2>, 4> corners = {
+      {{rect.x, rect.y},
+       {rect.x + rect.width, rect.y},
+       {rect.x + rect.width, rect.y + rect.height},
+       {rect.x, rect.y + rect.height}}};
   for (std::size_t index = 0; index < corners.size(); ++index) {
     const double x = corners[index][0] - pivotX;
     const double y = corners[index][1] - pivotY;
-    const auto point = apply(viewport.authoredToUi,
-                             pivotX + x * cosine - y * sine,
-                             pivotY + x * sine + y * cosine);
+    const auto point =
+        apply(viewport.authoredToUi, pivotX + x * cosine - y * sine,
+              pivotY + x * sine + y * cosine);
     result.vertices[index] = point;
   }
   const double u0 = static_cast<double>(region.x) / source.textureWidth;
@@ -437,13 +449,14 @@ UiDestinationGeometry projectSkinDestinationToUi(
       destination.clip->height > 0.0) {
     const auto topLeft = apply(viewport.authoredToUi, destination.clip->x,
                                destination.clip->y + destination.clip->height);
-    const auto bottomRight = apply(viewport.authoredToUi,
-                                   destination.clip->x + destination.clip->width,
-                                   destination.clip->y);
-    result.clip = UiLogicalRect{.x = std::min(topLeft[0], bottomRight[0]),
-                                .y = std::min(topLeft[1], bottomRight[1]),
-                                .width = std::abs(bottomRight[0] - topLeft[0]),
-                                .height = std::abs(bottomRight[1] - topLeft[1])};
+    const auto bottomRight = apply(
+        viewport.authoredToUi, destination.clip->x + destination.clip->width,
+        destination.clip->y);
+    result.clip =
+        UiLogicalRect{.x = std::min(topLeft[0], bottomRight[0]),
+                      .y = std::min(topLeft[1], bottomRight[1]),
+                      .width = std::abs(bottomRight[0] - topLeft[0]),
+                      .height = std::abs(bottomRight[1] - topLeft[1])};
   }
   return result;
 }

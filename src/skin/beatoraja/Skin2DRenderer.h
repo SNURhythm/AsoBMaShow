@@ -84,6 +84,14 @@ struct SkinJudgeStateView {
   bool maximumGauge = false;
 };
 
+struct SkinNoteExpansionStateView {
+  bool supported = false;
+  // Render-ready elapsed milliseconds since the current quarter-note pulse.
+  // The bridge owns chart/replay timing and Task 14 only applies Beatoraja's
+  // fixed 9 ms expansion plus 150 ms contraction curve.
+  std::int64_t elapsedSinceQuarterNoteMillis = 0;
+};
+
 class ISkinFrameState {
 public:
   virtual ~ISkinFrameState() = default;
@@ -106,6 +114,7 @@ public:
   projectedLines() const noexcept = 0;
   virtual SkinGaugeStateView gaugeState() const noexcept = 0;
   virtual SkinJudgeStateView judgeState(int player) const noexcept = 0;
+  virtual SkinNoteExpansionStateView noteExpansionState() const noexcept = 0;
 };
 
 class ISkinGaugeRandomSource {

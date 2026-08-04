@@ -77,13 +77,11 @@ void expectSprite(const SkinNormalizedNoteVisual &actual,
     return;
   }
   expect(sprite->resource == resource, message);
-  expect(sprite->frames.size() == 1 && sprite->frames[0].x == source,
-         message);
+  expect(sprite->frames.size() == 1 && sprite->frames[0].x == source, message);
 }
 
 void expectFallback(const SkinNormalizedNoteVisual &actual,
-                    SkinNoteFallbackColor color,
-                    SkinNoteFallbackShape shape,
+                    SkinNoteFallbackColor color, SkinNoteFallbackShape shape,
                     std::string_view message) {
   const auto *fallback = std::get_if<SkinSynthesizedNoteFallback>(&actual);
   expect(fallback != nullptr, message);
@@ -104,12 +102,14 @@ void testLegacyArraysTransposeByLane() {
 
   expect(result.note->lanes.size() == 2,
          "normalization preserves the two authored lanes");
+  expect(result.note->hcnBodySlotLayout == SkinHcnBodySlotLayout::Legacy,
+         "legacy HCN fields retain positional slot semantics");
   for (std::size_t lane = 0; lane < result.note->lanes.size(); ++lane) {
     const auto &normalizedLane = result.note->lanes[lane];
     expect(normalizedLane.authoredLane == lane,
            "transposed lane retains its authored index");
-    expectSprite(visual(normalizedLane, SkinNoteVisualKind::Normal),
-                 100 + lane, 1'000 + static_cast<int>(lane),
+    expectSprite(visual(normalizedLane, SkinNoteVisualKind::Normal), 100 + lane,
+                 1'000 + static_cast<int>(lane),
                  "normal visual remains in its lane");
     expectSprite(visual(normalizedLane, SkinNoteVisualKind::Mine), 200 + lane,
                  2'000 + static_cast<int>(lane),
@@ -126,8 +126,8 @@ void testLegacyArraysTransposeByLane() {
     expectSprite(visual(normalizedLane, SkinNoteVisualKind::LnBodyInactive),
                  600 + lane, 6'000 + static_cast<int>(lane),
                  "legacy LN active supplies inactive slot");
-    expectSprite(visual(normalizedLane, SkinNoteVisualKind::HcnEnd),
-                 700 + lane, 7'000 + static_cast<int>(lane),
+    expectSprite(visual(normalizedLane, SkinNoteVisualKind::HcnEnd), 700 + lane,
+                 7'000 + static_cast<int>(lane),
                  "HCN end transposes into its lane");
     expectSprite(visual(normalizedLane, SkinNoteVisualKind::HcnStart),
                  800 + lane, 8'000 + static_cast<int>(lane),
@@ -159,6 +159,8 @@ void testModernArraysTakePrecedenceIndependently() {
   if (!result.note) {
     return;
   }
+  expect(result.note->hcnBodySlotLayout == SkinHcnBodySlotLayout::Modern,
+         "modern HCN fields retain their reversed slot semantics");
   for (std::size_t lane = 0; lane < result.note->lanes.size(); ++lane) {
     const auto &normalizedLane = result.note->lanes[lane];
     expectSprite(visual(normalizedLane, SkinNoteVisualKind::LnBodyActive),
@@ -190,8 +192,8 @@ void testLnAndHcnCompatibilitySwitchesAreIndependent() {
          "modern LN with legacy HCN normalizes");
   if (lnModernResult.note) {
     const auto &lane = lnModernResult.note->lanes.front();
-    expectSprite(visual(lane, SkinNoteVisualKind::LnBodyActive), 1'300,
-                 13'000, "modern LN switch selects modern active body");
+    expectSprite(visual(lane, SkinNoteVisualKind::LnBodyActive), 1'300, 13'000,
+                 "modern LN switch selects modern active body");
     expectSprite(visual(lane, SkinNoteVisualKind::HcnDamage), 1'100, 11'000,
                  "modern LN switch leaves HCN on its legacy damage field");
   }
@@ -209,8 +211,8 @@ void testLnAndHcnCompatibilitySwitchesAreIndependent() {
                  "modern HCN switch leaves LN on its legacy body field");
     expectSprite(visual(lane, SkinNoteVisualKind::HcnDamage), 1'600, 16'000,
                  "modern HCN switch selects miss damage field");
-    expectSprite(visual(lane, SkinNoteVisualKind::HcnReactive), 1'500,
-                 15'000, "modern HCN switch selects reactive field");
+    expectSprite(visual(lane, SkinNoteVisualKind::HcnReactive), 1'500, 15'000,
+                 "modern HCN switch selects reactive field");
   }
 }
 

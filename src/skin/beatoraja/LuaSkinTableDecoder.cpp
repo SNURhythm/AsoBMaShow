@@ -1920,6 +1920,8 @@ bool buildNoteObject(GameplayDecodeRequest &request, RawSkinNote &note) {
 
   note.object.expansionRatePercent =
       normalizedGeometry.geometry->expansionRatePercent;
+  note.object.hcnBodySlotLayout =
+      normalizedVisuals.note->hcnBodySlotLayout;
   note.object.lanes.reserve(normalizedVisuals.note->lanes.size());
   for (std::size_t laneIndex = 0;
        laneIndex < normalizedVisuals.note->lanes.size(); ++laneIndex) {

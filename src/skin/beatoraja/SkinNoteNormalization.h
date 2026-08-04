@@ -15,8 +15,7 @@ namespace skin {
 // can build it from Lua tables without giving this helper access to Lua,
 // files, textures, or a mutable SkinNoteObject.
 using SkinAuthoredNoteVisualSlot = std::optional<SkinSpriteFrames>;
-using SkinAuthoredNoteVisualSlots =
-    std::vector<SkinAuthoredNoteVisualSlot>;
+using SkinAuthoredNoteVisualSlots = std::vector<SkinAuthoredNoteVisualSlot>;
 
 struct SkinNoteNormalizationInput {
   SkinAuthoredNoteVisualSlots note;
@@ -66,6 +65,7 @@ struct SkinNormalizedNoteLane {
 
 struct SkinNormalizedNote {
   std::vector<SkinNormalizedNoteLane> lanes;
+  SkinHcnBodySlotLayout hcnBodySlotLayout = SkinHcnBodySlotLayout::Legacy;
 };
 
 struct SkinNoteNormalizationPolicy {
