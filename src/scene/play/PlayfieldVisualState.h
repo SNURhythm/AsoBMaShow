@@ -94,6 +94,9 @@ struct NotePresentationState {
   ChartVisualId id = 0;
   bool judged = false;
   bool dead = false;
+  // Exact parser/gameplay event time for resolved-note rendering decisions.
+  // Unplayed notes use the shared OFF sentinel rather than an ambiguous zero.
+  long long playedTimeMicros = kPlayfieldTimestampOff;
   bool longActive = false;
   bool longDamaged = false;
   bool longReactive = false;

@@ -51,10 +51,17 @@ struct ProjectedLongNoteDescriptor {
   bool active = false;
   bool damaged = false;
   bool reactive = false;
+  bool headPlayed = false;
+  bool tailPlayed = false;
   bool headJudged = false;
   bool tailJudged = false;
   bool headDead = false;
   bool tailDead = false;
+  long long headPlayedTimeMicros = kPlayfieldTimestampOff;
+  long long tailPlayedTimeMicros = kPlayfieldTimestampOff;
+  bool tailReleasedEarly = false;
+  bool tailMissedWithHead = false;
+  bool tailResolvedAtOrAfterTiming = false;
   std::uint32_t submissionOrdinal = 0;
   std::uint32_t bodyDepth = 0;
   std::uint32_t endpointDepth = 0;

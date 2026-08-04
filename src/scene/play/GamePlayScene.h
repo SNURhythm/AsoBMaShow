@@ -12,6 +12,7 @@
 #include "NoteTimeRange.h"
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
+#include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
 #include "RhythmState.h"
 #include "../Scene.h"
@@ -230,6 +231,7 @@ private:
   std::mutex bestReplayLoadMutex;
   std::shared_ptr<ReplayData> pendingBestReplay;
   PlayfieldChartVisualModel playfieldChartVisualModel;
+  PlayfieldProjection playfieldProjection;
   std::unique_ptr<PlayfieldVisualStateStore> ownedPlayfieldVisualStateStore;
   PlayfieldVisualStateStore *playfieldVisualStateStore = nullptr;
   std::unique_ptr<BMSRenderer> ownedRenderer;
@@ -273,6 +275,7 @@ private:
   float floatingLaneCoverDragOffsetY = 0.0f;
   std::uint64_t playfieldFrameSerial = 0;
   PlayfieldVisualState capturedPlayfieldVisualState;
+  PlayfieldProjectionResult capturedPlayfieldProjection;
   std::vector<const bms_parser::Note *> playfieldVisualNoteSources;
   int playfieldLaneCoverPercent = 0;
   bool playfieldLaneCoverResetPending = false;

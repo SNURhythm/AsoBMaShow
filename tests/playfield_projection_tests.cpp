@@ -314,9 +314,12 @@ int main() {
   longState.notes = {
       {.id = 801, .dead = true},
       {.id = 803, .judged = true},
-      {.id = 804, .judged = true},
+      {.id = 804, .judged = true, .playedTimeMicros = 500'000},
       {.id = 805, .judged = true},
-      {.id = 806, .dead = true},
+      {.id = 806,
+       .judged = true,
+       .dead = true,
+       .playedTimeMicros = 1'000'000},
   };
   const auto longStateResult = projection.project(longStateModel, longState, {});
   // Desired DTO contract: ProjectedLongNoteDescriptor::headDead and
@@ -333,10 +336,17 @@ int main() {
       !longStateResult.longNotes[1].tailJudged ||
       longStateResult.longNotes[1].headDead ||
       longStateResult.longNotes[1].tailDead ||
+      !longStateResult.longNotes[1].tailPlayed ||
+      longStateResult.longNotes[1].tailPlayedTimeMicros != 500'000 ||
+      !longStateResult.longNotes[1].tailReleasedEarly ||
+      longStateResult.longNotes[1].tailMissedWithHead ||
+      longStateResult.longNotes[1].tailResolvedAtOrAfterTiming ||
       !longStateResult.longNotes[2].headJudged ||
       !longStateResult.longNotes[2].tailJudged ||
       longStateResult.longNotes[2].headDead ||
-      !longStateResult.longNotes[2].tailDead) {
+      !longStateResult.longNotes[2].tailDead ||
+      longStateResult.longNotes[2].tailReleasedEarly ||
+      !longStateResult.longNotes[2].tailResolvedAtOrAfterTiming) {
     std::cerr << "long-note dead and resolved state preservation failed\n";
     return EXIT_FAILURE;
   }

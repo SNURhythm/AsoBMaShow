@@ -1995,6 +1995,9 @@ bool GamePlayScene::reset() {
   ownedState.reset();
   state = nullptr;
   renderer->reset();
+  playfieldProjection.reset();
+  capturedPlayfieldVisualState = {};
+  capturedPlayfieldProjection = {};
   if (laneInputController != nullptr) {
     laneInputController->resetLaneStates();
     updateLaneStateText();
@@ -3449,6 +3452,8 @@ void GamePlayScene::capturePlayfieldVisualState(
         .id = model.id,
         .judged = source->IsPlayed,
         .dead = source->IsDead,
+        .playedTimeMicros = source->IsPlayed ? source->PlayedTime
+                                             : kPlayfieldTimestampOff,
     };
     if (const auto *longNote =
             dynamic_cast<const bms_parser::LongNote *>(source);
@@ -3482,6 +3487,10 @@ void GamePlayScene::capturePlayfieldVisualState(
       .replayTouchTimeMicros = gameplayTimeMicros,
       .bgaTimeMicros = gameplayTimeMicros,
   });
+  capturedPlayfieldProjection = playfieldProjection.project(
+      playfieldChartVisualModel, capturedPlayfieldVisualState,
+      {.includeInvisibleNotes =
+           capturedPlayfieldVisualState.configuration.showInvisibleNotes});
   playfieldLaneCoverResetPending = false;
 }
 
@@ -4141,6 +4150,9 @@ void GamePlayScene::cleanupScene() {
   renderer = nullptr;
   ownedPlayfieldVisualStateStore.reset();
   playfieldVisualStateStore = nullptr;
+  playfieldProjection.reset();
+  capturedPlayfieldVisualState = {};
+  capturedPlayfieldProjection = {};
   ownedState.reset();
   state = nullptr;
   ownedLaneStateText.reset();

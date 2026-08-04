@@ -291,6 +291,7 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
   store.setNoteState({.id = longHead->id,
                       .judged = true,
                       .dead = false,
+                      .playedTimeMicros = 777,
                       .longActive = true,
                       .longDamaged = true,
                       .longReactive = true});
@@ -340,6 +341,7 @@ void testVisualStateCaptureAndFanoutAreCoherentValueSnapshots() {
               captured.notes.front().id == firstNoteId &&
               captured.notes.front().judged &&
               capturedLong != captured.notes.end() &&
+              capturedLong->playedTimeMicros == 777 &&
               capturedLong->longActive && capturedLong->longDamaged &&
               capturedLong->longReactive &&
               capturedMine != captured.notes.end() && capturedMine->judged &&

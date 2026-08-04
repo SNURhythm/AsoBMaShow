@@ -362,6 +362,12 @@ PlayfieldProjectionResult PlayfieldProjection::project(
           continue;
         }
         const auto *tailState = stateFor(tail->id);
+        const bool tailReleasedEarly =
+            tailState != nullptr && tailState->judged &&
+            tailState->playedTimeMicros != kPlayfieldTimestampOff &&
+            tailState->playedTimeMicros < tailTimeline->timeMicros;
+        const bool headDead = noteState != nullptr && noteState->dead;
+        const bool tailDead = tailState != nullptr && tailState->dead;
         const auto rowDepthIt = builtInDepths.find(note->timelineId);
         const auto builtInLongOrder =
             rowDepthIt != builtInDepths.end() &&
@@ -381,12 +387,26 @@ PlayfieldProjectionResult PlayfieldProjection::project(
                         (tailState != nullptr && tailState->longDamaged),
              .reactive = (noteState != nullptr && noteState->longReactive) ||
                          (tailState != nullptr && tailState->longReactive),
+             .headPlayed = noteState != nullptr && noteState->judged,
+             .tailPlayed = tailState != nullptr && tailState->judged,
              .headJudged = noteState != nullptr &&
                             (noteState->judged || noteState->dead),
              .tailJudged = tailState != nullptr &&
                             (tailState->judged || tailState->dead),
-             .headDead = noteState != nullptr && noteState->dead,
-             .tailDead = tailState != nullptr && tailState->dead,
+             .headDead = headDead,
+             .tailDead = tailDead,
+             .headPlayedTimeMicros =
+                 noteState != nullptr ? noteState->playedTimeMicros
+                                      : kPlayfieldTimestampOff,
+             .tailPlayedTimeMicros =
+                 tailState != nullptr ? tailState->playedTimeMicros
+                                      : kPlayfieldTimestampOff,
+             .tailReleasedEarly = tailReleasedEarly,
+             .tailMissedWithHead = headDead && !tailDead && tailReleasedEarly,
+             .tailResolvedAtOrAfterTiming =
+                 tailState != nullptr && tailState->judged &&
+                 tailState->playedTimeMicros != kPlayfieldTimestampOff &&
+                 tailState->playedTimeMicros >= tailTimeline->timeMicros,
              .submissionOrdinal = order.next(),
              .bodyDepth = builtInLongOrder.bodyDepth,
              .endpointDepth = builtInLongOrder.endpointDepth});
