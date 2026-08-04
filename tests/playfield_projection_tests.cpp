@@ -437,6 +437,76 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  // BMSRenderer reserves 181/182 for every long body whose head has already
+  // passed the late-poor window.  Those rows must not consume an additional
+  // per-row depth before the current/future traversal begins.  This exact
+  // sequence characterizes the historical prepass drift: one past long head
+  // used to shift three live long rows and two normal rows by two depths.
+  PlayfieldChartVisualModel pastHeadDepthModel;
+  pastHeadDepthModel.laneOrder = {1};
+  pastHeadDepthModel.timelines = {
+      {.id = 90, .timeMicros = 0, .scrollPosition = 0.0,
+       .retainedForProjection = true, .authoredOrdinal = 0},
+      {.id = 91, .timeMicros = 1'000'000, .scrollPosition = 1.0,
+       .retainedForProjection = true, .authoredOrdinal = 1},
+      {.id = 92, .timeMicros = 1'100'000, .scrollPosition = 1.1,
+       .retainedForProjection = true, .authoredOrdinal = 2},
+      {.id = 93, .timeMicros = 1'200'000, .scrollPosition = 1.2,
+       .retainedForProjection = true, .authoredOrdinal = 3},
+      {.id = 94, .timeMicros = 1'300'000, .scrollPosition = 1.3,
+       .retainedForProjection = true, .authoredOrdinal = 4},
+      {.id = 95, .timeMicros = 1'400'000, .scrollPosition = 1.4,
+       .retainedForProjection = true, .authoredOrdinal = 5},
+      {.id = 96, .timeMicros = 1'500'000, .scrollPosition = 1.5,
+       .retainedForProjection = true, .authoredOrdinal = 6},
+      {.id = 97, .timeMicros = 1'600'000, .scrollPosition = 1.6,
+       .retainedForProjection = true, .authoredOrdinal = 7},
+      {.id = 98, .timeMicros = 1'700'000, .scrollPosition = 1.7,
+       .retainedForProjection = true, .authoredOrdinal = 8},
+  };
+  pastHeadDepthModel.notes = {
+      {.id = 901, .timelineId = 90, .pairId = 902, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .authoredOrdinal = 0},
+      {.id = 903, .timelineId = 91, .pairId = 904, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .authoredOrdinal = 1},
+      {.id = 904, .timelineId = 92, .pairId = 903, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .authoredOrdinal = 2},
+      {.id = 905, .timelineId = 93, .pairId = 906, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .authoredOrdinal = 3},
+      {.id = 906, .timelineId = 94, .pairId = 905, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .authoredOrdinal = 4},
+      {.id = 907, .timelineId = 95, .pairId = 908, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .authoredOrdinal = 5},
+      {.id = 908, .timelineId = 96, .pairId = 907, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .authoredOrdinal = 6},
+      {.id = 909, .timelineId = 97, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 7},
+      {.id = 910, .timelineId = 98, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 8},
+      {.id = 902, .timelineId = 97, .pairId = 901, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .authoredOrdinal = 9},
+  };
+  PlayfieldVisualState pastHeadDepthState;
+  pastHeadDepthState.clock.visualTimeMicros = 1'000'000;
+  const auto pastHeadDepthResult = projection.project(
+      pastHeadDepthModel, pastHeadDepthState,
+      {.latePoorTimingMicros = 200'000});
+  if (pastHeadDepthResult.longNotes.size() != 4 ||
+      pastHeadDepthResult.longNotes[0].bodyDepth != 181U ||
+      pastHeadDepthResult.longNotes[0].endpointDepth != 182U ||
+      pastHeadDepthResult.longNotes[1].bodyDepth != 183U ||
+      pastHeadDepthResult.longNotes[1].endpointDepth != 184U ||
+      pastHeadDepthResult.longNotes[2].bodyDepth != 185U ||
+      pastHeadDepthResult.longNotes[2].endpointDepth != 186U ||
+      pastHeadDepthResult.longNotes[3].bodyDepth != 187U ||
+      pastHeadDepthResult.longNotes[3].endpointDepth != 188U ||
+      pastHeadDepthResult.notes.size() != 2 ||
+      pastHeadDepthResult.notes[0].builtInDepth != 189U ||
+      pastHeadDepthResult.notes[1].builtInDepth != 190U) {
+    std::cerr << "past long heads must not shift live built-in depths\n";
+    return EXIT_FAILURE;
+  }
+
   PlayfieldChartVisualModel spanningLongModel;
   spanningLongModel.laneOrder = {1};
   spanningLongModel.timelines = {

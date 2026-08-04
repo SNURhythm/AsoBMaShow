@@ -20,6 +20,10 @@ struct PlayfieldProjectionRequest {
   std::size_t maxTimelines = 0;
   std::size_t maxNotes = 0;
   bool includeInvisibleNotes = false;
+  // The exact late-poor edge belongs to the active gameplay judge.  A caller
+  // that only has an immutable visual snapshot must opt in explicitly rather
+  // than projection guessing a ruleset-dependent value.
+  std::int64_t latePoorTimingMicros = 0;
 };
 
 struct ProjectedTimelineDescriptor {

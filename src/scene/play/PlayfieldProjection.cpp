@@ -44,6 +44,14 @@ bool isLongIntervalVisible(double headScrollDelta, double tailScrollDelta,
          std::min(headScrollDelta, tailScrollDelta) <= maximum;
 }
 
+bool isWithinLatePoorWindow(
+    long long timelineMicros, long long visualTimeMicros,
+    const PlayfieldProjectionRequest &request) noexcept {
+  const auto latePoorTiming = std::max<std::int64_t>(
+      0, request.latePoorTimingMicros);
+  return timelineMicros >= visualTimeMicros - latePoorTiming;
+}
+
 skin::SkinProjectedNoteKind toSkinNoteKind(ChartVisualNoteSource source) {
   switch (source) {
   case ChartVisualNoteSource::Invisible:
@@ -239,7 +247,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   gameplay_note_submission_order::Allocator builtInOrder;
   // BMSRenderer always reserves one shared order for long notes whose heads
   // have already passed the retained traversal window.
-  (void)builtInOrder.captureLongNote();
+  const auto pastLongNoteOrder = builtInOrder.captureLongNote();
 
   std::unordered_map<ChartVisualId, std::vector<const ChartVisualNote *>>
       notesByTimeline;
@@ -254,6 +262,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     }
     const double rowScrollDelta =
         timeline->scrollPosition - result.currentScrollPosition;
+    const bool rowIsWithinLatePoorWindow =
+        isWithinLatePoorWindow(timeline->timeMicros, timeMicros, request);
     const bool rowHasLongHead =
         std::ranges::any_of(rowIt->second, [](const ChartVisualNote *note) {
           return effectiveSource(*note) == ChartVisualNoteSource::Playable &&
@@ -303,12 +313,15 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
               result.currentScrollPosition;
           needsPrimaryDepth =
               needsPrimaryDepth ||
-              isLongIntervalVisible(rowScrollDelta, tailScrollDelta, request);
+              (rowIsWithinLatePoorWindow &&
+               isLongIntervalVisible(rowScrollDelta, tailScrollDelta, request));
           continue;
         }
       }
       needsPrimaryDepth =
-          needsPrimaryDepth || (!dead && isVisible(rowScrollDelta, request));
+          needsPrimaryDepth ||
+          (!dead && rowIsWithinLatePoorWindow &&
+           isVisible(rowScrollDelta, request));
     }
 
     auto &depths = builtInDepths[timeline->id];
@@ -391,10 +404,13 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         const bool tailDead = tailState != nullptr && tailState->dead;
         const auto rowDepthIt = builtInDepths.find(note->timelineId);
         const auto builtInLongOrder =
-            rowDepthIt != builtInDepths.end() &&
+            !isWithinLatePoorWindow(timeline->timeMicros, timeMicros,
+                                    request)
+                ? pastLongNoteOrder
+                : rowDepthIt != builtInDepths.end() &&
                     rowDepthIt->second.longOrder.has_value()
-                ? *rowDepthIt->second.longOrder
-                : gameplay_note_submission_order::LongNoteOrder{};
+                      ? *rowDepthIt->second.longOrder
+                      : gameplay_note_submission_order::LongNoteOrder{};
         result.longNotes.push_back(
             {.headId = note->id,
              .tailId = tail->id,
