@@ -218,9 +218,25 @@ public:
   }
 };
 
+// Renderers depend only on immutable prepared values.  This deliberately
+// excludes upload, decode, path, lease, and device-lifetime operations.
+class SkinPreparedResourceView {
+public:
+  virtual ~SkinPreparedResourceView() = default;
+  virtual const PreparedSkinResource *
+  find(SkinResourceId) const noexcept = 0;
+  virtual const SkinResolvedRegion *
+  findResolvedRegion(SkinResourceId,
+                     const SkinSourceRect &authored) const noexcept = 0;
+  virtual const PreparedSkinTextAtlas *
+  findTextAtlas(SkinTextAtlasId) const noexcept = 0;
+  virtual const PreparedSkinTextAtlas *
+  findTextAtlasForObject(SkinObjectId) const noexcept = 0;
+};
+
 class SkinResourceCatalog;
 struct SkinResourceUploadResult { std::unique_ptr<SkinResourceCatalog> catalog; std::vector<SkinDiagnostic> diagnostics; };
-class SkinResourceCatalog {
+class SkinResourceCatalog final : public SkinPreparedResourceView {
 public:
   static SkinResourceUploadResult upload(SkinResourceUploadPlan &&,
                                          std::shared_ptr<SkinTextureDevice>);
@@ -229,13 +245,14 @@ public:
   ~SkinResourceCatalog();
   SkinResourceCatalog(const SkinResourceCatalog &) = delete;
   SkinResourceCatalog &operator=(const SkinResourceCatalog &) = delete;
-  const PreparedSkinResource *find(SkinResourceId) const noexcept;
+  const PreparedSkinResource *find(SkinResourceId) const noexcept override;
   const SkinResolvedRegion *findResolvedRegion(SkinResourceId,
-                                                const SkinSourceRect &authored) const noexcept;
-  const PreparedSkinTextAtlas *findTextAtlas(SkinTextAtlasId) const noexcept;
+                                                const SkinSourceRect &authored) const noexcept override;
+  const PreparedSkinTextAtlas *
+  findTextAtlas(SkinTextAtlasId) const noexcept override;
   const PreparedSkinTextAtlas *findTextAtlas(const SkinTextAtlasKey &) const noexcept;
   const PreparedSkinTextAtlas *
-  findTextAtlasForObject(SkinObjectId) const noexcept;
+  findTextAtlasForObject(SkinObjectId) const noexcept override;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };
