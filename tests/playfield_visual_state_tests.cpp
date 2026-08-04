@@ -417,6 +417,24 @@ void testGameplayModeAndLaneCoverAuthorityAreCapturedByValue() {
           "exclusive");
 }
 
+void testLaneCoverAuthorityRemainsEnabledAtZeroAmount() {
+  ChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+
+  const auto laneCover = gameplayLaneCoverAuthority(0);
+  store.applyAuthorityUpdate({
+      .laneCoverPercent = laneCover.percent,
+      .laneCoverEnabled = laneCover.enabled,
+  });
+
+  const auto captured = store.capture({.serial = 44});
+  require(captured.authority.laneCoverEnabled &&
+              captured.authority.laneCoverPercent == 0,
+          "the gameplay lane-cover authority stays enabled when its amount "
+          "is zero");
+}
+
 void testLifecycleClocksDefaultAndResetToTheOffSentinel() {
   ChartFixture fixture;
   const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
@@ -434,18 +452,29 @@ void testLifecycleClocksDefaultAndResetToTheOffSentinel() {
 
   store.setSceneStartMicros(0);
   store.setPlayStartMicros(-1'500'000);
+  store.applyAuthorityUpdate({
+      .gameplayMode = PlayfieldGameplayMode::Practice,
+      .loadingState = PlayfieldLoadingState::Loaded,
+      .laneCoverPercent = 60,
+      .laneCoverEnabled = true,
+  });
   const auto started = store.capture({});
   require(started.sceneStartMicros == 0 &&
-              started.playStartMicros == -1'500'000,
+              started.playStartMicros == -1'500'000 &&
+              started.authority.gameplayMode == PlayfieldGameplayMode::Practice,
           "zero and negative gameplay lifecycle starts remain exact timestamps");
 
   store.resetModel(model);
   const auto reset = store.capture({});
   require(reset.sceneStartMicros == kPlayfieldTimestampOff &&
               reset.playStartMicros == kPlayfieldTimestampOff &&
+              reset.authority.gameplayMode == PlayfieldGameplayMode::Unknown &&
+              reset.authority.loadingState == PlayfieldLoadingState::Unknown &&
+              !reset.authority.laneCoverEnabled &&
+              reset.authority.laneCoverPercent == 0 &&
               started.sceneStartMicros == 0 &&
               started.playStartMicros == -1'500'000,
-          "model reset turns current lifecycle clocks off without mutating "
+          "model reset clears lifecycle clocks and authority without mutating "
           "an older capture");
 }
 
@@ -697,6 +726,7 @@ int main() {
   testLongNoteModeUsesChartThenOverridePrecedence();
   testVisualStateCaptureAndFanoutAreCoherentValueSnapshots();
   testGameplayModeAndLaneCoverAuthorityAreCapturedByValue();
+  testLaneCoverAuthorityRemainsEnabledAtZeroAmount();
   testLifecycleClocksDefaultAndResetToTheOffSentinel();
   testJudgeTimingIsClampedToThePublicStateWidth();
   testCapturedBgaMissStateTracksJudgesAndResets();

@@ -98,6 +98,16 @@ struct PlayfieldAuthorityUpdate {
   bool operator==(const PlayfieldAuthorityUpdate &other) const;
 };
 
+struct GameplayLaneCoverAuthority {
+  int percent = 0;
+  bool enabled = true;
+};
+
+inline constexpr GameplayLaneCoverAuthority
+gameplayLaneCoverAuthority(int percent) noexcept {
+  return {.percent = percent, .enabled = true};
+}
+
 inline constexpr long long kPlayfieldTimestampOff =
     std::numeric_limits<long long>::min();
 

@@ -64,6 +64,7 @@ PlayfieldVisualStateStore::PlayfieldVisualStateStore(
 
 void PlayfieldVisualStateStore::resetModel(
     const PlayfieldChartVisualModel &model) {
+  authority_ = {};
   laneOrder_ = model.laneOrder;
   laneIndices_.clear();
   laneIndices_.reserve(laneOrder_.size());

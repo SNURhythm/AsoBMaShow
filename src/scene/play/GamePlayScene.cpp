@@ -3417,6 +3417,8 @@ void GamePlayScene::capturePlayfieldVisualState(
     return;
   }
 
+  const auto laneCover =
+      gameplayLaneCoverAuthority(playfieldLaneCoverPercent);
   PlayfieldAuthorityUpdate authority{
       .currentBpm = currentGameplayBpm,
       .judgementCounters = state->judgeCount,
@@ -3441,8 +3443,8 @@ void GamePlayScene::capturePlayfieldVisualState(
       .loadingState = PlayfieldLoadingState::Loaded,
       .startLaneIndicators = preparationPlan.laneIndicator.lanes,
       .startLaneIndicatorsVisible = startLaneIndicatorsVisible,
-      .laneCoverPercent = playfieldLaneCoverPercent,
-      .laneCoverEnabled = playfieldLaneCoverPercent > 0,
+      .laneCoverPercent = laneCover.percent,
+      .laneCoverEnabled = laneCover.enabled,
       .liftEnabled = false,
       .liftRatio = 0.0F,
       .hiddenEnabled = false,
