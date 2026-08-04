@@ -4638,6 +4638,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
         )
         target_link_libraries(skin_performance_telemetry_tests PRIVATE bgfx)
+
+        add_executable(skin_acceptance_recorder_tests
+            tests/skin_acceptance_recorder_tests.cpp
+            src/BuildIdentity.cpp
+            src/FileChecksum.cpp
+            src/skin/beatoraja/SkinAcceptanceRecorder.cpp
+            src/skin/beatoraja/SkinOverlayDigestProvider.cpp
+            src/skin/beatoraja/SkinPerformanceTelemetry.cpp
+        )
+        target_include_directories(skin_acceptance_recorder_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(skin_acceptance_recorder_tests PRIVATE
+            cxx_std_23
+        )
+        target_compile_definitions(skin_acceptance_recorder_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_BUILD_COMMIT="1111111111111111111111111111111111111111"
+            ASOBMASHOW_BUILD_CONFIGURATION="Release"
+            ASOBMASHOW_SOURCE_CLEAN=1
+        )
     endif()
 
     add_executable(practice_session_tests
@@ -5924,6 +5945,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if(TARGET skin_performance_telemetry_tests)
         asobmashow_register_test(skin_performance_telemetry_tests)
+    endif()
+    if(TARGET skin_acceptance_recorder_tests)
+        asobmashow_register_test(skin_acceptance_recorder_tests)
     endif()
     if(TARGET skin_configuration_write_queue_tests)
         asobmashow_register_test(skin_configuration_write_queue_tests)
