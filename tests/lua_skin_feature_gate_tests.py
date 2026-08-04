@@ -24,6 +24,7 @@ NUMERIC_GLYPH_ATLAS_SOURCE = ROOT / "src/skin/beatoraja/NumericGlyphAtlas.cpp"
 GAUGE_NODE_EXPANSION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinGaugeNodeExpansion.cpp"
 )
+NOTE_NORMALIZATION_SOURCE = ROOT / "src/skin/beatoraja/SkinNoteNormalization.cpp"
 TEXT_GRAPH_NORMALIZATION_SOURCE = (
     ROOT / "src/skin/beatoraja/SkinTextGraphNormalization.cpp"
 )
@@ -136,6 +137,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertIn("beatoraja/NumericGlyphAtlas.cpp", enabled_block)
         self.assertIn("beatoraja/SkinModelValidator.cpp", enabled_block)
         self.assertIn("beatoraja/SkinGaugeNodeExpansion.cpp", enabled_block)
+        self.assertIn("beatoraja/SkinNoteNormalization.cpp", enabled_block)
         self.assertIn("beatoraja/SkinTextGraphNormalization.cpp", enabled_block)
 
     def test_xcode_discovered_runtime_implementations_have_source_guards(self):
@@ -147,6 +149,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
              NUMERIC_GLYPH_ATLAS_SOURCE,
              VALIDATOR_SOURCE,
             GAUGE_NODE_EXPANSION_SOURCE,
+            NOTE_NORMALIZATION_SOURCE,
             TEXT_GRAPH_NORMALIZATION_SOURCE,
         ):
             source = path.read_text(encoding="utf-8")
@@ -167,6 +170,7 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
                  NUMERIC_GLYPH_ATLAS_SOURCE,
                  VALIDATOR_SOURCE,
                 GAUGE_NODE_EXPANSION_SOURCE,
+                NOTE_NORMALIZATION_SOURCE,
                 TEXT_GRAPH_NORMALIZATION_SOURCE,
             ):
                 subprocess.run(
