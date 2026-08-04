@@ -155,6 +155,10 @@ public:
                     const SkinEntryId &entry,
                     SkinProfileSettings candidateProfileSettings,
                     SkinEntryValidator &validator, std::stop_token stop);
+  // Strong admission boundary: before returning PendingProfileSave, any
+  // exception or typed rejection must retain no owner ticket or prepared
+  // activation. After PendingProfileSave is returned, Store owns both and
+  // pollPreparedActivationCommit must eventually return a terminal result.
   CommitActivationResult
   beginPreparedActivationCommit(PreparedSkinActivation &&prepared,
                                 ISkinProfileSettingsOwner &owner);

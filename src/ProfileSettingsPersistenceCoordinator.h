@@ -149,6 +149,10 @@ struct ProfileSettingsPersistenceDependencies {
       loadSettings = AppSettingsStore::Load;
   std::function<void()> afterFullSaveAdmitted;
   std::function<void()> afterSnapshotInputsCaptured;
+  // Test fault seam invoked while the coordinator mutex still prevents the
+  // preallocated worker job from running, immediately after optimistic skin
+  // state is published. Throwing must roll the admission back atomically.
+  std::function<void()> afterSkinCommitStatePublished;
 };
 
 class ProfileSettingsPersistenceCoordinator final

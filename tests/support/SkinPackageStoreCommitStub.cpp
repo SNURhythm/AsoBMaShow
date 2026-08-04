@@ -1,5 +1,7 @@
 #include "SkinPackageStoreCommitStub.h"
 
+#include <algorithm>
+#include <list>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -9,7 +11,12 @@ namespace skin {
 namespace {
 
 struct StubStoreState {
-  std::map<std::uint64_t, std::unique_ptr<PreparedSkinActivation>> pending;
+  struct Pending {
+    std::uint64_t ticket = 0;
+    std::unique_ptr<PreparedSkinActivation> prepared;
+  };
+
+  std::list<Pending> pending;
   ActivationCommitDisposition nextDisposition =
       ActivationCommitDisposition::ActivatedRequested;
   std::size_t removedProfiles = 0;
@@ -40,16 +47,27 @@ terminalOwnerFailure(const SkinProfileCommitResult &owner) {
 
 CommitActivationResult SkinPackageStore::beginPreparedActivationCommit(
     PreparedSkinActivation &&prepared, ISkinProfileSettingsOwner &owner) {
-  auto ownerResult =
-      owner.beginCommit(prepared.profileId, prepared.expectedProfileGeneration,
-                        prepared.candidateProfileSettings);
+  auto &state = stubStates()[this];
+  state.pending.push_back({.prepared = std::make_unique<PreparedSkinActivation>(
+                               std::move(prepared))});
+  auto pending = std::prev(state.pending.end());
+  SkinProfileCommitResult ownerResult;
+  try {
+    ownerResult =
+        owner.beginCommit(pending->prepared->profileId,
+                          pending->prepared->expectedProfileGeneration,
+                          pending->prepared->candidateProfileSettings);
+  } catch (...) {
+    state.pending.erase(pending);
+    throw;
+  }
   if (ownerResult.status != SkinProfileCommitResult::Status::Pending) {
+    state.pending.erase(pending);
     return terminalOwnerFailure(ownerResult);
   }
 
   const auto ticket = ownerResult.ticket;
-  stubStates()[this].pending.emplace(
-      ticket, std::make_unique<PreparedSkinActivation>(std::move(prepared)));
+  pending->ticket = ticket;
   return {.disposition = ActivationCommitDisposition::PendingProfileSave,
           .ticket = ticket,
           .profileSnapshot = std::move(ownerResult.snapshot)};
@@ -58,7 +76,11 @@ CommitActivationResult SkinPackageStore::beginPreparedActivationCommit(
 CommitActivationResult SkinPackageStore::pollPreparedActivationCommit(
     std::uint64_t ticket, ISkinProfileSettingsOwner &owner) {
   auto &state = stubStates()[this];
-  const auto found = state.pending.find(ticket);
+  const auto found =
+      std::find_if(state.pending.begin(), state.pending.end(),
+                   [ticket](const StubStoreState::Pending &pending) {
+                     return pending.ticket == ticket;
+                   });
   if (found == state.pending.end()) {
     return {.disposition = ActivationCommitDisposition::RetainedPrevious,
             .ticket = ticket,
@@ -84,7 +106,7 @@ CommitActivationResult SkinPackageStore::pollPreparedActivationCommit(
                                 .profileSnapshot =
                                     std::move(ownerResult.snapshot)};
   if (disposition == ActivationCommitDisposition::ActivatedRequested) {
-    result.activation = std::move(found->second->activation);
+    result.activation = std::move(found->prepared->activation);
   }
   state.pending.erase(found);
   return result;

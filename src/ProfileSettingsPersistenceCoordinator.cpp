@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <condition_variable>
 #include <deque>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -437,29 +439,103 @@ ProfileSettingsPersistenceCoordinator::beginCommit(
             .failure = failureDiagnostic("skin_profile_commit_unresolved",
                                          "A profile commit is unresolved")};
   }
+
   const std::uint64_t ticket = impl_->allocateTicket();
-  const skin::SkinProfileSettings previous = state.settings;
-  state.generation = ++state.highWaterGeneration;
+  if (state.highWaterGeneration == std::numeric_limits<std::uint64_t>::max()) {
+    return {.status = skin::SkinProfileCommitResult::Status::RetryableFailure,
+            .failure =
+                failureDiagnostic("skin_profile_generation_exhausted",
+                                  "Skin profile generations are exhausted")};
+  }
+  const std::uint64_t previousGeneration = state.generation;
+  const std::uint64_t reservedGeneration = state.highWaterGeneration + 1;
+
+  skin::SkinProfileSettings previous;
+  skin::SkinProfileSettings activePrevious;
+  skin::SkinProfileSettings activeCandidate;
+  AppSettings full;
+  Impl::Job job;
+  skin::SkinProfileCommitResult pending;
+  skin::SkinProfileCommitResult callerResult;
+  skin::SkinProfileCommitResult admissionFailure;
+  try {
+    previous = state.settings;
+    activePrevious = impl_->activeSettings.skin;
+    activeCandidate = candidate;
+    full = impl_->activeSettings;
+    full.skin = candidate;
+    const skin::VersionedSkinProfileSettings nextSnapshot{
+        .profileId = profileId,
+        .generation = reservedGeneration,
+        .settings = candidate,
+    };
+    pending = {
+        .status = skin::SkinProfileCommitResult::Status::Pending,
+        .ticket = ticket,
+        .snapshot = nextSnapshot,
+    };
+    callerResult = pending;
+    admissionFailure = {
+        .status = skin::SkinProfileCommitResult::Status::RetryableFailure,
+        .snapshot = impl_->snapshotLocked(profileId),
+        .failure = failureDiagnostic(
+            "skin_profile_commit_admission_failed",
+            "Skin profile commit admission failed before worker handoff"),
+    };
+    job = {.kind = Impl::JobKind::SkinCommit,
+           .ticket = ticket,
+           .profileId = profileId,
+           .path = impl_->manager.pathsFor(profileId.opaque).settingsJson,
+           .settings = std::move(full),
+           .previousSkin = previous};
+    impl_->commits.emplace(ticket, std::move(pending));
+    try {
+      impl_->jobs.push_back(std::move(job));
+    } catch (...) {
+      impl_->commits.erase(ticket);
+      throw;
+    }
+  } catch (...) {
+    return admissionFailure.failure
+               ? std::move(admissionFailure)
+               : skin::SkinProfileCommitResult{
+                     .status = skin::SkinProfileCommitResult::Status::
+                         RetryableFailure,
+                     .failure = failureDiagnostic(
+                         "skin_profile_commit_admission_failed",
+                         "Skin profile commit admission could not be "
+                         "allocated")};
+  }
+
+  static_assert(std::is_nothrow_move_assignable_v<skin::SkinProfileSettings>);
+  static_assert(
+      std::is_nothrow_move_constructible_v<skin::SkinProfileCommitResult>);
+  state.highWaterGeneration = reservedGeneration;
+  state.generation = reservedGeneration;
   state.settings = std::move(candidate);
   state.unresolvedTicket = ticket;
-  if (impl_->activeProfileId == profileId.opaque) {
-    impl_->activeSettings.skin = state.settings;
+  const bool activeProfile = impl_->activeProfileId == profileId.opaque;
+  if (activeProfile) {
+    impl_->activeSettings.skin = std::move(activeCandidate);
   }
-  AppSettings full = impl_->activeSettings;
-  full.skin = state.settings;
-  impl_->commits[ticket] = {
-      .status = skin::SkinProfileCommitResult::Status::Pending,
-      .ticket = ticket,
-      .snapshot = impl_->snapshotLocked(profileId),
-  };
-  impl_->enqueue(
-      {.kind = Impl::JobKind::SkinCommit,
-       .ticket = ticket,
-       .profileId = profileId,
-       .path = impl_->manager.pathsFor(profileId.opaque).settingsJson,
-       .settings = std::move(full),
-       .previousSkin = previous});
-  return impl_->commits[ticket];
+  try {
+    if (impl_->dependencies.afterSkinCommitStatePublished) {
+      impl_->dependencies.afterSkinCommitStatePublished();
+    }
+  } catch (...) {
+    if (activeProfile) {
+      impl_->activeSettings.skin = std::move(activePrevious);
+    }
+    state.settings = std::move(previous);
+    state.generation = previousGeneration;
+    state.unresolvedTicket.reset();
+    impl_->jobs.pop_back();
+    impl_->commits.erase(ticket);
+    return admissionFailure;
+  }
+
+  impl_->cv.notify_one();
+  return callerResult;
 }
 
 skin::SkinProfileCommitResult

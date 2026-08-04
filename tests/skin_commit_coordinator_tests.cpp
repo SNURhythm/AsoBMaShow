@@ -11,6 +11,7 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -572,18 +573,52 @@ void testCompletionDeliveryIsBounded() {
   }
   Fixture fixture(std::move(profiles));
   const auto client = fixture.coordinator.createClient();
+  std::set<std::uint64_t> acceptedTickets;
+  std::vector<SkinProfileId> rejectedProfiles;
   for (int index = 0; index < 200; ++index) {
     const SkinProfileId profile{"profile-" + std::to_string(index)};
-    expect(fixture.coordinator
-               .submitProfileSettings(client, fixture.owner.snapshot(profile),
-                                      changedSettings(1))
-               .accepted,
-           "independent profile commit is admitted");
+    const auto submission = fixture.coordinator.submitProfileSettings(
+        client, fixture.owner.snapshot(profile), changedSettings(1));
+    if (submission.accepted) {
+      acceptedTickets.insert(submission.ticket);
+    } else {
+      rejectedProfiles.push_back(profile);
+    }
+  }
+  expect(!acceptedTickets.empty() && !rejectedProfiles.empty() &&
+             acceptedTickets.size() + rejectedProfiles.size() == 200,
+         "bounded delivery admission explicitly accounts for all 200 requests");
+  fixture.coordinator.poll();
+  const auto firstCompletions =
+      fixture.coordinator.takeProfileCompletions(client);
+  std::set<std::uint64_t> completedTickets;
+  for (const auto &completion : firstCompletions) {
+    completedTickets.insert(completion.ticket);
+  }
+  expect(completedTickets == acceptedTickets,
+         "every accepted non-detached ticket has exactly one observable "
+         "completion");
+
+  std::set<std::uint64_t> retriedTickets;
+  for (const auto &profile : rejectedProfiles) {
+    const auto retry = fixture.coordinator.submitProfileSettings(
+        client, fixture.owner.snapshot(profile), changedSettings(1));
+    expect(retry.accepted,
+           "taking completions releases delivery admission capacity");
+    if (retry.accepted) {
+      retriedTickets.insert(retry.ticket);
+    }
   }
   fixture.coordinator.poll();
-  const auto completions = fixture.coordinator.takeProfileCompletions(client);
-  expect(!completions.empty() && completions.size() <= 128,
-         "unconsumed per-client completion delivery remains bounded");
+  const auto retriedCompletions =
+      fixture.coordinator.takeProfileCompletions(client);
+  completedTickets.clear();
+  for (const auto &completion : retriedCompletions) {
+    completedTickets.insert(completion.ticket);
+  }
+  expect(completedTickets == retriedTickets &&
+             acceptedTickets.size() + retriedTickets.size() == 200,
+         "explicitly rejected requests can retry without any completion loss");
   expect(fixture.owner.acknowledgements == 200,
          "bounding delivery never abandons accepted transactions");
 }

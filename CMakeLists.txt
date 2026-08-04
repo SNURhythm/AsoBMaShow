@@ -4180,7 +4180,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endif()
 
-    add_executable(skin_commit_coordinator_tests EXCLUDE_FROM_ALL
+    add_executable(skin_commit_coordinator_tests
         tests/skin_commit_coordinator_tests.cpp
         tests/support/SkinPackageStoreCommitStub.cpp
         src/AtomicFile.cpp

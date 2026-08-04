@@ -79,17 +79,17 @@ template <class Value, std::size_t Capacity> class FixedBoundedQueue {
 public:
   static_assert(std::is_nothrow_move_constructible_v<Value>);
 
-  void push(Value value) noexcept {
+  bool full() const noexcept { return size_ == Capacity; }
+
+  bool push(Value value) noexcept {
     if (size_ == Capacity) {
-      slots_[start_].reset();
-      slots_[start_].emplace(std::move(value));
-      start_ = (start_ + 1) % Capacity;
-      return;
+      return false;
     }
 
     const auto index = (start_ + size_) % Capacity;
     slots_[index].emplace(std::move(value));
     ++size_;
+    return true;
   }
 
   std::vector<Value> take() {
@@ -119,6 +119,28 @@ void boundedBackoff(std::size_t &attempt) {
   const auto delay = std::min<std::size_t>((attempt - 16) * 50, 1'000);
   std::this_thread::sleep_for(std::chrono::microseconds(delay));
 }
+
+class ProfileGateRollback {
+public:
+  ProfileGateRollback(std::shared_ptr<ProfileGateRegistry> gates,
+                      const SkinProfileId &profile,
+                      std::uint64_t token) noexcept
+      : gates_(std::move(gates)), profile_(&profile), token_(token) {}
+
+  ~ProfileGateRollback() {
+    if (armed_) {
+      gates_->resume(*profile_, token_);
+    }
+  }
+
+  void release() noexcept { armed_ = false; }
+
+private:
+  std::shared_ptr<ProfileGateRegistry> gates_;
+  const SkinProfileId *profile_ = nullptr;
+  std::uint64_t token_ = 0;
+  bool armed_ = true;
+};
 
 } // namespace
 
@@ -175,6 +197,8 @@ struct SkinCommitCoordinator::Impl {
         activations;
     FixedBoundedQueue<SkinProfileCommitCompletion, kMaxDeliveryRecordsPerClient>
         profiles;
+    std::size_t activationOutstanding = 0;
+    std::size_t profileOutstanding = 0;
   };
 
   struct RevalidationSlot {
@@ -197,27 +221,33 @@ struct SkinCommitCoordinator::Impl {
            !gates->isBlocked(profile);
   }
 
-  void recordActivation(SkinActivationClientId client,
+  bool recordActivation(SkinActivationClientId client,
                         std::uint64_t coordinatorTicket,
                         CommitActivationResult &&result) noexcept {
     const auto found = deliveries.find(client);
     if (found == deliveries.end()) {
-      return;
+      return true;
     }
-    found->second.activations.push(
+    if (found->second.activations.full()) {
+      return false;
+    }
+    return found->second.activations.push(
         SkinActivationCompletion{.client = client,
                                  .ticket = coordinatorTicket,
                                  .result = std::move(result)});
   }
 
-  void recordProfile(SkinActivationClientId client,
+  bool recordProfile(SkinActivationClientId client,
                      std::uint64_t coordinatorTicket,
                      SkinProfileCommitResult &&result) noexcept {
     const auto found = deliveries.find(client);
     if (found == deliveries.end()) {
-      return;
+      return true;
     }
-    found->second.profiles.push(
+    if (found->second.profiles.full()) {
+      return false;
+    }
+    return found->second.profiles.push(
         SkinProfileCommitCompletion{.client = client,
                                     .ticket = coordinatorTicket,
                                     .result = std::move(result)});
@@ -283,8 +313,11 @@ struct SkinCommitCoordinator::Impl {
         ++iterator;
         continue;
       }
-      recordActivation(client, coordinatorTicket,
-                       std::move(*iterator->second.terminal));
+      if (!recordActivation(client, coordinatorTicket,
+                            std::move(*iterator->second.terminal))) {
+        ++iterator;
+        continue;
+      }
       releaseRevalidationReservation(iterator->second.profile);
       owner.acknowledgeCommit(storeTicket);
       iterator = activations.erase(iterator);
@@ -311,8 +344,11 @@ struct SkinCommitCoordinator::Impl {
         iterator->second.terminal.emplace(std::move(result));
       }
 
-      recordProfile(client, coordinatorTicket,
-                    std::move(*iterator->second.terminal));
+      if (!recordProfile(client, coordinatorTicket,
+                         std::move(*iterator->second.terminal))) {
+        ++iterator;
+        continue;
+      }
       owner.acknowledgeCommit(ownerTicket);
       iterator = profiles.erase(iterator);
     }
@@ -383,10 +419,20 @@ SkinCommitCoordinator::submitActivation(SkinActivationClientId client,
                    "The client or profile is not accepting skin commits"));
     return submission;
   }
+  auto &clientDelivery = impl_->deliveries.at(client);
+  if (clientDelivery.activationOutstanding == kMaxDeliveryRecordsPerClient) {
+    submission.diagnostics.push_back(
+        diagnostic("skin.commit.client_delivery_full",
+                   "The client must consume activation completions before "
+                   "submitting more"));
+    return submission;
+  }
+  ++clientDelivery.activationOutstanding;
   const SkinProfileId profile = prepared.profileId;
   auto revalidation = impl_->revalidation.find(profile.opaque);
   if (revalidation == impl_->revalidation.end()) {
     if (impl_->revalidation.size() == kMaxRevalidationProfiles) {
+      --clientDelivery.activationOutstanding;
       submission.diagnostics.push_back(diagnostic(
           "skin.commit.revalidation_capacity",
           "Too many profiles have pending activation revalidation work"));
@@ -395,6 +441,7 @@ SkinCommitCoordinator::submitActivation(SkinActivationClientId client,
     try {
       revalidation = impl_->revalidation.try_emplace(profile.opaque).first;
     } catch (...) {
+      --clientDelivery.activationOutstanding;
       submission.diagnostics.push_back(
           diagnostic("skin.commit.admission_allocation",
                      "Activation commit ownership could not be allocated"));
@@ -405,6 +452,7 @@ SkinCommitCoordinator::submitActivation(SkinActivationClientId client,
   const auto coordinatorTicket = allocateNeverReused(nextCoordinatorTicket);
   if (coordinatorTicket == 0) {
     impl_->releaseRevalidationReservation(profile);
+    --clientDelivery.activationOutstanding;
     submission.diagnostics.push_back(diagnostic(
         "skin.commit.ticket_exhausted", "Skin commit tickets are exhausted"));
     return submission;
@@ -418,6 +466,7 @@ SkinCommitCoordinator::submitActivation(SkinActivationClientId client,
                                                            .storeTicket = 0});
   } catch (...) {
     impl_->releaseRevalidationReservation(profile);
+    --clientDelivery.activationOutstanding;
     submission.diagnostics.push_back(
         diagnostic("skin.commit.admission_allocation",
                    "Activation commit ownership could not be allocated"));
@@ -431,6 +480,7 @@ SkinCommitCoordinator::submitActivation(SkinActivationClientId client,
   } catch (...) {
     impl_->activations.erase(coordinatorTicket);
     impl_->releaseRevalidationReservation(profile);
+    --clientDelivery.activationOutstanding;
     submission.diagnostics.push_back(
         diagnostic("skin.commit.activation_begin_exception",
                    "Activation commit admission failed unexpectedly"));
@@ -440,6 +490,7 @@ SkinCommitCoordinator::submitActivation(SkinActivationClientId client,
       result.ticket == 0) {
     impl_->activations.erase(coordinatorTicket);
     impl_->releaseRevalidationReservation(profile);
+    --clientDelivery.activationOutstanding;
     submission.diagnostics = std::move(result.diagnostics);
     if (submission.diagnostics.empty()) {
       submission.diagnostics.push_back(diagnostic(
@@ -471,8 +522,17 @@ SkinProfileCommitSubmissionResult SkinCommitCoordinator::submitProfileSettings(
                    "The client or profile is not accepting skin commits"));
     return submission;
   }
+  auto &clientDelivery = impl_->deliveries.at(client);
+  if (clientDelivery.profileOutstanding == kMaxDeliveryRecordsPerClient) {
+    submission.diagnostics.push_back(diagnostic(
+        "skin.commit.client_delivery_full",
+        "The client must consume profile completions before submitting more"));
+    return submission;
+  }
+  ++clientDelivery.profileOutstanding;
   const auto coordinatorTicket = allocateNeverReused(nextCoordinatorTicket);
   if (coordinatorTicket == 0) {
+    --clientDelivery.profileOutstanding;
     submission.diagnostics.push_back(diagnostic(
         "skin.commit.ticket_exhausted", "Skin commit tickets are exhausted"));
     return submission;
@@ -485,6 +545,7 @@ SkinProfileCommitSubmissionResult SkinCommitCoordinator::submitProfileSettings(
                                                      .profile = base.profileId,
                                                      .ownerTicket = 0});
   } catch (...) {
+    --clientDelivery.profileOutstanding;
     submission.diagnostics.push_back(
         diagnostic("skin.commit.admission_allocation",
                    "Profile commit ownership could not be allocated"));
@@ -497,6 +558,7 @@ SkinProfileCommitSubmissionResult SkinCommitCoordinator::submitProfileSettings(
                                       std::move(candidate));
   } catch (...) {
     impl_->profiles.erase(coordinatorTicket);
+    --clientDelivery.profileOutstanding;
     submission.diagnostics.push_back(
         diagnostic("skin.commit.profile_begin_exception",
                    "Profile commit admission failed unexpectedly"));
@@ -505,6 +567,7 @@ SkinProfileCommitSubmissionResult SkinCommitCoordinator::submitProfileSettings(
   if (result.status != SkinProfileCommitResult::Status::Pending ||
       result.ticket == 0) {
     impl_->profiles.erase(coordinatorTicket);
+    --clientDelivery.profileOutstanding;
     if (result.failure) {
       submission.diagnostics.push_back(*result.failure);
     }
@@ -543,7 +606,9 @@ SkinCommitCoordinator::takeCompletions(SkinActivationClientId client) {
   if (found == impl_->deliveries.end()) {
     return result;
   }
-  return found->second.activations.take();
+  auto completions = found->second.activations.take();
+  found->second.activationOutstanding -= completions.size();
+  return completions;
 }
 
 std::vector<SkinProfileCommitCompletion>
@@ -556,7 +621,9 @@ SkinCommitCoordinator::takeProfileCompletions(SkinActivationClientId client) {
   if (found == impl_->deliveries.end()) {
     return result;
   }
-  return found->second.profiles.take();
+  auto completions = found->second.profiles.take();
+  found->second.profileOutstanding -= completions.size();
+  return completions;
 }
 
 void SkinCommitCoordinator::detachClient(
@@ -614,6 +681,7 @@ SkinCommitCoordinator::beginProfileMutation(const SkinProfileId &profile) {
                               : "Profile is already blocked for mutation";
     return result;
   }
+  ProfileGateRollback rollback(impl_->gates, profile, token);
 
   std::weak_ptr<ProfileGateRegistry> weakGates = impl_->gates;
   SkinProfileMutationBarrier barrier(profile, [weakGates, profile, token] {
@@ -623,6 +691,7 @@ SkinCommitCoordinator::beginProfileMutation(const SkinProfileId &profile) {
   });
   barrier.state_->token = token;
   barrier.state_->registry = impl_->gates;
+  rollback.release();
   std::size_t pendingAttempts = 0;
   while (impl_->hasPending(profile)) {
     impl_->pollOnce();

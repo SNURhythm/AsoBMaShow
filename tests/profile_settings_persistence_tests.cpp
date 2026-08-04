@@ -9,8 +9,10 @@
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -287,6 +289,67 @@ void testCommitIsAsyncCasAndTerminalResultIsAcknowledgedExplicitly() {
   expect(coordinator.pollCommit(pending.ticket).status ==
              skin::SkinProfileCommitResult::Status::RetryableFailure,
          "acknowledging a terminal ticket releases it");
+}
+
+void testPostAdmissionFailureRollsBackWithoutPublishingOrEnqueueing() {
+  TempDirectory temp;
+  PlayerProfileManager manager(temp.path(), managerDependencies());
+  expect(manager.Initialize().ok(),
+         "profile manager initializes for admission rollback");
+  AppSettings active;
+  int saveCalls = 0;
+  bool failAdmission = true;
+  ProfileSettingsPersistenceCoordinator coordinator(
+      manager, active,
+      {.saveAtomic =
+           [&](const auto &path, const auto &settings, std::string &error) {
+             ++saveCalls;
+             return AppSettingsStore::Save(path, settings, error);
+           },
+       .afterSkinCommitStatePublished =
+           [&] {
+             if (std::exchange(failAdmission, false)) {
+               throw std::runtime_error("synthetic post-admission failure");
+             }
+           }});
+  const auto profile = *skin::makeSkinProfileId(manager.activeProfile().id);
+  const auto base = coordinator.snapshot(profile);
+
+  const auto failed =
+      coordinator.beginCommit(profile, base.generation, selectedSettings(31));
+  const auto afterFailure = coordinator.snapshot(profile);
+  const auto unknownFailedTicket = coordinator.pollCommit(failed.ticket);
+  expect(failed.status ==
+                 skin::SkinProfileCommitResult::Status::RetryableFailure &&
+             failed.ticket == 0 && failed.failure &&
+             failed.failure->code == "skin_profile_commit_admission_failed" &&
+             unknownFailedTicket.status ==
+                 skin::SkinProfileCommitResult::Status::RetryableFailure &&
+             unknownFailedTicket.failure &&
+             unknownFailedTicket.failure->code ==
+                 "skin_profile_ticket_unknown" &&
+             afterFailure.generation == base.generation &&
+             afterFailure.settings == base.settings &&
+             active.skin == base.settings && saveCalls == 0,
+         "post-admission exception rolls back state and leaves no pollable "
+         "ticket or queued I/O");
+
+  const auto accepted =
+      coordinator.beginCommit(profile, base.generation, selectedSettings(32));
+  const auto persisted = waitForCommit(coordinator, accepted.ticket);
+  expect(accepted.status == skin::SkinProfileCommitResult::Status::Pending &&
+             accepted.snapshot &&
+             accepted.snapshot->generation > base.generation + 1 &&
+             persisted.status ==
+                 skin::SkinProfileCommitResult::Status::Persisted &&
+             saveCalls == 1,
+         "rollback releases unresolved admission while never reusing its "
+         "reserved generation");
+  coordinator.acknowledgeCommit(accepted.ticket);
+  coordinator.shutdown();
+  expect(
+      saveCalls == 1,
+      "shutdown cannot later execute the rolled-back admission's removed job");
 }
 
 void testFailureRollsBackWithoutReusingGenerationAndPathIsCaptured() {
@@ -578,6 +641,7 @@ void testInventoryRaiiTokensCanOutliveCoordinatorShutdown() {
 
 int main() {
   testCommitIsAsyncCasAndTerminalResultIsAcknowledgedExplicitly();
+  testPostAdmissionFailureRollsBackWithoutPublishingOrEnqueueing();
   testFailureRollsBackWithoutReusingGenerationAndPathIsCaptured();
   testOrdinarySaveMergesPendingSkinAndLatestIrCandidate();
   testOrdinarySaveBeforeFailedSkinCommitKeepsLatestFullDocumentDurable();
