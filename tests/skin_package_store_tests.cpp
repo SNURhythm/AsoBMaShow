@@ -900,6 +900,48 @@ void testRemovalJournalRecoversOldAndNewGenerations() {
   }
 }
 
+void testRemovalRecoveryRetainsIntentWhenOwnedCleanupCannotFinish() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const std::string oldCatalog = catalogDocument(7, kOldTreeDigest);
+  const std::string newCatalog = emptyCatalogDocument(8);
+  const std::string oldDigest = file_checksum::sha256(oldCatalog);
+  const std::string newDigest = file_checksum::sha256(newCatalog);
+  writeOldTree(roots.visiblePackages / "FixtureSkin");
+  const fs::path oldRevision =
+      roots.privateRevisions / std::string(kOldTreeDigest);
+  writeOldTree(oldRevision);
+  freezeRevisionTree(oldRevision);
+  writeText(roots.privateCatalog / "catalog.json", oldCatalog);
+  writeText(roots.privateCatalog / ".removal-staging/remove-17-new.json",
+            newCatalog);
+  const fs::path cleanupTarget = temp.root() / "outside-removal-cleanup";
+  fs::create_directories(cleanupTarget);
+  writeText(cleanupTarget / "sentinel.txt",
+            "must remain outside transaction ownership");
+  std::error_code linkError;
+  fs::create_directory_symlink(
+      cleanupTarget, roots.privateCatalog / ".recovery-quarantine", linkError);
+  if (linkError) {
+    return;
+  }
+  writeText(roots.privateCatalog / "removal-journal.json",
+            removalJournalDocument(oldDigest, newDigest));
+
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  const auto recovered = store.recoverBeforeServiceStart();
+  expect(recovered.disposition == SkinRecoveryDisposition::Failed,
+         "removal recovery fails closed when an owned cleanup path is a link");
+  expect(fs::exists(roots.privateCatalog / "removal-journal.json"),
+         "failed removal cleanup retains the durable intent for restart");
+  expect(readText(cleanupTarget / "sentinel.txt") ==
+             "must remain outside transaction ownership",
+         "removal cleanup never follows an unowned link target");
+}
+
 void testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation() {
   for (const bool editDescendant : {false, true}) {
     TempDirectory temp;
@@ -1646,6 +1688,7 @@ int main(int argc, char **argv) {
   testRecoveryRejectsOverlappingBootstrapOwnership();
   testMalformedAndOversizedCatalogFailBootstrap();
   testRemovalJournalRecoversOldAndNewGenerations();
+  testRemovalRecoveryRetainsIntentWhenOwnedCleanupCannotFinish();
   testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation();
   testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage();
   testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity();

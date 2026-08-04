@@ -1761,9 +1761,15 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       const bool backupClean = quarantineTree(
           catalogBackup, roots_.privateCatalog / ".recovery-quarantine",
           journal->operationId, "removal-catalog-backup");
+      if (!stagingClean || !backupClean) {
+        result.diagnostics.push_back(storeDiagnostic(
+            "skin_package_removal_recovery_cleanup_failed",
+            "unable to finalize recovered skin package removal"));
+        return result;
+      }
       fs::remove(removalJournalPath, directoryError);
       std::string syncError;
-      if (!stagingClean || !backupClean || directoryError ||
+      if (directoryError ||
           !atomic_file::syncDirectory(roots_.privateCatalog, syncError)) {
         result.diagnostics.push_back(storeDiagnostic(
             "skin_package_removal_recovery_cleanup_failed",
@@ -3509,10 +3515,7 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
                              catalog_.snapshotDigest(*oldCatalog),
                          .newCatalogDigest = catalog_.snapshotDigest(next)};
   if (exists &&
-      (!catalog_.writeSnapshotFile(catalogStaging, next, result.diagnostics) ||
-       !catalog_.writeSnapshotFile(catalogBackup, *oldCatalog,
-                                   result.diagnostics) ||
-       !writeRemovalJournal(removalJournal, journal, result.diagnostics))) {
+      !writeRemovalJournal(removalJournal, journal, result.diagnostics)) {
     clearMutation();
     return result;
   }
@@ -3568,6 +3571,13 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
     return rollbackSucceeded;
   };
   ScopeRollback rollbackGuard(rollback);
+  if (exists &&
+      (!catalog_.writeSnapshotFile(catalogStaging, next, result.diagnostics) ||
+       !catalog_.writeSnapshotFile(catalogBackup, *oldCatalog,
+                                   result.diagnostics))) {
+    rollback();
+    return result;
+  }
   if (exists) {
     if (!ensureDirectoryNoFollow(retained.parent_path())) {
       error = std::make_error_code(std::errc::io_error);
