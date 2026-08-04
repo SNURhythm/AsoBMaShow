@@ -422,12 +422,18 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     SkinTextAtlasKey canonicalKey = atlas.key;
     if (!canonicalizeSkinTextAtlasKey(canonicalKey) || canonicalKey != atlas.key ||
         atlas.glyphs.size() > SkinResourcePolicy::maximumGlyphs - glyphCount ||
-        atlas.kerning.size() > SkinResourcePolicy::maximumKerningPairs - pairCount) {
+        atlas.kerning.size() > SkinResourcePolicy::maximumKerningPairs - pairCount ||
+        atlas.lineHeight <= 0 || atlas.lineHeight > SkinResourcePolicy::maximumDimension ||
+        std::llabs(static_cast<long long>(atlas.ascent)) > SkinResourcePolicy::maximumDimension ||
+        std::llabs(static_cast<long long>(atlas.descent)) > SkinResourcePolicy::maximumDimension) {
       result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has noncanonical atlas data")); return result;
     }
     for (const auto &[codepoint, metric] : atlas.glyphs) {
       (void)codepoint;
-      if (!canonicalRegion(metric.region, atlas.pixels.width, atlas.pixels.height)) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid glyph region")); return result; }
+      if (!canonicalRegion(metric.region, atlas.pixels.width, atlas.pixels.height) ||
+          std::llabs(static_cast<long long>(metric.bearingX)) > SkinResourcePolicy::maximumDimension ||
+          std::llabs(static_cast<long long>(metric.bearingY)) > SkinResourcePolicy::maximumDimension ||
+          std::llabs(static_cast<long long>(metric.advance)) > SkinResourcePolicy::maximumDimension) { result.diagnostics.push_back(diagnostic("skin.resource.atlas_limit", "resource upload plan has invalid glyph region")); return result; }
     }
     for (const auto &[pair, amount] : atlas.kerning) {
       (void)amount;

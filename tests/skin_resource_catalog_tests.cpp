@@ -1,4 +1,5 @@
 #include "skin/beatoraja/SkinResourceCatalog.h"
+#include "skin/beatoraja/SkinTextAtlas.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
@@ -67,6 +68,17 @@ void testSpriteBoundsAndNormalizedGridCells() {
   expect(skin::skinResourceResolveRect(authored, 40, 20, resolved) &&
              resolved.x == 20 && resolved.y == 10 && resolved.w == 20 && resolved.h == 10,
          "negative-one source dimensions resolve against decoded image bounds before UV preparation");
+}
+
+void testTextAtlasKeyRejectsNegativePaintExtents() {
+  skin::SkinTextAtlasKey key{.font=1, .pointSize=16};
+  key.outlineWidth = -0.25;
+  expect(!skin::canonicalizeSkinTextAtlasKey(key),
+         "negative outline extent cannot become a canonical atlas key");
+  key.outlineWidth = 0.0;
+  key.shadowSmoothness = -0.25;
+  expect(!skin::canonicalizeSkinTextAtlasKey(key),
+         "negative shadow smoothing cannot become a canonical atlas key");
 }
 
 struct TemporaryDirectory {
@@ -340,6 +352,7 @@ int main() {
   testBoundedPngAndJpegDecodeBeforeAllocation();
   testSharedSdlTtfRuntimeFinalRelease();
   testSpriteBoundsAndNormalizedGridCells();
+  testTextAtlasKeyRejectsNegativePaintExtents();
   testSecurePreparationLeaseAliasAndCatalogLifetime();
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";

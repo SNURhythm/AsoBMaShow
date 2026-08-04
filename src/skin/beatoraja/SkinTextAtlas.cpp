@@ -23,6 +23,7 @@ bool quantize(double &value) noexcept {
 }
 bool canonicalizeSkinTextAtlasKey(SkinTextAtlasKey &key) noexcept {
   return key.font != 0 && key.pointSize > 0 && key.pointSize <= 512 &&
+         key.outlineWidth >= 0.0 && key.shadowSmoothness >= 0.0 &&
          quantize(key.outlineWidth) && quantize(key.shadowOffsetX) &&
          quantize(key.shadowOffsetY) && quantize(key.shadowSmoothness);
 }
@@ -114,6 +115,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
 
   std::vector<GlyphBitmap> glyphs;
   glyphs.reserve(codepoints.size());
+  std::size_t temporaryGlyphBytes = 0;
   for (char32_t codepoint : codepoints) {
     if (codepoint == U'\n' || codepoint == U'\r') continue;
     std::size_t faceIndex = opened.size();
@@ -124,20 +126,33 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     if (TTF_GlyphMetrics32(opened[faceIndex].font, static_cast<Uint32>(codepoint), &minX, &maxX, &minY, &maxY, &advance) != 0) {
       result.error = "font glyph metrics failed"; return result;
     }
-    SDL_Surface *raw = TTF_RenderGlyph32_Blended(opened[faceIndex].font, static_cast<Uint32>(codepoint), SDL_Color{255,255,255,255});
-    if (!raw) { result.error = "font glyph rasterization failed"; return result; }
-    SDL_Surface *surface = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_RGBA32, 0);
-    SDL_FreeSurface(raw);
-    if (!surface) { result.error = "font glyph conversion failed"; return result; }
     const int outline = static_cast<int>(std::ceil(key.outlineWidth));
     const int shadowX = static_cast<int>(std::round(key.shadowOffsetX));
     const int shadowY = static_cast<int>(std::round(key.shadowOffsetY));
     const int smoothRadius = std::min(4, static_cast<int>(std::ceil(key.shadowSmoothness)));
     const int padding = std::max({2, outline + 1, std::abs(shadowX) + smoothRadius + 1, std::abs(shadowY) + smoothRadius + 1});
+    const auto estimatedWidth = static_cast<std::int64_t>(maxX) - minX + 2LL * padding;
+    const auto estimatedHeight = static_cast<std::int64_t>(maxY) - minY + 2LL * padding;
+    if (estimatedWidth <= 0 || estimatedHeight <= 0 || estimatedWidth > SkinResourcePolicy::maximumDimension ||
+        estimatedHeight > SkinResourcePolicy::maximumDimension ||
+        static_cast<std::uint64_t>(estimatedWidth) * static_cast<std::uint64_t>(estimatedHeight) * 4U > SkinResourcePolicy::maximumAtlasBytes - temporaryGlyphBytes) {
+      result.error = "font glyph metrics exceed atlas preparation limits"; return result;
+    }
+    SDL_Surface *raw = TTF_RenderGlyph32_Blended(opened[faceIndex].font, static_cast<Uint32>(codepoint), SDL_Color{255,255,255,255});
+    if (!raw) { result.error = "font glyph rasterization failed"; return result; }
+    SDL_Surface *surface = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_RGBA32, 0);
+    SDL_FreeSurface(raw);
+    if (!surface) { result.error = "font glyph conversion failed"; return result; }
     if (surface->w <= 0 || surface->h <= 0 || surface->w > SkinResourcePolicy::maximumDimension - 2 * padding ||
         surface->h > SkinResourcePolicy::maximumDimension - 2 * padding) {
       SDL_FreeSurface(surface); result.error = "font glyph dimensions exceed limits"; return result;
     }
+    const std::size_t glyphBytes = static_cast<std::size_t>(surface->w + 2 * padding) *
+                                   static_cast<std::size_t>(surface->h + 2 * padding) * 4U;
+    if (glyphBytes > SkinResourcePolicy::maximumAtlasBytes - temporaryGlyphBytes) {
+      SDL_FreeSurface(surface); result.error = "font temporary glyph bytes exceed atlas limit"; return result;
+    }
+    temporaryGlyphBytes += glyphBytes;
     GlyphBitmap glyph{.codepoint=codepoint, .face=faceIndex, .bearingX=minX, .bearingY=maxY, .advance=advance,
                       .width=surface->w + 2 * padding, .height=surface->h + 2 * padding, .padding=padding,
                       .rgba=std::vector<unsigned char>(static_cast<std::size_t>(surface->w + 2 * padding) * static_cast<std::size_t>(surface->h + 2 * padding) * 4U, 0)};
