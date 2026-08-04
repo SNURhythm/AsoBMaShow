@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../ProfileSettingsPersistenceCoordinator.h"
+#include "SkinActivationCommitStore.h"
 #include "SkinArchiveImporter.h"
 #include "SkinPackageCatalog.h"
 
@@ -70,44 +70,10 @@ struct RemovePackageResult {
   std::vector<SkinDiagnostic> diagnostics;
 };
 
-struct ValidatedSkinActivation {
-  SkinRevisionLease revision;
-  SkinEntryId entry;
-  EntryProfileSettings reconciledSettings;
-  std::string configurationDigest;
-};
-
-struct PreparedSkinActivation {
-  std::uint64_t sourceGeneration = 0;
-  std::uint64_t catalogGeneration = 0;
-  std::uint64_t expectedProfileGeneration = 0;
-  SkinProfileId profileId;
-  ValidatedSkinActivation activation;
-  SkinProfileSettings candidateProfileSettings;
-};
-
 struct PrepareActivationResult {
   std::optional<PreparedSkinActivation> prepared;
   std::optional<ValidatedSkinActivation> previousActivation;
   bool cancelled = false;
-  std::vector<SkinDiagnostic> diagnostics;
-};
-
-enum class ActivationCommitDisposition : std::uint8_t {
-  PendingProfileSave,
-  ActivatedRequested,
-  RetainedPrevious,
-  ProfileGenerationChanged,
-  SourceGenerationChanged,
-  ProfileCommittedNeedsRevalidation,
-};
-
-struct CommitActivationResult {
-  ActivationCommitDisposition disposition =
-      ActivationCommitDisposition::RetainedPrevious;
-  std::uint64_t ticket = 0;
-  std::optional<ValidatedSkinActivation> activation;
-  std::optional<VersionedSkinProfileSettings> profileSnapshot;
   std::vector<SkinDiagnostic> diagnostics;
 };
 
@@ -125,7 +91,7 @@ public:
            std::stop_token stop) = 0;
 };
 
-class SkinPackageStore {
+class SkinPackageStore : public SkinActivationCommitStore {
 public:
   SkinPackageStore(SkinStorageRoots, SkinPackageCatalog &, SkinAliasDetector &,
                    ISkinProfileSnapshotProvider &);
@@ -163,10 +129,10 @@ public:
   // Callers treat the Store ticket as opaque and never pass it to the owner.
   CommitActivationResult
   beginPreparedActivationCommit(PreparedSkinActivation &&prepared,
-                                ISkinProfileSettingsOwner &owner);
+                                ISkinProfileSettingsOwner &owner) override;
   CommitActivationResult
   pollPreparedActivationCommit(std::uint64_t ticket,
-                               ISkinProfileSettingsOwner &owner);
+                               ISkinProfileSettingsOwner &owner) override;
   AcquireActivationResult
   acquireValidatedActivation(const SkinProfileId &profile,
                              const SkinEntryId &entry,
@@ -175,7 +141,7 @@ public:
   catalogSnapshot() const noexcept;
   RemovePackageResult removePackage(const SkinPackageId &package,
                                     std::stop_token stop);
-  void removeProfileActivations(const SkinProfileId &profile);
+  void removeProfileActivations(const SkinProfileId &profile) override;
   void
   reconcileProfileActivations(std::span<const SkinProfileId> existingProfiles);
   GarbageCollectionResult collectGarbage();

@@ -208,7 +208,8 @@ struct SkinCommitCoordinator::Impl {
     std::optional<VersionedSkinProfileSettings> request;
   };
 
-  Impl(SkinPackageStore &storeValue, ISkinProfileSettingsOwner &ownerValue)
+  Impl(SkinActivationCommitStore &storeValue,
+       ISkinProfileSettingsOwner &ownerValue)
       : store(storeValue), owner(ownerValue),
         mainThread(std::this_thread::get_id()),
         gates(std::make_shared<ProfileGateRegistry>()) {}
@@ -401,7 +402,7 @@ struct SkinCommitCoordinator::Impl {
     return false;
   }
 
-  SkinPackageStore &store;
+  SkinActivationCommitStore &store;
   ISkinProfileSettingsOwner &owner;
   std::thread::id mainThread;
   std::shared_ptr<ProfileGateRegistry> gates;
@@ -413,7 +414,7 @@ struct SkinCommitCoordinator::Impl {
   std::map<std::string, RevalidationSlot> revalidation;
 };
 
-SkinCommitCoordinator::SkinCommitCoordinator(SkinPackageStore &store,
+SkinCommitCoordinator::SkinCommitCoordinator(SkinActivationCommitStore &store,
                                              ISkinProfileSettingsOwner &owner)
     : impl_(std::make_unique<Impl>(store, owner)) {}
 

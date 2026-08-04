@@ -4182,7 +4182,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(skin_commit_coordinator_tests
         tests/skin_commit_coordinator_tests.cpp
-        tests/support/SkinPackageStoreCommitStub.cpp
+        tests/support/SkinActivationCommitStoreFake.cpp
         src/AtomicFile.cpp
         src/FileChecksum.cpp
         src/VersionedJson.cpp
@@ -4192,7 +4192,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinArchiveImporter.cpp
         src/skin/package/SkinPackageCatalog.cpp
-        src/skin/package/SkinPackageStore.cpp
         src/skin/package/SkinPathPolicy.cpp
         src/skin/package/SkinTreeSnapshotter.cpp
     )

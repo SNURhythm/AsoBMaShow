@@ -2,7 +2,7 @@
 #include "skin/package/SkinPackageCatalog.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
-#include "support/SkinPackageStoreCommitStub.h"
+#include "support/SkinActivationCommitStoreFake.h"
 
 #include <atomic>
 #include <chrono>
@@ -226,17 +226,14 @@ private:
 struct Fixture {
   explicit Fixture(std::vector<SkinProfileId> profiles = {{"A"}, {"B"}})
       : roots(rootsBelow(temp.root())), catalog(roots.privateCatalog),
-        owner(std::move(profiles)), store(roots, catalog, aliases, owner),
-        coordinator(store, owner) {
-    test_support::resetStore(store);
-  }
+        owner(std::move(profiles)), coordinator(store, owner) {}
 
   TempDirectory temp;
   SkinStorageRoots roots;
   SkinPackageCatalog catalog;
   NoAliases aliases;
   FakeProfileOwner owner;
-  SkinPackageStore store;
+  test_support::SkinActivationCommitStoreFake store;
   SkinCommitCoordinator coordinator;
 };
 
@@ -385,7 +382,7 @@ void testProfileMutationBarrierDrainsAndResumesByOutcome() {
   auto overwrite = fixture.coordinator.beginProfileMutation({"A"});
   fixture.coordinator.finishProfileMutation(std::move(*overwrite.barrier), true,
                                             true);
-  expect(test_support::removedProfileCount(fixture.store) == 1 &&
+  expect(fixture.store.removedProfileCount() == 1 &&
              fixture.coordinator
                  .submitProfileSettings(client, fixture.owner.snapshot({"A"}),
                                         changedSettings(0))
@@ -397,7 +394,7 @@ void testProfileMutationBarrierDrainsAndResumesByOutcome() {
   fixture.coordinator.finishProfileMutation(std::move(*deletion.barrier), true,
                                             false);
   expect(
-      test_support::removedProfileCount(fixture.store) == 2 &&
+      fixture.store.removedProfileCount() == 2 &&
           !fixture.coordinator
                .submitProfileSettings(client, fixture.owner.snapshot({"A"}),
                                       changedSettings(1))
@@ -415,7 +412,7 @@ void testProfileMutationBarrierCannotBeFinishedByAnotherCoordinator() {
 
   second.coordinator.finishProfileMutation(std::move(*barrier.barrier), true,
                                            false);
-  expect(test_support::removedProfileCount(second.store) == 0,
+  expect(second.store.removedProfileCount() == 0,
          "a foreign barrier cannot remove another store's activation keys");
   barrier.barrier.reset();
   expect(
@@ -430,10 +427,10 @@ void testFailedActivationRemovalResumesProfileGate() {
   Fixture fixture;
   const auto client = fixture.coordinator.createClient();
   auto barrier = fixture.coordinator.beginProfileMutation({"A"});
-  test_support::throwOnNextProfileRemoval(fixture.store);
+  fixture.store.throwOnNextProfileRemoval();
   fixture.coordinator.finishProfileMutation(std::move(*barrier.barrier), true,
                                             false);
-  expect(test_support::removedProfileCount(fixture.store) == 0 &&
+  expect(fixture.store.removedProfileCount() == 0 &&
              fixture.coordinator
                  .submitProfileSettings(client, fixture.owner.snapshot({"A"}),
                                         changedSettings(1))
@@ -447,8 +444,7 @@ void testActivationPollingRevalidationDetachAndLeaseRelease() {
   const auto client = fixture.coordinator.createClient();
   auto prepared = makePreparedActivation(fixture, {"A"});
   auto weakPin = prepared.activation.revision.weakPin();
-  test_support::setNextActivationDisposition(
-      fixture.store,
+  fixture.store.setNextActivationDisposition(
       ActivationCommitDisposition::ProfileCommittedNeedsRevalidation);
   const auto submitted =
       fixture.coordinator.submitActivation(client, std::move(prepared));
@@ -493,8 +489,7 @@ void testRevalidationRequestsCoalesceLatestSnapshotPerProfile() {
   const auto client = fixture.coordinator.createClient();
   for (int attempt = 0; attempt < 3; ++attempt) {
     auto prepared = makePreparedActivation(fixture, {"A"});
-    test_support::setNextActivationDisposition(
-        fixture.store,
+    fixture.store.setNextActivationDisposition(
         ActivationCommitDisposition::ProfileCommittedNeedsRevalidation);
     expect(fixture.coordinator.submitActivation(client, std::move(prepared))
                .accepted,
@@ -503,8 +498,7 @@ void testRevalidationRequestsCoalesceLatestSnapshotPerProfile() {
     fixture.coordinator.takeCompletions(client);
   }
   auto otherProfile = makePreparedActivation(fixture, {"B"});
-  test_support::setNextActivationDisposition(
-      fixture.store,
+  fixture.store.setNextActivationDisposition(
       ActivationCommitDisposition::ProfileCommittedNeedsRevalidation);
   expect(fixture.coordinator.submitActivation(client, std::move(otherProfile))
              .accepted,

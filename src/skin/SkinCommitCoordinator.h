@@ -1,6 +1,6 @@
 #pragma once
 
-#include "package/SkinPackageStore.h"
+#include "package/SkinActivationCommitStore.h"
 
 #include <cstdint>
 #include <functional>
@@ -63,7 +63,8 @@ struct BeginSkinProfileMutationResult {
 
 class SkinCommitCoordinator {
 public:
-  SkinCommitCoordinator(SkinPackageStore &, ISkinProfileSettingsOwner &);
+  SkinCommitCoordinator(SkinActivationCommitStore &,
+                        ISkinProfileSettingsOwner &);
   ~SkinCommitCoordinator();
 
   SkinCommitCoordinator(const SkinCommitCoordinator &) = delete;
