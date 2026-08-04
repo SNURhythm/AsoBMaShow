@@ -36,6 +36,7 @@ constexpr std::uint64_t kHookInstructionInterval = 1'000;
 constexpr std::size_t kMaximumReturnedTableDepth = 64;
 constexpr std::uint64_t kMaximumReturnedTableEntries = 200'000;
 constexpr std::size_t kMaximumReturnedStringBytes = 16ULL * 1024 * 1024;
+constexpr std::size_t kMaximumCallbackScriptBytes = 64ULL * 1024;
 constexpr std::size_t kMaximumCallbacks = 20'000;
 constexpr std::size_t kMaximumDiagnosticBytes = 4ULL * 1024;
 constexpr std::string_view kHostErrorPrefix = "@ASOBMSKIN:";
@@ -92,6 +93,9 @@ struct LuaRuntimeShared {
   std::uint32_t generation = 0;
   std::vector<int> callbackReferences;
   std::unordered_map<const void *, std::uint32_t> callbackSlotsByIdentity;
+  std::uint64_t callbackCompilationInstructions = 0;
+  std::chrono::nanoseconds callbackCompilationWallUsed{0};
+  Clock::time_point callbackCompilationStarted{};
 
   bool executionActive = false;
   bool callbackActive = false;
@@ -340,6 +344,35 @@ void beginLoadBudget(LuaRuntimeShared &shared, LuaLoadBudget budget) {
   shared.executionDeadline = Clock::now() + budget.maxWallTime;
 }
 
+bool beginCallbackCompilationBudget(LuaRuntimeShared &shared,
+                                    LuaLoadBudget budget) {
+  shared.callbackActive = false;
+  shared.budgetViolated = false;
+  shared.budgetViolationCode = nullptr;
+  const auto wallLimit =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(budget.maxWallTime);
+  if (shared.callbackCompilationWallUsed >= wallLimit) {
+    shared.executionActive = false;
+    shared.budgetViolated = true;
+    shared.budgetViolationCode = "skin_lua_wall_time_limit_exceeded";
+    return false;
+  }
+  if (shared.callbackCompilationInstructions >= budget.maxInstructions) {
+    shared.executionActive = false;
+    shared.budgetViolated = true;
+    shared.budgetViolationCode = "skin_lua_instruction_limit_exceeded";
+    return false;
+  }
+  shared.executionActive = true;
+  shared.executionInstructions = 0;
+  shared.executionInstructionLimit =
+      budget.maxInstructions - shared.callbackCompilationInstructions;
+  shared.callbackCompilationStarted = Clock::now();
+  shared.executionDeadline = shared.callbackCompilationStarted +
+                             (wallLimit - shared.callbackCompilationWallUsed);
+  return true;
+}
+
 void beginCallbackBudget(LuaRuntimeShared &shared) {
   shared.executionActive = true;
   shared.callbackActive = true;
@@ -362,6 +395,34 @@ void endExecutionBudget(LuaRuntimeShared &shared) {
   }
   shared.executionActive = false;
   shared.callbackActive = false;
+}
+
+void endCallbackCompilationBudget(LuaRuntimeShared &shared,
+                                  LuaLoadBudget budget) {
+  const auto wallLimit =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(budget.maxWallTime);
+  const auto wallRemaining =
+      wallLimit - std::min(shared.callbackCompilationWallUsed, wallLimit);
+  shared.callbackCompilationWallUsed +=
+      std::min(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   Clock::now() - shared.callbackCompilationStarted),
+               wallRemaining);
+  if (shared.budgetViolated && shared.budgetViolationCode != nullptr &&
+      std::string_view(shared.budgetViolationCode) ==
+          "skin_lua_wall_time_limit_exceeded") {
+    shared.callbackCompilationWallUsed = wallLimit;
+  }
+  const std::uint64_t remaining =
+      budget.maxInstructions -
+      std::min(shared.callbackCompilationInstructions, budget.maxInstructions);
+  shared.callbackCompilationInstructions +=
+      std::min(shared.executionInstructions, remaining);
+  if (shared.budgetViolated && shared.budgetViolationCode != nullptr &&
+      std::string_view(shared.budgetViolationCode) ==
+          "skin_lua_instruction_limit_exceeded") {
+    shared.callbackCompilationInstructions = budget.maxInstructions;
+  }
+  endExecutionBudget(shared);
 }
 
 void pushScalar(lua_State *state, const LuaScalar &scalar) {
@@ -444,6 +505,8 @@ enum class BindingLookupFailure : std::uint8_t {
   Missing,
   InvalidType,
   InvalidNumber,
+  SourceTooLarge,
+  WorkLimit,
   CallbackLimit,
   HostAllocation,
 };
@@ -513,9 +576,64 @@ struct BindingSourceLookupRequest {
   LuaRuntimeShared *shared = nullptr;
   int valueReference = LUA_NOREF;
   const LuaValuePath *path = nullptr;
+  LuaBindingSourceLookupLimits limits;
   std::optional<LuaBindingSourceValue> source;
   BindingLookupFailure failure = BindingLookupFailure::None;
+  std::size_t workBytes = 0;
 };
+
+bool chargeBindingLookupWork(BindingSourceLookupRequest &request,
+                             std::size_t bytes) noexcept {
+  const std::size_t charge = std::max<std::size_t>(bytes, 1);
+  if (charge > request.limits.remainingWorkBytes) {
+    request.workBytes = request.limits.remainingWorkBytes;
+    request.failure = BindingLookupFailure::WorkLimit;
+    return false;
+  }
+  request.workBytes = charge;
+  return true;
+}
+
+bool luaJNumericStringSyntax(std::string_view text) noexcept {
+  while (!text.empty() && text.front() == ' ') {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && text.back() == ' ') {
+    text.remove_suffix(1);
+  }
+  if (text.empty()) {
+    return false;
+  }
+  // LuaJ's custom parser truncates its decimal fallback at 64 bytes. Keep the
+  // shared safe subset instead of reproducing trailing-garbage acceptance.
+  if (text.size() > 64) {
+    return false;
+  }
+  if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+    return std::ranges::all_of(text.substr(2), [](char value) noexcept {
+      return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') ||
+             (value >= 'A' && value <= 'F');
+    });
+  }
+  return std::ranges::all_of(text, [](char value) noexcept {
+    return (value >= '0' && value <= '9') || value == '+' || value == '-' ||
+           value == '.' || value == 'e' || value == 'E';
+  });
+}
+
+void storeNumericBinding(lua_State *state, int index,
+                         BindingSourceLookupRequest &request) noexcept {
+  const double numeric = static_cast<double>(lua_tonumber(state, index));
+  // LuaJ wraps some overflows during integer conversion. Keep the portable
+  // LuaJ/LuaJIT subset by rejecting non-finite and out-of-range values first.
+  if (!std::isfinite(numeric) ||
+      numeric < static_cast<double>(std::numeric_limits<int>::min()) ||
+      numeric > static_cast<double>(std::numeric_limits<int>::max())) {
+    request.failure = BindingLookupFailure::InvalidNumber;
+    return;
+  }
+  request.source = static_cast<int>(numeric);
+}
 
 int lookupBindingSourceArgument(lua_State *state) {
   auto *request =
@@ -540,49 +658,67 @@ int lookupBindingSourceArgument(lua_State *state) {
     lua_remove(state, -2);
   }
 
-  try {
-    switch (lua_type(state, -1)) {
-    case LUA_TNUMBER: {
-      const double numeric = static_cast<double>(lua_tonumber(state, -1));
-      if (!std::isfinite(numeric) ||
-          numeric < static_cast<double>(std::numeric_limits<int>::min()) ||
-          numeric > static_cast<double>(std::numeric_limits<int>::max())) {
-        request->failure = BindingLookupFailure::InvalidNumber;
-        return 0;
-      }
-      request->source = static_cast<int>(numeric);
+  const int type = lua_type(state, -1);
+  if (type == LUA_TFUNCTION) {
+    if (!chargeBindingLookupWork(*request, 1)) {
       return 0;
     }
-    case LUA_TSTRING: {
-      std::size_t size = 0;
-      const char *text = lua_tolstring(state, -1, &size);
-      if (text == nullptr || size > kMaximumReturnedStringBytes) {
-        request->failure = BindingLookupFailure::InvalidType;
-        return 0;
-      }
-      request->source = std::string(text, size);
+    LuaCallbackId callback;
+    if (retainCallbackValue(state, -1, *request->shared, callback,
+                            request->failure)) {
+      request->source = callback;
+    }
+    return 0;
+  }
+
+  if (type == LUA_TNUMBER && request->limits.numericFactoryAvailable) {
+    if (chargeBindingLookupWork(*request, 1)) {
+      storeNumericBinding(state, -1, *request);
+    }
+    return 0;
+  }
+
+  if (type == LUA_TSTRING || type == LUA_TNUMBER) {
+    if (type == LUA_TNUMBER && !chargeBindingLookupWork(*request, 1)) {
       return 0;
     }
-    case LUA_TFUNCTION: {
-      LuaCallbackId callback;
-      if (retainCallbackValue(state, -1, *request->shared, callback,
-                              request->failure)) {
-        request->source = callback;
-      }
-      return 0;
-    }
-    case LUA_TNIL:
-      request->failure = BindingLookupFailure::Missing;
-      return 0;
-    default:
+    std::size_t size = 0;
+    const char *text = lua_tolstring(state, -1, &size);
+    if (text == nullptr) {
       request->failure = BindingLookupFailure::InvalidType;
       return 0;
     }
-  } catch (...) {
-    request->source.reset();
-    request->failure = BindingLookupFailure::HostAllocation;
+    if (size > request->limits.maxStringBytes) {
+      request->workBytes =
+          std::min<std::size_t>(request->limits.remainingWorkBytes, 1);
+      request->failure = BindingLookupFailure::SourceTooLarge;
+      return 0;
+    }
+    if (!chargeBindingLookupWork(*request, size)) {
+      return 0;
+    }
+    if (request->limits.numericFactoryAvailable &&
+        luaJNumericStringSyntax(std::string_view(text, size)) &&
+        lua_isnumber(state, -1)) {
+      storeNumericBinding(state, -1, *request);
+      return 0;
+    }
+    try {
+      request->source = std::string(text, size);
+    } catch (...) {
+      request->source.reset();
+      request->failure = BindingLookupFailure::HostAllocation;
+    }
     return 0;
   }
+
+  chargeBindingLookupWork(*request, 1);
+  if (type == LUA_TNIL) {
+    request->failure = BindingLookupFailure::Missing;
+  } else if (request->failure == BindingLookupFailure::None) {
+    request->failure = BindingLookupFailure::InvalidType;
+  }
+  return 0;
 }
 
 enum class CallbackCompileFailure : std::uint8_t {
@@ -926,7 +1062,8 @@ LuaValueHandle::lookupCallbackNamed(std::string_view name) const {
 }
 
 LuaBindingSourceLookupResult
-LuaValueHandle::lookupBindingSource(const LuaValuePath &path) const {
+LuaValueHandle::lookupBindingSource(const LuaValuePath &path,
+                                    LuaBindingSourceLookupLimits limits) const {
   if (path.size() > LuaRuntimePolicy::maxBindingPathDepth) {
     return {.failure = makeDiagnostic(
                 "skin_lua_binding_path_too_deep",
@@ -941,40 +1078,58 @@ LuaValueHandle::lookupBindingSource(const LuaValuePath &path) const {
   const int savedTop = lua_gettop(state);
   BindingSourceLookupRequest request{.shared = impl_->shared.get(),
                                      .valueReference = impl_->reference,
-                                     .path = &path};
+                                     .path = &path,
+                                     .limits = limits};
   const int status = lua_cpcall(state, lookupBindingSourceArgument, &request);
   if (status != 0) {
     auto failure = luaFailure(state, status, *impl_->shared);
     lua_settop(state, savedTop);
-    return {.failure = std::move(failure)};
+    return {.failure = std::move(failure), .workBytes = request.workBytes};
   }
   lua_settop(state, savedTop);
   if (request.source) {
-    return {.source = std::move(request.source)};
+    return {.source = std::move(request.source),
+            .workBytes = request.workBytes};
   }
   switch (request.failure) {
   case BindingLookupFailure::Missing:
     return {.failure = makeDiagnostic("skin_lua_binding_missing",
-                                      "Lua binding path is nil or missing")};
+                                      "Lua binding path is nil or missing"),
+            .workBytes = request.workBytes};
   case BindingLookupFailure::InvalidNumber:
     return {.failure = makeDiagnostic(
                 "skin_lua_binding_number_invalid",
-                "Lua binding number is outside the supported integer range")};
+                "Lua binding number is outside the supported integer range"),
+            .workBytes = request.workBytes};
+  case BindingLookupFailure::SourceTooLarge:
+    return {.failure = makeDiagnostic(
+                "skin_lua_binding_source_too_large",
+                "Lua binding name or script exceeds the fixed byte limit"),
+            .workBytes = request.workBytes};
+  case BindingLookupFailure::WorkLimit:
+    return {.failure = makeDiagnostic(
+                "skin_lua_binding_work_limit_exceeded",
+                "Lua binding source work exceeds the cumulative byte limit"),
+            .workBytes = request.workBytes};
   case BindingLookupFailure::CallbackLimit:
     return {.failure = makeDiagnostic("skin_lua_callback_limit_exceeded",
-                                      "Lua callback limit is exhausted")};
+                                      "Lua callback limit is exhausted"),
+            .workBytes = request.workBytes};
   case BindingLookupFailure::HostAllocation:
     return {.failure =
                 makeDiagnostic("skin_lua_allocator_limit_exceeded",
-                               "Lua binding source could not be retained")};
+                               "Lua binding source could not be retained"),
+            .workBytes = request.workBytes};
   case BindingLookupFailure::InvalidType:
   case BindingLookupFailure::None:
     return {.failure = makeDiagnostic(
                 "skin_lua_binding_type_invalid",
-                "Lua binding source is not a number, string, or function")};
+                "Lua binding source is not a number, string, or function"),
+            .workBytes = request.workBytes};
   }
   return {.failure = makeDiagnostic("skin_lua_binding_type_invalid",
-                                    "Lua binding source is invalid")};
+                                    "Lua binding source is invalid"),
+          .workBytes = request.workBytes};
 }
 
 LuaSkinRuntime::LuaSkinRuntime(std::unique_ptr<Impl> impl) noexcept
@@ -1189,10 +1344,17 @@ LuaCallbackCompileResult
 LuaSkinRuntime::compileCallbackScript(std::string_view script,
                                       LuaCallbackScriptKind kind) {
   if (!impl_ || impl_->phase != LuaRuntimePhase::Configured || script.empty() ||
-      script.size() > kMaximumReturnedStringBytes) {
+      script.size() > kMaximumCallbackScriptBytes) {
     return {.failure = makeDiagnostic("skin_lua_callback_script_invalid",
                                       "Lua callback script requires a "
                                       "configured runtime and bounded source")};
+  }
+
+  const LuaLoadBudget budget = LuaRuntimePolicy::loadBudget(impl_->purpose);
+  if (!beginCallbackCompilationBudget(*impl_->shared, budget)) {
+    return {.failure =
+                makeDiagnostic(impl_->shared->budgetViolationCode,
+                               "Lua callback compilation budget is exhausted")};
   }
 
   std::string source;
@@ -1205,13 +1367,13 @@ LuaSkinRuntime::compileCallbackScript(std::string_view script,
       source.append(script);
     }
   } catch (...) {
+    endCallbackCompilationBudget(*impl_->shared, budget);
     return {.failure = makeDiagnostic("skin_lua_allocator_limit_exceeded",
                                       "Lua callback script allocation failed")};
   }
 
   lua_State *state = impl_->state;
   const int savedTop = lua_gettop(state);
-  beginLoadBudget(*impl_->shared, LuaRuntimePolicy::loadBudget(impl_->purpose));
   CallbackCompileRequest request{
       .shared = impl_->shared.get(), .source = source, .kind = kind};
   const int status = lua_cpcall(state, compileCallbackArgument, &request);
@@ -1220,7 +1382,7 @@ LuaSkinRuntime::compileCallbackScript(std::string_view script,
     impl_->shared->budgetViolated = true;
     impl_->shared->budgetViolationCode = "skin_lua_wall_time_limit_exceeded";
   }
-  endExecutionBudget(*impl_->shared);
+  endCallbackCompilationBudget(*impl_->shared, budget);
   if (status != 0) {
     auto failure = luaFailure(state, status, *impl_->shared);
     lua_settop(state, savedTop);

@@ -84,6 +84,10 @@ struct LuaSkinBindingDecodeResult {
 
 struct LuaSkinBindingDecoderPolicy {
   static constexpr std::size_t maxBindingsPerKind = 20'000;
+  // The aggregate matches the table decoder's 8 MiB copied-text ceiling. One
+  // inline name/script may consume at most 1/128 of that session allowance.
+  static constexpr std::size_t maxSourceTextBytes = 64 * 1024;
+  static constexpr std::size_t maxSourceWorkBytes = 8 * 1024 * 1024;
 };
 
 class LuaSkinBindingDecoder final {
@@ -111,6 +115,7 @@ private:
 
   LuaSkinRuntime *runtime_ = nullptr;
   SkinBuiltinBindingCatalogView builtins_;
+  std::size_t consumedSourceWorkBytes_ = 0;
   std::unordered_map<InternKey, SkinDecodedBindingId, InternKeyHash> interned_;
   std::vector<SkinBooleanPropertyBinding> booleanProperties_;
   std::vector<SkinIntegerPropertyBinding> integerProperties_;

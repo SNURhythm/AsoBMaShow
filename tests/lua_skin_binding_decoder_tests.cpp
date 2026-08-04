@@ -89,6 +89,20 @@ return {
   named_callback = shared,
   bindings = {
     numeric = 42,
+    numeric_string = "42",
+    space_numeric_string = " 42 ",
+    hex_numeric_string = "0x2a",
+    fractional_numeric_string = "42.9",
+    plus_numeric_string = "+42",
+    exponent_numeric_string = "4.2e1",
+    tab_numeric_string = "\t42\t",
+    hex_fraction_string = "0x2a.0",
+    infinity_string = "Infinity",
+    large_numeric_string = "1e9999",
+    out_of_range_numeric_string = "2147483648",
+    raw_positive_infinity = 1 / 0,
+    raw_nan = 0 / 0,
+    truncated_numeric_garbage = string.rep("9", 64) .. "x",
     unknown_numeric = 999,
     known_boolean = "known_boolean",
     known_integer = "known_integer",
@@ -104,10 +118,12 @@ return {
     boolean_script = "40 < 42",
     boolean_script_again = "40 < 42",
     integer_script = "40 + 2",
-    float_script = "0.25",
+    float_script = "1 / 4",
     string_script = "'scripted'",
     timer_script = "function() return 9001 end",
     timer_catalog_name = "123",
+    timer_budget_a = "(function() for i = 1, 11000000 do end; return function() return 1 end end)()",
+    timer_budget_b = "(function() for i = 1, 11000000 do end; return function() return 2 end end)()",
     float_writer_script = "return ...",
     string_writer_script = "return ...",
     event_script = "local state = ...; return state + 13",
@@ -118,6 +134,8 @@ return {
     invalid_nil = nil,
     nested = {deeper = {callback = shared}},
     many_callbacks = many_callbacks,
+    maximum_source = string.rep(" ", 65532) .. "true",
+    oversized_source = string.rep("x", 65537),
   }
 }
 )lua";
@@ -276,6 +294,9 @@ void testPinnedDispatchAndTypedInterning() {
           .selector =
               SkinBuiltinPropertySelector{std::string("known_string_writer")}},
       SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::StringWriter},
+          .selector = SkinBuiltinPropertySelector{std::string("42")}},
+      SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::Event},
           .selector = SkinBuiltinPropertySelector{std::string("known_event")}},
       SkinBuiltinBindingCatalogEntry{
@@ -304,6 +325,9 @@ void testPinnedDispatchAndTypedInterning() {
           .type = {.kind = SkinBindingKind::TimerProperty},
           .selector = SkinBuiltinPropertySelector{42}},
       SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::TimerProperty},
+          .selector = SkinBuiltinPropertySelector{123}},
+      SkinBuiltinBindingCatalogEntry{
           .type = {.kind = SkinBindingKind::FloatWriter},
           .selector = SkinBuiltinPropertySelector{42}},
       SkinBuiltinBindingCatalogEntry{.type = {.kind = SkinBindingKind::Event},
@@ -327,6 +351,16 @@ void testPinnedDispatchAndTypedInterning() {
                  .booleanProperties[booleanNumeric.value - 1]
                  .authoredOrdinal == 10,
          "interned binding retains the first authored ordinal");
+  for (const auto field : {"numeric_string", "space_numeric_string",
+                           "hex_numeric_string", "fractional_numeric_string",
+                           "plus_numeric_string", "exponent_numeric_string"}) {
+    const auto coerced = decodedId<SkinBooleanPropertyId>(
+        decoder.decode(*session.configured,
+                       request(SkinBindingKind::BooleanProperty, field)),
+        "LuaJ/LuaJIT-overlap numeric string decodes through the ID factory");
+    expect(coerced == booleanNumeric,
+           "numeric string coercion precedes name and script dispatch");
+  }
 
   const auto namedBoolean = decodedId<SkinBooleanPropertyId>(
       decoder.decode(
@@ -395,19 +429,68 @@ void testPinnedDispatchAndTypedInterning() {
       decoder.decode(
           *session.configured,
           request(SkinBindingKind::TimerProperty, "timer_catalog_name")),
-      "Timer string compiles because Timer has no name factory");
+      "Timer numeric string uses its permitted ID factory");
   const auto view = decoder.bindings();
-  const auto timerCallback =
-      callbackSource(view.timerProperties[timer.value - 1]);
-  expect(timerCallback != nullptr && timerCallback->slot != 0 &&
-             timerCallback->generation != 0,
-         "Timer name-like script becomes a nonzero runtime callback");
+  const auto *timerBuiltin = std::get_if<SkinBuiltinPropertySelector>(
+      &view.timerProperties[timer.value - 1].source);
+  expect(timerBuiltin != nullptr &&
+             std::get_if<int>(&timerBuiltin->value) != nullptr &&
+             *std::get_if<int>(&timerBuiltin->value) == 123,
+         "Timer numeric string becomes built-in ID 123, not a callback");
 
-  const auto rejected = decoder.decode(
-      *session.configured, request(SkinBindingKind::StringWriter, "numeric"));
-  expect(!rejected.id && rejected.failure &&
-             rejected.failure->code == "skin_lua_binding_type_invalid",
-         "StringWriter rejects numeric selectors because it has no ID factory");
+  const auto numericStringWriter = decodedId<SkinStringWriterId>(
+      decoder.decode(*session.configured,
+                     request(SkinBindingKind::StringWriter, "numeric")),
+      "StringWriter raw number falls through to its string-name factory");
+  const auto writerView = decoder.bindings();
+  const auto *numericStringWriterBuiltin =
+      numericStringWriter &&
+              numericStringWriter.value <= writerView.stringWriters.size()
+          ? std::get_if<SkinBuiltinPropertySelector>(
+                &writerView.stringWriters[numericStringWriter.value - 1].source)
+          : nullptr;
+  expect(numericStringWriterBuiltin != nullptr &&
+             std::get_if<std::string>(&numericStringWriterBuiltin->value) !=
+                 nullptr &&
+             *std::get_if<std::string>(&numericStringWriterBuiltin->value) ==
+                 "42",
+         "StringWriter raw number preserves pinned LuaNumber string fallback");
+
+  for (const auto field :
+       {"tab_numeric_string", "hex_fraction_string", "infinity_string"}) {
+    const auto failClosed = decodedId<SkinBooleanPropertyId>(
+        decoder.decode(*session.configured,
+                       request(SkinBindingKind::BooleanProperty, field)),
+        "numeric spelling outside the LuaJ/LuaJIT overlap remains a script");
+    expect(callbackSource(
+               decoder.bindings().booleanProperties[failClosed.value - 1]) !=
+               nullptr,
+           "runtime-only numeric coercion never becomes a built-in selector");
+  }
+
+  for (const auto field :
+       {"large_numeric_string", "out_of_range_numeric_string",
+        "raw_positive_infinity", "raw_nan"}) {
+    const auto unsafeNumeric = decoder.decode(
+        *session.configured, request(SkinBindingKind::BooleanProperty, field));
+    expect(!unsafeNumeric.id && unsafeNumeric.failure &&
+               unsafeNumeric.failure->code == "skin_lua_binding_number_invalid",
+           "nonfinite and out-of-range numeric coercion fails closed");
+  }
+  const auto truncatedGarbage = decoder.decode(
+      *session.configured,
+      request(SkinBindingKind::BooleanProperty, "truncated_numeric_garbage"));
+  expect(!truncatedGarbage.id && truncatedGarbage.failure &&
+             truncatedGarbage.failure->code ==
+                 "skin_lua_callback_script_invalid",
+         "LuaJ's 64-byte trailing-garbage parser quirk fails closed as script");
+
+  const auto numericStringWriterText = decodedId<SkinStringWriterId>(
+      decoder.decode(*session.configured,
+                     request(SkinBindingKind::StringWriter, "numeric_string")),
+      "StringWriter numeric string uses the same string-name factory");
+  expect(numericStringWriterText == numericStringWriter,
+         "StringWriter numeric text and numeric value intern by string form");
 
   const auto integerValue = decodedId<SkinIntegerPropertyId>(
       decoder.decode(
@@ -679,6 +762,59 @@ void testThousandsOfDistinctFunctionsStayIndexed() {
          "thousands of functions remain distinct while repeats intern once");
 }
 
+void testBindingSourceWorkAndIndividualTextAreBounded() {
+  auto session = fixture().session();
+  if (!session.runtime || !session.configured) {
+    return;
+  }
+  LuaSkinBindingDecoder decoder(*session.runtime, {});
+  const auto maximum =
+      request(SkinBindingKind::BooleanProperty, "maximum_source", 1);
+  const auto first = decodedId<SkinBooleanPropertyId>(
+      decoder.decode(*session.configured, maximum),
+      "one binding source at the individual text boundary decodes");
+  const std::size_t allowedLookups =
+      LuaSkinBindingDecoderPolicy::maxSourceWorkBytes /
+      LuaSkinBindingDecoderPolicy::maxSourceTextBytes;
+  for (std::size_t lookup = 1; lookup < allowedLookups; ++lookup) {
+    const auto repeated = decodedId<SkinBooleanPropertyId>(
+        decoder.decode(*session.configured, maximum),
+        "a repeated source lookup within the cumulative work budget decodes");
+    expect(repeated == first, "repeated maximum source remains interned");
+  }
+  const auto exhausted = decoder.decode(*session.configured, maximum);
+  expect(!exhausted.id && exhausted.failure &&
+             exhausted.failure->code == "skin_lua_binding_work_limit_exceeded",
+         "one lookup beyond the cumulative source-work boundary is rejected");
+
+  LuaSkinBindingDecoder oversizedDecoder(*session.runtime, {});
+  const auto oversized = oversizedDecoder.decode(
+      *session.configured,
+      request(SkinBindingKind::BooleanProperty, "oversized_source"));
+  expect(!oversized.id && oversized.failure &&
+             oversized.failure->code == "skin_lua_binding_source_too_large",
+         "a source one byte beyond the individual boundary is rejected");
+}
+
+void testTimerTrialsShareOneConfiguredCompilationBudget() {
+  auto session = fixture().session();
+  if (!session.runtime || !session.configured) {
+    return;
+  }
+  LuaSkinBindingDecoder decoder(*session.runtime, {});
+  const auto first =
+      decoder.decode(*session.configured,
+                     request(SkinBindingKind::TimerProperty, "timer_budget_a"));
+  expect(first.id.has_value() && !first.failure,
+         "one Timer trial below the configured compilation budget succeeds");
+  const auto aggregate =
+      decoder.decode(*session.configured,
+                     request(SkinBindingKind::TimerProperty, "timer_budget_b"));
+  expect(!aggregate.id && aggregate.failure &&
+             aggregate.failure->code == "skin_lua_instruction_limit_exceeded",
+         "a second individually-valid Timer trial exhausts the shared budget");
+}
+
 void testUnrecognizedScriptsCompileWithPinnedShapesAndBudgets() {
   auto session = fixture().session();
   if (!session.runtime || !session.configured) {
@@ -811,6 +947,8 @@ int main() {
   testNestedFunctionSurvivesConfiguredHandleDestruction();
   testBindingPathDepthIsBounded();
   testThousandsOfDistinctFunctionsStayIndexed();
+  testBindingSourceWorkAndIndividualTextAreBounded();
+  testTimerTrialsShareOneConfiguredCompilationBudget();
   testUnrecognizedScriptsCompileWithPinnedShapesAndBudgets();
   testPassiveCustomTimerIsExplicitAndNeverUsesBindingZero();
   if (failures == 0) {

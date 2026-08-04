@@ -128,7 +128,16 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
                                   "Lua binding request is incomplete")};
   }
 
-  auto lookedUp = value.lookupBindingSource(request.path);
+  const std::size_t remainingWorkBytes =
+      LuaSkinBindingDecoderPolicy::maxSourceWorkBytes -
+      std::min(consumedSourceWorkBytes_,
+               LuaSkinBindingDecoderPolicy::maxSourceWorkBytes);
+  auto lookedUp = value.lookupBindingSource(
+      request.path,
+      {.maxStringBytes = LuaSkinBindingDecoderPolicy::maxSourceTextBytes,
+       .remainingWorkBytes = remainingWorkBytes,
+       .numericFactoryAvailable = supportsNumericFactory(request.type.kind)});
+  consumedSourceWorkBytes_ += std::min(lookedUp.workBytes, remainingWorkBytes);
   if (!lookedUp.source) {
     return {.failure = lookedUp.failure
                            ? std::move(lookedUp.failure)

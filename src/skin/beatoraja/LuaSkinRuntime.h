@@ -8,6 +8,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -108,9 +109,16 @@ struct LuaValuePathElement {
 using LuaValuePath = std::vector<LuaValuePathElement>;
 using LuaBindingSourceValue = std::variant<int, std::string, LuaCallbackId>;
 
+struct LuaBindingSourceLookupLimits {
+  std::size_t maxStringBytes = std::numeric_limits<std::size_t>::max();
+  std::size_t remainingWorkBytes = std::numeric_limits<std::size_t>::max();
+  bool numericFactoryAvailable = true;
+};
+
 struct LuaBindingSourceLookupResult {
   std::optional<LuaBindingSourceValue> source;
   std::optional<SkinDiagnostic> failure;
+  std::size_t workBytes = 0;
 };
 
 enum class LuaCallbackScriptKind : std::uint8_t {
@@ -166,7 +174,8 @@ public:
   [[nodiscard]] LuaCallbackLookupResult
   lookupCallbackNamed(std::string_view name) const;
   [[nodiscard]] LuaBindingSourceLookupResult
-  lookupBindingSource(const LuaValuePath &path) const;
+  lookupBindingSource(const LuaValuePath &path,
+                      LuaBindingSourceLookupLimits = {}) const;
 
 private:
   using ProtectedValueOperation = void (*)(lua_State *, int, void *) noexcept;
