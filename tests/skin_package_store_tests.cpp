@@ -211,15 +211,43 @@ public:
 
 class OneShotThrowingObserver final : public SkinImportIoObserver {
 public:
+  explicit OneShotThrowingObserver(std::function<void()> beforeThrow = {})
+      : beforeThrow_(std::move(beforeThrow)) {}
+
   void reached(SkinImportIoOperation operation,
                const fs::path &) const override {
     if (operation == SkinImportIoOperation::BeforeVisiblePublication &&
         throwsRemaining.fetch_sub(1) > 0) {
+      if (beforeThrow_) {
+        beforeThrow_();
+      }
       throw std::runtime_error("injected visible publication failure");
     }
   }
 
+private:
+  std::function<void()> beforeThrow_;
   mutable std::atomic_int throwsRemaining{1};
+};
+
+class RemovalMutationObserver final : public SkinPackageStoreIoObserver {
+public:
+  explicit RemovalMutationObserver(std::function<void()> mutate)
+      : mutate_(std::move(mutate)) {}
+
+  void reached(SkinPackageStoreIoOperation operation,
+               const fs::path &) const noexcept override {
+    if (operation != SkinPackageStoreIoOperation::RemovalVisibleRetained) {
+      return;
+    }
+    try {
+      mutate_();
+    } catch (...) {
+    }
+  }
+
+private:
+  std::function<void()> mutate_;
 };
 
 class FakeProfileOwner final : public ISkinProfileSettingsOwner {
@@ -943,6 +971,102 @@ void testRemovalRecoveryRetainsIntentWhenOwnedCleanupCannotFinish() {
          "removal cleanup never follows an unowned link target");
 }
 
+void testStableRevisionRestoresCorruptedTransactionCopies() {
+  const std::string oldCatalog = catalogDocument(7, kOldTreeDigest);
+  const std::string newCatalog = emptyCatalogDocument(8);
+  {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    const fs::path stableOld =
+        roots.privateRevisions / std::string(kOldTreeDigest);
+    writeOldTree(stableOld);
+    freezeRevisionTree(stableOld);
+    writeNewTree(roots.visiblePackages.parent_path() /
+                 ".skin-publication-backups/op-17/FixtureSkin");
+    writeText(roots.privateCatalog / "catalog.json", oldCatalog);
+    writeText(roots.privateCatalog / ".publication-staging/op-17-new.json",
+              newCatalog);
+    writeText(roots.privateCatalog / ".publication-backups/op-17-old.json",
+              oldCatalog);
+    writeText(roots.privateCatalog / "publication-journal.json",
+              journalDocument("visible-backup-parent-synced"));
+
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    NoAliases aliases;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    expect(store.recoverBeforeServiceStart().disposition ==
+                   SkinRecoveryDisposition::Recovered &&
+               treeIsOld(roots.visiblePackages / "FixtureSkin"),
+           "publication recovery rematerializes immutable old bytes when the "
+           "renamed backup was corrupted through an open descendant");
+  }
+  {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    const fs::path stableOld =
+        roots.privateRevisions / std::string(kOldTreeDigest);
+    writeOldTree(stableOld);
+    freezeRevisionTree(stableOld);
+    writeNewTree(roots.visiblePackages.parent_path() /
+                 ".skin-removal-staging/remove-17/FixtureSkin");
+    writeText(roots.privateCatalog / "catalog.json", oldCatalog);
+    writeText(roots.privateCatalog / ".removal-staging/remove-17-new.json",
+              newCatalog);
+    writeText(roots.privateCatalog / ".removal-backups/remove-17-old.json",
+              oldCatalog);
+    writeText(roots.privateCatalog / "removal-journal.json",
+              removalJournalDocument(file_checksum::sha256(oldCatalog),
+                                     file_checksum::sha256(newCatalog)));
+
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    NoAliases aliases;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    expect(store.recoverBeforeServiceStart().disposition ==
+                   SkinRecoveryDisposition::Recovered &&
+               treeIsOld(roots.visiblePackages / "FixtureSkin"),
+           "removal recovery rematerializes immutable old bytes when retained "
+           "staging was corrupted through an open descendant");
+  }
+}
+
+void testIntentOnlyRecoveryNeedsNoUnjournaledCatalogArtifacts() {
+  const std::string oldCatalog = catalogDocument(7, kOldTreeDigest);
+  for (const bool removal : {false, true}) {
+    TempDirectory temp;
+    const SkinStorageRoots roots = rootsBelow(temp.root());
+    writeOldTree(roots.visiblePackages / "FixtureSkin");
+    const fs::path stableOld =
+        roots.privateRevisions / std::string(kOldTreeDigest);
+    writeOldTree(stableOld);
+    freezeRevisionTree(stableOld);
+    writeText(roots.privateCatalog / "catalog.json", oldCatalog);
+    if (removal) {
+      const std::string newCatalog = emptyCatalogDocument(8);
+      writeText(roots.privateCatalog / "removal-journal.json",
+                removalJournalDocument(file_checksum::sha256(oldCatalog),
+                                       file_checksum::sha256(newCatalog)));
+    } else {
+      writeText(roots.privateCatalog / "publication-journal.json",
+                journalDocument("intent-written"));
+    }
+
+    SkinPackageCatalog catalog(roots.privateCatalog);
+    FakeProfileSnapshots profiles;
+    NoAliases aliases;
+    SkinPackageStore store(roots, catalog, aliases, profiles);
+    expect(store.recoverBeforeServiceStart().disposition ==
+                   SkinRecoveryDisposition::Recovered &&
+               treeIsOld(roots.visiblePackages / "FixtureSkin") &&
+               snapshotIsExactly(*catalog.snapshot(), 7, kOldTreeDigest),
+           removal
+               ? "removal intent recovers before any catalog artifact exists"
+               : "publication intent recovers before any catalog artifact "
+                 "exists");
+  }
+}
+
 void testOperationNamesDoNotReusePreseededPriorProcessArtifacts() {
   TempDirectory temp;
   const SkinStorageRoots roots = rootsBelow(temp.root());
@@ -1326,7 +1450,18 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
 
     const fs::path newSource = temp.root() / "rollback-new";
     writeNewTree(newSource);
-    auto observer = std::make_shared<OneShotThrowingObserver>();
+    auto openOldWriter = std::make_shared<std::fstream>(
+        roots.visiblePackages / "FixtureSkin/old-only.txt",
+        std::ios::in | std::ios::out);
+    expect(openOldWriter->is_open(),
+           "publication rollback keeps an old descendant writer open");
+    std::atomic_bool oldBackupMutated{false};
+    auto observer = std::make_shared<OneShotThrowingObserver>([&] {
+      openOldWriter->seekp(0);
+      *openOldWriter << "corrupted-through-open-handle";
+      openOldWriter->flush();
+      oldBackupMutated.store(openOldWriter->good(), std::memory_order_release);
+    });
     SkinArchiveImporter throwingImporter(roots, aliases, observer);
     auto replacement =
         throwingImporter.prepareFolder(newSource, *package.package, {}, {});
@@ -1340,6 +1475,9 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
     } catch (const std::runtime_error &) {
       threw = true;
     }
+    openOldWriter->close();
+    expect(oldBackupMutated.load(std::memory_order_acquire),
+           "open descendant writer corrupts the renamed publication backup");
     expect(
         threw && fs::exists(roots.privateCatalog / "publication-journal.json"),
         "throw after old visible move retains publication recovery evidence");
@@ -1373,7 +1511,19 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
     SkinPackageCatalog catalog(roots.privateCatalog);
     FakeProfileSnapshots profiles;
     SelectableValidator validator;
-    SkinPackageStore store(roots, catalog, aliases, profiles);
+    std::shared_ptr<std::fstream> openOldWriter;
+    std::atomic_bool retainedTreeMutated{false};
+    auto removalObserver = std::make_shared<RemovalMutationObserver>([&] {
+      if (!openOldWriter) {
+        return;
+      }
+      openOldWriter->seekp(0);
+      *openOldWriter << "corrupted-through-open-handle";
+      openOldWriter->flush();
+      retainedTreeMutated.store(openOldWriter->good(),
+                                std::memory_order_release);
+    });
+    SkinPackageStore store(roots, catalog, aliases, profiles, removalObserver);
     expect(store.recoverBeforeServiceStart().disposition ==
                SkinRecoveryDisposition::Recovered,
            "removal rollback fixture bootstraps store roots");
@@ -1384,8 +1534,16 @@ void testTransactionFailureRetainsJournalForRestartRecovery() {
                         validator, {}, {})
                .published,
            "removal rollback fixture publishes old tree");
+    openOldWriter = std::make_shared<std::fstream>(
+        roots.visiblePackages / "FixtureSkin/old-only.txt",
+        std::ios::in | std::ios::out);
+    expect(openOldWriter->is_open(),
+           "removal rollback keeps an old descendant writer open");
     catalog.shutdown();
     const auto removed = store.removePackage(*package.package, {});
+    openOldWriter->close();
+    expect(retainedTreeMutated.load(std::memory_order_acquire),
+           "open descendant writer corrupts retained removal staging");
     expect(!removed.removed &&
                fs::exists(roots.privateCatalog / "removal-journal.json"),
            "failed removal rollback retains its journal and catalog copies");
@@ -1857,6 +2015,8 @@ int main(int argc, char **argv) {
   testMalformedAndOversizedCatalogFailBootstrap();
   testRemovalJournalRecoversOldAndNewGenerations();
   testRemovalRecoveryRetainsIntentWhenOwnedCleanupCannotFinish();
+  testStableRevisionRestoresCorruptedTransactionCopies();
+  testIntentOnlyRecoveryNeedsNoUnjournaledCatalogArtifacts();
   testOperationNamesDoNotReusePreseededPriorProcessArtifacts();
   testBootstrapCleansOnlyBoundedRecognizableOwnedArtifacts();
   testInventoryFenceAndDescendantEditReturnPreparedWithoutMutation();

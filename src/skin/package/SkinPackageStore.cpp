@@ -55,6 +55,7 @@ struct PublicationJournal {
   std::string newTreeDigest;
   std::string oldRevisionDigest;
   std::string newRevisionDigest;
+  std::string oldRevisionStagingToken;
   std::string revisionStagingToken;
   std::string catalogFileName;
   std::string catalogStagingToken;
@@ -72,6 +73,8 @@ struct RemovalJournal {
   SkinPackageId package;
   std::string retainedToken;
   std::string oldTreeDigest;
+  std::string oldRevisionDigest;
+  std::string oldRevisionStagingToken;
   std::string catalogStagingToken;
   std::string catalogBackupToken;
   std::uint64_t oldCatalogGeneration = 0;
@@ -222,6 +225,30 @@ loadJournal(const fs::path &path, std::vector<SkinDiagnostic> &diagnostics) {
         "skin package publication journal old identity is invalid"));
     return std::nullopt;
   }
+  if (result.oldPresent) {
+    result.oldRevisionDigest = result.oldTreeDigest;
+    const auto oldDigest = revision->find("oldDigest");
+    if (oldDigest != revision->end() &&
+        (!oldDigest->is_string() ||
+         !getString(*revision, "oldDigest", result.oldRevisionDigest) ||
+         result.oldRevisionDigest != result.oldTreeDigest)) {
+      diagnostics.push_back(storeDiagnostic(
+          "skin_package_journal_invalid",
+          "skin package publication journal old revision is invalid"));
+      return std::nullopt;
+    }
+    const auto oldStaging = revision->find("oldStagingToken");
+    if (oldStaging != revision->end() &&
+        (!oldStaging->is_string() ||
+         !getString(*revision, "oldStagingToken",
+                    result.oldRevisionStagingToken) ||
+         !safeToken(result.oldRevisionStagingToken))) {
+      diagnostics.push_back(storeDiagnostic(
+          "skin_package_journal_invalid",
+          "skin package publication journal old revision staging is invalid"));
+      return std::nullopt;
+    }
+  }
   result.oldCatalogGeneration = oldGeneration->get<std::uint64_t>();
   result.newCatalogGeneration = newGeneration->get<std::uint64_t>();
   result.oldSourceGeneration = oldSourceGeneration->get<std::uint64_t>();
@@ -272,6 +299,23 @@ loadRemovalJournal(const fs::path &path,
         !lowercaseSha256(result.oldCatalogDigest) ||
         !lowercaseSha256(result.newCatalogDigest)) {
       throw std::invalid_argument("invalid removal journal");
+    }
+    const auto revision = root.find("revision");
+    result.oldRevisionDigest = result.oldTreeDigest;
+    if (revision != root.end()) {
+      if (!revision->is_object() ||
+          !getString(*revision, "oldDigest", result.oldRevisionDigest) ||
+          result.oldRevisionDigest != result.oldTreeDigest) {
+        throw std::invalid_argument("invalid removal revision identity");
+      }
+      const auto staging = revision->find("stagingToken");
+      if (staging != revision->end() &&
+          (!staging->is_string() ||
+           !getString(*revision, "stagingToken",
+                      result.oldRevisionStagingToken) ||
+           !safeToken(result.oldRevisionStagingToken))) {
+        throw std::invalid_argument("invalid removal revision staging");
+      }
     }
     const auto normalized = normalizePackageId(directory);
     const auto oldGeneration = catalog->find("oldGeneration");
@@ -1753,6 +1797,10 @@ bool writeJournal(const fs::path &path, const PublicationJournal &journal,
   root["revision"] =
       OrderedJson{{"newDigest", journal.newRevisionDigest},
                   {"stagingToken", journal.revisionStagingToken}};
+  if (journal.oldPresent) {
+    root["revision"]["oldDigest"] = journal.oldRevisionDigest;
+    root["revision"]["oldStagingToken"] = journal.oldRevisionStagingToken;
+  }
   root["catalog"] =
       OrderedJson{{"fileName", journal.catalogFileName},
                   {"stagingToken", journal.catalogStagingToken},
@@ -1787,6 +1835,9 @@ bool writeRemovalJournal(const fs::path &path, const RemovalJournal &journal,
                   {"collisionKey", journal.package.collisionKey}};
   root["retainedToken"] = journal.retainedToken;
   root["oldTreeDigest"] = journal.oldTreeDigest;
+  root["revision"] =
+      OrderedJson{{"oldDigest", journal.oldRevisionDigest},
+                  {"stagingToken", journal.oldRevisionStagingToken}};
   root["catalog"] =
       OrderedJson{{"stagingToken", journal.catalogStagingToken},
                   {"backupToken", journal.catalogBackupToken},
@@ -2019,9 +2070,30 @@ discoverEntries(SkinRevisionReadView view, std::stop_token stop,
 
 SkinPackageStore::SkinPackageStore(
     SkinStorageRoots roots, SkinPackageCatalog &catalog,
-    SkinAliasDetector &aliases, ISkinProfileSnapshotProvider &profileSnapshots)
+    SkinAliasDetector &aliases, ISkinProfileSnapshotProvider &profileSnapshots,
+    std::shared_ptr<const SkinPackageStoreIoObserver> ioObserver)
     : roots_(std::move(roots)), catalog_(catalog), aliases_(aliases),
-      profileSnapshots_(profileSnapshots) {}
+      profileSnapshots_(profileSnapshots), ioObserver_(std::move(ioObserver)) {}
+
+bool SkinPackageStore::materializeStableRevision(
+    const fs::path &revisionRoot, const fs::path &destination,
+    const SkinPackageId &package, std::string_view expectedDigest,
+    std::vector<SkinDiagnostic> &diagnostics) {
+  SkinArchiveImporter importer(roots_, aliases_);
+  auto prepared = importer.prepareFolder(revisionRoot, package, {}, {});
+  diagnostics.insert(diagnostics.end(),
+                     std::make_move_iterator(prepared.diagnostics.begin()),
+                     std::make_move_iterator(prepared.diagnostics.end()));
+  if (!prepared.prepared ||
+      prepared.prepared->candidateRevision().lowercaseSha256 !=
+          expectedDigest ||
+      !prepared.prepared->renameVisibleStagingTo(destination, diagnostics)) {
+    return false;
+  }
+  prepared.prepared->releaseVisibleOwnership();
+  return treeDigestMatches(destination, package, expectedDigest, roots_,
+                           aliases_);
+}
 
 SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
   std::uint8_t expected = 0;
@@ -2119,6 +2191,13 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       const fs::path retained =
           roots_.visiblePackages.parent_path() / ".skin-removal-staging" /
           journal->retainedToken / journal->package.directoryName;
+      const fs::path oldRevision =
+          roots_.privateRevisions / journal->oldRevisionDigest;
+      const fs::path oldRevisionStaging =
+          journal->oldRevisionStagingToken.empty()
+              ? fs::path{}
+              : roots_.privateRevisions / ".staging" /
+                    journal->oldRevisionStagingToken;
       const fs::path catalogFile = roots_.privateCatalog / "catalog.json";
       const fs::path catalogStaging = roots_.privateCatalog /
                                       ".removal-staging" /
@@ -2143,6 +2222,9 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
           treeDigestMatches(retained, journal->package, journal->oldTreeDigest,
                             roots_, aliases_) &&
           retainedCapability->matchesIssuedIdentity();
+      const bool oldRevisionValid =
+          treeDigestMatches(oldRevision, journal->package,
+                            journal->oldRevisionDigest, roots_, aliases_);
       std::error_code visibleError;
       const auto visibleStatus = fs::symlink_status(visible, visibleError);
       const bool visibleMissing =
@@ -2197,7 +2279,8 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
           validateCatalogGeneration(newCatalog, journal->newCatalogGeneration,
                                     journal->newSourceGeneration);
       const bool oldComplete =
-          (visibleOld || retainedOld) && decodedOldCatalog.has_value();
+          (visibleOld || retainedOld || oldRevisionValid) &&
+          decodedOldCatalog.has_value();
       const bool newComplete = visibleMissing && decodedNewCatalog.has_value();
       if (!oldComplete && !newComplete) {
         result.diagnostics.push_back(storeDiagnostic(
@@ -2209,12 +2292,26 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
           newComplete && ((finalCatalog &&
                            finalCatalog->digest == journal->newCatalogDigest) ||
                           !oldComplete);
-      if (!selectNew && !visibleOld &&
-          (!retainedOld || !retainedCapability->renameTo(visible))) {
-        result.diagnostics.push_back(storeDiagnostic(
-            "skin_package_removal_recovery_visible_failed",
-            "unable to restore the removed visible skin package"));
-        return result;
+      if (!selectNew && !visibleOld) {
+        const bool visibleCleared =
+            !visibleCapability->existed() ||
+            quarantineTree(*visibleCapability,
+                           roots_.visiblePackages.parent_path() /
+                               ".skin-recovery-quarantine",
+                           journal->operationId, "removal-corrupt-visible");
+        const bool restoredFromRetained = visibleCleared && retainedOld &&
+                                          retainedCapability->renameTo(visible);
+        const bool restoredFromRevision =
+            !restoredFromRetained && visibleCleared && oldRevisionValid &&
+            materializeStableRevision(oldRevision, visible, journal->package,
+                                      journal->oldRevisionDigest,
+                                      result.diagnostics);
+        if (!restoredFromRetained && !restoredFromRevision) {
+          result.diagnostics.push_back(storeDiagnostic(
+              "skin_package_removal_recovery_visible_failed",
+              "unable to restore the removed visible skin package"));
+          return result;
+        }
       }
       const VerifiedCatalogBytes &selected =
           selectNew ? *newCatalog : *oldCatalog;
@@ -2255,7 +2352,7 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
             "restored removal catalog has inconsistent typed identity"));
         return result;
       }
-      if (selectNew &&
+      if (retainedCapability->currentPath() != visible &&
           !quarantineTree(*retainedCapability,
                           roots_.visiblePackages.parent_path() /
                               ".skin-recovery-quarantine",
@@ -2268,9 +2365,15 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
       const bool backupClean = quarantineTree(
           catalogBackup, roots_.privateCatalog / ".recovery-quarantine",
           journal->operationId, "removal-catalog-backup");
+      const bool oldRevisionStagingClean =
+          oldRevisionStaging.empty() ||
+          quarantineTree(oldRevisionStaging,
+                         roots_.privateRevisions / ".recovery-quarantine",
+                         journal->operationId, "removal-revision-staging");
       const bool reservationClean = releaseOperationReservation(
           roots_.privateCatalog, journal->operationId);
-      if (!stagingClean || !backupClean || !reservationClean) {
+      if (!stagingClean || !backupClean || !oldRevisionStagingClean ||
+          !reservationClean) {
         result.diagnostics.push_back(storeDiagnostic(
             "skin_package_removal_recovery_cleanup_failed",
             "unable to finalize recovered skin package removal"));
@@ -2321,8 +2424,15 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
         journal->visibleBackupToken / journal->oldVisibleDirectory;
     const fs::path newRevision =
         roots_.privateRevisions / journal->newRevisionDigest;
+    const fs::path oldRevision =
+        roots_.privateRevisions / journal->oldRevisionDigest;
     const fs::path revisionStaging =
         roots_.privateRevisions / ".staging" / journal->revisionStagingToken;
+    const fs::path oldRevisionStaging =
+        journal->oldRevisionStagingToken.empty()
+            ? fs::path{}
+            : roots_.privateRevisions / ".staging" /
+                  journal->oldRevisionStagingToken;
     const fs::path catalogFile =
         roots_.privateCatalog / journal->catalogFileName;
     const fs::path catalogStaging = roots_.privateCatalog /
@@ -2379,6 +2489,10 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
         treeDigestMatches(newRevision, journal->package,
                           journal->newRevisionDigest, roots_, aliases_) &&
         newRevisionCapability->matchesIssuedIdentity();
+    const bool oldRevisionValid =
+        journal->oldPresent &&
+        treeDigestMatches(oldRevision, journal->package,
+                          journal->oldRevisionDigest, roots_, aliases_);
     std::error_code visibleStatusError;
     const auto visibleStatus = fs::symlink_status(visible, visibleStatusError);
     const bool visibleMissing =
@@ -2433,9 +2547,10 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
     const auto decodedNewCatalog =
         validateCatalogGeneration(newCatalog, journal->newCatalogGeneration,
                                   journal->newSourceGeneration);
-    const bool oldVisibleComplete = journal->oldPresent
-                                        ? (oldVisibleIsOld || backupIsOld)
-                                        : (visibleMissing || visibleIsNew);
+    const bool oldVisibleComplete =
+        journal->oldPresent
+            ? (oldVisibleIsOld || backupIsOld || oldRevisionValid)
+            : (visibleMissing || visibleIsNew);
     const bool oldComplete = oldVisibleComplete && decodedOldCatalog;
     const bool newComplete =
         (visibleIsNew || stagingIsNew) && newRevisionValid && decodedNewCatalog;
@@ -2470,7 +2585,23 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
                          roots_.visiblePackages.parent_path() /
                              ".skin-recovery-quarantine",
                          journal->operationId, "rolled-back-visible");
-      if (!destinationCleared || !backupCapability->renameTo(oldVisible)) {
+      const bool oldDestinationCleared =
+          sameVisibleEntry || !oldVisibleCapability.existed() ||
+          quarantineTree(oldVisibleCapability,
+                         roots_.visiblePackages.parent_path() /
+                             ".skin-recovery-quarantine",
+                         journal->operationId,
+                         "rolled-back-corrupt-old-visible");
+      const bool restoredFromBackup = destinationCleared &&
+                                      oldDestinationCleared && backupIsOld &&
+                                      backupCapability->renameTo(oldVisible);
+      const bool restoredFromRevision =
+          !restoredFromBackup && destinationCleared && oldDestinationCleared &&
+          oldRevisionValid &&
+          materializeStableRevision(oldRevision, oldVisible, journal->package,
+                                    journal->oldRevisionDigest,
+                                    result.diagnostics);
+      if (!restoredFromBackup && !restoredFromRevision) {
         result.diagnostics.push_back(storeDiagnostic(
             "skin_package_recovery_visible_failed",
             "unable to restore the previous visible skin package"));
@@ -2601,6 +2732,10 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
     const bool revisionStagingCleaned =
         quarantineTree(revisionStaging, revisionQuarantine,
                        journal->operationId, "revision-staging");
+    const bool oldRevisionStagingCleaned =
+        oldRevisionStaging.empty() ||
+        quarantineTree(oldRevisionStaging, revisionQuarantine,
+                       journal->operationId, "old-revision-staging");
     const bool catalogStagingCleaned =
         quarantineTree(catalogStaging, catalogQuarantine, journal->operationId,
                        "catalog-staging");
@@ -2610,8 +2745,9 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
     const bool reservationCleaned = releaseOperationReservation(
         roots_.privateCatalog, journal->operationId);
     if (!visibleStagingCleaned || !visibleBackupCleaned ||
-        !revisionStagingCleaned || !catalogStagingCleaned ||
-        !catalogBackupCleaned || !reservationCleaned) {
+        !revisionStagingCleaned || !oldRevisionStagingCleaned ||
+        !catalogStagingCleaned || !catalogBackupCleaned ||
+        !reservationCleaned) {
       result.diagnostics.push_back(storeDiagnostic(
           "skin_package_recovery_cleanup_failed",
           "unable to clean journal-owned skin package staging"));
@@ -2840,14 +2976,20 @@ PublishPackageResult SkinPackageStore::publish(
 
   std::string oldTreeDigest;
   std::optional<std::vector<TreeMetadataRecord>> oldTreeManifest;
+  std::optional<PreparedSkinRevision> oldRevisionPrepared;
   if (destinationExists) {
     oldTreeManifest = treeMetadataManifest(oldVisible, aliases_);
-    auto digest = treeDigest(oldVisible, prepared.packageId(), roots_, aliases_,
-                             stop, result.diagnostics);
-    if (!oldTreeManifest || !digest) {
+    SkinTreeSnapshotter snapshotter(roots_, aliases_);
+    auto oldSnapshot =
+        snapshotter.snapshot(oldVisible, prepared.packageId(), stop, progress);
+    result.diagnostics.insert(
+        result.diagnostics.end(),
+        std::make_move_iterator(oldSnapshot.diagnostics.begin()),
+        std::make_move_iterator(oldSnapshot.diagnostics.end()));
+    if (!oldTreeManifest || !oldSnapshot.prepared) {
       return result;
     }
-    oldTreeDigest = std::move(*digest);
+    oldTreeDigest = oldSnapshot.prepared->revision().lowercaseSha256;
     if (!visibleCapability->matchesIssuedIdentity() ||
         treeMetadataManifest(oldVisible, aliases_) != oldTreeManifest) {
       result.diagnostics.push_back(
@@ -2855,6 +2997,7 @@ PublishPackageResult SkinPackageStore::publish(
                           "visible skin package changed during inspection"));
       return result;
     }
+    oldRevisionPrepared = std::move(*oldSnapshot.prepared);
   }
   auto operationReservation = reserveOperation(roots_.privateCatalog);
   if (!operationReservation) {
@@ -2881,6 +3024,9 @@ PublishPackageResult SkinPackageStore::publish(
       .newTreeDigest = prepared.candidateRevision().lowercaseSha256,
       .oldRevisionDigest = oldTreeDigest,
       .newRevisionDigest = prepared.candidateRevision().lowercaseSha256,
+      .oldRevisionStagingToken =
+          oldRevisionPrepared ? filenameUtf8(oldRevisionPrepared->stagingRoot())
+                              : std::string{},
       .revisionStagingToken = prepared.readView().root().filename().string(),
       .catalogFileName = "catalog.json",
       .catalogStagingToken = operationId + "-new.json",
@@ -2952,13 +3098,6 @@ PublishPackageResult SkinPackageStore::publish(
                         "skin package publication storage cannot be prepared"));
     return result;
   }
-  if (!catalog_.writeSnapshotFile(catalogStaging, newCatalog,
-                                  result.diagnostics) ||
-      !catalog_.writeSnapshotFile(catalogBackup, *oldCatalog,
-                                  result.diagnostics)) {
-    clearMutation();
-    return result;
-  }
   if (!writeJournal(journalPath, journal, result.diagnostics)) {
     clearMutation();
     return result;
@@ -2972,6 +3111,7 @@ PublishPackageResult SkinPackageStore::publish(
     }
     rollbackAttempted = true;
     try {
+      std::vector<SkinDiagnostic> rollbackDiagnostics;
       bool visibleRestored = true;
       const bool newVisible =
           treeDigestMatches(visible, prepared.packageId(),
@@ -2979,7 +3119,7 @@ PublishPackageResult SkinPackageStore::publish(
       if (newVisible) {
         const fs::path rollbackQuarantine =
             roots_.visiblePackages.parent_path() / ".skin-recovery-quarantine" /
-            (operationId + "-in-process-rollback-visible");
+            ("q-" + nextOperationId().substr(3));
         std::vector<SkinDiagnostic> relocationDiagnostics;
         visibleRestored =
             ensureDirectoryNoFollow(rollbackQuarantine.parent_path()) &&
@@ -2989,11 +3129,22 @@ PublishPackageResult SkinPackageStore::publish(
       if (destinationExists &&
           !treeDigestMatches(oldVisible, prepared.packageId(), oldTreeDigest,
                              roots_, aliases_)) {
-        visibleRestored = treeDigestMatches(backup, prepared.packageId(),
-                                            oldTreeDigest, roots_, aliases_) &&
-                          visibleCapability->matchesIssuedIdentity() &&
-                          visibleCapability->renameTo(oldVisible) &&
-                          visibleRestored;
+        const bool restoredFromBackup =
+            treeDigestMatches(backup, prepared.packageId(), oldTreeDigest,
+                              roots_, aliases_) &&
+            visibleCapability->matchesIssuedIdentity() &&
+            visibleCapability->renameTo(oldVisible);
+        const fs::path stableOldRevision =
+            roots_.privateRevisions / oldTreeDigest;
+        const bool restoredFromRevision =
+            !restoredFromBackup &&
+            treeDigestMatches(stableOldRevision, prepared.packageId(),
+                              oldTreeDigest, roots_, aliases_) &&
+            materializeStableRevision(stableOldRevision, oldVisible,
+                                      prepared.packageId(), oldTreeDigest,
+                                      rollbackDiagnostics);
+        visibleRestored =
+            (restoredFromBackup || restoredFromRevision) && visibleRestored;
       }
       if (!destinationExists) {
         std::error_code visibleError;
@@ -3003,8 +3154,6 @@ PublishPackageResult SkinPackageStore::publish(
              visibleError == std::errc::no_such_file_or_directory) &&
             visibleRestored;
       }
-
-      std::vector<SkinDiagnostic> rollbackDiagnostics;
       const bool catalogRestored =
           catalog_.replaceSnapshotDurably(*oldCatalog, rollbackDiagnostics);
       const bool generationRestored = visibleRestored && catalogRestored;
@@ -3016,7 +3165,15 @@ PublishPackageResult SkinPackageStore::publish(
         const bool backupClean = quarantineTree(
             catalogBackup, roots_.privateCatalog / ".recovery-quarantine",
             operationId, "in-process-catalog-backup");
-        if (stagingClean && backupClean && operationReservation->release()) {
+        const bool oldVisibleBackupClean =
+            !destinationExists ||
+            visibleCapability->currentPath() == oldVisible ||
+            quarantineTree(*visibleCapability,
+                           roots_.visiblePackages.parent_path() /
+                               ".skin-recovery-quarantine",
+                           operationId, "in-process-visible-backup");
+        if (stagingClean && backupClean && oldVisibleBackupClean &&
+            operationReservation->release()) {
           std::error_code removeError;
           fs::remove(journalPath, removeError);
           std::string syncError;
@@ -3043,6 +3200,34 @@ PublishPackageResult SkinPackageStore::publish(
   };
   ScopeRollback rollbackGuard(rollback);
 
+  operationReservation->retainForRecovery();
+  if (!catalog_.writeSnapshotFile(catalogStaging, newCatalog,
+                                  result.diagnostics) ||
+      !catalog_.writeSnapshotFile(catalogBackup, *oldCatalog,
+                                  result.diagnostics)) {
+    rollback();
+    return result;
+  }
+  std::optional<SkinRevisionLease> stableOldRevisionLease;
+  if (oldRevisionPrepared) {
+    std::string oldRevisionError;
+    stableOldRevisionLease =
+        std::move(*oldRevisionPrepared).publish(oldRevisionError);
+    if (!stableOldRevisionLease) {
+      result.diagnostics.push_back(
+          storeDiagnostic("skin_package_old_revision_publication_failed",
+                          "unable to publish stable rollback evidence for the "
+                          "visible package"));
+      rollback();
+      return result;
+    }
+    journal.phase = "old-revision-parent-synced";
+    if (!writeJournal(journalPath, journal, result.diagnostics)) {
+      rollback();
+      return result;
+    }
+  }
+
   if (destinationExists) {
     if (!visibleCapability->renameTo(backup)) {
       result.diagnostics.push_back(storeDiagnostic(
@@ -3066,7 +3251,6 @@ PublishPackageResult SkinPackageStore::publish(
     rollback();
     return result;
   }
-  operationReservation->retainForRecovery();
 
   std::string revisionError;
   auto revisionLease = prepared.publishRevision(revisionError);
@@ -3991,14 +4175,19 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
   std::error_code error;
   std::string oldTreeDigest;
   std::optional<std::vector<TreeMetadataRecord>> oldTreeManifest;
+  std::optional<PreparedSkinRevision> oldRevisionPrepared;
   if (exists) {
     oldTreeManifest = treeMetadataManifest(visible, aliases_);
-    auto digest = treeDigest(visible, package, roots_, aliases_, stop,
-                             result.diagnostics);
-    if (!oldTreeManifest || !digest) {
+    SkinTreeSnapshotter snapshotter(roots_, aliases_);
+    auto oldSnapshot = snapshotter.snapshot(visible, package, stop, {});
+    result.diagnostics.insert(
+        result.diagnostics.end(),
+        std::make_move_iterator(oldSnapshot.diagnostics.begin()),
+        std::make_move_iterator(oldSnapshot.diagnostics.end()));
+    if (!oldTreeManifest || !oldSnapshot.prepared) {
       return result;
     }
-    oldTreeDigest = std::move(*digest);
+    oldTreeDigest = oldSnapshot.prepared->revision().lowercaseSha256;
     if (!visibleCapability->matchesIssuedIdentity() ||
         treeMetadataManifest(visible, aliases_) != oldTreeManifest) {
       result.diagnostics.push_back(storeDiagnostic(
@@ -4006,6 +4195,7 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
           "visible skin package changed during removal inspection"));
       return result;
     }
+    oldRevisionPrepared = std::move(*oldSnapshot.prepared);
   }
 
   {
@@ -4030,19 +4220,23 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
       roots_.privateCatalog / ".removal-staging" / (operation + "-new.json");
   const fs::path catalogBackup =
       roots_.privateCatalog / ".removal-backups" / (operation + "-old.json");
-  RemovalJournal journal{.operationId = operation,
-                         .package = package,
-                         .retainedToken = operation,
-                         .oldTreeDigest = oldTreeDigest,
-                         .catalogStagingToken = operation + "-new.json",
-                         .catalogBackupToken = operation + "-old.json",
-                         .oldCatalogGeneration = oldCatalog->catalogGeneration,
-                         .newCatalogGeneration = next.catalogGeneration,
-                         .oldSourceGeneration = oldCatalog->sourceGeneration,
-                         .newSourceGeneration = next.sourceGeneration,
-                         .oldCatalogDigest =
-                             catalog_.snapshotDigest(*oldCatalog),
-                         .newCatalogDigest = catalog_.snapshotDigest(next)};
+  RemovalJournal journal{
+      .operationId = operation,
+      .package = package,
+      .retainedToken = operation,
+      .oldTreeDigest = oldTreeDigest,
+      .oldRevisionDigest = oldTreeDigest,
+      .oldRevisionStagingToken =
+          oldRevisionPrepared ? filenameUtf8(oldRevisionPrepared->stagingRoot())
+                              : std::string{},
+      .catalogStagingToken = operation + "-new.json",
+      .catalogBackupToken = operation + "-old.json",
+      .oldCatalogGeneration = oldCatalog->catalogGeneration,
+      .newCatalogGeneration = next.catalogGeneration,
+      .oldSourceGeneration = oldCatalog->sourceGeneration,
+      .newSourceGeneration = next.sourceGeneration,
+      .oldCatalogDigest = catalog_.snapshotDigest(*oldCatalog),
+      .newCatalogDigest = catalog_.snapshotDigest(next)};
   if (exists &&
       !writeRemovalJournal(removalJournal, journal, result.diagnostics)) {
     clearMutation();
@@ -4060,15 +4254,25 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
     }
     rollbackAttempted = true;
     try {
+      std::vector<SkinDiagnostic> rollbackDiagnostics;
       bool visibleRestored = true;
       if (exists && !treeDigestMatches(visible, package, oldTreeDigest, roots_,
                                        aliases_)) {
-        visibleRestored = treeDigestMatches(retained, package, oldTreeDigest,
-                                            roots_, aliases_) &&
-                          visibleCapability->matchesIssuedIdentity() &&
-                          visibleCapability->renameTo(visible);
+        const bool restoredFromRetained =
+            treeDigestMatches(retained, package, oldTreeDigest, roots_,
+                              aliases_) &&
+            visibleCapability->matchesIssuedIdentity() &&
+            visibleCapability->renameTo(visible);
+        const fs::path stableOldRevision =
+            roots_.privateRevisions / oldTreeDigest;
+        const bool restoredFromRevision =
+            !restoredFromRetained &&
+            treeDigestMatches(stableOldRevision, package, oldTreeDigest, roots_,
+                              aliases_) &&
+            materializeStableRevision(stableOldRevision, visible, package,
+                                      oldTreeDigest, rollbackDiagnostics);
+        visibleRestored = restoredFromRetained || restoredFromRevision;
       }
-      std::vector<SkinDiagnostic> rollbackDiagnostics;
       const bool catalogRestored =
           catalog_.replaceSnapshotDurably(*oldCatalog, rollbackDiagnostics);
       const bool generationRestored = visibleRestored && catalogRestored;
@@ -4080,7 +4284,14 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
         const bool backupClean = quarantineTree(
             catalogBackup, roots_.privateCatalog / ".recovery-quarantine",
             operation, "failed-removal-catalog-backup");
-        if (stagingClean && backupClean && operationReservation->release()) {
+        const bool retainedClean =
+            !exists || visibleCapability->currentPath() == visible ||
+            quarantineTree(*visibleCapability,
+                           roots_.visiblePackages.parent_path() /
+                               ".skin-recovery-quarantine",
+                           operation, "failed-removal-retained");
+        if (stagingClean && backupClean && retainedClean &&
+            operationReservation->release()) {
           std::error_code cleanupError;
           fs::remove(removalJournal, cleanupError);
           std::string syncError;
@@ -4103,6 +4314,19 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
     return rollbackSucceeded;
   };
   ScopeRollback rollbackGuard(rollback);
+  std::optional<SkinRevisionLease> stableOldRevisionLease;
+  if (oldRevisionPrepared) {
+    std::string oldRevisionError;
+    stableOldRevisionLease =
+        std::move(*oldRevisionPrepared).publish(oldRevisionError);
+    if (!stableOldRevisionLease) {
+      result.diagnostics.push_back(storeDiagnostic(
+          "skin_package_old_revision_publication_failed",
+          "unable to publish stable rollback evidence for package removal"));
+      rollback();
+      return result;
+    }
+  }
   if (exists &&
       (!catalog_.writeSnapshotFile(catalogStaging, next, result.diagnostics) ||
        !catalog_.writeSnapshotFile(catalogBackup, *oldCatalog,
@@ -4123,6 +4347,10 @@ SkinPackageStore::removePackage(const SkinPackageId &package,
       return result;
     }
     moved = true;
+    if (ioObserver_) {
+      ioObserver_->reached(SkinPackageStoreIoOperation::RemovalVisibleRetained,
+                           retained);
+    }
   }
   if (!catalog_.replaceSnapshotDurably(next, result.diagnostics)) {
     rollback();

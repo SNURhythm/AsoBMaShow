@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -18,6 +19,18 @@
 namespace skin {
 
 class SkinPackageOperationService;
+
+enum class SkinPackageStoreIoOperation : std::uint8_t {
+  RemovalVisibleRetained,
+};
+
+// Narrow fault-observation seam for deterministic transaction tests.
+class SkinPackageStoreIoObserver {
+public:
+  virtual ~SkinPackageStoreIoObserver() = default;
+  virtual void reached(SkinPackageStoreIoOperation,
+                       const std::filesystem::path &) const noexcept = 0;
+};
 
 struct SkinValidationResult {
   SkinValidationDisposition disposition = SkinValidationDisposition::Invalid;
@@ -94,7 +107,8 @@ public:
 class SkinPackageStore : public SkinActivationCommitStore {
 public:
   SkinPackageStore(SkinStorageRoots, SkinPackageCatalog &, SkinAliasDetector &,
-                   ISkinProfileSnapshotProvider &);
+                   ISkinProfileSnapshotProvider &,
+                   std::shared_ptr<const SkinPackageStoreIoObserver> = {});
 
   // Synchronous, exclusive bootstrap. The first call must finish before the
   // operation service is constructed. A later call returns AlreadyRecovered;
@@ -149,11 +163,17 @@ public:
 private:
   friend class SkinPackageOperationService;
   bool operationServiceReady() const noexcept;
+  bool materializeStableRevision(const std::filesystem::path &revisionRoot,
+                                 const std::filesystem::path &destination,
+                                 const SkinPackageId &package,
+                                 std::string_view expectedDigest,
+                                 std::vector<SkinDiagnostic> &diagnostics);
 
   SkinStorageRoots roots_;
   SkinPackageCatalog &catalog_;
   SkinAliasDetector &aliases_;
   ISkinProfileSnapshotProvider &profileSnapshots_;
+  std::shared_ptr<const SkinPackageStoreIoObserver> ioObserver_;
   // 0 = not started, 1 = running, 2 = attempted/completed.
   std::atomic_uint8_t recoveryState_{0};
   std::atomic_bool recoverySucceeded_{false};

@@ -82,6 +82,36 @@ class WindowsSkinPackageStoreContractTests(unittest.TestCase):
         self.assertIn("RetainedEntryCapability::issue(entry->path())", cleanup)
         self.assertIn("capability->removeExact()", cleanup)
 
+    def test_transaction_intent_precedes_catalog_artifact_creation(self):
+        publish = self.source[
+            self.source.index("PublishPackageResult SkinPackageStore::publish") :
+            self.source.index("ScanPackagesResult SkinPackageStore::rescanVisibleSources")
+        ]
+        self.assertLess(
+            publish.index("writeJournal(journalPath, journal"),
+            publish.index("catalog_.writeSnapshotFile(catalogStaging"),
+        )
+        remove = self.source[
+            self.source.index("SkinPackageStore::removePackage") :
+            self.source.index("void SkinPackageStore::removeProfileActivations")
+        ]
+        self.assertLess(
+            remove.index("writeRemovalJournal(removalJournal, journal"),
+            remove.index("catalog_.writeSnapshotFile(catalogStaging"),
+        )
+
+    def test_stable_old_revision_is_journaled_for_publish_and_remove(self):
+        for token in (
+            "oldRevisionStagingToken",
+            'root["revision"]["oldDigest"]',
+            'root["revision"]["oldStagingToken"]',
+            'root["revision"] =',
+            'OrderedJson{{"oldDigest", journal.oldRevisionDigest}',
+            "materializeStableRevision(",
+            'journal.phase = "old-revision-parent-synced"',
+        ):
+            self.assertIn(token, self.source)
+
 
 if __name__ == "__main__":
     unittest.main()
