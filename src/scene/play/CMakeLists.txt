@@ -17,6 +17,9 @@ target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             RealtimeGameplayWorker.cpp
                             RealtimeTouchInputRouter.cpp
                             ReplayKeysoundSchedule.cpp)
+if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+    target_sources(main PRIVATE PlayfieldPresentationCoordinator.cpp)
+endif()
 if(WIN32)
     target_link_libraries(main PRIVATE avrt)
 endif()
