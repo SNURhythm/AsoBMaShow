@@ -192,12 +192,6 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {};
   }
   switch (*id) {
-  case 32:
-    return {.value = !snapshot->authority.autoPlayMarkVisible,
-            .supported = true};
-  case 33:
-    return {.value = snapshot->authority.autoPlayMarkVisible,
-            .supported = true};
   case 42:
     return {.value = gaugeTypeIndex(snapshot->authority.gaugeType) <= 2,
             .supported = true};
@@ -218,11 +212,11 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
             .supported = true};
   case 1242:
     return {.value = snapshot->lastJudge.judgement != None &&
-                     snapshot->fastSlowMicros < 0,
+                     snapshot->fastSlowMicros > 0,
             .supported = true};
   case 1243:
     return {.value = snapshot->lastJudge.judgement != None &&
-                     snapshot->fastSlowMicros > 0,
+                     snapshot->fastSlowMicros < 0,
             .supported = true};
   default:
     break;

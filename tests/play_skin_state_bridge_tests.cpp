@@ -379,6 +379,144 @@ void testFramePropertiesUseAuthoritativeGaugeAndTimerRules() {
   bridge.discardFrame();
 }
 
+void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  chart.text = {.title = "title",
+                .subtitle = "subtitle",
+                .artist = "artist",
+                .subartist = "subartist",
+                .genre = "genre",
+                .auditedStringProperties = {{12, "full title"}}};
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  configuration.offsetsById = {
+      {1, {.x = 1}}, {3, {.x = 3}}, {4, {.x = 4}},
+      {30, {.x = 30}}, {32, {.x = 32}}};
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+
+  auto state = stateAt(101);
+  state.playStartMicros = 6'001;
+  state.lastJudgeVisualMicros = 6'002;
+  state.lanes.resize(8);
+  for (std::size_t index = 0; index < state.lanes.size(); ++index) {
+    state.lanes[index].pressMicros = 1'000 + static_cast<long long>(index);
+    state.lanes[index].releaseMicros =
+        2'000 + static_cast<long long>(index);
+    state.lanes[index].bombMicros = 3'000 + static_cast<long long>(index);
+  }
+  bridge.beginFrame(state, projectionAt(101));
+
+  expect(!bridge.booleanProperty({32}).supported &&
+             !bridge.booleanProperty({33}).supported,
+         "autoplay options stay unsupported without a play-mode source");
+  expect(bridge.booleanProperty({43}).supported &&
+             !bridge.booleanProperty({43}).value,
+         "gauge-hard option reads the authoritative gauge type");
+  expect(bridge.booleanProperty({241}).supported &&
+             bridge.booleanProperty({241}).value,
+         "judge-perfect option reads the most recent judgement");
+  expect(bridge.integerProperty({160}).supported &&
+             bridge.integerProperty({160}).value == 172,
+         "now-BPM truncates the authoritative current BPM");
+  expect(bridge.stringProperty({12}).supported &&
+             bridge.stringProperty({12}).value == "full title" &&
+             bridge.stringProperty({13}).value == "genre" &&
+             bridge.stringProperty({14}).value == "artist" &&
+             bridge.stringProperty({15}).value == "subartist",
+         "audited full title and chart text use immutable chart metadata");
+  for (const int id : {1, 3, 4, 30, 32}) {
+    const auto offset = bridge.offsetProperty(id);
+    expect(offset.supported && offset.value.x == id,
+           "configured selected offsets are returned by their exact IDs");
+  }
+
+  for (const auto [id, expected] : std::array{
+           std::pair{41, 6'001LL}, std::pair{46, 6'002LL},
+           std::pair{50, 3'000LL}, std::pair{51, 3'001LL},
+           std::pair{52, 3'002LL}, std::pair{53, 3'003LL},
+           std::pair{54, 3'004LL}, std::pair{55, 3'005LL},
+           std::pair{56, 3'006LL}, std::pair{57, 3'007LL},
+           std::pair{100, 1'000LL}, std::pair{101, 1'001LL},
+           std::pair{102, 1'002LL}, std::pair{103, 1'003LL},
+           std::pair{104, 1'004LL}, std::pair{105, 1'005LL},
+           std::pair{106, 1'006LL}, std::pair{107, 1'007LL},
+           std::pair{120, 2'000LL}, std::pair{121, 2'001LL},
+           std::pair{122, 2'002LL}, std::pair{123, 2'003LL},
+           std::pair{124, 2'004LL}, std::pair{125, 2'005LL},
+           std::pair{126, 2'006LL}, std::pair{127, 2'007LL}}) {
+    expect(bridge.timerProperty({id}) == expected,
+           "selected live timer reads its authoritative presentation clock");
+  }
+  const auto diagnosticCount = bridge.diagnostics().size();
+  for (const int id : {2, 3, 11, 40, 42, 44, 48, 70, 71, 72, 73, 74,
+                       75, 76, 77, 140, 143, 172, 173, 351, 352}) {
+    expect(bridge.timerProperty({id}) == INT64_MIN,
+           "selected timer without an authoritative source is off");
+  }
+  expect(bridge.diagnostics().size() == diagnosticCount,
+         "selected off timers do not report unsupported diagnostics");
+  expect(bridge.floatProperty({4}).supported &&
+             bridge.floatProperty({4}).value == 0.45,
+         "raw lane-cover percent remains exposed while enabled/lift semantics "
+         "are pending authoritative state");
+  bridge.discardFrame();
+
+  state = stateAt(102);
+  state.lastJudge = JudgeResult(Great, 20);
+  state.fastSlowMicros = 20;
+  bridge.beginFrame(state, projectionAt(102));
+  expect(bridge.booleanProperty({1242}).supported &&
+             bridge.booleanProperty({1242}).value &&
+             bridge.booleanProperty({1243}).supported &&
+             !bridge.booleanProperty({1243}).value,
+         "positive recent timing selects pinned early option");
+  bridge.discardFrame();
+
+  state = stateAt(103);
+  state.lastJudge = JudgeResult(Great, -20);
+  state.fastSlowMicros = -20;
+  bridge.beginFrame(state, projectionAt(103));
+  expect(bridge.booleanProperty({1242}).supported &&
+             !bridge.booleanProperty({1242}).value &&
+             bridge.booleanProperty({1243}).supported &&
+             bridge.booleanProperty({1243}).value,
+         "negative recent timing selects pinned late option");
+  bridge.discardFrame();
+
+  for (const auto [serial, gauge, option] : std::array{
+           std::tuple{104U, 5.0F, 230}, std::tuple{105U, 15.0F, 231},
+           std::tuple{106U, 25.0F, 232}, std::tuple{107U, 100.0F, 240}}) {
+    state = stateAt(serial);
+    state.authority.currentGauge = gauge;
+    bridge.beginFrame(state, projectionAt(serial));
+    expect(bridge.booleanProperty({option}).supported &&
+               bridge.booleanProperty({option}).value,
+           "selected gauge decile uses the compiled gauge maximum");
+    bridge.discardFrame();
+  }
+
+  PlayfieldChartVisualModel unauditedChart = chart;
+  unauditedChart.text.auditedStringProperties.clear();
+  PlaySkinStateBridge unaudited({.chartModel = unauditedChart,
+                                 .model = model,
+                                 .configuration = configuration,
+                                 .runtime = runtime.runtime(),
+                                 .mutationTable = mutations});
+  unaudited.beginFrame(stateAt(108), projectionAt(108));
+  expect(!unaudited.stringProperty({12}).supported,
+         "full title remains gated when the chart model lacks an audit value");
+  unaudited.discardFrame();
+}
+
 void testCustomObjectsRemainExplicitlyPendingSharedFrameOwnership() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -417,6 +555,7 @@ int main() {
   testPinnedMutationTableMatchesFrozenFixtureExhaustively();
   testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce();
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
+  testSelectedScuroMappingsUseOnlyAuthoritativeState();
   testCustomObjectsRemainExplicitlyPendingSharedFrameOwnership();
   return failures == 0 ? 0 : 1;
 }
