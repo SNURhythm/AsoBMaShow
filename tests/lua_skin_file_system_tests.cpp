@@ -1068,6 +1068,29 @@ void testCompatibilityDiagnosticsDeduplicateAndRetainCriticality() {
          "the collector reports whether any diagnostic is critical");
 }
 
+void testResourceCandidatesAreEntryAwareAndAmbiguitySafe() {
+  PackageFixture fixture;
+  auto created = fixture.create(fixture.entry, std::nullopt, false);
+  expect(created.fileSystem != nullptr,
+         "candidate fixture creates an entry-aware filesystem");
+  if (!created.fileSystem) {
+    return;
+  }
+  const auto same = created.fileSystem->resolveResourceCandidates(
+      "play.luaskin", "entry/play.luaskin");
+  expect(same.normalizedVirtualPath &&
+             *same.normalizedVirtualPath == "entry/play.luaskin",
+         "entry-relative and package-normalized aliases with one identity are accepted");
+  const auto ambiguous = created.fileSystem->resolveResourceCandidates(
+      "play.luaskin", "alternate/play.luaskin");
+  expect(ambiguous.failure && !ambiguous.normalizedVirtualPath,
+         "two distinct secure resource candidates are rejected instead of choosing one");
+  const auto bytes = created.fileSystem->readResolvedResource(
+      "entry/resources/image.bin", 1024);
+  expect(!bytes.failure && bytesToString(bytes.bytes) == "package-resource",
+         "resolved resource reads use the package root rather than an overlay");
+}
+
 } // namespace
 
 int main() {
@@ -1084,6 +1107,7 @@ int main() {
   testRenderTransitionLocksCapturedOperationsAndCounters();
   testPreparedAndPublishedViewsStaySynchronouslyOwned();
   testCompatibilityDiagnosticsDeduplicateAndRetainCriticality();
+  testResourceCandidatesAreEntryAwareAndAmbiguitySafe();
   if (failures != 0) {
     std::cerr << failures << " lua skin filesystem test(s) failed\n";
     return 1;

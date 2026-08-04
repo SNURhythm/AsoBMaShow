@@ -2451,6 +2451,71 @@ SkinFileResolveResult LuaSkinFileSystem::resolve(std::string_view virtualPath,
   return {.normalizedVirtualPath = *normalized.path};
 }
 
+SkinFileResolveResult LuaSkinFileSystem::resolveResourceCandidates(
+    std::string_view entryRelative,
+    std::string_view packageNormalized) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  if (auto denied = impl_->guard(RenderOperation::Read, entryRelative)) {
+    return {.failure = std::move(denied)};
+  }
+  const auto relative = impl_->normalize(entryRelative);
+  if (!relative.path) {
+    return {.failure = relative.failure};
+  }
+  const auto package = normalizeReference(impl_->entry.package, {},
+                                          packageNormalized);
+  if (!package.path || *package.path != packageNormalized) {
+    return {.failure = package.failure ? std::move(package.failure)
+                                       : failure(SkinFileError::InvalidPath,
+                                                 packageNormalized,
+                                                 "resource path is not package-normalized")};
+  }
+  const HostStatResult relativeStatus =
+      statAtRoot(impl_->revision.root(), *relative.path);
+  const HostStatResult packageStatus =
+      statAtRoot(impl_->revision.root(), *package.path);
+  const bool relativeExists = relativeStatus.kind == HostEntryKind::Regular;
+  const bool packageExists = packageStatus.kind == HostEntryKind::Regular;
+  if (relativeExists && packageExists && *relative.path != *package.path) {
+    return {.failure = failure(SkinFileError::InvalidPath, entryRelative,
+                               "resource path is ambiguous")};
+  }
+  if (relativeExists) {
+    return {.normalizedVirtualPath = *relative.path};
+  }
+  if (packageExists) {
+    return {.normalizedVirtualPath = *package.path};
+  }
+  const HostEntryKind kind = relativeStatus.kind != HostEntryKind::Missing
+                                 ? relativeStatus.kind
+                                 : packageStatus.kind;
+  return {.failure = failure(errorForKind(kind), entryRelative,
+                             messageForKind(kind))};
+}
+
+SkinFileReadResult LuaSkinFileSystem::readResolvedResource(
+    std::string_view packageNormalized, std::uint64_t maximumBytes) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  if (auto denied = impl_->guard(RenderOperation::Read, packageNormalized)) {
+    return {.failure = std::move(denied)};
+  }
+  const auto normalized =
+      normalizeReference(impl_->entry.package, {}, packageNormalized);
+  if (!normalized.path || *normalized.path != packageNormalized) {
+    return {.failure = normalized.failure
+                         ? std::move(normalized.failure)
+                         : failure(SkinFileError::InvalidPath,
+                                   packageNormalized,
+                                   "resource path is not package-normalized")};
+  }
+  return impl_->readNormalized(*normalized.path, SkinFileUse::Resource,
+                               maximumBytes);
+}
+
+const SkinEntryId &LuaSkinFileSystem::entry() const noexcept {
+  return impl_->entry;
+}
+
 SkinFileResolveResult
 LuaSkinFileSystem::resolveModule(std::string_view moduleName) const {
   const std::scoped_lock lock(impl_->operationMutex);

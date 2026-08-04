@@ -97,6 +97,10 @@ ImageDecodeWaitResult ImageDecodeCoordinator::waitTake(Ticket ticket,
   if (ticket == 0) {
     return {.state = ImageDecodeWaitState::Stopped};
   }
+  {
+    std::lock_guard lock(mutex_);
+    waitingTickets_.insert(ticket);
+  }
   std::stop_callback stopped(stop, [this, ticket] { cancel(ticket); });
   std::unique_lock lock(mutex_);
   cv_.wait(lock, [this, ticket] {
@@ -115,16 +119,19 @@ ImageDecodeWaitResult ImageDecodeCoordinator::waitTake(Ticket ticket,
       terminal != terminalTickets_.end()) {
     const ImageDecodeWaitState state = terminal->second;
     terminalTickets_.erase(terminal);
+    waitingTickets_.erase(ticket);
     return {.state = state};
   }
   const auto ticketEntry = tickets_.find(ticket);
   if (ticketEntry == tickets_.end()) {
+    waitingTickets_.erase(ticket);
     return {.state = stopping_ ? ImageDecodeWaitState::Stopped
                                : ImageDecodeWaitState::Cancelled};
   }
   const auto work = work_.find(ticketEntry->second);
   if (work == work_.end()) {
     tickets_.erase(ticketEntry);
+    waitingTickets_.erase(ticket);
     return {.state = stopping_ ? ImageDecodeWaitState::Stopped
                                : ImageDecodeWaitState::Cancelled};
   }
@@ -136,6 +143,7 @@ ImageDecodeWaitResult ImageDecodeCoordinator::waitTake(Ticket ticket,
     if (work->second.consumers.empty()) {
       eraseWorkLocked(work);
     }
+    waitingTickets_.erase(ticket);
     return result;
   }
   work->second.consumers.erase(ticket);
@@ -143,6 +151,7 @@ ImageDecodeWaitResult ImageDecodeCoordinator::waitTake(Ticket ticket,
   if (work->second.consumers.empty()) {
     eraseWorkLocked(work);
   }
+  waitingTickets_.erase(ticket);
   return {.state = ImageDecodeWaitState::Failed};
 }
 
@@ -212,9 +221,9 @@ void ImageDecodeCoordinator::shutdown() {
       for (auto &[key, work] : work_) {
         (void)key;
         work.stop.request_stop();
-        for (const Ticket ticket : work.consumers) {
-          terminalTickets_[ticket] = ImageDecodeWaitState::Stopped;
-        }
+        for (const Ticket ticket : work.consumers)
+          if (waitingTickets_.contains(ticket))
+            terminalTickets_[ticket] = ImageDecodeWaitState::Stopped;
       }
       work_.clear();
       tickets_.clear();
@@ -324,10 +333,14 @@ void ImageDecodeCoordinator::run() {
       continue;
     }
     if (decoded && decoded->valid()) {
+      // The result retains RGBA only. Drop source bytes before notifying
+      // consumers so a ready work item never keeps both allocations.
+      work->second.request.encoded.reset();
       work->second.image = std::move(decoded);
       work->second.state = WorkState::Ready;
       readyBytes_ += work->second.image->byteSize();
     } else {
+      work->second.request.encoded.reset();
       work->second.state = WorkState::Failed;
     }
     cv_.notify_all();
@@ -342,12 +355,14 @@ void ImageDecodeCoordinator::removeTicketLocked(Ticket ticket) {
   const auto work = work_.find(ticketEntry->second);
   if (work == work_.end()) {
     tickets_.erase(ticketEntry);
-    terminalTickets_[ticket] = ImageDecodeWaitState::Cancelled;
+    if (waitingTickets_.contains(ticket))
+      terminalTickets_[ticket] = ImageDecodeWaitState::Cancelled;
     return;
   }
   work->second.consumers.erase(ticket);
   tickets_.erase(ticketEntry);
-  terminalTickets_[ticket] = ImageDecodeWaitState::Cancelled;
+  if (waitingTickets_.contains(ticket))
+    terminalTickets_[ticket] = ImageDecodeWaitState::Cancelled;
   if (work->second.consumers.empty()) {
     eraseWorkLocked(work);
   }
@@ -358,8 +373,9 @@ void ImageDecodeCoordinator::eraseWorkLocked(
   work->second.stop.request_stop();
   for (const Ticket ticket : work->second.consumers) {
     tickets_.erase(ticket);
-    terminalTickets_[ticket] = stopping_ ? ImageDecodeWaitState::Stopped
-                                         : ImageDecodeWaitState::Cancelled;
+    if (waitingTickets_.contains(ticket))
+      terminalTickets_[ticket] = stopping_ ? ImageDecodeWaitState::Stopped
+                                           : ImageDecodeWaitState::Cancelled;
   }
   if (work->second.state == WorkState::Ready && work->second.image) {
     readyBytes_ -= work->second.image->byteSize();

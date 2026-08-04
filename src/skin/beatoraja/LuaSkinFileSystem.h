@@ -113,6 +113,16 @@ public:
 
   SkinFileResolveResult resolve(std::string_view virtualPath,
                                 SkinFileUse) const;
+  // Resource preparation may receive either an authored path relative to the
+  // selected entry or an already package-normalized path returned by
+  // skin_config.get_path. Resolve both through the no-follow package reader;
+  // choosing between two different existing files is forbidden.
+  SkinFileResolveResult resolveResourceCandidates(
+      std::string_view entryRelative,
+      std::string_view packageNormalized) const;
+  SkinFileReadResult readResolvedResource(std::string_view packageNormalized,
+                                          std::uint64_t maximumBytes) const;
+  [[nodiscard]] const SkinEntryId &entry() const noexcept;
   SkinFileResolveResult resolveModule(std::string_view moduleName) const;
   SkinFileReadResult readEntry(std::uint64_t maximumBytes) const;
   SkinFileReadResult read(std::string_view virtualPath, SkinFileUse,

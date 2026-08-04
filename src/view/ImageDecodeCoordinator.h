@@ -4,11 +4,13 @@
 
 #include <condition_variable>
 #include <cstddef>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -33,6 +35,10 @@ struct ImageDecodeRequest {
   int targetWidth = 0;
   int targetHeight = 0;
   bool priority = false;
+  // A coordinator work item owns secure package bytes until its loader has
+  // consumed them; callers never need to keep a revision/view alive for a
+  // queued decode.
+  std::shared_ptr<const std::vector<std::byte>> encoded;
 };
 
 class ImageDecodeCoordinator {
@@ -91,6 +97,7 @@ private:
   std::deque<std::string> queue_;
   std::map<std::string, Work, std::less<>> work_;
   std::map<Ticket, std::string> tickets_;
+  std::set<Ticket> waitingTickets_;
   std::map<Ticket, ImageDecodeWaitState> terminalTickets_;
   std::vector<std::thread> workers_;
   std::uint64_t nextTicket_ = 1;

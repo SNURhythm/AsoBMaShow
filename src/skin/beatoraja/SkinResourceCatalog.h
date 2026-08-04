@@ -1,12 +1,18 @@
 #pragma once
 
 #include "BeatorajaSkinModel.h"
+#include "LuaSkinFileSystem.h"
 #include "../package/SkinTreeSnapshotter.h"
 #include "view/DecodedImageCache.h"
+#include "view/ImageDecodeCoordinator.h"
 
 #include <array>
+#include <condition_variable>
 #include <map>
 #include <memory>
+#include <optional>
+#include <span>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -43,6 +49,9 @@ struct SkinResourcePolicy {
 
 struct SkinDecodedImage {
   SkinResourceId id = 0;
+  // Multiple model IDs can resolve to one immutable package resource. They
+  // share this physical upload; only the catalog owned-texture table owns it.
+  std::vector<SkinResourceId> aliases;
   image_decode::DecodedImageData pixels;
   std::vector<SkinSourceRect> regions;
 };
@@ -67,6 +76,48 @@ struct SkinPreparedGlyphAtlas {
   int ascent = 0; int descent = 0; int lineHeight = 0;
 };
 struct SkinResourceUploadPlan { SkinRevisionLease revision; std::vector<SkinDecodedImage> images; std::vector<SkinPreparedGlyphAtlas> atlases; std::size_t decodedBytes = 0; };
+
+struct SkinResourceValidationInputs {
+  SkinRevisionReadView revision;
+  SkinEntryId entry;
+  const LuaSkinFileSystem &fileSystem;
+  const ValidatedBeatorajaSkinModel &model;
+  const BeatorajaSkinConfiguration &configuration;
+  std::span<const std::string> requiredRuntimeStrings;
+  std::stop_token stop;
+};
+struct SkinResourceValidationResult { bool valid = false; bool cancelled = false; std::vector<SkinDiagnostic> diagnostics; };
+struct SkinResourcePreparationInputs {
+  SkinRevisionLease revision;
+  SkinEntryId entry;
+  const LuaSkinFileSystem &fileSystem;
+  const ValidatedBeatorajaSkinModel &model;
+  const BeatorajaSkinConfiguration &configuration;
+  std::span<const std::string> requiredRuntimeStrings;
+  std::stop_token stop;
+};
+struct SkinResourcePlanResult { std::optional<SkinResourceUploadPlan> plan; bool cancelled = false; std::vector<SkinDiagnostic> diagnostics; };
+
+class SkinResourcePreparationService {
+public:
+  SkinResourcePreparationService();
+  ~SkinResourcePreparationService();
+  SkinResourcePreparationService(const SkinResourcePreparationService &) = delete;
+  SkinResourcePreparationService &operator=(const SkinResourcePreparationService &) = delete;
+  SkinResourceValidationResult validateResources(SkinResourceValidationInputs);
+  SkinResourcePlanResult decodeAndPlan(SkinResourcePreparationInputs);
+  void shutdown() noexcept;
+private:
+  enum class State { Running, Stopping, Stopped };
+  bool beginCall();
+  void endCall() noexcept;
+  std::mutex serviceMutex_;
+  std::condition_variable serviceCv_;
+  image_decode::DecodedImageCache cache_;
+  image_decode::ImageDecodeCoordinator coordinator_;
+  State state_ = State::Running;
+  std::size_t activeCalls_ = 0;
+};
 struct PreparedSkinResource { SkinResourceId id = 0; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::vector<SkinSourceRect> regions; };
 struct PreparedSkinTextAtlas { SkinTextAtlasId id = 0; SkinTextAtlasKey key; bgfx::TextureHandle texture = BGFX_INVALID_HANDLE; int width = 0; int height = 0; std::map<char32_t,SkinPreparedGlyphMetrics> glyphs; std::map<std::pair<char32_t,char32_t>,int> kerning; int ascent = 0; int descent = 0; int lineHeight = 0; };
 

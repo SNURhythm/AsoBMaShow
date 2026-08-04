@@ -731,6 +731,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(lua_skin_runtime_tests
             tests/lua_skin_runtime_tests.cpp
             src/FileChecksum.cpp
+            src/Utils.cpp
+            src/path.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
@@ -3319,11 +3321,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(skin_resource_catalog_tests
             tests/skin_resource_catalog_tests.cpp
             src/view/DecodedImageCache.cpp
+            src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/FileChecksum.cpp
+            src/Utils.cpp
+            src/path.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
             src/skin/package/SkinAliasDetector.cpp
             src/skin/package/SkinPathPolicy.cpp
             src/skin/package/SkinTreeSnapshotter.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
         )
         if(APPLE)
