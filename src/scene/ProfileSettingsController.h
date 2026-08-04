@@ -66,6 +66,14 @@ struct ProfileSettingsControllerDependencies {
   std::function<bool(std::string &)> flushInput;
   std::function<bool(std::string &)> beginArchivePipeline;
   std::function<void()> endArchivePipeline;
+  // Dependency-free Task 24 boundary. Enabled builds retain the returned
+  // opaque token across the exact profile-membership mutation; disabled builds
+  // use the controller's no-op default without depending on skin types.
+  std::function<std::optional<std::uint64_t>(
+      std::optional<std::string_view>, std::string &)>
+      beginSkinProfileCatalogMutation;
+  std::function<void(std::uint64_t, bool, bool)>
+      finishSkinProfileCatalogMutation;
 };
 
 enum class ProfileArchiveTaskKind { Export, Import };
@@ -160,6 +168,12 @@ private:
   bool flushActiveState(std::string &errorMessage);
   bool acquireArchivePipeline();
   void releaseArchivePipeline();
+  std::optional<std::uint64_t> beginSkinProfileCatalogMutation(
+      std::optional<std::string_view> existingTarget,
+      std::string &errorMessage);
+  void finishSkinProfileCatalogMutation(std::uint64_t token, bool succeeded,
+                                        bool profileStillExists) noexcept;
+  void abandonArchiveSkinMutation() noexcept;
   void setFailure(ProfileError error, std::string message,
                   std::string fallback);
   void setSuccess(std::string message, std::string fallback);
@@ -181,4 +195,7 @@ private:
   std::uint64_t activeArchiveGeneration_ = 0;
   bool archivePipelineHeld_ = false;
   std::optional<ProfileSettingsStatus> archivePipelinePriorStatus_;
+  std::uint64_t nextFallbackSkinMutationToken_ = 0;
+  std::uint64_t activeArchiveSkinMutationToken_ = 0;
+  std::optional<std::string> activeArchiveSkinMutationTarget_;
 };

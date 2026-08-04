@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -21,6 +22,19 @@ std::string exceptionMessage(const std::exception &error,
                              std::string_view operation) {
   return std::string(operation) + ": " + error.what();
 }
+
+template <typename Callback> class ScopeExit {
+public:
+  explicit ScopeExit(Callback callback) : callback_(std::move(callback)) {}
+  ScopeExit(const ScopeExit &) = delete;
+  ScopeExit &operator=(const ScopeExit &) = delete;
+  ~ScopeExit() noexcept { callback_(); }
+
+private:
+  Callback callback_;
+};
+
+template <typename Callback> ScopeExit(Callback) -> ScopeExit<Callback>;
 } // namespace
 
 ProfileSettingsController::ProfileSettingsController(
@@ -30,6 +44,7 @@ ProfileSettingsController::ProfileSettingsController(
 }
 
 ProfileSettingsController::~ProfileSettingsController() {
+  abandonArchiveSkinMutation();
   releaseArchivePipeline();
 }
 
@@ -324,31 +339,97 @@ void ProfileSettingsController::releaseArchivePipeline() {
   }
 }
 
+std::optional<std::uint64_t>
+ProfileSettingsController::beginSkinProfileCatalogMutation(
+    std::optional<std::string_view> existingTarget,
+    std::string &errorMessage) {
+  errorMessage.clear();
+  if (!dependencies_.beginSkinProfileCatalogMutation) {
+    if (nextFallbackSkinMutationToken_ ==
+        std::numeric_limits<std::uint64_t>::max()) {
+      errorMessage = "Profile mutation tokens are exhausted.";
+      return std::nullopt;
+    }
+    return ++nextFallbackSkinMutationToken_;
+  }
+  try {
+    auto token = dependencies_.beginSkinProfileCatalogMutation(existingTarget,
+                                                               errorMessage);
+    if (!token || *token == 0) {
+      if (errorMessage.empty()) {
+        errorMessage = "Gameplay skin profile state is busy.";
+      }
+      return std::nullopt;
+    }
+    return token;
+  } catch (const std::exception &error) {
+    errorMessage =
+        exceptionMessage(error, "Unable to fence gameplay skin profiles");
+  } catch (...) {
+    errorMessage = "Unable to fence gameplay skin profiles.";
+  }
+  return std::nullopt;
+}
+
+void ProfileSettingsController::finishSkinProfileCatalogMutation(
+    std::uint64_t token, bool succeeded, bool profileStillExists) noexcept {
+  if (token == 0 || !dependencies_.finishSkinProfileCatalogMutation) {
+    return;
+  }
+  try {
+    dependencies_.finishSkinProfileCatalogMutation(
+        token, succeeded, profileStillExists);
+  } catch (...) {
+    // The production adapter is main-thread-only and no-throw. Teardown must
+    // not strand the controller if a test or platform adapter violates that
+    // contract.
+  }
+}
+
+void ProfileSettingsController::abandonArchiveSkinMutation() noexcept {
+  if (activeArchiveSkinMutationToken_ == 0) {
+    return;
+  }
+  const auto token = std::exchange(activeArchiveSkinMutationToken_, 0);
+  activeArchiveSkinMutationTarget_.reset();
+  finishSkinProfileCatalogMutation(token, false, true);
+}
+
 ProfileResult ProfileSettingsController::create(std::string name) {
   if (!actionsEnabled() || !dependencies_.create) {
     auto result = unavailableResult("Profile creation is unavailable.");
     setFailure(result.error, result.message, {});
     return result;
   }
-  try {
-    return finishMutation(dependencies_.create(std::move(name)),
-                          "Profile created.", std::nullopt);
-  } catch (const std::exception &error) {
-    auto result =
-        profileFailure(ProfileError::IoFailure,
-                       exceptionMessage(error, "Unable to create profile"));
-    if (refreshAfterMutation(std::nullopt, result.message)) {
-      setFailure(result.error, result.message, {});
-    }
-    return result;
-  } catch (...) {
-    auto result =
-        profileFailure(ProfileError::IoFailure, "Unable to create profile.");
-    if (refreshAfterMutation(std::nullopt, result.message)) {
-      setFailure(result.error, result.message, {});
-    }
+  std::string barrierError;
+  const auto token =
+      beginSkinProfileCatalogMutation(std::nullopt, barrierError);
+  if (!token) {
+    auto result = profileFailure(ProfileError::SwitchBlocked,
+                                 std::move(barrierError));
+    setFailure(result.error, result.message, {});
     return result;
   }
+  bool mutationSucceeded = false;
+  ScopeExit finishBarrier([&] {
+    finishSkinProfileCatalogMutation(*token, mutationSucceeded, true);
+  });
+  const auto profileCountBefore = profiles_.size();
+  ProfileResult result;
+  try {
+    result = dependencies_.create(std::move(name));
+  } catch (const std::exception &error) {
+    result = profileFailure(
+        ProfileError::IoFailure,
+        exceptionMessage(error, "Unable to create profile"));
+  } catch (...) {
+    result =
+        profileFailure(ProfileError::IoFailure, "Unable to create profile.");
+  }
+  result = finishMutation(std::move(result), "Profile created.", std::nullopt);
+  mutationSucceeded =
+      result.ok() || profiles_.size() > profileCountBefore;
+  return result;
 }
 
 ProfileResult ProfileSettingsController::rename(std::string_view profileId,
@@ -407,25 +488,36 @@ ProfileResult ProfileSettingsController::duplicate(std::string_view profileId,
       return result;
     }
   }
-  try {
-    return finishMutation(dependencies_.duplicate(profileId, std::move(name)),
-                          "Profile duplicated.", std::nullopt);
-  } catch (const std::exception &error) {
-    auto result =
-        profileFailure(ProfileError::IoFailure,
-                       exceptionMessage(error, "Unable to duplicate profile"));
-    if (refreshAfterMutation(std::nullopt, result.message)) {
-      setFailure(result.error, result.message, {});
-    }
-    return result;
-  } catch (...) {
-    auto result =
-        profileFailure(ProfileError::IoFailure, "Unable to duplicate profile.");
-    if (refreshAfterMutation(std::nullopt, result.message)) {
-      setFailure(result.error, result.message, {});
-    }
+  std::string barrierError;
+  const auto token =
+      beginSkinProfileCatalogMutation(std::nullopt, barrierError);
+  if (!token) {
+    auto result = profileFailure(ProfileError::SwitchBlocked,
+                                 std::move(barrierError));
+    setFailure(result.error, result.message, {});
     return result;
   }
+  bool mutationSucceeded = false;
+  ScopeExit finishBarrier([&] {
+    finishSkinProfileCatalogMutation(*token, mutationSucceeded, true);
+  });
+  const auto profileCountBefore = profiles_.size();
+  ProfileResult result;
+  try {
+    result = dependencies_.duplicate(profileId, std::move(name));
+  } catch (const std::exception &error) {
+    result = profileFailure(
+        ProfileError::IoFailure,
+        exceptionMessage(error, "Unable to duplicate profile"));
+  } catch (...) {
+    result = profileFailure(ProfileError::IoFailure,
+                            "Unable to duplicate profile.");
+  }
+  result =
+      finishMutation(std::move(result), "Profile duplicated.", std::nullopt);
+  mutationSucceeded =
+      result.ok() || profiles_.size() > profileCountBefore;
+  return result;
 }
 
 ProfileResult ProfileSettingsController::remove(std::string_view profileId) {
@@ -443,25 +535,35 @@ ProfileResult ProfileSettingsController::remove(std::string_view profileId) {
     setFailure(result.error, result.message, {});
     return result;
   }
-  try {
-    return finishMutation(dependencies_.remove(profileId), "Profile deleted.",
-                          std::nullopt);
-  } catch (const std::exception &error) {
-    auto result =
-        profileFailure(ProfileError::IoFailure,
-                       exceptionMessage(error, "Unable to delete profile"));
-    if (refreshAfterMutation(std::nullopt, result.message)) {
-      setFailure(result.error, result.message, {});
-    }
-    return result;
-  } catch (...) {
-    auto result =
-        profileFailure(ProfileError::IoFailure, "Unable to delete profile.");
-    if (refreshAfterMutation(std::nullopt, result.message)) {
-      setFailure(result.error, result.message, {});
-    }
+  std::string barrierError;
+  const auto token = beginSkinProfileCatalogMutation(profileId, barrierError);
+  if (!token) {
+    auto result = profileFailure(ProfileError::SwitchBlocked,
+                                 std::move(barrierError));
+    setFailure(result.error, result.message, {});
     return result;
   }
+  bool mutationSucceeded = false;
+  bool profileStillExists = true;
+  ScopeExit finishBarrier([&] {
+    finishSkinProfileCatalogMutation(*token, mutationSucceeded,
+                                     profileStillExists);
+  });
+  ProfileResult result;
+  try {
+    result = dependencies_.remove(profileId);
+  } catch (const std::exception &error) {
+    result = profileFailure(
+        ProfileError::IoFailure,
+        exceptionMessage(error, "Unable to delete profile"));
+  } catch (...) {
+    result =
+        profileFailure(ProfileError::IoFailure, "Unable to delete profile.");
+  }
+  result = finishMutation(std::move(result), "Profile deleted.", std::nullopt);
+  profileStillExists = contains(profileId);
+  mutationSucceeded = result.ok() || !profileStillExists;
+  return result;
 }
 
 ProfileSwitchResult
@@ -779,28 +881,56 @@ ProfileSettingsController::beginImport(const std::filesystem::path &archive,
     return std::nullopt;
   }
 
-  confirmationProfileId_.clear();
-  confirmationPriorStatus_.reset();
-  phase_ = ProfileSettingsPhase::Importing;
-  status_ = {.kind = ProfileSettingsStatusKind::Info,
-             .message = "Importing profile archive..."};
-  const std::uint64_t generation = nextArchiveGeneration_++;
-  activeArchiveGeneration_ = generation;
-  auto operation = dependencies_.importProfile;
-  return ProfileArchiveTask(
-      ProfileArchiveTaskKind::Import, generation,
-      [operation = std::move(operation), archive, options]() mutable {
-        try {
-          return operation(archive, options);
-        } catch (const std::exception &error) {
-          return archiveFailure(
-              ProfileError::IoFailure,
-              exceptionMessage(error, "Unable to import profile"));
-        } catch (...) {
-          return archiveFailure(ProfileError::IoFailure,
-                                "Unable to import profile.");
-        }
-      });
+  std::string barrierError;
+  std::optional<std::string_view> existingTarget;
+  if (!createImport) {
+    existingTarget = *options.overwriteProfileId;
+  }
+  const auto skinMutationToken =
+      beginSkinProfileCatalogMutation(existingTarget, barrierError);
+  if (!skinMutationToken) {
+    clearTransientPhase();
+    releaseArchivePipeline();
+    setFailure(ProfileError::SwitchBlocked, std::move(barrierError),
+               "Gameplay skin profile state is busy.");
+    return std::nullopt;
+  }
+
+  activeArchiveSkinMutationToken_ = *skinMutationToken;
+  try {
+    confirmationProfileId_.clear();
+    confirmationPriorStatus_.reset();
+    phase_ = ProfileSettingsPhase::Importing;
+    status_ = {.kind = ProfileSettingsStatusKind::Info,
+               .message = "Importing profile archive..."};
+    const std::uint64_t generation = nextArchiveGeneration_++;
+    activeArchiveGeneration_ = generation;
+    activeArchiveSkinMutationTarget_ =
+        createImport ? std::nullopt : options.overwriteProfileId;
+    auto operation = dependencies_.importProfile;
+    return ProfileArchiveTask(
+        ProfileArchiveTaskKind::Import, generation,
+        [operation = std::move(operation), archive, options]() mutable {
+          try {
+            return operation(archive, options);
+          } catch (const std::exception &error) {
+            return archiveFailure(
+                ProfileError::IoFailure,
+                exceptionMessage(error, "Unable to import profile"));
+          } catch (...) {
+            return archiveFailure(ProfileError::IoFailure,
+                                  "Unable to import profile.");
+          }
+        });
+  } catch (...) {
+    activeArchiveGeneration_ = 0;
+    abandonArchiveSkinMutation();
+    clearTransientPhase();
+    releaseArchivePipeline();
+    setFailure(ProfileError::IoFailure, {},
+               "Unable to retain the profile import mutation barrier.");
+    return std::nullopt;
+  }
 }
 
 bool ProfileSettingsController::completeArchive(
@@ -818,6 +948,10 @@ bool ProfileSettingsController::completeArchive(
   }
 
   activeArchiveGeneration_ = 0;
+  const auto skinMutationToken =
+      std::exchange(activeArchiveSkinMutationToken_, 0);
+  auto skinMutationTarget = std::move(activeArchiveSkinMutationTarget_);
+  activeArchiveSkinMutationTarget_.reset();
   clearTransientPhase();
   releaseArchivePipeline();
   const std::string preferred =
@@ -828,6 +962,10 @@ bool ProfileSettingsController::completeArchive(
           : (result.message.empty() ? "The profile archive action failed."
                                     : result.message);
   const bool refreshed = refreshAfterMutation(preferred, operationError);
+  const bool profileStillExists =
+      !skinMutationTarget || contains(*skinMutationTarget);
+  finishSkinProfileCatalogMutation(skinMutationToken, result.ok(),
+                                   profileStillExists);
   if (!result.ok()) {
     if (refreshed) {
       setFailure(result.error, result.message,
@@ -846,6 +984,7 @@ bool ProfileSettingsController::completeArchive(
 void ProfileSettingsController::abandonArchive(std::uint64_t generation) {
   if (generation != 0 && generation == activeArchiveGeneration_) {
     activeArchiveGeneration_ = 0;
+    abandonArchiveSkinMutation();
     clearTransientPhase();
     releaseArchivePipeline();
   }
