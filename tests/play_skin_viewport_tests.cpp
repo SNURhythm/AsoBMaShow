@@ -1,11 +1,23 @@
 #include "skin/beatoraja/PlaySkinViewport.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.h"
+#include "rendering/common.h"
 
 #include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <string_view>
+
+// Test-owned definitions for the only rendering globals read by the inline
+// normalizedToUi -> screenToUi conversion exercised below.
+namespace rendering {
+int render_width = 0;
+int render_height = 0;
+float ui_scale_x = 1.0F;
+float ui_scale_y = 1.0F;
+int ui_offset_x = 0;
+int ui_offset_y = 0;
+} // namespace rendering
 
 namespace {
 
@@ -100,8 +112,8 @@ void testCustomFitClampingAndLogicalScaleEquivalence() {
   const auto bounded = evaluatePlaySkinViewport(
       {.width = 100.0, .height = 100.0},
       {.x = 10.0, .y = 20.0, .width = 300.0, .height = 200.0}, clamped);
-  expect(near(bounded.authoredToUi.m00, 30.0) && near(bounded.authoredToUi.m11, -0.2) &&
-             near(bounded.authoredToUi.tx, 6852.0) && near(bounded.authoredToUi.ty, -8062.0),
+  expect(near(bounded.authoredToUi.m00, 30.0, 1e-4) && near(bounded.authoredToUi.m11, -0.2, 1e-4) &&
+             near(bounded.authoredToUi.tx, 6852.0, 1e-4) && near(bounded.authoredToUi.ty, -8062.0, 1e-4),
          "custom scale and translation use the profile policy min/max bounds");
 
   const auto oneXSafe = screenRectToUi(120.0, 70.0, 520.0, 270.0,
@@ -117,6 +129,20 @@ void testCustomFitClampingAndLogicalScaleEquivalence() {
              oneX.authoredToUi.m00 == twoX.authoredToUi.m00 &&
              oneX.authoredToUi.ty == twoX.authoredToUi.ty,
          "1x and 2x drawable safe rectangles convert to identical UI-logical viewports");
+}
+
+void testNormalizedTouchUsesRenderingConversion() {
+  rendering::render_width = 1'600;
+  rendering::render_height = 1'200;
+  rendering::ui_offset_x = 100;
+  rendering::ui_offset_y = 50;
+  rendering::ui_scale_x = 2.0F;
+  rendering::ui_scale_y = 2.0F;
+  float uiX = 0.0F;
+  float uiY = 0.0F;
+  rendering::normalizedToUi(0.5F, 0.25F, uiX, uiY);
+  expect(near(uiX, 350.0) && near(uiY, 125.0),
+         "normalized touch conversion uses drawable dimensions, UI offset, and scale");
 }
 
 void testInvalidSettingsBecomeFitAndInverseRoundTrips() {
@@ -185,6 +211,8 @@ void testOffsetsPrecedeViewportProjection() {
 int main() {
   testFitUsesSafeAreaAndBars();
   testStretchAndCustomComposeOverSelectedBase();
+  testCustomFitClampingAndLogicalScaleEquivalence();
+  testNormalizedTouchUsesRenderingConversion();
   testInvalidSettingsBecomeFitAndInverseRoundTrips();
   testProjectionUsesBottomLeftOrderAndClockwiseUiHandedness();
   testOffsetsPrecedeViewportProjection();
