@@ -26,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -336,6 +337,21 @@ public:
 
   void submit(const characterization::Submission &submission) override {
     submissions.push_back(submission);
+  }
+};
+
+class SubmissionPhaseThrowingRecorder final
+    : public characterization::Recorder {
+public:
+  bool reachedLaneBeamPass = false;
+
+  void beginFrame(const characterization::FrameSnapshot &) override {}
+  void project(const characterization::TimelineProjection &) override {}
+  void submit(const characterization::Submission &submission) override {
+    if (submission.kind == characterization::SubmissionKind::LaneBeamPass) {
+      reachedLaneBeamPass = true;
+      throw std::runtime_error("submission-phase characterization failure");
+    }
   }
 };
 
@@ -826,6 +842,261 @@ ScenarioResult renderScenario(
   return result;
 }
 
+struct PresentationInput {
+  PlayfieldVisualState state;
+  PlayfieldProjectionResult projection;
+};
+
+class PresentationStateFixture {
+public:
+  SyntheticChartFixture chartFixture;
+  PlayfieldChartVisualModel model;
+  PlayfieldVisualStateStore store;
+  Judge judge;
+  Recorder recorder;
+  BMSRenderer renderer;
+
+  PresentationStateFixture()
+      : model(buildPlayfieldChartVisualModel(*chartFixture.chart, 0)),
+        store(model), judge(chartFixture.chart->Meta.Rank),
+        renderer(chartFixture.chart.get(), judge.timingWindows,
+                 presentationConfig(kAfterCoverPercent).visibleTimeGreenNumber,
+                 true) {
+    const auto configuration = presentationConfig(kAfterCoverPercent);
+    store.setConfiguration(configuration);
+    store.applyAuthorityUpdate(
+        authorityFor(*chartFixture.chart, kAfterCoverPercent));
+    store.setSceneStartMicros(100'000);
+    store.setPlayStartMicros(250'000);
+    renderer.setCharacterizationRecorder(&recorder);
+  }
+
+  PresentationInput input(std::uint64_t frameSerial) {
+    store.setNoteStates(captureNoteStates(*chartFixture.chart, model,
+                                          kPastInvisibleRenderMicros));
+    const PlayfieldVisualState state = store.capture({
+        .serial = frameSerial,
+        .visualTimeMicros = kPastInvisibleRenderMicros,
+        .gameplayTimeMicros = kGameplayMicros,
+        .replayTouchTimeMicros = kPastInvisibleRenderMicros,
+        .bgaTimeMicros = kBgaMicros,
+    });
+    PlayfieldProjection projector;
+    PlayfieldProjectionResult projection = projector.project(
+        model, state,
+        {.includeInvisibleNotes = state.configuration.showInvisibleNotes,
+         .latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+         .builtInTraversal = renderer.projectionTraversal()});
+    return {.state = state, .projection = std::move(projection)};
+  }
+};
+
+void verifyPreparedPresentationIsOneShot(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+
+  PresentationStateFixture fixture;
+  const PresentationInput frame = fixture.input(11);
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+             PresentationFrameOutcome::Ready,
+         "a matched nonzero built-in frame prepares successfully");
+
+  RenderContext context;
+  const PresentationFrameResult first = fixture.renderer.render(context);
+  expect(first.frameSerial == 11 &&
+             first.outcome == PresentationFrameOutcome::Ready &&
+             first.submittedMode == PresentationMode::BuiltIn &&
+             first.bgaCompositeMode ==
+                 GameplayBgaCompositeMode::FullscreenBuiltIn &&
+             !first.failure.has_value(),
+         "the first result render submits the exact prepared built-in frame");
+  const std::size_t submittedFrameCount = fixture.recorder.frames.size();
+
+  const PresentationFrameResult second = fixture.renderer.render(context);
+  expect(second.frameSerial == 0 &&
+             second.outcome == PresentationFrameOutcome::CriticalFailure &&
+             second.failure.has_value() &&
+             second.failure->diagnostic.code ==
+                 "presentation.frame_not_prepared" &&
+             fixture.recorder.frames.size() == submittedFrameCount,
+         "result rendering consumes its prepared frame and cannot submit it twice");
+  const auto failure = fixture.renderer.lastFailure();
+  expect(failure.has_value() &&
+             failure->diagnostic.code == "presentation.frame_not_prepared",
+         "the consumed-frame failure is retained by lastFailure");
+  bgfx::frame();
+}
+
+void verifyRenderDoesNotRewindPreparedTraversal(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+
+  PresentationStateFixture fixture;
+  const PresentationInput initial = fixture.input(61);
+  PresentationInput regressive = fixture.input(62);
+  regressive.projection.builtInPlan.traversedTimelineOrdinals = {0};
+  regressive.projection.builtInPlan.nextStartRetainedOrdinal = 0;
+
+  expect(fixture.renderer.prepareFrame(initial.state, initial.projection) ==
+             PresentationFrameOutcome::Ready,
+         "the initial serial advances the retained traversal cursor");
+  const std::uint32_t advancedCursor =
+      fixture.renderer.projectionTraversal().startRetainedOrdinal;
+  expect(advancedCursor > 0,
+         "the initial prepared frame moves the retained traversal forward");
+
+  expect(fixture.renderer.prepareFrame(regressive.state, regressive.projection) ==
+             PresentationFrameOutcome::Ready,
+         "a newer serial accepts a projection captured before the advance");
+
+  RenderContext context;
+  const PresentationFrameResult result = fixture.renderer.render(context);
+  expect(result.frameSerial == 62 &&
+             result.outcome == PresentationFrameOutcome::Ready &&
+             fixture.renderer.projectionTraversal().startRetainedOrdinal ==
+                 advancedCursor,
+         "rendering a regressive prepared plan keeps traversal forward and "
+         "returns its one-shot ready result");
+  bgfx::frame();
+}
+
+void verifySerialOrderingAndReset() {
+  PresentationStateFixture fixture;
+  const PresentationInput newest = fixture.input(31);
+  expect(fixture.renderer.prepareFrame(newest.state, newest.projection) ==
+             PresentationFrameOutcome::Ready,
+         "the first serial in an epoch prepares successfully");
+  const std::uint32_t advancedCursor =
+      fixture.renderer.projectionTraversal().startRetainedOrdinal;
+  expect(advancedCursor > 0,
+         "successful prepare advances the retained Beatoraja traversal cursor");
+
+  expect(fixture.renderer.prepareFrame(newest.state, newest.projection) ==
+             PresentationFrameOutcome::CriticalFailure,
+         "an exact duplicate frame serial is rejected");
+  const auto duplicateFailure = fixture.renderer.lastFailure();
+  expect(duplicateFailure.has_value() &&
+             duplicateFailure->frameSerial == 31 &&
+             duplicateFailure->diagnostic.code ==
+                 "presentation.frame_duplicate" &&
+             fixture.renderer.projectionTraversal().startRetainedOrdinal ==
+                 advancedCursor,
+         "duplicate rejection identifies the serial and preserves traversal");
+
+  PresentationInput stale = newest;
+  stale.state.clock.serial = 30;
+  stale.projection.frameSerial = 30;
+  stale.projection.builtInPlan.traversedTimelineOrdinals = {0};
+  stale.projection.builtInPlan.nextStartRetainedOrdinal = 0;
+  expect(fixture.renderer.prepareFrame(stale.state, stale.projection) ==
+             PresentationFrameOutcome::CriticalFailure,
+         "an out-of-order frame serial is rejected");
+  const auto staleFailure = fixture.renderer.lastFailure();
+  expect(staleFailure.has_value() && staleFailure->frameSerial == 30 &&
+             staleFailure->diagnostic.code == "presentation.frame_stale" &&
+             fixture.renderer.projectionTraversal().startRetainedOrdinal ==
+                 advancedCursor,
+         "stale rejection cannot rewind the retained traversal cursor");
+
+  fixture.renderer.reset();
+  expect(fixture.renderer.projectionTraversal().startRetainedOrdinal == 0 &&
+             !fixture.renderer.lastFailure().has_value(),
+         "reset clears traversal and presentation failure state");
+  const PresentationInput reopened = fixture.input(31);
+  expect(fixture.renderer.prepareFrame(reopened.state, reopened.projection) ==
+             PresentationFrameOutcome::Ready,
+         "reset opens a new serial epoch that may reuse the prior serial");
+}
+
+void verifyPrepareFailurePrecedesSubmission() {
+  PresentationStateFixture fixture;
+  PresentationInput mismatch = fixture.input(41);
+  mismatch.projection.frameSerial = 42;
+  expect(fixture.renderer.prepareFrame(mismatch.state, mismatch.projection) ==
+             PresentationFrameOutcome::CriticalFailure,
+         "a state/projection serial mismatch fails during prepare");
+  expect(fixture.recorder.frames.empty() &&
+             fixture.recorder.submissions.empty(),
+         "prepare failure occurs before any built-in GPU submission path");
+
+  RenderContext context;
+  const PresentationFrameResult result = fixture.renderer.render(context);
+  expect(result.frameSerial == 41 &&
+             result.outcome == PresentationFrameOutcome::CriticalFailure &&
+             result.failure.has_value() &&
+             result.failure->frameSerial == result.frameSerial &&
+             result.failure->diagnostic.code ==
+                 "presentation.frame_mismatch" &&
+             fixture.recorder.frames.empty() &&
+             fixture.recorder.submissions.empty(),
+         "a pre-submit prepare failure returns the exact failed serial "
+         "without drawing");
+
+  const PresentationFrameResult consumed = fixture.renderer.render(context);
+  expect(consumed.frameSerial == 0 && consumed.failure.has_value() &&
+             consumed.failure->diagnostic.code ==
+                 "presentation.frame_not_prepared" &&
+             fixture.recorder.frames.empty() &&
+             fixture.recorder.submissions.empty(),
+         "even a failed prepared transaction is consumed exactly once");
+}
+
+void verifySubmissionFailurePropagatesAfterConsumption() {
+  PresentationStateFixture fixture;
+  SubmissionPhaseThrowingRecorder recorder;
+  fixture.renderer.setCharacterizationRecorder(&recorder);
+  const PresentationInput frame = fixture.input(51);
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+             PresentationFrameOutcome::Ready,
+         "the submission-exception fixture prepares before drawing");
+
+  RenderContext context;
+  bool propagated = false;
+  std::optional<PresentationFrameResult> fabricatedFailureResult;
+  try {
+    fabricatedFailureResult = fixture.renderer.render(context);
+  } catch (const std::runtime_error &error) {
+    propagated =
+        std::string_view(error.what()) ==
+        "submission-phase characterization failure";
+  }
+  expect(recorder.reachedLaneBeamPass && propagated &&
+             !fabricatedFailureResult.has_value(),
+         "a submission-phase exception propagates instead of reporting an "
+         "atomic recoverable frame failure");
+
+  const PresentationFrameResult consumed = fixture.renderer.render(context);
+  expect(consumed.frameSerial == 0 && consumed.failure.has_value() &&
+             consumed.failure->diagnostic.code ==
+                 "presentation.frame_not_prepared",
+         "a throwing submission path still consumes the prepared transaction");
+  bgfx::frame();
+}
+
+void verifyFactoryUsesBorrowedNonNullChart() {
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  std::unique_ptr<BuiltInPlayfieldPresentation> presentation =
+      createBuiltInPlayfieldPresentation({
+          .chart = *fixture.chart,
+          .timingWindows = judge.timingWindows,
+          .visibleTimeGreenNumber =
+              presentationConfig(kAfterCoverPercent).visibleTimeGreenNumber,
+          .renderHud = false,
+          .playbackRate = {},
+      });
+  expect(presentation != nullptr &&
+             presentation->activeMode() == PresentationMode::BuiltIn &&
+             presentation->projectionLatePoorTimingMicros() > 0,
+         "the factory constructs a concrete built-in presentation from a "
+         "non-null chart reference");
+
+  presentation.reset();
+  expect(fixture.chart->Meta.Title == "Synthetic Built-in 7K",
+         "the caller-owned chart remains alive after the borrowed "
+         "presentation is destroyed first");
+}
+
 Json configurationJson(const PlayfieldPresentationConfig &config) {
   return {
       {"visibleTimeGreenNumber", config.visibleTimeGreenNumber},
@@ -1310,6 +1581,13 @@ int main() {
 
   if (failures == 0) {
     try {
+      verifyPreparedPresentationIsOneShot(target);
+      verifyRenderDoesNotRewindPreparedTraversal(target);
+      verifySerialOrderingAndReset();
+      verifyPrepareFailurePrecedesSubmission();
+      verifySubmissionFailurePropagatesAfterConsumption();
+      verifyFactoryUsesBorrowedNonNullChart();
+
       const auto before =
           renderScenario(target, kBeforeCoverPercent, false);
       const auto after = renderScenario(target, kAfterCoverPercent, true);

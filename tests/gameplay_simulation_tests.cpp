@@ -1,4 +1,5 @@
 #include "scene/play/BMSRenderer.h"
+#include "scene/play/BuiltInPlayfieldPresentation.h"
 #include "scene/play/CompiledGameplayJudge.h"
 #include "scene/play/GameplayDefinition.h"
 #include "scene/play/GameplayCandidateRules.h"
@@ -9,6 +10,7 @@
 #include "scene/play/ManualKeysoundSelection.h"
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/PlayfieldPresentation.h"
+#include "scene/play/PlayfieldProjection.h"
 #include "scene/play/RhythmLaneInputController.h"
 
 #include "bms_parser.hpp"
@@ -21,15 +23,30 @@
 #include <unordered_map>
 
 namespace {
-static_assert(std::derived_from<BMSRenderer, PlayfieldPresentation>);
+static_assert(std::derived_from<BMSRenderer, BuiltInPlayfieldPresentation>);
 static_assert(requires(BMSRenderer &renderer,
-                       const PlayfieldPresentationConfig &configuration) {
+                       const PlayfieldPresentationConfig &configuration,
+                       const PlayfieldVisualState &state,
+                       const PlayfieldProjectionResult &projection,
+                       RenderContext &context) {
   { renderer.configure(configuration) } -> std::same_as<void>;
+  { renderer.prepareFrame(state, projection) } ->
+      std::same_as<PresentationFrameOutcome>;
+  { renderer.render(context) } -> std::same_as<PresentationFrameResult>;
   { renderer.reset() } -> std::same_as<void>;
   { renderer.refreshGeometry() } -> std::same_as<void>;
+  { renderer.activeMode() } noexcept -> std::same_as<PresentationMode>;
+  { renderer.lastFailure() } ->
+      std::same_as<std::optional<PresentationFailure>>;
+  { renderer.projectionTraversal() } ->
+      std::same_as<BuiltInRendererTraversal>;
   { renderer.onJudge(JudgeResult(PGreat, 0), 1, 2,
                      PlayfieldJudgeEventClock{}, true) } ->
       std::same_as<void>;
+});
+static_assert(requires(BuiltInPlayfieldPresentationCreateInfo creation) {
+  { createBuiltInPlayfieldPresentation(std::move(creation)) } ->
+      std::same_as<std::unique_ptr<BuiltInPlayfieldPresentation>>;
 });
 
 void require(bool condition, const char *message) {

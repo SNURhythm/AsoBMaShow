@@ -21,7 +21,7 @@
 #include "GameplayChartEntityRenderBudget.h"
 #include "GameplayGaugeRules.h"
 #include "GameplayNoteSubmissionOrder.h"
-#include "PlayfieldPresentation.h"
+#include "BuiltInPlayfieldPresentation.h"
 #include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
 #include <array>
@@ -215,11 +215,15 @@ public:
 } // namespace bms_renderer_characterization
 #endif
 
-class BMSRenderer : public PlayfieldPresentation {
+class BMSRenderer : public BuiltInPlayfieldPresentation {
 public:
   ~BMSRenderer();
 
 private:
+  struct PreparedPresentationFrame;
+  std::unique_ptr<PreparedPresentationFrame> preparedPresentationFrame;
+  std::uint64_t lastPreparedPresentationFrameSerial = 0;
+  std::optional<PresentationFailure> presentationFailure;
   std::unique_ptr<TextView> titleText;
   std::unique_ptr<TextView> judgeText;
   std::unique_ptr<TextView> pacemakerDeltaText;
@@ -520,6 +524,10 @@ public:
   static void renderAutoPlayMark(TextView *text, RenderContext &context);
 
   void configure(const PlayfieldPresentationConfig &configuration) override;
+  [[nodiscard]] PresentationFrameOutcome prepareFrame(
+      const PlayfieldVisualState &state,
+      const PlayfieldProjectionResult &projection) override;
+  [[nodiscard]] PresentationFrameResult render(RenderContext &) override;
   [[nodiscard]] gameplay::RealtimeTouchLayout touchLayout() const override;
   [[nodiscard]] std::uint64_t
   touchLayoutRevision() const noexcept override;
@@ -556,13 +564,19 @@ public:
               const PlayfieldProjectionResult &projection);
   // Projection capture must use the identical late-poor boundary as the
   // legacy renderer so its immutable row/depth plan has the same eligibility.
-  [[nodiscard]] long long projectionLatePoorTimingMicros() const noexcept {
+  [[nodiscard]] long long
+  projectionLatePoorTimingMicros() const noexcept override {
     return latePoorTiming;
   }
+  [[nodiscard]] BuiltInRendererTraversal
+  projectionTraversal() const override;
   [[nodiscard]] BuiltInRendererTraversal
   builtInProjectionTraversal() const;
   void reset() override;
   void refreshGeometry() override;
+  [[nodiscard]] PresentationMode activeMode() const noexcept override;
+  [[nodiscard]] std::optional<PresentationFailure>
+  lastFailure() const override;
   void setVisibleTimeGreenNumber(int greenNumber);
   void setVisibleTimeUseMilliseconds(bool enabled);
   void setCurrentBpm(double bpm);

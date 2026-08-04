@@ -1,6 +1,7 @@
 #include "scene/play/RealtimeTouchInputRouter.h"
 #include "scene/play/RealtimeTouchPresentation.h"
 #include "scene/play/PlayfieldPresentation.h"
+#include "scene/play/PlayfieldProjection.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -36,6 +37,30 @@ void requireNear(float actual, float expected, const char *message) {
 class ConcreteTouchPresentation final : public PlayfieldPresentation {
 public:
   void configure(const PlayfieldPresentationConfig &) override {}
+  PresentationFrameOutcome
+  prepareFrame(const PlayfieldVisualState &state,
+               const PlayfieldProjectionResult &projection) override {
+    preparedFrameSerial = state.clock.serial;
+    if (state.clock.serial == 0 || projection.frameSerial != state.clock.serial) {
+      failure = PresentationFailure{
+          .diagnostic = skin::SkinDiagnostic{
+              .code = "presentation.frame_mismatch",
+              .message = "The captured state and projection do not match."},
+          .frameSerial = state.clock.serial};
+      return PresentationFrameOutcome::CriticalFailure;
+    }
+    failure.reset();
+    return PresentationFrameOutcome::Ready;
+  }
+  PresentationFrameResult render(RenderContext &) override {
+    return {.frameSerial = preparedFrameSerial,
+            .outcome = failure.has_value()
+                           ? PresentationFrameOutcome::CriticalFailure
+                           : PresentationFrameOutcome::Ready,
+            .submittedMode = PresentationMode::BuiltIn,
+            .bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn,
+            .failure = failure};
+  }
   gameplay::RealtimeTouchLayout touchLayout() const override {
     gameplay::RealtimeTouchLayout layout;
     layout.revision = touchRevision;
@@ -68,6 +93,12 @@ public:
   void cancelPresentationTouches(long long) override {}
   void reset() override {}
   void refreshGeometry() override {}
+  PresentationMode activeMode() const noexcept override {
+    return PresentationMode::BuiltIn;
+  }
+  std::optional<PresentationFailure> lastFailure() const override {
+    return failure;
+  }
   void onLanePressed(int, JudgeResult, long long) override {}
   void onLaneReleased(int, long long) override {}
   void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock,
@@ -75,11 +106,40 @@ public:
 
   std::uint64_t touchRevision = 1;
   std::uint64_t hitRevision = 1;
+  std::uint64_t preparedFrameSerial = 0;
+  std::optional<PresentationFailure> failure;
   std::vector<PresentationUiHitRegion> hitRegions;
 };
 
 static_assert(!std::is_abstract_v<ConcreteTouchPresentation>,
               "the complete presentation touch surface is concrete");
+
+void testPresentationFrameContractCarriesExactSerialOnFailure() {
+  const PresentationFailure failure{
+      .entry = {.package = {.directoryName = "default",
+                            .collisionKey = "default"},
+                .packageRelativePath = "play/play7.luaskin",
+                .collisionKey = "play/play7.luaskin"},
+      .revisionDigest = "revision",
+      .configurationDigest = "configuration",
+      .diagnostic = {.code = "presentation.failure",
+                     .message = "fixture failure"},
+      .frameSerial = 41};
+  const PresentationFrameResult result{
+      .frameSerial = 41,
+      .outcome = PresentationFrameOutcome::CriticalFailure,
+      .submittedMode = PresentationMode::BuiltIn,
+      .bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn,
+      .failure = failure};
+
+  require(result.frameSerial == 41 && result.failure.has_value() &&
+              result.failure->frameSerial == result.frameSerial &&
+              result.submittedMode == PresentationMode::BuiltIn &&
+              result.bgaCompositeMode ==
+                  GameplayBgaCompositeMode::FullscreenBuiltIn &&
+              !result.preparedBga.has_value(),
+          "presentation failure results preserve the exact frame serial and built-in fallback contract");
+}
 
 void testTouchPresentationUsesUiNormalizedCoordinates() {
   rendering::window_width = 1920;
@@ -1634,6 +1694,7 @@ void testFailedCancelExpiryRequestsRecovery() {
 } // namespace
 
 int main() {
+  testPresentationFrameContractCarriesExactSerialOnFailure();
   testTouchPresentationUsesUiNormalizedCoordinates();
   testLegacyBuiltInTouchFallbackRequiresExplicitOwnership();
   testImmutableHitSnapshotPublishesValueOwnedTopmostGeometry();

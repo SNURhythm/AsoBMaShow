@@ -211,6 +211,21 @@ struct PreparedGameplayBgaFrame {
   std::optional<PreparedGameplayBgaSurface> miss;
 };
 
+enum class GameplayBgaCompositeMode : std::uint8_t {
+  FullscreenBuiltIn,
+  EmbeddedSkin,
+};
+
+// Reset before each scene render. Gameplay replaces this value only with the
+// result for that exact frame; main reuses `prepared` for fullscreen fallback
+// without advancing video a second time.
+struct GameplayBgaCompositeState {
+  std::uint64_t frameSerial = 0;
+  GameplayBgaCompositeMode mode =
+      GameplayBgaCompositeMode::FullscreenBuiltIn;
+  std::optional<PreparedGameplayBgaFrame> prepared;
+};
+
 // Resource preparation and renderer submission are deliberately separate so
 // gameplay stays independent of the optional Beatoraja renderer stack.
 class IGameplayBgaSubmitter {

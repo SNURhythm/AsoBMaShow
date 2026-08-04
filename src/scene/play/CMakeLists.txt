@@ -1,4 +1,5 @@
 target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
+                            BuiltInPlayfieldPresentation.cpp
                             PlayfieldChartVisualModel.cpp
                             PlayfieldProjection.cpp
                             PlayfieldVisualState.cpp

@@ -563,6 +563,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/rendering/TexBatchRenderer.cpp
             src/rendering/UniformCache.cpp
             src/scene/play/BMSRenderer.cpp
+            src/scene/play/BuiltInPlayfieldPresentation.cpp
             src/scene/play/GameplayGaugeRules.cpp
             src/scene/play/Judge.cpp
             src/scene/play/JudgementIndicatorRenderer.cpp

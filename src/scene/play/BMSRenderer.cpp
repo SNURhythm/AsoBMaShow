@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -617,6 +618,13 @@ JudgementCounterLayout judgementCounterLayoutFor(
   return layout;
 }
 } // namespace
+
+struct BMSRenderer::PreparedPresentationFrame {
+  std::uint64_t frameSerial = 0;
+  PresentationFrameOutcome outcome = PresentationFrameOutcome::Ready;
+  std::optional<PlayfieldVisualState> state;
+  std::optional<PlayfieldProjectionResult> projection;
+};
 
 AtomicLaneState::AtomicLaneState(AtomicLaneState &&other) noexcept {
   *this = std::move(other);
@@ -2300,6 +2308,10 @@ BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
   return traversal;
 }
 
+BuiltInRendererTraversal BMSRenderer::projectionTraversal() const {
+  return builtInProjectionTraversal();
+}
+
 int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
   const double referenceBpm = visibleTimeReferenceBpm();
   const double bpm =
@@ -2683,70 +2695,175 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 void BMSRenderer::render(RenderContext &context,
                          const PlayfieldVisualState &capturedState,
                          const PlayfieldProjectionResult &projection) {
-  if (capturedState.clock.serial == 0 ||
-      projection.frameSerial != capturedState.clock.serial) {
-    return;
+  (void)prepareFrame(capturedState, projection);
+  (void)render(context);
+}
+
+PresentationFrameOutcome BMSRenderer::prepareFrame(
+    const PlayfieldVisualState &capturedState,
+    const PlayfieldProjectionResult &projection) {
+  const std::uint64_t frameSerial = capturedState.clock.serial;
+  preparedPresentationFrame.reset();
+  presentationFailure.reset();
+
+  const auto rejectPrepare =
+      [this, frameSerial](std::string code, std::string message) {
+        presentationFailure = PresentationFailure{
+            .diagnostic = skin::SkinDiagnostic{.code = std::move(code),
+                                               .message = std::move(message)},
+            .frameSerial = frameSerial};
+        preparedPresentationFrame = std::make_unique<PreparedPresentationFrame>(
+            PreparedPresentationFrame{
+                .frameSerial = frameSerial,
+                .outcome = PresentationFrameOutcome::CriticalFailure});
+        return PresentationFrameOutcome::CriticalFailure;
+      };
+
+  if (frameSerial == 0 || projection.frameSerial != frameSerial) {
+    return rejectPrepare(
+        "presentation.frame_mismatch",
+        "The built-in state and projection must have one nonzero frame serial.");
+  }
+  if (frameSerial == lastPreparedPresentationFrameSerial) {
+    return rejectPrepare(
+        "presentation.frame_duplicate",
+        "The built-in presentation frame serial was prepared more than once.");
+  }
+  if (lastPreparedPresentationFrameSerial != 0 &&
+      frameSerial < lastPreparedPresentationFrameSerial) {
+    return rejectPrepare(
+        "presentation.frame_stale",
+        "The built-in presentation frame serial is older than the last "
+        "prepared frame.");
   }
 
-  configure(capturedState.configuration);
-  const auto &authority = capturedState.authority;
-  setCurrentBpm(authority.currentBpm);
-  setJudgementCounters(authority.judgementCounters, authority.comboBreak);
-  setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
-                 authority.currentGauge, authority.gaugeRules);
-  setPacemakerTarget(authority.pacemakerTarget);
-  setPacemakerStatus(authority.pacemakerStatus);
-  setPlayOptionStatus(authority.playOptionLabel);
-  setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
-  setStartLaneIndicators(authority.startLaneIndicators);
-  setStartLaneIndicatorsVisible(authority.startLaneIndicatorsVisible);
-  applyLaneCoverState(authority.laneCoverPercent,
-                      authority.resetLaneCoverVisibleTimeReference);
+  try {
+    auto prepared =
+        std::make_unique<PreparedPresentationFrame>(PreparedPresentationFrame{
+            .frameSerial = frameSerial,
+            .outcome = PresentationFrameOutcome::Ready,
+            .state = capturedState,
+            .projection = projection});
 
-  const std::size_t laneCount =
-      std::min(laneStatesByOrder.size(), capturedState.lanes.size());
-  for (std::size_t index = 0; index < laneStatesByOrder.size(); ++index) {
-    const LanePresentationState lane =
-        index < laneCount ? capturedState.lanes[index]
-                          : LanePresentationState{};
-    auto &destination = laneStatesByOrder[index];
-    destination.lastPressedJudgement.store(
-        static_cast<int>(lane.lastPressedJudge.judgement),
-        std::memory_order_relaxed);
-    destination.lastPressedDiff.store(lane.lastPressedJudge.Diff,
-                                      std::memory_order_relaxed);
-    destination.lastPressedTime.store(
-        lane.pressMicros == kPlayfieldTimestampOff ? -1 : lane.pressMicros,
-        std::memory_order_relaxed);
-    destination.isPressed.store(lane.pressed, std::memory_order_relaxed);
-    const long long lastStateTime = lane.pressed ? lane.pressMicros
-                                                 : lane.releaseMicros;
-    destination.lastStateTime.store(
-        lastStateTime == kPlayfieldTimestampOff ? -1 : lastStateTime,
-        std::memory_order_release);
+    configure(capturedState.configuration);
+    const auto &authority = capturedState.authority;
+    setCurrentBpm(authority.currentBpm);
+    setJudgementCounters(authority.judgementCounters, authority.comboBreak);
+    setGaugeStatus(authority.gaugeType, authority.gaugeAutoShift,
+                   authority.currentGauge, authority.gaugeRules);
+    setPacemakerTarget(authority.pacemakerTarget);
+    setPacemakerStatus(authority.pacemakerStatus);
+    setPlayOptionStatus(authority.playOptionLabel);
+    setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
+    setStartLaneIndicators(authority.startLaneIndicators);
+    setStartLaneIndicatorsVisible(authority.startLaneIndicatorsVisible);
+    applyLaneCoverState(authority.laneCoverPercent,
+                        authority.resetLaneCoverVisibleTimeReference);
+
+    const std::size_t laneCount =
+        std::min(laneStatesByOrder.size(), capturedState.lanes.size());
+    for (std::size_t index = 0; index < laneStatesByOrder.size(); ++index) {
+      const LanePresentationState lane =
+          index < laneCount ? capturedState.lanes[index]
+                            : LanePresentationState{};
+      auto &destination = laneStatesByOrder[index];
+      destination.lastPressedJudgement.store(
+          static_cast<int>(lane.lastPressedJudge.judgement),
+          std::memory_order_relaxed);
+      destination.lastPressedDiff.store(lane.lastPressedJudge.Diff,
+                                        std::memory_order_relaxed);
+      destination.lastPressedTime.store(
+          lane.pressMicros == kPlayfieldTimestampOff ? -1 : lane.pressMicros,
+          std::memory_order_relaxed);
+      destination.isPressed.store(lane.pressed, std::memory_order_relaxed);
+      const long long lastStateTime = lane.pressed ? lane.pressMicros
+                                                   : lane.releaseMicros;
+      destination.lastStateTime.store(
+          lastStateTime == kPlayfieldTimestampOff ? -1 : lastStateTime,
+          std::memory_order_release);
+    }
+
+    // Rebuild the event-derived indicator from the immutable snapshot so
+    // rendering consumes a complete frame-local presentation state.
+    judgementIndicator.clear();
+    if (capturedState.lastJudge.judgement != None &&
+        capturedState.lastJudgeVisualMicros != kPlayfieldTimestampOff) {
+      onJudge(capturedState.lastJudge, capturedState.combo, capturedState.score,
+              {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
+               .visualTimeMicros = capturedState.lastJudgeVisualMicros,
+               .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
+              true);
+    }
+
+    clearLiveTouchPoints();
+    for (const auto &touch : capturedState.touches) {
+      setLiveTouchPoint(touch.fingerId, touch.action, touch.normalizedX,
+                        touch.normalizedY, touch.songTimeMicros);
+    }
+
+    // Beatoraja's retained position moves forward during its draw traversal
+    // and rewinds only on explicit reinitialization. Projection is evaluated
+    // from the cursor captured before this call, so prepare warms the built-in
+    // even if the coordinator subsequently chooses a skin for this frame.
+    if (!projection.builtInPlan.traversedTimelineOrdinals.empty()) {
+      const std::size_t nextCursor = std::min<std::size_t>(
+          projection.builtInPlan.nextStartRetainedOrdinal, timelines.size());
+      state.currentTimelineIndex =
+          std::max(state.currentTimelineIndex, nextCursor);
+    }
+
+    lastPreparedPresentationFrameSerial = frameSerial;
+    preparedPresentationFrame = std::move(prepared);
+    return PresentationFrameOutcome::Ready;
+  } catch (const std::exception &error) {
+    return rejectPrepare("presentation.builtin_prepare_failed", error.what());
+  } catch (...) {
+    return rejectPrepare(
+        "presentation.builtin_prepare_failed",
+        "The built-in presentation reported an unknown prepare failure.");
+  }
+}
+
+PresentationFrameResult BMSRenderer::render(RenderContext &context) {
+  if (preparedPresentationFrame == nullptr) {
+    presentationFailure = PresentationFailure{
+        .diagnostic = skin::SkinDiagnostic{
+            .code = "presentation.frame_not_prepared",
+            .message = "The built-in presentation was rendered before prepareFrame."},
+        .frameSerial = 0};
+    return {.frameSerial = 0,
+            .outcome = PresentationFrameOutcome::CriticalFailure,
+            .submittedMode = PresentationMode::BuiltIn,
+            .bgaCompositeMode =
+                GameplayBgaCompositeMode::FullscreenBuiltIn,
+            .failure = presentationFailure};
   }
 
-  // Rebuild the event-derived indicator from the immutable snapshot so
-  // repeated rendering of the same frame cannot append duplicate samples or
-  // retain a judgement that the current snapshot no longer contains.
-  judgementIndicator.clear();
-  if (capturedState.lastJudge.judgement != None &&
-      capturedState.lastJudgeVisualMicros != kPlayfieldTimestampOff) {
-    onJudge(capturedState.lastJudge, capturedState.combo, capturedState.score,
-            {.songTimeMicros = capturedState.clock.gameplayTimeMicros,
-             .visualTimeMicros = capturedState.lastJudgeVisualMicros,
-             .bgaTimeMicros = capturedState.clock.bgaTimeMicros},
-            true);
+  // Consume before the first possible submission. A thrown submission-path
+  // exception cannot be retried and cannot be represented as an atomic
+  // CriticalFailure because earlier bgfx submissions may already exist.
+  std::unique_ptr<PreparedPresentationFrame> prepared =
+      std::move(preparedPresentationFrame);
+  const std::uint64_t frameSerial = prepared->frameSerial;
+  if (prepared->outcome != PresentationFrameOutcome::Ready) {
+    return {.frameSerial = frameSerial,
+            .outcome = prepared->outcome,
+            .submittedMode = PresentationMode::BuiltIn,
+            .bgaCompositeMode =
+                GameplayBgaCompositeMode::FullscreenBuiltIn,
+            .failure = presentationFailure};
   }
 
-  clearLiveTouchPoints();
-  for (const auto &touch : capturedState.touches) {
-    setLiveTouchPoint(touch.fingerId, touch.action, touch.normalizedX,
-                      touch.normalizedY, touch.songTimeMicros);
-  }
+  assert(prepared->state.has_value() && prepared->projection.has_value());
+  renderFrame(context, prepared->state->clock.visualTimeMicros,
+              prepared->state->clock.replayTouchTimeMicros,
+              &*prepared->projection);
 
-  renderFrame(context, capturedState.clock.visualTimeMicros,
-              capturedState.clock.replayTouchTimeMicros, &projection);
+  presentationFailure.reset();
+  return {.frameSerial = frameSerial,
+          .outcome = PresentationFrameOutcome::Ready,
+          .submittedMode = PresentationMode::BuiltIn,
+          .bgaCompositeMode = GameplayBgaCompositeMode::FullscreenBuiltIn};
 }
 
 void BMSRenderer::render(RenderContext &context, long long micro,
@@ -3257,8 +3374,10 @@ void BMSRenderer::renderFrame(
     // this cursor mirrors the legacy render loop without mutating chart or
     // gameplay/parser state, so the next immutable request starts correctly.
     if (!projection->builtInPlan.traversedTimelineOrdinals.empty()) {
-      state.currentTimelineIndex = std::min<std::size_t>(
+      const std::size_t nextCursor = std::min<std::size_t>(
           projection->builtInPlan.nextStartRetainedOrdinal, timelines.size());
+      state.currentTimelineIndex =
+          std::max(state.currentTimelineIndex, nextCursor);
     }
   } else {
   gameplay_note_submission_order::Allocator submissionOrder;
@@ -4089,6 +4208,9 @@ PresentationTouchResult BMSRenderer::endPresentationTouch(
 void BMSRenderer::cancelPresentationTouches(long long) {}
 
 void BMSRenderer::reset() {
+  preparedPresentationFrame.reset();
+  lastPreparedPresentationFrameSerial = 0;
+  presentationFailure.reset();
   state.reset();
   floatingVisibleTimeReferenceBpm.reset();
   judgementIndicator.clear();
@@ -4118,6 +4240,14 @@ void BMSRenderer::reset() {
     laneState.isPressed.store(false, std::memory_order_relaxed);
     laneState.lastStateTime.store(-1, std::memory_order_release);
   }
+}
+
+PresentationMode BMSRenderer::activeMode() const noexcept {
+  return PresentationMode::BuiltIn;
+}
+
+std::optional<PresentationFailure> BMSRenderer::lastFailure() const {
+  return presentationFailure;
 }
 
 void BMSRenderer::refreshGeometry() {

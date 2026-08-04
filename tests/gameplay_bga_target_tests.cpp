@@ -270,6 +270,24 @@ void testBgaDrawTargetRoleIsIndependentOfViewId() {
           "BGA draw targets carry an explicit role independently of view ID");
 }
 
+void testGameplayBgaCompositeStateDefaultsToBuiltInFullscreen() {
+  const GameplayBgaCompositeState state;
+  require(state.frameSerial == 0 &&
+              state.mode == GameplayBgaCompositeMode::FullscreenBuiltIn &&
+              !state.prepared.has_value(),
+          "gameplay BGA composite state defaults to fullscreen built-in without a stale prepared frame");
+
+  GameplayBgaCompositeState embedded{
+      .frameSerial = 73,
+      .mode = GameplayBgaCompositeMode::EmbeddedSkin,
+      .prepared = PreparedGameplayBgaFrame{.sequence = 73}};
+  require(embedded.frameSerial == 73 &&
+              embedded.mode == GameplayBgaCompositeMode::EmbeddedSkin &&
+              embedded.prepared.has_value() &&
+              embedded.prepared->sequence == embedded.frameSerial,
+          "gameplay BGA composite state carries one prepared value for the exact frame");
+}
+
 void testPinnedRoleAndMediaSelectExactBgaMaterials() {
   const auto baseImage = SelectGameplayBgaMaterial(
       GameplayBgaRole::Base, GameplayBgaMediaKind::Image);
@@ -1287,6 +1305,7 @@ int main() {
   rendering::PosTexCoord0Vertex::init();
   rendering::PosColorVertex::init();
   rendering::PosTexVertex::init();
+  testGameplayBgaCompositeStateDefaultsToBuiltInFullscreen();
   testBgaDrawTargetRoleIsIndependentOfViewId();
   testPinnedRoleAndMediaSelectExactBgaMaterials();
   testLayerMaterialMakesOnlyExactBlackTransparent();
