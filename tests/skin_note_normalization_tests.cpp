@@ -174,11 +174,11 @@ void testModernArraysTakePrecedenceIndependently() {
                  900 + lane, 9'000 + static_cast<int>(lane),
                  "modern HCN body supplies inactive slot");
     expectSprite(visual(normalizedLane, SkinNoteVisualKind::HcnDamage),
-                 1'500 + lane, 15'000 + static_cast<int>(lane),
-                 "modern HCN reactive maps to damage visual kind");
-    expectSprite(visual(normalizedLane, SkinNoteVisualKind::HcnReactive),
                  1'600 + lane, 16'000 + static_cast<int>(lane),
-                 "modern HCN miss maps to reactive visual kind");
+                 "modern HCN miss maps to damage visual kind");
+    expectSprite(visual(normalizedLane, SkinNoteVisualKind::HcnReactive),
+                 1'500 + lane, 15'000 + static_cast<int>(lane),
+                 "modern HCN reactive maps to reactive visual kind");
   }
 }
 
@@ -207,8 +207,10 @@ void testLnAndHcnCompatibilitySwitchesAreIndependent() {
     const auto &lane = hcnModernResult.note->lanes.front();
     expectSprite(visual(lane, SkinNoteVisualKind::LnBodyActive), 500, 5'000,
                  "modern HCN switch leaves LN on its legacy body field");
-    expectSprite(visual(lane, SkinNoteVisualKind::HcnDamage), 1'500, 15'000,
-                 "modern HCN switch selects reactive damage field");
+    expectSprite(visual(lane, SkinNoteVisualKind::HcnDamage), 1'600, 16'000,
+                 "modern HCN switch selects miss damage field");
+    expectSprite(visual(lane, SkinNoteVisualKind::HcnReactive), 1'500,
+                 15'000, "modern HCN switch selects reactive field");
   }
 }
 

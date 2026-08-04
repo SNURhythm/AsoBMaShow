@@ -102,8 +102,12 @@ normalizeSkinNote(const SkinNoteNormalizationInput &input) {
   const Slots &lnInactive = modernLn ? input.lnBody : input.lnActive;
   const Slots &hcnActive = modernHcn ? *input.hcnBodyActive : input.hcnBody;
   const Slots &hcnInactive = modernHcn ? input.hcnBody : input.hcnActive;
-  const Slots &hcnDamage = modernHcn ? input.hcnBodyReactive : input.hcnDamage;
-  const Slots &hcnReactive = modernHcn ? input.hcnBodyMiss : input.hcnReactive;
+  // JsonPlaySkinObjectLoader's raw indexes 8 and 9 are hcnbodyReactive and
+  // hcnbodyMiss. The source-neutral kinds preserve their HCN semantics,
+  // rather than retaining those raw positions.
+  const Slots &hcnDamage = modernHcn ? input.hcnBodyMiss : input.hcnDamage;
+  const Slots &hcnReactive =
+      modernHcn ? input.hcnBodyReactive : input.hcnReactive;
 
   const auto validation = validateSelectedArrays(
       laneCount, {&input.note, &input.mine, &input.lnEnd, &input.lnStart,
