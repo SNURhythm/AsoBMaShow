@@ -80,6 +80,14 @@ void writeText(const fs::path &path, std::string_view value) {
 }
 
 BeatorajaSkinModelDecodeResult decodeInlineModel(std::string_view sourceText) {
+  static const std::array judgeBindingBuiltins{
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::BooleanProperty},
+          .selector = SkinBuiltinPropertySelector{std::string("judge-condition")}},
+      SkinBuiltinBindingCatalogEntry{
+          .type = {.kind = SkinBindingKind::BooleanProperty},
+          .selector = SkinBuiltinPropertySelector{std::string("judge-draw")}},
+  };
   TempDirectory temp;
   const SkinStorageRoots roots{
       .visiblePackages = temp.root() / "visible",
@@ -149,7 +157,9 @@ BeatorajaSkinModelDecodeResult decodeInlineModel(std::string_view sourceText) {
     return {};
   }
   return decoder.decodeGameplay(*configured.value,
-                                {.runtime = *created.runtime});
+                                {.runtime = *created.runtime,
+                                 .builtins = SkinBuiltinBindingCatalogView(
+                                     judgeBindingBuiltins)});
 }
 
 const Json &expectedContract() {
@@ -478,26 +488,6 @@ void testStableIdsAndPerUseFrameExpansionAreSourceNeutral() {
     }
   }
 
-  BeatorajaSkinModel invalidChild = *decoded.model;
-  const auto outer = std::find_if(invalidChild.objects.begin(), invalidChild.objects.end(),
-      [](const auto &object) { return object.authoredName == "judge"; });
-  if (outer != invalidChild.objects.end()) {
-    const auto &outerJudge = std::get<SkinJudgeObject>(outer->payload);
-    const SkinObjectId outerId = outer->id;
-    if (outerJudge.grades[0].image) {
-      const auto child = std::find_if(invalidChild.objects.begin(), invalidChild.objects.end(),
-          [&](const auto &object) { return object.id == outerJudge.grades[0].image->object; });
-      if (child != invalidChild.objects.end()) {
-        std::get<SkinImageObject>(child->payload).orderedStates.clear();
-        const auto validated = test_support::validateWithAuthoredBuiltins(
-            std::move(invalidChild));
-        expect(validated.model && std::ranges::find(
-                   validated.model->disabledOptionalObjects, outerId) !=
-                   validated.model->disabledOptionalObjects.end(),
-               "validator disables an outer Judge whose synthetic child is invalid");
-      }
-    }
-  }
 }
 
 void testImageSetPreservesIndependentStateResourcesCropsAndTimers() {
@@ -959,8 +949,10 @@ return {
              {id='lift-default',src='atlas',x=0,y=50,w=20,h=10}},
   bga={id='bga'},
   judge={{id='judge',index=2,shift=true,
-          images={{id='judge-image',dst={{time=20,x=100,y=200,w=30,h=40}}},{id='missing-image',dst={{}}}},
-          numbers={{id='judge-number',dst={{time=10,x=80,y=210,w=20,h=8}}},{id='missing-number',dst={{}}}}}},
+          images={{id='judge-image',timer=81,op={'judge-condition'},draw='judge-draw',
+                   dst={{time=20,x=100,y=200,w=30,h=40}}},{id='missing-image',dst={{}}}},
+          numbers={{id='judge-number',timer=82,draw='judge-draw',
+                    dst={{time=10,x=80,y=210,w=20,h=8}}},{id='missing-number',dst={{}}}}}},
   destination={
     {id='hidden',offsets={99},offset=98,dst={{x=1,y=2,w=3,h=4}}},
     {id='lift',offsets={97},offset=96,dst={{}}},
@@ -1036,6 +1028,30 @@ return {
                  !image->stateIndex && !image->clickEvent,
              "Judge child image ignores referenced Image len/ref/act semantics");
     }
+    if (payload && payload->grades[0].image &&
+        payload->grades[0].detailNumber) {
+      const auto &imageDestination = payload->grades[0].image->destination;
+      const auto &numberDestination = payload->grades[0].detailNumber->destination;
+      const auto *imageCondition = imageDestination.conditions.empty()
+                                       ? nullptr
+                                       : std::get_if<SkinBooleanPropertyId>(
+                                             &imageDestination.conditions.front());
+      expect(imageDestination.timer && imageDestination.timer->value != 0 &&
+                 timerSelector(*decoded.model, *imageDestination.timer) == 81 &&
+                 imageCondition && imageCondition->value != 0 &&
+                 !decoded.model->booleanProperties.empty() &&
+                 imageDestination.drawCondition &&
+                 imageDestination.drawCondition->value != 0 &&
+                 numberDestination.timer && numberDestination.timer->value != 0 &&
+                 timerSelector(*decoded.model, *numberDestination.timer) == 82 &&
+                 numberDestination.drawCondition &&
+                 numberDestination.drawCondition->value != 0,
+             "Judge child destinations retain typed timer, op, and draw bindings");
+      const auto validated =
+          test_support::validateWithAuthoredBuiltins(*decoded.model);
+      expect(validated.model && !validated.criticalFailure,
+             "Judge child destination bindings remain validator-live");
+    }
   }
   BeatorajaSkinModel invalidChild = *decoded.model;
   const auto outer = std::find_if(invalidChild.objects.begin(), invalidChild.objects.end(),
@@ -1059,6 +1075,22 @@ return {
   }
 }
 
+void testLiveGenericObjectPrecedesSameIdGameplaySpecials() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type=0,w=1280,h=720,source={{id='atlas',path='atlas.png'}},
+  image={{id='shared',src='atlas',w=10,h=10}},
+  hiddenCover={{id='shared',src='atlas',w=10,h=10}},
+  bga={id='shared'}, judge={{id='shared'}},
+  destination={{id='shared',dst={{}}}}
+}
+)lua");
+  expect(decoded.model && decoded.model->objects.size() == 1 &&
+             std::holds_alternative<SkinImageObject>(
+                 decoded.model->objects.front().payload),
+         "generic Image wins same-ID Hidden/BGA/Judge specials without rejecting the model");
+}
+
 } // namespace
 
 int main() {
@@ -1075,6 +1107,7 @@ int main() {
   testNoteHeightAndIgnoredAuthoredVisualsRemainExplicitPolicies();
   testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject();
   testLiveCoverJudgeAndBgaSpecialObjects();
+  testLiveGenericObjectPrecedesSameIdGameplaySpecials();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;
