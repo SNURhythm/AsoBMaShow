@@ -611,17 +611,28 @@ void testCleanTransitionInvalidatesOpenReadHandle() {
     expect(false, "captured-read header succeeds");
     return;
   }
-  const LuaCallbackId callback =
-      requireCallback(*header.value, "captured_read");
+  const LuaCallbackId read = requireCallback(*header.value, "captured_read");
+  const LuaCallbackId write = requireCallback(*header.value, "captured_write");
+  const LuaCallbackId scan = requireCallback(*header.value, "captured_scan");
   expect(harness->runtime->loadConfigured({}).value.has_value(),
          "captured-read fixture configures");
   expect(harness->runtime->enterRenderPhase().ok,
          "an open read handle is safely invalidated at render transition");
   expect(harness->runtime->beginFrame(1).ok, "captured-read frame begins");
-  const auto result = harness->runtime->invoke(callback, {});
-  expect(result.failure &&
-             result.failure->code == "skin_file_render_phase_denied",
-         "captured iterator is phase checked and denied after invalidation");
+  for (const auto callback : {read, write, scan}) {
+    const auto result = harness->runtime->invoke(callback, {});
+    expect(result.failure &&
+               result.failure->code == "skin_file_render_phase_denied",
+           "captured read/write/scan is phase checked after clean transition");
+  }
+  const auto counters = harness->fileSystem->activityCounters();
+  expect(counters.renderReadsDenied == 1 && counters.renderWritesDenied == 1 &&
+             counters.renderDirectoryScansDenied == 1,
+         "clean transition exercises every exact render denial counter");
+  expect(counters.renderReadsPerformed == 0 &&
+             counters.renderWritesPerformed == 0 &&
+             counters.renderDirectoryScansPerformed == 0,
+         "clean transition leaves every matching performed counter at zero");
 }
 
 void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
@@ -650,26 +661,27 @@ void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
   expect(!transition.ok && transition.failure &&
              transition.failure->code == "skin_file_render_phase_denied",
          "dirty live handle makes transition fail with frozen diagnostic");
-  expect(harness->runtime->phase() == LuaRuntimePhase::Render,
-         "failed validation still revokes all filesystem authority");
+  expect(harness->runtime->phase() == LuaRuntimePhase::Configured,
+         "failed transition does not publish the render phase");
   expect(!fs::exists(dirtyPath),
          "dirty buffer is discarded and overlay remains unchanged");
-  expect(harness->runtime->beginFrame(1).ok,
-         "sandbox-integrity probe begins a render callback frame");
+  expect(!harness->runtime->beginFrame(1).ok,
+         "dirty transition failure keeps frame entry closed");
+  expect(!harness->runtime->enterRenderPhase().ok,
+         "dirty transition failure cannot be retried into render");
   for (const auto callback : {read, write, scan}) {
     const auto result = harness->runtime->invoke(callback, {});
     expect(result.failure &&
-               result.failure->code == "skin_file_render_phase_denied",
-           "captured read/write/scan authority is denied after transition");
+               result.failure->code == "skin_lua_callback_phase_invalid",
+           "dirty transition failure keeps callback entry closed");
   }
   const auto counters = harness->fileSystem->activityCounters();
-  expect(counters.renderReadsDenied == 1 && counters.renderWritesDenied == 1 &&
-             counters.renderDirectoryScansDenied == 1,
-         "captured operations increment their exact denied category");
-  expect(counters.renderReadsPerformed == 0 &&
+  expect(counters.renderReadsDenied == 0 && counters.renderWritesDenied == 0 &&
+             counters.renderDirectoryScansDenied == 0 &&
+             counters.renderReadsPerformed == 0 &&
              counters.renderWritesPerformed == 0 &&
              counters.renderDirectoryScansPerformed == 0,
-         "render guards keep all matching performed counters zero");
+         "closed callback entry performs no filesystem operation");
   expect(!fs::exists(dirtyPath),
          "post-render denials preserve the overlay after dirty discard");
 }

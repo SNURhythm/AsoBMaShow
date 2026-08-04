@@ -374,6 +374,7 @@ struct LuaValueHandle::Impl {
 struct LuaSkinRuntime::Impl {
   LuaRuntimePurpose purpose = LuaRuntimePurpose::Catalog;
   LuaRuntimePhase phase = LuaRuntimePhase::Created;
+  bool renderTransitionFailed = false;
   std::shared_ptr<LuaRuntimeShared> shared;
   lua_State *state = nullptr;
   std::unique_ptr<LuaSkinFileSystem> fileSystem;
@@ -606,7 +607,8 @@ LuaValueResult LuaSkinRuntime::loadConfigured(
 
 LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
   if (!impl_ || impl_->purpose != LuaRuntimePurpose::Gameplay ||
-      impl_->phase != LuaRuntimePhase::Configured) {
+      impl_->phase != LuaRuntimePhase::Configured ||
+      impl_->renderTransitionFailed) {
     return {.failure = makeDiagnostic(
                 "skin_lua_phase_invalid",
                 "Lua render transition requires configured gameplay")};
@@ -614,17 +616,19 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
   const auto handles = impl_->hostModules->invalidateFileHandles();
   const auto transition = impl_->fileSystem->enterRenderPhase();
   if (!transition.ok) {
+    impl_->renderTransitionFailed = true;
     return {.failure = makeDiagnostic(
                 "skin_file_render_phase_denied",
                 transition.failure ? transition.failure->message
                                    : "Lua filesystem transition failed")};
   }
-  impl_->phase = LuaRuntimePhase::Render;
   if (handles.hadDirtyWrite) {
+    impl_->renderTransitionFailed = true;
     return {.failure = makeDiagnostic(
                 "skin_file_render_phase_denied",
                 "dirty Lua file handle was discarded at render transition")};
   }
+  impl_->phase = LuaRuntimePhase::Render;
   return {.ok = true};
 }
 

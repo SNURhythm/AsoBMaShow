@@ -534,6 +534,10 @@ int ioOpen(lua_State *state) {
                                     LuaSkinHostPolicy::maxDataReadBytes);
     }
     if (read.failure) {
+      if (read.failure->code == SkinFileError::RenderPhase) {
+        impl->storeFileError(*read.failure);
+        return raiseStoredError(state, impl);
+      }
       return expectedFailure(state, read.failure->message);
     }
     bytes = std::move(read.bytes);
@@ -542,6 +546,10 @@ int ioOpen(lua_State *state) {
     const auto resolved = impl->fileSystem->resolve(
         std::string_view(path, pathSize), SkinFileUse::DataWrite);
     if (resolved.failure) {
+      if (resolved.failure->code == SkinFileError::RenderPhase) {
+        impl->storeFileError(*resolved.failure);
+        return raiseStoredError(state, impl);
+      }
       return expectedFailure(state, resolved.failure->message);
     }
     ready = true;

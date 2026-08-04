@@ -1,10 +1,18 @@
 local reader = io.open("data.txt", "r")
 assert(reader ~= nil)
 local lines = reader:lines()
+local File = luajava.bindClass("java.io.File")
+local directory = luajava.new(File, ".")
 
 return {
   phase = skin_config and "configured" or "header",
   captured_read = function()
     return lines()
+  end,
+  captured_write = function()
+    return assert(io.open("post-render.txt", "w"))
+  end,
+  captured_scan = function()
+    return directory:listFiles()
   end
 }
