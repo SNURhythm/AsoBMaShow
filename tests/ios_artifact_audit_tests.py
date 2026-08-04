@@ -228,6 +228,8 @@ class IOSArtifactAuditTests(unittest.TestCase):
         shader_directory.mkdir(parents=True)
         (shader_directory / "vs_skin_quad.bin").write_bytes(b"metal-vertex")
         (shader_directory / "fs_skin_quad.bin").write_bytes(b"metal-fragment")
+        (shader_directory / "vs_skin_yuvrgb.bin").write_bytes(b"metal-yuv-vertex")
+        (shader_directory / "fs_skin_yuvrgb.bin").write_bytes(b"metal-yuv-fragment")
         return app
 
     def run_audit(self, artifact: Path, *arguments: str):
@@ -271,7 +273,12 @@ class IOSArtifactAuditTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
 
     def test_missing_or_empty_metal_skin_shader_fails(self):
-        for name in ("vs_skin_quad.bin", "fs_skin_quad.bin"):
+        for name in (
+            "vs_skin_quad.bin",
+            "fs_skin_quad.bin",
+            "vs_skin_yuvrgb.bin",
+            "fs_skin_yuvrgb.bin",
+        ):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
                 app = self.make_app(Path(temp))
                 (app / "shaders/metal" / name).unlink()
