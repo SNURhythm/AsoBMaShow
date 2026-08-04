@@ -36,6 +36,9 @@ struct ProjectedPlayfieldNote {
   double scrollDelta = 0.0;
   bool judged = false;
   std::uint32_t submissionOrdinal = 0;
+  // The built-in renderer shares one primary depth across playable notes and
+  // mines in a timeline row. Skin submission order stays unique and separate.
+  std::uint32_t builtInDepth = 0;
 };
 
 struct ProjectedLongNoteDescriptor {
@@ -50,7 +53,11 @@ struct ProjectedLongNoteDescriptor {
   bool reactive = false;
   bool headJudged = false;
   bool tailJudged = false;
+  bool headDead = false;
+  bool tailDead = false;
   std::uint32_t submissionOrdinal = 0;
+  std::uint32_t bodyDepth = 0;
+  std::uint32_t endpointDepth = 0;
 };
 
 struct ProjectedLineDescriptor {

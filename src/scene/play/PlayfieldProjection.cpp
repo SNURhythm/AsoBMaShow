@@ -24,6 +24,18 @@ bool isVisible(double scrollDelta, const PlayfieldProjectionRequest &request) {
          scrollDelta <= request.visibleScrollAfter;
 }
 
+bool isLongIntervalVisible(double headScrollDelta, double tailScrollDelta,
+                           const PlayfieldProjectionRequest &request) {
+  if (request.visibleScrollBefore == 0.0 &&
+      request.visibleScrollAfter == 0.0) {
+    return true;
+  }
+  const double minimum = -request.visibleScrollBefore;
+  const double maximum = request.visibleScrollAfter;
+  return std::max(headScrollDelta, tailScrollDelta) >= minimum &&
+         std::min(headScrollDelta, tailScrollDelta) <= maximum;
+}
+
 skin::SkinProjectedNoteKind toSkinNoteKind(ChartVisualNoteKind kind) {
   switch (kind) {
   case ChartVisualNoteKind::Invisible:
@@ -204,6 +216,98 @@ PlayfieldProjectionResult PlayfieldProjection::project(
                             std::tie(right->authoredOrdinal, right->id);
                    });
 
+  struct BuiltInRowDepths {
+    std::optional<gameplay_note_submission_order::LongNoteOrder> longOrder;
+    std::optional<std::uint32_t> primaryDepth;
+    std::optional<std::uint32_t> invisibleDepth;
+  };
+  std::unordered_map<ChartVisualId, BuiltInRowDepths> builtInDepths;
+  builtInDepths.reserve(orderedTimelines.size());
+  gameplay_note_submission_order::Allocator builtInOrder;
+  // BMSRenderer always reserves one shared order for long notes whose heads
+  // have already passed the retained traversal window.
+  (void)builtInOrder.captureLongNote();
+
+  std::unordered_map<ChartVisualId, std::vector<const ChartVisualNote *>>
+      notesByTimeline;
+  notesByTimeline.reserve(orderedTimelines.size());
+  for (const auto *note : orderedNotes) {
+    notesByTimeline[note->timelineId].push_back(note);
+  }
+  for (const auto *timeline : orderedTimelines) {
+    const auto rowIt = notesByTimeline.find(timeline->id);
+    if (rowIt == notesByTimeline.end()) {
+      continue;
+    }
+    const double rowScrollDelta =
+        timeline->scrollPosition - result.currentScrollPosition;
+    const bool rowHasLongHead = std::ranges::any_of(
+        rowIt->second, [](const ChartVisualNote *note) {
+          return note->kind == ChartVisualNoteKind::LongHead;
+        });
+    bool needsPrimaryDepth = false;
+    bool needsInvisibleDepth = false;
+    for (const auto *note : rowIt->second) {
+      const auto *noteState = stateFor(note->id);
+      const bool dead = noteState != nullptr && noteState->dead;
+      if (note->kind == ChartVisualNoteKind::Invisible) {
+        needsInvisibleDepth =
+            needsInvisibleDepth ||
+            (request.includeInvisibleNotes && !dead &&
+             timeline->timeMicros >= timeMicros &&
+             isVisible(rowScrollDelta, request));
+        continue;
+      }
+      if (note->kind == ChartVisualNoteKind::Mine) {
+        needsPrimaryDepth =
+            needsPrimaryDepth ||
+            (!dead && timeline->timeMicros >= timeMicros &&
+             isVisible(rowScrollDelta, request));
+        continue;
+      }
+      if (note->kind == ChartVisualNoteKind::LongTail) {
+        continue;
+      }
+      if (note->kind == ChartVisualNoteKind::LongHead) {
+        const auto pairIt = notes.find(note->pairId);
+        const ChartVisualNote *tail =
+            pairIt == notes.end() ? nullptr : pairIt->second;
+        const auto tailTimelineIt =
+            tail == nullptr ? timelines.end() : timelines.find(tail->timelineId);
+        const bool validPair =
+            tail != nullptr && tail->kind == ChartVisualNoteKind::LongTail &&
+            tail->pairId == note->id && tail->lane == note->lane &&
+            tail->longNoteMode == note->longNoteMode &&
+            tailTimelineIt != timelines.end() &&
+            timeline->timeMicros <= tailTimelineIt->second->timeMicros;
+        if (validPair) {
+          const double tailScrollDelta =
+              tailTimelineIt->second->scrollPosition -
+              result.currentScrollPosition;
+          needsPrimaryDepth =
+              needsPrimaryDepth ||
+              isLongIntervalVisible(rowScrollDelta, tailScrollDelta, request);
+          continue;
+        }
+      }
+      needsPrimaryDepth =
+          needsPrimaryDepth || (!dead && isVisible(rowScrollDelta, request));
+    }
+
+    auto &depths = builtInDepths[timeline->id];
+    if (needsPrimaryDepth) {
+      if (rowHasLongHead) {
+        depths.longOrder = builtInOrder.captureLongNote();
+        depths.primaryDepth = depths.longOrder->endpointDepth;
+      } else {
+        depths.primaryDepth = builtInOrder.next();
+      }
+    }
+    if (needsInvisibleDepth) {
+      depths.invisibleDepth = builtInOrder.next();
+    }
+  }
+
   gameplay_note_submission_order::Allocator order;
   std::unordered_set<ChartVisualId> consumedLongEndpoints;
   const auto atNoteLimit = [&result, &request]() {
@@ -247,7 +351,7 @@ PlayfieldProjectionResult PlayfieldProjection::project(
         const auto *tailTimeline = tailTimelineIt->second;
         const double tailScrollDelta =
             tailTimeline->scrollPosition - result.currentScrollPosition;
-        if (!isVisible(tailScrollDelta, request) && !isVisible(scrollDelta, request)) {
+        if (!isLongIntervalVisible(scrollDelta, tailScrollDelta, request)) {
           continue;
         }
         if (atNoteLimit()) {
@@ -258,7 +362,12 @@ PlayfieldProjectionResult PlayfieldProjection::project(
           continue;
         }
         const auto *tailState = stateFor(tail->id);
-        const auto longOrder = order.captureLongNote();
+        const auto rowDepthIt = builtInDepths.find(note->timelineId);
+        const auto builtInLongOrder =
+            rowDepthIt != builtInDepths.end() &&
+                    rowDepthIt->second.longOrder.has_value()
+                ? *rowDepthIt->second.longOrder
+                : gameplay_note_submission_order::LongNoteOrder{};
         result.longNotes.push_back(
             {.headId = note->id,
              .tailId = tail->id,
@@ -276,7 +385,11 @@ PlayfieldProjectionResult PlayfieldProjection::project(
                             (noteState->judged || noteState->dead),
              .tailJudged = tailState != nullptr &&
                             (tailState->judged || tailState->dead),
-             .submissionOrdinal = longOrder.endpointDepth});
+             .headDead = noteState != nullptr && noteState->dead,
+             .tailDead = tailState != nullptr && tailState->dead,
+             .submissionOrdinal = order.next(),
+             .bodyDepth = builtInLongOrder.bodyDepth,
+             .endpointDepth = builtInLongOrder.endpointDepth});
         consumedLongEndpoints.insert(note->id);
         consumedLongEndpoints.insert(tail->id);
         continue;
@@ -303,7 +416,16 @@ PlayfieldProjectionResult PlayfieldProjection::project(
          .kind = note->kind,
          .scrollDelta = scrollDelta,
          .judged = noteState != nullptr && noteState->judged,
-         .submissionOrdinal = order.next()});
+         .submissionOrdinal = order.next(),
+         .builtInDepth = [&]() {
+           const auto found = builtInDepths.find(note->timelineId);
+           if (found == builtInDepths.end()) {
+             return std::uint32_t{0};
+           }
+           return note->kind == ChartVisualNoteKind::Invisible
+                      ? found->second.invisibleDepth.value_or(0)
+                      : found->second.primaryDepth.value_or(0);
+         }()});
   }
   return result;
 }

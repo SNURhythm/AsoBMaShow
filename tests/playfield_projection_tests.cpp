@@ -181,5 +181,200 @@ int main() {
     std::cerr << "projection note budget contract failed\n";
     return EXIT_FAILURE;
   }
+
+  // Desired DTO contract: ProjectedPlayfieldNote::builtInDepth gives a
+  // same-row normal and mine the legacy row-primary depth together, while an
+  // invisible note receives its own later built-in depth. Submission ordinals
+  // remain a unique authored stream for Skin2DRenderer.
+  PlayfieldChartVisualModel sharedRowDepthModel;
+  sharedRowDepthModel.laneOrder = {1, 2};
+  sharedRowDepthModel.timelines = {
+      {.id = 50, .timeMicros = 2'000'000, .scrollPosition = 10.0,
+       .retainedForProjection = true, .authoredOrdinal = 0},
+  };
+  sharedRowDepthModel.notes = {
+      {.id = 501, .timelineId = 50, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 0},
+      {.id = 502, .timelineId = 50, .lane = 2,
+       .kind = ChartVisualNoteKind::Mine, .authoredOrdinal = 1},
+      {.id = 503, .timelineId = 50, .lane = 1,
+       .kind = ChartVisualNoteKind::Invisible, .authoredOrdinal = 2},
+  };
+  PlayfieldVisualState sharedRowDepthState;
+  sharedRowDepthState.clock.visualTimeMicros = 1'000'000;
+  const auto sharedRowDepthResult = projection.project(
+      sharedRowDepthModel, sharedRowDepthState,
+      {.includeInvisibleNotes = true});
+  if (sharedRowDepthResult.notes.size() != 3 ||
+      sharedRowDepthResult.notes[0].noteId != 501 ||
+      sharedRowDepthResult.notes[0].submissionOrdinal != 181U ||
+      sharedRowDepthResult.notes[1].noteId != 502 ||
+      sharedRowDepthResult.notes[1].submissionOrdinal != 182U ||
+      sharedRowDepthResult.notes[2].noteId != 503 ||
+      sharedRowDepthResult.notes[2].submissionOrdinal != 183U ||
+      sharedRowDepthResult.notes[0].builtInDepth != 183U ||
+      sharedRowDepthResult.notes[1].builtInDepth != 183U ||
+      sharedRowDepthResult.notes[2].builtInDepth != 184U) {
+    std::cerr << "same-row playable and invisible depth contract failed\n";
+    return EXIT_FAILURE;
+  }
+
+  PlayfieldChartVisualModel pastLongDepthModel;
+  pastLongDepthModel.laneOrder = {1};
+  pastLongDepthModel.timelines = {
+      {.id = 60, .timeMicros = 0, .scrollPosition = 0.0,
+       .retainedForProjection = true, .authoredOrdinal = 0},
+      {.id = 61, .timeMicros = 1'000'000, .scrollPosition = 1.0,
+       .retainedForProjection = true, .authoredOrdinal = 1},
+  };
+  pastLongDepthModel.notes = {
+      {.id = 601, .timelineId = 60, .pairId = 602, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 0},
+      {.id = 602, .timelineId = 61, .pairId = 601, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 1},
+  };
+  PlayfieldVisualState pastLongDepthState;
+  pastLongDepthState.clock.visualTimeMicros = 0;
+  const auto pastLongDepthResult = projection.project(
+      pastLongDepthModel, pastLongDepthState, {});
+  // Desired DTO contract: the always pre-reserved past-long body/endpoint
+  // depths are 181/182, so the first authored long note exposes body 183 and
+  // endpoint 184 while its submission ordinal remains a separate, unique
+  // authored-stream value.
+  if (pastLongDepthResult.longNotes.size() != 1 ||
+      pastLongDepthResult.longNotes[0].bodyDepth != 183U ||
+      pastLongDepthResult.longNotes[0].endpointDepth != 184U ||
+      pastLongDepthResult.longNotes[0].submissionOrdinal == 0U) {
+    std::cerr << "past long-note depth reservation contract failed\n";
+    return EXIT_FAILURE;
+  }
+
+  PlayfieldChartVisualModel spanningLongModel;
+  spanningLongModel.laneOrder = {1};
+  spanningLongModel.timelines = {
+      {.id = 70, .timeMicros = 0, .scrollPosition = -3.0,
+       .retainedForProjection = true, .authoredOrdinal = 0},
+      {.id = 71, .timeMicros = 500'000, .scrollPosition = 0.0,
+       .retainedForProjection = true, .authoredOrdinal = 1},
+      {.id = 72, .timeMicros = 1'000'000, .scrollPosition = 3.0,
+       .retainedForProjection = true, .authoredOrdinal = 2},
+  };
+  spanningLongModel.notes = {
+      {.id = 701, .timelineId = 70, .pairId = 702, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 0},
+      {.id = 702, .timelineId = 72, .pairId = 701, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 1},
+  };
+  PlayfieldVisualState spanningLongState;
+  spanningLongState.clock.visualTimeMicros = 500'000;
+  const auto spanningLongResult = projection.project(
+      spanningLongModel, spanningLongState,
+      {.visibleScrollBefore = 1.0, .visibleScrollAfter = 1.0});
+  if (spanningLongResult.longNotes.size() != 1 ||
+      spanningLongResult.longNotes[0].headId != 701 ||
+      spanningLongResult.longNotes[0].tailId != 702) {
+    std::cerr << "long note spanning both viewport bounds was culled\n";
+    return EXIT_FAILURE;
+  }
+
+  PlayfieldChartVisualModel longStateModel;
+  longStateModel.laneOrder = {1};
+  longStateModel.timelines = {
+      {.id = 80, .timeMicros = 0, .scrollPosition = 0.0,
+       .retainedForProjection = true, .authoredOrdinal = 0},
+      {.id = 81, .timeMicros = 1'000'000, .scrollPosition = 1.0,
+       .retainedForProjection = true, .authoredOrdinal = 1},
+  };
+  longStateModel.notes = {
+      {.id = 801, .timelineId = 80, .pairId = 802, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 0},
+      {.id = 802, .timelineId = 81, .pairId = 801, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::LN,
+       .authoredOrdinal = 1},
+      {.id = 803, .timelineId = 80, .pairId = 804, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::CN,
+       .authoredOrdinal = 2},
+      {.id = 804, .timelineId = 81, .pairId = 803, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::CN,
+       .authoredOrdinal = 3},
+      {.id = 805, .timelineId = 80, .pairId = 806, .lane = 1,
+       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::CN,
+       .authoredOrdinal = 4},
+      {.id = 806, .timelineId = 81, .pairId = 805, .lane = 1,
+       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::CN,
+       .authoredOrdinal = 5},
+  };
+  PlayfieldVisualState longState;
+  longState.clock.visualTimeMicros = 500'000;
+  longState.notes = {
+      {.id = 801, .dead = true},
+      {.id = 803, .judged = true},
+      {.id = 804, .judged = true},
+      {.id = 805, .judged = true},
+      {.id = 806, .dead = true},
+  };
+  const auto longStateResult = projection.project(longStateModel, longState, {});
+  // Desired DTO contract: ProjectedLongNoteDescriptor::headDead and
+  // ::tailDead preserve death independently from judgement, so a dead-head
+  // orphan, an early-release CN tail, and a dead resolved tail do not collapse
+  // to the same pair of judged booleans.
+  if (longStateResult.longNotes.size() != 3 ||
+      !longStateResult.longNotes[0].headJudged ||
+      longStateResult.longNotes[0].tailJudged ||
+      !longStateResult.longNotes[0].headDead ||
+      longStateResult.longNotes[0].tailDead ||
+      longStateResult.longNotes[1].mode != ChartLongNoteMode::CN ||
+      !longStateResult.longNotes[1].headJudged ||
+      !longStateResult.longNotes[1].tailJudged ||
+      longStateResult.longNotes[1].headDead ||
+      longStateResult.longNotes[1].tailDead ||
+      !longStateResult.longNotes[2].headJudged ||
+      !longStateResult.longNotes[2].tailJudged ||
+      longStateResult.longNotes[2].headDead ||
+      !longStateResult.longNotes[2].tailDead) {
+    std::cerr << "long-note dead and resolved state preservation failed\n";
+    return EXIT_FAILURE;
+  }
+
+  PlayfieldChartVisualModel reverseStopModel;
+  reverseStopModel.laneOrder = {1};
+  reverseStopModel.timelines = {
+      {.id = 90, .timeMicros = 0, .scrollPosition = 0.0, .bpm = 120.0,
+       .retainedForProjection = true, .authoredOrdinal = 0},
+      {.id = 91, .timeMicros = 1'000'000, .scrollPosition = -1.0, .bpm = 120.0,
+       .stopMicros = 500'000, .retainedForProjection = true, .authoredOrdinal = 1},
+      {.id = 92, .timeMicros = 1'000'000, .scrollPosition = -1.0, .bpm = 120.0,
+       .retainedForProjection = true, .authoredOrdinal = 2},
+      {.id = 93, .timeMicros = 2'000'000, .scrollPosition = -2.0, .bpm = 120.0,
+       .retainedForProjection = true, .authoredOrdinal = 3},
+  };
+  reverseStopModel.notes = {
+      {.id = 901, .timelineId = 91, .lane = 1,
+       .kind = ChartVisualNoteKind::Normal, .authoredOrdinal = 0},
+      {.id = 902, .timelineId = 92, .lane = 1,
+       .kind = ChartVisualNoteKind::Mine, .authoredOrdinal = 1},
+  };
+  PlayfieldVisualState reverseStopState;
+  reverseStopState.clock.visualTimeMicros = 1'250'000;
+  const auto reverseStopResult = projection.project(
+      reverseStopModel, reverseStopState,
+      {.visibleScrollBefore = 0.25, .visibleScrollAfter = 0.25});
+  if (!closeTo(reverseStopResult.currentScrollPosition, -1.25) ||
+      reverseStopResult.timelines.size() != 2 ||
+      reverseStopResult.timelines[0].timelineId != 91 ||
+      reverseStopResult.timelines[1].timelineId != 92 ||
+      reverseStopResult.notes.size() != 2 ||
+      reverseStopResult.notes[0].noteId != 901 ||
+      reverseStopResult.notes[1].noteId != 902 ||
+      reverseStopResult.notes[0].submissionOrdinal >=
+          reverseStopResult.notes[1].submissionOrdinal) {
+    std::cerr << "reverse scroll, stop, and equal-row traversal contract failed\n";
+    return EXIT_FAILURE;
+  }
   return EXIT_SUCCESS;
 }
