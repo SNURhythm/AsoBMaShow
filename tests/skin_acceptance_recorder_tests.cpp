@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <locale>
 #include <map>
 #include <mutex>
 #include <span>
@@ -23,6 +24,11 @@ using namespace skin;
 using namespace std::chrono_literals;
 
 int failures = 0;
+
+class CommaDecimalPunct final : public std::numpunct<char> {
+protected:
+  char do_decimal_point() const override { return ','; }
+};
 
 void expect(bool condition, std::string_view message) {
   if (!condition) {
@@ -264,7 +270,10 @@ void testPerformanceStateMachineWorkerTicketAndSanitizedPayload() {
   expect(recorder.bindSession(facts()), "matching scene facts bind");
   expect(recorder.state() == SkinAcceptanceCaptureState::WarmingUp,
          "performance binding starts warmup");
+  const auto previousLocale = std::locale::global(
+      std::locale(std::locale::classic(), new CommaDecimalPunct));
   completePerformanceRun(recorder);
+  std::locale::global(previousLocale);
 
   const auto ticket = recorder.currentExportTicket();
   expect(ticket.has_value() && ticket->value != 0,
@@ -300,6 +309,10 @@ void testPerformanceStateMachineWorkerTicketAndSanitizedPayload() {
              writer.payload.find("\"recordingEndMicros\":211000000") !=
                  std::string::npos,
          "export preserves trusted exact 30/180 visual-clock boundaries");
+  expect(writer.payload.find("\"missedPresentationPercent\":0") !=
+             std::string::npos,
+         "performance percentages stay locale-independent JSON numbers on the "
+         "iOS 14 formatter");
   expect(
       writer.payload.find("private-profile") == std::string::npos &&
           writer.payload.find("private-package") == std::string::npos &&

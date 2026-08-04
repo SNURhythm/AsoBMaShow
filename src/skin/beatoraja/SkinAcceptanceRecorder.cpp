@@ -6,8 +6,13 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <cmath>
+#include <iomanip>
 #include <limits>
+#include <locale>
 #include <mutex>
+#include <sstream>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -200,13 +205,16 @@ void appendSigned(std::string &output, std::int64_t value) {
 }
 
 void appendDouble(std::string &output, double value) {
-  std::array<char, 64> buffer{};
-  const auto [end, error] =
-      std::to_chars(buffer.data(), buffer.data() + buffer.size(), value,
-                    std::chars_format::general, 8);
-  if (error == std::errc{}) {
-    output.append(buffer.data(), end);
+  if (!std::isfinite(value)) {
+    throw std::runtime_error("non-finite acceptance metric");
   }
+  std::ostringstream stream;
+  stream.imbue(std::locale::classic());
+  stream << std::setprecision(8) << std::defaultfloat << value;
+  if (!stream) {
+    throw std::runtime_error("acceptance metric formatting failed");
+  }
+  output += stream.str();
 }
 
 void appendQuoted(std::string &output, std::string_view value) {
