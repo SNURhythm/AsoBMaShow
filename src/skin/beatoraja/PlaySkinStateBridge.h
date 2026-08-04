@@ -122,6 +122,7 @@ public:
                   const PlayfieldProjectionResult &);
   SkinHostCallResult updateCustomObjects();
   SkinHostCallResult executeEvent(int, std::span<const int> arguments);
+  SkinHostCallResult invokeWriter(SkinFloatWriterId, double normalizedValue);
   [[nodiscard]] PlaySkinFrameCommit commitFrame();
   void discardFrame() noexcept;
 
@@ -158,6 +159,8 @@ private:
   void reportUnsupported(std::string_view kind,
                          const SkinBuiltinPropertySelector &);
   void reportUnsupportedEvent(int);
+  static LuaSkinEventExecutionResult executeHostEvent(
+      void *, int, std::span<const int>) noexcept;
   [[nodiscard]] const PlayfieldVisualState *state() const noexcept;
   [[nodiscard]] std::optional<int>
   numericSelector(const SkinBuiltinPropertySelector &) const noexcept;
@@ -166,6 +169,7 @@ private:
   FramePhase phase_ = FramePhase::Closed;
   bool runtimeBound_ = false;
   bool customObjectsUpdated_ = false;
+  bool writerInvocationActive_ = false;
   std::optional<PlayfieldVisualState> state_;
   std::uint64_t frameSerial_ = 0;
   std::uint64_t lastAcceptedFrameSerial_ = 0;

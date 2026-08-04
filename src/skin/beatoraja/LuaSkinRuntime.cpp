@@ -1266,6 +1266,13 @@ void LuaSkinRuntime::setFrameState(ISkinFrameState *state) noexcept {
   }
 }
 
+void LuaSkinRuntime::setEventExecutor(
+    LuaSkinEventExecutor executor) noexcept {
+  if (impl_ && impl_->hostModules) {
+    impl_->hostModules->setEventExecutor(executor);
+  }
+}
+
 LuaOperationResult
 LuaSkinRuntime::beginFrame(std::uint64_t visualStateSequence) {
   if (!impl_ || impl_->purpose != LuaRuntimePurpose::Gameplay ||
@@ -1291,6 +1298,11 @@ LuaCallbackResult LuaSkinRuntime::invoke(LuaCallbackId callback,
     return {.failure =
                 makeDiagnostic("skin_lua_callback_phase_invalid",
                                "Lua callback requires an active render frame")};
+  }
+  if (impl_->shared->callbackActive || impl_->shared->executionActive) {
+    return {.failure = makeDiagnostic(
+                "skin_lua_callback_reentrant",
+                "Lua callback entry is already active on this runtime")};
   }
   if (impl_->shared->frameExhausted) {
     return {.failure =

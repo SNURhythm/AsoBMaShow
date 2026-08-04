@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -88,8 +90,32 @@ public:
         entry_(*normalizeEntryPath(package_, "skin/main.luaskin").entry) {
     const auto source = temp_.root() / "source";
     writeText(source / "skin/main.luaskin", R"lua(
-if not skin_config then return {type=0} end
-return {type=0, probe_timer=function() return main_state.timer(41) end}
+local captured_main_state = require("main_state")
+return {
+  type=0,
+  probe_timer=function() return captured_main_state.timer(41) end,
+  normalized_writer=function(value)
+    assert(value >= 0 and value <= 1)
+    captured_main_state.event_exec(900, math.floor(value * 100 + 0.5))
+  end,
+  readonly_writer=function(value)
+    assert(captured_main_state.event_exec(301))
+    assert(captured_main_state.event_exec(302, 1))
+    for event_id = 303, 308 do
+      assert(captured_main_state.event_exec(event_id, 1, 2))
+    end
+    return value
+  end,
+  forbidden_writer=function() captured_main_state.event_exec(74) end,
+  unknown_writer=function() captured_main_state.event_exec(999) end,
+  excessive_arity_writer=function()
+    captured_main_state.event_exec(301, 1, 2, 3)
+  end,
+  stage_then_fail_writer=function()
+    captured_main_state.event_exec(900, 77)
+    error("rollback staged event")
+  end,
+}
 )lua");
     SkinTreeSnapshotter snapshotter(roots_, aliases_);
     auto snapshot = snapshotter.snapshot(source, package_, {}, {});
@@ -115,11 +141,15 @@ return {type=0, probe_timer=function() return main_state.timer(41) end}
     }
     auto header = runtime_->loadHeader();
     expect(header.value.has_value(), "runtime header executes");
+    if (header.value) {
+      retainCallbacks(*header.value);
+    }
     header.value.reset();
     auto configured = runtime_->loadConfigured({});
     expect(configured.value.has_value(), "runtime configured phase executes");
     if (configured.value) {
       probeTimer_ = configured.value->callbackNamed("probe_timer");
+      retainCallbacks(*configured.value);
     }
     expect(probeTimer_.has_value(), "runtime bridge callback is retained");
     configured.value.reset();
@@ -129,8 +159,23 @@ return {type=0, probe_timer=function() return main_state.timer(41) end}
   [[nodiscard]] bool ready() const noexcept { return runtime_ != nullptr; }
   LuaSkinRuntime &runtime() { return *runtime_; }
   [[nodiscard]] LuaCallbackId probeTimer() const { return *probeTimer_; }
+  [[nodiscard]] LuaCallbackId callback(std::string_view name) const {
+    const auto found = callbacks_.find(name);
+    return found == callbacks_.end() ? LuaCallbackId{} : found->second;
+  }
 
 private:
+  void retainCallbacks(LuaValueHandle &value) {
+    for (const std::string_view name : {
+             "normalized_writer", "readonly_writer", "forbidden_writer",
+             "unknown_writer", "excessive_arity_writer",
+             "stage_then_fail_writer"}) {
+      if (const auto callback = value.callbackNamed(name)) {
+        callbacks_.insert_or_assign(std::string{name}, *callback);
+      }
+    }
+  }
+
   TempDirectory temp_;
   SkinStorageRoots roots_;
   SkinPackageId package_;
@@ -139,6 +184,7 @@ private:
   std::optional<PreparedSkinRevision> prepared_;
   std::unique_ptr<LuaSkinRuntime> runtime_;
   std::optional<LuaCallbackId> probeTimer_;
+  std::map<std::string, LuaCallbackId, std::less<>> callbacks_;
 };
 
 PlayfieldVisualState stateAt(std::uint64_t serial) {
@@ -549,6 +595,103 @@ void testCustomObjectsRemainExplicitlyPendingSharedFrameOwnership() {
   (void)bridge.commitFrame();
 }
 
+void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  model.model.floatWriters = {
+      {.id = SkinFloatWriterId{1},
+       .source = runtime.callback("normalized_writer")},
+      {.id = SkinFloatWriterId{2},
+       .source = SkinBuiltinPropertySelector{.value = 4}},
+      {.id = SkinFloatWriterId{3},
+       .source = runtime.callback("readonly_writer")},
+      {.id = SkinFloatWriterId{4},
+       .source = runtime.callback("forbidden_writer")},
+      {.id = SkinFloatWriterId{5},
+       .source = runtime.callback("unknown_writer")},
+      {.id = SkinFloatWriterId{6},
+       .source = runtime.callback("excessive_arity_writer")},
+      {.id = SkinFloatWriterId{7},
+       .source = runtime.callback("stage_then_fail_writer")},
+  };
+  BeatorajaSkinConfiguration configuration;
+  auto rules = makePinnedSkinEventMutationTableV1();
+  std::vector<SkinEventMutationRule> testRules(rules.rules().begin(),
+                                                rules.rules().end());
+  testRules.push_back({.builtInEventId = 900,
+                       .kind = SkinEventMutationKind::SessionPresentation,
+                       .maximumArguments = 2});
+  SkinEventMutationTable mutations(std::move(testRules));
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = model,
+                              .configuration = configuration,
+                              .runtime = runtime.runtime(),
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(121), projectionAt(121));
+  expect(runtime.runtime().beginFrame(121).ok,
+         "writer transaction shares the renderer-owned Lua frame budget");
+
+  for (const double invalid : {
+           std::numeric_limits<double>::quiet_NaN(),
+           std::numeric_limits<double>::infinity(),
+           -std::numeric_limits<double>::infinity()}) {
+    const auto result = bridge.invokeWriter(SkinFloatWriterId{1}, invalid);
+    expect(result.status == SkinHostCallStatus::CriticalFailure &&
+               result.callbacksInvoked == 0,
+           "nonfinite writer input is rejected before Lua invocation");
+  }
+  expect(bridge.invokeWriter(SkinFloatWriterId{2}, 0.5).status ==
+             SkinHostCallStatus::Unsupported &&
+             bridge.invokeWriter(SkinFloatWriterId{999}, 0.5).status ==
+                 SkinHostCallStatus::Unsupported,
+         "built-in and missing writer sources fail closed in the model");
+
+  for (const double value : {-2.0, 2.0, 0.25}) {
+    const auto result = bridge.invokeWriter(SkinFloatWriterId{1}, value);
+    expect(result.status == SkinHostCallStatus::Completed &&
+               result.callbacksInvoked == 1,
+           "finite writer values clamp and invoke one explicit callback");
+  }
+  expect(bridge.invokeWriter(SkinFloatWriterId{3}, 0.5).status ==
+             SkinHostCallStatus::Completed,
+         "frozen read-only events accept zero through two arguments as no-ops");
+  for (const auto writer : {SkinFloatWriterId{4}, SkinFloatWriterId{5},
+                            SkinFloatWriterId{6}, SkinFloatWriterId{7}}) {
+    expect(bridge.invokeWriter(writer, 0.5).status ==
+               SkinHostCallStatus::CriticalFailure,
+           "unsupported event, excess arity, and callback failure reject the writer");
+  }
+
+  expect(bridge.executeEvent(74, {}).status == SkinHostCallStatus::Unsupported &&
+             bridge.executeEvent(999, {}).status ==
+                 SkinHostCallStatus::Unsupported,
+         "authority-changing and unknown direct events remain unsupported");
+  const auto committed = bridge.commitFrame();
+  expect(committed.frameSerial == 121 &&
+             committed.orderedMutations.size() == 3,
+         "failed callbacks roll back only their savepoint before one commit");
+  const std::array<int, 3> expectedArguments{0, 100, 25};
+  for (std::size_t index = 0;
+       index < committed.orderedMutations.size() &&
+       index < expectedArguments.size();
+       ++index) {
+    const auto *presentation =
+        std::get_if<SessionPresentationWrite>(&committed.orderedMutations[index]);
+    expect(presentation != nullptr && presentation->eventId == 900 &&
+               presentation->argumentCount == 1 &&
+               presentation->arguments[0] == expectedArguments[index],
+           "successful callback mutations preserve clamped authored order");
+  }
+  expect(bridge.commitFrame().frameSerial == 0,
+         "writer transaction cannot be committed twice");
+  bridge.discardFrame();
+  bridge.discardFrame();
+}
+
 } // namespace
 
 int main() {
@@ -557,5 +700,6 @@ int main() {
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
   testCustomObjectsRemainExplicitlyPendingSharedFrameOwnership();
+  testFloatWritersResolveLocallyAndRollbackCallbackMutations();
   return failures == 0 ? 0 : 1;
 }

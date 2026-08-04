@@ -14,6 +14,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -232,6 +233,7 @@ struct LuaSkinHostModulesImpl {
   bool allowOverlayWrites = false;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
+  LuaSkinEventExecutor eventExecutor;
   SkinCompatibilityDiagnostics diagnostics;
   std::vector<std::weak_ptr<LuaFileHandle>> handles;
   std::size_t openHandleCount = 0;
@@ -555,10 +557,47 @@ int mainStateTimer(lua_State *state) {
 }
 
 int mainStateEventExec(lua_State *state) {
-  (void)state;
-  return luaL_error(state,
-                    "main_state.event_exec is unavailable without a safe "
-                    "play-session mutation executor");
+  auto *impl = host(state);
+  const int count = lua_gettop(state);
+  if (count < 1 || count > 3) {
+    return luaL_error(
+        state,
+        "main_state.event_exec expects an event ID and zero to two arguments");
+  }
+  const int eventId = boundedIntegerArgument(state, 1, 0, false);
+  std::array<int, 2> arguments{};
+  for (int index = 2; index <= count; ++index) {
+    arguments[static_cast<std::size_t>(index - 2)] =
+        boundedIntegerArgument(state, index, 0, false);
+  }
+  if (!impl->eventExecutor) {
+    impl->storeError("skin_lua_event_executor_unavailable",
+                     "main_state.event_exec has no active frame executor");
+    return raiseStoredError(state, impl);
+  }
+
+  LuaSkinEventExecutionResult result;
+  try {
+    result = impl->eventExecutor.execute(
+        impl->eventExecutor.context, eventId,
+        std::span<const int>{arguments.data(),
+                             static_cast<std::size_t>(count - 1)});
+  } catch (...) {
+    impl->storeError("skin_lua_event_execution_failed",
+                     "main_state.event_exec failed within host limits");
+    return raiseStoredError(state, impl);
+  }
+  if (!result.ok()) {
+    impl->storeError(
+        result.failure->code.empty() ? "skin_lua_event_execution_failed"
+                                     : result.failure->code,
+        result.failure->message.empty() ? "main_state.event_exec was rejected"
+                                        : result.failure->message,
+        result.failure->virtualPath);
+    return raiseStoredError(state, impl);
+  }
+  lua_pushboolean(state, 1);
+  return 1;
 }
 
 int pushNamedInteger(lua_State *state, std::string_view name) {
@@ -1573,6 +1612,13 @@ std::optional<SkinDiagnostic> LuaSkinHostModules::enableStateAccessors() {
 void LuaSkinHostModules::setFrameState(ISkinFrameState *state) noexcept {
   if (impl_) {
     impl_->frameState = state;
+  }
+}
+
+void LuaSkinHostModules::setEventExecutor(
+    LuaSkinEventExecutor executor) noexcept {
+  if (impl_) {
+    impl_->eventExecutor = executor;
   }
 }
 

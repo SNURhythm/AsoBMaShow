@@ -1,5 +1,7 @@
 #include "PlaySkinStateBridge.h"
 
+#include "LuaSkinHostModules.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -92,6 +94,8 @@ void PlaySkinStateBridge::beginFrame(
   customObjectsUpdated_ = false;
 
   context_.runtime.setFrameState(this);
+  context_.runtime.setEventExecutor(
+      {.context = this, .execute = &PlaySkinStateBridge::executeHostEvent});
   runtimeBound_ = true;
   lastAcceptedFrameSerial_ = frameSerial_;
 }
@@ -159,11 +163,108 @@ PlaySkinStateBridge::executeEvent(int eventId, std::span<const int> arguments) {
   if (rule->kind == SkinEventMutationKind::ReadOnly) {
     return {.diagnostics = diagnostics_};
   }
+  if (rule->kind == SkinEventMutationKind::SessionPresentation) {
+    SessionPresentationWrite mutation{
+        .eventId = eventId,
+        .argumentCount = static_cast<std::uint8_t>(arguments.size())};
+    std::ranges::copy(arguments, mutation.arguments.begin());
+    try {
+      staged_.orderedMutations.emplace_back(std::move(mutation));
+    } catch (...) {
+      reportDiagnostic(
+          {.code = "skin.play_state.mutation_limit_exceeded",
+           .message = "Skin event mutation could not be staged."});
+      return {.status = SkinHostCallStatus::CriticalFailure,
+              .diagnostics = diagnostics_};
+    }
+    return {.diagnostics = diagnostics_};
+  }
   // Version 1 intentionally has no mutating rules. Keeping the default closed
   // prevents a future table-only edit from bypassing session integration.
   reportUnsupportedEvent(eventId);
   return {.status = SkinHostCallStatus::Unsupported,
           .diagnostics = diagnostics_};
+}
+
+SkinHostCallResult PlaySkinStateBridge::invokeWriter(
+    SkinFloatWriterId writerId, double normalizedValue) {
+  if (phase_ != FramePhase::Active) {
+    reportDiagnostic({.code = "skin.play_state.frame_inactive",
+                      .message = "Skin writers require an active frame."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+  if (!std::isfinite(normalizedValue)) {
+    reportDiagnostic(
+        {.code = "skin.play_state.writer_value_nonfinite",
+         .message = "Skin writer input must be finite before clamping."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+  if (writerInvocationActive_) {
+    reportDiagnostic(
+        {.code = "skin.play_state.writer_reentrant",
+         .message = "A skin writer callback is already active."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
+
+  const auto binding = std::ranges::find_if(
+      context_.model.model.floatWriters,
+      [writerId](const SkinFloatWriterBinding &candidate) {
+        return candidate.id == writerId;
+      });
+  if (binding == context_.model.model.floatWriters.end()) {
+    reportDiagnostic(
+        {.code = "skin.play_state.writer_missing",
+         .message = "Skin writer ID is not present in the validated model.",
+         .virtualPath = std::to_string(writerId.value)});
+    return {.status = SkinHostCallStatus::Unsupported,
+            .diagnostics = diagnostics_};
+  }
+  if (std::holds_alternative<SkinBuiltinPropertySelector>(binding->source)) {
+    reportDiagnostic(
+        {.code = "skin.play_state.writer_builtin_unsupported",
+         .message = "No built-in gameplay writer is allowlisted for this "
+                    "skin surface.",
+         .virtualPath = std::to_string(writerId.value)});
+    return {.status = SkinHostCallStatus::Unsupported,
+            .diagnostics = diagnostics_};
+  }
+
+  const std::size_t savepoint = staged_.orderedMutations.size();
+  writerInvocationActive_ = true;
+  LuaCallbackResult callback;
+  try {
+    const std::array<LuaScalar, 1> arguments{
+        LuaScalar{std::clamp(normalizedValue, 0.0, 1.0)}};
+    callback = context_.runtime.invoke(
+        std::get<LuaCallbackId>(binding->source), arguments);
+  } catch (...) {
+    writerInvocationActive_ = false;
+    staged_.orderedMutations.resize(savepoint);
+    reportDiagnostic({.code = "skin.play_state.writer_callback_failed",
+                      .message = "Skin writer callback failed within host "
+                                 "limits."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  writerInvocationActive_ = false;
+  if (callback.failure) {
+    staged_.orderedMutations.resize(savepoint);
+    const std::string code = callback.failure->code;
+    reportDiagnostic(std::move(*callback.failure));
+    const bool budgetExceeded =
+        code == "skin_lua_frame_budget_exceeded" ||
+        code == "skin_lua_instruction_limit_exceeded" ||
+        code == "skin_lua_wall_time_limit_exceeded";
+    return {.status = budgetExceeded ? SkinHostCallStatus::BudgetExceeded
+                                     : SkinHostCallStatus::CriticalFailure,
+            .callbacksInvoked = 1,
+            .diagnostics = diagnostics_};
+  }
+  return {.callbacksInvoked = 1, .diagnostics = diagnostics_};
 }
 
 PlaySkinFrameCommit PlaySkinStateBridge::commitFrame() {
@@ -434,15 +535,43 @@ PlaySkinStateBridge::diagnostics() const noexcept {
 
 void PlaySkinStateBridge::closeFrame() noexcept {
   if (runtimeBound_) {
+    context_.runtime.setEventExecutor({});
     context_.runtime.setFrameState(nullptr);
     runtimeBound_ = false;
   }
   phase_ = FramePhase::Closed;
   customObjectsUpdated_ = false;
+  writerInvocationActive_ = false;
   state_.reset();
   frameSerial_ = 0;
   projection_ = {};
   staged_ = {};
+}
+
+LuaSkinEventExecutionResult PlaySkinStateBridge::executeHostEvent(
+    void *opaque, int eventId, std::span<const int> arguments) noexcept {
+  if (opaque == nullptr) {
+    return {.failure = SkinDiagnostic{
+                .code = "skin_lua_event_executor_unavailable",
+                .message = "Skin event executor has no active bridge."}};
+  }
+  auto &bridge = *static_cast<PlaySkinStateBridge *>(opaque);
+  try {
+    const auto result = bridge.executeEvent(eventId, arguments);
+    if (result.status == SkinHostCallStatus::Completed) {
+      return {};
+    }
+    if (!result.diagnostics.empty()) {
+      return {.failure = result.diagnostics.back()};
+    }
+    return {.failure = SkinDiagnostic{
+                .code = "skin_lua_event_execution_failed",
+                .message = "Skin event execution was rejected."}};
+  } catch (...) {
+    return {.failure = SkinDiagnostic{
+                .code = "skin_lua_event_execution_failed",
+                .message = "Skin event execution failed within host limits."}};
+  }
 }
 
 void PlaySkinStateBridge::reportDiagnostic(SkinDiagnostic diagnostic) {

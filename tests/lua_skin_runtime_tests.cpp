@@ -207,6 +207,21 @@ LuaCallbackId requireCallback(LuaValueHandle &value, std::string_view name) {
   return callback.value_or(LuaCallbackId{});
 }
 
+struct ReentrantEventExecutorContext {
+  LuaSkinRuntime *runtime = nullptr;
+  LuaCallbackId callback;
+  std::optional<SkinDiagnostic> nestedFailure;
+};
+
+LuaSkinEventExecutionResult executeReentrantEvent(
+    void *opaque, int, std::span<const int>) noexcept {
+  auto &context = *static_cast<ReentrantEventExecutorContext *>(opaque);
+  const std::array<LuaScalar, 1> arguments{LuaScalar{0.5}};
+  const auto nested = context.runtime->invoke(context.callback, arguments);
+  context.nestedFailure = nested.failure;
+  return {.failure = nested.failure};
+}
+
 void loadThroughConfigured(RuntimeHarness &harness,
                            BeatorajaSkinConfiguration configuration = {}) {
   expect(harness.runtime->loadHeader().value.has_value(),
@@ -703,6 +718,43 @@ void testFrameTotalsResetOnlyForNewVisualState() {
          "forged/stale callback IDs are rejected");
 }
 
+void testCallbackReentrancyIsRejectedWithoutResettingBudgets() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::Gameplay, "writer_transaction.luaskin");
+  if (!harness) {
+    return;
+  }
+  auto header = harness->runtime->loadHeader();
+  if (!header.value) {
+    expect(false, "writer transaction fixture header succeeds");
+    return;
+  }
+  const LuaCallbackId callback =
+      requireCallback(*header.value, "reentrant_writer");
+  expect(harness->runtime->loadConfigured({}).value.has_value() &&
+             harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(19).ok,
+         "reentrancy fixture enters one shared callback frame");
+
+  ReentrantEventExecutorContext executor{.runtime = harness->runtime.get(),
+                                         .callback = callback};
+  harness->runtime->setEventExecutor(
+      {.context = &executor, .execute = executeReentrantEvent});
+  const std::array<LuaScalar, 1> arguments{LuaScalar{0.5}};
+  const auto outer = harness->runtime->invoke(callback, arguments);
+  expect(executor.nestedFailure &&
+             executor.nestedFailure->code == "skin_lua_callback_reentrant" &&
+             outer.failure &&
+             outer.failure->code == "skin_lua_callback_reentrant",
+         "nested callback entry returns the stable reentrancy diagnostic");
+
+  harness->runtime->setEventExecutor({});
+  const auto next = harness->runtime->invoke(callback, arguments);
+  expect(next.failure &&
+             next.failure->code == "skin_lua_event_executor_unavailable",
+         "reentrancy rejection leaves the existing frame budget usable");
+}
+
 void testCleanTransitionInvalidatesOpenReadHandle() {
   auto harness = makeHarness(LuaRuntimePurpose::Gameplay,
                              "captured_file_operation.luaskin");
@@ -810,6 +862,7 @@ int main() {
   testCallbackWallTimeIncludesHostCalls();
   testCallbackResultStringsUseTheFixedHostLimit();
   testFrameTotalsResetOnlyForNewVisualState();
+  testCallbackReentrancyIsRejectedWithoutResettingBudgets();
   testCleanTransitionInvalidatesOpenReadHandle();
   testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation();
   if (failures != 0) {
