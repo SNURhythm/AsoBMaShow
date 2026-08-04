@@ -3,6 +3,9 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <optional>
+#include <span>
+#include <vector>
 
 namespace {
 
@@ -105,6 +108,64 @@ void testZeroStartAndFrameBoundariesAreDeterministic() {
           "reset restores the deterministic default miss state");
 }
 
+void testMissCompositionSuppressesBaseAndLayerWithoutFallback() {
+  GameplayBgaMissStateTracker tracker;
+  tracker.onJudge(JudgeResult(Poor, 0), 0, clockAt(100));
+  const auto activeMiss = tracker.snapshot();
+  const auto noSequence = SelectGameplayBgaMissComposition(
+      std::nullopt, activeMiss, 100);
+  require(noSequence.composition == GameplayBgaComposition::BaseThenLayer &&
+              !noSequence.resourceId.has_value(),
+          "an absent channel-06 sequence leaves base and layer visible");
+
+  const auto beforeStart = SelectGameplayBgaMissComposition(
+      std::span<const int>{}, activeMiss, 99);
+  const auto atEnd = SelectGameplayBgaMissComposition(
+      std::span<const int>{}, activeMiss,
+      100 + kDefaultMissLayerDurationMicros);
+  require(beforeStart.composition == GameplayBgaComposition::BaseThenLayer &&
+              atEnd.composition == GameplayBgaComposition::BaseThenLayer,
+          "miss suppression is inactive before its start and at its exclusive end");
+
+  const auto zeroFrames = SelectGameplayBgaMissComposition(
+      std::span<const int>{}, activeMiss, 100);
+  require(zeroFrames.composition == GameplayBgaComposition::MissOnly &&
+              !zeroFrames.resourceId.has_value(),
+          "an active empty sequence suppresses base and layer without a resource");
+
+  const std::vector<int> oneFrame{41};
+  const auto one = SelectGameplayBgaMissComposition(
+      std::span<const int>(oneFrame), activeMiss, 300'000);
+  require(one.composition == GameplayBgaComposition::MissOnly &&
+              one.resourceId == 41,
+          "a one-frame miss sequence selects its only authored resource");
+
+  const std::vector<int> fourFrames{10, 20, 30, 40};
+  const auto first = SelectGameplayBgaMissComposition(
+      std::span<const int>(fourFrames), activeMiss, 100);
+  const auto second = SelectGameplayBgaMissComposition(
+      std::span<const int>(fourFrames), activeMiss, 166'767);
+  const auto third = SelectGameplayBgaMissComposition(
+      std::span<const int>(fourFrames), activeMiss, 333'434);
+  const auto fourth = SelectGameplayBgaMissComposition(
+      std::span<const int>(fourFrames), activeMiss, 499'999);
+  require(first.resourceId == 10 && second.resourceId == 20 &&
+              third.resourceId == 30 && fourth.resourceId == 30,
+          "a four-frame miss sequence preserves the pinned end-exclusive mapping");
+
+  const std::vector<int> blankFrame{kGameplayBgaAuthoredBlank};
+  const auto blank = SelectGameplayBgaMissComposition(
+      std::span<const int>(blankFrame), activeMiss, 100);
+  require(blank.composition == GameplayBgaComposition::MissOnly &&
+              !blank.resourceId.has_value(),
+          "an authored blank suppresses base and layer without fallback");
+
+  const auto afterSeekBack = SelectGameplayBgaMissComposition(
+      std::span<const int>(fourFrames), activeMiss, 100);
+  require(afterSeekBack.resourceId == 10,
+          "backward BGA time recomputes the selected miss frame without mutation");
+}
+
 } // namespace
 
 int main() {
@@ -112,5 +173,6 @@ int main() {
   testNoneJudgeDoesNotTriggerMissState();
   testComboZeroUsesBgaClockAndRepeatedZeroRetriggers();
   testZeroStartAndFrameBoundariesAreDeterministic();
+  testMissCompositionSuppressesBaseAndLayerWithoutFallback();
   return 0;
 }
