@@ -114,6 +114,7 @@ public:
   SkinFileResolveResult resolve(std::string_view virtualPath,
                                 SkinFileUse) const;
   SkinFileResolveResult resolveModule(std::string_view moduleName) const;
+  SkinFileReadResult readEntry(std::uint64_t maximumBytes) const;
   SkinFileReadResult read(std::string_view virtualPath, SkinFileUse,
                           std::uint64_t maximumBytes) const;
   SkinFileReadResult readModule(std::string_view moduleName,

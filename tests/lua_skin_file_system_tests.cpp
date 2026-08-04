@@ -227,6 +227,12 @@ void testWorkingDirectoryPackageCeilingAndModuleSearch() {
   }
   auto &fileSystem = *created.fileSystem;
 
+  const auto selectedEntry = fileSystem.readEntry(4096);
+  expect(!selectedEntry.failure &&
+             bytesToString(selectedEntry.bytes).find(
+                 "Task 8 virtual filesystem fixture") != std::string::npos,
+         "the selected entry is read directly from its typed identity");
+
   const auto entry = fileSystem.resolve("play.luaskin", SkinFileUse::LuaEntry);
   expect(entry.normalizedVirtualPath == "entry/play.luaskin" && !entry.failure,
          "entry references start at the entry parent");

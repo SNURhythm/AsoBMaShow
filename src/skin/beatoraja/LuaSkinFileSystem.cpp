@@ -2477,6 +2477,17 @@ LuaSkinFileSystem::resolveModule(std::string_view moduleName) const {
                              "Lua module is missing")};
 }
 
+SkinFileReadResult
+LuaSkinFileSystem::readEntry(std::uint64_t maximumBytes) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  if (auto denied = impl_->guard(RenderOperation::Read,
+                                 impl_->entry.packageRelativePath)) {
+    return {.failure = std::move(denied)};
+  }
+  return impl_->readNormalized(impl_->entry.packageRelativePath,
+                               SkinFileUse::LuaEntry, maximumBytes);
+}
+
 SkinFileReadResult LuaSkinFileSystem::read(std::string_view virtualPath,
                                            SkinFileUse use,
                                            std::uint64_t maximumBytes) const {
