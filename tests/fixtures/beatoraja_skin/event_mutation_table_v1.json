@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "beatorajaCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "provenance": "EventFactory.getEvent; MainStatePropertyLuaApiExporter.event_exec; CustomTimer.update; CustomEvent.update; Skin.updateCustomObjects",
+  "events": [
+    {"id": 74, "kind": "Unsupported", "minimumArguments": 0, "maximumArguments": 0, "configurationKey": ""},
+    {"id": 301, "kind": "ReadOnly", "minimumArguments": 0, "maximumArguments": 2, "configurationKey": ""},
+    {"id": 302, "kind": "ReadOnly", "minimumArguments": 0, "maximumArguments": 2, "configurationKey": ""},
+    {"id": 303, "kind": "ReadOnly", "minimumArguments": 0, "maximumArguments": 2, "configurationKey": ""},
+    {"id": 304, "kind": "ReadOnly", "minimumArguments": 0, "maximumArguments": 2, "configurationKey": ""},
+    {"id": 305, "kind": "ReadOnly", "minimumArguments": 0, "maximumArguments": 2, "configurationKey": ""},
+    {"id": 306, "kind": "ReadOnly", "minimumArguments": 0, "maximumArguments": 2, "configurationKey": ""},
+    {"id": 307, "kind": "ReadOnly", "minimumArguments": 0, "maximumArguments": 2, "configurationKey": ""},
+    {"id": 308, "kind": "ReadOnly", "minimumArguments": 0, "maximumArguments": 2, "configurationKey": ""}
+  ]
+}

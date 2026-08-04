@@ -14,6 +14,7 @@ struct lua_State;
 namespace skin {
 
 class LuaSkinFileSystem;
+class ISkinFrameState;
 struct LuaSkinHostModulesImpl;
 
 struct LuaSkinHostPolicy {
@@ -53,6 +54,8 @@ public:
 
   std::optional<SkinDiagnostic>
   installConfiguration(const BeatorajaSkinConfiguration &);
+  std::optional<SkinDiagnostic> enableStateAccessors();
+  void setFrameState(ISkinFrameState *) noexcept;
   LuaFileHandleInvalidationResult invalidateFileHandles() noexcept;
   std::span<const SkinCompatibilityDiagnostic> diagnostics() const noexcept;
 

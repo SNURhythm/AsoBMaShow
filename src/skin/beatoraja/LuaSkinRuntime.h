@@ -25,6 +25,7 @@ namespace skin {
 class LuaSkinFileSystem;
 class LuaSkinRuntime;
 class LuaSkinTableDecoder;
+class ISkinFrameState;
 
 enum class LuaRuntimePurpose : std::uint8_t {
   Catalog,
@@ -226,6 +227,7 @@ public:
   LuaValueResult
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
+  void setFrameState(ISkinFrameState *) noexcept;
   LuaOperationResult beginFrame(std::uint64_t visualStateSequence);
   LuaCallbackResult invoke(LuaCallbackId, std::span<const LuaScalar> arguments);
   LuaCallbackCompileResult compileCallbackScript(std::string_view,

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "beatorajaCommit": "c2ed5db1a46145ed10790c3872f717e95b59db9d",
+  "provenance": {
+    "BooleanPropertyFactory": "getBooleanProperty",
+    "IntegerPropertyFactory": "getIntegerProperty",
+    "FloatPropertyFactory": "getFloatProperty",
+    "StringPropertyFactory": "getStringProperty",
+    "TimerPropertyFactory": "getTimerProperty",
+    "MainStatePropertyLuaApiExporter": "export"
+  },
+  "cases": [
+    {
+      "name": "frame-lifetime",
+      "behavior": "one owned state/projection snapshot is visible only between a strictly increasing begin and its first commit or discard"
+    },
+    {
+      "name": "timer-off-sentinel",
+      "behavior": "every nonnegative timer ID is recognized; an unavailable value is exactly -9223372036854775808 without an unsupported diagnostic"
+    },
+    {
+      "name": "gauge-families",
+      "behavior": "types 0 through 2 are groove, types 3 through 5 are hard, and deciles plus qualification use the captured compiled gauge maximum and border"
+    },
+    {
+      "name": "audited-full-title",
+      "behavior": "string 12 is supported only when the immutable chart model contains an audited string-12 value; title is not substituted"
+    },
+    {
+      "name": "custom-objects-pending",
+      "behavior": "nonempty custom maps are explicitly unsupported until one session orchestrator owns the Lua frame shared by pre-draw custom callbacks and Skin2DRenderer evaluation"
+    }
+  ]
+}

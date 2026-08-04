@@ -319,6 +319,31 @@ void testStrictTwoPhaseStateMachineUsesOneState() {
          "configured execution cannot repeat in render phase");
 }
 
+void testMainStateAccessorsOpenOnlyAtRenderTransition() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::Gameplay, "render_main_state.luaskin");
+  if (!harness) {
+    return;
+  }
+  auto header = harness->runtime->loadHeader();
+  expect(header.value.has_value(),
+         "render main-state fixture sees an empty header module");
+  if (!header.value) {
+    return;
+  }
+  const LuaCallbackId callback =
+      requireCallback(*header.value, "render_main_state_ready");
+  expect(harness->runtime->loadConfigured({}).value.has_value(),
+         "configured entry receives main-state accessors on the header table");
+  expect(harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "configured main-state accessors remain usable in render");
+  const auto result = harness->runtime->invoke(callback, {});
+  const auto *ready = result.value ? std::get_if<bool>(&*result.value) : nullptr;
+  expect(ready != nullptr && *ready && !result.failure,
+         "the header-captured main-state table is populated in place");
+}
+
 void testConfiguredTableUsesCanonicalVirtualData() {
   auto harness =
       makeHarness(LuaRuntimePurpose::Validation, "configuration_table.luaskin");
@@ -771,6 +796,7 @@ int main() {
   testRuntimeContractsUseFrozenAuthoritiesAndProvenance();
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testStrictTwoPhaseStateMachineUsesOneState();
+  testMainStateAccessorsOpenOnlyAtRenderTransition();
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
   testValueHandlesLoseAuthorityWhenTheirRuntimeCloses();

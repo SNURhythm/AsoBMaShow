@@ -5,6 +5,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include "LuaSkinFileSystem.h"
+#include "Skin2DRenderer.h"
 
 extern "C" {
 #include <lauxlib.h>
@@ -227,6 +228,7 @@ int bitReplace(lua_State *state) {
 struct LuaSkinHostModulesImpl {
   lua_State *state = nullptr;
   LuaSkinFileSystem *fileSystem = nullptr;
+  ISkinFrameState *frameState = nullptr;
   bool allowOverlayWrites = false;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
@@ -460,6 +462,233 @@ void installClosure(lua_State *state, LuaSkinHostModulesImpl *impl,
                     lua_CFunction function) {
   lua_pushlightuserdata(state, impl);
   lua_pushcclosure(state, function, 1);
+}
+
+ISkinFrameState *frameState(lua_State *state) {
+  return host(state)->frameState;
+}
+
+int mainStateOption(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.option has no configured state");
+  }
+  const auto result = current->booleanProperty({.value = id});
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.option id: %d", id);
+  }
+  lua_pushboolean(state, result.value);
+  return 1;
+}
+
+int mainStateNumber(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.number has no configured state");
+  }
+  const auto result = current->integerProperty({.value = id});
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.number id: %d", id);
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  return 1;
+}
+
+int mainStateFloatNumber(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.float_number has no configured state");
+  }
+  const auto result = current->floatProperty({.value = id});
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.float_number id: %d", id);
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  return 1;
+}
+
+int mainStateText(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.text has no configured state");
+  }
+  const auto result = current->stringProperty({.value = id});
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.text id: %d", id);
+  }
+  lua_pushlstring(state, result.value.data(), result.value.size());
+  return 1;
+}
+
+int mainStateOffset(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.offset has no configured state");
+  }
+  const auto result = current->offsetProperty(id);
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.offset id: %d", id);
+  }
+  lua_createtable(state, 0, 6);
+  lua_pushinteger(state, result.value.x); lua_setfield(state, -2, "x");
+  lua_pushinteger(state, result.value.y); lua_setfield(state, -2, "y");
+  lua_pushinteger(state, result.value.w); lua_setfield(state, -2, "w");
+  lua_pushinteger(state, result.value.h); lua_setfield(state, -2, "h");
+  lua_pushinteger(state, result.value.r); lua_setfield(state, -2, "r");
+  lua_pushinteger(state, result.value.a); lua_setfield(state, -2, "a");
+  return 1;
+}
+
+int mainStateTimer(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const std::int64_t value = current == nullptr
+                                 ? std::numeric_limits<std::int64_t>::min()
+                                 : current->timerProperty({.value = id});
+  lua_pushnumber(state, static_cast<lua_Number>(value));
+  return 1;
+}
+
+int mainStateEventExec(lua_State *state) {
+  (void)state;
+  return luaL_error(state,
+                    "main_state.event_exec is unavailable without a safe "
+                    "play-session mutation executor");
+}
+
+int pushNamedInteger(lua_State *state, std::string_view name) {
+  auto *current = frameState(state);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.%.*s has no configured state",
+                      static_cast<int>(name.size()), name.data());
+  }
+  const auto result = current->integerProperty(
+      {.value = std::string{name}});
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.%.*s",
+                      static_cast<int>(name.size()), name.data());
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  return 1;
+}
+
+int pushNamedFloat(lua_State *state, std::string_view name) {
+  auto *current = frameState(state);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.%.*s has no configured state",
+                      static_cast<int>(name.size()), name.data());
+  }
+  const auto result = current->floatProperty(
+      {.value = std::string{name}});
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.%.*s",
+                      static_cast<int>(name.size()), name.data());
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  return 1;
+}
+
+int mainStateEventIndex(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  if (current == nullptr) {
+    return luaL_error(state, "main_state.event_index has no configured state");
+  }
+  const auto result = current->integerProperty({.value = id});
+  if (!result.supported) {
+    return luaL_error(state, "unsupported main_state.event_index id: %d", id);
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(result.value));
+  return 1;
+}
+
+int mainStateExscore(lua_State *state) {
+  return pushNamedInteger(state, "exscore");
+}
+
+int mainStateGauge(lua_State *state) {
+  auto *current = frameState(state);
+  const auto gauge = current == nullptr ? SkinGaugeStateView{}
+                                         : current->gaugeState();
+  if (!gauge.supported) {
+    return luaL_error(state, "main_state.gauge has no configured state");
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(gauge.value));
+  return 1;
+}
+
+int mainStateGaugeType(lua_State *state) {
+  auto *current = frameState(state);
+  const auto gauge = current == nullptr ? SkinGaugeStateView{}
+                                         : current->gaugeState();
+  if (!gauge.supported) {
+    return luaL_error(state, "main_state.gauge_type has no configured state");
+  }
+  lua_pushnumber(state, static_cast<lua_Number>(gauge.gaugeType));
+  return 1;
+}
+
+int mainStateJudge(lua_State *state) {
+  const int judge = boundedIntegerArgument(state, 1, 0, false);
+  return pushNamedInteger(state, "judge:" + std::to_string(judge));
+}
+
+int mainStateRate(lua_State *state) {
+  return pushNamedFloat(state, "rate");
+}
+
+int mainStateTime(lua_State *state) {
+  return pushNamedInteger(state, "time");
+}
+
+int mainStateVolumeBg(lua_State *state) {
+  return pushNamedFloat(state, "volume_bg");
+}
+
+int mainStateVolumeKey(lua_State *state) {
+  return pushNamedFloat(state, "volume_key");
+}
+
+int mainStateVolumeSys(lua_State *state) {
+  return pushNamedFloat(state, "volume_sys");
+}
+
+void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
+  lua_getglobal(state, "main_state");
+  if (!lua_istable(state, -1)) {
+    luaL_error(state, "main_state compatibility table is unavailable");
+  }
+  installClosure(state, impl, mainStateOption); lua_setfield(state, -2, "option");
+  installClosure(state, impl, mainStateNumber); lua_setfield(state, -2, "number");
+  installClosure(state, impl, mainStateFloatNumber); lua_setfield(state, -2, "float_number");
+  installClosure(state, impl, mainStateText); lua_setfield(state, -2, "text");
+  installClosure(state, impl, mainStateOffset); lua_setfield(state, -2, "offset");
+  installClosure(state, impl, mainStateTimer); lua_setfield(state, -2, "timer");
+  lua_pushnumber(state, static_cast<lua_Number>(std::numeric_limits<std::int64_t>::min()));
+  lua_setfield(state, -2, "timer_off_value");
+  installClosure(state, impl, mainStateEventExec); lua_setfield(state, -2, "event_exec");
+  installClosure(state, impl, mainStateEventIndex); lua_setfield(state, -2, "event_index");
+  installClosure(state, impl, mainStateExscore); lua_setfield(state, -2, "exscore");
+  installClosure(state, impl, mainStateGauge); lua_setfield(state, -2, "gauge");
+  installClosure(state, impl, mainStateGaugeType); lua_setfield(state, -2, "gauge_type");
+  installClosure(state, impl, mainStateJudge); lua_setfield(state, -2, "judge");
+  installClosure(state, impl, mainStateRate); lua_setfield(state, -2, "rate");
+  installClosure(state, impl, mainStateTime); lua_setfield(state, -2, "time");
+  installClosure(state, impl, mainStateVolumeBg); lua_setfield(state, -2, "volume_bg");
+  installClosure(state, impl, mainStateVolumeKey); lua_setfield(state, -2, "volume_key");
+  installClosure(state, impl, mainStateVolumeSys); lua_setfield(state, -2, "volume_sys");
+  lua_pop(state, 1);
+}
+
+int installStateAccessors(lua_State *state) {
+  auto *impl = static_cast<LuaSkinHostModulesImpl *>(lua_touserdata(state, 1));
+  populateMainState(state, impl);
+  return 0;
 }
 
 SharedLuaFileHandle &checkedHandle(lua_State *state, int index) {
@@ -1072,7 +1301,11 @@ void installBit32(lua_State *state) {
 void setLoaded(lua_State *state, const char *name) {
   lua_getglobal(state, "package");
   lua_getfield(state, -1, "loaded");
-  lua_newtable(state);
+  lua_getglobal(state, name);
+  if (lua_isnil(state, -1)) {
+    lua_pop(state, 1);
+    lua_newtable(state);
+  }
   lua_setfield(state, -2, name);
   lua_pop(state, 2);
 }
@@ -1139,6 +1372,8 @@ int installHost(lua_State *state) {
 
   installBit32(state);
   installFileMetatable(state);
+  lua_newtable(state);
+  lua_setglobal(state, "main_state");
 
   lua_createtable(state, 0, 1);
   installClosure(state, impl, ioOpen);
@@ -1321,6 +1556,24 @@ std::optional<SkinDiagnostic> LuaSkinHostModules::installConfiguration(
                  message != nullptr ? message : "Lua configuration failed");
   lua_pop(impl_->state, 1);
   return failure;
+}
+
+std::optional<SkinDiagnostic> LuaSkinHostModules::enableStateAccessors() {
+  if (lua_cpcall(impl_->state, installStateAccessors, impl_.get()) == 0) {
+    return std::nullopt;
+  }
+  const char *message = lua_tostring(impl_->state, -1);
+  auto failure = diagnostic(
+      "skin_lua_state_install_failed",
+      message != nullptr ? message : "Lua state-accessor installation failed");
+  lua_pop(impl_->state, 1);
+  return failure;
+}
+
+void LuaSkinHostModules::setFrameState(ISkinFrameState *state) noexcept {
+  if (impl_) {
+    impl_->frameState = state;
+  }
 }
 
 LuaFileHandleInvalidationResult

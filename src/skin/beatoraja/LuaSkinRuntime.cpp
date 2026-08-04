@@ -1223,6 +1223,9 @@ LuaValueResult LuaSkinRuntime::loadConfigured(
   if (auto failure = impl_->hostModules->installConfiguration(configuration)) {
     return {.failure = std::move(failure)};
   }
+  if (auto failure = impl_->hostModules->enableStateAccessors()) {
+    return {.failure = std::move(failure)};
+  }
   auto result = impl_->runEntry();
   if (result.value) {
     impl_->phase = LuaRuntimePhase::Configured;
@@ -1255,6 +1258,12 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
   }
   impl_->phase = LuaRuntimePhase::Render;
   return {.ok = true};
+}
+
+void LuaSkinRuntime::setFrameState(ISkinFrameState *state) noexcept {
+  if (impl_ && impl_->hostModules) {
+    impl_->hostModules->setFrameState(state);
+  }
 }
 
 LuaOperationResult

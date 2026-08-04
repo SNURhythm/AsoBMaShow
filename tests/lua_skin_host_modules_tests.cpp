@@ -1,4 +1,5 @@
 #include "skin/beatoraja/LuaSkinRuntime.h"
+#include "skin/beatoraja/Skin2DRenderer.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -163,6 +165,41 @@ return {
   end,
 }
 )lua");
+    writeText(source / "skin/main_state_lookup_errors.luaskin", R"lua(
+if not skin_config then return {type = 0} end
+for _, name in ipairs({"option", "number", "float_number", "text"}) do
+  local ok = pcall(function() return main_state[name](2147483647) end)
+  assert(not ok, "unsupported main_state." .. name .. " lookup must raise")
+end
+return {}
+)lua");
+    writeText(source / "skin/main_state_selected_surface.luaskin", R"lua(
+local state = require("main_state")
+if not skin_config then
+  assert(next(state) == nil)
+  return {type = 0}
+end
+for _, name in ipairs({
+  "event_index", "exscore", "float_number", "gauge", "gauge_type",
+  "judge", "number", "option", "rate", "text", "time", "timer",
+  "volume_bg", "volume_key", "volume_sys"
+}) do
+  assert(type(state[name]) == "function", "missing main_state." .. name)
+end
+assert(state.timer_off_value == -9223372036854775808)
+assert(state.option(170) == true)
+assert(state.event_index(12) == 9)
+assert(state.exscore() == 456)
+assert(state.gauge() == 62.5)
+assert(state.gauge_type() == 3)
+assert(state.judge(2) == 7)
+assert(state.rate() == 91.25)
+assert(state.time() == 123456)
+assert(state.volume_bg() == 0.3)
+assert(state.volume_key() == 0.4)
+assert(state.volume_sys() == 0.5)
+return {}
+)lua");
     writeText(source / "skin/parts/frame/red/panel.png", "selected");
     writeText(source / "skin/parts/frame/blue/panel.png",
               "random-fallback-must-not-win");
@@ -240,6 +277,68 @@ BeatorajaSkinConfiguration happyConfiguration() {
                      .selectedValue = "bg.png"}};
   return configuration;
 }
+
+class SelectedMainState final : public ISkinFrameState {
+public:
+  std::uint64_t frameSerial() const noexcept override { return 1; }
+  SkinPropertyLookup<bool>
+  booleanProperty(const SkinBuiltinPropertySelector &selector) override {
+    return selector.value == decltype(selector.value){170}
+               ? SkinPropertyLookup<bool>{.value = true, .supported = true}
+               : SkinPropertyLookup<bool>{};
+  }
+  SkinPropertyLookup<std::int64_t>
+  integerProperty(const SkinBuiltinPropertySelector &selector) override {
+    if (selector.value == decltype(selector.value){12}) {
+      return {.value = 9, .supported = true};
+    }
+    if (selector.value == decltype(selector.value){std::string{"exscore"}}) {
+      return {.value = 456, .supported = true};
+    }
+    if (selector.value == decltype(selector.value){std::string{"judge:2"}}) {
+      return {.value = 7, .supported = true};
+    }
+    if (selector.value == decltype(selector.value){std::string{"time"}}) {
+      return {.value = 123456, .supported = true};
+    }
+    return {};
+  }
+  SkinPropertyLookup<double>
+  floatProperty(const SkinBuiltinPropertySelector &selector) override {
+    if (selector.value == decltype(selector.value){std::string{"rate"}}) {
+      return {.value = 91.25, .supported = true};
+    }
+    if (selector.value == decltype(selector.value){std::string{"volume_bg"}}) {
+      return {.value = 0.3, .supported = true};
+    }
+    if (selector.value == decltype(selector.value){std::string{"volume_key"}}) {
+      return {.value = 0.4, .supported = true};
+    }
+    if (selector.value == decltype(selector.value){std::string{"volume_sys"}}) {
+      return {.value = 0.5, .supported = true};
+    }
+    return {};
+  }
+  SkinPropertyLookup<std::string_view>
+  stringProperty(const SkinBuiltinPropertySelector &) override { return {}; }
+  SkinPropertyLookup<ConfigOffset> offsetProperty(int) override { return {}; }
+  std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override {
+    return std::numeric_limits<std::int64_t>::min();
+  }
+  std::span<const SkinProjectedNoteView>
+  projectedNotes() const noexcept override { return {}; }
+  std::span<const SkinProjectedLongNoteView>
+  projectedLongNotes() const noexcept override { return {}; }
+  std::span<const SkinProjectedLineView>
+  projectedLines() const noexcept override { return {}; }
+  SkinGaugeStateView gaugeState() const noexcept override {
+    return {.supported = true, .value = 62.5, .gaugeType = 3};
+  }
+  SkinJudgeStateView judgeState(int) const noexcept override { return {}; }
+  SkinNoteExpansionStateView noteExpansionState() const noexcept override {
+    return {};
+  }
+};
 
 void testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates() {
   auto harness = fixture().create("shape.luaskin",
@@ -384,6 +483,36 @@ void testCapturedGetPathLosesAuthorityAtRenderTransition() {
          "captured get_path records one denial and performs no render read");
 }
 
+void testUnsupportedDirectMainStateLookupsRaise() {
+  auto harness = fixture().create("main_state_lookup_errors.luaskin",
+                                  LuaRuntimePurpose::Validation);
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "main-state lookup fixture loads with an empty header module");
+  const auto configured =
+      harness->runtime->loadConfigured(happyConfiguration());
+  expect(configured.value.has_value() && !configured.failure,
+         "unsupported direct property-factory lookups raise protected Lua errors");
+}
+
+void testSelectedMainStateSurfaceUsesBoundConfiguredState() {
+  auto harness = fixture().create("main_state_selected_surface.luaskin",
+                                  LuaRuntimePurpose::Gameplay);
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "selected main-state surface keeps the header module empty");
+  SelectedMainState state;
+  harness->runtime->setFrameState(&state);
+  const auto configured = harness->runtime->loadConfigured(happyConfiguration());
+  expect(configured.value.has_value() && !configured.failure,
+         "selected main-state surface reads the bound configured state");
+  harness->runtime->setFrameState(nullptr);
+}
+
 } // namespace
 
 int main() {
@@ -391,6 +520,8 @@ int main() {
   testGetPathSubstitutesAtWildcardAndKeepsTheSuffixVirtual();
   testGetPathRejectsUnsafeAndNondeterministicResolution();
   testCapturedGetPathLosesAuthorityAtRenderTransition();
+  testUnsupportedDirectMainStateLookupsRaise();
+  testSelectedMainStateSurfaceUsesBoundConfiguredState();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";
     return 1;
