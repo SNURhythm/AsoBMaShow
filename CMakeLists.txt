@@ -3358,6 +3358,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(audio_video_settings_tests
         tests/audio_video_settings_tests.cpp
         src/AppSettings.cpp
+        src/FileChecksum.cpp
         src/ir/IrProfileSettings.cpp
         src/Utils.cpp
         src/path.cpp
@@ -4111,6 +4112,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/app_settings_store_tests.cpp
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
+        src/FileChecksum.cpp
         src/VersionedJson.cpp
         src/AppSettings.cpp
         src/skin/SkinProfileSettings.cpp

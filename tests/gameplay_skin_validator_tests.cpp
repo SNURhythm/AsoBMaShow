@@ -1,4 +1,5 @@
 #include "skin/beatoraja/GameplaySkinValidator.h"
+#include "skin/beatoraja/BeatorajaSkinConfiguration.h"
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/package/SkinAliasDetector.h"
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -91,6 +93,74 @@ void expectDiagnostic(const SkinValidationResult &result, std::string_view code,
   }
   std::cerr << ")\n";
   ++failures;
+}
+
+bool isLowercaseSha256(std::string_view value) {
+  return value.size() == 64 &&
+         std::ranges::all_of(value, [](char character) {
+           return (character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+void testConfigurationDigestFramesOnlyPersistedConfigurationMaps() {
+  const EntryProfileSettings empty;
+  expect(skinConfigurationDigest(empty) ==
+             "f3c2c52f1de34a366df4f5bad4eb6a5bc080153949ea6422cb81aebfc84bc4b3",
+         "empty settings retain the independently derived V1 framing digest");
+
+  EntryProfileSettings configured;
+  configured.options.emplace("Gauge", -12);
+  configured.filePaths.emplace("Judge", "parts/judge.png");
+  configured.offsets.emplace(
+      "Lane", ConfigOffset{.x = -1, .y = 2, .w = -3, .h = 4, .r = -5, .a = 6});
+  const std::string baseline = skinConfigurationDigest(configured);
+  expect(isLowercaseSha256(baseline) &&
+             baseline.find("SENTINEL") == std::string::npos,
+         "configuration digests are opaque lowercase SHA-256 values");
+
+  std::set<std::string> mapDigests{baseline};
+  auto optionMutation = configured;
+  optionMutation.options["Gauge"] = -11;
+  mapDigests.insert(skinConfigurationDigest(optionMutation));
+  auto fileMutation = configured;
+  fileMutation.filePaths["Judge"] = "parts/alternate.png";
+  mapDigests.insert(skinConfigurationDigest(fileMutation));
+  auto offsetMutation = configured;
+  offsetMutation.offsets["Lane"].a = 7;
+  mapDigests.insert(skinConfigurationDigest(offsetMutation));
+  expect(mapDigests.size() == 4,
+         "each persisted option, file, and offset map mutation changes the digest");
+
+  auto viewportMutation = configured;
+  viewportMutation.viewport = {
+      .mode = ViewportMode::Custom,
+      .customBase = CustomViewportBase::Stretch,
+      .scaleX = 1.75F,
+      .scaleY = 0.5F,
+      .translateX = 321.0F,
+      .translateY = -654.0F,
+  };
+  expect(skinConfigurationDigest(viewportMutation) == baseline,
+         "viewport-only changes do not change the configuration digest");
+
+  BeatorajaSkinConfiguration runtimeConfiguration;
+  runtimeConfiguration.options = configured.options;
+  runtimeConfiguration.filePaths = configured.filePaths;
+  runtimeConfiguration.offsets = configured.offsets;
+  runtimeConfiguration.orderedOptions.push_back(
+      {.name = "SENTINEL-ORDER", .value = 999});
+  runtimeConfiguration.enabledOptionIds.insert(999);
+  runtimeConfiguration.orderedFiles.push_back(
+      {.name = "SENTINEL-FILE",
+       .pattern = "SENTINEL-HOST-PATH",
+       .selectedValue = "SENTINEL-SELECTION"});
+  runtimeConfiguration.offsetPermissions.emplace("SENTINEL-PERMISSION", 63);
+  runtimeConfiguration.offsetsById.emplace(999, ConfigOffset{.x = 999});
+  runtimeConfiguration.lowercaseSha256 = "SENTINEL-PRIOR-DIGEST";
+  expect(skinConfigurationDigest(runtimeConfiguration) == baseline,
+         "runtime-only ordering, declarations, permissions, IDs, and prior "
+         "digest sentinels cannot enter V1 framing");
 }
 
 SkinValidationResult
@@ -243,6 +313,11 @@ return {
                                  }),
          "validated result publishes the canonical lowercase configuration "
          "digest");
+  expect(result.reconciledSettings &&
+             result.configurationDigest ==
+                 skinConfigurationDigest(*result.reconciledSettings),
+         "validator reports the digest of the exact reconciled settings it "
+         "publishes");
 
   // validateScript has already destroyed the immutable revision, Lua runtime,
   // resource service and validator. Accessing these values proves the public
@@ -348,6 +423,7 @@ void testCancellationFailsClosedBeforeRetainingTheRevisionView() {
 } // namespace
 
 int main() {
+  testConfigurationDigestFramesOnlyPersistedConfigurationMaps();
   testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors();
   testValidNumericBindingPublishesOwnedTwoPhaseMetadata();
   testUnsupportedNumericBindingFailsClosed();

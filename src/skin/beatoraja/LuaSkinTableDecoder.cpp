@@ -4,7 +4,6 @@
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
-#include "../../FileChecksum.h"
 #include "LuaSkinBindingDecoder.h"
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinRuntime.h"
@@ -644,22 +643,6 @@ void decodeHeaderProtected(lua_State *state, int index, void *opaque) noexcept {
     request->allocationFailed = true;
     request->result.header.reset();
   }
-}
-
-void appendU32(std::string &bytes, std::uint32_t value) {
-  for (int shift = 24; shift >= 0; shift -= 8) {
-    bytes.push_back(static_cast<char>((value >> shift) & 0xffU));
-  }
-}
-
-void appendI32(std::string &bytes, int value) {
-  appendU32(bytes,
-            static_cast<std::uint32_t>(static_cast<std::int32_t>(value)));
-}
-
-void appendText(std::string &bytes, std::string_view value) {
-  appendU32(bytes, static_cast<std::uint32_t>(value.size()));
-  bytes.append(value);
 }
 
 ConfigOffset sanitizeOffset(ConfigOffset value,
@@ -3996,35 +3979,11 @@ BeatorajaSkinModelDecodeResult LuaSkinTableDecoder::decodeGameplay(
 
 std::string
 skinConfigurationDigest(const BeatorajaSkinConfiguration &configuration) {
-  std::string framed("ASOBMSKIN-CONFIG-V1", 19);
-  framed.push_back('\0');
-
-  framed.push_back(static_cast<char>(0x01));
-  appendU32(framed, static_cast<std::uint32_t>(configuration.options.size()));
-  for (const auto &[key, value] : configuration.options) {
-    appendText(framed, key);
-    appendI32(framed, value);
-  }
-
-  framed.push_back(static_cast<char>(0x02));
-  appendU32(framed, static_cast<std::uint32_t>(configuration.filePaths.size()));
-  for (const auto &[key, value] : configuration.filePaths) {
-    appendText(framed, key);
-    appendText(framed, value);
-  }
-
-  framed.push_back(static_cast<char>(0x03));
-  appendU32(framed, static_cast<std::uint32_t>(configuration.offsets.size()));
-  for (const auto &[key, value] : configuration.offsets) {
-    appendText(framed, key);
-    appendI32(framed, value.x);
-    appendI32(framed, value.y);
-    appendI32(framed, value.w);
-    appendI32(framed, value.h);
-    appendI32(framed, value.r);
-    appendI32(framed, value.a);
-  }
-  return file_checksum::sha256(framed);
+  return skinConfigurationDigest(EntryProfileSettings{
+      .options = configuration.options,
+      .filePaths = configuration.filePaths,
+      .offsets = configuration.offsets,
+  });
 }
 
 ConfigurationReconcileResult

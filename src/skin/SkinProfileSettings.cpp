@@ -1,5 +1,6 @@
 #include "SkinProfileSettings.h"
 
+#include "../FileChecksum.h"
 #include "package/SkinPathPolicy.h"
 
 #include <utf8proc.h>
@@ -12,6 +13,22 @@
 
 namespace skin {
 namespace {
+
+void appendDigestU32(std::string &bytes, std::uint32_t value) {
+  for (int shift = 24; shift >= 0; shift -= 8) {
+    bytes.push_back(static_cast<char>((value >> shift) & 0xffU));
+  }
+}
+
+void appendDigestI32(std::string &bytes, int value) {
+  appendDigestU32(
+      bytes, static_cast<std::uint32_t>(static_cast<std::int32_t>(value)));
+}
+
+void appendDigestText(std::string &bytes, std::string_view value) {
+  appendDigestU32(bytes, static_cast<std::uint32_t>(value.size()));
+  bytes.append(value);
+}
 
 std::optional<std::string> normalizeUtf8(std::string_view value) {
   if (value.empty() || value.find('\0') != std::string_view::npos) {
@@ -151,6 +168,41 @@ void sanitizeEntry(EntryProfileSettings &entry) {
 }
 
 } // namespace
+
+std::string skinConfigurationDigest(const EntryProfileSettings &settings) {
+  std::string framed("ASOBMSKIN-CONFIG-V1", 19);
+  framed.push_back('\0');
+
+  framed.push_back(static_cast<char>(0x01));
+  appendDigestU32(framed,
+                  static_cast<std::uint32_t>(settings.options.size()));
+  for (const auto &[key, value] : settings.options) {
+    appendDigestText(framed, key);
+    appendDigestI32(framed, value);
+  }
+
+  framed.push_back(static_cast<char>(0x02));
+  appendDigestU32(framed,
+                  static_cast<std::uint32_t>(settings.filePaths.size()));
+  for (const auto &[key, value] : settings.filePaths) {
+    appendDigestText(framed, key);
+    appendDigestText(framed, value);
+  }
+
+  framed.push_back(static_cast<char>(0x03));
+  appendDigestU32(framed,
+                  static_cast<std::uint32_t>(settings.offsets.size()));
+  for (const auto &[key, value] : settings.offsets) {
+    appendDigestText(framed, key);
+    appendDigestI32(framed, value.x);
+    appendDigestI32(framed, value.y);
+    appendDigestI32(framed, value.w);
+    appendDigestI32(framed, value.h);
+    appendDigestI32(framed, value.r);
+    appendDigestI32(framed, value.a);
+  }
+  return file_checksum::sha256(framed);
+}
 
 std::optional<std::string>
 normalizeSkinConfigurationKey(std::string_view value) {

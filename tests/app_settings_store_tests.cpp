@@ -195,6 +195,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
                    .translateX = 123.0F,
                    .translateY = -456.0F},
   };
+  const std::string expectedConfigurationDigest =
+      skin::skinConfigurationDigest(expected.skin.entries.at(*entry.entry));
   std::string error;
   expect(AppSettingsStore::Save(path, expected, error),
          "versioned settings save succeeds: " + error);
@@ -202,8 +204,15 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded, "saved settings load");
   expect(loaded.settings == expected,
          "JSON round trip preserves every setting including audio/video");
+  expect(skin::skinConfigurationDigest(
+             loaded.settings.skin.entries.at(*entry.entry)) ==
+             expectedConfigurationDigest,
+         "restart reconstructs the exact configuration digest from persisted "
+         "entry maps");
   expect(readFile(path).find("\"schemaVersion\": 4") != std::string::npos,
          "saved JSON declares schema version 4");
+  expect(readFile(path).find("configurationDigest") == std::string::npos,
+         "schema 4 does not persist a competing configuration digest map");
   expect(readFile(path).find("\"package\": \"ModernChic\"") !=
                  std::string::npos &&
              readFile(path).find("\"path\": \"play/7key.luaskin\"") !=

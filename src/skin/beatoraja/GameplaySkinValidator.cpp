@@ -178,9 +178,10 @@ SkinValidationResult GameplaySkinValidator::validate(
     }
     BeatorajaSkinConfiguration configuration =
         std::move(*reconciliation.configuration);
+    const std::string reconciledConfigurationDigest =
+        skinConfigurationDigest(reconciliation.reconciledSettings);
     if (configuration.lowercaseSha256.empty() ||
-        configuration.lowercaseSha256 !=
-            skinConfigurationDigest(configuration)) {
+        configuration.lowercaseSha256 != reconciledConfigurationDigest) {
       result.diagnostics.push_back(validationDiagnostic(
           "skin_lua_configuration_digest_invalid",
           "reconciled Lua skin configuration has an inconsistent digest"));
@@ -250,7 +251,7 @@ SkinValidationResult GameplaySkinValidator::validate(
     result.disposition = SkinValidationDisposition::Selectable7Key;
     result.reconciledSettings = std::move(reconciliation.reconciledSettings);
     result.metadata = metadataFor(validatedModel.model->model.header);
-    result.configurationDigest = std::move(configuration.lowercaseSha256);
+    result.configurationDigest = reconciledConfigurationDigest;
     return result;
   } catch (...) {
     result = {};

@@ -115,9 +115,42 @@ std::string filenameUtf8(const fs::path &path) {
 bool lowercaseSha256(std::string_view digest) {
   return digest.size() == 64 &&
          std::ranges::all_of(digest, [](unsigned char character) {
-           return std::isdigit(character) != 0 ||
+           return (character >= '0' && character <= '9') ||
                   (character >= 'a' && character <= 'f');
          });
+}
+
+bool failClosedMismatchedConfigurationDigest(
+    const SkinEntryId &entry, SkinValidationResult &validation) {
+  if (validation.cancelled ||
+      validation.disposition != SkinValidationDisposition::Selectable7Key) {
+    return false;
+  }
+
+  bool sanitizeIdempotent = false;
+  if (validation.reconciledSettings) {
+    SkinProfileSettings sanitized;
+    sanitized.entries.emplace(entry, *validation.reconciledSettings);
+    sanitized.sanitize();
+    const auto retained = sanitized.entries.find(entry);
+    sanitizeIdempotent =
+        retained != sanitized.entries.end() &&
+        retained->second == *validation.reconciledSettings;
+  }
+  if (sanitizeIdempotent &&
+      lowercaseSha256(validation.configurationDigest) &&
+      validation.configurationDigest ==
+          skinConfigurationDigest(*validation.reconciledSettings)) {
+    return false;
+  }
+  validation.disposition = SkinValidationDisposition::Invalid;
+  validation.reconciledSettings.reset();
+  validation.metadata.reset();
+  validation.configurationDigest.clear();
+  validation.diagnostics.push_back(storeDiagnostic(
+      "skin_configuration_digest_mismatch",
+      "validated skin settings do not match their configuration digest"));
+  return true;
 }
 
 std::optional<PublicationJournal>
@@ -2824,6 +2857,7 @@ PublishPackageResult SkinPackageStore::publish(
     }
     auto validation =
         validator.validate(prepared.readView(), entry, nullptr, stop);
+    (void)failClosedMismatchedConfigurationDigest(entry, validation);
     result.diagnostics.insert(
         result.diagnostics.end(),
         std::make_move_iterator(validation.diagnostics.begin()),
@@ -2837,7 +2871,8 @@ PublishPackageResult SkinPackageStore::publish(
         .validation = validation.disposition,
         .metadata = std::move(validation.metadata),
         .diagnostics = {}};
-    if (!validation.configurationDigest.empty() &&
+    if (validation.disposition == SkinValidationDisposition::Selectable7Key &&
+        validation.reconciledSettings &&
         lowercaseSha256(validation.configurationDigest)) {
       catalogEntry.validatedConfigurationDigests.push_back(
           std::move(validation.configurationDigest));
@@ -2864,6 +2899,7 @@ PublishPackageResult SkinPackageStore::publish(
                                                    : &settings->second;
     auto validation =
         validator.validate(prepared.readView(), selected, desired, stop);
+    (void)failClosedMismatchedConfigurationDigest(selected, validation);
     result.diagnostics.insert(
         result.diagnostics.end(),
         std::make_move_iterator(validation.diagnostics.begin()),
@@ -3488,6 +3524,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
     for (const SkinEntryId &entry : *entries) {
       auto validation = validator.validate(snapshot.prepared->readView(), entry,
                                            nullptr, stop);
+      (void)failClosedMismatchedConfigurationDigest(entry, validation);
       if (validation.cancelled || stop.stop_requested()) {
         result.cancelled = true;
         return result;
@@ -3520,7 +3557,10 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
           .validation = validation.disposition,
           .metadata = std::move(validation.metadata),
           .diagnostics = std::move(validation.diagnostics)};
-      if (lowercaseSha256(validation.configurationDigest)) {
+      if (validation.disposition ==
+              SkinValidationDisposition::Selectable7Key &&
+          validation.reconciledSettings &&
+          lowercaseSha256(validation.configurationDigest)) {
         catalogEntry.validatedConfigurationDigests.push_back(
             std::move(validation.configurationDigest));
       }
@@ -3550,6 +3590,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
           desired == profile.settings.entries.end() ? nullptr
                                                     : &desired->second,
           stop);
+      (void)failClosedMismatchedConfigurationDigest(selected, validation);
       if (validation.cancelled || stop.stop_requested()) {
         result.cancelled = true;
         return result;
@@ -3818,6 +3859,7 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
       desired == candidateProfileSettings.entries.end() ? nullptr
                                                         : &desired->second,
       stop);
+  (void)failClosedMismatchedConfigurationDigest(entry, validation);
   result.diagnostics.insert(
       result.diagnostics.end(),
       std::make_move_iterator(validation.diagnostics.begin()),
@@ -3838,6 +3880,16 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
   candidateProfileSettings.entries.insert_or_assign(
       entry, *validation.reconciledSettings);
   candidateProfileSettings.sanitize();
+  const auto durableSettings = candidateProfileSettings.entries.find(entry);
+  if (durableSettings == candidateProfileSettings.entries.end() ||
+      durableSettings->second != *validation.reconciledSettings ||
+      skinConfigurationDigest(durableSettings->second) !=
+          validation.configurationDigest) {
+    result.diagnostics.push_back(storeDiagnostic(
+        "skin_configuration_digest_mismatch",
+        "validated skin settings do not match their durable profile digest"));
+    return result;
+  }
   result.prepared = PreparedSkinActivation{
       .sourceGeneration = capturedSourceGeneration,
       .catalogGeneration = capturedCatalogGeneration,

@@ -57,6 +57,12 @@ struct EntryProfileSettings {
   bool operator==(const EntryProfileSettings &) const = default;
 };
 
+// SkinConfigurationDigestV1 covers only the three persisted configuration
+// maps. Viewport and every runtime/header-derived field are intentionally
+// excluded so layout changes do not create a different configured skin.
+[[nodiscard]] std::string
+skinConfigurationDigest(const EntryProfileSettings &settings);
+
 struct SkinProfileId {
   std::string opaque;
   auto operator<=>(const SkinProfileId &) const = default;
