@@ -373,6 +373,84 @@ void testJudgeTimingIsClampedToThePublicStateWidth() {
           "judge timing is clamped instead of overflowing its DTO field");
 }
 
+struct BgaCapturePresentation final : IPlayfieldPresentationEvents {
+  const PlayfieldVisualStateStore *store = nullptr;
+  bool observedCapturedMissState = false;
+
+  void onLanePressed(int, JudgeResult, long long) override {}
+  void onLaneReleased(int, long long) override {}
+  void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock,
+               bool) override {
+    const auto captured = store->capture({});
+    observedCapturedMissState =
+        captured.bgaMiss.active && captured.bgaMiss.startedBgaMicros == 321 &&
+        captured.bgaMiss.durationMicros == kDefaultMissLayerDurationMicros &&
+        captured.bgaMiss.triggerSerial == 1;
+  }
+};
+
+void testCapturedBgaMissStateTracksJudgesAndResets() {
+  ChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+
+  store.onJudge(JudgeResult(None, 0), 0, 0,
+                {.songTimeMicros = 1,
+                 .visualTimeMicros = 999,
+                 .bgaTimeMicros = 123},
+                true);
+  auto captured = store.capture({});
+  require(!captured.bgaMiss.active && captured.bgaMiss.triggerSerial == 0,
+          "None judgements do not enter captured BGA miss state");
+
+  store.onJudge(JudgeResult(Great, 0), 0, 1,
+                {.songTimeMicros = 2,
+                 .visualTimeMicros = 999,
+                 .bgaTimeMicros = 0},
+                true);
+  captured = store.capture({});
+  require(captured.bgaMiss.active && captured.bgaMiss.startedBgaMicros == 0 &&
+              captured.bgaMiss.durationMicros ==
+                  kDefaultMissLayerDurationMicros &&
+              captured.bgaMiss.triggerSerial == 1,
+          "captured BGA miss state retains a valid zero timestamp");
+
+  store.onJudge(JudgeResult(Kpoor, 0), 0, 2,
+                {.songTimeMicros = 3,
+                 .visualTimeMicros = 1,
+                 .bgaTimeMicros = 456},
+                true);
+  captured = store.capture({});
+  require(captured.bgaMiss.startedBgaMicros == 456 &&
+              captured.bgaMiss.triggerSerial == 2,
+          "repeated Kpoor-at-zero refreshes the captured BGA miss state");
+
+  store.resetModel(model);
+  captured = store.capture({});
+  require(!captured.bgaMiss.active && captured.bgaMiss.startedBgaMicros == 0 &&
+              captured.bgaMiss.durationMicros ==
+                  kDefaultMissLayerDurationMicros &&
+              captured.bgaMiss.triggerSerial == 0,
+          "model reset clears captured BGA miss state");
+}
+
+void testBgaMissStatePropagatesThroughEventFanoutBeforeCapture() {
+  ChartFixture fixture;
+  PlayfieldVisualStateStore store(
+      buildPlayfieldChartVisualModel(fixture.chart, 0));
+  BgaCapturePresentation presentation;
+  presentation.store = &store;
+  PlayfieldPresentationEventFanout fanout(store, presentation);
+
+  fanout.onJudge(JudgeResult(Poor, 0), 0, 1,
+                 {.songTimeMicros = 100,
+                  .visualTimeMicros = 200,
+                  .bgaTimeMicros = 321},
+                 true);
+  require(presentation.observedCapturedMissState,
+          "judge fanout updates BGA miss state before presentation capture");
+}
+
 void testEventClockUsesSourceTimeAndIndependentOffsets() {
   const auto clock =
       makePlayfieldJudgeEventClock(1'000'000, 125'000, 50'000);
@@ -531,6 +609,8 @@ int main() {
   testLongNoteModeUsesChartThenOverridePrecedence();
   testVisualStateCaptureAndFanoutAreCoherentValueSnapshots();
   testJudgeTimingIsClampedToThePublicStateWidth();
+  testCapturedBgaMissStateTracksJudgesAndResets();
+  testBgaMissStatePropagatesThroughEventFanoutBeforeCapture();
   testEventClockUsesSourceTimeAndIndependentOffsets();
   testLiveReleasedTouchesLingerThenPrune();
   testReplayTouchesUseCopiedStableSortedLifecycleValues();

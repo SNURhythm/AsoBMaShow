@@ -4161,6 +4161,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(playfield_visual_state_tests
         tests/playfield_visual_state_tests.cpp
         src/bms_parser.cpp
+        src/audio/GameplayBgaMissStateTracker.cpp
         src/scene/play/Judge.cpp
         src/scene/play/PlayfieldChartVisualModel.cpp
         src/scene/play/PlayfieldVisualState.cpp

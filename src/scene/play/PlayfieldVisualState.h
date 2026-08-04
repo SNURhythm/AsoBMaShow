@@ -2,6 +2,7 @@
 
 #include "../../AppSettings.h"
 #include "../../ReplayData.h"
+#include "../../audio/GameplayBgaMissStateTracker.h"
 #include "GameplayGaugeRules.h"
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
@@ -119,6 +120,7 @@ struct PlayfieldVisualState {
   std::vector<PresentationTouchPoint> touches;
   JudgeResult lastJudge = JudgeResult(None, 0);
   long long lastJudgeVisualMicros = kPlayfieldTimestampOff;
+  GameplayBgaMissState bgaMiss;
   int combo = 0;
   int score = 0;
   int fastSlowMicros = 0;
@@ -177,6 +179,7 @@ private:
   mutable TouchLifecycle replayTouches_;
   mutable TouchLifecycle liveTouches_;
   mutable std::vector<PresentationTouchPoint> touches_;
+  GameplayBgaMissStateTracker bgaMissTracker_;
   JudgeResult lastJudge_ = JudgeResult(None, 0);
   long long lastJudgeVisualMicros_ = kPlayfieldTimestampOff;
   int combo_ = 0;

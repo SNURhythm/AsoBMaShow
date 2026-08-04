@@ -80,6 +80,7 @@ void PlayfieldVisualStateStore::resetModel(
   replayTouches_ = {};
   liveTouches_ = {};
   touches_.clear();
+  bgaMissTracker_.reset();
   lastJudge_ = JudgeResult(None, 0);
   lastJudgeVisualMicros_ = kPlayfieldTimestampOff;
   combo_ = 0;
@@ -244,6 +245,7 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock) const {
       .touches = touches_,
       .lastJudge = lastJudge_,
       .lastJudgeVisualMicros = lastJudgeVisualMicros_,
+      .bgaMiss = bgaMissTracker_.snapshot(),
       .combo = combo_,
       .score = score_,
       .fastSlowMicros = fastSlowMicros_,
@@ -282,6 +284,7 @@ void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
                                         PlayfieldJudgeEventClock clock,
                                         bool recordTimingSample) {
   (void)recordTimingSample;
+  bgaMissTracker_.onJudge(judge, combo, clock);
   if (judge.judgement == None) {
     return;
   }
