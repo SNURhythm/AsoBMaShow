@@ -1,6 +1,7 @@
 #include "skin/beatoraja/PlaySkinViewport.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.h"
 
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -26,6 +27,16 @@ bool near(double actual, double expected, double epsilon = 1e-9) {
 std::array<double, 2> apply(const Affine2D &affine, double x, double y) {
   return {affine.m00 * x + affine.m01 * y + affine.tx,
           affine.m10 * x + affine.m11 * y + affine.ty};
+}
+
+UiLogicalRect screenRectToUi(double left, double top, double right,
+                             double bottom, double offsetX, double offsetY,
+                             double scaleX, double scaleY) {
+  const double uiLeft = (left - offsetX) / scaleX;
+  const double uiTop = (top - offsetY) / scaleY;
+  return {.x = uiLeft, .y = uiTop,
+          .width = (right - offsetX) / scaleX - uiLeft,
+          .height = (bottom - offsetY) / scaleY - uiTop};
 }
 
 void testFitUsesSafeAreaAndBars() {
@@ -64,6 +75,50 @@ void testStretchAndCustomComposeOverSelectedBase() {
          "custom scaling stays centered then applies bounded UI translation");
 }
 
+void testCustomFitClampingAndLogicalScaleEquivalence() {
+  ViewportSettings fitCustom;
+  fitCustom.mode = ViewportMode::Custom;
+  fitCustom.customBase = CustomViewportBase::Fit;
+  fitCustom.scaleX = 2.0F;
+  fitCustom.scaleY = 1.5F;
+  fitCustom.translateX = 10.0F;
+  fitCustom.translateY = -20.0F;
+  const auto customFit = evaluatePlaySkinViewport(
+      {.width = 1600.0, .height = 900.0},
+      {.x = 20.0, .y = 30.0, .width = 1200.0, .height = 900.0}, fitCustom);
+  expect(near(customFit.authoredToUi.m00, 1.5) && near(customFit.authoredToUi.m11, -1.125) &&
+             near(customFit.authoredToUi.tx, -570.0) && near(customFit.authoredToUi.ty, 966.25),
+         "custom-over-fit scales around the nonzero safe-area center then translates");
+
+  ViewportSettings clamped;
+  clamped.mode = ViewportMode::Custom;
+  clamped.customBase = CustomViewportBase::Stretch;
+  clamped.scaleX = 100.0F;
+  clamped.scaleY = 0.01F;
+  clamped.translateX = 9'000.0F;
+  clamped.translateY = -9'000.0F;
+  const auto bounded = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 100.0},
+      {.x = 10.0, .y = 20.0, .width = 300.0, .height = 200.0}, clamped);
+  expect(near(bounded.authoredToUi.m00, 30.0) && near(bounded.authoredToUi.m11, -0.2) &&
+             near(bounded.authoredToUi.tx, 6852.0) && near(bounded.authoredToUi.ty, -8062.0),
+         "custom scale and translation use the profile policy min/max bounds");
+
+  const auto oneXSafe = screenRectToUi(120.0, 70.0, 520.0, 270.0,
+                                       20.0, 10.0, 2.0, 2.0);
+  const auto twoXSafe = screenRectToUi(240.0, 140.0, 1040.0, 540.0,
+                                       40.0, 20.0, 4.0, 4.0);
+  const auto oneX = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0}, oneXSafe, {});
+  const auto twoX = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0}, twoXSafe, {});
+  expect(near(oneXSafe.x, twoXSafe.x) && near(oneXSafe.y, twoXSafe.y) &&
+             near(oneXSafe.width, twoXSafe.width) && near(oneXSafe.height, twoXSafe.height) &&
+             oneX.authoredToUi.m00 == twoX.authoredToUi.m00 &&
+             oneX.authoredToUi.ty == twoX.authoredToUi.ty,
+         "1x and 2x drawable safe rectangles convert to identical UI-logical viewports");
+}
+
 void testInvalidSettingsBecomeFitAndInverseRoundTrips() {
   ViewportSettings invalid;
   invalid.mode = static_cast<ViewportMode>(99);
@@ -73,13 +128,21 @@ void testInvalidSettingsBecomeFitAndInverseRoundTrips() {
   const auto viewport = evaluatePlaySkinViewport(
       {.width = 200.0, .height = 100.0}, {.x = 0.0, .y = 0.0, .width = 400.0, .height = 400.0}, invalid);
   expect(viewport.valid, "invalid persisted viewport is defensively reset to fit");
-  const auto ui = apply(viewport.authoredToUi, 50.0, 25.0);
-  const auto authored = apply(viewport.uiToAuthored, ui[0], ui[1]);
-  expect(near(authored[0], 50.0) && near(authored[1], 25.0), "viewport inverse round trips authored points");
+  const std::array<std::array<double, 2>, 4> corners = {
+      {{0.0, 0.0}, {200.0, 0.0}, {200.0, 100.0}, {0.0, 100.0}}};
+  for (const auto point : corners) {
+    const auto ui = apply(viewport.authoredToUi, point[0], point[1]);
+    const auto authored = apply(viewport.uiToAuthored, ui[0], ui[1]);
+    expect(near(authored[0], point[0]) && near(authored[1], point[1]),
+           "viewport inverse round trips each authored corner and touch point");
+  }
 
   const auto invalidBounds = evaluatePlaySkinViewport(
       {.width = 0.0, .height = 100.0}, {.x = 0.0, .y = 0.0, .width = 100.0, .height = 100.0}, {});
   expect(!invalidBounds.valid, "degenerate authored bounds deny inverse interaction");
+  const auto invalidSafe = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 100.0}, {.x = 0.0, .y = 0.0, .width = 0.0, .height = 100.0}, {});
+  expect(!invalidSafe.valid, "degenerate UI safe bounds deny inverse interaction");
 }
 
 void testProjectionUsesBottomLeftOrderAndClockwiseUiHandedness() {

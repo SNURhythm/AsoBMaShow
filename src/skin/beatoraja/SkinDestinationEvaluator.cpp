@@ -46,6 +46,24 @@ float easedRate(float rate, int acceleration) {
   }
 }
 
+int objectAcceleration(const SkinDestinationBody &destination) {
+  int acceleration = 0;
+  for (const auto &frame : destination.frames) {
+    if (acceleration == 0) {
+      acceleration = frame.acceleration;
+    }
+  }
+  return acceleration;
+}
+
+bool hasFixedColor(const SkinDestinationBody &destination) {
+  const auto &first = destination.frames.front().rgba;
+  return std::all_of(destination.frames.begin() + 1, destination.frames.end(),
+                     [&first](const SkinDestinationFrame &frame) {
+                       return frame.rgba == first;
+                     });
+}
+
 double interpolate(double lower, double upper, double rate) {
   return lower + (upper - lower) * rate;
 }
@@ -253,7 +271,8 @@ SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
       upperTime = lowerTime;
     }
   }
-  const int acceleration = destination.frames.front().acceleration;
+  const int acceleration = objectAcceleration(destination);
+  const bool fixedColor = hasFixedColor(destination);
   rate = easedRate(rate, acceleration);
   const bool interpolated = lowerIndex + 1 < destination.frames.size() && rate != 0.0F;
   const auto &lower = destination.frames[lowerIndex];
@@ -310,10 +329,14 @@ SkinDestinationEvaluationResult evaluateSkinDestinationAuthored(
     geometry.angleDegrees += offset.r;
     // SkinObject.prepareColor returns before offset alpha on an interpolated
     // non-step frame.  Preserve that behavior exactly.
-    if (!interpolated) {
+    if (!interpolated || acceleration == 3 || fixedColor) {
       geometry.rgba[3] = std::clamp(
           geometry.rgba[3] + static_cast<float>(offset.a) / 255.0F, 0.0F, 1.0F);
     }
+  }
+  if (geometry.clip &&
+      (geometry.clip->width <= 0.0 || geometry.clip->height <= 0.0)) {
+    geometry.clip.reset();
   }
 
   const int center = destination.center >= 0 && destination.center < 10
@@ -365,7 +388,8 @@ UiDestinationGeometry projectSkinDestinationToUi(
   const double u1 = static_cast<double>(region.x + region.w) / source.textureWidth;
   const double v1 = static_cast<double>(region.y + region.h) / source.textureHeight;
   result.normalizedUvs = {{{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}}};
-  if (destination.clip) {
+  if (destination.clip && destination.clip->width > 0.0 &&
+      destination.clip->height > 0.0) {
     const auto topLeft = apply(viewport.authoredToUi, destination.clip->x,
                                destination.clip->y + destination.clip->height);
     const auto bottomRight = apply(viewport.authoredToUi,
