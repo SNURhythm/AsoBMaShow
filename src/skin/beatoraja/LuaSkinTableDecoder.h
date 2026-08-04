@@ -12,6 +12,7 @@ class LuaValueHandle;
 struct LuaSkinTableDecoderPolicy {
   static constexpr std::size_t maxDepth = 64;
   static constexpr std::size_t maxEntries = 200'000;
+  static constexpr std::size_t maxMaterializedSpriteFrames = 200'000;
   static constexpr std::size_t maxDecodedObjects = 8'192;
   static constexpr std::size_t maxCopiedTextBytes = 8 * 1024 * 1024;
   static constexpr std::size_t maxCategories = 256;

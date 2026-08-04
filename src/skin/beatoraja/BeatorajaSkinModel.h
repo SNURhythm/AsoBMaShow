@@ -145,6 +145,11 @@ struct SkinSourceRect {
   int y = 0;
   int w = 0;
   int h = 0;
+  // Grid coordinates defer -1 full-texture axes until dimensions are known.
+  int gridColumn = 0;
+  int gridRow = 0;
+  int gridColumns = 1;
+  int gridRows = 1;
 };
 
 struct SkinImageResource {

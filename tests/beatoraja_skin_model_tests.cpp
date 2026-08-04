@@ -71,6 +71,84 @@ public:
   }
 };
 
+void writeText(const fs::path &path, std::string_view value) {
+  fs::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(value.data(), static_cast<std::streamsize>(value.size()));
+}
+
+BeatorajaSkinModelDecodeResult decodeInlineModel(std::string_view sourceText) {
+  TempDirectory temp;
+  const SkinStorageRoots roots{
+      .visiblePackages = temp.root() / "visible",
+      .privateRevisions = temp.root() / "revisions",
+      .privateCatalog = temp.root() / "catalog",
+      .profileOverlays = temp.root() / "overlays",
+  };
+  const auto package = *normalizePackageId("InlineModelContract").package;
+  const fs::path source = temp.root() / "source";
+  writeText(source / "skin/model.luaskin", sourceText);
+
+  AcceptFiles aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(), "inline model fixture snapshots");
+  if (!snapshot.prepared) {
+    return {};
+  }
+
+  const auto entry = *normalizeEntryPath(package, "skin/model.luaskin").entry;
+  const auto makeFileSystem = [&]() {
+    return LuaSkinFileSystem::create({.revision = snapshot.prepared->readView(),
+                                      .entry = entry,
+                                      .storageRoots = roots})
+        .fileSystem;
+  };
+  auto runtimeFileSystem = makeFileSystem();
+  auto reconciliationFileSystem = makeFileSystem();
+  expect(runtimeFileSystem != nullptr && reconciliationFileSystem != nullptr,
+         "inline model filesystems create");
+  if (!runtimeFileSystem || !reconciliationFileSystem) {
+    return {};
+  }
+
+  auto created =
+      LuaSkinRuntime::create({.purpose = LuaRuntimePurpose::Validation,
+                              .fileSystem = std::move(runtimeFileSystem)});
+  expect(created.runtime != nullptr, "inline model runtime creates");
+  if (!created.runtime) {
+    return {};
+  }
+
+  auto headerValue = created.runtime->loadHeader();
+  expect(headerValue.value.has_value(), "inline model header executes");
+  if (!headerValue.value) {
+    return {};
+  }
+  LuaSkinTableDecoder decoder;
+  const auto header = decoder.decodeHeader(*headerValue.value);
+  expect(header.header.has_value(), "inline model header decodes");
+  if (!header.header) {
+    return {};
+  }
+  headerValue.value.reset();
+
+  const auto reconciled = reconcileSkinConfiguration(*header.header, nullptr,
+                                                     *reconciliationFileSystem);
+  expect(reconciled.configuration.has_value(),
+         "inline model configuration reconciles");
+  if (!reconciled.configuration) {
+    return {};
+  }
+
+  auto configured = created.runtime->loadConfigured(*reconciled.configuration);
+  expect(configured.value.has_value(), "inline model configured phase runs");
+  if (!configured.value) {
+    return {};
+  }
+  return decoder.decodeGameplay(*configured.value);
+}
+
 const Json &expectedContract() {
   static const Json value = [] {
     const fs::path path =
@@ -483,6 +561,227 @@ void testDestinationDefaultsInheritanceAndStableTimeOrder() {
   }
 }
 
+void testMaterializedSpriteFrameBudgetRejectsCopyAmplification() {
+  const auto boundary = decodeInlineModel(R"lua(
+local choices = {"atlas", "atlas"}
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "source", path = "atlas.png"}},
+  image = {{id = "atlas", src = "source", w = 100000, h = 1,
+            divx = 100000, divy = 1}},
+  imageset = {{id = "states", images = choices}},
+  destination = {{id = "states", dst = {{}}}},
+}
+)lua");
+  expect(boundary.model.has_value(),
+         "exact materialized sprite frame budget remains accepted");
+
+  const auto repeatedImageSet = decodeInlineModel(R"lua(
+local choices = {"atlas", "atlas"}
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "source", path = "atlas.png"}},
+  image = {{id = "atlas", src = "source", w = 100001, h = 1,
+            divx = 100001, divy = 1}},
+  imageset = {{id = "states", images = choices}},
+  destination = {{id = "states", dst = {{}}}},
+}
+)lua");
+  expect(!repeatedImageSet.model && !repeatedImageSet.diagnostics.empty() &&
+             repeatedImageSet.diagnostics.front().code ==
+                 "skin_lua_model_limit_exceeded",
+         "repeated ImageSet IDs cannot amplify legal frames past the copy "
+         "budget");
+
+  const auto noteAmplification = decodeInlineModel(R"lua(
+local lanes = {}
+local laneDestinations = {}
+for i = 1, 167 do
+  lanes[i] = "atlas"
+  laneDestinations[i] = {x = i, y = 0, w = 1, h = 1}
+end
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "source", path = "atlas.png"}},
+  image = {{id = "atlas", src = "source", w = 100, h = 1,
+            divx = 100, divy = 1}},
+  note = {
+    id = "notes", note = lanes, mine = lanes,
+    lnend = lanes, lnstart = lanes, lnbodyActive = lanes, lnbody = lanes,
+    hcnend = lanes, hcnstart = lanes, hcnbodyActive = lanes,
+    hcnbody = lanes, hcnbodyMiss = lanes, hcnbodyReactive = lanes,
+    dst = laneDestinations,
+  },
+  destination = {{id = "notes", dst = {{}}}},
+}
+)lua");
+  expect(!noteAmplification.model && !noteAmplification.diagnostics.empty() &&
+             noteAmplification.diagnostics.front().code ==
+                 "skin_lua_model_limit_exceeded",
+         "note lane visuals cannot amplify legal frames past the copy budget");
+}
+
+void testFullTextureSentinelsRemainDeferredAcrossSpriteDivisions() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "source", path = "atlas.png"}},
+  image = {{id = "full", src = "source", x = 7, y = 11, w = -1, h = -1,
+            divx = 2, divy = 3}},
+  destination = {{id = "full", dst = {{}}}},
+}
+)lua");
+  expect(decoded.model.has_value(),
+         "full-texture sentinel model decodes before texture dimensions exist");
+  if (!decoded.model || decoded.model->objects.empty()) {
+    return;
+  }
+  const auto &states =
+      std::get<SkinImageObject>(decoded.model->objects.front().payload)
+          .orderedStates;
+  expect(states.size() == 1 && states.front().frames.size() == 6,
+         "deferred full-texture grid preserves its authored frame count");
+  if (states.empty() || states.front().frames.size() != 6) {
+    return;
+  }
+  const auto &first = states.front().frames.front();
+  const auto &last = states.front().frames.back();
+  expect(first.x == 7 && first.y == 11 && first.w == -1 && first.h == -1 &&
+             first.gridColumn == 0 && first.gridRow == 0 &&
+             first.gridColumns == 2 && first.gridRows == 3 && last.x == 7 &&
+             last.y == 11 && last.w == -1 && last.h == -1 &&
+             last.gridColumn == 1 && last.gridRow == 2 &&
+             last.gridColumns == 2 && last.gridRows == 3,
+         "divx/divy never divide or erase a full-texture -1 sentinel");
+}
+
+void testSparsePinnedBlendIdsMapExactlyAndRejectUnknownValues() {
+  const auto decoded = decodeInlineModel(R"lua(
+local authored = {0, 1, 2, 3, 4, 9}
+local images = {}
+local destinations = {}
+for i, blend in ipairs(authored) do
+  local id = "image-" .. i
+  images[i] = {id = id, src = "source", w = 1, h = 1}
+  destinations[i] = {id = id, blend = blend, dst = {{}}}
+end
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "source", path = "atlas.png"}},
+  image = images,
+  destination = destinations,
+}
+)lua");
+  expect(decoded.model.has_value(), "all pinned blend IDs decode");
+  if (decoded.model) {
+    const std::array expected{
+        SkinBlendMode::Normal,   SkinBlendMode::Normal,
+        SkinBlendMode::Additive, SkinBlendMode::Subtractive,
+        SkinBlendMode::Multiply, SkinBlendMode::Inverse,
+    };
+    expect(decoded.model->destinations.size() == expected.size(),
+           "blend fixture preserves every authored destination");
+    for (std::size_t index = 0;
+         index < decoded.model->destinations.size() && index < expected.size();
+         ++index) {
+      expect(decoded.model->destinations[index].presentation.blend ==
+                 expected[index],
+             "sparse authored blend ID maps to the exact portable mode");
+    }
+  }
+
+  const auto unsupported = decodeInlineModel(R"lua(
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "source", path = "atlas.png"}},
+  image = {{id = "image", src = "source", w = 1, h = 1}},
+  destination = {{id = "image", blend = 5, dst = {{}}}},
+}
+)lua");
+  expect(!unsupported.model && !unsupported.diagnostics.empty(),
+         "unsupported blend IDs fail closed");
+}
+
+void testClipComponentsInheritUntilTheFirstCompleteRectangle() {
+  const auto decoded = decodeInlineModel(R"lua(
+return {
+  type = 0, w = 1280, h = 720,
+  source = {{id = "source", path = "atlas.png"}},
+  image = {{id = "image", src = "source", w = 1, h = 1}},
+  destination = {{
+    id = "image",
+    dst = {
+      {time = 0, clip_x = 1},
+      {time = 1, clip_y = 2, clip_w = 3},
+      {time = 2, clip_h = 4},
+      {time = 3, clip_x = 5},
+    },
+  }},
+}
+)lua");
+  expect(decoded.model.has_value(),
+         "partial clip components inherit without rejecting the model");
+  if (!decoded.model || decoded.model->destinations.empty()) {
+    return;
+  }
+  const auto &frames = decoded.model->destinations.front().presentation.frames;
+  const auto clipEquals = [](const std::optional<SkinSourceRect> &clip, int x,
+                             int y, int w, int h) {
+    return clip && clip->x == x && clip->y == y && clip->w == w && clip->h == h;
+  };
+  expect(frames.size() == 4 && !frames[0].clip && !frames[1].clip &&
+             clipEquals(frames[2].clip, 1, 2, 3, 4) &&
+             clipEquals(frames[3].clip, 5, 2, 3, 4),
+         "clip applies only after all four independently inherited fields "
+         "exist");
+}
+
+void testLuaProtectedDecodeOwnsEveryRawParseTemporaryInTheRequest() {
+  const fs::path path = fs::path(ASOBMASHOW_SOURCE_DIR) /
+                        "src/skin/beatoraja/LuaSkinTableDecoder.cpp";
+  std::ifstream input(path, std::ios::binary);
+  const std::string source((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+  const auto protectedStart = source.find("void decodeGameplayProtected(");
+  const auto protectedEnd = source.find("\n} // namespace", protectedStart);
+  expect(!source.empty() && protectedStart != std::string::npos &&
+             protectedEnd != std::string::npos,
+         "gameplay decoder source is available for the longjmp audit");
+  if (protectedStart == std::string::npos ||
+      protectedEnd == std::string::npos) {
+    return;
+  }
+  const std::string_view protectedBody(source.data() + protectedStart,
+                                       protectedEnd - protectedStart);
+  for (const std::string_view field : {
+           "std::vector<RawSkinSource> rawSources;",
+           "std::vector<RawSkinImage> rawImages;",
+           "std::vector<RawSkinImageSet> rawImageSets;",
+           "std::vector<RawSkinNumber> rawNumbers;",
+           "std::vector<RawSkinFloat> rawFloats;",
+           "std::vector<RawSkinSlider> rawSliders;",
+           "std::vector<RawDestination> rawDestinations;",
+       }) {
+    expect(source.find(field) != std::string::npos,
+           "request declares every owning raw parse vector");
+  }
+  expect(source.find("std::vector<std::string> hidden;") != std::string::npos &&
+             source.find("std::vector<std::string> processed;") !=
+                 std::string::npos &&
+             source.find("std::vector<double> expansionRate;") !=
+                 std::string::npos,
+         "raw note owns hidden, processed, and expansion parse vectors");
+  expect(protectedBody.find("std::vector<Raw") == std::string_view::npos &&
+             protectedBody.find("RawSkinNote note") == std::string_view::npos,
+         "lua_cpcall callback has no owning raw parse automatic locals");
+  const auto noteOwner = protectedBody.find("request->note.emplace();");
+  const auto noteAccess = protectedBody.find(
+      "rawGetField(state, index, \"note\", request->decoding)");
+  expect(noteOwner != std::string_view::npos &&
+             noteAccess != std::string_view::npos && noteOwner < noteAccess,
+         "raw note ownership exists before the first fallible Lua access");
+}
+
 void testNoteHeightAndIgnoredAuthoredVisualsRemainExplicitPolicies() {
   const auto &decoded = decodedFixture();
   if (!decoded.model) {
@@ -583,6 +882,37 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
       expected.at("missingNormalNoteIsCritical").get<bool>() &&
           criticalResult.criticalFailure && !criticalResult.model,
       "missing critical normal-note presentation rejects the complete model");
+
+  BeatorajaSkinModel duplicateBindings = *decoded.model;
+  duplicateBindings.integerProperties.push_back(
+      duplicateBindings.integerProperties.front());
+  const auto duplicateResult = validator.validate(std::move(duplicateBindings));
+  expect(duplicateResult.criticalFailure && !duplicateResult.model,
+         "duplicate typed binding IDs reject the model");
+
+  BeatorajaSkinModel oversizedCanvas = *decoded.model;
+  oversizedCanvas.header.width =
+      LuaSkinTableDecoderPolicy::maxAuthoredDimension + 1;
+  const auto canvasResult = validator.validate(std::move(oversizedCanvas));
+  expect(canvasResult.criticalFailure && !canvasResult.model,
+         "authored canvas axes enforce the model dimension limit");
+
+  BeatorajaSkinModel wrongNumericDomain = *decoded.model;
+  const auto score = std::find_if(
+      wrongNumericDomain.objects.begin(), wrongNumericDomain.objects.end(),
+      [](const auto &object) { return object.authoredName == "score"; });
+  expect(score != wrongNumericDomain.objects.end(),
+         "numeric-domain mutation finds the score object");
+  if (score != wrongNumericDomain.objects.end()) {
+    std::get<SkinNumberObject>(score->payload).value = SkinIntegerPropertyId{1};
+    const SkinObjectId scoreId = score->id;
+    const auto domainResult = validator.validate(std::move(wrongNumericDomain));
+    expect(domainResult.model &&
+               std::ranges::find(domainResult.model->disabledOptionalObjects,
+                                 scoreId) !=
+                   domainResult.model->disabledOptionalObjects.end(),
+           "number objects reject image-index bindings with the wrong domain");
+  }
 }
 
 } // namespace
@@ -593,6 +923,11 @@ int main() {
   testStableIdsAndPerUseFrameExpansionAreSourceNeutral();
   testImageSetPreservesIndependentStateResourcesCropsAndTimers();
   testDestinationDefaultsInheritanceAndStableTimeOrder();
+  testMaterializedSpriteFrameBudgetRejectsCopyAmplification();
+  testFullTextureSentinelsRemainDeferredAcrossSpriteDivisions();
+  testSparsePinnedBlendIdsMapExactlyAndRejectUnknownValues();
+  testClipComponentsInheritUntilTheFirstCompleteRectangle();
+  testLuaProtectedDecodeOwnsEveryRawParseTemporaryInTheRequest();
   testNoteHeightAndIgnoredAuthoredVisualsRemainExplicitPolicies();
   testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject();
   if (failures != 0) {

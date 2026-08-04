@@ -1,10 +1,12 @@
 #include "SkinModelValidator.h"
 
 #include "../LuaGameplaySkinFeature.h"
+#include "LuaSkinTableDecoder.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include <algorithm>
+#include <map>
 #include <set>
 #include <string>
 #include <type_traits>
@@ -20,14 +22,31 @@ SkinDiagnostic validationDiagnostic(std::string code, std::string message) {
 }
 
 template <typename Binding>
-std::set<std::uint32_t> bindingIds(const std::vector<Binding> &bindings) {
-  std::set<std::uint32_t> result;
+bool collectBindingIds(const std::vector<Binding> &bindings,
+                       std::set<std::uint32_t> &result) {
   for (const auto &binding : bindings) {
-    if (binding.id.value != 0) {
-      result.insert(binding.id.value);
+    if (binding.id.value == 0 || !result.insert(binding.id.value).second) {
+      return false;
     }
   }
+  return true;
+}
+
+template <typename Binding, typename Domain>
+std::map<std::uint32_t, Domain>
+bindingDomains(const std::vector<Binding> &bindings) {
+  std::map<std::uint32_t, Domain> result;
+  for (const auto &binding : bindings) {
+    result.emplace(binding.id.value, binding.domain);
+  }
   return result;
+}
+
+template <typename Domain>
+bool hasDomain(const std::map<std::uint32_t, Domain> &domains, std::uint32_t id,
+               Domain expected) {
+  const auto found = domains.find(id);
+  return found != domains.end() && found->second == expected;
 }
 
 bool validSprite(const SkinSpriteFrames &sprite,
@@ -57,8 +76,8 @@ bool validNoteVisual(const SkinNoteVisual &visual,
 struct ValidationContext {
   const std::set<SkinResourceId> &resources;
   const std::set<SkinObjectId> &objects;
-  const std::set<std::uint32_t> &integers;
-  const std::set<std::uint32_t> &floats;
+  const std::map<std::uint32_t, SkinIntegerPropertyDomain> &integers;
+  const std::map<std::uint32_t, SkinFloatPropertyDomain> &floats;
   const std::set<std::uint32_t> &strings;
   const std::set<std::uint32_t> &timers;
 };
@@ -77,15 +96,18 @@ bool validPayload(const SkinObjectPayload &payload,
                                                           context.timers);
                                      }) &&
                  (!object.stateIndex ||
-                  context.integers.contains(object.stateIndex->value));
+                  hasDomain(context.integers, object.stateIndex->value,
+                            SkinIntegerPropertyDomain::ImageIndex));
         } else if constexpr (std::is_same_v<T, SkinNumberObject>) {
           return validDigits(object.digits, context.resources,
                              context.timers) &&
-                 context.integers.contains(object.value.value);
+                 hasDomain(context.integers, object.value.value,
+                           SkinIntegerPropertyDomain::IntegerValue);
         } else if constexpr (std::is_same_v<T, SkinFloatObject>) {
           return validDigits(object.digits, context.resources,
                              context.timers) &&
-                 context.floats.contains(object.value.value);
+                 hasDomain(context.floats, object.value.value,
+                           SkinFloatPropertyDomain::FloatValue);
         } else if constexpr (std::is_same_v<T, SkinTextObject>) {
           return object.font != 0 && context.resources.contains(object.font) &&
                  (!object.value ||
@@ -95,9 +117,11 @@ bool validPayload(const SkinObjectPayload &payload,
               [&](const auto &source) {
                 using V = std::decay_t<decltype(source)>;
                 if constexpr (std::is_same_v<V, SkinFloatPropertyId>) {
-                  return context.floats.contains(source.value);
+                  return hasDomain(context.floats, source.value,
+                                   SkinFloatPropertyDomain::Rate);
                 } else {
-                  return context.integers.contains(source.value.value) &&
+                  return hasDomain(context.integers, source.value.value,
+                                   SkinIntegerPropertyDomain::IntegerValue) &&
                          source.minimum <= source.maximum;
                 }
               },
@@ -109,9 +133,11 @@ bool validPayload(const SkinObjectPayload &payload,
               [&](const auto &source) {
                 using V = std::decay_t<decltype(source)>;
                 if constexpr (std::is_same_v<V, SkinFloatPropertyId>) {
-                  return context.floats.contains(source.value);
+                  return hasDomain(context.floats, source.value,
+                                   SkinFloatPropertyDomain::Rate);
                 } else {
-                  return context.integers.contains(source.value.value) &&
+                  return hasDomain(context.integers, source.value.value,
+                                   SkinIntegerPropertyDomain::IntegerValue) &&
                          source.minimum <= source.maximum;
                 }
               },
@@ -160,6 +186,49 @@ bool validPayload(const SkinObjectPayload &payload,
 SkinModelValidationResult
 SkinModelValidator::validate(BeatorajaSkinModel model) const {
   SkinModelValidationResult result;
+  if (model.header.width <= 0 || model.header.height <= 0 ||
+      model.header.width > LuaSkinTableDecoderPolicy::maxAuthoredDimension ||
+      model.header.height > LuaSkinTableDecoderPolicy::maxAuthoredDimension) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_canvas_invalid",
+        "Lua skin authored canvas dimensions are outside the fixed limit"));
+    return result;
+  }
+
+  std::set<std::uint32_t> booleanIds;
+  std::set<std::uint32_t> integerIds;
+  std::set<std::uint32_t> floatIds;
+  std::set<std::uint32_t> stringIds;
+  std::set<std::uint32_t> timerIds;
+  std::set<std::uint32_t> floatWriterIds;
+  std::set<std::uint32_t> stringWriterIds;
+  std::set<std::uint32_t> eventIds;
+  if (!collectBindingIds(model.booleanProperties, booleanIds) ||
+      !collectBindingIds(model.integerProperties, integerIds) ||
+      !collectBindingIds(model.floatProperties, floatIds) ||
+      !collectBindingIds(model.stringProperties, stringIds) ||
+      !collectBindingIds(model.timerProperties, timerIds) ||
+      !collectBindingIds(model.floatWriters, floatWriterIds) ||
+      !collectBindingIds(model.stringWriters, stringWriterIds) ||
+      !collectBindingIds(model.events, eventIds) ||
+      std::ranges::any_of(
+          model.integerProperties,
+          [](const auto &binding) {
+            return binding.domain != SkinIntegerPropertyDomain::IntegerValue &&
+                   binding.domain != SkinIntegerPropertyDomain::ImageIndex;
+          }) ||
+      std::ranges::any_of(model.floatProperties, [](const auto &binding) {
+        return binding.domain != SkinFloatPropertyDomain::Rate &&
+               binding.domain != SkinFloatPropertyDomain::FloatValue;
+      })) {
+    result.criticalFailure = true;
+    result.diagnostics.push_back(validationDiagnostic(
+        "skin_lua_model_binding_identity_invalid",
+        "Lua skin binding identities must be nonzero, unique, and typed"));
+    return result;
+  }
+
   std::set<SkinResourceId> resourceIds;
   std::set<SkinObjectId> objectIds;
   std::map<std::string, SkinResourceId, std::less<>> resourceNames;
@@ -195,16 +264,18 @@ SkinModelValidator::validate(BeatorajaSkinModel model) const {
     }
   }
 
-  const auto integers = bindingIds(model.integerProperties);
-  const auto floats = bindingIds(model.floatProperties);
-  const auto strings = bindingIds(model.stringProperties);
-  const auto timers = bindingIds(model.timerProperties);
+  const auto integers =
+      bindingDomains<SkinIntegerPropertyBinding, SkinIntegerPropertyDomain>(
+          model.integerProperties);
+  const auto floats =
+      bindingDomains<SkinFloatPropertyBinding, SkinFloatPropertyDomain>(
+          model.floatProperties);
   const ValidationContext context{.resources = resourceIds,
                                   .objects = objectIds,
                                   .integers = integers,
                                   .floats = floats,
-                                  .strings = strings,
-                                  .timers = timers};
+                                  .strings = stringIds,
+                                  .timers = timerIds};
 
   std::vector<SkinObjectId> disabled;
   for (const auto &object : model.objects) {
