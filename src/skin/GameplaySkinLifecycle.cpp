@@ -1090,74 +1090,114 @@ GameplaySkinLifecycle::catalogSnapshot() const noexcept {
   }
 }
 
-std::optional<GameplaySkinActivationRequest>
+GameplaySkinAcquisition
 GameplaySkinLifecycle::acquireForNextChart(int keyMode) {
   if (impl_->stopped || !impl_->initialized || !impl_->acquisitionReady ||
       !impl_->activeProfile ||
       !impl_->deps.snapshotProfile || !impl_->deps.acquireActivation) {
-    return std::nullopt;
+    return {.disposition = GameplaySkinAcquisitionDisposition::Failed,
+            .failure = GameplaySkinAcquisitionFailure{
+                .diagnostic = lifecycleDiagnostic(
+                    "skin.lifecycle.acquisition_unavailable",
+                    "The selected gameplay skin could not be acquired")}};
   }
   // Every call is a chart boundary. A failed/disabled acquisition must not
   // leave the preceding chart's identity eligible for writers or Reset Layout.
   impl_->discardWriterChain();
   impl_->currentIdentity.reset();
+  std::optional<SkinEntryId> requestedEntry;
+  std::string requestedConfigurationDigest;
   try {
     auto base = impl_->deps.snapshotProfile(*impl_->activeProfile);
     base.settings.sanitize();
     const auto trait = gameplaySkinTraitForKeyMode(keyMode);
     if (!trait) {
-      return std::nullopt;
+      return {};
     }
     const auto selectedTrait =
         base.settings.selectedGameplayEntries.find(trait->skinType);
     if (selectedTrait == base.settings.selectedGameplayEntries.end()) {
-      return std::nullopt;
+      return {};
     }
-    const auto entry = selectedTrait->second;
-    const auto selected = base.settings.entries.find(entry);
+    requestedEntry = selectedTrait->second;
+    const auto selected = base.settings.entries.find(*requestedEntry);
     if (selected == base.settings.entries.end()) {
-      return std::nullopt;
+      return {.disposition = GameplaySkinAcquisitionDisposition::Failed,
+              .failure = GameplaySkinAcquisitionFailure{
+                  .entry = std::move(requestedEntry),
+                  .diagnostic = lifecycleDiagnostic(
+                      "skin.lifecycle.selected_entry_missing",
+                      "The selected gameplay skin configuration is missing")}};
     }
-    const auto configurationDigest = skinConfigurationDigest(selected->second);
-    auto acquired = impl_->deps.acquireActivation(base.profileId, entry,
-                                                  configurationDigest);
+    requestedConfigurationDigest = skinConfigurationDigest(selected->second);
+    auto acquired = impl_->deps.acquireActivation(
+        base.profileId, *requestedEntry, requestedConfigurationDigest);
+    std::optional<SkinDiagnostic> acquisitionFailure;
+    for (const auto &diagnostic : acquired.diagnostics) {
+      if (!acquisitionFailure &&
+          diagnostic.severity == DiagnosticSeverity::Error) {
+        acquisitionFailure = diagnostic;
+      }
+    }
     impl_->appendAll(std::move(acquired.diagnostics),
                      SkinDiagnosticPhase::Validation);
-    if (!acquired.activation || acquired.activation->entry != entry ||
-        acquired.activation->configurationDigest != configurationDigest) {
-      return std::nullopt;
+    if (!acquired.activation || acquired.activation->entry != *requestedEntry ||
+        acquired.activation->configurationDigest !=
+            requestedConfigurationDigest) {
+      return {.disposition = GameplaySkinAcquisitionDisposition::Failed,
+              .failure = GameplaySkinAcquisitionFailure{
+                  .entry = std::move(requestedEntry),
+                  .configurationDigest =
+                      std::move(requestedConfigurationDigest),
+                  .diagnostic = acquisitionFailure.value_or(
+                      lifecycleDiagnostic(
+                          "skin.lifecycle.activation_unavailable",
+                          "The selected gameplay skin is not ready for this "
+                          "configuration"))}};
     }
     const auto sessionSerial = allocateSessionSerial();
     if (sessionSerial == 0) {
-      impl_->append(
-          lifecycleDiagnostic("skin.lifecycle.session_serial_exhausted",
-                              "Gameplay skin session serials are exhausted"),
-          SkinDiagnosticPhase::Session);
-      return std::nullopt;
+      auto diagnostic = lifecycleDiagnostic(
+          "skin.lifecycle.session_serial_exhausted",
+          "Gameplay skin session serials are exhausted");
+      impl_->append(diagnostic, SkinDiagnosticPhase::Session);
+      return {.disposition = GameplaySkinAcquisitionDisposition::Failed,
+              .failure = GameplaySkinAcquisitionFailure{
+                  .entry = std::move(requestedEntry),
+                  .revisionDigest =
+                      acquired.activation->revision.revision().lowercaseSha256,
+                  .configurationDigest =
+                      std::move(requestedConfigurationDigest),
+                  .diagnostic = std::move(diagnostic)}};
     }
     PlaySkinSessionIdentity identity{
         .sessionSerial = sessionSerial,
         .profileId = base.profileId,
-        .entry = entry,
+        .entry = *requestedEntry,
         .revisionDigest =
             acquired.activation->revision.revision().lowercaseSha256,
-        .configurationDigest = configurationDigest};
+        .configurationDigest = requestedConfigurationDigest};
     const auto chainGeneration = ++impl_->nextChainGeneration;
     impl_->writer.emplace(Impl::WriterChain{
         .generation = chainGeneration, .identity = identity, .base = base});
     impl_->currentIdentity = identity;
-    return GameplaySkinActivationRequest{.sessionSerial = sessionSerial,
-                                         .profileId = base.profileId,
-                                         .activation =
-                                             std::move(*acquired.activation),
-                                         .viewport = selected->second.viewport};
+    return {.disposition = GameplaySkinAcquisitionDisposition::Ready,
+            .request = GameplaySkinActivationRequest{
+                .sessionSerial = sessionSerial,
+                .profileId = base.profileId,
+                .activation = std::move(*acquired.activation),
+                .viewport = selected->second.viewport}};
   } catch (...) {
-    impl_->append(lifecycleDiagnostic(
-                      "skin.lifecycle.acquire_failed",
-                      "The next-chart gameplay skin activation could not be "
-                      "acquired"),
-                  SkinDiagnosticPhase::Validation);
-    return std::nullopt;
+    auto diagnostic = lifecycleDiagnostic(
+        "skin.lifecycle.acquire_failed",
+        "The next-chart gameplay skin activation could not be acquired");
+    impl_->append(diagnostic, SkinDiagnosticPhase::Validation);
+    return {.disposition = GameplaySkinAcquisitionDisposition::Failed,
+            .failure = GameplaySkinAcquisitionFailure{
+                .entry = std::move(requestedEntry),
+                .configurationDigest =
+                    std::move(requestedConfigurationDigest),
+                .diagnostic = std::move(diagnostic)}};
   }
 }
 

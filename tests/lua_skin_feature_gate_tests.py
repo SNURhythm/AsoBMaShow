@@ -462,8 +462,11 @@ class LuaSkinFeatureGateTests(unittest.TestCase):
         self.assertLess(rescan, scan)
         self.assertLess(scan, ready)
 
-        acquisition = braced_body(source, "acquireForNextChart()")
+        acquisition = braced_body(
+            source, "GameplaySkinLifecycle::acquireForNextChart("
+        )
         self.assertIn("!impl_->acquisitionReady", acquisition)
+        self.assertIn("GameplaySkinAcquisitionDisposition::Failed", acquisition)
 
     def test_skin_service_teardown_preserves_dependency_lifetimes(self):
         source = APPLICATION_CONTEXT_HEADER.read_text(encoding="utf-8")

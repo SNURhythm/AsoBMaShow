@@ -141,6 +141,20 @@ void appendGameplaySkinDiagnostic(
   } catch (...) {
   }
 }
+
+std::string gameplaySkinFailureMessage(const skin::SkinDiagnostic &diagnostic) {
+  std::string message = "The selected gameplay skin could not be used.";
+  if (!diagnostic.message.empty()) {
+    message.append("\n\n");
+    message.append(diagnostic.message);
+  }
+  if (!diagnostic.code.empty()) {
+    message.append("\n\n[");
+    message.append(diagnostic.code);
+    message.push_back(']');
+  }
+  return message;
+}
 #endif
 
 const char *
@@ -1206,76 +1220,112 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
   auto *coordinator =
       dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
   if (coordinator == nullptr || chart == nullptr ||
-      !context.acquireGameplaySkinForNextChart ||
-      !context.skinStorageRoots || !context.skinResourcePreparationService ||
-      !context.skinConfigurationWriteQueue ||
-      !context.skinDiagnosticHistory || !context.skinLiveResourceCounters) {
+      !context.acquireGameplaySkinForNextChart) {
     return;
   }
 
-  std::optional<skin::SkinEntryId> capturedEntry;
-  std::string capturedRevisionDigest;
-  std::string capturedConfigurationDigest;
-  bool identityCaptured = false;
-  const skin::UiLogicalRect safeUiBounds = gameplaySkinSafeUiBounds();
-  (void)skin::runGameplaySkinAttemptInstallFailClosed(
-      [&]() {
-        return context.acquireGameplaySkinForNextChart(chart->Meta.KeyMode);
-      },
-      [&](skin::GameplaySkinActivationRequest request)
-          -> std::unique_ptr<skin::PlaySkinSession> {
-        capturedEntry = request.activation.entry;
-        capturedRevisionDigest =
-            request.activation.revision.revision().lowercaseSha256;
-        capturedConfigurationDigest =
-            request.activation.configurationDigest;
-        identityCaptured = true;
-        auto created = skin::PlaySkinSession::create(
-            std::move(request.activation),
-            {.sessionSerial = request.sessionSerial,
-             .profileId = std::move(request.profileId),
-             .chartModel = playfieldChartVisualModel,
-             .initialState = &capturedPlayfieldVisualState,
-             .initialProjection = &capturedPlayfieldProjection,
-             .viewport = request.viewport,
-             .safeUiBounds = safeUiBounds,
-             .storageRoots = *context.skinStorageRoots,
-             .resourcePreparation = *context.skinResourcePreparationService,
-             .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
-             .liveResourceCounters = context.skinLiveResourceCounters,
-             .configurationWrites = *context.skinConfigurationWriteQueue,
-             .stop = {}});
-        for (auto &diagnostic : created.diagnostics) {
-          appendGameplaySkinDiagnostic(
-              context, *capturedEntry, capturedRevisionDigest,
-              capturedConfigurationDigest, skin::SkinDiagnosticPhase::Session,
-              std::move(diagnostic));
-        }
-        return std::move(created.session);
-      },
-      [&](std::unique_ptr<skin::PlaySkinSession> session) {
-        coordinator->installSkinSession(std::move(session));
-        gameplaySkinSafeBoundsInitialized = true;
-        gameplaySkinSafeBoundsX = safeUiBounds.x;
-        gameplaySkinSafeBoundsY = safeUiBounds.y;
-        gameplaySkinSafeBoundsWidth = safeUiBounds.width;
-        gameplaySkinSafeBoundsHeight = safeUiBounds.height;
-      },
-      [&]() {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Gameplay skin session construction failed");
-        if (identityCaptured && capturedEntry) {
-          appendGameplaySkinDiagnostic(
-              context, *capturedEntry, capturedRevisionDigest,
-              capturedConfigurationDigest, skin::SkinDiagnosticPhase::Session,
-              skin::SkinDiagnostic{
-                  .code = "skin.session.construction_exception",
+  if (!context.skinStorageRoots || !context.skinResourcePreparationService ||
+      !context.skinConfigurationWriteQueue ||
+      !context.skinDiagnosticHistory || !context.skinLiveResourceCounters) {
+    showPlaybackInitializationFailure(
+        "Gameplay skin services are unavailable. Return to Settings, then "
+        "try the selected skin again.");
+    return;
+  }
+
+  const skin::GameplaySkinAcquisition acquisition =
+      context.acquireGameplaySkinForNextChart(chart->Meta.KeyMode);
+  if (acquisition.disposition ==
+      skin::GameplaySkinAcquisitionDisposition::Failed) {
+    const skin::SkinDiagnostic diagnostic =
+        acquisition.failure
+            ? acquisition.failure->diagnostic
+            : skin::SkinDiagnostic{
+                  .code = "skin.lifecycle.acquisition_invalid",
                   .message =
-                      "The gameplay skin session could not be constructed; "
-                      "the built-in presentation remains active.",
-                  .severity = skin::DiagnosticSeverity::Error});
-        }
-      });
+                      "The selected gameplay skin returned no activation",
+                  .severity = skin::DiagnosticSeverity::Error};
+    showPlaybackInitializationFailure(gameplaySkinFailureMessage(diagnostic));
+    return;
+  }
+  if (acquisition.disposition !=
+          skin::GameplaySkinAcquisitionDisposition::Ready ||
+      !acquisition.request) {
+    return;
+  }
+
+  skin::GameplaySkinActivationRequest request =
+      std::move(*acquisition.request);
+  const skin::SkinEntryId capturedEntry = request.activation.entry;
+  const std::string capturedRevisionDigest =
+      request.activation.revision.revision().lowercaseSha256;
+  const std::string capturedConfigurationDigest =
+      request.activation.configurationDigest;
+  const skin::UiLogicalRect safeUiBounds = gameplaySkinSafeUiBounds();
+  try {
+    auto created = skin::PlaySkinSession::create(
+        std::move(request.activation),
+        {.sessionSerial = request.sessionSerial,
+         .profileId = std::move(request.profileId),
+         .chartModel = playfieldChartVisualModel,
+         .initialState = &capturedPlayfieldVisualState,
+         .initialProjection = &capturedPlayfieldProjection,
+         .viewport = request.viewport,
+         .safeUiBounds = safeUiBounds,
+         .storageRoots = *context.skinStorageRoots,
+         .resourcePreparation = *context.skinResourcePreparationService,
+         .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+         .liveResourceCounters = context.skinLiveResourceCounters,
+         .configurationWrites = *context.skinConfigurationWriteQueue,
+         .stop = {}});
+    std::optional<skin::SkinDiagnostic> failureDiagnostic;
+    for (auto &diagnostic : created.diagnostics) {
+      if (!failureDiagnostic &&
+          diagnostic.severity == skin::DiagnosticSeverity::Error) {
+        failureDiagnostic = diagnostic;
+      }
+      appendGameplaySkinDiagnostic(context, capturedEntry,
+                                  capturedRevisionDigest,
+                                  capturedConfigurationDigest,
+                                  skin::SkinDiagnosticPhase::Session,
+                                  std::move(diagnostic));
+    }
+    if (!created.session) {
+      const skin::SkinDiagnostic diagnostic = failureDiagnostic.value_or(
+          skin::SkinDiagnostic{
+              .code = "skin.session.construction_failed",
+              .message = "The selected gameplay skin could not start a "
+                         "chart-lifetime session",
+              .severity = skin::DiagnosticSeverity::Error});
+      if (!failureDiagnostic) {
+        appendGameplaySkinDiagnostic(
+            context, capturedEntry, capturedRevisionDigest,
+            capturedConfigurationDigest, skin::SkinDiagnosticPhase::Session,
+            diagnostic);
+      }
+      showPlaybackInitializationFailure(gameplaySkinFailureMessage(diagnostic));
+      return;
+    }
+    coordinator->installSkinSession(std::move(created.session));
+    gameplaySkinSafeBoundsInitialized = true;
+    gameplaySkinSafeBoundsX = safeUiBounds.x;
+    gameplaySkinSafeBoundsY = safeUiBounds.y;
+    gameplaySkinSafeBoundsWidth = safeUiBounds.width;
+    gameplaySkinSafeBoundsHeight = safeUiBounds.height;
+  } catch (...) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                 "Gameplay skin session construction failed");
+    const skin::SkinDiagnostic diagnostic{
+        .code = "skin.session.construction_exception",
+        .message = "The selected gameplay skin threw while starting. Built-in "
+                   "gameplay was not used as a replacement.",
+        .severity = skin::DiagnosticSeverity::Error};
+    appendGameplaySkinDiagnostic(context, capturedEntry, capturedRevisionDigest,
+                                capturedConfigurationDigest,
+                                skin::SkinDiagnosticPhase::Session,
+                                diagnostic);
+    showPlaybackInitializationFailure(gameplaySkinFailureMessage(diagnostic));
+  }
 #endif
 }
 
@@ -2739,6 +2789,9 @@ bool GamePlayScene::reset() {
       getVisualTimeMicros(initialGameplayTimeMicros),
       preparationIndicatorActive(initialRawSongTimeMicros));
   acquireGameplaySkinForAttempt();
+  if (playbackInitializationFailed) {
+    return false;
+  }
   updateSkinResetLayoutVisibility();
 #endif
   context.jukebox.play(preparationPlan.playbackStartTimeMicros);
@@ -2773,6 +2826,10 @@ void GamePlayScene::showPlaybackInitializationFailure(
     const std::string &message) {
   playbackInitializationFailed = true;
   escapeHandledByInputPipeline = true;
+  if (state != nullptr) {
+    state->isPlaying = false;
+    state->isEnding = true;
+  }
   context.jukebox.stop();
   if (inputHandler != nullptr) {
     inputHandler->stopListen();
@@ -2787,6 +2844,9 @@ void GamePlayScene::showPlaybackInitializationFailure(
   }
   if (practiceRestartButton != nullptr) {
     practiceRestartButton->setVisible(false);
+  }
+  if (skinResetLayoutButton != nullptr) {
+    skinResetLayoutButton->setVisible(false);
   }
   if (playbackFailureLayout != nullptr) {
     return;
@@ -4525,6 +4585,14 @@ void GamePlayScene::renderScene() {
       .mode = presentationFrame.bgaCompositeMode,
       .prepared = presentationFrame.preparedBga,
   };
+  if (presentationFrame.failure &&
+      (presentationFrame.outcome == PresentationFrameOutcome::CriticalFailure ||
+       presentationFrame.submittedMode == PresentationMode::BuiltIn) &&
+      !presentationFrame.failure->entry.collisionKey.empty()) {
+    showPlaybackInitializationFailure(
+        gameplaySkinFailureMessage(presentationFrame.failure->diagnostic));
+    return;
+  }
 #endif
   updateSkinResetLayoutVisibility();
   renderCoursePauseHoldRing();

@@ -4,7 +4,6 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -56,37 +55,23 @@ std::size_t countOccurrences(const std::string &source,
 void activationRequestBoundaryIsDefaultEmpty() {
   skin::AcquireGameplaySkinForNextChart acquire;
   expect(!acquire, "the injected next-chart acquisition callback defaults empty");
-}
+  const skin::GameplaySkinAcquisition noSelection;
+  expect(noSelection.disposition ==
+                 skin::GameplaySkinAcquisitionDisposition::BuiltIn &&
+             !noSelection.request && !noSelection.failure,
+         "an unselected trait is the only acquisition state that selects "
+         "built-in gameplay");
 
-void constructionExceptionFailsClosedAfterConsumingTheRequest() {
-  struct FakeCoordinator {
-    bool skinInstalled = false;
-  } coordinator;
-  int acquisitionCount = 0;
-  int constructionCount = 0;
-  int failureCount = 0;
-
-  const bool installed = skin::runGameplaySkinAttemptInstallFailClosed(
-      [&]() -> std::optional<int> {
-        ++acquisitionCount;
-        return 7;
-      },
-      [&](int) -> std::unique_ptr<int> {
-        ++constructionCount;
-        throw std::runtime_error("texture factory failed");
-      },
-      [&](std::unique_ptr<int>) { coordinator.skinInstalled = true; },
-      [&]() { ++failureCount; });
-
-  expect(!installed, "a construction exception does not install a skin");
-  expect(acquisitionCount == 1,
-         "the next-attempt activation is consumed exactly once");
-  expect(constructionCount == 1,
-         "the throwing construction factory is invoked exactly once");
-  expect(failureCount == 1,
-         "the fail-closed boundary reports one construction failure");
-  expect(!coordinator.skinInstalled,
-         "the warmed coordinator presentation remains built-in");
+  const skin::GameplaySkinAcquisition selectedFailure{
+      .disposition = skin::GameplaySkinAcquisitionDisposition::Failed,
+      .failure = skin::GameplaySkinAcquisitionFailure{
+          .diagnostic = {.code = "skin.test.selected_failure",
+                         .message = "selected skin failed",
+                         .severity = skin::DiagnosticSeverity::Error}}};
+  expect(selectedFailure.disposition ==
+                 skin::GameplaySkinAcquisitionDisposition::Failed &&
+             !selectedFailure.request && selectedFailure.failure,
+         "a selected skin failure cannot be represented as built-in gameplay");
 }
 
 void gameplaySceneOwnsOnlyThePresentationBoundary() {
@@ -110,8 +95,28 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
                  "gameplay calls only the injected next-chart acquisition seam");
   expectContains(source, "skin::PlaySkinSession::create(",
                  "gameplay creates an owning chart-lifetime skin session");
-  expectContains(source, "runGameplaySkinAttemptInstallFailClosed(",
-                 "request consumption and session construction share one fail-closed boundary");
+  expectContains(source, "GameplaySkinAcquisitionDisposition::Failed",
+                 "gameplay distinguishes a selected-skin acquisition failure");
+  expectContains(source,
+                 "showPlaybackInitializationFailure(gameplaySkinFailureMessage(diagnostic));",
+                 "selected-skin acquisition and session failures open the full-screen error page");
+  expectContains(source,
+                 "if (playbackInitializationFailed) {\n    return false;\n  }\n  updateSkinResetLayoutVisibility();",
+                 "a selected skin failure stops reset before audio and input start");
+  expectContains(source,
+                 "presentationFrame.outcome == PresentationFrameOutcome::CriticalFailure",
+                 "critical skin frame fallback opens the full-screen error page");
+  expectContains(source,
+                 "presentationFrame.submittedMode == PresentationMode::BuiltIn",
+                 "a non-critical selected-skin fallback also opens the full-screen error page");
+  expectContains(source,
+                 "if (state != nullptr) {\n    state->isPlaying = false;\n    state->isEnding = true;\n  }",
+                 "the full-screen failure page stops the current gameplay state");
+  expectContains(source,
+                 "if (skinResetLayoutButton != nullptr) {\n    skinResetLayoutButton->setVisible(false);\n  }\n  if (playbackFailureLayout != nullptr)",
+                 "the full-screen failure page hides the skin-only control");
+  expectAbsent(source, "runGameplaySkinAttemptInstallFailClosed(",
+               "gameplay no longer merges selected-skin failure with built-in selection");
   expectContains(source, "presentation->prepareFrame(",
                  "the matched state/projection pair is prepared through the presentation");
   expectContains(source, "presentation->render(renderContext)",
@@ -132,8 +137,8 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
                  "capturePlayfieldVisualState(\n      initialGameplayTimeMicros,\n      getVisualTimeMicros(initialGameplayTimeMicros),\n      preparationIndicatorActive(initialRawSongTimeMicros));\n  acquireGameplaySkinForAttempt();",
                  "every retry captures authoritative initial state before reacquiring through the injected attempt boundary");
   expectContains(source,
-                 "acquireGameplaySkinForAttempt();\n  updateSkinResetLayoutVisibility();\n#endif\n  context.jukebox.play",
-                 "configured skin loading completes before attempt audio starts");
+                 "acquireGameplaySkinForAttempt();\n  if (playbackInitializationFailed) {\n    return false;\n  }\n  updateSkinResetLayoutVisibility();\n#endif\n  context.jukebox.play",
+                 "configured skin loading either completes or stops before attempt audio starts");
   expectContains(source, "*playfieldVisualStateStore, *presentation",
                  "the event fanout targets the coordinator presentation exactly once");
   expectContains(source, ".replayData = options.replayData.get()",
@@ -170,7 +175,6 @@ void contextPublishesTheGuardedInjectionSeam() {
 
 int main() {
   activationRequestBoundaryIsDefaultEmpty();
-  constructionExceptionFailsClosedAfterConsumingTheRequest();
   gameplaySceneOwnsOnlyThePresentationBoundary();
   contextPublishesTheGuardedInjectionSeam();
   if (failures == 0) {

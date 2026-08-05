@@ -293,7 +293,7 @@ public:
         acquireGameplaySkinForNextChart = [this](int keyMode) {
           return gameplaySkinLifecycle
                      ? gameplaySkinLifecycle->acquireForNextChart(keyMode)
-                     : std::optional<skin::GameplaySkinActivationRequest>{};
+                     : skin::GameplaySkinAcquisition{};
         };
       }
     } catch (...) {

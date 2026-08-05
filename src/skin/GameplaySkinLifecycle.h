@@ -105,7 +105,7 @@ public:
   void poll();
   [[nodiscard]] std::shared_ptr<const SkinPackageCatalogSnapshot>
   catalogSnapshot() const noexcept;
-  [[nodiscard]] std::optional<GameplaySkinActivationRequest>
+  [[nodiscard]] GameplaySkinAcquisition
   acquireForNextChart(int keyMode = 7);
   void recordPresentationFailure(const PresentationFailure &);
   void shutdown() noexcept;

@@ -486,6 +486,25 @@ void testAcquisitionUsesOwningActivationAndMonotonicSessionSerial() {
           "the next chart receives a never-reused serial and new owning lease");
 }
 
+void testSelectedActivationFailureIsNotTreatedAsBuiltIn() {
+  LifecycleFake fake;
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  fake.completeReadiness(lifecycle);
+  fake.currentLease = nullptr;
+
+  const auto acquisition = lifecycle.acquireForNextChart();
+  require(acquisition.disposition ==
+                  GameplaySkinAcquisitionDisposition::Failed &&
+              !acquisition.request && acquisition.failure &&
+              acquisition.failure->entry &&
+              *acquisition.failure->entry == fake.entry &&
+              acquisition.failure->diagnostic.code ==
+                  "skin.lifecycle.activation_unavailable",
+          "a selected skin whose activation is unavailable reports a skin "
+          "failure instead of silently selecting built-in gameplay");
+}
+
 void testWriterChainRebasesBOnlyAfterASuccess() {
   LifecycleFake fake;
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -984,6 +1003,7 @@ int main() {
   testStartupUsesRecoveredCatalogWithoutRescan();
   testLaterFailedRescanPreservesReadyAcquisitionAndCatalog();
   testAcquisitionUsesOwningActivationAndMonotonicSessionSerial();
+  testSelectedActivationFailureIsNotTreatedAsBuiltIn();
   testWriterChainRebasesBOnlyAfterASuccess();
   testWriterRejectsAPreparedActivationFromADifferentRevision();
   testWriterRejectsACommitCompletionThatIsNotItsExactSuccessor();

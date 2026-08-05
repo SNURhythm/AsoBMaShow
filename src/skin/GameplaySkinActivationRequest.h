@@ -20,37 +20,52 @@ struct GameplaySkinActivationRequest {
   ViewportSettings viewport;
 };
 
-using AcquireGameplaySkinForNextChart =
-    std::function<std::optional<GameplaySkinActivationRequest>(int keyMode)>;
+// Built-in gameplay is a deliberate selection only when the chart trait has
+// no selected skin. A selected skin that cannot be activated must remain
+// distinguishable so gameplay does not silently replace it with built-in UI.
+enum class GameplaySkinAcquisitionDisposition : std::uint8_t {
+  BuiltIn,
+  Ready,
+  Failed,
+};
 
-// One noexcept boundary around the destructive handoff from a consumed
-// next-attempt request to an installed chart-lifetime session. In particular,
-// allocation by a texture/session factory must not escape gameplay reset and
-// replace the already-warmed built-in presentation.
-template <typename Acquire, typename Construct, typename Install,
-          typename OnException>
-[[nodiscard]] bool runGameplaySkinAttemptInstallFailClosed(
-    Acquire &&acquire, Construct &&construct, Install &&install,
-    OnException &&onException) noexcept {
-  try {
-    auto request = std::invoke(std::forward<Acquire>(acquire));
-    if (!request) {
-      return false;
-    }
-    auto session = std::invoke(std::forward<Construct>(construct),
-                               std::move(*request));
-    if (!session) {
-      return false;
-    }
-    std::invoke(std::forward<Install>(install), std::move(session));
-    return true;
-  } catch (...) {
-    try {
-      std::invoke(std::forward<OnException>(onException));
-    } catch (...) {
-    }
-    return false;
+struct GameplaySkinAcquisitionFailure {
+  std::optional<SkinEntryId> entry;
+  std::string revisionDigest;
+  std::string configurationDigest;
+  SkinDiagnostic diagnostic;
+};
+
+struct GameplaySkinAcquisition {
+  GameplaySkinAcquisitionDisposition disposition =
+      GameplaySkinAcquisitionDisposition::BuiltIn;
+  std::optional<GameplaySkinActivationRequest> request;
+  std::optional<GameplaySkinAcquisitionFailure> failure;
+
+  // Transitional optional-like access keeps existing chart-boundary callers
+  // source-compatible while making the no-selection / selected-failure state
+  // explicit to new callers.
+  [[nodiscard]] bool has_value() const noexcept { return request.has_value(); }
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return has_value();
   }
-}
+  [[nodiscard]] GameplaySkinActivationRequest &operator*() noexcept {
+    return *request;
+  }
+  [[nodiscard]] const GameplaySkinActivationRequest &operator*() const
+      noexcept {
+    return *request;
+  }
+  [[nodiscard]] GameplaySkinActivationRequest *operator->() noexcept {
+    return request.operator->();
+  }
+  [[nodiscard]] const GameplaySkinActivationRequest *operator->() const
+      noexcept {
+    return request.operator->();
+  }
+};
+
+using AcquireGameplaySkinForNextChart =
+    std::function<GameplaySkinAcquisition(int keyMode)>;
 
 } // namespace skin
