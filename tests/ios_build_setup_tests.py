@@ -554,6 +554,17 @@ class IOSBuildSetupTests(unittest.TestCase):
             "directory.URLByResolvingSymlinksInPath", implementation
         )
 
+    def test_ios_documents_path_resolves_the_trusted_sandbox_alias(self):
+        source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
+        implementation_start = source.index("std::string GetIOSDocumentsPath()")
+        implementation_end = source.index(
+            "std::string GetIOSApplicationSupportPath()", implementation_start
+        )
+        implementation = source[implementation_start:implementation_end]
+        self.assertIn("NSDocumentDirectory", implementation)
+        self.assertIn("URLByResolvingSymlinksInPath", implementation)
+        self.assertIn("resolvedDirectory.fileSystemRepresentation", implementation)
+
     def test_ios_folder_handoff_and_files_document_access_are_declared(self):
         with INFO_PLIST.open("rb") as handle:
             info = plistlib.load(handle)
