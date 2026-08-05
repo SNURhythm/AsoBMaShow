@@ -143,7 +143,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
                 [this]() {
                   if (context.gameplaySkinLifecycle != nullptr) {
                     context.gameplaySkinLifecycle->requestRescan(
-                        skin::SkinRescanReason::SettingsOpened);
+                        skin::SkinRescanReason::Explicit);
                   }
                 },
             .requestRevalidation =

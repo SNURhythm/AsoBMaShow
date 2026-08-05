@@ -316,16 +316,9 @@ public:
   }
 
   void completeReadiness(GameplaySkinLifecycle &lifecycle) {
+    // Startup uses the recovered package catalog. Scanning remains an explicit
+    // user operation, so there is no readiness operation chain to complete.
     lifecycle.poll();
-    completeInventory();
-    lifecycle.poll();
-    completeReconcile();
-    lifecycle.poll();
-    completeRescan();
-    const bool compatibility = owner.settings.gameplayCompatibilityEnabled;
-    owner.settings.gameplayCompatibilityEnabled = false;
-    lifecycle.poll();
-    owner.settings.gameplayCompatibilityEnabled = compatibility;
   }
 
   bool hasDiagnostic(std::string_view code) const {
@@ -434,134 +427,15 @@ public:
   bool throwOnDrain = false;
 };
 
-void testStartupAcquisitionWaitsForInventoryReconcileAndRescanInOrder() {
+void testStartupUsesRecoveredCatalogWithoutRescan() {
   LifecycleFake fake;
   GameplaySkinLifecycle lifecycle(fake.dependencies());
   lifecycle.startAfterProfileInitialization(fake.profile);
-  require(!lifecycle.acquireForNextChart() && fake.acquireCalls == 0,
-          "startup acquisition stays built-in-only before inventory begins");
-
-  lifecycle.poll();
-  require(fake.operationEvents == std::vector<std::string>{"inventory"} &&
-              !lifecycle.acquireForNextChart() && fake.acquireCalls == 0,
-          "inventory admission alone cannot expose acquisition");
-
-  fake.completeInventory();
-  lifecycle.poll();
-  require(fake.operationEvents ==
-                  std::vector<std::string>{"inventory", "reconcile"} &&
-              fake.reconciledProfiles.size() == 1 &&
-              fake.reconciledProfiles.front() ==
-                  std::vector<SkinProfileId>{fake.profile} &&
-              fake.rescannedInventories.empty() &&
-              !lifecycle.acquireForNextChart() && fake.acquireCalls == 0,
-          "a complete inventory submits value-owned typed profile IDs before "
-          "any rescan or acquisition");
-
-  fake.completeReconcile();
-  lifecycle.poll();
-  require(fake.operationEvents ==
-                  std::vector<std::string>{"inventory", "reconcile", "rescan"} &&
-              fake.rescannedInventories.size() == 1 &&
-              fake.rescannedInventories.front().inventoryGeneration == 41 &&
-              fake.rescannedInventories.front().profiles ==
-                  std::vector<VersionedSkinProfileSettings>{fake.owner} &&
-              !lifecycle.acquireForNextChart() && fake.acquireCalls == 0,
-          "successful reconciliation submits the same complete inventory to "
-          "the serialized rescan while acquisition remains unavailable");
-
-  fake.completeRescan();
-  lifecycle.poll();
   require(lifecycle.acquireForNextChart().has_value() &&
-              fake.operationEvents.back() == "acquire" &&
+              fake.operationEvents == std::vector<std::string>{"acquire"} &&
               fake.acquireCalls == 1,
-          "a successful scan is the first point that enables acquisition");
-}
-
-void testStartupReadinessFailuresRemainBuiltInOnlyAndDiagnosed() {
-  const auto inventoryFailure = [](bool complete, bool cancelled,
-                                   bool includeInventory) {
-    LifecycleFake fake;
-    GameplaySkinLifecycle lifecycle(fake.dependencies());
-    lifecycle.startAfterProfileInitialization(fake.profile);
-    lifecycle.poll();
-    fake.completeInventory(complete, cancelled, includeInventory);
-    lifecycle.poll();
-    return !lifecycle.acquireForNextChart() && fake.acquireCalls == 0 &&
-           fake.hasDiagnostic("skin.lifecycle.inventory_failed");
-  };
-  require(inventoryFailure(false, false, true) &&
-              inventoryFailure(true, true, true) &&
-              inventoryFailure(true, false, false),
-          "incomplete, cancelled, and missing all-profile inventories fail "
-          "closed with diagnostics");
-
-  {
-    LifecycleFake fake;
-    fake.rejectInventory = true;
-    GameplaySkinLifecycle lifecycle(fake.dependencies());
-    lifecycle.startAfterProfileInitialization(fake.profile);
-    lifecycle.poll();
-    require(!lifecycle.acquireForNextChart() &&
-                fake.hasDiagnostic("skin.lifecycle.inventory_rejected"),
-            "a zero inventory ticket leaves startup unavailable");
-  }
-  {
-    LifecycleFake fake;
-    fake.rejectReconcile = true;
-    GameplaySkinLifecycle lifecycle(fake.dependencies());
-    lifecycle.startAfterProfileInitialization(fake.profile);
-    lifecycle.poll();
-    fake.completeInventory();
-    lifecycle.poll();
-    require(!lifecycle.acquireForNextChart() &&
-                fake.hasDiagnostic("skin.lifecycle.reconcile_rejected") &&
-                fake.rescannedInventories.empty(),
-            "a zero reconcile ticket diagnoses startup without scanning");
-  }
-  {
-    LifecycleFake fake;
-    GameplaySkinLifecycle lifecycle(fake.dependencies());
-    lifecycle.startAfterProfileInitialization(fake.profile);
-    lifecycle.poll();
-    fake.completeInventory();
-    lifecycle.poll();
-    fake.completeReconcile(false);
-    lifecycle.poll();
-    require(!lifecycle.acquireForNextChart() &&
-                fake.hasDiagnostic("skin.lifecycle.reconcile_failed") &&
-                fake.rescannedInventories.empty(),
-            "a failed reconciliation cannot advance startup to rescan");
-  }
-  {
-    LifecycleFake fake;
-    fake.rejectRescan = true;
-    GameplaySkinLifecycle lifecycle(fake.dependencies());
-    lifecycle.startAfterProfileInitialization(fake.profile);
-    lifecycle.poll();
-    fake.completeInventory();
-    lifecycle.poll();
-    fake.completeReconcile();
-    lifecycle.poll();
-    require(!lifecycle.acquireForNextChart() &&
-                fake.hasDiagnostic("skin.lifecycle.rescan_rejected"),
-            "a zero rescan ticket leaves startup unavailable");
-  }
-  {
-    LifecycleFake fake;
-    GameplaySkinLifecycle lifecycle(fake.dependencies());
-    lifecycle.startAfterProfileInitialization(fake.profile);
-    lifecycle.poll();
-    fake.completeInventory();
-    lifecycle.poll();
-    fake.completeReconcile();
-    lifecycle.poll();
-    fake.completeRescan(false);
-    lifecycle.poll();
-    require(!lifecycle.acquireForNextChart() &&
-                fake.hasDiagnostic("skin.lifecycle.rescan_failed"),
-            "a failed scan leaves startup unavailable and diagnosed");
-  }
+          "startup acquires from the recovered catalog without an automatic "
+          "rescan");
 }
 
 void testLaterFailedRescanPreservesReadyAcquisitionAndCatalog() {
@@ -573,7 +447,6 @@ void testLaterFailedRescanPreservesReadyAcquisitionAndCatalog() {
           "later-rescan fixture first reaches startup readiness");
   const auto oldCatalog = lifecycle.catalogSnapshot();
 
-  lifecycle.requestRescan(SkinRescanReason::SettingsOpened);
   lifecycle.requestRescan(SkinRescanReason::Explicit);
   lifecycle.poll();
   fake.completeInventory();
@@ -1089,8 +962,7 @@ void testShutdownClosesBeforeDrainAndIsolatesCleanupFailures() {
 } // namespace
 
 int main() {
-  testStartupAcquisitionWaitsForInventoryReconcileAndRescanInOrder();
-  testStartupReadinessFailuresRemainBuiltInOnlyAndDiagnosed();
+  testStartupUsesRecoveredCatalogWithoutRescan();
   testLaterFailedRescanPreservesReadyAcquisitionAndCatalog();
   testAcquisitionUsesOwningActivationAndMonotonicSessionSerial();
   testWriterChainRebasesBOnlyAfterASuccess();

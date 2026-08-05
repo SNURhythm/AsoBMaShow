@@ -2711,10 +2711,6 @@ void SettingsScene::initView() {
       if (activeTab == SettingsTab::GameplaySkins) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
         ensureGameplaySkinSettingsController();
-        if (gameplaySkinSettingsController != nullptr) {
-          handleGameplaySkinActionResult(
-              gameplaySkinSettingsController->requestRescan());
-        }
 #endif
       }
       lastLayoutWidth = -1;

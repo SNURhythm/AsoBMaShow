@@ -17,11 +17,7 @@
 
 namespace skin {
 
-enum class SkinRescanReason : std::uint8_t {
-  Startup,
-  SettingsOpened,
-  Explicit,
-};
+enum class SkinRescanReason : std::uint8_t { Explicit };
 
 struct GameplaySkinLifecycleOperationSubmission {
   std::uint64_t ticket = 0;

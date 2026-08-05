@@ -956,8 +956,10 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
     return;
   }
   impl_->initialized = true;
+  // The package catalog is recovered before this lifecycle starts. A scan is
+  // user initiated, so recovery is sufficient to serve the next chart.
+  impl_->acquisitionReady = true;
   impl_->activeProfile = std::move(profile);
-  requestRescan(SkinRescanReason::Startup);
 }
 
 void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
