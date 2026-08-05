@@ -4,6 +4,7 @@
 #include "skin/SkinProfileSettings.h"
 #include "skin/SkinStoragePaths.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -918,6 +919,32 @@ void testInjectedFileAndPreparedDirectoryFsyncFailuresCleanStaging() {
   }
 }
 
+void testInjectedStagingFileCreateFailureReportsSystemError() {
+  TempDirectory temp;
+  const auto roots = rootsBelow(temp.root());
+  const fs::path source = temp.root() / "source";
+  writeBytes(source / "main.luaskin", "return {}\n");
+  FakeAliasDetector aliases;
+  auto failures = std::make_shared<FailOneSnapshotOperation>(
+      SkinSnapshotIoOperation::CopiedFileCreate);
+  SkinTreeSnapshotter snapshotter(roots, aliases, std::move(failures));
+
+  const auto result = snapshotter.snapshot(source, packageId(), {}, {});
+  expect(!result.prepared,
+         "a staging file create failure does not prepare a revision");
+  const auto diagnostic = std::ranges::find_if(
+      result.diagnostics, [](const SkinDiagnostic &candidate) {
+        return candidate.code == "skin_snapshot_copy_failed";
+      });
+  expect(diagnostic != result.diagnostics.end() &&
+             diagnostic->message ==
+                 "unable to create staging file: " +
+                     std::error_code(EIO, std::generic_category()).message(),
+         "a staging file create failure retains its OS error category");
+  expect(stagingEntryCount(roots) == 0,
+         "a staging file create failure cleans its staging directory");
+}
+
 void testInjectedPublicationFailuresRetainCleanupOwnership() {
   for (const auto operation : {SkinSnapshotIoOperation::PublicationRename,
                                SkinSnapshotIoOperation::PublishedParentFsync}) {
@@ -982,6 +1009,7 @@ int main() {
   testPrivateStorageRootDerivationFailsClosed();
   testSnapshotRejectsRelativePrivateRevisionRoot();
   testInjectedFileAndPreparedDirectoryFsyncFailuresCleanStaging();
+  testInjectedStagingFileCreateFailureReportsSystemError();
   testInjectedPublicationFailuresRetainCleanupOwnership();
   if (failures != 0) {
     std::cerr << failures << " test assertion(s) failed\n";

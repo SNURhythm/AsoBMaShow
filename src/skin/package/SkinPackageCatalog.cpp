@@ -29,6 +29,8 @@
 #include <unistd.h>
 #endif
 
+#include "SkinIOSFileOpenCompatibility.h"
+
 namespace skin {
 namespace {
 

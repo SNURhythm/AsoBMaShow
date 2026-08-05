@@ -29,6 +29,8 @@
 #endif
 #endif
 
+#include "SkinIOSFileOpenCompatibility.h"
+
 namespace skin {
 namespace {
 
@@ -1124,12 +1126,19 @@ std::optional<std::string> digestAndMaybeCopy(
                                          entry.normalizedPath));
         return std::nullopt;
       }
-      output = ::open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
-                      0600);
+      if (injectedFailure(failures, SkinSnapshotIoOperation::CopiedFileCreate,
+                          target)) {
+        errno = EIO;
+      } else {
+        output = ::open(target.c_str(),
+                        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+      }
       if (output < 0) {
+        const std::error_code outputError(errno, std::generic_category());
         ::close(input);
         diagnostics.push_back(diagnostic("skin_snapshot_copy_failed",
-                                         "unable to create staging file",
+                                         "unable to create staging file: " +
+                                             outputError.message(),
                                          entry.normalizedPath));
         return std::nullopt;
       }

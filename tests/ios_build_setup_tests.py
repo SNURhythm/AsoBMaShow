@@ -34,6 +34,7 @@ IOS_NATIVES_HEADER = ROOT / "src/iOSNatives.hpp"
 SKIN_STORAGE_PATHS_SOURCE = ROOT / "src/skin/SkinStoragePaths.cpp"
 SKIN_PACKAGE_STORE_SOURCE = ROOT / "src/skin/package/SkinPackageStore.cpp"
 SKIN_PACKAGE_CATALOG_SOURCE = ROOT / "src/skin/package/SkinPackageCatalog.cpp"
+SKIN_PATH_POLICY_HEADER = ROOT / "src/skin/package/SkinPathPolicy.h"
 SKIN_ALIAS_DETECTOR_APPLE = ROOT / "src/skin/package/SkinAliasDetectorApple.mm"
 VCPKG_MANIFEST = ROOT / "vcpkg.json"
 IOS_LIB_SCRIPT = ROOT / "scripts/get_ios_libs.py"
@@ -64,6 +65,42 @@ class IOSBuildSetupTests(unittest.TestCase):
         )
         self.assertIn("fileSystemSynchronizedGroups = (", target)
         self.assertIn(SRC_GROUP_ID, target)
+
+    def test_ios_skin_file_opens_omit_the_no_follow_flag(self):
+        compiler = shutil.which("clang++") or shutil.which("c++")
+        self.assertIsNotNone(compiler, "a C++ compiler is required")
+        sdk = subprocess.run(
+            ["xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        source = """
+#include \"skin/package/SkinIOSFileOpenCompatibility.h\"
+static_assert(skin::skinOpenNoFollowFlag() == 0);
+static_assert(O_NOFOLLOW == 0);
+int main() { return 0; }
+"""
+        result = subprocess.run(
+            [
+                compiler,
+                "-std=c++2b",
+                "-target",
+                "arm64-apple-ios14.0",
+                "-isysroot",
+                sdk,
+                "-I",
+                str(ROOT / "src"),
+                "-x",
+                "c++",
+                "-",
+                "-fsyntax-only",
+            ],
+            input=source,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_only_platform_and_build_metadata_are_membership_exceptions(self):
         exceptions = object_block(

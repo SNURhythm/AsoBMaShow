@@ -27,6 +27,7 @@ private:
 };
 
 enum class SkinSnapshotIoOperation : std::uint8_t {
+  CopiedFileCreate,
   CopiedFileFsync,
   PreparedParentFsync,
   PublicationRename,

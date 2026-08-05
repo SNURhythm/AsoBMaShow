@@ -35,6 +35,8 @@
 #endif
 #endif
 
+#include "SkinIOSFileOpenCompatibility.h"
+
 namespace skin {
 namespace {
 

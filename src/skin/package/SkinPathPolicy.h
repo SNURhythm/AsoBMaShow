@@ -1,11 +1,27 @@
 #pragma once
 
+#include "../../targets.h"
 #include "SkinPackageTypes.h"
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#endif
 
 #include <string>
 #include <string_view>
 
 namespace skin {
+
+// iOS Documents storage is intentionally user-editable through Files. Its
+// package services must therefore avoid Darwin's no-follow open flag; other
+// supported POSIX targets retain it.
+constexpr int skinOpenNoFollowFlag() noexcept {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || defined(_WIN32)
+  return 0;
+#else
+  return O_NOFOLLOW;
+#endif
+}
 
 // Normalizes a single virtual filename component. It never accepts a host or
 // package-relative path, and its result is valid NFC UTF-8.
