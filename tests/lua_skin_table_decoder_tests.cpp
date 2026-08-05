@@ -203,6 +203,9 @@ return {type=0, property={[1]={name="A",item={{name="A",op=1}},def="A"},
     writeText(source / "skin/numeric-string.luaskin", R"lua(
 return {type=0, property={["1"]={name="A",item={{name="A",op=1}},def="A"}}}
 )lua");
+    writeText(source / "skin/missing-option-item.luaskin", R"lua(
+return {type=0, property={{name="No choices", def="Default"}}}
+)lua");
     writeText(source / "skin/aliases.luaskin", R"lua(
 return {type=0, width=999, height=888, options={{name="ignored"}}}
 )lua");
@@ -526,14 +529,31 @@ void testTypedHeaderPreservesAuthoredNumericOrderAndCoercions() {
       "7-key headers append the four exact Beatoraja offsets");
 }
 
-void testStrictArraysAndHeaderBoundsFailClosed() {
-  for (const std::string_view invalid :
-       {"hole.luaskin", "mixed.luaskin", "numeric-string.luaskin",
-        }) {
-    const auto result = fixture().decode(invalid);
-    expect(!result.header && !result.diagnostics.empty(),
-           "invalid authored array or limit is rejected");
-  }
+void testHeaderArraysFollowBeatorajaTableKeys() {
+  const auto hole = fixture().decode("hole.luaskin");
+  expect(hole.header && hole.header->options.size() == 1 &&
+             hole.header->options.front().name == "B" &&
+             hole.header->options.front().choices.front().value == 2,
+         "sparse authored option tables retain their present values");
+  const auto mixed = fixture().decode("mixed.luaskin");
+  expect(mixed.header && mixed.header->options.size() == 2 &&
+             std::ranges::any_of(mixed.header->options, [](const auto &option) {
+               return option.name == "A" && option.choices.size() == 1 &&
+                      option.choices.front().value == 1;
+             }) &&
+             std::ranges::any_of(mixed.header->options, [](const auto &option) {
+               return option.name == "B" && option.choices.size() == 1 &&
+                      option.choices.front().value == 2;
+             }),
+         "mixed-key authored option tables retain every table value");
+  const auto numericString = fixture().decode("numeric-string.luaskin");
+  expect(numericString.header && numericString.header->options.size() == 1 &&
+             numericString.header->options.front().name == "A",
+         "string-keyed authored option tables retain their present values");
+  const auto missingItem = fixture().decode("missing-option-item.luaskin");
+  expect(missingItem.header && missingItem.header->options.size() == 1 &&
+             missingItem.header->options.front().choices.empty(),
+         "missing option items decode as Beatoraja's empty array");
   const auto tooMany = fixture().decode("too-many.luaskin");
   expect(tooMany.header && tooMany.header->options.size() == 257,
          "Beatoraja headers preserve every authored custom option without an "
@@ -585,17 +605,17 @@ void testAuthoredDimensionsStayWithinTheDecoderBoundary() {
          "ordinary authored dimensions remain valid");
 }
 
-void testRequiredHeaderTextCannotBeMissingOrEmpty() {
-  for (const std::string_view invalid :
+void testHeaderTextFollowsLuaValueCoercion() {
+  for (const std::string_view fixtureName :
        {"missing-category-item.luaskin", "empty-category-item.luaskin",
         "missing-option-name.luaskin", "empty-option-name.luaskin",
         "missing-choice-label.luaskin", "empty-choice-label.luaskin",
         "missing-file-name.luaskin", "empty-file-name.luaskin",
         "missing-file-path.luaskin", "empty-file-path.luaskin",
         "missing-offset-name.luaskin", "empty-offset-name.luaskin"}) {
-    const auto result = fixture().decode(invalid);
-    expect(!result.header && !result.diagnostics.empty(),
-           "required header text cannot be missing or empty");
+    const auto result = fixture().decode(fixtureName);
+    expect(result.header && result.diagnostics.empty(),
+           "header text follows Beatoraja's permissive LuaValue coercion");
   }
 
   const auto optional = fixture().decode("optional-text.luaskin");
@@ -1174,9 +1194,9 @@ void testRequestedExternalLuaSkinHeaderDecodes() {
 
 int main() {
   testTypedHeaderPreservesAuthoredNumericOrderAndCoercions();
-  testStrictArraysAndHeaderBoundsFailClosed();
+  testHeaderArraysFollowBeatorajaTableKeys();
   testAuthoredDimensionsStayWithinTheDecoderBoundary();
-  testRequiredHeaderTextCannotBeMissingOrEmpty();
+  testHeaderTextFollowsLuaValueCoercion();
   testHeaderPreservesBeatorajaConfigurationDeclarations();
   testHeaderDoesNotImposeAnUnpinnedTextLimit();
   testHeaderAndConfigurationAcceptLongBeatorajaNames();

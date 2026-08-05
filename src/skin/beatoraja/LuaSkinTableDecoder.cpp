@@ -226,6 +226,29 @@ bool rawGetField(lua_State *state, int index, std::string_view name,
 bool copyString(lua_State *state, int index, std::string &output,
                 std::optional<std::size_t> maximumBytes, bool allowEmpty,
                 DecodeRequest &request) {
+  if (!request.enforceGameplayLimits) {
+    switch (lua_type(state, index)) {
+    case LUA_TNIL:
+      output.clear();
+      return true;
+    case LUA_TBOOLEAN:
+      output = lua_toboolean(state, index) != 0 ? "true" : "false";
+      return true;
+    case LUA_TSTRING:
+    case LUA_TNUMBER: {
+      std::size_t size = 0;
+      const char *value = lua_tolstring(state, index, &size);
+      if (value == nullptr) {
+        return false;
+      }
+      output.assign(value, size);
+      return true;
+    }
+    default:
+      output = lua_typename(state, lua_type(state, index));
+      return true;
+    }
+  }
   if (lua_isnil(state, index)) {
     return allowEmpty ||
            fail(request, "skin_lua_header_invalid",
@@ -366,6 +389,30 @@ bool strictArrayLength(lua_State *state, int index,
   return true;
 }
 
+template <typename DecodeValue>
+bool forEachHeaderTableValue(lua_State *state, int index, DecodeRequest &request,
+                             DecodeValue decodeValue) {
+  if (!lua_istable(state, index)) {
+    return fail(request, "skin_lua_header_invalid",
+                "Lua skin header array field is not a table");
+  }
+  if (!lua_checkstack(state, 3)) {
+    return fail(request, "skin_lua_header_limit_exceeded",
+                "Lua skin header exceeds the fixed stack limit");
+  }
+  const int tableIndex = absoluteIndex(state, index);
+  lua_pushnil(state);
+  while (lua_next(state, tableIndex) != 0) {
+    ++request.entries;
+    const bool ok = decodeValue(state, -1);
+    lua_pop(state, 1);
+    if (!ok) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool decodeStringArray(lua_State *state, int index, std::size_t depth,
                        std::optional<std::size_t> maximum,
                        std::vector<std::string> &output,
@@ -374,6 +421,14 @@ bool decodeStringArray(lua_State *state, int index, std::size_t depth,
       depth > LuaSkinTableDecoderPolicy::maxDepth) {
     return fail(request, "skin_lua_header_limit_exceeded",
                 "Lua skin header exceeds the fixed depth limit");
+  }
+  if (!request.enforceGameplayLimits) {
+    return forEachHeaderTableValue(
+        state, index, request, [&](lua_State *state, int valueIndex) {
+          output.emplace_back();
+          return copyString(state, valueIndex, output.back(), std::nullopt,
+                            false, request);
+        });
   }
   std::size_t length = 0;
   if (!strictArrayLength(state, index, maximum, length, request)) {
@@ -431,12 +486,21 @@ bool decodeOption(lua_State *state, int index, std::size_t depth,
   }
   if (lua_isnil(state, -1)) {
     lua_pop(state, 1);
-    return fail(request, "skin_lua_header_invalid",
-                "Lua skin option has no choices");
+    return true;
   }
   if (!lua_istable(state, -1)) {
     lua_pop(state, 1);
     return true;
+  }
+  if (!request.enforceGameplayLimits) {
+    const bool ok = forEachHeaderTableValue(
+        state, -1, request, [&](lua_State *state, int valueIndex) {
+          output.choices.emplace_back();
+          return decodeChoice(state, valueIndex, depth + 2,
+                              output.choices.back(), request);
+        });
+    lua_pop(state, 1);
+    return ok;
   }
   std::size_t length = 0;
   if (!strictArrayLength(state, -1, std::nullopt, length, request)) {
@@ -508,6 +572,16 @@ bool decodeObjectArrayField(lua_State *state, int rootIndex,
   if (!lua_istable(state, -1)) {
     lua_pop(state, 1);
     return true;
+  }
+  if (!request.enforceGameplayLimits) {
+    const bool ok = forEachHeaderTableValue(
+        state, -1, request, [&](lua_State *state, int valueIndex) {
+          output.emplace_back();
+          return decodeElement(state, valueIndex, depth + 1, output.back(),
+                               request);
+        });
+    lua_pop(state, 1);
+    return ok;
   }
   std::size_t length = 0;
   if (!strictArrayLength(state, -1, maximum, length, request)) {
