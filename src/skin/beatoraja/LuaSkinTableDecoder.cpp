@@ -1659,27 +1659,6 @@ bool decodeRawIdentity(lua_State *state, int index, std::size_t depth,
                      request);
 }
 
-bool safeResourcePath(std::string_view path) {
-  if (path.empty() || path.front() == '/' || path.find('\\') != path.npos ||
-      (path.size() >= 2 && path[1] == ':')) {
-    return false;
-  }
-  std::size_t start = 0;
-  while (start <= path.size()) {
-    const std::size_t end = path.find('/', start);
-    const std::string_view component =
-        path.substr(start, (end == path.npos ? path.size() : end) - start);
-    if (component.empty() || component == "." || component == "..") {
-      return false;
-    }
-    if (end == path.npos) {
-      break;
-    }
-    start = end + 1;
-  }
-  return true;
-}
-
 bool expandImageFrames(GameplayDecodeRequest &request, RawSkinImage &image) {
   image.divisionsX = image.divisionsX > 0 ? image.divisionsX : 1;
   image.divisionsY = image.divisionsY > 0 ? image.divisionsY : 1;
@@ -2787,13 +2766,6 @@ void decodeGameplayProtected(lua_State *state, int index,
     for (std::size_t ordinal = 0; ordinal < request->rawSources.size();
          ++ordinal) {
       const auto &source = request->rawSources[ordinal];
-      if (!safeResourcePath(source.path)) {
-        fail(request->decoding, "skin_lua_model_invalid",
-             "Lua skin sources must have safe relative paths");
-        transferDecodeDiagnostics(*request);
-        request->result.model.reset();
-        return;
-      }
       const auto id = SkinResourceId{static_cast<std::uint32_t>(ordinal + 1)};
       // JSONSkinLoader's source map overwrites earlier declarations. Preserve
       // every resource for ownership, but bind image references to the last
@@ -2817,17 +2789,6 @@ void decodeGameplayProtected(lua_State *state, int index,
     }
     request->fonts.reserve(request->rawFonts.size());
     for (auto &font : request->rawFonts) {
-      const bool fallbacksSafe =
-          std::ranges::all_of(font.fallbacks, [](const auto &fallback) {
-            return fallback.path.empty() || safeResourcePath(fallback.path);
-          });
-      if (!safeResourcePath(font.path) || !fallbacksSafe) {
-        fail(request->decoding, "skin_lua_model_invalid",
-             "Lua skin fonts must have safe relative paths");
-        transferDecodeDiagnostics(*request);
-        request->result.model.reset();
-        return;
-      }
       const auto ordinal = static_cast<std::uint32_t>(model.resources.size());
       const auto id = SkinResourceId{ordinal + 1};
       SkinFontResource resource{

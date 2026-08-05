@@ -343,6 +343,16 @@ return {
   destination={{id="caption", dst={{}}}}
 }
 )lua");
+    writeText(source / "skin/external-resource-paths.luaskin", R"lua(
+return {
+  type=0,
+  source={{id="atlas", path="../shared/atlas.png"}},
+  font={{id="shared", path="../shared/font.ttf",
+         fallback={{path="/Library/Fonts/Arial.ttf"}}}},
+  text={{id="caption", font="shared", size=24, ref=10}},
+  destination={{id="caption", dst={{}}}}
+}
+)lua");
     writeText(source / "skin/system/relative-file-pattern.luaskin", R"lua(
 return {type=5, filepath={{name="Settings", path="../customize/settings/7keys/*",
                             def="default.lua"}}}
@@ -807,6 +817,17 @@ void testDuplicateFontNamesUseTheFirstBeatorajaDefinition() {
          "rejecting the skin");
 }
 
+void testResourcePathsFollowBeatorajaResolution() {
+  const auto decoded = fixture().decodeGameplay("external-resource-paths.luaskin");
+  const auto *caption =
+      decoded.model ? objectNamed(*decoded.model, "caption") : nullptr;
+  const auto *text =
+      caption ? std::get_if<SkinTextObject>(&caption->payload) : nullptr;
+  expect(decoded.model && decoded.diagnostics.empty() && text != nullptr &&
+             text->font == SkinResourceId{2},
+         "authored resource paths reach Beatoraja-style resolution");
+}
+
 void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
   const auto decoded = fixture().decode("valid.luaskin");
   auto fileSystem = fixture().fileSystem();
@@ -1204,6 +1225,7 @@ int main() {
   testDuplicateCustomFilesReuseTheirPersistedSelection();
   testUnresolvedHeaderConfigurationRemainsSelectable();
   testDuplicateFontNamesUseTheFirstBeatorajaDefinition();
+  testResourcePathsFollowBeatorajaResolution();
   testReconciliationDefaultsSanitizesAndIndexesConfiguration();
   testReconciliationRejectsEmptyConfigurationKeys();
   testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive();
