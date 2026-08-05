@@ -126,8 +126,12 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
          "gameplay renders the matched presentation exactly once per frame");
   expectContains(source, "chart->Meta.KeyMode != 7",
                  "unsupported charts cannot consume a 7-key activation");
-  expectContains(source, "presentation->reset();\n  gameplaySkinSafeBoundsInitialized = false;\n  acquireGameplaySkinForAttempt();",
-                 "every retry reset reacquires through the injected attempt boundary");
+  expectContains(source,
+                 "capturePlayfieldVisualState(\n      initialGameplayTimeMicros,\n      getVisualTimeMicros(initialGameplayTimeMicros),\n      preparationIndicatorActive(initialRawSongTimeMicros));\n  acquireGameplaySkinForAttempt();",
+                 "every retry captures authoritative initial state before reacquiring through the injected attempt boundary");
+  expectContains(source,
+                 "acquireGameplaySkinForAttempt();\n  updateSkinResetLayoutVisibility();\n#endif\n  context.jukebox.play",
+                 "configured skin loading completes before attempt audio starts");
   expectContains(source, "*playfieldVisualStateStore, *presentation",
                  "the event fanout targets the coordinator presentation exactly once");
   expectContains(source, ".replayData = options.replayData.get()",
