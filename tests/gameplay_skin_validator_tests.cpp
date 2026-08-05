@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <set>
 #include <stop_token>
@@ -270,7 +271,7 @@ void testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors() {
          "catalog keeps autoplay booleans closed without exact authority");
 }
 
-void testValidNumericBindingPublishesOwnedTwoPhaseMetadata() {
+void testCatalogPublishesOwnedHeaderMetadataWithoutLoadingGameplay() {
   constexpr std::string_view script = R"lua(
 __validator_phase_count = (__validator_phase_count or 0) + 1
 return {
@@ -297,12 +298,12 @@ return {
          "positive validation completes without cancellation or catch-all "
          "failure");
   expect(
-      result.metadata && result.metadata->displayName == "configured-phase-2" &&
+      result.metadata && result.metadata->displayName == "configured-phase-1" &&
           result.metadata->author == "validator fixture" &&
           result.metadata->skinType == 0 &&
           result.metadata->authoredWidth == 1280 &&
           result.metadata->authoredHeight == 720,
-      "configured phase reuses header Lua state and publishes copied metadata");
+      "catalog publishes metadata from the header-only Lua execution");
   expect(result.reconciledSettings &&
              result.reconciledSettings->options.at("Gauge") == 12,
          "validated result publishes reconciled profile settings");
@@ -330,33 +331,42 @@ return {
       "validation output remains owned after all staging state is destroyed");
 }
 
-void testConfiguredPhaseCanReadStaticMainState() {
+void testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState() {
   const SkinValidationResult result = validateScript(R"lua(
 if skin_config then
-  assert(main_state.option(241) == false)
-  assert(main_state.number(107) == 0)
-  assert(main_state.float_number(4) == 0)
-  assert(main_state.text(10) == "")
-  local offset = main_state.offset(10)
-  assert(offset.x == 0 and offset.y == 0 and offset.w == 0 and offset.h == 0)
-  assert(main_state.timer(40) == main_state.timer_off_value)
-  assert(main_state.exscore() == 0 and main_state.judge(1) == 0)
-  assert(main_state.rate() == 0 and main_state.time() == 0)
-  assert(main_state.volume_bg() == 0 and main_state.volume_key() == 0 and main_state.volume_sys() == 0)
-  assert(main_state.gauge() == 0 and main_state.gauge_type() == 0)
+  error("catalog validation must not execute configured Lua")
 end
 return {
-  type = 0, w = 1280, h = 720, name = "configured state access"
+  type = 0, w = 1280, h = 720, name = "header-only catalog"
 }
 )lua");
 
   expect(result.disposition == SkinValidationDisposition::Selectable7Key,
-         "validation supplies deterministic main_state values to configured Lua");
+         "catalog selection is based on a Beatoraja header pass, not fabricated "
+         "main_state values");
   expect(!hasDiagnostic(result, "skin_lua_execution_failed"),
-         "configured main_state access does not abort validation");
+         "unexecuted configured Lua cannot abort catalog validation");
 }
 
-void testUnsupportedNumericBindingFailsClosed() {
+void testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable() {
+  const SkinValidationResult result = validateScript(R"lua(
+return {
+  type = 0, w = 1280, h = 720, name = "empty option declaration",
+  property = {{name = "No choices", item = {}}}
+}
+)lua");
+
+  expect(result.disposition == SkinValidationDisposition::Selectable7Key &&
+             result.reconciledSettings &&
+             result.reconciledSettings->options ==
+                 std::map<std::string, int>{{"No choices", -1}} &&
+             result.configurationDigest ==
+                 skinConfigurationDigest(*result.reconciledSettings),
+         "an empty Beatoraja CustomOption keeps its random sentinel through "
+         "catalog activation without a digest mismatch");
+}
+
+void testCatalogDefersGameplayBindingFailureToGameplayLoading() {
   const SkinValidationResult result = validateScript(R"lua(
 return {
   type = 0, w = 1280, h = 720, name = "unsupported timer",
@@ -364,16 +374,14 @@ return {
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::Invalid,
-         "unsupported numeric built-in keeps the skin unselectable");
-  expect(hasDiagnostic(result, "skin_lua_model_binding_source_invalid"),
-         "unsupported numeric built-in reports typed catalog rejection");
-  expect(!result.reconciledSettings && !result.metadata &&
-             result.configurationDigest.empty(),
-         "unsupported binding publishes no partial validation output");
+  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+         "catalog keeps a syntactically valid skin selectable before the live "
+         "gameplay loader evaluates its bindings");
+  expect(!hasDiagnostic(result, "skin_lua_model_binding_source_invalid"),
+         "catalog does not decode the full gameplay model");
 }
 
-void testMissingCriticalResourceFailsClosed() {
+void testCatalogDefersGameplayResourceFailureToGameplayLoading() {
   const SkinValidationResult result = validateScript(R"lua(
 return {
   type = 0, w = 1280, h = 720, name = "missing note atlas",
@@ -395,14 +403,11 @@ return {
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::Invalid,
-         "missing critical note resource keeps the skin unselectable");
-  expectDiagnostic(
-      result, "skin.resource.missing_critical",
-      "resource preparation contributes its critical failure diagnostic");
-  expect(!result.reconciledSettings && !result.metadata &&
-             result.configurationDigest.empty(),
-         "resource failure publishes no partial validation output");
+  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+         "catalog does not reject a header because its full gameplay resources "
+         "have not been loaded");
+  expect(!hasDiagnostic(result, "skin.resource.missing_critical"),
+         "catalog validation does not prepare gameplay resources");
 }
 
 void testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors() {
@@ -505,10 +510,11 @@ void testCancellationFailsClosedBeforeRetainingTheRevisionView() {
 int main() {
   testConfigurationDigestFramesOnlyPersistedConfigurationMaps();
   testAuthoritativeCatalogAdmitsOnlyExecutableBridgeSelectors();
-  testValidNumericBindingPublishesOwnedTwoPhaseMetadata();
-  testConfiguredPhaseCanReadStaticMainState();
-  testUnsupportedNumericBindingFailsClosed();
-  testMissingCriticalResourceFailsClosed();
+  testCatalogPublishesOwnedHeaderMetadataWithoutLoadingGameplay();
+  testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
+  testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
+  testCatalogDefersGameplayBindingFailureToGameplayLoading();
+  testCatalogDefersGameplayResourceFailureToGameplayLoading();
   testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors();
   testCancellationFailsClosedBeforeRetainingTheRevisionView();
   return failures == 0 ? 0 : 1;

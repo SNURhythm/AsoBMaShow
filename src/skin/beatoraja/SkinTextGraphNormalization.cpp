@@ -135,10 +135,8 @@ normalizeSkinText(const SkinTextNormalizationInput &input,
     if (candidate.authoredName != input.fontName) {
       continue;
     }
-    if (font != nullptr) {
-      return textFailure(SkinTextGraphNormalizationError::AmbiguousFont);
-    }
     font = &candidate;
+    break;
   }
   if (font == nullptr) {
     return textFailure(SkinTextGraphNormalizationError::MissingFont);

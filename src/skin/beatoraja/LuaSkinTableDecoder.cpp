@@ -122,9 +122,8 @@ normalizedFilePatternComponent(std::string_view pattern) {
 }
 
 bool validPattern(std::string_view pattern) {
-  if (pattern.empty() ||
-      pattern.size() > SkinProfileSettingsPolicy::maxConfigurationValueBytes ||
-      pattern.front() == '/' || pattern.find('\\') != std::string_view::npos ||
+  if (pattern.empty() || pattern.front() == '/' ||
+      pattern.find('\\') != std::string_view::npos ||
       (pattern.size() >= 2 && pattern[1] == ':')) {
     return false;
   }
@@ -240,7 +239,9 @@ bool copyString(lua_State *state, int index, std::string &output,
           LuaSkinTableDecoderPolicy::maxCopiedTextBytes -
               std::min(size, LuaSkinTableDecoderPolicy::maxCopiedTextBytes)) {
     return fail(request, "skin_lua_header_limit_exceeded",
-                "Lua skin header text exceeds its fixed byte limit");
+                "Lua skin header text exceeds its fixed byte limit (size=" +
+                    std::to_string(size) + ", maximum=" +
+                    std::to_string(maximumBytes) + ")");
   }
   output.assign(value, size);
   auto normalized = normalizeNfc(output, allowEmpty);
@@ -261,6 +262,12 @@ bool stringField(lua_State *state, int index, std::string_view name,
   }
   const bool ok =
       copyString(state, -1, output, maximumBytes, allowEmpty, request);
+  if (!ok && !request.result.diagnostics.empty() &&
+      request.result.diagnostics.front().code ==
+          "skin_lua_header_limit_exceeded") {
+    request.result.diagnostics.front().message +=
+        " [field: " + std::string(name) + "]";
+  }
   lua_pop(state, 1);
   return ok;
 }
@@ -365,7 +372,7 @@ bool decodeStringArray(lua_State *state, int index, std::size_t depth,
     lua_rawgeti(state, tableIndex, static_cast<int>(position));
     output.emplace_back();
     if (!copyString(state, -1, output.back(),
-                    SkinProfileSettingsPolicy::maxConfigurationKeyBytes, false,
+                    LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
                     request)) {
       return false;
     }
@@ -378,7 +385,7 @@ bool decodeCategory(lua_State *state, int index, std::size_t depth,
                     SkinHeaderCategory &output, DecodeRequest &request) {
   if (!requireObject(state, index, depth, request) ||
       !stringField(state, index, "name", output.name,
-                   SkinProfileSettingsPolicy::maxConfigurationKeyBytes, false,
+                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
                    request) ||
       !rawGetField(state, index, "item", request)) {
     return false;
@@ -397,7 +404,7 @@ bool decodeChoice(lua_State *state, int index, std::size_t depth,
                   SkinHeaderOptionChoice &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "name", output.label,
-                     SkinProfileSettingsPolicy::maxConfigurationKeyBytes, false,
+                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
                      request) &&
          integerField(state, index, "op", output.value, request);
 }
@@ -406,13 +413,13 @@ bool decodeOption(lua_State *state, int index, std::size_t depth,
                   SkinHeaderOption &output, DecodeRequest &request) {
   if (!requireObject(state, index, depth, request) ||
       !stringField(state, index, "category", output.category,
-                   SkinProfileSettingsPolicy::maxConfigurationKeyBytes, true,
+                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
                    request) ||
       !stringField(state, index, "name", output.name,
-                   SkinProfileSettingsPolicy::maxConfigurationKeyBytes, false,
+                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
                    request) ||
       !stringField(state, index, "def", output.defaultLabel,
-                   SkinProfileSettingsPolicy::maxConfigurationKeyBytes, true,
+                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
                    request) ||
       !rawGetField(state, index, "item", request)) {
     return false;
@@ -428,8 +435,7 @@ bool decodeOption(lua_State *state, int index, std::size_t depth,
   }
   std::size_t length = 0;
   if (!strictArrayLength(state, -1, LuaSkinTableDecoderPolicy::maxOptionChoices,
-                         length, request) ||
-      length == 0) {
+                         length, request)) {
     return false;
   }
   output.choices.reserve(length);
@@ -450,16 +456,16 @@ bool decodeFile(lua_State *state, int index, std::size_t depth,
                 SkinHeaderFile &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "category", output.category,
-                     SkinProfileSettingsPolicy::maxConfigurationKeyBytes, true,
+                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
                      request) &&
          stringField(state, index, "name", output.name,
-                     SkinProfileSettingsPolicy::maxConfigurationKeyBytes, false,
+                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
                      request) &&
          stringField(state, index, "path", output.pattern,
-                     SkinProfileSettingsPolicy::maxConfigurationValueBytes,
+                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes,
                      false, request) &&
          stringField(state, index, "def", output.defaultValue,
-                     SkinProfileSettingsPolicy::maxConfigurationValueBytes,
+                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes,
                      true, request);
 }
 
@@ -467,10 +473,10 @@ bool decodeOffset(lua_State *state, int index, std::size_t depth,
                   SkinHeaderOffset &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "category", output.category,
-                     SkinProfileSettingsPolicy::maxConfigurationKeyBytes, true,
+                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
                      request) &&
          stringField(state, index, "name", output.name,
-                     SkinProfileSettingsPolicy::maxConfigurationKeyBytes, false,
+                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
                      request) &&
          integerField(state, index, "id", output.id, request) &&
          permissionField(state, index, "x", kOffsetPermissionX,
@@ -535,62 +541,6 @@ bool validateSemantics(BeatorajaSkinHeader &header, DecodeRequest &request) {
                 "Lua skin header dimensions are outside the fixed range");
   }
 
-  std::set<std::string> categoryNames;
-  for (const auto &category : header.categories) {
-    if (!categoryNames.insert(category.name).second) {
-      return fail(request, "skin_lua_header_invalid",
-                  "Lua skin header contains duplicate category names");
-    }
-  }
-
-  std::set<std::string> optionNames;
-  std::set<int> optionIds;
-  for (const auto &option : header.options) {
-    if (option.choices.empty() || !optionNames.insert(option.name).second) {
-      return fail(request, "skin_lua_header_invalid",
-                  "Lua skin header contains duplicate option names");
-    }
-    std::set<std::string> labels;
-    std::set<int> localIds;
-    for (const auto &choice : option.choices) {
-      if (!labels.insert(choice.label).second ||
-          !localIds.insert(choice.value).second ||
-          !optionIds.insert(choice.value).second) {
-        return fail(request, "skin_lua_header_invalid",
-                    "Lua skin option labels or IDs are ambiguous");
-      }
-    }
-  }
-
-  std::set<std::string> fileNames;
-  std::vector<std::string> patterns;
-  for (const auto &file : header.files) {
-    if (!fileNames.insert(file.name).second) {
-      return fail(request, "skin_lua_header_invalid",
-                  "Lua skin file declaration reuses a name: " + file.name);
-    }
-    if (!validPattern(file.pattern)) {
-      return fail(request, "skin_lua_header_invalid",
-                  "Lua skin file pattern is invalid: " + file.pattern);
-    }
-    for (const std::string &prior : patterns) {
-      if (file.pattern.starts_with(prior) || prior.starts_with(file.pattern)) {
-        return fail(request, "skin_lua_header_invalid",
-                    "Lua skin file patterns overlap ambiguously");
-      }
-    }
-    patterns.push_back(file.pattern);
-  }
-
-  std::set<std::string> offsetNames;
-  std::set<int> declaredOffsetIds;
-  for (const auto &offset : header.offsets) {
-    if (!offsetNames.insert(offset.name).second) {
-      return fail(request, "skin_lua_header_invalid",
-                  "Lua skin offset names are ambiguous");
-    }
-    declaredOffsetIds.insert(offset.id);
-  }
   if (header.type != kPlay7KeysType) {
     return true;
   }
@@ -601,14 +551,7 @@ bool validateSemantics(BeatorajaSkinHeader &header, DecodeRequest &request) {
       {.name = "Judge Detail offset", .id = 33, .permissions = 0x2f},
   };
   for (const auto &offset : synthesized) {
-    if (offsetNames.find(offset.name) != offsetNames.end() ||
-        declaredOffsetIds.find(offset.id) != declaredOffsetIds.end()) {
-      return fail(request, "skin_lua_header_invalid",
-                  "Lua skin offset collides with a synthesized control");
-    }
     header.offsets.push_back(offset);
-    offsetNames.insert(offset.name);
-    declaredOffsetIds.insert(offset.id);
   }
   return true;
 }
@@ -948,7 +891,7 @@ struct RawSkinNote {
 struct GameplayDecodeRequest {
   DecodeRequest decoding;
   BeatorajaSkinModelDecodeResult result;
-  std::map<std::string, SkinResourceId, std::less<>> resourceIds;
+  std::map<std::string, SkinResourceId, std::less<>> sourceIds;
   std::map<std::string, RawSkinImage, std::less<>> images;
   std::map<std::string, RawSkinImageSet, std::less<>> imageSets;
   std::map<std::string, RawSkinNumber, std::less<>> numbers;
@@ -1696,8 +1639,8 @@ bool expandImageFrames(GameplayDecodeRequest &request, RawSkinImage &image) {
                 "Lua skin image frames exceed the fixed model limit");
   }
 
-  const auto resource = request.resourceIds.find(image.source);
-  image.sprite.resource = resource != request.resourceIds.end()
+  const auto resource = request.sourceIds.find(image.source);
+  image.sprite.resource = resource != request.sourceIds.end()
                               ? resource->second
                               : SkinResourceId{0};
   image.sprite.cycleMillis = image.cycleMillis;
@@ -2781,16 +2724,18 @@ void decodeGameplayProtected(lua_State *state, int index,
     for (std::size_t ordinal = 0; ordinal < request->rawSources.size();
          ++ordinal) {
       const auto &source = request->rawSources[ordinal];
-      if (!safeResourcePath(source.path) ||
-          request->resourceIds.contains(source.id)) {
+      if (!safeResourcePath(source.path)) {
         fail(request->decoding, "skin_lua_model_invalid",
-             "Lua skin sources must have unique IDs and safe relative paths");
+             "Lua skin sources must have safe relative paths");
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
         return;
       }
       const auto id = SkinResourceId{static_cast<std::uint32_t>(ordinal + 1)};
-      request->resourceIds.emplace(source.id, id);
+      // JSONSkinLoader's source map overwrites earlier declarations. Preserve
+      // every resource for ownership, but bind image references to the last
+      // authored source with the same name.
+      request->sourceIds.insert_or_assign(source.id, id);
       model.resources.emplace_back(SkinImageResource{
           .id = id,
           .authoredName = source.id,
@@ -2813,10 +2758,9 @@ void decodeGameplayProtected(lua_State *state, int index,
           std::ranges::all_of(font.fallbacks, [](const auto &fallback) {
             return fallback.path.empty() || safeResourcePath(fallback.path);
           });
-      if (!safeResourcePath(font.path) || !fallbacksSafe ||
-          request->resourceIds.contains(font.id)) {
+      if (!safeResourcePath(font.path) || !fallbacksSafe) {
         fail(request->decoding, "skin_lua_model_invalid",
-             "Lua skin fonts must have unique IDs and safe relative paths");
+             "Lua skin fonts must have safe relative paths");
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
         return;
@@ -2835,7 +2779,6 @@ void decodeGameplayProtected(lua_State *state, int index,
         resource.fallbacks.push_back(
             {.virtualPath = std::move(fallback.path), .type = fallback.type});
       }
-      request->resourceIds.emplace(resource.authoredName, id);
       request->fonts.push_back(resource);
       model.resources.emplace_back(std::move(resource));
     }
@@ -4013,24 +3956,26 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
     settings.viewport = saved->viewport;
   }
 
-  std::set<std::string> optionNames;
-  std::set<int> optionIds;
   for (const auto &option : header.options) {
-    if (option.name.empty() || !optionNames.insert(option.name).second ||
-        option.choices.empty()) {
+    if (option.name.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
-                     "Lua skin options are ambiguous or empty"));
+                     "Lua skin option has an empty name"));
       return result;
+    }
+    // SkinHeader.CustomOption#getDefaultOption returns OPTION_RANDOM_VALUE
+    // (-1) when a declaration has no choices. It is still exported to Lua;
+    // persist the same effective sentinel so the activation configuration
+    // digest exactly represents what the configured Lua state will receive.
+    if (option.choices.empty()) {
+      configuration.orderedOptions.push_back({.name = option.name, .value = -1});
+      configuration.options.insert_or_assign(option.name, -1);
+      configuration.enabledOptionIds.insert(-1);
+      settings.options.insert_or_assign(option.name, -1);
+      continue;
     }
     const SkinHeaderOptionChoice *selected = &option.choices.front();
     for (const auto &choice : option.choices) {
-      if (!optionIds.insert(choice.value).second) {
-        result.diagnostics.push_back(
-            diagnostic("skin_lua_configuration_invalid",
-                       "Lua skin option IDs are ambiguous"));
-        return result;
-      }
       if (choice.label == option.defaultLabel) {
         selected = &choice;
       }
@@ -4046,15 +3991,13 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
         }
       }
     }
-    settings.options.emplace(option.name, selected->value);
+    settings.options.insert_or_assign(option.name, selected->value);
     configuration.orderedOptions.push_back(
         {.name = option.name, .value = selected->value});
-    configuration.options.emplace(option.name, selected->value);
+    configuration.options.insert_or_assign(option.name, selected->value);
     configuration.enabledOptionIds.insert(selected->value);
   }
 
-  std::set<std::string> fileNames;
-  std::vector<std::string> patterns;
   for (const auto &file : header.files) {
     if (file.name.empty()) {
       result.diagnostics.push_back(
@@ -4062,61 +4005,58 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
                      "Lua skin file declaration has an empty name"));
       return result;
     }
-    if (!fileNames.insert(file.name).second) {
-      result.diagnostics.push_back(
-          diagnostic("skin_lua_configuration_invalid",
-                     "Lua skin file declaration reuses a name: " + file.name));
-      return result;
-    }
-    if (!validPattern(file.pattern)) {
-      result.diagnostics.push_back(
-          diagnostic("skin_lua_configuration_invalid",
-                     "Lua skin file pattern is invalid: " + file.pattern));
-      return result;
-    }
-    for (const std::string &prior : patterns) {
-      if (file.pattern.starts_with(prior) || prior.starts_with(file.pattern)) {
-        result.diagnostics.push_back(
-            diagnostic("skin_lua_configuration_invalid",
-                       "Lua skin file patterns overlap ambiguously"));
-        return result;
+
+    // SkinHeader#setSkinConfigProperty accepts an existing FilePath by name
+    // without requiring it to still match the declaration or exist on disk.
+    // This also makes repeated CustomFile names share one persisted choice.
+    if (saved != nullptr) {
+      const auto desired = saved->filePaths.find(file.name);
+      if (desired != saved->filePaths.end()) {
+        settings.filePaths.insert_or_assign(file.name, desired->second);
+        configuration.orderedFiles.push_back(
+            {.name = file.name,
+             .pattern = file.pattern,
+             .selectedValue = desired->second});
+        configuration.filePaths.insert_or_assign(file.name, desired->second);
+        continue;
       }
     }
-    patterns.push_back(file.pattern);
+
+    // A missing directory is skipped by SkinConfiguration.updateCustomFiles.
+    // Keep the declaration for load-time path semantics, but do not invent a
+    // selection or reject the skin.
+    if (!validPattern(file.pattern)) {
+      configuration.orderedFiles.push_back(
+          {.name = file.name, .pattern = file.pattern, .selectedValue = {}});
+      continue;
+    }
 
     const std::size_t slash = file.pattern.rfind('/');
     const std::string directory =
         slash == std::string::npos ? "." : file.pattern.substr(0, slash);
     auto listed = fileSystem.list(
         directory, "", static_cast<std::size_t>(SkinPackagePolicy::maxFiles));
-    if (listed.failure) {
-      result.diagnostics.push_back(
-          diagnostic("skin_lua_configuration_invalid",
-                     "Lua skin file choices cannot be enumerated",
-                     listed.failure->virtualPath));
-      return result;
-    }
     std::vector<std::string> choices;
-    for (const std::string &entry : listed.entries) {
-      const std::string filename = filenameOf(entry);
-      if (!matchesFilePattern(file.pattern, filename)) {
-        continue;
-      }
-      const std::string candidate = substitutePattern(file.pattern, filename);
-      const auto resolved =
-          fileSystem.resolve(candidate, SkinFileUse::Resource);
-      if (resolved.normalizedVirtualPath) {
-        choices.push_back(filename);
+    if (!listed.failure) {
+      for (const std::string &entry : listed.entries) {
+        const std::string filename = filenameOf(entry);
+        if (!matchesFilePattern(file.pattern, filename)) {
+          continue;
+        }
+        const std::string candidate = substitutePattern(file.pattern, filename);
+        const auto resolved =
+            fileSystem.resolve(candidate, SkinFileUse::Resource);
+        if (resolved.normalizedVirtualPath) {
+          choices.push_back(filename);
+        }
       }
     }
     std::sort(choices.begin(), choices.end());
     choices.erase(std::unique(choices.begin(), choices.end()), choices.end());
-    if (choices.empty() ||
-        choices.size() > LuaSkinTableDecoderPolicy::maxOptionChoices) {
-      result.diagnostics.push_back(diagnostic(
-          "skin_lua_configuration_invalid",
-          "Lua skin file declaration has no bounded deterministic choice"));
-      return result;
+    if (choices.empty()) {
+      configuration.orderedFiles.push_back(
+          {.name = file.name, .pattern = file.pattern, .selectedValue = {}});
+      continue;
     }
 
     std::string selected = choices.front();
@@ -4127,27 +4067,18 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
         break;
       }
     }
-    if (saved != nullptr) {
-      const auto desired = saved->filePaths.find(file.name);
-      if (desired != saved->filePaths.end() &&
-          std::find(choices.begin(), choices.end(), desired->second) !=
-              choices.end()) {
-        selected = desired->second;
-      }
-    }
-    settings.filePaths.emplace(file.name, selected);
+    settings.filePaths.insert_or_assign(file.name, selected);
     configuration.orderedFiles.push_back({.name = file.name,
                                           .pattern = file.pattern,
                                           .selectedValue = selected});
-    configuration.filePaths.emplace(file.name, selected);
+    configuration.filePaths.insert_or_assign(file.name, selected);
   }
 
-  std::set<std::string> offsetNames;
   for (const auto &offset : header.offsets) {
-    if (offset.name.empty() || !offsetNames.insert(offset.name).second) {
+    if (offset.name.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
-                     "Lua skin offset names are ambiguous"));
+                     "Lua skin offset has an empty name"));
       return result;
     }
     ConfigOffset value;
@@ -4158,9 +4089,10 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
       }
     }
     value = sanitizeOffset(value, offset.permissions);
-    settings.offsets.emplace(offset.name, value);
-    configuration.offsets.emplace(offset.name, value);
-    configuration.offsetPermissions.emplace(offset.name, offset.permissions);
+    settings.offsets.insert_or_assign(offset.name, value);
+    configuration.offsets.insert_or_assign(offset.name, value);
+    configuration.offsetPermissions.insert_or_assign(offset.name,
+                                                      offset.permissions);
     configuration.offsetsById.insert_or_assign(offset.id, value);
   }
 

@@ -4,13 +4,9 @@
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinRuntime.h"
 #include "LuaSkinTableDecoder.h"
-#include "Skin2DRenderer.h"
-#include "SkinModelValidator.h"
-#include "SkinResourceCatalog.h"
 
 #include <algorithm>
 #include <iterator>
-#include <limits>
 #include <span>
 #include <utility>
 
@@ -88,67 +84,6 @@ bool hasErrors(std::span<const SkinDiagnostic> diagnostics) {
   });
 }
 
-class ValidationFrameState final : public ISkinFrameState {
-public:
-  std::uint64_t frameSerial() const noexcept override { return 0; }
-
-  SkinPropertyLookup<bool>
-  booleanProperty(const SkinBuiltinPropertySelector &) override {
-    return {.value = false, .supported = true};
-  }
-
-  SkinPropertyLookup<std::int64_t>
-  integerProperty(const SkinBuiltinPropertySelector &) override {
-    return {.value = 0, .supported = true};
-  }
-
-  SkinPropertyLookup<double>
-  floatProperty(const SkinBuiltinPropertySelector &) override {
-    return {.value = 0.0, .supported = true};
-  }
-
-  SkinPropertyLookup<std::string_view>
-  stringProperty(const SkinBuiltinPropertySelector &) override {
-    return {.value = {}, .supported = true};
-  }
-
-  SkinPropertyLookup<ConfigOffset> offsetProperty(int) override {
-    return {.value = {}, .supported = true};
-  }
-
-  std::int64_t
-  timerProperty(const SkinBuiltinPropertySelector &) override {
-    return std::numeric_limits<std::int64_t>::min();
-  }
-
-  std::span<const SkinProjectedNoteView>
-  projectedNotes() const noexcept override {
-    return {};
-  }
-
-  std::span<const SkinProjectedLongNoteView>
-  projectedLongNotes() const noexcept override {
-    return {};
-  }
-
-  std::span<const SkinProjectedLineView>
-  projectedLines() const noexcept override {
-    return {};
-  }
-
-  SkinGaugeStateView gaugeState() const noexcept override {
-    return {.supported = true};
-  }
-
-  SkinJudgeStateView judgeState(int) const noexcept override {
-    return {.supported = true};
-  }
-
-  SkinNoteExpansionStateView noteExpansionState() const noexcept override {
-    return {.supported = true};
-  }
-};
-
 } // namespace
 
 GameplaySkinValidator::GameplaySkinValidator(
@@ -162,15 +97,7 @@ SkinValidationResult GameplaySkinValidator::validate(
   if (cancelled(stop, result)) {
     return result;
   }
-  if (resources_ == nullptr) {
-    result.diagnostics.push_back(validationDiagnostic(
-        "skin_lua_validation_unavailable",
-        "Lua gameplay skin resource validation is unavailable"));
-    return result;
-  }
-
   try {
-    ValidationFrameState validationState;
     auto runtimeFiles =
         LuaSkinFileSystem::create({.revision = revision, .entry = entry});
     if (!runtimeFiles.fileSystem) {
@@ -255,67 +182,9 @@ SkinValidationResult GameplaySkinValidator::validate(
       return result;
     }
 
-    runtime.runtime->setFrameState(&validationState);
-    auto configuredValue = runtime.runtime->loadConfigured(configuration);
-    if (!configuredValue.value) {
-      appendFailure(result.diagnostics, std::move(configuredValue.failure),
-                    "skin_lua_configured_load_failed",
-                    "Lua skin configured phase could not be loaded");
-      return result;
-    }
-    if (cancelled(stop, result)) {
-      return result;
-    }
-    const SkinBuiltinBindingCatalogView builtins = gameplaySkinBuiltinCatalog();
-    auto decodedModel = decoder.decodeGameplay(
-        *configuredValue.value,
-        {.runtime = *runtime.runtime, .builtins = builtins});
-    result.diagnostics.insert(
-        result.diagnostics.end(),
-        std::make_move_iterator(decodedModel.diagnostics.begin()),
-        std::make_move_iterator(decodedModel.diagnostics.end()));
-    if (!decodedModel.model || hasErrors(result.diagnostics) ||
-        cancelled(stop, result)) {
-      return result;
-    }
-
-    SkinModelValidator modelValidator;
-    auto validatedModel = modelValidator.validate(
-        std::move(*decodedModel.model),
-        {.builtins = builtins,
-         .callbacks = runtime.runtime->callbackLiveness()});
-    result.diagnostics.insert(
-        result.diagnostics.end(),
-        std::make_move_iterator(validatedModel.diagnostics.begin()),
-        std::make_move_iterator(validatedModel.diagnostics.end()));
-    if (!validatedModel.model || hasErrors(result.diagnostics) ||
-        cancelled(stop, result)) {
-      return result;
-    }
-
-    auto resourceValidation = resources_->validateResources(
-        {.revision = revision,
-         .entry = entry,
-         .fileSystem = *configurationFiles.fileSystem,
-         .model = *validatedModel.model,
-         .configuration = configuration,
-         .requiredRuntimeStrings = {},
-         .stop = stop});
-    result.diagnostics.insert(
-        result.diagnostics.end(),
-        std::make_move_iterator(resourceValidation.diagnostics.begin()),
-        std::make_move_iterator(resourceValidation.diagnostics.end()));
-    if (resourceValidation.cancelled || cancelled(stop, result)) {
-      result.cancelled = true;
-      return result;
-    }
-    if (!resourceValidation.valid || hasErrors(result.diagnostics)) {
-      return result;
-    }
-
     result.disposition = SkinValidationDisposition::Selectable7Key;
     result.reconciledSettings = std::move(reconciliation.reconciledSettings);
-    result.metadata = metadataFor(validatedModel.model->model.header);
+    result.metadata = metadataFor(*decodedHeader.header);
     result.configurationDigest = reconciledConfigurationDigest;
     return result;
   } catch (...) {

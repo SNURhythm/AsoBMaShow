@@ -306,6 +306,33 @@ return {type=5, filepath={
     writeText(source / "skin/invalid-file-pattern.luaskin", R"lua(
 return {type=5, filepath={{name="Broken", path="ordinary/no-wildcard.png"}}}
 )lua");
+    writeText(source / "skin/empty-choices.luaskin", R"lua(
+return {type=5, property={{name="Unconfigured", item={}}}}
+)lua");
+    writeText(source / "skin/unresolved-file.luaskin", R"lua(
+return {type=5, filepath={{name="Not installed", path="missing/*.png"}}}
+)lua");
+    writeText(source / "skin/long-author.luaskin", R"lua(
+return {type=5, author=string.rep("A", 2048)}
+)lua");
+    writeText(source / "skin/long-configuration-text.luaskin", R"lua(
+local text = string.rep("X", 136)
+return {
+  type=5,
+  category={{name=text, item={1}}},
+  property={{category=text, name=text, def=text, item={{name=text, op=901}}}},
+  filepath={{category=text, name=text, path="ordinary/*.png", def="default"}},
+  offset={{category=text, name=text, id=120, x=true}},
+}
+)lua");
+    writeText(source / "skin/duplicate-font.luaskin", R"lua(
+return {
+  type=0,
+  font={{id="shared", path="first.ttf"}, {id="shared", path="second.ttf"}},
+  text={{id="caption", font="shared", size=24, ref=10}},
+  destination={{id="caption", dst={{}}}}
+}
+)lua");
     writeText(source / "skin/system/relative-file-pattern.luaskin", R"lua(
 return {type=5, filepath={{name="Settings", path="../customize/settings/7keys/*",
                             def="default.lua"}}}
@@ -454,6 +481,9 @@ HeaderFixture &fixture() {
   return value;
 }
 
+const SkinObjectDefinition *objectNamed(const BeatorajaSkinModel &model,
+                                        std::string_view name);
+
 void testTypedHeaderPreservesAuthoredNumericOrderAndCoercions() {
   const auto result = fixture().decode("valid.luaskin");
   expect(result.header.has_value() && result.diagnostics.empty(),
@@ -561,28 +591,150 @@ void testRequiredHeaderTextCannotBeMissingOrEmpty() {
          "root metadata, categories, and authored defaults remain optional");
 }
 
-void testSemanticAndSynthesizedCollisionsFailClosed() {
-  for (const std::string_view invalid :
+void testHeaderPreservesBeatorajaConfigurationDeclarations() {
+  for (const std::string_view fixtureName :
        {"duplicates.luaskin", "id-collision.luaskin",
-        "synth-collision.luaskin"}) {
-    const auto result = fixture().decode(invalid);
-    expect(!result.header && !result.diagnostics.empty(),
-           "ambiguous configuration name or ID is rejected");
+        "synth-collision.luaskin", "duplicate-file-name.luaskin",
+        "invalid-file-pattern.luaskin", "empty-choices.luaskin"}) {
+    const auto result = fixture().decode(fixtureName);
+    expect(result.header && result.diagnostics.empty(),
+           std::string("Beatoraja header preserves ") +
+               std::string(fixtureName));
   }
 }
 
-void testRejectedFileDeclarationsIdentifyTheirCause() {
-  const auto duplicate = fixture().decode("duplicate-file-name.luaskin");
-  expect(!duplicate.header && duplicate.diagnostics.size() == 1 &&
-             duplicate.diagnostics.front().message ==
-                 "Lua skin file declaration reuses a name: Reused",
-         "duplicate file declarations identify the reused name");
+void testHeaderDoesNotImposeAnUnpinnedTextLimit() {
+  const auto decoded = fixture().decode("long-author.luaskin");
+  expect(decoded.header && decoded.diagnostics.empty() &&
+             decoded.header->author.size() == 2048,
+         "a valid Beatoraja header is not rejected by an invented 1 KiB "
+         "metadata limit");
+}
 
-  const auto invalid = fixture().decode("invalid-file-pattern.luaskin");
-  expect(!invalid.header && invalid.diagnostics.size() == 1 &&
-             invalid.diagnostics.front().message ==
-                 "Lua skin file pattern is invalid: ordinary/no-wildcard.png",
-         "invalid file declarations identify the rejected pattern");
+void testHeaderAndConfigurationAcceptLongBeatorajaNames() {
+  const auto decoded = fixture().decode("long-configuration-text.luaskin");
+  expect(decoded.header && decoded.diagnostics.empty() &&
+             decoded.header->categories.size() == 1 &&
+             decoded.header->categories.front().name.size() == 136 &&
+             decoded.header->options.size() == 1 &&
+             decoded.header->options.front().name.size() == 136 &&
+             decoded.header->options.front().defaultLabel.size() == 136 &&
+             decoded.header->files.size() == 1 &&
+             decoded.header->files.front().name.size() == 136 &&
+             decoded.header->offsets.size() == 1 &&
+             decoded.header->offsets.front().name.size() == 136,
+         "Beatoraja headers do not inherit the app profile's old 128-byte "
+         "configuration-name cap");
+  if (!decoded.header) {
+    return;
+  }
+
+  auto fileSystem = fixture().fileSystem("long-configuration-text.luaskin");
+  expect(fileSystem != nullptr,
+         "long Beatoraja configuration names have a reconciliation filesystem");
+  if (!fileSystem) {
+    return;
+  }
+  const auto reconciled =
+      reconcileSkinConfiguration(*decoded.header, nullptr, *fileSystem);
+  const std::string key(136, 'X');
+  expect(reconciled.configuration && reconciled.diagnostics.empty() &&
+             reconciled.reconciledSettings.options ==
+                 std::map<std::string, int>{{key, 901}} &&
+             reconciled.reconciledSettings.filePaths ==
+                 std::map<std::string, std::string>{{key, "plain.png"}} &&
+             reconciled.reconciledSettings.offsets.contains(key),
+         "long authored names are retained through the Beatoraja configuration "
+         "reconciliation path");
+
+  const auto package = normalizePackageId("LongConfiguration").package;
+  const auto entry = package
+                         ? normalizeEntryPath(*package, "skin/main.luaskin").entry
+                         : std::nullopt;
+  SkinProfileSettings profile;
+  if (entry) {
+    profile.entries.emplace(*entry, reconciled.reconciledSettings);
+  }
+  profile.sanitize();
+  expect(entry && profile.entries.contains(*entry) &&
+             profile.entries.at(*entry).options.contains(key) &&
+             profile.entries.at(*entry).filePaths.contains(key) &&
+             profile.entries.at(*entry).offsets.contains(key),
+         "profile sanitization retains valid long Beatoraja configuration "
+         "names instead of discarding their selections");
+}
+
+void testDuplicateCustomFilesReuseTheirPersistedSelection() {
+  const auto duplicate = fixture().decode("duplicate-file-name.luaskin");
+  auto fileSystem = fixture().fileSystem("duplicate-file-name.luaskin");
+  expect(duplicate.header && fileSystem,
+         "duplicate-file reconciliation fixture is available");
+  if (!duplicate.header || !fileSystem) {
+    return;
+  }
+  EntryProfileSettings saved;
+  saved.filePaths.emplace("Reused", "persisted.png");
+  const auto reconciled =
+      reconcileSkinConfiguration(*duplicate.header, &saved, *fileSystem);
+  expect(reconciled.configuration && reconciled.diagnostics.empty() &&
+             reconciled.reconciledSettings.filePaths ==
+                 std::map<std::string, std::string>{{"Reused", "persisted.png"}} &&
+             reconciled.configuration->orderedFiles.size() == 2 &&
+             reconciled.configuration->orderedFiles[0].selectedValue ==
+                 "persisted.png" &&
+             reconciled.configuration->orderedFiles[1].selectedValue ==
+                 "persisted.png",
+         "duplicate custom-file names share the stored selection exactly as "
+         "Beatoraja's SkinConfig does");
+}
+
+void testUnresolvedHeaderConfigurationRemainsSelectable() {
+  const auto decoded = fixture().decode("empty-choices.luaskin");
+  auto choices = fixture().fileSystem("empty-choices.luaskin");
+  expect(decoded.header && choices,
+         "empty-option reconciliation fixture is available");
+  if (!decoded.header || !choices) {
+    return;
+  }
+  const auto emptyOption =
+      reconcileSkinConfiguration(*decoded.header, nullptr, *choices);
+  expect(emptyOption.configuration && emptyOption.diagnostics.empty() &&
+             emptyOption.configuration->options ==
+                 std::map<std::string, int>{{"Unconfigured", -1}} &&
+             emptyOption.configuration->enabledOptionIds == std::set<int>{-1} &&
+             emptyOption.reconciledSettings.options ==
+                 std::map<std::string, int>{{"Unconfigured", -1}},
+         "an option with no choices exports Beatoraja's random sentinel "
+         "as its stable effective configuration");
+
+  const auto unresolved = fixture().decode("unresolved-file.luaskin");
+  auto files = fixture().fileSystem("unresolved-file.luaskin");
+  expect(unresolved.header && files,
+         "unresolved-file reconciliation fixture is available");
+  if (!unresolved.header || !files) {
+    return;
+  }
+  const auto missingFile =
+      reconcileSkinConfiguration(*unresolved.header, nullptr, *files);
+  expect(missingFile.configuration && missingFile.diagnostics.empty() &&
+             missingFile.configuration->filePaths.empty() &&
+             missingFile.reconciledSettings.filePaths.empty() &&
+             missingFile.configuration->orderedFiles.size() == 1 &&
+             missingFile.configuration->orderedFiles.front().selectedValue.empty(),
+         "a missing custom-file directory remains unconfigured instead of "
+         "making the skin unselectable");
+}
+
+void testDuplicateFontNamesUseTheFirstBeatorajaDefinition() {
+  const auto decoded = fixture().decodeGameplay("duplicate-font.luaskin");
+  const auto *caption = decoded.model ? objectNamed(*decoded.model, "caption")
+                                      : nullptr;
+  const auto *text = caption ? std::get_if<SkinTextObject>(&caption->payload)
+                             : nullptr;
+  expect(decoded.model && decoded.diagnostics.empty() && text != nullptr &&
+             text->font == SkinResourceId{1},
+         "duplicate font names use the first Beatoraja definition instead of "
+         "rejecting the skin");
 }
 
 void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
@@ -617,9 +769,10 @@ void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
           configuration.enabledOptionIds == std::set<int>{11, 928},
       "declared saved option survives and invalid/removed values reset");
   expect(reconciled.reconciledSettings.filePaths ==
-                 std::map<std::string, std::string>{{"Background", "bg.png"}} &&
-             configuration.filePaths.at("Background") == "bg.png",
-         "invalid file choice resets to the deterministic declared default");
+                 std::map<std::string, std::string>{{"Background", "missing.png"}} &&
+             configuration.filePaths.at("Background") == "missing.png",
+         "a persisted Beatoraja custom-file value remains selected even when "
+         "the current package no longer contains it");
   expect(reconciled.reconciledSettings.viewport.mode == ViewportMode::Stretch,
          "viewport remains profile-owned and outside configuration digest");
   const auto authored = configuration.offsets.at("Authored offset");
@@ -713,10 +866,12 @@ void testEntryRelativeFilePatternsStayWithinThePackage() {
   if (!escaped.header || !escapedFileSystem) {
     return;
   }
-  const auto rejected =
+  const auto unresolved =
       reconcileSkinConfiguration(*escaped.header, nullptr, *escapedFileSystem);
-  expect(!rejected.configuration && !rejected.diagnostics.empty(),
-         "a custom file pattern cannot escape the selected package");
+  expect(unresolved.configuration && unresolved.diagnostics.empty() &&
+             unresolved.configuration->filePaths.empty(),
+         "a header-only catalog pass leaves an unresolved custom-file path "
+         "unconfigured; actual resource access remains sandboxed later");
 }
 
 void testRepeatedOffsetIdsFollowBeatorajaLastValueSemantics() {
@@ -966,8 +1121,12 @@ int main() {
   testStrictArraysAndHeaderBoundsFailClosed();
   testAuthoredDimensionsStayWithinTheDecoderBoundary();
   testRequiredHeaderTextCannotBeMissingOrEmpty();
-  testSemanticAndSynthesizedCollisionsFailClosed();
-  testRejectedFileDeclarationsIdentifyTheirCause();
+  testHeaderPreservesBeatorajaConfigurationDeclarations();
+  testHeaderDoesNotImposeAnUnpinnedTextLimit();
+  testHeaderAndConfigurationAcceptLongBeatorajaNames();
+  testDuplicateCustomFilesReuseTheirPersistedSelection();
+  testUnresolvedHeaderConfigurationRemainsSelectable();
+  testDuplicateFontNamesUseTheFirstBeatorajaDefinition();
   testReconciliationDefaultsSanitizesAndIndexesConfiguration();
   testReconciliationRejectsEmptyConfigurationKeys();
   testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive();

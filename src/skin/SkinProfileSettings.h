@@ -16,7 +16,10 @@ struct SkinProfileSettingsPolicy {
   static constexpr std::size_t maxOptionsPerEntry = 256;
   static constexpr std::size_t maxFilesPerEntry = 256;
   static constexpr std::size_t maxOffsetsPerEntry = 256;
-  static constexpr std::size_t maxConfigurationKeyBytes = 128;
+  // A Beatoraja CustomItem name is an unconstrained Java String. This matches
+  // the cumulative Lua header-copy budget so a valid authored name is not
+  // silently removed when the selected skin profile is saved.
+  static constexpr std::size_t maxConfigurationKeyBytes = 8 * 1024 * 1024;
   static constexpr std::size_t maxConfigurationValueBytes = 1'024;
   static constexpr int minOffsetComponent = -32'768;
   static constexpr int maxOffsetComponent = 32'767;

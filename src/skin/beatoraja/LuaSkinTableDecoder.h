@@ -27,7 +27,10 @@ struct LuaSkinTableDecoderPolicy {
   static constexpr std::size_t maxOffsets = 256;
   static constexpr std::size_t maxCategoryItems = 256;
   static constexpr std::size_t maxOptionChoices = 256;
-  static constexpr std::size_t maxHeaderTextBytes = 1'024;
+  // Beatoraja's Lua serializer does not impose a separate small metadata
+  // limit. Keep header strings inside the audited Lua copy budget rather than
+  // rejecting otherwise valid installed skins at catalog time.
+  static constexpr std::size_t maxHeaderTextBytes = maxCopiedTextBytes;
   static constexpr int maxAuthoredDimension = 8'192;
 };
 
