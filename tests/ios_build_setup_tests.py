@@ -551,6 +551,18 @@ class IOSBuildSetupTests(unittest.TestCase):
             implementation,
         )
         self.assertNotIn(
+            "if (![directory setResourceValue:@YES\n"
+            "                              forKey:NSURLIsExcludedFromBackupKey\n"
+            "                               error:&error]) {\n"
+            "      return {};\n"
+            "    }",
+            implementation,
+        )
+        self.assertIn(
+            "Could not exclude private skin storage from backup",
+            implementation,
+        )
+        self.assertNotIn(
             "directory.URLByResolvingSymlinksInPath", implementation
         )
 
@@ -562,6 +574,7 @@ class IOSBuildSetupTests(unittest.TestCase):
         )
         implementation = source[implementation_start:implementation_end]
         self.assertIn("NSDocumentDirectory", implementation)
+        self.assertIn("create:YES", implementation)
         self.assertIn("URLByResolvingSymlinksInPath", implementation)
         self.assertIn("resolvedDirectory.fileSystemRepresentation", implementation)
 

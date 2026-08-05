@@ -3886,7 +3886,7 @@ std::string GetIOSDocumentsPath() {
     NSURL *directory = [manager URLForDirectory:NSDocumentDirectory
                                        inDomain:NSUserDomainMask
                               appropriateForURL:nil
-                                         create:NO
+                                         create:YES
                                           error:nil];
     NSURL *resolvedDirectory = directory.URLByResolvingSymlinksInPath;
     if (resolvedDirectory == nil) {
@@ -3924,7 +3924,9 @@ std::string GetIOSApplicationSupportPath() {
     if (![directory setResourceValue:@YES
                               forKey:NSURLIsExcludedFromBackupKey
                                error:&error]) {
-      return {};
+      // The directory is still usable if iOS rejects this advisory cache
+      // attribute. Do not prevent the user-visible skin root from starting.
+      NSLog(@"Could not exclude private skin storage from backup: %@", error);
     }
     return std::string(directory.fileSystemRepresentation);
   }
