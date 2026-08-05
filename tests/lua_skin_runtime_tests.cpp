@@ -359,6 +359,19 @@ void testMainStateAccessorsOpenOnlyAtRenderTransition() {
          "the header-captured main-state table is populated in place");
 }
 
+void testRuntimeProvidesBeatorajaSafeOsLibrary() {
+  for (const auto purpose : {LuaRuntimePurpose::Catalog,
+                             LuaRuntimePurpose::Validation,
+                             LuaRuntimePurpose::Gameplay}) {
+    auto harness = makeHarness(purpose, "os_compatibility.luaskin");
+    if (!harness) {
+      continue;
+    }
+    expect(harness->runtime->loadHeader().value.has_value(),
+           "Beatoraja-compatible os.time succeeds in every runtime purpose");
+  }
+}
+
 void testConfiguredTableUsesCanonicalVirtualData() {
   auto harness =
       makeHarness(LuaRuntimePurpose::Validation, "configuration_table.luaskin");
@@ -849,6 +862,7 @@ int main() {
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();
+  testRuntimeProvidesBeatorajaSafeOsLibrary();
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
   testValueHandlesLoseAuthorityWhenTheirRuntimeCloses();

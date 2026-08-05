@@ -1,7 +1,10 @@
 assert(ffi == nil)
 assert(jit == nil)
 assert(debug == nil)
-assert(os == nil)
+assert(type(os) == "table")
+for _, name in ipairs({"execute", "exit", "getenv", "remove", "rename", "tmpname"}) do
+  assert(os[name] == nil)
+end
 assert(package.loadlib == nil)
 assert(package.cpath == nil or package.cpath == "")
 assert(package.searchers == nil)

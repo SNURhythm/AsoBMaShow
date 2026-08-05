@@ -1321,6 +1321,17 @@ void setNilGlobal(lua_State *state, const char *name) {
   lua_setglobal(state, name);
 }
 
+void installSafeOsLibrary(lua_State *state) {
+  openLibrary(state, LUA_OSLIBNAME, luaopen_os);
+  lua_getglobal(state, LUA_OSLIBNAME);
+  for (const char *name :
+       {"execute", "exit", "getenv", "remove", "rename", "tmpname"}) {
+    lua_pushnil(state);
+    lua_setfield(state, -2, name);
+  }
+  lua_pop(state, 1);
+}
+
 void installBit32(lua_State *state) {
   lua_createtable(state, 0, 9);
   const luaL_Reg functions[] = {{"band", bitBand},
@@ -1373,8 +1384,9 @@ int installHost(lua_State *state) {
   openLibrary(state, LUA_TABLIBNAME, luaopen_table);
   openLibrary(state, LUA_STRLIBNAME, luaopen_string);
   openLibrary(state, LUA_MATHLIBNAME, luaopen_math);
+  installSafeOsLibrary(state);
 
-  for (const char *name : {"ffi", "jit", "debug", "os", "bit"}) {
+  for (const char *name : {"ffi", "jit", "debug", "bit"}) {
     setNilGlobal(state, name);
   }
   for (const char *name :
