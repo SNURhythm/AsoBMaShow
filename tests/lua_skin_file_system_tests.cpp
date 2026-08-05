@@ -416,6 +416,11 @@ void testAtomicWritesNestedParentsAndQuotaRollback() {
     return;
   }
   auto &fileSystem = *created.fileSystem;
+  const auto nestedDirectory = fileSystem.mkdirData("History/260805");
+  expect(!nestedDirectory.failure &&
+             fs::is_directory(fixture.overlayRoot(fixture.entry, selectedProfile) /
+                              "entry/History/260805"),
+         "legacy mkdir creates missing parents for dynamic skin data");
 
   const auto nested =
       fileSystem.writeData("fresh/deep/value.txt", bytesOf("abc"), false);
@@ -796,6 +801,17 @@ void testDeterministicListingAndProfileEntryIsolation() {
     expect(bytesToString(result.bytes) == value,
            "overlay reads do not cross profile or entry identity");
   }
+
+  const auto dynamicHistory = firstEntryFirstProfile.fileSystem->writeData(
+      "History/260805/history.txt", bytesOf("record"), false);
+  expect(!dynamicHistory.failure,
+         "an overlay-only dynamic history file is created");
+  const auto historyEntries = firstEntryFirstProfile.fileSystem->list(
+      "History/260805", "", 32);
+  expect(!historyEntries.failure &&
+             historyEntries.entries ==
+                 std::vector<std::string>{"entry/History/260805/history.txt"},
+         "directory listings include overlay-only dynamic skin data");
 
   const auto all = firstEntryFirstProfile.fileSystem->list(".", "", 32);
   expect(!all.failure && std::ranges::is_sorted(all.entries) &&

@@ -113,6 +113,11 @@ public:
 
   SkinFileResolveResult resolve(std::string_view virtualPath,
                                 SkinFileUse) const;
+  // Normalizes an authored path inside the selected package without requiring
+  // that a package file already exists. This is for legacy skin APIs that
+  // create their own persistent data through skin_config.get_path.
+  SkinFileResolveResult normalizeVirtualPath(std::string_view virtualPath,
+                                             bool directoryPath = false) const;
   // Resource preparation may receive either an authored path relative to the
   // selected entry or an already package-normalized path returned by
   // skin_config.get_path. Resolve both through the no-follow package reader;
@@ -129,6 +134,10 @@ public:
   SkinFileReadResult readEntry(std::uint64_t maximumBytes) const;
   SkinFileReadResult read(std::string_view virtualPath, SkinFileUse,
                           std::uint64_t maximumBytes) const;
+  // Lua package-path and dofile references first use the entry directory,
+  // then the package root. A legacy `skin/` prefix also names that root.
+  SkinFileReadResult readLuaPath(std::string_view virtualPath,
+                                 std::uint64_t maximumBytes) const;
   SkinFileReadResult readModule(std::string_view moduleName,
                                 std::uint64_t maximumBytes) const;
   SkinFileListResult list(std::string_view virtualDirectory,

@@ -661,8 +661,10 @@ OverlayUsage collectUsage(int root) {
 
 std::pair<std::vector<std::string>, HostEntryKind>
 listAtRoot(const fs::path &root, std::string_view virtualDirectory,
-           const SkinPackageId &package, std::size_t maximumEntries) {
-  auto [directory, kind] = openDirectoryNoFollow(root, virtualDirectory);
+           const SkinPackageId &package, std::size_t maximumEntries,
+           bool requirePrivate = false) {
+  auto [directory, kind] =
+      openDirectoryNoFollow(root, virtualDirectory, requirePrivate);
   if (!directory) {
     return {{}, kind};
   }
@@ -1606,10 +1608,12 @@ OverlayUsage collectUsage(const fs::path &root) {
 
 std::pair<std::vector<std::string>, HostEntryKind>
 listAtRoot(const fs::path &root, std::string_view virtualDirectory,
-           const SkinPackageId &package, std::size_t maximumEntries) {
+           const SkinPackageId &package, std::size_t maximumEntries,
+           bool requirePrivate = false) {
   HostEntryKind kind = HostEntryKind::IoError;
   auto chain = openWindowsPathAtRoot(root, virtualDirectory,
-                                     FILE_LIST_DIRECTORY, true, kind);
+                                     FILE_LIST_DIRECTORY, true, kind,
+                                     requirePrivate);
   if (!chain) {
     return {{}, kind};
   }
@@ -2453,6 +2457,23 @@ SkinFileResolveResult LuaSkinFileSystem::resolve(std::string_view virtualPath,
   return {.normalizedVirtualPath = *normalized.path};
 }
 
+SkinFileResolveResult LuaSkinFileSystem::normalizeVirtualPath(
+    std::string_view virtualPath, bool directoryPath) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  if (auto denied = impl_->guard(RenderOperation::Read, virtualPath)) {
+    return {.failure = std::move(denied)};
+  }
+  while (directoryPath && virtualPath.size() > 1 &&
+         virtualPath.ends_with('/')) {
+    virtualPath.remove_suffix(1);
+  }
+  const auto normalized = impl_->normalize(virtualPath);
+  if (!normalized.path) {
+    return {.failure = normalized.failure};
+  }
+  return {.normalizedVirtualPath = *normalized.path};
+}
+
 SkinFileResolveResult LuaSkinFileSystem::resolveResourceCandidates(
     std::string_view entryRelative,
     std::string_view packageNormalized) const {
@@ -2588,6 +2609,49 @@ SkinFileReadResult LuaSkinFileSystem::read(std::string_view virtualPath,
 }
 
 SkinFileReadResult
+LuaSkinFileSystem::readLuaPath(std::string_view virtualPath,
+                               std::uint64_t maximumBytes) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  if (auto denied = impl_->guard(RenderOperation::Read, virtualPath)) {
+    return {.failure = std::move(denied)};
+  }
+  const auto entryRelative = impl_->normalize(virtualPath);
+  if (!entryRelative.path) {
+    return {.failure = entryRelative.failure};
+  }
+  SkinFileReadResult result = impl_->readNormalized(
+      *entryRelative.path, SkinFileUse::LuaModule, maximumBytes);
+  if (!(result.failure && result.failure->code == SkinFileError::Missing)) {
+    return result;
+  }
+
+  const auto packageRelative =
+      normalizeReference(impl_->entry.package, {}, virtualPath);
+  if (!packageRelative.path) {
+    return {.failure = packageRelative.failure};
+  }
+  if (*packageRelative.path != *entryRelative.path) {
+    result = impl_->readNormalized(*packageRelative.path,
+                                   SkinFileUse::LuaModule, maximumBytes);
+    if (!(result.failure && result.failure->code == SkinFileError::Missing)) {
+      return result;
+    }
+  }
+
+  constexpr std::string_view skinRootPrefix = "skin/";
+  if (!virtualPath.starts_with(skinRootPrefix)) {
+    return result;
+  }
+  const auto legacyPackageRelative = normalizeReference(
+      impl_->entry.package, {}, virtualPath.substr(skinRootPrefix.size()));
+  if (!legacyPackageRelative.path) {
+    return {.failure = legacyPackageRelative.failure};
+  }
+  return impl_->readNormalized(*legacyPackageRelative.path,
+                               SkinFileUse::LuaModule, maximumBytes);
+}
+
+SkinFileReadResult
 LuaSkinFileSystem::readModule(std::string_view moduleName,
                               std::uint64_t maximumBytes) const {
   const std::scoped_lock lock(impl_->operationMutex);
@@ -2637,15 +2701,48 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
   }
   const std::size_t boundedMaximum =
       std::min(maximumEntries, maximumListingEntries);
-  auto [entries, kind] = listAtRoot(impl_->revision.root(), *normalized.path,
-                                    impl_->entry.package, boundedMaximum);
-  if (kind == HostEntryKind::LimitExceeded) {
+  std::vector<std::string> entries;
+  HostEntryKind overlayKind = HostEntryKind::Missing;
+  if (impl_->overlayRoot) {
+    auto [overlayEntries, listedOverlayKind] =
+        listAtRoot(*impl_->overlayRoot, *normalized.path,
+                   impl_->entry.package, boundedMaximum, true);
+    overlayKind = listedOverlayKind;
+    if (overlayKind == HostEntryKind::LimitExceeded) {
+      return {.failure = failure(SkinFileError::LimitExceeded,
+                                 *normalized.path,
+                                 "skin directory listing exceeds its limit")};
+    }
+    if (overlayKind != HostEntryKind::Directory &&
+        overlayKind != HostEntryKind::Missing) {
+      return {.failure = failure(errorForKind(overlayKind), *normalized.path,
+                                 messageForKind(overlayKind))};
+    }
+    if (overlayKind == HostEntryKind::Directory) {
+      entries = std::move(overlayEntries);
+    }
+  }
+
+  auto [packageEntries, packageKind] = listAtRoot(
+      impl_->revision.root(), *normalized.path, impl_->entry.package,
+      boundedMaximum);
+  if (packageKind == HostEntryKind::LimitExceeded) {
     return {.failure = failure(SkinFileError::LimitExceeded, *normalized.path,
                                "skin directory listing exceeds its limit")};
   }
-  if (kind != HostEntryKind::Directory) {
-    return {.failure = failure(errorForKind(kind), *normalized.path,
-                               messageForKind(kind))};
+  if (packageKind == HostEntryKind::Directory) {
+    entries.insert(entries.end(), std::make_move_iterator(packageEntries.begin()),
+                   std::make_move_iterator(packageEntries.end()));
+  } else if (packageKind != HostEntryKind::Missing ||
+             overlayKind != HostEntryKind::Directory) {
+    return {.failure = failure(errorForKind(packageKind), *normalized.path,
+                               messageForKind(packageKind))};
+  }
+  std::ranges::sort(entries);
+  entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+  if (entries.size() > boundedMaximum) {
+    return {.failure = failure(SkinFileError::LimitExceeded, *normalized.path,
+                               "skin directory listing exceeds its limit")};
   }
   if (compiledPattern) {
     std::erase_if(entries, [&compiledPattern](const std::string &entry) {
@@ -2860,27 +2957,6 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory) {
             .failure =
                 failure(errorForKind(usage.kind), *normalized.path,
                         "skin data overlay contains a non-regular entry")};
-  }
-  const fs::path relative = pathFromUtf8(*normalized.path);
-  const std::string parentVirtual = utf8Path(relative.parent_path());
-  if (!parentVirtual.empty()) {
-    const HostStatResult packageParent =
-        statAtRoot(impl_->revision.root(), parentVirtual);
-#if defined(_WIN32)
-    const HostStatResult overlayParent =
-        statAtRoot(*impl_->overlayRoot, parentVirtual);
-#else
-    const HostStatResult overlayParent{.kind = overlayPin->parentExists()
-                                                   ? HostEntryKind::Directory
-                                                   : HostEntryKind::Missing};
-#endif
-    if (overlayParent.kind != HostEntryKind::Directory &&
-        packageParent.kind != HostEntryKind::Directory) {
-      return {.resultingBytes = usage.bytes,
-              .resultingFiles = usage.files,
-              .failure = failure(SkinFileError::Missing, *normalized.path,
-                                 "skin data directory parent is missing")};
-    }
   }
 #if defined(_WIN32)
   const HostStatResult existing =

@@ -242,6 +242,8 @@ struct LuaSkinHostModulesImpl {
   int gdxTokenReference = LUA_NOREF;
   const BeatorajaSkinConfiguration *pendingConfiguration = nullptr;
   std::vector<ConfiguredFile> configuredFiles;
+  std::vector<std::pair<std::string, std::string>> configuredPathAliases;
+  std::string initialPackagePath;
   std::string resolvedConfigurationPath;
   std::string lastErrorCode;
   std::string lastErrorMessage;
@@ -265,6 +267,39 @@ struct LuaSkinHostModulesImpl {
   void storeFileError(const SkinFileFailure &failure) noexcept {
     storeError(fileFailureCode(failure.code), failure.message,
                failure.virtualPath);
+  }
+
+  std::string_view configuredPathAlias(std::string_view path) const noexcept {
+    for (const auto &[returnedPath, entryRelativePath] :
+         configuredPathAliases) {
+      if (returnedPath == path) {
+        return entryRelativePath;
+      }
+    }
+    return path;
+  }
+
+  bool rememberConfiguredPathAlias(std::string_view returnedPath,
+                                   std::string_view entryRelativePath) noexcept {
+    try {
+      for (const auto &[knownReturnedPath, knownEntryRelativePath] :
+           configuredPathAliases) {
+        if (knownReturnedPath == returnedPath) {
+          if (knownEntryRelativePath == entryRelativePath) {
+            return true;
+          }
+          storeError("skin_lua_file_operation_failed",
+                     "skin_config.get_path returned an ambiguous path");
+          return false;
+        }
+      }
+      configuredPathAliases.emplace_back(returnedPath, entryRelativePath);
+      return true;
+    } catch (...) {
+      storeError("skin_lua_file_operation_failed",
+                 "skin_config.get_path could not retain its virtual path");
+      return false;
+    }
   }
 
   void reportLegacyDenial(std::string_view authority) noexcept {
@@ -364,6 +399,21 @@ bool LuaSkinHostModulesImpl::copyConfiguredFiles(
 bool LuaSkinHostModulesImpl::resolveConfiguredPath(
     std::string_view request) noexcept {
   try {
+    const auto retainResolvedPath = [this](
+                                        std::string_view entryRelativePath,
+                                        SkinFileResolveResult resolved) {
+      if (!resolved.normalizedVirtualPath) {
+        storeError("skin_lua_file_operation_failed",
+                   "skin_config.get_path did not resolve a resource");
+        return false;
+      }
+      if (!rememberConfiguredPathAlias(*resolved.normalizedVirtualPath,
+                                       entryRelativePath)) {
+        return false;
+      }
+      resolvedConfigurationPath = std::move(*resolved.normalizedVirtualPath);
+      return true;
+    };
     const ConfiguredFile *match = nullptr;
     for (const auto &file : configuredFiles) {
       if (!request.starts_with(file.pattern)) {
@@ -378,18 +428,28 @@ bool LuaSkinHostModulesImpl::resolveConfiguredPath(
     }
     if (match == nullptr) {
       if (request.find('*') == std::string_view::npos) {
-        auto resolved = fileSystem->resolve(request, SkinFileUse::Resource);
-        if (resolved.failure) {
+        std::string entryRelativePath(request);
+        while (entryRelativePath.size() > 1 &&
+               entryRelativePath.ends_with('/')) {
+          entryRelativePath.pop_back();
+        }
+        auto resolved =
+            fileSystem->resolve(entryRelativePath, SkinFileUse::Resource);
+        if (!resolved.failure) {
+          return retainResolvedPath(entryRelativePath, std::move(resolved));
+        }
+        if (resolved.failure->code != SkinFileError::Missing &&
+            resolved.failure->code != SkinFileError::NonRegular) {
           storeFileError(*resolved.failure);
           return false;
         }
-        if (!resolved.normalizedVirtualPath) {
-          storeError("skin_lua_file_operation_failed",
-                     "skin_config.get_path did not resolve a resource");
+        auto normalized =
+            fileSystem->normalizeVirtualPath(entryRelativePath, true);
+        if (normalized.failure) {
+          storeFileError(*normalized.failure);
           return false;
         }
-        resolvedConfigurationPath = std::move(*resolved.normalizedVirtualPath);
-        return true;
+        return retainResolvedPath(entryRelativePath, std::move(normalized));
       }
       storeError("skin_lua_file_operation_failed",
                  "skin_config.get_path has no configured file match");
@@ -427,13 +487,7 @@ bool LuaSkinHostModulesImpl::resolveConfiguredPath(
       storeFileError(*resolved.failure);
       return false;
     }
-    if (!resolved.normalizedVirtualPath) {
-      storeError("skin_lua_file_operation_failed",
-                 "skin_config.get_path did not resolve a resource");
-      return false;
-    }
-    resolvedConfigurationPath = std::move(*resolved.normalizedVirtualPath);
-    return true;
+    return retainResolvedPath(candidate, std::move(resolved));
   } catch (...) {
     storeError("skin_lua_file_operation_failed",
                "skin_config.get_path failed within host limits");
@@ -900,6 +954,8 @@ int ioOpen(lua_State *state) {
   const char *path = luaL_checklstring(state, 1, &pathSize);
   std::size_t modeSize = 0;
   const char *mode = luaL_optlstring(state, 2, "r", &modeSize);
+  const std::string_view virtualPath =
+      impl->configuredPathAlias(std::string_view(path, pathSize));
   if (lua_gettop(state) > 2) {
     return expectedFailure(state, "io.open accepts only path and mode");
   }
@@ -929,8 +985,7 @@ int ioOpen(lua_State *state) {
   if (selectedMode == HandleMode::Read) {
     SkinFileReadResult read;
     {
-      read = impl->fileSystem->read(std::string_view(path, pathSize),
-                                    SkinFileUse::DataRead,
+      read = impl->fileSystem->read(virtualPath, SkinFileUse::DataRead,
                                     LuaSkinHostPolicy::maxDataReadBytes);
     }
     if (read.failure) {
@@ -943,8 +998,8 @@ int ioOpen(lua_State *state) {
     bytes = std::move(read.bytes);
     ready = true;
   } else {
-    const auto resolved = impl->fileSystem->resolve(
-        std::string_view(path, pathSize), SkinFileUse::DataWrite);
+    const auto resolved =
+        impl->fileSystem->resolve(virtualPath, SkinFileUse::DataWrite);
     if (resolved.failure) {
       if (resolved.failure->code == SkinFileError::RenderPhase) {
         impl->storeFileError(*resolved.failure);
@@ -964,7 +1019,7 @@ int ioOpen(lua_State *state) {
   try {
     auto handle = std::make_shared<LuaFileHandle>();
     handle->owner = impl;
-    handle->virtualPath.assign(path, pathSize);
+    handle->virtualPath.assign(virtualPath);
     handle->mode = selectedMode;
     handle->bytes = std::move(bytes);
     handle->accountedBytes = handle->bytes.size();
@@ -1010,13 +1065,14 @@ int doFile(lua_State *state) {
   const char *path = luaL_checklstring(state, 1, &pathSize);
   int loadStatus = LUA_ERRFILE;
   {
-    const auto read = impl->fileSystem->read(
-        std::string_view(path, pathSize), SkinFileUse::LuaModule,
-        LuaSkinHostPolicy::maxTextChunkBytes);
+    const std::string_view virtualPath =
+        impl->configuredPathAlias(std::string_view(path, pathSize));
+    const auto read = impl->fileSystem->readLuaPath(
+        virtualPath, LuaSkinHostPolicy::maxTextChunkBytes);
     if (read.failure) {
       impl->storeFileError(*read.failure);
     } else {
-      std::string chunkName = "@" + std::string(path, pathSize);
+      std::string chunkName = "@" + std::string(virtualPath);
       loadStatus = luaL_loadbuffer(
           state, reinterpret_cast<const char *>(read.bytes.data()),
           read.bytes.size(), chunkName.c_str());
@@ -1057,6 +1113,7 @@ int moduleLoader(lua_State *state) {
   const std::string_view templates(searchTemplates);
   lua_pop(state, 2);
 
+  std::vector<std::string> searchedCandidates;
   std::size_t start = 0;
   while (start <= templates.size()) {
     const std::size_t end = templates.find(';', start);
@@ -1073,9 +1130,11 @@ int moduleLoader(lua_State *state) {
           candidate.push_back(character);
         }
       }
-      const auto read = impl->fileSystem->read(
-          candidate, SkinFileUse::LuaModule,
-          LuaSkinHostPolicy::maxTextChunkBytes);
+      if (searchedCandidates.size() < 4) {
+        searchedCandidates.push_back(candidate);
+      }
+      const auto read = impl->fileSystem->readLuaPath(
+          candidate, LuaSkinHostPolicy::maxTextChunkBytes);
       if (!read.failure) {
         found = true;
         std::string chunkName = "@module:" + std::string(name, nameSize);
@@ -1095,7 +1154,24 @@ int moduleLoader(lua_State *state) {
     start = end + 1;
   }
   if (!found) {
-    lua_pushfstring(state, "\n\tvirtual module '%s' was not found", name);
+    try {
+      std::string message = "\n\tvirtual module '";
+      message.append(name, nameSize);
+      message += "' was not found";
+      if (!searchedCandidates.empty()) {
+        message += " (searched: ";
+        for (std::size_t index = 0; index < searchedCandidates.size(); ++index) {
+          if (index != 0) {
+            message += ", ";
+          }
+          message += searchedCandidates[index];
+        }
+        message += ')';
+      }
+      lua_pushlstring(state, message.data(), message.size());
+    } catch (...) {
+      lua_pushfstring(state, "\n\tvirtual module '%s' was not found", name);
+    }
     return 1;
   }
   if (loadStatus == LUA_ERRFILE) {
@@ -1276,7 +1352,9 @@ int legacyNew(lua_State *state) {
   }
   std::size_t pathSize = 0;
   const char *path = lua_tolstring(state, 2, &pathSize);
-  pushLegacyFileObject(state, impl, path, pathSize);
+  const std::string_view virtualPath =
+      impl->configuredPathAlias(std::string_view(path, pathSize));
+  pushLegacyFileObject(state, impl, virtualPath.data(), virtualPath.size());
   return 1;
 }
 
@@ -1453,7 +1531,8 @@ int installHost(lua_State *state) {
   lua_setfield(state, -2, "loadlib");
   lua_pushnil(state);
   lua_setfield(state, -2, "cpath");
-  lua_pushliteral(state, "?.lua;?/init.lua");
+  lua_pushlstring(state, impl->initialPackagePath.data(),
+                  impl->initialPackagePath.size());
   lua_setfield(state, -2, "path");
   lua_createtable(state, 1, 0);
   installClosure(state, impl, moduleLoader);
@@ -1605,6 +1684,29 @@ LuaSkinHostModules::create(lua_State *state,
   impl->allowOverlayWrites = options.allowOverlayWrites;
   impl->coroutineContext = options.coroutineContext;
   impl->coroutineCreated = options.coroutineCreated;
+  try {
+    const std::string_view entryPath =
+        options.fileSystem->entry().packageRelativePath;
+    const std::size_t slash = entryPath.rfind('/');
+    const std::string_view entryDirectory =
+        slash == std::string_view::npos ? std::string_view{}
+                                      : entryPath.substr(0, slash);
+    std::string virtualDirectory;
+    if (entryDirectory.empty()) {
+      virtualDirectory = "skin";
+    } else if (entryDirectory == "skin" ||
+               entryDirectory.starts_with("skin/")) {
+      virtualDirectory.assign(entryDirectory);
+    } else {
+      virtualDirectory = "skin/";
+      virtualDirectory.append(entryDirectory);
+    }
+    impl->initialPackagePath = virtualDirectory + "/?.lua;" +
+                               virtualDirectory + "/?/init.lua";
+  } catch (...) {
+    return {.failure = diagnostic("skin_lua_runtime_create_failed",
+                                  "Lua virtual package path allocation failed")};
+  }
   if (lua_cpcall(state, installHost, impl.get()) != 0) {
     const char *message = lua_tostring(state, -1);
     auto failure =

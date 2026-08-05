@@ -1,0 +1,9 @@
+package.path = "MissingOne/?.lua;MissingTwo/?.lua;" .. package.path
+
+local ok, message = pcall(require, "const")
+assert(not ok)
+assert(tostring(message):find("virtual module 'const' was not found", 1, true))
+assert(tostring(message):find("MissingOne/const.lua", 1, true))
+assert(tostring(message):find("MissingTwo/const.lua", 1, true))
+
+return { phase = skin_config and "configured" or "header" }

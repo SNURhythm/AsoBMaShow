@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <array>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -134,6 +135,10 @@ public:
     return *normalizeEntryPath(package, "skin/" + std::string(fixture)).entry;
   }
 
+  SkinEntryId rootEntry(std::string_view fixture) const {
+    return *normalizeEntryPath(package, fixture).entry;
+  }
+
   TempDirectory temp;
   SkinStorageRoots roots;
   SkinPackageId package;
@@ -146,6 +151,23 @@ RuntimePackageFixture &runtimePackage() {
   return fixture;
 }
 
+void copyLuaSources(const fs::path &source, const fs::path &destination) {
+  for (const fs::directory_entry &entry :
+       fs::recursive_directory_iterator(source)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const fs::path extension = entry.path().extension();
+    if (extension != ".lua" && extension != ".luaskin") {
+      continue;
+    }
+    const fs::path target =
+        destination / entry.path().lexically_relative(source);
+    fs::create_directories(target.parent_path());
+    fs::copy_file(entry.path(), target, fs::copy_options::overwrite_existing);
+  }
+}
+
 struct RuntimeHarness {
   std::unique_ptr<LuaSkinRuntime> runtime;
   LuaSkinFileSystem *fileSystem = nullptr;
@@ -154,13 +176,16 @@ struct RuntimeHarness {
 
 std::unique_ptr<RuntimeHarness>
 makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
-            bool forceWriteCapableFileSystem = false) {
+            bool forceWriteCapableFileSystem = false,
+            bool entryAtPackageRoot = false) {
   static std::atomic_uint64_t profileSerial{0};
   RuntimePackageFixture &package = runtimePackage();
   if (!package.prepared) {
     return {};
   }
-  const SkinEntryId entry = package.entry(entryFixture);
+  const SkinEntryId entry = entryAtPackageRoot
+                                ? package.rootEntry(entryFixture)
+                                : package.entry(entryFixture);
   const bool writes =
       purpose != LuaRuntimePurpose::Catalog || forceWriteCapableFileSystem;
   const std::optional<SkinProfileId> profile =
@@ -380,6 +405,130 @@ void testRuntimeSearchesVirtualPackagePath() {
   }
   expect(harness->runtime->loadHeader().value.has_value(),
          "a skin package.path module root is searched virtually");
+}
+
+void testRuntimeSearchesSkinPrefixedPackageRoot() {
+  auto harness = makeHarness(LuaRuntimePurpose::Validation,
+                             "root_package_path_module.luaskin");
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "a skin-prefixed package.path searches the package root");
+}
+
+void testRuntimeInitialPackagePathNamesSelectedDirectory() {
+  auto harness = makeHarness(LuaRuntimePurpose::Validation,
+                             "nested/initial_package_path.luaskin");
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "initial package.path names the selected virtual directory");
+}
+
+void testRuntimeInitialPackagePathNamesPackageRoot() {
+  auto harness = makeHarness(LuaRuntimePurpose::Validation,
+                             "initial_root_package_path.luaskin", false, true);
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "initial package.path names the virtual package root");
+}
+
+void testRuntimeDiagnosesVirtualModuleCandidates() {
+  auto harness = makeHarness(LuaRuntimePurpose::Validation,
+                             "missing_package_path_module.luaskin");
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "missing virtual modules report the package.path candidates searched");
+}
+
+void testRuntimeCreatesConfiguredDynamicHistoryData() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::Validation, "dynamic_history.luaskin");
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "dynamic-history fixture loads its header");
+  const auto configured = harness->runtime->loadConfigured({});
+  expect(configured.value.has_value() && !configured.failure,
+         "skin_config.get_path supports a dynamically created history file");
+  const fs::path history =
+      harness->overlayRoot / "skin/History/260805/history.txt";
+  expect(readText(history) == "record\n",
+         "configured get_path data writes stay at the selected skin root");
+}
+
+void testRequestedExternalLuaSkinHeader() {
+  const char *configuredRoot = std::getenv("ASOBMASHOW_EXTERNAL_LUA_SKIN_ROOT");
+  if (configuredRoot == nullptr || *configuredRoot == '\0') {
+    return;
+  }
+  const fs::path source(configuredRoot);
+  expect(fs::is_directory(source),
+         "requested external Lua skin root is a readable directory");
+  if (!fs::is_directory(source)) {
+    return;
+  }
+  const char *configuredEntry =
+      std::getenv("ASOBMASHOW_EXTERNAL_LUA_SKIN_ENTRY");
+  const std::string entryPath =
+      configuredEntry != nullptr && *configuredEntry != '\0'
+          ? configuredEntry
+          : "result.luaskin";
+
+  TempDirectory temp;
+  const fs::path projectedSource = temp.root() / "source";
+  copyLuaSources(source, projectedSource);
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const auto package = normalizePackageId("ExternalLuaSkin").package;
+  const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
+                             : std::nullopt;
+  expect(package.has_value() && entry.has_value(),
+         "requested external Lua entry has a portable virtual identity");
+  if (!package || !entry) {
+    return;
+  }
+
+  AcceptFiles aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  auto snapshot = snapshotter.snapshot(projectedSource, *package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "requested external Lua source projection snapshots");
+  if (!snapshot.prepared) {
+    return;
+  }
+  auto fileSystem = LuaSkinFileSystem::create(
+      {.revision = snapshot.prepared->readView(),
+       .entry = *entry,
+       .storageRoots = roots,
+       .profileId = profileFor(1'000'000),
+       .allowDataWrites = true});
+  expect(fileSystem.fileSystem != nullptr,
+         "requested external Lua filesystem is created");
+  if (!fileSystem.fileSystem) {
+    return;
+  }
+  auto runtime = LuaSkinRuntime::create(
+      {.purpose = LuaRuntimePurpose::Validation,
+       .fileSystem = std::move(fileSystem.fileSystem)});
+  expect(runtime.runtime != nullptr,
+         "requested external Lua runtime is created");
+  if (!runtime.runtime) {
+    return;
+  }
+  const auto header = runtime.runtime->loadHeader();
+  if (header.failure) {
+    std::cerr << "external Lua header diagnostic: " << header.failure->code
+              << ": " << header.failure->message << '\n';
+  }
+  expect(header.value.has_value() && !header.failure,
+         "requested external Lua skin header loads through the virtual package");
 }
 
 void testConfiguredTableUsesCanonicalVirtualData() {
@@ -874,6 +1023,12 @@ int main() {
   testMainStateAccessorsOpenOnlyAtRenderTransition();
   testRuntimeProvidesBeatorajaSafeOsLibrary();
   testRuntimeSearchesVirtualPackagePath();
+  testRuntimeSearchesSkinPrefixedPackageRoot();
+  testRuntimeInitialPackagePathNamesSelectedDirectory();
+  testRuntimeInitialPackagePathNamesPackageRoot();
+  testRuntimeDiagnosesVirtualModuleCandidates();
+  testRuntimeCreatesConfiguredDynamicHistoryData();
+  testRequestedExternalLuaSkinHeader();
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
   testValueHandlesLoseAuthorityWhenTheirRuntimeCloses();
