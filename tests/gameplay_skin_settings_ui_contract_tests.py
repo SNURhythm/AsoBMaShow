@@ -55,9 +55,14 @@ class GameplaySkinSettingsUiContracts(unittest.TestCase):
 
     def test_unready_tab_exposes_the_sanitized_startup_diagnostic(self) -> None:
         enabled = self.read("src/scene/SettingsSceneSkins.cpp")
+        context = self.read("src/context.h")
         self.assertIn("context.skinRecoveryResult", enabled)
         self.assertIn("skinRecoveryResult->diagnostics", enabled)
         self.assertIn("diagnosticPresentation", enabled)
+        self.assertIn('"Retry Startup"', enabled)
+        self.assertIn("context.retryGameplaySkinServices()", enabled)
+        self.assertIn("bool retryGameplaySkinServices() noexcept", context)
+        self.assertIn("unwindGameplaySkinServicesAfterStartupFailure();", context)
 
     def test_core_operator_labels_and_files_location_are_present(self) -> None:
         enabled = self.read("src/scene/SettingsSceneSkins.cpp")

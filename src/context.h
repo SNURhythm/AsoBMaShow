@@ -309,6 +309,28 @@ public:
     }
   }
 
+  // Startup can run before an iOS container has finished making its private
+  // storage available. Retry only a failed, fully unwound bootstrap; never
+  // replace a live service graph or weaken the normal fail-closed boundary.
+  bool retryGameplaySkinServices() noexcept {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    if (!profileInitializationResult.ok() ||
+        !profileSettingsPersistenceCoordinator ||
+        !skinRecoveryResult ||
+        skinRecoveryResult->disposition !=
+            skin::SkinRecoveryDisposition::Failed ||
+        gameplaySkinLifecycle || skinPackageOperationService ||
+        skinCommitCoordinator) {
+      return false;
+    }
+    unwindGameplaySkinServicesAfterStartupFailure();
+    initializeGameplaySkinServices();
+    return gameplaySkinLifecycle != nullptr;
+#else
+    return false;
+#endif
+  }
+
   void shutdownGameplaySkinLifecycle() noexcept {
     acquireGameplaySkinForNextChart = {};
     if (gameplaySkinLifecycle) {

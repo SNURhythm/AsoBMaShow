@@ -226,6 +226,21 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     body->addView(makeWrappedText(
         availabilityMessage,
         metrics.bodyTextSize, ui_theme::textSecondary()));
+    const bool canRetryStartup =
+        skin::luaGameplaySkinsAvailable() && context.skinRecoveryResult &&
+        context.skinRecoveryResult->disposition ==
+            skin::SkinRecoveryDisposition::Failed;
+    if (canRetryStartup) {
+      body->addView(makeGameplaySkinAction(
+          metrics, "Retry Startup", true, [this]() {
+            const bool recovered = context.retryGameplaySkinServices();
+            gameplaySkinUiMessage = recovered
+                                      ? "Gameplay skin services restarted."
+                                      : "Gameplay skin services remain unavailable.";
+            ensureGameplaySkinSettingsController();
+            lastLayoutWidth = -1;
+          }));
+    }
     column->addView(makeCard(metrics, "Gameplay Skins", "Availability", body,
                              metrics.modeCardHeight, metrics.cardsWidth));
     return column;
