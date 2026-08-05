@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import hashlib
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 
@@ -16,6 +19,37 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests/fixtures/beatoraja_skin/reference_manifest.json"
 VERIFIER = ROOT / "scripts/run_skin_acceptance.py"
 PINNED_COMMIT = "c2ed5db1a46145ed10790c3872f717e95b59db9d"
+
+
+def iso_bmff_boxes(payload: bytes, start: int = 0, end: int | None = None):
+    """Yield strict (type, payload-start, end) tuples for one ISO-BMFF level."""
+    boundary = len(payload) if end is None else end
+    cursor = start
+    while cursor < boundary:
+        if boundary - cursor < 8:
+            raise ValueError("truncated ISO-BMFF box header")
+        size, box_type = struct.unpack_from(">I4s", payload, cursor)
+        header_size = 8
+        if size == 1:
+            if boundary - cursor < 16:
+                raise ValueError("truncated ISO-BMFF extended box header")
+            size = struct.unpack_from(">Q", payload, cursor + 8)[0]
+            header_size = 16
+        elif size == 0:
+            size = boundary - cursor
+        if size < header_size or cursor + size > boundary:
+            raise ValueError(f"invalid ISO-BMFF box size for {box_type!r}")
+        yield box_type, cursor + header_size, cursor + size
+        cursor += size
+    if cursor != boundary:
+        raise ValueError("ISO-BMFF boxes do not fill their parent")
+
+
+def required_iso_bmff_box(payload: bytes, start: int, end: int, wanted: bytes):
+    matches = [box for box in iso_bmff_boxes(payload, start, end) if box[0] == wanted]
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one {wanted!r} box, found {len(matches)}")
+    return matches[0]
 
 
 class SkinAcceptanceContractTests(unittest.TestCase):
@@ -555,6 +589,152 @@ class SkinAcceptanceContractTests(unittest.TestCase):
                     temporary_root,
                     {"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
                 )
+
+    def test_redistributable_acceptance_chart_fixture_is_self_describing(self):
+        """Keep the local synthetic chart and BGA inputs runnable without SCURO payloads."""
+        fixture_root = ROOT / "tests/fixtures/beatoraja_skin/charts"
+        chart = fixture_root / "acceptance_7k.bms"
+        readme = fixture_root / "README.md"
+        chart_bytes = chart.read_bytes()
+        chart_text = chart_bytes.decode("ascii")
+        readme_text = readme.read_text(encoding="utf-8")
+        normalized_readme = " ".join(readme_text.split())
+        self.assertIn("#LNTYPE 1", chart_text)
+        self.assertNotIn("#LNTYPE 2", chart_text)
+        self.assertNotIn("#LNMODE", chart_text)
+        self.assertIn("#002D1:", chart_text)
+        self.assertIn("#00206:02000300", chart_text)
+        self.assertIn("landmine", readme_text.lower())
+        self.assertIn("transparent gap", readme_text.lower())
+        for mode in ("LN", "CN", "HCN"):
+            self.assertIn(f"separate {mode} runtime/autoplay run", normalized_readme)
+
+        expected_hashes = {
+            "README.md": "d2d192a6b2e42923acd2d4d59d53079d78e0cd36d843fcdf13774200fabdff7b",
+            "acceptance_7k.bms": "0060de67ef50532e3747c7ac486045a8ef0c192d34853b1f424d4bc650406f00",
+            "acceptance_bga_base.png": "54102735089d1f3d5a8838915def4bb18e704e9ecac889c2c8c65ee8e60bbc31",
+            "acceptance_bga_layer.png": "fc03e493884867abaf863f48ad09fd5ebe3aefd14221ea9ade7a69c361d0615f",
+            "acceptance_bga_miss.png": "adfa0c7de03bc3bea3de80b4a4514881c8b6296568f43a5acd5cd7a16fffd1c9",
+            "acceptance_bga_video.mp4": "e947526c2c7e26632b09c4eb3f1ce912bd18094c7f224c0ef09138d70e361946",
+        }
+        for filename, expected_hash in expected_hashes.items():
+            with self.subTest(filename=filename):
+                payload = (fixture_root / filename).read_bytes()
+                self.assertEqual(hashlib.sha256(payload).hexdigest(), expected_hash)
+
+        for required_line in (
+            "#PLAYER 1",
+            "#PLAYLEVEL 7",
+            "#BPM 120",
+            "#BMP01 acceptance_bga_base.png",
+            "#BMP02 acceptance_bga_layer.png",
+            "#BMP03 acceptance_bga_miss.png",
+            "#BMP04 acceptance_bga_video.mp4",
+            "#LNOBJ ZZ",
+            "#LNTYPE 1",
+            "#00003:",
+            "#00008:",
+            "#00009:",
+            "#000SC:",
+            "#00004:",
+            "#00111:",
+            "#00151:",
+            "#002D1:",
+            "#00206:02000300",
+            "#00404:",
+            "#00411:",
+        ):
+            self.assertIn(required_line, chart_text)
+
+        expected_png_structure = {
+            "acceptance_bga_base.png": ([b"IHDR", b"PLTE", b"IDAT", b"IEND"], 1, 3),
+            "acceptance_bga_layer.png": ([b"IHDR", b"PLTE", b"IDAT", b"IEND"], 1, 3),
+            "acceptance_bga_miss.png": ([b"IHDR", b"IDAT", b"IEND"], 8, 6),
+        }
+        for filename, (expected_chunks, expected_bit_depth, expected_color_type) in expected_png_structure.items():
+            payload = (fixture_root / filename).read_bytes()
+            self.assertEqual(payload[:8], b"\x89PNG\r\n\x1a\n", filename)
+            chunks = []
+            idat_payload = bytearray()
+            cursor = 8
+            while cursor < len(payload):
+                self.assertGreaterEqual(len(payload) - cursor, 12, filename)
+                chunk_length = struct.unpack_from(">I", payload, cursor)[0]
+                chunk_type = payload[cursor + 4:cursor + 8]
+                chunk_end = cursor + 12 + chunk_length
+                self.assertLessEqual(chunk_end, len(payload), filename)
+                chunk_data = payload[cursor + 8:cursor + 8 + chunk_length]
+                expected_crc = struct.unpack_from(">I", payload, cursor + 8 + chunk_length)[0]
+                actual_crc = zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
+                self.assertEqual(actual_crc, expected_crc, filename)
+                chunks.append(chunk_type)
+                if chunk_type == b"IHDR":
+                    width, height, bit_depth, color_type, compression, filtering, interlace = (
+                        struct.unpack(">IIBBBBB", chunk_data)
+                    )
+                    self.assertEqual((width, height), (2, 2), filename)
+                    self.assertEqual((bit_depth, color_type), (expected_bit_depth, expected_color_type), filename)
+                    self.assertEqual((compression, filtering, interlace), (0, 0, 0), filename)
+                elif chunk_type == b"IDAT":
+                    idat_payload.extend(chunk_data)
+                cursor = chunk_end
+            self.assertEqual(chunks, expected_chunks, filename)
+            if filename == "acceptance_bga_miss.png":
+                scanlines = zlib.decompress(idat_payload)
+                self.assertEqual(len(scanlines), 18)
+                self.assertEqual((scanlines[0], scanlines[9]), (0, 0), "gap PNG uses unfiltered rows")
+                self.assertEqual(
+                    [scanlines[index] for index in (4, 8, 13, 17)],
+                    [0, 0, 0, 0],
+                    "every gap-card pixel must be transparent",
+                )
+
+        mp4 = (fixture_root / "acceptance_bga_video.mp4").read_bytes()
+        top_level = list(iso_bmff_boxes(mp4))
+        self.assertEqual(top_level[0][0], b"ftyp")
+        _, moov_start, moov_end = required_iso_bmff_box(mp4, 0, len(mp4), b"moov")
+        _, mdat_start, mdat_end = required_iso_bmff_box(mp4, 0, len(mp4), b"mdat")
+        tracks = [box for box in iso_bmff_boxes(mp4, moov_start, moov_end) if box[0] == b"trak"]
+        self.assertEqual(len(tracks), 1)
+        _, track_start, track_end = tracks[0]
+        _, mdia_start, mdia_end = required_iso_bmff_box(mp4, track_start, track_end, b"mdia")
+        _, handler_start, handler_end = required_iso_bmff_box(mp4, mdia_start, mdia_end, b"hdlr")
+        self.assertEqual(mp4[handler_start + 8:handler_start + 12], b"vide")
+        self.assertEqual(mp4[handler_start + 24:handler_end].rstrip(b"\x00"), b"")
+        _, mdhd_start, mdhd_end = required_iso_bmff_box(mp4, mdia_start, mdia_end, b"mdhd")
+        self.assertEqual(mp4[mdhd_start], 0, "fixture uses compact version-0 media header")
+        timescale, duration = struct.unpack_from(">II", mp4, mdhd_start + 12)
+        self.assertEqual(duration, timescale, "fixture duration must be exactly one second")
+
+        _, minf_start, minf_end = required_iso_bmff_box(mp4, mdia_start, mdia_end, b"minf")
+        _, stbl_start, stbl_end = required_iso_bmff_box(mp4, minf_start, minf_end, b"stbl")
+        _, stsd_start, stsd_end = required_iso_bmff_box(mp4, stbl_start, stbl_end, b"stsd")
+        self.assertEqual(struct.unpack_from(">I", mp4, stsd_start + 4)[0], 1)
+        sample_entry = stsd_start + 8
+        sample_entry_size, codec = struct.unpack_from(">I4s", mp4, sample_entry)
+        self.assertLessEqual(sample_entry + sample_entry_size, stsd_end)
+        self.assertEqual(codec, b"avc1")
+        self.assertEqual(struct.unpack_from(">HH", mp4, sample_entry + 32), (2, 2))
+        _, stsz_start, _ = required_iso_bmff_box(mp4, stbl_start, stbl_end, b"stsz")
+        self.assertEqual(struct.unpack_from(">I", mp4, stsz_start + 8)[0], 1)
+
+        nal_types = []
+        cursor = mdat_start
+        while cursor < mdat_end:
+            self.assertGreaterEqual(mdat_end - cursor, 4, "truncated AVC NAL length")
+            nal_size = struct.unpack_from(">I", mp4, cursor)[0]
+            cursor += 4
+            self.assertGreater(nal_size, 0)
+            self.assertLessEqual(cursor + nal_size, mdat_end, "truncated AVC NAL payload")
+            nal_types.append(mp4[cursor] & 0x1F)
+            cursor += nal_size
+        self.assertIn(5, nal_types, "one-frame fixture must contain an IDR frame")
+        self.assertNotIn(6, nal_types, "fixture must not contain H.264 SEI/user data")
+
+        lower_mp4 = mp4.lower()
+        for forbidden in (b"udta", b"meta", b"lavf", b"lavc", b"x264", b"videolan", b"http", b"encoder"):
+            self.assertNotIn(forbidden, lower_mp4)
+        self.assertIn("autoplay", readme_text.lower())
 
 
 if __name__ == "__main__":
