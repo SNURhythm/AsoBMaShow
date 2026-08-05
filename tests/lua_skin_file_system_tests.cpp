@@ -1120,6 +1120,8 @@ void testBeatorajaDirectSkinDirectorySemantics() {
            fs::copy_options::recursive);
   writeText(visiblePackage / "entry/play.luaskin", "return { live = true }\n");
   writeText(visiblePackage / "entry/direct.lua", "return 'visible'\n");
+  writeText(visiblePackage / "entry/choice.lua", "return 'choice'\n");
+  writeText(visiblePackage / "entry/binary.lua", std::string("\x1bLua", 4));
 
   auto created = fixture.create(fixture.entry, std::nullopt, false);
   expect(created.fileSystem != nullptr,
@@ -1135,6 +1137,21 @@ void testBeatorajaDirectSkinDirectorySemantics() {
   const auto module = fileSystem.readModule("direct", 4096);
   expect(!module.failure && bytesToString(module.bytes) == "return 'visible'\n",
          "module execution observes Files-app edits without rebuilding a snapshot");
+  const auto bytecode = fileSystem.read("binary.lua", SkinFileUse::LuaModule,
+                                        4096);
+  expect(!bytecode.failure && bytesToString(bytecode.bytes) ==
+                                 std::string("\x1bLua", 4),
+         "Lua bytecode is not rejected by an AsoBMaShow-only file boundary");
+
+  const auto regexListed =
+      fileSystem.list(".", "(direct|choice)%.lua", 1);
+  expect(!regexListed.failure && regexListed.entries.size() == 2 &&
+             std::ranges::find(regexListed.entries, "direct.lua") !=
+                 regexListed.entries.end() &&
+             std::ranges::find(regexListed.entries, "choice.lua") !=
+                 regexListed.entries.end(),
+         "file listing keeps Beatoraja's unrestricted regex and ignores the "
+         "former caller entry cap");
 
   writeText(fixture.roots.visiblePackages / "Hub/const.lua",
             "return { source = 'shared-skins-root' }\n");

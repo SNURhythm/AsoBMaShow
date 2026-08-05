@@ -47,13 +47,11 @@ SkinDiagnostic diagnostic(std::string code, std::string message,
 
 const char *fileFailureCode(SkinFileError error) noexcept {
   switch (error) {
-  case SkinFileError::RenderPhase:
-    return "skin_file_render_phase_denied";
-  case SkinFileError::BinaryChunk:
-    return "skin_lua_binary_chunk_denied";
   case SkinFileError::LimitExceeded:
   case SkinFileError::QuotaExceeded:
     return "skin_lua_host_limit_exceeded";
+  case SkinFileError::RenderPhase:
+  case SkinFileError::BinaryChunk:
   case SkinFileError::InvalidPath:
   case SkinFileError::EscapesPackage:
   case SkinFileError::WrongUse:
@@ -231,7 +229,6 @@ struct LuaSkinHostModulesImpl {
   lua_State *state = nullptr;
   LuaSkinFileSystem *fileSystem = nullptr;
   ISkinFrameState *frameState = nullptr;
-  bool allowOverlayWrites = false;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
   LuaSkinEventExecutor eventExecutor;
@@ -905,9 +902,6 @@ int ioOpen(lua_State *state) {
   } else {
     return expectedFailure(state, "Lua skin file mode is not allowed");
   }
-  if (selectedMode != HandleMode::Read && !impl->allowOverlayWrites) {
-    return expectedFailure(state, "Lua skin overlay writes are not allowed");
-  }
   bool ready = false;
   std::vector<std::byte> bytes;
   if (selectedMode == HandleMode::Read) {
@@ -918,10 +912,6 @@ int ioOpen(lua_State *state) {
           std::numeric_limits<std::uint64_t>::max());
     }
     if (read.failure) {
-      if (read.failure->code == SkinFileError::RenderPhase) {
-        impl->storeFileError(*read.failure);
-        return raiseStoredError(state, impl);
-      }
       return expectedFailure(state, read.failure->message);
     }
     bytes = std::move(read.bytes);
@@ -930,10 +920,6 @@ int ioOpen(lua_State *state) {
     const auto resolved =
         impl->fileSystem->resolve(virtualPath, SkinFileUse::DataWrite);
     if (resolved.failure) {
-      if (resolved.failure->code == SkinFileError::RenderPhase) {
-        impl->storeFileError(*resolved.failure);
-        return raiseStoredError(state, impl);
-      }
       return expectedFailure(state, resolved.failure->message);
     }
     const auto created = impl->fileSystem->writeData(
@@ -967,12 +953,6 @@ int textLoader(lua_State *state) {
   std::size_t size = 0;
   const char *text = luaL_checklstring(state, 1, &size);
   const char *name = luaL_optstring(state, 2, "=(skin-load)");
-  if (size > LuaSkinHostPolicy::maxTextChunkBytes ||
-      (size > 0 && static_cast<unsigned char>(text[0]) == 0x1b)) {
-    lua_pushnil(state);
-    lua_pushliteral(state, "binary or oversized Lua chunk is not allowed");
-    return 2;
-  }
   const int status = luaL_loadbuffer(state, text, size, name);
   if (status != 0) {
     lua_pushnil(state);
@@ -993,7 +973,7 @@ int doFile(lua_State *state) {
     const std::string_view virtualPath =
         impl->configuredPathAlias(std::string_view(path, pathSize));
     const auto read = impl->fileSystem->readLuaPath(
-        virtualPath, LuaSkinHostPolicy::maxTextChunkBytes);
+        virtualPath, std::numeric_limits<std::uint64_t>::max());
     if (read.failure) {
       impl->storeFileError(*read.failure);
     } else {
@@ -1059,7 +1039,7 @@ int moduleLoader(lua_State *state) {
         searchedCandidates.push_back(candidate);
       }
       const auto read = impl->fileSystem->readLuaPath(
-          candidate, LuaSkinHostPolicy::maxTextChunkBytes);
+          candidate, std::numeric_limits<std::uint64_t>::max());
       if (!read.failure) {
         found = true;
         std::string chunkName = "@module:" + std::string(name, nameSize);
@@ -1117,7 +1097,6 @@ bool sameUpvalueTable(lua_State *state, int argument, int upvalue) {
 enum class LegacyListStatus : std::uint8_t {
   Success,
   OrdinaryFailure,
-  RenderDenied,
 };
 
 LegacyListStatus pushLegacyList(lua_State *state, LuaSkinHostModulesImpl &impl,
@@ -1126,10 +1105,6 @@ LegacyListStatus pushLegacyList(lua_State *state, LuaSkinHostModulesImpl &impl,
   const auto listed = impl.fileSystem->list(
       resolvedPath, {}, std::numeric_limits<std::size_t>::max());
   if (listed.failure) {
-    if (listed.failure->code == SkinFileError::RenderPhase) {
-      impl.storeFileError(*listed.failure);
-      return LegacyListStatus::RenderDenied;
-    }
     return LegacyListStatus::OrdinaryFailure;
   }
   lua_createtable(state, static_cast<int>(listed.entries.size()), 0);
@@ -1157,30 +1132,20 @@ int legacyListFiles(lua_State *state) {
   const char *path = lua_tolstring(state, lua_upvalueindex(2), &pathSize);
   const LegacyListStatus status =
       pushLegacyList(state, *impl, std::string_view(path, pathSize));
-  if (status == LegacyListStatus::RenderDenied) {
-    return raiseStoredError(state, impl);
-  }
   if (status == LegacyListStatus::OrdinaryFailure) {
     return 0;
   }
   return 1;
 }
 
-std::pair<bool, bool> performLegacyMkdir(LuaSkinHostModulesImpl &impl,
-                                         std::string_view path) {
-  if (!impl.allowOverlayWrites) {
-    return {false, false};
-  }
+bool performLegacyMkdir(LuaSkinHostModulesImpl &impl,
+                        std::string_view path) {
   const auto result =
       impl.fileSystem->mkdirData(impl.configuredPathAlias(path));
   if (!result.failure) {
-    return {true, false};
+    return true;
   }
-  if (result.failure->code == SkinFileError::RenderPhase) {
-    impl.storeFileError(*result.failure);
-    return {false, true};
-  }
-  return {false, false};
+  return false;
 }
 
 int legacyMkdir(lua_State *state) {
@@ -1191,11 +1156,8 @@ int legacyMkdir(lua_State *state) {
   }
   std::size_t pathSize = 0;
   const char *path = lua_tolstring(state, lua_upvalueindex(2), &pathSize);
-  const auto [created, renderDenied] =
+  const bool created =
       performLegacyMkdir(*impl, std::string_view(path, pathSize));
-  if (renderDenied) {
-    return raiseStoredError(state, impl);
-  }
   lua_pushboolean(state, created);
   return 1;
 }
@@ -1613,7 +1575,6 @@ LuaSkinHostModules::create(lua_State *state,
   }
   impl->state = state;
   impl->fileSystem = options.fileSystem;
-  impl->allowOverlayWrites = options.allowOverlayWrites;
   impl->coroutineContext = options.coroutineContext;
   impl->coroutineCreated = options.coroutineCreated;
   try {

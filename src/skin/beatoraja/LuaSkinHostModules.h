@@ -17,10 +17,6 @@ class LuaSkinFileSystem;
 class ISkinFrameState;
 struct LuaSkinHostModulesImpl;
 
-struct LuaSkinHostPolicy {
-  static constexpr std::uint64_t maxTextChunkBytes = 8ULL * 1024 * 1024;
-};
-
 using LuaCoroutineCreatedCallback = void (*)(void *, lua_State *);
 
 struct LuaSkinEventExecutionResult {
@@ -43,7 +39,6 @@ struct LuaSkinEventExecutor {
 
 struct LuaSkinHostModulesOptions {
   LuaSkinFileSystem *fileSystem = nullptr;
-  bool allowOverlayWrites = false;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
 };

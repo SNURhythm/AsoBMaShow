@@ -68,13 +68,11 @@ std::string boundedLuaErrorText(lua_State *state, int index) {
 
 const char *runtimeFileFailureCode(SkinFileError error) noexcept {
   switch (error) {
-  case SkinFileError::RenderPhase:
-    return "skin_file_render_phase_denied";
-  case SkinFileError::BinaryChunk:
-    return "skin_lua_binary_chunk_denied";
   case SkinFileError::LimitExceeded:
   case SkinFileError::QuotaExceeded:
     return "skin_lua_host_limit_exceeded";
+  case SkinFileError::RenderPhase:
+  case SkinFileError::BinaryChunk:
   case SkinFileError::InvalidPath:
   case SkinFileError::EscapesPackage:
   case SkinFileError::WrongUse:
@@ -902,7 +900,8 @@ struct LuaSkinRuntime::Impl {
     int loadStatus = LUA_ERRFILE;
     std::optional<SkinDiagnostic> readFailure;
     {
-      auto entry = fileSystem->readEntry(LuaSkinHostPolicy::maxTextChunkBytes);
+      auto entry = fileSystem->readEntry(
+          std::numeric_limits<std::uint64_t>::max());
       if (entry.failure) {
         readFailure =
             makeDiagnostic(runtimeFileFailureCode(entry.failure->code),
@@ -1182,10 +1181,6 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   auto installed = LuaSkinHostModules::create(
       state,
       {.fileSystem = impl->fileSystem.get(),
-       // Beatoraja exposes its selected skin directory to the same Lua file
-       // API during both header and configured execution.  Catalog purpose is
-       // an app scheduling concern, not a separate filesystem authority.
-       .allowOverlayWrites = true,
        .coroutineContext = shared.get(),
        .coroutineCreated = installHook});
   if (!installed.modules) {
