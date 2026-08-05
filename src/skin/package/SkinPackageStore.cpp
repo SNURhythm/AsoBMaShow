@@ -3,6 +3,7 @@
 #include "../../AtomicFile.h"
 #include "../../FileChecksum.h"
 #include "../../VersionedJson.h"
+#include "../../targets.h"
 #include "SkinPathPolicy.h"
 
 #include <algorithm>
@@ -514,6 +515,19 @@ treeMetadataManifest(const fs::path &root, const SkinAliasDetector &aliases) {
 }
 
 #if defined(_WIN32)
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+bool ensureDirectoryNoFollow(const fs::path &directory) {
+  std::error_code error;
+  if (directory.empty()) {
+    return false;
+  }
+  fs::create_directories(directory, error);
+  if (error) {
+    return false;
+  }
+  return fs::is_directory(directory, error) && !error;
+}
+#else
 bool ensureDirectoryNoFollow(const fs::path &directory) {
   try {
     std::error_code error;
@@ -969,6 +983,7 @@ bool ensureDirectoryNoFollow(const fs::path &directory) {
   }
   return true;
 }
+#endif
 
 bool clearDirectoryDescriptor(int directory) {
   if (::fchmod(directory, 0700) != 0) {
