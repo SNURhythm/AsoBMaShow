@@ -918,7 +918,7 @@ void testValidatorRejectsCriticalNoteDependencyAndDisablesOptionalObject() {
 
   BeatorajaSkinModel oversizedCanvas = *decoded.model;
   oversizedCanvas.header.width =
-      LuaSkinTableDecoderPolicy::maxAuthoredDimension + 1;
+      LuaSkinTableDecoderPolicy::maxGameplayDimension + 1;
   const auto canvasResult =
       test_support::validateWithAuthoredBuiltins(std::move(oversizedCanvas));
   expect(canvasResult.criticalFailure && !canvasResult.model,

@@ -21,8 +21,8 @@ void appendDigestU32(std::string &bytes, std::uint32_t value) {
 }
 
 void appendDigestI32(std::string &bytes, int value) {
-  appendDigestU32(
-      bytes, static_cast<std::uint32_t>(static_cast<std::int32_t>(value)));
+  appendDigestU32(bytes,
+                  static_cast<std::uint32_t>(static_cast<std::int32_t>(value)));
 }
 
 void appendDigestText(std::string &bytes, std::string_view value) {
@@ -50,8 +50,7 @@ std::optional<std::string> normalizeUtf8(std::string_view value) {
 
 std::optional<std::string> configurationKey(std::string_view value) {
   auto normalized = normalizeUtf8(value);
-  if (!normalized || normalized->size() >
-                         SkinProfileSettingsPolicy::maxConfigurationKeyBytes) {
+  if (!normalized) {
     return std::nullopt;
   }
   return normalized;
@@ -66,10 +65,7 @@ bool isDrivePath(std::string_view value) {
 
 std::optional<std::string> virtualFileValue(std::string_view value) {
   auto normalized = normalizeUtf8(value);
-  if (!normalized ||
-      normalized->size() >
-          SkinProfileSettingsPolicy::maxConfigurationValueBytes ||
-      normalized->front() == '/' ||
+  if (!normalized || normalized->front() == '/' ||
       normalized->find('\\') != std::string::npos || isDrivePath(*normalized)) {
     return std::nullopt;
   }
@@ -90,7 +86,7 @@ std::optional<std::string> virtualFileValue(std::string_view value) {
 }
 
 template <typename Value, typename NormalizeValue>
-void sanitizeMap(std::map<std::string, Value> &values, std::size_t limit,
+void sanitizeMap(std::map<std::string, Value> &values,
                  NormalizeValue normalizeValue) {
   std::map<std::string, Value> sanitized;
   for (const auto &[rawKey, rawValue] : values) {
@@ -100,9 +96,6 @@ void sanitizeMap(std::map<std::string, Value> &values, std::size_t limit,
       continue;
     }
     sanitized.try_emplace(std::move(*key), std::move(*value));
-  }
-  while (sanitized.size() > limit) {
-    sanitized.erase(std::prev(sanitized.end()));
   }
   values = std::move(sanitized);
 }
@@ -137,33 +130,12 @@ void sanitizeViewport(ViewportSettings &viewport) {
 }
 
 void sanitizeEntry(EntryProfileSettings &entry) {
-  sanitizeMap(entry.options, SkinProfileSettingsPolicy::maxOptionsPerEntry,
+  sanitizeMap(entry.options,
               [](int value) { return std::optional<int>(value); });
-  sanitizeMap(entry.filePaths, SkinProfileSettingsPolicy::maxFilesPerEntry,
+  sanitizeMap(entry.filePaths,
               [](const std::string &value) { return virtualFileValue(value); });
-  sanitizeMap(
-      entry.offsets, SkinProfileSettingsPolicy::maxOffsetsPerEntry,
-      [](ConfigOffset value) {
-        value.x =
-            std::clamp(value.x, SkinProfileSettingsPolicy::minOffsetComponent,
-                       SkinProfileSettingsPolicy::maxOffsetComponent);
-        value.y =
-            std::clamp(value.y, SkinProfileSettingsPolicy::minOffsetComponent,
-                       SkinProfileSettingsPolicy::maxOffsetComponent);
-        value.w =
-            std::clamp(value.w, SkinProfileSettingsPolicy::minOffsetComponent,
-                       SkinProfileSettingsPolicy::maxOffsetComponent);
-        value.h =
-            std::clamp(value.h, SkinProfileSettingsPolicy::minOffsetComponent,
-                       SkinProfileSettingsPolicy::maxOffsetComponent);
-        value.r =
-            std::clamp(value.r, SkinProfileSettingsPolicy::minOffsetComponent,
-                       SkinProfileSettingsPolicy::maxOffsetComponent);
-        value.a =
-            std::clamp(value.a, SkinProfileSettingsPolicy::minOffsetComponent,
-                       SkinProfileSettingsPolicy::maxOffsetComponent);
-        return std::optional<ConfigOffset>(value);
-      });
+  sanitizeMap(entry.offsets,
+              [](ConfigOffset value) { return std::optional<ConfigOffset>(value); });
   sanitizeViewport(entry.viewport);
 }
 
@@ -174,8 +146,7 @@ std::string skinConfigurationDigest(const EntryProfileSettings &settings) {
   framed.push_back('\0');
 
   framed.push_back(static_cast<char>(0x01));
-  appendDigestU32(framed,
-                  static_cast<std::uint32_t>(settings.options.size()));
+  appendDigestU32(framed, static_cast<std::uint32_t>(settings.options.size()));
   for (const auto &[key, value] : settings.options) {
     appendDigestText(framed, key);
     appendDigestI32(framed, value);
@@ -190,8 +161,7 @@ std::string skinConfigurationDigest(const EntryProfileSettings &settings) {
   }
 
   framed.push_back(static_cast<char>(0x03));
-  appendDigestU32(framed,
-                  static_cast<std::uint32_t>(settings.offsets.size()));
+  appendDigestU32(framed, static_cast<std::uint32_t>(settings.offsets.size()));
   for (const auto &[key, value] : settings.offsets) {
     appendDigestText(framed, key);
     appendDigestI32(framed, value.x);
@@ -267,9 +237,6 @@ void SkinProfileSettings::sanitize() {
     sanitizeEntry(settings);
     retainedCollisionKeys.insert(entry.entry->collisionKey);
     sanitized.try_emplace(*entry.entry, std::move(settings));
-    if (sanitized.size() == SkinProfileSettingsPolicy::maxEntries) {
-      break;
-    }
   }
   entries = std::move(sanitized);
 

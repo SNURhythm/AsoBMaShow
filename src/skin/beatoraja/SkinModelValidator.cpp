@@ -483,8 +483,8 @@ SkinModelValidationResult SkinModelValidator::validate(
     return result;
   }
   if (model.header.width <= 0 || model.header.height <= 0 ||
-      model.header.width > LuaSkinTableDecoderPolicy::maxAuthoredDimension ||
-      model.header.height > LuaSkinTableDecoderPolicy::maxAuthoredDimension) {
+      model.header.width > LuaSkinTableDecoderPolicy::maxGameplayDimension ||
+      model.header.height > LuaSkinTableDecoderPolicy::maxGameplayDimension) {
     result.criticalFailure = true;
     result.diagnostics.push_back(validationDiagnostic(
         "skin_lua_model_canvas_invalid",

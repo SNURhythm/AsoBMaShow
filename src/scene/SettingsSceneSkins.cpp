@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -526,10 +527,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                   metrics, actionLabel, ordinaryActionsEnabled,
                   [this, entry = row.entry, name = offset.name, configured,
                    member, delta]() mutable {
-                    configured.*member = std::clamp(
-                        configured.*member + delta,
-                        skin::SkinProfileSettingsPolicy::minOffsetComponent,
-                        skin::SkinProfileSettingsPolicy::maxOffsetComponent);
+                    if (delta < 0 &&
+                        configured.*member > std::numeric_limits<int>::min()) {
+                      --configured.*member;
+                    } else if (delta > 0 &&
+                               configured.*member <
+                                   std::numeric_limits<int>::max()) {
+                      ++configured.*member;
+                    }
                     handleGameplaySkinActionResult(
                         gameplaySkinSettingsController->setOffset(entry, name,
                                                                   configured));

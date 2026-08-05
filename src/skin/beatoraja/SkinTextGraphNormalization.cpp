@@ -59,13 +59,13 @@ bool validUtf8(std::string_view value) {
 }
 
 bool boundedUtf8(std::string_view value) {
-  return value.size() <= LuaSkinTableDecoderPolicy::maxCopiedTextBytes &&
+  return value.size() <= LuaSkinTableDecoderPolicy::maxGameplayTextBytes &&
          validUtf8(value);
 }
 
 bool finiteAndBounded(double value) {
   return std::isfinite(value) &&
-         std::abs(value) <= LuaSkinTableDecoderPolicy::maxAuthoredDimension;
+         std::abs(value) <= LuaSkinTableDecoderPolicy::maxGameplayDimension;
 }
 
 bool validIntegerRateRange(
@@ -107,15 +107,15 @@ bool validSprite(const SkinSpriteFrames &sprite) {
 SkinTextNormalizationResult
 normalizeSkinText(const SkinTextNormalizationInput &input,
                   std::span<const SkinFontResource> fonts) {
-  if (input.fontName.size() > LuaSkinTableDecoderPolicy::maxCopiedTextBytes ||
-      input.literal.size() > LuaSkinTableDecoderPolicy::maxCopiedTextBytes) {
+  if (input.fontName.size() > LuaSkinTableDecoderPolicy::maxGameplayTextBytes ||
+      input.literal.size() > LuaSkinTableDecoderPolicy::maxGameplayTextBytes) {
     return textFailure(SkinTextGraphNormalizationError::TextLimitExceeded);
   }
   if (!validUtf8(input.fontName) || !validUtf8(input.literal)) {
     return textFailure(SkinTextGraphNormalizationError::InvalidUtf8);
   }
   if (input.pointSize <= 0 ||
-      input.pointSize > LuaSkinTableDecoderPolicy::maxAuthoredDimension ||
+      input.pointSize > LuaSkinTableDecoderPolicy::maxGameplayDimension ||
       input.alignment < 0 || input.alignment > 2 ||
       static_cast<int>(input.overflow) <
           static_cast<int>(SkinTextOverflow::Overflow) ||

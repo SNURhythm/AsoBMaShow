@@ -22,9 +22,9 @@ struct NumericGlyphAtlasPolicy {
   // Reuse the established model offset-table bound for Number's independent
   // digit/offset presentation, rather than importing FloatFormatter's limit.
   static constexpr int maxNumberDigits =
-      static_cast<int>(LuaSkinTableDecoderPolicy::maxOffsets);
+      static_cast<int>(LuaSkinTableDecoderPolicy::maxGameplayOffsets);
   static constexpr std::size_t maxNumberDigitOffsets =
-      LuaSkinTableDecoderPolicy::maxOffsets;
+      LuaSkinTableDecoderPolicy::maxGameplayOffsets;
 };
 
 struct NumericGlyphAtlasBudget {

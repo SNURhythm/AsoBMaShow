@@ -20,18 +20,12 @@ struct LuaSkinTableDecoderPolicy {
   static constexpr std::size_t maxEntries = 200'000;
   static constexpr std::size_t maxMaterializedSpriteFrames = 200'000;
   static constexpr std::size_t maxDecodedObjects = 8'192;
-  static constexpr std::size_t maxCopiedTextBytes = 8 * 1024 * 1024;
-  static constexpr std::size_t maxCategories = 256;
-  static constexpr std::size_t maxOptions = 256;
-  static constexpr std::size_t maxFiles = 256;
-  static constexpr std::size_t maxOffsets = 256;
-  static constexpr std::size_t maxCategoryItems = 256;
-  static constexpr std::size_t maxOptionChoices = 256;
-  // Beatoraja's Lua serializer does not impose a separate small metadata
-  // limit. Keep header strings inside the audited Lua copy budget rather than
-  // rejecting otherwise valid installed skins at catalog time.
-  static constexpr std::size_t maxHeaderTextBytes = maxCopiedTextBytes;
-  static constexpr int maxAuthoredDimension = 8'192;
+  // Full gameplay-model decoding uses a bounded copy budget. Header and
+  // configuration declarations intentionally do not use this budget because
+  // Beatoraja stores their authored strings without a fixed text limit.
+  static constexpr std::size_t maxGameplayTextBytes = 8 * 1024 * 1024;
+  static constexpr int maxGameplayDimension = 8'192;
+  static constexpr std::size_t maxGameplayOffsets = 256;
 };
 
 class LuaSkinTableDecoder final {

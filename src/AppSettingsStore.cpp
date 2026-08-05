@@ -275,10 +275,6 @@ void readSkinProfileSettings(const json &document,
     invalidValue("skin.entries", "expected array", diagnostics);
     return;
   }
-  if (entries->size() > skin::SkinProfileSettingsPolicy::maxEntries) {
-    invalidValue("skin.entries", "entry count exceeds limit", diagnostics);
-  }
-
   struct RetainedEntry {
     const json *settings = nullptr;
   };
@@ -307,27 +303,20 @@ void readSkinProfileSettings(const json &document,
     }
     retainedEntries.emplace(*entry,
                             RetainedEntry{.settings = &record["settings"]});
-    if (retainedEntries.size() > skin::SkinProfileSettingsPolicy::maxEntries) {
-      retainedEntries.erase(std::prev(retainedEntries.end()));
-    }
   }
 
   struct RetainedMapValue {
     std::string rawKey;
     const json *value = nullptr;
   };
-  const auto retainUniqueMapValues = [&](const json &map, std::string_view name,
-                                         std::size_t limit) {
+  const auto retainUniqueMapValues = [&](const json &map,
+                                         std::string_view name) {
     std::map<std::string, RetainedMapValue, std::less<>> retained;
-    if (map.size() > limit) {
-      invalidValue("skin.entries.settings." + std::string(name),
-                   "entry count exceeds limit", diagnostics);
-    }
     for (const auto &[rawKey, value] : map.items()) {
       auto key = skin::normalizeSkinConfigurationKey(rawKey);
       if (!key) {
         invalidValue("skin.entries.settings." + std::string(name),
-                     "key is invalid or exceeds its byte limit", diagnostics);
+                     "key is invalid", diagnostics);
         continue;
       }
       const auto existing = retained.find(*key);
@@ -339,9 +328,6 @@ void readSkinProfileSettings(const json &document,
       }
       retained.emplace(std::move(*key),
                        RetainedMapValue{.rawKey = rawKey, .value = &value});
-      if (retained.size() > limit) {
-        retained.erase(std::prev(retained.end()));
-      }
     }
     return retained;
   };
@@ -349,8 +335,7 @@ void readSkinProfileSettings(const json &document,
   for (const auto &[entry, retainedEntry] : retainedEntries) {
     skin::EntryProfileSettings settings;
     const auto &encoded = *retainedEntry.settings;
-    const auto readBoundedMap = [&](std::string_view name, auto &target,
-                                    std::size_t limit) {
+    const auto readMap = [&](std::string_view name, auto &target) {
       const auto map = encoded.find(std::string(name));
       if (map == encoded.end()) {
         return;
@@ -360,19 +345,15 @@ void readSkinProfileSettings(const json &document,
                      "expected object", diagnostics);
         return;
       }
-      auto retained = retainUniqueMapValues(*map, name, limit);
+      auto retained = retainUniqueMapValues(*map, name);
       for (const auto &[key, candidate] : retained) {
         try {
           using Mapped = typename std::decay_t<decltype(target)>::mapped_type;
           const auto &value = *candidate.value;
           if constexpr (std::is_same_v<Mapped, std::string>) {
-            if (!value.is_string() ||
-                value.get_ref<const std::string &>().size() >
-                    skin::SkinProfileSettingsPolicy::
-                        maxConfigurationValueBytes) {
+            if (!value.is_string()) {
               invalidValue("skin.entries.settings." + std::string(name),
-                           "value exceeds byte limit or is not a string",
-                           diagnostics);
+                           "value is not a string", diagnostics);
               continue;
             }
           }
@@ -383,19 +364,15 @@ void readSkinProfileSettings(const json &document,
         }
       }
     };
-    readBoundedMap("options", settings.options,
-                   skin::SkinProfileSettingsPolicy::maxOptionsPerEntry);
-    readBoundedMap("filePaths", settings.filePaths,
-                   skin::SkinProfileSettingsPolicy::maxFilesPerEntry);
+    readMap("options", settings.options);
+    readMap("filePaths", settings.filePaths);
     if (const auto offsets = encoded.find("offsets");
         offsets != encoded.end()) {
       if (!offsets->is_object()) {
         invalidValue("skin.entries.settings.offsets", "expected object",
                      diagnostics);
       } else {
-        auto retained = retainUniqueMapValues(
-            *offsets, "offsets",
-            skin::SkinProfileSettingsPolicy::maxOffsetsPerEntry);
+        auto retained = retainUniqueMapValues(*offsets, "offsets");
         for (const auto &[name, candidate] : retained) {
           const auto &value = *candidate.value;
           if (!value.is_object()) {

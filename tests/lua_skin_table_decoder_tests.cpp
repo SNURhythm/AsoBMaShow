@@ -325,6 +325,13 @@ return {
   offset={{category=text, name=text, id=120, x=true}},
 }
 )lua");
+    writeText(source / "skin/unbounded-configuration-text.luaskin", R"lua(
+local text = string.rep("X", 8 * 1024 * 1024 + 1)
+return {
+  type=5,
+  property={{name=text, item={{name="Value", op=901}}}},
+}
+)lua");
     writeText(source / "skin/duplicate-font.luaskin", R"lua(
 return {
   type=0,
@@ -446,7 +453,8 @@ return {type=0, property=p}
     if (!reconciled.configuration) {
       return {};
     }
-    auto configured = created.runtime->loadConfigured(*reconciled.configuration);
+    auto configured =
+        created.runtime->loadConfigured(*reconciled.configuration);
     expect(configured.value.has_value(), "gameplay configured phase executes");
     if (!configured.value) {
       return {};
@@ -521,11 +529,15 @@ void testTypedHeaderPreservesAuthoredNumericOrderAndCoercions() {
 void testStrictArraysAndHeaderBoundsFailClosed() {
   for (const std::string_view invalid :
        {"hole.luaskin", "mixed.luaskin", "numeric-string.luaskin",
-        "too-many.luaskin"}) {
+        }) {
     const auto result = fixture().decode(invalid);
     expect(!result.header && !result.diagnostics.empty(),
            "invalid authored array or limit is rejected");
   }
+  const auto tooMany = fixture().decode("too-many.luaskin");
+  expect(tooMany.header && tooMany.header->options.size() == 257,
+         "Beatoraja headers preserve every authored custom option without an "
+         "app-defined count limit");
   const auto aliases = fixture().decode("aliases.luaskin");
   expect(aliases.header && aliases.header->width == 1280 &&
              aliases.header->height == 720 && aliases.header->options.empty(),
@@ -555,17 +567,22 @@ void testStrictArraysAndHeaderBoundsFailClosed() {
 
 void testAuthoredDimensionsStayWithinTheDecoderBoundary() {
   for (const std::string_view invalid :
-       {"dimension-zero.luaskin", "dimension-negative.luaskin",
-        "dimension-too-wide.luaskin", "dimension-too-tall.luaskin"}) {
+       {"dimension-zero.luaskin", "dimension-negative.luaskin"}) {
     const auto result = fixture().decode(invalid);
     expect(!result.header && !result.diagnostics.empty(),
-           "non-positive or oversized authored dimension is rejected");
+           "non-positive authored dimensions are rejected");
   }
+  const auto tooWide = fixture().decode("dimension-too-wide.luaskin");
+  const auto tooTall = fixture().decode("dimension-too-tall.luaskin");
+  expect(tooWide.header && tooWide.header->width == 8193 &&
+             tooTall.header && tooTall.header->height == 8193,
+         "catalog headers preserve authored dimensions without an app-defined "
+         "maximum");
   const auto boundaries = fixture().decode("dimension-boundaries.luaskin");
   expect(boundaries.header && boundaries.header->width == 1 &&
              boundaries.header->height ==
-                 LuaSkinTableDecoderPolicy::maxAuthoredDimension,
-         "inclusive authored dimension boundaries remain valid");
+                 LuaSkinTableDecoderPolicy::maxGameplayDimension,
+         "ordinary authored dimensions remain valid");
 }
 
 void testRequiredHeaderTextCannotBeMissingOrEmpty() {
@@ -593,9 +610,9 @@ void testRequiredHeaderTextCannotBeMissingOrEmpty() {
 
 void testHeaderPreservesBeatorajaConfigurationDeclarations() {
   for (const std::string_view fixtureName :
-       {"duplicates.luaskin", "id-collision.luaskin",
-        "synth-collision.luaskin", "duplicate-file-name.luaskin",
-        "invalid-file-pattern.luaskin", "empty-choices.luaskin"}) {
+       {"duplicates.luaskin", "id-collision.luaskin", "synth-collision.luaskin",
+        "duplicate-file-name.luaskin", "invalid-file-pattern.luaskin",
+        "empty-choices.luaskin"}) {
     const auto result = fixture().decode(fixtureName);
     expect(result.header && result.diagnostics.empty(),
            std::string("Beatoraja header preserves ") +
@@ -648,9 +665,9 @@ void testHeaderAndConfigurationAcceptLongBeatorajaNames() {
          "reconciliation path");
 
   const auto package = normalizePackageId("LongConfiguration").package;
-  const auto entry = package
-                         ? normalizeEntryPath(*package, "skin/main.luaskin").entry
-                         : std::nullopt;
+  const auto entry =
+      package ? normalizeEntryPath(*package, "skin/main.luaskin").entry
+              : std::nullopt;
   SkinProfileSettings profile;
   if (entry) {
     profile.entries.emplace(*entry, reconciled.reconciledSettings);
@@ -662,6 +679,37 @@ void testHeaderAndConfigurationAcceptLongBeatorajaNames() {
              profile.entries.at(*entry).offsets.contains(key),
          "profile sanitization retains valid long Beatoraja configuration "
          "names instead of discarding their selections");
+}
+
+void testHeaderAndProfileConfigurationDoNotCapAuthoredText() {
+  const auto decoded = fixture().decode("unbounded-configuration-text.luaskin");
+  constexpr std::size_t authoredTextBytes = 8 * 1024 * 1024 + 1;
+  expect(decoded.header && decoded.diagnostics.empty() &&
+             decoded.header->options.size() == 1 &&
+             decoded.header->options.front().name.size() == authoredTextBytes,
+         "Beatoraja header configuration text is not capped at an app-defined "
+         "copy budget");
+  if (!decoded.header) {
+    return;
+  }
+
+  EntryProfileSettings settings;
+  settings.options.emplace(decoded.header->options.front().name, 901);
+  SkinProfileSettings profile;
+  const auto package = normalizePackageId("UnboundedConfiguration").package;
+  const auto entry =
+      package ? normalizeEntryPath(*package, "skin/main.luaskin").entry
+              : std::nullopt;
+  if (entry) {
+    profile.entries.emplace(*entry, std::move(settings));
+  }
+  profile.sanitize();
+  expect(entry && profile.entries.contains(*entry) &&
+             profile.entries.at(*entry).options.size() == 1 &&
+             profile.entries.at(*entry).options.begin()->first.size() ==
+                 authoredTextBytes,
+         "profile persistence retains every valid Beatoraja configuration "
+         "key without an app-defined text limit");
 }
 
 void testDuplicateCustomFilesReuseTheirPersistedSelection() {
@@ -676,16 +724,17 @@ void testDuplicateCustomFilesReuseTheirPersistedSelection() {
   saved.filePaths.emplace("Reused", "persisted.png");
   const auto reconciled =
       reconcileSkinConfiguration(*duplicate.header, &saved, *fileSystem);
-  expect(reconciled.configuration && reconciled.diagnostics.empty() &&
-             reconciled.reconciledSettings.filePaths ==
-                 std::map<std::string, std::string>{{"Reused", "persisted.png"}} &&
-             reconciled.configuration->orderedFiles.size() == 2 &&
-             reconciled.configuration->orderedFiles[0].selectedValue ==
-                 "persisted.png" &&
-             reconciled.configuration->orderedFiles[1].selectedValue ==
-                 "persisted.png",
-         "duplicate custom-file names share the stored selection exactly as "
-         "Beatoraja's SkinConfig does");
+  expect(
+      reconciled.configuration && reconciled.diagnostics.empty() &&
+          reconciled.reconciledSettings.filePaths ==
+              std::map<std::string, std::string>{{"Reused", "persisted.png"}} &&
+          reconciled.configuration->orderedFiles.size() == 2 &&
+          reconciled.configuration->orderedFiles[0].selectedValue ==
+              "persisted.png" &&
+          reconciled.configuration->orderedFiles[1].selectedValue ==
+              "persisted.png",
+      "duplicate custom-file names share the stored selection exactly as "
+      "Beatoraja's SkinConfig does");
 }
 
 void testUnresolvedHeaderConfigurationRemainsSelectable() {
@@ -716,21 +765,22 @@ void testUnresolvedHeaderConfigurationRemainsSelectable() {
   }
   const auto missingFile =
       reconcileSkinConfiguration(*unresolved.header, nullptr, *files);
-  expect(missingFile.configuration && missingFile.diagnostics.empty() &&
-             missingFile.configuration->filePaths.empty() &&
-             missingFile.reconciledSettings.filePaths.empty() &&
-             missingFile.configuration->orderedFiles.size() == 1 &&
-             missingFile.configuration->orderedFiles.front().selectedValue.empty(),
-         "a missing custom-file directory remains unconfigured instead of "
-         "making the skin unselectable");
+  expect(
+      missingFile.configuration && missingFile.diagnostics.empty() &&
+          missingFile.configuration->filePaths.empty() &&
+          missingFile.reconciledSettings.filePaths.empty() &&
+          missingFile.configuration->orderedFiles.size() == 1 &&
+          missingFile.configuration->orderedFiles.front().selectedValue.empty(),
+      "a missing custom-file directory remains unconfigured instead of "
+      "making the skin unselectable");
 }
 
 void testDuplicateFontNamesUseTheFirstBeatorajaDefinition() {
   const auto decoded = fixture().decodeGameplay("duplicate-font.luaskin");
-  const auto *caption = decoded.model ? objectNamed(*decoded.model, "caption")
-                                      : nullptr;
-  const auto *text = caption ? std::get_if<SkinTextObject>(&caption->payload)
-                             : nullptr;
+  const auto *caption =
+      decoded.model ? objectNamed(*decoded.model, "caption") : nullptr;
+  const auto *text =
+      caption ? std::get_if<SkinTextObject>(&caption->payload) : nullptr;
   expect(decoded.model && decoded.diagnostics.empty() && text != nullptr &&
              text->font == SkinResourceId{1},
          "duplicate font names use the first Beatoraja definition instead of "
@@ -769,7 +819,8 @@ void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
           configuration.enabledOptionIds == std::set<int>{11, 928},
       "declared saved option survives and invalid/removed values reset");
   expect(reconciled.reconciledSettings.filePaths ==
-                 std::map<std::string, std::string>{{"Background", "missing.png"}} &&
+                 std::map<std::string, std::string>{
+                     {"Background", "missing.png"}} &&
              configuration.filePaths.at("Background") == "missing.png",
          "a persisted Beatoraja custom-file value remains selected even when "
          "the current package no longer contains it");
@@ -845,7 +896,8 @@ void testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive() {
 
 void testEntryRelativeFilePatternsStayWithinThePackage() {
   const auto decoded = fixture().decode("system/relative-file-pattern.luaskin");
-  auto fileSystem = fixture().fileSystem("system/relative-file-pattern.luaskin");
+  auto fileSystem =
+      fixture().fileSystem("system/relative-file-pattern.luaskin");
   expect(decoded.header && fileSystem,
          "entry-relative file pattern fixture is available");
   if (!decoded.header || !fileSystem) {
@@ -853,10 +905,11 @@ void testEntryRelativeFilePatternsStayWithinThePackage() {
   }
   const auto reconciled =
       reconcileSkinConfiguration(*decoded.header, nullptr, *fileSystem);
-  expect(reconciled.configuration && reconciled.diagnostics.empty() &&
-             reconciled.configuration->filePaths ==
-                 std::map<std::string, std::string>{{"Settings", "default.lua"}},
-         "a custom file pattern may traverse to the entry's package parent");
+  expect(
+      reconciled.configuration && reconciled.diagnostics.empty() &&
+          reconciled.configuration->filePaths ==
+              std::map<std::string, std::string>{{"Settings", "default.lua"}},
+      "a custom file pattern may traverse to the entry's package parent");
 
   const auto escaped = fixture().decode("system/escaping-file-pattern.luaskin");
   auto escapedFileSystem =
@@ -894,7 +947,8 @@ void testRepeatedOffsetIdsFollowBeatorajaLastValueSemantics() {
                  ConfigOffset{.y = 9} &&
              reconciled.configuration->offsetsById.at(120) ==
                  ConfigOffset{.y = 9},
-         "repeated offset IDs retain both settings and use the final value at runtime");
+         "repeated offset IDs retain both settings and use the final value at "
+         "runtime");
 }
 
 void testUnrelatedDirectoryEntriesDoNotConsumeTheChoiceLimit() {
@@ -929,9 +983,10 @@ void testConfigurationDigestUsesTheFrozenBigEndianGrammar() {
 
 const SkinObjectDefinition *objectNamed(const BeatorajaSkinModel &model,
                                         std::string_view name) {
-  const auto found = std::ranges::find_if(model.objects, [&](const auto &object) {
-    return object.authoredName == name;
-  });
+  const auto found =
+      std::ranges::find_if(model.objects, [&](const auto &object) {
+        return object.authoredName == name;
+      });
   return found != model.objects.end() ? &*found : nullptr;
 }
 
@@ -970,7 +1025,7 @@ void testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects() {
              number->digits.negative->frames[12].x == 360,
          "Number-24 partitions both signed multi-frame glyph sets");
   expect(number->digits.positive.resource ==
-             number->digits.negative->resource &&
+                 number->digits.negative->resource &&
              number->digits.positive.timer == number->digits.negative->timer &&
              number->digits.positive.cycleMillis == 240 &&
              number->digits.negative->cycleMillis == 240,
@@ -1009,7 +1064,7 @@ void testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects() {
              floating->perDigitOffsets.front().height == 12.5,
          "Float maps normalized digits, sign, padding, gain, and offsets");
   expect(floating->digits.positive.resource ==
-             floating->digits.negative->resource &&
+                 floating->digits.negative->resource &&
              floating->digits.positive.timer ==
                  floating->digits.negative->timer &&
              floating->digits.positive.cycleMillis == 360 &&
@@ -1055,16 +1110,15 @@ void testRequestedExternalLuaSkinHeaderDecodes() {
   const char *configuredEntry =
       std::getenv("ASOBMASHOW_EXTERNAL_LUA_SKIN_ENTRY");
   const std::string entryPath =
-      configuredEntry != nullptr && *configuredEntry != '\0'
-          ? configuredEntry
-          : "result.luaskin";
+      configuredEntry != nullptr && *configuredEntry != '\0' ? configuredEntry
+                                                             : "result.luaskin";
 
   TempDirectory temp;
   const fs::path projectedSource = temp.root() / "source";
   copyLuaSources(source, projectedSource);
   const auto package = normalizePackageId("ExternalLuaSkin").package;
-  const auto entry = package ? normalizeEntryPath(*package, entryPath).entry
-                             : std::nullopt;
+  const auto entry =
+      package ? normalizeEntryPath(*package, entryPath).entry : std::nullopt;
   expect(package.has_value() && entry.has_value(),
          "requested external Lua entry has a portable virtual identity");
   if (!package || !entry) {
@@ -1083,17 +1137,18 @@ void testRequestedExternalLuaSkinHeaderDecodes() {
   if (!snapshot.prepared) {
     return;
   }
-  auto fileSystem = LuaSkinFileSystem::create(
-      {.revision = snapshot.prepared->readView(), .entry = *entry,
-       .storageRoots = roots});
+  auto fileSystem =
+      LuaSkinFileSystem::create({.revision = snapshot.prepared->readView(),
+                                 .entry = *entry,
+                                 .storageRoots = roots});
   expect(fileSystem.fileSystem != nullptr,
          "requested external Lua decoder filesystem is created");
   if (!fileSystem.fileSystem) {
     return;
   }
-  auto runtime = LuaSkinRuntime::create(
-      {.purpose = LuaRuntimePurpose::Catalog,
-       .fileSystem = std::move(fileSystem.fileSystem)});
+  auto runtime =
+      LuaSkinRuntime::create({.purpose = LuaRuntimePurpose::Catalog,
+                              .fileSystem = std::move(fileSystem.fileSystem)});
   expect(runtime.runtime != nullptr,
          "requested external Lua decoder runtime is created");
   if (!runtime.runtime) {
@@ -1110,8 +1165,9 @@ void testRequestedExternalLuaSkinHeaderDecodes() {
     std::cerr << "external Lua header decode diagnostic: " << diagnostic.code
               << ": " << diagnostic.message << '\n';
   }
-  expect(decoded.header.has_value() && decoded.diagnostics.empty(),
-         "requested external Lua header decodes through the compatibility model");
+  expect(
+      decoded.header.has_value() && decoded.diagnostics.empty(),
+      "requested external Lua header decodes through the compatibility model");
 }
 
 } // namespace
@@ -1124,6 +1180,7 @@ int main() {
   testHeaderPreservesBeatorajaConfigurationDeclarations();
   testHeaderDoesNotImposeAnUnpinnedTextLimit();
   testHeaderAndConfigurationAcceptLongBeatorajaNames();
+  testHeaderAndProfileConfigurationDoNotCapAuthoredText();
   testDuplicateCustomFilesReuseTheirPersistedSelection();
   testUnresolvedHeaderConfigurationRemainsSelectable();
   testDuplicateFontNamesUseTheFirstBeatorajaDefinition();

@@ -46,7 +46,7 @@ struct SkinNoteLaneGeometryNormalizationPolicy {
   static constexpr std::size_t maxLanes = 256;
   static constexpr std::size_t maxLaneDestinations = 256;
   static constexpr std::size_t maxAuthoredNoteHeights = 256;
-  // Matches LuaSkinTableDecoderPolicy::maxAuthoredDimension without coupling
+  // Matches LuaSkinTableDecoderPolicy::maxGameplayDimension without coupling
   // this source-neutral helper to the Lua decoder implementation.
   static constexpr double maxGeometryMagnitude = 8'192.0;
 };

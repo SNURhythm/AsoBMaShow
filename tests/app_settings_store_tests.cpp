@@ -204,9 +204,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded, "saved settings load");
   expect(loaded.settings == expected,
          "JSON round trip preserves every setting including audio/video");
-  expect(skin::skinConfigurationDigest(
-             loaded.settings.skin.entries.at(*entry.entry)) ==
-             expectedConfigurationDigest,
+  expect(skin::skinConfigurationDigest(loaded.settings.skin.entries.at(
+             *entry.entry)) == expectedConfigurationDigest,
          "restart reconstructs the exact configuration digest from persisted "
          "entry maps");
   expect(readFile(path).find("\"schemaVersion\": 4") != std::string::npos,
@@ -300,9 +299,9 @@ void testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds() {
                id.collisionKey == "pack/play/main.luaskin",
            "collision keys are rederived rather than trusted from JSON");
     const auto &entry = loaded.settings.skin.entries.at(id);
-    expect(entry.offsets.at("offset").x == -32768 &&
-               entry.offsets.at("offset").y == 32767,
-           "offset components clamp to the fixed range");
+    expect(entry.offsets.at("offset").x == -99999 &&
+               entry.offsets.at("offset").y == 99999,
+           "offset components preserve their authored integer values");
     expect(entry.viewport.mode == skin::ViewportMode::Fit &&
                entry.viewport.customBase == skin::CustomViewportBase::Fit &&
                entry.viewport.scaleX == 1.0F && entry.viewport.scaleY == 1.0F &&
@@ -333,17 +332,17 @@ void testSkinSettingsDeterministicallyEnforceFixedLimits() {
     settings.skin.entries[*entry.entry] = std::move(remembered);
   }
   settings.skin.sanitize();
-  expect(settings.skin.entries.size() == 64,
-         "skin profile retains at most 64 sorted entries");
+  expect(settings.skin.entries.size() == 100,
+         "skin profile retains every valid entry without an app-defined limit");
   expect(settings.skin.entries.begin()->first.package.directoryName ==
              "package-0",
          "entry truncation is deterministic map order");
   for (const auto &[entry, remembered] : settings.skin.entries) {
     (void)entry;
-    expect(remembered.options.size() == 256 &&
-               remembered.filePaths.size() == 256 &&
-               remembered.offsets.size() == 256,
-           "each configuration map retains at most 256 sorted valid keys");
+    expect(remembered.options.size() == 301 &&
+               remembered.filePaths.size() == 300 &&
+               remembered.offsets.size() == 300,
+           "each configuration map retains every valid authored declaration");
     expect(!remembered.filePaths.contains("absolute"),
            "host filesystem paths are never retained in profile settings");
   }
@@ -388,22 +387,24 @@ void testHostileSkinJsonIsBoundedDuringDecode() {
 
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded &&
-             loaded.settings.skin.entries.size() == 64,
-         "hostile skin JSON retains only the bounded entry set");
+             loaded.settings.skin.entries.size() == 70,
+         "skin JSON retains every valid persisted entry without an app-defined "
+         "count limit");
   if (!loaded.settings.skin.entries.empty()) {
     const auto &settings = loaded.settings.skin.entries.begin()->second;
-    expect(settings.options.size() <= 256 && settings.filePaths.size() <= 256 &&
-               settings.offsets.size() <= 256,
-           "hostile skin JSON retains only bounded configuration maps");
+    expect(settings.options.size() == 271 && settings.filePaths.size() == 271 &&
+               settings.offsets.size() == 270,
+           "skin JSON retains every valid persisted configuration declaration");
+    expect(settings.filePaths.contains("000-oversized-value") &&
+               settings.filePaths.at("000-oversized-value").size() == 1025,
+           "valid Beatoraja file selections are not rejected by an app-defined "
+           "text limit");
   }
-  expect(
-      hasDiagnostic(loaded.diagnostics, "skin.entries", "limit") &&
-          hasDiagnostic(loaded.diagnostics, "options", "limit") &&
-          hasDiagnostic(loaded.diagnostics, "filePaths", "limit") &&
-          hasDiagnostic(loaded.diagnostics, "offsets", "limit") &&
-          hasDiagnostic(loaded.diagnostics, "filePaths", "byte limit") &&
-          hasDiagnostic(loaded.diagnostics, "skin.entries.entry", "byte limit"),
-      "decode-time limits emit field-specific diagnostics");
+  expect(!hasDiagnostic(loaded.diagnostics, "options", "limit") &&
+             !hasDiagnostic(loaded.diagnostics, "filePaths", "limit") &&
+             !hasDiagnostic(loaded.diagnostics, "offsets", "limit"),
+         "configuration persistence does not impose count limits absent from "
+         "Beatoraja");
 }
 
 void testSkinEntryCollisionKeysDeduplicateDeterministically() {

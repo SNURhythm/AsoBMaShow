@@ -279,8 +279,9 @@ struct LuaSkinHostModulesImpl {
     return path;
   }
 
-  bool rememberConfiguredPathAlias(std::string_view returnedPath,
-                                   std::string_view entryRelativePath) noexcept {
+  bool
+  rememberConfiguredPathAlias(std::string_view returnedPath,
+                              std::string_view entryRelativePath) noexcept {
     try {
       for (const auto &[knownReturnedPath, knownEntryRelativePath] :
            configuredPathAliases) {
@@ -305,7 +306,8 @@ struct LuaSkinHostModulesImpl {
   void reportLegacyDenial(std::string_view authority) noexcept {
     const std::string_view diagnosticAuthority =
         authority == "java.net.URL" || authority == "java.io.File.member" ||
-                authority == "java.io.File.constructor" || authority == "bindClass"
+                authority == "java.io.File.constructor" ||
+                authority == "bindClass"
             ? authority
             : "unknown_legacy_authority";
     try {
@@ -368,23 +370,6 @@ void LuaSkinHostModulesImpl::releaseHandle(LuaFileHandle &handle) noexcept {
 
 bool LuaSkinHostModulesImpl::copyConfiguredFiles(
     const std::vector<ConfiguredFile> &files) noexcept {
-  if (files.size() > SkinProfileSettingsPolicy::maxFilesPerEntry) {
-    storeError("skin_lua_configuration_export_failed",
-               "Lua skin configured file list exceeds its fixed limit");
-    return false;
-  }
-  for (const auto &file : files) {
-    if (file.name.size() >
-            SkinProfileSettingsPolicy::maxConfigurationKeyBytes ||
-        file.pattern.size() >
-            SkinProfileSettingsPolicy::maxConfigurationValueBytes ||
-        file.selectedValue.size() >
-            SkinProfileSettingsPolicy::maxConfigurationValueBytes) {
-      storeError("skin_lua_configuration_export_failed",
-                 "Lua skin configured file text exceeds its fixed limit");
-      return false;
-    }
-  }
   try {
     configuredFiles = files;
     resolvedConfigurationPath.clear();
@@ -399,9 +384,8 @@ bool LuaSkinHostModulesImpl::copyConfiguredFiles(
 bool LuaSkinHostModulesImpl::resolveConfiguredPath(
     std::string_view request) noexcept {
   try {
-    const auto retainResolvedPath = [this](
-                                        std::string_view entryRelativePath,
-                                        SkinFileResolveResult resolved) {
+    const auto retainResolvedPath = [this](std::string_view entryRelativePath,
+                                           SkinFileResolveResult resolved) {
       if (!resolved.normalizedVirtualPath) {
         storeError("skin_lua_file_operation_failed",
                    "skin_config.get_path did not resolve a resource");
@@ -591,12 +575,18 @@ int mainStateOffset(lua_State *state) {
     return luaL_error(state, "unsupported main_state.offset id: %d", id);
   }
   lua_createtable(state, 0, 6);
-  lua_pushinteger(state, result.value.x); lua_setfield(state, -2, "x");
-  lua_pushinteger(state, result.value.y); lua_setfield(state, -2, "y");
-  lua_pushinteger(state, result.value.w); lua_setfield(state, -2, "w");
-  lua_pushinteger(state, result.value.h); lua_setfield(state, -2, "h");
-  lua_pushinteger(state, result.value.r); lua_setfield(state, -2, "r");
-  lua_pushinteger(state, result.value.a); lua_setfield(state, -2, "a");
+  lua_pushinteger(state, result.value.x);
+  lua_setfield(state, -2, "x");
+  lua_pushinteger(state, result.value.y);
+  lua_setfield(state, -2, "y");
+  lua_pushinteger(state, result.value.w);
+  lua_setfield(state, -2, "w");
+  lua_pushinteger(state, result.value.h);
+  lua_setfield(state, -2, "h");
+  lua_pushinteger(state, result.value.r);
+  lua_setfield(state, -2, "r");
+  lua_pushinteger(state, result.value.a);
+  lua_setfield(state, -2, "a");
   return 1;
 }
 
@@ -660,8 +650,7 @@ int pushNamedInteger(lua_State *state, std::string_view name) {
     return luaL_error(state, "main_state.%.*s has no configured state",
                       static_cast<int>(name.size()), name.data());
   }
-  const auto result = current->integerProperty(
-      {.value = std::string{name}});
+  const auto result = current->integerProperty({.value = std::string{name}});
   if (!result.supported) {
     return luaL_error(state, "unsupported main_state.%.*s",
                       static_cast<int>(name.size()), name.data());
@@ -676,8 +665,7 @@ int pushNamedFloat(lua_State *state, std::string_view name) {
     return luaL_error(state, "main_state.%.*s has no configured state",
                       static_cast<int>(name.size()), name.data());
   }
-  const auto result = current->floatProperty(
-      {.value = std::string{name}});
+  const auto result = current->floatProperty({.value = std::string{name}});
   if (!result.supported) {
     return luaL_error(state, "unsupported main_state.%.*s",
                       static_cast<int>(name.size()), name.data());
@@ -706,8 +694,8 @@ int mainStateExscore(lua_State *state) {
 
 int mainStateGauge(lua_State *state) {
   auto *current = frameState(state);
-  const auto gauge = current == nullptr ? SkinGaugeStateView{}
-                                         : current->gaugeState();
+  const auto gauge =
+      current == nullptr ? SkinGaugeStateView{} : current->gaugeState();
   if (!gauge.supported) {
     return luaL_error(state, "main_state.gauge has no configured state");
   }
@@ -717,8 +705,8 @@ int mainStateGauge(lua_State *state) {
 
 int mainStateGaugeType(lua_State *state) {
   auto *current = frameState(state);
-  const auto gauge = current == nullptr ? SkinGaugeStateView{}
-                                         : current->gaugeState();
+  const auto gauge =
+      current == nullptr ? SkinGaugeStateView{} : current->gaugeState();
   if (!gauge.supported) {
     return luaL_error(state, "main_state.gauge_type has no configured state");
   }
@@ -731,13 +719,9 @@ int mainStateJudge(lua_State *state) {
   return pushNamedInteger(state, "judge:" + std::to_string(judge));
 }
 
-int mainStateRate(lua_State *state) {
-  return pushNamedFloat(state, "rate");
-}
+int mainStateRate(lua_State *state) { return pushNamedFloat(state, "rate"); }
 
-int mainStateTime(lua_State *state) {
-  return pushNamedInteger(state, "time");
-}
+int mainStateTime(lua_State *state) { return pushNamedInteger(state, "time"); }
 
 int mainStateVolumeBg(lua_State *state) {
   return pushNamedFloat(state, "volume_bg");
@@ -756,25 +740,43 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   if (!lua_istable(state, -1)) {
     luaL_error(state, "main_state compatibility table is unavailable");
   }
-  installClosure(state, impl, mainStateOption); lua_setfield(state, -2, "option");
-  installClosure(state, impl, mainStateNumber); lua_setfield(state, -2, "number");
-  installClosure(state, impl, mainStateFloatNumber); lua_setfield(state, -2, "float_number");
-  installClosure(state, impl, mainStateText); lua_setfield(state, -2, "text");
-  installClosure(state, impl, mainStateOffset); lua_setfield(state, -2, "offset");
-  installClosure(state, impl, mainStateTimer); lua_setfield(state, -2, "timer");
-  lua_pushnumber(state, static_cast<lua_Number>(std::numeric_limits<std::int64_t>::min()));
+  installClosure(state, impl, mainStateOption);
+  lua_setfield(state, -2, "option");
+  installClosure(state, impl, mainStateNumber);
+  lua_setfield(state, -2, "number");
+  installClosure(state, impl, mainStateFloatNumber);
+  lua_setfield(state, -2, "float_number");
+  installClosure(state, impl, mainStateText);
+  lua_setfield(state, -2, "text");
+  installClosure(state, impl, mainStateOffset);
+  lua_setfield(state, -2, "offset");
+  installClosure(state, impl, mainStateTimer);
+  lua_setfield(state, -2, "timer");
+  lua_pushnumber(
+      state, static_cast<lua_Number>(std::numeric_limits<std::int64_t>::min()));
   lua_setfield(state, -2, "timer_off_value");
-  installClosure(state, impl, mainStateEventExec); lua_setfield(state, -2, "event_exec");
-  installClosure(state, impl, mainStateEventIndex); lua_setfield(state, -2, "event_index");
-  installClosure(state, impl, mainStateExscore); lua_setfield(state, -2, "exscore");
-  installClosure(state, impl, mainStateGauge); lua_setfield(state, -2, "gauge");
-  installClosure(state, impl, mainStateGaugeType); lua_setfield(state, -2, "gauge_type");
-  installClosure(state, impl, mainStateJudge); lua_setfield(state, -2, "judge");
-  installClosure(state, impl, mainStateRate); lua_setfield(state, -2, "rate");
-  installClosure(state, impl, mainStateTime); lua_setfield(state, -2, "time");
-  installClosure(state, impl, mainStateVolumeBg); lua_setfield(state, -2, "volume_bg");
-  installClosure(state, impl, mainStateVolumeKey); lua_setfield(state, -2, "volume_key");
-  installClosure(state, impl, mainStateVolumeSys); lua_setfield(state, -2, "volume_sys");
+  installClosure(state, impl, mainStateEventExec);
+  lua_setfield(state, -2, "event_exec");
+  installClosure(state, impl, mainStateEventIndex);
+  lua_setfield(state, -2, "event_index");
+  installClosure(state, impl, mainStateExscore);
+  lua_setfield(state, -2, "exscore");
+  installClosure(state, impl, mainStateGauge);
+  lua_setfield(state, -2, "gauge");
+  installClosure(state, impl, mainStateGaugeType);
+  lua_setfield(state, -2, "gauge_type");
+  installClosure(state, impl, mainStateJudge);
+  lua_setfield(state, -2, "judge");
+  installClosure(state, impl, mainStateRate);
+  lua_setfield(state, -2, "rate");
+  installClosure(state, impl, mainStateTime);
+  lua_setfield(state, -2, "time");
+  installClosure(state, impl, mainStateVolumeBg);
+  lua_setfield(state, -2, "volume_bg");
+  installClosure(state, impl, mainStateVolumeKey);
+  lua_setfield(state, -2, "volume_key");
+  installClosure(state, impl, mainStateVolumeSys);
+  lua_setfield(state, -2, "volume_sys");
   lua_pop(state, 1);
 }
 
@@ -885,8 +887,9 @@ int fileWrite(lua_State *state) {
         const auto *begin = reinterpret_cast<const std::byte *>(text);
         addition.insert(addition.end(), begin, begin + size);
       }
-      if (accepted && addition.size() <= LuaSkinHostPolicy::maxDataReadBytes -
-                                             handle->bytes.size() &&
+      if (accepted &&
+          addition.size() <=
+              LuaSkinHostPolicy::maxDataReadBytes - handle->bytes.size() &&
           handle->owner->reserveHandleBytes(addition.size())) {
         handle->bytes.insert(handle->bytes.end(), addition.begin(),
                              addition.end());
@@ -1013,7 +1016,8 @@ int ioOpen(lua_State *state) {
     return expectedFailure(state, "Lua skin file could not be opened");
   }
   if (!impl->reserveHandleBytes(bytes.size())) {
-    return expectedFailure(state, "Lua skin aggregate file buffer quota is exhausted");
+    return expectedFailure(state,
+                           "Lua skin aggregate file buffer quota is exhausted");
   }
 
   try {
@@ -1118,8 +1122,8 @@ int moduleLoader(lua_State *state) {
   while (start <= templates.size()) {
     const std::size_t end = templates.find(';', start);
     const std::string_view pattern = templates.substr(
-        start, end == std::string_view::npos ? templates.size() - start
-                                              : end - start);
+        start,
+        end == std::string_view::npos ? templates.size() - start : end - start);
     if (!pattern.empty() && pattern.find('?') != std::string_view::npos) {
       std::string candidate;
       candidate.reserve(pattern.size() + substitution.size());
@@ -1160,7 +1164,8 @@ int moduleLoader(lua_State *state) {
       message += "' was not found";
       if (!searchedCandidates.empty()) {
         message += " (searched: ";
-        for (std::size_t index = 0; index < searchedCandidates.size(); ++index) {
+        for (std::size_t index = 0; index < searchedCandidates.size();
+             ++index) {
           if (index != 0) {
             message += ", ";
           }
@@ -1688,9 +1693,9 @@ LuaSkinHostModules::create(lua_State *state,
     const std::string_view entryPath =
         options.fileSystem->entry().packageRelativePath;
     const std::size_t slash = entryPath.rfind('/');
-    const std::string_view entryDirectory =
-        slash == std::string_view::npos ? std::string_view{}
-                                      : entryPath.substr(0, slash);
+    const std::string_view entryDirectory = slash == std::string_view::npos
+                                                ? std::string_view{}
+                                                : entryPath.substr(0, slash);
     std::string virtualDirectory;
     if (entryDirectory.empty()) {
       virtualDirectory = "skin";
@@ -1701,11 +1706,12 @@ LuaSkinHostModules::create(lua_State *state,
       virtualDirectory = "skin/";
       virtualDirectory.append(entryDirectory);
     }
-    impl->initialPackagePath = virtualDirectory + "/?.lua;" +
-                               virtualDirectory + "/?/init.lua";
+    impl->initialPackagePath =
+        virtualDirectory + "/?.lua;" + virtualDirectory + "/?/init.lua";
   } catch (...) {
-    return {.failure = diagnostic("skin_lua_runtime_create_failed",
-                                  "Lua virtual package path allocation failed")};
+    return {.failure =
+                diagnostic("skin_lua_runtime_create_failed",
+                           "Lua virtual package path allocation failed")};
   }
   if (lua_cpcall(state, installHost, impl.get()) != 0) {
     const char *message = lua_tostring(state, -1);

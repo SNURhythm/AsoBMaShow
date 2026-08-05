@@ -158,6 +158,7 @@ struct DecodeRequest {
   std::size_t entries = 0;
   std::size_t objects = 0;
   std::size_t copiedTextBytes = 0;
+  bool enforceGameplayLimits = false;
   bool allocationFailed = false;
 };
 
@@ -177,7 +178,8 @@ int absoluteIndex(lua_State *state, int index) {
 
 bool requireObject(lua_State *state, int index, std::size_t depth,
                    DecodeRequest &request) {
-  if (depth > LuaSkinTableDecoderPolicy::maxDepth) {
+  if (request.enforceGameplayLimits &&
+      depth > LuaSkinTableDecoderPolicy::maxDepth) {
     return fail(request, "skin_lua_header_limit_exceeded",
                 "Lua skin header exceeds the fixed depth limit");
   }
@@ -186,7 +188,8 @@ bool requireObject(lua_State *state, int index, std::size_t depth,
                 "Lua skin header object field is not a table");
   }
   ++request.objects;
-  if (request.objects > LuaSkinTableDecoderPolicy::maxDecodedObjects) {
+  if (request.enforceGameplayLimits &&
+      request.objects > LuaSkinTableDecoderPolicy::maxDecodedObjects) {
     return fail(request, "skin_lua_header_limit_exceeded",
                 "Lua skin header exceeds the fixed object limit");
   }
@@ -198,7 +201,8 @@ bool requireObject(lua_State *state, int index, std::size_t depth,
   lua_pushnil(state);
   while (lua_next(state, tableIndex) != 0) {
     ++request.entries;
-    if (request.entries > LuaSkinTableDecoderPolicy::maxEntries) {
+    if (request.enforceGameplayLimits &&
+        request.entries > LuaSkinTableDecoderPolicy::maxEntries) {
       return fail(request, "skin_lua_header_limit_exceeded",
                   "Lua skin header exceeds the fixed entry limit");
     }
@@ -220,7 +224,7 @@ bool rawGetField(lua_State *state, int index, std::string_view name,
 }
 
 bool copyString(lua_State *state, int index, std::string &output,
-                std::size_t maximumBytes, bool allowEmpty,
+                std::optional<std::size_t> maximumBytes, bool allowEmpty,
                 DecodeRequest &request) {
   if (lua_isnil(state, index)) {
     return allowEmpty ||
@@ -234,29 +238,33 @@ bool copyString(lua_State *state, int index, std::string &output,
   }
   std::size_t size = 0;
   const char *value = lua_tolstring(state, index, &size);
-  if (value == nullptr || size > maximumBytes ||
-      request.copiedTextBytes >
-          LuaSkinTableDecoderPolicy::maxCopiedTextBytes -
-              std::min(size, LuaSkinTableDecoderPolicy::maxCopiedTextBytes)) {
+  if (value == nullptr || (maximumBytes && size > *maximumBytes) ||
+      (maximumBytes &&
+       request.copiedTextBytes >
+           LuaSkinTableDecoderPolicy::maxGameplayTextBytes -
+               std::min(size,
+                        LuaSkinTableDecoderPolicy::maxGameplayTextBytes))) {
     return fail(request, "skin_lua_header_limit_exceeded",
                 "Lua skin header text exceeds its fixed byte limit (size=" +
                     std::to_string(size) + ", maximum=" +
-                    std::to_string(maximumBytes) + ")");
+                    std::to_string(maximumBytes.value_or(0)) + ")");
   }
   output.assign(value, size);
   auto normalized = normalizeNfc(output, allowEmpty);
-  if (!normalized || normalized->size() > maximumBytes) {
+  if (!normalized || (maximumBytes && normalized->size() > *maximumBytes)) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header text is not valid normalized UTF-8");
   }
-  request.copiedTextBytes += normalized->size();
+  if (maximumBytes) {
+    request.copiedTextBytes += normalized->size();
+  }
   output = std::move(*normalized);
   return true;
 }
 
 bool stringField(lua_State *state, int index, std::string_view name,
-                 std::string &output, std::size_t maximumBytes, bool allowEmpty,
-                 DecodeRequest &request) {
+                 std::string &output, std::optional<std::size_t> maximumBytes,
+                 bool allowEmpty, DecodeRequest &request) {
   if (!rawGetField(state, index, name, request)) {
     return false;
   }
@@ -316,7 +324,8 @@ bool permissionField(lua_State *state, int index, std::string_view name,
   return true;
 }
 
-bool strictArrayLength(lua_State *state, int index, std::size_t maximum,
+bool strictArrayLength(lua_State *state, int index,
+                       std::optional<std::size_t> maximum,
                        std::size_t &length, DecodeRequest &request) {
   if (!lua_istable(state, index)) {
     return fail(request, "skin_lua_header_invalid",
@@ -333,14 +342,16 @@ bool strictArrayLength(lua_State *state, int index, std::size_t maximum,
   while (lua_next(state, tableIndex) != 0) {
     ++request.entries;
     ++count;
-    if (request.entries > LuaSkinTableDecoderPolicy::maxEntries ||
-        count > maximum || lua_type(state, -2) != LUA_TNUMBER) {
+    if ((request.enforceGameplayLimits &&
+         request.entries > LuaSkinTableDecoderPolicy::maxEntries) ||
+        (maximum && count > *maximum) || lua_type(state, -2) != LUA_TNUMBER) {
       return fail(request, "skin_lua_header_invalid",
                   "Lua skin header array exceeds its limit or has mixed keys");
     }
     const double numeric = static_cast<double>(lua_tonumber(state, -2));
     if (!std::isfinite(numeric) || std::trunc(numeric) != numeric ||
-        numeric < 1.0 || numeric > static_cast<double>(maximum)) {
+        numeric < 1.0 ||
+        (maximum && numeric > static_cast<double>(*maximum))) {
       return fail(request, "skin_lua_header_invalid",
                   "Lua skin header array key is not a positive integer");
     }
@@ -356,9 +367,11 @@ bool strictArrayLength(lua_State *state, int index, std::size_t maximum,
 }
 
 bool decodeStringArray(lua_State *state, int index, std::size_t depth,
-                       std::size_t maximum, std::vector<std::string> &output,
+                       std::optional<std::size_t> maximum,
+                       std::vector<std::string> &output,
                        DecodeRequest &request) {
-  if (depth > LuaSkinTableDecoderPolicy::maxDepth) {
+  if (request.enforceGameplayLimits &&
+      depth > LuaSkinTableDecoderPolicy::maxDepth) {
     return fail(request, "skin_lua_header_limit_exceeded",
                 "Lua skin header exceeds the fixed depth limit");
   }
@@ -371,9 +384,7 @@ bool decodeStringArray(lua_State *state, int index, std::size_t depth,
   for (std::size_t position = 1; position <= length; ++position) {
     lua_rawgeti(state, tableIndex, static_cast<int>(position));
     output.emplace_back();
-    if (!copyString(state, -1, output.back(),
-                    LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
-                    request)) {
+    if (!copyString(state, -1, output.back(), std::nullopt, false, request)) {
       return false;
     }
     lua_pop(state, 1);
@@ -384,17 +395,15 @@ bool decodeStringArray(lua_State *state, int index, std::size_t depth,
 bool decodeCategory(lua_State *state, int index, std::size_t depth,
                     SkinHeaderCategory &output, DecodeRequest &request) {
   if (!requireObject(state, index, depth, request) ||
-      !stringField(state, index, "name", output.name,
-                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+      !stringField(state, index, "name", output.name, std::nullopt, false,
                    request) ||
       !rawGetField(state, index, "item", request)) {
     return false;
   }
   bool ok = true;
   if (lua_istable(state, -1)) {
-    ok = decodeStringArray(state, -1, depth + 1,
-                           LuaSkinTableDecoderPolicy::maxCategoryItems,
-                           output.items, request);
+    ok = decodeStringArray(state, -1, depth + 1, std::nullopt, output.items,
+                           request);
   }
   lua_pop(state, 1);
   return ok;
@@ -403,8 +412,7 @@ bool decodeCategory(lua_State *state, int index, std::size_t depth,
 bool decodeChoice(lua_State *state, int index, std::size_t depth,
                   SkinHeaderOptionChoice &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
-         stringField(state, index, "name", output.label,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+         stringField(state, index, "name", output.label, std::nullopt, false,
                      request) &&
          integerField(state, index, "op", output.value, request);
 }
@@ -412,14 +420,11 @@ bool decodeChoice(lua_State *state, int index, std::size_t depth,
 bool decodeOption(lua_State *state, int index, std::size_t depth,
                   SkinHeaderOption &output, DecodeRequest &request) {
   if (!requireObject(state, index, depth, request) ||
-      !stringField(state, index, "category", output.category,
-                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
+      !stringField(state, index, "category", output.category, std::nullopt,
+                   true, request) ||
+      !stringField(state, index, "name", output.name, std::nullopt, false,
                    request) ||
-      !stringField(state, index, "name", output.name,
-                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
-                   request) ||
-      !stringField(state, index, "def", output.defaultLabel,
-                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
+      !stringField(state, index, "def", output.defaultLabel, std::nullopt, true,
                    request) ||
       !rawGetField(state, index, "item", request)) {
     return false;
@@ -434,8 +439,7 @@ bool decodeOption(lua_State *state, int index, std::size_t depth,
     return true;
   }
   std::size_t length = 0;
-  if (!strictArrayLength(state, -1, LuaSkinTableDecoderPolicy::maxOptionChoices,
-                         length, request)) {
+  if (!strictArrayLength(state, -1, std::nullopt, length, request)) {
     return false;
   }
   output.choices.reserve(length);
@@ -455,28 +459,22 @@ bool decodeOption(lua_State *state, int index, std::size_t depth,
 bool decodeFile(lua_State *state, int index, std::size_t depth,
                 SkinHeaderFile &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
-         stringField(state, index, "category", output.category,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
+         stringField(state, index, "category", output.category, std::nullopt,
+                     true, request) &&
+         stringField(state, index, "name", output.name, std::nullopt, false,
                      request) &&
-         stringField(state, index, "name", output.name,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+         stringField(state, index, "path", output.pattern, std::nullopt, false,
                      request) &&
-         stringField(state, index, "path", output.pattern,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes,
-                     false, request) &&
-         stringField(state, index, "def", output.defaultValue,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes,
+         stringField(state, index, "def", output.defaultValue, std::nullopt,
                      true, request);
 }
 
 bool decodeOffset(lua_State *state, int index, std::size_t depth,
                   SkinHeaderOffset &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
-         stringField(state, index, "category", output.category,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
-                     request) &&
-         stringField(state, index, "name", output.name,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+         stringField(state, index, "category", output.category, std::nullopt,
+                     true, request) &&
+         stringField(state, index, "name", output.name, std::nullopt, false,
                      request) &&
          integerField(state, index, "id", output.id, request) &&
          permissionField(state, index, "x", kOffsetPermissionX,
@@ -496,7 +494,8 @@ bool decodeOffset(lua_State *state, int index, std::size_t depth,
 template <typename Output, typename DecodeElement>
 bool decodeObjectArrayField(lua_State *state, int rootIndex,
                             std::string_view field, std::size_t depth,
-                            std::size_t maximum, std::vector<Output> &output,
+                            std::optional<std::size_t> maximum,
+                            std::vector<Output> &output,
                             DecodeRequest &request,
                             DecodeElement decodeElement) {
   if (!rawGetField(state, rootIndex, field, request)) {
@@ -533,10 +532,7 @@ bool validateSemantics(BeatorajaSkinHeader &header, DecodeRequest &request) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header does not declare a valid type");
   }
-  if (header.width < 1 ||
-      header.width > LuaSkinTableDecoderPolicy::maxAuthoredDimension ||
-      header.height < 1 ||
-      header.height > LuaSkinTableDecoderPolicy::maxAuthoredDimension) {
+  if (header.width < 1 || header.height < 1) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header dimensions are outside the fixed range");
   }
@@ -568,23 +564,17 @@ void decodeHeaderProtected(lua_State *state, int index, void *opaque) noexcept {
         !integerField(state, index, "type", header.type, *request) ||
         !integerField(state, index, "w", header.width, *request) ||
         !integerField(state, index, "h", header.height, *request) ||
-        !stringField(state, index, "name", header.name,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
+        !stringField(state, index, "name", header.name, std::nullopt, true,
                      *request) ||
-        !stringField(state, index, "author", header.author,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
+        !stringField(state, index, "author", header.author, std::nullopt, true,
                      *request) ||
-        !decodeObjectArrayField(state, index, "category", 1,
-                                LuaSkinTableDecoderPolicy::maxCategories,
+        !decodeObjectArrayField(state, index, "category", 1, std::nullopt,
                                 header.categories, *request, decodeCategory) ||
-        !decodeObjectArrayField(state, index, "property", 1,
-                                LuaSkinTableDecoderPolicy::maxOptions,
+        !decodeObjectArrayField(state, index, "property", 1, std::nullopt,
                                 header.options, *request, decodeOption) ||
-        !decodeObjectArrayField(state, index, "filepath", 1,
-                                LuaSkinTableDecoderPolicy::maxFiles,
+        !decodeObjectArrayField(state, index, "filepath", 1, std::nullopt,
                                 header.files, *request, decodeFile) ||
-        !decodeObjectArrayField(state, index, "offset", 1,
-                                LuaSkinTableDecoderPolicy::maxOffsets,
+        !decodeObjectArrayField(state, index, "offset", 1, std::nullopt,
                                 header.offsets, *request, decodeOffset) ||
         !validateSemantics(header, *request)) {
       request->result.header.reset();
@@ -597,16 +587,12 @@ void decodeHeaderProtected(lua_State *state, int index, void *opaque) noexcept {
 
 ConfigOffset sanitizeOffset(ConfigOffset value,
                             OffsetPermissionMask permissions) {
-  const auto clamp = [](int component) {
-    return std::clamp(component, SkinProfileSettingsPolicy::minOffsetComponent,
-                      SkinProfileSettingsPolicy::maxOffsetComponent);
-  };
-  value.x = (permissions & kOffsetPermissionX) != 0 ? clamp(value.x) : 0;
-  value.y = (permissions & kOffsetPermissionY) != 0 ? clamp(value.y) : 0;
-  value.w = (permissions & kOffsetPermissionW) != 0 ? clamp(value.w) : 0;
-  value.h = (permissions & kOffsetPermissionH) != 0 ? clamp(value.h) : 0;
-  value.r = (permissions & kOffsetPermissionR) != 0 ? clamp(value.r) : 0;
-  value.a = (permissions & kOffsetPermissionA) != 0 ? clamp(value.a) : 0;
+  value.x = (permissions & kOffsetPermissionX) != 0 ? value.x : 0;
+  value.y = (permissions & kOffsetPermissionY) != 0 ? value.y : 0;
+  value.w = (permissions & kOffsetPermissionW) != 0 ? value.w : 0;
+  value.h = (permissions & kOffsetPermissionH) != 0 ? value.h : 0;
+  value.r = (permissions & kOffsetPermissionR) != 0 ? value.r : 0;
+  value.a = (permissions & kOffsetPermissionA) != 0 ? value.a : 0;
   return value;
 }
 
@@ -967,11 +953,11 @@ bool decodeRawSource(lua_State *state, int index, std::size_t depth,
                      RawSkinSource &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          stringField(state, index, "path", output.path,
-                     SkinProfileSettingsPolicy::maxConfigurationValueBytes,
-                     false, request);
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request);
 }
 
 bool decodeRawFontFallback(lua_State *state, int index, std::size_t depth,
@@ -980,13 +966,13 @@ bool decodeRawFontFallback(lua_State *state, int index, std::size_t depth,
   if (lua_type(state, index) == LUA_TSTRING) {
     std::string ignored;
     return copyString(state, index, ignored,
-                      SkinProfileSettingsPolicy::maxConfigurationValueBytes,
-                      true, request);
+                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                      request);
   }
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "path", output.path,
-                     SkinProfileSettingsPolicy::maxConfigurationValueBytes,
-                     true, request) &&
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
+                     request) &&
          integerField(state, index, "type", output.type, request);
 }
 
@@ -994,11 +980,11 @@ bool decodeRawFont(lua_State *state, int index, std::size_t depth,
                    RawSkinFont &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          stringField(state, index, "path", output.path,
-                     SkinProfileSettingsPolicy::maxConfigurationValueBytes,
-                     false, request) &&
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                     request) &&
          decodeObjectArrayField(state, index, "fallback", depth,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 output.fallbacks, request,
@@ -1010,10 +996,10 @@ bool decodeRawImage(lua_State *state, int index, std::size_t depth,
                     RawSkinImage &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          stringField(state, index, "src", output.source,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          integerField(state, index, "x", output.x, request) &&
          integerField(state, index, "y", output.y, request) &&
@@ -1120,7 +1106,7 @@ bool decodeRawImageSet(lua_State *state, int index, std::size_t depth,
                        RawSkinImageSet &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          integerField(state, index, "ref", output.stateSelector, request) &&
          integerField(state, index, "click", output.clickMode, request) &&
@@ -1146,7 +1132,7 @@ bool decodeRawNumber(lua_State *state, int index, std::size_t depth,
                       request) &&
          integerField(state, index, "space", output.spacing, request) &&
          decodeObjectArrayField(state, index, "offset", depth,
-                                LuaSkinTableDecoderPolicy::maxOffsets,
+                                LuaSkinTableDecoderPolicy::maxGameplayOffsets,
                                 output.perDigitOffsets, request,
                                 decodeRawDigitOffset);
 }
@@ -1165,7 +1151,7 @@ bool decodeRawFloat(lua_State *state, int index, std::size_t depth,
          booleanField(state, index, "isSignvisible", output.signVisible,
                       request) &&
          decodeObjectArrayField(state, index, "offset", depth,
-                                LuaSkinTableDecoderPolicy::maxOffsets,
+                                LuaSkinTableDecoderPolicy::maxGameplayOffsets,
                                 output.perDigitOffsets, request,
                                 decodeRawDigitOffset);
 }
@@ -1186,7 +1172,7 @@ bool decodeRawGauge(lua_State *state, int index, std::size_t depth,
                     RawSkinGauge &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          stringArrayField(state, index, "nodes", output.nodes, request) &&
          integerField(state, index, "parts", output.parts, request) &&
@@ -1203,10 +1189,10 @@ bool decodeRawText(lua_State *state, int index, std::size_t depth,
                    RawSkinText &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          stringField(state, index, "font", output.font,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          integerField(state, index, "size", output.pointSize, request) &&
          integerField(state, index, "align", output.alignment, request) &&
@@ -1214,18 +1200,18 @@ bool decodeRawText(lua_State *state, int index, std::size_t depth,
          bindingFieldPresent(state, index, "event", output.writerFieldPresent,
                              request) &&
          stringField(state, index, "constantText", output.literal,
-                     LuaSkinTableDecoderPolicy::maxCopiedTextBytes, true,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
                      request) &&
          booleanField(state, index, "editable", output.editable, request) &&
          booleanField(state, index, "wrapping", output.wrapping, request) &&
          integerField(state, index, "overflow", output.overflow, request) &&
          stringField(state, index, "outlineColor", output.outlineColor,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
                      request) &&
          numberField(state, index, "outlineWidth", output.outlineWidth,
                      request) &&
          stringField(state, index, "shadowColor", output.shadowColor,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, true,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
                      request) &&
          numberField(state, index, "shadowOffsetX", output.shadowOffsetX,
                      request) &&
@@ -1351,7 +1337,7 @@ bool decodeRawNote(lua_State *state, int index, std::size_t depth,
                    RawSkinNote &output, DecodeRequest &request) {
   if (!requireObject(state, index, depth, request) ||
       !stringField(state, index, "id", output.id,
-                   LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                   LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                    request)) {
     return false;
   }
@@ -1450,7 +1436,7 @@ bool integerArrayField(lua_State *state, int index, std::string_view name,
     return true;
   }
   std::size_t length = 0;
-  if (!strictArrayLength(state, -1, LuaSkinTableDecoderPolicy::maxOffsets,
+  if (!strictArrayLength(state, -1, LuaSkinTableDecoderPolicy::maxGameplayOffsets,
                          length, request)) {
     return false;
   }
@@ -1535,7 +1521,7 @@ bool decodeRawDestination(lua_State *state, int index, std::size_t depth,
                           RawDestination &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          integerField(state, index, "loop", output.loop, request) &&
          integerField(state, index, "center", output.center, request) &&
@@ -1579,7 +1565,7 @@ bool decodeRawJudge(lua_State *state, int index, std::size_t depth,
                     RawSkinJudge &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
          integerField(state, index, "index", output.player, request) &&
          booleanField(state, index, "shift", output.shift, request) &&
@@ -1595,7 +1581,7 @@ bool decodeRawIdentity(lua_State *state, int index, std::size_t depth,
                        RawSkinIdentity &output, DecodeRequest &request) {
   return requireObject(state, index, depth, request) &&
          stringField(state, index, "id", output.id,
-                     LuaSkinTableDecoderPolicy::maxHeaderTextBytes, false,
+                     LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request);
 }
 
@@ -1853,8 +1839,7 @@ bool buildNoteObject(GameplayDecodeRequest &request, RawSkinNote &note) {
 
   note.object.expansionRatePercent =
       normalizedGeometry.geometry->expansionRatePercent;
-  note.object.hcnBodySlotLayout =
-      normalizedVisuals.note->hcnBodySlotLayout;
+  note.object.hcnBodySlotLayout = normalizedVisuals.note->hcnBodySlotLayout;
   note.object.lanes.reserve(normalizedVisuals.note->lanes.size());
   for (std::size_t laneIndex = 0;
        laneIndex < normalizedVisuals.note->lanes.size(); ++laneIndex) {
@@ -2155,12 +2140,10 @@ std::optional<SkinBlendMode> blendMode(int value) {
 bool normalizeDestination(GameplayDecodeRequest &request,
                           const RawDestination &raw,
                           std::uint32_t authoredOrdinal,
-                          SkinDestinationBody &output,
-                          bool sortFrames = true);
+                          SkinDestinationBody &output, bool sortFrames = true);
 
 bool makeCoverObject(GameplayDecodeRequest &request,
-                     const RawSkinCover &definition,
-                     SkinCoverObject &output) {
+                     const RawSkinCover &definition, SkinCoverObject &output) {
   const auto normalized = normalizeSkinCover(
       {.kind = definition.kind,
        .sprite = definition.image.sprite,
@@ -2168,14 +2151,14 @@ bool makeCoverObject(GameplayDecodeRequest &request,
        .authoredDisappearLineLinksLift = definition.disappearLineLinksLift,
        .lineScale = 1.0});
   if (!normalized.cover) {
-    request.result.diagnostics.push_back(diagnostic(
-        "skin_lua_model_cover_invalid",
-        "Lua skin cover definition cannot be normalized"));
+    request.result.diagnostics.push_back(
+        diagnostic("skin_lua_model_cover_invalid",
+                   "Lua skin cover definition cannot be normalized"));
     output = SkinCoverObject{};
     return true;
   }
-  if (!consumeMaterializedSpriteFrames(request,
-                                       normalized.cover->sprite.frames.size())) {
+  if (!consumeMaterializedSpriteFrames(
+          request, normalized.cover->sprite.frames.size())) {
     return false;
   }
   output = *normalized.cover;
@@ -2209,11 +2192,13 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Image,
                                     .matches = image != request.images.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::ImageSet,
-                                    .matches = imageSet != request.imageSets.end()},
+                                    .matches =
+                                        imageSet != request.imageSets.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Value,
                                     .matches = number != request.numbers.end()},
-      SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::FloatValue,
-                                    .matches = floating != request.floats.end()},
+      SkinObjectResolutionCandidate{
+          .kind = SkinObjectResolutionKind::FloatValue,
+          .matches = floating != request.floats.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Text,
                                     .matches = text != request.texts.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Slider,
@@ -2224,7 +2209,8 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
           .kind = SkinObjectResolutionKind::JudgeGraph,
           .matches = judgeGraph != request.judgeGraphs.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::BpmGraph,
-                                    .matches = bpmGraph != request.bpmGraphs.end()},
+                                    .matches =
+                                        bpmGraph != request.bpmGraphs.end()},
       SkinObjectResolutionCandidate{
           .kind = SkinObjectResolutionKind::HitErrorVisualizer,
           .matches = hitErrorVisualizer != request.hitErrorVisualizers.end()},
@@ -2235,10 +2221,12 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
                                     .matches = isGauge},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Note,
                                     .matches = isNote},
-      SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::HiddenCover,
-                                    .matches = hiddenCover != request.hiddenCovers.end()},
+      SkinObjectResolutionCandidate{
+          .kind = SkinObjectResolutionKind::HiddenCover,
+          .matches = hiddenCover != request.hiddenCovers.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::LiftCover,
-                                    .matches = liftCover != request.liftCovers.end()},
+                                    .matches =
+                                        liftCover != request.liftCovers.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Bga,
                                     .matches = isBga},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Judge,
@@ -2250,8 +2238,9 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   if (resolved.status != SkinObjectResolutionStatus::Found) {
-    return fail(request.decoding, "skin_lua_model_unsupported_object",
-                "Lua skin destination does not resolve to an audited v1 object");
+    return fail(
+        request.decoding, "skin_lua_model_unsupported_object",
+        "Lua skin destination does not resolve to an audited v1 object");
   }
 
   if (image != request.images.end()) {
@@ -2561,8 +2550,7 @@ bool makeJudgeObject(GameplayDecodeRequest &request, BeatorajaSkinModel &model,
     if (!consumeMaterializedSpriteFrames(request,
                                          image->second.sprite.frames.size()) ||
         !normalizeDestination(request, definition.images[grade],
-                              static_cast<std::uint32_t>(grade),
-                              destination)) {
+                              static_cast<std::uint32_t>(grade), destination)) {
       return false;
     }
     input.images[grade] = SkinJudgeInlineImageChild{
@@ -2579,21 +2567,20 @@ bool makeJudgeObject(GameplayDecodeRequest &request, BeatorajaSkinModel &model,
     }
     SkinDestinationBody destination;
     if (!normalizeDestination(request, definition.numbers[grade],
-                              static_cast<std::uint32_t>(grade),
-                              destination)) {
+                              static_cast<std::uint32_t>(grade), destination)) {
       return false;
     }
-    auto normalizedNumber = normalizeSkinJudgeNumber(
-        {.source = number->second.image.sprite,
-         .value = number->second.value,
-         .digitCount = number->second.digitCount,
-         .spacing = number->second.spacing,
-         .offsets = number->second.perDigitOffsets,
-         .destination = std::move(destination)});
+    auto normalizedNumber =
+        normalizeSkinJudgeNumber({.source = number->second.image.sprite,
+                                  .value = number->second.value,
+                                  .digitCount = number->second.digitCount,
+                                  .spacing = number->second.spacing,
+                                  .offsets = number->second.perDigitOffsets,
+                                  .destination = std::move(destination)});
     if (!normalizedNumber.number) {
-      request.result.diagnostics.push_back(diagnostic(
-          "skin_lua_model_judge_number_invalid",
-          "Lua skin Judge detail number cannot be normalized"));
+      request.result.diagnostics.push_back(
+          diagnostic("skin_lua_model_judge_number_invalid",
+                     "Lua skin Judge detail number cannot be normalized"));
       continue;
     }
     if (!consumeMaterializedSpriteFrames(
@@ -2618,7 +2605,8 @@ bool makeJudgeObject(GameplayDecodeRequest &request, BeatorajaSkinModel &model,
   output.grades.resize(SkinJudgeNormalizationPolicy::runtimeGradeSlots);
   for (std::size_t grade = 0; grade < output.grades.size(); ++grade) {
     auto &normalizedGrade = normalized.judge->grades[grade];
-    auto addChild = [&](SkinObjectPayload payload, SkinDestinationBody destination,
+    auto addChild = [&](SkinObjectPayload payload,
+                        SkinDestinationBody destination,
                         std::string suffix) -> SkinNestedObjectPresentation {
       const SkinObjectId id = request.nextSyntheticObjectId++;
       model.objects.push_back({
@@ -2632,9 +2620,9 @@ bool makeJudgeObject(GameplayDecodeRequest &request, BeatorajaSkinModel &model,
       return {.object = id, .destination = std::move(destination)};
     };
     if (normalizedGrade.image) {
-      output.grades[grade].image = addChild(
-          std::move(normalizedGrade.image->image),
-          std::move(normalizedGrade.image->destination), "image");
+      output.grades[grade].image =
+          addChild(std::move(normalizedGrade.image->image),
+                   std::move(normalizedGrade.image->destination), "image");
     }
     if (normalizedGrade.detailNumber) {
       output.grades[grade].detailNumber = addChild(
@@ -2681,6 +2669,7 @@ void decodeGameplayProtected(lua_State *state, int index,
       transferDecodeDiagnostics(*request);
       return;
     }
+    request->decoding.enforceGameplayLimits = true;
 
     request->result.model.emplace();
     auto &model = *request->result.model;
@@ -2906,24 +2895,22 @@ void decodeGameplayProtected(lua_State *state, int index,
       }
     }
 
-    if (!decodeObjectArrayField(
-            state, index, "bpmgraph", 1,
-            LuaSkinTableDecoderPolicy::maxDecodedObjects,
-            request->rawBpmGraphs, request->decoding, decodeRawIdentity) ||
-        !decodeObjectArrayField(
-            state, index, "hiterrorvisualizer", 1,
-            LuaSkinTableDecoderPolicy::maxDecodedObjects,
-            request->rawHitErrorVisualizers, request->decoding,
-            decodeRawIdentity) ||
-        !decodeObjectArrayField(
-            state, index, "judgegraph", 1,
-            LuaSkinTableDecoderPolicy::maxDecodedObjects,
-            request->rawJudgeGraphs, request->decoding, decodeRawIdentity) ||
-        !decodeObjectArrayField(
-            state, index, "timingvisualizer", 1,
-            LuaSkinTableDecoderPolicy::maxDecodedObjects,
-            request->rawTimingVisualizers, request->decoding,
-            decodeRawIdentity)) {
+    if (!decodeObjectArrayField(state, index, "bpmgraph", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawBpmGraphs, request->decoding,
+                                decodeRawIdentity) ||
+        !decodeObjectArrayField(state, index, "hiterrorvisualizer", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawHitErrorVisualizers,
+                                request->decoding, decodeRawIdentity) ||
+        !decodeObjectArrayField(state, index, "judgegraph", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawJudgeGraphs, request->decoding,
+                                decodeRawIdentity) ||
+        !decodeObjectArrayField(state, index, "timingvisualizer", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawTimingVisualizers,
+                                request->decoding, decodeRawIdentity)) {
       transferDecodeDiagnostics(*request);
       request->result.model.reset();
       return;
@@ -2933,27 +2920,26 @@ void decodeGameplayProtected(lua_State *state, int index,
                                  "bpmgraph");
     recordUnsupportedDefinitions(
         *request, request->rawHitErrorVisualizers,
-        "skin_lua_model_hiterrorvisualizer_unsupported",
-        "hiterrorvisualizer");
+        "skin_lua_model_hiterrorvisualizer_unsupported", "hiterrorvisualizer");
     recordUnsupportedDefinitions(*request, request->rawJudgeGraphs,
                                  "skin_lua_model_judgegraph_unsupported",
                                  "judgegraph");
-    recordUnsupportedDefinitions(
-        *request, request->rawTimingVisualizers,
-        "skin_lua_model_timingvisualizer_unsupported", "timingvisualizer");
+    recordUnsupportedDefinitions(*request, request->rawTimingVisualizers,
+                                 "skin_lua_model_timingvisualizer_unsupported",
+                                 "timingvisualizer");
 
-    if (!decodeObjectArrayField(
-            state, index, "hiddenCover", 1,
-            LuaSkinTableDecoderPolicy::maxDecodedObjects,
-            request->rawHiddenCovers, request->decoding, decodeRawHiddenCover) ||
-        !decodeObjectArrayField(
-            state, index, "liftCover", 1,
-            LuaSkinTableDecoderPolicy::maxDecodedObjects,
-            request->rawLiftCovers, request->decoding, decodeRawLiftCover) ||
-        !decodeObjectArrayField(
-            state, index, "judge", 1,
-            LuaSkinTableDecoderPolicy::maxDecodedObjects, request->rawJudges,
-            request->decoding, decodeRawJudge)) {
+    if (!decodeObjectArrayField(state, index, "hiddenCover", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawHiddenCovers, request->decoding,
+                                decodeRawHiddenCover) ||
+        !decodeObjectArrayField(state, index, "liftCover", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawLiftCovers, request->decoding,
+                                decodeRawLiftCover) ||
+        !decodeObjectArrayField(state, index, "judge", 1,
+                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                request->rawJudges, request->decoding,
+                                decodeRawJudge)) {
       transferDecodeDiagnostics(*request);
       request->result.model.reset();
       return;
@@ -2986,8 +2972,7 @@ void decodeGameplayProtected(lua_State *state, int index,
       return;
     }
     if (!lua_isnil(state, -1)) {
-      if (!decodeRawIdentity(state, -1, 2, *request->bga,
-                             request->decoding)) {
+      if (!decodeRawIdentity(state, -1, 2, *request->bga, request->decoding)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
         return;
@@ -3316,9 +3301,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       return false;
     }
     const bool hasGenericDestination = std::ranges::any_of(
-        request.rawDestinations, [&](const auto &destination) {
-          return destination.id == image.id;
-        });
+        request.rawDestinations,
+        [&](const auto &destination) { return destination.id == image.id; });
     if (hasGenericDestination && image.stateCount > 1) {
       SkinIntegerPropertyId id;
       if (!decodeRequiredBinding(
@@ -3332,7 +3316,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       }
       image.stateIndex = id;
     }
-    if (hasGenericDestination && !decodeOptionalBinding(
+    if (hasGenericDestination &&
+        !decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::Event},
             bindingPath("image", image.authoredIndex, "act"),
             bindingPathText("image", image.authoredIndex, "act"),
@@ -3591,13 +3576,13 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
     };
     const auto pathText = [&](std::string_view field) {
       return std::string("judge[") + std::to_string(judgeIndex) + "]." +
-             std::string(childArray) + "[" + std::to_string(childIndex) +
-             "]." + std::string(field);
+             std::string(childArray) + "[" + std::to_string(childIndex) + "]." +
+             std::string(field);
     };
-    if (!decodeOptionalBinding(
-            request, decoder, value, {.kind = SkinBindingKind::TimerProperty},
-            path("timer"), pathText("timer"), judgeIndex - 1,
-            destination.timer)) {
+    if (!decodeOptionalBinding(request, decoder, value,
+                               {.kind = SkinBindingKind::TimerProperty},
+                               path("timer"), pathText("timer"), judgeIndex - 1,
+                               destination.timer)) {
       return false;
     }
     for (std::size_t conditionIndex = 0;
@@ -3610,19 +3595,20 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       auto conditionPath = path("op");
       conditionPath.push_back(LuaValuePathElement::index(
           static_cast<std::uint32_t>(conditionIndex + 1)));
-      if (!decodeRequiredBinding(
-              request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
-              std::move(conditionPath), pathText("op") + "[" +
-                  std::to_string(conditionIndex + 1) + "]",
-              judgeIndex - 1, std::nullopt, id)) {
+      if (!decodeRequiredBinding(request, decoder, value,
+                                 {.kind = SkinBindingKind::BooleanProperty},
+                                 std::move(conditionPath),
+                                 pathText("op") + "[" +
+                                     std::to_string(conditionIndex + 1) + "]",
+                                 judgeIndex - 1, std::nullopt, id)) {
         return false;
       }
       condition.property = id;
     }
-    return decodeOptionalBinding(
-        request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
-        path("draw"), pathText("draw"), judgeIndex - 1,
-        destination.drawCondition);
+    return decodeOptionalBinding(request, decoder, value,
+                                 {.kind = SkinBindingKind::BooleanProperty},
+                                 path("draw"), pathText("draw"), judgeIndex - 1,
+                                 destination.drawCondition);
   };
   for (std::size_t judgeIndex = 0; judgeIndex < request.rawJudges.size();
        ++judgeIndex) {
@@ -3768,8 +3754,7 @@ bool materializeGameplay(GameplayDecodeRequest &request,
           },
           "BPMGraph") ||
       !moveUniqueDefinitions(
-          request, request.rawHitErrorVisualizers,
-          request.hitErrorVisualizers,
+          request, request.rawHitErrorVisualizers, request.hitErrorVisualizers,
           [](const RawSkinIdentity &identity) -> const std::string & {
             return identity.id;
           },
@@ -3941,15 +3926,6 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
                            const EntryProfileSettings *saved,
                            LuaSkinFileSystem &fileSystem) {
   ConfigurationReconcileResult result;
-  if (header.options.size() > LuaSkinTableDecoderPolicy::maxOptions ||
-      header.files.size() > LuaSkinTableDecoderPolicy::maxFiles ||
-      header.offsets.size() > LuaSkinTableDecoderPolicy::maxOffsets + 4) {
-    result.diagnostics.push_back(
-        diagnostic("skin_lua_configuration_invalid",
-                   "Lua skin header cannot be reconciled within fixed limits"));
-    return result;
-  }
-
   BeatorajaSkinConfiguration configuration;
   EntryProfileSettings settings;
   if (saved != nullptr) {
@@ -3968,7 +3944,8 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
     // persist the same effective sentinel so the activation configuration
     // digest exactly represents what the configured Lua state will receive.
     if (option.choices.empty()) {
-      configuration.orderedOptions.push_back({.name = option.name, .value = -1});
+      configuration.orderedOptions.push_back(
+          {.name = option.name, .value = -1});
       configuration.options.insert_or_assign(option.name, -1);
       configuration.enabledOptionIds.insert(-1);
       settings.options.insert_or_assign(option.name, -1);
@@ -4092,7 +4069,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
     settings.offsets.insert_or_assign(offset.name, value);
     configuration.offsets.insert_or_assign(offset.name, value);
     configuration.offsetPermissions.insert_or_assign(offset.name,
-                                                      offset.permissions);
+                                                     offset.permissions);
     configuration.offsetsById.insert_or_assign(offset.id, value);
   }
 
