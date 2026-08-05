@@ -55,11 +55,12 @@ control is renamed or given a new behavior merely to fit the new layout.
 
 ## Data and Runtime
 
-`SkinProfileSettings` replaces the single 7K selection with a mapping from
-canonical gameplay header type to selected entry. Entry-specific configuration
-continues to use the existing `entries` map. The persisted legacy
-`selected7KeyEntry` is read as the 7K mapping during migration and is no
-longer emitted by new saves.
+`SkinProfileSettings` gains an authoritative mapping from canonical gameplay
+header type to selected entry. Entry-specific configuration continues to use
+the existing `entries` map. The old single-7K fields remain derived
+in-memory compatibility aliases while package recovery and activation migrate;
+the persisted legacy `selected7KeyEntry` is read as the 7K mapping during
+migration and is no longer emitted by new saves.
 
 Validation becomes gameplay-type aware: a Lua entry is selectable when its
 decoded header has one of the supported gameplay types above and the existing

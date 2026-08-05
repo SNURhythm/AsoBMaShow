@@ -47,9 +47,9 @@ the immutable catalog snapshot.
 - Produces `skin::GameplaySkinTrait` with `skinType`, `keyMode`, and `label`.
 - Produces `gameplaySkinTraits()`, `gameplaySkinTraitForSkinType(int)`, and
   `gameplaySkinTraitForKeyMode(int)`.
-- Replaces `SkinProfileSettings::selected7KeyEntry` and
-  `gameplayCompatibilityEnabled` with
-  `std::map<int, SkinEntryId> selectedGameplayEntries`.
+- Adds authoritative `std::map<int, SkinEntryId> selectedGameplayEntries`.
+  `selected7KeyEntry` and `gameplayCompatibilityEnabled` remain derived,
+  non-serialized compatibility aliases until their downstream consumers move.
 
 - [ ] **Step 1: Write the failing trait/migration tests**
 
@@ -90,8 +90,9 @@ inline constexpr std::array kGameplaySkinTraits{
 `readSkinProfileSettings` reads `selectedGameplayEntries` first, then maps a
 valid legacy `selected7KeyEntry` to type 0 only when no type-0 entry was
 already present. Serialization emits only the new object keyed by decimal skin
-type. `sanitize()` normalizes every selected entry and removes keys that are
-not returned by `gameplaySkinTraitForSkinType`.
+type. `sanitize()` normalizes every selected entry, removes keys that are not
+returned by `gameplaySkinTraitForSkinType`, then derives the old 7K aliases
+from the type-0 map entry.
 
 - [ ] **Step 4: Run the focused green tests**
 
