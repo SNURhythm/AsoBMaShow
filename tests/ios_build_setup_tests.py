@@ -31,6 +31,7 @@ SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
 MAIN_SOURCE = ROOT / "src/main.cpp"
 IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
 IOS_NATIVES_HEADER = ROOT / "src/iOSNatives.hpp"
+SKIN_STORAGE_PATHS_SOURCE = ROOT / "src/skin/SkinStoragePaths.cpp"
 SKIN_ALIAS_DETECTOR_APPLE = ROOT / "src/skin/package/SkinAliasDetectorApple.mm"
 VCPKG_MANIFEST = ROOT / "vcpkg.json"
 IOS_LIB_SCRIPT = ROOT / "scripts/get_ios_libs.py"
@@ -574,9 +575,21 @@ class IOSBuildSetupTests(unittest.TestCase):
         )
         implementation = source[implementation_start:implementation_end]
         self.assertIn("NSDocumentDirectory", implementation)
-        self.assertIn("create:YES", implementation)
+        self.assertIn("NSSearchPathForDirectoriesInDomains", implementation)
+        self.assertIn("if (paths.count == 0)", implementation)
+        self.assertIn("createDirectoryAtURL", implementation)
         self.assertIn("URLByResolvingSymlinksInPath", implementation)
         self.assertIn("resolvedDirectory.fileSystemRepresentation", implementation)
+
+    def test_ios_skin_storage_keeps_all_state_in_files_visible_documents(self):
+        source = SKIN_STORAGE_PATHS_SOURCE.read_text(encoding="utf-8")
+        start = source.index("SkinStorageRoots defaultSkinStorageRoots()")
+        end = source.index("#endif", start)
+        implementation = source[start:end]
+        self.assertIn('Utils::GetDocumentsPath("Skins")', implementation)
+        self.assertIn('const std::filesystem::path workspace = visible / "_runtime";', implementation)
+        self.assertIn("return deriveSkinStorageRoots(visible, workspace);", implementation)
+        self.assertNotIn("GetIOSApplicationSupportPath", implementation)
 
     def test_ios_folder_handoff_and_files_document_access_are_declared(self):
         with INFO_PLIST.open("rb") as handle:

@@ -12,9 +12,7 @@
 #include <string_view>
 #include <utility>
 
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-#include "../iOSNatives.hpp"
-#elif TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
 #endif
 
@@ -59,25 +57,27 @@ SkinStorageRoots deriveSkinStorageRoots(std::filesystem::path visiblePackages,
 #if !defined(ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS)
 SkinStorageRoots defaultSkinStorageRoots() {
   const std::filesystem::path visible = Utils::GetDocumentsPath("Skins");
-  std::filesystem::path privateRoot;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  const std::filesystem::path applicationSupport =
-      GetIOSApplicationSupportPath();
-  if (!applicationSupport.empty()) {
-    privateRoot = applicationSupport / "Skins";
-  }
+  // Every skin file is intentionally Files-visible on iOS. Runtime revisions,
+  // catalog, and profile overlays share this writable workspace so edits may be
+  // made while the app is running.
+  const std::filesystem::path workspace = visible / "_runtime";
+  return deriveSkinStorageRoots(visible, workspace);
 #elif TARGET_OS_ANDROID
+  std::filesystem::path privateRoot;
   const std::filesystem::path internalFiles = GetAndroidInternalFilesDir();
   if (!internalFiles.empty()) {
     privateRoot = internalFiles / ".asobmashow-private" / "Skins";
   }
+  return deriveSkinStorageRoots(visible, privateRoot);
 #else
+  std::filesystem::path privateRoot;
   const std::filesystem::path applicationRoot = Utils::GetDocumentsPath();
   if (!applicationRoot.empty()) {
     privateRoot = applicationRoot / ".asobmashow-private" / "Skins";
   }
-#endif
   return deriveSkinStorageRoots(visible, privateRoot);
+#endif
 }
 #endif
 

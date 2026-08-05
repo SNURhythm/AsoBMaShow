@@ -3883,13 +3883,22 @@ void StopIOSSecurityScopedResource(void *resource) {
 std::string GetIOSDocumentsPath() {
   @autoreleasepool {
     NSFileManager *manager = NSFileManager.defaultManager;
-    NSURL *directory = [manager URLForDirectory:NSDocumentDirectory
-                                       inDomain:NSUserDomainMask
-                              appropriateForURL:nil
-                                         create:YES
-                                          error:nil];
+    NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES);
+    if (paths.count == 0) {
+      return {};
+    }
+    NSURL *directory =
+        [NSURL fileURLWithPath:paths.firstObject isDirectory:YES];
     NSURL *resolvedDirectory = directory.URLByResolvingSymlinksInPath;
     if (resolvedDirectory == nil) {
+      return {};
+    }
+    NSError *error = nil;
+    if (![manager createDirectoryAtURL:resolvedDirectory
+            withIntermediateDirectories:YES
+                             attributes:nil
+                                  error:&error]) {
       return {};
     }
     return std::string(resolvedDirectory.fileSystemRepresentation);
