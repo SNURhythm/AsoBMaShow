@@ -372,6 +372,16 @@ void testRuntimeProvidesBeatorajaSafeOsLibrary() {
   }
 }
 
+void testRuntimeSearchesVirtualPackagePath() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::Validation, "package_path_module.luaskin");
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "a skin package.path module root is searched virtually");
+}
+
 void testConfiguredTableUsesCanonicalVirtualData() {
   auto harness =
       makeHarness(LuaRuntimePurpose::Validation, "configuration_table.luaskin");
@@ -863,6 +873,7 @@ int main() {
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();
   testRuntimeProvidesBeatorajaSafeOsLibrary();
+  testRuntimeSearchesVirtualPackagePath();
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
   testValueHandlesLoseAuthorityWhenTheirRuntimeCloses();

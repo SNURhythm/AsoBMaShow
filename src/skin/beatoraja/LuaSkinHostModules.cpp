@@ -1033,28 +1033,68 @@ int doFile(lua_State *state) {
   return lua_gettop(state);
 }
 
+std::string modulePathSubstitution(std::string_view moduleName) {
+  std::string substitution(moduleName);
+  if (substitution.find('/') == std::string::npos) {
+    std::ranges::replace(substitution, '.', '/');
+  }
+  return substitution;
+}
+
 int moduleLoader(lua_State *state) {
   LuaSkinHostModulesImpl *impl = host(state);
   std::size_t nameSize = 0;
   const char *name = luaL_checklstring(state, 1, &nameSize);
   int loadStatus = LUA_ERRFILE;
-  bool missing = false;
-  {
-    const auto read = impl->fileSystem->readModule(
-        std::string_view(name, nameSize), LuaSkinHostPolicy::maxTextChunkBytes);
-    if (read.failure) {
-      missing = read.failure->code == SkinFileError::Missing;
-      if (!missing) {
-        impl->storeFileError(*read.failure);
+  bool found = false;
+  lua_getglobal(state, "package");
+  lua_getfield(state, -1, "path");
+  std::size_t searchPathSize = 0;
+  const char *searchPath = luaL_checklstring(state, -1, &searchPathSize);
+  const std::string substitution =
+      modulePathSubstitution(std::string_view(name, nameSize));
+  const std::string searchTemplates(searchPath, searchPathSize);
+  const std::string_view templates(searchTemplates);
+  lua_pop(state, 2);
+
+  std::size_t start = 0;
+  while (start <= templates.size()) {
+    const std::size_t end = templates.find(';', start);
+    const std::string_view pattern = templates.substr(
+        start, end == std::string_view::npos ? templates.size() - start
+                                              : end - start);
+    if (!pattern.empty() && pattern.find('?') != std::string_view::npos) {
+      std::string candidate;
+      candidate.reserve(pattern.size() + substitution.size());
+      for (const char character : pattern) {
+        if (character == '?') {
+          candidate += substitution;
+        } else {
+          candidate.push_back(character);
+        }
       }
-    } else {
-      std::string chunkName = "@module:" + std::string(name, nameSize);
-      loadStatus = luaL_loadbuffer(
-          state, reinterpret_cast<const char *>(read.bytes.data()),
-          read.bytes.size(), chunkName.c_str());
+      const auto read = impl->fileSystem->read(
+          candidate, SkinFileUse::LuaModule,
+          LuaSkinHostPolicy::maxTextChunkBytes);
+      if (!read.failure) {
+        found = true;
+        std::string chunkName = "@module:" + std::string(name, nameSize);
+        loadStatus = luaL_loadbuffer(
+            state, reinterpret_cast<const char *>(read.bytes.data()),
+            read.bytes.size(), chunkName.c_str());
+        break;
+      }
+      if (read.failure->code != SkinFileError::Missing) {
+        impl->storeFileError(*read.failure);
+        return raiseStoredError(state, impl);
+      }
     }
+    if (end == std::string_view::npos) {
+      break;
+    }
+    start = end + 1;
   }
-  if (missing) {
+  if (!found) {
     lua_pushfstring(state, "\n\tvirtual module '%s' was not found", name);
     return 1;
   }
