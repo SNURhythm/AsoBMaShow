@@ -96,6 +96,7 @@ public:
     owner.generation = 5;
     owner.settings.gameplayCompatibilityEnabled = true;
     owner.settings.selected7KeyEntry = entry;
+    owner.settings.selectedGameplayEntries.emplace(0, entry);
     owner.settings.entries[entry].options["choice"] = 0;
     activeEntrySettings = owner.settings.entries.at(entry);
     catalog = std::make_shared<SkinPackageCatalogSnapshot>();
@@ -677,12 +678,30 @@ void testDisabledNextChartClearsThePreviousSessionIdentity() {
       .entry = chart->activation.entry,
       .revisionDigest = chart->activation.revision.revision().lowercaseSha256,
       .configurationDigest = chart->activation.configurationDigest};
+  fake.owner.settings.selectedGameplayEntries.clear();
+  fake.owner.settings.selected7KeyEntry.reset();
   fake.owner.settings.gameplayCompatibilityEnabled = false;
   ++fake.owner.generation;
   require(!lifecycle.acquireForNextChart() &&
               lifecycle.requestViewportReset(identity, {}).disposition ==
                   GameplayViewportPersistenceDisposition::Rejected,
           "a built-in-only next chart cannot reuse the preceding identity");
+}
+
+void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
+  LifecycleFake fake;
+  fake.owner.settings.selectedGameplayEntries.clear();
+  fake.owner.settings.selectedGameplayEntries.emplace(1, fake.entry);
+  fake.owner.settings.selected7KeyEntry.reset();
+  fake.owner.settings.gameplayCompatibilityEnabled = true;
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+
+  require(!lifecycle.acquireForNextChart(7).has_value() &&
+              lifecycle.acquireForNextChart(5).has_value() &&
+              !lifecycle.acquireForNextChart(10).has_value(),
+          "next-chart acquisition selects only the skin trait matching the "
+          "chart keymode");
 }
 
 void testViewportResetValidatesAllIdentityFieldsAndCoalescesLatest() {
@@ -973,6 +992,7 @@ int main() {
   testStaleSessionIsDiagnosedAndCannotEnterWriterChain();
   testWriterIngressIsBoundedPerSession();
   testDisabledNextChartClearsThePreviousSessionIdentity();
+  testNextChartAcquisitionUsesTheMatchingKeymodeTrait();
   testWriterWaitsForViewportCommitAndRebasesOntoItsSuccessor();
   testViewportResetValidatesAllIdentityFieldsAndCoalescesLatest();
   testViewportResetRejectsEachStaleIdentityField();

@@ -124,8 +124,10 @@ void gameplaySceneOwnsOnlyThePresentationBoundary() {
          "gameplay prepares the matched presentation exactly once per frame");
   expect(countOccurrences(source, "presentation->render(renderContext)") == 1,
          "gameplay renders the matched presentation exactly once per frame");
-  expectContains(source, "chart->Meta.KeyMode != 7",
-                 "unsupported charts cannot consume a 7-key activation");
+  expectAbsent(source, "chart->Meta.KeyMode != 7",
+               "gameplay does not hard-code 7K skin acquisition");
+  expectContains(source, "acquireGameplaySkinForNextChart(chart->Meta.KeyMode)",
+                 "gameplay requests the selected skin for the chart keymode");
   expectContains(source,
                  "capturePlayfieldVisualState(\n      initialGameplayTimeMicros,\n      getVisualTimeMicros(initialGameplayTimeMicros),\n      preparationIndicatorActive(initialRawSongTimeMicros));\n  acquireGameplaySkinForAttempt();",
                  "every retry captures authoritative initial state before reacquiring through the injected attempt boundary");

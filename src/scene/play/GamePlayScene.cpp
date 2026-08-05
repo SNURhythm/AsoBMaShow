@@ -1205,7 +1205,7 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *coordinator =
       dynamic_cast<PlayfieldPresentationCoordinator *>(presentation);
-  if (coordinator == nullptr || chart == nullptr || chart->Meta.KeyMode != 7 ||
+  if (coordinator == nullptr || chart == nullptr ||
       !context.acquireGameplaySkinForNextChart ||
       !context.skinStorageRoots || !context.skinResourcePreparationService ||
       !context.skinConfigurationWriteQueue ||
@@ -1219,7 +1219,9 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
   bool identityCaptured = false;
   const skin::UiLogicalRect safeUiBounds = gameplaySkinSafeUiBounds();
   (void)skin::runGameplaySkinAttemptInstallFailClosed(
-      [&]() { return context.acquireGameplaySkinForNextChart(); },
+      [&]() {
+        return context.acquireGameplaySkinForNextChart(chart->Meta.KeyMode);
+      },
       [&](skin::GameplaySkinActivationRequest request)
           -> std::unique_ptr<skin::PlaySkinSession> {
         capturedEntry = request.activation.entry;

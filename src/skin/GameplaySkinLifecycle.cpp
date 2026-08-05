@@ -1,5 +1,7 @@
 #include "GameplaySkinLifecycle.h"
 
+#include "GameplaySkinTraits.h"
+
 #include <algorithm>
 #include <atomic>
 #include <deque>
@@ -39,6 +41,13 @@ bool sameIdentity(const PlaySkinSessionIdentity &left,
          left.profileId == right.profileId && left.entry == right.entry &&
          left.revisionDigest == right.revisionDigest &&
          left.configurationDigest == right.configurationDigest;
+}
+
+bool selectsGameplayEntry(const SkinProfileSettings &settings,
+                          const SkinEntryId &entry) {
+  return std::ranges::any_of(
+      settings.selectedGameplayEntries,
+      [&entry](const auto &selection) { return selection.second == entry; });
 }
 
 void applyWrite(EntryProfileSettings &entry,
@@ -402,7 +411,7 @@ struct GameplaySkinLifecycle::Impl {
     auto candidate = writer->base.settings;
     const auto found = candidate.entries.find(writer->identity.entry);
     if (found == candidate.entries.end() ||
-        candidate.selected7KeyEntry != writer->identity.entry) {
+        !selectsGameplayEntry(candidate, writer->identity.entry)) {
       invalidateWriterChain(
           "skin.lifecycle.writer_entry_changed",
           "The selected gameplay skin entry changed before writer commit");
@@ -412,8 +421,7 @@ struct GameplaySkinLifecycle::Impl {
       applyWrite(found->second, write);
     }
     candidate.sanitize();
-    if (!candidate.selected7KeyEntry ||
-        *candidate.selected7KeyEntry != writer->identity.entry ||
+    if (!selectsGameplayEntry(candidate, writer->identity.entry) ||
         !candidate.entries.contains(writer->identity.entry)) {
       invalidateWriterChain(
           "skin.lifecycle.writer_candidate_invalid",
@@ -525,10 +533,11 @@ struct GameplaySkinLifecycle::Impl {
       if (activeProfile && deps.snapshotProfile) {
         try {
           const auto base = deps.snapshotProfile(*activeProfile);
-          if (base.settings.gameplayCompatibilityEnabled &&
-              base.settings.selected7KeyEntry) {
+          for (const auto &[skinType, entry] :
+               base.settings.selectedGameplayEntries) {
+            (void)skinType;
             pendingRevalidations.push_back(
-                {.base = base, .entry = *base.settings.selected7KeyEntry});
+                {.base = base, .entry = entry});
           }
         } catch (...) {
         }
@@ -568,9 +577,8 @@ struct GameplaySkinLifecycle::Impl {
           successor.activation.entry != writer->identity.entry ||
           successor.activation.revision.revision().lowercaseSha256 !=
               writer->identity.revisionDigest ||
-          !successor.candidateProfileSettings.selected7KeyEntry ||
-          *successor.candidateProfileSettings.selected7KeyEntry !=
-              writer->identity.entry ||
+          !selectsGameplayEntry(successor.candidateProfileSettings,
+                                writer->identity.entry) ||
           successorEntry == successor.candidateProfileSettings.entries.end() ||
           successorEntry->second != successor.activation.reconciledSettings ||
           skinConfigurationDigest(successor.activation.reconciledSettings) !=
@@ -692,9 +700,7 @@ struct GameplaySkinLifecycle::Impl {
     }
     try {
       auto snapshot = deps.snapshotProfile(identity.profileId);
-      if (!snapshot.settings.gameplayCompatibilityEnabled ||
-          !snapshot.settings.selected7KeyEntry ||
-          *snapshot.settings.selected7KeyEntry != identity.entry) {
+      if (!selectsGameplayEntry(snapshot.settings, identity.entry)) {
         return std::nullopt;
       }
       const auto entry = snapshot.settings.entries.find(identity.entry);
@@ -993,10 +999,11 @@ void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
   }
   try {
     const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile);
-    if (snapshot.settings.gameplayCompatibilityEnabled &&
-        snapshot.settings.selected7KeyEntry) {
+    for (const auto &[skinType, entry] :
+         snapshot.settings.selectedGameplayEntries) {
+      (void)skinType;
       impl_->pendingRevalidations.push_back(
-          {.base = snapshot, .entry = *snapshot.settings.selected7KeyEntry});
+          {.base = snapshot, .entry = entry});
     }
   } catch (...) {
   }
@@ -1055,11 +1062,11 @@ void GameplaySkinLifecycle::poll() {
   impl_->consumeProfileCompletions();
   if (impl_->deps.takeRevalidationRequests) {
     for (auto &snapshot : impl_->deps.takeRevalidationRequests()) {
-      if (snapshot.settings.gameplayCompatibilityEnabled &&
-          snapshot.settings.selected7KeyEntry) {
+      for (const auto &[skinType, entry] :
+           snapshot.settings.selectedGameplayEntries) {
+        (void)skinType;
         impl_->pendingRevalidations.push_back(
-            {.base = std::move(snapshot),
-             .entry = *snapshot.settings.selected7KeyEntry});
+            {.base = snapshot, .entry = entry});
       }
     }
   }
@@ -1084,7 +1091,7 @@ GameplaySkinLifecycle::catalogSnapshot() const noexcept {
 }
 
 std::optional<GameplaySkinActivationRequest>
-GameplaySkinLifecycle::acquireForNextChart() {
+GameplaySkinLifecycle::acquireForNextChart(int keyMode) {
   if (impl_->stopped || !impl_->initialized || !impl_->acquisitionReady ||
       !impl_->activeProfile ||
       !impl_->deps.snapshotProfile || !impl_->deps.acquireActivation) {
@@ -1097,11 +1104,16 @@ GameplaySkinLifecycle::acquireForNextChart() {
   try {
     auto base = impl_->deps.snapshotProfile(*impl_->activeProfile);
     base.settings.sanitize();
-    if (!base.settings.gameplayCompatibilityEnabled ||
-        !base.settings.selected7KeyEntry) {
+    const auto trait = gameplaySkinTraitForKeyMode(keyMode);
+    if (!trait) {
       return std::nullopt;
     }
-    const auto entry = *base.settings.selected7KeyEntry;
+    const auto selectedTrait =
+        base.settings.selectedGameplayEntries.find(trait->skinType);
+    if (selectedTrait == base.settings.selectedGameplayEntries.end()) {
+      return std::nullopt;
+    }
+    const auto entry = selectedTrait->second;
     const auto selected = base.settings.entries.find(entry);
     if (selected == base.settings.entries.end()) {
       return std::nullopt;

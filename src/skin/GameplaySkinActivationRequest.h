@@ -21,7 +21,7 @@ struct GameplaySkinActivationRequest {
 };
 
 using AcquireGameplaySkinForNextChart =
-    std::function<std::optional<GameplaySkinActivationRequest>()>;
+    std::function<std::optional<GameplaySkinActivationRequest>(int keyMode)>;
 
 // One noexcept boundary around the destructive handoff from a consumed
 // next-attempt request to an installed chart-lifetime session. In particular,

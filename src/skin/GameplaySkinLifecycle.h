@@ -106,7 +106,7 @@ public:
   [[nodiscard]] std::shared_ptr<const SkinPackageCatalogSnapshot>
   catalogSnapshot() const noexcept;
   [[nodiscard]] std::optional<GameplaySkinActivationRequest>
-  acquireForNextChart();
+  acquireForNextChart(int keyMode = 7);
   void recordPresentationFailure(const PresentationFailure &);
   void shutdown() noexcept;
 

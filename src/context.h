@@ -290,9 +290,9 @@ public:
             lifecycleClientId);
         gameplaySkinLifecycle->startAfterProfileInitialization(
             *activeProfileId);
-        acquireGameplaySkinForNextChart = [this] {
+        acquireGameplaySkinForNextChart = [this](int keyMode) {
           return gameplaySkinLifecycle
-                     ? gameplaySkinLifecycle->acquireForNextChart()
+                     ? gameplaySkinLifecycle->acquireForNextChart(keyMode)
                      : std::optional<skin::GameplaySkinActivationRequest>{};
         };
       }
