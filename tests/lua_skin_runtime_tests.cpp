@@ -775,7 +775,12 @@ void testLoadfileUsesBeatorajaRestrictedIoRoot() {
   if (!harness) {
     return;
   }
-  expect(harness->runtime->loadHeader().value.has_value(),
+  const auto header = harness->runtime->loadHeader();
+  if (header.failure) {
+    std::cerr << "loadfile contract diagnostic: " << header.failure->code
+              << ": " << header.failure->message << '\n';
+  }
+  expect(header.value.has_value(),
          "loadfile compiles a selected-skin Lua file without executing it");
 }
 

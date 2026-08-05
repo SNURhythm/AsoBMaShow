@@ -17,13 +17,21 @@ local loaded_first, loaded_number = loaded()
 assert(loaded_first == "alpha" and loaded_number == 7)
 
 local reader = assert(io.open("input.txt"))
-assert(reader.seek == nil and reader.read == nil and reader.flush == nil)
+assert(type(reader.seek) == "function" and type(reader.read) == "function" and
+       type(reader.flush) == "function" and type(reader.setvbuf) == "function")
+assert(reader:setvbuf("full", 64) == true)
+assert(reader:read() == "first-line")
 local lines = reader:lines()
-assert(lines() == "first-line")
 assert(lines() == "second-line")
 assert(lines() == nil)
 assert(reader:close() == true)
 assert(reader:close() == true)
+
+local raw = assert(io.open("input.txt", "rb"))
+assert(raw:read(5) == "first")
+assert(raw:read("*l") == "-line")
+assert(raw:read("*a") == "second-line\n")
+assert(raw:close() == true)
 
 local writer = assert(io.open("fresh/deep/output.txt", "w"))
 assert(writer:write() == writer)
@@ -39,10 +47,42 @@ assert(verify:close() == true)
 
 local missing, missing_error = io.open("missing.txt", "r")
 assert(missing == nil and type(missing_error) == "string")
-for _, mode in ipairs({"rb", "r+", "x", ""}) do
+for _, mode in ipairs({"x", ""}) do
   local handle, mode_error = io.open("input.txt", mode)
   assert(handle == nil and type(mode_error) == "string")
 end
+
+local binary = assert(io.open("input.txt", "rb"))
+assert(binary:lines()() == "first-line")
+assert(binary:close() == true)
+
+local seed = assert(io.open("fresh/update.txt", "w"))
+assert(seed:write("first\nsecond\n") == seed)
+assert(seed:close() == true)
+local update = assert(io.open("fresh/update.txt", "r+"))
+assert(update:lines()() == "first")
+assert(update:write("changed") == update)
+assert(update:close() == true)
+local update_verify = assert(io.open("fresh/update.txt", "r"))
+assert(update_verify:lines()() == "first")
+assert(update_verify:lines()() == "changed")
+assert(update_verify:close() == true)
+
+local write_update = assert(io.open("fresh/write-update.txt", "w+"))
+assert(write_update:write("write") == write_update)
+assert(write_update:seek("set", 0) == 0)
+assert(write_update:lines()() == "write")
+assert(write_update:flush() == true)
+assert(write_update:close() == true)
+local append_update = assert(io.open("fresh/write-update.txt", "a+"))
+assert(append_update:seek("set", 0) == 0)
+assert(append_update:lines()() == "write")
+assert(append_update:seek("set", 0) == 0)
+assert(append_update:write("read") == append_update)
+assert(append_update:close() == true)
+local append_verify = assert(io.open("fresh/write-update.txt", "r"))
+assert(append_verify:lines()() == "reade")
+assert(append_verify:close() == true)
 
 local handles = {}
 for index = 1, 65 do
