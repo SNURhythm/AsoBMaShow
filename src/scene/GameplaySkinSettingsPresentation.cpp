@@ -202,9 +202,10 @@ std::string gameplaySkinSettingsPresentationKey(
   encoder.unsignedNumber(snapshot.progress.totalBytes);
   encoder.unsignedNumber(snapshot.progress.completedFiles);
 
-  encoder.boolean(snapshot.selected7KeyEntry.has_value());
-  if (snapshot.selected7KeyEntry) {
-    encodeEntry(encoder, *snapshot.selected7KeyEntry);
+  encoder.unsignedNumber(snapshot.selectedGameplayEntries.size());
+  for (const auto &[skinType, entry] : snapshot.selectedGameplayEntries) {
+    encoder.signedNumber(skinType);
+    encodeEntry(encoder, entry);
   }
 
   encoder.boolean(snapshot.preparedName.has_value());

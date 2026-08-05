@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,6 +48,9 @@ struct GameplaySkinSettingsSnapshot {
   GameplaySkinSettingsState state = GameplaySkinSettingsState::Empty;
   bool featureAvailable = true;
   bool compatibilityEnabled = false;
+  std::map<int, SkinEntryId> selectedGameplayEntries;
+  // Transitional projection for old callers. The trait map above is the UI's
+  // source of truth.
   std::optional<SkinEntryId> selected7KeyEntry;
   std::vector<GameplaySkinEntryRow> entries;
   std::optional<SkinPackageNameSuggestion> preparedName;
@@ -107,6 +111,10 @@ public:
   [[nodiscard]] ControllerActionResult requestRescan();
   [[nodiscard]] ControllerActionResult
   requestRevalidation(const SkinEntryId &entry);
+  [[nodiscard]] ControllerActionResult
+  selectGameplayTrait(int skinType, const SkinEntryId &entry);
+  [[nodiscard]] ControllerActionResult clearGameplayTrait(int skinType);
+  // Transitional convenience API: selects the trait declared by the entry.
   [[nodiscard]] ControllerActionResult select(const SkinEntryId &entry);
   [[nodiscard]] ControllerActionResult setCompatibilityEnabled(bool enabled);
   [[nodiscard]] ControllerActionResult setOption(const SkinEntryId &entry,

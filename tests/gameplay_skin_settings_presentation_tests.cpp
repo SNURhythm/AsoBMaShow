@@ -75,6 +75,7 @@ skin::GameplaySkinSettingsSnapshot snapshotWithEntry() {
   snapshot.featureAvailable = true;
   snapshot.compatibilityEnabled = true;
   snapshot.selected7KeyEntry = entryId();
+  snapshot.selectedGameplayEntries.emplace(0, entryId());
   snapshot.entries = {entryRow()};
   snapshot.progress = {.phase = skin::SkinProgressPhase::Publishing,
                        .completedBytes = 10,
@@ -199,6 +200,10 @@ void testActionDrivingChangesInvalidatePresentation() {
   requirePresentationChange(
       base, [](auto &value) { value.featureAvailable = false; },
       "feature availability changes invalidate presentation");
+  requirePresentationChange(
+      base,
+      [](auto &value) { value.selectedGameplayEntries.emplace(1, entryId("-5k")); },
+      "trait-specific selection changes invalidate presentation");
 }
 
 void testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity() {

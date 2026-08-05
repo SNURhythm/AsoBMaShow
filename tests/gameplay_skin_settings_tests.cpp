@@ -120,7 +120,7 @@ public:
     SkinEntryMetadataSnapshot metadata;
     metadata.displayName = "Controller Fixture";
     metadata.author = "AsoBMaShow tests";
-    metadata.skinType = 0;
+    metadata.skinType = skinType.load();
     metadata.authoredWidth = 1280;
     metadata.authoredHeight = 720;
     metadata.options.push_back({
@@ -130,13 +130,14 @@ public:
                     {.label = "2P", .value = 921}},
         .defaultLabel = "1P",
     });
-    return {.disposition = SkinValidationDisposition::Selectable7Key,
+    return {.disposition = SkinValidationDisposition::SelectableGameplay,
             .reconciledSettings = reconciled,
             .metadata = std::move(metadata),
             .configurationDigest = skinConfigurationDigest(reconciled)};
   }
 
   std::atomic_bool invalidConfiguration = false;
+  std::atomic_int skinType = 0;
 };
 
 class FakeProfileOwner final : public ISkinProfileSettingsOwner,
@@ -591,15 +592,15 @@ void testArchiveFolderSelectionAndDurableLayoutFlow() {
          "Reset Layout durably restores Fit");
 
   expect(controller->setCompatibilityEnabled(false).accepted,
-         "compatibility can be disabled without forgetting selection");
+         "legacy compatibility API can clear every trait selection");
   expect(pumpUntil(fixture, *controller,
                    [&] {
                      const auto settings =
                          fixture.owner.snapshot(fixture.profileA).settings;
                      return !settings.gameplayCompatibilityEnabled &&
-                            settings.selected7KeyEntry == entry;
+                            settings.selectedGameplayEntries.empty();
                    }),
-         "disablement preserves selected skin configuration");
+         "clearing compatibility removes trait selections");
 
   const auto clientB = fixture.commits.createClient();
   controller->profileChanged(fixture.profileB, clientB);
@@ -617,6 +618,33 @@ void testArchiveFolderSelectionAndDurableLayoutFlow() {
                  .viewport.mode == ViewportMode::Fit,
          "new-profile edits leave the old profile unchanged");
   controller->close();
+}
+
+void testSelectionIsScopedToTheSkinDeclaredGameplayTrait() {
+  Fixture fixture;
+  fixture.validator.skinType = 1;
+  const auto folder = fixture.temp.root() / "FiveKey";
+  writeText(folder / "play/play5.luaskin", "return { type = 1 }");
+  fixture.folderResults.push_back(
+      picked(folder, "FiveKey", PlatformTemporaryPathKind::Directory));
+  auto controller = fixture.makeController();
+  installQueuedImport(fixture, *controller, false);
+  const SkinEntryId entry = controller->snapshot().entries.front().entry;
+
+  expect(!controller->selectGameplayTrait(0, entry).accepted,
+         "a 5K skin cannot be selected for the 7K trait");
+  expect(controller->selectGameplayTrait(1, entry).accepted,
+         "a 5K skin selects its matching trait");
+  expect(pumpUntil(fixture, *controller,
+                   [&] {
+                     const auto settings =
+                         fixture.owner.snapshot(fixture.profileA).settings;
+                     const auto selected = settings.selectedGameplayEntries.find(1);
+                     return selected != settings.selectedGameplayEntries.end() &&
+                            selected->second == entry &&
+                            !settings.selected7KeyEntry;
+                   }),
+         "the durable profile retains the 5K mapping without replacing 7K");
 }
 
 void testRejectedPublishTransfersReservedStagingOffControllerThread() {
@@ -1518,6 +1546,7 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
 int main() {
   testSourceNameSuggestionPreservesTypedSemantics();
   testArchiveFolderSelectionAndDurableLayoutFlow();
+  testSelectionIsScopedToTheSkinDeclaredGameplayTrait();
   testRejectedPublishTransfersReservedStagingOffControllerThread();
   testRejectedPrepareTransfersExactTemporaryCleanupOffControllerThread();
   testNameReadyCancelTransfersOwnedSourceThroughReservedLane();

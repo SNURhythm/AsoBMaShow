@@ -1,5 +1,6 @@
 #include "GameplaySkinSettingsController.h"
 
+#include "../skin/GameplaySkinTraits.h"
 #include "../skin/package/SkinPathPolicy.h"
 
 #include <algorithm>
@@ -46,6 +47,18 @@ bool containsConfiguration(const SkinCatalogEntrySnapshot &catalogEntry,
   return std::ranges::find(catalogEntry.validatedConfigurationDigests,
                            digest) !=
          catalogEntry.validatedConfigurationDigests.end();
+}
+
+std::optional<int>
+selectableGameplaySkinType(const SkinCatalogEntrySnapshot *catalogEntry) {
+  if (catalogEntry == nullptr ||
+      catalogEntry->validation !=
+          SkinValidationDisposition::SelectableGameplay ||
+      !catalogEntry->metadata ||
+      !gameplaySkinTraitForSkinType(catalogEntry->metadata->skinType)) {
+    return std::nullopt;
+  }
+  return catalogEntry->metadata->skinType;
 }
 
 } // namespace
@@ -149,6 +162,8 @@ struct GameplaySkinSettingsController::Impl {
 
     projected.compatibilityEnabled =
         profile.settings.gameplayCompatibilityEnabled;
+    projected.selectedGameplayEntries =
+        profile.settings.selectedGameplayEntries;
     projected.selected7KeyEntry = profile.settings.selected7KeyEntry;
     projected.entries.clear();
     if (catalogValue) {
@@ -845,22 +860,54 @@ GameplaySkinSettingsController::requestRevalidation(const SkinEntryId &entry) {
 
 ControllerActionResult
 GameplaySkinSettingsController::select(const SkinEntryId &entry) {
+  const auto catalogValue = impl_->catalog();
+  const auto *catalogEntry = impl_->findCatalogEntry(entry, catalogValue);
+  const auto skinType = selectableGameplaySkinType(catalogEntry);
+  if (!skinType) {
+    return rejected("Only a validated gameplay skin can be selected.");
+  }
+  return selectGameplayTrait(*skinType, entry);
+}
+
+ControllerActionResult GameplaySkinSettingsController::selectGameplayTrait(
+    int skinType, const SkinEntryId &entry) {
   if (impl_->closed || impl_->hasControllerOperation()) {
     return rejected("Another gameplay skin operation is active.");
   }
+  if (!gameplaySkinTraitForSkinType(skinType)) {
+    return rejected("The requested gameplay skin trait is unavailable.");
+  }
   const auto catalogValue = impl_->catalog();
   const auto *catalogEntry = impl_->findCatalogEntry(entry, catalogValue);
-  if (!catalogEntry ||
-      catalogEntry->validation != SkinValidationDisposition::Selectable7Key) {
-    return rejected("Only a validated 7-key gameplay skin can be selected.");
+  const auto entrySkinType = selectableGameplaySkinType(catalogEntry);
+  if (!entrySkinType || *entrySkinType != skinType) {
+    return rejected("The selected skin does not support this gameplay trait.");
   }
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
           .settings;
-  candidate.selected7KeyEntry = entry;
+  candidate.selectedGameplayEntries.insert_or_assign(skinType, entry);
   candidate.entries.try_emplace(entry);
   return impl_->prepareActivation(entry, std::move(candidate),
                                   "Validating selected skin…");
+}
+
+ControllerActionResult
+GameplaySkinSettingsController::clearGameplayTrait(int skinType) {
+  if (impl_->closed || impl_->hasControllerOperation()) {
+    return rejected("Another gameplay skin operation is active.");
+  }
+  if (!gameplaySkinTraitForSkinType(skinType)) {
+    return rejected("The requested gameplay skin trait is unavailable.");
+  }
+  auto candidate =
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
+          .settings;
+  candidate.selectedGameplayEntries.erase(skinType);
+  // An empty new-format map must not be repopulated from a legacy alias.
+  candidate.selected7KeyEntry.reset();
+  candidate.gameplayCompatibilityEnabled = false;
+  return impl_->submitProfileOnly(std::move(candidate));
 }
 
 ControllerActionResult
@@ -872,21 +919,25 @@ GameplaySkinSettingsController::setCompatibilityEnabled(bool enabled) {
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
           .settings;
   if (enabled) {
-    if (!candidate.selected7KeyEntry) {
-      return rejected("Select a validated 7-key gameplay skin first.");
+    if (candidate.selectedGameplayEntries.empty()) {
+      return rejected("Select a validated gameplay skin first.");
     }
     const auto catalogValue = impl_->catalog();
-    const auto *catalogEntry =
-        impl_->findCatalogEntry(*candidate.selected7KeyEntry, catalogValue);
-    const auto settings = candidate.entries.find(*candidate.selected7KeyEntry);
-    const EntryProfileSettings defaults;
-    const auto &configured =
-        settings == candidate.entries.end() ? defaults : settings->second;
-    if (!catalogEntry ||
-        catalogEntry->validation != SkinValidationDisposition::Selectable7Key ||
-        !containsConfiguration(*catalogEntry, configured)) {
-      return rejected("The selected skin configuration is not validated.");
+    for (const auto &[skinType, entry] : candidate.selectedGameplayEntries) {
+      const auto *catalogEntry = impl_->findCatalogEntry(entry, catalogValue);
+      const auto entrySkinType = selectableGameplaySkinType(catalogEntry);
+      const auto settings = candidate.entries.find(entry);
+      const EntryProfileSettings defaults;
+      const auto &configured =
+          settings == candidate.entries.end() ? defaults : settings->second;
+      if (!entrySkinType || *entrySkinType != skinType ||
+          !containsConfiguration(*catalogEntry, configured)) {
+        return rejected("A selected skin configuration is not validated.");
+      }
     }
+  } else {
+    candidate.selectedGameplayEntries.clear();
+    candidate.selected7KeyEntry.reset();
   }
   candidate.gameplayCompatibilityEnabled = enabled;
   return impl_->submitProfileOnly(std::move(candidate));
@@ -901,8 +952,13 @@ GameplaySkinSettingsController::setOption(const SkinEntryId &entry,
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
           .settings;
+  const auto skinType = selectableGameplaySkinType(
+      impl_->findCatalogEntry(entry, impl_->catalog()));
+  if (!skinType) {
+    return rejected("Only a validated gameplay skin can be configured.");
+  }
   candidate.entries[entry].options[std::move(name)] = value;
-  candidate.selected7KeyEntry = entry;
+  candidate.selectedGameplayEntries.insert_or_assign(*skinType, entry);
   return impl_->prepareActivation(entry, std::move(candidate),
                                   "Validating skin option…");
 }
@@ -915,8 +971,13 @@ ControllerActionResult GameplaySkinSettingsController::setFileChoice(
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
           .settings;
+  const auto skinType = selectableGameplaySkinType(
+      impl_->findCatalogEntry(entry, impl_->catalog()));
+  if (!skinType) {
+    return rejected("Only a validated gameplay skin can be configured.");
+  }
   candidate.entries[entry].filePaths[std::move(name)] = std::move(value);
-  candidate.selected7KeyEntry = entry;
+  candidate.selectedGameplayEntries.insert_or_assign(*skinType, entry);
   return impl_->prepareActivation(entry, std::move(candidate),
                                   "Validating skin file choice…");
 }
@@ -929,8 +990,13 @@ ControllerActionResult GameplaySkinSettingsController::setOffset(
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
           .settings;
+  const auto skinType = selectableGameplaySkinType(
+      impl_->findCatalogEntry(entry, impl_->catalog()));
+  if (!skinType) {
+    return rejected("Only a validated gameplay skin can be configured.");
+  }
   candidate.entries[entry].offsets[std::move(name)] = value;
-  candidate.selected7KeyEntry = entry;
+  candidate.selectedGameplayEntries.insert_or_assign(*skinType, entry);
   return impl_->prepareActivation(entry, std::move(candidate),
                                   "Validating skin offset…");
 }
