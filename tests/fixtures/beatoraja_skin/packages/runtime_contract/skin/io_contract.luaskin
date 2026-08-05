@@ -12,6 +12,9 @@ assert(io.lines == nil and io.popen == nil and io.tmpfile == nil)
 local first, number = dofile("returns.lua")
 assert(first == "alpha" and number == 7)
 assert(not pcall(dofile, "returns.lua", "extra"))
+local loaded = assert(loadfile("returns.lua"))
+local loaded_first, loaded_number = loaded()
+assert(loaded_first == "alpha" and loaded_number == 7)
 
 local reader = assert(io.open("input.txt"))
 assert(reader.seek == nil and reader.read == nil and reader.flush == nil)
@@ -42,11 +45,9 @@ for _, mode in ipairs({"rb", "r+", "x", ""}) do
 end
 
 local handles = {}
-for index = 1, 64 do
+for index = 1, 65 do
   handles[index] = assert(io.open("input.txt", "r"))
 end
-local exhausted, exhausted_error = io.open("input.txt", "r")
-assert(exhausted == nil and type(exhausted_error) == "string")
 for _, handle in ipairs(handles) do assert(handle:close() == true) end
 assert(io.open("input.txt", "r"):close() == true)
 

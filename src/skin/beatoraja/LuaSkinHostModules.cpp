@@ -994,6 +994,31 @@ int doFile(lua_State *state) {
   return lua_gettop(state);
 }
 
+int loadFile(lua_State *state) {
+  LuaSkinHostModulesImpl *impl = host(state);
+  luaL_argcheck(state, lua_gettop(state) == 1, 1,
+                "loadfile accepts exactly one path");
+  std::size_t pathSize = 0;
+  const char *path = luaL_checklstring(state, 1, &pathSize);
+  const std::string_view virtualPath =
+      impl->configuredPathAlias(std::string_view(path, pathSize));
+  const auto read = impl->fileSystem->readLuaPath(
+      virtualPath, std::numeric_limits<std::uint64_t>::max());
+  if (read.failure) {
+    return expectedFailure(state, read.failure->message);
+  }
+  std::string chunkName = "@" + std::string(virtualPath);
+  const int loadStatus = luaL_loadbuffer(
+      state, reinterpret_cast<const char *>(read.bytes.data()),
+      read.bytes.size(), chunkName.c_str());
+  if (loadStatus == 0) {
+    return 1;
+  }
+  lua_pushnil(state);
+  lua_insert(state, -2);
+  return 2;
+}
+
 std::string modulePathSubstitution(std::string_view moduleName) {
   std::string substitution(moduleName);
   if (substitution.find('/') == std::string::npos) {
@@ -1401,13 +1426,14 @@ int installHost(lua_State *state) {
   for (const char *name : {"ffi", "jit", "debug", "bit"}) {
     setNilGlobal(state, name);
   }
-  for (const char *name :
-       {"collectgarbage", "gcinfo", "newproxy", "module", "loadfile"}) {
+  for (const char *name : {"collectgarbage", "gcinfo", "newproxy", "module"}) {
     setNilGlobal(state, name);
   }
 
   installClosure(state, impl, doFile);
   lua_setglobal(state, "dofile");
+  installClosure(state, impl, loadFile);
+  lua_setglobal(state, "loadfile");
   installClosure(state, impl, textLoader);
   lua_setglobal(state, "load");
   installClosure(state, impl, textLoader);

@@ -9,7 +9,7 @@ assert(package.loadlib == nil)
 assert(package.cpath == nil or package.cpath == "")
 assert(package.searchers == nil)
 assert(string.dump == nil)
-assert(loadfile == nil)
+assert(type(loadfile) == "function")
 
 assert(io ~= nil)
 assert(type(io.open) == "function")

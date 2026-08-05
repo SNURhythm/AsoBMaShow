@@ -19,6 +19,7 @@ assert(package.searchers == nil)
 assert(package.loadlib == nil)
 assert(package.cpath == nil)
 assert(string.dump == nil)
+assert(type(loadfile) == "function")
 
 assert(bit32.band(0xfff0, 0xff) == 240)
 assert(bit32.bor(0xf00, 0xff) == 4095)

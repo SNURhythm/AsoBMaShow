@@ -769,6 +769,16 @@ void testIoFacadeCallShapesHandlesAndHostByteLimit() {
   }
 }
 
+void testLoadfileUsesBeatorajaRestrictedIoRoot() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::Validation, "io_contract.luaskin");
+  if (!harness) {
+    return;
+  }
+  expect(harness->runtime->loadHeader().value.has_value(),
+         "loadfile compiles a selected-skin Lua file without executing it");
+}
+
 void testClosedLegacyFacadeIsExactAndDiagnosed() {
   auto harness =
       makeHarness(LuaRuntimePurpose::Validation, "legacy_facade.luaskin");
@@ -1044,6 +1054,7 @@ int main() {
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
   testLanguageSurfaceBit32AndTextOnlyLoading();
+  testLoadfileUsesBeatorajaRestrictedIoRoot();
   if (failures != 0) {
     std::cerr << failures << " lua skin runtime test(s) failed\n";
     return 1;
