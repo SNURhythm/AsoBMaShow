@@ -433,6 +433,7 @@ private:
 
 struct ActivationFixtureOptions {
   bool resourceBearing = false;
+  bool requireConfiguredState = false;
 };
 
 class ActivationFixture final {
@@ -468,6 +469,15 @@ if skin_config then
   if phase_count ~= 2 then
     error("configured phase did not reuse exactly one fresh header state")
   end
+ )lua";
+    if (options.requireConfiguredState) {
+      script += R"lua(
+  if main_state.option(81) ~= true then
+    error("configured state did not expose the initialized loaded option")
+  end
+)lua";
+    }
+    script += R"lua(
   local marker = io.open("configured-phase-marker.txt", "w")
   if marker then
     marker:write("configured")
@@ -540,9 +550,14 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
 
   PlaySkinSessionContext context(
       ViewportSettings viewport = {}, std::stop_token stop = {}) {
+    initialState_ = stateAt(1);
+    initialState_.authority.loadingState = PlayfieldLoadingState::Loaded;
+    initialProjection_ = projectionAt(initialState_.clock.serial);
     return {.sessionSerial = 73,
             .profileId = profile_,
             .chartModel = chart_,
+            .initialState = &initialState_,
+            .initialProjection = &initialProjection_,
             .viewport = viewport,
             .safeUiBounds = {.x = 0.0,
                              .y = 0.0,
@@ -582,6 +597,8 @@ private:
   SkinProfileId profile_;
   AcceptFiles aliases_;
   PlayfieldChartVisualModel chart_;
+  PlayfieldVisualState initialState_;
+  PlayfieldProjectionResult initialProjection_;
   EntryProfileSettings desired_;
   SkinResourcePreparationService resources_;
   std::shared_ptr<SessionTextureDevice> device_;
@@ -648,6 +665,17 @@ void testActivationCreatesAnOwningFreshStateSession() {
   expect(!weakRevision.hasLiveLease() &&
              fixture.liveCounters()->snapshot() == SkinLiveResourceSnapshot{},
          "final session teardown releases every revision pin and counter");
+}
+
+void testConfiguredLoadUsesTheInitializedAuthoritativeState() {
+  ActivationFixture fixture({.requireConfiguredState = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  const auto created =
+      PlaySkinSession::create(fixture.takeActivation(), fixture.context());
+  expect(created.session != nullptr && created.diagnostics.empty(),
+         "configured Lua load receives the initialized authoritative state");
 }
 
 void testActivationRejectsAReconciledDigestMismatch() {
@@ -934,7 +962,7 @@ return {
     mutations_ = SkinEventMutationTable(std::move(rules));
     bridge_ = std::make_unique<PlaySkinStateBridge>(PlaySkinStateBridgeContext{
         .chartModel = chart_,
-        .model = model_,
+        .model = &model_,
         .configuration = configuration_,
         .runtime = *runtime_,
         .mutationTable = mutations_});
@@ -2068,6 +2096,7 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
 
 int main() {
   testActivationCreatesAnOwningFreshStateSession();
+  testConfiguredLoadUsesTheInitializedAuthoritativeState();
   testActivationRejectsAReconciledDigestMismatch();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();

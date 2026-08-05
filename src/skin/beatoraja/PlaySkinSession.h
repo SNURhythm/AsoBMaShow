@@ -25,6 +25,11 @@ struct PlaySkinSessionContext {
   // Immutable chart-lifetime snapshot. The caller owns it and must keep it
   // alive and unchanged until the resulting PlaySkinSession is destroyed.
   const PlayfieldChartVisualModel &chartModel;
+  // The configured Lua pass runs with the same authoritative snapshot that
+  // starts the attempt. These are optional only so create() can diagnose an
+  // incomplete caller rather than fabricate state.
+  const PlayfieldVisualState *initialState = nullptr;
+  const PlayfieldProjectionResult *initialProjection = nullptr;
   ViewportSettings viewport;
   UiLogicalRect safeUiBounds;
   SkinStorageRoots storageRoots;

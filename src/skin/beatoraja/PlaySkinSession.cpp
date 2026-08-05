@@ -207,7 +207,7 @@ struct PlaySkinSession::OwnedActivation final {
             identitySeed(identity))),
         bridge(std::make_unique<PlaySkinStateBridge>(PlaySkinStateBridgeContext{
             .chartModel = *chartModel,
-            .model = model,
+            .model = &model,
             .configuration = configuration,
             .runtime = *runtime,
             .mutationTable = mutationTable})) {}
@@ -284,6 +284,22 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     result.diagnostics.push_back(sessionDiagnostic(
         "skin.session.serial_invalid",
         "Gameplay skin session serial must be nonzero."));
+    return result;
+  }
+  if (context.initialState == nullptr || context.initialProjection == nullptr) {
+    result.diagnostics.push_back(sessionDiagnostic(
+        "skin.session.initial_state_missing",
+        "Gameplay skin configuration requires an initialized authoritative "
+        "playfield state and projection."));
+    return result;
+  }
+  if (context.initialState->clock.serial == 0 ||
+      context.initialProjection->frameSerial !=
+          context.initialState->clock.serial) {
+    result.diagnostics.push_back(sessionDiagnostic(
+        "skin.session.initial_state_invalid",
+        "Gameplay skin configuration requires matching nonzero initial "
+        "playfield state and projection serials."));
     return result;
   }
   if (cancelled(context.stop, result)) {
@@ -396,7 +412,32 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
       return result;
     }
 
+    SkinEventMutationTable configuredMutationTable =
+        makePinnedSkinEventMutationTableV1();
+    PlaySkinStateBridge configuredStateBridge({
+        .chartModel = context.chartModel,
+        .model = nullptr,
+        .configuration = configuration,
+        .runtime = *runtime.runtime,
+        .mutationTable = configuredMutationTable,
+    });
+    configuredStateBridge.beginFrame(*context.initialState,
+                                     *context.initialProjection);
+    if (configuredStateBridge.frameSerial() !=
+        context.initialState->clock.serial) {
+      appendDiagnostics(result.diagnostics, configuredStateBridge.diagnostics());
+      configuredStateBridge.discardFrame();
+      if (!hasErrors(result.diagnostics)) {
+        result.diagnostics.push_back(sessionDiagnostic(
+            "skin.session.initial_state_invalid",
+            "Gameplay skin configuration could not bind its initialized "
+            "authoritative state."));
+      }
+      return result;
+    }
     auto configuredValue = runtime.runtime->loadConfigured(configuration);
+    appendDiagnostics(result.diagnostics, configuredStateBridge.diagnostics());
+    configuredStateBridge.discardFrame();
     if (!configuredValue.value) {
       appendFailure(result.diagnostics, std::move(configuredValue.failure),
                     "skin_lua_configured_load_failed",

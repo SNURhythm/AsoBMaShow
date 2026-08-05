@@ -1233,12 +1233,13 @@ void GamePlayScene::acquireGameplaySkinForAttempt() {
             {.sessionSerial = request.sessionSerial,
              .profileId = std::move(request.profileId),
              .chartModel = playfieldChartVisualModel,
+             .initialState = &capturedPlayfieldVisualState,
+             .initialProjection = &capturedPlayfieldProjection,
              .viewport = request.viewport,
              .safeUiBounds = safeUiBounds,
              .storageRoots = *context.skinStorageRoots,
              .resourcePreparation = *context.skinResourcePreparationService,
-             .textureDevice =
-                 std::make_shared<skin::BgfxSkinTextureDevice>(),
+             .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
              .liveResourceCounters = context.skinLiveResourceCounters,
              .configurationWrites = *context.skinConfigurationWriteQueue,
              .stop = {}});
@@ -2572,7 +2573,6 @@ bool GamePlayScene::reset() {
   state = nullptr;
   presentation->reset();
   gameplaySkinSafeBoundsInitialized = false;
-  acquireGameplaySkinForAttempt();
   updateSkinResetLayoutVisibility();
   playfieldProjection.reset();
   capturedPlayfieldVisualState = {};
@@ -2664,7 +2664,6 @@ bool GamePlayScene::reset() {
                                     preparationRange);
     context.jukebox.appendScheduledAudioEvents(replayKeysounds);
   }
-  context.jukebox.play(preparationPlan.playbackStartTimeMicros);
   playfieldFrameSerial = 0;
   playfieldLaneCoverPercent = effectiveNoteStartPositionPercent();
   playfieldLaneCoverResetPending = false;
@@ -2729,6 +2728,18 @@ bool GamePlayScene::reset() {
   resetHellChargeGaugeTracking(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
   state->isPlaying = true;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  const long long initialRawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long initialGameplayTimeMicros =
+      getGameplayTimeMicros(initialRawSongTimeMicros);
+  capturePlayfieldVisualState(
+      initialGameplayTimeMicros,
+      getVisualTimeMicros(initialGameplayTimeMicros),
+      preparationIndicatorActive(initialRawSongTimeMicros));
+  acquireGameplaySkinForAttempt();
+  updateSkinResetLayoutVisibility();
+#endif
+  context.jukebox.play(preparationPlan.playbackStartTimeMicros);
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   touchVisualizerLoaded = false;

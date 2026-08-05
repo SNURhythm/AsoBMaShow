@@ -352,7 +352,7 @@ void testBridgeOwnsSnapshotAndClosesEachFrameExactlyOnce() {
   configuration.offsetsById.emplace(3, ConfigOffset{.x = 7, .y = 9});
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -427,7 +427,7 @@ void testFramePropertiesUseAuthoritativeGaugeAndTimerRules() {
   configuration.offsetsById.emplace(3, ConfigOffset{.x = 7});
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -481,7 +481,7 @@ void testGameplayModeAndLoadingBooleanProperties() {
   BeatorajaSkinConfiguration configuration;
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -561,7 +561,7 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
   BeatorajaSkinConfiguration configuration;
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -740,7 +740,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
       {30, {.x = 30}}, {32, {.x = 32}}};
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -951,7 +951,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   PlayfieldChartVisualModel unauditedChart = chart;
   unauditedChart.text.auditedStringProperties.clear();
   PlaySkinStateBridge unaudited({.chartModel = unauditedChart,
-                                 .model = model,
+                                 .model = &model,
                                  .configuration = configuration,
                                  .runtime = runtime.runtime(),
                                  .mutationTable = mutations});
@@ -971,7 +971,7 @@ void testEmptyCustomObjectsStayZeroCost() {
   BeatorajaSkinConfiguration configuration;
   const auto mutations = makePinnedSkinEventMutationTableV1();
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -1024,7 +1024,7 @@ void testCustomTimersPrecedeAutomaticEventsInAuthoredOrder() {
                    .maximumArguments = 2});
   const SkinEventMutationTable mutations(std::move(rules));
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -1077,7 +1077,7 @@ void testCustomEventsAcceptManualAritiesAndRollbackCriticalFrames() {
   const SkinEventMutationTable mutations(std::move(rules));
   BeatorajaSkinConfiguration configuration;
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -1131,7 +1131,7 @@ void testAutomaticCustomEventUsesTheCapturedFrameClockForMinimumInterval() {
                    .maximumArguments = 2});
   const SkinEventMutationTable mutations(std::move(rules));
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -1197,7 +1197,7 @@ void testCustomObjectBudgetStopsLaterEventsAndRollsBackWrites() {
   const SkinEventMutationTable mutations(std::move(rules));
   BeatorajaSkinConfiguration configuration;
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});
@@ -1244,7 +1244,7 @@ void testFloatWritersResolveLocallyAndRollbackCallbackMutations() {
                        .maximumArguments = 2});
   SkinEventMutationTable mutations(std::move(testRules));
   PlaySkinStateBridge bridge({.chartModel = chart,
-                              .model = model,
+                              .model = &model,
                               .configuration = configuration,
                               .runtime = runtime.runtime(),
                               .mutationTable = mutations});

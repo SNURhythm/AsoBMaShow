@@ -169,8 +169,9 @@ SkinHostCallResult PlaySkinStateBridge::updateCustomObjects() {
     return {.diagnostics = diagnostics_};
   }
 
-  if (context_.model.model.customTimers.empty() &&
-      context_.model.model.customEvents.empty()) {
+  if (context_.model == nullptr ||
+      (context_.model->model.customTimers.empty() &&
+       context_.model->model.customEvents.empty())) {
     customObjectsUpdated_ = true;
     return {.diagnostics = diagnostics_};
   }
@@ -184,7 +185,7 @@ SkinHostCallResult PlaySkinStateBridge::updateCustomObjects() {
   SkinHostCallResult result;
   // IntMap iteration in the pinned target is not reproducible from IDs alone.
   // The validated model preserves declaration order, so use it directly.
-  for (const auto &timer : context_.model.model.customTimers) {
+  for (const auto &timer : context_.model->model.customTimers) {
     const auto updated = updateCustomTimer(timer);
     result.callbacksInvoked += updated.callbacksInvoked;
     if (updated.status != SkinHostCallStatus::Completed) {
@@ -195,7 +196,7 @@ SkinHostCallResult PlaySkinStateBridge::updateCustomObjects() {
       return result;
     }
   }
-  for (const auto &event : context_.model.model.customEvents) {
+  for (const auto &event : context_.model->model.customEvents) {
     const auto updated = updateCustomEvent(event);
     result.callbacksInvoked += updated.callbacksInvoked;
     if (updated.status != SkinHostCallStatus::Completed) {
@@ -225,31 +226,33 @@ PlaySkinStateBridge::executeEvent(int eventId, std::span<const int> arguments) {
             .diagnostics = diagnostics_};
   }
 
-  if (const auto event = std::ranges::find_if(
-          context_.model.model.customEvents,
-          [eventId](const SkinCustomEvent &candidate) {
-            return candidate.id == eventId;
-          }); event != context_.model.model.customEvents.end()) {
-    auto invoked = invokeCustomEvent(*event, arguments);
-    if (invoked.status == SkinHostCallStatus::Completed) {
-      try {
-        // Pinned CustomEvent.execute shares this clock with automatic update,
-        // so a manual invocation suppresses the same event until minInterval.
-        customEventLastExecutionMicros_.insert_or_assign(
-            event->id, state_->clock.visualTimeMicros);
-      } catch (...) {
-        reportDiagnostic({.code = "skin.play_state.custom_event_clock_failed",
-                          .message =
-                              "Custom event clock could not be recorded."});
-        invoked.status = SkinHostCallStatus::CriticalFailure;
+  if (context_.model != nullptr) {
+    if (const auto event = std::ranges::find_if(
+            context_.model->model.customEvents,
+            [eventId](const SkinCustomEvent &candidate) {
+              return candidate.id == eventId;
+            }); event != context_.model->model.customEvents.end()) {
+      auto invoked = invokeCustomEvent(*event, arguments);
+      if (invoked.status == SkinHostCallStatus::Completed) {
+        try {
+          // Pinned CustomEvent.execute shares this clock with automatic update,
+          // so a manual invocation suppresses the same event until minInterval.
+          customEventLastExecutionMicros_.insert_or_assign(
+              event->id, state_->clock.visualTimeMicros);
+        } catch (...) {
+          reportDiagnostic({.code = "skin.play_state.custom_event_clock_failed",
+                            .message =
+                                "Custom event clock could not be recorded."});
+          invoked.status = SkinHostCallStatus::CriticalFailure;
+        }
       }
+      if (invoked.status != SkinHostCallStatus::Completed) {
+        rollbackFrameWrites();
+      }
+      return {.status = invoked.status,
+              .callbacksInvoked = invoked.callbacksInvoked,
+              .diagnostics = diagnostics_};
     }
-    if (invoked.status != SkinHostCallStatus::Completed) {
-      rollbackFrameWrites();
-    }
-    return {.status = invoked.status,
-            .callbacksInvoked = invoked.callbacksInvoked,
-            .diagnostics = diagnostics_};
   }
 
   const auto *rule = context_.mutationTable.find(eventId);
@@ -361,11 +364,18 @@ SkinHostCallResult PlaySkinStateBridge::invokeCustomEvent(
 
 SkinHostCallResult PlaySkinStateBridge::invokeEventBinding(
     SkinEventBindingId id, std::span<const int> arguments) {
+  if (context_.model == nullptr) {
+    reportDiagnostic({.code = "skin.play_state.model_unavailable",
+                      .message = "Custom event bindings require the decoded "
+                                 "gameplay skin model."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
   const auto binding = std::ranges::find_if(
-      context_.model.model.events, [id](const SkinEventBinding &candidate) {
+      context_.model->model.events, [id](const SkinEventBinding &candidate) {
         return candidate.id == id;
       });
-  if (binding == context_.model.model.events.end()) {
+  if (binding == context_.model->model.events.end()) {
     reportDiagnostic({.code = "skin.play_state.custom_event_binding_missing",
                       .message = "Custom event action binding is absent."});
     return {.status = SkinHostCallStatus::CriticalFailure,
@@ -406,12 +416,19 @@ SkinHostCallResult PlaySkinStateBridge::invokeEventBinding(
 
 SkinHostCallResult PlaySkinStateBridge::evaluateCustomCondition(
     SkinBooleanPropertyId id, bool &condition) {
+  if (context_.model == nullptr) {
+    reportDiagnostic({.code = "skin.play_state.model_unavailable",
+                      .message = "Custom conditions require the decoded "
+                                 "gameplay skin model."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
   const auto binding = std::ranges::find_if(
-      context_.model.model.booleanProperties,
+      context_.model->model.booleanProperties,
       [id](const SkinBooleanPropertyBinding &candidate) {
         return candidate.id == id;
       });
-  if (binding == context_.model.model.booleanProperties.end()) {
+  if (binding == context_.model->model.booleanProperties.end()) {
     reportDiagnostic({.code = "skin.play_state.custom_event_condition_missing",
                       .message = "Custom event condition binding is absent."});
     return {.status = SkinHostCallStatus::CriticalFailure,
@@ -453,10 +470,17 @@ SkinHostCallResult PlaySkinStateBridge::evaluateCustomCondition(
 
 SkinHostCallResult PlaySkinStateBridge::evaluateCustomTimer(
     SkinTimerPropertyId id, std::int64_t &value) {
+  if (context_.model == nullptr) {
+    reportDiagnostic({.code = "skin.play_state.model_unavailable",
+                      .message = "Custom timers require the decoded gameplay "
+                                 "skin model."});
+    return {.status = SkinHostCallStatus::CriticalFailure,
+            .diagnostics = diagnostics_};
+  }
   const auto binding = std::ranges::find_if(
-      context_.model.model.timerProperties,
+      context_.model->model.timerProperties,
       [id](const SkinTimerPropertyBinding &candidate) { return candidate.id == id; });
-  if (binding == context_.model.model.timerProperties.end()) {
+  if (binding == context_.model->model.timerProperties.end()) {
     reportDiagnostic({.code = "skin.play_state.custom_timer_binding_missing",
                       .message = "Custom timer binding is absent."});
     return {.status = SkinHostCallStatus::CriticalFailure,
@@ -548,12 +572,19 @@ SkinHostCallResult PlaySkinStateBridge::invokeWriter(
             .diagnostics = diagnostics_};
   }
 
+  if (context_.model == nullptr) {
+    reportDiagnostic({.code = "skin.play_state.model_unavailable",
+                      .message = "Skin writers require the decoded gameplay "
+                                 "skin model."});
+    return {.status = SkinHostCallStatus::Unsupported,
+            .diagnostics = diagnostics_};
+  }
   const auto binding = std::ranges::find_if(
-      context_.model.model.floatWriters,
+      context_.model->model.floatWriters,
       [writerId](const SkinFloatWriterBinding &candidate) {
         return candidate.id == writerId;
       });
-  if (binding == context_.model.model.floatWriters.end()) {
+  if (binding == context_.model->model.floatWriters.end()) {
     reportDiagnostic(
         {.code = "skin.play_state.writer_missing",
          .message = "Skin writer ID is not present in the validated model.",

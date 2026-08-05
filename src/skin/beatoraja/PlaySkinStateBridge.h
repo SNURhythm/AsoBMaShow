@@ -103,7 +103,10 @@ struct PlaySkinFrameCommit {
 
 struct PlaySkinStateBridgeContext {
   const PlayfieldChartVisualModel &chartModel;
-  const ValidatedBeatorajaSkinModel &model;
+  // The configured-load bridge has real gameplay state but no decoded model
+  // yet. Model-dependent callbacks are unavailable until full model decoding
+  // has completed.
+  const ValidatedBeatorajaSkinModel *model = nullptr;
   const BeatorajaSkinConfiguration &configuration;
   LuaSkinRuntime &runtime;
   const SkinEventMutationTable &mutationTable;
