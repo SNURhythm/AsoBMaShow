@@ -245,8 +245,8 @@ SkinDiagnostic catalogDiagnostic(std::string code, std::string message) {
 
 std::string validationName(SkinValidationDisposition value) {
   switch (value) {
-  case SkinValidationDisposition::Selectable7Key:
-    return "selectable7Key";
+  case SkinValidationDisposition::SelectableGameplay:
+    return "selectableGameplay";
   case SkinValidationDisposition::UnavailableType:
     return "unavailableType";
   case SkinValidationDisposition::Invalid:
@@ -260,8 +260,8 @@ std::optional<SkinValidationDisposition> parseValidation(const Json &value) {
     return std::nullopt;
   }
   const std::string encoded = value.get<std::string>();
-  if (encoded == "selectable7Key") {
-    return SkinValidationDisposition::Selectable7Key;
+  if (encoded == "selectableGameplay" || encoded == "selectable7Key") {
+    return SkinValidationDisposition::SelectableGameplay;
   }
   if (encoded == "unavailableType") {
     return SkinValidationDisposition::UnavailableType;

@@ -86,7 +86,9 @@ struct SkinRevision {
 };
 
 enum class SkinValidationDisposition : std::uint8_t {
-  Selectable7Key,
+  SelectableGameplay,
+  // Kept source-compatible while callers migrate to the trait-based name.
+  Selectable7Key = SelectableGameplay,
   UnavailableType,
   Invalid,
 };

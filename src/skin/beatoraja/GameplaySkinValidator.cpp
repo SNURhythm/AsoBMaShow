@@ -1,6 +1,7 @@
 #include "GameplaySkinValidator.h"
 
 #include "GameplaySkinBuiltinCatalog.h"
+#include "../GameplaySkinTraits.h"
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinRuntime.h"
 #include "LuaSkinTableDecoder.h"
@@ -182,9 +183,18 @@ SkinValidationResult GameplaySkinValidator::validate(
       return result;
     }
 
-    result.disposition = SkinValidationDisposition::Selectable7Key;
-    result.reconciledSettings = std::move(reconciliation.reconciledSettings);
     result.metadata = metadataFor(*decodedHeader.header);
+    if (!gameplaySkinTraitForSkinType(result.metadata->skinType)) {
+      result.disposition = SkinValidationDisposition::UnavailableType;
+      result.diagnostics.push_back(validationDiagnostic(
+          "skin_lua_type_unavailable",
+          "Lua skin declares a supported Beatoraja type that is not a "
+          "gameplay keymode in this build"));
+      return result;
+    }
+
+    result.disposition = SkinValidationDisposition::SelectableGameplay;
+    result.reconciledSettings = std::move(reconciliation.reconciledSettings);
     result.configurationDigest = reconciledConfigurationDigest;
     return result;
   } catch (...) {

@@ -291,7 +291,7 @@ return {
   desired.options["Gauge"] = 12;
   SkinValidationResult result = validateScript(script, &desired);
 
-  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay,
          "valid 7-key Lua skin with a numeric built-in is selectable");
   expect(!result.cancelled &&
              !hasDiagnostic(result, "skin_lua_validation_failed"),
@@ -341,7 +341,7 @@ return {
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay,
          "catalog selection is based on a Beatoraja header pass, not fabricated "
          "main_state values");
   expect(!hasDiagnostic(result, "skin_lua_execution_failed"),
@@ -356,7 +356,7 @@ return {
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::Selectable7Key &&
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay &&
              result.reconciledSettings &&
              result.reconciledSettings->options ==
                  std::map<std::string, int>{{"No choices", -1}} &&
@@ -364,6 +364,19 @@ return {
                  skinConfigurationDigest(*result.reconciledSettings),
          "an empty Beatoraja CustomOption keeps its random sentinel through "
          "catalog activation without a digest mismatch");
+}
+
+void testCatalogRejectsNonGameplayBeatorajaSkinTypes() {
+  const SkinValidationResult result = validateScript(R"lua(
+return {
+  type = 5, w = 1280, h = 720, name = "music select is not gameplay"
+}
+)lua");
+
+  expect(result.disposition == SkinValidationDisposition::UnavailableType &&
+             result.metadata && result.metadata->skinType == 5 &&
+             hasDiagnostic(result, "skin_lua_type_unavailable"),
+         "non-gameplay Beatoraja skin types cannot appear in gameplay tabs");
 }
 
 void testCatalogDefersGameplayBindingFailureToGameplayLoading() {
@@ -374,7 +387,7 @@ return {
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay,
          "catalog keeps a syntactically valid skin selectable before the live "
          "gameplay loader evaluates its bindings");
   expect(!hasDiagnostic(result, "skin_lua_model_binding_source_invalid"),
@@ -403,7 +416,7 @@ return {
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay,
          "catalog does not reject a header because its full gameplay resources "
          "have not been loaded");
   expect(!hasDiagnostic(result, "skin.resource.missing_critical"),
@@ -451,7 +464,7 @@ void testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors() {
   GameplaySkinValidator validator(resources);
   const SkinValidationResult result =
       validator.validate(snapshot.prepared->readView(), *entry, nullptr, {});
-  if (result.disposition != SkinValidationDisposition::Selectable7Key) {
+  if (result.disposition != SkinValidationDisposition::SelectableGameplay) {
     for (const auto &diagnostic : result.diagnostics) {
       std::cerr << "external gameplay validation diagnostic: "
                 << diagnostic.code << ": " << diagnostic.message << '\n';
@@ -459,7 +472,7 @@ void testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors() {
   }
   expect(!hasDiagnostic(result, "skin_lua_execution_failed"),
          "requested external gameplay Lua does not require live main_state during validation");
-  expect(result.disposition == SkinValidationDisposition::Selectable7Key,
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay,
          "requested external gameplay skin validates as selectable");
 }
 
@@ -513,6 +526,7 @@ int main() {
   testCatalogPublishesOwnedHeaderMetadataWithoutLoadingGameplay();
   testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
+  testCatalogRejectsNonGameplayBeatorajaSkinTypes();
   testCatalogDefersGameplayBindingFailureToGameplayLoading();
   testCatalogDefersGameplayResourceFailureToGameplayLoading();
   testRequestedExternalGameplaySkinAvoidsConfiguredStateErrors();
