@@ -67,6 +67,12 @@ std::optional<std::string>
 normalizeSkinConfigurationKey(std::string_view value);
 
 struct SkinProfileSettings {
+  // This is the authoritative gameplay-skin selection. The key is the
+  // Beatoraja gameplay SkinType value, constrained by GameplaySkinTraits.
+  std::map<int, SkinEntryId> selectedGameplayEntries;
+
+  // Transitional derived aliases. New settings files do not write these, but
+  // readers accept them so existing profiles preserve their 7K selection.
   bool gameplayCompatibilityEnabled = false;
   std::optional<SkinEntryId> selected7KeyEntry;
   std::map<SkinEntryId, EntryProfileSettings> entries;

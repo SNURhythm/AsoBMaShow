@@ -2,10 +2,12 @@
 
 #include "VersionedJson.h"
 #include "scene/play/GameplayRuleset.h"
+#include "skin/GameplaySkinTraits.h"
 #include "skin/package/SkinPathPolicy.h"
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -163,16 +165,12 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
              {"translateX", settings.viewport.translateX},
              {"translateY", settings.viewport.translateY}}}}}});
   }
-  json result = {
-      {"gameplayCompatibilityEnabled",
-       skinSettings.gameplayCompatibilityEnabled},
-      {"entries", std::move(entries)},
-  };
-  result["selected7KeyEntry"] =
-      skinSettings.selected7KeyEntry
-          ? skinEntryIdToJson(*skinSettings.selected7KeyEntry)
-          : json(nullptr);
-  return result;
+  json selectedGameplayEntries = json::object();
+  for (const auto &[skinType, entry] : skinSettings.selectedGameplayEntries) {
+    selectedGameplayEntries[std::to_string(skinType)] = skinEntryIdToJson(entry);
+  }
+  return {{"selectedGameplayEntries", std::move(selectedGameplayEntries)},
+          {"entries", std::move(entries)}};
 }
 
 std::optional<skin::SkinEntryId>
@@ -266,6 +264,36 @@ void readSkinProfileSettings(const json &document,
       selected != found->end() && !selected->is_null()) {
     destination.selected7KeyEntry =
         readSkinEntryId(*selected, "skin.selected7KeyEntry", diagnostics);
+  }
+  if (const auto selectedGameplayEntries =
+          found->find("selectedGameplayEntries");
+      selectedGameplayEntries != found->end()) {
+    if (!selectedGameplayEntries->is_object()) {
+      invalidValue("skin.selectedGameplayEntries", "expected object",
+                   diagnostics);
+    } else {
+      for (const auto &[rawSkinType, encodedEntry] :
+           selectedGameplayEntries->items()) {
+        int skinType = -1;
+        const auto parsed = std::from_chars(
+            rawSkinType.data(), rawSkinType.data() + rawSkinType.size(),
+            skinType);
+        if (parsed.ec != std::errc{} || parsed.ptr != rawSkinType.data() + rawSkinType.size() ||
+            !skin::gameplaySkinTraitForSkinType(skinType)) {
+          invalidValue("skin.selectedGameplayEntries",
+                       "key is not a supported gameplay skin type",
+                       diagnostics);
+          continue;
+        }
+        const auto entry = readSkinEntryId(
+            encodedEntry, "skin.selectedGameplayEntries." + rawSkinType,
+            diagnostics);
+        if (entry) {
+          destination.selectedGameplayEntries.insert_or_assign(skinType,
+                                                                *entry);
+        }
+      }
+    }
   }
   const auto entries = found->find("entries");
   if (entries == found->end()) {

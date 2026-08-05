@@ -1,6 +1,7 @@
 #include "SkinProfileSettings.h"
 
 #include "../FileChecksum.h"
+#include "GameplaySkinTraits.h"
 #include "package/SkinPathPolicy.h"
 
 #include <utf8proc.h>
@@ -203,18 +204,31 @@ makeSkinProfileId(std::string_view existingPlayerProfileId) {
 }
 
 void SkinProfileSettings::sanitize() {
-  std::optional<std::string> selectedCollisionKey;
-  if (selected7KeyEntry) {
+  // A legacy profile represented one optional 7K selection plus a global
+  // enable bit. Preserve its disabled state by only migrating when it was
+  // enabled. Once a new-format map is present, it is wholly authoritative.
+  const bool hasAuthoritativeSelections = !selectedGameplayEntries.empty();
+  if (!hasAuthoritativeSelections && gameplayCompatibilityEnabled &&
+      selected7KeyEntry) {
+    selectedGameplayEntries.try_emplace(0, *selected7KeyEntry);
+  }
+
+  std::map<int, std::string> selectedCollisionKeys;
+  for (const auto &[skinType, selectedEntry] : selectedGameplayEntries) {
+    if (!gameplaySkinTraitForSkinType(skinType)) {
+      continue;
+    }
     const auto selectedPackage =
-        normalizePackageId(selected7KeyEntry->package.directoryName);
-    const auto selectedEntry =
+        normalizePackageId(selectedEntry.package.directoryName);
+    const auto normalizedEntry =
         selectedPackage.package
             ? normalizeEntryPath(*selectedPackage.package,
-                                 selected7KeyEntry->packageRelativePath)
+                                 selectedEntry.packageRelativePath)
             : SkinEntryIdResult{};
-    if (selectedEntry.entry &&
-        selectedEntry.entry->collisionKey == selected7KeyEntry->collisionKey) {
-      selectedCollisionKey = selectedEntry.entry->collisionKey;
+    if (normalizedEntry.entry &&
+        normalizedEntry.entry->collisionKey == selectedEntry.collisionKey) {
+      selectedCollisionKeys.try_emplace(skinType,
+                                        normalizedEntry.entry->collisionKey);
     }
   }
 
@@ -240,19 +254,23 @@ void SkinProfileSettings::sanitize() {
   }
   entries = std::move(sanitized);
 
-  selected7KeyEntry.reset();
-  if (selectedCollisionKey) {
+  selectedGameplayEntries.clear();
+  for (const auto &[skinType, selectedCollisionKey] : selectedCollisionKeys) {
     for (const auto &[entry, settings] : entries) {
       (void)settings;
-      if (entry.collisionKey == *selectedCollisionKey) {
-        selected7KeyEntry = entry;
+      if (entry.collisionKey == selectedCollisionKey) {
+        selectedGameplayEntries.try_emplace(skinType, entry);
         break;
       }
     }
   }
-  if (!selected7KeyEntry) {
-    gameplayCompatibilityEnabled = false;
+
+  selected7KeyEntry.reset();
+  if (const auto legacySelection = selectedGameplayEntries.find(0);
+      legacySelection != selectedGameplayEntries.end()) {
+    selected7KeyEntry = legacySelection->second;
   }
+  gameplayCompatibilityEnabled = !selectedGameplayEntries.empty();
 }
 
 } // namespace skin

@@ -5597,6 +5597,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         PROPERTY CXX_STANDARD_REQUIRED ON
     )
 
+    add_executable(gameplay_skin_traits_tests
+        tests/gameplay_skin_traits_tests.cpp
+    )
+    target_include_directories(gameplay_skin_traits_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_skin_traits_tests PRIVATE cxx_std_23)
+
     add_executable(skin_archive_importer_tests
         tests/skin_archive_importer_tests.cpp
         src/FileChecksum.cpp
@@ -5910,6 +5918,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_skin_lifecycle_tests)
     asobmashow_register_test(gameplay_skin_settings_tests)
     asobmashow_register_test(gameplay_skin_settings_presentation_tests)
+    asobmashow_register_test(gameplay_skin_traits_tests)
     asobmashow_register_test(skin_archive_importer_tests)
     asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)

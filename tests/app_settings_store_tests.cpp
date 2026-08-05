@@ -183,6 +183,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
       skin::normalizeEntryPath(*package.package, "play/7key.luaskin");
   expected.skin.gameplayCompatibilityEnabled = true;
   expected.skin.selected7KeyEntry = *entry.entry;
+  expected.skin.selectedGameplayEntries.emplace(0, *entry.entry);
   expected.skin.entries[*entry.entry] = {
       .options = {{"Lane", 101}},
       .filePaths = {{"Judge", "parts/judge.png"}},
@@ -212,6 +213,14 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "saved JSON declares schema version 4");
   expect(readFile(path).find("configurationDigest") == std::string::npos,
          "schema 4 does not persist a competing configuration digest map");
+  expect(readFile(path).find("\"selectedGameplayEntries\"") !=
+             std::string::npos,
+         "new settings persist gameplay selection by skin trait");
+  expect(readFile(path).find("\"selected7KeyEntry\"") ==
+             std::string::npos &&
+             readFile(path).find("\"gameplayCompatibilityEnabled\"") ==
+                 std::string::npos,
+         "new settings do not write legacy gameplay selection aliases");
   expect(readFile(path).find("\"package\": \"ModernChic\"") !=
                  std::string::npos &&
              readFile(path).find("\"path\": \"play/7key.luaskin\"") !=
@@ -266,6 +275,39 @@ void testSchemaThreeMigrationDisablesCompatibility() {
          "schema 3 migration has no selected gameplay skin");
   expect(loaded.settings.skin.entries.empty(),
          "schema 3 migration starts with no remembered skin entries");
+}
+
+void testLegacy7KeySelectionMigratesToTraitSelection() {
+  TempDirectory temp;
+  const auto path = temp.path() / "legacy-skin.json";
+  writeFile(path, R"JSON({
+    "schemaVersion": 4,
+    "skin": {
+      "gameplayCompatibilityEnabled": true,
+      "selected7KeyEntry": {"package":"Pack","path":"play/main.luaskin"},
+      "entries": [{
+        "entry":{"package":"Pack","path":"play/main.luaskin"},
+        "settings":{}
+      }]
+    }
+  })JSON");
+
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "legacy gameplay skin selection loads");
+  const auto selection = loaded.settings.skin.selectedGameplayEntries.find(0);
+  expect(selection != loaded.settings.skin.selectedGameplayEntries.end() &&
+             loaded.settings.skin.selected7KeyEntry == selection->second &&
+             loaded.settings.skin.gameplayCompatibilityEnabled,
+         "enabled legacy 7K selection migrates to the 7K trait");
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error),
+         "migrated settings save: " + error);
+  const auto persisted = readFile(path);
+  expect(persisted.find("\"selectedGameplayEntries\"") != std::string::npos &&
+             persisted.find("\"selected7KeyEntry\"") == std::string::npos,
+         "migration rewrites the selection using the trait map only");
 }
 
 void testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds() {
@@ -1139,6 +1181,7 @@ int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
   testSchemaThreeMigrationDisablesCompatibility();
+  testLegacy7KeySelectionMigratesToTraitSelection();
   testSkinSettingsRejectUntrustedIdentityAndSanitizeBounds();
   testSkinSettingsDeterministicallyEnforceFixedLimits();
   testHostileSkinJsonIsBoundedDuringDecode();
